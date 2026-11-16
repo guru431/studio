@@ -36,21 +36,26 @@ export function softwareView({ locked }) {
       const versionState = item.installed && item.version && item.latest && item.reason !== 'check'
         ? item.update_available ? 'outdated' : 'current' : 'unknown';
       const details = el('div', { class: 'code-software-versions' },
-        el('strong', {}, label), el('span', { class: 'code-software-version', 'data-state': versionState }, tr('Установлено: {0}', current)),
-        el('span', {}, tr('Актуальная версия: {0}', item.latest || tr('Не удалось проверить'))));
-      if (item.source === 'vscode') details.append(el('span', { class: 'muted small' }, tr('Расширение VS Code')));
+        el('div', { class: 'code-software-numbers' },
+          el('span', { class: 'code-software-version', 'data-state': versionState },
+            item.installed || item.reason === 'check' ? tr('Установлено: {0}', current) : current),
+          el('span', { class: 'muted' }, versionState === 'current' ? tr('Установлена актуальная версия')
+            : tr('Актуальная версия: {0}', item.latest || tr('Не удалось проверить')))));
+      const meta = el('div', { class: 'code-software-meta muted small' });
+      if (item.source === 'vscode') meta.append(el('span', {}, tr('Расширение VS Code')));
       if (item.cli_version && item.cli_version !== item.version) {
-        details.append(el('span', { class: 'muted small' }, tr('Версия CLI: {0}', item.cli_version)));
+        meta.append(el('span', {}, tr('Версия CLI: {0}', item.cli_version)));
       }
-      if (item.installed && item.latest && item.version && !item.update_available) {
-        details.append(el('span', { class: 'muted small' }, tr('Установлена актуальная версия')));
+      if (meta.childElementCount) details.append(meta);
+      if (reasons[item.reason] && item.reason !== 'not_installed') {
+        details.append(el('span', { class: 'muted small' }, tr(reasons[item.reason])));
       }
-      if (reasons[item.reason]) details.append(el('span', { class: 'muted small' }, tr(reasons[item.reason])));
       const update = el('button', { type: 'button', class: 'btn small',
         'data-software-update': item.id, 'aria-label': tr('Обновить {0}', label) }, tr('Обновить'));
       update.disabled = busy || !item.can_update;
       update.addEventListener('click', () => load('POST', `/${item.id}/update`));
-      return el('div', { class: 'code-software-row' }, details, update);
+      return el('div', { class: 'code-software-row' },
+        el('div', { class: 'code-software-heading' }, el('strong', {}, label), update), details);
     });
     host.replaceChildren(el('h3', {}, tr('Программы')), ...rows);
     if (states[data.update.state]) {

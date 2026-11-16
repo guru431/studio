@@ -32,11 +32,15 @@ FITS = """(() => {
 })()"""
 
 
-@pytest.mark.parametrize('width', [320, 1280])
+@pytest.mark.parametrize('width', [320, 568, 1280])
 def test_software_versions_update_progress_and_verified_result(browser, live, width, tmp_path):
     login = f'software-versions-{width}'
     live.add_user(login)
     machine = computer()
+    if width == 568:
+        machine.computer_data.update(
+            os='Microsoft Windows 11 Enterprise LTSC 10.0.26100',
+            internal_ips=['10.77.1.8'], projects_roots=['D:\\work'])
     machine.software_versions = True
     machine.software_data = {'items': [
         {'id': tool, 'installed': tool != 'opencode', 'version': '1.2.10' if tool == 'claude' else '1.2.3' if tool == 'codex' else None,
@@ -44,6 +48,8 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
          'source': 'vscode' if tool == 'claude' else 'npm', 'update_available': tool == 'codex',
          'can_update': tool == 'codex', 'reason': 'not_installed' if tool == 'opencode' else None}
         for tool in ('codex', 'claude', 'opencode')], 'update': {'tool': None, 'state': 'idle'}}
+    if width == 568:
+        machine.software_data['items'][0].update(source='vscode', cli_version='0.169.0-alpha.11.1')
     polls = []
     def progress(req, events):
         if machine.software_data['update']['state'] in ('waiting', 'updating'):
@@ -58,12 +64,21 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
             ('wait', '!!document.querySelector("#code-projects li")'),
+            ('eval', 'theme', f"document.documentElement.dataset.theme = '{'light' if width == 568 else 'dark'}'; true"),
             ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
             ('wait', 'document.querySelectorAll("[data-software-update]").length === 3'),
             ('eval', 'versions', 'document.querySelector(".code-software").textContent'),
             ('eval', 'initialColors', '[...document.querySelectorAll(".code-software-version")].map(e => [e.dataset.state,getComputedStyle(e).color])'),
             ('eval', 'missing', 'document.querySelector("[data-software-update=opencode]").disabled'),
             ('eval', 'fits', FITS),
+            ('eval', 'layout', '''(() => {
+              const dialog = document.querySelector('#code-computer-dialog');
+              const content = document.querySelector('.code-computer-content');
+              const actions = dialog.querySelector('.actions').getBoundingClientRect();
+              return {full: content.scrollHeight <= content.clientHeight + 1
+                  && dialog.scrollHeight <= dialog.clientHeight + 1,
+                actions: actions.top >= 0 && actions.bottom <= innerHeight};
+            })()'''),
             ('eval', 'softwareScroll', 'document.querySelector(".code-software").scrollIntoView({block:"start"});true'),
             ('screenshot', str(tmp_path / f'software-{width}.png')),
             ('click', '[data-software-update=codex]'),
@@ -78,6 +93,9 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
         server.stop()
     assert not result.get('failed'), result
     assert result['values']['missing'] and result['values']['fits'] and result['values']['disabled']
+    assert result['values']['layout']['actions']
+    if width == 568:
+        assert result['values']['layout']['full']
     colors = result['values']['initialColors']
     assert [entry[0] for entry in colors] == ['outdated', 'current', 'unknown']
     assert len({entry[1] for entry in colors}) == 3
@@ -151,9 +169,10 @@ def test_computer_info_button_shows_snapshot_refreshes_and_keeps_project(browser
     assert values['after'] == [values['before'], True]
     for text in ('Имя компьютера', 'WORKSTATION', 'Имя пользователя', 'test-worker', 'Внешний IP', '8.8.8.8',
                  'Внутренние IP', '10.77.1.8', '10.8.0.4', 'Windows 11', '12 ГиБ из 16 ГиБ (75%)',
-                 '4 ГиБ из 16 ГиБ',
+                 'свободно 4 ГиБ',
                  'C:\\ — свободно 100 ГиБ из 500 ГиБ', 'D:\\ — нет данных', 'C:\\work\\projects', 'D:\\Проекты'):
         assert text in values['details']
+    assert 'Доступно памяти' not in values['details']
     assert len(reads) == 2
     assert not problems(result), problems(result)
 
@@ -252,6 +271,15 @@ def test_computer_card_in_webkit(webkit, live, width, tmp_path):
             update.scroll_into_view_if_needed()
             assert page.evaluate(FITS)
             page.screenshot(path=str(tmp_path / f'computer-info-{width}.png'))
+            page.set_viewport_size({'width': width, 'height': 420})
+            page.evaluate("document.documentElement.style.setProperty('--font-scale', '1.5')")
+            assert page.evaluate(FITS)
+            assert page.locator('.code-computer-content').evaluate('e => e.scrollHeight > e.clientHeight')
+            assert page.locator('.code-computer-content').bounding_box()['height'] >= 120
+            for selector in ('.code-computer-heading', '.code-computer-footer'):
+                bounds = page.locator(selector).bounding_box()
+                assert bounds['y'] >= 0 and bounds['y'] + bounds['height'] <= 421
+            page.screenshot(path=str(tmp_path / f'computer-info-short-{width}.png'))
             page.get_by_role('button', name='Закрыть', exact=True).tap()
             assert not page.locator('#code-computer-dialog').evaluate('e => e.open')
     finally:
