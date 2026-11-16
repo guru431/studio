@@ -82,7 +82,8 @@ md2pdf_expected=$(git -C "$D" show "$REV:deploy/md2pdf.sha256" | tr -d '\r\n')
 md2pdf_actual=$(sha256sum "$MD2PDF_SOURCE" | cut -d' ' -f1)
 [ "$md2pdf_actual" = "$md2pdf_expected" ] || die "версия md2pdf.py не совпала с deploy/md2pdf.sha256"
 
-package=$(mktemp -d)
+mkdir -p "$D/.tmp"
+package=$(mktemp -d "$D/.tmp/deploy-XXXXXXXX")
 # Своя папка загрузки на хосте: параллельная выкладка не очистит и не перемешает её содержимое.
 # Установщик её переносит или удаляет; что осталось (отказ, --prepare-only) — убирает выход.
 IN=$R/.incoming-${REV:0:12}-$$-$RANDOM
@@ -103,9 +104,9 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -Output "$(cygpath -w "$package/studio-agent-setup.exe")"
 
 echo "==> код ${REV:0:7} → $HOST:$R"
+# Чужие загрузки не трогаем независимо от возраста. Выход очищает только успешно созданную свою.
+"${SSH[@]}" "sudo install -d -m 0755 $R && sudo mkdir -m 0700 $IN"
 uploaded=1
-# Папки загрузки старше суток (оборванные выкладки, прежняя общая .incoming) — не чьи-то текущие.
-"${SSH[@]}" "sudo install -d -m 0755 $R && sudo find $R -mindepth 1 -maxdepth 1 -name '.incoming*' -mmin +1440 -exec rm -rf {} + && sudo mkdir -m 0700 $IN"
 git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" "${PARTS[@]}" \
     | "$PYTHON" "$D/deploy/render-profile.py" \
     | "${SSH[@]}" "sudo tar -xf - -C $IN"
