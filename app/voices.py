@@ -1,4 +1,4 @@
-"""Голоса озвучки по образцу (спека 2026-10-20-studio-sections-voice-design, 6.4): запись 5–15 с,
+"""Голоса озвучки по образцу (спека 2026-10-20-studio-sections-voice-design, 6.4): запись 5–60 с,
 её текст и имя. Образец — WAV моно 24 кГц в media (audio.to_wav; длиннее SAMPLE_MAX — обрезается),
 принадлежит пользователю, удаляется им и вместе с историей. Его WAV и текст берёт озвучка srvllm
 (Qwen3-TTS `/clone`). Текст образца в списке не отдаётся — только в карточке голоса. Образец
@@ -8,6 +8,7 @@
 import asyncio
 import logging
 import uuid
+from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -25,11 +26,12 @@ import speech
 import state
 from image_upload import UploadError
 
-AUDIO_MAX = 10 * 1024 * 1024
-SAMPLE_MIN, SAMPLE_MAX = 4.5, 15.5
+AUDIO_MAX = 32 * 1024 * 1024
+SAMPLE_MIN, SAMPLE_MAX = 4.5, 60.0
+SAMPLES_MAX = 10
 NAME_MAX = 64
-TEXT_MAX = 500
-BUDGET_SEC = 60                 # WAV и длительность образца (до 10 МиБ записи) — ffmpeg за секунды
+TEXT_MAX = 2000
+BUDGET_SEC = 60                 # WAV и длительность образца — ffmpeg за секунды
 TRANSCRIBE_BUDGET_SEC = 120      # вся подготовка образца и ASR — раньше таймаута Apache
 PROBE_MAX = 200                 # проба голоса — одна короткая фраза (speeches.PHRASE_MAX — 220)
 #: пользователи, чья проба голоса идёт сейчас (одна за раз)
@@ -44,14 +46,16 @@ def _bad(code: str, message: str) -> HTTPException:
 
 
 def _row(user_id: int, voice_id: str):
-    row = state.DB.execute("SELECT * FROM voices WHERE id = ? AND user_id = ?", (voice_id, user_id)).fetchone()
+    row = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
+                           " FROM voices v WHERE v.id = ? AND v.user_id = ?", (voice_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого голоса нет"})
     return row
 
 
 def _out(row, with_text: bool = False) -> dict:
-    out = {"id": row["id"], "name": row["name"], "duration": row["duration"], "created": row["created"]}
+    out = {"id": row["id"], "name": row["name"], "duration": row["duration"], "created": row["created"],
+           "sample_count": row["sample_count"]}
     if with_text:
         out["text"] = row["ref_text"]
     return out
@@ -100,7 +104,7 @@ async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
         await file_io(src.write_bytes, data)
         duration = await asyncio.wait_for(audio.to_wav(src, dst, max_sec=SAMPLE_MAX), BUDGET_SEC)
         if duration < SAMPLE_MIN:
-            raise _bad("short", "образец — 5–15 секунд речи")
+            raise _bad("short", "образец — 5–60 секунд речи")
         wav = await file_io(dst.read_bytes)
     except audio.AudioError as e:
         raise _bad("audio", str(e)) from None
@@ -139,11 +143,9 @@ async def transcribe(request: Request):
 async def create(request: Request):
     uid = request.state.user.id
     fields, data, mime = await _form(request)
-    title, text = fields.get("name", "").strip(), fields.get("text", "").strip()
+    title, text = fields.get("name", "").strip(), _text(fields.get("text", ""))
     if not 1 <= len(title) <= NAME_MAX:
         raise _bad("name", f"имя голоса — от 1 до {NAME_MAX} знаков")
-    if not 1 <= len(text) <= TEXT_MAX:
-        raise _bad("text", f"текст образца — от 1 до {TEXT_MAX} знаков: что именно сказано в записи")
     wav, duration = await _sample(uid, data, mime)
     vid = uuid.uuid4().hex
     operations.check(uid)
@@ -159,13 +161,155 @@ async def create(request: Request):
 
 @router.get("")
 async def list_voices(request: Request):
-    rows = state.DB.execute("SELECT * FROM voices WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
+    rows = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
+                           " FROM voices v WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
     return {"items": [_out(r) for r in rows]}
 
 
 @router.get("/{voice_id}")
 async def get_voice(voice_id: str, request: Request):
-    return _out(_row(request.state.user.id, voice_id), with_text=True)
+    row = _row(request.state.user.id, voice_id)
+    return _out(row, with_text=True) | {"samples": [
+        {"id": s["id"], "text": s["ref_text"], "duration": s["duration"], "created": s["created"],
+         "active": s["media_id"] == row["media_id"]}
+        for s in state.DB.execute("SELECT * FROM voice_samples WHERE voice_id = ? AND user_id = ? ORDER BY created, id",
+                                  (voice_id, request.state.user.id))]}
+
+
+class VoiceIn(BaseModel):
+    name: str = Field(max_length=NAME_MAX)
+
+
+class SampleIn(BaseModel):
+    text: str | None = Field(default=None, max_length=TEXT_MAX)
+    active: bool = False
+
+
+def _text(text: str) -> str:
+    text = text.strip()
+    if not 1 <= len(text) <= TEXT_MAX:
+        raise _bad("text", f"текст образца — от 1 до {TEXT_MAX} знаков: что именно сказано в записи")
+    return text
+
+
+def _sample_row(uid: int, voice_id: str, sample_id: str):
+    _row(uid, voice_id)
+    sample = state.DB.execute("SELECT * FROM voice_samples WHERE id = ? AND voice_id = ? AND user_id = ?",
+                              (sample_id, voice_id, uid)).fetchone()
+    if sample is None:
+        raise HTTPException(404, {"code": "gone", "message": "такого образца нет"})
+    return sample
+
+
+def _select(uid: int, voice_id: str, sample_id: str):
+    sample = _sample_row(uid, voice_id, sample_id)
+    state.DB.execute("UPDATE voices SET media_id = ?, ref_text = ?, duration = ? WHERE id = ? AND user_id = ?",
+                     (sample["media_id"], sample["ref_text"], sample["duration"], voice_id, uid))
+
+
+@contextmanager
+def _transaction():
+    """Keep the sample and the compatible selected reference in sync; no awaits inside."""
+    state.DB.execute("BEGIN")
+    try:
+        yield
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+
+
+@router.patch("/{voice_id}")
+async def rename_voice(voice_id: str, body: VoiceIn, request: Request):
+    uid = request.state.user.id
+    _row(uid, voice_id)
+    name = body.name.strip()
+    if not name:
+        raise _bad("name", f"имя голоса — от 1 до {NAME_MAX} знаков")
+    state.DB.execute("UPDATE voices SET name = ? WHERE id = ? AND user_id = ?", (name, voice_id, uid))
+    return _out(_row(uid, voice_id))
+
+
+@router.post("/{voice_id}/samples", status_code=201)
+async def add_sample(voice_id: str, request: Request):
+    return await _save_sample(voice_id, request)
+
+
+@router.put("/{voice_id}/samples/{sample_id}")
+async def replace_sample(voice_id: str, sample_id: str, request: Request):
+    return await _save_sample(voice_id, request, sample_id)
+
+
+async def _save_sample(voice_id: str, request: Request, sample_id: str | None = None):
+    uid = request.state.user.id
+    voice = _row(uid, voice_id)
+    previous = _sample_row(uid, voice_id, sample_id) if sample_id else None
+    if previous is None and voice["sample_count"] >= SAMPLES_MAX:
+        raise _bad("samples", f"у голоса не больше {SAMPLES_MAX} образцов")
+    fields, data, mime = await _form(request)
+    text = _text(fields.get("text", ""))
+    wav, duration = await _sample(uid, data, mime)
+    operations.check(uid)
+    _row(uid, voice_id)
+    try:
+        mid = await media.save_async(uid, wav, "audio/wav", "voice-sample.wav")
+    except media.StorageError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    try:
+        with _transaction():
+            operations.check(uid)
+            current = _row(uid, voice_id)
+            if previous is not None:
+                sample = _sample_row(uid, voice_id, sample_id)
+                if sample["media_id"] != previous["media_id"]:
+                    raise HTTPException(409, {"code": "changed", "message": "образец изменён — откройте голос ещё раз"})
+                state.DB.execute("UPDATE voice_samples SET media_id = ?, ref_text = ?, duration = ? WHERE id = ?",
+                                 (mid, text, duration, sample_id))
+                if current["media_id"] == previous["media_id"]:
+                    _select(uid, voice_id, sample_id)
+            else:
+                if current["sample_count"] >= SAMPLES_MAX:
+                    raise _bad("samples", f"у голоса не больше {SAMPLES_MAX} образцов")
+                sample_id = uuid.uuid4().hex
+                state.DB.execute("INSERT INTO voice_samples VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                 (sample_id, voice_id, uid, text, mid, duration, clock.NOW()))
+    except BaseException:
+        await media.delete_async(uid, mid)
+        raise
+    if previous is not None and not media.referenced(uid, previous["media_id"]):
+        await media.delete_async(uid, previous["media_id"])
+    log.info("пользователь %d: образец голоса %s сохранён", uid, voice_id[:8])
+    return {"id": sample_id, "text": text, "duration": duration}
+
+
+@router.patch("/{voice_id}/samples/{sample_id}")
+async def edit_sample(voice_id: str, sample_id: str, body: SampleIn, request: Request):
+    uid = request.state.user.id
+    sample = _sample_row(uid, voice_id, sample_id)
+    text = _text(body.text) if body.text is not None else sample["ref_text"]
+    with _transaction():
+        state.DB.execute("UPDATE voice_samples SET ref_text = ? WHERE id = ?", (text, sample_id))
+        if body.active or _row(uid, voice_id)["media_id"] == sample["media_id"]:
+            _select(uid, voice_id, sample_id)
+    return {"id": sample_id, "text": text, "duration": sample["duration"]}
+
+
+@router.delete("/{voice_id}/samples/{sample_id}", status_code=204)
+async def delete_sample(voice_id: str, sample_id: str, request: Request):
+    uid = request.state.user.id
+    sample = _sample_row(uid, voice_id, sample_id)
+    voice = _row(uid, voice_id)
+    if voice["sample_count"] <= 1:
+        raise _bad("samples", "нужен хотя бы один образец голоса")
+    with _transaction():
+        state.DB.execute("DELETE FROM voice_samples WHERE id = ?", (sample_id,))
+        if voice["media_id"] == sample["media_id"]:
+            other = state.DB.execute("SELECT id FROM voice_samples WHERE voice_id = ? ORDER BY created, id LIMIT 1",
+                                     (voice_id,)).fetchone()
+            _select(uid, voice_id, other["id"])
+    if not media.referenced(uid, sample["media_id"]):
+        await media.delete_async(uid, sample["media_id"])
+    return Response(status_code=204)
 
 
 class ProbeIn(BaseModel):
@@ -206,8 +350,11 @@ async def probe(voice_id: str, body: ProbeIn, request: Request):
 async def delete_voice(voice_id: str, request: Request):
     uid = request.state.user.id
     row = _row(uid, voice_id)
+    mids = {s[0] for s in state.DB.execute("SELECT media_id FROM voice_samples WHERE voice_id = ? AND user_id = ?",
+                                          (voice_id, uid))} | {row["media_id"]}
     state.DB.execute("DELETE FROM voices WHERE id = ?", (voice_id,))
-    if not media.referenced(uid, row["media_id"]):
-        await media.delete_async(uid, row["media_id"])
+    for mid in mids:
+        if not media.referenced(uid, mid):
+            await media.delete_async(uid, mid)
     log.info("пользователь %d: голос %s удалён", uid, voice_id[:8])
     return Response(status_code=204)

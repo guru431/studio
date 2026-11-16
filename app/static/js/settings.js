@@ -23,7 +23,7 @@ import { locale, tr } from './i18n.js';
  * подключений — passport.js; найденные проверкой модели встают в найденные. Только в своих настройках.
  *
  * В «Речи» своих настроек — ещё «Голоса» (образцы для озвучки srvllm): запись 5–15 с файлом или
- * с микрофона, текст из ASR с возможностью правки и имя (POST /api/voices), список с «Удалить».
+ * с микрофона, текст из ASR с возможностью правки и имя; voice-editor.js редактирует голос и его образцы.
  *
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
  * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
@@ -40,7 +40,7 @@ import { ntfyBlock } from './ntfy-settings.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
-import { recordingName, startRecording } from './mic.js';
+import { editVoice } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
@@ -1048,136 +1048,22 @@ function voicesBlock(host) {
           reload();
         });
         const tryIt = button(tr("Проба"), { class: 'btn btn-sm voice-probe' }, () => probeVoice(host, v));
+        const edit = button(tr("Изменить"), { class: 'btn btn-sm voice-edit' }, () => add(v));
         return el('li', { class: 'voice', 'data-id': v.id }, el('b', {}, v.name),
-          el('span', { class: 'muted small' }, tr(" образец {0}", clock(v.duration))), tryIt, del);
+          el('span', { class: 'muted small' }, tr(" образец {0}", clock(v.duration)),
+            tr(" · образцов: {0}", v.sample_count)), tryIt, edit, del);
       }) : [el('li', { class: 'muted small' }, tr("Голосов пока нет: озвучка шлюза srvllm говорит голосом по образцу"))]));
     } catch (err) {
       say(note, words(err), 'error');
     }
   }
 
-  function add() {
-    const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off' });
-    const text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: '500',
-      placeholder: tr("Определится автоматически после загрузки или записи") });
-    const file = el('input', { type: 'file', name: 'audio', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm' });
-    const rec = button(tr("Записать с микрофона"), { class: 'btn btn-sm', id: 'voice-record' });
-    const recNote = el('p', { class: 'muted small', 'aria-live': 'polite' });
-    const recognizeNote = el('p', { class: 'muted small', 'aria-live': 'polite', id: 'voice-asr-status' });
-    const retry = button(tr("Распознать ещё раз"), { class: 'btn btn-sm', id: 'voice-transcribe', hidden: true });
-    const fail = el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' });
-    const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'voice-save' });
-    let recorded = null;
-    let recording = null;
-    let recognizing = null;
-    const dialog = openDialog(host, { id: 'voice-dialog', title: tr("Новый голос"), actions: [save], body: [
-      field(tr("Имя голоса"), name, 'name'), field(tr("Текст образца (можно поправить)"), text, 'text'),
-      el('p', { class: 'muted small' }, tr("Запись 5–15 секунд чистой речи: файлом или с микрофона.")),
-      el('div', { class: 'row' }, file, rec), recNote, recognizeNote, retry, fail] });
-    dialog.addEventListener('close', () => { recognizing?.abort(); });
-
-    async function transcribe(sample) {
-      recognizing?.abort();
-      const controller = new AbortController();
-      recognizing = controller;
-      text.value = '';
-      fail.textContent = '';
-      recognizeNote.textContent = tr("Распознаю текст образца…");
-      text.disabled = save.disabled = rec.disabled = true;
-      text.setAttribute('aria-busy', 'true');
-      retry.hidden = true;
-      const body = new FormData();
-      body.append('audio', sample, sample.name || recordingName(sample, 'sample'));
-      try {
-        const result = await api('POST', '/api/voices/transcribe', body, { signal: controller.signal });
-        if (recognizing !== controller || !dialog.open || !dialog.isConnected) return;
-        text.value = result.text;
-        recognizeNote.textContent = tr("Текст распознан. Проверьте его перед сохранением.");
-      } catch (err) {
-        if (controller.signal.aborted || recognizing !== controller || !dialog.open || !dialog.isConnected) return;
-        recognizeNote.textContent = tr("Распознавание не удалось. Повторите или введите текст образца вручную.");
-        fail.textContent = words(err);
-      } finally {
-        if (recognizing === controller) {
-          recognizing = null;
-          text.disabled = save.disabled = rec.disabled = false;
-          text.setAttribute('aria-busy', 'false');
-          retry.hidden = false;
-        }
-      }
-    }
-    file.addEventListener('change', () => {
-      const sample = file.files[0];
-      if (!sample) return;
-      recorded = null;
-      recNote.textContent = '';
-      transcribe(sample);
-    });
-    retry.addEventListener('click', () => {
-      const sample = file.files[0] || recorded;
-      if (sample) transcribe(sample);
-    });
-    rec.addEventListener('click', async () => {
-      if (recording) {
-        recording.stop();
-        return;
-      }
-      file.disabled = save.disabled = rec.disabled = true;
-      retry.hidden = true;
-      try {
-        recording = await startRecording(15, (sec) => { recNote.textContent = tr("Запись · {0} — нажмите ещё раз, чтобы остановить", clock(sec)); }, rec);
-      } catch (err) {
-        recNote.textContent = words(err);
-        file.disabled = save.disabled = rec.disabled = false;
-        return;
-      }
-      rec.disabled = false;
-      if (!recording) {                              // окно закрыли, пока браузер спрашивал разрешение
-        file.disabled = save.disabled = false;
-        return;
-      }
-      rec.textContent = tr("Остановить");
-      const sample = await recording.done;
-      recording = null;
-      file.disabled = save.disabled = false;
-      if (!sample) {                                 // отменена (окно закрыли, ушли из раздела)
-        rec.textContent = recorded ? tr("Записать заново") : tr("Записать с микрофона");
-        recNote.textContent = '';
-        return;
-      }
-      recorded = sample;
-      rec.textContent = tr("Записать заново");
-      recNote.textContent = tr("Запись готова");
-      file.value = '';
-      transcribe(sample);
-    });
-    save.addEventListener('click', async () => {
-      const sample = file.files[0] || recorded;
-      if (!sample) {
-        fail.textContent = tr("Нужна запись образца: файл или с микрофона");
-        return;
-      }
-      save.disabled = file.disabled = rec.disabled = retry.disabled = text.disabled = true;
-      const body = new FormData();
-      body.append('name', name.value.trim());
-      body.append('text', text.value.trim());
-      body.append('audio', sample, sample.name || recordingName(sample, 'sample'));
-      try {
-        await api('POST', '/api/voices', body);
-        dialog.close();
-        reload();
-      } catch (err) {
-        showError(dialog, err, { name: 'name', text: 'text' }, 'form');
-      } finally {
-        save.disabled = file.disabled = rec.disabled = retry.disabled = text.disabled = false;
-      }
-    });
-    name.focus();
+  function add(voice = null) {
+    editVoice(host, voice, reload).catch(err => say(note, words(err), 'error'));
   }
-
   reload();
   return el('section', { class: 'block voices-block' }, el('div', { class: 'block-head' }, el('h2', {}, tr("Голоса")),
-    button(tr("+ Голос"), { class: 'btn', id: 'voice-add' }, add)), list, note);
+    button(tr("+ Голос"), { class: 'btn', id: 'voice-add' }, () => add())), list, note);
 }
 
 /* ---- разделы ---------------------------------------------------------------------- */

@@ -86,7 +86,7 @@ def test_file_is_transcribed_corrected_and_saved(page, live):
     with wave.open(io.BytesIO(sample)) as wav:
         assert wav.getframerate() == 24000 and wav.getnchannels() == 1
         assert abs(wav.getnframes() / wav.getframerate() - saved["duration"]) < 0.05
-    assert saved["duration"] <= 15.5
+    assert abs(saved["duration"] - 20) < 0.05
     page.reload()
     assert page.locator(".voice").text_content().startswith("Голос с ASR")
 
@@ -103,7 +103,7 @@ def test_replacing_sample_and_closing_ignore_late_answers(page):
     }""")
     upload(page, "first.wav")
     assert page.locator("#voice-save").is_disabled()
-    upload(page, "second.wav")
+    page.evaluate(put_audio(".voice-sample input[type=file]", wav_of(6), "second.wav")[2])
     assert page.evaluate("window.asr[0].signal.aborted")
     page.evaluate("window.asr[1].resolve('Второй образец')")
     page.wait_for_function("() => document.querySelector('#voice-dialog [name=text]').value === 'Второй образец'")
@@ -125,11 +125,16 @@ def test_microphone_transcribes_and_failure_allows_manual_text(page, fake_audio)
       if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', {value: {}});
     }""")
     page.evaluate(FAKE_MIC)
+    page.evaluate("window.recordingTime = 0; window.actualNow = Date.now; Date.now = () => window.recordingTime")
     activate(page, "#voice-record")
     page.wait_for_function("() => document.querySelector('#voice-record').textContent === 'Остановить'")
     assert page.locator("#voice-save").is_disabled()
-    activate(page, "#voice-record")
+    page.evaluate("window.recordingTime = 16000")
+    page.wait_for_function("() => document.querySelector('#voice-dialog').textContent.includes('0:16')")
+    assert page.locator("#voice-record").text_content() == "Остановить"
+    page.evaluate("window.recordingTime = 60000")
     page.wait_for_function("() => document.querySelector('#voice-dialog [name=text]').value === 'распознано'")
+    page.evaluate("Date.now = window.actualNow")
     page.route("**/api/voices/transcribe", lambda route: route.fulfill(status=503,
                content_type="application/json", body='{"detail":{"code":"busy","message":"ASR busy"}}'))
     activate(page, "#voice-transcribe")
@@ -140,3 +145,65 @@ def test_microphone_transcribes_and_failure_allows_manual_text(page, fake_audio)
     page.unroute("**/api/voices/transcribe")
     activate(page, "#voice-transcribe")
     page.wait_for_function("() => document.querySelector('#voice-dialog [name=text]').value === 'распознано'")
+
+
+def read_voice(page):
+    return page.evaluate("""async () => {
+      const items = (await (await fetch('/api/voices')).json()).items;
+      return (await fetch('/api/voices/' + items[0].id)).json();
+    }""")
+
+
+def test_multiple_samples_can_be_edited_replaced_and_selected(page):
+    page.locator("#voice-dialog [name=name]").fill("Несколько образцов")
+    page.locator("#voice-files").set_input_files([
+        {"name": "minute.wav", "mimeType": "audio/wav", "buffer": wav_of(60)},
+        {"name": "second.wav", "mimeType": "audio/wav", "buffer": wav_of(6)}])
+    page.wait_for_function("() => document.querySelectorAll('.voice-sample').length === 2 && !document.querySelector('#voice-save').disabled")
+    page.locator(".voice-sample [name=text]").nth(0).fill("Первый")
+    page.locator(".voice-sample [name=text]").nth(1).fill("Второй")
+    activate(page, "#voice-save")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    saved = read_voice(page)
+    assert saved["sample_count"] == 2 and abs(saved["duration"] - 60) < 0.05
+    activate(page, ".voice-edit")
+    page.locator("#voice-dialog[open]").wait_for()
+    page.locator("#voice-dialog [name=name]").fill("Исправленный голос")
+    page.locator(".voice-sample [name=text]").nth(1).fill("Исправленный второй")
+    page.locator(".voice-sample input[type=radio]").nth(1).check()
+    page.locator(".voice-sample input[type=file]").nth(0).set_input_files(
+        {"name": "replacement.wav", "mimeType": "audio/wav", "buffer": wav_of(12)})
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    page.locator("#voice-files").set_input_files(
+        {"name": "third.wav", "mimeType": "audio/wav", "buffer": wav_of(6)})
+    page.wait_for_function("() => document.querySelectorAll('.voice-sample').length === 3 && !document.querySelector('#voice-save').disabled")
+    assert page.evaluate("document.querySelector('#voice-dialog').scrollWidth <= document.querySelector('#voice-dialog').clientWidth")
+    activate(page, "#voice-save")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    saved = read_voice(page)
+    assert saved["name"] == "Исправленный голос" and saved["sample_count"] == 3
+    assert saved["text"] == "Исправленный второй"
+    assert sorted(round(s["duration"]) for s in saved["samples"]) == [6, 6, 12]
+    activate(page, ".voice-edit")
+    page.locator("#voice-dialog[open]").wait_for()
+    page.locator(".voice-sample .btn-danger").nth(0).click()
+    activate(page, "#voice-save")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    assert read_voice(page)["sample_count"] == 2
+
+
+def test_partial_batch_failure_can_be_retried_without_duplicate_samples(page):
+    page.locator("#voice-dialog [name=name]").fill("Повтор загрузки")
+    page.locator("#voice-files").set_input_files([
+        {"name": "first.wav", "mimeType": "audio/wav", "buffer": wav_of(6)},
+        {"name": "second.wav", "mimeType": "audio/wav", "buffer": wav_of(6)}])
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    page.route("**/api/voices/*/samples", lambda route: route.fulfill(status=503,
+               content_type="application/json", body='{"detail":{"code":"busy","message":"Try again"}}'))
+    activate(page, "#voice-save")
+    page.wait_for_function("() => document.querySelector('#voice-dialog [data-for=form]').textContent === 'Try again'")
+    assert read_voice(page)["sample_count"] == 1
+    page.unroute("**/api/voices/*/samples")
+    activate(page, "#voice-save")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    assert read_voice(page)["sample_count"] == 2

@@ -670,6 +670,9 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .voice, .passkey { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 .voice b, .passkey b { font-weight: 600; }
 .voice .voice-delete, .passkey .passkey-delete { margin-left: auto; }
+.voice-samples { display: grid; gap: var(--space-4); min-width: 0; }
+.voice-sample { border-top: 1px solid var(--border); padding-top: var(--space-4); min-width: 0; }
+.voice-sample input[type="file"], #voice-files { max-width: 100%; min-width: 0; }
 .lock-block > .check { margin-bottom: var(--space-6); }
 .lock-block > .checks { margin-bottom: var(--space-6); }
 .lock-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5) var(--space-7); margin: var(--space-6) 0; }
