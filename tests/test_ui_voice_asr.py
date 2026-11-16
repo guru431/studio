@@ -12,7 +12,8 @@ import httpx
 import pytest
 
 from browser import find_browser
-from test_ui_browser import FAKE_MIC, READY, add_gateway, live, put_audio, wav_of
+from test_ui_browser import FAKE_MIC, READY, add_gateway, put_audio, wav_of
+from test_ui_email_accounts import live  # HTTPS fixture: Secure cookies work in Linux WebKit too.
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -42,12 +43,13 @@ def page(engine, live, request):
     name, browser = engine
     login = "asr-" + hashlib.sha256(request.node.name.encode()).hexdigest()[:16]
     live.add_user(login, theme="dark" if name == "webkit" else "light")
-    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"}, verify=False)
     assert signed.status_code == 303
-    cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
     with browser.new_context(viewport={"width": 320 if name == "webkit" else 1280, "height": 900},
-                             has_touch=name == "webkit", extra_http_headers={"Cookie": cookie},
+                             has_touch=name == "webkit", ignore_https_errors=True,
                              service_workers="block") as context:
+        context.add_cookies([{"name": key, "value": value, "url": live.url, "secure": True,
+                             "httpOnly": True, "sameSite": "Lax"} for key, value in signed.cookies.items()])
         page = context.new_page()
         page.set_default_timeout(15000)
         errors = []
@@ -66,12 +68,15 @@ def upload(page, name="sample.wav", seconds=6.0):
     page.evaluate(put_audio("#voice-dialog input[type=file]", wav_of(seconds), name)[2])
 
 
-def assert_audio_durations(page, expected):
+def assert_audio_controls(page, count):
     players = page.locator(".voice-sample audio")
-    assert players.count() == len(expected)
+    assert players.count() == count
     assert players.evaluate_all("as => as.every(a => a.controls && !a.hidden && a.src)")
+
+
+def require_wav_playback(page):
     if sys.platform == "win32" and page.context.browser.browser_type.name == "webkit":
-        # Probe independently: Windows WebKit can advertise WAV but lack the actual decoder.
+        # Windows WebKit can advertise WAV but fail to play even an independent Blob.
         supported = page.evaluate("""async encoded => {
           const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
           const url = URL.createObjectURL(new Blob([bytes], {type: 'audio/wav'}));
@@ -81,18 +86,39 @@ def assert_audio_durations(page, expected):
           finally { audio.pause(); audio.removeAttribute('src'); audio.load(); URL.revokeObjectURL(url); }
         }""", base64.b64encode(wav_of(0.1)).decode())
         if not supported:
-            return  # Editor/persistence still run; Chromium and Firefox exercise native playback.
+            pytest.skip("Windows WebKit cannot play an independent PCM WAV Blob; run playback on Linux/macOS")
+
+
+def assert_audio_durations(page, expected):
+    assert_audio_controls(page, len(expected))
+    players = page.locator(".voice-sample audio")
     page.wait_for_function("() => [...document.querySelectorAll('.voice-sample audio')].every(a => a.readyState >= 1)")
-    assert sorted(round(n) for n in players.evaluate_all("as => as.map(a => a.duration)")) == sorted(expected)
-    players.first.evaluate("a => a.play()")
-    page.wait_for_function("() => document.querySelector('.voice-sample audio').currentTime > 0")
-    players.first.evaluate("a => a.pause()")
+    assert sorted(players.evaluate_all("as => as.map(a => a.duration)")) == pytest.approx(sorted(expected), abs=0.05)
+    for index in range(len(expected)):
+        player = players.nth(index)
+        player.evaluate("a => a.play()")
+        page.wait_for_function("i => document.querySelectorAll('.voice-sample audio')[i]?.currentTime > 0", arg=index)
+        player.evaluate("a => a.pause()")
+
+
+def test_wav_samples_play_before_and_after_saving(page):
+    require_wav_playback(page)
+    page.locator("#voice-dialog [name=name]").fill("Прослушивание образцов")
+    upload(page)
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    assert_audio_durations(page, [6])
+    activate(page, "#voice-save")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    page.reload()
+    activate(page, ".voice-edit")
+    page.locator("#voice-dialog[open]").wait_for()
+    assert_audio_durations(page, [6])
 
 
 def test_file_is_transcribed_corrected_and_saved(page, live):
     page.locator("#voice-dialog [name=name]").fill("Голос с ASR")
     upload(page, seconds=20.0)
-    assert_audio_durations(page, [20])
+    assert_audio_controls(page, 1)
     page.wait_for_function("() => document.querySelector('#voice-dialog [name=text]').value === 'распознано'")
     page.locator("#voice-dialog [name=text]").fill("Исправленный текст")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -194,7 +220,7 @@ def test_multiple_samples_can_be_edited_replaced_and_selected(page):
     assert saved["sample_count"] == 2 and abs(saved["duration"] - 60) < 0.05
     activate(page, ".voice-edit")
     page.locator("#voice-dialog[open]").wait_for()
-    assert_audio_durations(page, [6, 60])
+    assert_audio_controls(page, 2)
     page.locator("#voice-dialog [name=name]").fill("Исправленный голос")
     page.locator(".voice-sample [name=text]").nth(1).fill("Исправленный второй")
     page.locator(".voice-sample input[type=radio]").nth(1).check()
