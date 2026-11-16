@@ -16,6 +16,7 @@ import httpx
 
 import security
 import state
+import connections  # Загрузить Connection до upstream: его аннотации участвуют в цикле импорта.
 import upstream
 
 router = APIRouter(prefix="/api/mcp")
