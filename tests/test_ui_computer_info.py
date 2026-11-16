@@ -33,6 +33,58 @@ FITS = """(() => {
 
 
 @pytest.mark.parametrize('width', [320, 1280])
+def test_software_versions_update_progress_and_verified_result(browser, live, width, tmp_path):
+    login = f'software-versions-{width}'
+    live.add_user(login)
+    machine = computer()
+    machine.software_versions = True
+    machine.software_data = {'items': [
+        {'id': tool, 'installed': tool != 'opencode', 'version': '1.2.3' if tool != 'opencode' else None,
+         'cli_version': '1.2.3' if tool != 'opencode' else None, 'latest': '1.2.10',
+         'source': 'vscode' if tool == 'claude' else 'npm', 'update_available': tool == 'codex',
+         'can_update': tool == 'codex', 'reason': 'not_installed' if tool == 'opencode' else None}
+        for tool in ('codex', 'claude', 'opencode')], 'update': {'tool': None, 'state': 'idle'}}
+    polls = []
+    def progress(req, events):
+        if machine.software_data['update']['state'] in ('waiting', 'updating'):
+            polls.append(req)
+            machine.software_data['update']['state'] = 'updating' if len(polls) == 1 else 'done'
+            if len(polls) > 1:
+                machine.software_data['items'][0].update(version='1.2.10', cli_version='1.2.10',
+                    update_available=False, can_update=False)
+        return machine.software_data
+    machine._op_software_versions = progress
+    aid, server = code_online(live, login, machine)
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', '!!document.querySelector("#code-projects li")'),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
+            ('wait', 'document.querySelectorAll("[data-software-update]").length === 3'),
+            ('eval', 'versions', 'document.querySelector(".code-software").textContent'),
+            ('eval', 'missing', 'document.querySelector("[data-software-update=opencode]").disabled'),
+            ('eval', 'fits', FITS),
+            ('eval', 'softwareScroll', 'document.querySelector(".code-software").scrollIntoView({block:"start"});true'),
+            ('screenshot', str(tmp_path / f'software-{width}.png')),
+            ('click', '[data-software-update=codex]'),
+            ('wait', 'document.querySelector("[data-software-cancel]")'),
+            ('wait', 'document.querySelector(".code-software").textContent.includes("версия проверена")'),
+            ('eval', 'result', 'document.querySelector(".code-software").textContent'),
+            ('eval', 'disabled', 'document.querySelector("[data-software-update=codex]").disabled'),
+            ('eval', 'close', 'document.querySelector("#code-computer-dialog").close();true'),
+            ('wait', '!document.querySelector(".code-software-row")')], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    assert result['values']['missing'] and result['values']['fits'] and result['values']['disabled']
+    for text in ('Codex', 'Claude Code', 'OpenCode', 'Установлено: 1.2.3', 'Актуальная версия: 1.2.10',
+                 'Расширение VS Code', 'Не установлено'):
+        assert text in result['values']['versions']
+    assert 'Установлено: 1.2.10' in result['values']['result']
+    assert sum(r['op'] == 'software_update' for r in machine.requests) == 1
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize('width', [320, 1280])
 def test_computer_name_switches_projects_without_opening_info(browser, live, width):
     login = f'computer-select-{width}'
     live.add_user(login)
@@ -159,6 +211,11 @@ def test_computer_card_in_webkit(webkit, live, width, tmp_path):
     login = f'computer-info-webkit-{width}'
     live.add_user(login)
     machine = computer()
+    machine.software_versions = True
+    machine.software_data = {'items': [{'id': 'codex', 'installed': True, 'version': '26.1002.51308',
+        'cli_version': '0.162.0-alpha.2', 'latest': '26.1111.21308', 'source': 'vscode',
+        'update_available': True, 'can_update': True, 'reason': None}],
+        'update': {'tool': None, 'state': 'idle'}}
     aid, server = code_online(live, login, machine, name='Компьютер с длинным именем')
     signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
     cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
@@ -183,6 +240,11 @@ def test_computer_card_in_webkit(webkit, live, width, tmp_path):
             page.wait_for_function('() => ' + SHOWN)
             assert page.evaluate(FITS)
             assert 'WORKSTATION' in page.locator('.code-computer-details').inner_text()
+            update = page.locator('[data-software-update=codex]')
+            update.wait_for()
+            assert update.is_enabled() and '0.162.0-alpha.2' in page.locator('.code-software').inner_text()
+            update.scroll_into_view_if_needed()
+            assert page.evaluate(FITS)
             page.screenshot(path=str(tmp_path / f'computer-info-{width}.png'))
             page.get_by_role('button', name='Закрыть', exact=True).tap()
             assert not page.locator('#code-computer-dialog').evaluate('e => e.open')

@@ -430,6 +430,7 @@ class Controller:
     async def _unenroll(self, ask_studio: bool) -> tuple[bool, str]:
         await self._built.wait()
         async with self._relink_lock:  # канал не поднимется, пока ключ не стёрт
+            await self.agent.software.close()
             await self._close_runners(hold=True)  # просьба turn в пути хода не начнёт: держится до `_relink`
             await self._drop_link()
             self.agent.open.clear()
@@ -526,6 +527,7 @@ class Controller:
         cleanup = asyncio.create_task(updater.cleanup_releases())
         first = asyncio.create_task(self._relink_task())
         await self._quit.wait()
+        await agent.software.close()
         update_task = agent.updater.task if agent.updater is not None else None
         if update_task is not None and not update_task.done():
             update_task.cancel()
@@ -543,7 +545,7 @@ class Controller:
         log.info("мост: выход")
 
     def _update_active(self) -> bool:
-        return (self.agent is not None and self.agent.desktop.status()["active"]
+        return (self.agent is not None and (self.agent.desktop.status()["active"] or self.agent.software.busy)
                 or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
                 or any(not task.done() for task in getattr(self._link, '_requests', ())))
 
@@ -645,6 +647,7 @@ class Controller:
                 self._set_state("offline")
             return
         if state in ("revoked", "replaced") and gen == self._gen:
+            await self.agent.software.close()
             await self._close_runners(hold=True)  # и после: просьба turn в пути хода не начнёт — до нового канала
             self.agent.open.clear()
 
@@ -665,6 +668,15 @@ class Controller:
     async def _refresh_cli(self) -> None:
         """Путь `claude.exe` — прежний, пока файл есть, иначе новейший (`cli.current`); сменился — версия заново
         (студия увидит её в следующем `hello`)."""
+        if self.agent.software.busy:
+            return
+        self.agent._software_requests += 1
+        try:
+            await self._read_cli()
+        finally:
+            self.agent._software_requests -= 1
+
+    async def _read_cli(self) -> None:
         path = self.runner.cli_path = await asyncio.to_thread(cli.current, self.runner.cli_path, self._find_cli)
         if path != self._versioned:
             first = self._versioned is _UNKNOWN
@@ -676,6 +688,15 @@ class Controller:
     async def _refresh_models(self) -> bool:
         """Модели и усилия Claude Code → следующий `hello`; пустой итог (сбой) прежние не стирает. Итог — сменился ли
         набор."""
+        if self.agent.software.busy:
+            return False
+        self.agent._software_requests += 1
+        try:
+            return await self._probe_models()
+        finally:
+            self.agent._software_requests -= 1
+
+    async def _probe_models(self) -> bool:
         self._set_backend("claude", "checking")
         models, efforts = await self._probe(self.agent.cfg.projects_root, self.runner.cli_path,
                                             factory=self._sdk_factory)

@@ -3,6 +3,7 @@ import { locale, tr } from './i18n.js';
 import { api } from './api.js';
 import { dateTime } from './time.js';
 import { el, words } from './ui.js';
+import { softwareView } from './code-software.js';
 
 const bytes = (value) => Number.isFinite(value)
   ? tr("{0} ГиБ", (value / 1073741824).toLocaleString(locale(), { maximumFractionDigits: 1 })) : tr("Нет данных");
@@ -19,10 +20,12 @@ export function computerView(host, { locked }) {
   const dialog = el('dialog', { id: 'code-computer-dialog', class: 'dialog code-computer-dialog',
     'aria-labelledby': 'code-computer-title' }, title, content, el('div', { class: 'actions' }, refresh, close));
   host.append(dialog);
+  const software = softwareView({ locked(id) { dialog.close(); locked(id); } });
   close.addEventListener('click', () => dialog.close());
   function clear() {
     generation += 1;
     controller?.abort();
+    software.clear();
     content.replaceChildren();
     content.removeAttribute('aria-busy');
   }
@@ -46,11 +49,12 @@ export function computerView(host, { locked }) {
       disk.total === null ? tr("{0} — нет данных", disk.path)
         : tr("{0} — {1} из {2}", disk.path, disk.free === null ? tr("нет данных о свободном месте") : tr("свободно {0}", bytes(disk.free)), bytes(disk.total))) : [null]));
     row(tr("Папки с проектами"), ...(data.projects_roots.length ? data.projects_roots : [tr("Не настроены")]));
-    content.replaceChildren(details, el('p', { class: 'muted small' }, tr("Обновлено: {0}", date(data.checked_at))));
+    content.replaceChildren(details, software.host, el('p', { class: 'muted small' }, tr("Обновлено: {0}", date(data.checked_at))));
   }
 
-  async function load() {
+  async function load(force = false) {
     controller?.abort();
+    software.clear();
     const mine = ++generation;
     const target = agent;
     refresh.disabled = !target.online || !target.computer_info;
@@ -67,7 +71,7 @@ export function computerView(host, { locked }) {
     content.replaceChildren(el('p', { class: 'muted' }, tr("Получаю сведения компьютера…")));
     try {
       const data = await api('GET', `/api/code/agents/${target.id}/info`, undefined, { signal });
-      if (mine === generation && dialog.open) paint(data);
+      if (mine === generation && dialog.open) { paint(data); software.show(target, force); }
     } catch (err) {
       if (mine !== generation || signal.aborted || !dialog.open) return;
       if (err.code === 'closed') { dialog.close(); locked(target.id); }
@@ -76,7 +80,7 @@ export function computerView(host, { locked }) {
       if (mine === generation) { refresh.disabled = false; content.removeAttribute('aria-busy'); }
     }
   }
-  refresh.addEventListener('click', load);
+  refresh.addEventListener('click', () => load(true));
   return {
     show(value) {
       agent = value;

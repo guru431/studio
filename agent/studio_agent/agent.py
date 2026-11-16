@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, limits, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
+from .software import Software
 from .pin import OpenSessions, PinStore
 from .turns import REQUEST_ID, Runner
 
@@ -28,6 +29,9 @@ OPS = {
     "desktop_status": (), "desktop_start": (), "desktop_frame": (), "desktop_input": (),
     "desktop_clipboard": (), "desktop_stop": (),
     "computer_info": (),
+    "software_versions": ("refresh",),
+    "software_update": ("software",),
+    "software_update_cancel": (),
     "agent_update": (),
     "agent_update_status": (),
     "agent_update_cancel": (),
@@ -98,6 +102,8 @@ class Agent:
         self.codex = codex
         self.opencode = opencode
         self.updater = None
+        self._software_requests = 0
+        self.software = Software(self)
         self.local_exit_pending = False
         self.desktop = desktop.Desktop(cfg.desktop_enabled, now=now)
         self.set_max_turns(cfg.max_turns)
@@ -142,7 +148,7 @@ class Agent:
                  "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
-                 "computer_info": True, "desktop": True, "metadata_cache": True, "visualizations": True,
+                 "computer_info": True, "software_versions": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -222,6 +228,9 @@ class Agent:
         op = frame.get("op")
         name = op if op == "open" or op in OPS else "?"  # в журнал — только известные имена
         after: list[dict] = []
+        tracked = op in OPS and not op.startswith('software_')
+        if tracked:
+            self._software_requests += 1
         try:
             data = await self._dispatch(frame, op, after)
             res = {"t": "res", "id": rid, "ok": True, "data": data}
@@ -232,6 +241,9 @@ class Agent:
         except Exception as e:
             log.warning("просьба %s: %s", name, type(e).__name__)
             return [_error(rid)]
+        finally:
+            if tracked:
+                self._software_requests -= 1
         try:
             res = events.ready(res)  # кодируется один раз: писатель канала шлёт готовую строку
         except ValueError as e:
@@ -271,6 +283,11 @@ class Agent:
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
+        if self.software.busy and (op in ('turn', 'chat_fork', 'agent_update') or
+                self.software.state == 'updating' and op not in (
+                    'computer_info', 'software_versions', 'software_update', 'software_update_cancel',
+                    'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
+            raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
                 "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
@@ -362,6 +379,15 @@ class Agent:
     async def _op_computer_info(self, frame, after):
         return await asyncio.to_thread(computer_info.read, list(self.cfg.projects_roots))
 
+    async def _op_software_versions(self, frame, after):
+        return await self.software.read(frame.get('refresh', False))
+
+    async def _op_software_update(self, frame, after):
+        return self.software.start(frame['software'])
+
+    async def _op_software_update_cancel(self, frame, after):
+        return self.software.cancel()
+
     async def _op_agent_update_status(self, frame, after):
         if self.updater is None:
             raise Refused("unsupported")
@@ -374,6 +400,8 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == 'software':
+            return value in ('claude', 'codex', 'opencode')
         if name == "source":
             return visualizations.valid_source(value)
         if name == "operation":

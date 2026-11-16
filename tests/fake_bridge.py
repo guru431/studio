@@ -73,6 +73,8 @@ class FakeMachine:
         self.project_activity = False
         self.project_summary = False
         self.computer_info = False
+        self.software_versions = False
+        self.software_data = {'items': [], 'update': {'tool': None, 'state': 'idle'}}
         self.visualizations = False
         self.passive_requests = False            # фоновые просьбы (`passive: true`) срок PIN не продлевают (§3)
         self.computer_data = {}
@@ -116,7 +118,7 @@ class FakeMachine:
                 "chat_control": self.chat_control,
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "opencode_usage", "opencode_features", "project_summary", "computer_info", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create")
                    if getattr(self, name)},
@@ -177,6 +179,17 @@ class FakeMachine:
 
     def _op_computer_info(self, req, events):
         return self.computer_data
+
+    def _op_software_versions(self, req, events):
+        return self.software_data
+
+    def _op_software_update(self, req, events):
+        self.software_data['update'] = {'tool': req['software'], 'state': 'waiting'}
+        return self.software_data
+
+    def _op_software_update_cancel(self, req, events):
+        self.software_data['update']['state'] = 'cancelled'
+        return self.software_data
 
     def _op_desktop_status(self, req, events):
         return {'enabled': self.desktop_enabled, 'active': self.desktop_active is not None}

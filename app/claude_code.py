@@ -597,6 +597,38 @@ async def computer_info(aid: int, request: Request):
                        headers={"Cache-Control": "no-store"})
 
 
+@router.get('/agents/{aid}/software')
+async def software_versions(aid: int, request: Request, refresh: bool = False):
+    from computer_info import software
+
+    own_agent(request, aid)
+    require_capability(aid, 'software_versions')
+    return _BridgeJSON(software(await ask(request, aid, 'software_versions', refresh=refresh, passive=not refresh)),
+                       headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/agents/{aid}/software/{tool}/update')
+async def software_update(aid: int, tool: str, request: Request):
+    from computer_info import software
+
+    own_agent(request, aid)
+    require_capability(aid, 'software_versions')
+    if tool not in ('claude', 'codex', 'opencode'):
+        raise _refuse(422, 'invalid', 'неизвестная программа')
+    return _BridgeJSON(software(await ask(request, aid, 'software_update', software=tool)),
+                       headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/agents/{aid}/software/cancel')
+async def software_update_cancel(aid: int, request: Request):
+    from computer_info import software
+
+    own_agent(request, aid)
+    require_capability(aid, 'software_versions')
+    return _BridgeJSON(software(await ask(request, aid, 'software_update_cancel')),
+                       headers={'Cache-Control': 'no-store'})
+
+
 @router.post("/agents/{aid}/update")
 async def update_agent(aid: int, request: Request):
     import agents

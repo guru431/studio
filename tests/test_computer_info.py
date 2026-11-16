@@ -2,6 +2,7 @@
 import logging
 
 import bridge
+import auth
 from conftest import make_user, signin
 from test_code import setup
 
@@ -59,3 +60,46 @@ def test_unavailable_external_lookup_uses_only_a_public_bridge_connection_ip(stu
     assert studio.c.get(path).json()['external_ip'] == '8.8.4.4'
     link.ip = '10.77.1.1'
     assert studio.c.get(path).json()['external_ip'] is None
+
+
+def test_software_routes_require_capability_pin_ownership_and_csrf(studio, caplog):
+    aid, machine, link = setup(studio, pin='2468', opened=False)
+    path = f'/api/code/agents/{aid}/software'
+    assert studio.c.get(path).json()['detail']['code'] == 'unsupported'
+    link.hello['software_versions'] = True
+    assert studio.c.get('/api/agents').json()['items'][0]['software_versions'] is True
+    assert studio.c.get(path).json()['detail']['code'] == 'closed'
+    studio.c.post(f'/api/code/agents/{aid}/open', json={'pin': '2468'})
+    machine.software_data = {'items': [{'id': 'codex', 'installed': True, 'version': '1.2.3',
+        'latest': '1.2.10', 'cli_version': '1.2.3', 'source': 'npm', 'update_available': True,
+        'can_update': True, 'reason': None}], 'update': {'tool': None, 'state': 'idle'}}
+    with caplog.at_level(logging.INFO):
+        response = studio.c.get(path + '?refresh=true')
+        assert response.json() == machine.software_data
+        assert response.headers['cache-control'] == 'no-store'
+        assert machine.requests[-1]['refresh'] is True
+        assert studio.c.post(path + '/codex/update').json()['update'] == {'tool': 'codex', 'state': 'waiting'}
+    assert studio.c.post(path + '/cancel').json()['update']['state'] == 'cancelled'
+    assert studio.c.post(path + '/arbitrary/update').status_code == 422
+    before = len(machine.requests)
+    studio.c.headers.pop(auth.CSRF_HEADER, None)
+    assert studio.c.post(path + '/codex/update').status_code == 403
+    assert len(machine.requests) == before
+    make_user(studio, 'other-software')
+    signin(studio, 'other-software')
+    for method, suffix in [('GET', ''), ('POST', '/codex/update'), ('POST', '/cancel')]:
+        assert studio.c.request(method, path + suffix).status_code == 404
+    assert len(machine.requests) == before
+
+
+def test_software_response_drops_paths_output_and_invalid_versions():
+    from computer_info import software
+
+    data = software({'items': [{'id': 'codex', 'installed': True, 'version': '1.2.3 & command',
+        'latest': '1.2.4', 'source': 'arbitrary', 'path': 'private-machine-path', 'stderr': 'private-text'},
+        {'id': 'codex'}, {'id': 'unknown'}], 'update': {'tool': 'unknown', 'state': 'private-output'}})
+    assert len(data['items']) == 1
+    assert data['items'][0]['version'] is None and data['items'][0]['source'] is None
+    assert data['items'][0]['latest'] == '1.2.4'
+    assert data['update'] == {'tool': None, 'state': 'error'}
+    assert 'private' not in str(data)
