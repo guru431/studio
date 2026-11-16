@@ -1,4 +1,5 @@
 import { locale, tr } from './i18n.js';
+import { chooseMcp } from './mcp-settings.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
@@ -423,7 +424,8 @@ function stepNode(s) {
   else if (s.kind === 'youtube') {
     const about = [s.channel, s.duration ? duration(s.duration) : '', s.lang].filter(Boolean).join(' · ');
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
-  } else li.append(tr("Инструмент"));
+  } else if (s.kind === 'mcp') li.append(`MCP · ${s.server} · ${s.tool}`);
+  else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
   return li;
 }
@@ -439,7 +441,8 @@ function badgeText(steps) {
   if (of('page')) exa.push(count(of('page'), [tr("страница"), tr("страницы"), tr("страниц")]));
   const parts = exa.length ? [tr("🌐 Интернет (Exa): {0}", exa.join(', '))] : [];
   if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), [tr("ролик"), tr("ролика"), tr("роликов")])}`);
-  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind)).length;
+  if (of('mcp')) parts.push(`MCP: ${of('mcp')}`);
+  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && s.kind !== 'mcp').length;
   if (wrong) parts.push(count(wrong, [tr("неверный вызов"), tr("неверных вызова"), tr("неверных вызовов")]));
   const errors = steps.filter((s) => s.error).length;
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
@@ -461,6 +464,7 @@ function build(view, ctx) {
   let atts = [];               // вложения поля ввода: { file, meta, error, busy, transcript }; из расшифровки — без file
   let needModel = false;       // диалог из расшифровки без локальной модели: «Отправить» — после явного выбора
   let draftWeb = false;        // «Интернет» нового диалога: PATCH после его создания
+  let draftMcp = [];
   let draftThink = false;      // «Рассуждение» нового диалога — так же
   let sending = false;
   let stick = true;
@@ -513,13 +517,15 @@ function build(view, ctx) {
   // на узком экране слово кнопки прячется (.toggle-word), остаётся значок: слово — в aria-label и title
   const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
     'aria-label': tr("Интернет"), title: WEB_TITLE, hidden: true }, icon('globe'), el('span', { class: 'toggle-word' }, tr("Интернет")));
+  const mcpToggle = el('button', { type: 'button', id: 'mcp-toggle', class: 'chip', hidden: true,
+    'aria-label': tr("Инструменты MCP"), 'aria-haspopup': 'dialog' }, 'MCP');
   const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip think-toggle', 'aria-pressed': 'false',
     'aria-label': tr("Рассуждение"), title: THINK_TITLE, hidden: true }, icon('bulb'),
   el('span', { class: 'toggle-word' }, tr("Рассуждение")));
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
   const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, webToggle, thinkToggle), send, stop),
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, webToggle, mcpToggle, thinkToggle), send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
@@ -701,7 +707,26 @@ function build(view, ctx) {
     webToggle.setAttribute('aria-pressed', String(webOn()));
     webToggle.title = hint || WEB_TITLE;
     webNote.textContent = hint || (webOn() && thinkOn() ? THINK_NOTE : '');
+    const conn = links.find(l => l.connection.id === chosen().connection_id)?.connection;
+    mcpToggle.hidden = chat ? !chat.chat.mcp_ok : !conn?.proxied || !!conn?.cleaner;
+    const ids = chat ? chat.chat.mcp_ids || [] : draftMcp;
+    mcpToggle.textContent = ids.length ? `MCP (${ids.length})` : 'MCP';
+    mcpToggle.setAttribute('aria-pressed', String(ids.length > 0));
   }
+  mcpToggle.addEventListener('click', async () => {
+    if (mcpToggle.disabled) return;
+    mcpToggle.disabled = true;
+    const current = chat, mine = opened;
+    try {
+      await chooseMcp(root, chat ? chat.chat.mcp_ids || [] : draftMcp, async ids => {
+        if (mine !== opened || current !== chat) return;
+        if (chat) chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { mcp_ids: ids });
+        else draftMcp = ids;
+        paintWeb();
+      });
+    } catch (err) { notice.textContent = words(err); }
+    finally { mcpToggle.disabled = false; }
+  });
 
   /* 409 `no_exa_key`: ключ убрали в другой вкладке — профиль этой вкладки ещё не знал */
   function noKey(err) {
@@ -783,7 +808,7 @@ function build(view, ctx) {
   /* ход даст модели Exa, а запросы она составит из расшифровки без подтверждения: в истории (`external_web`
    * сервера; он не считает неотправленное вложение) или в этом ходе (новое вложение из расшифровки) */
   function needsWebConsent(regenerate) {
-    if (!webOn() || !webTools().includes('search')) return false;
+    if (!(chat?.chat.mcp_ids?.length || draftMcp.length) && (!webOn() || !webTools().includes('search'))) return false;
     const fresh = !regenerate && atts.some((a) => a.transcript);
     return fresh || (!!chat && !!chat.chat.external_web);
   }
@@ -821,7 +846,8 @@ function build(view, ctx) {
   function askWeb(regenerate, externalOk) {
     const confirm = button(tr("Отправить"), { class: 'btn btn-accent', id: 'web-confirm' });
     const dialog = openDialog(root, { id: 'web-dialog', title: tr("Расшифровка и интернет"), actions: [confirm],
-      body: [el('p', {}, WEB_ASK)] });
+      body: [el('p', {}, chat?.chat.mcp_ids?.length || draftMcp.length
+        ? tr("Запросы из расшифровки могут уйти на выбранные MCP-серверы — отправить?") : WEB_ASK)] });
     confirm.addEventListener('click', () => {
       dialog.close();
       submit(regenerate, externalOk, true);
@@ -1323,6 +1349,7 @@ function build(view, ctx) {
     historyRead?.controller.abort();
     historyRead = null;
     draftWeb = false;
+    draftMcp = [];
     draftThink = false;
     clearTimeout(poll);
     stopWaiting();                                  // ушли из диалога — скан больше не ждём
@@ -1503,6 +1530,10 @@ function build(view, ctx) {
       history.replaceState(history.state, '', `#/chat/${created.id}`);
       loadList();
       const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
+      if (draftMcp.length) {
+        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { mcp_ids: draftMcp });
+        draftMcp = []; paintWeb();
+      }
       draftThink = false;
       if (think) {
         chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });

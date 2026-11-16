@@ -155,7 +155,7 @@ async def list_agents(request: Request):
                       "software_versions": hello.get("software_versions", False),
                       "desktop": hello.get("desktop", False),
                       "file_stats": hello.get("file_stats", False),
-                      "file_operations": hello.get("file_operations", False),
+                      "file_operations": hello.get("file_operations", False), "mcp": hello.get("mcp", False),
                       "file_suggestions": hello.get("file_suggestions", False),
                       "chat_search": hello.get("chat_search", False),
                       "queue_edit": hello.get("queue_edit", False),

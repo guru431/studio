@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import diffs, events, history_images, limits, opencode_events, opencode_rpc, sessions, store, timeline
+from . import diffs, events, history_images, limits, mcp, opencode_events, opencode_rpc, sessions, store, timeline
 from .codex import same_project
 from .errors import Refused
 from .turns import Runner, _Ask
@@ -204,8 +204,11 @@ class OpenCodeRunner(Runner):
         return rpc
 
     async def _temporary(self, rpc, project, directories=None):
-        return await rpc.request("session/new", {"cwd": str(project), "mcpServers": [],
+        return await rpc.request("session/new", {"cwd": str(project), "mcpServers": await self._mcp(rpc, project),
             **({'additionalDirectories': directories} if directories is not None else {})})
+
+    async def _mcp(self, rpc, project):
+        return await asyncio.to_thread(lambda: mcp.opencode(mcp.load(store.home(), project, "opencode"), rpc.info))
 
     async def _delete(self, rpc, target):
         # Только пустая сессия, которую создал этот вызов; пользовательские сессии не удаляются.
@@ -317,7 +320,7 @@ class OpenCodeRunner(Runner):
                     seen.add(cursor)
                 else:
                     raise Refused('too_large')
-            data = await rpc.request("session/load", {"sessionId": target, "cwd": str(project), "mcpServers": [],
+            data = await rpc.request("session/load", {"sessionId": target, "cwd": str(project), "mcpServers": await self._mcp(rpc, project),
                 **({'additionalDirectories': directories} if directories is not None else {})})
             return {**data, '_studio_directories': directories}
         except opencode_rpc.RpcError as e:
@@ -625,7 +628,7 @@ class OpenCodeRunner(Runner):
             try:
                 loaded = await self._load(rpc, project, target)
                 directories = loaded.get('_studio_directories')
-                data = await rpc.request('session/fork', {'sessionId': target, 'cwd': str(project), 'mcpServers': [],
+                data = await rpc.request('session/fork', {'sessionId': target, 'cwd': str(project), 'mcpServers': await self._mcp(rpc, project),
                     **({'additionalDirectories': directories} if directories is not None else {})})
                 target_new = data.get('sessionId')
             finally:

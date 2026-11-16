@@ -24,6 +24,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import auth
+import account_mail
 import bridge
 import clock
 import connections
@@ -56,6 +57,21 @@ class UserPatch(BaseModel):
 
 class Allowlist(BaseModel):
     entries: list[str]
+
+
+@router.get("/smtp")
+async def smtp_settings():
+    return account_mail.public_settings()
+
+
+@router.put("/smtp")
+async def save_smtp_settings(body: account_mail.Settings):
+    return account_mail.save_settings(body)
+
+
+@router.post("/smtp/check")
+async def check_smtp_settings():
+    return await account_mail.check()
 
 
 USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"

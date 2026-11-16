@@ -95,7 +95,7 @@ def test_agents_belong_to_their_user(studio):
                               "attachments": False, "project_activity": False, "subscription_usage": False, "opencode_usage": False, "opencode_features": False, "computer_info": False, "software_versions": False, "desktop": False,
                               "project_summary": False, "metadata_cache": False, "visualizations": False, "visualization_images": False, "history_images": False, "file_stats": False, "file_operations": False, "file_suggestions": False,
                               "chat_search": False, "queue_edit": False, "chat_fork": False,
-                              "subagents": False, "worktrees": False, "project_sharing": False, "project_create": False}]
+                              "subagents": False, "worktrees": False, "project_sharing": False, "project_create": False, "mcp": False}]
 
 
 def test_revoke_removes_the_agent_and_keeps_the_history(studio):

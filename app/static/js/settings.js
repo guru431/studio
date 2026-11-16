@@ -44,6 +44,8 @@ import { editVoice } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
+import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
+import { smtpSettings } from './smtp-settings.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
 
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
@@ -1072,15 +1074,15 @@ function voicesBlock(host) {
 const RAIL_ORDER = RAIL_SECTIONS.map((s) => s.id);                 // порядок рельса — из реестра разделов
 const ACCOUNT_IDS = ['appearance', 'security', 'notifications', 'data', 'input'];
 const OLD_IDS = { other: 'security', dictation: 'input' };
-const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data']);   // ответ разделов их не перерисовывает
+const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null }) {
   const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
-    security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
+    security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
   const sectionIds = [...RAIL_ORDER.filter((id) => other || id !== 'code'), ...(other ? ['cleaner'] : [])];
-  const accountIds = other ? ACCOUNT_IDS : ['input'];
+  const accountIds = other ? [...ACCOUNT_IDS, ...(me?.is_admin ? ['smtp'] : [])] : ['input'];
   const ids = [...sectionIds, ...accountIds];
   const nav = el('nav', { class: 'settings-nav', 'aria-label': tr("Разделы настроек") });
   const panel = el('div', { class: 'settings-panel' });
@@ -1370,7 +1372,11 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       let pendingAgents = null;
       const agents = () => pendingAgents ||= api('GET', '/api/agents').finally(() => { pendingAgents = null; });
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
-        codeDefaultsBlock(agents), quickActionsBlock(), computerPinBlock(), agentsBlock(host, agents)));
+        codeDefaultsBlock(agents), quickActionsBlock(), agentMcpBlock(agents), computerPinBlock(), agentsBlock(host, agents)));
+      return;
+    }
+    if (shown === 'smtp' && other && me?.is_admin) {
+      group('smtp', smtpSettings());
       return;
     }
     if (shown === 'input') {
@@ -1402,7 +1408,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       panel.replaceChildren(back, note);
       return;
     }
-    panel.replaceChildren(back, sectionBlock(s), ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
+    panel.replaceChildren(back, sectionBlock(s), ...(other && s.id === 'chat' ? [chatMcpBlock()] : []),
+      ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
   }
 
   function show(id) {

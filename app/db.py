@@ -5,7 +5,15 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 42
+VERSION = 43
+
+MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, url TEXT NOT NULL, secret_enc TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 1);
+CREATE INDEX mcp_servers_user ON mcp_servers(user_id);
+ALTER TABLE chats ADD COLUMN mcp_ids TEXT NOT NULL DEFAULT '[]';
+"""
 
 # Each voice keeps its selected reference in the old columns for rollback compatibility.
 VOICE_42 = """CREATE TABLE voice_samples(id TEXT PRIMARY KEY,
@@ -560,6 +568,7 @@ INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
 """ + INDEXES_9 + PASSPORT_10 + EDITS_11 + PHOTO_12 + SEARCH_13 + INTERNET_14 + THINKING_15 + OCR_16 + PIN_17 + TRANSLATE_18 + CODE_19 + CODE_20 + CODE_21 + CODE_22 + CODE_23 + LOCK_24 + CODE_25 + CLEANER_26 + TIMEZONE_27 + CODE_28 + NTFY_29 + NTFY_30 + CHAT_31 + S06_32 + SHARES_33 + SECURITY_34 + CHAT_35 + SHARES_36 + DEVICES_37 + PROJECTS_38 + AGENT_EVENTS_39 + EMAIL_40 + CODE_41
 
 SCHEMA += VOICE_42
+SCHEMA += MCP_43
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -656,6 +665,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     40: EMAIL_40,
     41: CODE_41,
     42: VOICE_42,
+    43: MCP_43,
 }
 
 

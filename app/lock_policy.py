@@ -115,7 +115,7 @@ def blocks(request, uid: int, digest: str) -> bool:
     path = request.url.path.rstrip("/")
     pieces = path.split("/")
     head = pieces[2] if len(pieces) > 2 else ""
-    section = {"chats": "chat", "attachments": "chat", "images": "photo", "presets": "photo",
+    section = {"chats": "chat", "mcp": "chat", "attachments": "chat", "images": "photo", "presets": "photo",
                "videos": "video", "transcripts": "transcribe", "transcribe": "transcribe",
                "voices": "speech", "speeches": "speech", "speech": "speech", "ocr": "ocr",
                "translate": "translate", "code": "code", "agents": "code"}.get(head)

@@ -259,7 +259,7 @@ def test_scan_made_by_a_protected_section_is_closed_everywhere(studio, closed):
 
 
 #: голова пути /api/<голова>/… → раздел: всё под ней закрывает защита этого раздела
-SECTION_HEADS = {"chats": "chat", "attachments": "chat", "images": "photo", "presets": "photo", "videos": "video",
+SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "images": "photo", "presets": "photo", "videos": "video",
                  "transcripts": "transcribe", "transcribe": "transcribe", "voices": "speech", "speeches": "speech",
                  "speech": "speech", "ocr": "ocr", "translate": "translate", "code": "code", "agents": "code"}
 #: прочие маршруты /api/* — явно. "closed" — закрыт любой частичной защитой (управление защитой, уведомлениями,
@@ -267,6 +267,9 @@ SECTION_HEADS = {"chats": "chat", "attachments": "chat", "images": "photo", "pre
 #: "lock" — запросы самой блокировки, "media" — по разделам файла, раздел — только при его защите.
 #: Новый маршрут без строки здесь роняет тест: решите, к чему он относится, и научите этому lock_policy.blocks.
 ROUTES = {
+    ("GET", "/api/admin/smtp"): "closed",
+    ("PUT", "/api/admin/smtp"): "closed",
+    ("POST", "/api/admin/smtp/check"): "closed",
     **{(m, p): "closed" for m, p in [
         ("GET", "/api/admin/allowlist"), ("PUT", "/api/admin/allowlist"), ("GET", "/api/admin/backup-check"),
         ("POST", "/api/admin/backup-check"), ("GET", "/api/admin/storage"), ("GET", "/api/admin/users"),
