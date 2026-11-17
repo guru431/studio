@@ -6,10 +6,12 @@
 
 ## Фото и видео
 
-- Каталог srvllm: Lustify, FLUX, SNOFS Krea 2 v1.6, Big Love Eryn1 (ERNIE-Image), FineView QW21
-  (Qwen Image 2.1); видео — Wan2.2 и H3 · DR34ML4Y. Названия выбираются в настройках раздела и в поле
-  создания. Также доступны Muse 3.5 Krea 2, Jib Mix Moss V2, FinePorn v5 и Moody Krea v8.
-  SNOFS, Big Love и эти четыре модели правят исходник с силой изменения; FineView использует его как референс.
+- Каталог srvllm: SNOFS Krea 2 v1.6 (умолчание), FLUX, FineView QW21 (Qwen Image 2.1)
+  и Jib Mix Moss V2; видео — Wan2.2 и H3 · DR34ML4Y. Названия выбираются в настройках раздела и в поле
+  создания. Muse, FinePorn, Moody Krea, Big Love и самостоятельная Lustify удалены по решению владельца.
+  `sections.retire_photo_models()` при запуске очищает сохранённый выбор и исправляет умолчания;
+  история изображений сохраняется. SNOFS и Jib правят исходник с силой изменения;
+  FineView использует его как референс. SNOFS остаётся LoRA поверх базового файла Lustify.
   Все новые модели занимают прежний слот ComfyUI; release выполняется по слотам, без повторов по псевдонимам.
   `images.MEDIA_TIMEOUT_SEC` (1900 с) покрывает холодную загрузку новых весов и обработку; прежние модели
   сохраняют `GENERATE_TIMEOUT_SEC`. У H3 — исходное фото и фиксированный профиль `quality=native`:

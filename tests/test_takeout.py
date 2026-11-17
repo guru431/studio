@@ -64,7 +64,7 @@ def history(uid, tag):
         " VALUES (?, ?, ?, 'document', ?, ?, ?, 5, ?)", f"{tag}att", uid, f"{tag}chat1-q", f"{tag}.pdf", m["doc"],
         f"{tag} doc text", T0)
     put("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id, media_id, state,"
-        " detail, created, finished, mask_media_id, chain) VALUES (?, ?, 'edit', 'lustify', ?, '1024x1024', 42, 0.5,"
+        " detail, created, finished, mask_media_id, chain) VALUES (?, ?, 'edit', 'snofs', ?, '1024x1024', 42, 0.5,"
         " ?, ?, 'done', '', ?, ?, ?, NULL)", f"{tag}img", uid, f"{tag} prompt", m["src"], m["img"], T0, T0 + 5, m["mask"])
     put("INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, media_id, prompt, prompt_source,"
         " seconds, quality, smooth, seed, state, progress, detail, created, finished, chain) VALUES (?, ?, 1, 'gw', ?, ?,"
@@ -334,13 +334,13 @@ def test_export_holds_transcript_edits_and_presets(studio):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     history(uid, "mine")
     put("UPDATE transcripts SET edits = ?", json.dumps({"segments": {"0": "fixed"}}))
-    put("INSERT INTO presets VALUES ('p1', ?, 'photo', 'night', ?, ?)", uid, json.dumps({"model": "lustify"}), T0)
+    put("INSERT INTO presets VALUES ('p1', ?, 'photo', 'night', ?, ?)", uid, json.dumps({"model": "snofs"}), T0)
     put("INSERT INTO presets VALUES ('p2', ?, 'photo', 'theirs', '{}', ?)", bob, T0)
     _, z = download(studio)
     zf = unzip(z)
     assert json.loads(zf.read("transcripts/0001.json"))[0]["edits"] == {"segments": {"0": "fixed"}}
     assert json.loads(zf.read("settings.json"))["presets"] == [
-        {"id": "p1", "section": "photo", "name": "night", "params": {"model": "lustify"}, "created": T0}]
+        {"id": "p1", "section": "photo", "name": "night", "params": {"model": "snofs"}, "created": T0}]
 
 
 def test_export_holds_the_steps_of_the_internet_but_not_the_exa_key(studio):
@@ -431,7 +431,7 @@ def test_export_pages_big_sections(studio, monkeypatch):
     history(uid, "mine")
     for n in range(4):                                   # то же время создания — порядок по id
         put("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id, media_id,"
-            " state, detail, created, finished, mask_media_id, chain) VALUES (?, ?, 'generation', 'lustify', ?,"
+            " state, detail, created, finished, mask_media_id, chain) VALUES (?, ?, 'generation', 'snofs', ?,"
             " '1024x1024', 1, NULL, NULL, NULL, 'error', 'x', ?, ?, NULL, NULL)", f"extra{n}", uid, f"p{n}", T0, T0)
     monkeypatch.setattr(takeout, "PAGE", 2)
     zf = unzip(download(studio, ["photo", "voices"])[1])

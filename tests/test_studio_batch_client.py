@@ -1,7 +1,7 @@
 """Клиент пакетной генерации client/studio-batch.ps1 и его Python-версия studio-batch.py — без сети.
 
 Скрипт ходит в API картинок шлюза. Его интерфейс зафиксирован спекой
-2026-10-19-images-api-lustify-design.md (раздел 5) и описан в Manual: умолчания -Model и
+2026-10-19-images-api-snofs-design.md (раздел 5) и описан в Manual: умолчания -Model и
 -Url, имена моделей и размеры у шлюза расходиться с ним не должны. Ключ в репозитории
 пустой, а локальная копия с ключом (studio-batch.local.ps1) — в .gitignore.
 """
@@ -40,7 +40,7 @@ def test_key_placeholder_is_empty_in_repo():
 
 def test_models_and_sizes_match_the_gateway_contract():
     text = SCRIPT.read_text(encoding="utf-8-sig")
-    assert "$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux-3-image-klein' }" in text
+    assert "$Models = @{ snofs = 'snofs-krea2-v1.6'; flux = 'flux-3-image-klein' }" in text
     assert "$Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }" in text
     assert "'/images/generations'" in text and "'/images/release'" in text
     assert "'GATEWAY_KEY_OWNER_IMAGES'" in text and "'studio-batch.local.ps1'" in text
@@ -80,7 +80,7 @@ def test_powershell_parses_script_and_defaults_match_contract():
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert out["errors"] == []
     d = out["defaults"]
-    assert d["Model"] == "lustify"
+    assert d["Model"] == "snofs"
     assert d["Url"] == "http://10.77.1.15:4000/slot"
     assert d["Size"] == "portrait"
     assert d["Token"] == ""
@@ -175,7 +175,7 @@ def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path)
     path, auth, fields = images.log[0]
     assert path == "/slot/images/edits" and auth == "Bearer test-key"
     assert fields["image"] == b"source-photo" and fields["strength"] == b"0.4"
-    assert fields["model"] == b"lustify-v10-krea2-turbo" and fields["seed"] == b"7"
+    assert fields["model"] == b"snofs-krea2-v1.6" and fields["seed"] == b"7"
     # Имя файла — своё (имя фото владельца в журналы службы не идёт), тип — по расширению
     assert images.files == [("image", "input.jpg", "image/jpeg")]
     assert [p.read_bytes() for p in out.glob("*.png")] == [b"result-png"]
@@ -218,7 +218,7 @@ def test_response_seed_is_normalized_before_naming_and_manifest(runner, images, 
 
     assert [p.name for p in out.glob("*.png")] == ["001-01_first_s42.png"]
     assert (out / "manifest.tsv").read_text(encoding="utf-8").splitlines() == [
-        "n\tfile\tseed\tsize\tmodel\tprompt", "1-1\t001-01_first_s42.png\t42\tportrait\tlustify\tfirst"]
+        "n\tfile\tseed\tsize\tmodel\tprompt", "1-1\t001-01_first_s42.png\t42\tportrait\tsnofs\tfirst"]
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

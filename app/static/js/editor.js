@@ -33,16 +33,16 @@ export function openEditor(item, choice, onCreated) {
 
 function show(host, item, choice, photo, onCreated) {
   const gateway = !choice || choice.kind === 'srvllm';
-  const lustify = gateway && (!choice || choice.model === 'lustify');
+  const withStrength = gateway && (!choice || ['snofs', 'jib-moss'].includes(choice.model));
   const mask = el('canvas', { id: 'edit-mask', hidden: true });
   const selection = document.createElement('canvas');           // белое — выделено, чёрное — нет
   const prompt = el('textarea', { id: 'edit-prompt', class: 'input', rows: '3', maxlength: String(PROMPT_MAX),
     placeholder: tr("Например: замени цвет куртки на синий, остальное оставь как есть") });
   const strength = el('input', { id: 'edit-strength', type: 'number', class: 'input', min: '0.05', max: '1', step: '0.05',
     value: STRENGTH });
-  const strengthLabel = el('label', { id: 'edit-strength-label', class: 'field', hidden: !lustify },
+  const strengthLabel = el('label', { id: 'edit-strength-label', class: 'field', hidden: !withStrength },
     el('span', {}, tr("Сила перерисовки")), strength);
-  const series = seriesControl({ prefix: 'edit-series', canStrength: () => lustify, canSeed: () => gateway,
+  const series = seriesControl({ prefix: 'edit-series', canStrength: () => withStrength, canSeed: () => gateway,
     from: () => strength.value });
   const seriesBox = el('div', { id: 'edit-series', class: 'field' }, el('span', {}, tr("Серия")), series.panel);
   strength.addEventListener('input', () => series.refresh());
@@ -71,7 +71,7 @@ function show(host, item, choice, photo, onCreated) {
     el('p', { id: 'edit-model-label', class: 'small' }, tr("Модель: {0} (выбрана в разделе)", choice ? modelLabel(choice.model) : tr("по умолчанию раздела"))),
     el('p', { id: 'edit-mode-tip', class: 'muted small' }, !gateway
       ? tr("Внешний сервис меняет фото по инструкции. Правка кистью — только через шлюз srvllm.")
-      : lustify
+      : withStrength
         ? tr("Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.")
         : tr("FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.")),
     sizeTip, strengthLabel, seriesBox,
@@ -143,7 +143,7 @@ function show(host, item, choice, photo, onCreated) {
       return;
     }
     const force = Number(strength.value);         // пусто или не число — тоже отказ
-    if (lustify && !(force >= 0.05 && force <= 1)) {
+    if (withStrength && !(force >= 0.05 && force <= 1)) {
       error.textContent = tr("Сила перерисовки — число от 0.05 до 1");
       return;
     }
@@ -155,7 +155,7 @@ function show(host, item, choice, photo, onCreated) {
     body.append('size', 'original');
     body.append('prompt', text);
     body.append('source_media_id', item.media_id);
-    if (lustify) body.append('strength', strength.value);
+    if (withStrength) body.append('strength', strength.value);
     const many = local.checked ? null : series.value();
     if (many) body.append('series', JSON.stringify(many));
     let snapshot = null;

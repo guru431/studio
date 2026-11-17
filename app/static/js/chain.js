@@ -29,7 +29,7 @@ export function seedOf(step) {
 
 /** Сила, которую стоит показывать: только у Lustify. */
 export function strengthOf(step) {
-  return ['lustify', 'snofs', 'big-love', 'muse', 'jib-moss', 'fineporn', 'moody-krea'].includes(step.model) && step.strength !== undefined && step.strength !== null ? step.strength : null;
+  return ['snofs', 'jib-moss'].includes(step.model) && step.strength !== undefined && step.strength !== null ? step.strength : null;
 }
 
 /** Модель, размер, seed и сила шага или записи — части подписи. */

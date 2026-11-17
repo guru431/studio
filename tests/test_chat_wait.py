@@ -61,8 +61,8 @@ def test_busy_card_waits_and_retries_the_model(studio):
 
 
 def test_local_model_frees_image_models_once_on_a_busy_card(studio):
-    """Ход на локальной модели после Lustify или FLUX: на первом 503 — release моделей картинок токеном
-    подключения учётки, затем повтор; раз на ход (не перед каждым ходом — тёплый Lustify без нужды не выгружается).
+    """Ход на локальной модели после SNOFS Krea 2 или FLUX: на первом 503 — release моделей картинок токеном
+    подключения учётки, затем повтор; раз на ход (не перед каждым ходом — тёплый SNOFS Krea 2 без нужды не выгружается).
     Идущая генерация отвечает release 409 — ход просто ждёт карту дальше."""
     from fakes import FakeGateway
     add_gateway(studio); cid = new_chat(studio)

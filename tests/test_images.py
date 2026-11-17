@@ -25,7 +25,7 @@ from fakes import PNG_REAL, TOKEN
 from image_upload import decode_form, image_size, normalize_image
 
 PROMPT = "секретный промпт: женщина у окна"
-LUSTIFY, FLUX = "lustify-v10-krea2-turbo", "flux-3-image-klein"
+SNOFS, FLUX = "snofs-krea2-v1.6", "flux-3-image-klein"
 GW = "http://10.77.1.15:4000"
 SLOT_BUSY = (409, {"error": {"message": "busy", "type": "slot_busy"}})
 
@@ -88,30 +88,30 @@ def test_job_goes_through_the_gateway_with_the_connection_key(studio):
     assert r.status_code == 202 and r.json()["seed"] == 7
     job = r.json()["id"]
     body = wait_state(studio, job, {"done", "error"})
-    assert body["state"] == "done" and body["model"] == "lustify" and body["kind"] == "generation"
+    assert body["state"] == "done" and body["model"] == "snofs" and body["kind"] == "generation"
     assert body["prompt"] == PROMPT and body["size"] == "832x1216" and body["seed"] == 7
     image = studio.c.get(f"/api/media/{body['media_id']}")
     assert image.status_code == 200 and image.content == PNG_REAL and image.headers["content-type"] == "image/png"
     payload, auth, read_timeout = studio.gw.generations[0]
-    assert payload == {"model": LUSTIFY, "prompt": PROMPT, "n": 1, "size": "832x1216", "seed": 7,
+    assert payload == {"model": SNOFS, "prompt": PROMPT, "n": 1, "size": "832x1216", "seed": 7,
                        "response_format": "b64_json"}
-    assert auth == f"Bearer {TOKEN}" and read_timeout == 1300
+    assert auth == f"Bearer {TOKEN}" and read_timeout == 1900
     assert [str(r.url) for r in studio.gw.requests] == [GW + "/slot/images/release", GW + "/slot/images/generations"]
     assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")]      # другая модель — до запроса
 
 
 @pytest.mark.parametrize("reply", [SLOT_BUSY, (500, {"error": {"message": "boom"}})], ids=["busy", "failed"])
 def test_switching_models_releases_the_other_one_first(studio, reply):
-    """Аренда Lustify (слот comfy) держит карту 600 с простоя, и FLUX её не вытесняет: без release
+    """Аренда SNOFS Krea 2 (слот comfy) держит карту 600 с простоя, и FLUX её не вытесняет: без release
     шлюз ждал карту 300 с и отвечал 503 (приёмка 2026-10-20). Release занятой модели (409) или
     сбой release задание не останавливает — карту дождётся сам запрос."""
     add_gateway(studio)
-    wait_state(studio, start(studio, model="lustify").json()["id"], {"done"})
+    wait_state(studio, start(studio, model="snofs").json()["id"], {"done"})
     assert [m for m, _ in studio.gw.releases] == [FLUX]
     studio.gw.release_replies = [reply]
     body = wait_state(studio, start(studio, model="flux").json()["id"], {"done", "error"})
     assert body["state"] == "done"
-    assert [m for m, _ in studio.gw.releases] == [FLUX, LUSTIFY]
+    assert [m for m, _ in studio.gw.releases] == [FLUX, SNOFS]
     paths = [r.url.path for r in studio.gw.requests]
     assert paths[-2:] == ["/slot/images/release", "/slot/images/generations"]
 
@@ -123,7 +123,7 @@ def test_unreachable_gateway_is_named_by_the_request_not_the_release(studio):
     assert body["state"] == "error" and body["detail"] == "шлюз недоступен: ConnectError"
 
 
-@pytest.mark.parametrize("model, gateway_id", [("flux", FLUX), ("lustify", LUSTIFY)])
+@pytest.mark.parametrize("model, gateway_id", [("flux", FLUX), ("snofs", SNOFS)])
 def test_model_is_chosen_on_the_page(studio, model, gateway_id):
     add_gateway(studio)
     wait_state(studio, start(studio, model=model).json()["id"], {"done"})
@@ -136,7 +136,7 @@ def test_seed_from_the_gateway_answer_is_shown(studio):
     body = wait_state(studio, start(studio, seed=7).json()["id"], {"done"})
     assert body["seed"] == 42
     download = studio.c.get(f"/api/media/{body['media_id']}?download=1")
-    assert download.headers["content-disposition"] == 'attachment; filename="studio-lustify-42.png"'
+    assert download.headers["content-disposition"] == 'attachment; filename="studio-snofs-42.png"'
 
 
 @pytest.mark.parametrize("code, body, words", [
@@ -158,7 +158,7 @@ def test_gateway_read_timeout_is_an_error_not_a_hang(studio):
     studio.gw.raise_on_generate = httpx.ReadTimeout
     add_gateway(studio)
     result = wait_state(studio, start(studio).json()["id"], {"done", "error"})
-    assert result["state"] == "error" and "1300" in result["detail"]
+    assert result["state"] == "error" and "1900" in result["detail"]
 
 
 def picture(fmt) -> bytes:
@@ -222,7 +222,7 @@ def test_jpeg_and_webp_replies_keep_their_own_type(studio, fmt, mime, ext):
     assert body["state"] == "done", body
     r = studio.c.get(f"/api/media/{body['media_id']}?download=1")
     assert r.content == raw and r.headers["content-type"] == mime
-    assert r.headers["content-disposition"] == f'attachment; filename="studio-lustify-5{ext}"'
+    assert r.headers["content-disposition"] == f'attachment; filename="studio-snofs-5{ext}"'
     assert studio.c.get(f"/api/media/{body['media_id']}?thumb=1").headers["content-type"] == "image/webp"
 
 
@@ -276,11 +276,11 @@ def test_cancel_waits_for_the_gateway_request_then_releases_the_models_slot(stud
 
 def test_cancel_retries_release_while_the_slot_is_busy(studio):
     studio.gw.release_replies = [SLOT_BUSY, SLOT_BUSY, (200, {"ok": True, "slot": "comfy"})]
-    job = _cancel_while_generating(studio, model="lustify")
+    job = _cancel_while_generating(studio, model="snofs")
     studio.gw.hold = False
     result = wait_state(studio, job, {"cancelled", "done", "error"})
     assert result["state"] == "cancelled" and "карта освобождена" in result["detail"]
-    assert [m for m, _ in studio.gw.releases] == [LUSTIFY] * 3
+    assert [m for m, _ in studio.gw.releases] == [SNOFS] * 3
     assert studio.sleeps == [images.RELEASE_PAUSE_SEC] * 2
 
 
@@ -314,21 +314,21 @@ def test_release_reports_each_model_in_plain_words(studio):
     r = studio.c.post("/api/images/release")
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results["lustify"] == {"state": "busy", "message": "занята генерацией"}
+    assert results["snofs"] == {"state": "busy", "message": "занята генерацией"}
     assert results["flux"]["state"] == "error" and "boom" in results["flux"]["message"]
     assert results["gemma-abl"]["state"] == "error"
 
 
 def test_release_shows_the_busy_reason(studio):
-    """Lustify и видео — слот comfy: переводчик при идущих роликах отвечает 409 «идут ролики: N»,
+    """SNOFS Krea 2 и видео — слот comfy: переводчик при идущих роликах отвечает 409 «идут ролики: N»,
     кнопка показывает его слова (спека 2026-10-19-srvllm-studio-video, раздел 6)."""
     studio.gw.release_replies = [(409, {"error": {"message": "идут ролики: 2", "type": "slot_busy"}}),
                                  (200, {"ok": True})]
     add_gateway(studio)
     results = studio.c.post("/api/images/release").json()["results"]
-    assert results["lustify"] == {"state": "busy", "message": "идут ролики: 2"}
+    assert results["snofs"] == {"state": "busy", "message": "идут ролики: 2"}
     assert results["flux"]["state"] == "released"
-    assert [m for m, _ in studio.gw.releases] == [LUSTIFY, FLUX, "gemma4-abl"]   # видео отдельно не освобождается
+    assert [m for m, _ in studio.gw.releases] == [SNOFS, FLUX, "gemma4-abl"]   # видео отдельно не освобождается
 
 
 def test_release_is_for_admins_only(studio):
@@ -384,7 +384,7 @@ def test_maximum_prompt_in_ascii_escaped_json_reaches_gateway(studio):
 
 # ---- правка фото -------------------------------------------------------------
 
-@pytest.mark.parametrize("model", ["lustify", "flux"])
+@pytest.mark.parametrize("model", ["snofs", "flux"])
 def test_uploaded_photo_is_forwarded_to_edits_and_discarded(studio, model):
     add_gateway(studio)
     source = png(Image.new("RGB", (32, 24), "red"))
@@ -393,12 +393,12 @@ def test_uploaded_photo_is_forwarded_to_edits_and_discarded(studio, model):
     assert r.status_code == 202, r.text
     job_id = r.json()["id"]
     body = wait_state(studio, job_id, {"done", "error"})
-    # сила — только у Lustify: FLUX её не получает, и в строке и цепочке её нет (раздел 9 спеки фото)
+    # сила — только у SNOFS Krea 2: FLUX её не получает, и в строке и цепочке её нет (раздел 9 спеки фото)
     assert body["state"] == "done" and body["kind"] == "edit"
-    assert body["strength"] == (0.4 if model == "lustify" else None) == body["chain"][-1]["strength"]
+    assert body["strength"] == (0.4 if model == "snofs" else None) == body["chain"][-1]["strength"]
     (fields, sent), = studio.gw.edits
     assert fields["model"] == images.MODELS[model] and sent.startswith(b"\x89PNG")
-    assert (fields.get("strength") == "0.4") if model == "lustify" else "strength" not in fields
+    assert (fields.get("strength") == "0.4") if model == "snofs" else "strength" not in fields
     assert str(studio.gw.requests[-1].url) == GW + "/slot/images/edits"
     assert images.JOBS[job_id].image is None
     # исходник — в истории, как его получил шлюз
@@ -649,7 +649,7 @@ def test_description_uses_gemma_abl_and_returns_editable_text_until_received(stu
     assert body["model"] == "gemma4-abl" and body["chat_template_kwargs"] == {"enable_thinking": False}
     assert body["messages"][0]["content"][0]["text"] == images.DESCRIPTION_PROMPT
     assert body["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert [model for model, _ in studio.gw.releases] == [LUSTIFY, FLUX, "gemma4-abl"]
+    assert [model for model, _ in studio.gw.releases] == [SNOFS, FLUX, "gemma4-abl"]
     job = images.JOBS[job_id]
     assert job.image is None and job.description is None
     assert text.strip() not in caplog.text
@@ -769,7 +769,7 @@ def test_translation_goes_to_gemma_abl_as_text_and_is_given_until_received(studi
     (body,) = studio.gw.descriptions
     assert body["model"] == "gemma4-abl" and body["chat_template_kwargs"] == {"enable_thinking": False}
     assert body["messages"] == [{"role": "user", "content": images.TRANSLATION_PROMPT + PROMPT}]
-    assert [model for model, _ in studio.gw.releases] == [LUSTIFY, FLUX, "gemma4-abl"]
+    assert [model for model, _ in studio.gw.releases] == [SNOFS, FLUX, "gemma4-abl"]
     assert images.JOBS[job_id].prompt == "" and PROMPT not in caplog.text and "a woman" not in caplog.text
     assert state.DB.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
 
@@ -914,7 +914,7 @@ def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
     studio.gw.hold = False
     job = wait_job(job_id)
     assert job.state == "cancelled" and "карта освобождена" in job.detail
-    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}"), (LUSTIFY, f"Bearer {TOKEN}")]   # до запроса и после
+    assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}"), (SNOFS, f"Bearer {TOKEN}")]   # до запроса и после
     assert media_rows() == 0 and share_files(env) == []
 
 
@@ -962,7 +962,7 @@ def test_deleting_a_user_releases_the_card_once_their_job_ends(studio, env):
     assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
     job = images.JOBS[job_id]
     assert job.state == "cancelled" and "карта освобождена" in job.detail
-    assert studio.gw.releases[-1] == (LUSTIFY, f"Bearer {TOKEN}")
+    assert studio.gw.releases[-1] == (SNOFS, f"Bearer {TOKEN}")
     assert state.DB.execute("SELECT COUNT(*) FROM users WHERE id = ?", (bob,)).fetchone()[0] == 0
     assert media_rows() == 0 and share_files(env) == []
 
@@ -1049,7 +1049,7 @@ def test_cancel_during_the_save_discards_the_saved_image(studio, env, monkeypatc
     result = wait_state(studio, job_id, {"cancelled", "done", "error"})
     assert result["state"] == "cancelled" and result["media_id"] is None
     assert media_rows() == 0 and share_files(env) == []
-    assert studio.gw.releases == [(LUSTIFY, f"Bearer {TOKEN}"), (FLUX, f"Bearer {TOKEN}")]   # до запроса и после
+    assert studio.gw.releases == [(SNOFS, f"Bearer {TOKEN}"), (FLUX, f"Bearer {TOKEN}")]   # до запроса и после
 
 
 def test_graceful_stop_during_the_cancel_delete_leaves_no_broken_row(studio, env, monkeypatch):
@@ -1198,7 +1198,7 @@ def test_prompt_and_key_never_reach_the_log_or_the_answers(studio, caplog):
 def test_unchecked_model_is_refused_and_default_is_used(studio):
     cid = add_gateway(studio)
     studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["flux"]})
-    assert start(studio, model="lustify").status_code == 422
+    assert start(studio, model="snofs").status_code == 422
     job = wait_state(studio, start(studio).json()["id"], {"done"})
     assert job["model"] == "flux" and studio.gw.generations[-1][0]["model"] == FLUX
 
@@ -1392,7 +1392,7 @@ def test_series_with_a_mask_is_refused(studio, env):
 
 def test_series_field_in_a_form_is_json(studio, env):
     add_gateway(studio)
-    form = {"prompt": "x", "size": "original", "model": "lustify", "strength": "0.25"}
+    form = {"prompt": "x", "size": "original", "model": "snofs", "strength": "0.25"}
     bad = studio.c.post("/api/images", data=form | {"series": "{broken"}, files={"image": ("p.png", photo(), "image/png")})
     assert bad.status_code == 422 and bad.json()["detail"]["code"] == "input"
     assert media_rows() == 0 and share_files(env) == []
@@ -1562,7 +1562,7 @@ def test_deeply_nested_series_field_is_refused(studio, env):
     """Поле `series` с глубокой вложенностью — 422, а не 500 (RecursionError json.loads)."""
     add_gateway(studio)
     deep = "[" * 50_000 + "]" * 50_000                          # 100 КБ — в пределе поля формы
-    form = {"prompt": "x", "size": "original", "model": "lustify", "strength": "0.25", "series": deep}
+    form = {"prompt": "x", "size": "original", "model": "snofs", "strength": "0.25", "series": deep}
     r = studio.c.post("/api/images", data=form, files={"image": ("p.png", photo(), "image/png")})
     assert r.status_code == 422 and r.json()["detail"]["code"] == "series", r.text
     assert media_rows() == 0 and share_files(env) == [] and not images.JOBS
@@ -1673,7 +1673,7 @@ def test_variants_are_capped(studio):
 
 # ---- пресеты -----------------------------------------------------------------
 
-PRESET = {"model": "lustify", "connection_id": None, "size": "portrait", "seed": 7, "strength": 0.4,
+PRESET = {"model": "snofs", "connection_id": None, "size": "portrait", "seed": 7, "strength": 0.4,
           "prompt": "портрет, студийный свет"}
 
 

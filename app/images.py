@@ -110,12 +110,11 @@ RESULT_MAX = 50 * 1024 * 1024
 NOT_PICTURE = "сервис вернул не картинку (нужен PNG, JPEG или WebP)"
 
 #: Модели страницы: короткое имя → id у шлюза (контракт API картинок).
-MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein",
-          "snofs": "snofs-krea2-v1.6", "big-love": "big-love-eryn1", "fineview": "fineview-qw21",
-          "muse": "muse-krea2-v3.5", "jib-moss": "jib-moss-v2", "fineporn": "fineporn-v5", "moody-krea": "moody-krea-v8"}
-STRENGTH_MODELS = {"lustify", "snofs", "big-love", "muse", "jib-moss", "fineporn", "moody-krea"}
+MODELS = {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein",
+          "fineview": "fineview-qw21", "jib-moss": "jib-moss-v2"}
+STRENGTH_MODELS = {"snofs", "jib-moss"}
 COMFY_MODELS = {value for name, value in MODELS.items() if name != "flux"}
-RELEASE_MODELS = {name: MODELS[name] for name in ("lustify", "flux")}
+RELEASE_MODELS = {name: MODELS[name] for name in ("snofs", "flux")}
 MEDIA_TIMEOUT_SEC = 1900
 #: Размеры: портрет, квадрат, альбом — около мегапикселя, кратны 16 (обе модели их держат).
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
@@ -764,7 +763,7 @@ async def _release_others(job: Job) -> None:
     """Release другой модели картинок перед запросом (п. 4 шапки): итог не важен — занятую (409)
     запрос дождётся у шлюза, а недоступный шлюз и убранный адрес назовёт сам запрос."""
     for model in RELEASE_MODELS.values():
-        if model == job.gateway_model or (model == MODELS["lustify"] and job.gateway_model in COMFY_MODELS):
+        if model == job.gateway_model or (model == MODELS["snofs"] and job.gateway_model in COMFY_MODELS):
             continue
         try:
             r = await release(job.conn, model)

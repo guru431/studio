@@ -241,7 +241,7 @@ def test_busy_card_is_waited_for_while_spotting(studio):
 
 
 def test_photo_after_slow_ocr_releases_images(studio):
-    """Ревью M3: распознавание снимка ждало карту (503) — за это время мог начаться Lustify: перед переводом
+    """Ревью M3: распознавание снимка ждало карту (503) — за это время мог начаться SNOFS Krea 2: перед переводом
     модели картинок отпускают снова. Быстрое — нет (сверяет test_photo_frees_and_releases_the_ocr_slot_around_spotting)."""
     add_gateway(studio)
     studio.gw.ocr_replies = [(503, {"error": {"message": "slot busy"}}), (200, spot_reply("Exit(93,146),(491,214)"))]

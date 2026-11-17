@@ -83,8 +83,8 @@ def test_batch_clients_read_the_same_prompts_on_edge_inputs(runner, images, tmp_
     gens = [body["prompt"] for path, _, body in images.log if path == "/slot/images/generations"]
     assert gens == [f"turn{ODD}left", "plain"]
     lines = (out / "manifest.tsv").read_bytes().decode().split("\n")
-    assert lines[1:] == ["1-1\t001-01_turn_left_s5.png\t5\tportrait\tlustify\tturn left",
-                         "2-1\t002-01_plain_s5.png\t5\tportrait\tlustify\tplain", ""]
+    assert lines[1:] == ["1-1\t001-01_turn_left_s5.png\t5\tportrait\tsnofs\tturn left",
+                         "2-1\t002-01_plain_s5.png\t5\tportrait\tsnofs\tplain", ""]
 
 
 GATEWAY = "http://gw.example.net:4000/slot"

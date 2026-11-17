@@ -437,10 +437,10 @@ def test_urls_of_each_kind():
 def test_models_of_a_proxied_connection_come_through_the_server(studio):
     cid = add_gateway(studio)
     studio.gw.reply = lambda request: httpx.Response(200, json={"data": [
-        {"id": "local-gemma-abl", "context_length": 8192}, {"id": "lustify", "owned_by": "x"}, {"no": "id"}]})
+        {"id": "local-gemma-abl", "context_length": 8192}, {"id": "snofs", "owned_by": "x"}, {"no": "id"}]})
     r = studio.c.get(f"/api/connections/{cid}/models")
     assert r.status_code == 200
-    assert r.json() == {"items": [{"id": "local-gemma-abl", "context_length": 8192}, {"id": "lustify"}]}
+    assert r.json() == {"items": [{"id": "local-gemma-abl", "context_length": 8192}, {"id": "snofs"}]}
     (q,) = studio.gw.requests
     assert str(q.url) == GW + "/v1/models" and q.headers["authorization"] == f"Bearer {FakeGateway.TOKEN}"
     studio.gw.reply = lambda request: httpx.Response(401)

@@ -22,7 +22,7 @@ def me(s, login="owner") -> int:
     return uid
 
 
-def image(uid, iid, state_="working", kind="generation", model="lustify", created=T0 - 30, finished=None,
+def image(uid, iid, state_="working", kind="generation", model="snofs", created=T0 - 30, finished=None,
           detail="жду карту или генерирую", prompt="секретный кот"):
     state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created, finished)"
                      " VALUES (?, ?, ?, ?, ?, '832x1216', 1, ?, ?, ?, ?)",
@@ -81,7 +81,7 @@ def test_running_jobs_of_every_section(studio):
     run = by_id(out["running"])
     assert set(run) == {"i1", "i2", "i3", "v1", "v2", "t1", "s1", "m1"}
     assert all(i["state"] == "running" and i["finished"] is None for i in run.values())
-    assert run["i1"] == {"section": "photo", "id": "i1", "state": "running", "title": "Картинка · Lustify",
+    assert run["i1"] == {"section": "photo", "id": "i1", "state": "running", "title": "Картинка · SNOFS Krea 2",
                          "detail": "жду карту или генерирую", "started": T0 - 30, "finished": None,
                          "href": "photo?id=i1", "cancel": "/api/images/i1/cancel"}
     assert run["i2"]["title"] == "Правка · FLUX" and run["i2"]["detail"] == "отменяю"
@@ -193,7 +193,7 @@ def test_running_picture_via_api_and_no_gateway_call(studio):
     try:
         seen = len(studio.gw.requests)
         out = get(studio)
-        assert [i["id"] for i in out["running"]] == [job_id] and out["running"][0]["title"] == "Картинка · Lustify"
+        assert [i["id"] for i in out["running"]] == [job_id] and out["running"][0]["title"] == "Картинка · SNOFS Krea 2"
         assert len(studio.gw.requests) == seen
     finally:
         studio.gw.hold = False

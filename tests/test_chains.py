@@ -21,7 +21,7 @@ def test_generation_is_one_step_with_its_own_picture(studio):
     item = wait_state(studio, start(studio, prompt="кот", seed=7).json()["id"], {"done"})
     step, = item["chain"]
     assert step["kind"] == "generation" and step["image_id"] == item["id"] and step["prompt"] == "кот"
-    assert step["media_id"] == item["media_id"] and step["model"] == "lustify" and step["gone"] is False
+    assert step["media_id"] == item["media_id"] and step["model"] == "snofs" and step["gone"] is False
 
 
 def test_edits_add_steps_and_link_the_pictures(studio):
@@ -99,7 +99,7 @@ def test_old_rows_get_a_chain_from_their_links(studio):
     b = media.save(uid, png(Image.new("RGB", (8, 8))), "image/png", "b.png")
     for iid, kind, src, mid in (("ia", "generation", None, a), ("ib", "edit", a, b)):
         state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, source_media_id, media_id,"
-                         " state, detail, created) VALUES (?, ?, ?, 'lustify', ?, '8x8', 1, ?, ?, 'done', 'готово', ?)",
+                         " state, detail, created) VALUES (?, ?, ?, 'snofs', ?, '8x8', 1, ?, ?, 'done', 'готово', ?)",
                          (iid, uid, kind, "p-" + iid, src, mid, T0))
     assert kinds(studio.c.get("/api/images/ib").json()) == ["generation", "edit"]
 

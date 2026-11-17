@@ -570,7 +570,7 @@ def test_settings_check_shows_the_gateway_passport(browser, live):
     lines = v["lines"]
     assert re.fullmatch(r"Адрес — отвечает, \d+ мс", lines[0]) and lines[1:4] == [
         "Ключ — принят", "Модели — 3", "Профиль — шлюз srvllm"]
-    assert "Lustify: генерация, правка, кисть, сила, seed — встроенный перечень srvllm" in lines
+    assert "SNOFS Krea 2: генерация, правка, кисть, сила, seed — встроенный перечень srvllm" in lines
     assert "FLUX: генерация, правка, кисть, seed — встроенный перечень srvllm" in lines
     assert "gemma4-abl: «Описать», «EN» — встроенный перечень srvllm" in lines
     assert re.fullmatch(PASSPORT_STAMP + " · адрес отвечает · ключ принят", v["chat"]), v["chat"]
@@ -633,8 +633,8 @@ def test_settings_check_of_a_cloud_runs_in_the_browser(browser, live):
 
 
 @pytest.mark.parametrize("width", [390, 1280])
-def test_settings_photo_unchecks_flux_and_the_chip_keeps_lustify(browser, live, width):
-    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела только Lustify."""
+def test_settings_photo_unchecks_flux_and_the_chip_keeps_snofs(browser, live, width):
+    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела только SNOFS Krea 2."""
     login = f"sect{width}"
     live.add_user(login)
     panel = ".section-panel[data-section=photo]"
@@ -648,13 +648,13 @@ def test_settings_photo_unchecks_flux_and_the_chip_keeps_lustify(browser, live, 
                  f" && document.querySelector('{panel} input.model-check[value=flux]')"), ("idle",),
         ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/sections')).sections[1].links[0].models)()"),
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
-        # в чипе «модель» раздела «Фото» — только Lustify
+        # в чипе «модель» раздела «Фото» — только SNOFS Krea 2
         *go("photo"), ("wait", FEED_READY), ("click", "#chip-model"),
         ("eval", "options", "[...document.querySelectorAll('#chip-model-menu .menu-option')].map(o => o.textContent)")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["saved"] == ["lustify"] and not r["values"]["overflow"]
-    assert r["values"]["options"] == ["Lustify"]
+    assert r["values"]["saved"] == ["snofs"] and not r["values"]["overflow"]
+    assert r["values"]["options"] == ["SNOFS Krea 2"]
     assert not problems(r), problems(r)
 
 
@@ -1870,7 +1870,7 @@ def test_chat_layout_fits_390(browser, live):
 
 # ---- фото ----------------------------------------------------------------------
 
-MODEL_IDS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein"}
+MODEL_IDS = {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein"}
 FEED_READY = ("document.querySelector('#photo-feed')?.dataset.feed"
               " && document.querySelector('#photo-feed').dataset.feed !== 'loading'")
 NEWEST_DONE = "#photo-feed .photo-card[data-state=done] .card-open"
@@ -1962,9 +1962,9 @@ def photo_screen(login, cards=0):
 
 
 @pytest.mark.parametrize("width", [390, 1280])
-@pytest.mark.parametrize("model", ["lustify", "flux"])
+@pytest.mark.parametrize("model", ["snofs", "flux"])
 def test_photo_source_strength_mask_and_model_switch(browser, live, width, model):
-    nxt = "flux" if model == "lustify" else "lustify"
+    nxt = "flux" if model == "snofs" else "snofs"
     login = f"ph-{model}-{width}"
     live.add_user(login)
     start = len(live.gw.edits)
@@ -2005,29 +2005,29 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         width=width, height=900, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
-    names = {"lustify": "Lustify", "flux": "FLUX"}
+    names = {"snofs": "SNOFS Krea 2", "flux": "FLUX"}
     assert v["strengthShown"] and not v["overflow"] and v["cleared"]
     assert names[model] in v["defaultModel"] and v["reset"] and names[nxt] in v["nextLabel"]
-    assert v["strengthVisible"] == (nxt == "lustify") and not v["editorOverflow"] and v["emptyMask"]
+    assert v["strengthVisible"] == (nxt == "snofs") and not v["editorOverflow"] and v["emptyMask"]
     # страница: исходник файлом, затем фото истории с маской и без
     _newest, middle, oldest = v["media"]
     first, second, third = (f["form"] for f in v["forms"])
     assert [f["path"] for f in v["forms"]] == ["/api/images"] * 3
-    assert first["model"] == "lustify" and first["strength"] == "0.4" and first["image"].startswith("file:")
+    assert first["model"] == "snofs" and first["strength"] == "0.4" and first["image"].startswith("file:")
     assert "source_media_id" not in first and "mask" not in first
     assert second["size"] == "original" and second["model"] == model and second["source_media_id"] == oldest
     assert second["mask"].startswith("file:") and "image" not in second
     assert third["size"] == "original" and third["model"] == nxt and third["source_media_id"] == middle
     assert "mask" not in third
-    # шлюз: модель, сила только у Lustify, фото исходника
+    # шлюз: модель, сила только у SNOFS Krea 2, фото исходника
     edits = live.gw.edits[start:]
     assert len(edits) == 3
-    assert edits[0][0]["model"] == MODEL_IDS["lustify"] and edits[0][0]["strength"] == "0.4"
+    assert edits[0][0]["model"] == MODEL_IDS["snofs"] and edits[0][0]["strength"] == "0.4"
     assert picture(edits[0][1]) == ((40, 30), (0, 0, 255))
     assert edits[1][0]["model"] == MODEL_IDS[model] and edits[1][0]["size"] == "64x48"
     assert edits[2][0]["model"] == MODEL_IDS[nxt]
-    assert edits[1 if model == "lustify" else 2][0]["strength"] == "0.25"
-    assert "strength" not in edits[2 if model == "lustify" else 1][0]
+    assert edits[1 if model == "snofs" else 2][0]["strength"] == "0.25"
+    assert "strength" not in edits[2 if model == "snofs" else 1][0]
     assert not problems(r), problems(r)
 
 
@@ -2065,7 +2065,7 @@ def test_brush_edit_of_a_picture_larger_than_2_mp_says_the_size_and_works(browse
     assert not problems(r), problems(r)
 
 
-@pytest.mark.parametrize("width,model", [(390, "lustify"), (1280, "flux")])
+@pytest.mark.parametrize("width,model", [(390, "snofs"), (1280, "flux")])
 def test_photo_description_is_edited_and_creates_without_a_source(browser, live, width, model):
     login = f"desc-{width}"
     live.add_user(login)
@@ -2346,17 +2346,17 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
                           ".map(i => [i.prompt, i.seed, i.size, i.media_id]))()")])
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["cols"] == 6 and v["caption"] == "Lustify"
-    assert v["released"] == "Lustify — освобождена; FLUX — освобождена; gemma-abl — освобождена"
-    # две картинки ленты и повтор (Lustify) — release FLUX до запроса; кнопка — три модели
-    lustify, flux = MODEL_IDS["lustify"], MODEL_IDS["flux"]
-    assert [m for m, _ in live.gw.releases[rel0:]] == [flux, flux, lustify, flux, "gemma4-abl", flux]
+    assert v["cols"] == 6 and v["caption"] == "SNOFS Krea 2"
+    assert v["released"] == "SNOFS Krea 2 — освобождена; FLUX — освобождена; gemma-abl — освобождена"
+    # две картинки ленты и повтор (SNOFS Krea 2) — release FLUX до запроса; кнопка — три модели
+    snofs, flux = MODEL_IDS["snofs"], MODEL_IDS["flux"]
+    assert [m for m, _ in live.gw.releases[rel0:]] == [flux, flux, snofs, flux, "gemma4-abl", flux]
     newest = v["items"][0]
     assert [i[:3] for i in v["items"]] == [["кот 1", 101, "1024x1024"], ["кот 0", 100, "832x1216"]]
     assert v["download"][0].endswith("?download=1") and v["download"][1] and "seed 101" in v["meta"]
     repeat = live.gw.generations[g0 + 2:]
     assert len(repeat) == 1 and repeat[0][0]["seed"] == 101 and repeat[0][0]["prompt"] == "кот 1"
-    assert repeat[0][0]["size"] == "1024x1024" and repeat[0][0]["model"] == MODEL_IDS["lustify"]
+    assert repeat[0][0]["size"] == "1024x1024" and repeat[0][0]["model"] == MODEL_IDS["snofs"]
     assert any(s.startswith("DELETE /api/images/") for s in r["sent"])
     assert v["hash"] == "#/video" and v["current"] == "video"
     assert not problems(r), problems(r)
@@ -2441,7 +2441,7 @@ def test_viewer_shows_the_chain_and_opens_a_step(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["prompts"] == ["кот", "ярче"] and v["now"] == [None, "true"]
-    assert v["meta"].startswith("1. Генерация · Lustify · 1024×1024 · seed 5")
+    assert v["meta"].startswith("1. Генерация · SNOFS Krea 2 · 1024×1024 · seed 5")
     assert not problems(r), problems(r)
 
 
@@ -2611,10 +2611,10 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
     assert v["head"] == ("grid" if width == 1280 else "none") and v["aligned"] and v["tableFits"]
     assert [row[0] for row in v["rows"]] == ["кот 2", "кот 1", "кот 0"]
     prompt, model, size, seed, when = v["rows"][0]
-    assert (model, size, seed) == ("Lustify", "1216×832", "seed 102") and re.fullmatch(r"\d\d:\d\d", when)
+    assert (model, size, seed) == ("SNOFS Krea 2", "1216×832", "seed 102") and re.fullmatch(r"\d\d:\d\d", when)
     assert (v["previewCols"] == 1) if width == 390 else (v["previewCols"] >= 3)
     text, meta, srcset, ratio = v["newest"]
-    assert text == "кот 2" and meta.startswith("Lustify · 1216×832 · seed 102 · ")
+    assert text == "кот 2" and meta.startswith("SNOFS Krea 2 · 1216×832 · seed 102 · ")
     assert re.fullmatch(r"/api/media/\w+\?thumb=1 384w, /api/media/\w+ 1216w", srcset)
     assert abs(ratio - 1216 / 832) < 0.02                       # картинка целиком, без обрезки
     assert v["kept"] == ["preview", "preview", "true"]
@@ -2929,7 +2929,7 @@ def test_photo_selection_downloads_one_zip(browser, live, width):
 def test_photo_selection_counts_only_files_to_download(browser, live):
     uid = live.add_user("zipcount")
     live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
-                   " VALUES (?, ?, 'generation', 'lustify', 'упавший кот', '832x1216', 1, 'error', 'шлюз не ответил', ?)",
+                   " VALUES (?, ?, 'generation', 'snofs', 'упавший кот', '832x1216', 1, 'error', 'шлюз не ответил', ?)",
              ("e" * 32, uid, time.time() - 60))
     r = browser.drive(live.url + "/", [*photo_screen("zipcount", cards=1), ("wait", done_cards(1)),
         ("click", "#photo-select"), ("click", "#photo-select-all"),
@@ -3216,7 +3216,7 @@ def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
 
 
 def test_photo_strength_series_shows_the_values_here_and_in_the_editor(browser, live):
-    """Критерий 5: Lustify с фото — «сила» от 0.25 до 0.75, 3 варианта: значения видны до запуска; и в «Изменить»."""
+    """Критерий 5: SNOFS Krea 2 с фото — «сила» от 0.25 до 0.75, 3 варианта: значения видны до запуска; и в «Изменить»."""
     login = "strengths"
     live.add_user(login)
     e0 = len(live.gw.edits)
@@ -3270,7 +3270,7 @@ def test_photo_preset_saves_and_applies(browser, live):
     prompt = "document.querySelector('#photo-prompt').value"
     chips = "[document.querySelector('#chip-model').textContent, document.querySelector('#chip-size').textContent," \
             " document.querySelector('#photo-strength').value]"
-    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'lustify',
+    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'snofs',
       connection_id: null, size: 'square', seed: 42, strength: 0.25, prompt: 'старый кот' }} }}); return true; }})()"""
     r = browser.drive(live.url + "/", [*photo_screen(login),
         ("type", "#photo-prompt", "портрет у окна"),
@@ -3318,11 +3318,11 @@ def test_photo_preset_saves_and_applies(browser, live):
     v = r["values"]
     assert v["empty"] == "Пресетов пока нет" and v["checks"] == [True, False]
     (name, params), = v["saved"]
-    assert name == "Портрет студия" and params["model"] == "lustify" and params["size"] == "landscape"
+    assert name == "Портрет студия" and params["model"] == "snofs" and params["size"] == "landscape"
     assert params.get("seed") is None and params["strength"] == 0.6 and params["prompt"] == "портрет у окна"
     assert v["prompt"] == "портрет у окна"
     model, size, strength = v["chips"]
-    assert "Lustify" in model and "Альбом" in size and strength == "0.6"
+    assert "SNOFS Krea 2" in model and "Альбом" in size and strength == "0.6"
     assert v["kept"] == "свой текст"
     assert "уже есть" in v["replace"][0] and v["replace"][1] == "Заменить"
     assert v["gone"] == "Пресетов пока нет"
@@ -3436,7 +3436,7 @@ def test_photo_compare_from_the_viewer_and_the_selection(browser, live, width):
     v = r["values"]
     gen, edit = v["made"]
     assert v["sides"][:2] == [f"/api/media/{gen}", f"/api/media/{edit}"]
-    assert v["sides"][2].startswith("1. Lustify · 1024×1024 · seed 5") and v["sides"][3].startswith("2. FLUX · 64×48")
+    assert v["sides"][2].startswith("1. SNOFS Krea 2 · 1024×1024 · seed 5") and v["sides"][3].startswith("2. FLUX · 64×48")
     assert "сила" not in v["sides"][3]                                   # у FLUX силы нет
     assert "30%" in v["clip"][0] and v["clip"][1] == "30%"
     assert 55 <= v["drag"][0] <= 65 and v["drag"][1].endswith("%")
@@ -3582,8 +3582,8 @@ def test_new_media_models_are_selectable_and_h3_controls_match_its_graph(browser
         ('eval', 'wan', "(() => { const s = document.querySelector('#video-model'); s.value = [...s.options].find(o => o.value.endsWith(':wan')).value; s.dispatchEvent(new Event('change')); return s.value; })()"),
         ('eval', 'wanControls', "[document.querySelector('#chip-smooth').hidden, document.querySelector('#chip-quality').disabled, document.querySelector('#video-seconds').readOnly, document.querySelector('#chip-quality').textContent]")], width=390, height=900)
     assert not r.get('failed'), r
-    assert all(name in r['values']['photos'] for name in ('SNOFS Krea 2', 'Big Love Eryn1', 'FineView QW21',
-        'Muse 3.5 Krea 2', 'Jib Mix Moss V2', 'FinePorn v5', 'Moody Krea v8'))
+    assert all(name in r['values']['photos'] for name in ('SNOFS Krea 2', 'FineView QW21', 'Jib Mix Moss V2', 'FLUX'))
+    assert not any(name in r['values']['photos'] for name in ('Lustify', 'Big Love', 'Muse', 'FinePorn', 'Moody'))
     assert r['values']['controls'] == [True, '5', '768p', True, True]
     assert r['values']['wanControls'] == [False, False, False, '576p']
     assert not problems(r), problems(r)
@@ -6072,7 +6072,7 @@ def reload_page(name="reload"):
 
 @pytest.mark.parametrize("width", [390, 1280])
 def test_jobs_badge_counts_a_running_picture(browser, live, width):
-    """Запустил картинку — у значка «1» сразу (jobs.kick), панель: «Идёт» — «Картинка · Lustify» с ходом,
+    """Запустил картинку — у значка «1» сразу (jobs.kick), панель: «Идёт» — «Картинка · SNOFS Krea 2» с ходом,
     «Готово за час» — пусто; значок в окне и не на аватаре."""
     login = f"jobs-run{width}"
     live.add_user(login)
@@ -6098,7 +6098,7 @@ def test_jobs_badge_counts_a_running_picture(browser, live, width):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["before"] == "0" and v["count"] == "1" and v["label"] == "В работе: 1" and v["placed"]
-    assert v["rows"] == [["photo", "Картинка · Lustify", False, "running"]]
+    assert v["rows"] == [["photo", "Картинка · SNOFS Krea 2", False, "running"]]
     assert re.fullmatch(r"жду карту или генерирую · \d+:\d\d", v["detail"]), v["detail"]
     assert v["finished"] == "За час ничего не закончилось" and v["inside"] and not v["overflow"]
     assert not problems(r), problems(r)
@@ -6123,7 +6123,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
         ("eval", "dotAfter", "document.querySelector('#jobs').dataset.new || ''")])
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["dot"] is True and v["rows"] == [["photo", "Картинка · Lustify", True, "done"]]
+    assert v["dot"] is True and v["rows"] == [["photo", "Картинка · SNOFS Krea 2", True, "done"]]
     assert v["running"] == "Сейчас ничего не идёт" and v["dotOpen"] == ""
     assert v["hash"] == "#/photo" and v["panel"] is False and v["dotAfter"] == ""
     assert not problems(r), problems(r)

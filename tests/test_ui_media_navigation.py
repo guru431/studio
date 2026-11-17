@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 def gallery(page, section, count=4):
     rows = [dict(id=f'{i:032x}', created=1700000000 - i, state='done', media_id=f'media-{i}',
-                 model='lustify', size='832x1216', seed=i, prompt=f'Файл {i}', elapsed=1,
+                 model='snofs', size='832x1216', seed=i, prompt=f'Файл {i}', elapsed=1,
                  seconds=1, quality='fast', progress=100, prompt_source='given') for i in range(count)]
     if len(rows) > 1:
         rows[1].update(state='error' if section == 'photo' else 'failed', media_id=None)

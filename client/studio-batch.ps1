@@ -36,7 +36,7 @@
 .PARAMETER PromptsFile
   Файл с промптами, одна строка — один промпт.
 .PARAMETER Model
-  lustify (по умолчанию, Lustify v10 Krea2 Turbo) или flux (FLUX 3 Image Klein).
+  snofs (по умолчанию, SNOFS Krea 2) или flux (FLUX 3 Image Klein).
 .PARAMETER ImagePath
   Исходное фото PNG/JPEG/WebP до 10 МиБ. Одно фото для всех промптов; запрос /images/edits.
 .PARAMETER Strength
@@ -74,7 +74,7 @@
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)][string]$PromptsFile,
-    [Parameter(ParameterSetName = 'Run')][ValidateSet('lustify', 'flux')][string]$Model = 'lustify',
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('snofs', 'flux')][string]$Model = 'snofs',
     [Parameter(ParameterSetName = 'Run')][string]$ImagePath = '',
     [Parameter(ParameterSetName = 'Run')][ValidateRange(0.05, 1.0)][double]$Strength = 0.65,
     [Parameter(ParameterSetName = 'Run')]
@@ -94,7 +94,7 @@ $EmbeddedKey = ''
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $VaultKey = 'GATEWAY_KEY_OWNER_IMAGES'
-$Models = @{ lustify = 'lustify-v10-krea2-turbo'; flux = 'flux-3-image-klein' }
+$Models = @{ snofs = 'snofs-krea2-v1.6'; flux = 'flux-3-image-klein' }
 $Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }
 $Mime = @{ '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.png' = 'image/png'; '.webp' = 'image/webp' }
 $TimeoutSec = 1300                     # маршрут генерации у шлюза — до 1260 с
@@ -270,7 +270,7 @@ try {
                 $body = @{ model = $modelId; prompt = $prompt; size = $Sizes[$Size]; n = 1
                            seed = $seedValue; response_format = 'b64_json' }
                 if ($ImagePath) {
-                    if ($Model -eq 'lustify') { $body.strength = $Strength }
+                    if ($Model -eq 'snofs') { $body.strength = $Strength }
                     $r = Invoke-Gateway '/images/edits' $body $TimeoutSec $ImagePath
                 } else {
                     $r = Invoke-Gateway '/images/generations' $body $TimeoutSec

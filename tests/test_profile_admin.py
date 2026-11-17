@@ -33,7 +33,7 @@ def add_history(s, env, uid, tag="тайна"):
     db.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, created)"
                " VALUES (?, ?, ?, 'image', 'x.png', ?, ?)", (f"a-{uid}", uid, f"msg-{uid}", f"m-{uid}", now))
     db.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, media_id, state, detail, created)"
-               " VALUES (?, ?, 'generation', 'lustify', ?, '1024x1024', 1, ?, 'done', '', ?)",
+               " VALUES (?, ?, 'generation', 'snofs', ?, '1024x1024', 1, ?, 'done', '', ?)",
                (f"i-{uid}", uid, f"{tag} prompt", f"m-{uid}", now))
     db.execute("INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
                " state, detail, created) VALUES (?, ?, 1, ?, ?, 5, 'fast', 0, 'done', '', ?)",
@@ -467,7 +467,7 @@ def test_disabling_a_user_stops_their_work_but_keeps_history(studio):
         studio.gw.hold = studio.gw.chat_hold = False
     until(lambda: images.JOBS[job].state in images.TERMINAL)
     assert images.JOBS[job].state == "cancelled" and "карта освобождена" in images.JOBS[job].detail
-    assert studio.gw.releases[-1] == ("lustify-v10-krea2-turbo", f"Bearer {TOKEN}")
+    assert studio.gw.releases[-1] == ("snofs-krea2-v1.6", f"Bearer {TOKEN}")
     row = state.DB.execute("SELECT state, gateway_id FROM videos WHERE id = ?", (video["id"],)).fetchone()
     assert row["state"] == "cancelled" and studio.gw.video_deleted == [row["gateway_id"]]
     statuses = [r["status"] for r in state.DB.execute("SELECT status FROM messages WHERE chat_id = ?", (cid,))]

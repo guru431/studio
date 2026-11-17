@@ -2,7 +2,7 @@
 
 Studio part — needs STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD of an administrator who already
 has the «srvllm» connection (`manage.py create-admin` with GATEWAY_KEY_OWNER_IMAGES). It logs in,
-generates a Lustify picture, edits half of it with the brush, describes it, makes a 1 s clip of it
+generates a SNOFS Krea 2 picture, edits half of it with the brush, describes it, makes a 1 s clip of it
 and asks local-gemma-abl about a PDF made here, recognizes a one-page scan in «Распознавание» and in the
 chat (gemma-abl answers without waiting out the ocr lease), translates a text, a one-page text PDF and a
 picture of a sign in «Перевод» (blocks with boxes; gemma-abl translates them without waiting out the ocr
@@ -32,7 +32,7 @@ from clients import local_copy_drift
 from conftest import CLIENT
 
 pytestmark = pytest.mark.manual
-MODEL = "lustify-v10-krea2-turbo"
+MODEL = "snofs-krea2-v1.6"
 PROMPT = "a simple watercolor landscape, green hills, a blue lake, no people"
 STUDIO = os.environ.get("STUDIO_LIVE_URL", "https://studio.example.com").rstrip("/")
 GATEWAY = os.environ.get("STUDIO_LIVE_GATEWAY", "http://10.77.1.15:4000/slot")
@@ -194,9 +194,9 @@ def cleanup(client, created):
 @pytest.mark.timeout(3 * IMAGE_SEC + VIDEO_SEC + 600)
 def test_photo_edit_description_and_video_through_the_studio(studio):
     c, made = studio.c, studio.created
-    # 1. Lustify from text, portrait 832x1216
+    # 1. SNOFS Krea 2 from text, portrait 832x1216
     job = submit(c, STUDIO + "/api/images", 202,
-                 json={"model": "lustify", "size": "portrait", "seed": 23, "prompt": PROMPT})
+                 json={"model": "snofs", "size": "portrait", "seed": 23, "prompt": PROMPT})
     made.images.append(job["id"])
     generated = poll(c, f"{STUDIO}/api/images/{job['id']}", finished, IMAGE_SEC)
     assert generated["state"] == "done", generated
@@ -211,14 +211,14 @@ def test_photo_edit_description_and_video_through_the_studio(studio):
     with Image.open(io.BytesIO(thumb.content)) as small:
         assert small.format == "WEBP" and max(small.size) <= 384
 
-    # 2. Brush edit of the left half (Lustify, strength as the editor's default): outside the mask every
-    # pixel is the source's. Lustify, not FLUX: the gateway cannot swap comfy→image within its 300 s
+    # 2. Brush edit of the left half (SNOFS Krea 2, strength as the editor's default): outside the mask every
+    # pixel is the source's. SNOFS Krea 2, not FLUX: the gateway cannot swap comfy→image within its 300 s
     # budget while comfy's lease is active, so a model switch here would fail with no_capacity.
     area = (0, 0, source.width // 2, source.height)
     mask = Image.new("L", source.size)
     mask.paste(255, area)
     job = submit(c, STUDIO + "/api/images", 202,
-                 data={"model": "lustify", "strength": "0.25", "size": "original", "seed": "21",
+                 data={"model": "snofs", "strength": "0.25", "size": "original", "seed": "21",
                        "prompt": "Turn the left half into a snowy winter scene. Keep everything else unchanged.",
                        "source_media_id": generated["media_id"]},
                  files={"mask": ("mask.png", png(mask), "image/png")})
