@@ -18,6 +18,7 @@ TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'openc
 PACKAGES = {tool: (package,) for tool, package in TOOLS.items()}
 PACKAGES['opencode'] = ('opencode-ai', '@opencode/cli', '@opencode-ai/cli')
 EXTENSIONS = {'codex': 'openai.chatgpt', 'claude': 'anthropic.claude-code'}
+HOMEBREW = {'codex': 'codex', 'claude': 'claude-code'}
 VERSION = re.compile(r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}')
 INSTALLED_VERSION = re.compile(VERSION.pattern + r'(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,48})?')
 UPDATE_SEC = 300
@@ -53,6 +54,12 @@ def _json(request):
 
 
 def latest(tool, source, package=None):
+    if source == 'homebrew':
+        if package != HOMEBREW.get(tool):
+            raise ValueError('package')
+        data = _json('https://formulae.brew.sh/api/cask/' + package + '.json')
+        value = data.get('version')
+        return value if isinstance(value, str) and VERSION.fullmatch(value) else None
     if source == 'vscode':
         body = {'filters': [{'criteria': [{'filterType': 7, 'value': EXTENSIONS[tool]}]}], 'flags': 17}
         request = urllib.request.Request(
@@ -160,12 +167,22 @@ def inspect(tool):
                 cli_version = version(result.stdout.decode('utf-8', 'replace').strip())
         except (OSError, subprocess.SubprocessError):
             pass
+    brew = None
+    if host.MACOS and source == 'native' and path is not None and tool in HOMEBREW:
+        for root in (Path('/opt/homebrew'), Path('/usr/local')):
+            if path.is_relative_to(root / 'Caskroom' / HOMEBREW[tool]) and (root / 'bin/brew').is_file():
+                source, package, brew = 'homebrew', HOMEBREW[tool], root / 'bin/brew'
+                break
+    native_claude = (host.MACOS and tool == 'claude' and path is not None
+                     and path.is_relative_to(Path.home() / '.local/share/claude/versions'))
+    bundled_opencode = (tool == 'opencode' and path is not None and
+                        path.name == 'opencode-cli' and path.parent.name == 'Resources')
     reason = ('not_installed' if path is None else 'bridge' if source == 'sdk' else
               'manager' if source == 'vscode' and not _vscode() or source == 'npm' and not _npm() else
-              'manual' if source == 'native' and tool != 'opencode' else None)
+              'manual' if source == 'native' and not native_claude and (tool != 'opencode' or bundled_opencode) else None)
     return {'id': tool, 'installed': path is not None, 'version': installed or cli_version,
             'cli_version': cli_version, 'source': source, 'reason': reason,
-            '_path': path, '_prefix': prefix, '_package': package}
+            '_path': path, '_prefix': prefix, '_package': package, '_brew': brew}
 
 
 def command(item, target):
@@ -174,6 +191,18 @@ def command(item, target):
     if tool not in TOOLS or not isinstance(target, str) or not VERSION.fullmatch(target):
         raise ValueError('target')
     env = dict(os.environ)
+    if item['source'] == 'homebrew':
+        package = HOMEBREW.get(tool)
+        brew = item.get('_brew')
+        if not package or item.get('_package') != package or brew not in (
+                Path('/opt/homebrew/bin/brew'), Path('/usr/local/bin/brew')):
+            raise ValueError('manager')
+        env['HOMEBREW_NO_INSTALL_CLEANUP'] = '1'
+        return [str(brew), 'upgrade', '--cask', package], env
+    if item['source'] == 'native' and tool == 'claude' and item.get('reason') is None:
+        if not host.MACOS or not item['_path'].is_relative_to(Path.home() / '.local/share/claude/versions'):
+            raise ValueError('manager')
+        return [str(item['_path']), 'update'], env
     if item['source'] == 'native' and tool == 'opencode':
         return [str(item['_path']), 'upgrade', target], env
     if item['source'] == 'vscode' and (launcher := _vscode()):

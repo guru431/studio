@@ -91,6 +91,7 @@ const lists = new Map();
 // Только метаданные списков, в памяти этой страницы; ключ включает учётку, компьютер и проект.
 const chatLists = new Map();
 const CHAT_LISTS_MAX = 20;
+let refreshModels = refreshRequested;
 document.addEventListener('studio-code-clear', () => { lists.clear(); chatLists.clear(); });
 /** Чаты с неотправленным черновиком (`${aid}/${chat}`, событие code-chat.js) — признак ✎ вкладки; только память. */
 const draftKeys = new Set();
@@ -920,7 +921,8 @@ export function mount(node, context) {
   acted = Date.now();                     // вход в раздел — действие владельца
   const mine = ++gen;
   layout();
-  const initialAgents = api('GET', '/api/agents');
+  const initialAgents = api('GET', `/api/agents${refreshModels ? '?refresh=true' : ''}`);
+  refreshModels = false;
   initialAgents.catch(() => {});
   load().catch(() => null).then(() => {
     if (mine !== gen || !host) return;

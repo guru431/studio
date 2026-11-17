@@ -151,7 +151,7 @@
   `applyAccent`, `follow`, `setupAppearance`, событие `studio-appearance`; меню аватара и «Оформление» — два вида одного
   состояния. Сохранение — последовательные PATCH, несохранённый выбор главнее перечитанного профиля; блоки страницы —
   `accountLookBlock`, `deviceLookBlock`; `deviceSizeControls` — общие синхронные настройки размера для страницы и меню аватара. В `app.js` кода темы нет.
-- Акцент учётки: `profile.ACCENTS` (orange, blue, violet, rose; первый — умолчание; зелёного нет — совпал бы с
+- Акцент учётки: `account_profile.ACCENTS` (orange, blue, violet, rose; первый — умолчание; зелёного нет — совпал бы с
   «работает» `--success`); `GET/PATCH /api/me.accent`, неизвестное — 422 `accent`; хранится ключом `accent` в JSON
   `users.views` (без шага схемы; наружу `views` без этого ключа; неизвестное в базе → `orange`; откат безопасен).
   CSS `:root, [data-accent=orange]` и `[data-accent=…]` задают `--accent`, `--accent-soft`, `--primary`;

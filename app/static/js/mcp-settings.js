@@ -154,8 +154,11 @@ export function agentMcpBlock(agents) {
   computers.addEventListener('change', loadProjects); projects.addEventListener('change', loadConfig); engine.addEventListener('change', loadConfig);
   agents().then(({ items }) => {
     if (!root.isConnected) return;
-    computers.replaceChildren(...items.filter(a => !a.shared && a.online).map(a => el('option', { value: a.id }, a.name)));
-    if (!computers.options.length) note.textContent = tr("Компьютер не на связи — запустите мост"); loadProjects();
+    const online = items.filter(a => !a.shared && a.online);
+    computers.replaceChildren(...online.filter(a => a.mcp).map(a => el('option', { value: a.id }, a.name)));
+    if (!computers.options.length) note.textContent = online.length
+      ? tr("Обновите мост на компьютере для настройки MCP") : tr("Компьютер не на связи — запустите мост");
+    loadProjects();
   }).catch(err => { note.textContent = words(err); });
   return root;
 }

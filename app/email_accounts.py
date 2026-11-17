@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 import account_mail
 import auth
 import clock
-import profile
+import account_profile as profile
 import security
 import security_log
 import state

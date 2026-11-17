@@ -293,7 +293,8 @@ def test_hello(agent):
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                              "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
                              "passive_requests": True, "history_images": True, "project_sharing": True,
-                             "completions": True, "visualization_scope": True, "visualization_images": True, "agent_update_cancel": False}
+                             "completions": True, "visualization_scope": True, "visualization_images": True,
+                             "agent_update_cancel": False, "codex_models": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 

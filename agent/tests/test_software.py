@@ -50,6 +50,47 @@ def test_latest_uses_fixed_registry_and_filters_platform_and_prerelease(monkeypa
     assert not software.newer('1.2.3', '2.0.0')
 
 
+def test_homebrew_updates_only_known_casks_and_preserves_old_installations(monkeypatch):
+    monkeypatch.setattr(software, '_json', lambda url: {'version': '1.2.10'} if
+        url == 'https://formulae.brew.sh/api/cask/codex.json' else pytest.fail(url))
+    assert software.latest('codex', 'homebrew', 'codex') == '1.2.10'
+    installed = item(source='homebrew', _package='codex', _brew=Path('/opt/homebrew/bin/brew'))
+    args, env = software.command(installed, '1.2.10')
+    assert args == [str(Path('/opt/homebrew/bin/brew')), 'upgrade', '--cask', 'codex']
+    assert env['HOMEBREW_NO_INSTALL_CLEANUP'] == '1'
+    with pytest.raises(ValueError):
+        software.command({**installed, '_package': 'untrusted'}, '1.2.10')
+    with pytest.raises(ValueError):
+        software.latest('codex', 'homebrew', '../untrusted')
+
+
+def test_detects_homebrew_cask_from_the_resolved_cli_path(monkeypatch):
+    path = Path('/opt/homebrew/Caskroom/codex/1.2.3/codex')
+    monkeypatch.setattr(software.host, 'MACOS', True)
+    monkeypatch.setattr(software.codex_rpc, 'find_cli', lambda: path)
+    monkeypatch.setattr(Path, 'resolve', lambda path: path)
+    monkeypatch.setattr(Path, 'is_file', lambda path: path == Path('/opt/homebrew/bin/brew'))
+    monkeypatch.setattr(software.subprocess, 'run', lambda *args, **kwargs:
+        SimpleNamespace(returncode=0, stdout=b'codex-cli 1.2.3'))
+    result = software.inspect('codex')
+    assert result['source'] == 'homebrew' and result['reason'] is None and result['_package'] == 'codex'
+
+
+def test_native_claude_uses_its_installer_and_bundled_opencode_is_read_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(software.host, 'MACOS', True)
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(software.subprocess, 'run', lambda *args, **kwargs:
+        SimpleNamespace(returncode=0, stdout=b'1.2.3'))
+    binary = tmp_path / '.local/share/claude/versions/1.2.3'
+    monkeypatch.setattr(software.cli, 'find_cli', lambda: binary)
+    result = software.inspect('claude')
+    assert result['reason'] is None
+    assert software.command(result, '1.2.10')[0] == [str(binary), 'update']
+    bundled = tmp_path / 'OpenCode.app/Contents/Resources/opencode-cli'
+    monkeypatch.setattr(software.opencode_rpc, 'find_cli', lambda: bundled)
+    assert software.inspect('opencode')['reason'] == 'manual'
+
+
 def test_json_lookup_refuses_redirects_and_limits_response(monkeypatch):
     handlers = []
     class Response:

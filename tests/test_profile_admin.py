@@ -1,4 +1,4 @@
-"""Профиль (app/profile.py), панель администратора (app/admin.py), удаление истории (app/history.py)."""
+"""Профиль (app/account_profile.py), администратор (app/admin.py), история (app/history.py)."""
 import json
 import logging
 

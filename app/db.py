@@ -631,7 +631,7 @@ SELECT l.user_id, l.section, l.connection_id, json_extract(l.models, '$[0]') FRO
            AND json_array_length(x.models) > 0));""",
     # речь: расшифровки записей, образцы голосов и озвучки
     5: SPEECH_TABLES,
-    # вид ленты разделов (profile.py) — в учётке: JSON {раздел: вид}
+    # вид ленты разделов (account_profile.py) — в учётке: JSON {раздел: вид}
     6: "ALTER TABLE users ADD COLUMN views TEXT NOT NULL DEFAULT '{}';",
     # блокировка на телефоне: включена ли у учётки, мобильна ли сессия, последняя отметка «на экране»
     7: """ALTER TABLE users ADD COLUMN screen_lock INTEGER NOT NULL DEFAULT 0;

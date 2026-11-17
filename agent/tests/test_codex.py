@@ -501,6 +501,42 @@ async def test_probe_reports_a_failure_even_with_a_saved_catalog(runner, monkeyp
     await runner.close(final=True)
 
 
+async def test_probe_reads_new_models_without_replacing_metadata_or_an_active_turn(runner, monkeypatch):
+    monkeypatch.setattr(codex_rpc, "version", lambda path: "test")
+    available = ["codex-test"]
+    original_connect, original_request = FakeRpc.connect, FakeRpc.request
+
+    async def connect(rpc):
+        rpc.cached_models = list(available)
+        await original_connect(rpc)
+
+    async def request(rpc, method, params):
+        if method == "model/list":
+            return {"data": [{"model": model, "displayName": model,
+                              "supportedReasoningEfforts": []} for model in rpc.cached_models]}
+        return await original_request(rpc, method, params)
+
+    monkeypatch.setattr(FakeRpc, "connect", connect)
+    monkeypatch.setattr(FakeRpc, "request", request)
+    await runner._metadata(runner.project, "model/list", {"limit": 50})
+    metadata_client = runner._meta
+    runner.start(runner.project, "a" * 16, CHAT, "Тест", None, None)
+    try:
+        rid = await asking(runner)
+        turn = runner._turns[CHAT]
+        turn_client = turn.client.rpc
+        available.extend(["gpt-6.2-sol", "gpt-6.2-astra"])
+        assert await runner.probe(str(runner.project))
+        assert [model["id"] for model in runner.models] == available
+        assert runner._meta is metadata_client and not metadata_client.closed
+        assert turn.client.rpc is turn_client and not turn_client.closed and not turn.task.done()
+        assert runner.fake.clients[-1].closed
+        runner.answer("a" * 16, CHAT, rid, "allow", None, None)
+        await turn.task
+    finally:
+        await runner.close(final=True)
+
+
 async def test_agent_dispatches_models_requests_and_shared_limit(runner, home, monkeypatch):
     from studio_agent import sessions, store
     from studio_agent.agent import Agent
@@ -515,6 +551,14 @@ async def test_agent_dispatches_models_requests_and_shared_limit(runner, home, m
     agent = Agent(store.Config(projects_root=str(home), max_turns=2), PinStore(home), claude, cc_version="test",
                   models=[{"id": "opus", "label": "Opus"}], efforts=["high"], codex=runner)
     await opened(agent)
+    monkeypatch.setattr(codex_rpc, "version", lambda path: "test")
+    assert agent.hello()["codex_models"] is True
+    out = await agent.handle(req("models", engine="codex"))
+    assert out[0]["ok"] and out[0]["data"]["codex"] == runner.catalog
+    assert runner.fake.clients[-1].closed
+    # Выборки усилий дальше задаёт этот тест, независимо от пробы каталога.
+    runner.efforts = ["ultra"]
+    runner.catalog["efforts"] = runner.efforts
     pid = projects.pid(runner.project.name)
     out = await agent.handle(req("chats", project=pid))
     assert [c.get("engine", "claude") for c in out[0]["data"]["items"]] == ["claude", "codex"]

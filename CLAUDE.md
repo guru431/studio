@@ -64,7 +64,7 @@ minor для возможностей, major для несовместимых �
   разрешения имён; имя — только https и только публичные адреса). Исключения — только адреса, зашитые в `web.py`
   (`api.exa.ai`, YouTube через yt-dlp — правила в [chat.md](docs/architecture/chat.md))
   и в `push.py` (`push.HOSTS`), и фиксированные HTTPS-адреса моста: `api64.ipify.org` (внешний IP),
-  `registry.npmjs.org` и `marketplace.visualstudio.com` (версии программ, `software.py`). Ключ Exa — свой у учётки, шифром.
+  `registry.npmjs.org`, `marketplace.visualstudio.com` и `formulae.brew.sh` (версии программ, `software.py`). Ключ Exa — свой у учётки, шифром.
 - **Путь к службе один — Apache debian**: приложение в Docker слушает только unix-сокет `/run/studio/web.sock`.
   nginx контейнера принимает запросы только от адреса Apache и передаёт его `X-Forwarded-For` без добавления своего
   адреса. Прямого TCP-входа в приложение нет: счёт попыток входа нельзя обходить поддельным заголовком.
@@ -89,7 +89,7 @@ minor для возможностей, major для несовместимых �
 | Область | Модули | Подробно |
 |---|---|---|
 | Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
-| Вход и защита | `auth`, `profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
+| Вход и защита | `auth`, `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities` | [connections](docs/architecture/connections.md) |
 | Чат | `chat`, `web`, `documents`, `cleaner_client` | [chat](docs/architecture/chat.md) |
@@ -176,6 +176,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 42 | `voice_samples` | читает выбранный образец из прежних полей `voices`; новые голоса получают образец триггером; экспорт дополнительных образцов недоступен, чистка сирот при незнакомом столбце отключена | Не нужен; дополнительные образцы сохраняются до возврата вперёд |
 | 43 | `mcp_servers`, `chats.mcp_ids` | подключения MCP и выбор инструментов не читает; чаты и остальные подключения работают | Не нужен; настройки сохраняются до возврата вперёд |
 | 44 | `videos.model`, по умолчанию `wan` | новые ролики H3 показывает как Wan; новые модели до возврата вперёд не запускать и не повторять | Не нужен; история сохраняется |
+| 45 | `speeches.chat_id`, `chat_created`, `voice_name` — продолжения озвучки | показывает отдельные записи; триггер заполняет новые поля при вставке прежним кодом | Не нужен; записи и группы сохраняются до возврата вперёд |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.

@@ -64,6 +64,7 @@ class FakeMachine:
         self.now = T0
         self.turns = 0
         self.codex = None
+        self.codex_models = False
         self.opencode = None
         self.images = True
         self.history_images = False
@@ -123,7 +124,7 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create")
+                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -179,6 +180,9 @@ class FakeMachine:
         self.update_state = 'preparing'
         self.update_version = req['version']
         return self._op_agent_update_status(req, events)
+
+    def _op_models(self, req, events):
+        return {"codex": self.codex}
 
     def _op_computer_info(self, req, events):
         return self.computer_data

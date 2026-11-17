@@ -80,6 +80,31 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
 
 
 @pytest.mark.integration
+def test_macos_permission_indicators_refresh_without_requesting_permissions(home, monkeypatch, tk_root):
+    from studio_agent.app import Controller
+    from studio_agent import desktop_macos
+
+    store.save_config(home, store.Config(projects_root='C:/work/projects'))
+    ctrl = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))
+    ctrl.state = 'online'
+    grants = {'screen': True, 'input': False, 'session': 'ready'}
+    monkeypatch.setattr(window.host, 'MACOS', True)
+    monkeypatch.setattr(desktop_macos, 'permission_status', lambda: dict(grants))
+    monkeypatch.setattr(desktop_macos, 'request_permission', lambda kind: pytest.fail('passive refresh requested a permission'))
+    monkeypatch.setattr(window.MainWindow, 'lift', lambda self: None)
+    monkeypatch.setattr(window.MainWindow, 'work', lambda self, fn, done, **kwargs: done(fn(), False))
+    monkeypatch.setattr(window, '_work_area', lambda win: (0, 0, 1024, 768))
+    main = window.MainWindow(tk_root, ctrl)
+    assert 'Запись экрана: Разрешено' in main.permission_value.cget('text')
+    assert 'Управление вводом: Нет доступа' in main.permission_value.cget('text')
+    grants['input'] = True
+    grants['session'] = 'locked'
+    main.refresh_permissions()
+    assert 'Управление вводом: Разрешено' in main.permission_value.cget('text')
+    assert 'Графический сеанс: Экран заблокирован' in main.permission_value.cget('text')
+
+
+@pytest.mark.integration
 def test_tabs_keyboard_and_theme_keep_settings_and_live_status(home, monkeypatch, tk_root):
     from tkinter import ttk
     from studio_agent.app import Controller

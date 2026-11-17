@@ -69,6 +69,16 @@ def system(monkeypatch):
     return mac.NativeDesktop(_quartz=q, _appkit=appkit), state
 
 
+def test_permission_snapshot_reads_grants_and_session_without_request_or_capture(system):
+    native, state = system
+    assert mac.permission_status(native.q) == {'screen': True, 'input': True, 'session': 'ready'}
+    state.input, state.locked = False, True
+    assert mac.permission_status(native.q) == {'screen': True, 'input': False, 'session': 'locked'}
+    state.console, state.locked, state.screen = False, False, False
+    assert mac.permission_status(native.q) == {'screen': False, 'input': False, 'session': 'unavailable'}
+    assert state.events == state.captures == []
+
+
 @pytest.mark.parametrize('field', ['locked', 'console', 'login', 'screen', 'input'])
 def test_lock_inactive_session_and_missing_permissions_refuse_without_native_input(system, field):
     native, state = system

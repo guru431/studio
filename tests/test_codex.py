@@ -14,6 +14,49 @@ CATALOG = {"version": "codex-test", "models": [{"id": "codex-test", "label": "Co
            "efforts": ["minimal", "high", "ultra"]}
 
 
+def test_explicit_refresh_replaces_codex_catalog_on_the_same_link(studio):
+    aid, machine, link = setup(studio)
+    machine.codex, machine.codex_models, machine.passive_requests = CATALOG, True, True
+    link.hello = bridge.parse_hello(machine.hello)
+    new = {**CATALOG, "models": [*CATALOG["models"], {"id": "gpt-6.2-sol", "label": "GPT-6.2 Sol"}]}
+    machine.codex = new
+    assert studio.c.get("/api/agents").json()["items"][0]["codex"] == CATALOG
+    assert not any(req["op"] == "models" for req in machine.requests)
+    assert studio.c.get("/api/agents?refresh=true").json()["items"][0]["codex"] == new
+    assert bridge.LINKS[aid] is link
+    request = next(req for req in machine.requests if req["op"] == "models")
+    assert request["engine"] == "codex" and request["passive"] is True
+
+
+@pytest.mark.parametrize("case", ["old", "closed", "invalid"])
+def test_refresh_preserves_catalog_for_old_closed_or_invalid_bridge(studio, case):
+    aid, machine, link = setup(studio, opened=case != "closed")
+    machine.codex, machine.codex_models = CATALOG, case != "old"
+    link.hello = bridge.parse_hello(machine.hello)
+    machine.codex = {**CATALOG, "efforts": ["invalid"]}
+    assert studio.c.get("/api/agents?refresh=true").json()["items"][0]["codex"] == CATALOG
+    assert bridge.LINKS[aid] is link
+    if case == "old":
+        assert not any(req["op"] == "models" for req in machine.requests)
+    if case == "closed":
+        assert not machine.open_sessions
+
+
+def test_refresh_does_not_return_computers_after_logout_during_the_probe(studio):
+    _, machine, link = setup(studio)
+    machine.codex, machine.codex_models = CATALOG, True
+    link.hello = bridge.parse_hello(machine.hello)
+
+    def logout(req, events):
+        state.DB.execute("DELETE FROM sessions")
+        return {"codex": CATALOG}
+
+    machine._op_models = logout
+    result = studio.c.get("/api/agents?refresh=true")
+    assert result.status_code == 409 and detail(result)["code"] == "closed"
+    assert "items" not in result.json()
+
+
 def test_optional_hello_catalog_is_validated_separately_and_old_bridge_works(studio):
     aid, machine, link = setup(studio)
     assert "codex" not in studio.c.get("/api/agents").json()["items"][0]
