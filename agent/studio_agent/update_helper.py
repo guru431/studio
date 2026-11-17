@@ -25,6 +25,24 @@ def python(stage):
     return stage / ('.venv/bin/python' if MACOS else '.venv/Scripts/pythonw.exe')
 
 
+def _macos_startup():
+    if __package__:
+        from . import macos_autostart
+    else:
+        import runpy
+        from types import SimpleNamespace
+        # Читаем именно доверенный исходник: не импортируем пакет обновления или его __pycache__.
+        data = runpy.run_path(str(Path(__file__).with_name('_macos_autostart.py')))
+        macos_autostart = SimpleNamespace(arguments=data['arguments'], open_arguments=data['open_arguments'])
+    return macos_autostart
+
+
+def launch_arguments(stage, env=None):
+    if MACOS:
+        return _macos_startup().open_arguments(Path(stage), env)
+    return [str(python(Path(stage))), str(Path(stage) / 'studio_agent.pyw')]
+
+
 def wait_old(pid: int, timeout: int = 120000) -> bool:
     if MACOS:
         deadline = time.monotonic() + timeout / 1000
@@ -471,13 +489,13 @@ def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, 
     def rollback():
         fallback = env.copy()
         fallback.pop('STUDIO_AGENT_UPDATE_READY', None)
-        start([plan['old_python'], str(Path(plan['old_repo']) / 'studio_agent.pyw')],
+        start(launch_arguments(plan['old_repo'], fallback) if MACOS else [plan['old_python'], str(Path(plan['old_repo']) / 'studio_agent.pyw')],
               cwd=plan['old_repo'], env=fallback, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
         return 'rolled_back'
 
     try:
-        new = start([str(python(stage)), str(stage / 'studio_agent.pyw')],
+        new = start(launch_arguments(stage, env),
                     cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except OSError:
@@ -524,8 +542,9 @@ def switch_macos(stage, old):
     try:
         with target.open('rb') as source:
             data = plistlib.load(source)
-        if isinstance(data, dict) and data.get('ProgramArguments') == [str(python(old)), str(old / 'studio_agent.pyw')]:
-            data['ProgramArguments'] = [str(python(stage)), str(stage / 'studio_agent.pyw')]
+        if isinstance(data, dict) and data.get('ProgramArguments') in (
+                [str(python(old)), str(old / 'studio_agent.pyw')], _macos_startup().arguments(old)):
+            data['ProgramArguments'] = _macos_startup().arguments(stage)
             data['WorkingDirectory'] = str(stage)
             temp = target.with_name(target.name + '.' + uuid.uuid4().hex)
             try:

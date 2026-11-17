@@ -16,7 +16,13 @@ RPC_SEC = 60
 def find_cli() -> Path | None:
     """Настоящий exe из PATH или npm; обёртки cmd/ps1 через shell не исполняются."""
     if host.MACOS:
-        return host.find_tool("opencode")
+        if path := host.find_tool("opencode"):
+            return path
+        for root in (Path.home() / "Applications", Path("/Applications")):
+            path = root / "OpenCode.app/Contents/Resources/opencode-cli"
+            if path.is_file() and os.access(path, os.X_OK):
+                return path
+        return None
     if exe := shutil.which("opencode.exe"):
         return Path(exe)
     npm = Path(os.environ.get("APPDATA", "")) / "npm/node_modules"

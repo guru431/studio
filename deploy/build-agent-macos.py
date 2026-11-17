@@ -89,7 +89,7 @@ def filter_requirements(source, destination, arch):
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build(archive, output, lock_path, work):
+def build(archive, output, lock_path, work, launcher_output=None):
     scripts = work / "scripts"
     scripts.mkdir()
     source = unpack_source(archive, scripts / "source")
@@ -104,6 +104,22 @@ def build(archive, output, lock_path, work):
         print("==> runtime " + arch, flush=True)
         download_runtime(lock, arch, runtimes / arch, work)
     native = runtimes / platform.machine() / "bin/python3"
+    # Native identity is shared by GUI, LaunchAgent and updater. It never execs Python.
+    launchers = []
+    compiler_env = dict(os.environ, TMPDIR=str(work), CLANG_MODULE_CACHE_PATH=str(work / 'clang-cache'))
+    for arch in ("arm64", "x86_64"):
+        binary = work / ("studio-agent-" + arch)
+        headers = runtimes / arch / "include" / ("python" + ".".join(lock["version"].split(".")[:2]))
+        run(["/usr/bin/clang", "-arch", arch, "-mmacosx-version-min=11.0", "-framework", "Foundation",
+             "-I", headers, source / "macos/launcher.m", "-o", binary], timeout=120, env=compiler_env)
+        launchers.append(binary)
+    launcher = source / "macos/studio-agent"
+    run(["/usr/bin/lipo", "-create", *launchers, "-output", launcher], timeout=30)
+    launcher.chmod(0o755)
+    if launcher_output is not None:
+        launcher_output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(launcher, launcher_output)
+        launcher_output.chmod(0o755)
     env = dict(os.environ, TMPDIR=str(work), PIP_CACHE_DIR=str(work / "pip-cache"),
                PYTHONDONTWRITEBYTECODE="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
     for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONPYCACHEPREFIX"):
@@ -199,12 +215,19 @@ def remote(args, work):
         run([*scp, args.archive, HERE / "build-agent-macos.py", args.lock, args.host + ":" + folder + "/"])
         command = ["/usr/bin/python3", folder + "/build-agent-macos.py", "--archive", folder + "/" + args.archive.name,
                    "--lock", folder + "/" + args.lock.name, "--output", folder + "/studio-agent-setup.pkg"]
+        if getattr(args, 'launcher_output', None) is not None:
+            command += ['--launcher-output', folder + '/studio-agent-macos']
         # Полная сборка включает обе архитектуры, загрузки и автономную установку.
         run([*ssh, shlex.join(command)], timeout=3600)
         staged = work / "studio-agent-setup.pkg"
         run([*scp, args.host + ":" + folder + "/studio-agent-setup.pkg", staged])
         args.output.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staged, args.output)
+        if getattr(args, 'launcher_output', None) is not None:
+            staged_launcher = work / 'studio-agent-macos'
+            run([*scp, args.host + ':' + folder + '/studio-agent-macos', staged_launcher])
+            args.launcher_output.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staged_launcher, args.launcher_output)
     finally:
         run([*ssh, shlex.join(["/usr/bin/python3", folder + "/build-agent-macos.py", "--validate-cleanup", folder])])
         run([*ssh, "rm -rf -- " + shlex.quote(folder)])
@@ -231,6 +254,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--launcher-output", type=Path)
     parser.add_argument("--lock", type=Path, default=HERE / "macos-runtime.json")
     parser.add_argument("--host", default=os.environ.get("STUDIO_MACOS_BUILD_SSH"))
     parser.add_argument("--port", default=os.environ.get("STUDIO_MACOS_BUILD_PORT", "22"))
@@ -245,7 +269,7 @@ def main():
         if args.host:
             remote(args, work)
         else:
-            build(args.archive, args.output, args.lock, work)
+            build(args.archive, args.output, args.lock, work, args.launcher_output)
 
 
 if __name__ == "__main__":

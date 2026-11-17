@@ -131,6 +131,15 @@ def memory_row(data: dict | None) -> str:
     return f"Доступно {available:.1f} из {total:.1f} ГБ".replace(".", ",")
 
 
+def permission_rows(data) -> str:
+    allowed = {True: 'Разрешено', False: 'Нет доступа', None: 'Не удалось проверить'}
+    session = {'ready': 'Доступен', 'locked': 'Экран заблокирован',
+               'unavailable': 'Недоступен — откройте Studio Agent из «Приложений»'}
+    return (f"Запись экрана: {allowed[data['screen']]}\n"
+            f"Управление вводом: {allowed[data['input']]}\n"
+            f"Графический сеанс: {session[data['session']]}")
+
+
 def open_main(root, controller):
     """Окно моста; открыто — поднять."""
     global _window
@@ -221,6 +230,10 @@ class MainWindow:
         self._body_window = None
         self.win.bind("<MouseWheel>", self.scroll_wheel)
         self.win.bind("<FocusIn>", self.reveal_focus)
+        self.permission_value = None
+        self._permission_check = False
+        if host.MACOS:
+            self.win.bind('<FocusIn>', lambda _: self.refresh_permissions(), add='+')
         self.body = None
         self.render()
         self.refresh_connection_info()
@@ -667,12 +680,30 @@ class MainWindow:
         self.studio_version_value.configure(text=version or ("Неизвестна" if self.state == "online" else "Нет связи"))
 
     def refresh_connection_info(self) -> None:
-        """Снимок памяти раз в пять секунд, пока окно открыто; вызов WinAPI не создаёт процессов."""
+        """Сведения и права раз в пять секунд, пока окно открыто; без запроса разрешений."""
         if not self.alive():
             return
         if self.enrolled:
             self.memory_value.configure(text=memory_row(computer_info.memory_status()))
+        if host.MACOS:
+            self.refresh_permissions()
         self.root.after(5000, self.refresh_connection_info)
+
+
+    def refresh_permissions(self) -> None:
+        label = self.permission_value
+        if not self.alive() or label is None or not label.winfo_exists() or self._permission_check:
+            return
+        from .desktop_macos import permission_status
+
+        self._permission_check = True
+        def done(value, failed):
+            self._permission_check = False
+            label = self.permission_value
+            if label is not None and label.winfo_exists():
+                label.configure(text=permission_rows(value) if not failed else 'Не удалось проверить разрешения macOS')
+                self.schedule_fit()
+        self.work(permission_status, done, hold=False)
 
     def show_login(self, login: str) -> None:
         if self.login_value is not None and self.login_value.winfo_exists():
@@ -813,14 +844,18 @@ class MainWindow:
                 self.work(lambda: request_permission(kind),
                           lambda _, failed: problem.set(FAILED) if failed else None)
 
-            self.ttk.Label(area, text="macOS: разрешите запись экрана и управление вводом для Studio Agent/Python."
+            self.ttk.Label(area, text="macOS: разрешите запись экрана и управление вводом для Studio Agent."
                            " После разрешения записи экрана может понадобиться перезапуск агента.",
                            style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
                 row=2, column=0, sticky="w", pady=(self.px(4), 0))
-            for index, (kind, label) in enumerate((("screen", "Запись экрана…"), ("input", "Управление вводом…")), 3):
+            self.permission_value = self.ttk.Label(area, text='Проверка разрешений macOS…',
+                style='Card.TLabel', justify='left', wraplength=self.px(380))
+            self.permission_value.grid(row=3, column=0, sticky='w', pady=(self.px(4), 0))
+            for index, (kind, label) in enumerate((("screen", "Запись экрана…"), ("input", "Управление вводом…")), 4):
                 permission = self.ttk.Button(area, text=label, command=lambda k=kind: permit(k))
                 permission.grid(row=index, column=0, sticky="w", pady=(self.px(4), 0))
                 self.buttons.append(permission)
+            self.refresh_permissions()
 
     def turn_limit_control(self, box, *, row: int, value: int, problem) -> None:
         tk, ttk = self.tk, self.ttk

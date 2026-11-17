@@ -1,4 +1,4 @@
-"""Хранилище: свой объём и очередь удаления (`GET /api/me/storage`, profile.py), доступность шары,
+"""Хранилище: свой объём и очередь удаления (`GET /api/me/storage`, account_profile.py), доступность шары,
 возраст копии базы и размер очереди для администратора (`GET /api/admin/storage`, admin.py)."""
 import logging
 import os

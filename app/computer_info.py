@@ -19,7 +19,7 @@ def software(data):
         items.append({'id': item['id'], 'installed': item.get('installed') is True,
             'version': version(item.get('version')), 'cli_version': version(item.get('cli_version')),
             'latest': version(item.get('latest')),
-            'source': item.get('source') if item.get('source') in ('npm', 'vscode', 'native', 'sdk') else None,
+            'source': item.get('source') if item.get('source') in ('npm', 'vscode', 'native', 'sdk', 'homebrew') else None,
             'update_available': item.get('update_available') is True, 'can_update': item.get('can_update') is True,
             'reason': item.get('reason') if item.get('reason') in ('not_installed', 'bridge', 'manager', 'manual', 'check') else None})
     update = data.get('update') if isinstance(data.get('update'), dict) else {}

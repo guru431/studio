@@ -39,7 +39,8 @@ disconnect до освобождения хода. Codex получает config
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
-| 0.27.0 | `hello.software_versions` (`software_versions`, `software_update`, `software_update_cancel`) | §20 |
+| 0.33.0 | `hello.codex_models` (`models`, `engine: codex`) — обновление каталога без смены канала | §22 |
+| 0.27.0 | `hello.software_versions` (`software_versions`, `software_update`, `software_update_cancel`) | §21 |
 | до 0.3.0 | база v1: `open`, `projects`, `chats`, `history`, `turn`, `watch`, `answer`, `stop`, `files`, `read`, `raw`, `save`, `git`; `login` в `welcome`, отвязка `DELETE /api/agent/enroll` | §1–§7 |
 | 0.3.0 | `hello.codex` — Codex, `engine: codex` | §2.2 |
 | 0.3.3 | `hello.images` — картинки в `turn` | §2.2 |
@@ -358,10 +359,14 @@ Git поиска сессий/worktree. Адаптеры меняют тольк
 
 С моста 0.27.0 окно сведений также показывает установленные и актуальные версии Codex, Claude Code и
 OpenCode. `software.py` ищет тот же CLI, что ходы; для VS Code показывает версию расширения и отдельно CLI,
-если они различаются. Номера стабильных выпусков берутся только с npm registry и VS Marketplace по фиксированным
+если они различаются. Номера стабильных выпусков берутся с npm registry, VS Marketplace и Homebrew по фиксированным
 HTTPS-адресам, без перенаправлений, с пределами времени/тела; кэш выпусков — десять минут в памяти.
 Пакет npm определяется по установке, включая `@opencode/cli` и вынесенные платформенные зависимости.
 Встроенный в SDK Claude обновляется вместе с мостом; неизвестный способ установки обозначен ручным обновлением.
+На macOS распознаются Homebrew casks Codex/Claude Code: версия берётся из фиксированного API Homebrew,
+команда — `brew upgrade --cask` с известным именем пакета и сохранением прежних установок. Нативная
+установка Claude в каталоге его версий использует штатный `claude update`. CLI внутри OpenCode.app
+обнаруживается, но самостоятельно не обновляется: менять вложенный файл подписанного приложения нельзя.
 
 Обновление доступно только владельцу после PIN и CSRF. `software_update` принимает только имя из фиксированного
 списка, версию/команду/пакет выбирает мост. Фоновая задача ждёт все ходы и начатые просьбы/пробы каталогов,

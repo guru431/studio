@@ -37,6 +37,7 @@ OPS = {
     "agent_update_cancel": (),
     "usage": ("refresh", "model"),
     "usage_reset": ("idempotency_key",),
+    "models": (),
     "projects": ("refresh",),
     "project_roots": (),
     "mcp_get": ("project",),
@@ -153,7 +154,8 @@ class Agent:
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                  "computer_info": True, "software_versions": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
-                 "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None}
+                 "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
+                 "codex_models": True}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -303,7 +305,7 @@ class Agent:
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode"):
             raise Refused("invalid")
-        if op == "usage_reset" and engine != "codex":
+        if op in ("usage_reset", "models") and engine != "codex":
             raise Refused("invalid")
         backend = self._runner(frame)
         if engine != "claude" and (backend is None or backend.catalog is None):
@@ -382,6 +384,12 @@ class Agent:
         if self.updater is None:
             raise Refused("unsupported")
         return self.updater.start(frame)
+
+    async def _op_models(self, frame, after):
+        async with asyncio.timeout(24):
+            if not await self.codex.probe(self.cfg.projects_root):
+                raise Refused("busy", "Не удалось обновить модели Codex — повторите позже")
+        return {"codex": self.codex.catalog}
 
     async def _op_computer_info(self, frame, after):
         return await asyncio.to_thread(computer_info.read, list(self.cfg.projects_roots))

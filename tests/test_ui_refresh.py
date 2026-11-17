@@ -14,6 +14,42 @@ from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, CODE_CHAT_C, READY, brows
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 
+def test_refresh_updates_the_codex_picker_without_replacing_the_bridge(desktop_browser, live):
+    import bridge
+
+    login = f"refresh-codex-{desktop_browser.browser_type.name}"
+    live.add_user(login)
+    machine = FakeMachine({"alpha": {"chats": {CODE_CHAT_B: {**code_session("Codex"), "engine": "codex"}}}})
+    machine.codex, machine.codex_models, machine.passive_requests = CATALOG, True, True
+    aid, channel = code_online(live, login, machine)
+    try:
+        original_link = bridge.LINKS[aid]
+        signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+        cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+        with desktop_browser.new_context(extra_http_headers={"Cookie": cookie}, service_workers="block") as context:
+            if desktop_browser.browser_type.name == "firefox":
+                context.add_cookies([{"name": key, "value": value, "url": live.url, "secure": True,
+                    "httpOnly": True, "sameSite": "Lax"} for key, value in signed.cookies.items()])
+            page = context.new_page()
+            page.set_default_timeout(15000)
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_B}")
+            page.wait_for_function("() => !document.querySelector('#code-model-pick')?.disabled")
+            assert not code_requests(machine, "models")
+            assert page.locator('#code-model option[value="gpt-6.2-sol"]').count() == 0
+            machine.codex = {**CATALOG, "models": [*CATALOG["models"],
+                {"id": "gpt-6.2-sol", "label": "GPT-6.2 Sol"},
+                {"id": "gpt-6.2-astra", "label": "GPT-6.2 Astra"}]}
+            page.locator("#refresh-app").click()
+            page.wait_for_function("() => document.querySelector('#code-model option[value=\"gpt-6.2-astra\"]')")
+            page.locator("#code-model-pick").click()
+            page.locator("#code-model-menu").get_by_role("menuitemradio", name="GPT-6.2 Sol", exact=True).click()
+            page.wait_for_function("() => document.querySelector('#code-model').value === 'gpt-6.2-sol'")
+            assert len(code_requests(machine, "models")) == 1
+            assert bridge.LINKS[aid] is original_link
+    finally:
+        channel.stop()
+
+
 @pytest.mark.parametrize("width,section,refuse", [(320, "code", False), (1280, "settings/appearance", True)])
 def test_refresh_claims_active_sessions_across_projects_and_computers(desktop_browser, live, width, section, refuse):
     login = f"refresh-claim-{desktop_browser.browser_type.name}-{width}"

@@ -4,10 +4,10 @@ import fcntl
 import hashlib
 import os
 import plistlib
-import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import uuid
 from pathlib import Path
@@ -17,19 +17,48 @@ BUSY = "Дождитесь завершения заданий и выйдите
 
 
 def bundle(base: Path, applications: Path) -> Path:
+    """Компилятор и codesign не могут повредить прежнее приложение при отказе."""
+    applications.mkdir(parents=True, exist_ok=True)
     app = applications / "Studio Agent.app"
+    if app.is_symlink():
+        raise ValueError('приложение не должно быть ссылкой')
+    with tempfile.TemporaryDirectory(prefix='.studio-agent-', dir=applications) as folder:
+        pending = Path(folder) / 'Studio Agent.app'
+        _write_bundle(pending)
+        previous = Path(folder) / 'previous.app'
+        if app.exists():
+            app.rename(previous)
+        try:
+            pending.rename(app)
+        except BaseException:
+            if previous.exists():
+                previous.rename(app)
+            raise
+    return app
+
+
+def _write_bundle(app: Path) -> None:
     contents = app / "Contents"
     executable = contents / "MacOS/studio-agent"
     executable.parent.mkdir(parents=True, exist_ok=True)
-    current = base / "current"
-    executable.write_text("#!/bin/sh\nexec " + shlex.quote(str(current / ".venv/bin/python")) + " "
-                          + shlex.quote(str(current / "studio_agent.pyw")) + "\n", encoding="utf-8")
+    launcher = SOURCE / 'macos/studio-agent'
+    if launcher.is_file():
+        shutil.copyfile(launcher, executable)
+    else:
+        # Установка из исходников требует инструменты разработчика; автономный PKG уже содержит launcher.
+        subprocess.run(['/usr/bin/clang', '-framework', 'Foundation', '-I', sysconfig.get_path('include'),
+                        str(SOURCE / 'macos/launcher.m'), '-o', str(executable)],
+                       env=dict(os.environ, TMPDIR=str(app.parent),
+                                CLANG_MODULE_CACHE_PATH=str(app.parent / 'clang-cache')),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=120)
     executable.chmod(0o755)
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump({"CFBundleIdentifier": "com.studio.agent", "CFBundleName": "Studio Agent",
+                       "CFBundleDisplayName": "Studio Agent",
                        "CFBundleExecutable": "studio-agent", "CFBundlePackageType": "APPL",
                        "LSUIElement": True, "NSHighResolutionCapable": True}, output)
-    return app
+    subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', 'com.studio.agent', str(app)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
 
 
 def install(base: Path, home: Path, applications: Path, *, start=True, autostart=True,
@@ -51,6 +80,8 @@ def install(base: Path, home: Path, applications: Path, *, start=True, autostart
         shutil.copytree(SOURCE / "studio_agent", stage / "studio_agent", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in ("studio_agent.pyw", "requirements.txt", "constraints.txt", "install.command", "install_macos.py", "README.md"):
             shutil.copyfile(SOURCE / name, stage / name)
+        if (SOURCE / 'macos').is_dir():
+            shutil.copytree(SOURCE / 'macos', stage / 'macos')
         (stage / "install.command").chmod(0o755)
         interpreter = Path(sys.executable)
         if runtime_source is not None:

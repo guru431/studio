@@ -260,6 +260,7 @@ class CodexRunner(Runner):
         self.default_efforts = {}
         self._meta = None
         self._meta_lock = asyncio.Lock()
+        self._catalog_lock = asyncio.Lock()
         self._usage_meta = None
         self._usage_lock = asyncio.Lock()
         self._histories = metadata.HistoryIndex()
@@ -412,13 +413,22 @@ class CodexRunner(Runner):
                 raise
 
     async def probe(self, root) -> bool:
+        async with self._catalog_lock:
+            return await self._probe_catalog(root)
+
+    async def _probe_catalog(self, root) -> bool:
+        rpc = None
         try:
             path = await asyncio.to_thread(self.find_codex)
             if path is None:
                 self.catalog = None
                 return False
             self.version = await asyncio.to_thread(codex_rpc.version, path)
-            data = await self._metadata(root, "model/list", {"limit": 50})
+            # Постоянный metadata app-server держит собственный каталог. Короткий клиент читает
+            # свежие модели, не закрывая историю и отдельные процессы выполняемых ходов.
+            rpc = self.rpc_factory(path, Path(root))
+            await rpc.connect()
+            data = await rpc.request("model/list", {"limit": 50})
             models, efforts = [], set()
             for m in data.get("data", []):
                 value = m.get("model")
@@ -426,26 +436,31 @@ class CodexRunner(Runner):
                     continue
                 models.append({"id": value, "label": str(m.get("displayName") or value)[:100]})
                 efforts.update(e.get("reasoningEffort") for e in m.get("supportedReasoningEfforts", []))
+            if not models:
+                return False
             self.models = models[:50]
             self.default_efforts = {m.get("model"): m.get("defaultReasoningEffort") for m in data.get("data", [])}
             self.efforts = [e for e in EFFORTS if e in efforts]
             self.catalog = {"version": self.version, "models": self.models, "efforts": self.efforts}
             try:
-                cfg = (await self._metadata(root, "config/read", {"cwd": str(root), "includeLayers": False}))["config"]
+                cfg = (await rpc.request("config/read", {"cwd": str(root), "includeLayers": False}))["config"]
                 default = next((m for m in data.get("data", []) if m.get("isDefault")), {})
-                native = await self._metadata(root, "thread/start", {"cwd": str(root), "ephemeral": True})
+                native = await rpc.request("thread/start", {"cwd": str(root), "ephemeral": True})
                 self.catalog["defaults"] = {"model": native.get("model") or cfg.get("model") or default.get("model"),
                     "effort": cfg.get("model_reasoning_effort") or default.get("defaultReasoningEffort"),
                     "access": permissions.codex_value(native.get("sandbox")) or cfg.get("sandbox_mode")}
                 if tid := native.get("thread", {}).get("id"):
                     with contextlib.suppress(codex_rpc.RpcError):
-                        await self._metadata(root, "thread/unsubscribe", {"threadId": tid})
+                        await rpc.request("thread/unsubscribe", {"threadId": tid})
             except (codex_rpc.RpcError, KeyError):
                 pass
             return bool(self.models)
         except Exception as e:
             log.warning("Codex: каталог: %s", type(e).__name__)
             return False
+        finally:
+            if rpc is not None:
+                await rpc.disconnect()
 
     def _list_params(self, project, state_db):
         return {"cwd": str(project), "limit": limits.CHATS_MAX, **({"useStateDbOnly": True} if state_db else {}),

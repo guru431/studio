@@ -877,8 +877,16 @@ def test_install_failed_pip_leaves_the_running_code_and_environment(tmp_path):
     assert not (root / ".incoming" / ".venv").exists() and not (root / ".previous").exists()
 
 
+@pytest.fixture
+def component_workspace(tmp_path):
+    with tempfile.TemporaryDirectory(dir=tmp_path) as directory:
+        yield Path(directory)
+
+
 @pytest.mark.integration                   # git и bash на Windows — секунды
-def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sources(tmp_path):
+@pytest.mark.timeout(120)
+def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sources(component_workspace):
+    tmp_path = component_workspace
     bash = _bash()
     if not bash:
         pytest.skip("нет bash")
@@ -889,7 +897,8 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
         shutil.copyfile(DEPLOY / name, repo / "deploy" / name)
     # Здесь проверяется доставка одного HEAD; тяжёлая сборка PKG имеет собственную приёмку на Mac.
     (repo / 'deploy/build-agent-macos.py').write_text(
-        'import pathlib,sys; pathlib.Path(sys.argv[sys.argv.index("--output")+1]).write_bytes(b"xar!fixture")\n')
+        'import pathlib,sys; pathlib.Path(sys.argv[sys.argv.index("--output")+1]).write_bytes(b"xar!fixture"); '
+        'pathlib.Path(sys.argv[sys.argv.index("--launcher-output")+1]).write_bytes(b"\\xca\\xfe\\xba\\xbe fixture")\n')
     shutil.copyfile(DEPLOY / 'macos-runtime.json', repo / 'deploy/macos-runtime.json')
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
@@ -942,6 +951,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     with zipfile.ZipFile(tmp_path / "bridge.zip") as archive:
         names = {n for n in archive.namelist() if not n.endswith("/")}
         assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names
+        assert archive.read('studio-agent/macos/studio-agent').startswith(b'\xca\xfe\xba\xbe')
         assert b'"https://studio.example.net"' in archive.read("studio-agent/studio_agent/store.py")
         assert not any(n.startswith("studio-agent/tests/") or n.endswith("CLAUDE.md") for n in names)
         assert all(n.startswith("studio-agent/") for n in names)

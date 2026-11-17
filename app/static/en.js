@@ -1,5 +1,6 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Обновите мост на компьютере для настройки MCP": "Update the agent on the computer to configure MCP",
   "Использовать недельный сброс": "Use weekly reset",
   "Повторить сброс": "Retry reset",
   "Использовать сброс": "Use reset",

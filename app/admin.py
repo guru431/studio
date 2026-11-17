@@ -33,7 +33,7 @@ import images
 import manage
 import media
 import operations
-import profile
+import account_profile as profile
 import push
 import sections
 import security

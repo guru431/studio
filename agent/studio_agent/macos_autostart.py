@@ -11,7 +11,23 @@ def path() -> Path:
 
 
 def arguments(repo: Path) -> list[str]:
+    launcher = Path.home() / 'Applications/Studio Agent.app/Contents/MacOS/studio-agent'
+    if launcher.is_file():
+        with launcher.open('rb') as source:
+            if source.read(4) in (b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xca\xfe\xba\xbe'):
+                return [str(launcher), '--studio-repo', str(repo)]
     return [str(repo / ".venv/bin/python"), str(repo / "studio_agent.pyw")]
+
+
+def open_arguments(repo: Path, env=None) -> list[str]:
+    args = arguments(repo)
+    if len(args) != 3:
+        return args
+    command = ['/usr/bin/open', '-n', '-W']
+    for name in ('STUDIO_AGENT_HOME', 'STUDIO_AGENT_UPDATE_READY'):
+        if env is not None and name in env:
+            command += ['--env', name + '=' + env[name]]
+    return [*command, str(Path(args[0]).parents[2]), '--args', *args[1:]]
 
 
 def read() -> dict:

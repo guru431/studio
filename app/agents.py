@@ -130,13 +130,21 @@ async def download(request: Request):
 
 
 @router.get("/api/agents")
-async def list_agents(request: Request):
+async def list_agents(request: Request, refresh: bool = False):
     release = await asyncio.to_thread(agent_release.release, AGENT_ZIP)
-    rows = state.DB.execute("SELECT id, user_id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
+    rows = list(state.DB.execute("SELECT id, user_id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
                             " WHERE user_id = ? OR id IN (SELECT m.agent_id FROM project_members m"
                             " JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = a.user_id"
                             " WHERE m.user_id = ? AND u.disabled = 0) ORDER BY created, id",
-                            (request.state.user.id, request.state.user.id))
+                            (request.state.user.id, request.state.user.id)))
+    if refresh:
+        from claude_code import _session_open
+
+        await asyncio.gather(*(_refresh_codex(request, link) for row in rows
+            if row["user_id"] == request.state.user.id and (link := bridge.LINKS.get(row["id"])) is not None
+            and link.hello.get("codex_models") and "codex" in link.hello))
+        if not _session_open(request.state.digest):
+            raise HTTPException(409, {"code": "closed", "message": "Сеанс Студии закрыт"})
     items = []
     for r in rows:
         link = bridge.LINKS.get(r["id"])
@@ -149,6 +157,7 @@ async def list_agents(request: Request):
                       "last_seen": r["last_seen"], "models": hello.get("models", []),
                       "efforts": hello.get("efforts", []), "images": hello.get("images", False),
                       "chat_state": hello.get("chat_state", False), "defaults": hello.get("defaults", {}),
+                      "mcp": hello.get("mcp", False),
                       "chat_control": hello.get("chat_control", False),
                       "attachments": hello.get("attachments", False),
                       "project_activity": hello.get("project_activity", False),
@@ -179,6 +188,19 @@ async def list_agents(request: Request):
             items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
                              computer_info=False, software_versions=False, desktop=False, subscription_usage=False, usage_reset=False, opencode_usage=False, worktrees=False, project_create=False)
     return {"items": items}
+
+
+async def _refresh_codex(request: Request, link: bridge.Link) -> None:
+    """Обновление страницы: не открывает PIN, не продлевает его срок и не заменяет канал."""
+    from claude_code import ask
+
+    try:
+        data = await ask(request, link.agent_id, "models", engine="codex", quiet=True, passive=True)
+        catalog = bridge.parse_hello({**link.hello, "t": "hello", "v": 1, "codex": data.get("codex")})["codex"]
+    except (HTTPException, bridge.ProtocolError):
+        return  # закрытый/старый мост или сбой: прежний каталог остаётся доступен
+    if bridge.LINKS.get(link.agent_id) is link:
+        link.hello["codex"] = catalog
 
 
 @router.get("/api/agent/package")

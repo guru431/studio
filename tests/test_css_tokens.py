@@ -3,7 +3,7 @@
 import json
 import re
 
-import profile
+import account_profile as profile
 
 from conftest import APP
 

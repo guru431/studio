@@ -28,6 +28,21 @@ KEYS.update({'Enter': 36, 'Tab': 48, 'Space': 49, 'Backspace': 51, 'Escape': 53,
 _UNAVAILABLE = 'Нужен открытый графический сеанс macOS без блокировки экрана'
 
 
+def permission_status(_quartz=None):
+    """Только preflight текущего процесса: без запроса разрешений, снимков и ввода."""
+    try:
+        if _quartz is None:
+            import Quartz as _quartz
+        q = _quartz
+        session = q.CGSessionCopyCurrentDictionary()
+        ready = bool(session and session.get(q.kCGSessionOnConsoleKey) and session.get(q.kCGSessionLoginDoneKey))
+        locked = bool(session and session.get('CGSSessionScreenIsLocked', False))
+        return {'screen': bool(q.CGPreflightScreenCaptureAccess()), 'input': bool(q.CGPreflightPostEventAccess()),
+                'session': 'locked' if locked else 'ready' if ready else 'unavailable'}
+    except Exception:
+        return {'screen': None, 'input': None, 'session': 'unavailable'}
+
+
 def request_permission(kind):
     """Вызывается исключительно кнопкой локального окна, никогда из протокола."""
     import Quartz as q
@@ -60,14 +75,12 @@ class NativeDesktop:
             import AppKit
             self.q, self.appkit = Quartz, AppKit
         q = self.q
-        session = q.CGSessionCopyCurrentDictionary()
-        if (not session or not session.get(q.kCGSessionOnConsoleKey)
-                or not session.get(q.kCGSessionLoginDoneKey)
-                or session.get('CGSSessionScreenIsLocked', False)):
+        status = permission_status(q)
+        if status['session'] != 'ready':
             raise Refused('desktop_unavailable', _UNAVAILABLE)
-        if not q.CGPreflightScreenCaptureAccess():
+        if status['screen'] is not True:
             raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Запись экрана…» и разрешите доступ')
-        if not q.CGPreflightPostEventAccess():
+        if status['input'] is not True:
             raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Управление вводом…» и разрешите доступ')
         return q
 

@@ -123,6 +123,8 @@ def prepare(h: Path, release: dict) -> Path:
         archive.unlink()
         # Хелпер берём из уже работающей доверенной копии; он не импортирует пакет обновления.
         shutil.copyfile(REPO / 'studio_agent' / 'update_helper.py', stage / '_update_helper.py')
+        if host.MACOS:
+            shutil.copyfile(REPO / 'studio_agent' / 'macos_autostart.py', stage / '_macos_autostart.py')
         env = os.environ.copy()
         env.pop('PYTHONPATH', None)
         env.pop('PYTHONHOME', None)

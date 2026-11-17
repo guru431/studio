@@ -112,11 +112,15 @@ def schema_db(tmp_path_factory):
     """Пустая база текущей схемы — одна на процесс xdist: SCHEMA на новый файл — ~0,2 с, а тестов
     с `studio` — почти весь набор. Закрыта — WAL слит в файл, копия файла — целая база."""
     import db
-    path = tmp_path_factory.mktemp("schema") / "studio.db"
-    conn = db.connect(path)
-    db.migrate(conn)
-    conn.close()
-    return path
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='schema-', dir=tmp_path_factory.getbasetemp()) as directory:
+        path = Path(directory) / 'studio.db'
+        conn = db.connect(path)
+        try:
+            db.migrate(conn)
+        finally:
+            conn.close()
+        yield path
 
 
 @pytest.fixture

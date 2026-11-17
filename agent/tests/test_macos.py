@@ -2,7 +2,9 @@
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -63,6 +65,19 @@ def test_launchagent_path_never_adds_current_directory_when_path_is_missing(monk
     assert paths and '' not in paths and '.' not in paths
 
 
+def test_macos_finds_the_cli_in_the_opencode_desktop_application(tmp_path, monkeypatch):
+    monkeypatch.setattr(host, 'MACOS', True)
+    monkeypatch.setattr(host, 'find_tool', lambda name: None)
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    binary = tmp_path / 'Applications/OpenCode.app/Contents/Resources/opencode-cli'
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+    monkeypatch.setattr(opencode_rpc.os, 'access', lambda path, mode: path == binary)
+    assert opencode_rpc.find_cli() == binary
+    monkeypatch.setattr(opencode_rpc.os, 'access', lambda path, mode: False)
+    assert opencode_rpc.find_cli() is None
+
+
 def test_macos_launchagent_preserves_argv_and_does_not_start_or_stop_processes(tmp_path, monkeypatch):
     target = tmp_path / 'LaunchAgents/com.studio.agent.plist'
     monkeypatch.setattr(macos_autostart, 'path', lambda: target)
@@ -76,6 +91,57 @@ def test_macos_launchagent_preserves_argv_and_does_not_start_or_stop_processes(t
     assert macos_autostart.read() == data
     macos_autostart.set_enabled(False, repo)
     assert not target.exists()
+
+
+def test_native_launcher_is_used_for_autostart_updates_and_rollback(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(update_helper, 'MACOS', True)
+    binary = tmp_path / 'Applications/Studio Agent.app/Contents/MacOS/studio-agent'
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b'\xca\xfe\xba\xbe' + b'fixture')
+    repo = tmp_path / 'releases/release-current'
+    expected = [str(binary), '--studio-repo', str(repo)]
+    assert macos_autostart.arguments(repo) == expected
+    assert update_helper.launch_arguments(repo) == [
+        '/usr/bin/open', '-n', '-W', str(binary.parents[2]), '--args', '--studio-repo', str(repo)]
+    binary.write_bytes(b'#!/bin/sh\nexec python\n')
+    assert macos_autostart.arguments(repo) == [str(repo / '.venv/bin/python'), str(repo / 'studio_agent.pyw')]
+
+
+def test_first_update_from_python_switches_to_native_before_gui_start(tmp_path, monkeypatch):
+    from studio_agent import macos_launcher
+    repo = tmp_path / 'release'
+    (repo / 'macos').mkdir(parents=True)
+    (repo / 'macos/studio-agent').touch()
+    app = tmp_path / 'Applications/Studio Agent.app'
+    binary_path = app / 'Contents/MacOS/studio-agent'
+    binary_path.parent.mkdir(parents=True)
+    binary_path.write_bytes(b'\xca\xfe\xba\xbe fixture')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.delenv('STUDIO_AGENT_HOME', raising=False)
+    monkeypatch.delenv('STUDIO_AGENT_UPDATE_READY', raising=False)
+    calls = []
+    monkeypatch.setattr(macos_launcher, 'executable', lambda: Path('/runtime/python'))
+    monkeypatch.setitem(sys.modules, 'install_macos', SimpleNamespace(bundle=lambda *args: app))
+    monkeypatch.setattr(macos_launcher.os, 'execv', lambda path, args: calls.append((path, args)))
+    macos_launcher.ensure_native(repo)
+    binary = str(app / 'Contents/MacOS/studio-agent')
+    assert calls == [('/usr/bin/open', ['/usr/bin/open', '-n', '-W', str(app), '--args', '--studio-repo', str(repo)])]
+    monkeypatch.setattr(macos_launcher, 'executable', lambda: Path(binary))
+    macos_launcher.ensure_native(repo)
+    assert len(calls) == 1
+
+
+def test_standalone_helper_reads_only_its_trusted_autostart_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(update_helper, 'MACOS', True)
+    monkeypatch.setattr(update_helper, '__package__', None)
+    monkeypatch.setattr(update_helper, '__file__', str(tmp_path / '_update_helper.py'))
+    (tmp_path / '_macos_autostart.py').write_text(
+        'def arguments(repo): return ["trusted", str(repo)]\n'
+        'def open_arguments(repo, env=None): return arguments(repo)\n')
+    malicious = SimpleNamespace(open_arguments=lambda *args: pytest.fail('untrusted module imported'))
+    monkeypatch.setitem(sys.modules, '_macos_autostart', malicious)
+    assert update_helper.launch_arguments(tmp_path) == ['trusted', str(tmp_path)]
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='права POSIX')

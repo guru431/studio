@@ -97,16 +97,25 @@ git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "
 "$PYTHON" "$D/deploy/render-profile.py" --agent "$package/studio-agent.zip"
 git -C "$D" show "$REV:deploy/build-agent-installer.ps1" > "$package/build-agent-installer.ps1"
 git -C "$D" show "$REV:deploy/agent-installer.cs" > "$package/agent-installer.cs"
+git -C "$D" show "$REV:deploy/build-agent-macos.py" > "$package/build-agent-macos.py"
+git -C "$D" show "$REV:deploy/macos-runtime.json" > "$package/macos-runtime.json"
+echo "==> сборка автономного установщика macOS"
+"$PYTHON" "$package/build-agent-macos.py" --archive "$package/studio-agent.zip" \
+    --output "$package/studio-agent-setup.pkg" --lock "$package/macos-runtime.json" \
+    --launcher-output "$package/studio-agent-macos"
+"$PYTHON" - "$package/studio-agent.zip" "$package/studio-agent-macos" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "a") as archive:
+    assert "studio-agent/macos/studio-agent" not in archive.namelist()
+    archive.write(sys.argv[2], "studio-agent/macos/studio-agent")
+PY
 echo "==> сборка установщика Windows"
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$(cygpath -w "$package/build-agent-installer.ps1")" \
     -Archive "$(cygpath -w "$package/studio-agent.zip")" \
     -Output "$(cygpath -w "$package/studio-agent-setup.exe")"
-git -C "$D" show "$REV:deploy/build-agent-macos.py" > "$package/build-agent-macos.py"
-git -C "$D" show "$REV:deploy/macos-runtime.json" > "$package/macos-runtime.json"
-echo "==> сборка автономного установщика macOS"
-"$PYTHON" "$package/build-agent-macos.py" --archive "$package/studio-agent.zip" \
-    --output "$package/studio-agent-setup.pkg" --lock "$package/macos-runtime.json"
 
 echo "==> код ${REV:0:7} → $HOST:$R"
 # Чужие загрузки не трогаем независимо от возраста. Выход очищает только успешно созданную свою.

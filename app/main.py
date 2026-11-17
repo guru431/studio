@@ -53,7 +53,7 @@ import media
 import ocr
 import ntfy
 import presets
-import profile
+import account_profile as profile
 import project_access
 import release
 import push
