@@ -122,6 +122,30 @@ def test_prepare_checks_checksum_and_builds_a_separate_venv(home, tmp_path, monk
     assert store.load_config(home).url == 'https://studio.example'
 
 
+def test_dependency_download_can_exceed_five_minutes_without_extending_other_steps(home, tmp_path, monkeypatch):
+    archive = bundle(tmp_path / 'package.zip').read_bytes()
+    store.save_config(home, store.Config(url='https://studio.example'))
+    monkeypatch.setattr(store, 'load_key', lambda h: 'device-key')
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'local'))
+    opener = Mock()
+    opener.open.side_effect = lambda *a, **kw: io.BytesIO(archive)
+    monkeypatch.setattr(updater.urllib.request, 'build_opener', lambda *a: opener)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs['timeout']))
+        if command[1:4] == ['-m', 'pip', 'install'] and kwargs['timeout'] < 1800:
+            raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    monkeypatch.setattr(updater.subprocess, 'run', run)
+    release = {**FUTURE, 'size': len(archive), 'sha256': hashlib.sha256(archive).hexdigest()}
+    stage = updater.prepare(home, release)
+    try:
+        assert [timeout for _, timeout in calls] == [300, 300, 1800, 300]
+    finally:
+        updater.discard(stage)
+
+
 async def test_update_waits_for_jobs_and_repeated_clicks_launch_only_once(home, tmp_path):
     active = [True]
     waiting = asyncio.Event()

@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 VERSION_RE = re.compile(r'[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}')
 PACKAGE_MAX = 16 * 1024 * 1024
 UNPACKED_MAX = 64 * 1024 * 1024
+PIP_INSTALL_SEC = 1800
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -138,10 +139,12 @@ def prepare(h: Path, release: dict) -> Path:
         ]
         with tempfile.TemporaryDirectory(prefix='prepare-', dir=stage) as temporary:
             env.update(TMP=temporary, TEMP=temporary, TMPDIR=temporary, PIP_CACHE_DIR=temporary)
-            for command in commands:
+            for step, command in enumerate(commands, 1):
+                log.info('обновление: шаг %d', step)
+                timeout = PIP_INSTALL_SEC if command[1:4] == ['-m', 'pip', 'install'] else 300
                 subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, creationflags=host.NO_WINDOW,
-                               timeout=300, check=True)
+                               timeout=timeout, check=True)
         return stage
     except BaseException:
         discard(stage)
