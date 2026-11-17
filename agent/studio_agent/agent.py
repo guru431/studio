@@ -151,7 +151,7 @@ class Agent:
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
-                 "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
+                 "computer_info": True, "software_versions": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -361,8 +361,6 @@ class Agent:
 
     async def _desktop_request(self, op, frame):
         """Поля проверены `_desktop_fields` до продления срока PIN."""
-        if host.MACOS:
-            raise Refused("desktop_unavailable", "Удалённый рабочий стол доступен только на Windows")
         control = frame.get("control")
         session = frame["session"]
         if op == "desktop_status":

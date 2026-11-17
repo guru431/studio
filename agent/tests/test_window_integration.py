@@ -145,9 +145,12 @@ def test_tabs_keyboard_and_theme_keep_settings_and_live_status(home, monkeypatch
 
 
 @pytest.mark.integration
-def test_local_desktop_checkbox_persists_without_restarting_or_contacting_studio(home, monkeypatch, tk_root):
+@pytest.mark.parametrize('macos', [False, True])
+def test_local_desktop_checkbox_persists_without_restarting_or_contacting_studio(home, monkeypatch, tk_root, macos):
     from tkinter import ttk
     from studio_agent.app import Controller
+
+    monkeypatch.setattr(window.host, 'MACOS', macos)
 
     store.save_config(home, store.Config(projects_root='C:/work/projects'))
     ctrl = Controller(home, autostart=SimpleNamespace(enabled=lambda: False))

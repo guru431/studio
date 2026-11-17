@@ -5,9 +5,20 @@ import threading
 
 import pytest
 
-from studio_agent import app, desktop, store
+from studio_agent import app, desktop, host, store
 from studio_agent.errors import Refused
 from test_agent import Clock, make, req
+
+
+async def test_macos_advertises_desktop_and_allows_reading_local_switch(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(host, 'MACOS', True)
+    agent = make(home, tmp_path)
+    try:
+        assert agent.hello()['desktop'] is True
+        assert await agent._desktop_request('desktop_status', {'session': 'a' * 32}) == {
+            'enabled': False, 'active': False, 'resolutions': list(desktop.RESOLUTIONS)}
+    finally:
+        await agent.desktop.close()
 
 
 class Native:
