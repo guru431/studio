@@ -1,0 +1,99 @@
+"""Чаты озвучки: продолжение, снимок голоса и повторная генерация выбранной записи."""
+import db
+import state
+from conftest import make_user, signin
+from test_speeches import add_gateway, busy_speech, voice, wait_sp
+
+
+def test_continue_chat_and_replace_a_record(studio, fake_audio):
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    first = studio.c.post('/api/speeches', json={'text': 'Первая.', 'voice': vid}).json()
+    first = wait_sp(studio, first['id'], {'done'})
+    second = studio.c.post('/api/speeches', json={
+        'text': 'Вторая.', 'voice': vid, 'chat_id': first['id']}).json()
+    second = wait_sp(studio, second['id'], {'done'})
+    chats = studio.c.get('/api/speeches/chats').json()['items']
+    assert len(chats) == 1 and chats[0]['id'] == first['id']
+    assert chats[0]['created'] == first['created']
+    assert studio.c.get(f"/api/speeches/chats/{first['id']}").json()['items'] == [first, second]
+    assert studio.c.patch(f'/api/voices/{vid}', json={'name': 'Новое имя'}).status_code == 200
+    assert studio.c.get(f"/api/speeches/{first['id']}").json()['voice_name'] == 'Мой'
+    old_media = first['media_id']
+    replacement = studio.c.patch(f"/api/speeches/{first['id']}", json={
+        'text': 'Исправленная.', 'voice': vid}).json()
+    assert replacement['id'] == first['id'] and replacement['chat_id'] == first['id']
+    edited = wait_sp(studio, first['id'], {'done'})
+    assert edited['text'] == 'Исправленная.' and edited['voice_name'] == 'Новое имя'
+    assert edited['media_id'] != old_media and edited['created'] == first['created']
+    assert len(studio.c.get('/api/speeches').json()['items']) == 2
+    assert studio.c.get(f'/api/media/{old_media}').status_code == 404
+    found = state.DB.execute("SELECT body FROM search_docs WHERE section='speech' AND item=?",
+                             (first['id'],)).fetchone()
+    assert found[0] == 'Исправленная.'
+    assert studio.c.delete(f"/api/speeches/{first['id']}").status_code == 204
+    chat = studio.c.get(f"/api/speeches/chats/{first['id']}").json()
+    assert chat['created'] == first['created'] and [i['id'] for i in chat['items']] == [second['id']]
+
+
+def test_chat_ownership_and_running_edit_are_checked(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    sid = busy_speech(studio, fake_audio, monkeypatch)
+    current = wait_sp(studio, sid, {'working'})
+    body = {'text': 'Правка.', 'voice': current['voice']}
+    assert studio.c.patch(f'/api/speeches/{sid}', json=body).status_code == 409
+    make_user(studio, 'other')
+    signin(studio, 'other')
+    add_gateway(studio)
+    body['voice'] = voice(studio, fake_audio)
+    assert studio.c.get(f'/api/speeches/chats/{sid}').status_code == 404
+    assert studio.c.patch(f'/api/speeches/{sid}', json=body).status_code == 404
+    assert studio.c.post('/api/speeches', json=body | {'chat_id': sid}).status_code == 404
+    assert studio.c.get('/api/speeches/chats').json()['items'] == []
+
+
+def test_chat_pages_keep_equal_start_times_and_the_first_record_order(studio):
+    uid = make_user(studio, 'owner')
+    signin(studio, 'owner')
+    for sid, cid, text in [('a', 'a', 'Первый'), ('b', 'b', 'Другой'), ('c', 'c', 'Третий'), ('0', 'a', 'Продолжение')]:
+        state.DB.execute("INSERT INTO speeches(id,user_id,model,voice,text,state,detail,created,chat_id,chat_created)"
+                         " VALUES(?,?,'qwen3-tts','voice',?,'done','готово',100,?,100)", (sid, uid, text, cid))
+    first = studio.c.get('/api/speeches/chats?limit=2').json()['items']
+    assert [i['id'] for i in first] == ['c', 'b']
+    rest = studio.c.get('/api/speeches/chats?limit=2&before=100&before_id=b').json()['items']
+    assert [i['id'] for i in rest] == ['a']
+    chat = studio.c.get('/api/speeches/chats/a').json()
+    assert [i['text'] for i in chat['items']] == ['Первый', 'Продолжение']
+
+
+def test_failed_edit_preserves_audio_and_shared_audio_survives_replacement(studio, fake_audio):
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    created = studio.c.post('/api/speeches', json={'text': 'Оригинал.', 'voice': vid}).json()
+    old = wait_sp(studio, created['id'], {'done'})
+    assert studio.c.patch(f"/api/speeches/{old['id']}", json={'text': ' ', 'voice': vid}).status_code == 422
+    assert studio.c.get(f"/api/speeches/{old['id']}").json() == old
+    state.DB.execute("INSERT INTO speeches(id,user_id,model,voice,text,media_id,state,detail,created)"
+                     " SELECT 'shared-audio',user_id,model,voice,'Копия',media_id,state,detail,created"
+                     " FROM speeches WHERE id=?", (old['id'],))
+    assert studio.c.patch(f"/api/speeches/{old['id']}", json={'text': 'Правка.', 'voice': vid}).status_code == 202
+    assert wait_sp(studio, old['id'], {'done'})['media_id'] != old['media_id']
+    assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 200
+
+
+def test_migration_preserves_old_speeches_and_previous_writer(env):
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45) + '\nPRAGMA user_version=44;')
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
+        conn.execute("INSERT INTO voices VALUES('v',1,'Старый голос','образец','ref',8,0)")
+        insert = ("INSERT INTO speeches(id,user_id,model,voice,text,state,detail,created)"
+                  " VALUES(?,1,'qwen3-tts','v','Привет','done','готово',123)")
+        conn.execute(insert, ('old',))
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute('SELECT chat_id,chat_created,voice_name FROM speeches').fetchone()[:] == (
+            'old', 123, 'Старый голос')
+        conn.execute(insert, ('previous-writer',))
+        assert conn.execute("SELECT chat_id,chat_created FROM speeches WHERE id='previous-writer'").fetchone()[:] == (
+            'previous-writer', 123)

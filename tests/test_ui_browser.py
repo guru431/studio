@@ -4935,7 +4935,7 @@ def seed_list(live, section, uid, n, running_newest=False) -> list:
 SLOW_PAGE = """(() => { window.lists = { first: 0, paged: 0 }; const real = window.fetch;
   window.fetch = async (url, opts = {}) => {
     const u = String(url);
-    if (/^\\/api\\/(transcripts|speeches)\\?/.test(u)) {
+    if (/^\\/api\\/(transcripts|speeches(?:\\/chats)?)\\?/.test(u)) {
       if (!u.includes('before_id=')) window.lists.first += 1;
       else { await new Promise(r => setTimeout(r, 3500)); window.lists.paged += 1; }
     }

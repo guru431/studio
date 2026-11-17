@@ -239,7 +239,8 @@ def _scans(user_id: int, rows: list, files: dict) -> list:
 
 
 def _speeches(user_id: int, rows: list, files: dict) -> list:
-    return [_pick(r, "id", "model", "voice", "text", "duration", "state", "detail", "created", "finished")
+    return [_pick(r, "id", "chat_id", "chat_created", "model", "voice", "voice_name", "text", "duration",
+                  "state", "detail", "created", "finished")
             | {"file": files.get(r["media_id"])} for r in rows]
 
 

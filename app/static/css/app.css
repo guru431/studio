@@ -518,6 +518,9 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tr-seek:focus-visible { color: var(--accent); }
 @media (hover: hover) { .tr-seek:hover { color: var(--accent); } }
 .sp-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.sp-record { display: flex; flex-direction: column; gap: var(--space-4); }
+.sp-record + .sp-record { margin-top: var(--space-7); padding-top: var(--space-7); border-top: 1px solid var(--border); }
+.sp-voice-name { margin: 0; overflow-wrap: anywhere; }
 .sp-audio { width: 100%; }
 .sp-toolbar { display: flex; flex: none; gap: var(--space-4); padding: var(--space-4) var(--space-7); }
 .speech .split-main { overflow: hidden; }

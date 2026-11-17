@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 44
+VERSION = 45
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -572,6 +572,28 @@ SCHEMA += VOICE_42
 SCHEMA += MCP_43
 SCHEMA += MEDIA_44
 
+#: Старые озвучки — отдельные чаты; время начала копируется в продолжения и переживает удаление первой записи.
+SPEECH_45 = """
+ALTER TABLE speeches ADD COLUMN chat_id TEXT;
+ALTER TABLE speeches ADD COLUMN chat_created REAL;
+ALTER TABLE speeches ADD COLUMN voice_name TEXT NOT NULL DEFAULT '';
+UPDATE speeches SET chat_id = id, chat_created = created,
+  voice_name = COALESCE((SELECT name FROM voices WHERE voices.id = speeches.voice
+                        AND voices.user_id = speeches.user_id), voice);
+CREATE INDEX speeches_user_chat ON speeches(user_id, chat_id, created, id);
+CREATE INDEX speeches_user_chat_created ON speeches(user_id, chat_created, chat_id);
+CREATE TRIGGER speeches_chat_ai AFTER INSERT ON speeches WHEN new.chat_id IS NULL BEGIN
+  UPDATE speeches SET chat_id = new.id, chat_created = new.created,
+    voice_name = COALESCE((SELECT name FROM voices WHERE id = new.voice AND user_id = new.user_id), new.voice)
+    WHERE id = new.id;
+END;
+CREATE TRIGGER search_speeches_au AFTER UPDATE OF text ON speeches WHEN old.text IS NOT new.text BEGIN
+  DELETE FROM search_docs WHERE section = 'speech' AND item = old.id;
+  """ + _DOC + """ ('speech', new.id, '', new.user_id, new.model, new.created, new.text);
+END;
+"""
+SCHEMA += SPEECH_45
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -669,6 +691,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     42: VOICE_42,
     43: MCP_43,
     44: MEDIA_44,
+    45: SPEECH_45,
 }
 
 

@@ -49,11 +49,9 @@ def test_h3_long_video_is_refused_before_creating_history(studio):
 def test_previous_schema_defaults_old_videos_to_wan(env):
     conn = db.connect(env.db_path)
     try:
+        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44) + '\nPRAGMA user_version=43;')
         db.migrate(conn)
-        conn.execute("ALTER TABLE videos DROP COLUMN model")
-        conn.execute("PRAGMA user_version = 43")
-        db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 44
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
         column = next(row for row in conn.execute("PRAGMA table_info(videos)") if row[1] == "model")
         assert column[4] == "'wan'"
     finally:
