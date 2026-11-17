@@ -36,6 +36,7 @@ OPS = {
     "agent_update_status": (),
     "agent_update_cancel": (),
     "usage": ("refresh", "model"),
+    "usage_reset": ("idempotency_key",),
     "projects": ("refresh",),
     "project_roots": (),
     "mcp_get": ("project",),
@@ -147,7 +148,7 @@ class Agent:
                  "agent_version": agent_version, "platform": "darwin" if host.MACOS else "win32", "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
-                 "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                 "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                  "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
@@ -302,6 +303,8 @@ class Agent:
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode"):
             raise Refused("invalid")
+        if op == "usage_reset" and engine != "codex":
+            raise Refused("invalid")
         backend = self._runner(frame)
         if engine != "claude" and (backend is None or backend.catalog is None):
             label = "Codex" if engine == "codex" else "OpenCode"
@@ -406,6 +409,8 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == "idempotency_key":
+            return isinstance(value, str) and limits.CHAT_ID.fullmatch(value) is not None
         if name == 'software':
             return value in ('claude', 'codex', 'opencode')
         if name == "source":
@@ -700,6 +705,14 @@ class Agent:
     async def _op_usage(self, frame, after):
         return await self._usage.read(frame.get("engine", "claude"), self.cfg.projects_root,
                                       self._runner(frame), refresh=frame.get("refresh", False), model=frame.get("model"))
+
+    async def _op_usage_reset(self, frame, after):
+        try:
+            return await self.codex.reset_usage(self.cfg.projects_root, frame["idempotency_key"])
+        finally:
+            # Даже при потере ответа списание могло состояться. Старое чтение не вернётся в кэш.
+            self._usage.cached.pop(("codex", None), None)
+            self._usage.pending.pop(("codex", None), None)
 
     async def _op_state(self, frame, after):
         project = await self._project(frame)

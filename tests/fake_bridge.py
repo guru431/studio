@@ -93,6 +93,8 @@ class FakeMachine:
         self.worktrees = False
         self.project_create = False
         self.subscription_usage = False
+        self.platform = None
+        self.usage_reset = False
         self.opencode_usage = False
         self.opencode_features = False
         self.usage_data = None
@@ -116,9 +118,10 @@ class FakeMachine:
                 "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
+                **({'platform': self.platform} if self.platform else {}),
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create")
                    if getattr(self, name)},

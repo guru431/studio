@@ -18,6 +18,7 @@ def test_create_project_in_chosen_folder(desktop_browser, live, width, count, tm
     login = f'create-{engine}-{width}-{count}'
     live.add_user(login)
     machine = creation_machine(count)
+    machine.platform = 'win32' if count == 1 else 'darwin'
     machine.roots[-1]['path'] = 'C:\\Projects\\' + 'Очень длинная папка\\' * 12
     aid, channel = code_online(live, login, machine)
     try:
@@ -29,6 +30,24 @@ def test_create_project_in_chosen_folder(desktop_browser, live, width, count, tm
             page.goto(live.url + '/#/code')
             trigger = page.locator('#code-project-create')
             trigger.wait_for()
+            expect(page.locator('#code-project-refresh')).to_have_count(0)
+            expect(page.locator('#refresh-app')).to_be_visible()
+            logo = page.locator('.code-agent-platform')
+            expect(logo).to_have_attribute('aria-label', 'Windows' if count == 1 else 'macOS')
+            assert logo.evaluate('''node => node.previousElementSibling.classList.contains('code-agent-state')
+                && node.nextElementSibling.classList.contains('code-agent-name')''')
+            controls = trigger.evaluate('''node => {
+              const rect = node.getBoundingClientRect(), sort = document.querySelector('#code-project-sort-open').getBoundingClientRect();
+              return {sameRow: Math.abs(rect.top-sort.top)<1, afterSort: rect.left>=sort.right,
+                label: getComputedStyle(node.querySelector('.code-project-create-label')).display,
+                icon: getComputedStyle(node.querySelector('.ico')).display};
+            }''')
+            assert controls['sameRow'] == (width == 320)
+            assert controls['label'] == ('none' if width == 320 else 'block')
+            assert (controls['icon'] != 'none') == (width == 320)
+            if width == 320:
+                assert controls['afterSort']
+            page.screenshot(path=str(tmp_path / f'project-controls-{engine}-{width}-{count}.png'))
             trigger.tap() if width == 320 else trigger.press('Enter')
             dialog = page.locator('#code-project-create-dialog')
             name = dialog.get_by_label('Название проекта')

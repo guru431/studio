@@ -67,6 +67,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/search"): {"query": "a"},
     ("POST", "/api/code/agents/1/projects/1/chats/1/queue"): {"request_id": "0" * 16, "version": 1, "text": "a"},
     ("GET", "/api/code/agents/1/usage"): None,
+    ("POST", "/api/code/agents/1/usage/reset"): {"idempotency_key": "8ae96ff3-3425-4f4c-8772-b6fd61502868"},
     ("POST", "/api/code/agents/1/open"): {"pin": None},
     ("GET", "/api/code/agents/1/projects"): None,
     ("GET", "/api/code/agents/1/projects/1/summary"): None,

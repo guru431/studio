@@ -101,11 +101,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const sortText = el('span', { class: 'code-project-sort-text', 'aria-hidden': 'true' }, sort.selectedOptions[0].textContent);
   const sortBox = el('button', { type: 'button', id: 'code-project-sort-open', class: 'input code-project-sort',
     'aria-label': tr("Поиск и сортировка проектов") }, sortText);
-  const refresh = el('button', { id: 'code-project-refresh', class: 'btn', type: 'button',
-    title: tr("Обновить сведения"), 'aria-label': tr("Обновить сведения") }, el('span', { 'aria-hidden': 'true' }, icon('refresh')));
   const updated = el('p', { id: 'code-project-updated', class: 'muted', 'aria-live': 'polite' }, tr("Ещё не обновлено"));
   const newProject = el('button', { id: 'code-project-create', class: 'btn', type: 'button', hidden: true,
-    'aria-haspopup': 'dialog' }, tr("Новый проект"));
+    title: tr("Новый проект"), 'aria-label': tr("Новый проект"), 'aria-haspopup': 'dialog' },
+    icon('plus'), el('span', { class: 'code-project-create-label' }, tr("Новый проект")));
   // Поиск проектов (D2): по словам названия, только в памяти панели; список проектов не перечитывает.
   const search = el('input', { id: 'code-project-search', class: 'input code-project-search', type: 'search',
     placeholder: tr("Поиск проектов"), 'aria-label': tr("Поиск проектов"), autocomplete: 'off', maxlength: '200',
@@ -125,7 +124,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const sortPanel = el('div', { id: 'code-project-sort-menu', class: 'code-project-sort-menu' }, search, sortOptions);
   const sortPopup = popupPanel(sortBox, sortPanel, { label: tr("Поиск и сортировка проектов"), side: 'above',
     followViewport: true, autoFocus: false });
-  const footer = el('div', { class: 'code-panel-footer', hidden: true }, newProject, sortBox, sort, sortPanel, refresh, updated);
+  const footer = el('div', { class: 'code-panel-footer', hidden: true }, newProject, sortBox, sort, sortPanel, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': tr("Компьютеры и проекты") },
     el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
   host.append(root);
@@ -304,6 +303,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   let opening = null;      // идущий POST …/open: { aid, done } — done: открылся ли (ready ждёт его)
   let projectItems = [];
   let refreshing = null;
+  let summariesBusy = false;
   if (!snapshots.has(me.id)) snapshots.set(me.id, { summaries: new Map(), checked: new Map() });
   const { summaries, checked } = snapshots.get(me.id);
   while (snapshots.size > 4) snapshots.delete(snapshots.keys().next().value);
@@ -312,15 +312,19 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const observer = new IntersectionObserver(() => visible(), { root: body });
 
   function visible() {
-    if (summaryFrame || !alive || mode !== 'projects' || refresh.disabled) return;
+    if (summaryFrame || !alive || mode !== 'projects' || summariesBusy) return;
     summaryFrame = requestAnimationFrame(() => {
       summaryFrame = null;
-      if (refresh.disabled || !alive || mode !== 'projects') return;
+      if (summariesBusy || !alive || mode !== 'projects') return;
       const agent = items.find((a) => a.id === selected);
       if (agent) refreshSummaries(gen, agent);
     });
   }
   body.addEventListener('scroll', visible, { passive: true });
+  // Первый кадр открытия ещё за краем экрана. После выезда читаем видимые строки без ручного обновления.
+  root.addEventListener('transitionend', (event) => {
+    if (event.target === root && event.propertyName === 'transform') visible();
+  });
 
   function filterProjects() {
     const words = searchable(search.value).split(/\s+/).filter(Boolean);
@@ -382,13 +386,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   function refreshBusy(busy) {
-    refresh.disabled = busy;
-    refresh.setAttribute('aria-busy', String(busy));
+    summariesBusy = busy;
     footer.setAttribute('aria-busy', String(busy));
-    const label = busy ? tr("Обновляю сведения…") : tr("Обновить сведения");
-    refresh.title = label;
-    refresh.setAttribute('aria-label', label);
-    if (busy) updated.textContent = label;
+    if (busy) updated.textContent = tr("Обновляю сведения…");
     else paintUpdated();
   }
 
@@ -548,15 +548,6 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     visible();
     try { localStorage.setItem(sortKey, sort.value); } catch { /* Выбор действует в открытой панели. */ }
   });
-  refresh.addEventListener('click', async () => {
-    if (refresh.disabled || mode !== 'projects') return;
-    const mine = ++gen;
-    const agent = items.find((a) => a.id === selected);
-    refreshBusy(true);
-    status.textContent = '';
-    try { await projects(mine, agent, null, true, true); }
-    finally { if (alive && mine === gen && !refreshing) refreshBusy(false); }
-  });
 
   /** Список компьютеров; не прочитался — null (прежний список остаётся, «компьютеров нет» не сказать). */
   async function readAgents() {
@@ -589,6 +580,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         title: agent.online && agent.cc_version ? `Claude Code ${agent.cc_version}` : null },
       el('span', { class: `code-agent-state${agent.online ? ' on' : ''}` },
         el('span', { class: 'sr' }, agent.online ? tr("на связи") : tr("не на связи"))),
+      ['win32', 'darwin'].includes(agent.platform)
+        ? el('span', { class: 'code-agent-platform', role: 'img', 'aria-label': agent.platform === 'darwin' ? 'macOS' : 'Windows',
+          title: agent.platform === 'darwin' ? 'macOS' : 'Windows' }, icon(agent.platform === 'darwin' ? 'apple' : 'windows')) : null,
       el('span', { class: 'code-agent-name' }, agent.name),
       agent.has_pin ? el('span', { class: 'sr' }, tr("защищён PIN")) : null,
       el('span', { class: 'code-agent-version', title: agent.agent_version
@@ -781,11 +775,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     projects(mine, agent, found);
   }
 
-  async function projects(mine, agent, found = null, keep = false, force = false) {
-    if (refreshRequested && !refreshedAgents.has(agent.id)) {
-      force = true;
-      found = null;
-    }
+  async function projects(mine, agent, found = null) {
+    const force = refreshRequested && !refreshedAgents.has(agent.id);
+    if (force) found = null;
     try {
       if (found === null) found = await list(agent.id, true, force);
     } catch (err) {
@@ -794,8 +786,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         return;
       }
       if (alive && mine === gen) {
-        if (keep && err.code !== 'offline') status.textContent = words(err);
-        else { footer.hidden = true; refused(err); }
+        footer.hidden = true;
+        refused(err);
       }
       return;
     }
@@ -919,7 +911,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     aid = Number(aid);
     if (aid === selected && mode === 'projects') {
       mode = 'loading';
-      // Как show(): идущее обновление сводок прежнего показа отменяется, иначе ↻ осталось бы занятым.
+      // Как show(): отменяем обновление сводок прежнего показа, чтобы новое чтение могло завершиться.
       refreshing?.abort();
       refreshing = null;
       refreshBusy(false);

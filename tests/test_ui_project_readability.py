@@ -39,8 +39,7 @@ def test_project_names_dates_and_navigation(desktop_browser, live, width, tmp_pa
                 page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
                 if width == 320:
                     page.locator("#code-panel-toggle").click()
-                page.locator("#code-project-refresh").click()
-                pw.expect(page.locator("#code-project-refresh")).to_have_attribute("aria-busy", "false")
+                pw.expect(page.locator(".code-panel-footer")).to_have_attribute("aria-busy", "false")
                 row = page.locator(f"#code-projects li[data-pid='{pid('alpha')}']")
                 pw.expect(row.locator(".code-project-modified")).not_to_have_text("—")
                 layout = row.evaluate("""li => {

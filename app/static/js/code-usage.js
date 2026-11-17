@@ -1,19 +1,34 @@
 import { locale, tr } from './i18n.js';
-/* Подписка выбранного помощника на выбранном компьютере. Только чтение, кэш в памяти моста. */
-import { api } from './api.js';
+/* Подписка выбранного помощника; списание сброса — только по явному подтверждению. */
+import { api, me } from './api.js';
 import { dateTime } from './time.js';
-import { el, words } from './ui.js';
+import { el, openDialog, words } from './ui.js';
 import { ENGINE_NAMES } from './code-options.js';
 
 const number = (n) => Number.isFinite(n) ? n.toLocaleString(locale()) : '—';
 const date = (n) => Number.isFinite(n) ? dateTime(n) : tr("Не сообщается");
+const resetAttempts = new Map();
 
-export function usageView(host, { aid, engine, supported, model = () => '' }) {
+export function usageView(host, { aid, engine, supported, canReset = false, model = () => '' }) {
   let alive = true;
   let controller = null;
   let loading = false;
   let queuedLoad = null;
   let paintedModel = null;
+  let resetting = false;
+  let confirmation = null;
+  const resetStorage = `studio-code-usage-reset:${me.id}:${aid}`;
+  let resetKey = resetAttempts.get(resetStorage) || null;
+  try { resetKey ||= sessionStorage.getItem(resetStorage); } catch { /* Повтор живёт в памяти страницы. */ }
+  function rememberReset(key) {
+    resetKey = key;
+    if (key) resetAttempts.set(resetStorage, key);
+    else resetAttempts.delete(resetStorage);
+    try {
+      if (key) sessionStorage.setItem(resetStorage, key);
+      else sessionStorage.removeItem(resetStorage);
+    } catch { /* Закрытое хранилище не мешает повтору с тем же ключом. */ }
+  }
   const button = el('button', { type: 'button', id: 'code-usage', class: 'icon-btn code-usage',
     title: tr("Лимиты и статистика подписки"), 'aria-label': tr("Лимиты и статистика подписки"), 'aria-haspopup': 'dialog' });
   const remainingText = el('b', { id: 'code-usage-remaining' }, '—');
@@ -21,9 +36,11 @@ export function usageView(host, { aid, engine, supported, model = () => '' }) {
   const content = el('div', { class: 'code-usage-content', 'aria-live': 'polite' });
   const close = el('button', { type: 'button', class: 'btn' }, tr("Закрыть"));
   const refresh = el('button', { type: 'button', class: 'btn', id: 'code-usage-refresh' }, tr("Обновить"));
+  const reset = el('button', { type: 'button', class: 'btn', id: 'code-usage-reset', hidden: true }, tr("Использовать недельный сброс"));
+  const result = el('p', { role: 'status', class: 'small', id: 'code-usage-reset-result' });
   const dialog = el('dialog', { id: 'code-usage-dialog', class: 'dialog code-usage-dialog',
     'aria-labelledby': 'code-usage-title' }, el('h2', { id: 'code-usage-title' }, tr("{0} · подписка", ENGINE_NAMES[engine])),
-  content, el('div', { class: 'dialog-actions' }, refresh, close));
+  content, result, el('div', { class: 'actions' }, reset, refresh, close));
   host.append(dialog);
   close.addEventListener('click', () => dialog.close());
   function paint(data) {
@@ -46,6 +63,9 @@ export function usageView(host, { aid, engine, supported, model = () => '' }) {
     });
     const stats = data.statistics || {};
     const summary = stats.summary || {};
+    reset.hidden = engine !== 'codex' || !canReset || !(summary.available_resets > 0 || resetKey);
+    reset.disabled = resetting;
+    reset.textContent = resetKey ? tr("Повторить сброс") : tr("Использовать недельный сброс");
     const labels = { ...(engine === 'codex' ? { available_resets: tr("Доступные сбросы лимита") } : {}),
       lifetime_tokens: tr("Токенов за всё время"), peak_daily_tokens: tr("Максимум токенов за день"),
       longest_running_turn_sec: tr("Самый долгий ход, секунд"), current_streak_days: tr("Дней подряд сейчас"),
@@ -74,6 +94,8 @@ export function usageView(host, { aid, engine, supported, model = () => '' }) {
       entries.length ? el('dl', { class: 'code-usage-summary' }, ...entries.flatMap(([key, label]) =>
         [el('dt', {}, label), el('dd', {}, Number.isFinite(summary[key]) ? number(summary[key]) : tr("Не сообщается"))])) : null,
       resetDetails,
+      engine === 'codex' && summary.available_resets > 0 && !canReset
+        ? el('p', { class: 'muted small' }, tr("Обновите мост на компьютере для использования сбросов.")) : null,
       !stats.available ? el('p', { class: 'muted' }, stats.reason || tr("Провайдер не сообщает статистику подписки")) : null,
       daily.length ? el('details', {}, el('summary', {}, tr("Использование по дням")),
         el('table', { class: 'code-usage-days' }, el('thead', {}, el('tr', {}, el('th', {}, tr("Дата")), el('th', {}, tr("Токены")))),
@@ -91,7 +113,7 @@ export function usageView(host, { aid, engine, supported, model = () => '' }) {
       button.title = tr("Лимиты и статистика подписки");
       button.setAttribute('aria-label', button.title);
     }
-    if (loading) {
+    if (loading || resetting) {
       queuedLoad = { fresh: fresh || !!queuedLoad?.fresh, passive: passive && (queuedLoad?.passive ?? true) };
       return;
     }
@@ -102,6 +124,7 @@ export function usageView(host, { aid, engine, supported, model = () => '' }) {
     }
     loading = true;
     refresh.disabled = true;
+    reset.disabled = true;
     controller = new AbortController();
     if (dialog.open) content.replaceChildren(el('p', { class: 'muted' }, tr("Получаю данные подписки…")));
     try {
@@ -120,14 +143,46 @@ export function usageView(host, { aid, engine, supported, model = () => '' }) {
       }
     } finally {
       loading = false;
-      if (alive) refresh.disabled = false;
+      if (alive) { refresh.disabled = false; reset.disabled = false; }
       const next = queuedLoad;
       queuedLoad = null;
       if (alive && next) load(next.fresh, next.passive);
     }
   }
+  reset.addEventListener('click', () => {
+    if (loading || resetting || confirmation?.isConnected) return;
+    const submit = el('button', { type: 'button', class: 'btn btn-accent' }, tr("Использовать сброс"));
+    confirmation = openDialog(host, { id: 'code-usage-reset-confirm', title: tr("Сбросить лимиты Codex?"),
+      body: [el('p', {}, tr("Будет использован один доступный сброс лимитов Codex. Это действие нельзя отменить."))], actions: [submit] });
+    submit.addEventListener('click', async () => {
+      if (resetting) return;
+      rememberReset(resetKey || crypto.randomUUID());
+      resetting = true;
+      refresh.disabled = reset.disabled = true;
+      confirmation.close();
+      result.textContent = tr("Применяю сброс…");
+      try {
+        const data = await api('POST', `/api/code/agents/${aid}/usage/reset`, { idempotency_key: resetKey });
+        const messages = { reset: tr("Лимиты Codex сброшены."), alreadyRedeemed: tr("Этот сброс уже применён."),
+          nothingToReset: tr("Сейчас нет лимитов, доступных для сброса. Сброс не использован."),
+          noCredit: tr("Доступных сбросов больше нет.") };
+        if (!Object.hasOwn(messages, data.outcome)) throw new Error(tr("Не удалось подтвердить сброс. Повторите попытку."));
+        rememberReset(null);
+        if (alive) result.textContent = messages[data.outcome];
+      } catch (err) {
+        if (alive) result.textContent = tr("{0}. Повтор использует тот же сброс.", words(err));
+      } finally {
+        resetting = false;
+        if (alive) {
+          reset.textContent = resetKey ? tr("Повторить сброс") : tr("Использовать недельный сброс");
+          queuedLoad = null;
+          await load(true);
+        }
+      }
+    });
+  });
   button.addEventListener('click', () => { dialog.showModal(); load(); });
   refresh.addEventListener('click', () => load(true));
   load();
-  return { button, refresh: () => load(false, true), unmount() { alive = false; controller?.abort(); dialog.remove(); } };
+  return { button, refresh: () => load(false, true), unmount() { alive = false; controller?.abort(); confirmation?.close(); dialog.remove(); } };
 }

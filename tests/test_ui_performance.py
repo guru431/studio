@@ -152,7 +152,7 @@ def test_completed_summary_appears_before_slow_project_and_is_reused_on_return(b
     try:
         result = browser.drive(live.url+'/', [*signin(login), ('wait', READY), ('eval', 'gate', gate), *go('code'),
             ('wait', f"document.querySelector('#code-projects li[data-pid=\"{pid('alpha')}\"] .code-project-findings')?.textContent==='П: 0' && typeof window.__release==='function'"),
-            ('eval', 'stillLoading', "document.querySelector('#code-project-refresh').disabled"),
+            ('eval', 'stillLoading', "document.querySelector('.code-panel-footer').getAttribute('aria-busy') === 'true'"),
             ('eval', 'release', 'window.__release(); true'),
             ('wait', "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
             ('eval', 'before', 'window.__summaries'), *go('photo'), ('wait', "!!document.querySelector('#photo-feed')"),

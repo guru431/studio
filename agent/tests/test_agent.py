@@ -288,7 +288,7 @@ def test_hello(agent):
                                  "agent_version": VERSION, "platform": "darwin" if host.MACOS else "win32", "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
-                             "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
+                             "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
                              "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
@@ -350,6 +350,38 @@ async def test_posted_local_idle_exit_refuses_new_work_but_keeps_status_availabl
     assert (await agent.handle(req('desktop_status')))[0]['ok']
     agent.local_exit_pending = False
     assert (await agent.handle(req('projects')))[0]['ok']
+
+
+async def test_usage_reset_guards_fields_and_invalidates_inflight_cache(agent):
+    agent.codex = SimpleNamespace(catalog={"version": "test"}, reset_usage=AsyncMock(return_value={"outcome": "reset"}))
+    key = "8ae96ff3-3425-4f4c-8772-b6fd61502868"
+    assert (await agent.handle(req("usage_reset", engine="codex", idempotency_key=key)))[0]["code"] == "closed"
+    await agent.handle(req("open", pin=None))
+    assert (await agent.handle(req("usage_reset", engine="codex", idempotency_key="")))[0]["code"] == "invalid"
+    assert (await agent.handle(req("usage_reset", idempotency_key=key)))[0]["code"] == "invalid"
+    agent.codex.reset_usage.assert_not_called()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def stale_read(root):
+        started.set()
+        await release.wait()
+        return {"limits": {"rateLimitResetCredits": {"availableCount": 2}}}
+
+    agent.codex.subscription_usage = AsyncMock(side_effect=stale_read)
+    old = asyncio.create_task(agent._usage.read("codex", agent.cfg.projects_root, agent.codex))
+    try:
+        await started.wait()
+        assert (await agent.handle(req("usage_reset", engine="codex", idempotency_key=key)))[0]["data"] == {"outcome": "reset"}
+        agent.codex.reset_usage.assert_awaited_once_with(agent.cfg.projects_root, key)
+    finally:
+        release.set()
+        await old
+    agent.codex.subscription_usage = AsyncMock(return_value={"limits": {"rateLimitResetCredits": {"availableCount": 1}}})
+    current = await agent._usage.read("codex", agent.cfg.projects_root, agent.codex)
+    assert current["statistics"]["summary"]["available_resets"] == 1
+    agent.codex.subscription_usage.assert_awaited_once()
+    assert (await agent.handle(req("usage_reset", engine="codex", idempotency_key=key,
+                                  shared_projects=["0" * 16])))[0]["code"] == "closed"
 
 
 async def test_subscription_usage_requires_open_session_and_valid_refresh(agent):

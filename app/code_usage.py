@@ -1,6 +1,7 @@
 """Лимиты помощника: только владелец компьютера и открытая PIN-сессия моста."""
 
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, ValidationError
@@ -68,6 +69,28 @@ LINKS = {
     "codex": [{"label": "Использование Codex", "url": "https://chatgpt.com/codex/settings/usage"}],
     "opencode": [{"label": "Провайдеры OpenCode", "url": "https://opencode.ai/docs/providers/"}],
 }
+
+
+class ResetRequest(BaseModel):
+    idempotency_key: UUID
+
+
+class ResetResult(BaseModel):
+    outcome: Literal["reset", "alreadyRedeemed", "nothingToReset", "noCredit"]
+
+
+@router.post("/agents/{aid}/usage/reset")
+async def reset_usage(aid: int, body: ResetRequest, request: Request):
+    claude_code.own_agent(request, aid)
+    claude_code.require_engine(aid, "codex")
+    link = bridge.LINKS.get(aid)
+    if link is not None and not link.hello.get("usage_reset"):
+        raise claude_code._refuse(409, "unsupported", "обновите мост для сброса лимита")
+    raw = await claude_code.ask(request, aid, "usage_reset", engine="codex", idempotency_key=str(body.idempotency_key))
+    try:
+        return ResetResult.model_validate(raw).model_dump()
+    except ValidationError:
+        raise claude_code._refuse(502, "bridge", "мост ответил непонятно") from None
 
 
 @router.get("/agents/{aid}/usage")

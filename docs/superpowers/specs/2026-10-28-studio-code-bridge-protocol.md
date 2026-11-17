@@ -422,6 +422,16 @@ PIN-сессия, повторная проверка после чтения. �
 как остальные просьбы. HTTP: `GET /api/code/agents/<aid>/usage?engine=codex&refresh=false`;
 владелец компьютера и экранная блокировка проверяются обычными защитами сервера.
 
+Мост ≥0.31.0: `hello.usage_reset: true` объявляет изменяющую просьбу
+`usage_reset {engine: "codex", idempotency_key: UUID}` без проекта/чата, только владельцу с открытым PIN.
+HTTP: `POST /api/code/agents/<aid>/usage/reset {idempotency_key}` с CSRF, после подтверждения в интерфейсе.
+Мост вызывает `account/rateLimitResetCredit/consume {idempotencyKey}`, без `creditId` (выбирает провайдер).
+Ответ: `{outcome: "reset"|"alreadyRedeemed"|"nothingToReset"|"noCredit"}`; первые два — успешное списание,
+остальные — лимит не подлежит сбросу либо нет кредитов. Повтор одной попытки сохраняет UUID, включая потерю
+ответа и перезагрузку страницы; новая подтверждённая попытка после известного исхода получает новый UUID.
+Кэш лимитов инвалидируется даже при ошибке. После ответа Studio перечитывает `usage` с `refresh: true`.
+Старый Codex может вернуть `unsupported`: мост не повторяет изменяющий RPC автоматически.
+
 Ответ: `{engine, available, source, checked_at, cache_ttl: 60, plan, windows, statistics, links, message?}`.
 `checked_at` и `windows[].resets_at` — Unix seconds; `windows[]` содержит
 `{id, label, available, used_percent, remaining_percent, window_minutes, resets_at, reason?}`.
