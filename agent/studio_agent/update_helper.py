@@ -7,12 +7,36 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
 
+MACOS = sys.platform == 'darwin'
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
+def install_home():
+    return (Path.home() / 'Library/Application Support/Studio Agent/app' if MACOS else
+            Path(os.environ['LOCALAPPDATA']) / 'Programs/studio-agent')
+
+
+def python(stage):
+    return stage / ('.venv/bin/python' if MACOS else '.venv/Scripts/pythonw.exe')
+
 
 def wait_old(pid: int, timeout: int = 120000) -> bool:
+    if MACOS:
+        deadline = time.monotonic() + timeout / 1000
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False
+            time.sleep(0.1)
+        return False
     from ctypes import wintypes
 
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -42,6 +66,20 @@ class ProcessReleases(set):
 
 
 def _lock_file(path, *, create=False, gate=False):
+    if MACOS:
+        import fcntl
+        flags = os.O_RDWR | os.O_NOFOLLOW
+        if create or gate:
+            flags |= os.O_CREAT
+        if create:
+            flags |= os.O_EXCL
+        fd = os.open(path, flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(fd)
+            raise
+        return _PosixHandles, fd
     from ctypes import wintypes
 
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -55,6 +93,10 @@ def _lock_file(path, *, create=False, gate=False):
     if handle in (None, ctypes.c_void_p(-1).value):
         raise ctypes.WinError(ctypes.get_last_error())
     return kernel, handle
+
+
+class _PosixHandles:
+    CloseHandle = staticmethod(os.close)
 
 
 def release_runtime_lease(token):
@@ -144,10 +186,10 @@ def _reparse(info):
 
 
 def _managed_location(stage):
-    local = os.environ.get('LOCALAPPDATA')
+    local = str(Path.home()) if MACOS else os.environ.get('LOCALAPPDATA')
     if not local or not Path(local).is_absolute() or not RELEASE_NAME.fullmatch(stage.name):
         return None
-    base = Path(local) / 'Programs/studio-agent/releases'
+    base = install_home() / 'releases'
     if os.path.normcase(os.path.abspath(stage.parent)) != os.path.normcase(os.path.abspath(base)):
         return None
     return base
@@ -157,9 +199,11 @@ def _managed_base(stage):
     base = _managed_location(stage)
     if base is None:
         return None
-    local = Path(os.environ['LOCALAPPDATA'])
+    local = Path.home() if MACOS else Path(os.environ['LOCALAPPDATA'])
     try:
-        for path in (local, local / 'Programs', base.parent, base, stage):
+        parents = (local, local / 'Library', local / 'Library/Application Support', base.parent.parent,
+                   base.parent, base, stage) if MACOS else (local, local / 'Programs', base.parent, base, stage)
+        for path in parents:
             info = path.lstat()
             if _reparse(info) or not stat.S_ISDIR(info.st_mode):
                 return None
@@ -220,6 +264,8 @@ def _safe_tree(root):
             with os.scandir(pending.pop()) as entries:
                 for entry in entries:
                     info = entry.stat(follow_symlinks=False)
+                    if MACOS and stat.S_ISLNK(info.st_mode) and shutil.rmtree.avoids_symlink_attacks:
+                        continue  # POSIX rmtree удаляет саму ссылку, не её цель (включая symlink venv).
                     if _reparse(info):
                         return False
                     if stat.S_ISDIR(info.st_mode):
@@ -231,6 +277,16 @@ def _safe_tree(root):
 
 def running_releases(base):
     """CIM только читает процессы; наружу выходят имена выпусков, без команд, путей или аргументов."""
+    if MACOS:
+        try:
+            result = subprocess.run(['/bin/ps', '-axww', '-o', 'command='], capture_output=True,
+                                    timeout=10, check=True)
+            if len(result.stdout) > 4 * 1024 * 1024:
+                return None
+            pattern = re.escape(str(base)) + r'/(release-[A-Za-z0-9_-]{1,64})(?:/|\s|$)'
+            return ProcessReleases(re.findall(pattern, result.stdout.decode('utf-8', 'replace')))
+        except (OSError, subprocess.SubprocessError):
+            return None
     script = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -360,6 +416,17 @@ def prune(stage: Path, plan: dict, autostart: str | None = '', *, processes=None
 
 
 def _autostart():
+    if MACOS:
+        import plistlib
+        try:
+            with (Path.home() / 'Library/LaunchAgents/com.studio.agent.plist').open('rb') as source:
+                data = plistlib.load(source)
+            args = data.get('ProgramArguments') if isinstance(data, dict) else None
+            return json.dumps(args) if isinstance(args, list) and all(isinstance(arg, str) for arg in args) else None
+        except FileNotFoundError:
+            return ''
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            return None
     import winreg
 
     try:
@@ -406,17 +473,21 @@ def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, 
         fallback.pop('STUDIO_AGENT_UPDATE_READY', None)
         start([plan['old_python'], str(Path(plan['old_repo']) / 'studio_agent.pyw')],
               cwd=plan['old_repo'], env=fallback, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-              stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+              stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
         return 'rolled_back'
 
     try:
-        new = start([str(stage / '.venv/Scripts/pythonw.exe'), str(stage / 'studio_agent.pyw')],
+        new = start([str(python(stage)), str(stage / 'studio_agent.pyw')],
                     cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+                    stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except OSError:
         return rollback()
     for _ in range(120):
         if (stage / '_update_ready').is_file():
+            if MACOS:
+                switch_macos(stage, Path(plan['old_repo']))
+                prune(stage, plan, _autostart())
+                return 'complete'
             # Сохраняем прежний выбор автозапуска; чужое значение не перезаписываем.
             import winreg
             key = r'Software\Microsoft\Windows\CurrentVersion\Run'
@@ -444,6 +515,35 @@ def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, 
             return rollback()
         sleep(0.5)
     return 'unconfirmed'
+
+
+def switch_macos(stage, old):
+    """Переключить лишь ссылки и автозапуск прежней копии, после подтверждённого запуска новой."""
+    import plistlib
+    target = Path.home() / 'Library/LaunchAgents/com.studio.agent.plist'
+    try:
+        with target.open('rb') as source:
+            data = plistlib.load(source)
+        if isinstance(data, dict) and data.get('ProgramArguments') == [str(python(old)), str(old / 'studio_agent.pyw')]:
+            data['ProgramArguments'] = [str(python(stage)), str(stage / 'studio_agent.pyw')]
+            data['WorkingDirectory'] = str(stage)
+            temp = target.with_name(target.name + '.' + uuid.uuid4().hex)
+            try:
+                with temp.open('xb') as output:
+                    plistlib.dump(data, output)
+                os.replace(temp, target)
+            finally:
+                temp.unlink(missing_ok=True)
+    except FileNotFoundError:
+        pass
+    current = install_home() / 'current'
+    if current.is_symlink() and current.resolve() == old.resolve():
+        temp = current.with_name('current-' + uuid.uuid4().hex)
+        try:
+            temp.symlink_to(stage, target_is_directory=True)
+            os.replace(temp, current)
+        finally:
+            temp.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

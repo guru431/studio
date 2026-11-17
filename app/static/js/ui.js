@@ -71,11 +71,13 @@ export function button(text, attrs = {}, onClick) {
 export function agentDownload() {
   return el('div', { class: 'agent-download' },
     el('p', { class: 'agent-install-note', role: 'note' },
-      tr("Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows.")),
+      tr("Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS.")),
     el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: 'studio-agent-setup.exe' },
       tr("Скачать агент для Windows (.exe)")),
-    el('p', { class: 'muted small agent-download-needs' }, tr("Установщик EXE, нужны Python 3.11+ и Claude Code, Codex или OpenCode")),
-    el('p', { class: 'agent-download-steps' }, tr("Запустите studio-agent-setup.exe. В окне моста войдите логином и паролем студии — компьютер появится в разделе «Агенты».")));
+    el('a', { id: 'agent-download-macos', class: 'btn', href: '/api/agent/download?platform=macos', download: 'studio-agent-macos.zip' },
+      tr("Скачать агент для macOS (.zip)")),
+    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Python 3.11+ и Claude Code, Codex или OpenCode; для macOS — Python с Tk")),
+    el('p', { class: 'agent-download-steps' }, tr("Windows: запустите studio-agent-setup.exe. macOS: распакуйте ZIP и запустите install.command. В окне моста войдите логином и паролем студии.")));
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.

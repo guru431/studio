@@ -398,20 +398,24 @@ def test_requirements_are_exact_pins():
 
 def _requirements(path: Path) -> list:
     from packaging.requirements import Requirement
-    return [Requirement(line) for line in path.read_text(encoding="utf-8").splitlines()
-            if line and not line.startswith(("#", "-"))]
+    requirements = [Requirement(line) for line in path.read_text(encoding="utf-8").splitlines()
+                    if line and not line.startswith(("#", "-"))]
+    return [req for req in requirements if req.marker is None or req.marker.evaluate()]
 
 
 def _constraints(path: Path) -> dict:
-    """Каждая строка — `имя==версия`, имя — один раз."""
+    """Каждая действующая в этой среде строка — точная версия, имя — один раз."""
+    from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
     pins = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#"):
-            assert re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9.+!]+", line), line
-            name, version = line.split("==")
-            assert canonicalize_name(name) not in pins, line
-            pins[canonicalize_name(name)] = version
+            req = Requirement(line)
+            assert re.fullmatch(r"==[A-Za-z0-9.+!]+", str(req.specifier)), line
+            if req.marker is not None and not req.marker.evaluate():
+                continue
+            assert canonicalize_name(req.name) not in pins, line
+            pins[canonicalize_name(req.name)] = str(req.specifier)[2:]
     return pins
 
 

@@ -11,7 +11,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import cli, codex_rpc, jobs, opencode_rpc
+from . import cli, codex_rpc, host, jobs, opencode_rpc
 from .errors import Refused
 
 TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'opencode': 'opencode-ai'}
@@ -61,7 +61,7 @@ def latest(tool, source, package=None):
                 'Accept': 'application/json;api-version=7.2-preview.1'})
         releases = _json(request)['results'][0]['extensions'][0]['versions']
         candidates = [v['version'] for v in releases
-            if v.get('targetPlatform', 'universal') in ('universal', 'win32-x64')
+            if v.get('targetPlatform', 'universal') in ('universal', host.vscode_platform())
             and VERSION.fullmatch(v.get('version', ''))
             and not any(p.get('key') == 'Microsoft.VisualStudio.Code.PreRelease' and p.get('value') == 'true'
                         for p in v.get('properties', []))]
@@ -83,6 +83,13 @@ def _manifest(path):
 
 
 def _vscode():
+    if host.MACOS:
+        for root in (Path('/Applications'), Path.home() / 'Applications'):
+            app = root / 'Visual Studio Code.app/Contents'
+            exe, script = app / 'MacOS/Electron', app / 'Resources/app/out/cli.js'
+            if exe.is_file() and script.is_file():
+                return [str(exe), str(script)]
+        return None
     command = shutil.which('code.cmd')
     if command:
         root = Path(command).parent.parent
@@ -102,6 +109,9 @@ def _vscode():
 
 
 def _npm():
+    if host.MACOS:
+        node, npm = host.find_tool('node'), host.find_tool('npm')
+        return [str(node), str(npm.resolve())] if node and npm else None
     node = shutil.which('node.exe')
     if node:
         script = Path(node).parent / 'node_modules/npm/bin/npm-cli.js'
@@ -117,7 +127,7 @@ def inspect(tool):
     if path is None and tool == 'claude':
         # SDK поставляет собственный CLI, обновляемый вместе с мостом.
         import claude_agent_sdk
-        bundled = Path(claude_agent_sdk.__file__).parent / '_bundled/claude.exe'
+        bundled = Path(claude_agent_sdk.__file__).parent / '_bundled' / ('claude' if host.MACOS else 'claude.exe')
         path = bundled if bundled.is_file() else None
         source = 'sdk'
     cli_version = None
@@ -137,7 +147,7 @@ def inspect(tool):
             # npm может вынести платформенный пакет в соседний node_modules, вне основного пакета.
             candidate = manifest.get('name')
             if isinstance(candidate, str) and (tool == 'codex' and candidate.startswith('@openai/codex-')
-                    or tool == 'opencode' and candidate.startswith('opencode-windows-')):
+                    or tool == 'opencode' and candidate.startswith(('opencode-windows-', 'opencode-darwin-'))):
                 modules = parent.parent.parent if tool == 'codex' else parent.parent
                 primary = _manifest(modules / TOOLS[tool] / 'package.json')
                 if primary.get('name') == TOOLS[tool]:
@@ -145,7 +155,7 @@ def inspect(tool):
                     break
         try:
             result = subprocess.run([str(path), '--version'], stdin=subprocess.DEVNULL,
-                capture_output=True, timeout=4, creationflags=subprocess.CREATE_NO_WINDOW)
+                capture_output=True, timeout=4, creationflags=host.NO_WINDOW)
             if result.returncode == 0:
                 cli_version = version(result.stdout.decode('utf-8', 'replace').strip())
         except (OSError, subprocess.SubprocessError):
@@ -182,7 +192,7 @@ async def install(item, target):
     args, env = await asyncio.to_thread(command, item, target)
     process = await asyncio.create_subprocess_exec(*args, env=env, cwd=str(item['_path'].parent),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+        creationflags=host.NO_WINDOW, **host.process_group())
     job = None
     try:
         job = jobs.attach(process.pid)

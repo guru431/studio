@@ -2,7 +2,7 @@ import base64
 import ctypes
 import hashlib
 import os
-import _winapi
+from platform_fs import create_directory_link
 
 import pytest
 
@@ -26,11 +26,12 @@ def test_pid_is_the_head_of_sha256_of_the_folder_name():
 def test_projects_skip_hidden_and_outside(tmp_path):
     root = tmp_path / "projects"; (root / "b").mkdir(parents=True); (root / "a").mkdir(); (root / ".git").mkdir()
     outside = tmp_path / "elsewhere"; outside.mkdir()
-    _winapi.CreateJunction(str(outside), str(root / "jump"))
+    create_directory_link(outside, root / "jump")
     assert [p["name"] for p in projects.list_projects(str(root))] == ["a", "b"]
     assert projects.list_projects(str(tmp_path / "нет")) == []
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_projects_skip_hidden_and_system_attributes_and_plain_files(tmp_path):
     root = tmp_path / "projects"; (root / "ok").mkdir(parents=True); (root / "h").mkdir(); (root / "s").mkdir()
     (root / "file.txt").write_text("x")
@@ -67,7 +68,7 @@ def test_the_empty_path_is_the_project_root(tmp_path):
 
 def test_a_junction_out_of_the_project_is_outside_and_not_listed(tmp_path):
     proj = tmp_path / "p"; proj.mkdir(); out = tmp_path / "secret"; out.mkdir(); (out / "k.txt").write_text("x")
-    _winapi.CreateJunction(str(out), str(proj / "link"))
+    create_directory_link(out, proj / "link")
     assert files.list_dir(proj, "")["items"] == []
     with pytest.raises(errors.Refused) as e:
         files.read_text(proj, "link/k.txt")
@@ -174,6 +175,7 @@ def _attributes(p) -> int:
     return ctypes.windll.kernel32.GetFileAttributesW(str(p))
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_save_of_a_read_only_file_is_refused_with_words_and_writes_nothing(tmp_path):
     f = tmp_path / "a.txt"; f.write_bytes(b"x")
     assert ctypes.windll.kernel32.SetFileAttributesW(str(f), 0x1)  # FILE_ATTRIBUTE_READONLY
@@ -186,6 +188,7 @@ def test_save_of_a_read_only_file_is_refused_with_words_and_writes_nothing(tmp_p
         ctypes.windll.kernel32.SetFileAttributesW(str(f), 0x80)  # иначе tmp_path не убрать
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_save_keeps_hidden_and_system_attributes(tmp_path):
     f = tmp_path / "a.txt"; f.write_bytes(b"x")
     assert ctypes.windll.kernel32.SetFileAttributesW(str(f), 0x2 | 0x4)  # HIDDEN | SYSTEM, без ARCHIVE

@@ -4,11 +4,11 @@ import dataclasses
 import json
 import logging
 import os
-import tempfile
 import threading
 from pathlib import Path
 
-from . import dpapi, limits
+from . import dpapi, host, limits
+from .atomic import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -62,23 +62,9 @@ class Config:
 
 def home() -> Path:
     """STUDIO_AGENT_HOME, иначе %LOCALAPPDATA%\\studio-agent; каталог создаётся."""
-    h = Path(os.environ.get("STUDIO_AGENT_HOME") or Path(os.environ["LOCALAPPDATA"]) / "studio-agent")
-    h.mkdir(parents=True, exist_ok=True)
+    h = Path(os.environ.get("STUDIO_AGENT_HOME") or host.data_home())
+    h.mkdir(parents=True, exist_ok=True, mode=0o700)
     return h
-
-
-def write_atomic(path: Path, data: bytes) -> None:
-    """Временный файл рядом, затем os.replace: читатель видит прежний файл или новый целиком."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def load_config(h: Path) -> Config:

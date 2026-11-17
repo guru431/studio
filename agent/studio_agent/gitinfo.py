@@ -62,7 +62,7 @@ def _filters(base: list[str], env: dict, timeout: float) -> list[str] | None:
     владельца (git-lfs) остаются. Конфиг не проверить или имя драйвера не выразить через `-c` — `None`:
     статус не читается (без `--show-scope` — git старше 2.26)."""
     r = subprocess.run([*base, "config", "--show-scope", "-z", "--get-regexp", FILTER_KEYS], capture_output=True,
-                       env=env, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+                       env=env, timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode not in (0, 1):  # 1 — ключей нет
         return None
     fields = r.stdout.split(b"\0")
@@ -97,7 +97,7 @@ def run(project: Path, args: list[str], *, timeout: float = GIT_SEC) -> subproce
         base += guard
         args = ["status", "--ignore-submodules=dirty", *args[1:]]
     return subprocess.run([*base, *args], capture_output=True, env=env, timeout=timeout,
-                          creationflags=subprocess.CREATE_NO_WINDOW)
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def status(project: Path) -> dict:

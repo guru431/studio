@@ -270,7 +270,7 @@ def make_visible(project: Path, chat: str) -> bool:
     if info.cwd is not None and os.path.normcase(os.path.realpath(info.cwd)) != os.path.normcase(os.path.realpath(project)):
         return False
     path = _resolve_session_file_path(chat, str(project))
-    if path is None or path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+    if path is None or path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
         return False
     before = path.stat()
     with path.open("rb") as source:

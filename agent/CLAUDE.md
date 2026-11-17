@@ -1,6 +1,6 @@
 # CLAUDE.md — компонент agent проекта studio
 
-Windows-мост к студии `https://studio.example.com`: держит исходящий канал WebSocket к студии и отдаёт ей локальные
+Мост Windows/macOS к студии `https://studio.example.com`: держит исходящий канал WebSocket к студии и отдаёт ей локальные
 Claude Code, Codex и OpenCode владельца — проекты, чаты, ход с карточками разрешений, файлы, git — строго по протоколу
 версии 1. Как ставить и пользоваться — [README.md](README.md); устройство подробно, решения плана и таблица
 capability → версия моста — [docs/architecture/agent-bridge.md](../docs/architecture/agent-bridge.md).
@@ -41,8 +41,10 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
   Windows-моста. Не применять Stop-Process/kill к активному мосту, особенно из выполняемого им задания: это уничтожает
   исполнителя и его CLI. Ручная установка — после завершения заданий и выхода в трее; автоматическое обновление через
   `updater.py` само дожидается простоя и просит штатный выход GUI.
-- Только Windows. Ключ устройства и PIN — DPAPI области пользователя; пароль студии на машине не остаётся и в argv не
-  передаётся (только окно или `getpass`).
+- Windows: ключ устройства и PIN защищены DPAPI пользователя. macOS: Fernet с ключом в Keychain пользователя;
+  пароль студии на машине не остаётся и в argv не передаётся (только окно или `getpass`).
+- macOS Intel/Apple Silicon: `install.command` → `install_macos.py`, приложение `~/Applications/Studio Agent.app`,
+  настройки `~/Library/Application Support/Studio Agent`, автозапуск LaunchAgent. [Контракт и проверки](../docs/architecture/agent-macos.md).
 - Протокол v1, значения дословно: кадр ≤ 48 МиБ; первый кадр — `hello` с `"v": 1`; `welcome` ждать ≤ 10 с; закрытия
   4401 (отозван — не переподключаться), 4409 (заменён — не переподключаться), 4400 (пауза 60 с и снова),
   1012/1001/обрыв/отказ рукопожатия — переподключение 1, 2, 4, 8, 16, 32, 60 с; `id` просьбы — 16 hex, `session` —
@@ -70,7 +72,8 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 - Блокирующее (файлы, scrypt, сессии SDK, git) — `asyncio.to_thread`: цикл держит пинги канала.
 - Git проекта — недоверенный: `gitinfo.SAFE`, фильтры репозитория выключены (`gitinfo._filters`), хуки не запускаются;
   исключение — `worktree add` по действию владельца.
-- Автозапуск — значение `StudioAgent` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; Task Scheduler не трогать.
+- Автозапуск Windows — значение `StudioAgent` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; Task Scheduler не трогать.
+  macOS — `~/Library/LaunchAgents/com.studio.agent.plist`, без принудительного перезапуска.
 - Кодировки: `.py` — UTF-8 без BOM, LF; `.ps1` — UTF-8 **с BOM**, CRLF (`.gitattributes`).
 - Комментарии, докстринги и тексты — по-русски, как в студии; слова отказов и интерфейса — дословно из «Тексты» плана.
 - Коммит — сообщение через файл (`git commit -F <файл>`), в конце `Co-Authored-By: Claude Opus 5.5

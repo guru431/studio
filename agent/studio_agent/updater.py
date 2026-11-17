@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from . import VERSION, store, update_helper
+from . import VERSION, host, store, update_helper
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def prepare(h: Path, release: dict) -> Path:
     if not key:
         raise ValueError('key')
     url = package_url(cfg.url)
-    base = Path(os.environ['LOCALAPPDATA']) / 'Programs' / 'studio-agent' / 'releases'
+    base = host.install_home() / 'releases'
     base.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix='release-', dir=base))
     try:
@@ -125,20 +125,23 @@ def prepare(h: Path, release: dict) -> Path:
         env = os.environ.copy()
         env.pop('PYTHONPATH', None)
         env.pop('PYTHONHOME', None)
-        pythonw = str(stage / '.venv/Scripts/pythonw.exe')
+        pythonw = str(host.python(stage))
         # venv из pythonw запускает консольный ensurepip без CREATE_NO_WINDOW. Разделяем шаги:
         # ensurepip и его дочерний pip теперь работают через pythonw и не создают консоль.
         commands = [
             [sys._base_executable, '-m', 'venv', '--without-pip', str(stage / '.venv')],
             [pythonw, '-m', 'ensurepip', '--upgrade', '--default-pip'],
             [pythonw, '-m', 'pip', 'install', '--disable-pip-version-check',
-             '-q', '-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')],
+             '-q', *(['--only-binary=:all:'] if host.MACOS else []),
+             '-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')],
             [pythonw, '-c', 'import studio_agent.app'],
         ]
-        for command in commands:
-            subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
-                           timeout=300, check=True)
+        with tempfile.TemporaryDirectory(prefix='prepare-', dir=stage) as temporary:
+            env.update(TMP=temporary, TEMP=temporary, TMPDIR=temporary, PIP_CACHE_DIR=temporary)
+            for command in commands:
+                subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, creationflags=host.NO_WINDOW,
+                               timeout=300, check=True)
         return stage
     except BaseException:
         discard(stage)
@@ -147,7 +150,7 @@ def prepare(h: Path, release: dict) -> Path:
 
 def discard(stage: Path) -> None:
     """Только собственная новая папка `release-*` в `releases`. Работающую/предыдущую копию не трогаем."""
-    base = Path(os.environ['LOCALAPPDATA']) / 'Programs' / 'studio-agent' / 'releases'
+    base = host.install_home() / 'releases'
     if stage.resolve().parent == base.resolve() and stage.name.startswith('release-'):
         shutil.rmtree(stage, ignore_errors=True)
 
@@ -156,10 +159,11 @@ def launch(stage: Path, h: Path) -> None:
     """Отдельный процесс ждёт завершения старого моста; ключей/PIN в аргументах и файле плана нет."""
     plan = {'pid': os.getpid(), 'old_repo': str(REPO), 'old_python': sys.executable, 'home': str(h)}
     (stage / '_update_plan.json').write_text(json.dumps(plan), encoding='utf-8')
-    pythonw = str(Path(sys.executable).with_name('pythonw.exe'))
+    pythonw = sys.executable if host.MACOS else str(Path(sys.executable).with_name('pythonw.exe'))
     subprocess.Popen([pythonw, str(stage / '_update_helper.py')], cwd=stage,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+                     **({'start_new_session': True} if host.MACOS else
+                        {'creationflags': subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}))
 
 
 class Updater:

@@ -1,4 +1,4 @@
-# Windows-мост `agent/` (studio-agent)
+# Мост Windows/macOS `agent/` (studio-agent)
 
 Правила и карта модулей — [agent/CLAUDE.md](../../agent/CLAUDE.md); установка и пользование —
 [agent/README.md](../../agent/README.md); контракт — протокол
@@ -6,6 +6,9 @@
 [agents.md](agents.md). Ссылки `` `модуль.символ` `` здесь — на `agent/studio_agent/` (сверяет `tests/test_docs.py`).
 
 ## Capability и версии моста
+
+С 0.29.0 поддерживается macOS Intel/Apple Silicon. Общие операции и протокол сохраняются;
+Keychain, LaunchAgent, установка и платформенные ограничения описаны в [agent-macos.md](agent-macos.md).
 
 С 0.28.1 подготовка обновления создаёт venv без pip, затем отдельно запускает ensurepip, pip и проверку
 импорта через `pythonw.exe`. Это скрывает и дочерние процессы ensurepip: одного `CREATE_NO_WINDOW` у
@@ -523,7 +526,7 @@ UUID нового чата задаёт студия, настоящий thread 
   Worktree создаётся рядом с исходным проектом в его разрешённом корне; список видит все разрешённые корни.
 - `files` — `resolve` (вид пути проверяется **до диска**: имена устройств, ADS `:`, точка или пробел в конце части —
   `invalid`; настоящий путь вне проекта — `outside`), `list_dir`, `read_text`, `read_raw` (base64), `save_text`
-  (`version` — sha256 байтов, запись через `store.write_atomic`; «только чтение» — `read_only` «файл только для
+  (`version` — sha256 байтов, запись через `atomic.write_atomic`; «только чтение» — `read_only` «файл только для
   чтения» до записи, прочие атрибуты прежнего файла — новому `SetFileAttributesW`).
   С 0.7.5 `list_dir` добавляет необязательный `created`: секунды Unix из `st_birthtime`, в Python 3.11 на
   Windows — из `st_ctime` (создание); без даты создания — `null`. Рекурсивного обхода нет.

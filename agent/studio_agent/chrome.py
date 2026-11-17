@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -11,10 +12,10 @@ PACKAGE = "chrome-devtools-mcp@1.12.0"
 
 
 def config(project, which=shutil.which):
-    node, npx = which("node.exe"), which("npx.cmd")
+    node, npx = which("node.exe" if os.name == "nt" else "node"), which("npx.cmd" if os.name == "nt" else "npx")
     if not node or not npx:
         return None
-    entry = Path(npx).parent / "node_modules/npm/bin/npx-cli.js"
+    entry = Path(npx).parent / "node_modules/npm/bin/npx-cli.js" if os.name == "nt" else Path(npx).resolve()
     if not entry.is_file():
         return None
     return {"command": node, "args": [str(entry), "-y", PACKAGE, "--autoConnect", "--no-usage-statistics",

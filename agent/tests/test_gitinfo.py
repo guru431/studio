@@ -49,7 +49,7 @@ def test_status_runs_git_without_shell_window_and_locks(monkeypatch, tmp_path):
     assert seen["env"]["PATH"] == os.environ["PATH"]
     assert seen["env"]["GIT_CEILING_DIRECTORIES"] == os.path.realpath(tmp_path.parent)  # выше проекта не искать
     assert seen["timeout"] == 25 and seen["capture_output"] is True
-    assert seen["creationflags"] == subprocess.CREATE_NO_WINDOW and not seen.get("shell")
+    assert seen["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0) and not seen.get("shell")
 
 
 def test_status_switches_off_filter_drivers_of_the_repository_config(monkeypatch, tmp_path):

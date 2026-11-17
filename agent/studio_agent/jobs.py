@@ -9,7 +9,10 @@
 import ctypes
 import logging
 import os
+import signal
 from ctypes import wintypes
+
+from . import host
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,13 @@ class Job:
 def attach(pid):
     """Свой job с `KILL_ON_JOB_CLOSE` для запущенного процесса; не Windows, нет pid, отказ — None
     (поведение прежнее, в журнал — только код ошибки)."""
+    if host.MACOS and type(pid) is int:
+        try:
+            if os.getpgid(pid) == pid and pid != os.getpgrp():
+                return ProcessGroup(pid)
+        except ProcessLookupError:
+            pass
+        return None
     if os.name != "nt" or type(pid) is not int:
         return None
     k = _kernel32()
@@ -93,3 +103,17 @@ def attach(pid):
         k.CloseHandle(job)
         return None
     return Job(k, job)
+
+
+class ProcessGroup:
+    """Только группа CLI, созданная start_new_session; группа самого моста не затрагивается."""
+    def __init__(self, pid):
+        self.pid = pid
+
+    def close(self):
+        if self.pid is not None:
+            try:
+                os.killpg(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            self.pid = None

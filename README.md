@@ -26,7 +26,7 @@
 
 Studio brings everyday AI tools and remote development into a single account. Ask a model about a document, create an image, animate it, transcribe a meeting, translate a scan or continue a coding session from your phone. History, settings and open agent tabs follow your account across devices.
 
-The server runs on infrastructure you control. Connect local models through the **srvllm gateway** or use **OpenAI-compatible services** for supported tasks. The Windows bridge connects the agents already installed on your computers, using their existing accounts and project permissions.
+The server runs on infrastructure you control. Connect local models through the **srvllm gateway** or use **OpenAI-compatible services** for supported tasks. The Windows/macOS bridge connects the agents already installed on your computers, using their existing accounts and project permissions.
 
 **Eight workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Agents.
 
@@ -105,7 +105,7 @@ The server runs on infrastructure you control. Connect local models through the 
 
 ### Agents: Claude Code, Codex and OpenCode
 
-Use installed coding agents on your own Windows computers from a desktop browser or phone.
+Use installed coding agents on your own Windows or macOS computers from a desktop browser or phone.
 
 - Connect multiple computers; browse projects under each bridge's configured root.
 - Inspect project summaries, findings/idea counts and Git state; sort projects and view connected-computer information.
@@ -178,14 +178,14 @@ Studio is the application layer. Models and inference services are configured se
 | Server | Linux, Docker Compose and systemd; the supplied production profile also uses an Apache HTTPS reverse proxy |
 | Data | Local disk for SQLite; the supplied Docker profile expects a mounted CIFS share for media |
 | Models | srvllm gateway for the complete local media/OCR workflow; OpenAI-compatible endpoints for supported individual tasks |
-| Coding agents | Windows computer, Studio bridge and at least one installed, authenticated Claude Code, Codex or OpenCode CLI |
+| Coding agents | Windows or macOS computer, Studio bridge and at least one installed, authenticated Claude Code, Codex or OpenCode CLI |
 | Optional services | Exa for chat web tools, Web Push or an HTTPS ntfy server for notifications, Cleaner for data cleaning |
 
 1. Clone the repository: `git clone https://github.com/guru431/studio.git`.
 2. Follow the [Docker deployment guide](docs/architecture/deploy-docker.md) to configure hosts, media mounts, Apache and the ignored `deploy/local-profile.sh`.
 3. Provide a persistent `STUDIO_DATA_KEY` and initial administrator credentials using the deployment secret flow described in [publication and local installation](docs/publication.md). Back up the data key alongside the data.
 4. Deploy a committed revision with `bash deploy/deploy.sh`; the explicit `--new-secret` and `--create-admin` options provision the key and first account.
-5. Sign in, add connections and select models for the sections you want. Add the Windows bridge from Agents if you want remote coding.
+5. Sign in, add connections and select models for the sections you want. Add the Windows or macOS bridge from Agents if you want remote coding.
 
 The supplied deployment scripts target a managed installation with SSH, shared media storage and a separate HTTPS proxy. They require a local profile; this repository does not provision the inference gateway. Addresses and paths in tracked examples are placeholders.
 
@@ -223,12 +223,12 @@ flowchart LR
     APP --> DB[("Local SQLite")]
     APP --> MEDIA[("Media storage")]
     APP --> MODELS["srvllm / allowed model services"]
-    APP <-->|WebSocket| BRIDGE["Windows bridge"]
+    APP <-->|WebSocket| BRIDGE["Windows / macOS bridge"]
     BRIDGE --> CLI["Claude Code / Codex / OpenCode"]
     BRIDGE --> PROJECTS["Local projects, files and Git"]
 ```
 
-The main server uses FastAPI, SQLite/FTS5 and encrypted credentials. The image includes ffmpeg, Chromium and yt-dlp for audio, PDF export and subtitle workflows. The Windows bridge is part of this repository under [agent/](agent/).
+The main server uses FastAPI, SQLite/FTS5 and encrypted credentials. The image includes ffmpeg, Chromium and yt-dlp for audio, PDF export and subtitle workflows. The Windows/macOS bridge is part of this repository under [agent/](agent/).
 
 ## Documentation
 
@@ -240,6 +240,6 @@ The main server uses FastAPI, SQLite/FTS5 and encrypted credentials. The image i
 | [Architecture index](docs/architecture/README.md) | Current behavior by subsystem |
 | [Docker deployment](docs/architecture/deploy-docker.md) | Installation, backups, migration and rollback |
 | [Publication and local profile](docs/publication.md) | Public examples, private configuration and secret handling |
-| [Windows bridge](agent/README.md) | Installation, accounts, access and compatibility |
+| [Windows/macOS bridge](agent/README.md) | Installation, accounts, access and compatibility |
 | [Tests](docs/architecture/testing.md) | Fast, integration and live acceptance suites |
 | [Glossary](docs/glossary.md) | UI names and section terminology |

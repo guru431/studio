@@ -13,6 +13,7 @@ from collections.abc import Callable
 from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 from .app import TITLE, WORDS
+from . import host
 
 GREEN, GREY, YELLOW, RED = (47, 158, 111), (143, 143, 143), (232, 168, 26), (220, 38, 38)
 COLORS = {"online": GREEN, "connecting": GREY, "setup": GREY, "offline": YELLOW, "revoked": RED, "replaced": RED}
@@ -119,6 +120,9 @@ class Tray:
         import pystray
 
         self.state, self.login = state, login
+        self._pin_locked = pin_locked
+        self._pin_status = False
+        self._stopped = False
         self.activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False, "updating": False}
 
         def updating(item) -> bool:  # «Отменить обновление» — пока Studio Agent готовит обновление или ждёт заданий
@@ -134,7 +138,8 @@ class Tray:
             pystray.MenuItem("Открыть Studio Agent", lambda: post("open"), default=True),
             pystray.MenuItem("Завершить этот сеанс", lambda: post("stop_desktop"),
                              enabled=lambda item: self.activity['desktop_active']),
-            pystray.MenuItem("Снять блок PIN", lambda: post("reset_pin"), enabled=lambda item: pin_locked()),
+            pystray.MenuItem("Снять блок PIN", lambda: post("reset_pin"),
+                             enabled=lambda item: self._pin_status if host.MACOS else pin_locked()),
             pystray.MenuItem("Открыть журнал", lambda: post("log")),
             pystray.MenuItem("Отменить обновление", lambda: post("cancel_update"), enabled=updating, visible=updating),
             pystray.MenuItem(lambda item: "Отменить выход после завершения" if self.activity['quit_when_idle']
@@ -144,6 +149,9 @@ class Tray:
         self.icon = pystray.Icon("studio-agent", image(state), title(state, login), menu)
 
     def start(self) -> None:
+        if host.MACOS:
+            self.icon.run_detached()
+            return
         threading.Thread(target=self.icon.run, name="studio-agent-tray", daemon=True).start()
 
     def show(self, state: str, login: str) -> None:
@@ -169,7 +177,16 @@ class Tray:
         потоке — `pin_locked` читает `pin.bin` (DPAPI)."""
         def run() -> None:
             with contextlib.suppress(Exception):
-                self.icon.update_menu()
+                if host.MACOS:
+                    from PyObjCTools import AppHelper
+                    locked = self._pin_locked()  # Keychain и диск — вне главного потока Cocoa/Tk
+                    def update():
+                        if not self._stopped:
+                            self._pin_status = locked
+                            self.icon.update_menu()
+                    AppHelper.callAfter(update)
+                elif not self._stopped:
+                    self.icon.update_menu()
 
         threading.Thread(target=run, name="studio-agent-tray-menu", daemon=True).start()
 
@@ -178,4 +195,5 @@ class Tray:
             self.icon.notify(text, TITLE)
 
     def stop(self) -> None:
+        self._stopped = True
         self.icon.stop()

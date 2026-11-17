@@ -1,6 +1,6 @@
 """Изменения файлов: границы проекта, отсутствие перезаписи и настоящий Windows junction."""
 
-import _winapi
+from platform_fs import create_directory_link
 import ctypes
 import os
 import stat
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from studio_agent import files, projects
+from studio_agent import files, host, projects
 from studio_agent.errors import Refused
 from test_agent import agent, opened, req, root
 
@@ -22,6 +22,7 @@ def delete_workspace(tmp_path):
 
 
 @pytest.mark.parametrize("directory", [False, True])
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_delete_readonly_file_and_nested_tree_preserves_other_files(delete_workspace, directory):
     root = delete_workspace
     target = root / "folder/nested/object" if directory else root / "object"
@@ -41,6 +42,7 @@ def test_delete_readonly_file_and_nested_tree_preserves_other_files(delete_works
 
 
 @pytest.mark.parametrize("readonly", [False, True])
+@pytest.mark.skipif(os.name != 'nt', reason='блокировка файла Windows')
 def test_locked_file_reports_busy_without_changing_readonly(delete_workspace, readonly):
     root = delete_workspace
     target = root / "locked"
@@ -56,6 +58,7 @@ def test_locked_file_reports_busy_without_changing_readonly(delete_workspace, re
 
 
 @pytest.mark.parametrize("readonly", [False, True])
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_delete_access_denied_does_not_change_attributes_or_retry_indefinitely(delete_workspace, monkeypatch, readonly):
     root = delete_workspace
     target = root / "denied"
@@ -80,6 +83,7 @@ def test_delete_access_denied_does_not_change_attributes_or_retry_indefinitely(d
     assert len(calls) == (2 if readonly else 1)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_delete_does_not_clear_attributes_when_directory_scan_is_denied(delete_workspace, monkeypatch):
     root = delete_workspace
     folder = root / "folder"
@@ -99,6 +103,7 @@ def test_delete_does_not_clear_attributes_when_directory_scan_is_denied(delete_w
     assert (folder / "keep").read_bytes() == b"keep"
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='атрибуты Windows')
 def test_readonly_retry_rechecks_parent_junction_before_changing_attributes(delete_workspace, monkeypatch):
     project, outside = delete_workspace / "project", delete_workspace / "outside"
     (project / "folder").mkdir(parents=True)
@@ -109,7 +114,7 @@ def test_readonly_retry_rechecks_parent_junction_before_changing_attributes(dele
 
     def replaced(path, **kwargs):
         (project / "folder").rename(project / "original")
-        _winapi.CreateJunction(str(outside), str(project / "folder"))
+        create_directory_link(outside, project / "folder")
         raise PermissionError(13, "fixture access denied", str(path), 5)
 
     with monkeypatch.context() as patch:
@@ -173,7 +178,7 @@ def test_links_cannot_redirect_mutations_and_recursive_delete_keeps_external_fil
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "keep").write_bytes(b"keep")
-    _winapi.CreateJunction(str(outside), str(project / "link"))
+    create_directory_link(outside, project / "link")
     (project / "source").write_bytes(b"source")
     for operation, path, destination in [("delete", "link", None), ("delete", "link/keep", None),
                                          ("create_file", "link/new", None), ("move", "link", "renamed"),
@@ -181,7 +186,7 @@ def test_links_cannot_redirect_mutations_and_recursive_delete_keeps_external_fil
         with pytest.raises(Refused, match="outside"):
             files.operate(project, operation, path, destination)
     (project / "folder").mkdir()
-    _winapi.CreateJunction(str(outside), str(project / "folder/nested"))
+    create_directory_link(outside, project / "folder/nested")
     files.operate(project, "delete", "folder")
     assert (outside / "keep").read_bytes() == b"keep"
     assert not (project / "folder").exists()
@@ -190,13 +195,13 @@ def test_links_cannot_redirect_mutations_and_recursive_delete_keeps_external_fil
 
 def test_destination_appearing_during_move_is_preserved(tmp_path, monkeypatch):
     (tmp_path / "source").write_bytes(b"source")
-    rename = Path.rename
+    rename = host.rename
 
     def race(source, destination):
         destination.write_bytes(b"arrived")
         return rename(source, destination)
 
-    monkeypatch.setattr(Path, "rename", race)
+    monkeypatch.setattr(host, "rename", race)
     with pytest.raises(Refused, match="exists"):
         files.operate(tmp_path, "move", "source", "destination")
     assert (tmp_path / "source").read_bytes() == b"source"

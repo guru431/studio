@@ -5,7 +5,12 @@
 
 import contextlib
 import ctypes
-import winreg
+import subprocess
+
+from . import host
+
+if not host.MACOS:
+    import winreg
 
 PERSONALIZE = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
@@ -18,7 +23,7 @@ PAPER = {"bg": "#fbfaf7", "panel": "#ffffff", "text": "#1f1d1a", "muted": "#7b76
 GRAPHITE = {"bg": "#1b1b1b", "panel": "#262626", "text": "#ececec", "muted": "#8f8f8f", "border": "#2a2a2a",
             "accent": "#ececec", "on_accent": "#111111", "ok": "#3ecf8e", "danger": "#f87171",
             "warn": "#f5b94a", "field": "#1f1f1f", "edge": "#3d3d3d"}
-FONTS = ("Segoe UI Variable Text", "Segoe UI")  # первый, что есть
+FONTS = (".AppleSystemUIFont", "Helvetica Neue") if host.MACOS else ("Segoe UI Variable Text", "Segoe UI")
 SIZE = 10
 
 
@@ -28,6 +33,13 @@ def palette(dark: bool) -> dict[str, str]:
 
 def is_dark() -> bool:
     """Тёмная тема приложений Windows (`AppsUseLightTheme` = 0); нет значения — светлая."""
+    if host.MACOS:
+        try:
+            result = subprocess.run(["/usr/bin/defaults", "read", "-g", "AppleInterfaceStyle"],
+                                    capture_output=True, timeout=3)
+            return result.returncode == 0 and result.stdout.strip() == b"Dark"
+        except (OSError, subprocess.SubprocessError):
+            return False
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE) as k:
             return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
@@ -42,6 +54,8 @@ def dark_for(choice: str) -> bool:
 
 def dark_title(win, dark: bool) -> None:
     """Тёмный заголовок окна (Windows 10 20H1+, 11); не вышло — светлый, как есть."""
+    if host.MACOS:
+        return
     with contextlib.suppress(Exception):
         win.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()

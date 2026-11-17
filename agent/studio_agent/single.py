@@ -1,37 +1,39 @@
-"""Один мост на учётку Windows: именованный мьютекс (автозапуск и ручной запуск не держат два канала)."""
+"""Один мост на пользователя: Windows mutex или macOS flock, освобождаемый ОС при выходе."""
+from .host import MACOS
 
-import ctypes
-from ctypes import wintypes
+if not MACOS:
+    from .single_windows import NAME, Mutex, acquire as _acquire
+else:
+    import fcntl
+    import hashlib
+    import os
+    from . import store
 
-NAME = "Local\\StudioAgent"
-ERROR_ALREADY_EXISTS = 183
+    NAME = "Local\\StudioAgent"
 
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
-_kernel32.CreateMutexW.restype = wintypes.HANDLE
-_kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-_kernel32.CloseHandle.restype = wintypes.BOOL
+    class Mutex:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def close(self):
+            if self.handle is not None:
+                os.close(self.handle)
+                self.handle = None
+
+    def _acquire(name=NAME):
+        path = store.home() / (".instance-" + hashlib.sha256(name.encode()).hexdigest()[:16])
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        except BaseException:
+            os.close(fd)
+            raise
+        return Mutex(fd)
 
 
-class Mutex:
-    """Держится до `close()` или выхода процесса."""
-
-    def __init__(self, handle: int):
-        self.handle = handle
-
-    def close(self) -> None:
-        if self.handle:
-            _kernel32.CloseHandle(self.handle)
-            self.handle = None
-
-
-def acquire(name: str = NAME) -> Mutex | None:
-    """Мьютекс наш — `Mutex`; уже есть у другого экземпляра — `None`."""
-    handle = _kernel32.CreateMutexW(None, False, name)
-    error = ctypes.get_last_error()
-    if not handle:
-        raise ctypes.WinError(error)
-    if error == ERROR_ALREADY_EXISTS:
-        _kernel32.CloseHandle(handle)
-        return None
-    return Mutex(handle)
+def acquire(name=NAME):
+    """Захватить системный замок этой учётки; занято — None."""
+    return _acquire(name)

@@ -11,13 +11,12 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions
 
-from . import VERSION, limits
+from . import VERSION, host, limits
 from .claude_sdk import ClaudeSDKClient
 
 log = logging.getLogger(__name__)
 
 VSCODE_EXTENSIONS = Path.home() / ".vscode" / "extensions"
-EXTENSION = re.compile(r"anthropic\.claude-code-(\d+(?:\.\d+)*)-win32-x64")
 BUILTIN = "встроенный в SDK"
 VERSION_SEC = 30
 VERSION_MAX = 64
@@ -50,14 +49,15 @@ def _vscode_path(value: str) -> bool:
 
 def find_cli(extensions: Path = VSCODE_EXTENSIONS) -> Path | None:
     """`claude.exe` новейшего расширения; версии — числами (2.1.312 > 2.1.99), папка без файла пропускается."""
+    pattern = re.compile(r"anthropic\.claude-code-(\d+(?:\.\d+)*)-" + host.vscode_platform())
     found = []
     with contextlib.suppress(OSError):
         for entry in extensions.iterdir():
-            match = EXTENSION.fullmatch(entry.name)
-            exe = entry / "resources" / "native-binary" / "claude.exe"
+            match = pattern.fullmatch(entry.name)
+            exe = entry / "resources" / "native-binary" / ("claude" if host.MACOS else "claude.exe")
             if match and exe.is_file():
                 found.append((tuple(int(part) for part in match.group(1).split(".")), exe))
-    return max(found, key=lambda item: item[0])[1] if found else None
+    return max(found, key=lambda item: item[0])[1] if found else host.find_tool("claude") if host.MACOS else None
 
 
 def current(path: Path | None, find=find_cli) -> Path | None:
@@ -86,7 +86,7 @@ def cli_version(path: Path | None) -> str:
         return BUILTIN
     try:
         r = subprocess.run([str(path), "--version"], capture_output=True, stdin=subprocess.DEVNULL,
-                           timeout=VERSION_SEC, creationflags=subprocess.CREATE_NO_WINDOW)
+                           timeout=VERSION_SEC, creationflags=host.NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return BUILTIN
     words = r.stdout.decode("utf-8", "replace").split()

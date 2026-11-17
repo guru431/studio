@@ -8,13 +8,15 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import VERSION, jobs, limits
+from . import VERSION, host, jobs, limits
 
 RPC_SEC = 60
 
 
 def find_cli() -> Path | None:
     """Настоящий exe из PATH или npm; обёртки cmd/ps1 через shell не исполняются."""
+    if host.MACOS:
+        return host.find_tool("opencode")
     if exe := shutil.which("opencode.exe"):
         return Path(exe)
     npm = Path(os.environ.get("APPDATA", "")) / "npm/node_modules"
@@ -29,7 +31,7 @@ def find_cli() -> Path | None:
 
 def version(path: Path) -> str:
     result = subprocess.run([str(path), "--version"], capture_output=True, stdin=subprocess.DEVNULL,
-                            timeout=RPC_SEC, creationflags=subprocess.CREATE_NO_WINDOW)
+                            timeout=RPC_SEC, creationflags=host.NO_WINDOW)
     return result.stdout.decode("utf-8", "replace").strip()[:64] if result.returncode == 0 else "OpenCode"
 
 
@@ -56,7 +58,7 @@ class Client:
     async def connect(self):
         self.process = await self.spawn(str(self.path), "acp", cwd=str(self.cwd),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            limit=limits.FRAME_MAX, creationflags=subprocess.CREATE_NO_WINDOW)
+            limit=limits.FRAME_MAX, creationflags=host.NO_WINDOW, **host.process_group())
         # MCP-серверы и шеллы CLI — в его job: disconnect не оставит их сиротами.
         self.job = jobs.attach(getattr(self.process, "pid", None))
         self.reader = asyncio.create_task(self._read())

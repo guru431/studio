@@ -1,6 +1,6 @@
 # AGENTS.md — компонент agent проекта studio
 
-Windows-мост: отдаёт студии `studio.example.com` локальные Claude Code, Codex и OpenCode по протоколу v1. Часть репозитория studio.
+Мост Windows/macOS: отдаёт студии `studio.example.com` локальные Claude Code, Codex и OpenCode по протоколу v1. Часть репозитория studio.
 Общие правила — [../CLAUDE.md](../CLAUDE.md), устройство моста — [CLAUDE.md](CLAUDE.md), установка — [README.md](README.md).
 
 ## Ключевые файлы
@@ -16,7 +16,8 @@ Windows-мост: отдаёт студии `studio.example.com` локальн�
 
 ## Ловушки
 
-- Только Windows: DPAPI (`studio_agent/dpapi.py`) — через ctypes, область пользователя; блоб другой учётки не читается.
+- Секреты: Windows DPAPI; macOS — ключ Fernet в Keychain (`macos_keychain.py`), без ключей в argv и открытых файлах.
+- macOS: установка — `install.command`, системные различия — `host.py`, автозапуск — LaunchAgent пользователя; [подробности](../docs/architecture/agent-macos.md).
 - Ключ устройства — только заголовком `Authorization`; логгер `websockets` не ниже INFO (на DEBUG пишет ключ).
 - PIN проверяет мост; счёт неверных пишется на диск **до** scrypt. Открытые сессии — в памяти; срок простоя — `req.idle_sec` (настраивается в студии, по умолчанию `OPEN_IDLE_SEC`, 3 часа), продлевают только принятые не фоновые просьбы (`passive`); переподключение сохраняет отметки без продления; явная настройка сбрасывает доступ.
 - Журнал `agent.log` — только id, коды, числа, имена типов исключений. Ни ключа, ни PIN, ни путей, ни текстов.

@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, limits, mcp, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, limits, mcp, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .software import Software
 from .pin import OpenSessions, PinStore
@@ -144,13 +144,13 @@ class Agent:
         from . import VERSION as agent_version
 
         hello = {"t": "hello", "v": 1, "cc_version": self.cc_version, "projects_root": self.cfg.projects_root,
-                 "agent_version": agent_version, "agent_update": self.updater is not None,
+                 "agent_version": agent_version, "platform": "darwin" if host.MACOS else "win32", "agent_update": self.updater is not None,
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                  "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
-                 "computer_info": True, "software_versions": True, "desktop": True, "metadata_cache": True, "visualizations": True,
+                 "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -358,6 +358,8 @@ class Agent:
 
     async def _desktop_request(self, op, frame):
         """Поля проверены `_desktop_fields` до продления срока PIN."""
+        if host.MACOS:
+            raise Refused("desktop_unavailable", "Удалённый рабочий стол доступен только на Windows")
         control = frame.get("control")
         session = frame["session"]
         if op == "desktop_status":

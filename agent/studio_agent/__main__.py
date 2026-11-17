@@ -5,6 +5,7 @@
 import argparse
 import getpass
 import os
+import socket
 import sys
 import threading
 
@@ -56,7 +57,7 @@ def _run_console(h) -> int:
 def _enroll(h) -> int:
     cfg = store.load_config(h)
     form = {"url": _ask("Адрес студии", cfg.url), "login": _ask("Логин"),
-            "name": _ask("Имя компьютера", cfg.name or os.environ.get("COMPUTERNAME", "")),
+            "name": _ask("Имя компьютера", cfg.name or socket.gethostname()),
             "projects_roots": _ask_folders(cfg.projects_roots), "pin": "", "pin2": "", "no_pin": False,
             "autostart": cfg.autostart}
     form["password"] = getpass.getpass("Пароль: ")

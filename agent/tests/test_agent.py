@@ -283,14 +283,15 @@ async def test_file_stats_checks_pin_project_and_serializes_scans(agent, root, m
 
 
 def test_hello(agent):
+    from studio_agent import host
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
-                             "agent_version": VERSION, "agent_update": False,
+                                 "agent_version": VERSION, "platform": "darwin" if host.MACOS else "win32", "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                              "subscription_usage": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
-                             "computer_info": True, "software_versions": True, "desktop": True, "metadata_cache": True, "visualizations": True,
+                             "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True, "agent_update_cancel": False}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])

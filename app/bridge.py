@@ -201,6 +201,10 @@ def parse_hello(frame: dict) -> dict:
     result = {"cc_version": _string(frame.get("cc_version"), 64),
               "projects_root": _string(frame.get("projects_root"), 1024),
               "has_pin": frame["has_pin"], "models": out_models, "efforts": list(dict.fromkeys(efforts))}
+    if "platform" in frame:
+        if frame["platform"] not in ("win32", "darwin"):
+            raise ProtocolError("hello")
+        result["platform"] = frame["platform"]
     if "agent_version" in frame:
         from agent_release import VERSION
         value = frame["agent_version"]

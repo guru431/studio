@@ -11,7 +11,7 @@ import re
 import threading
 from pathlib import Path
 
-from . import autostart, cli, enroll, setup, store, theme, update_helper, updater
+from . import autostart, cli, enroll, host, setup, store, theme, update_helper, updater
 from .claude_sdk import ClaudeSDKClient
 from .codex import CodexRunner
 from .opencode import OpenCodeRunner
@@ -734,6 +734,7 @@ class Controller:
 def prepare_env() -> None:
     """Перед `Controller` (трей и `run --console`): окружение моста без привязки к сессии того, кто его запустил —
     `claude.exe` ходов наследует `os.environ`."""
+    host.prepare_path()
     dropped = cli.drop_session_env()
     if dropped:
         log.info("окружение: убрано переменных сессии: %d", dropped)
@@ -817,7 +818,7 @@ def main(argv: list[str]) -> int:
                 window.pin_changed()
             elif cmd == "log":
                 with contextlib.suppress(OSError):
-                    os.startfile(h / "agent.log")
+                    host.open_file(h / "agent.log")
             elif cmd == "stop_desktop":
                 ctrl.stop_desktop_session()
             elif cmd == "quit_idle":
@@ -836,7 +837,13 @@ def main(argv: list[str]) -> int:
     if ctrl.state == "setup":
         window.open_main(root, ctrl)
     root.after(100, poll)
-    root.mainloop()
-    mutex.close()
+    try:
+        root.mainloop()
+    finally:
+        icon.stop()
+        ctrl.quit()
+        with contextlib.suppress(Exception):
+            root.destroy()
+        mutex.close()
     log.info("мост: остановлен")
     return 0
