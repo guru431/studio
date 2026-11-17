@@ -124,7 +124,7 @@ def test_model_without_tools_explains_how_to_disable_mcp(studio):
 def test_mcp_step_43_keeps_previous_chat_writer_compatible(env):
     from contextlib import closing
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.MEDIA_44).removesuffix(db.MCP_43) + '\nPRAGMA user_version=42;')
+        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43) + '\nPRAGMA user_version=42;')
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         conn.execute("INSERT INTO chats(id,user_id,created,updated) VALUES('before',1,0,0)")
         db.migrate(conn)

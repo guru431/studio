@@ -316,7 +316,7 @@ def test_operator_adds_missing_email_without_resetting_password_or_sessions(stud
 
 def test_migration_39_to_40_preserves_accounts_sessions_and_unique_email(env):
     connection = db.connect(env.db_path)
-    connection.executescript(db.SCHEMA.removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40) + "\nPRAGMA user_version=39;")
+    connection.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40) + "\nPRAGMA user_version=39;")
     connection.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'old','Old','hash',0)")
     connection.execute("INSERT INTO sessions(digest,user_id,csrf,expires,renewed) VALUES('d',1,'c',100,0)")
     db.migrate(connection); db.migrate(connection)

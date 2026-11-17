@@ -102,7 +102,7 @@ def test_running_row_keeps_focus_through_list_polls(browser, live, section):
     строке выбирает её."""
     login = f"lfocus{section}"
     ids = seed_list(live, section, live.add_user(login), 3, running_newest=True)
-    url = LISTS[section][1]
+    url = LISTS[section][1] + ('/chats' if section == 'speech' else '')
     row = f".tr-item[data-id='{ids[-1]}']"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
         ("wait", "document.querySelector('.settings-nav')"),
@@ -126,13 +126,14 @@ STAGES = """((url, id) => { window.polls = 0; window.picks = 0; window.cancels =
   window.setTimeout = (f, t, ...a) => wait(f, t === 3000 ? 50 : t, ...a);
   window.fetch = async (path, opts = {}) => {
     const u = String(path), method = opts.method || 'GET';
-    if (method === 'POST' && u === `/api/${url}/${id}/cancel`) window.cancels += 1;
+    if (method === 'POST' && u === `/api/${url.replace('/chats', '')}/${id}/cancel`) window.cancels += 1;
     const list = u.startsWith(`/api/${url}?`), one = u === `/api/${url}/${id}`;
     if (method !== 'GET' || !(list || one)) return real(path, opts);
     if (list) window.polls += 1; else window.picks += 1;
     const res = await real(path, opts);
     const body = await res.json();
-    for (const item of body.items || [body]) if (item.id === id) item.detail = `этап ${window.polls}`;
+    if (body.id === id) body.detail = `этап ${window.polls}`;
+    for (const item of body.items || []) if (item.id === id) item.detail = `этап ${window.polls}`;
     return new Response(JSON.stringify(body), { status: res.status, headers: { 'content-type': 'application/json' } });
   };
   return true; })"""
@@ -165,6 +166,8 @@ def test_panel_cancel_keeps_focus_through_detail_changes(browser, live, section)
     uid = live.add_user(login)
     record = seed_scan(live, uid) if section == "ocr" else seed_list(live, section, uid, 1, running_newest=True)[0]
     url, cancel = PANELS[section]
+    if section == 'speech':
+        url += '/chats'
     row = f".tr-item[data-id='{record}']"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
         ("wait", "document.querySelector('.settings-nav')"),

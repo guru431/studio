@@ -62,6 +62,7 @@ class SpeechIn(BaseModel):
     voice: str = Field(max_length=VOICE_NAME_MAX)
     connection_id: "int | None" = None
     model: "str | None" = Field(default=None, max_length=200)
+    chat_id: "str | None" = Field(default=None, min_length=1, max_length=64)
 
 
 @dataclass
@@ -138,7 +139,9 @@ def waiting(row) -> str:
 
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
-    return {"id": row["id"], "text": row["text"], "voice": row["voice"], "model": row["model"], "state": row["state"],
+    return {"id": row["id"], "chat_id": row["chat_id"], "voice_name": row["voice_name"],
+            "connection_id": row["connection_id"],
+            "text": row["text"], "voice": row["voice"], "model": row["model"], "state": row["state"],
             "detail": job.stage if job is not None and row["state"] == "working"
             else waiting(row) if row["state"] == "queued" else row["detail"],
             "media_id": row["media_id"], "duration": row["duration"], "created": row["created"],
@@ -322,25 +325,55 @@ async def stop() -> None:
 
 # ---- API -----------------------------------------------------------------------------
 
-@router.post("", status_code=202)
-async def create(body: SpeechIn, request: Request):
-    uid = request.state.user.id
-    operations.check(uid)
+def _input(uid: int, body: SpeechIn):
+    """Одинаковые проверки при новой записи и при её повторной озвучке."""
     text = documents.nfc(body.text).strip()           # текст идёт в поиск (search_speeches_*), как у документов
     if not text or len(text) > TEXT_MAX:
         raise HTTPException(422, {"code": "text", "message": f"текст — от 1 до {TEXT_MAX} знаков"})
     conn, model = sections.resolve(uid, "speech", body.connection_id, body.model)
     voice = body.voice.strip()
     if conn.kind == "srvllm":
-        voices._row(uid, voice)                                   # чужой и неизвестный голос — 404 gone
+        name = voices._row(uid, voice)["name"]                    # чужой и неизвестный голос — 404 gone
     elif not voice:
         raise HTTPException(422, {"code": "voice", "message": "назовите голос сервиса"})
+    else:
+        name = voice
     if _full_queue(uid):
         raise HTTPException(409, {"code": "busy", "message": (
             f"в очереди уже {QUEUE_MAX} озвучек — дождитесь их или отмените")})
+    return text, conn, model, voice, name
+
+
+def _chat_rows(uid: int, cid: str):
+    rows = state.DB.execute("SELECT * FROM speeches WHERE user_id = ? AND chat_id = ? ORDER BY created, rowid",
+                            (uid, cid)).fetchall()
+    if not rows:
+        raise HTTPException(404, {"code": "gone", "message": "такого чата озвучки нет"})
+    return rows
+
+
+def _chat_out(rows, *, full=False):
+    items = [_out(r) for r in rows]
+    current = next((i for i in items if i["state"] not in TERMINAL), items[-1])
+    summary = {"id": rows[0]["chat_id"], "created": rows[0]["chat_created"], "text": items[0]["text"],
+               "state": current["state"], "detail": current["detail"],
+               "revision": [(i["id"], i["state"], i["detail"], i["media_id"], i["parts"], i["finished"]) for i in items]}
+    if full:
+        summary["items"] = items
+    return summary
+
+
+@router.post("", status_code=202)
+async def create(body: SpeechIn, request: Request):
+    uid = request.state.user.id
+    operations.check(uid)
+    chat = _chat_rows(uid, body.chat_id)[0] if body.chat_id else None
+    text, conn, model, voice, name = _input(uid, body)
     sid, now = uuid.uuid4().hex, clock.NOW()
-    state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, text, state, detail, created)"
-                     " VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)", (sid, uid, conn.id, model, voice, text, QUEUED, now))
+    state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, voice_name, text, state, detail,"
+                     " created, chat_id, chat_created) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+                     (sid, uid, conn.id, model, voice, name, text, QUEUED, now,
+                      chat["chat_id"] if chat else sid, chat["chat_created"] if chat else now))
     EPOCHS[sid] = operations.capture(uid)
     kick(uid)
     log.info("озвучка %s: принята", sid[:8])
@@ -353,6 +386,44 @@ async def list_speeches(request: Request, before: "float | None" = None,
     """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
     rows = db.page(state.DB, "speeches", request.state.user.id, before, before_id, limit)
     return {"items": [_out(r) for r in rows]}
+
+
+@router.get("/chats")
+async def list_chats(request: Request, before: "float | None" = None,
+                     before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
+    uid = request.state.user.id
+    where, args = "", [uid]
+    if before is not None:
+        where = " AND (chat_created < ? OR (chat_created = ? AND chat_id < ?))" if before_id else " AND chat_created < ?"
+        args.extend((before, before, before_id) if before_id else (before,))
+    chats = state.DB.execute("SELECT chat_id FROM speeches WHERE user_id = ?" + where
+                             + " GROUP BY chat_id ORDER BY chat_created DESC, chat_id DESC LIMIT ?", (*args, limit)).fetchall()
+    return {"items": [_chat_out(_chat_rows(uid, r["chat_id"])) for r in chats]}
+
+
+@router.get("/chats/{cid}")
+async def get_chat(cid: str, request: Request):
+    return _chat_out(_chat_rows(request.state.user.id, cid), full=True)
+
+
+@router.patch("/{sid}", status_code=202)
+async def edit(sid: str, body: SpeechIn, request: Request):
+    uid = request.state.user.id
+    operations.check(uid)
+    row = _row(uid, sid)
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "дождитесь озвучки или отмените её"})
+    if body.chat_id is not None and body.chat_id != row["chat_id"]:
+        raise HTTPException(422, {"code": "chat", "message": "нельзя перенести запись в другой чат"})
+    text, conn, model, voice, name = _input(uid, body)
+    state.DB.execute("UPDATE speeches SET text = ?, connection_id = ?, model = ?, voice = ?, voice_name = ?,"
+                     " state = 'queued', detail = ?, media_id = NULL, duration = NULL, finished = NULL WHERE id = ?",
+                     (text, conn.id, model, voice, name, QUEUED, sid))
+    EPOCHS[sid] = operations.capture(uid)
+    kick(uid)
+    if row["media_id"] and not media.referenced(uid, row["media_id"]):
+        await media.delete_async(uid, row["media_id"])
+    return _out(_row(uid, sid))
 
 
 @router.get("/{sid}")
