@@ -7558,17 +7558,17 @@ def test_code_empty_offers_agent_download(browser, live):
           return [a.tagName, a.getAttribute('href'), a.hasAttribute('download'), a.textContent,
             document.querySelectorAll('#agent-download').length]; })()"""),
         ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p')].map((p) => p.textContent)"),
-        ("eval", "macos", "document.querySelector('#agent-download-macos').getAttribute('href')"),
+        ("eval", "macos", "(() => {const a=document.querySelector('#agent-download-macos'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "badge", "!!document.querySelector('#code-empty .badge svg')"),
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
-    assert v["macos"] == '/api/agent/download?platform=macos'
+    assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
     assert v["texts"] == ["Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS.",
-                          "Нужны Python 3.11+ и Claude Code, Codex или OpenCode; для macOS — Python с Tk",
-                          "Windows: запустите studio-agent-setup.exe. macOS: распакуйте ZIP и запустите install.command."
-                          " В окне моста войдите логином и паролем студии."]
+                          "Нужны Claude Code, Codex или OpenCode. Windows: Python 3.11+. macOS 13+: Python уже в установщике.",
+                          "Windows: запустите studio-agent-setup.exe. macOS: откройте studio-agent-setup.pkg двойным щелчком — Python и зависимости уже внутри."
+                          " В окне моста войдите в свою учётную запись Studio."]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
 

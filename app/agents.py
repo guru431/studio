@@ -40,6 +40,7 @@ EVENTS_PAGE = 50
 #: архив моста — `<корень кода>/agent/studio-agent.zip`, рядом с `app/` (кладёт выкладка; тесты подменяют)
 AGENT_ZIP = Path(__file__).resolve().parent.parent / "agent" / "studio-agent.zip"
 AGENT_SETUP = AGENT_ZIP.with_name("studio-agent-setup.exe")
+AGENT_MACOS = AGENT_ZIP.with_name("studio-agent-setup.pkg")
 FOREIGN = "запрос пришёл с чужого сайта"
 
 
@@ -114,17 +115,17 @@ async def unenroll(request: Request):
 
 @router.get("/api/agent/download")
 async def download(request: Request):
-    """Windows EXE или общий ZIP с установщиком macOS — только вошедшим."""
+    """Автономные установщики Windows EXE и macOS PKG — только вошедшим."""
     platform = request.query_params.get("platform", "windows")
     if platform not in ("windows", "macos"):
         raise HTTPException(400, {"code": "invalid", "message": "неизвестная платформа"})
-    package = AGENT_ZIP if platform == "macos" else AGENT_SETUP
+    package = AGENT_MACOS if platform == "macos" else AGENT_SETUP
     if not package.is_file():
         raise HTTPException(404, {"code": "no_agent",
                                   "message": "установщика моста нет на сервере — его кладёт выкладка студии"})
     log.info("пользователь %d: скачан мост", request.state.user.id)
-    return FileResponse(package, media_type="application/zip" if platform == "macos" else "application/octet-stream",
-                        filename="studio-agent-macos.zip" if platform == "macos" else "studio-agent-setup.exe",
+    return FileResponse(package, media_type="application/octet-stream",
+                        filename=package.name,
                         headers={"Cache-Control": "private, no-cache"})
 
 

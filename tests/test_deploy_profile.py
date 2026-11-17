@@ -148,10 +148,12 @@ def test_git_bash_preserves_remote_profile_paths_for_native_python(tmp_path):
     root = Path(__file__).parents[1]
     profile = tmp_path / 'local-profile.sh'
     profile.write_text('STUDIO_REMOTE_ROOT=/srv/studio\nSTUDIO_MEDIA_DIR=/mnt/media/studio\n'
-                       'STUDIO_CERT_DIR=/etc/certs/studio\n', encoding='utf-8', newline='\n')
+                       'STUDIO_CERT_DIR=/etc/certs/studio\n'
+                       'STUDIO_MACOS_BUILD_ROOT=/Users/builder/projects/studio\n', encoding='utf-8', newline='\n')
     probe = tmp_path / 'check.py'
     probe.write_text('import os,runpy,sys\n'
                      'assert os.environ["STUDIO_TEST_PATH"] == "/srv/keep"\n'
+                     'assert os.environ["STUDIO_MACOS_BUILD_ROOT"] == "/Users/builder/projects/studio"\n'
                      'sys.argv = [sys.argv[1], "--check"]\n'
                      'runpy.run_path(sys.argv[0], run_name="__main__")\n', encoding='utf-8')
     script = root / 'deploy/deploy.sh'
@@ -159,7 +161,7 @@ def test_git_bash_preserves_remote_profile_paths_for_native_python(tmp_path):
     command = prefix + '\nexec ' + shlex.join([Path(sys.executable).as_posix(), probe.as_posix(),
                                               (root/'deploy/render-profile.py').as_posix()])
     env = {key: value for key, value in os.environ.items()
-           if key not in ('STUDIO_REMOTE_ROOT', 'STUDIO_MEDIA_DIR', 'STUDIO_CERT_DIR')}
+           if key not in ('STUDIO_REMOTE_ROOT', 'STUDIO_MEDIA_DIR', 'STUDIO_CERT_DIR', 'STUDIO_MACOS_BUILD_ROOT')}
     env.update(STUDIO_DEPLOY_PROFILE=profile.as_posix(), STUDIO_TEST_PATH='/srv/keep',
                MSYS2_ENV_CONV_EXCL='STUDIO_TEST_PATH')
     result = subprocess.run([bash, '-c', command, script.as_posix()], env=env,

@@ -102,6 +102,10 @@ command -v yt-dlp >/dev/null     || echo "ВНИМАНИЕ: нет yt-dlp — ч
     echo "ОШИБКА: нет $NEW/agent/studio-agent-setup.exe — deploy.sh собирает его на Windows" >&2
     exit 1
 }
+[ -s "$NEW/agent/studio-agent-setup.pkg" ] || {
+    echo "ОШИБКА: нет установщика macOS — deploy.sh собирает его на Mac" >&2
+    exit 1
+}
 
 # Среда Python — своя у новой версии, до подмены кода: pip не меняет пакеты работающей службы.
 # Собирается в $NEW/.venv, только если сменились requirements.txt, constraints.txt или python3 (штамп в самой

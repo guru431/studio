@@ -74,10 +74,10 @@ export function agentDownload() {
       tr("Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS.")),
     el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: 'studio-agent-setup.exe' },
       tr("Скачать агент для Windows (.exe)")),
-    el('a', { id: 'agent-download-macos', class: 'btn', href: '/api/agent/download?platform=macos', download: 'studio-agent-macos.zip' },
-      tr("Скачать агент для macOS (.zip)")),
-    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Python 3.11+ и Claude Code, Codex или OpenCode; для macOS — Python с Tk")),
-    el('p', { class: 'agent-download-steps' }, tr("Windows: запустите studio-agent-setup.exe. macOS: распакуйте ZIP и запустите install.command. В окне моста войдите логином и паролем студии.")));
+    el('a', { id: 'agent-download-macos', class: 'btn', href: '/api/agent/download?platform=macos', download: 'studio-agent-setup.pkg' },
+      tr("Скачать агент для macOS (.pkg)")),
+    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Windows: Python 3.11+. macOS 13+: Python уже в установщике.")),
+    el('p', { class: 'agent-download-steps' }, tr("Windows: запустите studio-agent-setup.exe. macOS: откройте studio-agent-setup.pkg двойным щелчком — Python и зависимости уже внутри. В окне моста войдите в свою учётную запись Studio.")));
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.

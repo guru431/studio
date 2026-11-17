@@ -606,7 +606,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         ? el('button', { type: 'button', class: 'btn code-agent-update', title: tr("Обновить агент до {0}", agent.latest_version),
           'aria-label': tr("Обновить агент · {0}", agent.name), disabled: busy })
         : el('a', { class: 'btn code-agent-update', href: agent.platform === 'darwin' ? '/api/agent/download?platform=macos' : '/api/agent/download',
-          download: agent.platform === 'darwin' ? 'studio-agent-macos.zip' : 'studio-agent-setup.exe',
+          download: agent.platform === 'darwin' ? 'studio-agent-setup.pkg' : 'studio-agent-setup.exe',
           title: agent.platform === 'darwin' ? tr("Скачать установщик Studio Agent{0} для macOS", agent.latest_version ? ' ' + agent.latest_version : '')
             : tr("Скачать установщик Studio Agent{0} для Windows", agent.latest_version ? ' ' + agent.latest_version : ''),
           'aria-label': tr("Скачать установщик агента · {0}", agent.name) });

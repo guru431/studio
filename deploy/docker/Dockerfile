@@ -17,7 +17,7 @@ COPY app ./app
 COPY deploy/md2pdf.py deploy/md2pdf.sha256 ./deploy/
 RUN cd deploy && echo "$(cat md2pdf.sha256)  md2pdf.py" | sha256sum --check --status
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
-COPY agent/studio-agent.zip agent/studio-agent-setup.exe ./agent/
+COPY agent/studio-agent.zip agent/studio-agent-setup.exe agent/studio-agent-setup.pkg ./agent/
 ARG STUDIO_REVISION=development
 ARG STUDIO_VERSION=development
 LABEL org.opencontainers.image.title="Studio" \

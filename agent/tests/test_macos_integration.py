@@ -11,6 +11,36 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.skipif(sys.platform != 'darwin', reason='macOS')]
 
 
+@pytest.mark.timeout(300)
+def test_pkg_installs_offline_preserves_settings_and_reuses_private_python(tmp_path, monkeypatch):
+    """Payload получают через pkgutil --expand-full; тест не пишет в настоящий HOME/LaunchAgents."""
+    import install_macos
+    import platform
+    from studio_agent import macos_autostart
+    payload = os.environ.get('STUDIO_AGENT_MACOS_PAYLOAD')
+    if not payload:
+        pytest.skip('нужен распакованный PKG: STUDIO_AGENT_MACOS_PAYLOAD=<bridge.pkg/Scripts>')
+    source = Path(payload)
+    monkeypatch.setattr(install_macos, 'SOURCE', source / 'source/studio-agent')
+    monkeypatch.setenv('PIP_NO_INDEX', '1')
+    with tempfile.TemporaryDirectory(dir=tmp_path) as folder:
+        root = Path(folder)
+        home, base = root / 'settings', root / 'app'
+        monkeypatch.setattr(macos_autostart, 'path', lambda: root / 'LaunchAgents/com.studio.agent.plist')
+        kwargs = dict(start=False, runtime_source=source / 'runtime' / platform.machine(),
+                      wheelhouse=source / 'wheels' / platform.machine())
+        first = install_macos.install(base, home, root / 'Applications', **kwargs)
+        (home / 'key.bin').write_bytes(b'preserved-key')
+        second = install_macos.install(base, home, root / 'Applications', **kwargs)
+        assert first != second and (base / 'current').resolve() == second
+        assert (home / 'key.bin').read_bytes() == b'preserved-key'
+        assert len(list((base / 'runtimes').iterdir())) == 1
+        result = subprocess.run([str(second / '.venv/bin/python'), '-c',
+                                 'import sys,tkinter,studio_agent.app; assert "/runtimes/" in sys._base_executable'],
+                                cwd=second, capture_output=True, check=True, timeout=30)
+        assert result.returncode == 0
+
+
 def test_native_keychain_encrypts_and_recovers_after_cache_reset(tmp_path, monkeypatch):
     from studio_agent import macos_keychain as secrets
     lib = secrets._security()
