@@ -10,7 +10,9 @@ from test_videos import create_video
 
 
 @pytest.mark.parametrize("model,gateway", [("snofs", "snofs-krea2-v1.6"),
-    ("big-love", "big-love-eryn1"), ("fineview", "fineview-qw21")])
+    ("big-love", "big-love-eryn1"), ("fineview", "fineview-qw21"),
+    ("muse", "muse-krea2-v3.5"), ("jib-moss", "jib-moss-v2"),
+    ("fineporn", "fineporn-v5"), ("moody-krea", "moody-krea-v8")])
 def test_new_photo_model_is_selected_and_releases_only_the_other_slot(studio, model, gateway):
     add_gateway(studio)
     response = start(studio, model=model, seed=123)
