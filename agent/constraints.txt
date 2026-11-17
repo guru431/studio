@@ -28,6 +28,8 @@ pyjwt==2.15.1
 pyobjc-core==13.0
 pyobjc-framework-Cocoa==13.0
 pyobjc-framework-Quartz==13.0
+pyobjc-framework-ScreenCaptureKit==13.0
+pyobjc-framework-CoreMedia==13.0
 pystray==0.19.5
 python-multipart==0.0.33
 pywin32==312

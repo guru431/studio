@@ -31,13 +31,30 @@
 - Tk и значок строки меню используют главный цикл macOS (`pystray.run_detached`).
 - Codex/OpenCode и установщики CLI получают отдельную POSIX-группу процессов; закрытие клиента
   завершает также его дочерние процессы. Claude Code сохраняет штатный жизненный цикл SDK.
-- Удалённый рабочий стол — только Windows: Mac сообщает `desktop: false`, локальный переключатель скрыт.
+- С Agent 0.32.0 удалённый рабочий стол доступен и на Mac: экран, мышь, клавиатура (включая Cmd/Option)
+  и текстовый буфер обмена. `desktop_enabled` по умолчанию выключен; выбор сохраняется и меняется только
+  в локальном окне агента. Там же кнопки «Запись экрана…» и «Управление вводом…» запрашивают системные
+  разрешения и открывают соответствующие страницы конфиденциальности macOS для Studio Agent/Python.
+  После выдачи доступа к экрану macOS может потребовать штатный перезапуск агента после окончания заданий.
+  Запросы из Studio сами разрешений не запрашивают. Блокировка, смена активного пользователя, отзыв
+  разрешений, обрыв канала и выключение локального доступа завершают управление и отпускают ввод.
+  Собственное окно/меню агента недоступны для удалённого ввода. Экран входа и заблокированный Mac не обслуживаются.
+- `desktop_macos.py` использует Quartz/AppKit и ScreenCaptureKit на macOS 14+ (на 13 — Core Graphics).
+  Retina захватывается с учётом масштаба, координаты мыши — в логических границах монитора, включая отрицательные.
+  Изображения и буфер остаются в памяти; `screencapture`, временные PNG и AppleScript не используются.
 - Intel использует `cryptography==48.0.1` с готовым universal2-пакетом; Windows и Apple Silicon —
   основную версию из `constraints.txt`. Зависимости Cocoa/Quartz также закреплены.
 
 Обновление проверяет размер и SHA-256, готовит отдельную среду, ждёт простоя и штатного выхода.
 Хелпер stdlib ждёт прежний PID, запускает новую копию и переключает прежний LaunchAgent и `current`
 лишь после подтверждения готовности. При раннем падении новой копии запускается прежняя.
+
+Проверка паритета 2026-11-17: проекты, файлы/Git, PIN, чаты и ходы трёх CLI, MCP, Keychain,
+строка меню, LaunchAgent и автообновление моста имеют пути macOS. Оставшиеся ограничения:
+снимок компьютера пока показывает только корневой том; нативные Claude Code/Codex (в том числе
+Homebrew) обновляются вручную, из Studio поддержаны npm/VS Code и штатный upgrade OpenCode.
+CLI устанавливаются и авторизуются отдельно; блокировка экрана и системные разрешения macOS
+сохраняют действие независимо от разрешения рабочего стола в агенте.
 
 ## Проверки
 
@@ -55,7 +72,7 @@ Windows: команды наборов `main` и `agent` из корневого
 Быстрый переносимый набор (Python на Mac):
 
 ```sh
-.venv/bin/python -m pytest tests/test_macos.py tests/test_store.py tests/test_pin.py tests/test_link.py tests/test_files.py tests/test_file_operations.py tests/test_gitinfo.py tests/test_cli.py tests/test_constraints.py tests/test_codex_rpc.py tests/test_opencode_rpc.py -q
+.venv/bin/python -m pytest tests/test_macos.py tests/test_desktop_macos.py tests/test_desktop.py tests/test_store.py tests/test_pin.py tests/test_link.py tests/test_files.py tests/test_file_operations.py tests/test_gitinfo.py tests/test_cli.py tests/test_constraints.py tests/test_codex_rpc.py tests/test_opencode_rpc.py -q
 ```
 
 Системная приёмка без LLM-квоты:

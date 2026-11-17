@@ -737,8 +737,7 @@ class MainWindow:
                                    style="Card.TCheckbutton")
         box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=self.px(6))
         self.buttons.append(box_auto)
-        if not host.MACOS:
-            self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
+        self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
         self.pin_line.grid(row=7, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
@@ -806,6 +805,22 @@ class MainWindow:
                        style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
             row=1, column=0, sticky="w", pady=(self.px(4), 0))
         self.buttons.append(button)
+        if host.MACOS:
+            from .desktop_macos import request_permission
+
+            def permit(kind):
+                problem.set("")
+                self.work(lambda: request_permission(kind),
+                          lambda _, failed: problem.set(FAILED) if failed else None)
+
+            self.ttk.Label(area, text="macOS: разрешите запись экрана и управление вводом для Studio Agent/Python."
+                           " После разрешения записи экрана может понадобиться перезапуск агента.",
+                           style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
+                row=2, column=0, sticky="w", pady=(self.px(4), 0))
+            for index, (kind, label) in enumerate((("screen", "Запись экрана…"), ("input", "Управление вводом…")), 3):
+                permission = self.ttk.Button(area, text=label, command=lambda k=kind: permit(k))
+                permission.grid(row=index, column=0, sticky="w", pady=(self.px(4), 0))
+                self.buttons.append(permission)
 
     def turn_limit_control(self, box, *, row: int, value: int, problem) -> None:
         tk, ttk = self.tk, self.ttk

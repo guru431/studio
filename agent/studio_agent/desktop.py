@@ -1,6 +1,6 @@
 """Локальный выключатель и один короткоживущий сеанс рабочего стола.
 
-Протокол умеет читать выключатель, но не менять его. Windows-объекты живут в одном
+Протокол умеет читать выключатель, но не менять его. Системные объекты живут в одном
 рабочем потоке; кадры не накапливаются, а потерявший связь зритель теряет ввод.
 """
 import asyncio
@@ -12,6 +12,7 @@ import threading
 import time
 
 from .errors import Refused
+from . import host
 
 CONTROL = re.compile(r"[0-9a-f]{32}")
 LEASE_SEC = 10
@@ -51,7 +52,10 @@ def validate_events(events) -> list[dict]:
                               or not re.fullmatch(r"[A-Za-z0-9]{2,24}", event["code"])):
             raise Refused("invalid")
         if kind == "key":
-            from .desktop_native import KEYS
+            if host.MACOS:
+                from .desktop_macos import KEYS
+            else:
+                from .desktop_native import KEYS
             if event["code"] not in KEYS:
                 raise Refused("unsupported", "Эта клавиша не поддерживается")
         if kind == "wheel" and any(type(event[k]) is not int or abs(event[k]) > 1200 for k in ("dx", "dy")):
@@ -159,7 +163,10 @@ class Desktop:
                     self._check(session, control, generation)
                     if self._native is None:
                         if self._factory is None:
-                            from .desktop_native import NativeDesktop
+                            if host.MACOS:
+                                from .desktop_macos import NativeDesktop
+                            else:
+                                from .desktop_native import NativeDesktop
                             self._factory = NativeDesktop
                         self._native = self._factory()
                 return action(self._native, generation)
@@ -174,7 +181,7 @@ class Desktop:
             raise
         except TimeoutError:
             self.revoke(session, control)
-            raise Refused("desktop_unavailable", "Windows не ответила — подключитесь к рабочему столу снова") from None
+            raise Refused("desktop_unavailable", "Компьютер не ответил — подключитесь к рабочему столу снова") from None
         except Refused as error:
             if error.code == "desktop_unavailable":
                 self.revoke(session, control)
