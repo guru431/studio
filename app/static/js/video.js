@@ -38,6 +38,7 @@ const PROMPT_MAX = 4000;
 const PHOTO_MAX = 20 * 1024 * 1024;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const QUALITIES = [['fast', tr("Быстро 480p")], ['standard', tr("Обычно 576p")], ['high', tr("Высоко 720p")]];
+const H3_RESOLUTION = { fast: '256p', standard: '352p', high: '480p' };
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
 const SOURCES = { given: tr("свой промпт"), auto: tr("придуман по фото"), fallback: tr("запасной промпт") };
 const RUNNING = new Set(['queued', 'in_progress']);
@@ -114,6 +115,14 @@ function build(view, ctx) {
     title: tr("Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с") }, tr("плавно"));
   // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
   const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': tr("Модель"), hidden: true });
+  function isH3() { return modelPick.value.split(':').slice(1).join(':') === 'h3'; }
+  function paintModel() {
+    chipSmooth.hidden = isH3();
+    chipSeconds.title = isH3() ? 'H3: 1–5 s · 24 fps' : tr("Длительность: 1–30 с");
+    if (isH3() && Number(seconds.value) > 5) seconds.value = '5';
+    paintQuality();
+  }
+  modelPick.addEventListener('change', paintModel);
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, tr("Оживить"));
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
   const promptBox = fieldBox(prompt, { attach: pick });
@@ -173,11 +182,18 @@ function build(view, ctx) {
 
   /* чип качества: в чипе — «576p», полные слова — в меню, в title и aria-label */
   function paintQuality() {
-    qualityName.textContent = RESOLUTION[quality];
-    const named = tr("Качество: {0}", QUALITIES.find(([value]) => value === quality)[1]);   // «576p» без слова — непонятно, что это
+    const qualityLabel = (value) => {
+      const label = QUALITIES.find(([v]) => v === value)[1];
+      return isH3() ? label.replace(/\d+p/, H3_RESOLUTION[value]) : label;
+    };
+    qualityName.textContent = (isH3() ? H3_RESOLUTION : RESOLUTION)[quality];
+    const named = tr("Качество: {0}", qualityLabel(quality));
     chipQuality.setAttribute('aria-label', named);
     chipQuality.title = named;
-    for (const b of qualityMenu.children) b.setAttribute('aria-checked', String(b.dataset.value === quality));
+    for (const b of qualityMenu.children) {
+      b.setAttribute('aria-checked', String(b.dataset.value === quality));
+      b.textContent = qualityLabel(b.dataset.value);
+    }
   }
 
   /* фото-источник */
@@ -297,7 +313,9 @@ function build(view, ctx) {
   }
 
   function clipParams(item) {
-    return [tr("{0} с", item.seconds), RESOLUTION[item.quality] || item.quality, item.smooth ? tr("32 к/с") : tr("16 к/с")].join(' · ');
+    return [modelLabel(item.model || 'wan'), tr("{0} с", item.seconds),
+      item.model === 'h3' ? H3_RESOLUTION[item.quality] : RESOLUTION[item.quality] || item.quality,
+      item.model === 'h3' ? '24 fps' : item.smooth ? tr("32 к/с") : tr("16 к/с")].join(' · ');
   }
 
   function seedText(item) {
@@ -527,6 +545,7 @@ function build(view, ctx) {
     modelPick.replaceChildren(...options.map(([value, label]) => el('option', { value }, label)));
     if (section.default) modelPick.value = `${section.default.connection_id}:${section.default.model}`;
     modelPick.hidden = options.length < 2;
+    paintModel();
   }, () => {});
 
   // ход, слова и время идущего — на месте: опрос карточку с ними не пересоздаёт (quiet ленты)
@@ -598,6 +617,7 @@ function build(view, ctx) {
     if (!source) throw new Error(tr("Выберите фото для ролика"));
     const sec = seconds.value.trim();
     if (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30) throw new Error(tr("Длительность — целое число секунд от 1 до 30"));
+    if (isH3() && Number(sec) > 5) throw new Error('H3: 1–5 s');
     if (source.file && source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
     const body = new FormData();
     if (source.file) body.append('image', source.file, source.file.name);
@@ -609,8 +629,8 @@ function build(view, ctx) {
     body.append('prompt', text);
     body.append('seconds', String(Number(sec)));
     body.append('quality', quality);
-    body.append('smooth', String(smooth));
-    if (!modelPick.hidden && modelPick.value) {
+    body.append('smooth', String(isH3() ? false : smooth));
+    if (modelPick.value) {
       const [connId, ...rest] = modelPick.value.split(':');
       body.append('connection_id', connId);
       body.append('model', rest.join(':'));

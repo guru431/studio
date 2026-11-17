@@ -22,7 +22,7 @@ def test_gateway_joins_every_section_with_its_catalog(studio):
     # порядок вкладок студии (спека 2026-10-27-studio-ui-tidy, 4.1): API отдаёт разделы в нём
     assert sections.SECTIONS == ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "dictation")
     assert sections.sections_of(uid, cid) == list(sections.SECTIONS)
-    assert [link.models for link in sections.links(uid, "photo")] == [("lustify", "flux")]
+    assert [link.models for link in sections.links(uid, "photo")] == [("lustify", "flux", "snofs", "big-love", "fineview")]
     assert sections.default(uid, "photo")[1] == "lustify" and sections.default(uid, "chat")[1] == "local-gemma-abl"
     assert sections.capabilities(uid) == dict.fromkeys(sections.SECTIONS, True)
 
@@ -153,7 +153,7 @@ def test_sections_api_round_trip(studio):
     body = studio.c.get("/api/sections").json()["sections"]
     assert [s["id"] for s in body] == list(sections.SECTIONS)
     photo = body[1]
-    assert photo["name"] == "Фото" and photo["links"][0]["catalog"] == ["lustify", "flux"]
+    assert photo["name"] == "Фото" and photo["links"][0]["catalog"] == ["lustify", "flux", "snofs", "big-love", "fineview"]
     assert photo["links"][0]["connection"]["id"] == cid and photo["default"] == {"connection_id": cid, "model": "lustify"}
     assert body[0]["links"][0]["catalog"] is None                           # чат srvllm — из /v1/models
     r = studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["lustify"]})
@@ -162,7 +162,7 @@ def test_sections_api_round_trip(studio):
     assert r.status_code == 422 and r.json()["detail"]["code"] == "model"
     assert studio.c.put("/api/sections/photo/default", json={"connection_id": cid, "model": "flux"}).status_code == 422
     assert "local-gemma-abl" in studio.c.get(f"/api/sections/chat/links/{cid}/found").json()["items"]
-    assert studio.c.get(f"/api/sections/photo/links/{cid}/found").json()["items"] == ["lustify", "flux"]
+    assert studio.c.get(f"/api/sections/photo/links/{cid}/found").json()["items"] == ["lustify", "flux", "snofs", "big-love", "fineview"]
     assert studio.c.delete(f"/api/sections/photo/links/{cid}").status_code == 204
     assert studio.c.get("/api/sections").json()["sections"][1]["default"] is None
     r = studio.c.post("/api/sections/photo/links", json={"connection_id": cid})

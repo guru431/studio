@@ -20,12 +20,16 @@ CATALOG_CAPS = {
     "lustify": ("generate", "edit", "mask", "strength", "seed"),
     "flux": ("generate", "edit", "mask", "seed"),
     "wan": ("video",),
+    "h3": ("video",),
+    "snofs": ("generate", "edit", "mask", "strength", "seed"),
+    "big-love": ("generate", "edit", "mask", "strength", "seed"),
+    "fineview": ("generate", "edit", "mask", "seed"),
     "whisperx": ("diarize", "dictation"),
     "gigaam": ("dictation_ru",),
     "qwen3-tts": ("voices",),
 }
 #: короткое имя → id шлюза в `GET /slot/models`; модели речи там не перечисляются и не сверяются
-GATEWAY_IDS = {**images.MODELS, "wan": videos.VIDEO_MODEL}
+GATEWAY_IDS = {**images.MODELS, **videos.MODELS}
 #: «Описать» и «EN» идут маршрутом описания модели gemma4-abl — когда `/slot/*` ключу открыты
 SLOT_CAPS = {images.DESCRIPTION_MODEL: ("describe", "translate")}
 

@@ -76,7 +76,7 @@ def test_local_model_frees_image_models_once_on_a_busy_card(studio):
     assert sent == ["/v1/chat/completions", "/slot/images/release", "/slot/images/release",
                     "/v1/chat/completions", "/v1/chat/completions", "/v1/chat/completions"]
     import images
-    assert studio.gw.releases == [(m, f"Bearer {FakeGateway.TOKEN}") for m in images.MODELS.values()]
+    assert studio.gw.releases == [(m, f"Bearer {FakeGateway.TOKEN}") for m in images.RELEASE_MODELS.values()]
 
 
 def test_busy_card_too_long_is_an_error_kept_after_reload(studio, monkeypatch):

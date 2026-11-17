@@ -3568,6 +3568,26 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     assert not problems(r), problems(r)
 
 
+def test_new_media_models_are_selectable_and_h3_controls_match_its_graph(browser, live):
+    live.add_user('media-models')
+    r = browser.drive(live.url + '/', [*signin('media-models'), ('wait', READY), add_gateway(),
+        *go('photo'), ('wait', "document.querySelector('#chip-model')"),
+        ('click', '#chip-model'),
+        ('wait', "document.querySelector('#chip-model-menu').matches(':popover-open')"),
+        ('eval', 'photos', "document.querySelector('#chip-model-menu').textContent"),
+        ('press', 'Escape'), *go('video'), ('wait', "document.querySelector('#video-model option[value$=\":h3\"]')"),
+        set_value('#video-seconds', '15'),
+        ('eval', 'pick', "(() => { const s = document.querySelector('#video-model'); s.value = [...s.options].find(o => o.value.endsWith(':h3')).value; s.dispatchEvent(new Event('change')); return s.value; })()"),
+        ('eval', 'controls', "[document.querySelector('#chip-smooth').hidden, document.querySelector('#video-seconds').value, document.querySelector('#chip-quality').textContent]"),
+        ('click', '#chip-quality'),
+        ('eval', 'qualities', "document.querySelector('#chip-quality-menu').textContent")], width=390, height=900)
+    assert not r.get('failed'), r
+    assert all(name in r['values']['photos'] for name in ('SNOFS Krea 2', 'Big Love Eryn1', 'FineView QW21'))
+    assert r['values']['controls'] == [True, '5', '352p']
+    assert all(size in r['values']['qualities'] for size in ('256p', '352p', '480p'))
+    assert not problems(r), problems(r)
+
+
 def test_video_feed_shows_progress_and_survives_reload(browser, live, ready_clips):
     login = "vreload"
     live.add_user(login)

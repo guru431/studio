@@ -50,7 +50,8 @@ import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.
 
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
 const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
-  gigaam: 'GigaAM' };
+  gigaam: 'GigaAM', snofs: 'SNOFS Krea 2', 'big-love': 'Big Love Eryn1',
+  fineview: 'FineView QW21', h3: 'H3 · DR34ML4Y' };
 const SEARCH_FROM = 8;
 
 /** Подпись модели: короткие имена шлюза — словами, прочие — как есть. */

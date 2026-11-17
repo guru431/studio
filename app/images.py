@@ -110,7 +110,12 @@ RESULT_MAX = 50 * 1024 * 1024
 NOT_PICTURE = "сервис вернул не картинку (нужен PNG, JPEG или WebP)"
 
 #: Модели страницы: короткое имя → id у шлюза (контракт API картинок).
-MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein"}
+MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein",
+          "snofs": "snofs-krea2-v1.6", "big-love": "big-love-eryn1", "fineview": "fineview-qw21"}
+STRENGTH_MODELS = {"lustify", "snofs", "big-love"}
+COMFY_MODELS = {value for name, value in MODELS.items() if name != "flux"}
+RELEASE_MODELS = {name: MODELS[name] for name in ("lustify", "flux")}
+MEDIA_TIMEOUT_SEC = 1900
 #: Размеры: портрет, квадрат, альбом — около мегапикселя, кратны 16 (обе модели их держат).
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
 #: те же форматы у внешнего сервиса (размеры gpt-image-1); «original» — без size
@@ -454,7 +459,7 @@ async def create_job(request: Request):
     conn, model = sections.resolve(uid, "photo", body.connection_id, body.model)
     if mask is not None and conn.kind != "srvllm":
         raise HTTPException(422, {"code": "brush", "message": "правка кистью — только через шлюз srvllm"})
-    lustify_edit = image is not None and conn.kind == "srvllm" and model == "lustify"
+    lustify_edit = image is not None and conn.kind == "srvllm" and model in STRENGTH_MODELS
     count, vary = (body.series.count, body.series.vary) if body.series else (1, "seed")
     strengths = [body.strength if lustify_edit else None] * count
     if vary == "strength":
@@ -616,7 +621,7 @@ async def release_card(request: Request):
     """Обе модели и gemma-abl — тремя release фото-подключения администратора: итог по каждой."""
     conn = _srvllm_photo(auth.require_admin(request).id)
     results = {}
-    for name, model in (MODELS | {"gemma-abl": DESCRIPTION_MODEL}).items():
+    for name, model in (RELEASE_MODELS | {"gemma-abl": DESCRIPTION_MODEL}).items():
         try:
             r = await release_description(conn) if name == "gemma-abl" else await release(conn, model)
         except (httpx.HTTPError, upstream.UpstreamRefused) as e:
@@ -702,7 +707,7 @@ async def free_models(conn: Connection) -> bool:
     """Release всех моделей картинок (Lustify, FLUX держат карту арендой) перед локальной моделью. Итог не важен:
     идущую генерацию release не оборвёт (409), занятую карту дождётся шлюз. False — шлюз отказал или не ответил."""
     try:
-        for model in MODELS.values():
+        for model in RELEASE_MODELS.values():
             await release(conn, model)
     except (httpx.HTTPError, upstream.UpstreamRefused):
         return False
@@ -757,8 +762,8 @@ def _picture(data: bytes) -> str:
 async def _release_others(job: Job) -> None:
     """Release другой модели картинок перед запросом (п. 4 шапки): итог не важен — занятую (409)
     запрос дождётся у шлюза, а недоступный шлюз и убранный адрес назовёт сам запрос."""
-    for model in MODELS.values():
-        if model == job.gateway_model:
+    for model in RELEASE_MODELS.values():
+        if model == job.gateway_model or (model == MODELS["lustify"] and job.gateway_model in COMFY_MODELS):
             continue
         try:
             r = await release(job.conn, model)
@@ -805,17 +810,18 @@ async def generate(job: Job) -> "tuple[bytes, int | None, str]":
     payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "size": job.size,
                "seed": job.seed, "response_format": "b64_json"}
     await _release_others(job)
+    timeout = MEDIA_TIMEOUT_SEC if job.model in {"snofs", "big-love", "fineview"} else GENERATE_TIMEOUT_SEC
     try:
         if job.image is not None:
-            if job.model == "lustify":
+            if job.model in STRENGTH_MODELS:
                 payload["strength"] = job.strength
-            r = await _slot(job.conn, "/images/edits", GENERATE_TIMEOUT_SEC,
+            r = await _slot(job.conn, "/images/edits", timeout,
                             data={k: str(v) for k, v in payload.items()},
                             files={"image": ("input.png", job.image, "image/png")})
         else:
-            r = await _slot(job.conn, "/images/generations", GENERATE_TIMEOUT_SEC, json=payload)
+            r = await _slot(job.conn, "/images/generations", timeout, json=payload)
     except httpx.TimeoutException:
-        raise JobError("timeout", f"шлюз не ответил за {GENERATE_TIMEOUT_SEC} с")
+        raise JobError("timeout", f"шлюз не ответил за {timeout} с")
     except httpx.HTTPError as e:
         raise JobError("gateway", f"шлюз недоступен: {type(e).__name__}")
     except upstream.UpstreamRefused as e:
@@ -831,7 +837,7 @@ async def generate(job: Job) -> "tuple[bytes, int | None, str]":
 
 async def describe(job: Job):
     # Image slots hold leases for 600 s; release only idle image requests before switching.
-    for model in MODELS.values():
+    for model in RELEASE_MODELS.values():
         try:
             response = await release(job.conn, model)
         except httpx.HTTPError as e:

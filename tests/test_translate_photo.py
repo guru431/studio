@@ -175,7 +175,7 @@ def test_photo_frees_and_releases_the_ocr_slot_around_spotting(studio):
     studio.gw.ocr_reply = spot_reply("Exit(93,146),(491,214)")
     row = wait_row(studio, start_file(studio, "Снимок.png", photo("PNG", (60, 40))))
     assert row["state"] == "done", row["detail"]
-    frees = ["/slot/images/release"] * len(images.MODELS) + ["/slot/images/descriptions/release"]
+    frees = ["/slot/images/release"] * len(images.RELEASE_MODELS) + ["/slot/images/descriptions/release"]
     # модели картинок отпустил free_card того же шлюза — перед переводом их не отпускают второй раз
     assert paths(studio) == [*frees, "/pages/ocr", "/pages/ocr-release", "/v1/chat/completions"]
     assert ocr.EXTERNAL == {} and ocr.LEASED == {}
@@ -249,7 +249,7 @@ def test_photo_after_slow_ocr_releases_images(studio):
     assert row["state"] == "done", row["detail"]
     sent = paths(studio)
     after = sent[len(sent) - 1 - sent[::-1].index("/pages/ocr-release"):]
-    assert after == ["/pages/ocr-release", *["/slot/images/release"] * len(images.MODELS), "/v1/chat/completions"]
+    assert after == ["/pages/ocr-release", *["/slot/images/release"] * len(images.RELEASE_MODELS), "/v1/chat/completions"]
 
 
 def test_borrowed_marks_settling(studio):

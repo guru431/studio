@@ -170,7 +170,7 @@ def test_apache_accepts_agent_turn_bodies_including_followups():
 def test_apache_route_outlasts_every_upstream_timeout_of_the_studio():
     """B2-M8: при равных пределах 502 Apache закрывал бы 504 службы словами «шлюз не ответил»."""
     timeout = int(re.search(r"^\s*ProxyPass / \S+ timeout=(\d+)", uncommented(VHOST), re.M).group(1))
-    release = (len(images.MODELS) + 1) * images.SHORT_TIMEOUT_SEC         # «Освободить карту»: три release
+    release = (len(images.RELEASE_MODELS) + 1) * images.SHORT_TIMEOUT_SEC  # один release на слот
     saves = 2 * media.SAVE_TIMEOUT_SEC                                    # правка: исходник и маска на шару
     # удаление учётки ждёт её заданий картинок
     assert timeout > max(chat.MODELS_TIMEOUT_SEC, release, images.SETTLE_SEC, saves)
