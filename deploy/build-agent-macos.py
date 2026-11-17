@@ -20,8 +20,8 @@ HERE = Path(__file__).resolve().parent
 IDENTIFIER = "com.studio.agent.installer"
 
 
-def run(argv, **kwargs):
-    return subprocess.run(list(map(str, argv)), check=True, timeout=900, **kwargs)
+def run(argv, *, timeout=900, **kwargs):
+    return subprocess.run(list(map(str, argv)), check=True, timeout=timeout, **kwargs)
 
 
 def unpack_source(archive, target):
@@ -199,7 +199,8 @@ def remote(args, work):
         run([*scp, args.archive, HERE / "build-agent-macos.py", args.lock, args.host + ":" + folder + "/"])
         command = ["/usr/bin/python3", folder + "/build-agent-macos.py", "--archive", folder + "/" + args.archive.name,
                    "--lock", folder + "/" + args.lock.name, "--output", folder + "/studio-agent-setup.pkg"]
-        run([*ssh, shlex.join(command)])
+        # Полная сборка включает обе архитектуры, загрузки и автономную установку.
+        run([*ssh, shlex.join(command)], timeout=3600)
         staged = work / "studio-agent-setup.pkg"
         run([*scp, args.host + ":" + folder + "/studio-agent-setup.pkg", staged])
         args.output.parent.mkdir(parents=True, exist_ok=True)
