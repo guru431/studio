@@ -5,6 +5,8 @@
 import { el } from './ui.js';
 
 export const ICONS = {
+  windows: '<path fill="currentColor" stroke="none" d="M3 5.5l8-1.1V11H3zm9-1.3L21 3v8h-9zM3 12h8v6.6l-8-1.1zm9 0h9v9l-9-1.2z"/>',
+  apple: '<path fill="currentColor" stroke="none" d="M16.6 2c.1 1.3-.4 2.5-1.2 3.4-.8.9-2 1.5-3.2 1.4-.2-1.2.4-2.5 1.2-3.3.9-.9 2.1-1.5 3.2-1.5ZM20.8 16.7c-.5 1.2-.8 1.8-1.5 2.9-1 1.5-2.4 3.3-4.1 3.3-1.5 0-1.9-1-3.9-1s-2.4 1-3.9 1c-1.6.1-3-1.6-4-3.1C.5 15.5.3 10 2.1 7.6 3.4 5.9 5.4 5 7.3 5c1.6 0 2.6 1 3.9 1 1.2 0 2-1 3.9-1 1.5 0 3.1.8 4.3 2.1-3.8 2.1-3.2 7.6 1.4 9.6Z" transform="translate(2 0) scale(.9)"/>',
   // разделы
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
   code: '<path d="M4 6l5 5-5 5M11 18h9"/>',

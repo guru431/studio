@@ -359,6 +359,36 @@ class CodexRunner(Runner):
             pass
         return result
 
+    async def reset_usage(self, root, idempotency_key):
+        """Одно явное списание; повтор с тем же UUID безопасен на стороне Codex."""
+        try:
+            async with asyncio.timeout(24):
+                async with self._usage_lock:
+                    try:
+                        if self._usage_meta is None:
+                            path = await asyncio.to_thread(self.find_codex)
+                            if path is None:
+                                raise Refused("unsupported", "Codex не найден на компьютере")
+                            self._usage_meta = self.rpc_factory(path, Path(root))
+                            await self._usage_meta.connect()
+                        raw = await self._usage_meta.request("account/rateLimitResetCredit/consume",
+                            {"idempotencyKey": idempotency_key})
+                        if not isinstance(raw, dict) or raw.get("outcome") not in (
+                                "reset", "alreadyRedeemed", "nothingToReset", "noCredit"):
+                            raise Refused("error", "Codex ответил непонятно; повторите с тем же сбросом")
+                        return {"outcome": raw["outcome"]}
+                    except BaseException:
+                        if self._usage_meta is not None:
+                            await self._usage_meta.disconnect()
+                            self._usage_meta = None
+                        raise
+        except codex_rpc.RpcError as error:
+            if error.code == -32601:
+                raise Refused("unsupported", "Обновите Codex на компьютере для сброса лимита") from None
+            raise Refused("error", "Не удалось подтвердить сброс Codex; повторите с тем же сбросом") from None
+        except (TimeoutError, OSError):
+            raise Refused("error", "Не удалось подтвердить сброс Codex; повторите с тем же сбросом") from None
+
     async def _metadata(self, project, method, params):
         async with self._meta_lock:
             try:

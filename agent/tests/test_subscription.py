@@ -9,6 +9,28 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from studio_agent import codex, codex_rpc, subscription
+from studio_agent.errors import Refused
+
+
+async def test_codex_reset_reuses_rpc_key_and_filters_response(home):
+    rpc = SimpleNamespace(connect=AsyncMock(), disconnect=AsyncMock(),
+        request=AsyncMock(return_value={"outcome": "alreadyRedeemed", "secret": "private"}))
+    runner = codex.CodexRunner(lambda f: None, home=home, find_cli=lambda: home / "codex.exe",
+                              factory=lambda *_: rpc)
+    key = "8ae96ff3-3425-4f4c-8772-b6fd61502868"
+    try:
+        assert await runner.reset_usage(home, key) == {"outcome": "alreadyRedeemed"}
+        rpc.request.assert_awaited_once_with("account/rateLimitResetCredit/consume", {"idempotencyKey": key})
+        rpc.request.side_effect = codex_rpc.RpcError(transport=True)
+        with pytest.raises(Refused, match="error"):
+            await runner.reset_usage(home, key)
+        assert runner._usage_meta is None
+        rpc.request.side_effect = codex_rpc.RpcError(code=-32601)
+        with pytest.raises(Refused, match="unsupported"):
+            await runner.reset_usage(home, key)
+    finally:
+        if runner._usage_meta is not None:
+            await runner._usage_meta.disconnect()
 
 
 def test_codex_limits_and_subscription_statistics_are_independent():

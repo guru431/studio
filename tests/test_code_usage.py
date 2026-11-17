@@ -17,6 +17,44 @@ USAGE = {"engine": "codex", "available": True, "source": "Codex app-server", "ch
          "statistics": {"available": True, "source": "Аккаунт Codex", "summary": {"lifetime_tokens": 123},
                         "daily": [{"date": "2026-10-30", "tokens": 10}]}}
 
+RESET_KEY = "8ae96ff3-3425-4f4c-8772-b6fd61502868"
+
+
+def test_reset_requires_owner_pin_csrf_and_capability(studio):
+    aid, machine, link = prepare(studio, opened=False)
+    link.hello["usage_reset"] = True
+    machine._op_usage_reset = lambda req, events: {"outcome": "reset", "private": "secret"}
+    endpoint = url(aid, "usage/reset")
+    body = {"idempotency_key": RESET_KEY}
+    assert studio.c.post(endpoint, json=body, headers={"x-studio-csrf": "invalid"}).status_code == 403
+    assert studio.c.post(endpoint, json=body).json()["detail"]["code"] == "closed"
+    assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
+    before = len(machine.requests)
+    assert studio.c.post(endpoint, json={"idempotency_key": ""}).status_code == 422
+    link.hello["usage_reset"] = False
+    assert studio.c.post(endpoint, json=body).status_code == 409
+    assert len(machine.requests) == before
+    link.hello["usage_reset"] = True
+    for _ in range(2):
+        response = studio.c.post(endpoint, json=body)
+        assert response.status_code == 200 and response.json() == {"outcome": "reset"}
+        assert machine.requests[-1]["idempotency_key"] == RESET_KEY
+        assert machine.requests[-1]["engine"] == "codex"
+    make_user(studio, "friend")
+    signin(studio, "friend")
+    before = len(machine.requests)
+    assert studio.c.post(endpoint, json=body).status_code == 404
+    assert len(machine.requests) == before
+
+
+@pytest.mark.parametrize("outcome", ["alreadyRedeemed", "nothingToReset", "noCredit", "unexpected"])
+def test_reset_validates_provider_outcomes(studio, outcome):
+    aid, machine, link = prepare(studio)
+    link.hello["usage_reset"] = True
+    machine._op_usage_reset = lambda req, events: {"outcome": outcome}
+    response = studio.c.post(url(aid, "usage/reset"), json={"idempotency_key": RESET_KEY})
+    assert response.status_code == (502 if outcome == "unexpected" else 200)
+
 
 def prepare(studio, *, opened=True):
     aid, machine, link = setup(studio, opened=opened)

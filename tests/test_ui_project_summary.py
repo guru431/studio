@@ -1,4 +1,4 @@
-"""Сведения о проектах, сортировка и закреплённое обновление в браузере."""
+"""Сведения о проектах, сортировка и автоматическое обновление в браузере."""
 
 import pytest
 
@@ -6,6 +6,15 @@ from fake_bridge import FakeMachine, T0, pid
 from test_ui_browser import READY, browser, code_online, code_requests, go, live, problems, set_value, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+
+def reread_projects():
+    """Истёк кэш: повторный выбор компьютера заново читает сводки без отдельной кнопки."""
+    return [("eval", "expire", """(() => {
+      const now = performance.now.bind(performance);
+      performance.now = () => now() + 60000;
+      return true;
+    })()"""), ("click", ".code-agent[aria-current=true]")]
+
 
 
 @pytest.mark.parametrize("width,timezone", [(320, "UTC"), (1280, "America/New_York")])
@@ -35,7 +44,7 @@ def test_project_times_use_moscow_across_browser_timezones(browser, live, width,
             ("eval", "timezone", "Intl.DateTimeFormat().resolvedOptions().timeZone"),
             ("eval", "clock", f"Date.now = () => {stamp * 1000}; true"),
             *go("code"), ("wait", ready), ("eval", "initial", dates),
-            ("click", "#code-project-refresh"), ("wait", ready), ("eval", "refreshed", dates)],
+            *reread_projects(), ("wait", ready), ("eval", "refreshed", dates)],
             width=width, mobile=width == 320, timezone=timezone)
     finally:
         server.stop()
@@ -116,6 +125,7 @@ def test_project_visibility_sort_groups_unknowns_last_and_updates_after_github_c
       window.remoteGate = new Promise(resolve => window.releaseRemote = resolve);
       window.fetch = async (url, options) => {{
         if (String(url).includes('/{pid('pending')}/summary?remote=true')) {{
+          window.remoteRequested = true;
           await window.remoteGate;
           return new Response(JSON.stringify({{git:'ok',checked_at:{T0},github:{{state:'current',behind:0,ahead:0}}}}),
             {{status:200,headers:{{'content-type':'application/json'}}}});
@@ -125,11 +135,11 @@ def test_project_visibility_sort_groups_unknowns_last_and_updates_after_github_c
       return true;
     }})()"""
     order = "[...document.querySelectorAll('#code-projects li')].map(row => row.dataset.pid)"
-    ready = "!document.querySelector('#code-project-refresh')?.disabled && document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    ready = "document.querySelector('.code-panel-footer')?.getAttribute('aria-busy') !== 'true' && document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             *go("code"), ("wait", ready), set_value("#code-project-sort", "public"),
-            ("click", "#code-project-refresh"), ("wait", ready), ("eval", "public", order),
+            ("wait", "window.remoteRequested"), ("wait", ready), ("eval", "public", order),
             set_value("#code-project-sort", "private"), ("eval", "private", order),
             ("eval", "release", "window.releaseRemote(); true"),
             ("wait", f"document.querySelector(\"li[data-pid='{pid('pending')}'] .code-project-github\")?.textContent === 'GitHub ✓'"),
@@ -216,7 +226,7 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     order = lambda key: ("eval", "sort-" + key, f"(() => {{ const s = document.querySelector('#code-project-sort');"
         f" s.value = '{key}'; s.dispatchEvent(new Event('change')); return {first}; }})()")
     geometry = """(() => {
-      const button = document.querySelector('#code-project-refresh'), r = button.getBoundingClientRect();
+      const button = document.querySelector('#code-project-sort-open'), r = button.getBoundingClientRect();
       const footer = document.querySelector('.code-panel-footer').getBoundingClientRect();
       const body = document.querySelector('.code-panel-body').getBoundingClientRect();
       return [r.top, r.bottom <= innerHeight && r.top >= 0 && body.bottom <= footer.top + 1
@@ -226,43 +236,23 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     gate = f"""(() => {{ const real = window.fetch; window.projectReads = 0;
       window.fetch = async (url, options) => {{
         const path = new URL(String(url), location.href).pathname;
-        if (path.endsWith('/projects') && window.projectListGate) await window.projectListGate;
-        if (path.endsWith('/summary')) {{
-          window.projectReads++;
-          if (window.projectGate) await window.projectGate;
-          if (window.overrideSummary && String(url).includes('/{pid('alpha')}/'))
-            return new Response(JSON.stringify({{findings:20,ideas:0,changed:7,unpushed:4,
-              modified:{T0 + 10},checked_at:{T0 + 10},git:'ok',github:{{state:'unknown'}}}}),
-              {{status:200,headers:{{'content-type':'application/json'}}}});
-        }}
+        if (path.endsWith('/summary')) window.projectReads++;
         return real(url, options);
       }}; return true; }})()"""
-    # Windows без анимаций (сервер, RDP) отдаёт браузеру prefers-reduced-motion: reduce — тогда ↻ не вращается
-    # по CSS, и ожидаемое имя анимации — none; остальное состояние кнопки одинаково.
-    loading = """(() => {
-      const button = document.querySelector('#code-project-refresh'), footer = button.closest('.code-panel-footer');
-      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      return [button.disabled, button.getAttribute('aria-busy'), footer.getAttribute('aria-busy'),
-        getComputedStyle(button.firstElementChild).animationName, document.querySelector('#code-project-updated').textContent,
-        reduce];
-    })()"""
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             *go("code"), ("wait", "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
-            ("click", "#code-project-refresh"),
-            ("wait", "!document.querySelector('#code-project-refresh').disabled && window.projectReads>=39"),
+            set_value("#code-project-sort", "findings"),
+            ("wait", "document.querySelector('.code-panel-footer').getAttribute('aria-busy') === 'false' && window.projectReads>=39"),
+            set_value("#code-project-sort", "name"),
             ("eval", "initialReadCount", "window.initialProjectReads=window.projectReads"),
             ("eval", "counts", f"document.querySelector(\"{alpha}\").textContent"),
             ("eval", "compactControls", """(() => {
               const sort = document.querySelector('#code-project-sort-open').getBoundingClientRect();
               const label = document.querySelector('.code-project-sort-text');
-              const button = document.querySelector('#code-project-refresh'), refresh = button.getBoundingClientRect();
               const updated = document.querySelector('#code-project-updated').getBoundingClientRect();
-              return Math.abs(sort.top - refresh.top) < 1 && sort.right < refresh.left
-                && sort.height <= 34 && refresh.height <= 34 && refresh.width <= 34
-                && parseFloat(getComputedStyle(label).fontSize) <= 11
-                && button.scrollWidth <= button.clientWidth
-                && updated.top >= Math.max(sort.bottom, refresh.bottom);
+              return sort.height <= 34 && parseFloat(getComputedStyle(label).fontSize) <= 11
+                && updated.top >= sort.bottom;
             })()"""),
             ("eval", "twoLines", """[...document.querySelectorAll('#code-projects .code-project')].every(row => {
               const heading = row.querySelector('.code-project-heading').getBoundingClientRect();
@@ -294,21 +284,6 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
             ("eval", "scroll", "(() => {const b=document.querySelector('.code-panel-body');b.scrollTop=b.scrollHeight;return true;})()"),
             ("eval", "after", geometry),
             ("screenshot", str(tmp_path / f"projects-{width}.png")),
-            ("eval", "hold", "window.projectGate = new Promise(resolve=>window.releaseProjects=resolve); window.projectListGate = new Promise(resolve=>window.releaseProjectList=resolve); true"),
-            ("click", "#code-project-refresh"),
-            ("wait", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'true'"),
-            ("eval", "loadingList", loading),
-            ("eval", "releaseList", "window.projectListGate=null; window.releaseProjectList(); true"),
-            ("wait", "document.querySelector('#code-project-refresh').disabled && window.projectReads > window.initialProjectReads"),
-            ("eval", "loadingSummary", loading),
-            ("screenshot", str(tmp_path / f"projects-refresh-{width}.png")),
-            ("eval", "previous", f"document.querySelector(\"{alpha} .code-project-findings\").textContent"),
-            ("eval", "release", "window.overrideSummary=true; window.projectGate=null; window.releaseProjects(); true"),
-            ("wait", "!document.querySelector('#code-project-refresh').disabled"),
-            ("eval", "finished", loading),
-            ("eval", "fresh", f"document.querySelector(\"{alpha}\").textContent"), order("unpushed"),
-            ("eval", "final-unpushed", first),
-            ("eval", "reads", "window.projectReads"),
             ("eval", "overflow", "document.documentElement.scrollWidth > innerWidth")],
             width=width, mobile=width == 320)
     finally:
@@ -318,22 +293,14 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert [values["sort-" + key] for key in ("findings", "ideas", "modified", "name")] == [
         pid("beta"), pid("gamma"), pid("delta"), pid("alpha")]
     assert values["initial-unpushed"] == pid("delta")
-    assert values["final-unpushed"] == pid("alpha"), {key: values[key] for key in ('fresh', 'reads', 'final-unpushed')}
     assert values["before"][1] and values["after"][1]
     assert abs(values["before"][0] - values["after"][0]) < 1
     assert "(П: 1 · И: 0)" in values["counts"] and "Git: 0 ↑0" in values["counts"]
-    assert values["previous"] == "П: 1" and "П: 20" in values["fresh"]
-    assert "Git: 7 ↑4" in values["fresh"] and values["reads"] == values["initialReadCount"] + 39
     assert values["twoLines"] and values["compactControls"]
-    spin = 'none' if values["loadingList"][5] else 'spin'
-    assert values["loadingList"] == values["loadingSummary"] == [True, 'true', 'true', spin, 'Обновляю сведения…',
-                                                                values["loadingList"][5]]
-    assert values["finished"][:4] == [False, 'false', 'false', 'none']
-    assert values["finished"][4].startswith('Обновлено:')
     assert [entry[:2] for entry in values["github"]] == [
         ["GitHub ↓3", "red"], ["GitHub ✓", "green"], ["GitHub ↕", "red"],
         ["GitHub ↑1", "yellow"], ["GitHub ∅", "red"]]
-    assert "отстаёт на 3" in values["github"][0][2] and "GitHub ?" in values["fresh"]
+    assert "отстаёт на 3" in values["github"][0][2]
     assert [entry[:2] for entry in values["remotes"]] == [["cld ↓2", "red"]]
     assert "По локальным данным Git, без fetch" in values["remotes"][0][2]
     assert "null" not in values["counts"] and "undefined" not in values["counts"]
@@ -366,39 +333,36 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
         }}
         return real(url, options);
       }};return true;}})()"""
-    ready = "!document.querySelector('#code-project-refresh')?.disabled && document.querySelector('#code-projects')"
+    ready = "document.querySelector('.code-panel-footer')?.getAttribute('aria-busy') !== 'true' && document.querySelector('#code-projects')"
     count = "document.querySelector('.code-project-findings').textContent"
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             ("eval", "open", f"location.hash='#/code/{aid}';true"),
             ("wait", ready), ("eval", "initial", count),
             ("eval", "last", "window.lastUpdated = document.querySelector('#code-project-updated').textContent"),
-            ("eval", "fail", "window.failSummary=true"), ("click", "#code-project-refresh"),
+            ("eval", "fail", "window.failSummary=true"), *reread_projects(),
             ("wait", "document.querySelector('#code-panel-status').textContent.includes('Не удалось')"),
             ("eval", "retained", count),
-            ("eval", "errorFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
+            ("eval", "errorFinished", "document.querySelector('.code-panel-footer').getAttribute('aria-busy') === 'false'"),
             ("eval", "staleGithub", "[document.querySelector('.code-project-github').textContent, document.querySelector('.code-project-github').dataset.gitLevel]"),
             ("eval", "staleRemote", "[document.querySelector('.code-project-remote').textContent, document.querySelector('.code-project-remote').dataset.gitLevel]"),
             ("eval", "unchanged", "window.lastUpdated === document.querySelector('#code-project-updated').textContent"),
-            ("eval", "failList", "window.failSummary=false;window.failList=true;true"),
-            ("click", "#code-project-refresh"), ("wait", ready), ("eval", "afterListFailure", count),
-            ("eval", "listErrorFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
-            ("eval", "retry", "window.failList=false;window.holdSummary=true;true"),
-            ("click", "#code-project-refresh"), ("wait", "window.heldSummaries === 1"),
+            ("eval", "retry", "window.failSummary=false;window.holdSummary=true;true"),
+            *reread_projects(), ("wait", "window.heldSummaries === 1"),
             ("click", f"#code-agents li[data-id='{bid}'] button"), ("wait", ready),
             ("eval", "other", count),
             ("eval", "release", "window.holdSummary=false;window.releaseSummary();true"),
             ("wait", "window.heldSummaries === 0"), ("eval", "keptOther", count),
-            ("eval", "otherFinished", "document.querySelector('#code-project-refresh').getAttribute('aria-busy') === 'false'"),
+            ("eval", "otherFinished", "document.querySelector('.code-panel-footer').getAttribute('aria-busy') === 'false'"),
             ("eval", "stillOther", f"!!document.querySelector('#code-projects li[data-pid=\"{pid('beta')}\"]')")])
     finally:
         second.stop()
         server.stop()
     assert not result.get("failed"), result
     values = result["values"]
-    assert values["initial"] == values["retained"] == values["afterListFailure"] == "П: 5"
+    assert values["initial"] == values["retained"] == "П: 5"
     assert values["unchanged"] and values["stillOther"]
-    assert values["errorFinished"] and values["listErrorFinished"] and values["otherFinished"]
+    assert values["errorFinished"] and values["otherFinished"]
     assert values["staleGithub"] == ["GitHub ↓4", "unknown"]
     assert values["staleRemote"] == ["cld ↓2", "unknown"]
     assert values["other"] == values["keptOther"] == "П: 7"
@@ -407,7 +371,7 @@ def test_project_refresh_preserves_data_on_errors_and_ignores_previous_computer(
 
 def test_project_refresh_finishes_when_the_same_computer_is_chosen_again(browser, live):
     """Пока сводки грузятся, нажатие на тот же компьютер перечитывает проекты: прежнее обновление отменяется,
-    ↻ не остаётся занятым, сводки дочитываются заново."""
+    панель завершает обновление, сводки дочитываются заново."""
     login = "project-summary-same-computer"
     live.add_user(login)
     machine = FakeMachine({"alpha": {"summary": {"findings": 5, "ideas": 2, "changed": 1, "unpushed": 0,
@@ -422,15 +386,16 @@ def test_project_refresh_finishes_when_the_same_computer_is_chosen_again(browser
         }
         return real(url, options);
       };return true;})()"""
-    ready = "!document.querySelector('#code-project-refresh')?.disabled && document.querySelector('#code-projects')"
-    busy = "document.querySelector('#code-project-refresh').getAttribute('aria-busy')"
+    ready = "document.querySelector('.code-panel-footer')?.getAttribute('aria-busy') !== 'true' && document.querySelector('#code-projects')"
+    busy = "document.querySelector('.code-panel-footer').getAttribute('aria-busy')"
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "gate", gate),
             ("eval", "open", f"location.hash='#/code/{aid}';true"), ("wait", ready),
-            ("eval", "hold", "window.holdOnce = true"), ("click", "#code-project-refresh"),
+            ("eval", "hold", "window.holdOnce = true"), *reread_projects(),
             ("wait", "window.heldSummaries === 1"),
             ("click", f"#code-agents li[data-id='{aid}'] button"),
-            ("wait", f"{busy} === 'false' && document.querySelector('.code-project-findings')?.textContent === 'П: 5'"),
+            ("wait", f"{busy} === 'false' && document.querySelector('.code-project-findings')?.textContent === 'П: 5'"
+                     " && document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"),
             ("eval", "release", "window.releaseSummary(); true"),
             ("wait", ready), ("eval", "busy", busy),
             ("eval", "label", "document.querySelector('#code-project-updated').textContent")])

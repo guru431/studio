@@ -78,6 +78,7 @@ disconnect до освобождения хода. Codex получает config
 | 0.24.0 | `hello.project_create` — `project_roots`, `project_create`, создание пустой папки в выбранном корне | §19 |
 | 0.25.0 | `hello.opencode_usage` — окна Go; `usage.model` выбирает провайдера текущей модели | §9 |
 | 0.26.0 | `hello.opencode_features` — режим основного агента, дополнительные каталоги, ветки и история подагентов OpenCode | §20 |
+| 0.31.0 | `hello.usage_reset` — подтверждённый сброс лимитов Codex с ключом идемпотентности | §9 |
 
 ## OpenCode 2.x (0.26.0)
 

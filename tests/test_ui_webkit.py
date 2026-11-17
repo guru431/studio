@@ -514,7 +514,7 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     page.studio_machine.projects['beta']['summary'] = {"git": "ok", "checked_at": T0, "github": None}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
-    button = page.locator('#code-project-refresh')
+    button = page.locator('#code-project-sort-open')
     gh = page.locator('.code-project-github')
     pw.expect(gh).to_have_text('GitHub ↓12')
     assert gh.evaluate("""e => {const r=e.getBoundingClientRect(), row=e.parentElement.getBoundingClientRect();
@@ -533,18 +533,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
             && e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))];} """)
 
     before = position()
-    controls = page.locator('.code-panel-footer').evaluate("""footer => {
-      const sort=footer.querySelector('#code-project-sort-open').getBoundingClientRect();
-      const button=footer.querySelector('#code-project-refresh'), refresh=button.getBoundingClientRect();
-      const updated=footer.querySelector('p').getBoundingClientRect();
-      return {sameLine:Math.abs(sort.top-refresh.top)<1 && sort.right<refresh.left,
-        compact:sort.height<=34 && refresh.height<=34 && refresh.width<=34 && button.scrollWidth<=button.clientWidth,
-        smallLabel:parseFloat(getComputedStyle(footer.querySelector('.code-project-sort-text')).fontSize)<=11,
-        dateBelow:updated.top>=Math.max(sort.bottom, refresh.bottom),
-        heights:[sort.height,refresh.height], widths:[sort.width,refresh.width],
-        tops:[sort.top,refresh.top,updated.top]};
-    }""")
-    assert all(controls[key] for key in ('sameLine', 'compact', 'dateBelow', 'smallLabel')), controls
+    assert page.locator('#code-project-refresh').count() == 0
+    assert page.locator('#refresh-app').is_visible()
     page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
     after = position()
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
@@ -558,29 +548,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     page.locator('#code-project-sort-options input[value=findings]').check()
     pw.expect(page.locator('.code-project-sort-text')).to_have_text('По количеству проблем')
     pw.expect(button).to_be_enabled()
-    page.evaluate("""() => {
-      const real = window.fetch;
-      window.refreshGate = new Promise(resolve => window.releaseRefresh = resolve);
-      window.fetch = async (...args) => {
-        if (String(args[0]).endsWith('/summary') && window.refreshGate) await window.refreshGate;
-        return real(...args);
-      };
-    }""")
-    button.tap()
-    pw.expect(button).to_have_attribute('aria-busy', 'true')
-    pw.expect(page.locator('#code-project-updated')).to_have_text('Обновляю сведения…')
-    assert button.locator('span').evaluate("e => getComputedStyle(e).animationName") == 'spin'
-    page.emulate_media(reduced_motion='reduce')
-    assert button.locator('span').evaluate("e => getComputedStyle(e).animationName") == 'none'
-    pw.expect(page.locator('#code-project-updated')).to_have_text('Обновляю сведения…')
-    page.screenshot(path=str(tmp_path / f'refresh-webkit-{page.viewport_size["width"]}.png'))
-    page.evaluate('() => { window.refreshGate = null; window.releaseRefresh(); }')
-    pw.expect(button).to_be_enabled()
-    pw.expect(button).to_have_attribute('aria-busy', 'false')
-    assert button.evaluate('e => e.scrollWidth <= e.clientWidth')
-    pw.expect(page.locator('#code-project-updated')).to_contain_text('Обновлено:')
-    page.screenshot(path=str(tmp_path / f'projects-webkit-{page.viewport_size["width"]}.png'))
-    fits(page)
+    pw.expect(page.locator('.code-panel-footer')).to_have_attribute('aria-busy', 'false')
+
 
 
 @pytest.mark.parametrize("iphone", [(393, 852)], indirect=True)

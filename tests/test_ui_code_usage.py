@@ -7,8 +7,94 @@ from fake_bridge import pid
 from test_codex import CATALOG
 from test_ui_browser import CODE_CHAT_A, code_free_machine, code_online, code_session, live
 from test_ui_chat_focus import focus_browser, pw
+from test_ui_project_access import context, signed
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_codex_weekly_reset_confirmation_and_lost_response_retry(focus_browser, live, width, tmp_path):
+    login = f"reset-action-{focus_browser.browser_type.name}-{width}"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: {**code_session("Сброс Codex"), "engine": "codex"}})
+    machine.codex = CATALOG
+    machine.subscription_usage = machine.usage_reset = True
+    machine.usage_data = {"engine": "codex", "available": True, "source": "Codex app-server",
+        "checked_at": 1800000000, "cache_ttl": 60, "windows": [{"id": "seven_day", "label": "Неделя",
+            "available": True, "used_percent": 100, "remaining_percent": 0, "window_minutes": 10080}],
+        "statistics": {"available": True, "source": "Аккаунт Codex", "summary": {"available_resets": 2}, "daily": []}}
+    redeemed = set()
+
+    def consume(req, events):
+        key = req["idempotency_key"]
+        if key in redeemed:
+            return {"outcome": "alreadyRedeemed"}
+        redeemed.add(key)
+        machine.usage_data["statistics"]["summary"]["available_resets"] -= 1
+        machine.usage_data["windows"][0].update(used_percent=0, remaining_percent=100)
+        return {"outcome": "reset"}
+
+    machine._op_usage_reset = consume
+    aid, channel = code_online(live, login, machine)
+    try:
+        with context(focus_browser, live, signed(live, login), width) as ctx:
+            page = ctx.new_page()
+            page.set_default_timeout(10000)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+            page.locator("#code-usage").click()
+            reset = page.locator("#code-usage-reset")
+            pw.expect(reset).to_be_visible()
+            assert page.locator("#code-usage-dialog").evaluate("node => node.scrollWidth <= node.clientWidth")
+            page.screenshot(path=str(tmp_path / f"weekly-reset-action-{width}.png"))
+            reset.click()
+            confirmation = page.locator("#code-usage-reset-confirm")
+            confirmation.get_by_role("button", name="Отмена", exact=True).click()
+            assert not redeemed
+            reset.click()
+
+            page.evaluate("""() => {
+              const fetch = window.fetch;
+              let lost = false;
+              window.fetch = async (...args) => {
+                const response = await fetch(...args);
+                if (!lost && String(args[0]).endsWith('/usage/reset')) {
+                  lost = true;
+                  if (!response.ok) throw new Error('test reset failed');
+                  throw new TypeError('test lost response');
+                }
+                return response;
+              };
+            }""")
+            confirmation.get_by_role("button", name="Использовать сброс", exact=True).click()
+            pw.expect(page.locator("#code-usage-reset-result")).to_contain_text("Повтор использует тот же сброс")
+            pw.expect(reset).to_have_text("Повторить сброс")
+            pw.expect(page.locator("#code-usage-remaining")).to_have_text("100%")
+            page.reload()
+            page.locator("#code-usage").click()
+            pw.expect(reset).to_have_text("Повторить сброс")
+            reset.click()
+            confirmation.get_by_role("button", name="Использовать сброс", exact=True).click()
+            pw.expect(page.locator("#code-usage-reset-result")).to_have_text("Этот сброс уже применён.")
+            pw.expect(reset).to_have_text("Использовать недельный сброс")
+            requests = [req for req in machine.requests if req.get("op") == "usage_reset"]
+            assert len(requests) == 2 and len(redeemed) == 1
+            assert requests[0]["idempotency_key"] == requests[1]["idempotency_key"]
+            for outcome, message in (("nothingToReset", "Сейчас нет лимитов"), ("noCredit", "Доступных сбросов больше нет")):
+                machine._op_usage_reset = lambda req, events: {"outcome": outcome}
+                reset.click()
+                confirmation.get_by_role("button", name="Использовать сброс", exact=True).click()
+                pw.expect(page.locator("#code-usage-reset-result")).to_contain_text(message)
+                pw.expect(reset).to_be_enabled()
+            machine.usage_data["statistics"]["summary"]["available_resets"] = 0
+            page.locator("#code-usage-refresh").click()
+            pw.expect(reset).to_be_hidden()
+            page.screenshot(path=str(tmp_path / f"weekly-reset-{width}.png"))
+            assert page.locator("#code-usage-dialog").evaluate("node => node.scrollWidth <= node.clientWidth")
+            assert not errors
+    finally:
+        channel.stop()
 
 
 def test_opencode_weekly_limit_follows_selected_provider(focus_browser, live):

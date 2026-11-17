@@ -130,7 +130,7 @@ def test_refresh_reloads_all_projects_and_the_open_chat(browser, live, width, tm
     machine.project_summary = True
     aid, server = code_online(live, login, machine)
     address = f"#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
-    refreshed = ("document.querySelector('#code-project-refresh')?.getAttribute('aria-busy') === 'false'"
+    refreshed = ("document.querySelector('.code-panel-footer')?.getAttribute('aria-busy') === 'false'"
                  " && [...document.querySelectorAll('.code-project-findings')].every(n => n.textContent.includes('9'))"
                  " && document.querySelectorAll('.code-project-findings').length === 26")
     geometry = """(() => {
