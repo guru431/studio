@@ -17,10 +17,12 @@ def _pins() -> dict:
     pins = {}
     for line in (AGENT / "constraints.txt").read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#"):
-            assert re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9.+!]+", line), line
-            name, version = line.split("==")
-            assert canonicalize_name(name) not in pins, line
-            pins[canonicalize_name(name)] = version
+            req = Requirement(line)
+            assert re.fullmatch(r"==[A-Za-z0-9.+!]+", str(req.specifier)), line
+            if req.marker is not None and not req.marker.evaluate():
+                continue
+            assert canonicalize_name(req.name) not in pins, line
+            pins[canonicalize_name(req.name)] = str(req.specifier)[2:]
     return pins
 
 
@@ -29,6 +31,7 @@ def test_constraints_pin_every_dependency_of_the_bridge():
     pins = _pins()
     roots = [Requirement(line) for line in (AGENT / "requirements.txt").read_text(encoding="utf-8").splitlines()
              if line and not line.startswith("#")]
+    roots = [req for req in roots if req.marker is None or req.marker.evaluate()]
     for req in roots:
         assert pins.get(canonicalize_name(req.name)) == str(req.specifier)[2:], req
     todo, seen, missing = list(roots), set(), set()

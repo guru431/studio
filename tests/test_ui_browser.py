@@ -7303,7 +7303,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
     v = r["values"]
     assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
     assert v["nested"] and v["other"]
-    assert v["notice"] == "Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows."
+    assert v["notice"] == "Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -7558,15 +7558,17 @@ def test_code_empty_offers_agent_download(browser, live):
           return [a.tagName, a.getAttribute('href'), a.hasAttribute('download'), a.textContent,
             document.querySelectorAll('#agent-download').length]; })()"""),
         ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p')].map((p) => p.textContent)"),
+        ("eval", "macos", "document.querySelector('#agent-download-macos').getAttribute('href')"),
         ("eval", "badge", "!!document.querySelector('#code-empty .badge svg')"),
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
-    assert v["texts"] == ["Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows.",
-                          "Установщик EXE, нужны Python 3.11+ и Claude Code, Codex или OpenCode",
-                          "Запустите studio-agent-setup.exe. В окне моста войдите логином и паролем студии —"
-                          " компьютер появится в разделе «Агенты»."]
+    assert v["macos"] == '/api/agent/download?platform=macos'
+    assert v["texts"] == ["Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS.",
+                          "Нужны Python 3.11+ и Claude Code, Codex или OpenCode; для macOS — Python с Tk",
+                          "Windows: запустите studio-agent-setup.exe. macOS: распакуйте ZIP и запустите install.command."
+                          " В окне моста войдите логином и паролем студии."]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
 

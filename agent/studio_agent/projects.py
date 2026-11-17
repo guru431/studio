@@ -97,7 +97,7 @@ def catalog(config) -> list[tuple[dict, Path]]:
             if entry.name.startswith("."):
                 continue
             try:
-                attrs = entry.stat(follow_symlinks=False).st_file_attributes
+                attrs = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
                 if attrs & (HIDDEN | stat.FILE_ATTRIBUTE_REPARSE_POINT) or not entry.is_dir(follow_symlinks=False):
                     continue
                 path = Path(os.path.realpath(entry.path))
@@ -186,7 +186,7 @@ class Catalog:
                     forbidden = HIDDEN | stat.FILE_ATTRIBUTE_REPARSE_POINT
                     # `path` — настоящий путь (`catalog`), корень сверяется тоже настоящим: корень-ссылка, `subst`
                     # и подключённый сетевой диск иначе давали «нет такого проекта» видимому проекту.
-                    if (not stat.S_ISDIR(attrs.st_mode) or attrs.st_file_attributes & forbidden
+                    if (not stat.S_ISDIR(attrs.st_mode) or getattr(attrs, "st_file_attributes", 0) & forbidden
                             or not any(_key(path.parent) == _key(root) and inside(os.path.realpath(root), path)
                                        for root in roots(config))):
                         break

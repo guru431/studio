@@ -29,3 +29,14 @@ def home(tmp_path, monkeypatch):
     """Каталог моста во временной папке теста."""
     monkeypatch.setenv("STUDIO_AGENT_HOME", str(tmp_path))
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def macos_test_secrets(monkeypatch, request):
+    """Быстрые тесты не открывают Keychain и не создают в нём сотни временных записей."""
+    if (sys.platform == 'darwin' and request.node.get_closest_marker('integration') is None
+            and request.module.__name__ != 'test_macos'):
+        from cryptography.fernet import Fernet
+        from studio_agent import macos_keychain
+        key = Fernet.generate_key()
+        monkeypatch.setattr(macos_keychain, '_key', lambda account: key)

@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import VERSION, chrome, jobs, limits
+from . import VERSION, chrome, host, jobs, limits
 
 RPC_SEC = 25
 # Строка stdout app-server: ответ `thread/read` с `includeTurns` — вся история одной строкой, картинки —
@@ -23,6 +23,13 @@ _TAIL_ID = re.compile(rb',\s*"id"\s*:\s*(-?\d+)\s*\}\s*$')
 
 def find_cli() -> Path | None:
     """Настоящий exe из PATH, npm или расширения VS Code; cmd/ps1 не запускаются через shell."""
+    if host.MACOS:
+        if path := host.find_tool("codex"):
+            return path
+        platform = "darwin-aarch64" if host.vscode_platform() == "darwin-arm64" else "darwin-x86_64"
+        found = sorted((Path.home() / ".vscode/extensions").glob(f"openai.chatgpt-*/bin/{platform}/codex"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        return found[0] if found else None
     exe = shutil.which("codex.exe")
     if exe:
         return Path(exe)
@@ -39,7 +46,7 @@ def find_cli() -> Path | None:
 
 def version(path: Path) -> str:
     result = subprocess.run([str(path), "--version"], capture_output=True, stdin=subprocess.DEVNULL,
-                            timeout=RPC_SEC, creationflags=subprocess.CREATE_NO_WINDOW)
+                            timeout=RPC_SEC, creationflags=host.NO_WINDOW)
     return result.stdout.decode("utf-8", "replace").strip()[:64] if result.returncode == 0 else "Codex"
 
 
@@ -115,7 +122,7 @@ class Client:
         self.process = await self.spawn(str(self.path), "app-server", "--listen", "stdio://", *overrides, cwd=str(self.cwd),
                                         env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                         stderr=asyncio.subprocess.DEVNULL, limit=limits.FRAME_MAX,
-                                        creationflags=subprocess.CREATE_NO_WINDOW)
+                                        creationflags=host.NO_WINDOW, **host.process_group())
         # MCP-серверы и шеллы CLI — в его job: disconnect не оставит их сиротами.
         self.job = jobs.attach(getattr(self.process, "pid", None))
         self.reader = asyncio.create_task(self._read())

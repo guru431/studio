@@ -89,7 +89,7 @@ def test_agents_belong_to_their_user(studio):
     signin(studio, "owner")
     items = studio.c.get("/api/agents").json()["items"]
     assert items == [{"id": agent_id, "name": "Рабочий ПК", "online": False, "has_pin": False, "cc_version": None,
-                      "agent_version": None, "agent_update": False, "agent_update_cancel": False, "latest_version": None,
+                      "agent_version": None, "platform": None, "agent_update": False, "agent_update_cancel": False, "latest_version": None,
                       "projects_root": None, "created": items[0]["created"], "last_seen": None,
                           "models": [], "efforts": [], "images": False, "chat_state": False, "defaults": {}, "chat_control": False,
                               "attachments": False, "project_activity": False, "subscription_usage": False, "opencode_usage": False, "opencode_features": False, "computer_info": False, "software_versions": False, "desktop": False,
@@ -169,6 +169,20 @@ def test_download_without_installer_is_404(studio, monkeypatch, tmp_path):
     r = studio.c.get("/api/agent/download")
     assert r.status_code == 404 and r.json()["detail"] == {
         "code": "no_agent", "message": "установщика моста нет на сервере — его кладёт выкладка студии"}
+
+
+def test_macos_download_is_authenticated_and_uses_the_bridge_zip(studio, monkeypatch, tmp_path):
+    package = tmp_path / 'studio-agent.zip'
+    package.write_bytes(b'PK-macos-package')
+    monkeypatch.setattr(agents, 'AGENT_ZIP', package)
+    assert studio.c.get('/api/agent/download?platform=macos').status_code == 401
+    make_user(studio, 'owner')
+    signin(studio, 'owner')
+    response = studio.c.get('/api/agent/download?platform=macos')
+    assert response.status_code == 200 and response.content == package.read_bytes()
+    assert response.headers['content-type'] == 'application/zip'
+    assert 'studio-agent-macos.zip' in response.headers['content-disposition']
+    assert studio.c.get('/api/agent/download?platform=unknown').status_code == 400
 
 
 def test_download_needs_a_session(studio, monkeypatch, tmp_path):

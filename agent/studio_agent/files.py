@@ -11,7 +11,7 @@ import stat
 import sys
 from pathlib import Path
 
-from . import limits, store
+from . import host, limits, store
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def _mutation_path(project: Path, path: str) -> Path:
             if index != len(parts) - 1:
                 raise Refused("not_found", NO_DIR) from None
             break
-        if stat.S_ISLNK(info.st_mode) or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
             raise Refused("outside", "операции через ссылки и junction запрещены")
     # Повторная проверка настоящего абсолютного пути непосредственно перед изменением.
     if not inside(str(root), os.path.realpath(target)):
@@ -153,10 +153,11 @@ def operate(project: Path, operation: str, path: str, destination: str | None = 
             old, new = os.path.normcase(str(source)), os.path.normcase(str(target))
             if source.is_dir() and new.startswith(old + os.sep):
                 raise Refused("invalid", "нельзя переместить папку внутрь самой себя")
-            if target.exists() and (old != new or str(source) == str(target)):
+            case_only = (host.MACOS and str(source) != str(target) and old.casefold() == new.casefold()
+                         and target.exists() and os.path.samefile(source, target))
+            if target.exists() and not case_only and (old != new or str(source) == str(target)):
                 raise Refused("exists", "файл или папка с таким именем уже существует")
-            # На Windows rename атомарно отказывает, если назначение появилось после проверки.
-            source.rename(target)
+            host.rename(source, target)
         else:
             _delete(project, source)
     except FileExistsError:
@@ -253,9 +254,13 @@ def save_text(project: Path, path: str, text: str, ver: str) -> dict:
         raise Refused("invalid") from None
     if len(new) > limits.TEXT_MAX:
         raise Refused("too_large", TOO_BIG_TEXT)
-    attrs = os.stat(p).st_file_attributes
-    if attrs & stat.FILE_ATTRIBUTE_READONLY:
+    before = os.stat(p)
+    attrs = getattr(before, "st_file_attributes", 0)
+    if attrs & stat.FILE_ATTRIBUTE_READONLY or os.name != "nt" and not before.st_mode & 0o222:
         raise Refused("read_only", READ_ONLY)
+    if os.name != "nt":
+        store.write_atomic(p, new, mode=stat.S_IMODE(before.st_mode))
+        return {"version": version(new)}
     store.write_atomic(p, new)
     keep = attrs & KEEP_ATTRIBUTES
     if not ctypes.windll.kernel32.SetFileAttributesW(str(p), keep or stat.FILE_ATTRIBUTE_NORMAL):

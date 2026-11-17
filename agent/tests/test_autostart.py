@@ -1,9 +1,10 @@
 """Автозапуск (настоящий реестр HKCU, тестовый ключ) и install.ps1 (парсер PowerShell) — `integration`."""
 
 import subprocess
-import winreg
 
 import pytest
+
+winreg = pytest.importorskip('winreg')
 
 from studio_agent import autostart
 

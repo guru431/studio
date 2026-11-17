@@ -10,10 +10,11 @@
 
 import logging
 import os
+import socket
 import threading
 from urllib.parse import urlsplit
 
-from . import VERSION, computer_info, enroll, setup, theme
+from . import VERSION, computer_info, enroll, host, setup, theme
 
 log = logging.getLogger(__name__)
 
@@ -488,7 +489,7 @@ class MainWindow:
         url = tk.StringVar(value=cfg.url)
         login, password = tk.StringVar(), tk.StringVar()
         email_code = tk.StringVar()
-        name = tk.StringVar(value=cfg.name or os.environ.get("COMPUTERNAME", ""))
+        name = tk.StringVar(value=cfg.name or socket.gethostname())
         folders = list(cfg.projects_roots)
         pin, pin2 = tk.StringVar(), tk.StringVar()
         auto = tk.BooleanVar(value=cfg.autostart)
@@ -528,7 +529,7 @@ class MainWindow:
                 row=0, column=column * 2 + 1, sticky="ew", padx=(0, gap))
             pin_box.columnconfigure(column * 2 + 1, weight=1)
         r += 1
-        ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, style="Card.TCheckbutton").grid(
+        ttk.Checkbutton(box, text="Запускать при входе в macOS" if host.MACOS else "Запускать при входе в Windows", variable=auto, style="Card.TCheckbutton").grid(
             row=r, column=0, columnspan=2, sticky="w")
         foot = ttk.Frame(self.body)
         foot.grid(row=row + 1, column=0, sticky="ew")
@@ -732,11 +733,12 @@ class MainWindow:
 
             self.work(lambda: self.ctrl.set_autostart(on), done)
 
-        box_auto = ttk.Checkbutton(box, text="Запускать при входе в Windows", variable=auto, command=toggle,
+        box_auto = ttk.Checkbutton(box, text="Запускать при входе в macOS" if host.MACOS else "Запускать при входе в Windows", variable=auto, command=toggle,
                                    style="Card.TCheckbutton")
         box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=self.px(6))
         self.buttons.append(box_auto)
-        self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
+        if not host.MACOS:
+            self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
         self.pin_line.grid(row=7, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)

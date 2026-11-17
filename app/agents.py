@@ -114,12 +114,17 @@ async def unenroll(request: Request):
 
 @router.get("/api/agent/download")
 async def download(request: Request):
-    """Один установочный EXE для Windows — только вошедшим."""
-    if not AGENT_SETUP.is_file():
+    """Windows EXE или общий ZIP с установщиком macOS — только вошедшим."""
+    platform = request.query_params.get("platform", "windows")
+    if platform not in ("windows", "macos"):
+        raise HTTPException(400, {"code": "invalid", "message": "неизвестная платформа"})
+    package = AGENT_ZIP if platform == "macos" else AGENT_SETUP
+    if not package.is_file():
         raise HTTPException(404, {"code": "no_agent",
                                   "message": "установщика моста нет на сервере — его кладёт выкладка студии"})
     log.info("пользователь %d: скачан мост", request.state.user.id)
-    return FileResponse(AGENT_SETUP, media_type="application/octet-stream", filename="studio-agent-setup.exe",
+    return FileResponse(package, media_type="application/zip" if platform == "macos" else "application/octet-stream",
+                        filename="studio-agent-macos.zip" if platform == "macos" else "studio-agent-setup.exe",
                         headers={"Cache-Control": "private, no-cache"})
 
 
@@ -136,7 +141,7 @@ async def list_agents(request: Request):
         link = bridge.LINKS.get(r["id"])
         hello = link.hello if link is not None else {}
         items.append({"id": r["id"], "name": r["name"], "online": link is not None, "has_pin": bool(r["has_pin"]),
-                      "agent_version": hello.get("agent_version"), "agent_update": hello.get("agent_update", False),
+                      "agent_version": hello.get("agent_version"), "platform": hello.get("platform"), "agent_update": hello.get("agent_update", False),
                       "agent_update_cancel": hello.get("agent_update_cancel", False),
                       "latest_version": release["version"] if release else None,
                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],

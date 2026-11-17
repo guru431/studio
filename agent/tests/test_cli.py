@@ -1,14 +1,14 @@
 import subprocess
 
-from studio_agent import VERSION, cli
+from studio_agent import VERSION, cli, host
 
 
 def _ext(root, version, binary=True):
-    d = root / f"anthropic.claude-code-{version}-win32-x64" / "resources" / "native-binary"
+    d = root / f"anthropic.claude-code-{version}-{host.vscode_platform()}" / "resources" / "native-binary"
     d.mkdir(parents=True)
     if binary:
-        (d / "claude.exe").write_bytes(b"")
-    return d / "claude.exe"
+        (d / ("claude" if host.MACOS else "claude.exe")).write_bytes(b"")
+    return d / ("claude" if host.MACOS else "claude.exe")
 
 
 def test_find_cli_takes_the_newest_version_with_the_binary(tmp_path):
@@ -34,7 +34,7 @@ def test_cli_version_is_the_first_word(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.subprocess, "run", run)
     assert cli.cli_version(tmp_path / "claude.exe") == "2.1.312"
     assert seen["args"] == [str(tmp_path / "claude.exe"), "--version"]
-    assert seen["timeout"] == 30 and seen["creationflags"] == subprocess.CREATE_NO_WINDOW
+    assert seen["timeout"] == 30 and seen["creationflags"] == host.NO_WINDOW
 
 
 def test_cli_version_falls_back_to_the_sdk(monkeypatch, tmp_path):

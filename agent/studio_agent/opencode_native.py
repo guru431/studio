@@ -31,7 +31,7 @@ class Client:
                 cwd=str(self.project), env={**os.environ, 'OPENCODE_PASSWORD': self.password,
                                           'OPENCODE_SERVER_PASSWORD': self.password},
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW)
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             self.job = jobs.attach(self.process.pid)
             async with asyncio.timeout(15):
                 for _ in range(32):
