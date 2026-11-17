@@ -1,5 +1,9 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "H3: 5 с, нативный размер, 24 кадра/с": "H3: 5 seconds, native resolution, 24 fps",
+  "H3: нативный размер (768p)": "H3: native resolution (768p)",
+  "H3: используйте 5 секунд; короткие ролики давали артефакты": "H3: use 5 seconds; shorter clips produced artifacts",
+  "нативный профиль доступен только для H3": "The native profile is available only for H3",
   "Прослушать образец": "Listen to sample",
   "Новый перевод": "New translation",
   "эта модель не поддерживает инструменты — отключите MCP или выберите другую модель": "This model does not support tools. Disable MCP or choose another model.",
