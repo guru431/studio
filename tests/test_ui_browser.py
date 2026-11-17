@@ -3578,13 +3578,13 @@ def test_new_media_models_are_selectable_and_h3_controls_match_its_graph(browser
         ('press', 'Escape'), *go('video'), ('wait', "document.querySelector('#video-model option[value$=\":h3\"]')"),
         set_value('#video-seconds', '15'),
         ('eval', 'pick', "(() => { const s = document.querySelector('#video-model'); s.value = [...s.options].find(o => o.value.endsWith(':h3')).value; s.dispatchEvent(new Event('change')); return s.value; })()"),
-        ('eval', 'controls', "[document.querySelector('#chip-smooth').hidden, document.querySelector('#video-seconds').value, document.querySelector('#chip-quality').textContent]"),
-        ('click', '#chip-quality'),
-        ('eval', 'qualities', "document.querySelector('#chip-quality-menu').textContent")], width=390, height=900)
+        ('eval', 'controls', "[document.querySelector('#chip-smooth').hidden, document.querySelector('#video-seconds').value, document.querySelector('#chip-quality').textContent, document.querySelector('#chip-quality').disabled, document.querySelector('#video-seconds').readOnly]"),
+        ('eval', 'wan', "(() => { const s = document.querySelector('#video-model'); s.value = [...s.options].find(o => o.value.endsWith(':wan')).value; s.dispatchEvent(new Event('change')); return s.value; })()"),
+        ('eval', 'wanControls', "[document.querySelector('#chip-smooth').hidden, document.querySelector('#chip-quality').disabled, document.querySelector('#video-seconds').readOnly, document.querySelector('#chip-quality').textContent]")], width=390, height=900)
     assert not r.get('failed'), r
     assert all(name in r['values']['photos'] for name in ('SNOFS Krea 2', 'Big Love Eryn1', 'FineView QW21'))
-    assert r['values']['controls'] == [True, '5', '352p']
-    assert all(size in r['values']['qualities'] for size in ('256p', '352p', '480p'))
+    assert r['values']['controls'] == [True, '5', '768p', True, True]
+    assert r['values']['wanControls'] == [False, False, False, '576p']
     assert not problems(r), problems(r)
 
 

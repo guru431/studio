@@ -14,7 +14,7 @@ const KINDS = { generation: tr("Генерация"), upload: tr("Фото с у
   video: tr("Ролик") };
 export const NAMES = { lustify: 'Lustify', flux: 'FLUX', snofs: 'SNOFS Krea 2',
   'big-love': 'Big Love Eryn1', fineview: 'FineView QW21' };
-const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
+const RESOLUTION = { fast: '480p', standard: '576p', high: '720p', native: '768p' };
 
 /** Модель внешнего сервиса: не из перечня шлюза (images.MODELS). */
 export function isExternal(model) {

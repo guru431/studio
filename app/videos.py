@@ -108,13 +108,22 @@ class VideoIn(BaseModel):
     model: "str | None" = Field(default=None, max_length=200)
     prompt: str = Field(default="", max_length=4000)
     seconds: int = Field(default=5, ge=1, le=30)
-    quality: Literal["fast", "standard", "high"] = "standard"
+    quality: Literal["fast", "standard", "high", "native"] = "standard"
     smooth: bool = True
     seed: "int | None" = Field(default=None, ge=0, le=2**32 - 1)
 
 
 class TooBig(Exception):
     """mp4 у шлюза больше VIDEO_CONTENT_MAX."""
+
+
+def _profile(body: VideoIn) -> None:
+    if body.model == "h3":
+        if body.seconds != 5:
+            raise HTTPException(422, {"code": "seconds", "message": "H3: используйте 5 секунд; короткие ролики давали артефакты"})
+        body.quality, body.smooth = "native", False
+    elif body.quality == "native":
+        raise HTTPException(422, {"code": "quality", "message": "нативный профиль доступен только для H3"})
 
 
 # ---- строки ------------------------------------------------------------------
@@ -300,10 +309,7 @@ async def create_video(request: Request):
         # пустое поле — «по умолчанию»: seed случайный, длительность 5 с
         body = VideoIn.model_validate({k: v for k, v in fields.items() if v != ""})
         conn, body.model = sections.resolve(uid, "video", body.connection_id, body.model)
-        if body.model == "h3":
-            if body.seconds > 5:
-                raise HTTPException(422, {"code": "seconds", "message": "H3: длительность от 1 до 5 секунд"})
-            body.smooth = False
+        _profile(body)
         image = await forms.photo(uid, upload, source_id, VIDEO_PIXELS)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
@@ -326,6 +332,7 @@ async def _send(uid: int, conn: Connection, image: bytes, source_id: str, body: 
     посреди запроса (выкладка) оставляет её, и наблюдатель после перезапуска находит принятое шлюзом
     задание по этому seed (`_resume`), а не оставляет ролик на карте без учёта. Seed пользователя ничего не
     доказывает (п. 1 шапки) — строка, как прежде, только после ответа."""
+    _profile(body)
     chosen = body.seed is None                   # seed выбрала студия — по нему можно найти своё задание
     seed = secrets.randbelow(2**32) if chosen else body.seed
     model = body.model or "wan"

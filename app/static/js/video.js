@@ -38,7 +38,8 @@ const PROMPT_MAX = 4000;
 const PHOTO_MAX = 20 * 1024 * 1024;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const QUALITIES = [['fast', tr("Быстро 480p")], ['standard', tr("Обычно 576p")], ['high', tr("Высоко 720p")]];
-const H3_RESOLUTION = { fast: '256p', standard: '352p', high: '480p' };
+// Old records retain their actual legacy profile; new H3 jobs use native only.
+const H3_RESOLUTION = { fast: '256p', standard: '352p', high: '480p', native: '768p' };
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p' };
 const SOURCES = { given: tr("свой промпт"), auto: tr("придуман по фото"), fallback: tr("запасной промпт") };
 const RUNNING = new Set(['queued', 'in_progress']);
@@ -118,8 +119,11 @@ function build(view, ctx) {
   function isH3() { return modelPick.value.split(':').slice(1).join(':') === 'h3'; }
   function paintModel() {
     chipSmooth.hidden = isH3();
-    chipSeconds.title = isH3() ? 'H3: 1–5 s · 24 fps' : tr("Длительность: 1–30 с");
-    if (isH3() && Number(seconds.value) > 5) seconds.value = '5';
+    chipSeconds.title = isH3() ? tr("H3: 5 с, нативный размер, 24 кадра/с") : tr("Длительность: 1–30 с");
+    seconds.readOnly = isH3();
+    chipQuality.disabled = isH3();
+    qualityPopup.close();
+    if (isH3()) seconds.value = '5';
     paintQuality();
   }
   modelPick.addEventListener('change', paintModel);
@@ -184,9 +188,9 @@ function build(view, ctx) {
   function paintQuality() {
     const qualityLabel = (value) => {
       const label = QUALITIES.find(([v]) => v === value)[1];
-      return isH3() ? label.replace(/\d+p/, H3_RESOLUTION[value]) : label;
+      return isH3() ? tr("H3: нативный размер (768p)") : label;
     };
-    qualityName.textContent = (isH3() ? H3_RESOLUTION : RESOLUTION)[quality];
+    qualityName.textContent = isH3() ? H3_RESOLUTION.native : RESOLUTION[quality];
     const named = tr("Качество: {0}", qualityLabel(quality));
     chipQuality.setAttribute('aria-label', named);
     chipQuality.title = named;
@@ -617,7 +621,7 @@ function build(view, ctx) {
     if (!source) throw new Error(tr("Выберите фото для ролика"));
     const sec = seconds.value.trim();
     if (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30) throw new Error(tr("Длительность — целое число секунд от 1 до 30"));
-    if (isH3() && Number(sec) > 5) throw new Error('H3: 1–5 s');
+    if (isH3() && Number(sec) !== 5) throw new Error(tr("H3: используйте 5 секунд; короткие ролики давали артефакты"));
     if (source.file && source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
     const body = new FormData();
     if (source.file) body.append('image', source.file, source.file.name);
@@ -628,7 +632,7 @@ function build(view, ctx) {
     if (text.length > PROMPT_MAX) throw new Error(tr("Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото."));
     body.append('prompt', text);
     body.append('seconds', String(Number(sec)));
-    body.append('quality', quality);
+    body.append('quality', isH3() ? 'native' : quality);
     body.append('smooth', String(isH3() ? false : smooth));
     if (modelPick.value) {
       const [connId, ...rest] = modelPick.value.split(':');
