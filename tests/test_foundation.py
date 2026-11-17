@@ -260,7 +260,7 @@ def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
                        f" {DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 1;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
-                 " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
+                 " VALUES ('i1', 1, 'edit', 'snofs', 'p', '64x48', 1, 'done', 'готово', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert conn.execute("SELECT id, mask_media_id FROM images").fetchone()[:] == ("i1", None)
@@ -274,7 +274,7 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
                        f" {DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 2;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
-                 " VALUES ('i1', 1, 'edit', 'lustify', 'p', '64x48', 1, 'done', 'готово', 0)")
+                 " VALUES ('i1', 1, 'edit', 'snofs', 'p', '64x48', 1, 'done', 'готово', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert conn.execute("SELECT id, chain IS NULL FROM images").fetchone()[:] == ("i1", 1)
@@ -446,7 +446,7 @@ def test_migrate_adds_the_search_index_to_a_version_12_base(env):
     conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} PRAGMA user_version = 12;")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
-                 " VALUES ('i1', 1, 'generation', 'lustify', 'Кошка на крыше', '64x48', 1, 'done', 'готово', 1)")
+                 " VALUES ('i1', 1, 'generation', 'snofs', 'Кошка на крыше', '64x48', 1, 'done', 'готово', 1)")
     conn.execute(FEED_ROWS["videos"].replace("'p'", "'Ёлка горит'"), ("v1", 1, 2))
     conn.execute(FEED_ROWS["transcripts"].replace("'a.m4a'", "'Звонок Ивану.m4a'"), ("t1", 1, 3))
     conn.execute(FEED_ROWS["speeches"].replace("'t'", "'Доброе утро'"), ("s1", 1, 4))

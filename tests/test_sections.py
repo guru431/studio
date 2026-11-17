@@ -11,11 +11,29 @@ import sections
 import state
 from conftest import add_connection, add_gateway, make_user
 
-PHOTO_MODELS = ["lustify", "flux", "snofs", "big-love", "fineview", "muse", "jib-moss", "fineporn", "moody-krea"]
+PHOTO_MODELS = ["snofs", "flux", "fineview", "jib-moss"]
 
 
 def uid_of_owner() -> int:
     return state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+
+
+def test_retired_photo_choices_are_pruned_without_deleting_history(studio):
+    cid = add_gateway(studio)
+    uid = uid_of_owner()
+    old = ["lustify", "flux", "snofs", "big-love", "fineview", "muse", "jib-moss", "fineporn", "moody-krea"]
+    state.DB.execute("UPDATE section_links SET models=? WHERE user_id=? AND section='photo'",
+                     (json.dumps(old), uid))
+    state.DB.execute("UPDATE section_defaults SET model='lustify' WHERE user_id=? AND section='photo'", (uid,))
+    state.DB.execute("INSERT INTO images(id,user_id,kind,model,prompt,size,seed,state,detail,created)"
+                     " VALUES ('legacy-photo',?,'generation','lustify','old','portrait',1,'error','old',1)", (uid,))
+    sections.retire_photo_models()
+    assert sections.links(uid, 'photo')[0].models == ('flux', 'snofs', 'fineview', 'jib-moss')
+    assert sections.default(uid, 'photo')[1] == 'snofs'
+    assert state.DB.execute("SELECT model FROM images WHERE id='legacy-photo'").fetchone()[0] == 'lustify'
+    before = state.DB.total_changes
+    sections.retire_photo_models()
+    assert state.DB.total_changes == before
 
 
 def test_gateway_joins_every_section_with_its_catalog(studio):
@@ -25,7 +43,7 @@ def test_gateway_joins_every_section_with_its_catalog(studio):
     assert sections.SECTIONS == ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "dictation")
     assert sections.sections_of(uid, cid) == list(sections.SECTIONS)
     assert [link.models for link in sections.links(uid, "photo")] == [tuple(PHOTO_MODELS)]
-    assert sections.default(uid, "photo")[1] == "lustify" and sections.default(uid, "chat")[1] == "local-gemma-abl"
+    assert sections.default(uid, "photo")[1] == "snofs" and sections.default(uid, "chat")[1] == "local-gemma-abl"
     assert sections.capabilities(uid) == dict.fromkeys(sections.SECTIONS, True)
 
 
@@ -156,10 +174,10 @@ def test_sections_api_round_trip(studio):
     assert [s["id"] for s in body] == list(sections.SECTIONS)
     photo = body[1]
     assert photo["name"] == "Фото" and photo["links"][0]["catalog"] == PHOTO_MODELS
-    assert photo["links"][0]["connection"]["id"] == cid and photo["default"] == {"connection_id": cid, "model": "lustify"}
+    assert photo["links"][0]["connection"]["id"] == cid and photo["default"] == {"connection_id": cid, "model": "snofs"}
     assert body[0]["links"][0]["catalog"] is None                           # чат srvllm — из /v1/models
-    r = studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["lustify"]})
-    assert r.status_code == 200 and r.json()["links"][0]["models"] == ["lustify"]
+    r = studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["snofs"]})
+    assert r.status_code == 200 and r.json()["links"][0]["models"] == ["snofs"]
     r = studio.c.put(f"/api/sections/photo/links/{cid}", json={"models": ["sdxl"]})
     assert r.status_code == 422 and r.json()["detail"]["code"] == "model"
     assert studio.c.put("/api/sections/photo/default", json={"connection_id": cid, "model": "flux"}).status_code == 422
@@ -168,7 +186,7 @@ def test_sections_api_round_trip(studio):
     assert studio.c.delete(f"/api/sections/photo/links/{cid}").status_code == 204
     assert studio.c.get("/api/sections").json()["sections"][1]["default"] is None
     r = studio.c.post("/api/sections/photo/links", json={"connection_id": cid})
-    assert r.status_code == 200 and r.json()["default"] == {"connection_id": cid, "model": "lustify"}
+    assert r.status_code == 200 and r.json()["default"] == {"connection_id": cid, "model": "snofs"}
     assert studio.c.put("/api/sections/music/default", json={"connection_id": cid, "model": "x"}).status_code == 404
 
 
@@ -178,8 +196,8 @@ def test_foreign_connection_is_gone_everywhere(studio):
     theirs = state.DB.execute("INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
                               " VALUES (?, 'b', 'srvllm', 'http://10.77.1.15:4000', x'00', '[]', 0)", (bob,)).lastrowid
     for method, path, body in (("post", "/api/sections/photo/links", {"connection_id": theirs}),
-                               ("put", f"/api/sections/photo/links/{theirs}", {"models": ["lustify"]}),
-                               ("put", "/api/sections/photo/default", {"connection_id": theirs, "model": "lustify"}),
+                               ("put", f"/api/sections/photo/links/{theirs}", {"models": ["snofs"]}),
+                               ("put", "/api/sections/photo/default", {"connection_id": theirs, "model": "snofs"}),
                                ("delete", f"/api/sections/photo/links/{theirs}", None),
                                ("get", f"/api/sections/chat/links/{theirs}/found", None)):
         r = getattr(studio.c, method)(path, **({"json": body} if body else {}))

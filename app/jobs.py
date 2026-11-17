@@ -30,7 +30,8 @@ router = APIRouter(prefix="/api/jobs")
 JOBS_RECENT_SEC = 3600
 FINISHED_MAX = 50
 SPEECH_TITLE = 40
-MODEL_NAMES = {"lustify": "Lustify", "flux": "FLUX"}
+MODEL_NAMES = {"lustify": "Lustify", "flux": "FLUX", "snofs": "SNOFS Krea 2",
+               "jib-moss": "Jib Mix Moss V2", "fineview": "FineView QW21"}
 STATES = {"done": "done", "error": "error", "failed": "error", "cancelled": "cancelled"}
 TERMINAL = tuple(STATES)
 

@@ -10,9 +10,7 @@ from test_videos import create_video
 
 
 @pytest.mark.parametrize("model,gateway", [("snofs", "snofs-krea2-v1.6"),
-    ("big-love", "big-love-eryn1"), ("fineview", "fineview-qw21"),
-    ("muse", "muse-krea2-v3.5"), ("jib-moss", "jib-moss-v2"),
-    ("fineporn", "fineporn-v5"), ("moody-krea", "moody-krea-v8")])
+    ("fineview", "fineview-qw21"), ("jib-moss", "jib-moss-v2")])
 def test_new_photo_model_is_selected_and_releases_only_the_other_slot(studio, model, gateway):
     add_gateway(studio)
     response = start(studio, model=model, seed=123)
@@ -23,6 +21,15 @@ def test_new_photo_model_is_selected_and_releases_only_the_other_slot(studio, mo
     releases = [r for r in studio.gw.requests if r.url.path == "/slot/images/release"]
     assert len(releases) == 1
     assert b'flux-3-image-klein' in releases[0].content
+
+
+@pytest.mark.parametrize("model", ["lustify", "big-love", "muse", "fineporn", "moody-krea"])
+def test_retired_photo_model_is_refused_before_history_or_gateway(studio, model):
+    add_gateway(studio)
+    response = start(studio, model=model)
+    assert response.status_code == 422
+    assert not studio.gw.generations
+    assert state.DB.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
 
 
 def test_h3_is_persisted_and_repeat_keeps_the_model(studio):

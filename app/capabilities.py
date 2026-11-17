@@ -17,17 +17,12 @@ ID_MAX = 200
 
 #: встроенный перечень srvllm: короткое имя студии → возможности
 CATALOG_CAPS = {
-    "lustify": ("generate", "edit", "mask", "strength", "seed"),
     "flux": ("generate", "edit", "mask", "seed"),
     "wan": ("video",),
     "h3": ("video",),
     "snofs": ("generate", "edit", "mask", "strength", "seed"),
-    "big-love": ("generate", "edit", "mask", "strength", "seed"),
     "fineview": ("generate", "edit", "mask", "seed"),
-    "muse": ("generate", "edit", "mask", "strength", "seed"),
     "jib-moss": ("generate", "edit", "mask", "strength", "seed"),
-    "fineporn": ("generate", "edit", "mask", "strength", "seed"),
-    "moody-krea": ("generate", "edit", "mask", "strength", "seed"),
     "whisperx": ("diarize", "dictation"),
     "gigaam": ("dictation_ru",),
     "qwen3-tts": ("voices",),

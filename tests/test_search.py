@@ -370,7 +370,7 @@ def hits(r) -> list:
 
 def seed(uid: int, tag: str = "", at: float = T0) -> None:
     """По записи каждого раздела со словами «кошка» и «ёлка»; id — с меткой учётки."""
-    state.DB.execute(IMAGE, (f"i{tag}", uid, "lustify", "Кошка на крыше", at + 1))
+    state.DB.execute(IMAGE, (f"i{tag}", uid, "snofs", "Кошка на крыше", at + 1))
     state.DB.execute(VIDEO, (f"v{tag}", uid, "Ёлка в снегу", at + 2))
     state.DB.execute(TRANSCRIPT, (f"t{tag}", uid, "Звонок.m4a", at + 3, "Кошкин дом сгорел"))
     state.DB.execute(SPEECH, (f"s{tag}", uid, "КОШКА мурлычет у ёлки", at + 4))
@@ -386,7 +386,7 @@ def test_each_section_is_found_by_the_start_of_a_word_in_any_case_and_yo(studio)
     assert hits(r) == [("chat", "c"), ("speech", "s"), ("transcribe", "t"), ("photo", "i")]
     by = {i["section"]: i for i in r.json()["items"]}
     assert by["photo"] == {"section": "photo", "id": "i", "part": "", "title": "Кошка на крыше",
-                           "snippet": "\u0002Кошка\u0003 на крыше", "model": "lustify", "created": T0 + 1,
+                           "snippet": "\u0002Кошка\u0003 на крыше", "model": "snofs", "created": T0 + 1,
                            "href": "photo?id=i", "attachment": None}
     assert by["chat"]["title"] == "Про зверей" and by["chat"]["href"] == "chat/c?m=m" and by["chat"]["part"] == "m"
     assert by["chat"]["snippet"] == "Две \u0002кошки\u0003 спят"
@@ -406,7 +406,7 @@ def test_another_users_history_is_never_found(studio):
     assert {i for _, i in hits(search(studio, q="кошк"))} == {"c", "s", "t", "i"}
     assert {i for _, i in hits(search(studio, section="photo"))} == {"i"}
     assert studio.c.get("/api/search/models").json() == {"models": {
-        "chat": ["local-gemma-abl"], "photo": ["lustify"], "speech": ["qwen3-tts"], "transcribe": ["whisperx"],
+        "chat": ["local-gemma-abl"], "photo": ["snofs"], "speech": ["qwen3-tts"], "transcribe": ["whisperx"],
         "video": ["wan"]}}
 
 
@@ -415,9 +415,9 @@ def test_filters_narrow_and_alone_make_a_list(studio):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     day = datetime(2027, 1, 11, tzinfo=ZoneInfo('Europe/Moscow')).timestamp()
     for n, at in enumerate((day - 3600, day + 12 * 3600, day + 86400 - 1, day + 86400 + 60)):
-        state.DB.execute(IMAGE, (f"i{n}", uid, "flux" if n == 2 else "lustify", f"Кошка {n}", at))
+        state.DB.execute(IMAGE, (f"i{n}", uid, "flux" if n == 2 else "snofs", f"Кошка {n}", at))
     state.DB.execute(VIDEO, ("v", uid, "Кошка бежит", day + 3600))
-    assert hits(search(studio, q="кошк", section="photo", model="lustify")) == [("photo", "i3"), ("photo", "i1"),
+    assert hits(search(studio, q="кошк", section="photo", model="snofs")) == [("photo", "i3"), ("photo", "i1"),
                                                                                 ("photo", "i0")]
     assert hits(search(studio, q="кошк", since="2027-01-11", until="2027-01-11")) == [
         ("photo", "i2"), ("photo", "i1"), ("video", "v")]
@@ -437,7 +437,7 @@ def test_date_filters_use_the_account_timezone_and_calendar_day_length(studio, z
     assert studio.c.patch('/api/me', json={'timezone': zone}).status_code == 200
     first, last = [datetime.fromisoformat(value).replace(tzinfo=timezone.utc).timestamp() for value in (start, end)]
     for n, at in enumerate((first - 1, first, last - 1, last)):
-        state.DB.execute(IMAGE, (f'i{n}', uid, 'lustify', 'На границе дня', at))
+        state.DB.execute(IMAGE, (f'i{n}', uid, 'snofs', 'На границе дня', at))
     assert hits(search(studio, since=day, until=day)) == [('photo', 'i2'), ('photo', 'i1')]
 
 
@@ -534,9 +534,9 @@ def test_the_log_gets_the_count_not_the_words(studio, caplog):
     caplog.set_level(logging.DEBUG)
     uid = make_user(studio, "owner"); signin(studio, "owner")
     seed(uid)
-    assert len(hits(search(studio, q="кошк", model="lustify", since="2027-01-01"))) == 1
+    assert len(hits(search(studio, q="кошк", model="snofs", since="2027-01-01"))) == 1
     assert "search: 1" in caplog.text
-    assert "кошк" not in caplog.text.lower() and "lustify" not in caplog.text and "2027-01-01" not in caplog.text
+    assert "кошк" not in caplog.text.lower() and "snofs" not in caplog.text and "2027-01-01" not in caplog.text
 
 
 @pytest.mark.integration  # замер скорости — отдельно от конкурирующих быстрых проверок

@@ -33,7 +33,7 @@ NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "speech":
          "translate": "Перевод", "dictation": "Голосовой ввод"}
 SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "translate", "speech", "dictation"}
 LEGACY = ("chat", "photo", "video")           # разделы прежнего столбца connections.sections
-CATALOG = {"photo": ["lustify", "flux", "snofs", "big-love", "fineview", "muse", "jib-moss", "fineporn", "moody-krea"], "video": ["wan", "h3"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
+CATALOG = {"photo": ["snofs", "flux", "fineview", "jib-moss"], "video": ["wan", "h3"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
            "speech": ["qwen3-tts"], "dictation": ["gigaam", "whisperx"]}
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
 S06_CATALOG = {"chat": ["qwen-27b", "qwen-27b-fast"], "translate": ["qwen-27b", "qwen-27b-fast"],
@@ -41,6 +41,7 @@ S06_CATALOG = {"chat": ["qwen-27b", "qwen-27b-fast"], "translate": ["qwen-27b", 
 LOCAL_PREFIX = "local-"                       # роли шлюза srvllm, что работают на его карте (is_local)
 MODEL_MAX = 200
 MODELS_MAX = 200
+RETIRED_PHOTO_MODELS = {"lustify", "big-love", "muse", "fineporn", "moody-krea"}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/sections")
@@ -264,6 +265,32 @@ def settle_all(user_id: int) -> None:
         for section in SECTIONS:
             _settle(user_id, section)
         _sync_legacy(user_id)
+
+
+def retire_photo_models() -> None:
+    """Prune retired srvllm choices and repair defaults without changing media history."""
+    affected = set()
+    with transaction():
+        rows = state.DB.execute("SELECT l.user_id, l.connection_id, l.models FROM section_links l"
+                                " JOIN connections c ON c.id=l.connection_id AND c.user_id=l.user_id"
+                                " WHERE l.section='photo' AND c.kind='srvllm'").fetchall()
+        for row in rows:
+            selected = json.loads(row["models"])
+            models = [m for m in selected if m not in RETIRED_PHOTO_MODELS] or ["snofs"]
+            uid, cid = row["user_id"], row["connection_id"]
+            if models != selected:
+                state.DB.execute("UPDATE section_links SET models=? WHERE user_id=? AND section='photo' AND connection_id=?",
+                                 (json.dumps(models), uid, cid))
+                affected.add(uid)
+            chosen = _default_row(uid, "photo")
+            if chosen and chosen["connection_id"] == cid and chosen["model"] in RETIRED_PHOTO_MODELS:
+                replacement = "snofs" if "snofs" in models else models[0]
+                state.DB.execute("UPDATE section_defaults SET model=? WHERE user_id=? AND section='photo'",
+                                 (replacement, uid))
+                affected.add(uid)
+        for uid in affected:
+            _settle(uid, "photo")
+            _sync_legacy(uid)
 
 
 def adopt(section: str, source: str) -> None:

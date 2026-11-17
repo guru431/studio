@@ -54,7 +54,7 @@ def public(monkeypatch):
 
 def test_gateway_check_reads_two_lists_and_spends_nothing(studio):
     cid = add_gateway(studio)
-    studio.gw.slot_models = [{"id": "lustify-v10-krea2-turbo"}, {"id": "wan2.2-remix-i2v-v3"}, {"id": "other-x"}]
+    studio.gw.slot_models = [{"id": "snofs-krea2-v1.6"}, {"id": "wan2.2-remix-i2v-v3"}, {"id": "other-x"}]
     r = check(studio, cid)
     assert r.status_code == 200
     p = r.json()["passport"]
@@ -66,9 +66,9 @@ def test_gateway_check_reads_two_lists_and_spends_nothing(studio):
     assert chat["reach"] == {"ok": True, "words": "отвечает"} and chat["status"] == 200 and chat["count"] == 2
     assert chat["key"]["state"] == "accepted" and slot["key"]["state"] == "accepted" and slot["count"] == 3
     models = by_id(p)
-    assert caps(models["lustify"]) == {(c, "catalog") for c in ("generate", "edit", "mask", "strength", "seed")}
+    assert caps(models["snofs"]) == {(c, "catalog") for c in ("generate", "edit", "mask", "strength", "seed")}
     assert caps(models["flux"]) == {(c, "catalog") for c in ("generate", "edit", "mask", "seed")}
-    assert models["flux"]["absent"] is True and "absent" not in models["lustify"]
+    assert models["flux"]["absent"] is True and "absent" not in models["snofs"]
     assert caps(models["wan"]) == {("video", "catalog")}
     assert caps(models["whisperx"]) == {("diarize", "catalog"), ("dictation", "catalog")}
     assert caps(models["gigaam"]) == {("dictation_ru", "catalog")} and caps(models["qwen3-tts"]) == {("voices", "catalog")}
@@ -76,7 +76,7 @@ def test_gateway_check_reads_two_lists_and_spends_nothing(studio):
     assert models["local-gemma-abl"]["context_length"] == 131072 and "other-x" in models
     # найденные — короткие имена перечня, которые шлюз назвал; чат — из /v1/models
     found = r.json()["found"]
-    assert found["photo"] == ["lustify"] and found["video"] == ["wan"]
+    assert found["photo"] == ["snofs"] and found["video"] == ["wan"]
     assert found["chat"] == ["local-gemma-abl", "gemma4-abl"] and "transcribe" not in found
     # паспорт — в подключении и в разделах, токена в нём нет
     assert studio.c.get("/api/connections").json()["items"][0]["passport"] == p

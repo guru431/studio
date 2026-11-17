@@ -213,8 +213,8 @@ def test_chunk_with_context_drops_its_echo_and_composes_nfc(studio):
 
 def test_chunk_errors_become_words(studio):
     gw = conn_of(add_gateway(studio))
-    studio.gw.chat_error = (503, {"error": {"message": "карта занята: идёт Lustify"}})
-    with pytest.raises(translate_text.Busy, match="идёт Lustify"):
+    studio.gw.chat_error = (503, {"error": {"message": "карта занята: идёт SNOFS Krea 2"}})
+    with pytest.raises(translate_text.Busy, match="идёт SNOFS Krea 2"):
         run_chunk(studio, gw, "local-gemma-abl", "Hello")
     studio.gw.chat_error = (500, {"error": {"message": "сбой"}})
     with pytest.raises(translate_text.TranslateError, match="шлюз ответил 500: сбой") as e:

@@ -563,9 +563,9 @@ def local_headers(blob, zf):
 
 def test_archive_streams_the_chosen_files_in_order(studio, caplog):
     uid = make_user(studio, "owner"); signin(studio, "owner")
-    a = media.save(uid, png(64, 64), "image/png", "studio-lustify-42.png", thumb=True)
+    a = media.save(uid, png(64, 64), "image/png", "studio-snofs-42.png", thumb=True)
     b = media.save(uid, DATA, "video/mp4", "studio-video-7.mp4")
-    c = media.save(uid, png(32, 32), "image/png", "studio-lustify-42.png")
+    c = media.save(uid, png(32, 32), "image/png", "studio-snofs-42.png")
     media.save(uid, DATA, "video/mp4", "not-chosen.mp4")
     with caplog.at_level(logging.INFO, logger="studio"):
         r = archive(studio, [b, a, c, a])
@@ -577,14 +577,14 @@ def test_archive_streams_the_chosen_files_in_order(studio, caplog):
     assert z.headers["cache-control"] == "no-store" and z.headers["x-content-type-options"] == "nosniff"
     zf = zipfile.ZipFile(io.BytesIO(z.content))
     assert zf.testzip() is None
-    assert zf.namelist() == ["studio-video-7.mp4", "studio-lustify-42.png", "studio-lustify-42-2.png"]
+    assert zf.namelist() == ["studio-video-7.mp4", "studio-snofs-42.png", "studio-snofs-42-2.png"]
     assert {i.compress_type for i in zf.infolist()} == {zipfile.ZIP_STORED}
-    assert zf.read("studio-video-7.mp4") == DATA and zf.read("studio-lustify-42-2.png") == png(32, 32)
+    assert zf.read("studio-video-7.mp4") == DATA and zf.read("studio-snofs-42-2.png") == png(32, 32)
     # без дескриптора данных (бит 3): CRC и размеры — в локальном заголовке (Archive Utility macOS)
     for (flags, crc, packed, size), info in zip(local_headers(z.content, zf), zf.infolist()):
         assert not flags & 0x08 and crc == info.CRC and packed == size == info.file_size
     assert "archive: 3" in caplog.text
-    for secret in ("studio-lustify", "studio-video", a, b, c):
+    for secret in ("studio-snofs", "studio-video", a, b, c):
         assert secret not in caplog.text
 
 
