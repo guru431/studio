@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,3 +50,28 @@ def test_cross_architecture_constraints_use_the_target_markers(tmp_path, arch, c
     assert 'cryptography==' + crypto in lines
     assert len([line for line in lines if line.startswith('cryptography==')]) == 1
     assert not any(';' in line for line in lines)
+
+
+def test_remote_build_has_time_for_both_architectures_without_extending_transfer_timeouts(tmp_path, monkeypatch):
+    work = tmp_path / 'work'
+    work.mkdir()
+    calls = []
+
+    def run(argv, *, timeout, **kwargs):
+        calls.append((argv, timeout))
+        if argv[0] == 'ssh' and '--archive' in argv[-1]:
+            if timeout < 3600:
+                raise builder.subprocess.TimeoutExpired(argv, timeout)
+        if argv[0] == 'scp' and argv[-1] == str(work / 'studio-agent-setup.pkg'):
+            Path(argv[-1]).write_bytes(b'pkg')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(builder.subprocess, 'run', run)
+    args = SimpleNamespace(remote_root='/Users/builder/projects/studio', key=None, port='22',
+                           host='builder@macos.example.net', archive=tmp_path / 'source.zip',
+                           lock=tmp_path / 'lock.json', output=tmp_path / 'result.pkg')
+    builder.remote(args, work)
+    assert args.output.read_bytes() == b'pkg'
+    builds = [(argv, timeout) for argv, timeout in calls if argv[0] == 'ssh' and '--archive' in argv[-1]]
+    assert len(builds) == 1 and builds[0][1] == 3600
+    assert all(timeout == 900 for argv, timeout in calls if not (argv[0] == 'ssh' and '--archive' in argv[-1]))
