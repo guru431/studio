@@ -235,7 +235,7 @@ function build(view, ctx) {
   }
 
   function isLustify() {
-    return !!choice && choice.kind === 'srvllm' && choice.model === 'lustify';
+    return !!choice && choice.kind === 'srvllm' && ['lustify', 'snofs', 'big-love'].includes(choice.model);
   }
 
   /** Варианты чипа «модель» — отмеченные модели раздела «Фото», выбор — его умолчание. */

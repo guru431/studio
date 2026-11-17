@@ -5,7 +5,8 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 43
+VERSION = 44
+MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
        user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
@@ -569,6 +570,7 @@ INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
 
 SCHEMA += VOICE_42
 SCHEMA += MCP_43
+SCHEMA += MEDIA_44
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -666,6 +668,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     41: CODE_41,
     42: VOICE_42,
     43: MCP_43,
+    44: MEDIA_44,
 }
 
 

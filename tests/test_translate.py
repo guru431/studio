@@ -193,7 +193,7 @@ def test_local_model_frees_image_models_once(studio, monkeypatch):
     monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
     add_gateway(studio)
     wait_row(studio, start(studio, THREE))
-    assert [m for m, _ in studio.gw.releases] == list(images.MODELS.values())
+    assert [m for m, _ in studio.gw.releases] == list(images.RELEASE_MODELS.values())
     sent = [r.url.path for r in studio.gw.requests]
     assert sent.index("/v1/chat/completions") > max(i for i, p in enumerate(sent) if p == "/slot/images/release")
 

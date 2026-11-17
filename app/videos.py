@@ -60,6 +60,7 @@ router = APIRouter(prefix="/api/videos")
 
 #: Контракт API видео шлюза (спека 2026-10-19-srvllm-studio-video, «Решения исполнителя»).
 VIDEO_MODEL = "wan2.2-remix-i2v-v3"
+MODELS = {"wan": VIDEO_MODEL, "h3": "minimax-h3-dr34ml4y"}
 VIDEO_ID_RE = re.compile(r"video_[0-9a-f]{24}")
 # загрузка картинки и ответ `queued` — ролик шлюз не ждёт; чтение mp4 — тот же срок на кусок
 VIDEO_TIMEOUT_SEC = 120
@@ -131,7 +132,7 @@ def _out(row, with_chain=True, steps=None) -> dict:
     chain = chains.of_video(row["user_id"], row) if with_chain else None
     out = {"id": row["id"], "state": row["state"], "progress": row["progress"], "detail": row["detail"],
            "prompt": row["prompt"], "prompt_source": row["prompt_source"], "seconds": row["seconds"],
-           "quality": row["quality"], "smooth": bool(row["smooth"]), "seed": row["seed"],
+           "quality": row["quality"], "smooth": bool(row["smooth"]), "seed": row["seed"], "model": row["model"],
            "source_media_id": row["source_media_id"], "media_id": row["media_id"], "created": row["created"],
            "elapsed": int(max(0, end - row["created"])), "steps": len(chain) if with_chain else steps}
     if with_chain:
@@ -268,6 +269,7 @@ def _pick(data: list, form: dict, since: float) -> "dict | None":
     found = [v for v in data
              if isinstance(v, dict) and isinstance(v.get("id"), str) and VIDEO_ID_RE.fullmatch(v["id"])
              and str(v.get("seed")) == form["seed"] and str(v.get("seconds")) == form["seconds"]
+             and v.get("model", VIDEO_MODEL) == form.get("model", VIDEO_MODEL)
              and v.get("quality") == form["quality"] and v.get("smooth") is (form["smooth"] == "true")
              and ((v.get("prompt"), v.get("prompt_source")) == (form["prompt"], "given") if "prompt" in form
                   else v.get("prompt_source") != "given")
@@ -297,7 +299,11 @@ async def create_video(request: Request):
             fields["prompt"] = fields["prompt"].replace("\r\n", "\n").replace("\r", "\n")
         # пустое поле — «по умолчанию»: seed случайный, длительность 5 с
         body = VideoIn.model_validate({k: v for k, v in fields.items() if v != ""})
-        conn = _video_connection(uid, body.connection_id, body.model)
+        conn, body.model = sections.resolve(uid, "video", body.connection_id, body.model)
+        if body.model == "h3":
+            if body.seconds > 5:
+                raise HTTPException(422, {"code": "seconds", "message": "H3: длительность от 1 до 5 секунд"})
+            body.smooth = False
         image = await forms.photo(uid, upload, source_id, VIDEO_PIXELS)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
@@ -322,7 +328,8 @@ async def _send(uid: int, conn: Connection, image: bytes, source_id: str, body: 
     доказывает (п. 1 шапки) — строка, как прежде, только после ответа."""
     chosen = body.seed is None                   # seed выбрала студия — по нему можно найти своё задание
     seed = secrets.randbelow(2**32) if chosen else body.seed
-    form = {"model": VIDEO_MODEL, "seconds": str(body.seconds), "quality": body.quality,
+    model = body.model or "wan"
+    form = {"model": MODELS[model], "seconds": str(body.seconds), "quality": body.quality,
             "smooth": "true" if body.smooth else "false", "seed": str(seed)}
     prompt = body.prompt.strip()
     if prompt:
@@ -337,12 +344,12 @@ async def _send(uid: int, conn: Connection, image: bytes, source_id: str, body: 
             quality=body.quality, created=started)]
         state.DB.execute(
             "INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, prompt, prompt_source,"
-            " seconds, quality, smooth, seed, state, progress, detail, created, chain)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " seconds, quality, smooth, seed, state, progress, detail, created, chain, model)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (video_id, uid, conn.id, gateway_id, source_id, prompt, prompt_source, body.seconds, body.quality,
              int(body.smooth), _int(answer.get("seed"), seed), status if status in ACTIVE else "queued",
              min(100, max(0, _int(answer.get("progress"), 0))), _text(answer.get("detail"), "в очереди"), started,
-             json.dumps(chain, ensure_ascii=False)))
+             json.dumps(chain, ensure_ascii=False), model))
 
     if chosen:
         insert(None, {"detail": SENDING})
@@ -437,13 +444,14 @@ async def repeat_video(video_id: str, request: Request):
         body = RepeatIn.model_validate_json(await forms.read_body(request, 1024) or b"{}")
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": f"вариантов — от 1 до {REPEAT_MAX}"}) from None
-    conn = _video_connection(uid, row["connection_id"])
+    conn = _video_connection(uid, row["connection_id"], row["model"])
     try:
         image = await forms.photo(uid, None, row["source_media_id"], VIDEO_PIXELS)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     operations.check(uid)
-    clip = VideoIn(prompt=_asked_prompt(row), seconds=row["seconds"], quality=row["quality"], smooth=bool(row["smooth"]))
+    clip = VideoIn(prompt=_asked_prompt(row), seconds=row["seconds"], quality=row["quality"],
+                   smooth=bool(row["smooth"]), model=row["model"])
     made, message = [], None
     for _ in range(body.count):
         try:
@@ -602,7 +610,7 @@ def recover() -> None:
 
 
 def _form_of(row) -> dict:
-    form = {"seconds": str(row["seconds"]), "quality": row["quality"], "smooth": "true" if row["smooth"] else "false",
+    form = {"model": MODELS[row["model"]], "seconds": str(row["seconds"]), "quality": row["quality"], "smooth": "true" if row["smooth"] else "false",
             "seed": str(row["seed"])}
     if row["prompt"]:
         form["prompt"] = row["prompt"]

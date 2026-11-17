@@ -33,7 +33,7 @@ NAMES = {"chat": "Чат", "photo": "Фото", "video": "Видео", "speech":
          "translate": "Перевод", "dictation": "Голосовой ввод"}
 SERVER_ONLY = {"photo", "video", "transcribe", "ocr", "translate", "speech", "dictation"}
 LEGACY = ("chat", "photo", "video")           # разделы прежнего столбца connections.sections
-CATALOG = {"photo": ["lustify", "flux"], "video": ["wan"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
+CATALOG = {"photo": ["lustify", "flux", "snofs", "big-love", "fineview"], "video": ["wan", "h3"], "transcribe": ["whisperx"], "ocr": ["hunyuan-ocr"],
            "speech": ["qwen3-tts"], "dictation": ["gigaam", "whisperx"]}
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
 S06_CATALOG = {"chat": ["qwen-27b", "qwen-27b-fast"], "translate": ["qwen-27b", "qwen-27b-fast"],
