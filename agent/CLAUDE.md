@@ -15,9 +15,10 @@ capability → версия моста — [docs/architecture/agent-bridge.md](.
 Исходники и Git-история — часть репозитория `studio`, каталог `agent/` (с 2026-10-30): `origin` приватный, но основная
 ветка после очистки публикуется на GitHub — в отслеживаемые файлы только примеры. Общие правила —
 [../CLAUDE.md](../CLAUDE.md); сервер и мост меняются одним коммитом, ZIP собирается из `HEAD:agent`. Браузеру
-отдаётся один `studio-agent-setup.exe`, содержащий этот ZIP: сборка — `../deploy/build-agent-installer.ps1`, оболочка —
-`../deploy/agent-installer.cs` (временная распаковка, `install.ps1`, уборка только своей папки). Права администратора
-не нужны; Python 3.11+ и интернет для pip нужны. Обновления моста получают ZIP. Находки и идеи — в корневых
+отдаётся `studio-agent-setup.exe` для Windows: сборка — `../deploy/build-agent-installer.ps1`, оболочка —
+`../deploy/agent-installer.cs` (временная распаковка ZIP, `install.ps1`, уборка только своей папки). Windows требует
+Python 3.11+ и интернет для pip; macOS получает автономный `studio-agent-setup.pkg` со встроенными Python/Tk и wheels
+(`../deploy/build-agent-macos.py`). Права администратора не нужны. Обновления моста получают ZIP. Находки и идеи — в корневых
 `FINDINGS.md` и `IDEAS.md` (вне Git: след закрытия — сообщение коммита с заголовком записи). Отдельного проекта и
 remote у компонента нет. Версия — `studio_agent/__init__.py::VERSION`.
 
@@ -43,7 +44,8 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
   `updater.py` само дожидается простоя и просит штатный выход GUI.
 - Windows: ключ устройства и PIN защищены DPAPI пользователя. macOS: Fernet с ключом в Keychain пользователя;
   пароль студии на машине не остаётся и в argv не передаётся (только окно или `getpass`).
-- macOS Intel/Apple Silicon: `install.command` → `install_macos.py`, приложение `~/Applications/Studio Agent.app`,
+- macOS Intel/Apple Silicon: один `studio-agent-setup.pkg` со встроенным Python/Tk и wheels → `install_macos.py`,
+  сборка `../deploy/build-agent-macos.py`; `install.command` оставлен для разработчиков. Приложение `~/Applications/Studio Agent.app`,
   настройки `~/Library/Application Support/Studio Agent`, автозапуск LaunchAgent. [Контракт и проверки](../docs/architecture/agent-macos.md).
 - Протокол v1, значения дословно: кадр ≤ 48 МиБ; первый кадр — `hello` с `"v": 1`; `welcome` ждать ≤ 10 с; закрытия
   4401 (отозван — не переподключаться), 4409 (заменён — не переподключаться), 4400 (пауза 60 с и снова),

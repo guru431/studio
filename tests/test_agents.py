@@ -171,17 +171,19 @@ def test_download_without_installer_is_404(studio, monkeypatch, tmp_path):
         "code": "no_agent", "message": "установщика моста нет на сервере — его кладёт выкладка студии"}
 
 
-def test_macos_download_is_authenticated_and_uses_the_bridge_zip(studio, monkeypatch, tmp_path):
-    package = tmp_path / 'studio-agent.zip'
-    package.write_bytes(b'PK-macos-package')
-    monkeypatch.setattr(agents, 'AGENT_ZIP', package)
+def test_macos_download_is_authenticated_and_uses_the_standalone_installer(studio, monkeypatch, tmp_path):
+    package = tmp_path / 'studio-agent-setup.pkg'
+    package.write_bytes(b'xar!-macos-package')
+    monkeypatch.setattr(agents, 'AGENT_MACOS', package)
     assert studio.c.get('/api/agent/download?platform=macos').status_code == 401
     make_user(studio, 'owner')
     signin(studio, 'owner')
     response = studio.c.get('/api/agent/download?platform=macos')
     assert response.status_code == 200 and response.content == package.read_bytes()
-    assert response.headers['content-type'] == 'application/zip'
-    assert 'studio-agent-macos.zip' in response.headers['content-disposition']
+    assert response.headers['content-type'] == 'application/octet-stream'
+    assert 'studio-agent-setup.pkg' in response.headers['content-disposition']
+    package.unlink()
+    assert studio.c.get('/api/agent/download?platform=macos').status_code == 404
     assert studio.c.get('/api/agent/download?platform=unknown').status_code == 400
 
 

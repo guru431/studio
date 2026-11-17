@@ -17,7 +17,7 @@
 ## Ловушки
 
 - Секреты: Windows DPAPI; macOS — ключ Fernet в Keychain (`macos_keychain.py`), без ключей в argv и открытых файлах.
-- macOS: установка — `install.command`, системные различия — `host.py`, автозапуск — LaunchAgent пользователя; [подробности](../docs/architecture/agent-macos.md).
+- macOS: один автономный `studio-agent-setup.pkg`; сборка — `../deploy/build-agent-macos.py`, системные различия — `host.py`, автозапуск — LaunchAgent пользователя; [подробности](../docs/architecture/agent-macos.md).
 - Ключ устройства — только заголовком `Authorization`; логгер `websockets` не ниже INFO (на DEBUG пишет ключ).
 - PIN проверяет мост; счёт неверных пишется на диск **до** scrypt. Открытые сессии — в памяти; срок простоя — `req.idle_sec` (настраивается в студии, по умолчанию `OPEN_IDLE_SEC`, 3 часа), продлевают только принятые не фоновые просьбы (`passive`); переподключение сохраняет отметки без продления; явная настройка сбрасывает доступ.
 - Журнал `agent.log` — только id, коды, числа, имена типов исключений. Ни ключа, ни PIN, ни путей, ни текстов.

@@ -58,6 +58,7 @@ probe="$STUDIO_MEDIA_DIR/.studio-deploy-$$"
 setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"
 setpriv --reuid=10001 --regid=10001 --clear-groups rm "$probe"
 [ -s "$NEW/agent/studio-agent.zip" ] && [ -s "$NEW/agent/studio-agent-setup.exe" ]
+[ -s "$NEW/agent/studio-agent-setup.pkg" ]
 version=$(sed -nE 's/^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$NEW/app/release.py")
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'studio: invalid application version' >&2; exit 1; }
 image="studio:$version-$REVISION"

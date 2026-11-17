@@ -307,7 +307,7 @@ def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
     assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "$REV:agent"' in code
-    assert "for file in studio-agent.zip studio-agent-setup.exe" in code
+    assert "for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg" in code
     assert "$IN/agent/$file" in code
     first_ssh = code.index('"${SSH[@]}" "sudo install -d')
     assert code.index('status --porcelain -- "${PARTS[@]}" agent') < first_ssh
@@ -317,6 +317,9 @@ def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     assert archive < build < first_ssh
     assert 'show "$REV:deploy/build-agent-installer.ps1"' in code
     assert 'show "$REV:deploy/agent-installer.cs"' in code
+    assert 'show "$REV:deploy/build-agent-macos.py"' in code
+    assert 'show "$REV:deploy/macos-runtime.json"' in code
+    assert code.index('"$PYTHON" "$package/build-agent-macos.py"') < first_ssh
 
 
 def test_deploy_resolves_the_revision_once_and_uploads_into_its_own_folder():
@@ -388,6 +391,8 @@ def test_install_swaps_the_bridge_archive_with_the_code():
     assert check < code.index('for p in "${SWAP[@]}"; do') and check < code.index('chown -R root:root "$NEW"')
     setup = code.index('[ -s "$NEW/agent/studio-agent-setup.exe" ]')
     assert setup < code.index('for p in "${SWAP[@]}"; do') and setup < code.index('chown -R root:root "$NEW"')
+    macos = code.index('[ -s "$NEW/agent/studio-agent-setup.pkg" ]')
+    assert macos < code.index('for p in "${SWAP[@]}"; do')
 
 
 def test_requirements_are_exact_pins():
@@ -882,6 +887,10 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     (repo / "deploy" / "deploy.sh").write_text(DEPLOY_SH, encoding="utf-8", newline="\n")
     for name in ("build-agent-installer.ps1", "agent-installer.cs", "render-profile.py"):
         shutil.copyfile(DEPLOY / name, repo / "deploy" / name)
+    # Здесь проверяется доставка одного HEAD; тяжёлая сборка PKG имеет собственную приёмку на Mac.
+    (repo / 'deploy/build-agent-macos.py').write_text(
+        'import pathlib,sys; pathlib.Path(sys.argv[sys.argv.index("--output")+1]).write_bytes(b"xar!fixture")\n')
+    shutil.copyfile(DEPLOY / 'macos-runtime.json', repo / 'deploy/macos-runtime.json')
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("# server\n")
     (repo / "requirements.txt").write_text("# requirements\n")
@@ -903,6 +912,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
                'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
                '*"cat > "*"studio-agent-setup.exe"*) cat > "$PROBE/setup.exe" ;; '
+               '*"cat > "*"studio-agent-setup.pkg"*) cat > "$PROBE/setup.pkg" ;; '
                '*"cat > "*"deploy/md2pdf.py"*) cat > "$PROBE/converter.py" ;; '
                '*) cat >/dev/null ;; esac; }; '
                'curl() { printf 200; }; source "$0"')
@@ -927,6 +937,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "ssh-calls").is_file()
     assert (tmp_path / "setup.exe").read_bytes().startswith(b"MZ")
+    assert (tmp_path / "setup.pkg").read_bytes() == b"xar!fixture"
     assert (tmp_path / "converter.py").read_bytes() == converter_bytes
     with zipfile.ZipFile(tmp_path / "bridge.zip") as archive:
         names = {n for n in archive.namelist() if not n.endswith("/")}

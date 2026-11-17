@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent
+BUSY = "Дождитесь завершения заданий и выйдите из Studio Agent через меню"
 
 
 def bundle(base: Path, applications: Path) -> Path:
@@ -31,7 +32,8 @@ def bundle(base: Path, applications: Path) -> Path:
     return app
 
 
-def install(base: Path, home: Path, applications: Path, *, start=True, autostart=True) -> Path:
+def install(base: Path, home: Path, applications: Path, *, start=True, autostart=True,
+            runtime_source: Path | None = None, wheelhouse: Path | None = None) -> Path:
     """Работающий экземпляр не останавливаем и не меняем; настройки, PIN и чаты остаются в home."""
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock_path = home / (".instance-" + hashlib.sha256(b"Local\\StudioAgent").hexdigest()[:16])
@@ -42,7 +44,7 @@ def install(base: Path, home: Path, applications: Path, *, start=True, autostart
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise RuntimeError("Дождитесь завершения заданий и выйдите из Studio Agent через меню") from None
+            raise RuntimeError(BUSY) from None
         releases = base / "releases"
         releases.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix="release-", dir=releases))
@@ -50,8 +52,23 @@ def install(base: Path, home: Path, applications: Path, *, start=True, autostart
         for name in ("studio_agent.pyw", "requirements.txt", "constraints.txt", "install.command", "install_macos.py", "README.md"):
             shutil.copyfile(SOURCE / name, stage / name)
         (stage / "install.command").chmod(0o755)
+        interpreter = Path(sys.executable)
+        if runtime_source is not None:
+            # Runtime живёт отдельно от выпусков: venv обновлений продолжает ссылаться на него
+            # после уборки прежнего исходного кода. Установленный Python пользователя не меняем.
+            identity = (runtime_source / ".studio-runtime-id").read_text(encoding="ascii").strip()
+            if len(identity) != 64 or any(c not in "0123456789abcdef" for c in identity):
+                raise ValueError("неверный runtime")
+            runtimes = base / "runtimes"
+            runtimes.mkdir(exist_ok=True)
+            runtime = runtimes / identity
+            if not runtime.exists():
+                with tempfile.TemporaryDirectory(prefix="runtime-", dir=runtimes) as temporary:
+                    pending = Path(temporary) / "python"
+                    shutil.copytree(runtime_source, pending, symlinks=True)
+                    pending.rename(runtime)
+            interpreter = runtime / "bin/python3"
         python = stage / ".venv/bin/python"
-        subprocess.run([sys.executable, "-m", "venv", str(stage / ".venv")], check=True, timeout=60)
         # pip/сборщики пишут промежуточные файлы только внутри создаваемого выпуска.
         with tempfile.TemporaryDirectory(prefix="install-", dir=stage) as temporary:
             env = dict(os.environ, TMPDIR=temporary, PIP_CACHE_DIR=temporary)
@@ -59,9 +76,14 @@ def install(base: Path, home: Path, applications: Path, *, start=True, autostart
             env.pop("PYTHONPATH", None)
             env.pop("PYTHONPYCACHEPREFIX", None)
             env.pop("PYTHONDONTWRITEBYTECODE", None)
+            subprocess.run([str(interpreter), "-m", "venv", str(stage / ".venv")], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=60)
+            offline = ["--no-index", "--find-links", str(wheelhouse)] if wheelhouse is not None else []
             subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary=:all:",
-                            "-r", str(stage / "requirements.txt"), "-c", str(stage / "constraints.txt")], env=env, check=True, timeout=300)
-            subprocess.run([str(python), "-c", "import tkinter, studio_agent.app"], cwd=stage, env=env, check=True, timeout=30)
+                            *offline, "-r", str(stage / "requirements.txt"), "-c", str(stage / "constraints.txt")], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=300)
+            subprocess.run([str(python), "-c", "import tkinter, studio_agent.app"], cwd=stage, env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
         app = bundle(base, applications)
         # После появления внешних ссылок выпуск сохраняется и при сбое следующего шага.
         # Он уже проверен и может быть целью автозапуска; удалять его тогда нельзя.
@@ -90,14 +112,30 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--no-autostart", action="store_true")
+    parser.add_argument("--runtime-source", type=Path)
+    parser.add_argument("--wheelhouse", type=Path)
     args = parser.parse_args(argv)
     if sys.platform != "darwin" or sys.version_info < (3, 11):
         parser.error("Нужны macOS и Python 3.11+ с Tk")
     import tkinter  # понятная ошибка до копирования, если Python собран без Tk
     home = Path(os.environ.get("STUDIO_AGENT_HOME") or Path.home() / "Library/Application Support/Studio Agent")
-    install(home / "app", home, Path.home() / "Applications", start=not args.no_start, autostart=not args.no_autostart)
+    try:
+        install(home / "app", home, Path.home() / "Applications", start=not args.no_start, autostart=not args.no_autostart,
+                runtime_source=args.runtime_source, wheelhouse=args.wheelhouse)
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
+        message = BUSY if isinstance(error, RuntimeError) and str(error) == BUSY else "Не удалось установить Studio Agent. Повторите установку."
+        # В системный журнал установщика не попадают пути пользователя и вывод pip.
+        print(message, file=sys.stderr)
+        if not os.environ.get("COMMAND_LINE_INSTALL"):
+            try:
+                subprocess.run(["/usr/bin/osascript", "-e", 'on run argv\ndisplay alert "Studio Agent" message (item 1 of argv) as critical\nend run',
+                                message], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass  # Ошибка установки уже сообщена; недоступное окно не меняет код возврата.
+        return 1
     print("Studio Agent установлен. Откройте ~/Applications/Studio Agent.app и войдите в студию.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

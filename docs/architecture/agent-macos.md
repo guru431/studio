@@ -4,18 +4,23 @@
 Протокол v1, PIN, исходящий WebSocket, ограничения доступа и запрет записи личных данных в журнал
 совпадают с [общим мостом](agent-bridge.md). Совместимость старых Windows-мостов сохраняется.
 
-`GET /api/agent/download?platform=macos` отдаёт вошедшему пользователю тот же проверяемый ZIP,
-который получает автообновление; в нём есть `install.command` и `install_macos.py`. Прежний URL
+`GET /api/agent/download?platform=macos` отдаёт вошедшему пользователю один автономный
+`studio-agent-setup.pkg` (с Studio 0.23.0 / Agent 0.30.0). Штатный установщик macOS запускается
+двойным щелчком. ZIP исходников остаётся форматом автообновления. Прежний URL
 без параметра отдаёт Windows EXE. Секреты устройства по-прежнему передаются только в заголовке.
 Необязательное поле `hello.platform` (`darwin`/`win32`) помогает выбрать установщик машины на связи.
 
 ## Установка и системные границы
 
-- Python 3.11+ с Tk, git и отдельно настроенные CLI. LaunchAgent добавляет обычные пути Homebrew,
+- PKG для macOS 13+ содержит native runtime Python с Tk и закреплённые wheels Intel/Apple Silicon;
+  установка проходит без сети, sudo, Homebrew и системного Python. Git и CLI настраиваются отдельно.
+  LaunchAgent добавляет обычные пути Homebrew,
   `~/.local/bin`, `~/.cargo/bin`, `~/.opencode/bin`; команды запускаются списками аргументов без shell.
 - Настройки: `~/Library/Application Support/Studio Agent`. Приложение:
   `~/Applications/Studio Agent.app`. Выпуски: `app/releases/release-*` внутри каталога настроек;
   приложение открывает `app/current`. Среды venv создаются сразу по окончательному пути.
+- Python установщика хранится отдельно в `app/runtimes/<sha256>`: уборка старых выпусков не удаляет
+  интерпретатор, на который ссылаются venv автообновлений. Повторная установка использует тот же runtime.
 - Ключ Fernet лежит в Keychain под сервисом `com.studio.agent.secrets.v1`, запись привязана к
   настоящему пути каталога настроек. `key.bin` и `pin.bin` содержат только аутентифицированный
   шифротекст. Ошибка или блокировка Keychain не создаёт замену существующего ключа. Пароль Studio
@@ -36,6 +41,14 @@
 
 ## Проверки
 
+`deploy/build-agent-macos.py --archive <studio-agent.zip> --output <studio-agent-setup.pkg>` работает
+на Mac либо через SSH (`STUDIO_MACOS_BUILD_*` в [локальном профиле](../publication.md)). Он проверяет
+SHA-256 обоих runtime из `deploy/macos-runtime.json`, скачивает закреплённые wheels для обеих архитектур,
+проверяет настоящую установку без сети во временный HOME и собирает пользовательский PKG через
+`pkgbuild`/`productbuild`. Все промежуточные файлы и кэши находятся рядом с ZIP в `.tmp`.
+PKG содержит скрипт общего установщика, не запускается от root и не меняет системный Python.
+Без Developer ID Installer пакет не подписан; macOS может потребовать «Всё равно открыть».
+
 Windows: команды наборов `main` и `agent` из корневого `CLAUDE.md` и `agent/CLAUDE.md`.
 На macOS команды выполняются из `agent/`; временные каталоги и кэш задаются внутри `.tmp/<task>/`.
 
@@ -50,6 +63,10 @@ Windows: команды наборов `main` и `agent` из корневого
 ```sh
 .venv/bin/python -m pytest tests/test_macos_integration.py tests/test_macos.py -q -m integration
 ```
+
+Для теста автономного PKG распакуйте его `pkgutil --expand-full` в `.tmp/<task>/expanded`
+и задайте `STUDIO_AGENT_MACOS_PAYLOAD` путём `expanded/bridge.pkg/Scripts`. Проверяются отсутствие
+сети, повторная установка, сохранение ключа и независимость runtime от выпуска исходного кода.
 
 Keychain проверяется отдельной временной связкой, которая удаляется в `finally`; окно и строка меню
 проверяются в графическом сеансе. Отдельная проверка реальной генерации требует авторизованных CLI

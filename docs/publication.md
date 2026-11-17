@@ -30,6 +30,14 @@ pull-зеркало получает его с основного сервера
 `STUDIO_URL`, `STUDIO_REMOTE_ROOT`, `STUDIO_MEDIA_DIR` и `STUDIO_HAIRPIN_IP`.
 `STUDIO_CERT_DIR` выбирает каталог сертификата Apache, `STUDIO_APACHE_PORT` —
 порт его vhost и метку порта в именах журналов.
+
+Для автономного установщика macOS профиль также задаёт `STUDIO_MACOS_BUILD_SSH`,
+`STUDIO_MACOS_BUILD_PORT`, `STUDIO_MACOS_BUILD_KEY` и `STUDIO_MACOS_BUILD_ROOT` — абсолютный корень
+проекта Studio на Mac. Например, `builder@macos.example.net`, порт `22`, ключ SSH и
+`/Users/builder/projects/studio`. Нужны macOS, штатные `pkgbuild`/`productbuild` и системный Python 3.9+.
+Сборщик передаёт только ZIP того же HEAD, скрипт и lock runtime; работает в уникальной `.tmp/`
+на Mac, проверяет автономную установку, забирает PKG и убирает свою папку. Сервер получает ZIP,
+EXE и PKG одной ревизии. Без Mac сборка останавливается до изменения сервера.
 При необходимости `STUDIO_PYTHON` выбирает интерпретатор локальной среды.
 Шаблон профиля:
 

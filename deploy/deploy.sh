@@ -16,7 +16,7 @@
 # /opt/services/apache/apache2.conf строкой IncludeOptional: install.sh проверяет его apache2ctl -t
 # (отказ — прежний код на место) и после ответа службы всегда сам делает reload Apache.
 # EXE установки и ZIP обновления моста — agent/ того же HEAD студии.
-# EXE собирается на Windows до первого SSH; оба файла откатываются вместе с кодом.
+# EXE собирается на Windows, PKG — на Mac из локального профиля; файлы откатываются вместе с кодом.
 set -euo pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
 PROFILE=${STUDIO_DEPLOY_PROFILE:-$D/deploy/local-profile.sh}
@@ -28,7 +28,7 @@ if [ -f "$PROFILE" ]; then
 fi
 # Keep Debian paths intact when Git Bash starts native Windows helpers. Local
 # file arguments still need normal MSYS conversion; preserve caller exclusions.
-export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR;STUDIO_PROXY_VHOST"
+export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR;STUDIO_PROXY_VHOST;STUDIO_MACOS_BUILD_ROOT"
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
 PORT=${STUDIO_SSH_PORT:-22222}
 KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
@@ -102,6 +102,11 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$(cygpath -w "$package/build-agent-installer.ps1")" \
     -Archive "$(cygpath -w "$package/studio-agent.zip")" \
     -Output "$(cygpath -w "$package/studio-agent-setup.exe")"
+git -C "$D" show "$REV:deploy/build-agent-macos.py" > "$package/build-agent-macos.py"
+git -C "$D" show "$REV:deploy/macos-runtime.json" > "$package/macos-runtime.json"
+echo "==> сборка автономного установщика macOS"
+"$PYTHON" "$package/build-agent-macos.py" --archive "$package/studio-agent.zip" \
+    --output "$package/studio-agent-setup.pkg" --lock "$package/macos-runtime.json"
 
 echo "==> код ${REV:0:7} → $HOST:$R"
 # Чужие загрузки не трогаем независимо от возраста. Выход очищает только успешно созданную свою.
@@ -114,7 +119,7 @@ git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" "${PARTS[@]}" \
 "${SSH[@]}" "sudo sh -c 'cat > $IN/deploy/md2pdf.py'" < "$MD2PDF_SOURCE"
 echo "==> мост ${REV:0:7} → ZIP и установщик EXE"
 "${SSH[@]}" "sudo install -d -m 0755 $IN/agent"
-for file in studio-agent.zip studio-agent-setup.exe; do
+for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg; do
     "${SSH[@]}" "sudo sh -c 'cat > $IN/agent/$file'" < "$package/$file"
 done
 
