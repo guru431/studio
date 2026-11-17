@@ -111,8 +111,9 @@ NOT_PICTURE = "сервис вернул не картинку (нужен PNG, 
 
 #: Модели страницы: короткое имя → id у шлюза (контракт API картинок).
 MODELS = {"lustify": "lustify-v10-krea2-turbo", "flux": "flux-3-image-klein",
-          "snofs": "snofs-krea2-v1.6", "big-love": "big-love-eryn1", "fineview": "fineview-qw21"}
-STRENGTH_MODELS = {"lustify", "snofs", "big-love"}
+          "snofs": "snofs-krea2-v1.6", "big-love": "big-love-eryn1", "fineview": "fineview-qw21",
+          "muse": "muse-krea2-v3.5", "jib-moss": "jib-moss-v2", "fineporn": "fineporn-v5", "moody-krea": "moody-krea-v8"}
+STRENGTH_MODELS = {"lustify", "snofs", "big-love", "muse", "jib-moss", "fineporn", "moody-krea"}
 COMFY_MODELS = {value for name, value in MODELS.items() if name != "flux"}
 RELEASE_MODELS = {name: MODELS[name] for name in ("lustify", "flux")}
 MEDIA_TIMEOUT_SEC = 1900
@@ -810,7 +811,7 @@ async def generate(job: Job) -> "tuple[bytes, int | None, str]":
     payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "size": job.size,
                "seed": job.seed, "response_format": "b64_json"}
     await _release_others(job)
-    timeout = MEDIA_TIMEOUT_SEC if job.model in {"snofs", "big-love", "fineview"} else GENERATE_TIMEOUT_SEC
+    timeout = MEDIA_TIMEOUT_SEC if job.model in MODELS and job.model not in {"lustify", "flux"} else GENERATE_TIMEOUT_SEC
     try:
         if job.image is not None:
             if job.model in STRENGTH_MODELS:

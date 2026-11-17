@@ -3582,7 +3582,8 @@ def test_new_media_models_are_selectable_and_h3_controls_match_its_graph(browser
         ('eval', 'wan', "(() => { const s = document.querySelector('#video-model'); s.value = [...s.options].find(o => o.value.endsWith(':wan')).value; s.dispatchEvent(new Event('change')); return s.value; })()"),
         ('eval', 'wanControls', "[document.querySelector('#chip-smooth').hidden, document.querySelector('#chip-quality').disabled, document.querySelector('#video-seconds').readOnly, document.querySelector('#chip-quality').textContent]")], width=390, height=900)
     assert not r.get('failed'), r
-    assert all(name in r['values']['photos'] for name in ('SNOFS Krea 2', 'Big Love Eryn1', 'FineView QW21'))
+    assert all(name in r['values']['photos'] for name in ('SNOFS Krea 2', 'Big Love Eryn1', 'FineView QW21',
+        'Muse 3.5 Krea 2', 'Jib Mix Moss V2', 'FinePorn v5', 'Moody Krea v8'))
     assert r['values']['controls'] == [True, '5', '768p', True, True]
     assert r['values']['wanControls'] == [False, False, False, '576p']
     assert not problems(r), problems(r)

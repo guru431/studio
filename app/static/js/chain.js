@@ -13,7 +13,8 @@ import { dateOnly } from './time.js';
 const KINDS = { generation: tr("Генерация"), upload: tr("Фото с устройства"), edit: tr("Правка"), brush: tr("Правка кистью"),
   video: tr("Ролик") };
 export const NAMES = { lustify: 'Lustify', flux: 'FLUX', snofs: 'SNOFS Krea 2',
-  'big-love': 'Big Love Eryn1', fineview: 'FineView QW21' };
+  'big-love': 'Big Love Eryn1', fineview: 'FineView QW21', muse: 'Muse 3.5 Krea 2',
+  'jib-moss': 'Jib Mix Moss V2', fineporn: 'FinePorn v5', 'moody-krea': 'Moody Krea v8' };
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p', native: '768p' };
 
 /** Модель внешнего сервиса: не из перечня шлюза (images.MODELS). */
@@ -28,7 +29,7 @@ export function seedOf(step) {
 
 /** Сила, которую стоит показывать: только у Lustify. */
 export function strengthOf(step) {
-  return ['lustify', 'snofs', 'big-love'].includes(step.model) && step.strength !== undefined && step.strength !== null ? step.strength : null;
+  return ['lustify', 'snofs', 'big-love', 'muse', 'jib-moss', 'fineporn', 'moody-krea'].includes(step.model) && step.strength !== undefined && step.strength !== null ? step.strength : null;
 }
 
 /** Модель, размер, seed и сила шага или записи — части подписи. */
