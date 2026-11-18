@@ -489,7 +489,8 @@ async def projects(aid: int, request: Request):
     own_agent(request, aid, shared=True)
     items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
     shared = {r[0] for r in state.DB.execute("SELECT DISTINCT project FROM project_members WHERE agent_id = ?", (aid,))}
-    return {"items": [{"pid": i["pid"], "name": i["name"], "shared": i["pid"] in shared}
+    return {"items": [{"pid": i["pid"], "name": i["name"], "shared": i["pid"] in shared,
+                       **({"last_code_bytes": size} if type(size := i.get("last_code_bytes")) is int and size >= 0 else {})}
                       for i in (items if isinstance(items, list) else [])
                       if isinstance(i, dict) and isinstance(i.get("pid"), str) and PID_RE.fullmatch(i["pid"])
                       and isinstance(i.get("name"), str)]}
@@ -558,7 +559,7 @@ async def project_summary(aid: int, pid: str, request: Request):
     result = {key: value if type(value := data.get(key)) is int and value >= 0 else None
               for key in ("findings", "ideas", "changed", "unpushed")}
     if code_size:
-        size = data.get("code_bytes")
+        size = data.get("code_bytes") if data.get("code_size_version") == 2 else None
         result["code_bytes"] = size if type(size) is int and size >= 0 else None
     if "github" in data:
         result["github"] = _remote_status(data["github"])

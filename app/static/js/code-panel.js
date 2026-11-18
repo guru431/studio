@@ -303,6 +303,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   let pending = 0;         // select/pin ждут списка: выбор при входе их не перебивает
   let opening = null;      // идущий POST …/open: { aid, done } — done: открылся ли (ready ждёт его)
   let projectItems = [];
+  let codeSizes = new Map();
   let refreshing = null;
   let summariesBusy = false;
   if (!snapshots.has(me.id)) snapshots.set(me.id, { summaries: new Map(), checked: new Map() });
@@ -419,8 +420,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         return el('a', { class: 'code-project-remote', href: `${href}?tab=git`,
           'data-git-level': data.stale ? 'unknown' : level, title, 'aria-label': title }, `${remote.name} ${mark}`);
       });
-    const size = Number.isInteger(data?.code_bytes) ? `${data.code_bytes.toLocaleString(locale())} ${tr("Б")}` : '—';
-    summary.replaceChildren(el('span', { class: 'code-project-size' }, tr("Код: {0}", size)),
+    const bytes = codeSizes.get(li.dataset.pid);
+    const size = bytes === undefined ? '—' : tr("{0} КБ", (bytes / 1000).toLocaleString(locale(), { maximumFractionDigits: 3 }));
+    summary.replaceChildren(el('span', { class: 'code-project-size',
+      title: bytes !== undefined && data?.code_bytes == null ? tr("Последний успешный замер") : '' }, tr("Код: {0}", size)),
     el('a', { class: 'code-project-git', href: `${href}?tab=git`,
       'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
       title: tr("Изменено файлов: {0}. Не запушено коммитов: {1}. По локальным данным Git, без fetch.", value('changed'), value('unpushed')) }, git),
@@ -461,8 +464,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         const diff = visibilityRank(a) - visibilityRank(b);
         if (diff) return diff;
       } else if (sort.value !== 'name') {
-        const av = details?.get(a.dataset.pid)?.[sort.value];
-        const bv = details?.get(b.dataset.pid)?.[sort.value];
+        const av = sort.value === 'code_bytes' ? codeSizes.get(a.dataset.pid) : details?.get(a.dataset.pid)?.[sort.value];
+        const bv = sort.value === 'code_bytes' ? codeSizes.get(b.dataset.pid) : details?.get(b.dataset.pid)?.[sort.value];
         const diff = (Number.isFinite(bv) ? bv : -1) - (Number.isFinite(av) ? av : -1);
         if (diff) return diff;
       }
@@ -505,6 +508,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     function publish(project, data) {
       if (!alive || mine !== gen || own.signal.aborted) return;
       const snapshot = { ...(withSize ? { code_bytes: null } : {}), ...data, readAt: performance.now() };
+      if (Number.isSafeInteger(snapshot.code_bytes)) codeSizes.set(project.pid, snapshot.code_bytes);
       results.set(project.pid, snapshot);
       const row = body.querySelector(`li[data-pid="${project.pid}"]`);
       if (row) paintSummary(row, snapshot);
@@ -810,6 +814,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     if (!alive || mine !== gen) return;
     mode = 'projects';
     projectItems = found;
+    codeSizes = new Map();
+    for (const p of found) {
+      const bytes = p.last_code_bytes ?? summaries.get(agent.id)?.get(p.pid)?.code_bytes;
+      if (Number.isSafeInteger(bytes)) codeSizes.set(p.pid, bytes);
+    }
     const rows = found.map((p) => {
       const link = el('a', { class: 'code-project-name', title: p.name, href: `#/code/${agent.id}/${p.pid}` }, p.name);
       const row = el('div', { class: 'code-project' },
@@ -983,9 +992,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       if (!agent?.project_summary || selected !== Number(aid)) return;
       const mine = gen;
       try {
-        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary?refresh=true`, undefined,
+        const sizeQuery = sort.value === 'code_bytes' ? '&code_size=true' : '';
+        const data = await api('GET', `/api/code/agents/${aid}/projects/${pid}/summary?refresh=true${sizeQuery}`, undefined,
           { headers: { 'x-studio-passive': '1' } });
         if (!alive || mine !== gen) return;
+        if (Number.isSafeInteger(data.code_bytes)) codeSizes.set(pid, data.code_bytes);
         summaries.get(selected)?.set(pid, { ...data, readAt: performance.now() });
         const row = body.querySelector(`li[data-pid="${pid}"]`);
         if (row) paintSummary(row, data);

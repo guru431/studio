@@ -16,6 +16,33 @@ CONFIG = "config.json"
 KEY = "key.bin"
 CHOICES = "choices.json"
 CHOICES_MAX = 500
+CODE_SIZES = "code-sizes-v2.json"
+_CODE_SIZES_LOCK = threading.Lock()
+
+
+def read_code_sizes() -> dict[str, int]:
+    """Последние успешные замеры по хешу каталога. Ошибка кэша не мешает показать проекты."""
+    try:
+        with (home() / CODE_SIZES).open("rb") as stream:
+            raw = json.loads(stream.read(128 * 1024))
+        return {k: v for k, v in raw.items() if type(v) is int and v >= 0} if isinstance(raw, dict) else {}
+    except (OSError, ValueError, RecursionError):
+        return {}
+
+
+def remember_code_size(key: str, size: int) -> None:
+    with _CODE_SIZES_LOCK:
+        sizes = read_code_sizes()
+        if sizes.get(key) == size:
+            return
+        sizes.pop(key, None)
+        sizes[key] = size
+        while len(sizes) > 2048:
+            del sizes[next(iter(sizes))]
+        try:
+            write_atomic(home() / CODE_SIZES, json.dumps(sizes).encode("ascii"))
+        except OSError:
+            pass
 
 
 @dataclasses.dataclass

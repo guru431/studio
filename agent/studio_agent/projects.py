@@ -22,6 +22,11 @@ def _key(path) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
+def code_size_key(path: Path) -> str:
+    """Путь из каталога уже разрешён. Хеш различает и смену корня при прежнем pid."""
+    return pid(os.path.normcase(path))
+
+
 def roots(config) -> list[str]:
     """Настройки, список или прежний одиночный путь; дубли настоящих путей исключены."""
     paths = getattr(config, "projects_roots", None)
@@ -165,9 +170,15 @@ class Catalog:
             self.signature, self.until = signature, self.now() + self.ttl
         return self.items
 
-    def list(self, config, *, refresh=False):
+    def list(self, config, *, refresh=False, sizes=None):
         with self.lock:
-            return [dict(row) for row, _ in self._read(config, refresh)]
+            items = []
+            for row, path in self._read(config, refresh):
+                item = dict(row)
+                if sizes and (size := sizes.get(code_size_key(path))) is not None:
+                    item["last_code_bytes"] = size
+                items.append(item)
+            return items
 
     def create(self, config, root_id, name):
         with self.lock:

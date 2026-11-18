@@ -926,6 +926,8 @@ globalThis.StudioEnglish = Object.freeze({
   "По дате изменения": "By modification date",
   "По размеру кода": "By code size",
   "Код: {0}": "Code: {0}",
+  "{0} КБ": "{0} kB",
+  "Последний успешный замер": "Last successful measurement",
   "По количеству проблем": "By issue count",
   "По количеству идей": "By idea count",
   "Сначала незапушенные": "Unpushed first",

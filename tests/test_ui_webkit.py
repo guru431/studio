@@ -511,7 +511,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
         "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0},
         "remotes": [{"name": "cld", "state": "behind", "behind": 3, "ahead": 0},
                     {"name": "upstream", "state": "behind", "behind": 10, "ahead": 0}]}
-    page.studio_machine.projects['beta']['summary'] = {"git": "ok", "checked_at": T0, "github": None, "code_bytes": 12}
+    page.studio_machine.projects['beta']['summary'] = {"git": "ok", "checked_at": T0, "github": None,
+                                                      "code_bytes": 12, "code_size_version": 2}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
     button = page.locator('#code-project-sort-open')

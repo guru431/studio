@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from studio_agent import gitinfo, project_summary
+from studio_agent import gitinfo, project_summary, source_size
 
 
 def test_code_bytes_counts_nested_sources_and_skips_dependencies_and_assets(tmp_path):
@@ -24,6 +24,28 @@ def test_code_bytes_incomplete_scan_is_unknown(tmp_path):
     ticks = iter((0, 0, project_summary.CODE_SCAN_SEC))
     (tmp_path / "first.py").touch()
     assert project_summary.code_bytes(tmp_path, monotonic=lambda: next(ticks)) is None
+
+
+def test_code_bytes_counts_embedded_source_and_skips_rendered_and_reference_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(source_size, "BLOCK", 37)
+    uri = b"data:image/png;base64," + b"A" * 2000
+    source = b"const icon = '" + uri + b"';"
+    html = (b"<!-- <script>example</script> --><img src='" + uri + b"'>"
+            b"<script type='application/json'>[123]</script><script src='lib.js'>ignored</script>"
+            b"<script type='module'>" + source + b"</script><style>.x{color:red}</style>")
+    (tmp_path / "view.html").write_bytes(html)
+    (tmp_path / "snapshot-render.html").write_bytes(html)
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "saved.html").write_bytes(html)
+    (tmp_path / "main.js").write_bytes(source)
+    assert project_summary.code_bytes(tmp_path) == 2 * len(b"const icon = '';") + len(b".x{color:red}")
+
+
+def test_code_bytes_handles_component_code_and_windows_script_encoding(tmp_path):
+    (tmp_path / "component.astro").write_bytes(b"---\r\nlet n = 1;\r\n---\r\n<p>page</p><script>go()</script>")
+    (tmp_path / "task.ps1").write_bytes("'data:image/png;base64,QUJD'".encode("utf-16"))
+    (tmp_path / "binary.js").write_bytes(b"\x00\xff")
+    assert project_summary.code_bytes(tmp_path) == len(b"let n = 1;\r\ngo()''")
 
 
 def test_code_bytes_skips_linked_directories(tmp_path):
