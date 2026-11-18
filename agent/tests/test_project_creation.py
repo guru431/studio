@@ -93,7 +93,7 @@ async def test_creation_is_blocked_while_agent_is_updating_or_exiting(agent, roo
     from types import SimpleNamespace
     await agent.handle(req('open', pin=None))
     if state == 'updating':
-        agent.updater = SimpleNamespace(busy=True)
+        agent.updater = SimpleNamespace(busy=True, state="waiting")
     else:
         agent.local_exit_pending = True
     response = (await agent.handle(req('project_create', root=projects.list_roots(agent.cfg)[0]['id'], name='new')))[0]
