@@ -76,6 +76,7 @@ class FakeMachine:
         self.computer_info = False
         self.terminal = False
         self.software_versions = False
+        self.software_update_all = False
         self.software_data = {'items': [], 'update': {'tool': None, 'state': 'idle'}}
         self.visualizations = False
         self.passive_requests = False            # фоновые просьбы (`passive: true`) срок PIN не продлевают (§3)
@@ -125,7 +126,8 @@ class FakeMachine:
                 **({'agent_update': True} if self.agent_update else {}),
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "terminal", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
-                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models")
+                                           "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
+                                           "software_update_all")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))

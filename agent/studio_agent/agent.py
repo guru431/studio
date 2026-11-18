@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, limits, mcp, metadata, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, limits, mcp, metadata, mirror, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .software import Software
 from .pin import OpenSessions, PinStore
@@ -43,6 +43,14 @@ OPS = {
     "mcp_get": ("project",),
     "mcp_save": ("project",),
     "project_create": ("root", "name"),
+    "mirror_scan": ("project",),
+    "mirror_destination": ("root", "name"),
+    "mirror_read": ("project",),
+    "mirror_text": ("root", "name", "path"),
+    "mirror_begin": ("root", "name", "ticket"),
+    "mirror_chunk": ("ticket",),
+    "mirror_apply": ("root", "name", "ticket", "expected"),
+    "mirror_abort": ("ticket",),
     "project_summary": ("project", "refresh", "remote", "code_size"),
     "activity": (),
     "chats": ("project", "refresh"),
@@ -82,7 +90,7 @@ RESTART_SAFE_OPS = frozenset({
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
     "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
-    "worktrees", "read", "raw", "visualization", "git",
+    "worktrees", "read", "raw", "visualization", "git", "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
 })
 
 # Новая операция получает доступ соавтора только после явного включения в контракт.
@@ -135,6 +143,7 @@ class Agent:
         self._usage = subscription.UsageCache(now=now)
         self._file_stats_lock = asyncio.Lock()
         self._files_lock = asyncio.Lock()
+        self._mirrors = mirror.Transfers()
         self._search_lock = asyncio.Lock()
         self._forking = {}
         self._file_index = discovery.FileIndex()
@@ -165,8 +174,9 @@ class Agent:
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
-                 "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
-                 "computer_info": True, "software_versions": True, "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
+                 "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
+                 "computer_info": True, "software_versions": True, "software_update_all": True,
+                 "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
                  "codex_models": True, "opencode_models": self.opencode is not None}
@@ -318,7 +328,7 @@ class Agent:
             if op not in SHARED_OPS or (op not in ("projects", "activity") and
                     ("project" not in OPS[op] or frame.get("project") not in scope)):
                 raise Refused("closed")
-        if self.local_exit_pending and op not in RESTART_SAFE_OPS:
+        if self.local_exit_pending and op not in RESTART_SAFE_OPS and op not in ("mirror_chunk", "mirror_apply", "mirror_abort"):
             raise Refused("busy", "Агент завершает работу по выбору на компьютере")
         if (self.updater is not None and self.updater.state == "restarting"
                 and op not in ("agent_update_status", "agent_update_cancel")):
@@ -329,14 +339,14 @@ class Agent:
             raise Refused("closed")
         if op not in OPS:
             raise Refused("invalid")
-        if self.software.busy and (op in ('turn', 'chat_fork', 'agent_update') or
+        if self.software.busy and (op in ('turn', 'chat_fork', 'agent_update', 'mirror_begin') or
                 self.software.state == 'updating' and op not in (
                     'computer_info', 'terminal_info', 'software_versions', 'software_update', 'software_update_cancel',
                     'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
             raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
                 "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start",
-                "mcp_save", "usage_reset"):
+                "mcp_save", "usage_reset", "mirror_begin"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
@@ -466,10 +476,14 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == "ticket":
+            return isinstance(value, str) and SESSION.fullmatch(value) is not None
+        if name == "expected":
+            return isinstance(value, str) and VERSION.fullmatch(value) is not None
         if name == "idempotency_key":
             return isinstance(value, str) and limits.CHAT_ID.fullmatch(value) is not None
         if name == 'software':
-            return value in ('claude', 'codex', 'opencode')
+            return value in ('claude', 'codex', 'opencode', 'all')
         if name == "source":
             return visualizations.valid_source(value)
         if name == "operation":
@@ -566,6 +580,35 @@ class Agent:
 
     async def _op_project_roots(self, frame, after):
         return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
+
+    async def _op_mirror_scan(self, frame, after):
+        return await asyncio.to_thread(mirror.scan, await self._project(frame))
+
+    async def _op_mirror_destination(self, frame, after):
+        def inspect():
+            path = mirror.target(self.cfg, frame["root"], frame["name"])
+            data = mirror.scan(path)
+            return {**data, "pid": projects.project_id(self.cfg, path.parent, path.name), "folder": str(path.parent)}
+        return await asyncio.to_thread(inspect)
+
+    async def _op_mirror_read(self, frame, after):
+        return await asyncio.to_thread(mirror.read, await self._project(frame), frame.get("reads"))
+
+    async def _op_mirror_text(self, frame, after):
+        def read():
+            path = mirror.target(self.cfg, frame["root"], frame["name"])
+            return files.read_text(path, frame["path"])
+        return await asyncio.to_thread(read)
+
+    async def _mirror_transfer(self, frame, after):
+        async with self._files_lock:
+            return await asyncio.to_thread(self._mirrors.run, frame["op"], frame, self.cfg)
+
+    _op_mirror_begin = _op_mirror_chunk = _op_mirror_apply = _op_mirror_abort = _mirror_transfer
+
+    @property
+    def mirror_active(self):
+        return self._mirrors.active
 
     async def _op_mcp_get(self, frame, after):
         project = await self._project(frame)

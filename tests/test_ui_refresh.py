@@ -157,6 +157,40 @@ class RefreshMachine(FakeMachine):
                 "start": 0, "total": 1}
 
 
+def test_automatic_refresh_retries_all_summaries_and_preserves_composer(browser, live):
+    login = "refresh-auto"
+    live.add_user(login)
+    machine = RefreshMachine({"alpha": {"chats": {CODE_CHAT_A: code_session("Current chat")}}, "beta": {}})
+    machine.project_summary = True
+    aid, server = code_online(live, login, machine)
+    address = f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    summary = f"/api/code/agents/{aid}/projects/{pid('alpha')}/summary"
+    text = "Черновик, который нельзя потерять"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(address),
+            ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 1')"),
+            ("type", "#code-text", text),
+            ("route", summary, 503, '{"detail":{"code":"offline","message":"Временная ошибка"}}'),
+            ("click", "#refresh-app"),
+            ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 3')"),
+            ("eval", "afterFirstRetry", "document.querySelector('#code-text').value"),
+            ("unroute", summary),
+            ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 4')"),
+            ("wait", "document.querySelectorAll('.code-project-findings').length === 2"
+                     " && [...document.querySelectorAll('.code-project-findings')].every(n => n.textContent.includes('9'))"),
+            ("eval", "afterRecovery", "document.querySelector('#code-text').value")],
+            init="""const delay = window.setTimeout;
+                window.setTimeout = (fn, ms, ...args) =>
+                  delay(fn, ms === 5000 || ms === 10000 ? 1200 : ms, ...args);""")
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["afterFirstRetry"] == result["values"]["afterRecovery"] == text
+    summaries = [q for q in code_requests(machine, "project_summary") if q.get("refresh")]
+    assert [q["project"] for q in summaries].count(pid("beta")) >= 3
+    assert len([q for q in code_requests(machine, "projects") if q.get("refresh")]) >= 3
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_refresh_reloads_all_projects_and_the_open_chat(browser, live, width, tmp_path):
     login = f"refresh-chat-{width}"

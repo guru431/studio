@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 47
+VERSION = 48
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -603,6 +603,21 @@ WHERE section = 'speech'
   AND NOT EXISTS (SELECT 1 FROM json_each(models) WHERE value = 'f5-tts');
 """
 SCHEMA += F5_TTS_47
+PROJECT_MIRRORS_48 = """CREATE TABLE project_mirrors(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
+    project TEXT NOT NULL,
+    destination INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
+    root TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    location BLOB NOT NULL,
+    baseline BLOB,
+    synced REAL,
+    UNIQUE(destination, root, name_key)
+);
+CREATE INDEX project_mirrors_source ON project_mirrors(source, project);
+"""
+SCHEMA += PROJECT_MIRRORS_48
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -704,6 +719,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     45: SPEECH_45,
     46: AGENT_PLATFORM_46,
     47: F5_TTS_47,
+    48: PROJECT_MIRRORS_48,
 }
 
 

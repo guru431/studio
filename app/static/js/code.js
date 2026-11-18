@@ -46,13 +46,15 @@ import { api, me } from './api.js';
 import { svg } from './icons.js';
 import { projectGit, gitLevel, GIT_ACTIONS } from './code-git.js';
 import { projectMembers } from './project-members.js';
+import { projectMirrors } from './project-mirrors.js';
 import { engineOrder } from './code-options.js';
 import { panelView } from './code-panel.js';
 import { sessionList } from './code-sessions.js';
 import { tabBar } from './code-tabs.js';
 import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspace.js';
 import { lazy } from './stale.js';
-import { refreshRequested } from './refresh.js';
+import { refreshAfterFailure, refreshRequested } from './refresh.js';
+import { savedDrafts } from './code-drafts.js';
 import { agentDownload, el, openDialog, words } from './ui.js';
 
 const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
@@ -93,8 +95,12 @@ const chatLists = new Map();
 const CHAT_LISTS_MAX = 20;
 let refreshModels = refreshRequested;
 document.addEventListener('studio-code-clear', () => { lists.clear(); chatLists.clear(); });
-/** Чаты с неотправленным черновиком (`${aid}/${chat}`, событие code-chat.js) — признак ✎ вкладки; только память. */
+/** Чаты с неотправленным черновиком: ✎ вкладки. */
 const draftKeys = new Set();
+document.addEventListener('studio-locked', () => { draftKeys.clear(); paintTabs(); });
+document.addEventListener('studio-before-auto-refresh', (event) => {
+  if (proj?.files?.dirty() || view?.refreshBlocked?.()) event.preventDefault();
+});
 document.addEventListener('studio-code-draft', ({ detail }) => {
   if (detail.draft) draftKeys.add(detail.key);
   else draftKeys.delete(detail.key);
@@ -319,6 +325,7 @@ function chatsOf(p, fresh = false, passive = false) {
             if (!p.complete) shownStatus.textContent = partial;
             else if (shownStatus.textContent === partial) shownStatus.textContent = '';
           }
+          if (!p.complete) refreshAfterFailure();
           const key = cacheKey(p);
           chatLists.delete(key);
           // При возвращении метки активности ждут свежего ответа компьютера.
@@ -331,8 +338,9 @@ function chatsOf(p, fresh = false, passive = false) {
       return p.items;
     });
     p.listing = promise;
-    promise.catch(() => {
+    promise.catch((err) => {
       if (p.listing === promise) p.listing = null;
+      if (proj === p) refreshAfterFailure(err);
     }).finally(() => { if (!p.listing || p.listing === promise) p.listingPending = false; });
   }
   return p.listing;
@@ -435,9 +443,11 @@ function enter(aid, pid) {
   const p = { key, aid, pid, naming: null, listing: null, loaded: false, items: [], info: new Map(), bar: null, files: null, git: null,
     repo: projectGit(aid, pid),
     chatBox: pane(false), filesBox: pane(true), gitBox: pane(true),
+    mirrorButton: el('button', { type: 'button', id: 'code-project-mirror', class: 'chip', hidden: true }, tr("Зеркало")),
     accessButton: el('button', { type: 'button', id: 'code-project-access', class: 'chip',
       title: tr("Совместная работа"), 'aria-label': tr("Доступ к проекту"), hidden: true }, tr("Доступ")) };
   ui.views.insertBefore(p.accessButton, document.getElementById('code-tab-chat'));
+  ui.views.insertBefore(p.mirrorButton, p.accessButton);
   const cached = chatLists.get(cacheKey(p));
   if (cached) {
     p.items = cached;
@@ -491,6 +501,8 @@ function closeProject() {
   ui.placeShared.hidden = true;
   proj.members?.unmount();
   proj.accessButton.remove();
+  proj.mirrors?.unmount();
+  proj.mirrorButton.remove();
   proj.gitActions?.unmount();
   stopPoll();
   if (proj.bar) proj.bar.unmount();
@@ -519,6 +531,8 @@ async function plaque(p) {
     ui.placeProject.textContent = name || tr("Проект");
     ui.placeShared.hidden = !p.shared;
     if (name && !agent.shared && !p.members) {
+      p.mirrors = projectMirrors(ui.root, p.mirrorButton, p.aid, { pid: p.pid, name, capable: agent.project_mirror });
+      p.mirrorButton.hidden = false;
       p.accessButton.setAttribute('aria-label', tr("Доступ к проекту · {0}", name));
       p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name }, (shared) => {
         if (p.shared === shared) return;
@@ -544,6 +558,7 @@ function remember(aid, pid, key) {
  * из «Текстов», прочее — словами. Кэши раздела и метки активности сбрасывают только closed и 404 самого компьютера
  * (`computer: true`); «нет файла» или сессии моста — обычный отказ. */
 function failed(err, aid, status, file = null) {
+  if (err) refreshAfterFailure(err);
   if (err?.code === 'closed' || (err?.code === 'not_found' && err.detail?.computer === true)) {
     document.dispatchEvent(new Event('studio-code-clear'));
   }
@@ -585,7 +600,10 @@ function opened(aid) {
 
 function usable(agent, status) {
   if (!agent) status.textContent = NO_AGENT;
-  else if (!agent.online) status.textContent = OFFLINE;
+  else if (!agent.online) {
+    status.textContent = OFFLINE;
+    refreshAfterFailure();
+  }
   return !!agent && agent.online;
 }
 
@@ -918,13 +936,14 @@ export function mount(node, context) {
   host = node;
   ctx = context;
   none = false;
+  for (const key of Object.keys(savedDrafts())) draftKeys.add(key);
   acted = Date.now();                     // вход в раздел — действие владельца
   const mine = ++gen;
   layout();
   const initialAgents = api('GET', `/api/agents${refreshModels ? '?refresh=true' : ''}`);
   refreshModels = false;
   initialAgents.catch(() => {});
-  load().catch(() => null).then(() => {
+  load().catch((err) => { refreshAfterFailure(err); }).then(() => {
     if (mine !== gen || !host) return;
     const ws = get();
     const [aid, pid] = ctx.id ? ctx.id.split('/') : [];

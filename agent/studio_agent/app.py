@@ -556,7 +556,7 @@ class Controller:
 
     def _update_active(self) -> bool:
         return (self.agent is not None and (self.agent.desktop.status()["active"] or self.agent.software.busy
-                                            or self.agent.restart_blocking_requests > 0)
+                                            or self.agent.mirror_active or self.agent.restart_blocking_requests > 0)
                 or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode)))
 
     def _update_holds(self) -> dict:

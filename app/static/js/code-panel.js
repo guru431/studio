@@ -1,5 +1,5 @@
 import { locale, tr } from './i18n.js';
-import { refreshRequested } from './refresh.js';
+import { refreshAfterFailure, refreshRequested } from './refresh.js';
 /* Панель раздела «Claude Code» (спека 2026-10-29-studio-code-workspace-design, 6.1–6.3): компьютеры учётки строками,
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
  *
@@ -528,10 +528,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
               if (results.get(project.pid) === snapshot) {
                 publish(project, withSize ? { ...remote, code_bytes: snapshot.code_bytes } : remote);
               }
-            }).catch(() => {}));
+            }).catch((err) => { if (alive && mine === gen && !own.signal.aborted) refreshAfterFailure(err); }));
         } catch (err) {
           if (own.signal.aborted || !alive || mine !== gen) return;
           failures += 1;
+          if (err.code !== 'closed') refreshAfterFailure();
           publish(project, { ...results.get(project.pid), stale: true });
           if (['closed', 'offline'].includes(err.code)) {
             blocked = true;
@@ -547,7 +548,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
       if (!alive || mine !== gen) return;
       if (!failures) checked.set(agent.id, Date.now() / 1000);
-      else status.textContent = tr("Не удалось обновить сведения: {0}. Повторите обновление.", failures);
+      else if (!blocked) status.textContent = tr("Не удалось обновить сведения: {0}. Студия повторит обновление.", failures);
       for (const li of body.querySelectorAll('#code-projects li[data-pid]')) paintSummary(li, results.get(li.dataset.pid));
       sortProjects();
       paintUpdated();
@@ -580,7 +581,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         document.dispatchEvent(new Event('studio-code-clear'));
       }
     } catch (err) {
-      if (alive) status.textContent = words(err);
+      if (alive) {
+        status.textContent = words(err);
+        refreshAfterFailure(err);
+      }
       return null;
     }
     if (alive) paintAgents();
@@ -756,6 +760,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   function offline() {
+    refreshAfterFailure();
     summaries.delete(selected);
     checked.delete(selected);
     mode = 'offline';
@@ -765,7 +770,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   function refused(err) {
     mode = 'error';
     if (err && err.code === 'offline') offline();
-    else status.textContent = words(err);
+    else {
+      status.textContent = words(err);
+      if (err) refreshAfterFailure(err);
+    }
   }
 
   async function openIt(mine, agent, resume = false) {
@@ -1009,7 +1017,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         const row = body.querySelector(`li[data-pid="${pid}"]`);
         if (row) paintSummary(row, data);
         sortProjects();
-      } catch { /* Прежние сведения остаются до ручного обновления. */ }
+      } catch (err) { if (alive && mine === gen) refreshAfterFailure(err); }
     },
     select,
     pin,

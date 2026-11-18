@@ -44,6 +44,7 @@ disconnect до освобождения хода. Codex получает config
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.39.0 | `hello.project_mirror` и `hello.software_update_all` | §23, §21 |
 | 0.33.0 | `hello.codex_models` (`models`, `engine: codex`) — обновление каталога без смены канала | §22 |
 | 0.27.0 | `hello.software_versions` (`software_versions`, `software_update`, `software_update_cancel`) | §21 |
 | до 0.3.0 | база v1: `open`, `projects`, `chats`, `history`, `turn`, `watch`, `answer`, `stop`, `files`, `read`, `raw`, `save`, `git`; `login` в `welcome`, отвязка `DELETE /api/agent/enroll` | §1–§7 |
