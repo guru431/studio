@@ -31,6 +31,7 @@ export function softwareView({ locked }) {
     const busy = ['waiting', 'updating'].includes(data.update.state);
     const rows = data.items.map((item) => {
       const label = names[item.id];
+      const install = item.id === 'claude' && item.source === 'sdk' && item.can_update;
       const current = item.reason === 'check' ? tr('Нет данных')
         : item.installed ? item.version || tr('Нет данных') : tr('Не установлено');
       const versionState = item.installed && item.version && item.latest && item.reason !== 'check'
@@ -50,15 +51,17 @@ export function softwareView({ locked }) {
       if (reasons[item.reason] && item.reason !== 'not_installed') {
         details.append(el('span', { class: 'muted small' }, tr(reasons[item.reason])));
       }
+      if (install) details.append(el('span', { class: 'muted small' }, tr('Будет установлен отдельный CLI Claude Code.')));
       const update = el('button', { type: 'button', class: 'btn small',
-        'data-software-update': item.id, 'aria-label': tr('Обновить {0}', label) }, tr('Обновить'));
+        'data-software-update': item.id, 'aria-label': install ? tr('Установить {0}', label) : tr('Обновить {0}', label) },
+      install ? tr('Установить') : tr('Обновить'));
       update.disabled = busy || !item.can_update;
       update.addEventListener('click', () => load('POST', `/${item.id}/update`));
       return el('div', { class: 'code-software-row' },
         el('div', { class: 'code-software-heading' }, el('strong', {}, label), update), details);
     });
     const all = el('button', { type: 'button', class: 'btn small', id: 'code-software-update-all',
-      disabled: busy || !data.items.some((item) => item.can_update) }, tr('Обновить все агенты'));
+      disabled: busy || !data.items.some((item) => item.can_update && item.source !== 'sdk') }, tr('Обновить все агенты'));
     all.addEventListener('click', () => load('POST', '/all/update'));
     host.replaceChildren(el('div', { class: 'code-software-heading' }, el('h3', {}, tr('Программы')),
       agent.software_update_all ? all : null), ...rows);

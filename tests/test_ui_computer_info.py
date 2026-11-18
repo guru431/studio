@@ -61,6 +61,33 @@ FITS = """(() => {
 })()"""
 
 
+def test_macos_bundled_claude_offers_an_explicit_native_install(browser, live):
+    login = "macos-bundled-claude"
+    live.add_user(login)
+    machine = computer()
+    machine.platform = "darwin"
+    machine.software_versions = machine.software_update_all = True
+    machine.software_data = {
+        "items": [{"id": "claude", "installed": True, "version": "2.1.310", "source": "sdk",
+                   "latest": "2.1.327", "update_available": True, "can_update": True}],
+        "update": {"tool": None, "state": "idle"},
+    }
+    aid, server = code_online(live, login, machine)
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', '!!document.querySelector("#code-projects li")'),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
+            ('wait', 'document.querySelector("[data-software-update=claude]")?.textContent === "Установить"'),
+            ('eval', 'batchDisabled', 'document.querySelector("#code-software-update-all").disabled'),
+            ('click', '[data-software-update=claude]'),
+            ('wait', '!!document.querySelector("[data-software-cancel]")')])
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["batchDisabled"]
+    assert [r["software"] for r in machine.requests if r["op"] == "software_update"] == ["claude"]
+
+
 @pytest.mark.parametrize('width', [320, 568, 1280])
 def test_software_versions_update_progress_and_verified_result(browser, live, width, tmp_path):
     login = f'software-versions-{width}'

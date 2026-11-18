@@ -64,16 +64,21 @@ def test_homebrew_updates_only_known_casks_and_preserves_old_installations(monke
         software.latest('codex', 'homebrew', '../untrusted')
 
 
-def test_detects_homebrew_cask_from_the_resolved_cli_path(monkeypatch):
-    path = Path('/opt/homebrew/Caskroom/codex/1.2.3/codex')
+@pytest.mark.parametrize(("tool", "cask"), [("codex", "codex"), ("claude", "claude-code@latest")])
+def test_detects_homebrew_cask_from_the_resolved_cli_path(monkeypatch, tool, cask):
+    path = Path("/opt/homebrew/Caskroom") / cask / "1.2.3" / tool
     monkeypatch.setattr(software.host, 'MACOS', True)
-    monkeypatch.setattr(software.codex_rpc, 'find_cli', lambda: path)
+    monkeypatch.setattr(software.codex_rpc if tool == "codex" else software.cli, 'find_cli', lambda: path)
     monkeypatch.setattr(Path, 'resolve', lambda path: path)
     monkeypatch.setattr(Path, 'is_file', lambda path: path == Path('/opt/homebrew/bin/brew'))
     monkeypatch.setattr(software.subprocess, 'run', lambda *args, **kwargs:
         SimpleNamespace(returncode=0, stdout=b'codex-cli 1.2.3'))
-    result = software.inspect('codex')
-    assert result['source'] == 'homebrew' and result['reason'] is None and result['_package'] == 'codex'
+    result = software.inspect(tool)
+    assert result['source'] == 'homebrew' and result['reason'] is None and result['_package'] == cask
+    assert software.command(result, "1.2.10")[0][-1] == cask
+    monkeypatch.setattr(software, "_json", lambda url: {"version": "1.2.10"} if
+                        url == f"https://formulae.brew.sh/api/cask/{cask}.json" else pytest.fail(url))
+    assert software.latest(tool, "homebrew", cask) == "1.2.10"
 
 
 def test_native_claude_uses_its_installer_and_bundled_opencode_is_read_only(monkeypatch, tmp_path):
@@ -92,6 +97,57 @@ def test_native_claude_uses_its_installer_and_bundled_opencode_is_read_only(monk
         SimpleNamespace(returncode=0, stdout=b'opencode v2.3.0\n'))
     result = software.inspect('opencode')
     assert result['reason'] == 'manual' and result['installed'] and result['version'] == '2.3.0'
+
+
+def test_macos_sdk_claude_offers_the_official_native_installer(monkeypatch, tmp_path):
+    binary = tmp_path / "sdk" / "claude"
+    monkeypatch.setattr(software.host, "MACOS", True)
+    monkeypatch.setattr(software.cli, "find_cli", lambda: None)
+    monkeypatch.setattr(software, "_bundled_claude", lambda: binary)
+    monkeypatch.setattr(software.subprocess, "run", lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=b"2.1.310 (Claude Code)"))
+    installed = software.inspect("claude")
+    assert installed["source"] == "sdk" and installed["reason"] is None
+    assert software.command(installed, "2.1.327")[0] == [str(binary), "install", "2.1.327"]
+    with pytest.raises(ValueError):
+        software.command({**installed, "_path": tmp_path / "different-cli"}, "2.1.327")
+    monkeypatch.setattr(software.host, "MACOS", False)
+    assert software.inspect("claude")["reason"] == "bridge"
+
+
+@pytest.mark.parametrize("source, channel", [("sdk", "latest"), ("native", "stable")])
+def test_macos_claude_checks_the_configured_native_release_channel(monkeypatch, tmp_path, source, channel):
+    monkeypatch.setattr(software.host, "MACOS", True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "settings.json").write_text(json.dumps({"autoUpdatesChannel": channel}), encoding="utf-8")
+
+    def read(url, limit):
+        assert url == f"https://downloads.claude.ai/claude-code-releases/{channel}" and limit == 64
+        return b"2.1.311\n"
+
+    monkeypatch.setattr(software, "_payload", read)
+    assert software.latest("claude", source) == "2.1.311"
+
+
+@pytest.mark.parametrize("after", ["native", "sdk"])
+async def test_macos_sdk_install_verifies_separate_cli_and_is_excluded_from_batch(monkeypatch, tmp_path, after):
+    m = manager()
+    bundled = item("claude", source="sdk", _path=tmp_path / "sdk/claude", latest="2.1.327", can_update=True)
+    native = tmp_path / ".local/bin/claude"
+    m.items = {"claude": bundled}
+    monkeypatch.setattr(software, "inspect", lambda tool: bundled.copy())
+    monkeypatch.setattr(software.cli, "find_cli", lambda: native)
+    install = AsyncMock()
+    monkeypatch.setattr(software, "install", install)
+    monkeypatch.setattr(m, "_read", AsyncMock(return_value=item("claude", source=after, version="2.1.327")))
+    with pytest.raises(Refused) as refused:
+        m.start("all")
+    assert refused.value.code == "unsupported"
+    m.start("claude")
+    await m.task
+    install.assert_awaited_once_with(bundled, "2.1.327")
+    assert m.state == ("done" if after == "native" else "error")
+    assert getattr(m.agent.runner, "cli_path", None) == (native if after == "native" else None)
 
 
 def test_json_lookup_refuses_redirects_and_limits_response(monkeypatch):

@@ -1,5 +1,6 @@
 """Выбор папки, PIN второго компьютера, копия и разница через настоящий интерфейс."""
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -58,3 +59,43 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
     assert result["values"]["order"] == "Файлы/Доступ"
     assert result["values"]["root"] and result["values"]["fits"]
     assert (destination / "local.env").read_bytes() == (source / "local.env").read_bytes()
+
+
+def test_mirror_dialog_finds_a_renamed_git_clone_and_attaches_it_without_copying(browser, live, computers):
+    if not shutil.which("git"):
+        pytest.skip("Git нужен для чтения .git/config")
+    login = "existing-mirror"
+    live.add_user(login)
+    source, first, second = computers
+    (source / ".git/config").write_text('[remote "origin"]\nurl = https://git.example.com/team/project.git\n',
+                                       encoding="utf-8")
+    clone = Path(second.roots[1]) / "renamed"
+    (clone / ".git").mkdir(parents=True)
+    (clone / ".git/config").write_text('[remote "origin"]\nurl = git@git.example.com:team/project\n', encoding="utf-8")
+    (clone / "notes.txt").write_bytes(b"independent local edit")
+    aid, left = code_online(live, login, first, "Source")
+    _, right = code_online(live, login, second, "Destination")
+    address = f"code/{aid}/{pid(source.name)}"
+    found = "#code-mirror-discovery"
+    panel = "#code-project-mirrors"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(address),
+            ("wait", "document.querySelector('#code-project-mirror')?.hidden === false"),
+            ("click", "#code-project-mirror"),
+            ("wait", f"document.querySelector('{found} button')?.textContent === 'Проверить копии'"),
+            ("click", f"{found} button"),
+            ("type", f"{panel} input[type=password]", "2468"),
+            ("click", f"{panel} form:has(input[type=password]) button"),
+            ("wait", f"document.querySelector('{found} button')?.textContent === 'Привязать'"),
+            ("eval", "found", f"document.querySelector('{found} li').textContent"),
+            ("click", f"{found} button"),
+            ("wait", f"document.querySelector('{panel} .project-mirror-state')?.textContent.includes('Синхронизировать изменения')"),
+            ("eval", "comparison", f"document.querySelector('{panel} .project-mirror-state').textContent")])
+    finally:
+        left.stop()
+        right.stop()
+    assert not result.get("failed"), result
+    assert "renamed" in result["values"]["found"] and "Тот же Git-репозиторий" in result["values"]["found"]
+    assert second.roots[1] in result["values"]["found"]
+    assert "Локальных изменений в зеркале" in result["values"]["comparison"]
+    assert (clone / "notes.txt").read_bytes() == b"independent local edit"
