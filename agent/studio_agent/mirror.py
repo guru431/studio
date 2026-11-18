@@ -4,14 +4,17 @@ import base64
 import hashlib
 import json
 import os
+import re
 import stat
+import subprocess
 import tempfile
 import threading
 import time
 import unicodedata
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
-from . import files, projects
+from . import files, gitinfo, projects
 from .errors import Refused
 
 CHUNK = 4 * 1024 * 1024
@@ -20,6 +23,10 @@ ENTRY_MAX = 150_000
 REPARSE = stat.FILE_ATTRIBUTE_REPARSE_POINT
 DIRECTORY = ["dir", "", 0, 0]
 SKIPPED = ["skip", "", 0, 0]
+REMOTE_KEY = r"^remote\.(origin|github)\.url$"
+DISCOVERY_SEC = 20
+DISCOVERY_MAX = 100
+REPOSITORY_ID = re.compile(r"[0-9a-f]{64}")
 
 
 def serial(value) -> bytes:
@@ -28,6 +35,93 @@ def serial(value) -> bytes:
 
 def fingerprint(entries) -> str:
     return hashlib.sha256(serial(entries)).hexdigest()
+
+
+def _repository_id(url: str) -> str | None:
+    """Идентичность сетевого remote без имени пользователя, пароля, параметров и транспорта."""
+    if not 0 < len(url) <= 4096 or any(c.isspace() or ord(c) < 32 or c == "\\" for c in url):
+        return None
+    if "://" not in url:
+        scp = re.fullmatch(r"(?:[^@/:]+@)?([A-Za-z0-9.-]{2,}):([^/].*)", url)
+        if scp is None:
+            return None
+        url = f"ssh://{scp[1]}/{scp[2]}"
+    try:
+        parsed = urlsplit(url)
+        default_port = {"http": 80, "https": 443, "ssh": 22, "git": 9418}.get(parsed.scheme)
+        hostname = parsed.hostname
+        if not default_port or not hostname:
+            return None
+        port = parsed.port
+        path = unquote(parsed.path, errors="strict").strip("/").removesuffix(".git")
+    except ValueError:
+        return None
+    if any(not part or part in (".", "..") for part in path.split("/")) or any(ord(c) < 32 for c in path):
+        return None
+    hostname = hostname.rstrip(".")
+    if hostname == "github.com":
+        path = path.casefold()
+    return fingerprint([hostname, None if port in (None, default_port) else port, path])
+
+
+def _repositories(project: Path) -> set[str]:
+    try:
+        # Читается только собственный обычный .git/config. Include и сетевые операции не нужны.
+        config = files._mutation_path(project, ".git/config")
+        info = config.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+            return set()
+        result = gitinfo.run(project, ["config", "--no-includes", "--file", str(config), "-z",
+                                       "--get-regexp", REMOTE_KEY], timeout=2)
+    except (OSError, Refused, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+    repositories = set()
+    for row in result.stdout.split(b"\0"):
+        key, sep, value = row.partition(b"\n")
+        if sep and key in (b"remote.origin.url", b"remote.github.url"):
+            ident = _repository_id(value.decode("utf-8", "replace"))
+            if ident:
+                repositories.add(ident)
+    return repositories
+
+
+def identity(project: Path) -> dict:
+    return {"name": project.name, "repositories": sorted(_repositories(project))[:16]}
+
+
+def valid_repositories(value) -> bool:
+    return (isinstance(value, list) and len(value) <= 16
+            and all(isinstance(item, str) and REPOSITORY_ID.fullmatch(item) for item in value))
+
+
+def candidates(config, name: str, repositories: list[str], *, now=time.monotonic) -> dict:
+    """Похожие папки в локальном каталоге. Известные разные remotes исключают совпадение только по имени."""
+    deadline = now() + DISCOVERY_SEC
+    roots = {Path(root["path"]): root for root in projects.list_roots(config)}
+    wanted = unicodedata.normalize("NFC", name).casefold()
+    catalog = sorted(projects.catalog(config), key=lambda entry: unicodedata.normalize("NFC", entry[1].name).casefold() != wanted)
+    source_ids = set(repositories)
+    items = []
+    for row, path in catalog:
+        if now() >= deadline or len(items) == DISCOVERY_MAX:
+            return {"items": items, "complete": False}
+        if path.parent not in roots or not projects.valid_name(path.name):
+            continue
+        same_name = unicodedata.normalize("NFC", path.name).casefold() == wanted
+        if not same_name and not source_ids:
+            continue
+        local = _repositories(path) if source_ids else set()
+        if source_ids & local:
+            match = "repository"
+        elif same_name and not (source_ids and local):
+            match = "name"
+        else:
+            continue
+        root = roots[path.parent]
+        items.append({"pid": row["pid"], "root": root["id"], "folder": root["path"], "name": path.name, "match": match})
+    return {"items": items, "complete": True}
 
 
 def target(config, root_id, name) -> Path:
@@ -60,6 +154,12 @@ def _stat(path):
         return path.lstat()
     except FileNotFoundError:
         return None
+
+
+def destination(config, root_id, name, *, metadata_only=False):
+    path = target(config, root_id, name)
+    data = {"exists": _stat(path) is not None} if metadata_only else scan(path)
+    return {**data, "pid": projects.project_id(config, path.parent, path.name), "folder": str(path.parent)}
 
 
 def _stamp(info):

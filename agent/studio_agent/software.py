@@ -18,7 +18,8 @@ TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'openc
 PACKAGES = {tool: (package,) for tool, package in TOOLS.items()}
 PACKAGES['opencode'] = ('opencode-ai', '@opencode/cli', '@opencode-ai/cli')
 EXTENSIONS = {'codex': 'openai.chatgpt', 'claude': 'anthropic.claude-code'}
-HOMEBREW = {'codex': 'codex', 'claude': 'claude-code'}
+HOMEBREW = {'codex': ('codex',), 'claude': ('claude-code', 'claude-code@latest')}
+CLAUDE_RELEASES = 'https://downloads.claude.ai/claude-code-releases'
 VERSION = re.compile(r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}')
 INSTALLED_VERSION = re.compile(VERSION.pattern + r'(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,48})?')
 UPDATE_SEC = 300
@@ -41,25 +42,34 @@ def newer(left, right):
     return key(left) > key(right)
 
 
-def _json(request):
+def _payload(request, limit):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None
 
     with urllib.request.build_opener(NoRedirect).open(request, timeout=4) as response:
-        raw = response.read(4 * 1024 * 1024 + 1)
-    if len(raw) > 4 * 1024 * 1024:
+        raw = response.read(limit + 1)
+    if len(raw) > limit:
         raise ValueError('size')
-    return json.loads(raw)
+    return raw
+
+
+def _json(request):
+    return json.loads(_payload(request, 4 * 1024 * 1024))
 
 
 def latest(tool, source, package=None):
     if source == 'homebrew':
-        if package != HOMEBREW.get(tool):
+        if package not in HOMEBREW.get(tool, ()):
             raise ValueError('package')
         data = _json('https://formulae.brew.sh/api/cask/' + package + '.json')
         value = data.get('version')
         return value if isinstance(value, str) and VERSION.fullmatch(value) else None
+    if host.MACOS and tool == 'claude' and source in ('native', 'sdk'):
+        config = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
+        channel = 'stable' if _manifest(config / 'settings.json').get('autoUpdatesChannel') == 'stable' else 'latest'
+        value = _payload(f'{CLAUDE_RELEASES}/{channel}', 64).decode('ascii').strip()
+        return value if VERSION.fullmatch(value) else None
     if source == 'vscode':
         body = {'filters': [{'criteria': [{'filterType': 7, 'value': EXTENSIONS[tool]}]}], 'flags': 17}
         request = urllib.request.Request(
@@ -136,15 +146,21 @@ def _npm_prefix(modules):
     return parent.parent if (host.MACOS or host.LINUX) and parent.name == 'lib' else parent
 
 
+def _bundled_claude():
+    import claude_agent_sdk
+
+    cli_name = 'claude' if host.MACOS or host.LINUX else 'claude.exe'
+    path = Path(claude_agent_sdk.__file__).parent / '_bundled' / cli_name
+    return path.resolve() if path.is_file() else None
+
+
 def inspect(tool):
     """Тот же поиск exe, что у ходов; для расширения показываем также версию его пакета."""
     path = {'claude': cli.find_cli, 'codex': codex_rpc.find_cli, 'opencode': opencode_rpc.find_cli}[tool]()
     source, installed, prefix, package = 'native', None, None, TOOLS[tool]
     if path is None and tool == 'claude':
         # SDK поставляет собственный CLI, обновляемый вместе с мостом.
-        import claude_agent_sdk
-        bundled = Path(claude_agent_sdk.__file__).parent / '_bundled' / ('claude' if host.MACOS or host.LINUX else 'claude.exe')
-        path = bundled if bundled.is_file() else None
+        path = _bundled_claude()
         source = 'sdk'
     cli_version = None
     if path is not None:
@@ -179,14 +195,15 @@ def inspect(tool):
     brew = None
     if host.MACOS and source == 'native' and path is not None and tool in HOMEBREW:
         for root in (Path('/opt/homebrew'), Path('/usr/local')):
-            if path.is_relative_to(root / 'Caskroom' / HOMEBREW[tool]) and (root / 'bin/brew').is_file():
-                source, package, brew = 'homebrew', HOMEBREW[tool], root / 'bin/brew'
+            cask = next((name for name in HOMEBREW[tool] if path.is_relative_to(root / 'Caskroom' / name)), None)
+            if cask and (root / 'bin/brew').is_file():
+                source, package, brew = 'homebrew', cask, root / 'bin/brew'
                 break
     native_claude = ((host.MACOS or host.LINUX) and tool == 'claude' and path is not None
                      and path.is_relative_to(Path.home() / '.local/share/claude/versions'))
     bundled_opencode = (tool == 'opencode' and path is not None and
                         path.name == 'opencode-cli' and path.parent.name == 'Resources')
-    reason = ('not_installed' if path is None else 'bridge' if source == 'sdk' else
+    reason = ('not_installed' if path is None else 'bridge' if source == 'sdk' and not host.MACOS else
               'manager' if source == 'vscode' and not _vscode() or source == 'npm' and not _npm() else
               'manual' if source == 'native' and not native_claude and (tool != 'opencode' or bundled_opencode) else None)
     return {'id': tool, 'installed': path is not None, 'version': installed or cli_version,
@@ -201,13 +218,18 @@ def command(item, target):
         raise ValueError('target')
     env = dict(os.environ)
     if item['source'] == 'homebrew':
-        package = HOMEBREW.get(tool)
+        package = item.get('_package')
         brew = item.get('_brew')
-        if not package or item.get('_package') != package or brew not in (
+        if package not in HOMEBREW.get(tool, ()) or brew not in (
                 Path('/opt/homebrew/bin/brew'), Path('/usr/local/bin/brew')):
             raise ValueError('manager')
         env['HOMEBREW_NO_INSTALL_CLEANUP'] = '1'
         return [str(brew), 'upgrade', '--cask', package], env
+    if item['source'] == 'sdk' and tool == 'claude' and host.MACOS:
+        binary = _bundled_claude()
+        if binary is None or item.get('_path') != binary:
+            raise ValueError('manager')
+        return [str(binary), 'install', target], env
     if item['source'] == 'native' and tool == 'claude' and item.get('reason') is None:
         if not (host.MACOS or host.LINUX) or not item['_path'].is_relative_to(Path.home() / '.local/share/claude/versions'):
             raise ValueError('manager')
@@ -296,7 +318,8 @@ class Software:
             raise Refused('busy')
         names = TOOLS if tool == 'all' else (tool,)
         candidates = [(name, item['latest'], item['source'], item.get('_package', TOOLS[name]))
-                      for name in names if (item := self.items.get(name)) and item['can_update']]
+                      for name in names if (item := self.items.get(name)) and item['can_update']
+                      and not (tool == 'all' and item['source'] == 'sdk')]
         if not candidates:
             raise Refused('unsupported', 'Сначала проверьте доступные обновления программ')
         self.tool, self.state = tool, 'waiting'
@@ -346,7 +369,8 @@ class Software:
             await install(item, target)
         item = await self._read(tool, True)
         self.items[tool] = item
-        if item['version'] is None or newer(target, item['version']):
+        if (item['version'] is None or newer(target, item['version'])
+                or source == 'sdk' and (item['source'] != 'native' or item['reason'] is not None)):
             raise ValueError('verification')
         if tool == 'claude':
             self.agent.runner.cli_path = await asyncio.to_thread(cli.find_cli)

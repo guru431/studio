@@ -20,10 +20,11 @@ import project_access
 import security
 import state
 
-router = APIRouter(prefix="/api/code/agents/{aid}/projects/{pid}/mirrors")
+router = APIRouter(prefix="/api/code/agents/{aid}/projects/{pid}/mirrors", default_response_class=code._BridgeJSON)
 log = logging.getLogger("studio")
 CHUNK = 4 * 1024 * 1024
 MAX_ENTRIES = 150_000
+DISCOVERY_CAP = "project_mirror_discovery"
 SKIP = ["skip", "", 0, 0]
 DIR = ["dir", "", 0, 0]
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -35,6 +36,7 @@ class Destination(BaseModel):
     destination: int = Field(gt=0)
     root: str = Field(pattern=r"^[0-9a-f]{16}$")
     name: str = Field(min_length=1, max_length=120)
+    existing: bool = False
 
 
 class Sync(BaseModel):
@@ -183,6 +185,85 @@ def _private_destination(aid, project):
         raise code._refuse(409, "conflict", "папка назначения открыта другим пользователям Студии")
 
 
+def _can_discover(aid):
+    link = bridge.LINKS.get(aid)
+    return bool(link and link.hello.get("project_mirror") and link.hello.get(DISCOVERY_CAP))
+
+
+def _candidates(data, aid, reserved, shared):
+    raw = data.get("items")
+    if not isinstance(raw, list):
+        return []
+    items = []
+    for item in raw[:100]:
+        if not isinstance(item, dict):
+            continue
+        project, root, name, folder, match = (item.get(key) for key in ("pid", "root", "name", "folder", "match"))
+        if (not all(isinstance(value, str) and code.PID_RE.fullmatch(value) for value in (project, root))
+                or not isinstance(name, str) or not 1 <= len(name) <= 120
+                or not isinstance(folder, str) or not 1 <= len(folder) <= 4096
+                or match not in ("repository", "name")):
+            continue
+        if (aid, root, security.digest(name.casefold())) in reserved or (aid, project) in shared:
+            continue
+        items.append({"root": root, "name": name, "folder": folder, "match": match})
+    return items
+
+
+@router.post("/discover")
+async def discover(aid: int, pid: str, request: Request, destination: int | None = None):
+    _owner(request, aid, pid)
+    if destination is not None:
+        project_access.owner(request, destination)
+    if aid not in bridge.LINKS:
+        raise code._refuse(409, "offline", "компьютер не на связи")
+    if not _can_discover(aid):
+        return {"available": False, "devices": []}
+    uid = request.state.user.id
+    agents = list(state.DB.execute(
+        "SELECT id, name, has_pin FROM agents WHERE user_id=? AND id<>? AND (? IS NULL OR id=?) ORDER BY id",
+        (uid, aid, destination, destination)))
+    if not agents:
+        return {"available": True, "devices": []}
+    source = await _ask(request, aid, "mirror_identity", project=pid, passive=True, timeout=5)
+    name, repositories = source.get("name"), source.get("repositories")
+    if (not isinstance(name, str) or not 1 <= len(name) <= 120 or not isinstance(repositories, list)
+            or len(repositories) > 16 or not all(isinstance(item, str) and SHA256.fullmatch(item) for item in repositories)):
+        raise code._refuse(502, "bridge", "мост вернул неверные сведения о проекте")
+    reserved = {tuple(row) for row in state.DB.execute(
+        "SELECT m.destination, m.root, m.name_key FROM project_mirrors m JOIN agents a ON a.id=m.destination WHERE a.user_id=?",
+        (uid,))}
+    shared = {tuple(row) for row in state.DB.execute(
+        "SELECT m.agent_id, m.project FROM project_members m JOIN agents a ON a.id=m.agent_id WHERE a.user_id=?",
+        (uid,))}
+    parallel = asyncio.Semaphore(4)
+
+    async def inspect(agent):
+        target = agent["id"]
+        result = {"id": target, "computer": agent["name"], "items": []}
+        if target not in bridge.LINKS:
+            return {**result, "state": "offline"}
+        if not _can_discover(target):
+            return {**result, "state": "unsupported"}
+        async with parallel:
+            try:
+                if not agent["has_pin"]:
+                    await _ask(request, target, "open", pin=None, passive=True, timeout=5)
+                data = await _ask(request, target, "mirror_candidates", name=name, repositories=repositories,
+                                  passive=True, timeout=25)
+            except HTTPException as error:
+                reason = error.detail.get("code")
+                stage = ("locked" if reason in ("closed", "pin_needed", "pin_locked")
+                         else "offline" if reason == "offline" else "error")
+                return {**result, "state": stage}
+        return {**result, "state": "ready", "complete": data.get("complete") is True,
+                "items": _candidates(data, target, reserved, shared)}
+
+    devices = await asyncio.gather(*(inspect(agent) for agent in agents))
+    _owner(request, aid, pid)
+    return {"available": True, "devices": devices}
+
+
 async def _compare(request, row):
     aid, pid, destination = row["source"], row["project"], row["destination"]
     to = {"root": row["root"], "name": _location(row)["name"]}
@@ -296,10 +377,17 @@ async def create(aid: int, pid: str, request: Request):
     body = await _body(request, Destination)
     if body.destination == aid or "/" in body.name or body.name.startswith("."):
         raise code._refuse(422, "invalid", "выберите другой компьютер и имя папки проекта")
-    target = await _ask(request, body.destination, "mirror_destination", root=body.root, name=body.name)
-    folder = target.get("folder")
-    if not isinstance(folder, str) or not 1 <= len(folder) <= 4096:
+    metadata_only = _can_discover(body.destination)
+    flags = {"metadata_only": True} if metadata_only else {}
+    target = await _ask(request, body.destination, "mirror_destination", root=body.root, name=body.name, **flags)
+    folder, project = target.get("folder"), target.get("pid")
+    if (not isinstance(folder, str) or not 1 <= len(folder) <= 4096
+            or not isinstance(project, str) or not code.PID_RE.fullmatch(project)):
         raise code._refuse(502, "bridge", "мост вернул неверное назначение зеркала")
+    exists = target.get("exists") is True if metadata_only else target.get("entries") is not None
+    if body.existing and not exists:
+        raise code._refuse(404, "not_found", "найденная папка больше недоступна — обновите поиск")
+    _private_destination(body.destination, project)
     await _ask(request, aid, "mirror_read", project=pid, reads=[])
     try:
         mid = state.DB.execute(

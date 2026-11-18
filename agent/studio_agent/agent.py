@@ -43,8 +43,10 @@ OPS = {
     "mcp_get": ("project",),
     "mcp_save": ("project",),
     "project_create": ("root", "name"),
+    "mirror_identity": ("project",),
+    "mirror_candidates": ("name", "repositories"),
     "mirror_scan": ("project",),
-    "mirror_destination": ("root", "name"),
+    "mirror_destination": ("root", "name", "metadata_only"),
     "mirror_read": ("project",),
     "mirror_text": ("root", "name", "path"),
     "mirror_begin": ("root", "name", "ticket"),
@@ -90,7 +92,8 @@ RESTART_SAFE_OPS = frozenset({
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
     "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
-    "worktrees", "read", "raw", "visualization", "git", "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
+    "worktrees", "read", "raw", "visualization", "git", "mirror_identity", "mirror_candidates",
+    "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
 })
 
 # Новая операция получает доступ соавтора только после явного включения в контракт.
@@ -175,6 +178,7 @@ class Agent:
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
+                 "project_mirror_discovery": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
                  "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
@@ -476,6 +480,8 @@ class Agent:
 
     def _field(self, op: str, name: str, value) -> bool:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
+        if name == "repositories":
+            return mirror.valid_repositories(value)
         if name == "ticket":
             return isinstance(value, str) and SESSION.fullmatch(value) is not None
         if name == "expected":
@@ -490,7 +496,7 @@ class Agent:
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
             return True
-        if name in ("refresh", "remote", "code_size"):
+        if name in ("refresh", "remote", "code_size", "metadata_only"):
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
@@ -581,15 +587,18 @@ class Agent:
     async def _op_project_roots(self, frame, after):
         return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
 
+    async def _op_mirror_identity(self, frame, after):
+        return await asyncio.to_thread(mirror.identity, await self._project(frame))
+
+    async def _op_mirror_candidates(self, frame, after):
+        return await asyncio.to_thread(mirror.candidates, self.cfg, frame["name"], frame["repositories"])
+
     async def _op_mirror_scan(self, frame, after):
         return await asyncio.to_thread(mirror.scan, await self._project(frame))
 
     async def _op_mirror_destination(self, frame, after):
-        def inspect():
-            path = mirror.target(self.cfg, frame["root"], frame["name"])
-            data = mirror.scan(path)
-            return {**data, "pid": projects.project_id(self.cfg, path.parent, path.name), "folder": str(path.parent)}
-        return await asyncio.to_thread(inspect)
+        return await asyncio.to_thread(mirror.destination, self.cfg, frame["root"], frame["name"],
+                                       metadata_only=frame.get("metadata_only"))
 
     async def _op_mirror_read(self, frame, after):
         return await asyncio.to_thread(mirror.read, await self._project(frame), frame.get("reads"))

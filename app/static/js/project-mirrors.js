@@ -25,14 +25,20 @@ export function projectMirrors(host, trigger, aid, project) {
       label(tr("Имя папки копии"), name), save);
     const pinSlot = el('div');
     const state = el('div', { class: 'project-mirror-state' });
+    const foundStatus = el('p', { class: 'muted', role: 'status' });
+    const foundList = el('ul', { class: 'project-mirror-candidates' });
+    const found = el('section', { id: 'code-mirror-discovery', hidden: true },
+      el('h3', {}, tr("Найденные копии")), foundStatus, foundList);
     const mirrorPicker = label(tr("Зеркала проекта"), choices);
     mirrorPicker.hidden = true;
     dialog = openDialog(host, { id: 'code-project-mirrors', title: tr("Зеркало · {0}", project.name),
-      body: [mirrorPicker, targetForm, pinSlot, status, state], cancelText: tr("Закрыть") });
+      body: [mirrorPicker, pinSlot, found, targetForm, status, state], cancelText: tr("Закрыть") });
     let devices = [];
     let items = [];
     let busy = false;
     let timer;
+    let search = 0;
+    const discovered = new Map();
     dialog.addEventListener('close', () => { controller.abort(); clearTimeout(timer); }, { once: true });
 
     function tell(text, error = false) {
@@ -51,6 +57,7 @@ export function projectMirrors(host, trigger, aid, project) {
       targetForm.inert = busy;
       pinSlot.inert = busy;
       state.inert = busy;
+      foundList.inert = busy;
       save.disabled = !roots.value;
     }
 
@@ -90,6 +97,64 @@ export function projectMirrors(host, trigger, aid, project) {
         return;
       }
       await next();
+    }
+
+    function paintCopies() {
+      const groups = [...discovered.values()];
+      const rows = groups.flatMap((device) => {
+        if (device.state === 'locked') {
+          const check = button(tr("Проверить копии"));
+          check.addEventListener('click', () => work(async () => {
+            pinSlot.replaceChildren();
+            await unlock(device.id, () => findCopies(device.id));
+          }));
+          return [el('li', {}, el('span', {}, device.computer, el('br'),
+            el('small', { class: 'muted' }, tr("Для поиска нужен PIN компьютера"))), check)];
+        }
+        const labels = { offline: tr("Компьютер не на связи"), unsupported: tr("Обновите мост для поиска копий"),
+          error: tr("Не удалось проверить папки компьютера"), partial: tr("Проверена часть папок компьютера") };
+        const note = labels[device.state === 'ready' && !device.complete ? 'partial' : device.state];
+        const copies = device.items.map((candidate) => {
+          const attach = button(tr("Привязать"));
+          attach.addEventListener('click', () => work(async () => {
+            const item = await request('POST', url, {
+              destination: device.id, root: candidate.root, name: candidate.name, existing: true,
+            });
+            await load(item.id);
+          }));
+          return el('li', {}, el('div', {},
+            el('strong', {}, `${device.computer} · ${candidate.name}`),
+            el('div', { class: 'muted' }, candidate.folder),
+            el('small', { class: 'muted' }, candidate.match === 'repository'
+              ? tr("Тот же Git-репозиторий") : tr("Совпадает имя папки"))), attach);
+        });
+        return note ? [...copies, el('li', { class: 'muted' }, `${device.computer} · ${note}`)] : copies;
+      });
+      foundList.replaceChildren(...rows);
+      foundStatus.textContent = rows.length ? '' : tr("Непривязанные копии не найдены.");
+    }
+
+    async function findCopies(target = null) {
+      const mine = ++search;
+      found.hidden = !devices.length;
+      if (found.hidden) return;
+      if (target === null) {
+        discovered.clear();
+        foundList.replaceChildren();
+      }
+      foundStatus.textContent = tr("Ищу копии в папках проектов…");
+      try {
+        const result = await request('POST', `${url}/discover${target === null ? '' : `?destination=${target}`}`);
+        if (signal.aborted || mine !== search) return;
+        if (!result.available) {
+          foundStatus.textContent = tr("Обновите мост исходного компьютера для поиска копий.");
+          return;
+        }
+        for (const device of result.devices) discovered.set(device.id, device);
+        paintCopies();
+      } catch (err) {
+        if (!signal.aborted && mine === search) foundStatus.textContent = words(err);
+      }
     }
 
     function difference(item, data) {
@@ -216,6 +281,7 @@ export function projectMirrors(host, trigger, aid, project) {
       selectField(targets, tr("Выберите компьютер"), devices.map((agent) =>
         option(agent.id, agent.online ? agent.name : tr("{0} · не на связи", agent.name))));
       selectField(roots, tr("Выберите папку проектов"), []);
+      findCopies();
       await selected();
       if (!items.length && !devices.length) tell(tr("Подключите ещё один компьютер к этой учётной записи."));
     }
