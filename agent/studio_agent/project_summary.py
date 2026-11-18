@@ -7,20 +7,21 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import discovery, files, github_status, gitinfo, remote_status
+from . import discovery, files, github_status, gitinfo, remote_status, source_size
 from .errors import Refused
 
 JOURNAL_MAX = 2 * 1024 * 1024
 GIT_SEC = 5
 CODE_SCAN_SEC = 5
 CODE_SKIP_DIRS = discovery.IGNORED | {".tmp", ".tox", ".nox", ".worktrees", "vendor", "coverage", "obj",
-                                      ".gradle", ".nuxt", ".svelte-kit", ".build", "pods"}
+                                      ".gradle", ".nuxt", ".svelte-kit", ".build", "pods", "references",
+                                      "third_party", "third-party", "generated", ".output", "output"}
 CODE_SUFFIXES = frozenset("""
-    .py .pyi .pyw .js .jsx .mjs .cjs .ts .tsx .mts .cts .vue .svelte .astro .html .htm .css .scss .sass .less
+    .py .pyi .pyw .js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass .less
     .c .h .cc .cpp .cxx .hh .hpp .hxx .cs .fs .fsx .vb .java .kt .kts .scala .groovy .swift .m .mm .rs .go
     .php .rb .r .lua .pl .pm .t .dart .ex .exs .erl .hrl .hs .ml .mli .clj .cljs .lisp .jl .sol .asm .s
     .sh .bash .zsh .fish .ps1 .psm1 .psd1 .bat .cmd .sql .cmake .mk .gradle .proto .tf
-""".split())
+""".split()) | source_size.MARKUP
 CODE_NAMES = {"makefile", "gnumakefile", "cmakelists.txt", "dockerfile", "containerfile", "rakefile", "jenkinsfile"}
 
 
@@ -42,12 +43,16 @@ def code_bytes(project: Path, *, monotonic=time.monotonic) -> int | None:
                     info = entry.stat(follow_symlinks=False)
                     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                         continue
+                    child = f"{relative}/{entry.name}" if relative else entry.name
                     if stat.S_ISDIR(info.st_mode):
                         if name not in CODE_SKIP_DIRS:
-                            pending.append(f"{relative}/{entry.name}" if relative else entry.name)
-                    elif stat.S_ISREG(info.st_mode) and (name in CODE_NAMES or os.path.splitext(name)[1] in CODE_SUFFIXES):
-                        total += info.st_size
-    except (OSError, Refused):
+                            pending.append(child)
+                    elif stat.S_ISREG(info.st_mode) and not name.endswith((".min.js", ".min.css", "-render.html")):
+                        suffix = os.path.splitext(name)[1]
+                        if name in CODE_NAMES or suffix in CODE_SUFFIXES:
+                            with files.resolve(project, child).open("rb") as stream:
+                                total += source_size.count(stream, suffix, deadline, monotonic)
+    except (OSError, Refused, ValueError, AssertionError):  # HTMLParser отклоняет неверные объявления на старых Python.
         return None
     return total
 

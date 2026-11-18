@@ -266,12 +266,17 @@ class FakeMachine:
         return chat
 
     def _op_projects(self, req, events):
-        return {"items": [{"pid": pid(name), "name": name} for name in sorted(self.projects)]}
+        return {"items": [{"pid": pid(name), "name": name,
+                           **({"last_code_bytes": p["last_code_bytes"]} if "last_code_bytes" in p else {})}
+                          for name, p in sorted(self.projects.items())]}
 
     def _op_project_summary(self, req, events):
         _, project = self._project(req)
-        return project.get("summary", {"findings": 0, "ideas": 0, "changed": 0, "unpushed": 0,
+        summary = project.get("summary", {"findings": 0, "ideas": 0, "changed": 0, "unpushed": 0,
                                        "modified": self.now, "checked_at": self.now, "git": "ok"})
+        if req.get("code_size") and summary.get("code_size_version") == 2 and type(summary.get("code_bytes")) is int:
+            project["last_code_bytes"] = summary["code_bytes"]
+        return summary
 
     def _op_activity(self, req, events):
         return {"items": [{"project": turn["project"], "chat": chat, "running": True,

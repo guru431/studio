@@ -167,7 +167,7 @@ async def test_codex_catalog_uses_state_index_without_repair_scan(home):
         await runner.close(final=True)
 
 
-async def test_code_size_is_on_demand_and_refresh_remeasures(home, tmp_path):
+async def test_code_size_is_on_demand_and_refresh_remeasures(home, tmp_path, monkeypatch):
     root = tmp_path / "projects"
     project = root / "demo"
     project.mkdir(parents=True)
@@ -180,6 +180,15 @@ async def test_code_size_is_on_demand_and_refresh_remeasures(home, tmp_path):
     (project / "demo.py").write_bytes(b"print()")
     assert (await agent.handle(frame))[0]["data"]["code_bytes"] == 0
     assert (await agent.handle({**frame, "refresh": True}))[0]["data"]["code_bytes"] == 7
+    restarted = make(home, root)
+    await opened(restarted)
+    scan = Mock(return_value=None)
+    monkeypatch.setattr(project_summary, "code_bytes", scan)
+    listing = req("projects")
+    assert (await restarted.handle(listing))[0]["data"]["items"][0]["last_code_bytes"] == 7
+    scan.assert_not_called()
+    assert (await restarted.handle(frame))[0]["data"]["code_bytes"] is None
+    assert (await restarted.handle(listing))[0]["data"]["items"][0]["last_code_bytes"] == 7
 
 
 async def test_github_does_not_block_local_summary_and_remote_reads_are_shared(home, tmp_path, monkeypatch):

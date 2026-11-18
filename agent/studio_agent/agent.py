@@ -140,6 +140,7 @@ class Agent:
         self._file_index = discovery.FileIndex()
         self._catalog = projects.Catalog(now=now)
         self._metadata = metadata.Cache(now=now)
+        self._size_save_lock = asyncio.Lock()
         self._wall = wall
         self._histories = metadata.HistoryIndex()
         self._link = 0  # поколение канала (`new_link`): открытие, начатое прежним каналом, сессию не открывает
@@ -546,7 +547,9 @@ class Agent:
     # --- op ---
 
     async def _op_projects(self, frame, after):
-        return {"items": await asyncio.to_thread(self._catalog.list, self.cfg, refresh=bool(frame.get("refresh")))}
+        def listed():
+            return self._catalog.list(self.cfg, refresh=bool(frame.get("refresh")), sizes=store.read_code_sizes())
+        return {"items": await asyncio.to_thread(listed)}
 
     async def _op_project_roots(self, frame, after):
         return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
@@ -570,11 +573,17 @@ class Agent:
             lambda: asyncio.to_thread(project_summary.read, project, local=True, now=self._wall), ttl=20,
             refresh=bool(frame.get("refresh"))))
         if frame.get("code_size"):
+            size_key = projects.code_size_key(project)
+            key = (pid, "code_size", size_key)
             async def measure():
-                return {"code_bytes": await asyncio.to_thread(project_summary.code_bytes, project)}
+                return {"code_bytes": await asyncio.to_thread(project_summary.code_bytes, project), "code_size_version": 2}
 
-            data.update(await self._metadata.get((pid, "code_size"), measure, ttl=300,
-                                                 refresh=bool(frame.get("refresh"))))
+            measured = await self._metadata.get(key, measure, ttl=300, refresh=bool(frame.get("refresh")))
+            if measured["code_bytes"] is not None:
+                async with self._size_save_lock:
+                    if self._metadata.peek(key) is measured:
+                        await asyncio.to_thread(store.remember_code_size, size_key, measured["code_bytes"])
+            data.update(measured)
         remote = data.pop("_github", None)
         if remote:
             branch, head, repo = remote

@@ -107,7 +107,7 @@ def test_project_code_size_sort_requests_sizes_and_restores_order(browser, live,
     live.add_user(login)
     sizes = {"alpha-legacy": {}, "beta-empty": {"code_bytes": 0}, "gamma": {"code_bytes": 22},
              "project10": {"code_bytes": 100}, "project2": {"code_bytes": 100}}
-    machine = FakeMachine({name: {"summary": summary} for name, summary in sizes.items()})
+    machine = FakeMachine({name: {"summary": {"code_size_version": 2, **summary}} for name, summary in sizes.items()})
     machine.project_summary = True
     _, server = code_online(live, login, machine)
     ready = "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
@@ -115,18 +115,33 @@ def test_project_code_size_sort_requests_sizes_and_restores_order(browser, live,
     sorted_rows = f"[...{rows}].map(row => [row.querySelector('.code-project-name').textContent, " \
                   "row.querySelector('.code-project-size').innerText])"
     first = f"{rows}[0]?.dataset.pid === '{pid('project2')}'"
+    gate = """if (sessionStorage.getItem('hold-sizes')) {
+      const request = window.fetch, gate = new Promise(resolve => window.releaseSizes = resolve);
+      window.fetch = async (...args) => {
+        if (!String(args[0]).includes('code_size=true')) return request(...args);
+        window.waitingForSizes = true;
+        await gate;
+        const response = await request(...args);
+        if (!String(args[0]).includes('/GAMMA/summary')) return response;
+        const data = await response.json();
+        return new Response(JSON.stringify({...data, code_bytes: 1250}), {headers: response.headers});
+      };
+    }""".replace("GAMMA", pid("gamma"))
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), ("wait", ready),
             ("click", "#code-project-sort-open"), ("click", "#code-project-sort-options input[value=code_bytes]"),
             ("wait", first), ("eval", "selected", sorted_rows),
-            ("eval", "reload", "location.reload(); true"), ("wait", READY), ("wait", first),
-            ("eval", "restored", sorted_rows)], width=width, mobile=width == 320)
+            ("eval", "reload", "sessionStorage.setItem('hold-sizes','1'); location.reload(); true"),
+            ("wait", READY), ("wait", "window.waitingForSizes"), ("eval", "cached", sorted_rows),
+            ("eval", "release", "window.releaseSizes(); true"), ("wait", f"{rows}[0]?.dataset.pid === '{pid('gamma')}'"),
+            ("eval", "restored", sorted_rows)], init=gate, width=width, mobile=width == 320)
     finally:
         server.stop()
     assert not result.get("failed"), result
-    expected = [["project2", "Код: 100 Б"], ["project10", "Код: 100 Б"], ["gamma", "Код: 22 Б"],
-                ["beta-empty", "Код: 0 Б"], ["alpha-legacy", "Код: —"]]
-    assert result["values"]["selected"] == result["values"]["restored"] == expected
+    expected = [["project2", "Код: 0,1 КБ"], ["project10", "Код: 0,1 КБ"], ["gamma", "Код: 0,022 КБ"],
+                ["beta-empty", "Код: 0 КБ"], ["alpha-legacy", "Код: —"]]
+    assert result["values"]["selected"] == result["values"]["cached"] == expected
+    assert result["values"]["restored"] == [["gamma", "Код: 1,25 КБ"], *expected[:2], *expected[3:]]
     assert not problems(result), problems(result)
 
 

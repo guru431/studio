@@ -18,8 +18,9 @@ def test_project_summary_capability_pin_ownership_and_filtered_response(studio):
     assert studio.c.get(path.replace(ALPHA, "invalid")).status_code == 422
 
 
-@pytest.mark.parametrize("summary, expected", [({}, None), ({"code_bytes": 0}, 0), ({"code_bytes": 42}, 42),
-                                               ({"code_bytes": True}, None), ({"code_bytes": -1}, None)])
+@pytest.mark.parametrize("summary, expected", [({}, None), ({"code_bytes": 42}, None),
+    ({"code_bytes": 0, "code_size_version": 2}, 0), ({"code_bytes": 42, "code_size_version": 2}, 42),
+    ({"code_bytes": True, "code_size_version": 2}, None), ({"code_bytes": -1, "code_size_version": 2}, None)])
 def test_project_code_size_requested_and_filtered(studio, summary, expected):
     aid, machine, link = setup(studio)
     link.hello["project_summary"] = True
