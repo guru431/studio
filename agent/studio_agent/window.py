@@ -869,8 +869,8 @@ class MainWindow:
                     problem.set('Откройте «Конфиденциальность и безопасность» в настройках macOS')
                 self.refresh_permissions()
 
-            self.ttk.Label(area, text="В настройках macOS включите Studio Agent. Если его нет в списке,"
-                           " добавьте приложение кнопкой «+». Для записи экрана macOS может попросить перезапуск.",
+            self.ttk.Label(area, text="Подтвердите запрос macOS для Studio Agent."
+                           " После выдачи права на запись экрана macOS может попросить перезапуск.",
                            style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
                 row=2, column=0, sticky="w", pady=(self.px(4), 0))
             self.permission_value = self.ttk.Label(area, text='Проверка разрешений macOS…',
