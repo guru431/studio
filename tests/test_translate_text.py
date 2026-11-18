@@ -93,9 +93,10 @@ def test_split_is_linear_on_long_whitespace_runs():
     """Ревью M9: `\\s*\\n\\s*\\n\\s*` перебирал пробельный пробег с каждой позиции — 100 000 пробелов за 11 с."""
     run = " " * 100_000
     for text in (f"a{run}b", f"a\n{run}b", f"a{run}\n\n{run}b", f"a \n \n{run}\n b"):
-        start = time.perf_counter()
+        # Measure the splitter's CPU work even when xdist workers compete for the host.
+        start = time.thread_time()
         parts = translate_text.split(text)
-        assert time.perf_counter() - start < 0.1
+        assert time.thread_time() - start < 0.1
         assert "".join(c + s for c, s in parts) == text and all(c == c.strip() for c, _ in parts)
     assert translate_text.split("a  \n \n\t b", limit=1) == [("a", "  \n \n\t "), ("b", "")]
 
