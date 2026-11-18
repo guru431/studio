@@ -79,25 +79,42 @@ def test_permission_snapshot_reads_grants_and_session_without_request_or_capture
     assert state.events == state.captures == []
 
 
-@pytest.mark.parametrize('kind,pane', [('screen', 'Privacy_ScreenCapture'), ('input', 'Privacy_Accessibility')])
-def test_permission_button_requests_only_missing_grant_and_opens_its_pane(monkeypatch, kind, pane):
-    requests, urls = [], []
+def test_permission_button_requests_accessibility_for_the_running_app(monkeypatch):
+    requests, panes = [], []
     allowed = False
-    check = lambda: allowed
-    quartz = SimpleNamespace(CGPreflightScreenCaptureAccess=check, CGPreflightPostEventAccess=check,
-                             CGRequestScreenCaptureAccess=lambda: requests.append('screen'),
-                             CGRequestPostEventAccess=lambda: requests.append('input'))
-    workspace = SimpleNamespace(openURL_=lambda url: urls.append(url) or True)
-    monkeypatch.setitem(sys.modules, 'Quartz', quartz)
-    monkeypatch.setitem(sys.modules, 'AppKit', SimpleNamespace(
-        NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace)))
-    monkeypatch.setitem(sys.modules, 'Foundation', SimpleNamespace(NSURL=SimpleNamespace(URLWithString_=str)))
+    monkeypatch.setitem(sys.modules, 'Quartz', SimpleNamespace(CGPreflightPostEventAccess=lambda: allowed))
+    monkeypatch.setitem(sys.modules, 'HIServices', SimpleNamespace(
+        AXIsProcessTrustedWithOptions=requests.append, kAXTrustedCheckOptionPrompt='prompt'))
+    monkeypatch.setattr(mac, '_open_permission_settings', lambda pane: panes.append(pane) or True)
 
-    mac.request_permission(kind)
+    mac.request_permission('input')
     allowed = True
-    mac.request_permission(kind)
-    assert requests == [kind]
-    assert urls == ['x-apple.systempreferences:com.apple.preference.security?' + pane] * 2
+    mac.request_permission('input')
+    assert requests == [{'prompt': True}]
+    assert panes == ['Privacy_Accessibility'] * 2
+
+
+def test_screen_permission_uses_screen_capture_kit_before_opening_settings(monkeypatch):
+    callbacks, scheduled, panes = [], [], []
+    allowed = False
+    monkeypatch.setitem(sys.modules, 'Quartz', SimpleNamespace(CGPreflightScreenCaptureAccess=lambda: allowed))
+    monkeypatch.setitem(sys.modules, 'ScreenCaptureKit', SimpleNamespace(SCShareableContent=SimpleNamespace(
+        getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_=
+        lambda desktop, onscreen, callback: callbacks.append(callback))))
+    monkeypatch.setitem(sys.modules, 'PyObjCTools', SimpleNamespace(
+        AppHelper=SimpleNamespace(callAfter=lambda callback, pane: scheduled.append((callback, pane)))))
+    monkeypatch.setattr(mac, '_open_permission_settings', lambda pane: panes.append(pane) or True)
+
+    mac.request_permission('screen')
+    callback, = callbacks
+    assert not panes and not scheduled
+    callback(object(), None)
+    assert not scheduled  # согласие уже выдано, системная панель не нужна
+    callback(None, object())
+    assert scheduled == [(mac._open_permission_settings, 'Privacy_ScreenCapture')]
+    allowed = True
+    mac.request_permission('screen')
+    assert callbacks == [callback] and panes == ['Privacy_ScreenCapture']
 
 
 @pytest.mark.parametrize('field', ['locked', 'console', 'login', 'screen', 'input'])

@@ -16,7 +16,7 @@ SOURCE = Path(__file__).resolve().parent
 BUSY = "Дождитесь завершения заданий и выйдите из Studio Agent через меню"
 
 
-def bundle(base: Path, applications: Path) -> Path:
+def bundle(repo: Path, applications: Path) -> Path:
     """Компилятор и codesign не могут повредить прежнее приложение при отказе."""
     applications.mkdir(parents=True, exist_ok=True)
     app = applications / "Studio Agent.app"
@@ -24,7 +24,7 @@ def bundle(base: Path, applications: Path) -> Path:
         raise ValueError('приложение не должно быть ссылкой')
     with tempfile.TemporaryDirectory(prefix='.studio-agent-', dir=applications) as folder:
         pending = Path(folder) / 'Studio Agent.app'
-        _write_bundle(pending)
+        _write_bundle(pending, repo)
         previous = Path(folder) / 'previous.app'
         if app.exists():
             app.rename(previous)
@@ -37,7 +37,7 @@ def bundle(base: Path, applications: Path) -> Path:
     return app
 
 
-def _write_bundle(app: Path) -> None:
+def _write_bundle(app: Path, repo: Path) -> None:
     contents = app / "Contents"
     executable = contents / "MacOS/studio-agent"
     executable.parent.mkdir(parents=True, exist_ok=True)
@@ -52,10 +52,20 @@ def _write_bundle(app: Path) -> None:
                                 CLANG_MODULE_CACHE_PATH=str(app.parent / 'clang-cache')),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=120)
     executable.chmod(0o755)
+    icon = contents / 'Resources/StudioAgent.icns'
+    icon.parent.mkdir()
+    env = dict(os.environ, TMPDIR=str(app.parent))
+    env.pop('PYTHONHOME', None)
+    env.pop('PYTHONPATH', None)
+    subprocess.run([str(repo / '.venv/bin/python'), '-B', '-c',
+                    'import sys; from studio_agent.tray import icon; icon(1024).save(sys.argv[1])', str(icon)],
+                   cwd=repo, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump({"CFBundleIdentifier": "com.studio.agent", "CFBundleName": "Studio Agent",
                        "CFBundleDisplayName": "Studio Agent",
                        "CFBundleExecutable": "studio-agent", "CFBundlePackageType": "APPL",
+                       "CFBundleIconFile": icon.name,
+                       "NSScreenCaptureUsageDescription": "Studio Agent shares your screen during a remote desktop session.",
                        "LSUIElement": True, "NSHighResolutionCapable": True}, output)
     subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', 'com.studio.agent', str(app)],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
@@ -113,9 +123,9 @@ def install(base: Path, home: Path, applications: Path, *, start=True, autostart
             subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary=:all:",
                             *offline, "-r", str(stage / "requirements.txt"), "-c", str(stage / "constraints.txt")], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=300)
-            subprocess.run([str(python), "-c", "import tkinter, studio_agent.app"], cwd=stage, env=env,
+            subprocess.run([str(python), "-c", "import tkinter, HIServices, studio_agent.app"], cwd=stage, env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
-        app = bundle(base, applications)
+        app = bundle(stage, applications)
         # После появления внешних ссылок выпуск сохраняется и при сбое следующего шага.
         # Он уже проверен и может быть целью автозапуска; удалять его тогда нельзя.
         activated = True

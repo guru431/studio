@@ -1,6 +1,7 @@
 """Живая приёмка macOS без учёток LLM: Keychain, процессные группы, окно и установка."""
 import ctypes
 import os
+import plistlib
 import sys
 import subprocess
 import tempfile
@@ -16,6 +17,7 @@ def test_pkg_installs_offline_preserves_settings_and_reuses_private_python(tmp_p
     """Payload получают через pkgutil --expand-full; тест не пишет в настоящий HOME/LaunchAgents."""
     import install_macos
     import platform
+    from PIL import Image
     from studio_agent import macos_autostart
     payload = os.environ.get('STUDIO_AGENT_MACOS_PAYLOAD')
     if not payload:
@@ -35,6 +37,11 @@ def test_pkg_installs_offline_preserves_settings_and_reuses_private_python(tmp_p
         assert first != second and (base / 'current').resolve() == second
         assert (home / 'key.bin').read_bytes() == b'preserved-key'
         assert len(list((base / 'runtimes').iterdir())) == 1
+        contents = root / 'Applications/Studio Agent.app/Contents'
+        info = plistlib.loads((contents / 'Info.plist').read_bytes())
+        with Image.open(contents / 'Resources' / info['CFBundleIconFile']) as icon:
+            assert icon.format == 'ICNS' and icon.width >= 512
+        subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(contents.parent)], check=True, timeout=30)
         result = subprocess.run([str(second / '.venv/bin/python'), '-c',
                                  'import sys,tkinter,studio_agent.app; assert "/runtimes/" in sys._base_executable'],
                                 cwd=second, capture_output=True, check=True, timeout=30)

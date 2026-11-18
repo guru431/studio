@@ -45,24 +45,44 @@ def permission_status(_quartz=None):
 def request_permission(kind):
     """Системный запрос выполняет главный поток приложения по локальной кнопке."""
     import Quartz as q
+
+    if kind == 'screen':
+        pane = 'Privacy_ScreenCapture'
+        if not q.CGPreflightScreenCaptureAccess():
+            from PyObjCTools import AppHelper
+
+            def checked(_content, error):
+                # ScreenCaptureKit запрашивает согласие сам. Настройки открываются после его ответа.
+                if error is not None:
+                    AppHelper.callAfter(_open_permission_settings, pane)
+
+            _shareable_content(checked)
+            return
+    elif kind == 'input':
+        from HIServices import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+
+        pane = 'Privacy_Accessibility'
+        if not q.CGPreflightPostEventAccess():
+            AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+    else:
+        raise ValueError('permission')
+    if not _open_permission_settings(pane):
+        raise OSError('permission settings')
+
+
+def _open_permission_settings(pane):
     from AppKit import NSWorkspace
     from Foundation import NSURL
 
-    if kind == 'screen':
-        allowed, request = q.CGPreflightScreenCaptureAccess, q.CGRequestScreenCaptureAccess
-        pane = 'Privacy_ScreenCapture'
-    elif kind == 'input':
-        allowed, request = q.CGPreflightPostEventAccess, q.CGRequestPostEventAccess
-        pane = 'Privacy_Accessibility'
-    else:
-        raise ValueError('permission')
-    try:
-        if not allowed():
-            request()
-    finally:
-        url = NSURL.URLWithString_('x-apple.systempreferences:com.apple.preference.security?' + pane)
-        if not NSWorkspace.sharedWorkspace().openURL_(url):
-            raise OSError('permission settings')
+    url = NSURL.URLWithString_('x-apple.systempreferences:com.apple.preference.security?' + pane)
+    return NSWorkspace.sharedWorkspace().openURL_(url)
+
+
+def _shareable_content(callback):
+    from ScreenCaptureKit import SCShareableContent
+
+    SCShareableContent.getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
+        True, True, callback)
 
 
 class NativeDesktop:
@@ -134,9 +154,7 @@ class NativeDesktop:
                 raise Refused('desktop_unavailable', 'macOS не удалось получить изображение экрана')
             return result[0][0]
 
-        content = wait(lambda callback: sc.SCShareableContent.
-                       getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
-                           True, True, callback))
+        content = wait(_shareable_content)
         selected = next((item for item in content.displays() if item.displayID() == display), None)
         if selected is None:
             raise Refused('desktop_unavailable', 'Монитор отключён — подключитесь снова')
