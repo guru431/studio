@@ -57,10 +57,21 @@ export function softwareView({ locked }) {
       return el('div', { class: 'code-software-row' },
         el('div', { class: 'code-software-heading' }, el('strong', {}, label), update), details);
     });
-    host.replaceChildren(el('h3', {}, tr('Программы')), ...rows);
+    const all = el('button', { type: 'button', class: 'btn small', id: 'code-software-update-all',
+      disabled: busy || !data.items.some((item) => item.can_update) }, tr('Обновить все агенты'));
+    all.addEventListener('click', () => load('POST', '/all/update'));
+    host.replaceChildren(el('div', { class: 'code-software-heading' }, el('h3', {}, tr('Программы')),
+      agent.software_update_all ? all : null), ...rows);
     if (states[data.update.state]) {
+      const title = data.update.tool === 'all' ? tr('Все агенты') : names[data.update.tool];
       host.append(el('p', { class: data.update.state === 'error' ? 'error small' : 'muted small' },
-        `${names[data.update.tool] || ''} · ${tr(states[data.update.state])}`));
+        `${title || ''} · ${tr(states[data.update.state])}`));
+      if (data.update.results && !busy) {
+        for (const [name, result] of Object.entries(data.update.results)) {
+          host.append(el('p', { class: result === 'error' ? 'error small' : 'muted small' },
+            `${names[name]} · ${tr(states[result])}`));
+        }
+      }
     }
     if (data.update.state === 'waiting') {
       const cancel = el('button', { type: 'button', class: 'btn small', 'data-software-cancel': '' }, tr('Отменить обновление'));

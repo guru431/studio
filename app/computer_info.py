@@ -23,10 +23,13 @@ def software(data):
             'update_available': item.get('update_available') is True, 'can_update': item.get('can_update') is True,
             'reason': item.get('reason') if item.get('reason') in ('not_installed', 'bridge', 'manager', 'manual', 'check') else None})
     update = data.get('update') if isinstance(data.get('update'), dict) else {}
+    results = update.get('results') if isinstance(update.get('results'), dict) else {}
     return {'items': items, 'update': {
-        'tool': update.get('tool') if update.get('tool') in ('claude', 'codex', 'opencode') else None,
+        'tool': update.get('tool') if update.get('tool') in ('claude', 'codex', 'opencode', 'all') else None,
         'state': update.get('state') if update.get('state') in (
-            'idle', 'waiting', 'updating', 'done', 'error', 'cancelled') else 'error'}}
+            'idle', 'waiting', 'updating', 'done', 'error', 'cancelled') else 'error',
+        **({'results': {tool: results[tool] for tool in ('claude', 'codex', 'opencode')
+                        if results.get(tool) in ('done', 'error')}} if update.get('tool') == 'all' else {})}}
 
 
 def _text(value, maximum=512):

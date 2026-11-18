@@ -29,7 +29,7 @@ import { opencodeView } from './code-opencode.js';
  * Модель и усилие: первый пункт — «по умолчанию» (null — прежние модель и усилие чата, протокол §4). Выбор
  * учётки — из me.code_defaults, подставляется только в новый чат (fresh — заведён
  * «Новым чатом» в этом окне, или история пуста), пока выбор не трогали; существующий начинает с «по умолчанию».
- * Черновик поля — в памяти модуля по чату (drafts): уход к PIN и назад его не теряет; снимается, когда ход
+ * Черновик текста — в текущей вкладке по чату (drafts): перезагрузка и уход к PIN его сохраняют; снимается, когда ход
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. В хранилище браузера —
  * ни ленты, ни поля. Текст машины — только textContent и markdown.js. */
 import { api as request, me, unknownOutcome } from './api.js';
@@ -57,6 +57,8 @@ import { statusActions } from './code-status-bar.js';
 import { historyImages } from './code-chat-images.js';
 import { commandsView } from './code-commands.js';
 import { WINDOW } from './code-window.js';
+import { refreshAfterFailure } from './refresh.js';
+import { saveDraft, savedDrafts } from './code-drafts.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -78,8 +80,7 @@ const IMAGE_MAX = 10 * 1024 * 1024;
 const IMAGES_MAX = 30 * 1024 * 1024;
 const IMAGE_COUNT = 8;
 
-/** Черновики поля задания: `<aid>/<chat>` → текст; только память страницы. */
-/** Черновики чатов (`${aid}/${chat}`) — только память страницы. Смена «есть черновик / нет» — событие
+/** Черновики чатов (`${aid}/${chat}`). Смена «есть черновик / нет» — событие
  * `studio-code-draft` { key, draft } на document: по нему вкладка показывает ✎ (code.js, code-tabs.js). */
 class Drafts extends Map {
   set(key, value) {
@@ -102,8 +103,18 @@ function hasDraft(key) {
 function announceDraft(key, had) {
   if (had !== hasDraft(key)) document.dispatchEvent(new CustomEvent('studio-code-draft', { detail: { key, draft: !had } }));
 }
-const drafts = new Drafts();
-const imageDrafts = new Drafts();  // картинки черновика — только память, как текст
+const drafts = new class extends Drafts {
+  set(key, value) {
+    const receipt = sendIds.get(key);
+    saveDraft(key, value, receipt?.value === value.trim() && !receipt.images.length ? receipt.id : null);
+    return super.set(key, value);
+  }
+  delete(key) {
+    saveDraft(key, '');
+    return super.delete(key);
+  }
+}();
+const imageDrafts = new Drafts();  // вложения черновика живут в памяти страницы
 const historyCache = new Map(); // последние 12 историй, только память этой страницы
 document.addEventListener('studio-code-clear', () => historyCache.clear());
 const pendingInputs = new Map(); // до подтверждения, что CLI принял исходное задание
@@ -143,6 +154,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const endpoint = (tail = '') => `${url}${tail}${engine !== 'claude' ? `?engine=${engine}` : ''}`;
   const assistant = ENGINE_NAMES[engine];
   const draftKey = `${aid}/${chat}`;
+  const saved = savedDrafts()[draftKey];
+  if (saved && !drafts.has(draftKey)) {
+    if (saved.receipt) sendIds.set(draftKey, { id: saved.receipt, value: saved.text.trim(), images: [] });
+    drafts.set(draftKey, saved.text);
+  }
   const historyKey = `${me.id}/${aid}/${pid}/${engine}/${chat}`;
   const workspace = document.getElementById('view');
   const scroller = el('div', { id: 'code-chat-scroll', class: 'code-chat-scroll', tabindex: '0',
@@ -458,7 +474,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       paintSettings({});
       settingsReady = !agent?.chat_state;
       if (err.code === 'closed') closed();
-      else { stateError = words(err); showStatus(stateError); }
+      else { stateError = words(err); showStatus(stateError); refreshAfterFailure(err); }
     } finally {
       if (stateRequest === own) {
         resolving = false;
@@ -949,6 +965,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         && known.images.every((image, n) => image === sent[n])) return known.id;
     const id = crypto.randomUUID().replaceAll('-', '');
     sendIds.set(draftKey, { id, value, images: sent });
+    if (drafts.has(draftKey)) drafts.set(draftKey, drafts.get(draftKey));
     return id;
   }
 
@@ -1392,6 +1409,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         finish(data);
         return true;
       case 'offline':
+        refreshAfterFailure();
         if (data.wait === true) {     // live без компьютера: поток ждёт online, без опроса
           setRunning(false);
           paintActivity('offline');
@@ -1439,6 +1457,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function waitForComputer() {
+    refreshAfterFailure();
     setRunning(false);
     paintActivity('offline');
     showStatus(WAITING);
@@ -1457,7 +1476,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       // обрыв: свой (страница ушла, новый поток) или сети — ниже
     }
     if (controller === own) controller = null;
-    if (!ended && alive && !own.signal.aborted) later(AGAIN_MS);
+    if (!ended && alive && !own.signal.aborted) {
+      refreshAfterFailure();
+      later(AGAIN_MS);
+    }
   }
 
   async function openLive(passive = false) {
@@ -1474,6 +1496,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       else if (err.code === 'offline') waitForComputer();
       else {
         showStatus(words(err));
+        refreshAfterFailure(err);
         if (err.code === 'network' || err.status >= 500) later(RETRY_MS);
         else reloadButton.hidden = false;      // само не повторится — «Повторить»
       }
@@ -1588,6 +1611,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /** Ошибка загрузки истории: слова и «Повторить»; связь, сбой моста или шлюза — повтор сам через RETRY_MS. */
   function loadFailed(err) {
+    refreshAfterFailure(err);
     loadError = err.code === 'offline' ? WAITING : words(err);
     showStatus(loadError);
     if (err.code === 'offline') paintActivity('offline');
@@ -1860,6 +1884,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   return {
     focus() { if (alive) focusDesktop(text); },
+    refreshBlocked() { return sending || (pendingInputs.get(draftKey)?.images.length > 0); },
     unmount() {
       alive = false;
       askObserver.disconnect();

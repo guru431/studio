@@ -294,6 +294,36 @@ async def test_shutdown_before_the_update_task_starts_releases_busy_state():
     assert not m.busy and m.state == 'cancelled'
 
 
+async def test_update_all_runs_available_installers_sequentially_after_active_work(monkeypatch):
+    waiting, release = asyncio.Event(), asyncio.Event()
+    async def sleep(_):
+        waiting.set()
+        await release.wait()
+    m = manager(sleep=sleep)
+    m.agent._software_requests = 1
+    m.items = {'codex': item('codex', latest='1.2.10', can_update=True),
+               'claude': item('claude', latest='1.2.10', can_update=False),
+               'opencode': item('opencode', latest='1.2.10', can_update=True)}
+    calls = []
+    async def update(name, *_):
+        calls.append(name)
+        if name == 'codex':
+            raise OSError('private installer output')
+    monkeypatch.setattr(m, '_update', update)
+    assert m.start('all')['update'] == {'tool': 'all', 'state': 'waiting', 'results': {}}
+    try:
+        await waiting.wait()
+        assert calls == []
+        m.agent._software_requests = 0
+        release.set()
+        await m.task
+        assert calls == ['codex', 'opencode']
+        assert m.snapshot()['update'] == {
+            'tool': 'all', 'state': 'error', 'results': {'codex': 'error', 'opencode': 'done'}}
+    finally:
+        await m.close()
+
+
 async def test_software_operations_require_pin_owner_and_valid_tool(agent_with_pin, monkeypatch):
     agent = agent_with_pin
     assert agent.hello()['software_versions'] is True

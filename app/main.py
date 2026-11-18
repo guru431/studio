@@ -42,6 +42,7 @@ import checks
 import claude_code
 import code_usage
 import code_activity
+import project_mirrors
 import config
 import connections
 import db
@@ -131,6 +132,7 @@ async def lifespan(_app):
         await ocr.stop()
         await speeches.stop()
         await chat.stop_all()
+        await project_mirrors.stop()
         await bridge.stop()
         await push.stop()
         cleaner.TICKETS.clear()
@@ -194,6 +196,7 @@ app.include_router(bridge.router)
 app.include_router(workspace.router)
 app.include_router(claude_code.router)
 app.include_router(project_access.router)
+app.include_router(project_mirrors.router)
 app.include_router(desktop.router)
 app.include_router(code_usage.router)
 app.include_router(code_activity.router)

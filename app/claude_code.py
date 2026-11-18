@@ -367,7 +367,8 @@ def _warn(request: Request, aid: int, op: str, error: HTTPException) -> None:
     log.warning("пользователь %d: компьютер %d — %s: %s", request.state.user.id, aid, op, error.detail["code"])
 
 
-async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passive: bool = False, **args) -> dict:
+async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passive: bool = False,
+              reply_timeout: float | None = None, **args) -> dict:
     """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим, в журнал — `_warn`
     (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
     запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи».
@@ -412,7 +413,8 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
             raise _refuse(409, "unsupported", "обновите агент на компьютере для настройки таймера PIN")
         if passive and link.hello.get("passive_requests"):
             args["passive"] = True
-        data = await bridge.call(aid, op, bridge.tag(request.state.digest), **args)
+        data = await bridge.call(aid, op, bridge.tag(request.state.digest),
+                                 **({"timeout": reply_timeout} if reply_timeout is not None else {}), **args)
         # The computer may finish its work after logout, expiry, disable or a screen lock.
         # Keeping that result on the computer does not authorize delivery to this request.
         if not _session_open(request.state.digest):
@@ -658,8 +660,10 @@ async def software_update(aid: int, tool: str, request: Request):
 
     own_agent(request, aid)
     require_capability(aid, 'software_versions')
-    if tool not in ('claude', 'codex', 'opencode'):
+    if tool not in ('claude', 'codex', 'opencode', 'all'):
         raise _refuse(422, 'invalid', 'неизвестная программа')
+    if tool == 'all':
+        require_capability(aid, 'software_update_all')
     return _BridgeJSON(software(await ask(request, aid, 'software_update', software=tool)),
                        headers={'Cache-Control': 'no-store'})
 

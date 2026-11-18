@@ -251,6 +251,7 @@ class Software:
         self.items, self.cache = {}, {}
         self.checked = None
         self.state, self.tool, self.task = 'idle', None, None
+        self.results = None
         self.lock = asyncio.Lock()
 
     @property
@@ -278,7 +279,8 @@ class Software:
 
     def snapshot(self):
         return {'items': [{k: v for k, v in item.items() if not k.startswith('_')} for item in self.items.values()],
-                'update': {'tool': self.tool, 'state': self.state}}
+                'update': {'tool': self.tool, 'state': self.state,
+                           **({'results': dict(self.results)} if self.results is not None else {})}}
 
     async def read(self, refresh=False):
         async with self.lock:
@@ -292,11 +294,14 @@ class Software:
         if (self.busy or self.task is not None and not self.task.done() or self.agent.local_exit_pending
                 or self.lock.locked() or self.agent.updater is not None and self.agent.updater.busy):
             raise Refused('busy')
-        item = self.items.get(tool)
-        if item is None or not item['can_update']:
+        names = TOOLS if tool == 'all' else (tool,)
+        candidates = [(name, item['latest'], item['source'], item.get('_package', TOOLS[name]))
+                      for name in names if (item := self.items.get(name)) and item['can_update']]
+        if not candidates:
             raise Refused('unsupported', 'Сначала проверьте доступные обновления программ')
         self.tool, self.state = tool, 'waiting'
-        self.task = asyncio.create_task(self._run(tool, item['latest'], item['source'], item.get('_package', TOOLS[tool])))
+        self.results = {} if tool == 'all' else None
+        self.task = asyncio.create_task(self._run(candidates))
         return self.snapshot()
 
     def cancel(self):
@@ -305,35 +310,46 @@ class Software:
             self.state = 'cancelled'
         return self.snapshot()
 
-    async def _run(self, tool, target, source, package):
+    async def _run(self, candidates):
         try:
-            while (self.agent._software_requests or any(backend is not None and backend.live()
+            while (self.agent._software_requests or getattr(self.agent, "mirror_active", False) or
+                    any(backend is not None and backend.live()
                     for backend in (self.agent.runner, self.agent.codex, self.agent.opencode))):
                 await self.sleep(1)
             self.state = 'updating'
-            backend = {'claude': self.agent.runner, 'codex': self.agent.codex, 'opencode': self.agent.opencode}[tool]
-            if backend is not None:
-                await backend.close()
-            item = await asyncio.to_thread(inspect, tool)
-            if (not item['installed'] or item['reason'] or item['source'] != source
-                    or item.get('_package', TOOLS[tool]) != package or item['version'] is None):
-                raise ValueError('installation')
-            # Автообновление вне моста могло опередить очередь: установленную новую версию не понижаем.
-            if newer(target, item['version']):
-                await install(item, target)
-            item = await self._read(tool, True)
-            self.items[tool] = item
-            if item['version'] is None or newer(target, item['version']):
-                raise ValueError('verification')
-            if tool == 'claude':
-                self.agent.runner.cli_path = await asyncio.to_thread(cli.find_cli)
-            self.state = 'done'
+            failed = False
+            for candidate in candidates:
+                try:
+                    await self._update(*candidate)
+                    status = 'done'
+                except Exception:
+                    # Установщик и исключения могут содержать пути и ключи.
+                    status = 'error'
+                    failed = True
+                if self.results is not None:
+                    self.results[candidate[0]] = status
+            self.state = 'error' if failed else 'done'
         except asyncio.CancelledError:
             self.state = 'cancelled'
             raise
-        except Exception:
-            # Вывод установщика и исключения могут содержать пути/ключи: наружу только состояние.
-            self.state = 'error'
+
+    async def _update(self, tool, target, source, package):
+        backend = {'claude': self.agent.runner, 'codex': self.agent.codex, 'opencode': self.agent.opencode}[tool]
+        if backend is not None:
+            await backend.close()
+        item = await asyncio.to_thread(inspect, tool)
+        if (not item['installed'] or item['reason'] or item['source'] != source
+                or item.get('_package', TOOLS[tool]) != package or item['version'] is None):
+            raise ValueError('installation')
+        # Автообновление вне моста может опередить очередь.
+        if newer(target, item['version']):
+            await install(item, target)
+        item = await self._read(tool, True)
+        self.items[tool] = item
+        if item['version'] is None or newer(target, item['version']):
+            raise ValueError('verification')
+        if tool == 'claude':
+            self.agent.runner.cli_path = await asyncio.to_thread(cli.find_cli)
 
     async def close(self):
         if self.task is not None and not self.task.done():

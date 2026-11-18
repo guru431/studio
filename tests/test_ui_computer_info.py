@@ -71,6 +71,7 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
             os='Microsoft Windows 11 Enterprise LTSC 10.0.26100',
             internal_ips=['10.77.1.8'], projects_roots=['D:\\work'])
     machine.software_versions = True
+    machine.software_update_all = width == 320
     machine.software_data = {'items': [
         {'id': tool, 'installed': tool != 'opencode', 'version': '1.2.10' if tool == 'claude' else '1.2.3' if tool == 'codex' else None,
          'cli_version': '1.2.10' if tool == 'claude' else '1.2.3' if tool == 'codex' else None, 'latest': '1.2.10',
@@ -110,7 +111,7 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
             })()'''),
             ('eval', 'softwareScroll', 'document.querySelector(".code-software").scrollIntoView({block:"start"});true'),
             ('screenshot', str(tmp_path / f'software-{width}.png')),
-            ('click', '[data-software-update=codex]'),
+            ('click', '#code-software-update-all' if width == 320 else '[data-software-update=codex]'),
             ('wait', 'document.querySelector("[data-software-cancel]")'),
             ('wait', 'document.querySelector(".code-software").textContent.includes("версия проверена")'),
             ('eval', 'result', 'document.querySelector(".code-software").textContent'),
@@ -134,6 +135,7 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
         assert text in result['values']['versions']
     assert 'Установлено: 1.2.10' in result['values']['result']
     assert sum(r['op'] == 'software_update' for r in machine.requests) == 1
+    assert [r['software'] for r in machine.requests if r['op'] == 'software_update'] == ['all' if width == 320 else 'codex']
     assert not problems(result), problems(result)
 
 

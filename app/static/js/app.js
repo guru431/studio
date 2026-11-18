@@ -38,7 +38,8 @@ import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy } from './stale.js';
-import { claimActiveSessions, refreshRequested, reloadStudio } from './refresh.js';
+import { claimActiveSessions, refreshAfterFailure, refreshRequested, reloadStudio } from './refresh.js';
+import './code-drafts.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),
@@ -341,8 +342,7 @@ async function start() {
   await enter(worker);
 }
 
-/** Профиль не пришёл (нет связи): в PWA обновить страницу нечем — «Повторить», а ещё сам повтор при
- * появлении сети и возвращении на экран. По таймеру не повторяет: без связи запросы не копятся. */
+/** Профиль не пришёл: даём повторить вход в оболочку и запускаем общее обновление. */
 function retryLater(first, worker) {
   let asking = false;
   const say = (err) => {
@@ -359,7 +359,10 @@ function retryLater(first, worker) {
       await loadMe();
     } catch (err) {
       asking = false;
-      if (err.code !== 'login') say(err);
+      if (err.code !== 'login') {
+        say(err);
+        refreshAfterFailure(err);
+      }
       return;
     }
     window.removeEventListener('online', retry);
@@ -367,6 +370,7 @@ function retryLater(first, worker) {
     await enter(worker);
   }
   say(first);
+  refreshAfterFailure(first);
   window.addEventListener('online', retry);
   document.addEventListener('visibilitychange', retry);
 }
@@ -384,8 +388,11 @@ async function enter(worker) {
     let failed;
     try { failed = await claimActiveSessions(); }
     catch { failed = true; }
-    if (failed) view.prepend(el('p', { id: 'refresh-status', class: 'status error', role: 'status' },
-      tr("Не все активные сессии удалось перенести сюда. Нажмите «Обновить», чтобы повторить.")));
+    if (failed) {
+      view.prepend(el('p', { id: 'refresh-status', class: 'status error', role: 'status' },
+        tr("Не все активные сессии удалось перенести сюда. Студия повторит обновление.")));
+      refreshAfterFailure();
+    }
   }
   setupCodeActivity();
   await worker;
