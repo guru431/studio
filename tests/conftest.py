@@ -109,8 +109,11 @@ LOGIN_IP = "10.77.48.5"
 
 @pytest.fixture(scope="session")
 def schema_db(tmp_path_factory):
-    """Пустая база текущей схемы — одна на процесс xdist: SCHEMA на новый файл — ~0,2 с, а тестов
-    с `studio` — почти весь набор. Закрыта — WAL слит в файл, копия файла — целая база."""
+    """Пустая база текущей схемы — один снимок в памяти на процесс xdist.
+
+    SQLite сливает WAL при закрытии соединения. Каждый тест получает отдельный файл
+    полной базы без повторного открытия и проверок пути файла шаблона.
+    """
     import db
     import tempfile
     with tempfile.TemporaryDirectory(prefix='schema-', dir=tmp_path_factory.getbasetemp()) as directory:
@@ -120,7 +123,7 @@ def schema_db(tmp_path_factory):
             db.migrate(conn)
         finally:
             conn.close()
-        yield path
+        return path.read_bytes()
 
 
 @pytest.fixture
@@ -128,8 +131,6 @@ def studio(env, schema_db, monkeypatch):
     """main.app на свежей базе: часы — список `clock`, пауза двигает их и пишется в `sleeps`,
     шлюз — FakeGateway через httpx.MockTransport. База — копия `schema_db`, если тест не положил
     свою заранее (её lifespan доведёт до VERSION сам)."""
-    import shutil
-
     import httpx
     from fastapi.testclient import TestClient
 
@@ -196,7 +197,7 @@ def studio(env, schema_db, monkeypatch):
     clear_bridge()
     clear_push()
     if not env.db_path.exists():
-        shutil.copyfile(schema_db, env.db_path)
+        env.db_path.write_bytes(schema_db)
     with TestClient(main.app, base_url="https://testserver",
                    backend_options={"loop_factory": new_event_loop}) as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
