@@ -24,7 +24,7 @@ def package(tmp_path, monkeypatch, request):
     return path
 
 
-def test_package_requires_a_live_device_key_and_never_exposes_it(studio, package, caplog):
+def test_package_requires_a_live_device_key_and_never_exposes_it(studio, package, caplog, monkeypatch):
     caplog.set_level(logging.DEBUG)
     uid = make_user(studio, 'owner')
     aid, key = enroll(studio)
@@ -36,9 +36,16 @@ def test_package_requires_a_live_device_key_and_never_exposes_it(studio, package
     response = studio.c.get(url, headers=headers)
     assert response.status_code == 200 and response.content == package.read_bytes()
     assert response.headers['cache-control'] == 'no-store'
+    pkg = package.with_suffix('.pkg')
+    pkg.write_bytes(b'xar!fixture')
+    monkeypatch.setattr(agents, 'AGENT_MACOS', pkg)
+    assert studio.c.get(url + '?platform=macos').status_code == 401
+    assert studio.c.get(url + '?platform=macos', headers=headers).content == pkg.read_bytes()
+    assert studio.c.get(url + '?platform=unknown', headers=headers).status_code == 422
     assert studio.c.get(url, headers={**headers, 'Origin': 'https://evil.example'}).status_code == 403
     state.DB.execute('UPDATE users SET disabled = 1 WHERE id = ?', (uid,))
     assert studio.c.get(url, headers=headers).status_code == 401
+    assert studio.c.get(url + '?platform=macos', headers=headers).status_code == 401
     state.DB.execute('UPDATE users SET disabled = 0 WHERE id = ?', (uid,))
     state.DB.execute('DELETE FROM agents WHERE id = ?', (aid,))
     assert studio.c.get(url, headers=headers).status_code == 401

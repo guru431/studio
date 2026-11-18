@@ -858,7 +858,7 @@ class MainWindow:
             row=1, column=0, sticky="w", pady=(self.px(4), 0))
         self.buttons.append(button)
         if host.MACOS:
-            from .desktop_macos import request_permission
+            from .desktop_macos import persistent_capture_build, request_permission
 
             def permit(kind):
                 problem.set("")
@@ -878,9 +878,12 @@ class MainWindow:
             self.permission_value.grid(row=3, column=0, sticky='w', pady=(self.px(4), 0))
             actions = self.ttk.Frame(area, style="Card.TFrame")
             actions.grid(row=4, column=0, sticky='w', pady=(self.px(6), 0))
-            for column, (kind, label) in enumerate((("screen", "Запись экрана…"), ("input", "Универсальный доступ…"))):
+            permissions = [("screen", "Запись экрана…"), ("input", "Универсальный доступ…")]
+            if persistent_capture_build():
+                permissions.append(("remote", "Удалённый рабочий стол…"))
+            for index, (kind, label) in enumerate(permissions):
                 permission = self.ttk.Button(actions, text=label, command=lambda k=kind: permit(k))
-                permission.grid(row=0, column=column, padx=(0, self.px(6)))
+                permission.grid(row=index // 2, column=index % 2, sticky="w", padx=(0, self.px(6)))
                 self.buttons.append(permission)
             self.refresh_permissions()
 

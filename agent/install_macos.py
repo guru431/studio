@@ -22,6 +22,10 @@ def bundle(repo: Path, applications: Path, *, launcher: Path | None = None) -> P
     app = applications / "Studio Agent.app"
     if app.is_symlink():
         raise ValueError('приложение не должно быть ссылкой')
+    if app.is_dir():
+        with (app / 'Contents/Info.plist').open('rb') as source:
+            if plistlib.load(source).get('StudioSigningTeam'):
+                raise ValueError('Для обновления Developer ID приложения нужен подписанный выпуск')
     with tempfile.TemporaryDirectory(prefix='.studio-agent-', dir=applications) as folder:
         pending = Path(folder) / 'Studio Agent.app'
         _write_bundle(pending, repo, launcher=launcher)

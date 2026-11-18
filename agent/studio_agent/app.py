@@ -785,7 +785,11 @@ def main(argv: list[str]) -> int:
         nonlocal ready_file
         if ready_file and ctrl._built.is_set():
             candidate = Path(ready_file)
-            if candidate == Path(__file__).resolve().parent.parent / '_update_ready':
+            if host.MACOS and updater.macos_signed.sealed_app(updater.REPO):
+                if updater.macos_signed.ready_marker(ready_file):
+                    with candidate.open('xb'):
+                        pass
+            elif candidate == updater.REPO / '_update_ready':
                 candidate.touch()
             ready_file = ''
         while True:

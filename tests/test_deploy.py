@@ -885,7 +885,8 @@ def component_workspace(tmp_path):
 
 @pytest.mark.integration                   # git и bash на Windows — секунды
 @pytest.mark.timeout(120)
-def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sources(component_workspace):
+@pytest.mark.parametrize("signed_pkg", [False, True])
+def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sources(component_workspace, signed_pkg):
     tmp_path = component_workspace
     bash = _bash()
     if not bash:
@@ -917,6 +918,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
            "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix(),
            "STUDIO_URL": "https://studio.example.net",
            "STUDIO_PYTHON": Path(sys.executable).as_posix()}
+    env['STUDIO_MACOS_SIGNING_IDENTITY'] = '0' * 40 if signed_pkg else ''
     (tmp_path / 'md2pdf.py').write_bytes(converter_bytes)
     wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
                'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
@@ -952,6 +954,13 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
         names = {n for n in archive.namelist() if not n.endswith("/")}
         assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names
         assert archive.read('studio-agent/macos/studio-agent').startswith(b'\xca\xfe\xba\xbe')
+        descriptor = 'studio-agent/macos/signed-package.json'
+        if signed_pkg:
+            import json
+            assert json.loads(archive.read(descriptor)) == {
+                'sha256': hashlib.sha256(b'xar!fixture').hexdigest(), 'size': len(b'xar!fixture')}
+        else:
+            assert descriptor not in names
         assert b'"https://studio.example.net"' in archive.read("studio-agent/studio_agent/store.py")
         assert not any(n.startswith("studio-agent/tests/") or n.endswith("CLAUDE.md") for n in names)
         assert all(n.startswith("studio-agent/") for n in names)

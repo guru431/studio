@@ -42,18 +42,29 @@ def permission_status(_quartz=None):
         return {'screen': None, 'input': None, 'session': 'unavailable'}
 
 
+def persistent_capture_build():
+    from pathlib import Path
+    from .macos_signed import info, sealed_app
+
+    app = sealed_app(Path(__file__).resolve().parent.parent)
+    return bool(app and info(app).get('StudioPersistentCapture') is True)
+
+
 def request_permission(kind):
     """Системный запрос выполняет главный поток приложения по локальной кнопке."""
     import Quartz as q
 
-    if kind == 'screen':
-        pane = 'Privacy_ScreenCapture'
-        if not q.CGPreflightScreenCaptureAccess():
+    if kind in ('screen', 'remote'):
+        remote = kind == 'remote'
+        if remote and not persistent_capture_build():
+            raise ValueError('persistent capture unavailable')
+        pane = 'Privacy_RemoteDesktop' if remote else 'Privacy_ScreenCapture'
+        if remote or not q.CGPreflightScreenCaptureAccess():
             from PyObjCTools import AppHelper
 
             def checked(_content, error):
                 # ScreenCaptureKit запрашивает согласие сам. Настройки открываются после его ответа.
-                if error is not None:
+                if remote or error is not None:
                     AppHelper.callAfter(_open_permission_settings, pane)
 
             _shareable_content(checked)

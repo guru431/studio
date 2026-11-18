@@ -38,6 +38,21 @@ pull-зеркало получает его с основного сервера
 Сборщик передаёт только ZIP того же HEAD, скрипт и lock runtime; работает в уникальной `.tmp/`
 на Mac, проверяет автономную установку, забирает PKG и убирает свою папку. Сервер получает ZIP,
 EXE и PKG одной ревизии. Без Mac сборка останавливается до изменения сервера.
+
+Для выпуска Developer ID укажите в игнорируемом `deploy/local-profile.sh` SHA-1 сертификата
+**Developer ID Application** в `STUDIO_MACOS_SIGNING_IDENTITY`. Сертификат и его закрытый ключ
+должны быть доступны `codesign` в Keychain сборочной учётной записи. Для подписи самого PKG
+служит `STUDIO_MACOS_INSTALLER_IDENTITY` (SHA-1 **Developer ID Installer** той же команды).
+После одобрения Apple задайте `STUDIO_MACOS_CAPTURE_PROFILE` — абсолютный путь **на сборочном Mac**
+к Developer ID provisioning profile для `com.studio.agent` с правом
+`com.apple.developer.persistent-content-capture`. Профиль встраивается в распространяемое приложение.
+Настройте зарегистрированный App ID и запросите право в своей команде разработчика.
+[Persistent Content Capture](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.persistent-content-capture).
+
+При заданной подписи сборка сверяет сертификат, команду, App ID, срок профиля и разрешённое право.
+Ошибка останавливает выпуск. Закрытые ключи остаются в Keychain. Сборка проверяет обе подписи Universal2,
+запускает встроенный runtime на архитектуре сборщика и проверяет .app после распаковки конечного PKG.
+Нотаризация в Apple является отдельной операцией.
 При необходимости `STUDIO_PYTHON` выбирает интерпретатор локальной среды.
 Шаблон профиля:
 

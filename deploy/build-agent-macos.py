@@ -6,6 +6,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -89,10 +90,20 @@ def filter_requirements(source, destination, arch):
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build(archive, output, lock_path, work, launcher_output=None):
+def build(archive, output, lock_path, work, launcher_output=None, signing_identity=None, capture_profile=None,
+          installer_identity=None):
     scripts = work / "scripts"
     scripts.mkdir()
     source = unpack_source(archive, scripts / "source")
+    if (capture_profile or installer_identity) and not signing_identity:
+        raise ValueError("Для подписанного выпуска нужен Developer ID Application")
+    if signing_identity:
+        signing = runpy.run_path(str(source / 'macos/sign_release.py'))
+        team, grants = signing['preflight'](signing_identity, capture_profile)
+        if installer_identity:
+            listing = subprocess.check_output(['/usr/bin/security', 'find-identity', '-v'], text=True, timeout=20)
+            if signing['signing_team'](installer_identity, listing, 'Installer') != team:
+                raise ValueError('Сертификаты приложения и установщика принадлежат разным командам')
     match = re.search(r'^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$',
                       (source / "studio_agent/__init__.py").read_text(encoding="utf-8"), re.M)
     if match is None:
@@ -165,6 +176,26 @@ exec "$PAYLOAD/runtime/$ARCH/bin/python3" "$PAYLOAD/source/studio-agent/install_
     installed = acceptance / "settings/app/current/.venv/bin/python"
     run([installed, "-c", "import sys, tkinter, studio_agent.app; "
          "assert '/runtimes/' in sys._base_executable"], cwd=source, env=probe_env)
+    if signing_identity:
+        signed = signing['build_app'](source, scripts, work, lock, acceptance / 'Applications/Studio Agent.app',
+                                      match[1], signing_identity, capture_profile, team, grants, env)
+        verifier = runpy.run_path(str(source / 'studio_agent/macos_signed.py'))['verify']
+        verifier(signed, team, match[1], capture=bool(grants))
+        result = run([signed / 'Contents/MacOS/studio-agent', '--check-runtime'], env=probe_env,
+                     capture_output=True, text=True, timeout=180)
+        if result.stdout.strip() != match[1]:
+            raise ValueError('Неверная версия подписанного приложения')
+        scripts = signed.parent
+        postinstall = scripts / 'postinstall'
+        postinstall.write_text('''#!/bin/sh
+set -eu
+[ "$(/usr/bin/id -u)" != 0 ] || exit 1
+app="$(dirname -- "$0")/Studio Agent.app"
+arch=$(/usr/bin/uname -m)
+exec "$app/Contents/Resources/runtime/$arch/bin/python3" -I -B \\
+    "$app/Contents/Resources/agent/studio_agent/macos_signed.py" --install "$app"
+''', encoding='utf-8')
+        postinstall.chmod(0o755)
     # nopayload: вся запись и проверка замка идут через общий install_macos, до смены приложения.
     component = work / "bridge.pkg"
     run(["/usr/bin/pkgbuild", "--nopayload", "--scripts", scripts, "--identifier", IDENTIFIER,
@@ -196,8 +227,15 @@ exec "$PAYLOAD/runtime/$ARCH/bin/python3" "$PAYLOAD/source/studio-agent/install_
         (resources / (name + ".html")).write_text('<!doctype html><meta charset="utf-8">' + body, encoding="utf-8")
     output.parent.mkdir(parents=True, exist_ok=True)
     built = work / "studio-agent-setup.pkg"
-    run(["/usr/bin/productbuild", "--distribution", distribution, "--package-path", work,
+    sign_pkg = ['--sign', installer_identity] if installer_identity else []
+    run(["/usr/bin/productbuild", *sign_pkg, "--distribution", distribution, "--package-path", work,
          "--resources", resources, built])
+    if signing_identity:
+        if installer_identity:
+            run(['/usr/sbin/pkgutil', '--check-signature', built])
+        expanded = work / 'expanded'
+        run(['/usr/sbin/pkgutil', '--expand-full', built, expanded])
+        verifier(expanded / 'bridge.pkg/Scripts/Studio Agent.app', team, match[1], capture=bool(grants))
     os.replace(built, output)
 
 
@@ -218,6 +256,12 @@ def remote(args, work):
                    "--lock", folder + "/" + args.lock.name, "--output", folder + "/studio-agent-setup.pkg"]
         if getattr(args, 'launcher_output', None) is not None:
             command += ['--launcher-output', folder + '/studio-agent-macos']
+        if getattr(args, 'signing_identity', None):
+            command += ['--signing-identity', args.signing_identity]
+        if getattr(args, 'capture_profile', None):
+            command += ['--capture-profile', str(args.capture_profile)]
+        if getattr(args, 'installer_identity', None):
+            command += ['--installer-identity', args.installer_identity]
         # Полная сборка включает обе архитектуры, загрузки и автономную установку.
         run([*ssh, shlex.join(command)], timeout=3600)
         staged = work / "studio-agent-setup.pkg"
@@ -256,12 +300,19 @@ def main():
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--launcher-output", type=Path)
+    parser.add_argument("--signing-identity", default=os.environ.get("STUDIO_MACOS_SIGNING_IDENTITY"))
+    parser.add_argument("--capture-profile", default=os.environ.get("STUDIO_MACOS_CAPTURE_PROFILE"))
+    parser.add_argument("--installer-identity", default=os.environ.get("STUDIO_MACOS_INSTALLER_IDENTITY"))
     parser.add_argument("--lock", type=Path, default=HERE / "macos-runtime.json")
     parser.add_argument("--host", default=os.environ.get("STUDIO_MACOS_BUILD_SSH"))
     parser.add_argument("--port", default=os.environ.get("STUDIO_MACOS_BUILD_PORT", "22"))
     parser.add_argument("--key", default=os.environ.get("STUDIO_MACOS_BUILD_KEY"))
     parser.add_argument("--remote-root", default=os.environ.get("STUDIO_MACOS_BUILD_ROOT"))
     args = parser.parse_args()
+    if args.installer_identity and not args.signing_identity:
+        parser.error("подпись установщика требует подписи приложения")
+    if args.capture_profile and (not args.signing_identity or not PurePosixPath(args.capture_profile).is_absolute()):
+        parser.error("нужны Developer ID Application и абсолютный путь профиля на Mac")
     if not args.host and sys.platform != "darwin":
         parser.error("нужен Mac: задайте STUDIO_MACOS_BUILD_SSH и STUDIO_MACOS_BUILD_ROOT в локальном профиле")
     # Вызывающий deploy уже создал собственную папку .tmp; промежуточные файлы остаются рядом с ZIP.
@@ -270,7 +321,8 @@ def main():
         if args.host:
             remote(args, work)
         else:
-            build(args.archive, args.output, args.lock, work, args.launcher_output)
+            build(args.archive, args.output, args.lock, work, args.launcher_output, args.signing_identity,
+                  args.capture_profile, args.installer_identity)
 
 
 if __name__ == "__main__":

@@ -18,15 +18,20 @@ def command() -> str:
     if host.MACOS:
         import json
         from .macos_autostart import arguments
-        return json.dumps(arguments(REPO))
+        from .macos_signed import sealed_app
+        return json.dumps(arguments(REPO, app=sealed_app(REPO)))
     return f'"{REPO / ".venv" / "Scripts" / "pythonw.exe"}" "{REPO / "studio_agent.pyw"}"'
 
 
 def enabled(key: str = RUN_KEY) -> bool:
     """Значение есть и запускает эту копию (`command()`); указывает на другую копию моста — не включён."""
     if host.MACOS:
-        from .macos_autostart import arguments, read
-        return read().get("ProgramArguments") == arguments(REPO)
+        from .macos_autostart import arguments, open_arguments, read
+        from .macos_signed import sealed_app
+        data = read()
+        app = sealed_app(REPO)
+        return data.get("ProgramArguments") in (arguments(REPO, app=app),
+                                                 open_arguments(REPO, data.get("EnvironmentVariables"), app=app))
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
             value, _ = winreg.QueryValueEx(k, VALUE)
@@ -38,7 +43,8 @@ def enabled(key: str = RUN_KEY) -> bool:
 def set_enabled(on: bool, key: str = RUN_KEY) -> None:
     if host.MACOS:
         from .macos_autostart import set_enabled as macos_set
-        macos_set(on, REPO)
+        from .macos_signed import sealed_app
+        macos_set(on, REPO, app=sealed_app(REPO))
         return
     if on:
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:

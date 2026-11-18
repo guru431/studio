@@ -215,9 +215,14 @@ async def update_package(request: Request):
         raise HTTPException(401, {"code": "key", "message": "ключ компьютера не принят"})
     if auth.foreign_origin(request):
         raise HTTPException(403, {"code": "origin", "message": FOREIGN})
-    if not AGENT_ZIP.is_file():
+    platform = request.query_params.get("platform", "zip")
+    if platform not in ("zip", "macos"):
+        raise HTTPException(422, {"code": "platform", "message": "неизвестный формат обновления"})
+    package = AGENT_MACOS if platform == "macos" else AGENT_ZIP
+    if not package.is_file():
         raise HTTPException(404, {"code": "no_agent", "message": "архива агента нет на сервере"})
-    return FileResponse(AGENT_ZIP, media_type="application/zip", headers={"Cache-Control": "no-store"})
+    return FileResponse(package, media_type="application/octet-stream" if platform == "macos" else "application/zip",
+                        headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/agents/events")
