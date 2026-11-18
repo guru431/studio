@@ -551,11 +551,15 @@ async def project_summary(aid: int, pid: str, request: Request):
     link = bridge.LINKS.get(aid)
     if link is not None and not link.hello.get("project_summary"):
         raise _refuse(409, "unsupported", "обновите мост на компьютере для сведений о проектах")
-    data = await ask(request, aid, "project_summary", project=pid,
+    code_size = request.query_params.get("code_size") == "true"
+    data = await ask(request, aid, "project_summary", project=pid, code_size=code_size,
                      refresh=request.query_params.get("refresh") == "true",
                      remote=request.query_params.get("remote") == "true")
     result = {key: value if type(value := data.get(key)) is int and value >= 0 else None
               for key in ("findings", "ideas", "changed", "unpushed")}
+    if code_size:
+        size = data.get("code_bytes")
+        result["code_bytes"] = size if type(size) is int and size >= 0 else None
     if "github" in data:
         result["github"] = _remote_status(data["github"])
     if 'github_checked_at' in data:

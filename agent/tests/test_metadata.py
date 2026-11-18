@@ -167,6 +167,21 @@ async def test_codex_catalog_uses_state_index_without_repair_scan(home):
         await runner.close(final=True)
 
 
+async def test_code_size_is_on_demand_and_refresh_remeasures(home, tmp_path):
+    root = tmp_path / "projects"
+    project = root / "demo"
+    project.mkdir(parents=True)
+    agent = make(home, root)
+    await opened(agent)
+    frame = req("project_summary", project=projects.pid("demo"))
+    assert "code_bytes" not in (await agent.handle(frame))[0]["data"]
+    frame["code_size"] = True
+    assert (await agent.handle(frame))[0]["data"]["code_bytes"] == 0
+    (project / "demo.py").write_bytes(b"print()")
+    assert (await agent.handle(frame))[0]["data"]["code_bytes"] == 0
+    assert (await agent.handle({**frame, "refresh": True}))[0]["data"]["code_bytes"] == 7
+
+
 async def test_github_does_not_block_local_summary_and_remote_reads_are_shared(home, tmp_path, monkeypatch):
     root = tmp_path / 'projects'; (root / 'demo').mkdir(parents=True)
     agent = make(home, root)

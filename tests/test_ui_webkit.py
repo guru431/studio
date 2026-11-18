@@ -511,7 +511,7 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
         "modified": T0, "checked_at": T0, "github": {"state": "behind", "behind": 12, "ahead": 0},
         "remotes": [{"name": "cld", "state": "behind", "behind": 3, "ahead": 0},
                     {"name": "upstream", "state": "behind", "behind": 10, "ahead": 0}]}
-    page.studio_machine.projects['beta']['summary'] = {"git": "ok", "checked_at": T0, "github": None}
+    page.studio_machine.projects['beta']['summary'] = {"git": "ok", "checked_at": T0, "github": None, "code_bytes": 12}
     page.reload()
     page.locator('#code-project-updated').filter(has_text='Обновлено:').wait_for()
     button = page.locator('#code-project-sort-open')
@@ -538,7 +538,8 @@ def test_project_summary_footer_stays_visible_and_accepts_taps(iphone, tmp_path)
     page.locator('.code-panel-body').evaluate('e=>e.scrollTop=e.scrollHeight')
     after = position()
     assert before[1] and after[1] and abs(before[0] - after[0]) < 1
-    for value, label, name in [('private', 'Сначала приватные', 'beta'), ('public', 'Сначала публичные', 'alpha')]:
+    for value, label, name in [('private', 'Сначала приватные', 'beta'), ('public', 'Сначала публичные', 'alpha'),
+                               ('code_bytes', 'По размеру кода', 'beta')]:
         page.locator('#code-project-sort-open').tap()
         page.locator(f'#code-project-sort-options input[value={value}]').check()
         pw.expect(page.locator('.code-project-sort-text')).to_have_text(label)

@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { locale, tr } from './i18n.js';
 import { refreshRequested } from './refresh.js';
 /* Панель раздела «Claude Code» (спека 2026-10-29-studio-code-workspace-design, 6.1–6.3): компьютеры учётки строками,
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
@@ -89,7 +89,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
   const sort = el('select', { id: 'code-project-sort', hidden: true, 'aria-label': tr("Сортировка проектов") },
-    ...[['name', tr("По имени")], ['modified', tr("По дате изменения")], ['findings', tr("По количеству проблем")],
+    ...[['name', tr("По имени")], ['modified', tr("По дате изменения")], ['code_bytes', tr("По размеру кода")],
+      ['findings', tr("По количеству проблем")],
       ['ideas', tr("По количеству идей")], ['unpushed', tr("Сначала незапушенные")],
       ['public', tr("Сначала публичные")], ['private', tr("Сначала приватные")]]
       .map(([value, label]) => el('option', { value }, label)));
@@ -418,7 +419,9 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         return el('a', { class: 'code-project-remote', href: `${href}?tab=git`,
           'data-git-level': data.stale ? 'unknown' : level, title, 'aria-label': title }, `${remote.name} ${mark}`);
       });
-    summary.replaceChildren(el('a', { class: 'code-project-git', href: `${href}?tab=git`,
+    const size = Number.isInteger(data?.code_bytes) ? `${data.code_bytes.toLocaleString(locale())} ${tr("Б")}` : '—';
+    summary.replaceChildren(el('span', { class: 'code-project-size' }, tr("Код: {0}", size)),
+    el('a', { class: 'code-project-git', href: `${href}?tab=git`,
       'data-git-level': data?.git === 'ok' && !data?.stale ? gitLevel(data.changed, data.unpushed) : 'unknown',
       title: tr("Изменено файлов: {0}. Не запушено коммитов: {1}. По локальным данным Git, без fetch.", value('changed'), value('unpushed')) }, git),
     ...(github ? [el('a', { class: 'code-project-github', href: `${href}?tab=git`,
@@ -442,6 +445,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   function sortProjects() {
     const listBox = body.querySelector('#code-projects');
     if (!listBox) return;
+    listBox.classList.toggle('by-code-size', sort.value === 'code_bytes');
     const details = summaries.get(selected);
     const names = new Map(projectItems.map((p) => [p.pid, p.name]));
     const byVisibility = sort.value === 'public' || sort.value === 'private';
@@ -476,15 +480,21 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     const bounds = body.getBoundingClientRect();
     const panelBounds = root.getBoundingClientRect();
     const onScreen = panelBounds.right > 0 && panelBounds.left < innerWidth;
+    const withSize = sort.value === 'code_bytes';
     const queue = projectItems.filter((project) => {
       if (!force && !onScreen) return false;
       const cached = results.get(project.pid);
-      if (!force && cached && performance.now() - cached.readAt < SUMMARY_MS) return false;
+      if (!force && cached && performance.now() - cached.readAt < SUMMARY_MS
+        && (!withSize || 'code_bytes' in cached)) return false;
       if (force || sort.value !== 'name') return true;
       const row = body.querySelector(`li[data-pid="${project.pid}"]`)?.getBoundingClientRect();
       return row && row.bottom >= bounds.top && row.top <= bounds.bottom;
     }).sort((a, b) => Number(b.pid === shown?.pid) - Number(a.pid === shown?.pid));
     if (!queue.length) return;
+    const query = new URLSearchParams();
+    if (force) query.set('refresh', 'true');
+    if (withSize) query.set('code_size', 'true');
+    const suffix = query.size ? `?${query}` : '';
     const own = new AbortController();
     requests.add(own);
     refreshing = own;
@@ -494,20 +504,26 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     let blocked = false;
     function publish(project, data) {
       if (!alive || mine !== gen || own.signal.aborted) return;
-      results.set(project.pid, { ...data, readAt: performance.now() });
+      const snapshot = { ...(withSize ? { code_bytes: null } : {}), ...data, readAt: performance.now() };
+      results.set(project.pid, snapshot);
       const row = body.querySelector(`li[data-pid="${project.pid}"]`);
-      if (row) paintSummary(row, data);
+      if (row) paintSummary(row, snapshot);
       if (sort.value === 'public' || sort.value === 'private') sortProjects();
+      return snapshot;
     }
     async function worker() {
       while (alive && mine === gen && queue.length && !blocked) {
         const project = queue.shift();
         try {
           const url = `/api/code/agents/${agent.id}/projects/${project.pid}/summary`;
-          const data = await api('GET', url + (force ? '?refresh=true' : ''), undefined, { signal: own.signal });
-          publish(project, data);
-          if (data.github_pending) remoteJobs.push(api('GET', `${url}?remote=true`, undefined, { signal: own.signal })
-            .then((remote) => publish(project, remote)).catch(() => {}));
+          const data = await api('GET', url + suffix, undefined, { signal: own.signal });
+          const snapshot = publish(project, data);
+          if (snapshot && data.github_pending) remoteJobs.push(api('GET', `${url}?remote=true`, undefined, { signal: own.signal })
+            .then((remote) => {
+              if (results.get(project.pid) === snapshot) {
+                publish(project, withSize ? { ...remote, code_bytes: snapshot.code_bytes } : remote);
+              }
+            }).catch(() => {}));
         } catch (err) {
           if (own.signal.aborted || !alive || mine !== gen) return;
           failures += 1;
