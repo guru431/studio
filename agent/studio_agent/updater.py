@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from . import VERSION, host, store, update_helper
+from . import VERSION, host, macos_signed, store, update_helper
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,43 @@ def unpack(archive: Path, target: Path, version: str) -> None:
                     shutil.copyfileobj(contents, output)
 
 
+def _download(url, key, archive, size, digest):
+    request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key})
+    checksum, received = hashlib.sha256(), 0
+    opener = urllib.request.build_opener(NoRedirect())
+    with opener.open(request, timeout=30) as response, archive.open('xb') as output:
+        while block := response.read(128 * 1024):
+            received += len(block)
+            if received > size:
+                raise ValueError('size')
+            checksum.update(block)
+            output.write(block)
+    if received != size or checksum.hexdigest() != digest:
+        raise ValueError('checksum')
+
+
+def _prepare_signed(app, stage, archive, url, key, release):
+    if not macos_signed.managed_app(app):
+        raise ValueError('Для обновления установите приложение в «Программы»')
+    with zipfile.ZipFile(archive) as source:
+        member = source.getinfo('studio-agent/macos/signed-package.json')
+        if member.file_size > 256:
+            raise ValueError('signed package metadata')
+        data = json.loads(source.read(member))
+    size, digest = data['size'], data['sha256']
+    if type(size) is not int or not 0 < size <= macos_signed.MAX_PKG or not re.fullmatch('[0-9a-f]{64}', digest):
+        raise ValueError('signed package metadata')
+    pkg = stage / 'agent.pkg'
+    _download(url + '?platform=macos', key, pkg, size, digest)
+    subprocess.run(['/usr/sbin/pkgutil', '--expand-full', str(pkg), str(stage / 'expanded')],
+                   check=True, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    previous = macos_signed.info(app)
+    macos_signed.verify(macos_signed.candidate(stage), previous['StudioSigningTeam'], release['version'],
+                        capture=bool(previous.get('StudioPersistentCapture')))
+    pkg.unlink()
+    archive.unlink()
+
+
 def prepare(h: Path, release: dict) -> Path:
     """Секрет — только в заголовке HTTPS. Новая среда остаётся на окончательном пути: venv не переносим."""
     cfg, key = store.load_config(h), store.load_key(h)
@@ -107,18 +144,10 @@ def prepare(h: Path, release: dict) -> Path:
     stage = Path(tempfile.mkdtemp(prefix='release-', dir=base))
     try:
         archive = stage / 'package.zip'
-        request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key})
-        digest, size = hashlib.sha256(), 0
-        opener = urllib.request.build_opener(NoRedirect())
-        with opener.open(request, timeout=30) as response, archive.open('wb') as output:
-            while block := response.read(128 * 1024):
-                size += len(block)
-                if size > release['size']:
-                    raise ValueError('size')
-                digest.update(block)
-                output.write(block)
-        if size != release['size'] or digest.hexdigest() != release['sha256']:
-            raise ValueError('checksum')
+        _download(url, key, archive, release['size'], release['sha256'])
+        if host.MACOS and (app := macos_signed.sealed_app(REPO)) is not None:
+            _prepare_signed(app, stage, archive, url, key, release)
+            return stage
         unpack(archive, stage, release['version'])
         archive.unlink()
         # Хелпер берём из уже работающей доверенной копии; он не импортирует пакет обновления.
@@ -162,6 +191,17 @@ def discard(stage: Path) -> None:
 
 def launch(stage: Path, h: Path) -> None:
     """Отдельный процесс ждёт завершения старого моста; ключей/PIN в аргументах и файле плана нет."""
+    if host.MACOS and (app := macos_signed.sealed_app(REPO)) is not None:
+        new = macos_signed.candidate(stage)
+        version = macos_signed.info(new)['CFBundleShortVersionString']
+        previous = macos_signed.info(app)
+        macos_signed.verify(new, previous['StudioSigningTeam'], version,
+                            capture=bool(previous.get('StudioPersistentCapture')))
+        subprocess.Popen([str(macos_signed.interpreter(new)), '-I', '-B', str(REPO / 'studio_agent/macos_signed.py'),
+                          '--update', str(stage), str(os.getpid()), version], cwd=stage,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return
     plan = {'pid': os.getpid(), 'old_repo': str(REPO), 'old_python': sys.executable, 'home': str(h)}
     (stage / '_update_plan.json').write_text(json.dumps(plan), encoding='utf-8')
     pythonw = sys.executable if host.MACOS else str(Path(sys.executable).with_name('pythonw.exe'))

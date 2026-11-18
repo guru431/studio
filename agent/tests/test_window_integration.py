@@ -80,7 +80,8 @@ def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk
 
 
 @pytest.mark.integration
-def test_macos_permission_indicators_refresh_without_requesting_permissions(home, monkeypatch, tk_root):
+@pytest.mark.parametrize('persistent', [False, True])
+def test_macos_permission_indicators_refresh_without_requesting_permissions(home, monkeypatch, tk_root, persistent):
     from studio_agent.app import Controller
     from studio_agent import desktop_macos
 
@@ -90,7 +91,9 @@ def test_macos_permission_indicators_refresh_without_requesting_permissions(home
     grants = {'screen': True, 'input': False, 'session': 'ready'}
     monkeypatch.setattr(window.host, 'MACOS', True)
     monkeypatch.setattr(desktop_macos, 'permission_status', lambda: dict(grants))
-    monkeypatch.setattr(desktop_macos, 'request_permission', lambda kind: pytest.fail('passive refresh requested a permission'))
+    requested = []
+    monkeypatch.setattr(desktop_macos, 'persistent_capture_build', lambda: persistent)
+    monkeypatch.setattr(desktop_macos, 'request_permission', requested.append)
     monkeypatch.setattr(window.MainWindow, 'lift', lambda self: None)
     monkeypatch.setattr(window.MainWindow, 'work', lambda self, fn, done, **kwargs: done(fn(), False))
     monkeypatch.setattr(window, '_work_area', lambda win: (0, 0, 1024, 768))
@@ -107,6 +110,12 @@ def test_macos_permission_indicators_refresh_without_requesting_permissions(home
     main.refresh_permissions()
     assert 'Управление вводом: Разрешено' in main.permission_value.cget('text')
     assert 'Графический сеанс: Экран заблокирован' in main.permission_value.cget('text')
+    assert not requested
+    remote = [b for b in main.buttons if b.winfo_class() == 'TButton' and b.cget('text') == 'Удалённый рабочий стол…']
+    assert bool(remote) == persistent
+    if persistent:
+        remote[0].invoke()
+        assert requested == ['remote']
 
 
 @pytest.mark.integration

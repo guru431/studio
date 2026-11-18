@@ -28,7 +28,7 @@ if [ -f "$PROFILE" ]; then
 fi
 # Keep Debian paths intact when Git Bash starts native Windows helpers. Local
 # file arguments still need normal MSYS conversion; preserve caller exclusions.
-export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR;STUDIO_PROXY_VHOST;STUDIO_MACOS_BUILD_ROOT"
+export MSYS2_ENV_CONV_EXCL="${MSYS2_ENV_CONV_EXCL:+$MSYS2_ENV_CONV_EXCL;}STUDIO_REMOTE_ROOT;STUDIO_MEDIA_DIR;STUDIO_CERT_DIR;STUDIO_PROXY_VHOST;STUDIO_MACOS_BUILD_ROOT;STUDIO_MACOS_CAPTURE_PROFILE"
 HOST=${STUDIO_SSH:-deploy@10.77.1.10}
 PORT=${STUDIO_SSH_PORT:-22222}
 KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
@@ -104,12 +104,21 @@ echo "==> сборка автономного установщика macOS"
     --output "$package/studio-agent-setup.pkg" --lock "$package/macos-runtime.json" \
     --launcher-output "$package/studio-agent-macos"
 "$PYTHON" - "$package/studio-agent.zip" "$package/studio-agent-macos" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
 import sys
 import zipfile
 
 with zipfile.ZipFile(sys.argv[1], "a") as archive:
     assert "studio-agent/macos/studio-agent" not in archive.namelist()
     archive.write(sys.argv[2], "studio-agent/macos/studio-agent")
+    if os.environ.get("STUDIO_MACOS_SIGNING_IDENTITY"):
+        pkg = Path(sys.argv[1]).with_name("studio-agent-setup.pkg")
+        with pkg.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        archive.writestr("studio-agent/macos/signed-package.json", json.dumps({"sha256": digest, "size": pkg.stat().st_size}))
 PY
 echo "==> сборка установщика Windows"
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \

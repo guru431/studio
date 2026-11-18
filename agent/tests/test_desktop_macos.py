@@ -117,6 +117,23 @@ def test_screen_permission_uses_screen_capture_kit_before_opening_settings(monke
     assert callbacks == [callback] and panes == ['Privacy_ScreenCapture']
 
 
+def test_remote_desktop_consent_is_local_to_an_approved_build(monkeypatch):
+    calls, completed = [], []
+    monkeypatch.setitem(sys.modules, 'Quartz', SimpleNamespace(CGPreflightScreenCaptureAccess=lambda: True))
+    monkeypatch.setattr(mac, 'persistent_capture_build', lambda: False)
+    with pytest.raises(ValueError):
+        mac.request_permission('remote')
+    monkeypatch.setattr(mac, 'persistent_capture_build', lambda: True)
+    monkeypatch.setattr(mac, '_shareable_content', completed.append)
+    monkeypatch.setattr(mac, '_open_permission_settings', calls.append)
+    monkeypatch.setitem(sys.modules, 'PyObjCTools', SimpleNamespace(AppHelper=SimpleNamespace(
+        callAfter=lambda callback, pane: callback(pane))))
+    mac.request_permission('remote')
+    assert not calls
+    completed[0](object(), None)
+    assert calls == ['Privacy_RemoteDesktop']
+
+
 @pytest.mark.parametrize('field', ['locked', 'console', 'login', 'screen', 'input'])
 def test_lock_inactive_session_and_missing_permissions_refuse_without_native_input(system, field):
     native, state = system
