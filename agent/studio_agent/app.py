@@ -341,6 +341,11 @@ class Controller:
         cfg = await asyncio.to_thread(self.config)
         self.agent.desktop.set_enabled(cfg.desktop_enabled)
         self.agent.cfg.desktop_enabled = cfg.desktop_enabled
+        if (host.LINUX and not host.MACOS and cfg.desktop_enabled and self.agent.desktop.capable
+                and not self._linux_desktop_advertised):
+            # The user opened a graphical session after the service started headless.
+            await self._relink_task()
+            self._linux_desktop_advertised = True
 
     def set_max_turns(self, value: int) -> None:
         """Сохранить общий предел и применить в цикле ядра без переподключения и остановки заданий."""
@@ -516,6 +521,10 @@ class Controller:
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
                                    models=[], efforts=[], has_pin=has_pin, codex=self.codex, opencode=self.opencode)
+        if host.LINUX and not host.MACOS:
+            from . import desktop_linux
+            agent.desktop.capable = await asyncio.to_thread(desktop_linux.available)
+            self._linux_desktop_advertised = agent.desktop.capable
         if self.on_update_quit is not None:
             agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit, holds=self._update_holds)
         agent.on_pin_locked = self._pin_changed

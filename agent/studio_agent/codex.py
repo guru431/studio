@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import codex_progress, codex_rpc, diffs, events, history_images, limits, mcp, metadata, permissions, sessions, store, task_metrics, timeline
+from . import codex_progress, codex_rpc, diffs, events, history_images, host, limits, mcp, metadata, permissions, sessions, store, task_metrics, timeline
 from .errors import Refused
 from .turns import Runner, _Ask
 
@@ -26,8 +26,13 @@ CHILDREN_CACHE_MAX = 32
 STEP_UPDATE_SEC = 0.25
 
 
+def _path_key(resolved: Path) -> str:
+    path = str(resolved)
+    return path if host.LINUX else path.casefold()
+
+
 def same_project(left, right) -> bool:
-    return isinstance(left, str) and str(Path(left).resolve()).casefold() == str(Path(right).resolve()).casefold()
+    return isinstance(left, str) and _path_key(Path(left).resolve()) == _path_key(Path(right).resolve())
 
 
 def last_context(path, home=None):
@@ -469,7 +474,7 @@ class CodexRunner(Runner):
     def _scan(self, project):
         """Полный обход JSONL отдельным app-server в фоне: общий `_meta` и ответ списка его не ждут.
         Сессии, которых нет в готовом индексе (старый CLI, сбой записи), добавляются к следующим спискам."""
-        key = str(Path(project).resolve()).casefold()
+        key = _path_key(Path(project).resolve())
         # `refresh` шлёт и фоновый опрос вкладок раз в 20 с: обход — не чаще SCAN_EVERY_SEC на проект.
         if key in self._scans or self.now() - self._scanned.get(key, float("-inf")) < SCAN_EVERY_SEC:
             return self._scans.get(key)
@@ -509,7 +514,7 @@ class CodexRunner(Runner):
         # Обычный thread/list также сканирует JSONL для восстановления метаданных — секунды на проект.
         # Готовый индекс отвечает сразу; ручное обновление (`refresh`) сверяет его полным обходом в фоне.
         data = await self._metadata(project, "thread/list", self._list_params(project, True))
-        key = str(Path(project).resolve()).casefold()
+        key = _path_key(Path(project).resolve())
         rows = [row for row in data.get("data", []) if isinstance(row, dict)]
         self._indexed[key] = {row.get("id") for row in rows}
         if refresh:
@@ -535,7 +540,7 @@ class CodexRunner(Runner):
     async def history(self, project, chat, before, limit):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
         root = await asyncio.to_thread(project.resolve)
-        key = (str(root).casefold(), target)
+        key = (_path_key(root), target)
         path = self._history_paths.get(key)
         def revision(path):
             if not isinstance(path, str):
@@ -641,7 +646,7 @@ class CodexRunner(Runner):
     async def subagents(self, project, chat):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
         root = await asyncio.to_thread(project.resolve)
-        key = (str(root).casefold(), target)
+        key = (_path_key(root), target)
         async with self._children_lock:
             cached = self._children_cache.get(key)
             if cached is None or not 0 <= self.now() - cached[0] < CHILDREN_CACHE_SEC:

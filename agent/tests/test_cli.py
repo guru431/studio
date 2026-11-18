@@ -7,8 +7,8 @@ def _ext(root, version, binary=True):
     d = root / f"anthropic.claude-code-{version}-{host.vscode_platform()}" / "resources" / "native-binary"
     d.mkdir(parents=True)
     if binary:
-        (d / ("claude" if host.MACOS else "claude.exe")).write_bytes(b"")
-    return d / ("claude" if host.MACOS else "claude.exe")
+        (d / ("claude" if host.MACOS or host.LINUX else "claude.exe")).write_bytes(b"")
+    return d / ("claude" if host.MACOS or host.LINUX else "claude.exe")
 
 
 def test_find_cli_takes_the_newest_version_with_the_binary(tmp_path):
@@ -19,7 +19,8 @@ def test_find_cli_takes_the_newest_version_with_the_binary(tmp_path):
     assert cli.find_cli(tmp_path) == newest
 
 
-def test_find_cli_without_extensions_is_none(tmp_path):
+def test_find_cli_without_extensions_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(host, "find_tool", lambda name: None)
     assert cli.find_cli(tmp_path) is None
     assert cli.find_cli(tmp_path / "нет") is None
 

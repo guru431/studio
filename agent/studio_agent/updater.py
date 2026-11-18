@@ -151,7 +151,8 @@ def prepare(h: Path, release: dict) -> Path:
         unpack(archive, stage, release['version'])
         archive.unlink()
         # Хелпер берём из уже работающей доверенной копии; он не импортирует пакет обновления.
-        shutil.copyfile(REPO / 'studio_agent' / 'update_helper.py', stage / '_update_helper.py')
+        if not host.LINUX:
+            shutil.copyfile(REPO / 'studio_agent' / 'update_helper.py', stage / '_update_helper.py')
         if host.MACOS:
             shutil.copyfile(REPO / 'studio_agent' / 'macos_autostart.py', stage / '_macos_autostart.py')
         env = os.environ.copy()
@@ -191,6 +192,10 @@ def discard(stage: Path) -> None:
 
 def launch(stage: Path, h: Path) -> None:
     """Отдельный процесс ждёт завершения старого моста; ключей/PIN в аргументах и файле плана нет."""
+    if host.LINUX:
+        from .linux_service import schedule_update
+        schedule_update(stage)
+        return
     if host.MACOS and (app := macos_signed.sealed_app(REPO)) is not None:
         new = macos_signed.candidate(stage)
         version = macos_signed.info(new)['CFBundleShortVersionString']

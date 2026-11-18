@@ -23,10 +23,11 @@ _TAIL_ID = re.compile(rb',\s*"id"\s*:\s*(-?\d+)\s*\}\s*$')
 
 def find_cli() -> Path | None:
     """Настоящий exe из PATH, npm или расширения VS Code; cmd/ps1 не запускаются через shell."""
-    if host.MACOS:
+    if host.MACOS or host.LINUX:
         if path := host.find_tool("codex"):
             return path
-        platform = "darwin-aarch64" if host.vscode_platform() == "darwin-arm64" else "darwin-x86_64"
+        os_name, _, arch = host.vscode_platform().partition("-")
+        platform = os_name + "-" + {"arm64": "aarch64", "x64": "x86_64"}.get(arch, arch)
         found = sorted((Path.home() / ".vscode/extensions").glob(f"openai.chatgpt-*/bin/{platform}/codex"),
                        key=lambda p: p.stat().st_mtime, reverse=True)
         return found[0] if found else None

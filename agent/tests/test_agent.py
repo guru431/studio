@@ -285,7 +285,7 @@ async def test_file_stats_checks_pin_project_and_serializes_scans(agent, root, m
 def test_hello(agent):
     from studio_agent import host
     assert agent.hello() == {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": agent.cfg.projects_root,
-                                 "agent_version": VERSION, "platform": "darwin" if host.MACOS else "win32", "agent_update": False,
+                                 "agent_version": VERSION, "platform": host.platform_id(), "agent_update": False,
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,

@@ -1,6 +1,8 @@
 """Привязка моста Claude Code к учётке, компьютеры учётки и история подключений (app/agents.py, app/bridge.py)."""
 import logging
 
+import pytest
+
 import agents
 import auth
 import bridge
@@ -171,19 +173,23 @@ def test_download_without_installer_is_404(studio, monkeypatch, tmp_path):
         "code": "no_agent", "message": "установщика моста нет на сервере — его кладёт выкладка студии"}
 
 
-def test_macos_download_is_authenticated_and_uses_the_standalone_installer(studio, monkeypatch, tmp_path):
-    package = tmp_path / 'studio-agent-setup.pkg'
-    package.write_bytes(b'xar!-macos-package')
-    monkeypatch.setattr(agents, 'AGENT_MACOS', package)
-    assert studio.c.get('/api/agent/download?platform=macos').status_code == 401
+@pytest.mark.parametrize(("platform", "setting", "filename"), [
+    ("macos", "AGENT_MACOS", "studio-agent-setup.pkg"), ("linux", "AGENT_LINUX", "studio-agent-setup.sh"),
+])
+def test_download_uses_the_requested_installer(studio, monkeypatch, tmp_path, platform, setting, filename):
+    package = tmp_path / filename
+    package.write_bytes(platform.encode())
+    monkeypatch.setattr(agents, setting, package)
+    url = '/api/agent/download?platform=' + platform
+    assert studio.c.get(url).status_code == 401
     make_user(studio, 'owner')
     signin(studio, 'owner')
-    response = studio.c.get('/api/agent/download?platform=macos')
+    response = studio.c.get(url)
     assert response.status_code == 200 and response.content == package.read_bytes()
     assert response.headers['content-type'] == 'application/octet-stream'
-    assert 'studio-agent-setup.pkg' in response.headers['content-disposition']
+    assert filename in response.headers['content-disposition']
     package.unlink()
-    assert studio.c.get('/api/agent/download?platform=macos').status_code == 404
+    assert studio.c.get(url).status_code == 404
     assert studio.c.get('/api/agent/download?platform=unknown').status_code == 400
 
 

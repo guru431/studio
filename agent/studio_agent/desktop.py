@@ -54,6 +54,8 @@ def validate_events(events) -> list[dict]:
         if kind == "key":
             if host.MACOS:
                 from .desktop_macos import KEYS
+            elif host.LINUX:
+                from .desktop_portal import KEYS
             else:
                 from .desktop_native import KEYS
             if event["code"] not in KEYS:
@@ -76,6 +78,7 @@ def validate_events(events) -> list[dict]:
 class Desktop:
     def __init__(self, enabled=False, *, factory=None, now=time.monotonic):
         self._enabled = enabled is True
+        self.capable = host.MACOS or not host.LINUX
         self._factory = factory
         self._now = now
         self._guard = threading.RLock()
@@ -90,15 +93,38 @@ class Desktop:
         self._watchdog = None
         self._closed = False
 
+    def authorize_local(self):
+        """Linux system chooser. Called only by the local menu, never by a protocol op."""
+        from .desktop_linux import NativeDesktop
+        with self._guard:
+            if self._closed or self._control is not None:
+                raise Refused("busy", "Сначала завершите текущий сеанс рабочего стола")
+            generation = self._generation
+        backend = NativeDesktop()
+        try:
+            backend.authorize_local()
+            with self._guard:
+                if self._closed or generation != self._generation or self._control is not None:
+                    raise Refused("gone", "Состояние агента изменилось")
+                old, self._native = self._native, backend
+                self._generation += 1
+                self.capable = True
+                if old is not None:
+                    self._pool.submit(self._release, old)
+        except BaseException:
+            backend.release()
+            raise
+
     def set_enabled(self, enabled: bool) -> None:
         """Только Controller из локального окна. Не является операцией протокола."""
         if type(enabled) is not bool:
             raise ValueError("desktop_enabled")
         with self._guard:
-            if self._enabled == enabled:
+            if self._enabled == enabled and enabled:
                 return
             self._enabled = enabled
-            self.revoke()
+            if not enabled:
+                self.revoke()
 
     def revoke(self, session=None, control=None) -> None:
         with self._guard:
@@ -111,12 +137,18 @@ class Desktop:
             self._deadline = 0
             if not self._closed and (self._native is not None
                                      or self._pending is not None and not self._pending.done()):
-                self._pool.submit(self._release)
+                self._pool.submit(self._release, self._native)
 
-    def _release(self):
-        if self._native is not None:
+    def disconnect(self):
+        # A chooser grant waiting for its first viewer is local. An established remote lease ends.
+        with self._guard:
+            if self._control is not None:
+                self.revoke()
+
+    def _release(self, native):
+        if native is not None:
             try:
-                self._native.release()
+                native.release()
             except Exception:
                 pass  # выключатель уже закрыт; в журнал не попадают данные Windows
 
@@ -165,6 +197,8 @@ class Desktop:
                         if self._factory is None:
                             if host.MACOS:
                                 from .desktop_macos import NativeDesktop
+                            elif host.LINUX:
+                                from .desktop_linux import NativeDesktop
                             else:
                                 from .desktop_native import NativeDesktop
                             self._factory = NativeDesktop

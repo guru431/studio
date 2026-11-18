@@ -23,6 +23,8 @@ def find_cli() -> Path | None:
             if path.is_file() and os.access(path, os.X_OK):
                 return path
         return None
+    if host.LINUX:
+        return host.find_tool("opencode")
     if exe := shutil.which("opencode.exe"):
         return Path(exe)
     npm = Path(os.environ.get("APPDATA", "")) / "npm/node_modules"
@@ -30,8 +32,6 @@ def find_cli() -> Path | None:
                     "opencode-windows-*/bin/opencode.exe", "opencode-ai/node_modules/opencode-windows-*/bin/opencode.exe"):
         if found := sorted(npm.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True):
             return found[0]
-    if os.name != "nt" and (exe := shutil.which("opencode")):
-        return Path(exe)
     return None
 
 

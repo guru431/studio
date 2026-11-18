@@ -74,6 +74,15 @@ def test_link_needs_a_known_key(studio):
     assert kinds() == ["enroll"] and not bridge.LINKS
 
 
+def test_linux_platform_selects_the_same_installer_after_disconnect(studio):
+    make_user(studio, "owner")
+    _, key = enroll(studio)
+    signin(studio, "owner")
+    with online(studio, key, {**HELLO, "platform": "linux"}):
+        assert agents(studio)[0]["platform"] == "linux"
+    assert agents(studio)[0]["platform"] == "linux"
+
+
 def test_hello_brings_the_agent_online(studio):
     make_user(studio, "owner")
     aid, key = enroll(studio)

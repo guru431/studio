@@ -1,7 +1,7 @@
-"""Один мост на пользователя: Windows mutex или macOS flock, освобождаемый ОС при выходе."""
-from .host import MACOS
+"""Один мост на пользователя: Windows mutex или POSIX flock, освобождаемый ОС при выходе."""
+from .host import LINUX, MACOS
 
-if not MACOS:
+if not (MACOS or LINUX):
     from .single_windows import NAME, Mutex, acquire as _acquire
 else:
     import fcntl

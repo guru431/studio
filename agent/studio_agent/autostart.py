@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import host
 
-if not host.MACOS:
+if not host.MACOS and not host.LINUX:
     import winreg
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -15,6 +15,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 def command() -> str:
     """`"<repo>\\.venv\\Scripts\\pythonw.exe" "<repo>\\studio_agent.pyw"` — без консоли."""
+    if host.LINUX:
+        from .linux_autostart import launcher
+        return str(launcher()) + " run --console"
     if host.MACOS:
         import json
         from .macos_autostart import arguments
@@ -25,6 +28,9 @@ def command() -> str:
 
 def enabled(key: str = RUN_KEY) -> bool:
     """Значение есть и запускает эту копию (`command()`); указывает на другую копию моста — не включён."""
+    if host.LINUX:
+        from .linux_autostart import enabled as linux_enabled
+        return linux_enabled()
     if host.MACOS:
         from .macos_autostart import arguments, open_arguments, read
         from .macos_signed import sealed_app
@@ -41,6 +47,10 @@ def enabled(key: str = RUN_KEY) -> bool:
 
 
 def set_enabled(on: bool, key: str = RUN_KEY) -> None:
+    if host.LINUX:
+        from .linux_autostart import set_enabled as linux_set
+        linux_set(on)
+        return
     if host.MACOS:
         from .macos_autostart import set_enabled as macos_set
         from .macos_signed import sealed_app

@@ -12,7 +12,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-# Собранные установщики Windows и macOS
+# Собранные установщики агентов
 /dist/
 # Макеты визуального брейншторма
 .superpowers/

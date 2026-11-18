@@ -4,10 +4,11 @@ import threading
 
 import pytest
 
-from studio_agent import computer_info
+from studio_agent import computer_info, host
 from test_agent import agent_with_pin, req, root
 
 
+@pytest.mark.skipif(host.MACOS or host.LINUX, reason="Windows GlobalMemoryStatusEx")
 def test_memory_status_reports_available_and_total_or_unavailable(monkeypatch):
     def read(pointer):
         data = pointer._obj
@@ -41,6 +42,7 @@ def test_snapshot_preserves_all_roots_and_distinguishes_unavailable_values(monke
     assert len(data['projects_roots']) == 2
 
 
+@pytest.mark.skipif(host.MACOS or host.LINUX, reason="Windows CIM")
 def test_failed_windows_probe_and_external_lookup_still_return_identity_and_roots(monkeypatch):
     real_run = subprocess.run
 

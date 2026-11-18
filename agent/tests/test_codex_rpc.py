@@ -10,7 +10,7 @@ from studio_agent import codex_rpc, host, limits
 from studio_agent.codex_rpc import Client, RpcError
 
 
-@pytest.mark.skipif(host.MACOS, reason='установка npm Windows')
+@pytest.mark.skipif(host.MACOS or host.LINUX, reason='установка npm Windows')
 def test_find_cli_handles_npm_native_package_and_vscode_without_shell(tmp_path, monkeypatch):
     from studio_agent import codex_rpc
     monkeypatch.setenv("APPDATA", str(tmp_path))

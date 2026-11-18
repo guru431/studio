@@ -41,6 +41,7 @@ EVENTS_PAGE = 50
 AGENT_ZIP = Path(__file__).resolve().parent.parent / "agent" / "studio-agent.zip"
 AGENT_SETUP = AGENT_ZIP.with_name("studio-agent-setup.exe")
 AGENT_MACOS = AGENT_ZIP.with_name("studio-agent-setup.pkg")
+AGENT_LINUX = AGENT_ZIP.with_name("studio-agent-setup.sh")
 FOREIGN = "запрос пришёл с чужого сайта"
 
 
@@ -115,11 +116,11 @@ async def unenroll(request: Request):
 
 @router.get("/api/agent/download")
 async def download(request: Request):
-    """Автономные установщики Windows EXE и macOS PKG — только вошедшим."""
+    """Установщик выбранной платформы доступен только вошедшим."""
     platform = request.query_params.get("platform", "windows")
-    if platform not in ("windows", "macos"):
+    package = {"windows": AGENT_SETUP, "macos": AGENT_MACOS, "linux": AGENT_LINUX}.get(platform)
+    if package is None:
         raise HTTPException(400, {"code": "invalid", "message": "неизвестная платформа"})
-    package = AGENT_MACOS if platform == "macos" else AGENT_SETUP
     if not package.is_file():
         raise HTTPException(404, {"code": "no_agent",
                                   "message": "установщика моста нет на сервере — его кладёт выкладка студии"})
@@ -132,7 +133,7 @@ async def download(request: Request):
 @router.get("/api/agents")
 async def list_agents(request: Request, refresh: bool = False):
     release = await asyncio.to_thread(agent_release.release, AGENT_ZIP)
-    rows = list(state.DB.execute("SELECT id, user_id, name, has_pin, cc_version, projects_root, created, last_seen FROM agents"
+    rows = list(state.DB.execute("SELECT id, user_id, name, has_pin, cc_version, projects_root, created, last_seen, platform FROM agents"
                             " WHERE user_id = ? OR id IN (SELECT m.agent_id FROM project_members m"
                             " JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = a.user_id"
                             " WHERE m.user_id = ? AND u.disabled = 0) ORDER BY created, id",
@@ -151,7 +152,7 @@ async def list_agents(request: Request, refresh: bool = False):
         link = bridge.LINKS.get(r["id"])
         hello = link.hello if link is not None else {}
         items.append({"id": r["id"], "name": r["name"], "online": link is not None, "has_pin": bool(r["has_pin"]),
-                      "agent_version": hello.get("agent_version"), "platform": hello.get("platform"), "agent_update": hello.get("agent_update", False),
+                      "agent_version": hello.get("agent_version"), "platform": hello.get("platform") or r["platform"], "agent_update": hello.get("agent_update", False),
                       "agent_update_cancel": hello.get("agent_update_cancel", False),
                       "latest_version": release["version"] if release else None,
                       "cc_version": r["cc_version"], "projects_root": r["projects_root"], "created": r["created"],

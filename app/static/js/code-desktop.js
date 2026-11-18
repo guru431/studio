@@ -595,7 +595,7 @@ export function desktopView(host, { locked }) {
     show(value) {
       stop();
       agent = value;
-      modifierButtons.get('MetaLeft').textContent = value.platform === 'darwin' ? '⌘ Cmd' : 'Win';
+      modifierButtons.get('MetaLeft').textContent = ({ darwin: '⌘ Cmd', linux: 'Super' })[value.platform] || 'Win';
       modifierButtons.get('AltLeft').textContent = value.platform === 'darwin' ? '⌥ Option' : 'Alt';
       title.textContent = tr("{0} · рабочий стол", value.name);
       if (!dialog.open) dialog.showModal();

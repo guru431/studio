@@ -73,7 +73,7 @@ def test_repeat_of_legacy_short_h3_does_not_recreate_the_bad_profile(studio):
 def test_previous_schema_defaults_old_videos_to_wan(env):
     conn = db.connect(env.db_path)
     try:
-        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44) + '\nPRAGMA user_version=43;')
+        conn.executescript(db.SCHEMA.split(db.SPEECH_45, 1)[0].removesuffix(db.MEDIA_44) + '\nPRAGMA user_version=43;')
         db.migrate(conn)
         assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
         column = next(row for row in conn.execute("PRAGMA table_info(videos)") if row[1] == "model")
