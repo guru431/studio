@@ -14,7 +14,10 @@ def codex_start(value):
     """Пресеты студии: никакой подмены настроек при отсутствии явного выбора."""
     if value is None:
         return {}
-    return {"sandbox": value, "approvalPolicy": "never" if value == "danger-full-access" else "on-request"}
+    params = {"sandbox": value, "approvalPolicy": "on-request"}
+    if value == "danger-full-access":
+        params["approvalsReviewer"] = "auto_review"
+    return params
 
 
 def codex_turn(value):
@@ -24,7 +27,10 @@ def codex_turn(value):
                        "danger-full-access": "dangerFullAccess"}[value]}
     if value == "workspace-write":
         policy["networkAccess"] = False
-    return {"sandboxPolicy": policy, "approvalPolicy": "never" if value == "danger-full-access" else "on-request"}
+    params = {"sandboxPolicy": policy, "approvalPolicy": "on-request"}
+    if value == "danger-full-access":
+        params["approvalsReviewer"] = "auto_review"
+    return params
 
 
 def codex_value(policy):

@@ -135,13 +135,13 @@ async def test_question_ids_distinguish_identical_text(runner):
             await task
 
 
-async def test_project_mcp_is_sent_on_thread_start_and_resume(runner, home):
+async def test_project_mcp_and_full_access_reviews_survive_thread_resume(runner, home):
     from studio_agent import mcp
     config = {'mcpServers': {'remote': {'type': 'http', 'url': 'https://mcp.example.com/mcp',
                                       'headers': {'Authorization': 'Bearer private'}}}}
     mcp.save(home, runner.project, 'codex', config)
-    for _ in range(2):
-        runner.start(runner.project, 'project', CHAT, 'Hello', None, None)
+    for access in ('danger-full-access', None):
+        runner.start(runner.project, 'project', CHAT, 'Hello', None, None, access=access)
         task = runner._turns[CHAT].task
         try:
             rid = await asking(runner)
@@ -153,6 +153,15 @@ async def test_project_mcp_is_sent_on_thread_start_and_resume(runner, home):
     starts = [p for method, p in runner.fake.calls if method in ('thread/start', 'thread/resume')]
     assert len(starts) == 2
     assert all(p['config'] == mcp.codex(config) for p in starts)
+    assert [method for method, _ in runner.fake.calls if method in ('thread/start', 'thread/resume')] == [
+        'thread/start', 'thread/resume']
+    turns = [p for method, p in runner.fake.calls if method == 'turn/start']
+    assert len(turns) == 2
+    for params in starts + turns:
+        assert params['approvalPolicy'] == 'on-request'
+        assert params['approvalsReviewer'] == 'auto_review'
+    assert all(p['sandbox'] == 'danger-full-access' for p in starts)
+    assert all(p['sandboxPolicy'] == {'type': 'dangerFullAccess'} for p in turns)
 
 
 @pytest.mark.parametrize("questions", [
