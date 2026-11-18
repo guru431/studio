@@ -9,6 +9,7 @@
   моста); канал на связи закрывается 4401 (`bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
 - Установщик моста — `GET /api/agent/download` (только вошедшим): `AGENT_SETUP` рядом с кодом кладёт выкладка
   (`deploy/deploy.sh` собирает EXE и ZIP из одного HEAD); секретов в них нет.
+  Для терминала Linux вошедшая сессия выдаёт короткоживущий пропуск только на этот установщик.
   `GET /api/agent/package` — ZIP самому мосту по действующему ключу устройства активной учётки.
 - Компьютеры и история подключений — только свои: чужой id — 404. История только добавляется (`bridge.record`)
   и только читается: ни DELETE, ни «Удалить всю историю».
@@ -17,17 +18,20 @@
 import asyncio
 import json
 import logging
+import shlex
 import unicodedata
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from cryptography.fernet import InvalidToken
 
 import auth
 import agent_release
 import bridge
 import clock
 import email_accounts
+import lock_policy
 import security
 import project_access
 import state
@@ -42,6 +46,8 @@ AGENT_ZIP = Path(__file__).resolve().parent.parent / "agent" / "studio-agent.zip
 AGENT_SETUP = AGENT_ZIP.with_name("studio-agent-setup.exe")
 AGENT_MACOS = AGENT_ZIP.with_name("studio-agent-setup.pkg")
 AGENT_LINUX = AGENT_ZIP.with_name("studio-agent-setup.sh")
+INSTALL_TTL = 10 * 60
+LINUX_INSTALL_PATH = "/api/agent/linux-installer"
 FOREIGN = "запрос пришёл с чужого сайта"
 
 
@@ -121,13 +127,53 @@ async def download(request: Request):
     package = {"windows": AGENT_SETUP, "macos": AGENT_MACOS, "linux": AGENT_LINUX}.get(platform)
     if package is None:
         raise HTTPException(400, {"code": "invalid", "message": "неизвестная платформа"})
+    response = _installer_file(package)
+    log.info("пользователь %d: скачан мост", request.state.user.id)
+    return response
+
+
+def _installer_file(package: Path) -> FileResponse:
     if not package.is_file():
         raise HTTPException(404, {"code": "no_agent",
                                   "message": "установщика моста нет на сервере — его кладёт выкладка студии"})
-    log.info("пользователь %d: скачан мост", request.state.user.id)
     return FileResponse(package, media_type="application/octet-stream",
                         filename=package.name,
                         headers={"Cache-Control": "private, no-cache"})
+
+
+@router.post("/api/agents/linux-install")
+async def linux_install_command(request: Request):
+    issued = clock.NOW()
+    ticket = security.encrypt(json.dumps(["linux-install", request.state.digest, issued])).decode("ascii")
+    url = shlex.quote(state.CFG.origin.rstrip("/") + LINUX_INSTALL_PATH)
+    command = ('(f=$(mktemp) && trap \'rm -f -- "$f"\' EXIT && '
+               f'curl -fsS -H \'Authorization: Bearer {ticket}\' -o "$f" {url} && sh "$f")')
+    return {"command": command}
+
+
+@router.get(LINUX_INSTALL_PATH)
+async def linux_install_download(request: Request):
+    """Пропуск привязан к выдавшей сессии. В заголовке запроса нет cookie или ключа устройства."""
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    now = clock.NOW()
+    try:
+        if scheme.lower() != "bearer" or not token or len(token) > 512:
+            raise ValueError
+        purpose, digest, issued = json.loads(security.decrypt(token.encode()))
+        if purpose != "linux-install" or not 0 <= now - issued < INSTALL_TTL:
+            raise ValueError
+        row = state.DB.execute("SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id"
+                               " WHERE s.digest=? AND s.expires>? AND u.disabled=0", (digest, now)).fetchone()
+        if row is None or not email_accounts.has_email(row["user_id"]) or lock_policy.locked(digest, "code"):
+            raise ValueError
+    except (InvalidToken, TypeError, ValueError):
+        raise HTTPException(401, {"code": "install_ticket", "message": "получите новую команду установки в Студии"},
+                            headers={"Cache-Control": "no-store"}) from None
+    if auth.foreign_origin(request):
+        raise HTTPException(403, {"code": "origin", "message": FOREIGN})
+    response = _installer_file(AGENT_LINUX)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/api/agents")

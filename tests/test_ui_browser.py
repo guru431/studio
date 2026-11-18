@@ -7558,7 +7558,10 @@ def test_code_empty_offers_agent_download(browser, live):
         ("eval", "link", """(() => { const a = document.querySelector('#code-empty #agent-download');
           return [a.tagName, a.getAttribute('href'), a.hasAttribute('download'), a.textContent,
             document.querySelectorAll('#agent-download').length]; })()"""),
-        ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p')].map((p) => p.textContent)"),
+        ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p:not(.agent-install-command)')].map((p) => p.textContent)"),
+        ("click", "#code-empty .agent-download button"),
+        ("wait", "document.querySelector('#code-empty .agent-install-command code')?.textContent.includes('curl -fsS')"),
+        ("eval", "command", "document.querySelector('#code-empty .agent-install-command code').textContent"),
         ("eval", "macos", "(() => {const a=document.querySelector('#agent-download-macos'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "linux", "(() => {const a=document.querySelector('#agent-download-linux'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "badge", "!!document.querySelector('#code-empty .badge svg')"),
@@ -7570,8 +7573,8 @@ def test_code_empty_offers_agent_download(browser, live):
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
     assert v["texts"] == ["Установите агент на компьютер, который хотите подключить к Студии.",
                           "Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
-                          "В Windows и macOS откройте установщик. В Linux выполните команду в каталоге загрузки и войдите в Студию через меню агента."
-                          "sh ./studio-agent-setup.sh"]
+                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню агента."]
+    assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
 

@@ -1,4 +1,5 @@
 import { language, message, tr } from './i18n.js';
+import { api } from './api.js';
 /* Мелочи разметки для разделов: элемент, поле с местом под отказ, своё окно <dialog>.
  *
  * Текст сервера — только через textContent (el() добавляет строки текстовыми узлами), innerHTML
@@ -73,6 +74,34 @@ export const agentInstallers = {
 };
 
 export function agentDownload() {
+  const command = el('code', { 'aria-live': 'polite' });
+  const copy = button(tr("Копировать"), { class: 'btn', hidden: true }, async () => {
+    try {
+      await navigator.clipboard.writeText(command.textContent);
+      copy.textContent = tr("Скопировано");
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(command);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  });
+  const getCommand = button(tr("Получить команду для Linux"), { class: 'btn' }, async () => {
+    getCommand.disabled = true;
+    copy.hidden = true;
+    copy.textContent = tr("Копировать");
+    command.textContent = '';
+    try {
+      const result = await api('POST', '/api/agents/linux-install');
+      command.textContent = result.command;
+      copy.hidden = false;
+    } catch (err) {
+      command.textContent = words(err);
+    } finally {
+      getCommand.disabled = false;
+    }
+  });
   return el('div', { class: 'agent-download' },
     el('p', { class: 'agent-install-note', role: 'note' },
       tr("Установите агент на компьютер, который хотите подключить к Студии.")),
@@ -83,8 +112,8 @@ export function agentDownload() {
     el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
       tr("Скачать агент для Linux (.sh)")),
     el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
-    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик. В Linux выполните команду в каталоге загрузки и войдите в Студию через меню агента."),
-      el('br'), el('code', {}, 'sh ./studio-agent-setup.sh')));
+    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню агента.")),
+    getCommand, el('p', { class: 'agent-install-command' }, command), copy);
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.

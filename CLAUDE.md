@@ -52,7 +52,8 @@ minor для возможностей, major для несовместимых �
     кодов; свой Origin, предел тела, одноразовые хешированные токены, сроки и паузы — [email-accounts](docs/architecture/email-accounts.md);
   - `auth.OPEN_API`: `/api/agent/enroll` (`POST` — вход логином/email и паролем, при включении ещё кодом, со счётом и паузами `/login`; `DELETE` —
     отвязка ключом устройства в `Authorization`; чужой `Origin` — 403) и `/api/agent/package` (ZIP обновления — только
-    `Authorization: Bearer` действующего устройства активной учётки).
+    `Authorization: Bearer` действующего устройства активной учётки) и `/api/agent/linux-installer`
+    (только Linux-установщик по временному Bearer-пропуску действующей сессии).
   `/` без сессии уводит на вход; остальное `/api/*` — через `auth.guard` (сессия + CSRF у изменяющих). `auth.guard` —
   HTTP-middleware: WebSocket `/api/agent/link` проверяет ключ сам, и новый WebSocket-маршрут без своей проверки был бы
   анонимным. Страницы отвечают и на HEAD.

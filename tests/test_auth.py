@@ -333,9 +333,9 @@ def guarded_routes() -> list[tuple[str, str]]:
             continue
         assert isinstance(route, Route), route
         full = prefix + route.path
-        # Пакет обновления защищён отдельным ключом устройства, а не cookie браузера.
-        # Удалённый/отключённый ключ, чужой Origin и попытка подменить его сессией — test_agent_update.py.
-        if full in ANONYMOUS or full == '/api/agent/package':
+        # Свой Bearer: ключ устройства на обновление, временный пропуск на установщик Linux.
+        # Отказы и границы прав проверяют test_agent_update.py и test_agents.py.
+        if full in ANONYMOUS or full in {'/api/agent/package', '/api/agent/linux-installer'}:
             continue
         assert full.startswith("/api/"), full
         path = re.sub(r"\{[^}]+\}", "1", full)
