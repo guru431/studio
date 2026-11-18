@@ -4,7 +4,7 @@ sections-voice-design, 6.1 и 6.3–6.5; контракт шлюза свере�
 - srvllm: расшифровка — `/speech/asr` WhisperX с собеседниками (запрос — ASR_QUERY, поле файла
   `audio_file`; текст собирается из сегментов, `speaker` может не быть); голосовой ввод — GigaAM
   `/speech/lite/transcriptions` или WhisperX `/speech/transcriptions` (`file`); озвучка — Qwen3-TTS
-  `/speech/tts-qwen` (`text`, `language`, `ref_text`, `ref_audio` — WAV образца; ответ — WAV).
+  `/speech/tts-qwen` и F5-TTS `/speech/tts-f5` (`text`, `language`, `ref_text`, `ref_audio`; ответ — WAV).
 - Внешний сервис: `/audio/transcriptions` (расшифровка — `verbose_json`, без собеседников; ввод —
   `json`) и `/audio/speech` (JSON с голосом по имени; ответ — mp3).
 - 503 (карта занята, `busy` Qwen) — Busy: ждать и повторять решает вызывающий; прочие отказы —
@@ -30,6 +30,7 @@ LITE_TIMEOUT_SEC = 180
 TTS_TIMEOUT_SEC = 720
 EXTERNAL_TIMEOUT_SEC = 600
 TTS_LANGUAGE = "Russian"
+TTS_ROUTES = {"qwen3-tts": "/speech/tts-qwen", "f5-tts": "/speech/tts-f5"}
 LABEL = "Собеседник {}"          # метка собеседника по порядку первого появления (с 1)
 
 
@@ -133,8 +134,11 @@ async def dictate(conn, model: str, data: bytes, mime: str, name: str) -> str:
 async def say(conn, model: str, text: str, voice) -> tuple[bytes, str]:
     """Одна фраза: srvllm — `voice` = (WAV образца, его текст), ответ WAV; внешний — имя голоса, mp3."""
     if conn.kind == "srvllm":
+        route = TTS_ROUTES.get(model)
+        if route is None:
+            raise SpeechError("неизвестная модель озвучки шлюза")
         wav, ref_text = voice
-        r = await _post(conn, f"{conn.base_url}/speech/tts-qwen", TTS_TIMEOUT_SEC,
+        r = await _post(conn, f"{conn.base_url}{route}", TTS_TIMEOUT_SEC,
                         data={"text": text, "language": TTS_LANGUAGE, "ref_text": ref_text},
                         files={"ref_audio": ("voice.wav", wav, "audio/wav")})
         mime = "audio/wav"

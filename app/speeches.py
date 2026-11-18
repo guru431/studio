@@ -231,7 +231,8 @@ async def run(job: Job) -> None:
                     voice = await voices.reference(job.user_id, job.voice)
                 except HTTPException:
                     raise JobError("голос удалён") from None
-                await speech.free_card(job.conn)
+                if job.model == "qwen3-tts":
+                    await speech.free_card(job.conn)
             else:
                 voice = job.voice
             for n, piece in enumerate(pieces, 1):

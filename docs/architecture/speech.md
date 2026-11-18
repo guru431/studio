@@ -1,6 +1,6 @@
 # Речь: голосовой ввод, расшифровка, голоса, озвучка
 
-Модули: `speech` (WhisperX, GigaAM, Qwen3-TTS шлюза и внешний сервис), `audio` (ffmpeg debian: длительность, сжатие,
+Модули: `speech` (WhisperX, GigaAM, Qwen3-TTS и F5-TTS шлюза, внешние сервисы), `audio` (ffmpeg debian: длительность, сжатие,
 WAV образца, склейка), `dictation` (голосовой ввод), `transcripts` (расшифровка в фоне), `voices` (образцы голосов),
 `speeches` (озвучка в фоне), `exports` (txt, docx, srt; страницы скана — `pages_txt/md/docx`).
 
@@ -15,7 +15,8 @@ WAV образца, склейка), `dictation` (голосовой ввод), 
 - `GET /api/speeches/{id}/parts/{n}` — готовые части идущей озвучки (`Job.ready`, `parts` в ответе, `no-store`);
   страница проигрывает их по очереди в `#sp-live`; итоговый mp3 прежний.
 - `POST /api/voices/{id}/probe {text}` — до `voices.PROBE_MAX` (200) знаков, только srvllm, ничего не сохраняется;
-  перед фразой `speech.free_card`; занятая карта — сразу 503; одна проба за раз (`PROBING`).
+  перед фразой Qwen3-TTS — `speech.free_card`, F5-TTS использует свой резидентный слот.
+  Занятая служба — сразу 503. Одна проба за раз (`PROBING`).
 - В настройках новый образец (файл или микрофон) автоматически получает текст через
   `POST /api/voices/transcribe`: тот же WAV с обрезкой, что при сохранении, затем модель раздела
   «Голосовой ввод» (`dictation.recognize`). Вся операция ограничена `voices.TRANSCRIBE_BUDGET_SEC` (120 с),

@@ -16,7 +16,7 @@ ARTIFACT = "art_" + "2" * 32
 PATH = f"/artifacts/{ARTIFACT}/content"
 
 
-def service(gateway, *, image=PNG_REAL, uploads=False):
+def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -30,6 +30,8 @@ def service(gateway, *, image=PNG_REAL, uploads=False):
              **dict.fromkeys(("artifact_upload", "job_status", "job_result", "internal_action"), ({}, []))}
     if uploads:
         tools.update(dict.fromkeys(("audio_transcribe", "document_read"), (params(artifact_id="string"), ["artifact_id"])))
+    if clone_models:
+        tools["speech_synthesize"][0]["model"] = {"type": "string", "enum": ["qwen3-tts", "f5-tts"], "default": "qwen3-tts"}
     calls = []
     statuses = iter(("running", "completed"))
 
@@ -171,16 +173,16 @@ def test_speech_uses_the_selected_studio_voice_sample(studio):
 
     uid = owner(studio)
     sid = add(studio)
-    calls = service(studio.gw)
+    calls = service(studio.gw, clone_models=True)
     sample = media.save(uid, WAV_FAKE, "audio/wav", "sample.wav")
     vid = "e" * 32
     state.DB.execute("INSERT INTO voices(id,user_id,name,media_id,ref_text,duration,created) VALUES (?,?,?,?,?,1,1)",
                      (vid, uid, "Voice sample", sample, "Voice reference text"))
     route = f"/api/mcp-tools/speech/servers/{sid}/run"
-    payload = {"tool": "speech_synthesize", "arguments": {"text": "Read this"}, "voice_id": vid}
+    payload = {"tool": "speech_synthesize", "arguments": {"text": "Read this", "model": "f5-tts"}, "voice_id": vid}
     assert studio.c.post(route, json=payload).json()["text"] == "Synthesized speech"
     assert calls[0] == ("artifact_upload", {"data_base64": base64.b64encode(WAV_FAKE).decode(), "mime_type": "audio/wav"})
-    assert calls[1] == ("speech_synthesize", {"text": "Read this", "engine": "clone", "reference_artifact_id": ARTIFACT,
+    assert calls[1] == ("speech_synthesize", {"text": "Read this", "model": "f5-tts", "engine": "clone", "reference_artifact_id": ARTIFACT,
                                              "reference_text": "Voice reference text"})
     calls.clear()
     assert studio.c.post(route, json={**payload, "voice_id": "f" * 32}).status_code == 404

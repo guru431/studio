@@ -72,6 +72,7 @@ def test_gateway_check_reads_two_lists_and_spends_nothing(studio):
     assert caps(models["wan"]) == {("video", "catalog")}
     assert caps(models["whisperx"]) == {("diarize", "catalog"), ("dictation", "catalog")}
     assert caps(models["gigaam"]) == {("dictation_ru", "catalog")} and caps(models["qwen3-tts"]) == {("voices", "catalog")}
+    assert caps(models["f5-tts"]) == {("voices", "catalog")}
     assert {("describe", "catalog"), ("translate", "catalog")} <= caps(models["gemma4-abl"])
     assert models["local-gemma-abl"]["context_length"] == 131072 and "other-x" in models
     # найденные — короткие имена перечня, которые шлюз назвал; чат — из /v1/models

@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 46
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 47
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -230,7 +230,8 @@ def test_migrate_links_a_version_3_base_to_every_section(env):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     links = {(r[0], r[1]): json.loads(r[2]) for r in conn.execute("SELECT connection_id, section, models FROM section_links")}
     assert links == {(7, "chat"): ["gemma4-abl"], (7, "photo"): ["lustify", "flux"], (7, "video"): ["wan"],
-                     (7, "transcribe"): ["whisperx"], (7, "speech"): ["qwen3-tts"], (7, "dictation"): ["gigaam", "whisperx"],
+                     (7, "transcribe"): ["whisperx"], (7, "speech"): ["qwen3-tts", "f5-tts"],
+                     (7, "dictation"): ["gigaam", "whisperx"],
                      (7, "ocr"): ["hunyuan-ocr"], (8, "chat"): []}
     defaults = dict(((r[0]), (r[1], r[2])) for r in conn.execute("SELECT section, connection_id, model FROM section_defaults"))
     assert defaults == {"chat": (7, "gemma4-abl"), "photo": (7, "lustify"), "video": (7, "wan"),
@@ -533,7 +534,7 @@ def test_step_18_adds_translations_with_search_and_keeps_rows(env):
     install_schema(conn, 17)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 46
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     conn.execute("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name, source,"
                  " state, detail, created) VALUES ('t1', 1, 'text', 'm', 'auto', 'ru', 'Hello', 'Hello world',"
                  " 'queued', 'в очереди', 1)")
@@ -569,7 +570,7 @@ def test_step_19_adds_code_tables_and_cascades(env):
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d1', 1, 'c', 9, 0)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 46
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     assert conn.execute("SELECT has_pin, projects_root, cc_version, last_seen FROM agents").fetchone()[:] == (
         0, None, None, None)
@@ -612,7 +613,7 @@ def test_step_20_adds_the_code_workspace_and_cascades(env):
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 46
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     conn.execute("INSERT INTO code_tabs(user_id, agent_id, project, touched) VALUES (1, 5, 'p', 1)")
     assert conn.execute("SELECT tabs, active FROM code_tabs").fetchone()[:] == ("[]", None)
     conn.execute("INSERT INTO code_place(user_id, panel_id, agent_id, project) VALUES (1, 5, 5, 'p')")
@@ -642,7 +643,7 @@ def test_step_39_widens_agent_event_kinds_and_keeps_rows(env):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 2, 'member_add')")
     db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 46
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert tuple(conn.execute("SELECT id, kind, ip FROM agent_events").fetchone()) == (7, "enroll", "10.77.1.9")
     conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 2, 'member_add')")
     conn.execute("INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind) VALUES (1, 5, 'ПК', 3, 'pin_ok')")

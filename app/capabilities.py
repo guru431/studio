@@ -26,6 +26,7 @@ CATALOG_CAPS = {
     "whisperx": ("diarize", "dictation"),
     "gigaam": ("dictation_ru",),
     "qwen3-tts": ("voices",),
+    "f5-tts": ("voices",),
 }
 #: короткое имя → id шлюза в `GET /slot/models`; модели речи там не перечисляются и не сверяются
 GATEWAY_IDS = {**images.MODELS, **videos.MODELS}

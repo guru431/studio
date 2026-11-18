@@ -176,6 +176,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   document.addEventListener('studio-locked', paint, { signal: controller.signal });
   queueMicrotask(() => { paint(); load(); });
   return { control, output, has, hasFile, run, clear,
+    argument(key) { return picked()?.tool.schema.properties?.[key]; },
     canClone() {
       const engines = picked()?.tool.schema.properties?.engine?.enum;
       return hasFile('reference_artifact_id') && has('reference_text') && Array.isArray(engines) && engines.includes('clone');

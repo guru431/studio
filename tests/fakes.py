@@ -203,7 +203,7 @@ class FakeGateway:
             self.asr_requests.append(request)
             code, body = self.asr_replies.pop(0) if self.asr_replies else (200, self.asr_reply)
             return httpx.Response(code, json=body)
-        if path == "/speech/tts-qwen" and request.method == "POST":
+        if path in {"/speech/tts-qwen", "/speech/tts-f5"} and request.method == "POST":
             self.tts_requests.append(request)
             code, body = self.tts_replies[min(len(self.tts_requests), len(self.tts_replies)) - 1]
             if isinstance(body, bytes):
