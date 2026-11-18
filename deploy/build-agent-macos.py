@@ -190,7 +190,8 @@ exec "$PAYLOAD/runtime/$ARCH/bin/python3" "$PAYLOAD/source/studio-agent/install_
                    "<p>Установщик содержит Python и все зависимости для Intel и Apple Silicon. Интернет для установки не нужен.</p>"
                    "<p>Перед повторной установкой дождитесь завершения заданий и выйдите из моста через меню.</p>",
         "conclusion": "<h1>Мост установлен</h1><p>В окне Studio Agent войдите в свою учётную запись Studio.</p>"
-                      "<p>Приложение находится в папке Applications вашего пользователя и запускается при входе в macOS.</p>"
+                      "<p>Откройте Studio Agent в «Программах». Если общая папка недоступна для записи,"
+                      " приложение устанавливается в Applications домашней папки.</p>"
     }.items():
         (resources / (name + ".html")).write_text('<!doctype html><meta charset="utf-8">' + body, encoding="utf-8")
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -95,6 +95,11 @@ def test_macos_permission_indicators_refresh_without_requesting_permissions(home
     monkeypatch.setattr(window.MainWindow, 'work', lambda self, fn, done, **kwargs: done(fn(), False))
     monkeypatch.setattr(window, '_work_area', lambda win: (0, 0, 1024, 768))
     main = window.MainWindow(tk_root, ctrl)
+    main.sections.select(main.access_page)
+    tk_root.update()
+    assert not main.win.bind('<MouseWheel>')
+    assert not any(widget.winfo_class() == 'TScrollbar' for widget in main.win.winfo_children())
+    assert main.permission_value.winfo_viewable()
     assert 'Запись экрана: Разрешено' in main.permission_value.cget('text')
     assert 'Управление вводом: Нет доступа' in main.permission_value.cget('text')
     grants['input'] = True
@@ -214,7 +219,8 @@ def test_local_activity_buttons_stop_only_desktop_and_wait_for_work_before_exit(
     ctrl.state = 'online'
     desktop = {"active": True, "enabled": True}
     ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop),
-        revoke=lambda: desktop.update(active=False)))
+        revoke=lambda: desktop.update(active=False)), software=SimpleNamespace(busy=False),
+        restart_blocking_requests=0)
     work = {"task": True}
     ctrl.codex = SimpleNamespace(live=lambda: dict(work))
     exits = []

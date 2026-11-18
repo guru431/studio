@@ -45,7 +45,8 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 - Windows: ключ устройства и PIN защищены DPAPI пользователя. macOS: Fernet с ключом в Keychain пользователя;
   пароль студии на машине не остаётся и в argv не передаётся (только окно или `getpass`).
 - macOS Intel/Apple Silicon: один `studio-agent-setup.pkg` со встроенным Python/Tk и wheels → `install_macos.py`,
-  сборка `../deploy/build-agent-macos.py`; `install.command` оставлен для разработчиков. Приложение `~/Applications/Studio Agent.app`,
+  сборка `../deploy/build-agent-macos.py`; `install.command` оставлен для разработчиков. Приложение `/Applications/Studio Agent.app`
+  или `~/Applications/Studio Agent.app`, если общая папка недоступна для записи,
   настройки `~/Library/Application Support/Studio Agent`, автозапуск LaunchAgent. [Контракт и проверки](../docs/architecture/agent-macos.md).
 - Протокол v1, значения дословно: кадр ≤ 48 МиБ; первый кадр — `hello` с `"v": 1`; `welcome` ждать ≤ 10 с; закрытия
   4401 (отозван — не переподключаться), 4409 (заменён — не переподключаться), 4400 (пауза 60 с и снова),

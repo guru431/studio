@@ -123,7 +123,7 @@ def blocks(request, uid: int, digest: str) -> bool:
         return bool(scan_sections(uid, pieces[3]) & hidden(digest))     # документ закрытого чата или перевода
     if section is not None:
         return protected(row, section)
-    if head == "sections" and len(pieces) > 3:
+    if head in ("sections", "mcp-tools") and len(pieces) > 3:
         return protected(row, pieces[3])
     if head == "media" and len(pieces) > 3 and pieces[3] != "archives":
         return bool(media_sections(uid, pieces[3]) & hidden(digest))

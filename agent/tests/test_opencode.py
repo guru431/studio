@@ -120,6 +120,24 @@ async def test_probe_models_and_all_efforts_without_prompt_deletes_only_temporar
     assert runner.fake.deleted == [SESSION] and all(c.closed for c in runner.fake.clients)
 
 
+async def test_agent_can_probe_opencode_before_it_has_a_catalog(runner, home):
+    from studio_agent import store
+    from studio_agent.agent import Agent
+    from studio_agent.pin import PinStore
+    from studio_agent.turns import Runner
+    from test_agent import opened, req
+
+    runner.catalog = None
+    claude = Runner(lambda _: None, choices=store.Choices(home), cli_path=None)
+    agent = Agent(store.Config(projects_root=str(runner.project)), PinStore(home), claude,
+                  cc_version='', models=[], efforts=[], opencode=runner)
+    await opened(agent)
+    assert 'opencode' not in agent.hello()
+    response, *_ = await agent.handle(req('models', engine='opencode', passive=True))
+    assert response['ok'] and response['data']['opencode'] == agent.hello()['opencode']
+    assert runner.fake.deleted == [SESSION]
+
+
 async def test_history_images_load_from_the_same_owned_session_and_release_the_rpc(runner):
     from test_image_input import PNG
 

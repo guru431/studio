@@ -28,7 +28,7 @@ CACHE_SEC = 600
 def version(value):
     if not isinstance(value, str) or len(value) > 128:
         return None
-    match = re.search(r'(?<![\w.])(' + INSTALLED_VERSION.pattern + r')(?![\w.+-])', value)
+    match = re.search(r'(?<![\w.])v?(' + INSTALLED_VERSION.pattern + r')(?![\w.+-])', value)
     return match[1] if match else None
 
 

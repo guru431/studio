@@ -140,9 +140,10 @@ async def list_agents(request: Request, refresh: bool = False):
     if refresh:
         from claude_code import _session_open
 
-        await asyncio.gather(*(_refresh_codex(request, link) for row in rows
+        await asyncio.gather(*(_refresh_catalog(request, link, engine) for row in rows
             if row["user_id"] == request.state.user.id and (link := bridge.LINKS.get(row["id"])) is not None
-            and link.hello.get("codex_models") and "codex" in link.hello))
+            for engine in ("codex", "opencode") if link.hello.get(engine + "_models")
+            and (engine == "opencode" or engine in link.hello)))
         if not _session_open(request.state.digest):
             raise HTTPException(409, {"code": "closed", "message": "Сеанс Студии закрыт"})
     items = []
@@ -190,17 +191,17 @@ async def list_agents(request: Request, refresh: bool = False):
     return {"items": items}
 
 
-async def _refresh_codex(request: Request, link: bridge.Link) -> None:
+async def _refresh_catalog(request: Request, link: bridge.Link, engine: str) -> None:
     """Обновление страницы: не открывает PIN, не продлевает его срок и не заменяет канал."""
     from claude_code import ask
 
     try:
-        data = await ask(request, link.agent_id, "models", engine="codex", quiet=True, passive=True)
-        catalog = bridge.parse_hello({**link.hello, "t": "hello", "v": 1, "codex": data.get("codex")})["codex"]
+        data = await ask(request, link.agent_id, "models", engine=engine, quiet=True, passive=True)
+        catalog = bridge.parse_hello({**link.hello, "t": "hello", "v": 1, engine: data.get(engine)})[engine]
     except (HTTPException, bridge.ProtocolError):
         return  # закрытый/старый мост или сбой: прежний каталог остаётся доступен
     if bridge.LINKS.get(link.agent_id) is link:
-        link.hello["codex"] = catalog
+        link.hello[engine] = catalog
 
 
 @router.get("/api/agent/package")

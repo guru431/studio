@@ -542,9 +542,14 @@ def switch_macos(stage, old):
     try:
         with target.open('rb') as source:
             data = plistlib.load(source)
+        startup = _macos_startup()
+        variables = data.get('EnvironmentVariables') if isinstance(data, dict) else None
+        home = variables.get('STUDIO_AGENT_HOME') if isinstance(variables, dict) else None
+        env = {'STUDIO_AGENT_HOME': home} if isinstance(home, str) else None
         if isinstance(data, dict) and data.get('ProgramArguments') in (
-                [str(python(old)), str(old / 'studio_agent.pyw')], _macos_startup().arguments(old)):
-            data['ProgramArguments'] = _macos_startup().arguments(stage)
+                [str(python(old)), str(old / 'studio_agent.pyw')], startup.arguments(old),
+                startup.open_arguments(old, env)):
+            data['ProgramArguments'] = startup.open_arguments(stage, env)
             data['WorkingDirectory'] = str(stage)
             temp = target.with_name(target.name + '.' + uuid.uuid4().hex)
             try:

@@ -319,6 +319,10 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .head h1 { margin: 0; font-size:var(--fs-lg); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .grow { flex: 1; }
 .head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
+.mcp-tools-bar { flex: none; padding: var(--space-4) var(--space-7); border-bottom: 1px solid var(--line); }
+.mcp-result { display: grid; gap: var(--space-4); }
+.mcp-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.mcp-result :is(img, video, audio) { display: block; max-width: 100%; margin-bottom: var(--space-3); }
 
 /* телефон: рельс — нижние вкладки, аватар — в шапке раздела */
 @media (max-width: 760px) {

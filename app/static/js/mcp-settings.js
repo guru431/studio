@@ -1,4 +1,4 @@
-/* Формы MCP: HTTP обычного чата, stdio/HTTP/SSE проекта на Windows-мосту. */
+/* Формы MCP: HTTP-подключения Studio и stdio/HTTP/SSE проекта на мосту. */
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { button, el, field, openDialog, words } from './ui.js';
@@ -65,7 +65,7 @@ function editor(host, previous, { local = false, save }) {
 export function chatMcpBlock() {
   const list = el('div', { id: 'mcp-servers' }), note = el('p', { class: 'status', 'aria-live': 'polite' });
   const root = el('section', { class: 'block', id: 'chat-mcp-settings' }, el('h2', {}, 'MCP'),
-    el('p', { class: 'muted' }, tr("Подключения для обычных чатов через сервер. Адрес должен разрешить администратор Studio.")), list, note);
+    el('p', { class: 'muted' }, tr("Подключения для чата и других разделов Studio. Поддерживаемые инструменты появятся в своих разделах. Адрес должен разрешить администратор Studio.")), list, note);
   async function run(action) { try { await action(); } catch (err) { note.textContent = words(err); } }
   async function reload() {
     const { items } = await api('GET', '/api/mcp');

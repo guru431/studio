@@ -312,6 +312,8 @@ ROUTES = {
     ("GET", "/api/media/{media_id}"): "media",
     ("GET", "/api/connections/{conn_id}/token"): "chat",            # ключ прямого подключения — данные чата
     **{(m, p): "path" for m, p in [                                 # раздел — из адреса
+        ("GET", "/api/mcp-tools/{section}"), ("POST", "/api/mcp-tools/{section}/servers/{sid}/run"),
+        ("POST", "/api/mcp-tools/{section}/status"), ("GET", "/api/mcp-tools/{section}/files/{encoded}"),
         ("PUT", "/api/sections/{section}/default"), ("POST", "/api/sections/{section}/links"),
         ("DELETE", "/api/sections/{section}/links/{conn_id}"), ("PUT", "/api/sections/{section}/links/{conn_id}"),
         ("GET", "/api/sections/{section}/links/{conn_id}/found")]},

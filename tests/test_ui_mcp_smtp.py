@@ -3,9 +3,36 @@ import pytest
 import httpx
 
 from fake_bridge import FakeMachine
+from test_mcp import TOKEN, URL
+from test_mcp_sections import service
 from test_ui_browser import browser, live, signin, READY, NO_OVERFLOW, problems, set_value, code_online, code_requests
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_section_discovers_mcp_and_runs_image_tool_without_a_native_model(browser, live, width):
+    login = f'mcp-photo-{width}'
+    live.add_user(login)
+    calls = service(live.gw)
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
+        ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
+        ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
+        ('type', '#mcp-token', TOKEN), ('click', '#mcp-save'),
+        ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
+        ('eval', 'photo', "location.hash='#/photo'"), ('wait', "document.querySelector('#section-mcp')?.offsetWidth > 0"),
+        ('click', '#section-mcp'), ('wait', "document.querySelector('#section-mcp-dialog')?.open"),
+        ('type', '#section-mcp-form [name=prompt]', 'A photo via MCP'), ('click', '#section-mcp-run'),
+        ('wait', "document.querySelector('#section-mcp-result img')?.naturalWidth === 64"),
+        ('eval', 'fits', NO_OVERFLOW),
+        ('eval', 'speech', "location.hash='#/speech'"),
+        ('wait', "document.querySelector('#rail [data-section=speech]')?.getAttribute('aria-current') === 'page'"),
+        ('eval', 'noTools', "!document.querySelector('#section-mcp-dialog') && !document.querySelector('#section-mcp')?.offsetWidth")],
+        width=width, mobile=width == 320)
+    assert not result.get('failed'), result
+    assert result['values']['fits'] and result['values']['noTools']
+    assert calls == [('image_generate', {'prompt': 'A photo via MCP'})]
+    assert not problems(result), result.get('log')
 
 
 @pytest.mark.parametrize('width', [320, 1280])

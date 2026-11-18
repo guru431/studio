@@ -34,7 +34,7 @@ The server runs on infrastructure you control. Connect local models through the 
 
 ## Features
 
-- Configure MCP tools for regular chats and coding agents through Settings; select connected servers per chat.
+- Connect MCP servers in Settings. Select servers per chat or run compatible tools from Photos, Video, Speech, Transcription, Scans, and Translation. Coding agents have separate project MCP settings.
 - Administrators can change SMTP settings and test the connection without restarting Studio.
 
 ### Chat

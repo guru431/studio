@@ -168,7 +168,7 @@ class Agent:
                  "computer_info": True, "software_versions": True, "desktop": True, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
-                 "codex_models": True}
+                 "codex_models": True, "opencode_models": self.opencode is not None}
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -339,10 +339,10 @@ class Agent:
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode"):
             raise Refused("invalid")
-        if op in ("usage_reset", "models") and engine != "codex":
+        if (op == "usage_reset" and engine != "codex") or (op == "models" and engine == "claude"):
             raise Refused("invalid")
         backend = self._runner(frame)
-        if engine != "claude" and (backend is None or backend.catalog is None):
+        if engine != "claude" and (backend is None or (backend.catalog is None and op != "models")):
             label = "Codex" if engine == "codex" else "OpenCode"
             raise Refused("unsupported", f"{label} не найден на компьютере")
         for name in OPS[op]:
@@ -420,10 +420,13 @@ class Agent:
         return self.updater.start(frame)
 
     async def _op_models(self, frame, after):
+        engine = frame["engine"]
+        backend = self._runner(frame)
         async with asyncio.timeout(24):
-            if not await self.codex.probe(self.cfg.projects_root):
-                raise Refused("busy", "Не удалось обновить модели Codex — повторите позже")
-        return {"codex": self.codex.catalog}
+            if not await backend.probe(self.cfg.projects_root):
+                name = "Codex" if engine == "codex" else "OpenCode"
+                raise Refused("busy", f"Не удалось обновить модели {name} — повторите позже")
+        return {engine: backend.catalog}
 
     async def _op_computer_info(self, frame, after):
         return await asyncio.to_thread(computer_info.read, list(self.cfg.projects_roots))

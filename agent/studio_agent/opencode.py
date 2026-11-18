@@ -194,6 +194,7 @@ class OpenCodeRunner(Runner):
         self.models, self.efforts, self.version = [], [], ""
         self._catalog_rpc = None
         self._catalog_lock = asyncio.Lock()
+        self._probe_lock = asyncio.Lock()
 
     async def _connect(self, project):
         path = await asyncio.to_thread(self.find_opencode)
@@ -215,6 +216,10 @@ class OpenCodeRunner(Runner):
         await rpc.request("session/delete", {"sessionId": target})
 
     async def probe(self, root):
+        async with self._probe_lock:
+            return await self._probe(root)
+
+    async def _probe(self, root):
         rpc, temporary, ready, catalog = None, None, False, None
         try:
             rpc = await self._connect(root)
