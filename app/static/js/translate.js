@@ -45,6 +45,7 @@ import { createPicker, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
+import { sectionMcp } from './mcp-sections.js';
 import { photoView } from './translate-photo.js';
 import { el, openDialog, words } from './ui.js';
 
@@ -167,9 +168,11 @@ function build(view, ctx) {
   const sourceContent = el('div', { class: 'tl-source-content', hidden: true }, chip, sourceText);
   textBox.box.prepend(sourceContent);
   const count = el('span', { id: 'tl-count', class: 'muted small tl-count' });
-  const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go' }, tr("Перевести"));
+  const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go', hidden: !!ctx.hint }, tr("Перевести"));
+  const mcp = sectionMcp('translate', { native: !ctx.hint, fields: ['text', 'source_lang', 'target_lang', 'source_language', 'target_language', 'model'],
+    onChange: paintMcp, onBusy: paintGo, onText(value) { loose = value; paintRight(); } });
   const bar = el('div', { class: 'composer-bar' },
-    el('div', { class: 'composer-opts' }, count), ctx.hint ? null : goBtn);
+    el('div', { class: 'composer-opts' }, mcp.control, count), ctx.hint ? null : goBtn);
   const left = el('div', { class: 'composer tl-left', id: 'tl-composer' }, langRow, textBox.box, textBox.error, bar,
     ...(ctx.hint ? [] : [fileInput, photoInput, attachMenu]));
 
@@ -184,14 +187,15 @@ function build(view, ctx) {
     { 'data-format': key }, () => download(key)]) });
   const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, formats);
   const exportBtn = formats.querySelector('#tl-export');
-  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, stop, cont), output, acts);
+  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, stop, cont), mcp.output, output, acts);
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
   const empty = el('p', { class: 'muted small' }, tr("Здесь появятся ваши переводы"));
   const more = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more' }, tr("Показать ещё"));
   more.addEventListener('click', () => docs.more());
-  const body = el('div', { class: 'tl-view' }, ctx.hint ? ctx.hint('hint-bar') : null, right, error,
+  const nativeHint = ctx.hint?.('hint-bar');
+  const body = el('div', { class: 'tl-view' }, nativeHint, right, error,
     el('section', { class: 'tl-past', 'aria-label': tr("История переводов") }, el('h2', {}, tr("История")), list));
   view.append(el('div', { class: 'translate' }, head, body, left));
   const draft = sectionDraft('translate', input);  // запись по ?id — позже, её исходник встанет вместо черновика
@@ -211,7 +215,7 @@ function build(view, ctx) {
       model.replaceChildren(...links.flatMap(({ connection: c, models, local_models: local }) => models.map((m) =>
         el('option', { value: `${c.id}:${m}` }, `${c.name} · ${m}${(local || []).includes(m) ? '' : tr(" · облако")}`))));
       if (section && section.default) model.value = `${section.default.connection_id}:${section.default.model}`;
-      model.hidden = !model.options.length;
+      paintMcp();
     } catch (err) {
       error.textContent = words(err);
     }
@@ -295,8 +299,17 @@ function build(view, ctx) {
   }
 
   function paintGo() {
-    goBtn.disabled = sending || (!pending && !(rec && rec.kind !== 'text') && input.value.length > TEXT_MAX);
-    fresh.disabled = sending;
+    goBtn.disabled = sending || mcp.busy || (!pending && !(rec && rec.kind !== 'text') && input.value.length > TEXT_MAX);
+    fresh.disabled = sending || mcp.busy;
+  }
+
+  function paintMcp() {
+    const active = !!mcp.tool;
+    goBtn.hidden = fresh.hidden = !!ctx.hint && !active;
+    if (active && !goBtn.parentNode) bar.append(goBtn);
+    attach.hidden = !!ctx.hint || active;
+    model.hidden = !model.options.length || (active && !mcp.has('model'));
+    if (nativeHint) nativeHint.hidden = active;
   }
 
   /** Вид записи-снимка над правым окном: новый — на новую запись, та же — новые переводы блоков на слой. */
@@ -512,10 +525,29 @@ function build(view, ctx) {
   }
 
   function go() {
-    if (sending) return;
+    if (sending || mcp.busy || goBtn.hidden) return;
     error.textContent = '';
     const langs = { source_lang: source.value, target_lang: target.value };
     const pick = chosen();
+    if (mcp.tool) {
+      if (pending || (rec && rec.kind !== 'text')) {
+        error.textContent = tr("Уберите вложение и введите текст для перевода через MCP");
+      } else if (!input.value.trim()) {
+        error.textContent = tr("Введите текст");
+        input.focus();
+      } else {
+        const text = input.value;
+        rec = null;
+        docs.deselect();
+        clearTimeout(timer);
+        loose = '';
+        paintRight();
+        paintHistory();
+        mcp.run({ text, ...langs, source_language: langs.source_lang, target_language: langs.target_lang, model: pick.model })
+          .then(ok => { if (ok) draft.sent(text); });
+      }
+      return;
+    }
     if (pending) {
       upload(pending.file, langs, pick);
     } else if (rec && rec.kind !== 'text') {
@@ -649,7 +681,8 @@ function build(view, ctx) {
 
   /* события */
   fresh.addEventListener('click', () => {
-    if (sending) return;
+    if (sending || mcp.busy) return;
+    mcp.clear();
     picked = true;
     touched = true;
     pending = null;
@@ -665,7 +698,7 @@ function build(view, ctx) {
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      if (!ctx.hint) go();
+      if (!goBtn.hidden) go();
     }
   });
   goBtn.addEventListener('click', go);
@@ -765,6 +798,7 @@ function build(view, ctx) {
       // черновик — только текст без записи: исходник открытой (отправленной) записи им не становится
       draft.save(!rec || input.value !== (rec.source || ''));
       alive = false;
+      mcp.destroy();
       clearTimeout(timer);
       docs.stop();
       if (photo) photo.destroy();

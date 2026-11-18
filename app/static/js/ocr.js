@@ -25,6 +25,7 @@ import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
+import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
 import { el, openDialog, plural, words } from './ui.js';
 
@@ -60,6 +61,7 @@ export function asMarkdown(pages) {
 }
 
 function build(view, ctx) {
+  let uploading = false;
   let picked = false;          // документ выбрали сами (список, загрузка): ?id из адреса его не перебивает
   let shownId = null;          // документ, чья страница сейчас в листалке
   let at = 0;                  // номер показанной страницы (с 0)
@@ -75,21 +77,23 @@ function build(view, ctx) {
   const { select, refresh } = docs;
 
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
-  const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add' }, icon('plus'), tr("Загрузить скан"), input);
+  const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"), input);
   const progress = el('p', { id: 'ocr-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Документы") });
   const aside = el('aside', { class: 'split-aside', id: 'ocr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Документы"),
     'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Документы"));
-  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'ocr-upload' }, icon('plus'), tr("Загрузить скан"));
+  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'ocr-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"));
   upload.addEventListener('click', () => input.click());
-  const toolbar = el('div', { class: 'split-toolbar' }, toggle, ...(ctx.hint ? [] : [upload]));
+  const mcp = sectionMcp('ocr', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
+  const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
   const title = el('h1', {}, NAMES.ocr);
   const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
-  const main = el('section', { class: 'split-main' }, head, toolbar, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
+  const nativeHint = ctx.hint?.('hint-bar');
+  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, mcp.output, body);
   const root = el('div', { class: 'split ocr' }, aside, backdrop, main);
   view.append(root);
 
@@ -301,6 +305,25 @@ function build(view, ctx) {
   }
 
   /* загрузка */
+  function paintMcp() {
+    add.hidden = !mcp.control.hidden || !!ctx.hint;
+    const active = !!mcp.tool;
+    upload.hidden = !!ctx.hint && !active;
+    if (nativeHint && active) {
+      nativeHint.hidden = true;
+      if (!upload.parentNode) {
+        aside.prepend(add, progress);
+        toolbar.append(upload);
+      }
+    }
+    input.multiple = !active;
+    input.accept = active ? 'image/png,image/jpeg,image/webp' : ACCEPT;
+  }
+
+  function paintBusy() {
+    input.disabled = upload.disabled = uploading || mcp.busy;
+  }
+
   function send(files) {
     if (files.length > FILES_MAX) {
       error.textContent = tr("Больше {0} файлов за раз", FILES_MAX);
@@ -311,8 +334,8 @@ function build(view, ctx) {
       return;
     }
     error.textContent = '';
-    input.disabled = true;
-    upload.disabled = true;
+    uploading = true;
+    paintBusy();
     const form = new FormData();
     for (const file of files) form.append('file', file, file.name);
     const xhr = new XMLHttpRequest();
@@ -322,8 +345,8 @@ function build(view, ctx) {
       if (event.lengthComputable) progress.textContent = tr("Загружаю · {0}%", Math.round(event.loaded * 100 / event.total));
     });
     xhr.addEventListener('loadend', async () => {
-      input.disabled = false;
-      upload.disabled = false;
+      uploading = false;
+      paintBusy();
       progress.textContent = '';
       let answer = null;
       try {
@@ -353,7 +376,11 @@ function build(view, ctx) {
   input.addEventListener('change', () => {
     const files = [...input.files];
     input.value = '';
-    if (files.length) send(files);
+    if (!files.length || input.disabled) return;
+    error.textContent = '';
+    if (!mcp.tool) send(files);
+    else if (files.length === 1) mcp.run({}, { files: { artifact_id: files[0] } });
+    else error.textContent = tr("Для MCP выберите изображение одной страницы");
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
@@ -372,6 +399,7 @@ function build(view, ctx) {
   return {
     follow,
     destroy() {
+      mcp.destroy();
       docs.stop();
     },
   };

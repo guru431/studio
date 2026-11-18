@@ -3,35 +3,89 @@ import pytest
 import httpx
 
 from fake_bridge import FakeMachine
+from fakes import PNG_REAL, WAV_FAKE
 from test_mcp import TOKEN, URL
 from test_mcp_sections import service
-from test_ui_browser import browser, live, signin, READY, NO_OVERFLOW, problems, set_value, code_online, code_requests
+from test_ui_browser import browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value, code_online, code_requests
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 
 @pytest.mark.parametrize('width', [320, 1280])
-def test_section_discovers_mcp_and_runs_image_tool_without_a_native_model(browser, live, width):
-    login = f'mcp-photo-{width}'
-    live.add_user(login)
+def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, width):
+    login = 'owner' if width == 1280 else 'mcp-forms-mobile'
+    if login != 'owner':
+        live.add_user(login)
     calls = service(live.gw)
+    choose = lambda tool: ('eval', 'tool', "(() => { const s = document.querySelector('#section-mcp-tool');"
+                           f"s.value = [...s.options].find(o => o.value.endsWith(':{tool}')).value;"
+                           "s.dispatchEvent(new Event('change', { bubbles: true })); })()")
+    tool_ready = "document.querySelector('#section-mcp-tool:not([hidden])')?.offsetWidth > 0"
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
         ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
         ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
         ('type', '#mcp-token', TOKEN), ('click', '#mcp-save'),
         ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
-        ('eval', 'photo', "location.hash='#/photo'"), ('wait', "document.querySelector('#section-mcp')?.offsetWidth > 0"),
-        ('click', '#section-mcp'), ('wait', "document.querySelector('#section-mcp-dialog')?.open"),
-        ('type', '#section-mcp-form [name=prompt]', 'A photo via MCP'), ('click', '#section-mcp-run'),
+        ('eval', 'photo', "location.hash='#/photo'"), ('wait', tool_ready),
+        ('eval', 'provider', "document.querySelector('#photo-composer #section-mcp-tool').value"),
+        ('type', '#photo-prompt', 'A photo via MCP'), choose('image_generate'),
+        ('click', '#chip-size'), ('click', '#chip-size-menu [data-value=square]'),
+        ('click', '#photo-go'),
         ('wait', "document.querySelector('#section-mcp-result img')?.naturalWidth === 64"),
-        ('eval', 'fits', NO_OVERFLOW),
-        ('eval', 'speech', "location.hash='#/speech'"),
-        ('wait', "document.querySelector('#rail [data-section=speech]')?.getAttribute('aria-current') === 'page'"),
-        ('eval', 'noTools', "!document.querySelector('#section-mcp-dialog') && !document.querySelector('#section-mcp')?.offsetWidth")],
+        ('eval', 'photoFits', NO_OVERFLOW),
+        ('eval', 'video', "location.hash='#/video'"), ('wait', tool_ready), choose('video_estimate'),
+        put_files('#video-file', [("source.png", PNG_REAL)]),
+        ('type', '#video-prompt', 'A slow pan'), set_value('#video-seconds', '9'),
+        ('click', '#chip-quality'), ('click', '#chip-quality-menu [data-value=high]'), ('click', '#chip-smooth'),
+        ('click', '#video-go'), ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Estimated time'"),
+        ('eval', 'videoFits', NO_OVERFLOW),
+        ('eval', 'translate', "location.hash='#/translate'"), ('wait', tool_ready), choose('text_translate'),
+        ('wait', "document.querySelector('#tl-target option[value=en]')"),
+        set_value('#tl-source', 'ru'), set_value('#tl-target', 'en'),
+        ('type', '#tl-input', 'Текст для перевода'), ('click', '#tl-go'),
+        ('wait', "document.querySelector('#tl-output')?.textContent === 'Translated text'"),
+        ('eval', 'translateFits', NO_OVERFLOW),
+        ('eval', 'hasDialog', "!!document.querySelector('dialog[open]')")],
         width=width, mobile=width == 320)
     assert not result.get('failed'), result
-    assert result['values']['fits'] and result['values']['noTools']
-    assert calls == [('image_generate', {'prompt': 'A photo via MCP'})]
+    assert result['values']['photoFits'] and result['values']['videoFits'] and result['values']['translateFits']
+    assert not result['values']['hasDialog']
+    assert bool(result['values']['provider']) is (width == 320)
+    model = {'model': 'snofs-krea2-v1.6'} if login == 'owner' else {}
+    assert calls[0] == ('image_generate', {'prompt': 'A photo via MCP', 'size': '1024x1024', 'n': 1, **model})
+    assert calls[1][0] == 'artifact_upload' and calls[1][1]['mime_type'] == 'image/png'
+    assert calls[2][0] == 'video_estimate'
+    assert {key: value for key, value in calls[2][1].items() if key != 'artifact_id'} == {
+        'prompt': 'A slow pan', 'seconds': 9, 'quality': 'high', 'smooth': False}
+    assert calls[3:] == [('text_translate', {'text': 'Текст для перевода', 'source_lang': 'ru', 'target_lang': 'en'})]
+    assert not problems(result), result.get('log')
+
+
+def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
+    login = 'mcp-upload-forms'
+    live.add_user(login)
+    calls = service(live.gw, uploads=True)
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
+        ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
+        ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
+        ('type', '#mcp-token', TOKEN), ('click', '#mcp-save'),
+        ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
+        ('eval', 'speech', "location.hash='#/speech'"), ('wait', "document.querySelector('#speech-composer #section-mcp-tool')?.offsetWidth > 0"),
+        ('type', '#speech-text', 'Read this'), set_value('#speech-composer #chip-voice', 'ExampleVoice'), ('click', '#speech-go'),
+        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Synthesized speech'"),
+        ('eval', 'transcribe', "location.hash='#/transcribe'"), ('wait', "document.querySelector('#transcribe-upload')?.offsetWidth > 0"),
+        put_audio('#transcribe-add input', WAV_FAKE),
+        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Transcribed audio'"),
+        ('eval', 'ocr', "location.hash='#/ocr'"), ('wait', "document.querySelector('#ocr-upload')?.offsetWidth > 0"),
+        ('eval', 'onePage', "!document.querySelector('#ocr-add input').multiple"),
+        put_files('#ocr-add input', [("page.png", PNG_REAL)]),
+        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Recognized page'"),
+        ('eval', 'fits', NO_OVERFLOW)], width=1280)
+    assert not result.get('failed'), result
+    assert result['values']['onePage'] and result['values']['fits']
+    assert calls[0] == ('speech_synthesize', {'text': 'Read this', 'voice': 'ExampleVoice'})
+    assert [name for name, _ in calls[1:]] == ['artifact_upload', 'audio_transcribe', 'artifact_upload', 'document_read']
+    assert [calls[i][1]['mime_type'] for i in [1, 3]] == ['audio/wav', 'image/png']
     assert not problems(result), result.get('log')
 
 
