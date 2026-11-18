@@ -3,6 +3,13 @@ import { api } from './api.js';
 import { el, openDialog, words } from './ui.js';
 import { changeView } from './code-diff.js';
 
+function* parents(path) {
+  while (path.includes('/')) {
+    path = path.slice(0, path.lastIndexOf('/'));
+    yield path;
+  }
+}
+
 export function projectMirrors(host, trigger, aid, project) {
   const url = `/api/code/agents/${aid}/projects/${project.pid}/mirrors`;
   let dialog;
@@ -157,19 +164,27 @@ export function projectMirrors(host, trigger, aid, project) {
       }
     }
 
-    function difference(item, data) {
+    function difference(item, data, keep, omits, changed) {
       const detail = el('details', {}, el('summary', {}, tr("Посмотреть разницу ({0})", data.changes.length)));
       const rows = el('ul', { class: 'project-mirror-diff' });
       const preview = el('div', { class: 'project-mirror-preview' });
       const prev = button(tr("Назад")), next = button(tr("Далее"));
       const range = el('span', { class: 'muted', 'aria-live': 'polite' });
       const labels = { added: tr("Добавить"), changed: tr("Обновить"), removed: tr("Удалить"), skipped: tr("Пропущен") };
-      let page = 0;
+      let page = 0, marks = [];
+      function paintMarks() {
+        for (const { key, kind, conflict, mark } of marks) {
+          const omitted = kind !== 'skipped' && omits(key);
+          mark.textContent = omitted ? tr("Останется в копии") : conflict ? tr("Локальное изменение") : labels[kind];
+          mark.className = conflict && !omitted ? 'error' : 'muted';
+        }
+      }
       function paint() {
         const first = page * 100;
         const chunk = data.changes.slice(first, first + 100);
         preview.replaceChildren();
-        rows.replaceChildren(...chunk.map(([path, kind, conflict, text]) => {
+        marks = [];
+        rows.replaceChildren(...chunk.map(([path, kind, conflict, text, keepable, , key = path], offset) => {
           const file = text ? el('button', { type: 'button', class: 'btn-link' }, el('code', {}, path)) : el('code', {}, path);
           if (text) file.addEventListener('click', () => work(async () => {
             preview.replaceChildren(el('p', { class: 'muted' }, tr("Загрузка…")));
@@ -181,9 +196,24 @@ export function projectMirrors(host, trigger, aid, project) {
               if (!signal.aborted) preview.replaceChildren(el('p', { class: 'error' }, words(err)));
             }
           }));
-          return el('li', {}, el('span', { class: conflict ? 'error' : 'muted' },
-            conflict ? tr("Локальное изменение") : labels[kind]), file);
+          const mark = el('span');
+          marks.push({ key, kind, conflict, mark });
+          const content = el('div', {}, file);
+          if (keepable) {
+            const index = first + offset;
+            const checkbox = el('input', { type: 'checkbox', checked: keep.has(index),
+              'aria-label': tr("Оставить в копии «{0}»", path) });
+            checkbox.addEventListener('change', () => {
+              if (checkbox.checked) keep.set(index, key);
+              else keep.delete(index);
+              changed();
+              paintMarks();
+            });
+            content.append(el('label', { class: 'project-mirror-keep' }, checkbox, tr("Оставить в копии")));
+          }
+          return el('li', {}, mark, content);
         }));
+        paintMarks();
         range.textContent = `${first + 1}–${first + chunk.length} / ${data.changes.length}`;
         prev.disabled = first === 0;
         next.disabled = first + chunk.length >= data.changes.length;
@@ -212,23 +242,54 @@ export function projectMirrors(host, trigger, aid, project) {
       const { check, remove } = controls(item);
       const updated = item.synced ? tr("Последняя синхронизация · {0}", new Date(item.synced * 1000).toLocaleString()) : '';
       const title = el('p', {}, `${item.computer} · ${item.name}`, el('br'), el('span', { class: 'muted' }, item.folder));
-      const summary = !data.exists ? tr("Копия ещё не создана") : data.changes.length === data.skipped
-        ? tr("Доступные для копирования файлы совпадают") : tr("Различий в файлах и папках: {0}", data.changes.length - data.skipped);
+      const summary = el('p', { 'aria-live': 'polite' });
+      const warning = el('p', { class: 'error' });
       const sync = button(data.exists ? tr("Синхронизировать изменения") : tr("Скопировать весь проект"));
-      sync.disabled = data.exists && !data.changes.some(([, kind]) => kind !== 'skipped');
+      const keep = new Map();
+      let files = new Set(), folders = new Set();
+      let remaining, conflicts, deletions;
+      function omits(path) {
+        if (files.has(path) || folders.has(path)) return true;
+        for (const parent of parents(path)) if (files.has(parent)) return true;
+        return false;
+      }
+      function changed() {
+        files = new Set(keep.values());
+        folders = new Set();
+        for (const path of files) for (const parent of parents(path)) folders.add(parent);
+        remaining = data.changes.length - data.skipped;
+        conflicts = data.conflicts;
+        deletions = data.deletions;
+        if (keep.size) {
+          for (const [path, kind, conflict, , , deletion, key = path] of data.changes) {
+            if (kind === 'skipped' || !omits(key)) continue;
+            remaining -= 1;
+            conflicts -= Number(conflict);
+            deletions -= Number(deletion);
+          }
+        }
+        summary.textContent = keep.size ? tr("Будет изменено файлов и папок: {0}", remaining)
+          : !data.exists ? tr("Копия ещё не создана")
+            : remaining ? tr("Различий в файлах и папках: {0}", remaining)
+              : tr("Доступные для копирования файлы совпадают");
+        warning.hidden = !conflicts;
+        warning.textContent = conflicts ? tr("Локальных изменений в зеркале: {0}", conflicts) : '';
+        sync.disabled = data.exists && !remaining;
+      }
+      changed();
       sync.addEventListener('click', () => work(async () => {
         const cautions = [
-          data.conflicts && tr("Локальных изменений в зеркале: {0}. Заменить их состоянием проекта?", data.conflicts),
-          data.deletions && tr("Из зеркала будет удалено файлов и папок: {0}. Синхронизировать?", data.deletions),
+          keep.size && tr("Будет изменено файлов и папок: {0}", remaining),
+          conflicts && tr("Локальных изменений в зеркале: {0}. Заменить их состоянием проекта?", conflicts),
+          deletions && tr("Из зеркала будет удалено файлов и папок: {0}. Синхронизировать?", deletions),
         ].filter(Boolean);
         if (cautions.length && !window.confirm(cautions.join('\n'))) return;
-        await request('POST', `${url}/${item.id}/sync`, { plan: data.plan, overwrite: data.conflicts > 0 });
+        await request('POST', `${url}/${item.id}/sync`, { plan: data.plan, overwrite: conflicts > 0, keep: [...keep.keys()] });
         await watch(item);
       }));
-      state.replaceChildren(title, el('p', {}, summary), ...(updated ? [el('p', { class: 'muted' }, updated)] : []),
-        ...(data.conflicts ? [el('p', { class: 'error' }, tr("Локальных изменений в зеркале: {0}", data.conflicts))] : []),
+      state.replaceChildren(title, summary, ...(updated ? [el('p', { class: 'muted' }, updated)] : []), warning,
         ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено ссылок, специальных объектов и связанных папок: {0}", data.skipped))] : []),
-        ...(data.changes.length ? [difference(item, data)] : []),
+        ...(data.changes.length ? [difference(item, data, keep, omits, changed)] : []),
         el('div', { class: 'actions' }, check, remove, sync));
     }
 

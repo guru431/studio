@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Пакетная генерация картинок через API картинок шлюза srvllm (Lustify или FLUX).
+  Пакетная генерация картинок через API картинок шлюза srvllm (SNOFS или FLUX).
 
 .DESCRIPTION
   Скрипт ходит прямо в шлюз (POST <Url>/images/generations) ключом владельца для картинок;
@@ -9,19 +9,17 @@
   Промпты берутся из текстового файла в UTF-8: одна строка — один промпт. Пустые строки и
   строки, начинающиеся с #, пропускаются.
 
-  Картинки ложатся в -OutDir под именами вида 003-02_<начало промпта>_s<seed>.png, рядом —
-  manifest.tsv (номер, файл, seed, размер, модель, промпт), чтобы повторить удачную картинку
-  тем же seed.
+  Картинки ложатся в -OutDir под именами вида 003-02_<начало промпта>_s<seed>.png. К занятому
+  имени добавляется -2, -3, … Рядом — manifest.tsv (номер, файл, seed, размер, модель, промпт),
+  чтобы повторить удачную картинку тем же seed.
 
   Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
     powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal [-GatewayUrl http://<шлюз>:4000/slot]
   Рядом появится studio-batch.local.ps1 (в .gitignore) — дальше запускайте её; её можно
   переносить на другие компьютеры как есть. Ключ на один запуск — параметром -Token.
 
-  Карта одна на всех: пока её держит другой потребитель, шлюз ждёт, и первая картинка выходит
-  позже. Lustify: первая картинка — около 40 с (подъём модели, gemma4 снимается), дальше ~11 с
-  на каждую. FLUX 3: подъём ~30 с, дальше ~25–40 с на картинку (апсемплер промпта в графе), тоже
-  снимает gemma4. Шлюз ждёт ответ до 21 мин.
+  Карта одна на всех: пока её держит другой потребитель, шлюз ждёт. Первая картинка занимает
+  больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин.
   По окончании карта освобождается и возвращается gemma4; -KeepCard — оставить карту.
   Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
@@ -40,7 +38,7 @@
 .PARAMETER ImagePath
   Исходное фото PNG/JPEG/WebP до 10 МиБ. Одно фото для всех промптов; запрос /images/edits.
 .PARAMETER Strength
-  Сила изменения Lustify от 0.05 до 1 (по умолчанию 0.65). Меньше — ближе к исходнику.
+  Сила изменения SNOFS от 0.05 до 1 (по умолчанию 0.65). Меньше — ближе к исходнику.
 .PARAMETER OutDir
   Куда класть картинки. По умолчанию — новая папка studio-<дата-время> в текущем каталоге.
 .PARAMETER Size
@@ -239,11 +237,36 @@ function Get-Slug([string]$Text) {
     return $slug
 }
 
+function Write-Picture([string]$Stem, [byte[]]$Bytes) {
+    $part = Join-Path $OutDir ('.studio-batch-{0:N}.part' -f [Guid]::NewGuid())
+    $stream = [IO.File]::Open($part, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+    try {
+        try { $stream.Write($Bytes, 0, $Bytes.Length) } finally { $stream.Dispose() }
+        $file = "$Stem.png"
+        for ($n = 2; ; $n++) {
+            $path = Join-Path $OutDir $file
+            try { [IO.File]::Move($part, $path); return $file }
+            catch {
+                if (-not (Test-Path -LiteralPath $path)) { throw }
+                $file = "$Stem-$n.png"
+            }
+        }
+    } finally {
+        [IO.File]::Delete($part)
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $manifest = Join-Path $OutDir 'manifest.tsv'
 $manifestEncoding = New-Object System.Text.UTF8Encoding($false)
-if (-not (Test-Path -LiteralPath $manifest)) {
-    [IO.File]::WriteAllText($manifest, "n`tfile`tseed`tsize`tmodel`tprompt`n", $manifestEncoding)
+$newManifest = $null
+try { $newManifest = [IO.File]::Open($manifest, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write) }
+catch { if (-not [IO.File]::Exists($manifest)) { throw } }
+if ($newManifest) {
+    try {
+        $header = $manifestEncoding.GetBytes("n`tfile`tseed`tsize`tmodel`tprompt`n")
+        $newManifest.Write($header, 0, $header.Length)
+    } finally { $newManifest.Dispose() }
 }
 
 $total = $prompts.Count * $Count
@@ -280,8 +303,8 @@ try {
                 if (-not $item.b64_json) { throw 'в ответе шлюза нет картинки (data[0].b64_json)' }
                 # FLUX может не вернуть seed — тогда в manifest запрошенный
                 $seedOut = if ($null -ne $item.seed) { [long]$item.seed } else { $seedValue }
-                $file = '{0:D3}-{1:D2}_{2}_s{3}.png' -f ($p + 1), ($k + 1), (Get-Slug $prompt), $seedOut
-                [IO.File]::WriteAllBytes((Join-Path $OutDir $file), [Convert]::FromBase64String($item.b64_json))
+                $stem = '{0:D3}-{1:D2}_{2}_s{3}' -f ($p + 1), ($k + 1), (Get-Slug $prompt), $seedOut
+                $file = Write-Picture $stem ([Convert]::FromBase64String($item.b64_json))
                 $manifestLine = "{0}-{1}`t{2}`t{3}`t{4}`t{5}`t{6}`n" -f ($p + 1), ($k + 1), $file, $seedOut, $Size, $Model,
                     ($prompt -replace '[\t\n\v\f\r\x1c-\x1e\x85\u2028\u2029]+', ' ')
                 [IO.File]::AppendAllText($manifest, $manifestLine, $manifestEncoding)

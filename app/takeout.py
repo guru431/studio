@@ -168,7 +168,7 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
     attachments: dict[str, list] = {}
     for a in state.DB.execute(
             "SELECT id, message_id, kind, name, chars, text, media_id FROM attachments WHERE user_id = ?"
-            " AND message_id IN (SELECT id FROM messages WHERE chat_id = ?) ORDER BY created, id", (user_id, chat_id)):
+            " AND message_id IN (SELECT id FROM messages WHERE chat_id = ?) ORDER BY created, rowid", (user_id, chat_id)):
         attachments.setdefault(a["message_id"], []).append(
             {"id": a["id"], "kind": a["kind"], "name": a["name"], "chars": a["chars"], "text": a["text"],
              "file": files.get(a["media_id"])})
@@ -178,7 +178,7 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
                  "reasoning": m["reasoning"], "reasoning_sec": m["reasoning_sec"]}
                 for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
                                           " reasoning_sec FROM messages"
-                                          " WHERE chat_id = ? ORDER BY created, id", (chat_id,))]
+                                          " WHERE chat_id = ? ORDER BY created, rowid", (chat_id,))]
     return {**dict(chat), "messages": messages}
 
 

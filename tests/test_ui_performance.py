@@ -2,6 +2,7 @@
 import pytest
 
 from fake_bridge import FakeMachine, T0, pid
+from test_ui_desktop import desktop_browser
 from test_ui_browser import READY, browser, live, code_online, code_tab_ready, go, signin, problems, CODE_MSGS
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -92,6 +93,58 @@ def test_offline_shell_references_only_precached_assets(browser, live):
     assert not result.get('failed'), result
     assert result['values']['missing'] == []
     assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("route,automatic", [("/#/photo?id=test-photo", False),
+                                              ("/share#test-snapshot", False),
+                                              ("/account/reset#test-action", True)])
+@pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
+def test_offline_retry_preserves_navigation_url(desktop_browser, live, route, automatic):
+    with desktop_browser.new_context() as context:
+        signed = context.request.post(live.url + "/login", form={"login": "owner", "password": "password-123"},
+                                      max_redirects=0)
+        assert signed.status == 303
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        page.add_init_script("window.initialFragment = location.hash")
+        if not automatic:
+            page.add_init_script("addEventListener('online', event => event.stopImmediatePropagation())")
+        # Из другого пути даже открытие фото на / — навигация, а не локальная смена hash.
+        page.goto(live.url + "/robots.txt")
+        page.evaluate("""async () => {
+          await navigator.serviceWorker.register('/sw.js');
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true}));
+          }
+        }""")
+        context.set_offline(True)
+        target = live.url + route
+        page.goto(target)
+        page.wait_for_url(target)
+        retry = page.locator("#retry")
+        retry.wait_for()
+        assert page.url == target
+        if automatic:
+            with page.expect_event("domcontentloaded"):
+                context.set_offline(False)
+        else:
+            context.set_offline(False)
+            with page.expect_event("domcontentloaded"):
+                retry.click()
+        path, fragment = target.split("#")
+        assert page.url.split("#")[0] == path and retry.count() == 0
+        # Страница почтового действия штатно убирает секрет из адресной строки после чтения.
+        assert page.evaluate("window.initialFragment") == f"#{fragment}"
+
+
+def test_history_strength_includes_retired_models(browser, live):
+    check = """(async () => {
+      const {strengthOf} = await import('/static/js/chain.js');
+      return ['lustify', 'muse', 'snofs', 'jib-moss', 'flux'].map(model => strengthOf({model, strength: 0.65}));
+    })()"""
+    result = browser.drive(live.url+'/', [*signin(), ('wait', READY), ('eval', 'strength', check)])
+    assert not result.get('failed'), result
+    assert result['values']['strength'] == [0.65, 0.65, 0.65, 0.65, None]
 
 
 def test_cross_project_cached_text_does_not_wait_for_catalog_but_sending_does(browser, live):

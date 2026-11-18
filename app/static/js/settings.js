@@ -1038,19 +1038,32 @@ function voicesBlock(host) {
   const list = el('ul', { class: 'voices' });
   const note = status('voice-status');
 
+  function confirmDelete(voice, trigger) {
+    if (host.querySelector('#voice-delete-dialog')) return;
+    const yes = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'voice-delete-confirm' });
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const dialog = openDialog(host, { id: 'voice-delete-dialog', title: tr("Удалить голос?"), actions: [yes],
+      body: [el('p', {}, tr("Будет удалён голос «{0}». Количество образцов: {1}.", voice.name, voice.sample_count)), fail] });
+    dialog.addEventListener('close', () => trigger.focus({ preventScroll: true }));
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      fail.textContent = '';
+      try {
+        await api('DELETE', `/api/voices/${voice.id}`);
+        dialog.close();
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
   async function reload() {
     try {
       const { items } = await api('GET', '/api/voices');
       list.replaceChildren(...(items.length ? items.map((v) => {
-        const del = button(tr("Удалить"), { class: 'btn btn-sm btn-danger voice-delete' }, async () => {
-          del.disabled = true;
-          try {
-            await api('DELETE', `/api/voices/${v.id}`);
-          } catch (err) {
-            say(note, words(err), 'error');
-          }
-          reload();
-        });
+        const del = button(tr("Удалить"), { class: 'btn btn-sm btn-danger voice-delete' }, () => confirmDelete(v, del));
         const tryIt = button(tr("Проба"), { class: 'btn btn-sm voice-probe' }, () => probeVoice(host, v));
         const edit = button(tr("Изменить"), { class: 'btn btn-sm voice-edit' }, () => add(v));
         return el('li', { class: 'voice', 'data-id': v.id }, el('b', {}, v.name),

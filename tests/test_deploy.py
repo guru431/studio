@@ -206,6 +206,15 @@ def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
     assert dictation.BUDGET_SEC < _route_timeout("/api/dictation")
     assert voices.BUDGET_SEC < _route_timeout("/api/voices")
     assert voices.TRANSCRIBE_BUDGET_SEC < _route_timeout("/api/voices/transcribe")
+    assert voices.BUDGET_SEC + media.SAVE_TIMEOUT_SEC < _route_timeout("/api/voices/prepare-sample")
+
+
+def test_voice_editor_uploads_fit_through_the_proxy():
+    import voices
+    paths = ["/api/voices/transcribe", "/api/voices/prepare-sample"]
+    limits = re.findall(r'<LocationMatch "([^"]+)">\s*LimitRequestBody (\d+)', uncommented(VHOST))
+    for path in paths:
+        assert any(re.fullmatch(pattern, path) and int(limit) >= voices.AUDIO_MAX + 64 * 1024 for pattern, limit in limits)
     assert _route_timeout("/api/chats/1/messages") == 600 and _route_timeout("/api/images") == 150
 
 

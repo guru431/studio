@@ -1,5 +1,6 @@
 """Озвучка (app/speeches.py): текст по фразам голосом по образцу (Qwen3-TTS шлюза) или голосом
 сервиса по имени, склейка в mp3, ожидание карты, отмена; текст — не в журнал."""
+import asyncio
 import json
 import logging
 
@@ -108,6 +109,39 @@ def test_cancel_while_waiting_leaves_no_temp_files(studio, env, fake_audio, monk
         studio.c.get(f"/api/speeches/{sid}")
     assert studio.c.post(f"/api/speeches/{sid}/cancel").status_code == 200
     assert wait_sp(studio, sid, {"cancelled", "error"})["state"] == "cancelled"
+    assert not list((env.db_path.parent / "tmp").iterdir()) and speeches.JOBS == {}
+
+
+def test_repeated_cancel_waits_until_all_fragments_are_removed(studio, env, fake_audio, monkeypatch):
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    studio.gw.tts_replies = [(200, WAV_FAKE), (200, WAV_FAKE), (503, {"detail": "busy"})]
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    unlinking, go = hold_temp_unlink(env, monkeypatch)
+    text = f"{LONG_A} {LONG_B} {LONG_A}"
+    sid = studio.c.post("/api/speeches", json={"text": text, "voice": vid}).json()["id"]
+    for _ in range(3000):
+        if studio.c.get(f"/api/speeches/{sid}").json()["parts"] == 2:
+            break
+    else:
+        raise AssertionError("two parts were not generated")
+
+    async def scenario():
+        job = speeches.JOBS[sid]
+        first = asyncio.create_task(speeches._cancel([job]))
+        repeat = None
+        try:
+            assert await asyncio.to_thread(unlinking.wait, 5)
+            repeat = asyncio.create_task(speeches._cancel([job]))
+            await asyncio.sleep(0)
+            assert not job.task.done()
+            assert len(job.files) == 2
+        finally:
+            go.set()
+            await asyncio.gather(first, *([repeat] if repeat else []))
+
+    studio.c.portal.call(scenario)
+    assert studio.c.get(f"/api/speeches/{sid}").json()["state"] == "cancelled"
     assert not list((env.db_path.parent / "tmp").iterdir()) and speeches.JOBS == {}
 
 

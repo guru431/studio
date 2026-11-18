@@ -816,6 +816,29 @@ def test_unreachable_share_keeps_the_job_for_the_next_pass(studio, monkeypatch):
     assert item(studio, v["id"])["state"] == "done"
 
 
+def test_empty_content_is_retried_before_publishing_or_dropping_the_clip(studio, env):
+    add_gateway(studio)
+    clip = create_video(studio).json()
+    before = share_files(env)
+    studio.gw.video_status = "completed"
+    studio.gw.video_content = b""
+
+    poll(studio)
+
+    pending = item(studio, clip["id"])
+    assert pending["state"] == "queued" and pending["progress"] < 100
+    assert pending["media_id"] is None and studio.gw.video_deleted == []
+    assert share_files(env) == before and media_rows() == 1
+
+    studio.gw.video_content = MP4
+    poll(studio)
+
+    done = item(studio, clip["id"])
+    assert done["state"] == "done" and done["progress"] == 100
+    assert studio.gw.video_deleted == [v_gateway_id(studio)]
+    assert media.path(owner_id(), done["media_id"]).read_bytes() == MP4
+
+
 def test_unsaved_clip_says_so_when_the_gateway_forgets_it(studio, monkeypatch):
     """Шара лежит, пока шлюз не забыл ролик: итог — о хранилище, а не «шлюз забыл» (ревью A2-M3)."""
     add_gateway(studio)

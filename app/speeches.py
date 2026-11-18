@@ -197,7 +197,15 @@ async def _runner(user_id: int) -> None:
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
-        await job.task
+        job.task.add_done_callback(lambda _, item=job: _finish_unstarted(item))
+        await asyncio.gather(asyncio.shield(job.task), return_exceptions=True)
+
+
+def _finish_unstarted(job: Job) -> None:
+    if JOBS.get(job.id) is job:
+        state_, detail = ("cancelled", "отменено") if job.by_user else ("error", INTERRUPTED)
+        _finish(job.id, state_, detail)
+        JOBS.pop(job.id)
 
 
 async def _say(job: Job, text: str, voice, label: str) -> tuple[bytes, str]:
@@ -242,13 +250,13 @@ async def run(job: Job) -> None:
                 data, mime = await _say(job, piece, voice, label)
                 part = audio.temp(".wav" if mime == "audio/wav" else ".mp3")
                 job.files.append(part)
-                await asyncio.to_thread(part.write_bytes, data)
+                await audio.file_io(part.write_bytes, data)
                 job.ready = n
             out = audio.temp(".mp3")
             job.files.append(out)
             await audio.mp3_of(job.files[:-1], out)
             duration = await audio.probe(out)
-            data = await asyncio.to_thread(out.read_bytes)
+            data = await audio.file_io(out.read_bytes)
             media_id = await media.save_async(job.user_id, data, "audio/mpeg", f"speech-{job.id[:8]}.mp3")
             outcome = ("done", "готово", {"media_id": media_id, "duration": duration})
             log.info("озвучка %s: готова", job.id[:8])
@@ -268,9 +276,10 @@ async def run(job: Job) -> None:
     finally:
         job.text = ""
         try:
-            for f in job.files:
-                await asyncio.to_thread(f.unlink, missing_ok=True)
-        finally:                                     # и вторая отмена посреди уборки итог не теряет
+            await audio.remove_temp(*job.files)
+        except asyncio.CancelledError:
+            pass
+        finally:
             state_, detail, extra = outcome
             _finish(job.id, state_, detail, **extra)
             JOBS.pop(job.id, None)
@@ -297,9 +306,10 @@ def resume() -> None:
 
 async def _cancel(jobs: list[Job]) -> None:
     for job in jobs:
-        job.by_user = True
-        job.task.cancel()
-    await asyncio.gather(*(j.task for j in jobs), return_exceptions=True)
+        if not job.by_user:
+            job.by_user = True
+            job.task.cancel()
+    await asyncio.gather(*(asyncio.shield(j.task) for j in jobs), return_exceptions=True)
 
 
 def _drop_waiting(user_id: int, sid: "str | None" = None) -> int:
@@ -317,10 +327,14 @@ async def stop_user(user_id: int) -> None:
 
 
 async def stop() -> None:
-    tasks = list(RUNNERS.values()) + [j.task for j in JOBS.values() if j.task is not None and not j.task.done()]
-    for task in tasks:
+    runners = list(RUNNERS.values())
+    jobs = [j for j in JOBS.values() if j.task is not None and not j.task.done()]
+    for task in runners:
         task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    for job in jobs:
+        if not job.by_user:
+            job.task.cancel()
+    await asyncio.gather(*runners, *(j.task for j in jobs), return_exceptions=True)
     EPOCHS.clear()                                   # ждущие остаются в базе; эпоху им даст `resume`
 
 

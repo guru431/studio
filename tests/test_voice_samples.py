@@ -179,3 +179,35 @@ def test_sample_storage_failure_keeps_the_previous_recording(studio, fake_audio,
     response = studio.c.put(f"/api/voices/{vid}/samples/{vid}", data={"text": "Замена"}, files=SAMPLE)
     assert response.status_code == 503 and response.json()["detail"]["code"] == "storage"
     assert studio.c.get(f"/api/voices/{vid}").json()["sample_count"] == 1
+
+
+def test_batch_changes_voice_only_after_all_uploads_are_valid(studio, fake_audio):
+    import auth
+    assert studio.c.post("/api/voices/prepare-sample", files=SAMPLE).status_code == 401
+    add_gateway(studio)
+    assert studio.c.post("/api/voices/prepare-sample", headers={auth.CSRF_HEADER: "wrong"}, files=SAMPLE).status_code == 403
+    fake_audio.duration = 8
+    vid = create(studio).json()["id"]
+    sid = add(studio, vid).json()["id"]
+    before = studio.c.get(f"/api/voices/{vid}").json()
+    staged = studio.c.post("/api/voices/prepare-sample", files=SAMPLE)
+    assert staged.status_code == 200
+    token = staged.json()["upload"]
+    fake_audio.duration = 1
+    assert studio.c.post("/api/voices/prepare-sample", files=SAMPLE).status_code == 422
+    assert studio.c.get(f"/api/voices/{vid}").json() == before
+    for sample in before["samples"]:
+        assert studio.c.get(f"/api/media/{sample['media_id']}").status_code == 200
+
+    path = f"/api/voices/{vid}/batch"
+    samples = [{"id": sid, "text": "Правка"}, {"upload": token, "text": "Новый"}]
+    edit = {"name": "Обновлённый голос", "revision": before["revision"], "selected": 1, "samples": samples}
+    assert studio.c.put(path, json=edit | {"samples": [*samples, {"text": "Нет записи"}]}).status_code == 422
+    assert studio.c.get(f"/api/voices/{vid}").json() == before
+    assert studio.c.put(path, json=edit).status_code == 200
+    assert studio.c.put(path, json=edit).status_code == 409
+    assert studio.c.post("/api/voices/discard-samples", json={"uploads": [token]}).status_code == 204
+    after = studio.c.get(f"/api/voices/{vid}").json()
+    assert after["sample_count"] == 2 and after["text"] == "Новый" and after["name"] == edit["name"]
+    assert {sample["text"] for sample in after["samples"]} == {"Правка", "Новый"}
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 2

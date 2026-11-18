@@ -1,5 +1,6 @@
 """Проверка копии базы (manage.verify_backup, `manage.py verify-backup`, панель `/api/admin/backup-check`;
 спека 2026-10-21-studio-export-restore-check, раздел 6)."""
+import dataclasses
 import hashlib
 import json
 import logging
@@ -391,6 +392,94 @@ def test_failed_nightly_check_is_pushed_to_active_admins_once(studio, sent):
     assert admin.notify_failed_check() == 0
     manage.record_check(state.DB, {"ok": False, "problems": ["a"], "at": None}, notified=True)   # из панели
     assert admin.notify_failed_check() == 0 and len(sent) == 1
+
+
+def test_failed_copy_notifies_once_without_erasing_the_last_good_copy(studio, env, monkeypatch, sent):
+    owner = make_user(studio, "owner", is_admin=True)
+    copy = backup_of(state.DB, env, monkeypatch)
+    before = digest(copy)
+    assert manage.main(["verify-backup"]) == 0
+    previous_check = manage.last_check(state.DB)
+
+    def write_failure(*args, **kwargs):
+        raise OSError("copy failed")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(shutil, "copyfile", write_failure)
+        assert manage.main(["backup"]) == 1
+    assert digest(copy) == before and manage.last_check(state.DB) == previous_check
+    signin(studio, "owner")
+    storage = studio.c.get("/api/admin/storage").json()
+    assert storage["copy"] == {"ok": False, "at": clock.NOW()}
+    assert storage["backup"]["at"] == copy.stat().st_mtime
+    assert admin.notify_failed_check() == 1
+    assert sent == [(owner, admin.COPY_NOTICE, "admin", "Студия")]
+    assert admin.notify_failed_check() == 0
+
+    assert manage.main(["backup"]) == 0
+    assert manage.last_copy(state.DB)["ok"] is True
+    assert admin.notify_failed_check() == 0 and len(sent) == 1
+
+
+def test_overlapping_backups_do_not_share_a_part_file(base, env, monkeypatch):
+    add_rows(base, tokens=0, files=())
+    monkeypatch.setattr(clock, "NOW", lambda: T0)
+    first_copying = threading.Event()
+    second_started = threading.Event()
+    second_copying = threading.Event()
+    release = threading.Event()
+    codes = []
+    real_copy = shutil.copyfile
+
+    def copy_file(source, dest):
+        if first_copying.is_set():
+            second_copying.set()
+        else:
+            first_copying.set()
+            if not release.wait(2):
+                raise TimeoutError("first copy was not released")
+        return real_copy(source, dest)
+
+    def second_run():
+        second_started.set()
+        codes.append(manage.backup())
+
+    monkeypatch.setattr(shutil, "copyfile", copy_file)
+    first = threading.Thread(target=lambda: codes.append(manage.backup()), daemon=True)
+    second = threading.Thread(target=second_run, daemon=True)
+    first.start()
+    try:
+        assert first_copying.wait(2)
+        second.start()
+        assert second_started.wait(2)
+        assert not second_copying.wait(0.1)
+    finally:
+        release.set()
+        first.join(3)
+        if second.ident is not None:
+            second.join(3)
+    assert codes == [0, 0]
+    assert len(list((env.media_dir / "backup").iterdir())) == 1
+
+
+@pytest.mark.parametrize("category,statement", [
+    ("smtp", "INSERT INTO settings(key,value) VALUES('smtp',?)"),
+    ("mcp", "INSERT INTO mcp_servers(user_id,name,url,secret_enc) VALUES(1,'test','https://mcp.test',?)"),
+    ("mirrors", "INSERT INTO project_mirrors(source,project,destination,root,name_key,location)"
+                " VALUES(1,'project',1,'root','copy',?)"),
+])
+def test_verify_detects_wrong_key_with_only_one_encrypted_setting(base, env, monkeypatch, category, statement):
+    add_rows(base, tokens=0, files=())
+    if category == "mirrors":
+        base.execute("INSERT INTO agents(user_id,name,key_hash,has_pin,projects_root,cc_version,created,last_seen)"
+                     " VALUES(1,'host','hash',0,'root','1',0,0)")
+    base.execute(statement, (security.encrypt("{}"),))
+    backup_of(base, env, monkeypatch)
+    assert manage.verify_backup()[category] == {"ok": 1, "failed": 0}
+    monkeypatch.setattr(state, "CFG", dataclasses.replace(state.CFG, data_key=Fernet.generate_key()))
+    out = manage.verify_backup()
+    assert out[category] == {"ok": 0, "failed": 1}
+    assert out["ok"] is False
 
 
 def test_admin_storage_shows_the_last_check(studio, check, monkeypatch):

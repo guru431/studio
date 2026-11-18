@@ -34,8 +34,9 @@
   `presets.js` (чип «★»); серия — поле `series` у `POST /api/images` (`images.run_series`: строки `queued` по одной в
   слоте пользователя, отмена любой снимает весь остаток; `stop()` и `recover()` переводят `queued` в `error`) и
   `series.js` (чип «×1» и панель в «Изменить»); варианты — `GET /api/images/<id>/variants` (индекс
-  `images_user_source`); сравнение — `compare.js` (`#compare`); параметры по модели — `chain.js` (`strengthOf` только
-  Lustify, `seedOf` — не у внешнего сервиса; в строку сила пишется только у Lustify).
+  `images_user_source`); сравнение — `compare.js` (`#compare`); параметры по модели — `chain.js`.
+  `strengthOf` показывает сохранённую силу у моделей, которые её получали, включая снятые.
+  `seedOf` показывает seed для моделей шлюза.
 - Кисть: `images._fit_mask` — маска с соотношением сторон исходника приводится к размеру `normalize_image` (NEAREST)
   и сохраняется уменьшенной; в редакторе `#edit-size-tip` «Фото будет уменьшено до N×M.».
 - Фото из истории в формах — до `forms.HISTORY_MAX`/`forms.HISTORY_PIXELS` (= `images.RESULT_MAX`/`RESULT_PIXELS`,

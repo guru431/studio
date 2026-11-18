@@ -50,7 +50,7 @@ The server runs on infrastructure you control. Connect local models through the 
 
 ### Images
 
-- Text to image and image to image through the gateway, including Lustify and FLUX; compatible external image endpoints are also supported.
+- Text to image and image to image through the gateway, including SNOFS and FLUX. Compatible external image endpoints are also supported.
 - Portrait, square and landscape formats; image strength where supported.
 - Edit a whole image or paint a mask to change a selected region with the gateway.
 - Generate two to four variations, reuse a seed where supported, save presets and inspect generation parameters.

@@ -17,6 +17,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from email import policy
 from email.parser import BytesParser
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -104,12 +105,16 @@ def test_python_help_survives_a_pipe_in_a_non_utf8_encoding():
 class FakeVideos:
     """Подставная служба видео: задание готово с первого опроса, журнал всех запросов."""
 
-    def __init__(self, busy_posts=(), fail_names=(), reject_posts=False, unavailable=0):
+    def __init__(self, busy_posts=(), fail_names=(), reject_posts=False, unavailable=0, *,
+                 first_listing=None, empty_reads=0, remove_after_post=None):
         self.log = []            # (метод, путь) по порядку
         self.posts = []          # поля multipart принятых заданий
         self.post_attempts = 0
         self.busy_posts = set(busy_posts)    # номера попыток POST, на которые 429
         self.unavailable = unavailable       # столько первых попыток POST — 503
+        self.first_listing = first_listing
+        self.empty_reads = empty_reads
+        self.remove_after_post = remove_after_post
         self.reject_posts = reject_posts     # все создания — 400
         self.fail_names = set(fail_names)    # картинки (по содержимому), задания которых падают
         self.jobs = {}
@@ -166,12 +171,17 @@ class FakeVideos:
                            "prompt": given or "auto motion %d" % n, "source": "given" if given else "auto",
                            "fail": fields["input_reference"] in fake.fail_names}
                     fake.jobs[job["id"]] = job
+                    if n == 1 and fake.remove_after_post is not None:
+                        fake.remove_after_post.unlink()
                     return self.reply(200, fake.obj(job, "queued"))
 
             def do_GET(self):
                 with fake.lock:
                     fake.log.append(("GET", self.path))
                     if self.path == "/slot/videos":
+                        if fake.first_listing is not None:
+                            broken, fake.first_listing = fake.first_listing, None
+                            return self.reply(200, broken)
                         data = [fake.obj(j, "failed" if j["fail"] else "completed") for j in fake.jobs.values()]
                         return self.reply(200, {"object": "list", "data": data, "has_more": False})
                     m = re.fullmatch(r"/slot/videos/(video_\w+)(/content)?", self.path)
@@ -179,6 +189,9 @@ class FakeVideos:
                     if not job:
                         return self.reply(404, {"error": {"message": "нет такого"}})
                     if m.group(2):
+                        if fake.empty_reads:
+                            fake.empty_reads -= 1
+                            return self.reply(200, b"", "video/mp4")
                         return self.reply(200, ("mp4-" + job["id"]).encode(), "video/mp4")
                     return self.reply(200, fake.obj(job, "failed" if job["fail"] else "completed"))
 
@@ -268,9 +281,10 @@ def test_folder_run_sends_downloads_records_and_releases(runner, service, tmp_pa
     seeds = [int(p["seed"]) for p in fake.posts]
 
     # Придуманный службой промпт сохранён, без BOM; у картинки со своим .txt — нет
-    assert (tmp_path / "B.auto.txt").read_bytes() == b"auto motion 2"
-    assert (tmp_path / "c.auto.txt").read_bytes() == b"auto motion 3"
-    assert not (tmp_path / "a.auto.txt").exists()
+    saved_prompts = tmp_path / ".studio-video-prompts"
+    assert (saved_prompts / "B.jpg.txt").read_bytes() == b"auto motion 2"
+    assert (saved_prompts / "c.webp.txt").read_bytes() == b"auto motion 3"
+    assert not (saved_prompts / "a.png.txt").exists()
 
     # Отпечаток: свой промпт входит, промпт службы — нет; seed — только заданный явно
     keys = [fingerprint(b"img-a", "slow turn\tto camera"), fingerprint(b"img-b"), fingerprint(b"img-c")]
@@ -437,11 +451,50 @@ def test_failed_write_of_one_video_does_not_stop_the_run(runner, service, tmp_pa
     out = run_script(runner, fake, tmp_path, "-Seed", "42", code=3)
 
     assert "ролик 1/2 a.png: не записался —" in out and "готово 1, не вышло 1" in out
-    assert ("DELETE", "/slot/videos/video_%024x" % 1) in fake.log and fake.jobs == {}
+    kept = "video_%024x" % 1
+    assert ("DELETE", f"/slot/videos/{kept}") not in fake.log and list(fake.jobs) == [kept]
+    assert f"{fake.url}/videos/{kept}/content" in out
     assert [r["image"] for r in manifest_rows(tmp_path)] == ["b.png"]
     assert [p.name for p in tmp_path.glob("*.mp4")] == [f"b_5s_s42_{fingerprint(b'img-b', seed=42)[:8]}.mp4"]
     assert blocked.is_dir(), "чужой каталог не трогается: убирается только свой недописанный файл"
     assert fake.release == [{"model": MODEL}]
+
+    blocked.rmdir()
+    request = Request(f"{fake.url}/videos/{kept}/content", headers={"Authorization": "Bearer test-key"})
+    with urlopen(request, timeout=2) as response:
+        recovered = response.read()
+    path = blocked.with_suffix("")
+    path.write_bytes(recovered)
+    assert path.read_bytes() == b"mp4-" + kept.encode()
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_bad_listing_and_empty_download_are_retried(runner, service, tmp_path):
+    fake = service(first_listing={}, empty_reads=1)
+    (tmp_path / "x.png").write_bytes(b"img-x")
+    (tmp_path / "y.png").write_bytes(b"img-y")
+
+    run_script(runner, fake, tmp_path, "-KeepCard")
+
+    path = "/slot/videos/video_%024x" % 1
+    dl = ("GET", path + "/content")
+    assert fake.log.count(dl) == 2
+    assert fake.log.index(("DELETE", path)) > fake.log.index(dl, fake.log.index(dl) + 1)
+    assert [r["image"] for r in manifest_rows(tmp_path)] == ["y.png", "x.png"]
+    assert fake.jobs == {} and all(p.stat().st_size > 0 for p in tmp_path.glob("*.mp4"))
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_source_removed_after_planning_does_not_stop_other_videos(runner, service, tmp_path):
+    for name in ("a.png", "b.png", "c.png"):
+        (tmp_path / name).write_bytes(name.encode())
+    fake = service(remove_after_post=tmp_path / "b.png")
+
+    run_script(runner, fake, tmp_path, "-KeepCard", code=3)
+
+    assert [p["input_reference"] for p in fake.posts] == [b"a.png", b"c.png"]
+    assert [r["image"] for r in manifest_rows(tmp_path)] == ["a.png", "c.png"]
+    assert fake.jobs == {}
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
@@ -474,6 +527,23 @@ def test_same_name_images_and_taken_names_keep_every_result(runner, service, tmp
         ("photo.jpg", names[0], keys[0]), ("photo.png", names[1], keys[1])]
     assert [(tmp_path / n).read_bytes() for n in names] == [b"mp4-video_%024x" % n for n in (1, 2)]
     assert taken.read_bytes() == b"earlier" and not list(tmp_path.glob("*.part"))
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_auto_prompt_is_saved_for_the_full_filename_and_legacy_is_used_when_unambiguous(runner, service, tmp_path):
+    fake = service()
+    (tmp_path / "photo.jpg").write_bytes(b"img-jpg")
+    (tmp_path / "photo.png").write_bytes(b"img-png")
+    (tmp_path / "photo.auto.txt").write_text("ambiguous", encoding="utf-8")
+    (tmp_path / "single.webp").write_bytes(b"img-webp")
+    (tmp_path / "single.auto.txt").write_text("legacy motion", encoding="utf-8")
+
+    run_script(runner, fake, tmp_path, "-KeepCard")
+    run_script(runner, fake, tmp_path, "-KeepCard", "-Redo")
+
+    assert [post.get("prompt") for post in fake.posts] == [
+        None, None, b"legacy motion", b"auto motion 1", b"auto motion 2", b"legacy motion"]
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

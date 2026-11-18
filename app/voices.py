@@ -6,11 +6,13 @@
 расшифровки) — дольше: 504 словами; таймаут маршрута Apache больше (сверяет tests/test_deploy.py).
 Журнал — только id: имя голоса, текст и звук туда не пишутся."""
 import asyncio
+import json
 import logging
 import uuid
 from contextlib import contextmanager
 
-from fastapi import APIRouter, HTTPException, Request
+from cryptography.fernet import InvalidToken
+from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -22,6 +24,7 @@ import forms
 import media
 import operations
 import sections
+import security
 import speech
 import state
 from image_upload import UploadError
@@ -34,6 +37,7 @@ TEXT_MAX = 2000
 BUDGET_SEC = 60                 # WAV и длительность образца — ffmpeg за секунды
 TRANSCRIBE_BUDGET_SEC = 120      # вся подготовка образца и ASR — раньше таймаута Apache
 PROBE_MAX = 200                 # проба голоса — одна короткая фраза (speeches.PHRASE_MAX — 220)
+DRAFT_SEC = 900                 # подготовленные WAV без ссылки убирает обычная чистка сирот
 #: пользователи, чья проба голоса идёт сейчас (одна за раз)
 PROBING: set = set()
 
@@ -82,30 +86,13 @@ async def _form(request: Request):
 
 async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
     """Один и тот же WAV и предел длительности для ASR и сохранения образца."""
-    async def file_io(fn, *args, **kwargs):
-        task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
-        try:
-            return await asyncio.shield(task)
-        finally:
-            # Отмена ожидания не останавливает поток; файлы можно убирать только после close.
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    pass
-
     src, dst = audio.temp(media.EXT.get(mime, ".bin")), audio.temp(".wav")
-
-    def cleanup():
-        for f in (src, dst):
-            f.unlink(missing_ok=True)
-
     try:
-        await file_io(src.write_bytes, data)
+        await audio.file_io(src.write_bytes, data)
         duration = await asyncio.wait_for(audio.to_wav(src, dst, max_sec=SAMPLE_MAX), BUDGET_SEC)
         if duration < SAMPLE_MIN:
             raise _bad("short", "образец — 5–60 секунд речи")
-        wav = await file_io(dst.read_bytes)
+        wav = await audio.file_io(dst.read_bytes)
     except audio.AudioError as e:
         raise _bad("audio", str(e)) from None
     except TimeoutError:
@@ -113,7 +100,7 @@ async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
         raise HTTPException(504, {"code": "timeout", "message": "образец обрабатывается слишком долго — "
                                   "попробуйте ещё раз"}) from None
     finally:
-        await file_io(cleanup)                 # оба файла одной операцией: отмена не пропустит второй
+        await audio.remove_temp(src, dst)
     return wav, duration
 
 
@@ -170,12 +157,22 @@ async def list_voices(request: Request):
 
 @router.get("/{voice_id}")
 async def get_voice(voice_id: str, request: Request):
-    row = _row(request.state.user.id, voice_id)
-    return _out(row, with_text=True) | {"samples": [
+    uid = request.state.user.id
+    row = _row(uid, voice_id)
+    samples = _samples(uid, voice_id)
+    return _out(row, with_text=True) | {"revision": _revision(row, samples), "samples": [
         {"id": s["id"], "media_id": s["media_id"], "text": s["ref_text"], "duration": s["duration"], "created": s["created"],
          "active": s["media_id"] == row["media_id"]}
-        for s in state.DB.execute("SELECT * FROM voice_samples WHERE voice_id = ? AND user_id = ? ORDER BY created, id",
-                                  (voice_id, request.state.user.id))]}
+        for s in samples]}
+
+
+def _samples(uid, voice_id):
+    return state.DB.execute("SELECT * FROM voice_samples WHERE voice_id = ? AND user_id = ? ORDER BY created, id",
+                            (voice_id, uid)).fetchall()
+
+
+def _revision(voice, samples) -> str:
+    return security.digest(json.dumps([voice["name"], voice["media_id"], [tuple(s) for s in samples]]))
 
 
 class VoiceIn(BaseModel):
@@ -219,6 +216,134 @@ def _transaction():
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+
+
+class BatchSampleIn(BaseModel):
+    id: str | None = Field(default=None, max_length=64)
+    text: str = Field(max_length=TEXT_MAX)
+    upload: str | None = Field(default=None, max_length=512)
+
+
+class BatchIn(VoiceIn):
+    revision: str | None = Field(default=None, max_length=64)
+    samples: list[BatchSampleIn] = Field(min_length=1, max_length=SAMPLES_MAX)
+    selected: int = Field(ge=0, lt=SAMPLES_MAX)
+
+
+class DraftsIn(BaseModel):
+    uploads: list[str] = Field(max_length=SAMPLES_MAX)
+
+
+@router.post("/prepare-sample")
+async def prepare_sample(request: Request):
+    """Проверить один новый WAV. Пока редактор не подтвердил весь голос, ссылки на него нет."""
+    uid = request.state.user.id
+    _, data, mime = await _form(request)
+    wav, duration = await _sample(uid, data, mime)
+    try:
+        mid = await media.save_async(uid, wav, "audio/wav", "voice-sample.wav")
+    except media.StorageError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    upload = security.encrypt(json.dumps(["voice-draft", uid, mid, duration, clock.NOW() + DRAFT_SEC]))
+    return {"upload": upload.decode("ascii")}
+
+
+def _draft(uid: int, token: str):
+    if len(token) > 512:
+        return None
+    try:
+        purpose, owner, mid, duration, expires = json.loads(security.decrypt(token.encode("ascii")))
+    except (InvalidToken, TypeError, ValueError):
+        return None
+    if purpose == "voice-draft" and owner == uid and clock.NOW() <= expires:
+        if media.alive(uid, mid) and not media.referenced(uid, mid):
+            return mid, duration
+    return None
+
+
+def _retire_samples(uid: int, media_ids) -> None:
+    """Снять строки невостребованных образцов и передать удаление файлов очереди media."""
+    rows = []
+    for mid in media_ids:
+        if not media.referenced(uid, mid):
+            row = state.DB.execute("SELECT id, rel_path FROM media WHERE id = ? AND user_id = ?", (mid, uid)).fetchone()
+            if row is not None:
+                rows.append(tuple(row))
+    media.queue(uid, rows)
+    state.DB.executemany("DELETE FROM media WHERE id = ?", [(mid,) for mid, _ in rows])
+
+
+@router.post("/discard-samples", status_code=204)
+async def discard_samples(body: DraftsIn, request: Request):
+    uid = request.state.user.id
+    with _transaction():
+        _retire_samples(uid, {draft[0] for token in body.uploads if (draft := _draft(uid, token))})
+    return Response(status_code=204)
+
+
+def _batch_plan(uid: int, body: BatchIn, old: dict, first_id: str | None):
+    result, ids, mids = [], set(), set()
+    for index, item in enumerate(body.samples):
+        previous = old.get(item.id)
+        if item.id is not None and (previous is None or item.id in ids):
+            raise _bad("samples", "неверный список образцов голоса")
+        sample_id = item.id or (first_id if index == 0 else None) or uuid.uuid4().hex
+        if item.upload:
+            draft = _draft(uid, item.upload)
+            if not draft or draft[0] in mids:
+                raise _bad("samples", "подготовленный образец недоступен — загрузите запись ещё раз")
+            mid, duration = draft
+        elif previous is not None:
+            mid, duration = previous["media_id"], previous["duration"]
+        else:
+            raise _bad("samples", "нужна запись образца: файл или с микрофона")
+        ids.add(sample_id)
+        mids.add(mid)
+        result.append((sample_id, _text(item.text), mid, duration, previous["created"] if previous else clock.NOW()))
+    return result
+
+
+@router.put("/{voice_id}/batch")
+async def save_batch(body: BatchIn, request: Request, voice_id: str = Path(pattern=r"^[0-9a-f]{32}$")):
+    uid = request.state.user.id
+    name = body.name.strip()
+    if not name:
+        raise _bad("name", f"имя голоса — от 1 до {NAME_MAX} знаков")
+    if body.selected >= len(body.samples) or len(body.samples) > SAMPLES_MAX:
+        raise _bad("samples", "неверный список образцов голоса")
+    changed = HTTPException(409, {"code": "changed", "message": "голос изменён — откройте его ещё раз"})
+    creating = body.revision is None
+    with _transaction():
+        operations.check(uid)
+        samples = [] if creating else _samples(uid, voice_id)
+        if not creating and body.revision != _revision(_row(uid, voice_id), samples):
+            raise changed
+        old = {s["id"]: s for s in samples}
+        plan = _batch_plan(uid, body, old, voice_id if creating else None)
+        _, active_text, active_media, active_duration, _ = plan[body.selected]
+        if creating:
+            # Триггер voices_sample_ai добавляет первый образец с id голоса.
+            _, text, mid, duration, created = plan[0]
+            if not state.DB.execute("INSERT OR IGNORE INTO voices(id, user_id, name, ref_text, media_id, duration, created)"
+                                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                    (voice_id, uid, name, text, mid, duration, created)).rowcount:
+                raise changed
+        for sid, text, mid, duration, created in plan:
+            if sid in old:
+                state.DB.execute("UPDATE voice_samples SET ref_text = ?, media_id = ?, duration = ? WHERE id = ?",
+                                 (text, mid, duration, sid))
+            elif not creating or sid != voice_id:
+                state.DB.execute("INSERT INTO voice_samples VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                 (sid, voice_id, uid, text, mid, duration, created))
+        if not creating or body.selected != 0:
+            state.DB.execute("UPDATE voices SET name = ?, ref_text = ?, media_id = ?, duration = ? WHERE id = ?",
+                             (name, active_text, active_media, active_duration, voice_id))
+        if not creating:
+            state.DB.executemany("DELETE FROM voice_samples WHERE id = ?",
+                                 [(sid,) for sid in old.keys() - {s[0] for s in plan}])
+        _retire_samples(uid, {s["media_id"] for s in samples} - {s[2] for s in plan})
+    log.info("пользователь %d: голос %s сохранён", uid, voice_id[:8])
+    return _out(_row(uid, voice_id))
 
 
 @router.patch("/{voice_id}")

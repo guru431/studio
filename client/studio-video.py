@@ -13,9 +13,9 @@
 добавляется -2, -3, …), рядом — журнал video-manifest.tsv (картинка, ролик, seed,
 длительность, качество, дорисовка, вариант, откуда промпт, промпт, модель, отпечаток).
 
-Промпт картинки: <имя>.txt рядом (UTF-8, целиком) → иначе --prompt → иначе <имя>.auto.txt
-(промпт, придуманный службой в прошлый раз) → иначе пусто: служба опишет движение по фото
-сама, а скрипт сохранит её промпт в <имя>.auto.txt — повторный запуск отдаст его как свой.
+Промпт картинки: <имя>.txt рядом (UTF-8, целиком) → иначе --prompt → иначе сохранённый авто-
+промпт в .studio-video-prompts/<имя с расширением>.txt → иначе служба придумает, а скрипт его сохранит.
+Старый <имя>.auto.txt читается, если в папке только одна картинка с таким именем без расширения.
 
 Задания уходят очередью: скрипт шлёт все, пока служба принимает; «очередь полна» (429) —
 ждёт, пока выйдут отправленные, и досылает; «карта или служба недоступна» (503) — задание
@@ -24,10 +24,13 @@
 доделает повторный запуск по журналу. Повторный запуск пропускает ролик, если в журнале
 есть ролик с тем же отпечатком и его файл на месте. Отпечаток — sha256 содержимого картинки,
 модели, seed (если задан --seed), длительности, качества, дорисовки, номера варианта и своего
-промпта (<имя>.txt или --prompt; промпт службы и <имя>.auto.txt в него не входят): смена
+промпта (<имя>.txt или --prompt; сохранённый автопромпт в него не входит): смена
 любого из них — новый ролик. Строки журнала прежней версии (без отпечатка) сверяются только
 по имени картинки, длительности, качеству, дорисовке и варианту — смены промпта, seed, модели
 и содержимого картинки по ним не видно, скрипт об этом предупреждает. --redo — сделать заново.
+
+Если готовый ролик не удалось скачать или записать, задание остаётся у шлюза до истечения
+срока хранения (30 минут с готовности). Скрипт печатает URL для повторного GET с тем же ключом.
 
 Код выхода: 0 — все ролики готовы или уже были; 3 — хотя бы один не вышел (не отправлен,
 не сделан службой, не скачался, картинка больше 20 МБ или промпт длиннее предела); 1 — скрипт
@@ -57,11 +60,13 @@ import os
 import re
 import secrets
 import socket
+import stat
 import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -80,6 +85,7 @@ MAX_IMAGE = 20 * 1024 * 1024
 MAX_SEED = 4294967295
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 MANIFEST = "video-manifest.tsv"
+AUTO_PROMPTS = ".studio-video-prompts"
 HEADER = ["image", "video", "seed", "seconds", "quality", "smooth", "variant", "prompt_source", "prompt", "model",
           "fingerprint"]
 OLD_HEADER = HEADER[:9]                # журнал прежней версии: без модели и отпечатка
@@ -304,7 +310,16 @@ class Videos:
                 "seed": job.seed}
         if job.prompt:
             form["prompt"] = job.prompt
-        return self.call("POST", "/videos", form=form, image=job.image)
+        try:
+            return self.call("POST", "/videos", form=form, image=job.image)
+        except OSError as e:
+            raise Fail(f"не удалось прочитать исходник: {e}") from e
+
+    def keep_completed(self, job, why):
+        warn(f"{self.label(job)}: {why}. До истечения срока хранения (30 мин с готовности) "
+             f"скачайте повторно: GET {self.url}/videos/{job.id}/content с тем же Bearer-ключом")
+        self.failed += 1
+        return True
 
     def listing(self):
         """Список заданий службы одним запросом (id → объект): опрос по заданию упёрся бы в предел
@@ -316,10 +331,16 @@ class Videos:
             self.list_error = f"нет ответа: {e}"
             return None
         obj = read_json(data) if status == 200 else None
-        if not isinstance(obj, dict):
+        if status != 200:
             self.list_error = fail_text(status, data)
             return None
-        return {str(v["id"]): v for v in obj.get("data") or [] if isinstance(v, dict) and v.get("id")}
+        entries = obj.get("data") if isinstance(obj, dict) else None
+        if not isinstance(entries, list) or any(
+            not isinstance(v, dict) or not isinstance(v.get("id"), str) or not v["id"] for v in entries
+        ):
+            self.list_error = "служба вернула неверный список заданий — повторю"
+            return None
+        return {str(v["id"]): v for v in entries}
 
     def update(self, job, listing):
         """Ход одного задания по списку; True — задание закончено (готово, не вышло или пропало у службы)."""
@@ -331,17 +352,25 @@ class Videos:
             self.failed += 1
             return True
         obj = listing[job.id]
+        status = obj.get("status")
+        if status == "completed":
+            job.completed = True
         if obj.get("detail"):
             self.show(job, str(obj["detail"]))
-        if obj.get("status") == "in_progress" and not job.running:
+        if status == "in_progress" and not job.running:
             job.running = time.monotonic()
-        # Придуманный службой промпт — в <имя>.auto.txt, у вариантов он общий: один раз
+        # Автопромпт общий для вариантов одной картинки, полное имя включает расширение.
         if (not job.prompt and str(obj.get("prompt_source")) == "auto" and obj.get("prompt")
-                and job.base not in self.auto_saved):
-            (self.folder / f"{job.base}.auto.txt").write_bytes(str(obj["prompt"]).strip().encode())
-            self.auto_saved.add(job.base)
-            say(f"{self.label(job)}: промпт службы сохранён в {job.base}.auto.txt")
-        if obj.get("status") == "failed":
+                and job.image.name not in self.auto_saved):
+            saved = self.folder / AUTO_PROMPTS / f"{job.image.name}.txt"
+            self.auto_saved.add(job.image.name)
+            try:
+                saved.parent.mkdir(exist_ok=True)
+                saved.write_bytes(str(obj["prompt"]).strip().encode())
+                say(f"{self.label(job)}: промпт службы сохранён в {AUTO_PROMPTS}/{saved.name}")
+            except OSError as e:
+                warn(f"{self.label(job)}: промпт службы не записался — {e}")
+        if status == "failed":
             error = obj.get("error")
             why = "служба не назвала причину"
             if isinstance(error, dict) and error.get("message"):
@@ -350,7 +379,7 @@ class Videos:
             self.remove(job)
             self.failed += 1
             return True
-        if obj.get("status") != "completed":
+        if status != "completed":
             return False
 
         why = ""
@@ -358,6 +387,8 @@ class Videos:
             status, video = self.call("GET", f"/videos/{job.id}/content")
             if status != 200:
                 why = fail_text(status, video)
+            elif not video:
+                why = "шлюз вернул пустой файл"
         except Fail as e:
             why = str(e)
         if why:
@@ -366,10 +397,7 @@ class Videos:
             if job.tries < 3:
                 self.show(job, f"не скачался ({why}), повторю")
                 return False
-            warn(f"{self.label(job)}: не скачался — {why}")
-            self.remove(job)
-            self.failed += 1
-            return True
+            return self.keep_completed(job, f"не скачался — {why}")
         seed = int(obj["seed"]) if obj.get("seed") is not None else job.seed
         # Отпечаток в имени разводит картинки с одним именем и разные запросы; занятое имя не
         # перезаписывается (--redo с тем же seed), а недописанный файл не ляжет под именем ролика
@@ -379,25 +407,28 @@ class Videos:
             n += 1
             file = f"{stem}-{n}.mp4"
         part = self.folder / (file + ".part")
+        own_part = False
         try:
-            part.write_bytes(video)
+            with part.open("xb") as stream:
+                own_part = True
+                stream.write(video)
+            if (self.folder / file).exists():
+                raise FileExistsError(file)
             os.replace(part, self.folder / file)
+            own_part = False
+            prompt = job.prompt or str(obj.get("prompt") or "")
+            source = job.source or str(obj.get("prompt_source") or "") or "auto"
+            self.add_row([job.image.name, file, str(seed), str(self.args.seconds), self.args.quality, self.smooth,
+                          str(job.variant), source, prompt, self.args.model, job.key])
         except OSError as e:
-            # Диск полон, нет прав, имя занято: один ролик — не повод ронять прогон и снимать чужие
-            warn(f"{self.label(job)}: не записался — {e}")
-            try:
-                if part.is_file():
-                    part.unlink()
-            except OSError:
-                pass
-            self.remove(job)
-            self.failed += 1
-            return True
+            return self.keep_completed(job, f"не записался — {e}")
+        finally:
+            if own_part:
+                try:
+                    part.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self.remove(job)
-        prompt = job.prompt or str(obj.get("prompt") or "")
-        source = job.source or str(obj.get("prompt_source") or "") or "auto"
-        self.add_row([job.image.name, file, str(seed), str(self.args.seconds), self.args.quality, self.smooth,
-                      str(job.variant), source, prompt, self.args.model, job.key])
         self.done += 1
         say(f"{self.label(job)}: готово за {span(time.monotonic() - (job.running or job.sent))} → {file}")
         return True
@@ -422,7 +453,13 @@ class Videos:
                 os.replace(part, self.manifest)
             for row in rows:
                 c = row.split("\t")
-                if len(c) < 9 or c[0] == "image" or not (self.folder / c[1]).is_file():
+                if len(c) < 9 or c[0] == "image":
+                    continue
+                try:
+                    saved_video = (self.folder / c[1]).stat()
+                except OSError:
+                    continue
+                if not stat.S_ISREG(saved_video.st_mode) or saved_video.st_size == 0:
                     continue
                 if len(c) >= 11 and c[10]:
                     recorded.add(c[10])
@@ -439,6 +476,7 @@ class Videos:
                         key=lambda p: p.name.lower())
         if not images:
             raise Fail(f"В папке {self.folder} нет картинок (.jpg .jpeg .png .webp)")
+        by_stem = Counter(img.stem.casefold() for img in images)
 
         common = a.prompt.strip()
         smooth_label = "без дорисовки" if a.no_smooth else "с дорисовкой"
@@ -446,13 +484,22 @@ class Videos:
             f"вариантов {a.count}")
         todo = []
         for img in images:
-            if img.stat().st_size > MAX_IMAGE:
+            try:
+                with img.open("rb") as source_file:
+                    image_bytes = source_file.read(MAX_IMAGE + 1)
+            except OSError as e:
+                warn(f"{img.name}: не удалось прочитать исходник — {e}")
+                self.failed += a.count
+                continue
+            if len(image_bytes) > MAX_IMAGE:
                 warn(f"{img.name}: больше 20 МБ — пропущена")
                 self.failed += a.count
                 continue
             base = img.stem
             own = self.folder / f"{base}.txt"
-            saved = self.folder / f"{base}.auto.txt"
+            saved = self.folder / AUTO_PROMPTS / f"{img.name}.txt"
+            if not saved.is_file() and by_stem[base.casefold()] == 1:
+                saved = self.folder / f"{base}.auto.txt"
             text = source = ""
             if own.is_file():
                 text = own.read_text(encoding="utf-8-sig", errors="replace").strip()
@@ -472,8 +519,8 @@ class Videos:
                 self.failed += a.count
                 continue
             # Отпечаток запроса (тот же у PowerShell-версии): промпт — только свой; придуманный
-            # службой и <имя>.auto.txt не входят, иначе повтор переделывал бы готовое
-            digest = hashlib.sha256(img.read_bytes()).hexdigest()
+            # службой и сохранённый автопромпт не входят, иначе повтор переделывал бы готовое
+            digest = hashlib.sha256(image_bytes).hexdigest()
             own_prompt = re.sub(r"\r\n?", "\n", text) if source in ("file", "common") else ""
             added = 0
             for k in range(1, a.count + 1):
@@ -490,7 +537,7 @@ class Videos:
                     continue
                 todo.append(SimpleNamespace(n=len(todo) + 1, image=img, base=base, variant=k, seed=seed,
                                             prompt=text, source=source, key=key, id="", detail="", sent=0.0,
-                                            running=0.0, tries=0, unavailable=0))
+                                            running=0.0, tries=0, unavailable=0, completed=False))
                 added += 1
             if added:
                 say(f"  {img.name}: роликов {added}, промпт — {label}")
@@ -544,7 +591,8 @@ class Videos:
                         sent += 1
                     else:
                         if not why:
-                            why = fail_text(status, data) if status >= 300 else "в ответе службы нет id задания"
+                            why = (fail_text(status, data) if status is not None and status >= 300
+                                   else "в ответе службы нет id задания")
                         warn(f"{self.label(job)}: не отправлен — {why}")
                         self.failed += 1
                 if sent != before:
@@ -559,9 +607,10 @@ class Videos:
                     time.sleep(POLL)
         finally:
             # Ctrl+C или ошибка: свои незавершённые задания — снять, чтобы служба не рендерила впустую
-            if active:
-                warn(f"Отменяю свои незавершённые задания: {len(active)}")
-                for job in list(active):
+            unfinished = [job for job in active if not job.completed]
+            if unfinished:
+                warn(f"Отменяю свои незавершённые задания: {len(unfinished)}")
+                for job in unfinished:
                     self.remove(job)
             # Освобождение — в своём try: сетевой сбой не должен затереть исходную ошибку и итог
             if self.args.keep_card:

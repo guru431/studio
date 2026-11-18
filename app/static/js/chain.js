@@ -5,8 +5,8 @@ import { tr } from './i18n.js';
  * Текст сервера — только textContent.
  *
  * Параметры по модели (спека 2026-10-21-studio-photo-presets-compare-series, раздел 9) — общие для
- * цепочки, карточек и сравнения: сила — только у Lustify (у старых строк FLUX она записана, но FLUX
- * её не получал), seed — не у внешнего сервиса (модель не из перечня шлюза). */
+ * цепочки, карточек и сравнения: сила — у моделей, которые её получали (включая снятые), seed — не
+ * у внешнего сервиса (модель не из перечня шлюза). */
 import { el } from './ui.js';
 import { dateOnly } from './time.js';
 
@@ -16,6 +16,7 @@ export const NAMES = { lustify: 'Lustify', flux: 'FLUX', snofs: 'SNOFS Krea 2',
   'big-love': 'Big Love Eryn1', fineview: 'FineView QW21', muse: 'Muse 3.5 Krea 2',
   'jib-moss': 'Jib Mix Moss V2', fineporn: 'FinePorn v5', 'moody-krea': 'Moody Krea v8' };
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p', native: '768p' };
+const STRENGTH_HISTORY = new Set(['lustify', 'snofs', 'big-love', 'muse', 'jib-moss', 'fineporn', 'moody-krea']);
 
 /** Модель внешнего сервиса: не из перечня шлюза (images.MODELS). */
 export function isExternal(model) {
@@ -27,9 +28,9 @@ export function seedOf(step) {
   return step.seed !== undefined && step.seed !== null && !isExternal(step.model) ? step.seed : null;
 }
 
-/** Сила, которую стоит показывать: только у Lustify. */
+/** Сила, фактически переданная модели при создании записи. */
 export function strengthOf(step) {
-  return ['snofs', 'jib-moss'].includes(step.model) && step.strength !== undefined && step.strength !== null ? step.strength : null;
+  return STRENGTH_HISTORY.has(step.model) ? step.strength ?? null : null;
 }
 
 /** Модель, размер, seed и сила шага или записи — части подписи. */

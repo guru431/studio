@@ -80,6 +80,8 @@ WHERE_ACTIVE = "state IN ('queued', 'in_progress')"
 FORGOTTEN = "шлюз забыл задание"
 RETRYING = "не удалось сохранить файл — повторяю"
 UNSAVED = "не удалось сохранить файл: хранилище недоступно"
+EMPTY_RETRYING = "шлюз вернул пустой файл — скачиваю снова"
+EMPTY_UNSAVED = "шлюз не выдал файл до конца срока хранения"
 LOST_MANUAL = ("ролик мог начаться у шлюза, но в ленту не попадёт: с seed, заданным вручную, его не отличить "
                "от чужого в общей очереди шлюза. Шлюз сам снимет его по сроку; повторите — без seed студия "
                "находит такой ролик сама")
@@ -115,6 +117,10 @@ class VideoIn(BaseModel):
 
 class TooBig(Exception):
     """mp4 у шлюза больше VIDEO_CONTENT_MAX."""
+
+
+class EmptyContent(Exception):
+    """Шлюз не выдал ни одного байта ролика."""
 
 
 def _profile(body: VideoIn) -> None:
@@ -528,6 +534,8 @@ async def _limited(chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
         if size > VIDEO_CONTENT_MAX:
             raise TooBig()
         yield chunk
+    if size == 0:
+        raise EmptyContent()
 
 
 async def _fail(row, detail: str, conn: "Connection | None" = None) -> None:
@@ -542,10 +550,12 @@ def _update(row, body: dict) -> "tuple[bool, int | None]":
     """Ход ролика по ответу шлюза; итог — строка ещё активна и её seed."""
     status = body.get("status")
     seed = _int(body.get("seed"), row["seed"])
+    progress = _int(body.get("progress"), row["progress"])
+    limit = 99 if status == "completed" else 100
     changed = state.DB.execute(f"UPDATE videos SET state = ?, progress = ?, detail = ?, prompt = ?, prompt_source = ?, seed = ?"
                      f" WHERE id = ? AND {WHERE_ACTIVE}",
                      (status if status in ACTIVE else row["state"],
-                      min(100, max(0, _int(body.get("progress"), row["progress"]))),
+                      min(limit, max(0, progress)),
                       _text(body.get("detail"), row["detail"]), _text(body.get("prompt"), row["prompt"]),
                       _text(body.get("prompt_source"), row["prompt_source"]), seed, row["id"])).rowcount == 1
     return changed, seed
@@ -560,7 +570,7 @@ def _failure_words(body: dict) -> str:
 
 def _forgotten(row) -> str:
     """Шлюз ролика не знает: забыл сам — или готовый ролик не лёг на шару, пока шлюз его держал."""
-    return UNSAVED if row["detail"] == RETRYING else FORGOTTEN
+    return {RETRYING: UNSAVED, EMPTY_RETRYING: EMPTY_UNSAVED}.get(row["detail"], FORGOTTEN)
 
 
 async def _fetch(row, conn: Connection, seed: "int | None") -> None:
@@ -591,9 +601,10 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
         log.warning("ролик %s: mp4 больше %d МиБ", row["id"][:8], VIDEO_CONTENT_MAX >> 20)
         await _fail(row, f"ролик больше {VIDEO_CONTENT_MAX >> 20} МиБ — в историю не взят", conn)
         return
-    except media.StorageError:
-        log.warning("ролик %s: шара недоступна — следующий проход", row["id"][:8])
-        state.DB.execute(f"UPDATE videos SET detail = ? WHERE id = ? AND {WHERE_ACTIVE}", (RETRYING, row["id"]))
+    except (media.StorageError, EmptyContent) as e:
+        detail = EMPTY_RETRYING if isinstance(e, EmptyContent) else RETRYING
+        log.warning("ролик %s: %s", row["id"][:8], detail)
+        state.DB.execute(f"UPDATE videos SET detail = ? WHERE id = ? AND {WHERE_ACTIVE}", (detail, row["id"]))
         return
     except httpx.HTTPError as e:
         log.info("ролик %s: mp4 не скачан (%s) — следующий проход", row["id"][:8], type(e).__name__)

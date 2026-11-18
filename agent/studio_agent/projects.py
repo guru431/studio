@@ -85,9 +85,10 @@ def create_project(config, root_id: str, name: str) -> dict:
     return {"pid": project_id(config, root, name), "name": name}
 
 
-def catalog(config) -> list[tuple[dict, Path]]:
+def scan_catalog(config) -> tuple[list[tuple[dict, Path]], bool]:
     """Публичная строка и локальный путь: пути остаются только внутри моста."""
     items, seen = [], set()
+    complete = True
     paths = roots(config)
     legacy = getattr(config, "projects_legacy_root", "") or (paths[0] if paths else "")
     legacy_key = _key(legacy) if legacy else ""
@@ -95,8 +96,10 @@ def catalog(config) -> list[tuple[dict, Path]]:
         try:
             real_root = os.path.realpath(root)
             root_key = _key(real_root)
-            entries = list(os.scandir(real_root))
+            with os.scandir(real_root) as children:
+                entries = list(children)
         except OSError:
+            complete = False
             continue
         for entry in entries:
             if entry.name.startswith("."):
@@ -110,6 +113,7 @@ def catalog(config) -> list[tuple[dict, Path]]:
                 if not inside(real_root, path) or key in seen:
                     continue
             except OSError:
+                complete = False
                 continue
             seen.add(key)
             ident = pid(entry.name) if root_key == legacy_key else pid(root_key + "\0" + entry.name)
@@ -123,7 +127,11 @@ def catalog(config) -> list[tuple[dict, Path]]:
             # Последние знаки id различают и папки с одинаковым именем родителя, без передачи полного пути.
             row["name"] += f" · {path.parent.name} · {row['pid'][-6:]}"
     items.sort(key=lambda item: (item[0]["name"].casefold(), item[0]["name"]))
-    return items
+    return items, complete
+
+
+def catalog(config) -> list[tuple[dict, Path]]:
+    return scan_catalog(config)[0]
 
 
 def list_projects(root) -> list[dict]:

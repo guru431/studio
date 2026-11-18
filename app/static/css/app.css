@@ -1488,6 +1488,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .project-mirror-diff li { display: grid; grid-template-columns: minmax(6.5em, 1fr) minmax(0, 3fr);
   align-items: baseline; gap: var(--space-3); margin-block: var(--space-2); }
 .project-mirror-diff .btn-link { text-align: start; min-width: 0; }
+#code-project-mirrors .project-mirror-keep { display: flex; align-items: baseline; font-size: var(--fs-xs); }
 .code-project-title { display: flex; align-items: baseline; gap: var(--space-2); flex: 1; min-width: 0; }
 .code-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .code-project-count { flex: none; color: var(--text-2); font-size:var(--fs-xs); font-variant-numeric: tabular-nums; }

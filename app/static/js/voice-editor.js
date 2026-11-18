@@ -16,13 +16,12 @@ export async function editVoice(host, voice, onSaved) {
   if (host.querySelector('#voice-dialog')) return;
   const original = voice ? await api('GET', `/api/voices/${voice.id}`) : null;
   if (!host.isConnected || host.querySelector('#voice-dialog')) return;
-  let voiceId = original?.id;
+  const voiceId = original?.id || crypto.randomUUID().replaceAll('-', '');
   let entries = [];
   let selected = null;
   let recording = null;
   let starting = false;
   let saving = false;
-  const removed = [];
   const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', value: original?.name || '' });
   const list = el('div', { class: 'voice-samples' });
   const file = el('input', { type: 'file', id: 'voice-files', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm', multiple: true });
@@ -73,12 +72,11 @@ export async function editVoice(host, voice, onSaved) {
   }
 
   function makeEntry(sample = {}) {
-    const entry = { id: sample.id, mediaId: sample.media_id, duration: sample.duration,
-      originalText: sample.text || '', file: null, pending: false };
+    const entry = { id: sample.id, mediaId: sample.media_id, file: null, pending: false };
     entry.player = el('audio', { class: 'voice-sample-audio', controls: true, preload: 'metadata', hidden: true,
       'aria-label': tr("Прослушать образец") });
     entry.text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: String(TEXT_MAX),
-      placeholder: tr("Определится автоматически после загрузки или записи") }, entry.originalText);
+      placeholder: tr("Определится автоматически после загрузки или записи") }, sample.text || '');
     entry.note = el('p', { class: 'muted small', 'aria-live': 'polite', ...(!entries.length ? { id: 'voice-asr-status' } : {}) });
     entry.error = el('p', { class: 'error', 'aria-live': 'polite' });
     entry.radio = el('input', { type: 'radio', name: 'voice-reference' });
@@ -101,7 +99,6 @@ export async function editVoice(host, voice, onSaved) {
       entry.controller?.abort();
       entry.discarded = true;
       stopPreview(entry);
-      if (entry.id) removed.push(entry.id);
       entries = entries.filter(e => e !== entry);
       entry.node.remove();
       if (selected === entry) choose(entries[0]);
@@ -231,46 +228,33 @@ export async function editVoice(host, voice, onSaved) {
     }
     saving = true;
     busy();
+    const uploads = [];
     try {
-      // Free occupied slots first, retaining one stored reference until a new one is saved.
-      while (removed.length && (removed.length > 1 || entries.some(e => e.id))) {
-        await api('DELETE', `/api/voices/${voiceId}/samples/${removed[0]}`);
-        removed.shift();
-        onSaved();
-        if (!dialog.open || !dialog.isConnected) return;
-      }
+      const samples = [];
       for (const entry of entries) {
+        const sample = { id: entry.id, text: entry.text.value.trim() };
         if (entry.file) {
           const body = new FormData();
-          body.append('name', name.value.trim());
-          body.append('text', entry.text.value.trim());
           body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
-          const url = !voiceId ? '/api/voices' : `/api/voices/${voiceId}/samples${entry.id ? '/' + entry.id : ''}`;
-          const result = await api(entry.id ? 'PUT' : 'POST', url, body);
-          if (!voiceId) voiceId = result.id;
-          entry.id = result.id;
-          entry.file = null;
-          entry.originalText = entry.text.value.trim();
-        } else if (entry.text.value.trim() !== entry.originalText) {
-          await api('PATCH', `/api/voices/${voiceId}/samples/${entry.id}`, { text: entry.text.value.trim() });
-          entry.originalText = entry.text.value.trim();
+          const { upload } = await api('POST', '/api/voices/prepare-sample', body);
+          uploads.push(upload);
+          sample.upload = upload;
         }
-        onSaved();
         if (!dialog.open || !dialog.isConnected) return;
+        samples.push(sample);
       }
-      await api('PATCH', `/api/voices/${voiceId}`, { name: name.value.trim() });
-      await api('PATCH', `/api/voices/${voiceId}/samples/${selected.id}`, { active: true });
-      while (removed.length) {
-        await api('DELETE', `/api/voices/${voiceId}/samples/${removed[0]}`);
-        removed.shift();
-      }
-      dialog.close();
+      await api('PUT', `/api/voices/${voiceId}/batch`, { name: name.value.trim(), revision: original?.revision,
+        selected: entries.indexOf(selected), samples });
+      uploads.length = 0;
+      if (dialog.open) dialog.close();
+      onSaved();
     } catch (err) {
       fail.textContent = words(err);
     } finally {
       saving = false;
       busy();
-      onSaved();
+      // A lost response may mean that the voice was already saved. The server keeps referenced uploads.
+      if (uploads.length) api('POST', '/api/voices/discard-samples', { uploads }).catch(() => {});
     }
   });
   dialog.addEventListener('close', () => {

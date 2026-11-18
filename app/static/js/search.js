@@ -35,7 +35,9 @@ const HAS_WORD = /[\p{L}\p{N}]/u;
 const MESSAGE_HREF = /^chat\/[\w-]+\?m=[\w-]+$/;
 
 const memory = { q: '', section: '', model: '', since: '', until: '' };
+let returnTo = null;
 let screen = null;
+document.addEventListener('studio-locked', () => { returnTo = null; });
 
 function icon(section) {
   const box = el('span', { class: 'search-ico', 'aria-hidden': 'true' });
@@ -66,9 +68,10 @@ function row(item, go) {
   const doc = item.attachment ? el('span', { class: 'search-doc', title: item.attachment }, `📄 ${item.attachment}`) : null;
   const snippet = !same && item.snippet ? el('span', { class: 'search-snippet' }, ...marked(item.snippet)) : null;
   const meta = el('span', { class: 'search-meta' }, [item.model, when(item.created)].filter(Boolean).join(' · '));
-  const node = el('button', { type: 'button', class: 'search-row', 'data-section': item.section, 'data-id': item.id },
+  const node = el('button', { type: 'button', class: 'search-row', 'data-section': item.section, 'data-id': item.id,
+    'data-part': item.part },
     icon(item.section), el('span', { class: 'search-text' }, title, doc, snippet, meta));
-  node.addEventListener('click', () => { if (HREF.test(item.href) || MESSAGE_HREF.test(item.href)) go(item.href); });
+  node.addEventListener('click', () => { if (HREF.test(item.href) || MESSAGE_HREF.test(item.href)) go(item, node); });
   return el('li', {}, node);
 }
 
@@ -124,7 +127,7 @@ function mountScreen(view, ctx) {
         days.push({ key: k, list: el('ul', { class: 'search-list' }),
           title: el('h2', { class: 'feed-day-title' }, dayTitle(item.created)) });
       }
-      days[days.length - 1].list.append(row(item, ctx.navigate));
+      days[days.length - 1].list.append(row(item, openResult));
     }
     results.replaceChildren(...days.map((d) => el('section', { class: 'search-day' }, d.title, d.list)));
     moreBtn.hidden = !more;
@@ -136,11 +139,21 @@ function mountScreen(view, ctx) {
     return body;
   }
 
-  async function run(append = false) {
+  function openResult(item, node) {
+    if (shown === JSON.stringify(wanted())) {
+      returnTo = { key: shown, section: item.section, id: String(item.id), part: node.dataset.part,
+        count: items.length, offset: node.getBoundingClientRect().top - view.getBoundingClientRect().top,
+        scroll: view.scrollTop };
+    }
+    ctx.navigate(item.href);
+  }
+
+  async function run(append = false, restore = null) {
     clearTimeout(timer);
     const mine = ++asked;
     const body = wanted();
     const key = JSON.stringify(body);
+    if (returnTo?.key !== key) returnTo = null;
     // новый запрос ещё ждал паузы после ввода — «Показать ещё» начинает его заново, а не дописывает
     // его страницу (курсором прежнего) к прежнему списку
     if (key !== shown) append = false;
@@ -153,19 +166,30 @@ function mountScreen(view, ctx) {
       results.dataset.state = 'idle';
       return;
     }
-    if (append && items.length) {
-      const last = items[items.length - 1];
-      body.before = { created: last.created, item: last.id, part: last.part };
-    }
     results.dataset.state = 'loading';
     moreBtn.disabled = true;
     try {
-      const out = await api('POST', '/api/search', body);
-      if (mine !== asked) return;
-      items = append ? [...items, ...out.items] : out.items;
+      const next = append ? [...items] : [];
+      let out;
+      do {
+        const last = next.at(-1);
+        const before = last ? { created: last.created, item: last.id, part: last.part } : undefined;
+        out = await api('POST', '/api/search', { ...body, before });
+        if (mine !== asked) return;
+        next.push(...out.items);
+      } while (restore && returnTo === restore && out.more && out.items.length && next.length < restore.count);
+      items = next;
       shown = key;
       more = out.more;
       paint();
+      if (restore && returnTo === restore) {
+        const node = [...results.querySelectorAll('.search-row')].find(({ dataset }) =>
+          dataset.section === restore.section && dataset.id === restore.id && dataset.part === restore.part);
+        view.scrollTop = node
+          ? view.scrollTop + node.getBoundingClientRect().top - view.getBoundingClientRect().top - restore.offset
+          : restore.scroll;
+        node?.focus({ preventScroll: true });
+      }
       status.textContent = items.length ? '' : tr("Ничего не нашлось");
       results.dataset.state = 'ready';
     } catch (err) {
@@ -184,6 +208,7 @@ function mountScreen(view, ctx) {
 
   q.addEventListener('input', () => {
     memory.q = q.value;
+    if (returnTo?.key !== JSON.stringify(wanted())) returnTo = null;
     later();
   });
   q.addEventListener('keydown', (event) => {
@@ -225,8 +250,9 @@ function mountScreen(view, ctx) {
     models = out.models;
     paintModels();
   }, () => {});
-  run();
-  if (matchMedia('(hover: hover)').matches) q.focus();
+  const restore = returnTo?.key === JSON.stringify(wanted()) ? returnTo : null;
+  run(false, restore);
+  if (!restore && matchMedia('(hover: hover)').matches) q.focus();
   return { results, stop() { clearTimeout(timer); asked += 1; } };
 }
 

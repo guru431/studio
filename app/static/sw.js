@@ -14,6 +14,7 @@ const SHELL = [
   '/offline.html',
   `/static/css/app.css?v=${VERSION}`,
   `/static/theme.js?v=${VERSION}`,
+  `/static/offline.js?v=${VERSION}`,
   `/static/en.js?v=${VERSION}`,
   `/static/i18n.js?v=${VERSION}`,
   '/static/icons/icon.svg',
@@ -116,7 +117,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(() => caches.match('/offline.html')));
+    event.respondWith(fetch(request).catch(async () => {
+      const page = await caches.match('/offline.html');
+      // У ответа из Cache Storage свой URL. Оболочка должна открыться по исходному адресу.
+      return page ? new Response(page.body, { status: page.status, headers: page.headers }) : Response.error();
+    }));
     return;
   }
   // API (и медиа под ним) и модули — только сеть, мимо кэша

@@ -28,7 +28,8 @@ def test_lost_accepted_post_is_reconciled_without_resending(browser, live):
     assert result['values']['messages'] == ['Acknowledged once', 'Здравствуйте!']
 
 
-def test_manual_retry_reuses_key_when_reconciliation_is_unavailable(browser, live):
+@pytest.mark.parametrize("status", [0, 502, 504])
+def test_manual_retry_reuses_key_when_reconciliation_is_unavailable(browser, live, status):
     before = len(live.gw.chat_requests)
     gate = """(() => {
       const real=window.fetch; window.denied=0;
@@ -37,9 +38,11 @@ def test_manual_retry_reuses_key_when_reconciliation_is_unavailable(browser, liv
         return real(url,options);
       }; return true;
     })()"""
+    loss = LOSS if not status else LOSS.replace("throw new TypeError('Synthetic reset')",
+                                                f"return new Response('', {{status:{status}}})")
     result = browser.drive(live.url+'/', [*signin(), ('wait', READY), *open_new_chat(),
-        ('eval', 'loss', LOSS), ('eval', 'gate', gate), ('type', '#chat-input', 'Retry safely'), ('click', '#send'),
-        ('wait', "window.lost===1 && document.querySelector('#chat-error').textContent.includes('Нет связи')"),
+        ('eval', 'loss', loss), ('eval', 'gate', gate), ('type', '#chat-input', 'Retry safely'), ('click', '#send'),
+        ('wait', "window.lost===1 && document.querySelector('#chat-error').textContent.length>0"),
         ('click', '#send'), ('wait', ANSWERED),
         ('eval', 'users', "document.querySelectorAll('#messages .msg.user').length")])
     assert not result.get('failed'), result
