@@ -167,16 +167,17 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     finally { createLoading = false; newProject.setAttribute('aria-busy', 'false'); }
   });
 
-  let infoIntent = null; // Окна открываются только отдельными кнопками сведений и рабочего стола.
+  let infoIntent = null;
   let infoKind = 'info';
   const viewers = new Map();
   async function showViewer(agent, kind) {
     try {
       if (!viewers.has(kind)) {
-        const module = await lazy(() => (kind === 'desktop' ? import('./code-desktop.js') : import('./code-computer.js')),
-          tr("Окно не загрузилось"));
+        const load = { info: () => import('./code-computer.js'), desktop: () => import('./code-desktop.js'),
+          terminal: () => import('./code-terminal.js') };
+        const module = await lazy(load[kind], tr("Окно не загрузилось"));
         if (!alive || infoIntent !== agent.id || infoKind !== kind) return;
-        const create = kind === 'desktop' ? module.desktopView : module.computerView;
+        const create = { info: module.computerView, desktop: module.desktopView, terminal: module.terminalView }[kind];
         viewers.set(kind, create(root, { locked(aid) { infoKind = kind; infoIntent = aid; pin(aid); } }));
       }
       if (!alive || infoIntent !== agent.id || infoKind !== kind) return;
@@ -640,12 +641,20 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         'aria-haspopup': 'dialog' });
       remote.append(icon('remote'));
       remote.addEventListener('click', () => computerClicked(agent.id, 'desktop'));
+      let terminal = null;
+      if (agent.platform === 'linux' && !agent.shared) {
+        terminal = el('button', { type: 'button', class: 'btn code-agent-terminal',
+          title: tr("Терминал Linux"), 'aria-label': tr("Терминал Linux · {0}", agent.name),
+          'aria-haspopup': 'dialog' }, icon('code'));
+        terminal.addEventListener('click', () => computerClicked(agent.id, 'terminal'));
+      }
       const seen = !agent.online && Number.isFinite(agent.last_seen)
         ? el('span', { class: 'code-agent-seen muted' }, lastSeenText(agent.last_seen)) : null;
       if (seen) row.title = seen.textContent;
       if (agent.shared) row.title = tr("Совместные проекты");
       return el('li', { 'data-id': agent.id, class: 'code-agent-row' }, row,
-        ...(agent.shared ? [el('span', { class: 'muted small' }, tr("Совместные"))] : [button, info, remote]), seen, note);
+        ...(agent.shared ? [el('span', { class: 'muted small' }, tr("Совместные"))] :
+          [button, info, terminal, agent.platform !== 'linux' || agent.desktop ? remote : null]), seen, note);
     }));
   }
 

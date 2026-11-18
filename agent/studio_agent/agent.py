@@ -28,7 +28,7 @@ PIN_FIELD_MAX = 64
 OPS = {
     "desktop_status": (), "desktop_start": (), "desktop_frame": (), "desktop_input": (),
     "desktop_clipboard": (), "desktop_stop": (),
-    "computer_info": (),
+    "computer_info": (), "terminal_info": (),
     "software_versions": ("refresh",),
     "software_update": ("software",),
     "software_update_cancel": (),
@@ -78,7 +78,7 @@ OPS = {
 # Новый op по умолчанию удерживает штатный перезапуск, пока обработчик не закончит работу.
 RESTART_SAFE_OPS = frozenset({
     "agent_update", "agent_update_status", "agent_update_cancel", "software_update_cancel",
-    "desktop_status", "desktop_frame", "computer_info", "software_versions",
+    "desktop_status", "desktop_frame", "computer_info", "terminal_info", "software_versions",
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
     "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
@@ -170,6 +170,8 @@ class Agent:
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
                  "codex_models": True, "opencode_models": self.opencode is not None}
+        if host.platform_id() == "linux":
+            hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
         for name in ("codex", "opencode"):
@@ -329,7 +331,7 @@ class Agent:
             raise Refused("invalid")
         if self.software.busy and (op in ('turn', 'chat_fork', 'agent_update') or
                 self.software.state == 'updating' and op not in (
-                    'computer_info', 'software_versions', 'software_update', 'software_update_cancel',
+                    'computer_info', 'terminal_info', 'software_versions', 'software_update', 'software_update_cancel',
                     'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
             raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
@@ -433,6 +435,15 @@ class Agent:
 
     async def _op_computer_info(self, frame, after):
         return await asyncio.to_thread(computer_info.read, list(self.cfg.projects_roots))
+
+    async def _op_terminal_info(self, frame, after):
+        from . import linux_terminal
+        if host.platform_id() != 'linux':
+            raise Refused('unsupported')
+        try:
+            return await asyncio.to_thread(linux_terminal.read, self.pins.path.parent)
+        except (OSError, ValueError, RecursionError):
+            raise Refused('invalid', 'Проверьте настройки SSH и веб-консоли в меню агента') from None
 
     async def _op_software_versions(self, frame, after):
         return await self.software.read(frame.get('refresh', False))

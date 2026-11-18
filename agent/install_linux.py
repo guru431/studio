@@ -52,6 +52,10 @@ def install(archive: Path, *, autostart: bool | None, start: bool):
         linux_autostart.install_launcher(base)
         linux_autostart.switch_current(base, stage, old)
         installed = True
+        if os.geteuid() == 0:
+            import pwd
+            from studio_agent import linux_dispatch
+            linux_dispatch.checked_launcher(pwd.getpwuid(0))
         (stage / "_update_result").write_text("complete", encoding="ascii")
         try:
             enable = (old is None or linux_autostart.enabled()) if autostart is None else autostart
@@ -77,17 +81,57 @@ def main():
     parser.add_argument("--no-autostart", action="store_true")
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--no-menu", action="store_true")
+    parser.add_argument("--system-command-for", metavar="USER",
+                        help="зарегистрировать системную команду для существующей установки пользователя")
     args = parser.parse_args()
     if sys.platform != "linux" or sys.version_info < (3, 11):
         parser.error("Нужны Linux и Python 3.11+ с модулем venv")
     os.umask(0o077)
+    import pwd
+    from studio_agent import host, linux_dispatch, linux_register
+
+    account = pwd.getpwuid(os.geteuid())
+    if args.system_command_for is not None:
+        if os.geteuid() != 0:
+            parser.error("Для регистрации системной команды нужны права администратора")
+        try:
+            owner = pwd.getpwnam(args.system_command_for)
+            binding = linux_register.register(owner)
+        except (KeyError, ValueError, OSError) as error:
+            print(f"Регистрация studio-agent: {error}", file=sys.stderr)
+            return 1
+        print("Системная команда studio-agent доступна.")
+        if binding != (owner.pw_uid, owner.pw_name):
+            print(f"Сохранена прежняя привязка для root без личного агента (UID {binding[0]}).")
+        return 0
     try:
+        if account.pw_uid == 0:
+            if Path.home() != Path(account.pw_dir):
+                raise ValueError("Для установки от root используйте домашнюю папку root")
+            config = host.xdg_home("XDG_CONFIG_HOME", ".config")
+            linux_dispatch.check_root_paths((Path.home() / ".local/bin", host.install_home() / "releases",
+                Path(os.environ.get("STUDIO_AGENT_HOME") or host.data_home()), config / "studio-agent",
+                config / "systemd/user"))
         command = install(Path(sys.argv[0]), autostart=False if args.no_autostart else None,
                           start=not args.no_start)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"Установка Studio Agent: {error}", file=sys.stderr)
         return 1
-    print(f"Studio Agent установлен. Меню: {command} menu", flush=True)
+    binding = None
+    registration_available = Path.home() == Path(account.pw_dir)
+    try:
+        if registration_available:
+            binding = linux_register.register(account)
+    except (OSError, ValueError) as error:
+        registration_available = False
+        print(f"Регистрация системной команды: {error}", file=sys.stderr)
+    print(f"Studio Agent установлен. Меню: {'studio-agent' if binding else command} menu", flush=True)
+    if binding and binding != (account.pw_uid, account.pw_name):
+        print(f"Сохранена прежняя привязка для root без личного агента (UID {binding[0]}).")
+    if not binding and registration_available:
+        print("Администратор может зарегистрировать команду из доверенного файла установки:")
+        import shlex
+        print(f"sudo /usr/bin/python3 -IS ./studio-agent-setup.sh --system-command-for {shlex.quote(account.pw_name)}")
     if sys.stdin.isatty() and not args.no_menu:
         os.execl(str(command), str(command), "menu")
     return 0

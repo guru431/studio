@@ -22,7 +22,7 @@ def test_installer_bundles_only_the_profiled_runtime(tmp_path):
                      "studio_agent/linux_menu.py", "tests/test_install.py", "macos/studio-agent"):
             output.writestr("studio-agent/" + name, name)
     runpy.run_path(str(ROOT / "deploy/build-agent-linux.py"))["build"](archive, installer)
-    assert installer.read_bytes().startswith(b"#!/bin/sh\nexec ")
+    assert b'exec /usr/bin/python3 -IS "$0" "$@"' in installer.read_bytes().split(b"PK\x03\x04", 1)[0]
     with zipfile.ZipFile(installer) as packed:
         assert {item.date_time for item in packed.infolist()} == {(1980, 1, 1, 0, 0, 0)}
         assert set(packed.namelist()) == {"__main__.py", "requirements.txt", "constraints.txt",

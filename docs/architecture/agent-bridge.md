@@ -771,3 +771,10 @@ fetch/push; сервер мог измениться. Нет сети, GCM, fetc
   строкой «… начало не показано» (Ruling 7, 10; элемент бывает и вопросом).
 - `run --console` собирает ядро тем же `app.Controller`, что и трей (Ruling 11): сборка Agent/Runner/Link одна.
 - Логгер `websockets` — не ниже INFO и в консоли (Ruling 13, `journal.setup`).
+## Терминал Linux
+
+Linux сообщает `hello.terminal`. Только владельцу открытой сессии компьютера
+`GET /api/code/agents/{aid}/terminal` передаёт ответ моста на `terminal_info` с
+`Cache-Control: no-store`. Из локально настроенных адресов сервер формирует команду SSH,
+ссылку для SSH-клиента и ссылку HTTPS веб-консоли. Сетевое соединение и аутентификацию
+выполняют SSH-клиент или браузер владельца. Настройка адресов — [меню Linux](../../agent/README.md#linux).

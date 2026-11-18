@@ -22,7 +22,9 @@ def build(archive: Path, output: Path) -> None:
                    *(name for name in sorted(files) if re.fullmatch(r"studio_agent/(?!__init__\.py$)[\w]+\.py", name))]
         bootstrap = source.read(files["install_linux.py"])
         with output.open("wb") as stream:
-            stream.write(b'#!/bin/sh\nexec "${STUDIO_PYTHON:-python3}" -I "$0" "$@"\nexit 1\n')
+            stream.write(b'#!/bin/sh\nif [ "$(/usr/bin/id -u)" = 0 ]; then\n'
+                         b'    exec /usr/bin/python3 -IS "$0" "$@"\nfi\n'
+                         b'exec "${STUDIO_PYTHON:-python3}" -I "$0" "$@"\nexit 1\n')
             with zipfile.ZipFile(stream, "w") as target:
                 _write(target, "__main__.py", bootstrap)
                 for member in members:

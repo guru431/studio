@@ -93,7 +93,7 @@ def test_agents_belong_to_their_user(studio):
     items = studio.c.get("/api/agents").json()["items"]
     assert items == [{"id": agent_id, "name": "Рабочий ПК", "online": False, "has_pin": False, "cc_version": None,
                       "agent_version": None, "platform": None, "agent_update": False, "agent_update_cancel": False, "latest_version": None,
-                      "projects_root": None, "created": items[0]["created"], "last_seen": None,
+                      "projects_root": None, "created": items[0]["created"], "last_seen": None, "terminal": False,
                           "models": [], "efforts": [], "images": False, "chat_state": False, "defaults": {}, "chat_control": False,
                               "attachments": False, "project_activity": False, "subscription_usage": False, "usage_reset": False, "opencode_usage": False, "opencode_features": False, "computer_info": False, "software_versions": False, "desktop": False,
                               "project_summary": False, "metadata_cache": False, "visualizations": False, "visualization_images": False, "history_images": False, "file_stats": False, "file_operations": False, "file_suggestions": False,

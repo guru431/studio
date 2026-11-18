@@ -291,7 +291,9 @@ def test_hello(agent):
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "pin_timeout": True,
-                             "computer_info": True, "software_versions": True, "desktop": not host.MACOS, "metadata_cache": True, "visualizations": True,
+                             "computer_info": True, "software_versions": True, "desktop": host.platform_id() != 'linux',
+                             **({'terminal': True} if host.platform_id() == 'linux' else {}),
+                             "metadata_cache": True, "visualizations": True,
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False}
