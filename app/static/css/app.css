@@ -1482,7 +1482,8 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-project-summary { display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--space-1); overflow-x: auto; }
 .code-project-metrics a { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 .code-project-git, .code-project-github, .code-project-remote, .code-project-summary > [aria-hidden], .code-project-summary > .error { flex: none; }
-.code-project-modified { flex: none; white-space: nowrap; }
+.code-project-modified, .code-project-size { flex: none; white-space: nowrap; }
+.code-projects:not(.by-code-size) .code-project-size { display: none; }
 .code-project-git[data-git-level="green"], .code-project-github[data-git-level="green"], .code-project-remote[data-git-level="green"], .code-repo-status[data-git-level="green"] { color: var(--success); }
 .code-project-git[data-git-level="yellow"], .code-project-github[data-git-level="yellow"], .code-project-remote[data-git-level="yellow"], .code-repo-status[data-git-level="yellow"] { color: var(--warn); }
 .code-project-git[data-git-level="red"], .code-project-github[data-git-level="red"], .code-project-remote[data-git-level="red"], .code-repo-status[data-git-level="red"] { color: var(--danger); }

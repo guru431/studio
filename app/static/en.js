@@ -924,6 +924,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Сортировка проектов": "Sort projects",
   "По имени": "By name",
   "По дате изменения": "By modification date",
+  "По размеру кода": "By code size",
+  "Код: {0}": "Code: {0}",
   "По количеству проблем": "By issue count",
   "По количеству идей": "By idea count",
   "Сначала незапушенные": "Unpushed first",

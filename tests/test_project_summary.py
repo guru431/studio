@@ -18,6 +18,18 @@ def test_project_summary_capability_pin_ownership_and_filtered_response(studio):
     assert studio.c.get(path.replace(ALPHA, "invalid")).status_code == 422
 
 
+@pytest.mark.parametrize("summary, expected", [({}, None), ({"code_bytes": 0}, 0), ({"code_bytes": 42}, 42),
+                                               ({"code_bytes": True}, None), ({"code_bytes": -1}, None)])
+def test_project_code_size_requested_and_filtered(studio, summary, expected):
+    aid, machine, link = setup(studio)
+    link.hello["project_summary"] = True
+    machine.projects["alpha"]["summary"] = summary
+    path = f"/api/code/agents/{aid}/projects/{ALPHA}/summary"
+    assert "code_bytes" not in studio.c.get(path).json()
+    assert studio.c.get(path + "?code_size=true").json()["code_bytes"] == expected
+    assert machine.requests[-1]["code_size"] is True
+
+
 def test_project_summary_unknown_values_do_not_turn_into_zero(studio):
     aid, machine, link = setup(studio)
     link.hello["project_summary"] = True

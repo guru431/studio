@@ -6,6 +6,46 @@ import pytest
 from studio_agent import gitinfo, project_summary
 
 
+def test_code_bytes_counts_nested_sources_and_skips_dependencies_and_assets(tmp_path):
+    for name in (".git/tools.py", ".venv/lib/setup.py", "app/node_modules/lib/a.js", "vendor/lib.c",
+                 "dist/bundle.js", ".tmp/script.ps1", "README.md", "assets/img.png"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ignored")
+    assert project_summary.code_bytes(tmp_path) == 0
+    (tmp_path / "app" / "main.PY").write_bytes("имя".encode())
+    (tmp_path / "app" / "ui.tsx").write_bytes(b"12345")
+    (tmp_path / "Makefile").write_bytes(b"123")
+    assert project_summary.code_bytes(tmp_path) == 14
+
+
+def test_code_bytes_incomplete_scan_is_unknown(tmp_path):
+    assert project_summary.code_bytes(tmp_path / "missing") is None
+    ticks = iter((0, 0, project_summary.CODE_SCAN_SEC))
+    (tmp_path / "first.py").touch()
+    assert project_summary.code_bytes(tmp_path, monotonic=lambda: next(ticks)) is None
+
+
+def test_code_bytes_skips_linked_directories(tmp_path):
+    project, outside = tmp_path / "project", tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    (outside / "extra.js").write_bytes(b"123")
+    link = project / "linked"
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(outside), str(link))
+    else:
+        link.symlink_to(outside, target_is_directory=True)
+    try:
+        assert project_summary.code_bytes(project) == 0
+    finally:
+        if os.name == "nt":
+            link.rmdir()
+        else:
+            link.unlink()
+
+
 def test_journals_count_only_active_entries_outside_comments_and_code(tmp_path):
     text = """# Findings
 ## First

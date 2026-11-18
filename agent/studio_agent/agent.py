@@ -43,7 +43,7 @@ OPS = {
     "mcp_get": ("project",),
     "mcp_save": ("project",),
     "project_create": ("root", "name"),
-    "project_summary": ("project", "refresh", "remote"),
+    "project_summary": ("project", "refresh", "remote", "code_size"),
     "activity": (),
     "chats": ("project", "refresh"),
     "history": ("project", "chat", "before", "limit"),
@@ -462,7 +462,7 @@ class Agent:
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
             return True
-        if name in ("refresh", "remote"):
+        if name in ("refresh", "remote", "code_size"):
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
@@ -569,6 +569,12 @@ class Agent:
         data = dict(await self._metadata.get((pid, "summary"),
             lambda: asyncio.to_thread(project_summary.read, project, local=True, now=self._wall), ttl=20,
             refresh=bool(frame.get("refresh"))))
+        if frame.get("code_size"):
+            async def measure():
+                return {"code_bytes": await asyncio.to_thread(project_summary.code_bytes, project)}
+
+            data.update(await self._metadata.get((pid, "code_size"), measure, ttl=300,
+                                                 refresh=bool(frame.get("refresh"))))
         remote = data.pop("_github", None)
         if remote:
             branch, head, repo = remote

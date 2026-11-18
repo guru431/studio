@@ -102,6 +102,35 @@ def test_project_sort_restores_after_navigation_reload_and_account_switch(browse
 
 
 @pytest.mark.parametrize("width", [320, 1280])
+def test_project_code_size_sort_requests_sizes_and_restores_order(browser, live, width):
+    login = f"project-size-{width}"
+    live.add_user(login)
+    sizes = {"alpha-legacy": {}, "beta-empty": {"code_bytes": 0}, "gamma": {"code_bytes": 22},
+             "project10": {"code_bytes": 100}, "project2": {"code_bytes": 100}}
+    machine = FakeMachine({name: {"summary": summary} for name, summary in sizes.items()})
+    machine.project_summary = True
+    _, server = code_online(live, login, machine)
+    ready = "document.querySelector('#code-project-updated')?.textContent.startsWith('Обновлено:')"
+    rows = "document.querySelectorAll('#code-projects li')"
+    sorted_rows = f"[...{rows}].map(row => [row.querySelector('.code-project-name').textContent, " \
+                  "row.querySelector('.code-project-size').innerText])"
+    first = f"{rows}[0]?.dataset.pid === '{pid('project2')}'"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), ("wait", ready),
+            ("click", "#code-project-sort-open"), ("click", "#code-project-sort-options input[value=code_bytes]"),
+            ("wait", first), ("eval", "selected", sorted_rows),
+            ("eval", "reload", "location.reload(); true"), ("wait", READY), ("wait", first),
+            ("eval", "restored", sorted_rows)], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    expected = [["project2", "Код: 100 Б"], ["project10", "Код: 100 Б"], ["gamma", "Код: 22 Б"],
+                ["beta-empty", "Код: 0 Б"], ["alpha-legacy", "Код: —"]]
+    assert result["values"]["selected"] == result["values"]["restored"] == expected
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
 def test_project_visibility_sort_groups_unknowns_last_and_updates_after_github_check(browser, live, width, tmp_path):
     login = f"project-visibility-{width}"
     live.add_user(login)
