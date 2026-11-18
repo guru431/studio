@@ -39,7 +39,6 @@ import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy } from './stale.js';
 import { claimActiveSessions, refreshRequested, reloadStudio } from './refresh.js';
-import { mountMcpTools } from './mcp-sections.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),
@@ -169,10 +168,7 @@ async function render() {
     await ensureSectionOpen(guardedSection);
   } catch (err) {
     if (mine !== renders) return;
-    if (current) {
-      current.disposeMcp?.();
-      current.module.unmount();
-    }
+    if (current) current.module.unmount();
     current = null;
     const retry = el('button', { type: 'button', class: 'btn', id: 'section-unlock-retry' }, tr("Повторить"));
     retry.addEventListener('click', render);
@@ -206,14 +202,10 @@ async function render() {
   }
   if (mine !== renders) return;
   cancelRecording();                            // запись голоса прежнего раздела не переживает его
-  if (current) {
-    current.disposeMcp?.();
-    current.module.unmount();
-  }
+  if (current) current.module.unmount();
   view.replaceChildren();
   current = { section: route.section, module };
   module.mount(view, ctx);
-  current.disposeMcp = mountMcpTools(view, route.section);
   revealView();
   announce(route.section);
 }

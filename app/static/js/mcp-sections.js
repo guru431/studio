@@ -1,69 +1,21 @@
 import { api } from './api.js';
 import { tr } from './i18n.js';
-import { button, el, field, openDialog, words } from './ui.js';
+import { button, el, words } from './ui.js';
 
-const sections = new Set(['photo', 'video', 'speech', 'transcribe', 'ocr', 'translate']);
-const labels = {
-  image_generate: tr("Создать фото"), image_edit: tr("Изменить фото"), image_describe: tr("Описать фото"),
-  video_create: tr("Создать видео"), video_estimate: tr("Оценить время генерации"),
-  speech_synthesize: tr("Озвучить текст"), audio_transcribe: tr("Расшифровать запись"),
-  document_read: tr("Распознать страницу"), text_translate: tr("Перевести текст"),
-  prompt: tr("Промпт"), text: tr("Текст"), model: tr("Модель"), size: tr("Размер"),
-  seconds: tr("Длительность (с)"), voice: tr("Голос"), language: tr("Язык"), quality: tr("Качество"),
-  artifact_id: tr("Исходный файл"), reference_artifact_id: tr("Образец голоса"), reference_text: tr("Текст образца"),
-};
 const records = new Map();
 document.addEventListener('studio-locked', () => {
-  document.querySelector('#section-mcp-dialog')?.close();
-  for (const [section, record] of records) {
-    if (!record.job && !record.starting) records.delete(section);
-  }
+  for (const [section, record] of records) if (!record.job && !record.starting) records.delete(section);
 });
+const imageNames = {
+  image_generate: tr("Создать фото"), generate_image: tr("Создать фото"),
+  image_edit: tr("Изменить фото"), edit_image: tr("Изменить фото"),
+  image_describe: tr("Описать фото"), describe_image: tr("Описать фото"),
+};
 
-const input = (tag, attrs, ...children) => el(tag, { class: 'input', ...attrs }, ...children);
-
-function fieldControl(name, schema, required, file) {
-  const base = { name, required, title: typeof schema.description === 'string' ? schema.description : null };
-  const numeric = value => Number.isFinite(value) ? value : null;
-  const defaultText = typeof schema.default === 'string' ? schema.default : '';
-  let node, read;
-  if (file) {
-    node = input('input', { ...base, type: 'file', accept: file === 'image' ? 'image/png,image/jpeg,image/webp' : 'audio/*,video/*' });
-    read = () => node.files[0];
-  } else if (Array.isArray(schema.enum) || schema.type === 'boolean') {
-    const options = Array.isArray(schema.enum) ? schema.enum.map(value => [value,
-      typeof value === 'string' ? value : JSON.stringify(value)]) :
-      [[true, tr("Да")], [false, tr("Нет")]];
-    node = input('select', base, el('option', { value: '' }, '—'),
-      ...options.map(([, label], index) => el('option', { value: index }, label)));
-    read = () => node.value === '' ? undefined : options[Number(node.value)][0];
-    const index = options.findIndex(([value]) => value === schema.default);
-    if (index >= 0) node.value = String(index);
-  } else if (['integer', 'number'].includes(schema.type)) {
-    node = input('input', { ...base, type: 'number', step: schema.type === 'integer' ? 1 : 'any',
-      min: numeric(schema.minimum), max: numeric(schema.maximum), value: numeric(schema.default) });
-    read = () => node.value === '' ? undefined : node.valueAsNumber;
-  } else if (schema.type === 'string' && !schema.format && !['prompt', 'text', 'reference_text'].includes(name)) {
-    node = input('input', { ...base, type: 'text', minlength: numeric(schema.minLength), maxlength: numeric(schema.maxLength),
-      value: defaultText, autocomplete: 'off' });
-    read = () => node.value || undefined;
-  } else {
-    node = input('textarea', { ...base, rows: 3, spellcheck: 'false', maxlength: numeric(schema.maxLength) });
-    if (schema.default !== undefined) node.value = schema.type === 'string' ? defaultText : JSON.stringify(schema.default);
-    read = () => {
-      if (!node.value) return undefined;
-      if (schema.type === 'string') return node.value;
-      try { return JSON.parse(node.value); }
-      catch { throw new Error(tr("Проверьте формат JSON в поле «{0}»", label)); }
-    };
-  }
-  const label = (typeof schema.title === 'string' && schema.title) || (Object.hasOwn(labels, name) ? labels[name] : name);
-  return { node, file, read, field: field(label, node) };
-}
-
-function fileData(file, uploadMax) {
-  if (!file.size || file.size > uploadMax) {
-    throw new Error(tr("Файл MCP должен быть непустым и не больше {0} МиБ", uploadMax / (1024 * 1024)));
+function fileData(file, limit) {
+  if (!(file instanceof File)) return { media_id: file.mediaId };
+  if (!file.size || file.size > limit) {
+    throw new Error(tr("Файл MCP должен быть непустым и не больше {0} МиБ", limit / (1024 * 1024)));
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -76,9 +28,8 @@ function fileData(file, uploadMax) {
 function showResult(host, output, urls) {
   for (const url of urls.splice(0)) URL.revokeObjectURL(url);
   host.replaceChildren();
-  if (!output) return;
-  if (output.text) host.append(el('pre', {}, output.text));
-  for (const result of output.files || []) {
+  if (output?.text) host.append(el('pre', {}, output.text));
+  for (const result of output?.files || []) {
     let url = result.url;
     if (result.base64) {
       try {
@@ -91,58 +42,65 @@ function showResult(host, output, urls) {
     const type = result.mime.split('/')[0];
     const preview = type === 'image' ? el('img', { src: url, alt: result.name || tr("Результат MCP") }) :
       ['audio', 'video'].includes(type) ? el(type, { src: url, controls: true, preload: 'metadata', playsinline: true }) : null;
-    host.append(el('div', {}, preview, el('a', { class: 'btn', href: url, download: result.name || '' }, tr("Скачать"))));
+    host.append(el('div', {}, preview, el('a', { class: 'btn btn-sm', href: url, download: result.name || '' }, tr("Скачать"))));
   }
 }
 
-function openTools(view, section, { items: servers, max_upload_bytes: uploadMax }, refresh) {
+/** The section owns its controls. MCP receives only the arguments from those controls that the tool declares. */
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText }) {
   const base = `/api/mcp-tools/${section}`;
-  const options = servers.flatMap(server => (server.tools || []).map(tool => ({ server, tool })));
-  const choose = input('select', { id: 'section-mcp-tool' }, ...options.map(({ server, tool }, index) =>
-    el('option', { value: index }, `${tool.title || labels[tool.name] || tool.name} · ${server.name}`)));
-  const parameters = el('div'), description = el('p', { class: 'muted' });
-  const form = el('form', { id: 'section-mcp-form' }, field(tr("Инструмент MCP"), choose), description, parameters);
+  const controller = new AbortController();
+  const urls = [];
+  const options = new Map();
+  let limit, timer, rendered, polling = false;
+  const control = el('select', { id: 'section-mcp-tool', class: 'chip mcp-tool', hidden: true, 'aria-label': tr("Инструмент MCP") });
   const status = el('p', { class: 'status', 'aria-live': 'polite' });
   const result = el('div', { class: 'mcp-result', id: 'section-mcp-result' });
-  const run = button(tr("Запустить"), { type: 'submit', class: 'btn btn-accent', form: form.id, id: 'section-mcp-run' });
-  const retry = button(tr("Обновить"), { hidden: true }, () => { retry.hidden = true; poll(); });
-  const unavailable = servers.filter(server => server.unavailable).map(server => server.name);
-  const reload = button(tr("Проверить соединение"), { hidden: !unavailable.length }, () => { dialog.close(); refresh(true); });
-  const signal = new AbortController();
-  const urls = [];
-  let controls = [], timer, painted, polling = false;
-  let record = records.get(section) || {};
-  const dialog = openDialog(view, { id: 'section-mcp-dialog', title: tr("Инструменты MCP"),
-    body: [unavailable.length ? el('p', { class: 'error' }, tr("MCP недоступен: {0}", unavailable.join(', '))) : null,
-      options.length ? form : null, status, result], actions: [reload, retry, ...(options.length ? [run] : [])],
-    cancelText: tr("Закрыть") });
+  const retry = button(tr("Обновить"), { class: 'btn btn-sm', hidden: true }, () => {
+    record().retry = false;
+    poll();
+  });
+  const dismiss = button(tr("Закрыть"), { class: 'btn btn-sm', hidden: true }, clear);
+  const output = el('div', { class: 'mcp-run', hidden: true }, status, result, retry, dismiss);
+  const record = () => records.get(section);
+  const picked = () => options.get(control.value);
+  const busy = () => !!(record()?.starting || record()?.job);
+  const has = key => Object.hasOwn(picked()?.tool.schema.properties || {}, key);
+  const hasFile = key => Object.hasOwn(picked()?.tool.files || {}, key);
 
   function paint() {
-    if (!dialog.open) return;
-    record = records.get(section) || record;
-    const busy = !!(record.job || record.starting);
-    choose.disabled = run.disabled = busy;
-    for (const control of controls) control.node.disabled = busy;
-    status.classList.toggle('error', !!record.error);
-    status.textContent = record.error || (busy ? tr("В работе") : record.output ? tr("Готово") : '');
-    if (painted !== record.output) {
-      painted = record.output;
-      showResult(result, record.output, urls);
+    if (controller.signal.aborted) return;
+    const current = record();
+    const active = busy();
+    control.disabled = active;
+    retry.hidden = !current?.retry;
+    dismiss.hidden = active || !(current?.output || current?.error);
+    output.hidden = !active && !(current?.error || current?.output);
+    status.classList.toggle('error', !!current?.error);
+    status.textContent = current?.error || (active ? tr("В работе") : current?.output ? tr("Готово") : '');
+    if (rendered !== current?.output) {
+      rendered = current?.output;
+      if (onText) onText(rendered?.text || '');
+      showResult(result, onText && rendered ? { files: rendered.files } : rendered, urls);
     }
+    onBusy?.();
+    clearTimeout(timer);
+    if (current?.job && !polling && !current.retry) timer = setTimeout(poll, 3500);
   }
 
-  function pollLater() {
-    clearTimeout(timer);
-    if (dialog.open && record.job && !polling && retry.hidden) timer = setTimeout(poll, 3500);
+  function clear() {
+    if (busy()) return;
+    records.delete(section);
+    paint();
   }
 
   async function poll() {
-    if (!record.job || polling || !dialog.open) return;
+    const current = record();
+    if (!current?.job || polling || controller.signal.aborted) return;
     polling = true;
-    const current = record;
     try {
-      const reply = await api('POST', `${base}/status`, { ticket: current.job }, { signal: signal.signal });
-      if (!dialog.open) return;
+      const reply = await api('POST', `${base}/status`, { ticket: current.job }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       current.error = '';
       if (!reply.active) {
         current.job = null;
@@ -150,89 +108,87 @@ function openTools(view, section, { items: servers, max_upload_bytes: uploadMax 
         if (!current.error) current.output = reply;
       }
     } catch (err) {
-      if (!dialog.open) return;
+      if (controller.signal.aborted) return;
       current.error = words(err);
       if (err.status === 404) current.job = null;
-      else retry.hidden = false;
+      else current.retry = true;
     } finally {
       polling = false;
       paint();
-      pollLater();
     }
   }
 
-  function fields() {
-    const picked = options[Number(choose.value)];
-    if (!picked) return;
-    const { tool } = picked;
-    description.textContent = tool.description;
-    description.hidden = !tool.description;
-    controls = Object.entries(tool.schema.properties || {}).filter(([name, schema]) =>
-      schema && typeof schema === 'object' && name !== 'wait_seconds').map(([name, schema]) =>
-      fieldControl(name, schema, tool.schema.required?.includes(name), Object.hasOwn(tool.files, name) && tool.files[name]));
-    parameters.replaceChildren(...controls.map(control => control.field));
-  }
-
-  choose.addEventListener('change', fields);
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
-    if (record.job || record.starting || !options.length) return;
-    const { server, tool } = options[Number(choose.value)];
-    const current = record = { starting: true };
+  async function run(values, { files = {}, voiceId } = {}) {
+    const choice = picked();
+    if (!choice || busy()) return false;
+    const { server, tool } = choice;
+    const current = { starting: true, key: control.value };
     records.set(section, current);
     paint();
     try {
-      const values = controls.map(control => [control, control.read()]).filter(([, value]) => value !== undefined);
-      const args = Object.fromEntries(values.filter(([control]) => !control.file).map(([control, value]) => [control.node.name, value]));
-      const files = Object.fromEntries(await Promise.all(values.filter(([control]) => control.file).map(async ([control, value]) =>
-        [control.node.name, await fileData(value, uploadMax)])));
-      const reply = await api('POST', `${base}/servers/${server.id}/run`, { tool: tool.name, arguments: args, files });
+      const args = Object.fromEntries(Object.entries(values).filter(([key, value]) => has(key) && value !== undefined));
+      const sources = Object.entries(files).filter(([key, value]) => hasFile(key) && value);
+      const supplied = new Set([...Object.keys(args), ...sources.map(([key]) => key)]);
+      if (voiceId) ['reference_artifact_id', 'reference_text'].forEach(key => supplied.add(key));
+      const missing = tool.schema.required?.find(key => !supplied.has(key));
+      if (missing) throw new Error(tr("Для MCP заполните поле «{0}»", tool.schema.properties[missing].title || missing));
+      const inputs = Object.fromEntries(await Promise.all(sources.map(async ([key, value]) => [key, await fileData(value, limit)])));
+      const reply = await api('POST', `${base}/servers/${server.id}/run`, { tool: tool.name, arguments: args, files: inputs,
+        ...(voiceId ? { voice_id: voiceId } : {}) });
       if (reply.job) current.job = reply.job;
-      else if (records.get(section) === current) current.output = reply;
-      parameters.querySelectorAll('input[type=file]').forEach(node => { node.value = ''; });
+      else current.output = reply;
+      return true;
     } catch (err) {
       current.error = words(err);
+      return false;
     } finally {
       current.starting = false;
-      document.dispatchEvent(new Event('studio-mcp-result'));
-    }
-  });
-
-  const update = () => { paint(); pollLater(); };
-  document.addEventListener('studio-mcp-result', update, { signal: signal.signal });
-  function dispose() {
-    signal.abort();
-    clearTimeout(timer);
-    for (const url of urls.splice(0)) URL.revokeObjectURL(url);
-    if (dialog.open) dialog.close();
-  }
-  dialog.addEventListener('close', dispose, { once: true });
-  fields();
-  update();
-  return dispose;
-}
-
-export function mountMcpTools(view, section) {
-  if (!sections.has(section)) return;
-  const head = view.querySelector('header.head');
-  if (!head) return;
-  const controller = new AbortController();
-  let catalog, dispose;
-  const launch = button('MCP', { id: 'section-mcp', 'aria-haspopup': 'dialog', title: tr("Инструменты MCP") },
-    () => { if (!view.querySelector('#section-mcp-dialog[open]')) dispose = openTools(view, section, catalog, load); });
-  const bar = el('div', { class: 'mcp-tools-bar', hidden: true }, launch);
-  head.after(bar);
-  async function load(reopen = false) {
-    try {
-      const reply = await api('GET', `/api/mcp-tools/${section}`, undefined, { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      catalog = reply;
-      bar.hidden = !catalog.items.length && !records.has(section);
-      if (reopen && !bar.hidden) launch.click();
-    } catch {
-      // Discovery may fail independently of the section and its normal connection.
+      document.dispatchEvent(new Event(`studio-mcp-${section}`));
     }
   }
-  load();
-  return () => { controller.abort(); dispose?.(); };
+
+  async function load() {
+    let catalog;
+    try { catalog = await api('GET', base, undefined, { signal: controller.signal }); }
+    catch { return; }
+    if (controller.signal.aborted) return;
+    limit = catalog.max_upload_bytes;
+    const allowed = new Set(fields);
+    for (const server of catalog.items) for (const tool of server.tools || []) {
+      if (fileRequired && !Object.hasOwn(tool.files, fileRequired)) continue;
+      if (!(tool.schema.required || []).every(key => allowed.has(key) || Object.hasOwn(tool.files, key))) continue;
+      options.set(`${server.id}:${tool.name}`, { server, tool });
+    }
+    if (!options.size) return;
+    const label = tool => tool.title || (Object.hasOwn(imageNames, tool.name) ? imageNames[tool.name] :
+      tool.name === 'video_estimate' ? tr("Оценить время генерации") : '');
+    control.append(el('option', { value: '', disabled: !native }, tr("Студия")), ...[...options].map(([key, { server, tool }]) =>
+      el('option', { value: key }, ['MCP', server.name, label(tool)].filter(Boolean).join(' · '))));
+    const last = record()?.key;
+    control.value = options.has(last) ? last : native ? '' : options.keys().next().value;
+    control.hidden = false;
+    onChange?.();
+    paint();
+  }
+
+  control.addEventListener('change', () => onChange?.());
+  document.addEventListener(`studio-mcp-${section}`, paint, { signal: controller.signal });
+  document.addEventListener('studio-locked', paint, { signal: controller.signal });
+  queueMicrotask(() => { paint(); load(); });
+  return { control, output, has, hasFile, run, clear,
+    canClone() {
+      const engines = picked()?.tool.schema.properties?.engine?.enum;
+      return hasFile('reference_artifact_id') && has('reference_text') && Array.isArray(engines) && engines.includes('clone');
+    },
+    useNative() {
+      if (!native) return;
+      control.value = '';
+      onChange?.();
+    },
+    get tool() { return picked()?.tool.name; }, get busy() { return busy(); },
+    destroy() {
+      controller.abort();
+      clearTimeout(timer);
+      for (const url of urls.splice(0)) URL.revokeObjectURL(url);
+    } };
 }

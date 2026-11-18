@@ -32,6 +32,7 @@ import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
+import { sectionMcp } from './mcp-sections.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -62,6 +63,7 @@ export function asText(segments) {
 }
 
 function build(view, ctx) {
+  let uploading = false;
   let editing = null;          // { id, drafts: Map номер → текст } — черновик правки выбранной записи
   let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
   let busy = null;             // блок «идёт» выбранной записи (feed.busyBlock): опрос меняет в нём только текст
@@ -79,7 +81,7 @@ function build(view, ctx) {
   const { select, refresh } = records;
 
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT });
-  const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add' }, icon('plus'), tr("Загрузить запись"), input);
+  const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"), input);
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Записи") });
   // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
@@ -87,14 +89,16 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Записи"),
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
-  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'transcribe-upload' }, icon('plus'), tr("Загрузить запись"));
+  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'transcribe-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"));
   upload.addEventListener('click', () => input.click());
-  const toolbar = el('div', { class: 'split-toolbar' }, toggle, ...(ctx.hint ? [] : [upload]));
+  const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
+  const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
   const title = el('h1', {}, NAMES.transcribe);
   const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
-  const main = el('section', { class: 'split-main' }, head, toolbar, ctx.hint ? ctx.hint('hint-bar') : null, error, body);
+  const nativeHint = ctx.hint?.('hint-bar');
+  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, mcp.output, body);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
 
@@ -369,14 +373,30 @@ function build(view, ctx) {
   }
 
   /* загрузка */
+  function paintMcp() {
+    add.hidden = !mcp.control.hidden || !!ctx.hint;
+    upload.hidden = !!ctx.hint && !mcp.tool;
+    if (nativeHint && mcp.tool) {
+      nativeHint.hidden = true;
+      if (!upload.parentNode) {
+        aside.prepend(add, progress);
+        toolbar.append(upload);
+      }
+    }
+  }
+
+  function paintBusy() {
+    input.disabled = upload.disabled = uploading || mcp.busy;
+  }
+
   function send(file) {
     if (file.size > UPLOAD_MAX) {
       error.textContent = tr("Запись больше 200 МиБ");
       return;
     }
     error.textContent = '';
-    input.disabled = true;
-    upload.disabled = true;
+    uploading = true;
+    paintBusy();
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/transcripts');
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
@@ -386,8 +406,8 @@ function build(view, ctx) {
       if (event.lengthComputable) progress.textContent = tr("Загружаю запись · {0}%", Math.round(event.loaded * 100 / event.total));
     });
     xhr.addEventListener('loadend', async () => {
-      input.disabled = false;
-      upload.disabled = false;
+      uploading = false;
+      paintBusy();
       progress.textContent = '';
       let answer = null;
       try {
@@ -417,7 +437,10 @@ function build(view, ctx) {
   input.addEventListener('change', () => {
     const file = input.files[0];
     input.value = '';
-    if (file) send(file);
+    if (!file || input.disabled) return;
+    error.textContent = '';
+    if (mcp.tool) mcp.run({}, { files: { artifact_id: file } });
+    else send(file);
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
@@ -437,6 +460,7 @@ function build(view, ctx) {
   return {
     follow,
     destroy() {
+      mcp.destroy();
       records.stop();
     },
   };

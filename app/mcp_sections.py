@@ -15,11 +15,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 import clock
 import forms
+import images
 import mcp_client as mcp
 import media
 import security
 import state
 import upstream
+import voices
 
 router = APIRouter(prefix="/api/mcp-tools")
 TOOLS = {
@@ -102,7 +104,8 @@ async def catalog(section: str, request: Request):
 
 
 class FileIn(BaseModel):
-    data: str
+    data: str | None = None
+    media_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
     mime_type: str = Field(default="", max_length=100)
     name: str = Field(default="", max_length=255)
 
@@ -111,6 +114,7 @@ class RunIn(BaseModel):
     tool: str = Field(max_length=128)
     arguments: dict = Field(default_factory=dict, max_length=128)
     files: dict[str, FileIn] = Field(default_factory=dict, max_length=1)
+    voice_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
 
 
 def ticket(session: mcp.Session, section: str, kind: str, *payload) -> str:
@@ -203,10 +207,27 @@ def present(session, section, result):
     return {"text": clean_text(text), "files": files}
 
 
+async def upload_artifact(session, data, mime):
+    reply = await call(session, "artifact_upload", {"data_base64": base64.b64encode(data).decode(), "mime_type": mime})
+    item = reply.get("structuredContent")
+    aid = item.get("id") if isinstance(item, dict) else None
+    if not isinstance(aid, str) or not ARTIFACT_ID.fullmatch(aid):
+        raise mcp.refused("MCP не вернул идентификатор файла")
+    return aid
+
+
 async def upload(session, kind, file):
+    if file.media_id is not None:
+        if kind != "image" or file.data is not None:
+            raise mcp.refused("Выберите одно исходное фото", "invalid", 422)
+        try:
+            data = await forms.photo(session.uid, None, file.media_id)
+        except forms.UploadError as exc:
+            raise mcp.refused(str(exc), "invalid", exc.status) from None
+        return await upload_artifact(session, data, "image/png")
     encoded = file.data
     try:
-        data = base64.b64decode(encoded, validate=True)
+        data = base64.b64decode(encoded or "", validate=True)
     except (ValueError, UnicodeError):
         raise mcp.refused("Неверные данные файла MCP", "invalid", 422) from None
     if not data or len(data) > UPLOAD_MAX:
@@ -216,17 +237,25 @@ async def upload(session, kind, file):
             data = await asyncio.to_thread(forms.normalize_image, data)
         except forms.UploadError as exc:
             raise mcp.refused(str(exc), "invalid", exc.status) from None
-        encoded, mime = base64.b64encode(data).decode(), "image/png"
+        mime = "image/png"
     else:
         mime = forms.audio_type(file.mime_type, file.name)
         if mime not in INLINE_MIME:
             raise mcp.refused("Выберите звуковой файл MCP", "invalid", 415)
-    reply = await call(session, "artifact_upload", {"data_base64": encoded, "mime_type": mime})
-    item = reply.get("structuredContent")
-    aid = item.get("id") if isinstance(item, dict) else None
-    if not isinstance(aid, str) or not ARTIFACT_ID.fullmatch(aid):
-        raise mcp.refused("MCP не вернул идентификатор файла")
-    return aid
+    return await upload_artifact(session, data, mime)
+
+
+async def voice_arguments(session, section, tool, voice_id, files):
+    props = tool["schema"].get("properties", {})
+    engine = props.get("engine", {}).get("enum")
+    if (section != "speech" or files or "reference_artifact_id" not in tool["files"] or "reference_text" not in props
+            or not isinstance(engine, list) or "clone" not in engine):
+        raise mcp.refused("Инструмент MCP не принимает образец голоса", "invalid", 422)
+    audio, text = await voices.reference(session.uid, voice_id)
+    if not audio or len(audio) > UPLOAD_MAX:
+        raise mcp.refused("Образец голоса превышает предел MCP", "too_big", 413)
+    aid = await upload_artifact(session, audio, "audio/wav")
+    return {"engine": "clone", "reference_artifact_id": aid, "reference_text": text}
 
 
 @router.post("/{section}/servers/{sid}/run")
@@ -249,8 +278,14 @@ async def run(section: str, sid: int, request: Request):
         args = body.arguments
         if not body.files.keys() <= tool["files"].keys():
             raise mcp.refused("Инструмент не принимает этот файл MCP", "invalid", 422)
-        for key, file in body.files.items():
-            args[key] = await upload(session, tool["files"][key], file)
+        if body.voice_id:
+            args.update(await voice_arguments(session, section, tool, body.voice_id, body.files))
+            args.pop("voice", None)
+        else:
+            for key, file in body.files.items():
+                args[key] = await upload(session, tool["files"][key], file)
+        if body.tool in {"image_generate", "image_edit"} and isinstance(args.get("model"), str):
+            args["model"] = images.MODELS.get(args["model"], args["model"])
         result = await call(session, body.tool, args)
         data = result.get("structuredContent")
         jid = data.get("id") if isinstance(data, dict) else None

@@ -18,6 +18,7 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
+import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { el, openDialog, words } from './ui.js';
 import { timeOnly } from './time.js';
@@ -34,6 +35,8 @@ function build(view, ctx) {
   let links = [];
   let voices = [];
   let editing = null;
+  let sending = false;
+  let sampleId = '', serviceVoice;
   let shownChat = null;
   let alive = true;
   const cards = new Map();
@@ -73,10 +76,13 @@ function build(view, ctx) {
   const editNote = el('p', { class: 'muted small', id: 'speech-edit-note', hidden: true }, tr("Изменение записи"));
   const cancelEdit = el('button', { type: 'button', class: 'btn btn-sm', id: 'speech-edit-cancel', hidden: true },
     tr("Отменить изменение"));
+  const mcp = sectionMcp('speech', { native: !ctx.hint, fields: ['text', 'voice', 'model', 'engine', 'reference_text'],
+    onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
-  const form = el('form', { class: 'composer', id: 'speech-composer' }, editNote, textBox.box, textBox.error, hint,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, voiceBox, count, cancelEdit), go));
-  const main = el('section', { class: 'split-main' }, head, toolbar, error, body, ctx.hint ? ctx.hint('hint-bar') : form);
+  const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, hint,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, voiceBox, count, cancelEdit), go));
+  const nativeHint = ctx.hint?.('hint-bar');
+  const main = el('section', { class: 'split-main' }, head, toolbar, error, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
   const draft = sectionDraft('speech', text);
@@ -97,21 +103,48 @@ function build(view, ctx) {
 
   function paintVoice() {
     const { kind } = chosen();
+    const active = !!mcp.tool;
+    const previous = voiceBox.querySelector('#chip-voice');
+    if (previous?.tagName === 'SELECT') sampleId = previous.value;
+    if (previous?.tagName === 'INPUT') serviceVoice = previous.value;
     hint.hidden = true;
-    if (kind === 'srvllm') {
+    const clone = active && mcp.canClone() && !!voices.length;
+    voiceBox.hidden = active && !mcp.has('voice') && !clone;
+    if (active ? clone && (kind === 'srvllm' || !mcp.has('voice')) : kind === 'srvllm') {
       const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': tr("Голос") },
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
+      if (voices.some(v => v.id === sampleId)) pick.value = sampleId;
       voiceBox.replaceChildren(pick);
-      if (!voices.length) {
+      if (active) {
+        hint.textContent = tr("Выбранный образец голоса будет отправлен на MCP-сервер.");
+        hint.hidden = false;
+      } else if (!voices.length) {
         hint.replaceChildren(tr("Голосов пока нет — добавьте голос в настройках раздела «Озвучка»: "),
           el('a', { href: '#/settings/speech' }, tr("открыть настройки")));
         hint.hidden = false;
       }
     } else {
       const options = el('datalist', { id: 'service-voices' }, ...SERVICE_VOICES.map((v) => el('option', { value: v })));
-      voiceBox.replaceChildren(el('input', { class: 'chip', id: 'chip-voice', list: 'service-voices', value: 'alloy',
+      voiceBox.replaceChildren(el('input', { class: 'chip', id: 'chip-voice', list: 'service-voices',
+        value: serviceVoice || (active ? '' : 'alloy'), placeholder: tr("Голос сервиса"),
         maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' }), options);
     }
+  }
+
+  function paintMcp() {
+    const active = !!mcp.tool;
+    if (active && editing) endEdit();
+    form.hidden = !!ctx.hint && !active;
+    if (nativeHint) {
+      nativeHint.hidden = active;
+      if (active && !form.parentNode) nativeHint.after(form);
+    }
+    modelPick.hidden = modelPick.options.length < 2 || (active && !mcp.has('model'));
+    paintVoice();
+  }
+
+  function paintBusy() {
+    go.disabled = fresh.disabled = cancelEdit.disabled = sending || mcp.busy;
   }
 
   async function loadChoices() {
@@ -124,8 +157,7 @@ function build(view, ctx) {
         models.map((m) => el('option', { value: `${c.id}:${m}` }, `${modelLabel(m)} · ${c.name}`)));
       modelPick.replaceChildren(...options);
       if (section.default) modelPick.value = `${section.default.connection_id}:${section.default.model}`;
-      modelPick.hidden = options.length < 2;
-      paintVoice();
+      paintMcp();
     } catch (err) {
       error.textContent = words(err);
     }
@@ -227,7 +259,8 @@ function build(view, ctx) {
 
   async function startEdit(item) {
     await choicesReady;
-    if (!alive || records.current?.id !== item.chat_id || go.disabled || !voiceBox.querySelector('#chip-voice')) return;
+    if (!alive || ctx.hint || records.current?.id !== item.chat_id || go.disabled || !voiceBox.querySelector('#chip-voice')) return;
+    mcp.useNative();
     if (!editing) editing = { draft: text.value, model: modelPick.value,
       voice: voiceBox.querySelector('#chip-voice').value };
     editing.id = item.id;
@@ -339,6 +372,7 @@ function build(view, ctx) {
   cancelEdit.addEventListener('click', () => endEdit());
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (go.disabled) return;
     const value = text.value.trim();
     const voiceField = voiceBox.querySelector('#chip-voice');
     const voice = voiceField ? voiceField.value.trim() : '';
@@ -346,20 +380,29 @@ function build(view, ctx) {
       error.textContent = tr("Напишите текст");
       return;
     }
-    if (!voice) {
+    if (!voice && !mcp.tool) {
       error.textContent = tr("Выберите голос");
       return;
     }
     error.textContent = '';
-    go.disabled = true;
-    fresh.disabled = true;
-    cancelEdit.disabled = true;
+    sending = true;
+    paintBusy();
     const raw = text.value;
     const edited = editing?.id;
     const cid = records.current?.id;
     const navigation = following;
     try {
       const { connection_id: connectionId, model } = chosen();
+      if (mcp.tool) {
+        const voiceId = voiceField?.tagName === 'SELECT' && mcp.canClone() ? voice : undefined;
+        const ok = await mcp.run({ text: value, model: model || undefined,
+          voice: !voiceId && !voiceBox.hidden && voice ? voice : undefined }, { voiceId });
+        if (ok) {
+          draft.sent(raw);
+          if (alive && text.value === raw) setText('');
+        }
+        return;
+      }
       const created = await api(edited ? 'PATCH' : 'POST', edited ? `/api/speeches/${edited}` : '/api/speeches', { text: value, voice,
         ...(cid ? { chat_id: cid } : {}),
         ...(model ? { connection_id: connectionId, model } : {}) });
@@ -377,9 +420,8 @@ function build(view, ctx) {
     } catch (err) {
       error.textContent = words(err);
     } finally {
-      go.disabled = false;
-      fresh.disabled = false;
-      cancelEdit.disabled = false;
+      sending = false;
+      paintBusy();
     }
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
@@ -406,6 +448,7 @@ function build(view, ctx) {
     follow,
     destroy() {
       alive = false;
+      mcp.destroy();
       following += 1;
       if (editing) setText(editing.draft);
       draft.save();

@@ -28,6 +28,7 @@ import { kick } from './jobs.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
+import { sectionMcp } from './mcp-sections.js';
 import { button, el, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
 import { viewerNavigation } from './viewer-navigation.js';
@@ -116,24 +117,41 @@ function build(view, ctx) {
     title: tr("Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с") }, tr("плавно"));
   // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
   const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': tr("Модель"), hidden: true });
-  function isH3() { return modelPick.value.split(':').slice(1).join(':') === 'h3'; }
+  function isH3() { return !mcp.tool && modelPick.value.split(':').slice(1).join(':') === 'h3'; }
   function paintModel() {
-    chipSmooth.hidden = isH3();
+    const active = !!mcp.tool;
+    form.hidden = !!ctx.hint && !active;
+    if (nativeHint) {
+      nativeHint.hidden = active;
+      if (active && !form.parentNode) nativeHint.after(form);
+    }
+    modelPick.hidden = modelPick.options.length < 2 || (active && !mcp.has('model'));
+    chipSeconds.hidden = active && !mcp.has('seconds');
+    qualityWrap.hidden = active && !mcp.has('quality');
+    pick.hidden = active && !mcp.hasFile('artifact_id');
+    sourceBox.hidden = !source || pick.hidden;
+    photoContext.hidden = pick.hidden || !photoPrompt.value;
+    chipSmooth.hidden = isH3() || (active && !mcp.has('smooth'));
     chipSeconds.title = isH3() ? tr("H3: 5 с, нативный размер, 24 кадра/с") : tr("Длительность: 1–30 с");
     seconds.readOnly = isH3();
     chipQuality.disabled = isH3();
     qualityPopup.close();
     if (isH3()) seconds.value = '5';
     paintQuality();
+    paintGo();
   }
   modelPick.addEventListener('change', paintModel);
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, tr("Оживить"));
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
+  const mcp = sectionMcp('video', { native: !ctx.hint, fields: ['prompt', 'seconds', 'quality', 'smooth', 'model'],
+    onChange: paintModel, onBusy: paintGo });
   const promptBox = fieldBox(prompt, { attach: pick });
-  const form = el('form', { class: 'composer', id: 'video-composer' }, sourceBox, photoContext, promptBox.box, promptBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick, chipSeconds,
-      el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu), chipSmooth), go));
-  const root = el('div', { class: 'video' }, head, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
+  const qualityWrap = el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu);
+  const form = el('form', { class: 'composer', id: 'video-composer', hidden: !!ctx.hint }, sourceBox, photoContext, promptBox.box, promptBox.error,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, chipSeconds,
+      qualityWrap, chipSmooth), go));
+  const nativeHint = ctx.hint?.('hint-bar');
+  const root = el('div', { class: 'video' }, head, feedBox, error, mcp.output, nativeHint || form,
     selection.bar);
   view.append(root);
   const draft = sectionDraft('video', prompt);
@@ -201,20 +219,24 @@ function build(view, ctx) {
   }
 
   /* фото-источник */
+  function paintGo() {
+    go.disabled = submitting || loadingSource || mcp.busy;
+    go.textContent = loadingSource ? tr("Перенос фото…") : mcp.tool === 'video_estimate' ? tr("Оценить") : tr("Оживить");
+  }
+
   function setSource(next) {
     sourceVersion += 1;
     loadingSource = false;
-    go.disabled = submitting;
-    go.textContent = tr("Оживить");
+    paintGo();
     error.textContent = '';
     if (source && source.file) URL.revokeObjectURL(source.url);
     source = next;
     photoPrompt.value = source?.photoPrompt || '';
-    photoContext.hidden = !photoPrompt.value;
+    photoContext.hidden = pick.hidden || !photoPrompt.value;
     photoContext.open = false;
     paintPromptHint();
     pick.classList.toggle('on', !!source);
-    sourceBox.hidden = !source;
+    sourceBox.hidden = !source || pick.hidden;
     chosen.hidden = !source;
     if (source) {
       sourceImg.src = source.url;
@@ -239,8 +261,7 @@ function build(view, ctx) {
       return;
     }
     loadingSource = true;
-    go.disabled = true;
-    go.textContent = tr("Перенос фото…");
+    paintGo();
     const version = sourceVersion;
     try {
       const item = await api('GET', `/api/images/${encodeURIComponent(photoId)}`);
@@ -252,8 +273,7 @@ function build(view, ctx) {
     } finally {
       if (alive && version === sourceVersion) {
         loadingSource = false;
-        go.disabled = submitting;
-        go.textContent = tr("Оживить");
+        paintGo();
       }
     }
   }
@@ -548,7 +568,6 @@ function build(view, ctx) {
       models.map((m) => [`${c.id}:${m}`, `${modelLabel(m)} · ${c.name}`]));
     modelPick.replaceChildren(...options.map(([value, label]) => el('option', { value }, label)));
     if (section.default) modelPick.value = `${section.default.connection_id}:${section.default.model}`;
-    modelPick.hidden = options.length < 2;
     paintModel();
   }, () => {});
 
@@ -618,44 +637,47 @@ function build(view, ctx) {
 
   /* ролик */
   function compose() {
-    if (!source) throw new Error(tr("Выберите фото для ролика"));
+    const needSource = !mcp.tool || mcp.hasFile('artifact_id');
+    if (needSource && !source) throw new Error(tr("Выберите фото для ролика"));
     const sec = seconds.value.trim();
-    if (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30) throw new Error(tr("Длительность — целое число секунд от 1 до 30"));
+    if ((!mcp.tool || mcp.has('seconds')) && (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30)) {
+      throw new Error(tr("Длительность — целое число секунд от 1 до 30"));
+    }
     if (isH3() && Number(sec) !== 5) throw new Error(tr("H3: используйте 5 секунд; короткие ролики давали артефакты"));
-    if (source.file && source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
-    const body = new FormData();
-    if (source.file) body.append('image', source.file, source.file.name);
-    else body.append('source_media_id', source.mediaId);
-    const context = photoPrompt.value.trim();
+    if (needSource && source?.file?.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
+    const context = needSource ? photoPrompt.value.trim() : '';
     const motion = prompt.value.trim();
     const text = context ? `Описание исходного фото:\n${context}\n\nДвижение в видео:\n${motion || 'Естественное движение в кадре.'}` : motion;
     if (text.length > PROMPT_MAX) throw new Error(tr("Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото."));
-    body.append('prompt', text);
-    body.append('seconds', String(Number(sec)));
-    body.append('quality', isH3() ? 'native' : quality);
-    body.append('smooth', String(isH3() ? false : smooth));
-    if (modelPick.value) {
-      const [connId, ...rest] = modelPick.value.split(':');
-      body.append('connection_id', connId);
-      body.append('model', rest.join(':'));
-    }
-    return body;
+    const [connId, ...model] = modelPick.value.split(':');
+    return { prompt: text, seconds: Number(sec), quality: isH3() ? 'native' : quality, smooth: !isH3() && smooth,
+      ...(connId ? { connection_id: connId, model: model.join(':') } : {}) };
   }
 
   async function submit() {
-    if (submitting || loadingSource) return;
+    if (submitting || loadingSource || mcp.busy) return;
     error.textContent = '';
-    let body;
+    let values;
     try {
-      body = compose();
+      values = compose();
     } catch (err) {
       error.textContent = words(err);
       return;
     }
     submitting = true;
-    go.disabled = true;
+    paintGo();
     const value = prompt.value;
     try {
+      if (mcp.tool) {
+        if (await mcp.run({ ...values, prompt: values.prompt || undefined }, { files: { artifact_id: source?.file || source } })) {
+          draft.sent(value);
+        }
+        return;
+      }
+      const body = new FormData();
+      if (source.file) body.append('image', source.file, source.file.name);
+      else body.append('source_media_id', source.mediaId);
+      for (const [key, value] of Object.entries(values)) body.append(key, String(value));
       const out = await api('POST', '/api/videos', body);
       draft.sent(value);                            // отправленный промпт черновиком не возвращается
       kick();
@@ -664,7 +686,7 @@ function build(view, ctx) {
       error.textContent = words(err);
     } finally {
       submitting = false;
-      go.disabled = loadingSource;
+      paintGo();
     }
   }
 
@@ -705,6 +727,7 @@ function build(view, ctx) {
     destroy() {
       draft.save();
       alive = false;
+      mcp.destroy();
       sourceVersion += 1;
       selection.destroy();
       clearInterval(tick);

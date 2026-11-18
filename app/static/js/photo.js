@@ -40,6 +40,7 @@ import { createFeed, pageQuery } from './feed.js';
 import { enterSends, fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
+import { sectionMcp } from './mcp-sections.js';
 import { presetChip } from './presets.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
@@ -82,6 +83,7 @@ function build(view, ctx) {
   let choices = [];              // варианты чипа: [ключ, подпись, выбор]
   let size = 'portrait';
   let source = null;             // { file, url } — исходное фото с устройства
+  let mcp;
   let submitting = false;
   let describing = false;
   let translating = null;        // { id, started, timer } — идущий перевод промпта
@@ -137,8 +139,8 @@ function build(view, ctx) {
   const seriesName = el('span', { class: 'chip-name' }, '×1');
   const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series',
     title: tr("Серия: несколько вариантов подряд") }, seriesName);
-  const series = seriesControl({ prefix: 'photo-series', canStrength: () => isLustify() && !!source,
-    canSeed: () => !choice || choice.kind === 'srvllm', from: () => strength.value, onChange: () => {
+  const series = seriesControl({ prefix: 'photo-series', canStrength: () => !mcp?.tool && isLustify() && !!source,
+    canSeed: () => !mcp?.tool && (!choice || choice.kind === 'srvllm'), from: () => strength.value, onChange: () => {
       seriesName.textContent = series ? series.label() : '×1';
       chipSeries.classList.toggle('on', !!(series && series.value()));
     } });
@@ -149,11 +151,15 @@ function build(view, ctx) {
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate', hidden: true }, 'EN');
   const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
+  mcp = sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'model', 'strength', 'n'],
+    onChange: paintSource, onBusy: syncBusy });
   const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
-  const form = el('form', { class: 'composer', id: 'photo-composer' }, sourceBox, promptBox.box, promptBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, chipModel.wrap, chipSize.wrap, chipTranslate,
-      el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu), presets.wrap), go));
-  const root = el('div', { class: 'photo' }, head, status, feedBox, error, ctx.hint ? ctx.hint('hint-bar') : form,
+  const seriesWrap = el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu);
+  const form = el('form', { class: 'composer', id: 'photo-composer', hidden: !!ctx.hint }, sourceBox, promptBox.box, promptBox.error,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, chipModel.wrap, chipSize.wrap, chipTranslate,
+      seriesWrap, presets.wrap), go));
+  const nativeHint = ctx.hint?.('hint-bar');
+  const root = el('div', { class: 'photo' }, head, status, feedBox, error, mcp.output, nativeHint || form,
     selection.bar);
   view.append(root);
   const draft = sectionDraft('photo', prompt);
@@ -267,8 +273,20 @@ function build(view, ctx) {
   }
 
   function paintSource() {
-    sourceBox.hidden = !source;
-    strengthLabel.hidden = !isLustify();
+    const active = !!mcp.tool;
+    const describe = ['image_describe', 'describe_image'].includes(mcp.tool);
+    form.hidden = !!ctx.hint && !active;
+    if (nativeHint) {
+      nativeHint.hidden = active;
+      if (active && !form.parentNode) nativeHint.after(form);
+    }
+    chipPhoto.hidden = active && !mcp.hasFile('artifact_id');
+    sourceBox.hidden = !source || chipPhoto.hidden;
+    strengthLabel.hidden = active ? !mcp.has('strength') : !isLustify();
+    chipModel.wrap.hidden = active && (!mcp.has('model') || !choice);
+    chipSize.wrap.hidden = active && !mcp.has('size');
+    seriesWrap.hidden = active && !mcp.has('n');
+    go.textContent = describe ? tr("Описать фото") : tr("Создать");
     series.refresh();
   }
 
@@ -331,7 +349,7 @@ function build(view, ctx) {
 
   /* занятость: одно задание за раз */
   function syncBusy() {
-    const busy = submitting || describing || !!translating || running.size > 0;
+    const busy = submitting || describing || !!translating || running.size > 0 || mcp.busy;
     for (const b of [go, ...gated]) {
       b.disabled = busy;
       b.title = busy ? tr("Дождитесь конца текущего задания") : '';
@@ -550,6 +568,21 @@ function build(view, ctx) {
 
   function submit(withSource = true) {
     const text = prompt.value.trim();
+    if (withSource && mcp.tool) {
+      error.textContent = '';
+      if (mcp.hasFile('artifact_id') && !source) {
+        error.textContent = tr("Выберите исходное фото");
+        return;
+      }
+      const many = series.value();
+      const raw = prompt.value;
+      mcp.run({ prompt: text || undefined, model: choice?.model, size: SIZES.find(([key]) => key === size)[2],
+        strength: Number(strength.value), n: many?.count || 1 }, { files: { artifact_id: source?.file } }).then(ok => {
+        if (ok) draft.sent(raw);
+        if (ok && many && mcp.has('n')) series.reset();
+      });
+      return;
+    }
     if (!text) {
       error.textContent = tr("Напишите промпт");
       return;
@@ -952,6 +985,7 @@ function build(view, ctx) {
     destroy() {
       draft.save();
       alive = false;
+      mcp.destroy();
       if (shutDescribe) shutDescribe();
       selection.destroy();
       clearInterval(tick);

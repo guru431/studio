@@ -5,9 +5,10 @@ import json
 
 import httpx
 
+import media
 import state
 from conftest import make_user, signin
-from fakes import MP4, PNG_REAL
+from fakes import MP4, PNG_REAL, WAV_FAKE
 from test_mcp import TOKEN, URL, add
 
 JOB = "job_" + "1" * 32
@@ -15,10 +16,20 @@ ARTIFACT = "art_" + "2" * 32
 PATH = f"/artifacts/{ARTIFACT}/content"
 
 
-def service(gateway, *, image=PNG_REAL):
-    tools = {"image_generate": {"prompt": {"type": "string"}},
-             "video_create": {"artifact_id": {"type": "string"}},
-             "artifact_upload": {}, "job_status": {}, "job_result": {}, "internal_action": {}}
+def service(gateway, *, image=PNG_REAL, uploads=False):
+    def params(**types):
+        return {key: {"type": value} for key, value in types.items()}
+
+    video = params(artifact_id="string", prompt="string", seconds="integer", quality="string", smooth="boolean")
+    tools = {"image_generate": (params(prompt="string", size="string", model="string", n="integer"), ["prompt"]),
+             "video_create": (video, ["artifact_id"]), "video_estimate": (video, ["artifact_id"]),
+             "text_translate": (params(text="string", source_lang="string", target_lang="string"),
+                                ["text", "source_lang", "target_lang"]),
+             "speech_synthesize": (params(text="string", voice="string", reference_artifact_id="string", reference_text="string")
+                                   | {"engine": {"type": "string", "enum": ["default", "clone"]}}, ["text"]),
+             **dict.fromkeys(("artifact_upload", "job_status", "job_result", "internal_action"), ({}, []))}
+    if uploads:
+        tools.update(dict.fromkeys(("audio_transcribe", "document_read"), (params(artifact_id="string"), ["artifact_id"])))
     calls = []
     statuses = iter(("running", "completed"))
 
@@ -32,7 +43,7 @@ def service(gateway, *, image=PNG_REAL):
             result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}
         elif method == "tools/list":
             result = {"tools": [{"name": name, "inputSchema": {"type": "object", "properties": props,
-                                                              "required": list(props)}} for name, props in tools.items()]}
+                                                              "required": required}} for name, (props, required) in tools.items()]}
         else:
             name, args = (payload["params"][key] for key in ("name", "arguments"))
             calls.append((name, args))
@@ -42,6 +53,16 @@ def service(gateway, *, image=PNG_REAL):
                 data = {"id": JOB, "status": "queued"}
                 if name == "artifact_upload":
                     data = {"id": ARTIFACT}
+                elif name == "video_estimate":
+                    data = {"text": "Estimated time"}
+                elif name == "text_translate":
+                    data = {"text": "Translated text"}
+                elif name == "speech_synthesize":
+                    data = {"text": "Synthesized speech"}
+                elif name == "audio_transcribe":
+                    data = {"text": "Transcribed audio"}
+                elif name == "document_read":
+                    data = {"text": "Recognized page"}
                 elif name == "job_status":
                     data = {"status": next(statuses)}
                 elif name == "job_result":
@@ -64,7 +85,7 @@ def test_section_tools_discovered_for_owner_and_called_only_in_matching_section(
     sid = add(studio)
     image = PNG_REAL + bytes(1 << 20)  # Inline media can exceed the chat RPC budget.
     calls = service(studio.gw, image=image)
-    for section, names in [("photo", ["image_generate"]), ("video", ["video_create"]), ("speech", [])]:
+    for section, names in [("photo", ["image_generate"]), ("video", ["video_create", "video_estimate"]), ("ocr", [])]:
         reply = studio.c.get(f"/api/mcp-tools/{section}")
         assert reply.status_code == 200
         assert [tool["name"] for server in reply.json()["items"] for tool in server["tools"]] == names
@@ -122,3 +143,45 @@ def test_unavailable_mcp_does_not_hide_other_servers(studio):
     assert [server["id"] for server in reply["items"]] == [sid, other["id"]]
     assert reply["items"][0]["tools"][0]["name"] == "image_generate"
     assert reply["items"][1] == {"id": other["id"], "name": "Offline", "unavailable": True}
+
+
+def test_video_can_use_only_a_readable_photo_from_studio_history(studio):
+    from test_lock_policy import IMAGE, owner
+
+    uid = owner(studio)
+    sid = add(studio)
+    calls = service(studio.gw)
+    source = media.save(uid, PNG_REAL, "image/png", "source.png")
+    state.DB.execute(IMAGE, ("image", uid, "flux", "source", 1))
+    state.DB.execute("UPDATE images SET media_id=? WHERE id='image'", (source,))
+    payload = {"tool": "video_estimate", "files": {"artifact_id": {"media_id": source}}, "arguments": {"seconds": 7}}
+    route = f"/api/mcp-tools/video/servers/{sid}/run"
+    assert studio.c.post(route, json=payload).json()["text"] == "Estimated time"
+    assert calls[0][0] == "artifact_upload"
+    assert calls[1] == ("video_estimate", {"artifact_id": ARTIFACT, "seconds": 7})
+    calls.clear()
+    state.DB.execute("UPDATE users SET screen_lock=1, screen_lock_sections='[\"photo\"]' WHERE id=?", (uid,))
+    state.DB.execute("UPDATE sessions SET seen=NULL")
+    assert studio.c.post(route, json=payload).status_code == 423
+    assert calls == []
+
+
+def test_speech_uses_the_selected_studio_voice_sample(studio):
+    from test_lock_policy import owner
+
+    uid = owner(studio)
+    sid = add(studio)
+    calls = service(studio.gw)
+    sample = media.save(uid, WAV_FAKE, "audio/wav", "sample.wav")
+    vid = "e" * 32
+    state.DB.execute("INSERT INTO voices(id,user_id,name,media_id,ref_text,duration,created) VALUES (?,?,?,?,?,1,1)",
+                     (vid, uid, "Voice sample", sample, "Voice reference text"))
+    route = f"/api/mcp-tools/speech/servers/{sid}/run"
+    payload = {"tool": "speech_synthesize", "arguments": {"text": "Read this"}, "voice_id": vid}
+    assert studio.c.post(route, json=payload).json()["text"] == "Synthesized speech"
+    assert calls[0] == ("artifact_upload", {"data_base64": base64.b64encode(WAV_FAKE).decode(), "mime_type": "audio/wav"})
+    assert calls[1] == ("speech_synthesize", {"text": "Read this", "engine": "clone", "reference_artifact_id": ARTIFACT,
+                                             "reference_text": "Voice reference text"})
+    calls.clear()
+    assert studio.c.post(route, json={**payload, "voice_id": "f" * 32}).status_code == 404
+    assert calls == []
