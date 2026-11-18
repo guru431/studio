@@ -98,3 +98,31 @@ async def mp3_of(parts: list[Path], dst: Path) -> None:
         argv += ["-i", str(part)]
     joined = "".join(f"[{i}:a]" for i in range(len(parts))) + f"concat=n={len(parts)}:v=0:a=1[a]"
     await _run([*argv, "-filter_complex", joined, "-map", "[a]", "-ac", "1", "-c:a", "libmp3lame", "-q:a", "4", str(dst)])
+
+
+async def file_io(fn, *args):
+    """При отмене дождаться закрытия файла в потоке, прежде чем продолжить уборку."""
+    task = asyncio.create_task(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.wait({task})
+            except asyncio.CancelledError:
+                pass
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
+async def remove_temp(*paths: Path) -> None:
+    """Убрать все части, даже если во время уборки пришла ещё одна отмена."""
+    def remove():
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                log.warning("звук: временный файл не удалён (%s)", type(e).__name__)
+
+    await file_io(remove)

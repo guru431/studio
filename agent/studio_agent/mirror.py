@@ -101,7 +101,8 @@ def candidates(config, name: str, repositories: list[str], *, now=time.monotonic
     deadline = now() + DISCOVERY_SEC
     roots = {Path(root["path"]): root for root in projects.list_roots(config)}
     wanted = unicodedata.normalize("NFC", name).casefold()
-    catalog = sorted(projects.catalog(config), key=lambda entry: unicodedata.normalize("NFC", entry[1].name).casefold() != wanted)
+    catalog, complete = projects.scan_catalog(config)
+    catalog.sort(key=lambda entry: unicodedata.normalize("NFC", entry[1].name).casefold() != wanted)
     source_ids = set(repositories)
     items = []
     for row, path in catalog:
@@ -121,7 +122,7 @@ def candidates(config, name: str, repositories: list[str], *, now=time.monotonic
             continue
         root = roots[path.parent]
         items.append({"pid": row["pid"], "root": root["id"], "folder": root["path"], "name": path.name, "match": match})
-    return {"items": items, "complete": True}
+    return {"items": items, "complete": complete}
 
 
 def target(config, root_id, name) -> Path:
@@ -158,6 +159,8 @@ def _stat(path):
 
 def destination(config, root_id, name, *, metadata_only=False):
     path = target(config, root_id, name)
+    if metadata_only:
+        _standalone_git(path)
     data = {"exists": _stat(path) is not None} if metadata_only else scan(path)
     return {**data, "pid": projects.project_id(config, path.parent, path.name), "folder": str(path.parent)}
 
@@ -168,6 +171,12 @@ def _stamp(info):
 
 def _reparse(info):
     return getattr(info, "st_file_attributes", 0) & REPARSE
+
+
+def _standalone_git(root):
+    git = _stat(root / ".git")
+    if git is not None and (not stat.S_ISDIR(git.st_mode) or _reparse(git)):
+        raise Refused("conflict", "Папка использует внешний каталог Git. Выберите основной репозиторий или отдельный клон.")
 
 
 def _safe_link(root, path, link):
@@ -218,6 +227,7 @@ def scan(root: Path) -> dict:
             return {"entries": None}
         if _reparse(info) or not stat.S_ISDIR(info.st_mode) or root.resolve() != root:
             raise Refused("outside", "путь назначения должен быть обычной папкой проекта")
+        _standalone_git(root)
         entries = {}
         folders = [root]
         while folders:
@@ -248,6 +258,7 @@ def read(root, reads):
         raise Refused("invalid")
     payload, total = [], 0
     try:
+        _standalone_git(root)
         for path, offset, count in reads:
             if type(offset) is not int or offset < 0 or type(count) is not int or not 0 <= count <= CHUNK - total:
                 raise Refused("invalid")
@@ -326,7 +337,11 @@ class Transfer:
                             hashlib.file_digest(stream, "sha256").hexdigest() != entry[1]):
                         raise Refused("conflict", "содержимое файла изменилось во время передачи")
                 if os.name != "nt" and entry[3]:
-                    candidate.chmod(0o700)
+                    mode = 0o700
+                    if path in before and before[path][0] == "file" and before[path][3]:
+                        old = files._mutation_path(dest, path)
+                        mode = old.lstat().st_mode & 0o777
+                    candidate.chmod(mode)
                 staged[path] = candidate
             elif entry[0] == "link":
                 if not _safe_link(dest, dest.joinpath(*parts), entry[1]):
@@ -473,7 +488,9 @@ class Transfers:
                     if self.transfer and self.timer:
                         raise Refused("busy", "на компьютер уже передаётся зеркало")
                     self._close()
-                    self.transfer = Transfer(target(config, frame["root"], frame["name"]), session, ticket)
+                    destination = target(config, frame["root"], frame["name"])
+                    _standalone_git(destination)
+                    self.transfer = Transfer(destination, session, ticket)
                     self._renew()
                 else:
                     active = self.transfer

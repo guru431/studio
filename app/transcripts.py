@@ -230,7 +230,15 @@ async def _runner(user_id: int) -> None:
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
-        await job.task
+        job.task.add_done_callback(lambda _, item=job: _finish_unstarted(item))
+        await asyncio.gather(asyncio.shield(job.task), return_exceptions=True)
+
+
+def _finish_unstarted(job: Job) -> None:
+    if JOBS.get(job.id) is job:
+        state_, detail_ = ("cancelled", "отменено") if job.by_user else ("error", INTERRUPTED)
+        _finish(job.id, state_, detail_)
+        JOBS.pop(job.id)
 
 
 async def _recognize(job: Job, path) -> list:
@@ -296,14 +304,10 @@ async def run(job: Job) -> None:
         outcome = ("cancelled", "отменено", {})
         log.info("расшифровка %s: отменена", job.id[:8])
     finally:
-        cleanup = asyncio.create_task(asyncio.to_thread(tmp.unlink, missing_ok=True))
         try:
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    pass                             # поток удаления ещё идёт: итог ждёт его
-            cleanup.result()
+            await audio.remove_temp(tmp)
+        except asyncio.CancelledError:
+            pass
         finally:
             state_, detail_, extra = outcome
             _finish(job.id, state_, detail_, **extra)
@@ -332,9 +336,10 @@ def resume() -> None:
 
 async def _cancel(jobs: list[Job]) -> None:
     for job in jobs:
-        job.by_user = True
-        job.task.cancel()
-    await asyncio.gather(*(j.task for j in jobs), return_exceptions=True)
+        if not job.by_user:
+            job.by_user = True
+            job.task.cancel()
+    await asyncio.gather(*(asyncio.shield(j.task) for j in jobs), return_exceptions=True)
 
 
 def _drop_waiting(user_id: int, tid: "str | None" = None) -> int:
@@ -354,10 +359,14 @@ async def stop_user(user_id: int) -> None:
 
 async def stop() -> None:
     """Остановка службы: задания записывают «прервано» и кончаются до закрытия базы; ждущие остаются."""
-    tasks = list(RUNNERS.values()) + [j.task for j in JOBS.values() if j.task is not None and not j.task.done()]
-    for task in tasks:
+    runners = list(RUNNERS.values())
+    jobs = [j for j in JOBS.values() if j.task is not None and not j.task.done()]
+    for task in runners:
         task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    for job in jobs:
+        if not job.by_user:
+            job.task.cancel()
+    await asyncio.gather(*runners, *(j.task for j in jobs), return_exceptions=True)
     EPOCHS.clear()                                   # ждущие остаются в базе; эпоху им даст `resume`
 
 
@@ -439,6 +448,10 @@ async def upload(request: Request):
     except HTTPException:
         await media.delete_async(uid, source)
         raise
+    return _enqueue(uid, conn, model, name, source)
+
+
+def _enqueue(uid: int, conn, model: str, name: str, source: str) -> dict:
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
                      " created) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
@@ -447,6 +460,28 @@ async def upload(request: Request):
     kick(uid)
     log.info("расшифровка %s: принята", tid[:8])
     return _out(_row(uid, tid))
+
+
+class RetryIn(BaseModel):
+    connection_id: int | None = None
+    model: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/{tid}/retry", status_code=202)
+async def retry(tid: str, body: RetryIn, request: Request):
+    uid = request.state.user.id
+    row = _row(uid, tid)
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "дождитесь завершения расшифровки или отмените её"})
+    conn, model = sections.resolve(uid, "transcribe", body.connection_id, body.model)
+    if _full_queue(uid):
+        raise _busy()
+    source = row["source_media_id"]
+    if not source or not media.alive(uid, source):
+        raise HTTPException(404, media.GONE)
+    operations.check(uid)
+    # Между проверкой файла и новой ссылкой нет await. Старую запись можно удалять отдельно.
+    return _enqueue(uid, conn, model, row["name"], source)
 
 
 @router.get("")

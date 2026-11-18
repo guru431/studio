@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Пакетная генерация картинок через API картинок шлюза srvllm (Lustify или FLUX).
+"""Пакетная генерация картинок через API картинок шлюза srvllm (SNOFS или FLUX).
 
 Аналог studio-batch.ps1 для Linux и macOS: те же параметры (--prompts-file вместо
 -PromptsFile и т. д.), те же имена файлов и manifest.tsv. Нужен только Python 3.8+.
@@ -10,9 +10,9 @@
 Промпты берутся из текстового файла в UTF-8: одна строка — один промпт. Пустые строки и
 строки, начинающиеся с #, пропускаются.
 
-Картинки ложатся в --out-dir под именами вида 003-02_<начало промпта>_s<seed>.png, рядом —
-manifest.tsv (номер, файл, seed, размер, модель, промпт), чтобы повторить удачную картинку
-тем же seed.
+Картинки ложатся в --out-dir под именами вида 003-02_<начало промпта>_s<seed>.png. К занятому
+имени добавляется -2, -3, … Рядом — manifest.tsv (номер, файл, seed, размер, модель, промпт),
+чтобы повторить удачную картинку тем же seed.
 
 Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
     python3 studio-batch.py --make-local [--vault-path /путь/vault.env] [--gateway-url http://<шлюз>:4000/slot]
@@ -20,10 +20,8 @@ manifest.tsv (номер, файл, seed, размер, модель, промп
 можно переносить на другие компьютеры как есть. Ключ на один запуск — --token (он виден в
 списке процессов).
 
-Карта одна на всех: пока её держит другой потребитель, шлюз ждёт, и первая картинка выходит
-позже. Lustify: первая картинка — около 40 с (подъём модели, gemma4 снимается), дальше ~11 с
-на каждую. FLUX 3: подъём ~30 с, дальше ~25–40 с на картинку (апсемплер промпта в графе), тоже
-снимает gemma4. Шлюз ждёт ответ до 21 мин.
+Карта одна на всех: пока её держит другой потребитель, шлюз ждёт. Первая картинка занимает
+больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин.
 По окончании карта освобождается и возвращается gemma4; --keep-card — оставить карту.
 Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
@@ -42,6 +40,7 @@ Ctrl+C обрывает текущий запрос и тоже освобожд
 """
 import argparse
 import base64
+import errno
 import http.client
 import json
 import os
@@ -107,7 +106,7 @@ def parse_args(argv):
     p.add_argument("--image-path", default="",
                    help="исходное фото PNG/JPEG/WebP до 10 МиБ, одно на все промпты (запрос /images/edits)")
     p.add_argument("--strength", type=bounded(float, 0.05, 1.0), default=0.65,
-                   help="сила изменения Lustify от 0.05 до 1 (по умолчанию 0.65); меньше — ближе к исходнику")
+                   help="сила изменения SNOFS от 0.05 до 1 (по умолчанию 0.65); меньше — ближе к исходнику")
     p.add_argument("--out-dir", default="",
                    help="куда класть картинки; по умолчанию — новая папка studio-<дата-время> в текущем каталоге")
     p.add_argument("--size", choices=["portrait", "square", "landscape"], default="portrait",
@@ -246,6 +245,45 @@ def slug(text):
     return s or "prompt"
 
 
+def write_exclusively(path, content):
+    stream = path.open("xb")
+    try:
+        with stream:
+            stream.write(content)
+    except BaseException:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def write_picture(folder, stem, content):
+    """Готовое имя появляется целиком, если файловая система поддерживает публикацию без замены."""
+    part = folder / f".studio-batch-{uuid.uuid4().hex}.part"
+    write_exclusively(part, content)
+    try:
+        publish = os.rename if os.name == "nt" else os.link
+        file, n = f"{stem}.png", 1
+        while True:
+            path = folder / file
+            try:
+                try:
+                    publish(part, path)
+                except OSError as e:
+                    if os.name == "nt" or e.errno not in (errno.EOPNOTSUPP, errno.ENOSYS, errno.EPERM):
+                        raise
+                    # Например, exFAT на Linux не поддерживает жёстких ссылок.
+                    write_exclusively(path, content)
+            except FileExistsError:
+                n += 1
+                file = f"{stem}-{n}.png"
+            else:
+                return file
+    finally:
+        part.unlink(missing_ok=True)
+
+
 def run(args):
     """Прогон по файлу промптов; возвращает число не вышедших картинок."""
     token = args.token or EMBEDDED_KEY
@@ -272,9 +310,11 @@ def run(args):
     out_dir = Path(args.out_dir or "studio-" + datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = out_dir / "manifest.tsv"
-    if not manifest.exists():
-        with open(manifest, "w", encoding="utf-8", newline="\n") as f:
+    try:
+        with open(manifest, "x", encoding="utf-8", newline="\n") as f:
             f.write("n\tfile\tseed\tsize\tmodel\tprompt\n")
+    except FileExistsError:
+        pass
 
     total = len(prompts) * args.count
     done = failed = 0
@@ -310,8 +350,8 @@ def run(args):
                         raise Fail("в ответе шлюза нет картинки (data[0].b64_json)")
                     # FLUX может не вернуть seed — тогда в manifest запрошенный
                     seed_out = int(item["seed"]) if item.get("seed") is not None else seed
-                    file = f"{p:03d}-{k:02d}_{slug(prompt)}_s{seed_out}.png"
-                    (out_dir / file).write_bytes(base64.b64decode(item["b64_json"]))
+                    stem = f"{p:03d}-{k:02d}_{slug(prompt)}_s{seed_out}"
+                    file = write_picture(out_dir, stem, base64.b64decode(item["b64_json"]))
                     with open(manifest, "a", encoding="utf-8", newline="\n") as f:
                         f.write(f"{p}-{k}\t{file}\t{seed_out}\t{args.size}\t{args.model}\t"
                                 f"{SEPARATORS.sub(' ', prompt)}\n")

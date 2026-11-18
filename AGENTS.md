@@ -40,11 +40,11 @@
 
 - Мост Windows/macOS/Linux для Claude Code, Codex и OpenCode — компонент [agent/](agent/README.md), его правила — [agent/CLAUDE.md](agent/CLAUDE.md).
   Наборы тестов `main` и `agent` объявлены вместе в `local-config/cron/project-registry.json::studio.tests`.
-- Тесты: `.venv/Scripts/python -m pytest -q` (быстрый набор, восемь процессов pytest-xdist; один
+- Тесты: `.venv/Scripts/python -m pytest -q` (быстрый набор, 12 процессов pytest-xdist; один
   тест без параллели — `-n0`), `-m integration` (браузер, PowerShell — одним процессом по очереди),
   `-m manual` (живая приёмка `tests/test_studio_upload_live.py` после выкладки:
-  `STUDIO_ADMIN_LOGIN`, `STUDIO_ADMIN_PASSWORD`, `GATEWAY_KEY_OWNER_IMAGES` из vault через `grep`,
-  генерирует на карте; команда — в CLAUDE.md).
+  рабочие `STUDIO_ADMIN_LOGIN` и `STUDIO_ADMIN_PASSWORD` для приёмки передаются отдельно,
+  `GATEWAY_KEY_OWNER_IMAGES` — из vault; генерирует на карте, команда — в CLAUDE.md).
 - Выкладка: `bash deploy/deploy.sh [--new-secret] [--create-admin]`, профиль `STUDIO_RUNTIME=docker` —
   закоммиченный HEAD на Docker-хост, [compose](deploy/docker/compose.yaml), `studio-docker.service`
   и `studio-backup.timer`; Apache остаётся HTTPS-входом. Прежний systemd-профиль сохранён для отката.

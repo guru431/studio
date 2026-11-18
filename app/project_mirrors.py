@@ -7,6 +7,7 @@ import logging
 import re
 import secrets
 import sqlite3
+from typing import Annotated
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -28,6 +29,7 @@ DISCOVERY_CAP = "project_mirror_discovery"
 SKIP = ["skip", "", 0, 0]
 DIR = ["dir", "", 0, 0]
 SHA256 = re.compile(r"[0-9a-f]{64}")
+EXTERNAL_GIT = "Папка использует внешний каталог Git. Выберите основной репозиторий или отдельный клон."
 TRANSFERS = {}
 RESULTS = {}
 
@@ -42,6 +44,7 @@ class Destination(BaseModel):
 class Sync(BaseModel):
     plan: str = Field(pattern=r"^[0-9a-f]{64}$")
     overwrite: bool = False
+    keep: list[Annotated[int, Field(strict=True, ge=0)]] = Field(default_factory=list, max_length=MAX_ENTRIES)
 
 
 class FileDiff(BaseModel):
@@ -56,8 +59,8 @@ def _digest(value):
     return hashlib.sha256(_json(value).encode("ascii")).hexdigest()
 
 
-async def _body(request, model):
-    raw = await auth.small_body(request, 4096)
+async def _body(request, model, limit=4096):
+    raw = await auth.small_body(request, limit)
     if raw is None:
         raise code._refuse(413, "too_large", "настройки зеркала превышают предел")
     try:
@@ -125,10 +128,19 @@ def _entries(data, *, missing=False):
                  size == 0 and type(mode) is int and mode in (0, 1))
         if not valid:
             raise code._refuse(502, "bridge", "мост вернул неверный список файлов")
+    if ".git" in entries and entries[".git"] != DIR:
+        raise code._refuse(409, "conflict", EXTERNAL_GIT)
     return entries
 
 
-def _plan(source, destination, baseline):
+def _source_entry(new, old):
+    if new is not None and new[0] == "file" and new[3] is None:
+        # Windows не сообщает признак исполнения: сохраняем режим существующего файла POSIX.
+        return [*new[:3], old[3] if old is not None and old[0] == "file" else 0]
+    return new
+
+
+def _plan(source, destination, baseline, *, windows=False):
     target = destination or {}
     previous = baseline or {}
     updates = {}
@@ -145,7 +157,8 @@ def _plan(source, destination, baseline):
                 path = path.rsplit("/", 1)[0]
                 protected.add(path)
     for path in sorted(source.keys() | target.keys()):
-        old, new = target.get(path), source.get(path)
+        old = target.get(path)
+        new = _source_entry(source.get(path), old)
         parent = path
         while parent not in ignored and "/" in parent:
             parent = parent.rsplit("/", 1)[0]
@@ -157,26 +170,79 @@ def _plan(source, destination, baseline):
             continue
         if new is not None:
             updates[path] = new
-        if old is not None and (new is None or old[0] != new[0]):
+        deletion = old is not None and (new is None or old[0] != new[0])
+        if deletion:
             remove.append(path)
         conflict = old != previous.get(path)
         conflicts += int(conflict)
         text = all(entry is None or entry[0] == "file" and entry[2] <= 128 * 1024 for entry in (old, new))
-        changes.append([path, "removed" if new is None else "added" if old is None else "changed", conflict, text])
+        keepable = old is not None and old[0] == "file"
+        change = [path, "removed" if new is None else "added" if old is None else "changed", conflict,
+                  text, keepable, deletion]
+        if windows and (key := path.casefold()) != path:
+            change.append(key)
+        changes.append(change)
     return updates, remove, changes, conflicts, skipped
 
 
-def _portable(entries, platform):
+def _portable(entries, platform, source_platform):
     if platform == "win32":
         folded = set()
-        for path, item in entries.items():
+        for path in entries:
             key = path.casefold()
             if key in folded:
                 raise code._refuse(409, "conflict", "в проекте есть пути, различающиеся только регистром")
             folded.add(key)
+    if platform == "win32" or source_platform == "win32":
+        for path, item in entries.items():
             if item[0] == "file":
-                item[3] = 0
+                entries[path] = [*item[:3], 0 if platform == "win32" else None]
     return entries
+
+
+def _ancestors(path):
+    while "/" in path:
+        path = path.rsplit("/", 1)[0]
+        yield path
+
+
+def _selection(plan, selected, updates, remove):
+    changes = plan["changes"]
+    keys = {change[0]: change[6] for change in changes if len(change) > 6}
+
+    def key(path):
+        return keys.get(path, path)
+
+    keep = set()
+    for index in selected.keep:
+        if index >= len(changes) or len(changes[index]) < 5 or not changes[index][4]:
+            raise code._refuse(422, "invalid", "выбранный файл нельзя оставить в копии")
+        keep.add(key(changes[index][0]))
+    protected = {parent for path in keep for parent in _ancestors(path)}
+
+    def apply(path):
+        path = key(path)
+        return path not in keep and path not in protected and all(parent not in keep for parent in _ancestors(path))
+
+    if any(conflict and apply(path) for path, _, conflict, *_ in changes) and not selected.overwrite:
+        raise code._refuse(409, "conflict", "в зеркале есть локальные изменения")
+    if keep:
+        updates = {path: entry for path, entry in updates.items() if apply(path)}
+        remove = [path for path in remove if apply(path)]
+        if not updates and not remove:
+            raise code._refuse(422, "invalid", "в плане не осталось изменений")
+    return updates, remove
+
+
+def _next_baseline(source, current, previous, updates, remove):
+    current = current or {}
+    confirmed = {path: entry for path, entry in (previous or {}).items() if path in source or path in current}
+    confirmed.update((path, entry) for path, entry in current.items()
+                     if entry != SKIP and _source_entry(source.get(path), entry) == entry)
+    for path in remove:
+        confirmed.pop(path, None)
+    confirmed.update(updates)
+    return security.encrypt(_json(confirmed))
 
 
 def _private_destination(aid, project):
@@ -272,21 +338,25 @@ async def _compare(request, row):
     if target.get("pid") is None or not code.PID_RE.fullmatch(str(target["pid"])):
         raise code._refuse(502, "bridge", "мост вернул неверное назначение зеркала")
     _private_destination(destination, target["pid"])
-    link = bridge.LINKS.get(destination)
-    if link is None:
+    link, from_link = bridge.LINKS.get(destination), bridge.LINKS.get(aid)
+    if link is None or from_link is None:
         raise code._refuse(409, "offline", "компьютер не на связи")
     platform = link.hello.get("platform")
+    source_platform = from_link.hello.get("platform")
 
     def compare_trees():
-        entries = _portable(_entries(source), platform)
+        entries = _portable(_entries(source), platform, source_platform)
         current = _entries(target, missing=True)
         baseline = json.loads(security.decrypt(row["baseline"])) if row["baseline"] else None
-        updates, remove, changes, conflicts, skipped = _plan(entries, current, baseline)
-        token = _digest([row["id"], row["synced"], entries, current])
+        updates, remove, changes, conflicts, skipped = _plan(entries, current, baseline, windows=platform == "win32")
+        marker = None
+        if row["baseline"] is not None and (updates or remove):
+            marker = hashlib.sha256(row["baseline"]).hexdigest()
+        token = _digest([row["id"], row["synced"], marker, entries, current])
         result = {"plan": token, "exists": current is not None, "project": target["pid"],
                   "changes": changes, "conflicts": conflicts, "skipped": skipped, "deletions": len(remove),
                   "bytes": sum(info[2] for info in updates.values())}
-        return result, to, entries, current, updates, remove, platform
+        return result, to, entries, current, updates, remove, platform, source_platform, baseline
 
     result = await asyncio.to_thread(compare_trees)
     _owner(request, aid, pid)
@@ -319,12 +389,11 @@ async def _sync(request, row, selected, progress):
     ticket = secrets.token_hex(16)
     started = False
     try:
-        plan, to, source, current, updates, remove, platform = await _compare(request, row)
+        plan, to, source, current, updates, remove, platform, source_platform, baseline = await _compare(request, row)
         if plan["plan"] != selected.plan:
             raise code._refuse(409, "conflict", "проект или зеркало изменились — обновите сравнение")
-        if plan["conflicts"] and not selected.overwrite:
-            raise code._refuse(409, "conflict", "в зеркале есть локальные изменения")
-        progress.update(bytes=0, total=plan["bytes"])
+        updates, remove = await asyncio.to_thread(_selection, plan, selected, updates, remove)
+        progress.update(bytes=0, total=sum(info[2] for info in updates.values()))
         if updates or remove or current is None:
             started = True
             await _ask(request, destination, "mirror_begin", ticket=ticket, **to)
@@ -339,7 +408,7 @@ async def _sync(request, row, selected, progress):
                 await _ask(request, destination, "mirror_chunk", ticket=ticket, chunks=chunks)
                 progress["bytes"] += sum(read[2] for read in reads)
             latest = await _ask(request, aid, "mirror_scan", project=pid)
-            fresh = await asyncio.to_thread(lambda: _portable(_entries(latest), platform))
+            fresh = await asyncio.to_thread(lambda: _portable(_entries(latest), platform, source_platform))
             if fresh != source:
                 raise code._refuse(409, "conflict", "исходный проект изменился во время передачи — обновите сравнение")
             expected = await asyncio.to_thread(_digest, current)
@@ -347,7 +416,7 @@ async def _sync(request, row, selected, progress):
             await _ask(request, destination, "mirror_apply", ticket=ticket, expected=expected,
                        updates=updates, remove=remove, **to)
             started = False
-        sealed = await asyncio.to_thread(lambda: security.encrypt(_json(source)))
+        sealed = await asyncio.to_thread(_next_baseline, source, current, baseline, updates, remove)
         state.DB.execute("UPDATE project_mirrors SET baseline=?, synced=? WHERE id=?", (sealed, clock.NOW(), mid))
         progress["state"] = "done"
     except HTTPException as error:
@@ -407,7 +476,11 @@ async def get(aid: int, pid: str, mid: int, request: Request):
 @router.post("/{mid}/compare")
 async def compare(aid: int, pid: str, mid: int, request: Request):
     row = _row(request, aid, pid, mid)
-    result, *_ = await _compare(request, row)
+    result, _, source, current, updates, remove, *_ = await _compare(request, row)
+    if row["baseline"] is None and current is not None and not updates and not remove:
+        sealed = await asyncio.to_thread(_next_baseline, source, current, None, {}, [])
+        _row(request, aid, pid, mid)
+        state.DB.execute("UPDATE project_mirrors SET baseline=? WHERE id=? AND baseline IS NULL", (sealed, mid))
     return result
 
 
@@ -440,7 +513,7 @@ async def file_diff(aid: int, pid: str, mid: int, request: Request):
 @router.post("/{mid}/sync", status_code=202)
 async def sync(aid: int, pid: str, mid: int, request: Request):
     _row(request, aid, pid, mid)
-    selected = await _body(request, Sync)
+    selected = await _body(request, Sync, 4096 + 8 * MAX_ENTRIES)
     row = _row(request, aid, pid, mid)
     destination = row["destination"]
     if destination in TRANSFERS or len(TRANSFERS) >= 4:

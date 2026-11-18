@@ -4216,6 +4216,27 @@ def transcribed(login, seconds=6.0):
             ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2")]
 
 
+def test_transcribe_retries_using_the_saved_recording(browser, live):
+    login = "trretry"
+    live.add_user(login)
+    selected = "document.querySelector('.tr-item[aria-current=true]')"
+    player = "document.querySelector('.tr-view audio').getAttribute('src')"
+    r = browser.drive(live.url + "/", [*transcribed(login),
+        ("eval", "original", f"window.original = {selected}.dataset.id"),
+        ("eval", "audio", player), ("click", "#tr-retry"),
+        ("wait", "!document.querySelector('#tr-retry-confirm').disabled"),
+        ("eval", "choice", "document.querySelector('#tr-retry-model option').textContent"),
+        ("click", "#tr-retry-confirm"),
+        ("wait", f"{selected}?.dataset.id && {selected}.dataset.id !== window.original"),
+        ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ("eval", "new_audio", player)], timeout=20000)
+    assert not r.get("failed"), r
+    assert r["values"]["audio"] == r["values"]["new_audio"]
+    assert "WhisperX" in r["values"]["choice"]
+    assert sum(p == "POST /api/transcripts" for p in r["sent"]) == 1
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
     """«Править» → текст реплики → «Сохранить»; «Имена» → «Иван»; выгрузка TXT — с ними; нажатие по
@@ -4835,10 +4856,16 @@ def test_voice_is_added_in_settings(browser, live, width):
         ("eval", "fits", NO_OVERFLOW),
         ("click", "#voice-save"), ("wait", f"!{is_open(dialog)} && document.querySelector('.voice')"),
         ("eval", "voice", "document.querySelector('.voice').textContent"),
-        ("click", ".voice .voice-delete"), ("wait", "!document.querySelector('.voice')")],
+        ("click", ".voice .voice-delete"), ("wait", is_open("#voice-delete-dialog")),
+        ("eval", "confirm", "document.querySelector('#voice-delete-dialog p').textContent"),
+        ("click", "#voice-delete-dialog .dialog-close"),
+        ("wait", "document.activeElement === document.querySelector('.voice .voice-delete')"),
+        ("click", ".voice .voice-delete"), ("click", "#voice-delete-confirm"),
+        ("wait", "!document.querySelector('.voice')")],
         width=width, mobile=width == 320)
     assert not r.get("failed"), r
     assert "Мой голос" in r["values"]["voice"] and "0:06" in r["values"]["voice"]
+    assert "Мой голос" in r["values"]["confirm"] and "1" in r["values"]["confirm"]
     assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
@@ -6523,6 +6550,26 @@ def test_search_more_right_after_typing_starts_the_new_query(browser, live):
     assert v["typed"] == "loading"
     assert len(v["titles"]) == 30 and all(t.startswith("пёс ") for t in v["titles"]), v["titles"]
     assert not problems(r), problems(r)
+
+
+def test_search_back_restores_third_page_and_focus(browser, live):
+    login = "search-restore-page"
+    uid = live.add_user(login)
+    live_sql(live, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 69)"
+                   " INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                   " SELECT 'restore-' || i, ?, 'generation', 'flux', 'река ' || i, '1024x1024', 1, 'done', '', ? + i"
+                   " FROM n", (uid, fake_bridge.T0))
+    selected = '#search-results .search-row[data-id="restore-9"]'
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("search"),
+        ("wait", "document.querySelector('#search-q')"), set_value("#search-q", "река"),
+        ("wait", search_ready(30)), ("click", "#search-more"), ("wait", search_ready(60)),
+        ("click", "#search-more"), ("wait", search_ready(70)), ("click", selected),
+        ("wait", "location.hash === '#/photo?id=restore-9'"), ("eval", "back", "history.back(); true"),
+        ("wait", search_ready(70)),
+        ("eval", "restored", f"document.activeElement.matches({json.dumps(selected)})"
+                             " && document.querySelector('#view').scrollTop > 0")])
+    assert not r.get("failed"), r
+    assert r["values"]["restored"] is True
 
 
 # ---- перевод ---------------------------------------------------------------------

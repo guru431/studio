@@ -375,7 +375,7 @@ function storageBlock() {
     refresh.disabled = true;
     note.textContent = '';
     try {
-      const { share, backup, pending, orphans, check } = await api('GET', '/api/admin/storage');
+      const { share, backup, pending, orphans, check, copy } = await api('GET', '/api/admin/storage');
       const shareText = share.state === 'ok' ? tr("доступна, свободно {0} из {1}", sizeText(share.free), sizeText(share.total))
         : share.message;
       const backupText = backup.state === 'ok'
@@ -384,6 +384,8 @@ function storageBlock() {
       const [queue] = queueText(pending);
       list.replaceChildren(...line('share', tr("Шара"), shareText, share.state !== 'ok'),
         ...line('backup', tr("Копия базы"), backupText, backup.state !== 'ok' || backup.age > STALE_SEC),
+        ...(copy?.ok === false ? line('backup-attempt', tr("Последняя попытка копирования"),
+          tr("Ошибка — {0}", momentText(copy.at)), true) : []),
         // итог последней проверки новейшей копии (ночной после копии или из «Проверить копию»), хранится в базе
         ...line('check', tr("Проверка копии"), !check ? tr("ещё не было: ночная идёт сразу после копии")
           : `${check.ok ? tr("поднимается") : tr("не поднимается, проблем — {0}", check.problems)}`

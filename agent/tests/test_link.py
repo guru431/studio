@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 import pytest
@@ -154,6 +155,44 @@ async def test_turns_finished_without_link_are_sent_after_welcome_once(fake_stud
     assert not agent._missed
     await lk.stop()
     await task
+
+
+async def test_completions_survive_two_failed_writes(fake_studio, agent):
+    attempts = []
+
+    class Interrupted:
+        def __init__(self, ws):
+            self.ws = ws
+
+        def __getattr__(self, name):
+            return getattr(self.ws, name)
+
+        async def send(self, text):
+            frame = json.loads(text)
+            if frame["t"] == "completions":
+                attempts.append(frame)
+                if len(attempts) <= 2:
+                    await self.ws.close()
+                    await self.ws.wait_closed()
+                    raise OSError("write interrupted")
+            await self.ws.send(text)
+
+    async def connect(*args, **kwargs):
+        return Interrupted(await real_connect(*args, **kwargs))
+
+    fake_studio.completions = True
+    agent.emit(_done(CHAT))
+    lk, _, task = start(fake_studio, agent, connect=connect)
+    try:
+        await fake_studio.connected(3)
+        await until(lambda: any(frame["t"] == "completions" for _, frame in fake_studio.frames), sec=0.5)
+        delivered = [frame for _, frame in fake_studio.frames if frame["t"] == "completions"]
+        assert len(attempts) == 3 and delivered == attempts[-1:]
+        assert delivered[0]["items"][0]["chat"] == CHAT
+        assert not agent._missed
+    finally:
+        await lk.stop()
+        await task
 
 
 def test_unsent_completions_frame_waits_for_the_next_link(agent):

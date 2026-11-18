@@ -19,15 +19,19 @@ Chrome уже подключён через расширение; дополни
 Локальный лаунчер Playwright MCP сохраняет автоматические снимки и временные файлы дочернего процесса
 в `.tmp/browser-mcp-*` рабочего каталога и очищает каталог при штатном завершении MCP.
 
-    .venv/Scripts/python -m pytest -q                                   # быстрый набор: бюджет 60 с, 8 процессов
+    .venv/Scripts/python -m pytest -q                                   # быстрый набор: бюджет 60 с, 12 процессов
     .venv/Scripts/python -m pytest -q -m integration                    # браузер (Edge/Chrome + node 22), PowerShell
-    v() { grep "^$1=" C:/work/projects/local-config/secrets/vault.env | cut -d= -f2-; }    # живая приёмка: значения не печатать
-    STUDIO_ADMIN_LOGIN=$(v STUDIO_ADMIN_LOGIN) STUDIO_ADMIN_PASSWORD=$(v STUDIO_ADMIN_PASSWORD) \
-      GATEWAY_KEY_OWNER_IMAGES=$(v GATEWAY_KEY_OWNER_IMAGES) .venv/Scripts/python -m pytest -q -m manual
+    # В отдельной оболочке введите разрешённые для приёмки рабочие реквизиты.
+    read -r -p 'Логин для приёмки: ' STUDIO_ADMIN_LOGIN
+    read -rs -p 'Рабочий пароль для приёмки: ' STUDIO_ADMIN_PASSWORD
+    v() { grep "^$1=" C:/work/projects/local-config/secrets/vault.env | cut -d= -f2-; }
+    STUDIO_ADMIN_LOGIN="$STUDIO_ADMIN_LOGIN" STUDIO_ADMIN_PASSWORD="$STUDIO_ADMIN_PASSWORD" \
+      GATEWAY_KEY_OWNER_IMAGES="$(v GATEWAY_KEY_OWNER_IMAGES)" .venv/Scripts/python -m pytest -q -m manual
+    unset STUDIO_ADMIN_LOGIN STUDIO_ADMIN_PASSWORD
 
 Живая приёмка (`tests/test_studio_upload_live.py`, генерирует на карте, до ~1,5 ч) — после
-выкладки и `--create-admin`: входит администратором в `STUDIO_LIVE_URL` (по умолчанию
-`https://studio.example.com`), делает Lustify, правку кистью (Lustify, вне маски — пиксели исходника),
+выкладки: входит администратором в `STUDIO_LIVE_URL` (по умолчанию
+`https://studio.example.com`), создаёт изображение SNOFS и правит его кистью (вне маски — пиксели исходника),
 описание gemma-abl, ролик 1 с, ответ `local-gemma-abl` по PDF и одностраничный скан — в разделе
 «Распознавание» и вложением в чате (затем `/pages/ocr-release` — 200 и ответ gemma-abl без ожидания
 аренды), «Перевод» на `local-gemma-abl` — текст, одностраничный PDF со слоем и снимок вывески (блоки с рамками,
@@ -40,8 +44,7 @@ Chrome уже подключён через расширение; дополни
 (решение 2026-10-20, `local-config/project-knowledge-base.yaml` → `api_keys.studio_admin`), поэтому вход
 на проде паролем из vault отвечает 401 — это не сбой выкладки. Не повторять: из LAN неудачи идут
 парой «example-user + 10.77.1.1», и пятая за 15 минут запрёт владельцу вход из дома. Для живой приёмки
-— спросить владельца: временно вернуть пароль восстановления (`--create-admin` гасит его сессии)
-или завести отдельную учётку администратора для приёмки.
+используйте рабочие реквизиты администратора, разрешённые владельцем для этой проверки.
 
 Среда: `"/c/Program Files/Python314/python" -m venv .venv`, затем
 `.venv/Scripts/python -m pip install -r requirements-dev.txt`. Приложение в быстрых тестах —
@@ -76,7 +79,7 @@ WAV до сохранения и после перезагрузки стран�
 `align-self: stretch`: WebKit при настольном `flex-start` и `height: auto` сжимает фиксированную
 панель до высоты компьютеров, обрезая проекты, несмотря на заданные `top` и `bottom`.
 Договорённость юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`. Набор идёт восемью процессами
-(`-n 8 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
+(`-n 12 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
 его не делят. Планировщик `tests/conftest.py` выдаёт обычный файл целиком одному процессу вместо
 отдельной выдачи каждого теста; явные группы сохраняются. `integration` и `manual` — группой `serial`, одним
 процессом по очереди. Один тест без параллели — `-n0`. Срок теста (`timeout = 30`, на Windows метод `thread`)

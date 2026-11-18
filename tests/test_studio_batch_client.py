@@ -181,6 +181,23 @@ def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path)
     assert [p.read_bytes() for p in out.glob("*.png")] == [b"result-png"]
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_same_seed_keeps_the_image_from_an_earlier_run(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("same prompt\n", encoding="utf-8")
+    out = tmp_path / "out"
+    args = ("-PromptsFile", str(prompts), "-Seed", "17", "-KeepCard", "-OutDir", str(out))
+    run_script(runner, images, *args, "-Size", "portrait")
+    run_script(runner, images, *args, "-Size", "square")
+
+    rows = (out / "manifest.tsv").read_text(encoding="utf-8-sig").splitlines()[1:]
+    assert len(rows) == 2
+    paths = [out / row.split("\t")[1] for row in rows]
+    assert paths[0] != paths[1]
+    assert [path.read_bytes() for path in paths] == [b"png-1", b"png-2"]
+
+
 @pytest.mark.parametrize("runner", RUNNERS)
 def test_prompts_file_run_names_files_writes_manifest_and_releases(runner, images, tmp_path):
     prompts = tmp_path / "prompts.txt"

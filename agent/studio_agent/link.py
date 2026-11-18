@@ -229,8 +229,7 @@ class Link:
         for f in out:
             queue.put_nowait(f)
 
-    @staticmethod
-    async def _write(ws, queue: asyncio.Queue) -> None:
+    async def _write(self, ws, queue: asyncio.Queue) -> None:
         """Писатель канала: один на канал, кадры — по порядку очереди (`events.Ready` — уже закодирован); `None` —
         очередь дослана, конец."""
         while True:
@@ -242,4 +241,11 @@ class Link:
             except (TypeError, ValueError) as e:
                 log.warning("канал: кадр не кодируется: %s", type(e).__name__)
                 continue
-            await ws.send(text)
+            try:
+                await ws.send(text)
+            except (Exception, asyncio.CancelledError):
+                # Кадр уже вынут из очереди. Вернуть завершение до разбора оставшейся очереди:
+                # там могут быть более свежие итоги того же чата.
+                if not self._stop.is_set():
+                    self.agent.missed(frame)
+                raise

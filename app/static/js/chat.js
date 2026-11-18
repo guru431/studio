@@ -1635,7 +1635,7 @@ function build(view, ctx) {
         ...(cleanerTicket ? { cleaner_ticket: cleanerTicket } : {}) });
     } catch (err) {
       jobs.delete(id);
-      const uncertain = err.status === 0 || err.name === 'TimeoutError' || err.status === 503;
+      const uncertain = [0, 502, 503, 504].includes(err.status) || err.name === 'TimeoutError';
       if (uncertain) attempt.uncertain = true;
       else if (pendingTurn === attempt) pendingTurn = null;
       if (chatId === id) {

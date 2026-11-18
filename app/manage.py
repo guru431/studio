@@ -15,6 +15,8 @@ backup — согласованная копия SQLite (`Connection.backup`, с
 на шару под временным именем и `os.replace` в `$STUDIO_MEDIA_DIR/backup/studio-YYYYMMDD.db`
 (дата — UTC). Хранятся BACKUP_KEEP последних копий; временный файл на шаре при отказе убирается,
 забытые прежними сбоями — вместе со старыми копиями.
+Создание и ротация одной базы сериализованы локальной блокировкой. Итог попытки записывается
+отдельно от проверки, чтобы отказ записи на шару был виден даже при наличии прежней копии.
 
 verify-backup [ПУТЬ] — поднимется ли студия из копии (без пути — из новейшей): verify_backup на
 временной копии в tmp_dir, рабочая база не открывается. Итог — JSON в stdout; код 0 — поднимается,
@@ -30,6 +32,7 @@ import secrets
 import shutil
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,10 +54,26 @@ GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
 BACKUP_KEEP = 7
 BACKUP_GLOB = "studio-????????.db"          # копии в $STUDIO_MEDIA_DIR/backup; их возраст видит панель (admin.py)
+COPY_KEY = "backup_copy"
 VERIFY_FILES_SEC = 600                      # verify_backup: дольше файлы не проверяются — «проверено N из M»
 #: verify_backup: свободного места в tmp_dir (диск рабочей базы) — копия плюс столько (или 10 % копии)
 VERIFY_RESERVE = 256 << 20
 CHECK_KEY = "backup_check"                  # settings: итог последней проверки новейшей копии (check_summary)
+ENCRYPTED_BACKUP_FIELDS = (
+    ("tokens", "токены подключений", "SELECT token_enc FROM connections"),
+    ("exa_keys", "ключи Exa", "SELECT exa_key FROM users WHERE exa_key IS NOT NULL"),
+    ("shares", "ссылки «Поделиться»", "SELECT token_enc FROM chat_shares UNION ALL"
+     " SELECT sealed FROM chat_shares WHERE sealed IS NOT NULL"),
+    ("smtp", "настройки SMTP", "SELECT value FROM settings WHERE key = 'smtp'"),
+    ("mcp", "настройки MCP", "SELECT secret_enc FROM mcp_servers"),
+    ("mirrors", "сведения о зеркалах", "SELECT location FROM project_mirrors UNION ALL"
+     " SELECT baseline FROM project_mirrors WHERE baseline IS NOT NULL"),
+    ("cleaner", "токены Cleaner", "SELECT token_enc FROM cleaner_contexts UNION ALL"
+     " SELECT token_enc FROM cleaner_deletions"),
+    ("notifications", "ключи уведомлений", "SELECT value FROM settings WHERE key = 'vapid' UNION ALL"
+     " SELECT token_enc FROM ntfy_devices WHERE token_enc IS NOT NULL UNION ALL"
+     " SELECT token_enc FROM ntfy_settings WHERE token_enc IS NOT NULL"),
+)
 
 
 def read_pairs(text: str) -> dict[str, str]:
@@ -206,6 +225,25 @@ def backup() -> int:
     if not cfg.db_path.is_file():   # sqlite3.connect завёл бы пустую базу
         print(f"нет базы {cfg.db_path}", file=sys.stderr)
         return 2
+    # SQLite держит блокировку на отдельном локальном файле. Рабочая база остаётся доступной
+    # для записи, а блокировка снимается ОС даже при аварийном завершении команды.
+    lock_path = cfg.db_path.with_name(f".{cfg.db_path.name}.backup-lock")
+    try:
+        with closing(sqlite3.connect(lock_path, timeout=1800)) as lock:
+            lock.execute("BEGIN IMMEDIATE")
+            result = _copy_backup(cfg)
+            try:
+                with closing(sqlite3.connect(cfg.db_path, isolation_level=None)) as conn:
+                    _record_result(conn, COPY_KEY, {"ok": result == 0, "at": clock.NOW(), "notified": result == 0})
+            except sqlite3.Error as e:
+                print(f"итог копирования не записан в базу ({type(e).__name__})", file=sys.stderr)
+            return result
+    except sqlite3.Error as e:
+        print(f"не удалось взять блокировку копии ({type(e).__name__})", file=sys.stderr)
+        return 1
+
+
+def _copy_backup(cfg: config.Config) -> int:
     day = datetime.fromtimestamp(clock.NOW(), timezone.utc)
     folder = cfg.media_dir / "backup"
     target = folder / f"studio-{day:%Y%m%d}.db"
@@ -213,14 +251,10 @@ def backup() -> int:
     shared = folder / f".{target.name}.part"
     try:
         local.unlink(missing_ok=True)
-        src, dst = sqlite3.connect(cfg.db_path), sqlite3.connect(local)
-        try:
+        with closing(sqlite3.connect(cfg.db_path)) as src, closing(sqlite3.connect(local)) as dst:
             src.backup(dst)
             # копия — один файл без -wal/-shm: открывать её с шары и переносить проще
             dst.execute("PRAGMA journal_mode=DELETE")
-        finally:
-            dst.close()
-            src.close()
         folder.mkdir(exist_ok=True)
         shutil.copyfile(local, shared)
         os.replace(shared, target)
@@ -232,7 +266,10 @@ def backup() -> int:
         print(f"копия базы не сделана: {e}", file=sys.stderr)
         return 1
     finally:
-        local.unlink(missing_ok=True)
+        try:
+            local.unlink(missing_ok=True)
+        except OSError as e:
+            print(f"локальный снимок не убран ({type(e).__name__})", file=sys.stderr)
     print(f"копия базы: {target}")
     try:
         # и .part суток, что упали, пока его уборки не было (своя копия к этому месту уже на месте)
@@ -278,18 +315,13 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict) -> None
     if not out["users"]:
         problems.append("в копии нет ни одной учётки")
     key = Fernet(cfg.data_key)
-    # ссылки «Поделиться»: ключ ссылки и снимок (`sealed`; без шифра — копия до шага 36, его шифрует seal())
-    for sql, name, words in (("SELECT token_enc FROM connections", "tokens", "токены подключений"),
-                             ("SELECT exa_key FROM users WHERE exa_key IS NOT NULL", "exa_keys", "ключи Exa"),
-                             ("SELECT token_enc FROM chat_shares UNION ALL"
-                              " SELECT sealed FROM chat_shares WHERE sealed IS NOT NULL", "shares",
-                              "ссылки «Поделиться»")):
+    for name, words, sql in ENCRYPTED_BACKUP_FIELDS:
         count = out[name]
         for (blob,) in conn.execute(sql):
             try:
-                key.decrypt(blob)                # значение не держится и не печатается
+                key.decrypt(blob).decode("utf-8")    # значение не сохраняется и не печатается
                 count["ok"] += 1
-            except InvalidToken:
+            except (InvalidToken, TypeError, UnicodeError):
                 count["failed"] += 1
         if count["failed"]:
             problems.append(f"{words} не расшифрованы: {count['failed']} из "
@@ -326,14 +358,13 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     копируется файлом `verify-<случайное>.db` в tmp_dir (локальный диск; файл, а не каталог: каталог
     уронил бы audio.clean_tmp при старте; свободно меньше копии с запасом VERIFY_RESERVE или 10 % — не
     копируется) и там проверяется: целостность, схема (1…db.VERSION, шаги db.STEPS проходят), учётки,
-    токены подключений, ключи Exa учёток и ссылки «Поделиться» текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
+    зашифрованные данные и настройки текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
     обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется.
     Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
     или из main)."""
     cfg, start = state.CFG, clock.NOW()
     out = {"backup": None, "at": None, "size": None, "integrity": None, "schema_from": None, "schema_to": None,
-           "users": None, "tokens": {"ok": 0, "failed": 0}, "exa_keys": {"ok": 0, "failed": 0},
-           "shares": {"ok": 0, "failed": 0},
+           "users": None, **{name: {"ok": 0, "failed": 0} for name, _, _ in ENCRYPTED_BACKUP_FIELDS},
            "files": {"state": "skipped", "present": 0, "missing": 0, "checked": 0, "total": 0},
            "ok": False, "took": 0, "problems": []}
     try:
@@ -378,12 +409,21 @@ def check_summary(out: dict, *, notified: bool) -> dict:
 
 
 def record_check(conn: sqlite3.Connection, out: dict, *, notified: bool = False) -> None:
+    _record_result(conn, CHECK_KEY, check_summary(out, notified=notified))
+
+
+def _record_result(conn: sqlite3.Connection, key: str, result: dict) -> None:
     conn.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                 (CHECK_KEY, json.dumps(check_summary(out, notified=notified))))
+                 (key, json.dumps(result)))
 
 
 def last_check(conn: sqlite3.Connection) -> "dict | None":
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (CHECK_KEY,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def last_copy(conn: sqlite3.Connection) -> "dict | None":
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (COPY_KEY,)).fetchone()
     return json.loads(row[0]) if row else None
 
 

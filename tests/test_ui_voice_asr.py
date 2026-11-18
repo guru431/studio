@@ -245,18 +245,27 @@ def test_multiple_samples_can_be_edited_replaced_and_selected(page):
     assert read_voice(page)["sample_count"] == 2
 
 
-def test_partial_batch_failure_can_be_retried_without_duplicate_samples(page):
+def test_batch_failure_can_be_retried_without_partial_voice(page):
     page.locator("#voice-dialog [name=name]").fill("Повтор загрузки")
     page.locator("#voice-files").set_input_files([
         {"name": "first.wav", "mimeType": "audio/wav", "buffer": wav_of(6)},
         {"name": "second.wav", "mimeType": "audio/wav", "buffer": wav_of(6)}])
     page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
-    page.route("**/api/voices/*/samples", lambda route: route.fulfill(status=503,
-               content_type="application/json", body='{"detail":{"code":"busy","message":"Try again"}}'))
+    prepared = []
+
+    def fail_second(route):
+        prepared.append(route.request.url)
+        if len(prepared) == 1:
+            route.continue_()
+        else:
+            route.fulfill(status=503, content_type="application/json",
+                          body='{"detail":{"code":"busy","message":"Try again"}}')
+
+    page.route("**/api/voices/prepare-sample", fail_second)
     activate(page, "#voice-save")
     page.wait_for_function("() => document.querySelector('#voice-dialog [data-for=form]').textContent === 'Try again'")
-    assert read_voice(page)["sample_count"] == 1
-    page.unroute("**/api/voices/*/samples")
+    assert page.evaluate("async () => (await (await fetch('/api/voices')).json()).items.length") == 0
+    page.unroute("**/api/voices/prepare-sample")
     activate(page, "#voice-save")
     page.locator("#voice-dialog").wait_for(state="detached")
     assert read_voice(page)["sample_count"] == 2

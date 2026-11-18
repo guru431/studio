@@ -33,7 +33,8 @@ import { dateTime } from './time.js';
 import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
-import { el, openDialog, words } from './ui.js';
+import { modelLabel } from './settings.js';
+import { el, field, openDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
@@ -132,7 +133,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-delete-confirm' }, tr("Удалить"));
     const dialog = openDialog(root, { id: 'tr-delete-dialog', title: tr("Удалить расшифровку?"), actions: [yes],
-      body: [el('p', {}, tr("Удалятся текст и исходная запись.")), fail] });
+      body: [el('p', {}, tr("Текст удалится. Исходная запись сохранится, если её используют другие расшифровки.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -144,6 +145,52 @@ function build(view, ctx) {
       } catch (err) {
         fail.textContent = words(err);
         yes.disabled = false;
+      }
+    });
+  }
+
+  async function retryDialog(item) {
+    if (root.querySelector('#tr-retry-dialog')) return;
+    const model = el('select', { class: 'input', id: 'tr-retry-model', disabled: true });
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const go = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-retry-confirm', disabled: true }, tr("Расшифровать запись"));
+    const dialog = openDialog(root, { id: 'tr-retry-dialog', title: tr("Расшифровать ещё раз"), actions: [go],
+      body: [field(tr("Модель"), model, 'model'), fail] });
+    let choices;
+    try {
+      const { sections } = await api('GET', '/api/sections');
+      if (!dialog.open || !dialog.isConnected) return;
+      const section = sections.find(s => s.id === 'transcribe');
+      choices = section.links.filter(link => link.connection.proxied).flatMap(({ connection, models }) =>
+        models.map(id => ({ connection_id: connection.id, model: id, label: `${modelLabel(id)} · ${connection.name}` })));
+      if (!choices.length) {
+        fail.textContent = tr("Выберите модель в настройках раздела «Расшифровка».");
+        return;
+      }
+      model.append(...choices.map((choice, index) => el('option', { value: String(index) }, choice.label)));
+      const selected = choices.findIndex(choice => choice.connection_id === section.default?.connection_id
+        && choice.model === section.default?.model);
+      model.selectedIndex = Math.max(0, selected);
+      model.disabled = go.disabled = false;
+    } catch (err) {
+      fail.textContent = words(err);
+      return;
+    }
+    go.addEventListener('click', async () => {
+      const { connection_id, model: chosen } = choices[model.selectedIndex];
+      go.disabled = model.disabled = true;
+      fail.textContent = '';
+      try {
+        const answer = await api('POST', `/api/transcripts/${item.id}/retry`, { connection_id, model: chosen });
+        kick();
+        if (!dialog.open || !dialog.isConnected) return;
+        dialog.close();
+        picked = true;
+        await records.load();
+        await select(answer.id);
+      } catch (err) {
+        fail.textContent = words(err);
+        go.disabled = model.disabled = false;
       }
     });
   }
@@ -348,6 +395,11 @@ function build(view, ctx) {
       if (!editing) acts.append(chatMenu(item));
     }
     if (!RUNNING.has(item.state)) {
+      if (!editing && item.source_media_id) {
+        const retry = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-retry' }, tr("Расшифровать ещё раз"));
+        retry.addEventListener('click', () => retryDialog(item));
+        acts.append(retry);
+      }
       const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-delete' }, tr("Удалить"));
       del.addEventListener('click', () => confirmDelete(item));
       acts.append(del);

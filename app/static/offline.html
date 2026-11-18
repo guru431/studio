@@ -13,6 +13,7 @@
 <script src="/static/en.js?v={{v}}"></script>
 <script src="/static/i18n.js?v={{v}}"></script>
 <script src="/static/theme.js?v={{v}}"></script>
+<script src="/static/offline.js?v={{v}}" defer></script>
 </head>
 <body class="solo">
 <main class="solo-card">
@@ -21,7 +22,7 @@
     <h1 data-i18n>Студия</h1>
     <p data-i18n>Нет связи. Студия откроется, когда появится интернет.</p>
   </div>
-  <a class="btn btn-accent" href="/" data-i18n>Повторить</a>
+  <button type="button" class="btn btn-accent" id="retry" data-i18n>Повторить</button>
 </main>
 </body>
 </html>

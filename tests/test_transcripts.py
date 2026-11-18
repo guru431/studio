@@ -12,6 +12,7 @@ import pytest
 
 import clock
 import media
+import speeches
 import state
 import transcripts
 from fastapi import HTTPException
@@ -164,6 +165,63 @@ def test_cancel_while_waiting_for_the_card(studio, env, fake_audio, monkeypatch)
     item = wait_tr(studio, tid, {"cancelled", "error"})
     assert item["state"] == "cancelled"
     assert not list((env.db_path.parent / "tmp").iterdir()) and transcripts.JOBS == {}
+
+
+@pytest.mark.parametrize("module, table", [(transcripts, "transcripts"), (speeches, "speeches")])
+def test_cancel_before_job_starts_keeps_runner_alive(studio, monkeypatch, module, table):
+    uid = make_user(studio, "owner")
+    if module is transcripts:
+        state.DB.executemany("INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
+                             " VALUES (?, ?, 'm', 'name', 'media', 'queued', '', ?)", [("first", uid, 1), ("second", uid, 2)])
+    else:
+        state.DB.executemany("INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created)"
+                             " VALUES (?, ?, 'm', 'voice', 'text', 'queued', '', ?)", [("first", uid, 1), ("second", uid, 2)])
+
+    real = asyncio.create_task
+    cancels = []
+
+    def spawn(coro, *args, **kwargs):
+        if coro.cr_code is module.run.__code__ and "first" in module.JOBS:
+            # Schedule the endpoint before the child gets its first event-loop step.
+            request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=uid)))
+            cancels.append(real(module.cancel("first", request)))
+        return real(coro, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_task", spawn)
+
+    async def scenario():
+        module.kick(uid)
+        await asyncio.gather(module.RUNNERS[uid], return_exceptions=True)
+        assert await cancels.pop() == {"state": "cancelled"}
+
+    studio.c.portal.call(scenario)
+    assert [tuple(r) for r in state.DB.execute(f"SELECT id, state FROM {table} ORDER BY id")] == [
+        ("first", "cancelled"), ("second", "error")]
+    assert module.JOBS == {}
+
+
+def test_retry_reuses_the_account_recording_until_last_attempt_is_deleted(studio, fake_audio):
+    conn = add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    original = wait_tr(studio, tid, {"done"})
+    mid = original["source_media_id"]
+    endpoint = f"/api/transcripts/{tid}/retry"
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    assert studio.c.post(endpoint, json={}).status_code == 404
+    signin(studio, "owner")
+    denied = studio.c.post(endpoint, json={"model": "unknown"})
+    assert denied.status_code == 422 and denied.json()["detail"]["code"] == "model"
+    response = studio.c.post(endpoint, json={"connection_id": conn, "model": "whisperx"})
+    assert response.status_code == 202, response.text
+    attempt = response.json()
+    assert attempt["id"] != tid and attempt["source_media_id"] == mid
+    assert wait_tr(studio, attempt["id"], {"done"})["segments"] == original["segments"]
+    assert studio.c.get(f"/api/transcripts/{tid}").json() == original
+    assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
+    assert studio.c.get(f"/api/media/{mid}").status_code == 200
+    assert studio.c.delete(f"/api/transcripts/{attempt['id']}").status_code == 204
+    assert studio.c.get(f"/api/media/{mid}").status_code == 404
 
 
 def test_too_big_or_unknown_upload_leaves_nothing(studio, env, fake_audio, monkeypatch):

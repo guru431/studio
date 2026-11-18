@@ -1,5 +1,6 @@
 """Маршруты Студии и реальные операции диска моста на двух временных корнях."""
 from pathlib import Path
+import shutil
 
 import bridge
 import pytest
@@ -139,8 +140,15 @@ def test_project_mirror_copies_all_files_detects_conflicts_and_recovers(studio, 
     plan = compare()
     assert plan["conflicts"] == 1 and sync(plan)["error"]["code"] == "conflict"
     assert (destination / "notes.txt").read_bytes() == b"local destination edit\n"
+    (source / "local.env").write_bytes(b"PRIVATE=changed\n")
+    plan = compare()
+    local = next(index for index, change in enumerate(plan["changes"]) if change[0] == "notes.txt")
+    assert sync(plan, keep=[local])["state"] == "done"
+    assert (destination / "notes.txt").read_bytes() == b"local destination edit\n"
+    assert (destination / "local.env").read_bytes() == b"PRIVATE=changed\n"
     (source / "local.env").unlink()
     sync_plan = compare()
+    assert sync_plan["conflicts"] == 1
     assert sync(sync_plan, overwrite=True)["state"] == "done"
     assert compare()["changes"] == []
     assert not (destination / "local.env").exists()
@@ -160,6 +168,80 @@ def test_skipped_subtree_preserves_files_at_destination():
     target = {"link": mirror.DIRECTORY, "link/keep": original}
     updates, remove, _, conflicts, skipped = _plan(source, target, target)
     assert updates == {} and remove == [] and (conflicts, skipped) == (0, 2)
+
+
+def test_windows_source_preserves_posix_executable_flags():
+    from project_mirrors import _plan, _portable
+
+    original = ["file", "0" * 64, 3, 1]
+    target = {"run": original}
+    source = {"run": ["file", original[1], 3, 0]}
+    assert _plan(_portable(source, "linux", "win32"), target, target)[2] == []
+    new = ["file", "1" * 64, 4, 0]
+    updates, remove, _, conflicts, _ = _plan(_portable({"run": new}, "darwin", "win32"), target, target)
+    assert updates == {"run": ["file", new[1], 4, 1]} and not remove and not conflicts
+
+
+def test_legacy_manifest_with_external_git_is_rejected():
+    from fastapi import HTTPException
+    from project_mirrors import _entries
+
+    with pytest.raises(HTTPException) as error:
+        _entries({"entries": {".git": ["file", "0" * 64, 42, 0]}})
+    assert error.value.status_code == 409
+    assert "отдельный клон" in error.value.detail["message"]
+
+
+def test_preserving_nested_file_keeps_its_parent_but_applies_other_changes():
+    from fastapi import HTTPException
+    from project_mirrors import Sync, _plan, _selection
+
+    old = ["file", "0" * 64, 3, 0]
+    new = ["file", "1" * 64, 4, 0]
+    target = {"tree": mirror.DIRECTORY, "tree/keep": old, "tree/remove": old}
+    source = {"tree": new, "other": new}
+    updates, remove, changes, _, _ = _plan(source, target, target)
+    keep = [index for index, entry in enumerate(changes) if entry[0] == "tree/keep"]
+    selected = Sync(plan="0" * 64, keep=keep)
+    assert _selection({"changes": changes}, selected, updates, remove) == ({"other": new}, ["tree/remove"])
+    with pytest.raises(HTTPException) as error:
+        _selection({"changes": changes}, Sync(plan="0" * 64, keep=[len(changes)]), updates, remove)
+    assert error.value.status_code == 422 and error.value.detail["code"] == "invalid"
+
+    # На Windows смена регистра выглядит как удаление и создание, но путь остаётся тем же.
+    target = {"Settings": old}
+    source = {"settings": new, "other": new}
+    updates, remove, changes, _, _ = _plan(source, target, target, windows=True)
+    keep = [index for index, entry in enumerate(changes) if entry[0] == "Settings"]
+    selected = Sync(plan="0" * 64, keep=keep)
+    assert _selection({"changes": changes}, selected, updates, remove) == ({"other": new}, [])
+
+
+def test_first_equal_comparison_establishes_baseline_for_both_directions(studio, computers):
+    source, first, second = computers
+    root = mirror.projects.list_roots(second.roots)[1]
+    clone = Path(root["path"]) / source.name
+    shutil.copytree(source, clone)
+    make_user(studio, "owner")
+    left, _ = enroll(studio, name="Source")
+    right, _ = enroll(studio, name="Destination")
+    connect(studio, left, first)
+    connect(studio, right, second)
+    signin(studio, "owner")
+    client = studio.c
+    assert client.post(f"/api/code/agents/{left}/open", json={"pin": None}).status_code == 204
+    assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+    url = f"/api/code/agents/{left}/projects/{pid(source.name)}/mirrors"
+    created = client.post(url, json={"destination": right, "root": root["id"], "name": source.name, "existing": True})
+    assert created.status_code == 201, created.text
+    endpoint = f"{url}/{created.json()['id']}"
+    assert client.post(endpoint + "/compare").json()["changes"] == []
+    assert client.get(endpoint).json()["synced"] is None
+    (source / "notes.txt").write_bytes(b"source only")
+    assert client.post(endpoint + "/compare").json()["conflicts"] == 0
+    (source / "notes.txt").write_bytes(b"original\n")
+    (clone / "notes.txt").write_bytes(b"copy only")
+    assert client.post(endpoint + "/compare").json()["conflicts"] == 1
 
 
 def test_discovery_respects_pin_and_links_only_a_present_unreserved_copy(studio, computers, monkeypatch):

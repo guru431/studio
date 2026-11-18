@@ -12,9 +12,9 @@
   -2, -3, …), рядом — журнал video-manifest.tsv (картинка, ролик, seed, длительность, качество,
   дорисовка, вариант, откуда промпт, промпт, модель, отпечаток).
 
-  Промпт картинки: <имя>.txt рядом (UTF-8, целиком) → иначе -Prompt → иначе <имя>.auto.txt
-  (промпт, придуманный службой в прошлый раз) → иначе пусто: служба опишет движение по фото
-  сама, а скрипт сохранит её промпт в <имя>.auto.txt — повторный запуск отдаст его как свой.
+  Промпт картинки: <имя>.txt рядом (UTF-8, целиком) → иначе -Prompt → иначе сохранённый авто-
+  промпт в .studio-video-prompts/<имя с расширением>.txt → иначе служба придумает, а скрипт его сохранит.
+  Старый <имя>.auto.txt читается, если в папке только одна картинка с таким именем без расширения.
 
   Задания уходят очередью: скрипт шлёт все, пока служба принимает; «очередь полна» (429) —
   ждёт, пока выйдут отправленные, и досылает; «карта или служба недоступна» (503) — задание
@@ -23,10 +23,13 @@
   доделает повторный запуск по журналу. Повторный запуск пропускает ролик, если в журнале
   есть ролик с тем же отпечатком и его файл на месте. Отпечаток — sha256 содержимого картинки,
   модели, seed (если задан -Seed), длительности, качества, дорисовки, номера варианта и своего
-  промпта (<имя>.txt или -Prompt; промпт службы и <имя>.auto.txt в него не входят): смена
+  промпта (<имя>.txt или -Prompt; сохранённый автопромпт в него не входит): смена
   любого из них — новый ролик. Строки журнала прежней версии (без отпечатка) сверяются только
   по имени картинки, длительности, качеству, дорисовке и варианту — смены промпта, seed, модели
   и содержимого картинки по ним не видно, скрипт об этом предупреждает. -Redo — сделать заново.
+
+  Если готовый ролик не удалось скачать или записать, задание остаётся у шлюза до истечения
+  срока хранения (30 минут с готовности). Скрипт печатает URL для повторного GET с тем же ключом.
 
   Код выхода: 0 — все ролики готовы или уже были; 3 — хотя бы один не вышел (не отправлен,
   не сделан службой, не скачался, картинка больше 20 МБ или промпт длиннее предела); 1 — скрипт
@@ -282,16 +285,33 @@ function Send-Video($Job) {
     return Invoke-Gateway 'POST' '/videos' -Form $form -ImageFile $Job.Image.FullName
 }
 
+function Keep-CompletedVideo($Job, [string]$Why) {
+    Write-Warning ("$(Get-Label $Job): $Why. До истечения срока хранения (30 мин с готовности) " +
+        "скачайте повторно: GET $Url/videos/$($Job.Id)/content с тем же Bearer-ключом")
+    $script:failed++
+    return $true
+}
+
 # Список заданий службы одним запросом (id → объект): опрос по заданию упёрся бы в предел
 # запросов ключа (rpm) уже на паре десятков роликов. $null — список не получен ($script:listError).
 function Get-Listing {
     $script:listError = ''
     try { $r = Invoke-Gateway 'GET' '/videos' }
     catch { $script:listError = "нет ответа: $($_.Exception.Message)"; return $null }
-    $obj = if ($r.Status -eq 200) { Read-Json $r.Text } else { $null }
-    if (-not $obj) { $script:listError = Get-FailText $r; return $null }
+    if ($r.Status -ne 200) { $script:listError = Get-FailText $r; return $null }
+    $obj = if ($r.Text.TrimStart().StartsWith('{')) { Read-Json $r.Text } else { $null }
+    if ($obj.data -isnot [array]) {
+        $script:listError = 'служба вернула неверный список заданий — повторю'
+        return $null
+    }
     $map = @{}
-    foreach ($v in @($obj.data)) { if ($v.id) { $map["$($v.id)"] = $v } }
+    foreach ($v in $obj.data) {
+        if ($v -isnot [pscustomobject] -or $v.id -isnot [string] -or -not $v.id) {
+            $script:listError = 'служба вернула неверный список заданий — повторю'
+            return $null
+        }
+        $map[$v.id] = $v
+    }
     return $map
 }
 
@@ -304,14 +324,20 @@ function Update-Video($Job, $Listing) {
         return $true
     }
     $obj = $Listing[$Job.Id]
+    if ($obj.status -eq 'completed') { $Job.Completed = $true }
     if ($obj.detail) { Show-Detail $Job "$($obj.detail)" }
     if ($obj.status -eq 'in_progress' -and -not $Job.Running) { $Job.Running = Get-Date }
-    # Придуманный службой промпт — в <имя>.auto.txt, у вариантов он общий: один раз
+    # Автопромпт общий для вариантов одной картинки, полное имя включает расширение.
     if (-not $Job.Prompt -and "$($obj.prompt_source)" -eq 'auto' -and $obj.prompt -and
-            -not $autoSaved.ContainsKey($Job.Base)) {
-        [IO.File]::WriteAllText((Join-Path $Folder "$($Job.Base).auto.txt"), "$($obj.prompt)".Trim(), $Utf8NoBom)
-        $autoSaved[$Job.Base] = $true
-        Write-Host "$(Get-Label $Job): промпт службы сохранён в $($Job.Base).auto.txt"
+            $autoSaved.Add($Job.Image.Name)) {
+        $autoFile = "$($Job.Image.Name).txt"
+        try {
+            [void][IO.Directory]::CreateDirectory($autoDir)
+            [IO.File]::WriteAllText((Join-Path $autoDir $autoFile), "$($obj.prompt)".Trim(), $Utf8NoBom)
+            Write-Host "$(Get-Label $Job): промпт службы сохранён в .studio-video-prompts/$autoFile"
+        } catch {
+            Write-Warning "$(Get-Label $Job): промпт службы не записался — $($_.Exception.Message)"
+        }
     }
     if ($obj.status -eq 'failed') {
         $why = if ($obj.error.message) { "$($obj.error.message)" } else { 'служба не назвала причину' }
@@ -326,15 +352,13 @@ function Update-Video($Job, $Listing) {
     try {
         $c = Invoke-Gateway 'GET' "/videos/$($Job.Id)/content" -Binary
         if ($c.Status -ne 200) { $why = Get-FailText $c }
+        elseif (-not $c.Bytes.Length) { $why = 'шлюз вернул пустой файл' }
     } catch { $why = $_.Exception.Message }
     if ($why) {
         # Готовый ролик служба держит 30 минут: сетевой сбой не повод его терять
         $Job.Tries++
         if ($Job.Tries -lt 3) { Show-Detail $Job "не скачался ($why), повторю"; return $false }
-        Write-Warning "$(Get-Label $Job): не скачался — $why"
-        Remove-Video $Job
-        $script:failed++
-        return $true
+        return (Keep-CompletedVideo $Job "не скачался — $why")
     }
     $seedOut = if ($null -ne $obj.seed) { [long]$obj.seed } else { $Job.Seed }
     # Отпечаток в имени разводит картинки с одним именем и разные запросы; занятое имя не
@@ -343,24 +367,25 @@ function Update-Video($Job, $Listing) {
     $file = "$stem.mp4"
     for ($n = 2; Test-Path -LiteralPath (Join-Path $Folder $file); $n++) { $file = "$stem-$n.mp4" }
     $path = Join-Path $Folder $file
+    $ownPart = $false
     try {
-        [IO.File]::WriteAllBytes("$path.part", $c.Bytes)
+        $stream = [IO.File]::Open("$path.part", [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+        $ownPart = $true
+        try { $stream.Write($c.Bytes, 0, $c.Bytes.Length) } finally { $stream.Dispose() }
         [IO.File]::Move("$path.part", $path)
+        $ownPart = $false
+        $promptOut = if ($Job.Prompt) { $Job.Prompt } else { "$($obj.prompt)" }
+        $sourceOut = if ($Job.Source) { $Job.Source } elseif ($obj.prompt_source) { "$($obj.prompt_source)" } else { 'auto' }
+        Add-ManifestLine @($Job.Image.Name, $file, "$seedOut", "$Seconds", $Quality, $smoothText, "$($Job.Variant)",
+                           $sourceOut, $promptOut, $Model, $Job.Key)
     } catch {
-        # Диск полон, нет прав, имя занято: один ролик — не повод ронять прогон и снимать чужие
         $e = $_.Exception
         if ($e.InnerException) { $e = $e.InnerException }
-        Write-Warning "$(Get-Label $Job): не записался — $($e.Message)"
-        try { if (Test-Path -LiteralPath "$path.part" -PathType Leaf) { [IO.File]::Delete("$path.part") } } catch { }
-        Remove-Video $Job
-        $script:failed++
-        return $true
+        return (Keep-CompletedVideo $Job "не записался — $($e.Message)")
+    } finally {
+        if ($ownPart) { try { [IO.File]::Delete("$path.part") } catch { } }
     }
     Remove-Video $Job
-    $promptOut = if ($Job.Prompt) { $Job.Prompt } else { "$($obj.prompt)" }
-    $sourceOut = if ($Job.Source) { $Job.Source } elseif ($obj.prompt_source) { "$($obj.prompt_source)" } else { 'auto' }
-    Add-ManifestLine @($Job.Image.Name, $file, "$seedOut", "$Seconds", $Quality, $smoothText, "$($Job.Variant)",
-                       $sourceOut, $promptOut, $Model, $Job.Key)
     $script:done++
     $from = if ($Job.Running) { $Job.Running } else { $Job.Sent }
     Write-Host "$(Get-Label $Job): готово за $(Format-Span ((Get-Date) - $from)) → $file"
@@ -368,6 +393,7 @@ function Update-Video($Job, $Listing) {
 }
 
 $manifest = Join-Path $Folder 'video-manifest.tsv'
+$autoDir = Join-Path $Folder '.studio-video-prompts'
 $header = @('image', 'video', 'seed', 'seconds', 'quality', 'smooth', 'variant', 'prompt_source', 'prompt', 'model',
             'fingerprint')
 $recorded = @{}
@@ -384,7 +410,8 @@ if (Test-Path -LiteralPath $manifest) {
     foreach ($row in $rows) {
         $c = $row.Split("`t")
         if ($c.Count -lt 9 -or $c[0] -eq 'image') { continue }
-        if (-not (Test-Path -LiteralPath (Join-Path $Folder $c[1]) -PathType Leaf)) { continue }
+        $savedVideo = Get-Item -LiteralPath (Join-Path $Folder $c[1]) -ErrorAction SilentlyContinue
+        if (-not $savedVideo -or $savedVideo.PSIsContainer -or -not $savedVideo.Length) { continue }
         if ($c.Count -ge 11 -and $c[10]) { $recorded[$c[10]] = $true }
         else { $legacy[(@($c[0], $c[3], $c[4], $c[5], $c[6]) -join "`t")] = $true }
     }
@@ -402,6 +429,8 @@ $images = @(Get-ChildItem -LiteralPath $Folder -File |
     Where-Object { $Mime.ContainsKey($_.Extension.ToLowerInvariant()) -and -not $_.Name.StartsWith('.') } |
     Sort-Object { $_.Name.ToLowerInvariant() })
 if ($images.Count -eq 0) { throw "В папке $Folder нет картинок (.jpg .jpeg .png .webp)" }
+$byStem = @{}
+foreach ($img in $images) { $byStem[[IO.Path]::GetFileNameWithoutExtension($img.Name)]++ }
 
 $done = 0
 $failed = 0
@@ -418,7 +447,10 @@ foreach ($img in $images) {
     }
     $base = [IO.Path]::GetFileNameWithoutExtension($img.Name)
     $own = Join-Path $Folder "$base.txt"
-    $saved = Join-Path $Folder "$base.auto.txt"
+    $saved = Join-Path $autoDir "$($img.Name).txt"
+    if (-not (Test-Path -LiteralPath $saved -PathType Leaf) -and $byStem[$base] -eq 1) {
+        $saved = Join-Path $Folder "$base.auto.txt"
+    }
     $text = ''
     $source = ''
     if (Test-Path -LiteralPath $own -PathType Leaf) { $text = [IO.File]::ReadAllText($own, [Text.Encoding]::UTF8).Trim() }
@@ -434,8 +466,19 @@ foreach ($img in $images) {
         continue
     }
     # Отпечаток запроса (тот же у Python-версии): промпт — только свой; придуманный
-    # службой и <имя>.auto.txt не входят, иначе повтор переделывал бы готовое
-    $digest = Get-Sha256 ([IO.File]::ReadAllBytes($img.FullName))
+    # службой и сохранённый автопромпт не входят, иначе повтор переделывал бы готовое
+    try { $imageBytes = [IO.File]::ReadAllBytes($img.FullName) }
+    catch {
+        Write-Warning "$($img.Name): не удалось прочитать исходник — $($_.Exception.Message)"
+        $failed += $Count
+        continue
+    }
+    if ($imageBytes.Length -gt $MaxImage) {
+        Write-Warning "$($img.Name): больше 20 МБ — пропущена"
+        $failed += $Count
+        continue
+    }
+    $digest = Get-Sha256 $imageBytes
     $ownPrompt = if ($source -eq 'file' -or $source -eq 'common') { $text -replace "\r\n?", "`n" } else { '' }
     $added = 0
     for ($k = 1; $k -le $Count; $k++) {
@@ -455,7 +498,7 @@ foreach ($img in $images) {
         [void]$todo.Add([pscustomobject]@{ N = $todo.Count + 1; Image = $img; Base = $base; Variant = $k
                                            Seed = $seedValue; Prompt = $text; Source = $source; Key = $key
                                            Id = ''; Detail = ''; Sent = $null; Running = $null; Tries = 0
-                                           Unavailable = 0 })
+                                           Unavailable = 0; Completed = $false })
         $added++
     }
     if ($added) { Write-Host "  $($img.Name): роликов $added, промпт — $label" }
@@ -468,7 +511,7 @@ if ($legacySkipped) {
 }
 
 $active = New-Object Collections.ArrayList
-$autoSaved = @{}
+$autoSaved = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $next = 0
 $sent = 0
 $full = $false
@@ -527,9 +570,10 @@ try {
     }
 } finally {
     # Ctrl+C или ошибка: свои незавершённые задания — снять, чтобы служба не рендерила впустую
-    if ($active.Count -gt 0) {
-        Write-Warning "Отменяю свои незавершённые задания: $($active.Count)"
-        foreach ($job in @($active)) { Remove-Video $job }
+    $unfinished = @($active | Where-Object { -not $_.Completed })
+    if ($unfinished.Count -gt 0) {
+        Write-Warning "Отменяю свои незавершённые задания: $($unfinished.Count)"
+        foreach ($job in $unfinished) { Remove-Video $job }
     }
     # Освобождение — в своём try: сетевой сбой не должен затереть исходную ошибку и итог
     if ($KeepCard) { }

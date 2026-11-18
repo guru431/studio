@@ -59,7 +59,7 @@ def history(uid, tag):
         put("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
             " VALUES (?, ?, 'user', ?, 'done', 'server', NULL, ?)", f"{chat}-q", chat, f"{tag} question {n}", T0)
         put("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
-            " VALUES (?, ?, 'assistant', ?, 'done', 'server', 'm', ?)", f"{chat}-a", chat, f"{tag} answer {n}", T0 + 1)
+            " VALUES (?, ?, 'assistant', ?, 'done', 'server', 'm', ?)", f"{chat}-a", chat, f"{tag} answer {n}", T0)
     put("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
         " VALUES (?, ?, ?, 'document', ?, ?, ?, 5, ?)", f"{tag}att", uid, f"{tag}chat1-q", f"{tag}.pdf", m["doc"],
         f"{tag} doc text", T0)
@@ -123,6 +123,9 @@ def unzip(z) -> zipfile.ZipFile:
 def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     m = history(uid, "mine")
+    put("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
+        " SELECT 'earlier-id', user_id, message_id, kind, name, media_id, text, chars, created"
+        " FROM attachments WHERE id = 'mineatt'")
     with caplog.at_level(logging.INFO, logger="studio"):
         est, z = download(studio)
     assert est["files"] == 9 and est["bytes"] == sum(len(DATA) + len(k) for k in m)
@@ -145,8 +148,9 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     assert chat["title"] == "mine title 1" and [x["content"] for x in chat["messages"]] == ["mine question 1",
                                                                                               "mine answer 1"]
     att = chat["messages"][0]["attachments"]
-    assert att == [{"id": "mineatt", "kind": "document", "name": "mine.pdf", "chars": 5, "text": "mine doc text",
-                    "file": f"files/{m['doc']}.pdf"}]
+    first_att = {"id": "mineatt", "kind": "document", "name": "mine.pdf", "chars": 5, "text": "mine doc text",
+                 "file": f"files/{m['doc']}.pdf"}
+    assert att == [first_att, {**first_att, "id": "earlier-id"}]
     image = json.loads(zf.read("images/0001.json"))[0]
     assert image["prompt"] == "mine prompt" and image["file"] == f"files/{m['img']}.png"
     assert image["source_file"] == f"files/{m['src']}.jpg" and image["mask_file"] == f"files/{m['mask']}.png"

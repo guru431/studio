@@ -255,7 +255,9 @@ async def get_storage():
     if PROBE is None or PROBE.done():
         PROBE = _start_probe(state.CFG.media_dir)
     files, since = media.waiting()
-    out = {"pending": {"files": files, "since": since}, "orphans": media.orphans(), "check": _last_check()}
+    copy = manage.last_copy(state.DB)
+    out = {"pending": {"files": files, "since": since}, "orphans": media.orphans(), "check": _last_check(),
+           "copy": {"ok": copy["ok"], "at": copy["at"]} if copy else None}
     probe = asyncio.wrap_future(PROBE)
     done, _ = await asyncio.wait({probe}, timeout=PROBE_SEC)
     if not done:
@@ -320,28 +322,33 @@ def _last_check() -> "dict | None":
         "age": clock.NOW() - last["at"]}
 
 
-#: как часто служба смотрит итог ночной проверки копии (его пишет manage.py verify-backup другим процессом)
+#: как часто служба смотрит итоги копирования и проверки, записанные другим процессом
 CHECK_WATCH_SEC = 900
 CHECK_NOTICE = "Копия базы не поднимается: проблем — {}. Подробности — «Администрирование» → «Хранилище»"
+COPY_NOTICE = "Не удалось выполнить резервное копирование базы. Подробности — «Администрирование» → «Хранилище»"
 
 
 def notify_failed_check() -> int:
     """Провальный итог, о котором ещё не сообщали, — push и ntfy активным администраторам, один раз:
     отметка `notified` ставится сравнением с прочитанным значением, новый итог между чтением и отметкой
     достанется следующему проходу. Возвращает число уведомлённых."""
-    row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (manage.CHECK_KEY,)).fetchone()
-    last = json.loads(row["value"]) if row else None
-    if last is None or last["notified"]:
-        return 0
-    marked = json.dumps(last | {"notified": True})
-    if state.DB.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?",
-                        (marked, manage.CHECK_KEY, row["value"])).rowcount != 1:
-        return 0
-    admins = [r["id"] for r in state.DB.execute("SELECT id FROM users WHERE is_admin = 1 AND disabled = 0")]
-    for uid in admins:
-        push.notify_later(uid, CHECK_NOTICE.format(last["problems"]), "admin", "backup-check", title="Студия")
-    log.warning("backup-check: копия не поднимается, уведомлены администраторы (%d)", len(admins))
-    return len(admins)
+    notified = set()
+    for key, tag in ((manage.COPY_KEY, "backup-copy"), (manage.CHECK_KEY, "backup-check")):
+        row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        last = json.loads(row["value"]) if row else None
+        if last is None or last["notified"]:
+            continue
+        marked = json.dumps(last | {"notified": True})
+        if state.DB.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?",
+                            (marked, key, row["value"])).rowcount != 1:
+            continue
+        notice = COPY_NOTICE if key == manage.COPY_KEY else CHECK_NOTICE.format(last["problems"])
+        admins = [r["id"] for r in state.DB.execute("SELECT id FROM users WHERE is_admin = 1 AND disabled = 0")]
+        for uid in admins:
+            push.notify_later(uid, notice, "admin", tag, title="Студия")
+        notified.update(admins)
+        log.warning("%s: уведомлены администраторы (%d)", tag, len(admins))
+    return len(notified)
 
 
 async def _watch_checks() -> None:
