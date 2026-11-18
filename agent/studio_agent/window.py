@@ -221,19 +221,21 @@ class MainWindow:
         theme.dark_title(self.win, self.c["dark"])
         self.win.rowconfigure(0, weight=1)
         self.win.columnconfigure(0, weight=1)
-        self.viewport = tk.Canvas(self.win, background=self.c["bg"], highlightthickness=0,
-                                  borderwidth=0, takefocus=False)
-        self.viewport.grid(row=0, column=0, sticky="nsew")
-        self.scroll = ttk.Scrollbar(self.win, orient="vertical", command=self.viewport.yview)
-        self.viewport.configure(yscrollcommand=self.scroll.set)
+        self.viewport = None
         self._fit_pending = False
         self._body_window = None
-        self.win.bind("<MouseWheel>", self.scroll_wheel)
-        self.win.bind("<FocusIn>", self.reveal_focus)
         self.permission_value = None
         self._permission_check = False
         if host.MACOS:
-            self.win.bind('<FocusIn>', lambda _: self.refresh_permissions(), add='+')
+            self.win.bind('<FocusIn>', lambda _: self.refresh_permissions())
+        else:
+            self.viewport = tk.Canvas(self.win, background=self.c["bg"], highlightthickness=0,
+                                      borderwidth=0, takefocus=False)
+            self.viewport.grid(row=0, column=0, sticky="nsew")
+            self.scroll = ttk.Scrollbar(self.win, orient="vertical", command=self.viewport.yview)
+            self.viewport.configure(yscrollcommand=self.scroll.set)
+            self.win.bind("<MouseWheel>", self.scroll_wheel)
+            self.win.bind("<FocusIn>", self.reveal_focus)
         self.body = None
         self.render()
         self.refresh_connection_info()
@@ -256,17 +258,20 @@ class MainWindow:
         if not self.alive():
             return
         left, top, available_width, available_height = _work_area(self.win)
-        width = min(self.body.winfo_reqwidth(), max(1, available_width - self.px(32)))
-        content_height = self.body.winfo_reqheight()
-        height = min(content_height, max(1, available_height - self.px(48)))
-        if content_height > height:
-            self.scroll.grid(row=0, column=1, sticky="ns")
-        else:
-            self.scroll.grid_remove()
-        self.viewport.itemconfigure(self._body_window, width=width)
-        self.viewport.configure(width=width, height=height, scrollregion=(0, 0, width, content_height))
-        outer_width = width + (self.scroll.winfo_reqwidth() if content_height > height else 0) + self.px(16)
-        x = max(left, min(self.win.winfo_x(), left + available_width - outer_width))
+        width, height = self.body.winfo_reqwidth(), self.body.winfo_reqheight()
+        if self.viewport is not None:
+            width = min(width, max(1, available_width - self.px(32)))
+            content_height = height
+            height = min(height, max(1, available_height - self.px(48)))
+            if content_height > height:
+                self.scroll.grid(row=0, column=1, sticky="ns")
+            else:
+                self.scroll.grid_remove()
+            self.viewport.itemconfigure(self._body_window, width=width)
+            self.viewport.configure(width=width, height=height, scrollregion=(0, 0, width, content_height))
+            if content_height > height:
+                width += self.scroll.winfo_reqwidth()
+        x = max(left, min(self.win.winfo_x(), left + available_width - width - self.px(16)))
         y = max(top, min(self.win.winfo_y(), top + available_height - height - self.px(48)))
         self.win.geometry(f"{x:+d}{y:+d}")
 
@@ -384,16 +389,20 @@ class MainWindow:
     def render(self) -> None:
         ttk = self.ttk
         self.buttons = []
-        self.card_widgets = self.pin_line = self.login_value = self.activity_widgets = None
+        self.card_widgets = self.pin_line = self.login_value = self.activity_widgets = self.permission_value = None
         self.backend_widgets = {}
         if self.body is not None:
             self.body.destroy()
-        if self._body_window is not None:
-            self.viewport.delete(self._body_window)
-        self.body = ttk.Frame(self.viewport, padding=self.px(8))
-        self._body_window = self.viewport.create_window(0, 0, window=self.body, anchor="nw")
+        if self.viewport is None:
+            self.body = ttk.Frame(self.win, padding=self.px(8))
+            self.body.grid(row=0, column=0, sticky='nsew')
+        else:
+            if self._body_window is not None:
+                self.viewport.delete(self._body_window)
+            self.body = ttk.Frame(self.viewport, padding=self.px(8))
+            self._body_window = self.viewport.create_window(0, 0, window=self.body, anchor="nw")
+            self.viewport.yview_moveto(0)
         self.body.bind("<Configure>", self.schedule_fit)
-        self.viewport.yview_moveto(0)
         self.body.columnconfigure(0, weight=1, minsize=self.px(400))  # ширина не скачет со сменой состояния
         self.header()
         if view_of(self.enrolled) == "login":
@@ -602,7 +611,12 @@ class MainWindow:
                             (self.settings_page, "Настройки")):
             page.columnconfigure(0, weight=1)
             self.sections.add(page, text=label)
-        self.sections.bind("<<NotebookTabChanged>>", lambda e: self.viewport.yview_moveto(0))
+        if host.MACOS:
+            self.access_page = ttk.Frame(self.sections, padding=(0, self.px(6), 0, 0))
+            self.access_page.columnconfigure(0, weight=1)
+            self.sections.add(self.access_page, text="Доступ")
+        else:
+            self.sections.bind("<<NotebookTabChanged>>", lambda e: self.viewport.yview_moveto(0))
         box = self.card(0, host=connection)
         box.columnconfigure(0, weight=0)
         box.columnconfigure(1, weight=1)
@@ -768,7 +782,14 @@ class MainWindow:
                                    style="Card.TCheckbutton")
         box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=self.px(6))
         self.buttons.append(box_auto)
-        self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
+        if host.MACOS:
+            access = self.card(0, host=self.access_page)
+            access_problem = tk.StringVar()
+            self.desktop_control(access, row=0, enabled=cfg.desktop_enabled, problem=access_problem)
+            ttk.Label(access, textvariable=access_problem, style="Card.Error.TLabel",
+                      wraplength=self.px(380)).grid(row=1, column=0, sticky='w')
+        else:
+            self.desktop_control(box, row=6, enabled=cfg.desktop_enabled, problem=problem)
         self.pin_line = ttk.Frame(box, style="Card.TFrame")
         self.pin_line.grid(row=7, column=0, columnspan=2, sticky="ew")
         self.pin_line.columnconfigure(0, weight=1)
@@ -841,19 +862,25 @@ class MainWindow:
 
             def permit(kind):
                 problem.set("")
-                self.work(lambda: request_permission(kind),
-                          lambda _, failed: problem.set(FAILED) if failed else None)
+                try:
+                    request_permission(kind)
+                except Exception as error:
+                    log.warning('разрешения macOS: %s', type(error).__name__)
+                    problem.set('Откройте «Конфиденциальность и безопасность» в настройках macOS')
+                self.refresh_permissions()
 
-            self.ttk.Label(area, text="macOS: разрешите запись экрана и управление вводом для Studio Agent."
-                           " После разрешения записи экрана может понадобиться перезапуск агента.",
+            self.ttk.Label(area, text="В настройках macOS включите Studio Agent. Если его нет в списке,"
+                           " добавьте приложение кнопкой «+». Для записи экрана macOS может попросить перезапуск.",
                            style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
                 row=2, column=0, sticky="w", pady=(self.px(4), 0))
             self.permission_value = self.ttk.Label(area, text='Проверка разрешений macOS…',
                 style='Card.TLabel', justify='left', wraplength=self.px(380))
             self.permission_value.grid(row=3, column=0, sticky='w', pady=(self.px(4), 0))
-            for index, (kind, label) in enumerate((("screen", "Запись экрана…"), ("input", "Управление вводом…")), 4):
-                permission = self.ttk.Button(area, text=label, command=lambda k=kind: permit(k))
-                permission.grid(row=index, column=0, sticky="w", pady=(self.px(4), 0))
+            actions = self.ttk.Frame(area, style="Card.TFrame")
+            actions.grid(row=4, column=0, sticky='w', pady=(self.px(6), 0))
+            for column, (kind, label) in enumerate((("screen", "Запись экрана…"), ("input", "Универсальный доступ…"))):
+                permission = self.ttk.Button(actions, text=label, command=lambda k=kind: permit(k))
+                permission.grid(row=0, column=column, padx=(0, self.px(6)))
                 self.buttons.append(permission)
             self.refresh_permissions()
 
@@ -897,24 +924,33 @@ class MainWindow:
         area = ttk.Frame(box, style="Card.TFrame")
         area.grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(self.px(3), self.px(6)))
         area.columnconfigure(0, weight=1)
-        viewport = ttk.Frame(area, width=self.px(285), height=self.px(52), style="Card.TFrame")
-        viewport.grid(row=0, column=0, sticky="ew")
-        viewport.grid_propagate(False)
-        viewport.rowconfigure(0, weight=1)
-        viewport.columnconfigure(0, weight=1)
-        listing = ttk.Treeview(viewport, show="tree", selectmode="browse", height=2, style="Folders.Treeview")
-        listing.column("#0", minwidth=self.px(180), width=self.px(285), stretch=False)
-        listing.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(area, orient="vertical", command=listing.yview)
-        scroll.grid(row=0, column=1, sticky="ns")
-        listing.configure(yscrollcommand=scroll.set)
-        horizontal = ttk.Scrollbar(area, orient="horizontal", command=listing.xview)
-        horizontal.grid(row=1, column=0, sticky="ew")
-        listing.configure(xscrollcommand=horizontal.set)
+        if host.MACOS:
+            listing = ttk.Combobox(area, state="readonly", width=27)
+            listing.grid(row=0, column=0, sticky='ew')
+        else:
+            viewport = ttk.Frame(area, width=self.px(285), height=self.px(52), style="Card.TFrame")
+            viewport.grid(row=0, column=0, sticky="ew")
+            viewport.grid_propagate(False)
+            viewport.rowconfigure(0, weight=1)
+            viewport.columnconfigure(0, weight=1)
+            listing = ttk.Treeview(viewport, show="tree", selectmode="browse", height=2, style="Folders.Treeview")
+            listing.column("#0", minwidth=self.px(180), width=self.px(285), stretch=False)
+            listing.grid(row=0, column=0, sticky="nsew")
+            scroll = ttk.Scrollbar(area, orient="vertical", command=listing.yview)
+            scroll.grid(row=0, column=1, sticky="ns")
+            listing.configure(yscrollcommand=scroll.set)
+            horizontal = ttk.Scrollbar(area, orient="horizontal", command=listing.xview)
+            horizontal.grid(row=1, column=0, sticky="ew")
+            listing.configure(xscrollcommand=horizontal.set)
         bar = ttk.Frame(area, style="Card.TFrame")
         bar.grid(row=0, column=2, rowspan=2, sticky="n", padx=(self.px(6), 0))
 
         def render() -> None:
+            if host.MACOS:
+                listing.configure(values=folders)
+                if folders:
+                    listing.current(len(folders) - 1)
+                return
             import tkinter.font as tkfont
 
             listing.delete(*listing.get_children())
@@ -954,12 +990,14 @@ class MainWindow:
                     apply([*folders, path])
 
         def remove() -> None:
-            if self.busy or not listing.selection():
+            if self.busy:
+                return
+            index = listing.current() if host.MACOS else int(next(iter(listing.selection()), -1))
+            if index < 0:
                 return
             if len(folders) <= 1:
                 problem.set("Нужна хотя бы одна папка проектов")
                 return
-            index = int(listing.selection()[0])
             apply(folders[:index] + folders[index + 1:])
 
         for index, (label, action) in enumerate((("Добавить…", add), ("Убрать", remove))):

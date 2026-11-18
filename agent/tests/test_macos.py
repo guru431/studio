@@ -80,6 +80,8 @@ def test_macos_finds_the_cli_in_the_opencode_desktop_application(tmp_path, monke
 
 def test_macos_launchagent_preserves_argv_and_does_not_start_or_stop_processes(tmp_path, monkeypatch):
     target = tmp_path / 'LaunchAgents/com.studio.agent.plist'
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(macos_autostart, 'SYSTEM_APPLICATIONS', tmp_path / 'shared-applications')
     monkeypatch.setattr(macos_autostart, 'path', lambda: target)
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: pytest.fail('must not touch running bridge'))
     repo = tmp_path / 'Studio Agent/release-one'
@@ -95,6 +97,7 @@ def test_macos_launchagent_preserves_argv_and_does_not_start_or_stop_processes(t
 
 def test_native_launcher_is_used_for_autostart_updates_and_rollback(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(macos_autostart, 'SYSTEM_APPLICATIONS', tmp_path / 'shared-applications')
     monkeypatch.setattr(update_helper, 'MACOS', True)
     binary = tmp_path / 'Applications/Studio Agent.app/Contents/MacOS/studio-agent'
     binary.parent.mkdir(parents=True)
@@ -106,6 +109,26 @@ def test_native_launcher_is_used_for_autostart_updates_and_rollback(tmp_path, mo
         '/usr/bin/open', '-n', '-W', str(binary.parents[2]), '--args', '--studio-repo', str(repo)]
     binary.write_bytes(b'#!/bin/sh\nexec python\n')
     assert macos_autostart.arguments(repo) == [str(repo / '.venv/bin/python'), str(repo / 'studio_agent.pyw')]
+
+
+def test_standard_macos_install_uses_applications_and_launch_services(tmp_path, monkeypatch):
+    common = tmp_path / 'Applications'
+    user = tmp_path / 'user'
+    monkeypatch.setattr(macos_autostart, 'SYSTEM_APPLICATIONS', common)
+    monkeypatch.setattr(Path, 'home', lambda: user)
+    monkeypatch.setattr(os, 'getuid', lambda: common.stat().st_uid, raising=False)
+    monkeypatch.delenv('STUDIO_AGENT_HOME', raising=False)
+    common.mkdir()
+    assert macos_autostart.application_directory() == common
+    binary = common / 'Studio Agent.app/Contents/MacOS/studio-agent'
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b'\xca\xfe\xba\xbe fixture')
+    repo = tmp_path / 'releases/release-current'
+    macos_autostart.set_enabled(True, repo)
+    assert macos_autostart.read()['ProgramArguments'] == [
+        '/usr/bin/open', '-n', '-W', str(binary.parents[2]), '--args', '--studio-repo', str(repo)]
+    monkeypatch.setenv('STUDIO_AGENT_HOME', str(tmp_path / 'isolated'))
+    assert macos_autostart.application_directory() == user / 'Applications'
 
 
 def test_first_update_from_python_switches_to_native_before_gui_start(tmp_path, monkeypatch):

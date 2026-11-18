@@ -2,7 +2,6 @@
 import base64
 import io
 import os
-import subprocess
 import threading
 import time
 
@@ -44,19 +43,26 @@ def permission_status(_quartz=None):
 
 
 def request_permission(kind):
-    """Вызывается исключительно кнопкой локального окна, никогда из протокола."""
+    """Системный запрос выполняет главный поток приложения по локальной кнопке."""
     import Quartz as q
+    from AppKit import NSWorkspace
+    from Foundation import NSURL
+
     if kind == 'screen':
-        q.CGRequestScreenCaptureAccess()
+        allowed, request = q.CGPreflightScreenCaptureAccess, q.CGRequestScreenCaptureAccess
         pane = 'Privacy_ScreenCapture'
     elif kind == 'input':
-        q.CGRequestPostEventAccess()
+        allowed, request = q.CGPreflightPostEventAccess, q.CGRequestPostEventAccess
         pane = 'Privacy_Accessibility'
     else:
         raise ValueError('permission')
-    subprocess.run(['/usr/bin/open', 'x-apple.systempreferences:com.apple.preference.security?' + pane],
-                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   timeout=5, check=True)
+    try:
+        if not allowed():
+            request()
+    finally:
+        url = NSURL.URLWithString_('x-apple.systempreferences:com.apple.preference.security?' + pane)
+        if not NSWorkspace.sharedWorkspace().openURL_(url):
+            raise OSError('permission settings')
 
 
 class NativeDesktop:
@@ -81,7 +87,7 @@ class NativeDesktop:
         if status['screen'] is not True:
             raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Запись экрана…» и разрешите доступ')
         if status['input'] is not True:
-            raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Управление вводом…» и разрешите доступ')
+            raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Универсальный доступ…» и разрешите доступ')
         return q
 
     def _displays(self):

@@ -24,7 +24,7 @@ def ensure_native(repo):
         return  # исходники без подготовленного launcher запускаются до сборки PKG как прежде
     from install_macos import bundle
     from . import host
-    from .macos_autostart import open_arguments
-    bundle(host.install_home(), Path.home() / 'Applications')
-    command = open_arguments(repo, os.environ)
+    from .macos_autostart import application_directory, open_arguments
+    app = bundle(host.install_home(), application_directory())
+    command = open_arguments(repo, os.environ, app=app)
     os.execv(command[0], command)

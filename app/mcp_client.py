@@ -1,4 +1,4 @@
-"""MCP обычного чата: личные HTTP-подключения, Streamable HTTP и ограниченные результаты.
+"""Личные HTTP-подключения MCP, Streamable HTTP и инструменты чата.
 
 Адреса проходят ту же SSRF-проверку и закрепление DNS, что подключения моделей.
 Ключи — шифром в базе, запросы/ответы и заголовки никогда не пишутся в журнал.
@@ -137,7 +137,7 @@ class Session:
         self.version = None
         self.seq = 0
 
-    def headers(self):
+    def headers(self, *, rpc=True):
         item = row(self.uid, self.sid)
         if not item["enabled"] or item["url"] != self.url or item["secret_enc"] != self.stamp:
             raise refused("Подключение MCP изменено или выключено — запустите ответ заново")
@@ -145,6 +145,8 @@ class Session:
         headers = httpx.Headers(values.get("headers", {}))
         if values.get("token"):
             headers["Authorization"] = f"Bearer {values['token']}"
+        if not rpc:
+            return dict(headers)
         headers.update({"Accept": "application/json, text/event-stream", "Content-Type": "application/json"})
         if self.session:
             headers["Mcp-Session-Id"] = self.session
@@ -152,7 +154,7 @@ class Session:
             headers["MCP-Protocol-Version"] = self.version
         return dict(headers)
 
-    async def rpc(self, method, params=None, *, notification=False):
+    async def rpc(self, method, params=None, *, notification=False, max_bytes=MAX_BYTES):
         self.seq += 1
         payload = {"jsonrpc": "2.0", "method": method}
         if params is not None:
@@ -176,8 +178,8 @@ class Session:
                     sse = "text/event-stream" in response.headers.get("content-type", "")
                     async for chunk in response.aiter_bytes():
                         size += len(chunk)
-                        if size > MAX_BYTES:
-                            raise refused("Ответ MCP больше 1 МиБ")
+                        if size > max_bytes:
+                            raise refused(f"Ответ MCP больше {max_bytes >> 20} МиБ")
                         data.extend(chunk)
                         if sse:
                             # SSE допускает LF и CRLF; многострочное data склеивается переводом строки.
@@ -197,7 +199,7 @@ class Session:
                     raise refused("MCP не вернул ответ на запрос")
         except upstream.UpstreamRefused:
             raise refused("Адрес MCP недоступен по правилам разрешённых адресов") from None
-        except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError):
+        except (httpx.HTTPError, TimeoutError, ValueError, RecursionError):
             raise refused("MCP недоступен или вернул неверный ответ") from None
 
     @staticmethod
@@ -206,13 +208,16 @@ class Session:
             raise refused("MCP отклонил запрос")
         return result["result"]
 
-    async def tools(self):
+    async def initialize(self):
         result = await self.rpc("initialize", {"protocolVersion": PROTOCOL, "capabilities": {},
                                                 "clientInfo": {"name": "Studio", "version": "1"}})
         self.version = result.get("protocolVersion")
         if self.version not in ("2024-11-05", "2025-03-26", PROTOCOL):
             raise refused("Версия протокола MCP не поддерживается")
         await self.rpc("notifications/initialized", notification=True)
+
+    async def tools(self):
+        await self.initialize()
         tools, cursor, seen = [], None, set()
         while True:
             result = await self.rpc("tools/list", {"cursor": cursor} if cursor else {})

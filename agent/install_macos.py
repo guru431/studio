@@ -123,7 +123,7 @@ def install(base: Path, home: Path, applications: Path, *, start=True, autostart
         sys.path.insert(0, str(stage))
         from studio_agent import macos_autostart
         if autostart:
-            macos_autostart.set_enabled(True, stage)
+            macos_autostart.set_enabled(True, stage, app=app)
         link = base / ("current-" + uuid.uuid4().hex)
         try:
             link.symlink_to(stage, target_is_directory=True)
@@ -149,9 +149,12 @@ def main(argv=None):
     if sys.platform != "darwin" or sys.version_info < (3, 11):
         parser.error("Нужны macOS и Python 3.11+ с Tk")
     import tkinter  # понятная ошибка до копирования, если Python собран без Tk
+    from studio_agent.macos_autostart import APP_NAME, application_directory
+
     home = Path(os.environ.get("STUDIO_AGENT_HOME") or Path.home() / "Library/Application Support/Studio Agent")
+    applications = application_directory()
     try:
-        install(home / "app", home, Path.home() / "Applications", start=not args.no_start, autostart=not args.no_autostart,
+        install(home / "app", home, applications, start=not args.no_start, autostart=not args.no_autostart,
                 runtime_source=args.runtime_source, wheelhouse=args.wheelhouse)
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
         message = BUSY if isinstance(error, RuntimeError) and str(error) == BUSY else "Не удалось установить Studio Agent. Повторите установку."
@@ -164,7 +167,7 @@ def main(argv=None):
             except (OSError, subprocess.TimeoutExpired):
                 pass  # Ошибка установки уже сообщена; недоступное окно не меняет код возврата.
         return 1
-    print("Studio Agent установлен. Откройте ~/Applications/Studio Agent.app и войдите в студию.")
+    print(f"Studio Agent установлен. Откройте {applications / APP_NAME} и войдите в студию.")
     return 0
 
 

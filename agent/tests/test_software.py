@@ -88,7 +88,10 @@ def test_native_claude_uses_its_installer_and_bundled_opencode_is_read_only(monk
     assert software.command(result, '1.2.10')[0] == [str(binary), 'update']
     bundled = tmp_path / 'OpenCode.app/Contents/Resources/opencode-cli'
     monkeypatch.setattr(software.opencode_rpc, 'find_cli', lambda: bundled)
-    assert software.inspect('opencode')['reason'] == 'manual'
+    monkeypatch.setattr(software.subprocess, 'run', lambda *args, **kwargs:
+        SimpleNamespace(returncode=0, stdout=b'opencode v2.3.0\n'))
+    result = software.inspect('opencode')
+    assert result['reason'] == 'manual' and result['installed'] and result['version'] == '2.3.0'
 
 
 def test_json_lookup_refuses_redirects_and_limits_response(monkeypatch):

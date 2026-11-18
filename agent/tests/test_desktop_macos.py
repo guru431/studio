@@ -79,6 +79,27 @@ def test_permission_snapshot_reads_grants_and_session_without_request_or_capture
     assert state.events == state.captures == []
 
 
+@pytest.mark.parametrize('kind,pane', [('screen', 'Privacy_ScreenCapture'), ('input', 'Privacy_Accessibility')])
+def test_permission_button_requests_only_missing_grant_and_opens_its_pane(monkeypatch, kind, pane):
+    requests, urls = [], []
+    allowed = False
+    check = lambda: allowed
+    quartz = SimpleNamespace(CGPreflightScreenCaptureAccess=check, CGPreflightPostEventAccess=check,
+                             CGRequestScreenCaptureAccess=lambda: requests.append('screen'),
+                             CGRequestPostEventAccess=lambda: requests.append('input'))
+    workspace = SimpleNamespace(openURL_=lambda url: urls.append(url) or True)
+    monkeypatch.setitem(sys.modules, 'Quartz', quartz)
+    monkeypatch.setitem(sys.modules, 'AppKit', SimpleNamespace(
+        NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace)))
+    monkeypatch.setitem(sys.modules, 'Foundation', SimpleNamespace(NSURL=SimpleNamespace(URLWithString_=str)))
+
+    mac.request_permission(kind)
+    allowed = True
+    mac.request_permission(kind)
+    assert requests == [kind]
+    assert urls == ['x-apple.systempreferences:com.apple.preference.security?' + pane] * 2
+
+
 @pytest.mark.parametrize('field', ['locked', 'console', 'login', 'screen', 'input'])
 def test_lock_inactive_session_and_missing_permissions_refuse_without_native_input(system, field):
     native, state = system

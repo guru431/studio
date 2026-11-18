@@ -137,6 +137,7 @@ def test_macos_update_switches_only_its_launchagent_and_preserves_rollback(tmp_p
     from studio_agent import macos_autostart, update_helper as helper
     user = tmp_path / 'user'
     monkeypatch.setattr(Path, 'home', lambda: user)
+    monkeypatch.setattr(macos_autostart, 'SYSTEM_APPLICATIONS', tmp_path / 'shared-applications')
     base = helper.install_home() / 'releases'
     old, current, stale = (base / ('release-' + name) for name in ('old', 'current', 'stale'))
     for stage in (old, current, stale):
@@ -148,7 +149,7 @@ def test_macos_update_switches_only_its_launchagent_and_preserves_rollback(tmp_p
     macos_autostart.set_enabled(True, old)
     helper.switch_macos(current, old)
     assert (base.parent / 'current').resolve() == current
-    assert macos_autostart.read()['ProgramArguments'] == macos_autostart.arguments(current)
+    assert macos_autostart.read()['ProgramArguments'] == macos_autostart.open_arguments(current, os.environ)
     assert helper.prune(current, {'old_repo': str(old)}, helper._autostart(),
                         processes=lambda ignored: helper.ProcessReleases()) == [stale]
     assert old.exists() and current.exists() and Path(sys.executable).exists()
