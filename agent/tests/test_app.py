@@ -11,7 +11,9 @@ import pytest
 from claude_agent_sdk import PermissionResultDeny
 
 from fake_sdk import FakeFactory, result_ok
-from studio_agent import app, autostart, enroll, projects, sessions, store, turns
+from studio_agent import app, autostart, enroll, projects, sessions, store, turns, updater
+from studio_agent.agent import Agent
+from studio_agent.link import Link
 from studio_agent.pin import PinStore
 
 MODELS = [{"id": "opus", "label": "Opus"}]
@@ -192,8 +194,7 @@ def test_local_desktop_permission_is_applied_live_and_restored_on_restart(make, 
     assert not restarted.agent.desktop.status()['enabled'] and not store.load_config(home).desktop_enabled
 
 
-def test_update_waits_for_each_backend_and_pending_machine_requests(make, home):
-    import concurrent.futures
+def test_update_waits_for_each_backend(make, home):
     from types import SimpleNamespace
 
     ctrl = make()
@@ -204,22 +205,84 @@ def test_update_waits_for_each_backend_and_pending_machine_requests(make, home):
         backend._turns['chat'] = SimpleNamespace(asks={})
         assert ctrl._update_active() is True
         backend._turns.clear()
-    pending = concurrent.futures.Future()
-    ctrl._link = SimpleNamespace(_requests={pending})
-    assert ctrl._update_active() is True
-    pending.set_result(None)
     assert ctrl._update_active() is False
 
 
+async def test_update_preserves_a_write_across_reconnect_and_can_restart_with_a_pending_read(make, home, monkeypatch):
+    ctrl = make()
+    ctrl.runner = turns.Runner(lambda event: None, choices=store.Choices(home), cli_path=None)
+    agent = ctrl.agent = Agent(store.Config(), PinStore(home), ctrl.runner, cc_version="", models=[], efforts=[])
+    session = "a" * 32
+    read_started, write_started = asyncio.Event(), asyncio.Event()
+    finish_read, finish_write = asyncio.Event(), asyncio.Event()
+    waiting, recheck, read_cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    actions = []
+
+    async def read(frame, after):
+        read_started.set()
+        try:
+            await finish_read.wait()
+        except asyncio.CancelledError:
+            read_cancelled.set()
+            raise
+        return {"items": []}
+
+    async def write(frame, after):
+        write_started.set()
+        await finish_write.wait()
+        return {}
+
+    async def sleep(seconds):
+        waiting.set()
+        await recheck.wait()
+
+    monkeypatch.setattr(agent, "_op_chats", read)
+    monkeypatch.setattr(agent, "_op_save", write)
+    agent.updater = updater.Updater(home, ctrl._update_active, lambda: actions.append("quit"),
+                                    prepare_fn=lambda h, release: home, launch_fn=lambda stage, h: actions.append("launch"),
+                                    sleep=sleep, holds=ctrl._update_holds)
+    previous_link = ctrl._link = Link("https://studio.example", "key", agent)
+    queue = asyncio.Queue()
+
+    def frame(op, **fields):
+        return {"t": "req", "id": "1" * 16, "op": op, "session": session, **fields}
+
+    assert (await agent.handle(frame("open", pin=None)))[0]["ok"]
+    previous_link._on_frame(frame("chats", project="2" * 16), queue)
+    previous_link._on_frame(frame("save", project="2" * 16, path="a.txt", text="a", version="3" * 64), queue)
+    try:
+        await asyncio.gather(read_started.wait(), write_started.wait())
+        assert ctrl._update_holds()["requests"] == 1
+        ctrl._link = Link("https://studio.example", "key", agent)
+        agent.updater.start({"version": "99.0.0", "sha256": "a" * 64, "size": 1})
+        await waiting.wait()
+        status = (await agent.handle(frame("agent_update_status")))[0]["data"]
+        assert status["holds"]["requests"] == 1 and actions == []
+        finish_write.set()
+        assert (await queue.get())["ok"]
+        recheck.set()
+        await agent.updater.task
+        assert actions == ["launch", "quit"] and not finish_read.is_set()
+        reply = (await agent.handle(frame("open", pin=None)))[0]
+        assert reply["code"] == "busy"
+        await agent.cancel_reads_for_exit()
+        assert read_cancelled.is_set()
+    finally:
+        finish_write.set()
+        finish_read.set()
+        recheck.set()
+        await asyncio.gather(*previous_link._requests, return_exceptions=True)
+
+
 def test_local_activity_and_idle_exit_include_every_runner_desktop_and_requests(make, home):
-    import concurrent.futures
     from types import SimpleNamespace
 
     ctrl = make()
     backends = [turns.Runner(lambda event: None, choices=store.Choices(home), cli_path=None) for _ in range(3)]
     ctrl.runner, ctrl.codex, ctrl.opencode = backends
     desktop = {"active": True, "enabled": True}
-    ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop)), software=SimpleNamespace(busy=False))
+    ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop)),
+                                 software=SimpleNamespace(busy=False), restart_blocking_requests=0)
     exits, snapshots = [], []
     ctrl.on_idle_quit = lambda: exits.append(True)
     ctrl.on_activity(snapshots.append)
@@ -240,12 +303,11 @@ def test_local_activity_and_idle_exit_include_every_runner_desktop_and_requests(
         backend._turns.clear()
         ctrl._refresh_activity()
         assert not exits
-    pending = concurrent.futures.Future()
-    ctrl._link = SimpleNamespace(_requests={pending})
+    ctrl.agent.restart_blocking_requests = 1
     desktop["active"] = False
     ctrl._refresh_activity()
     assert ctrl.activity_status()["desktop_active"] is False and not exits
-    pending.set_result(None)
+    ctrl.agent.restart_blocking_requests = 0
     ctrl.agent.software.busy = True
     ctrl._refresh_activity()
     assert not exits

@@ -540,14 +540,15 @@ class Controller:
         await asyncio.gather(prober, activity, cleanup, first, *self._relinks, return_exceptions=True)
         await self._close_runners(final=True)  # и после: канал ещё досылает очередь, новый ход погиб бы без `done`
         await self._drop_link()
+        await agent.cancel_reads_for_exit()
         await agent.desktop.close()
         await asyncio.gather(*self._background, return_exceptions=True)  # welcome: потоки — до закрытия цикла
         log.info("мост: выход")
 
     def _update_active(self) -> bool:
-        return (self.agent is not None and (self.agent.desktop.status()["active"] or self.agent.software.busy)
-                or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode))
-                or any(not task.done() for task in getattr(self._link, '_requests', ())))
+        return (self.agent is not None and (self.agent.desktop.status()["active"] or self.agent.software.busy
+                                            or self.agent.restart_blocking_requests > 0)
+                or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode)))
 
     def _update_holds(self) -> dict:
         """Что держит ожидание обновления (`_update_active`) — только числа и признак, для Студии."""
@@ -555,7 +556,7 @@ class Controller:
                 for waiting in backend.live().values()]
         return {"tasks": len(live), "asking": sum(bool(waiting) for waiting in live),
                 "desktop": bool(self.agent is not None and self.agent.desktop.status()["active"]),
-                "requests": sum(not task.done() for task in getattr(self._link, '_requests', ()))}
+                "requests": self.agent.restart_blocking_requests if self.agent is not None else 0}
 
     def cancel_update(self) -> None:
         """Пункт трея «Отменить обновление»: то же, что кнопка Студии; из любого потока."""
@@ -583,7 +584,7 @@ class Controller:
                 except Exception as error:
                     log.warning("подписчик активности: %s", type(error).__name__)
         # Проверка и постановка выхода идут в одном такте ядра. Ожидания карточек — тоже live(),
-        # desktop.status() истекает по lease; запросы канала включены даже без активного Runner.
+        # desktop.status() истекает по lease; изменяющие просьбы учитываются даже без активного Runner.
         if self._quit_when_idle and not self._idle_quit_posted and not self._update_active():
             self._idle_quit_posted = True
             if self.agent is not None:

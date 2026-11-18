@@ -325,7 +325,7 @@ async def test_everything_but_open_is_closed_until_opened(agent):
 
 async def test_update_obeys_pin_and_blocks_new_work_without_interrupting_existing(agent_with_pin):
     agent = agent_with_pin
-    agent.updater = SimpleNamespace(busy=False, start=Mock(return_value={'state': 'preparing'}),
+    agent.updater = SimpleNamespace(busy=False, state='idle', start=Mock(return_value={'state': 'preparing'}),
                                     status=lambda: {'state': 'waiting'}, cancel=Mock(return_value={'state': 'idle'}))
     assert agent.hello()['agent_update'] is True and agent.hello()['agent_update_cancel'] is True
     assert (await agent.handle(req('agent_update')))[0]['code'] == 'closed'

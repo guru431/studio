@@ -74,6 +74,17 @@ OPS = {
     "git": ("project",),
 }
 
+# Эти просьбы читают данные, обслуживают обновлятор или меняют только временное состояние.
+# Новый op по умолчанию удерживает штатный перезапуск, пока обработчик не закончит работу.
+RESTART_SAFE_OPS = frozenset({
+    "agent_update", "agent_update_status", "agent_update_cancel", "software_update_cancel",
+    "desktop_status", "desktop_frame", "computer_info", "software_versions",
+    "usage", "models", "projects", "project_roots", "project_summary", "activity",
+    "mcp_get", "chats", "history", "history_image", "state", "watch",
+    "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
+    "worktrees", "read", "raw", "visualization", "git",
+})
+
 # Новая операция получает доступ соавтора только после явного включения в контракт.
 SHARED_OPS = frozenset({"projects", "activity", "project_summary", "chats", "history", "history_image",
     "state", "turn", "steer", "queue_edit", "queue_pause", "claim", "watch", "answer", "stop",
@@ -107,6 +118,8 @@ class Agent:
         self.opencode = opencode
         self.updater = None
         self._software_requests = 0
+        self.restart_blocking_requests = 0
+        self._restart_safe_requests: set[asyncio.Task] = set()
         self.software = Software(self)
         self.local_exit_pending = False
         self.desktop = desktop.Desktop(cfg.desktop_enabled, now=now)
@@ -231,13 +244,19 @@ class Agent:
             log.warning("просьба без id")
             return []
         op = frame.get("op")
-        name = op if op == "open" or op in OPS else "?"  # в журнал — только известные имена
+        name = op if isinstance(op, str) and (op == "open" or op in OPS) else "?"
         after: list[dict] = []
-        tracked = op in OPS and not op.startswith('software_')
+        tracked = name in OPS and not name.startswith('software_')
+        blocks_restart = name != "?" and name not in RESTART_SAFE_OPS
+        read_task = asyncio.current_task() if name in RESTART_SAFE_OPS else None
         if tracked:
             self._software_requests += 1
+        if blocks_restart:
+            self.restart_blocking_requests += 1
+        if read_task is not None:
+            self._restart_safe_requests.add(read_task)
         try:
-            data = await self._dispatch(frame, op, after)
+            data = await self._dispatch(frame, name, after)
             res = {"t": "res", "id": rid, "ok": True, "data": data}
         except Refused as e:
             log.info("просьба %s: %s%s", name, e.code, f" ({e.extra['left']})" if "left" in e.extra else "")
@@ -249,6 +268,10 @@ class Agent:
         finally:
             if tracked:
                 self._software_requests -= 1
+            if blocks_restart:
+                self.restart_blocking_requests -= 1
+            if read_task is not None:
+                self._restart_safe_requests.discard(read_task)
         try:
             res = events.ready(res)  # кодируется один раз: писатель канала шлёт готовую строку
         except ValueError as e:
@@ -260,7 +283,15 @@ class Agent:
             return [{"t": "res", "id": rid, "ok": False, "code": "too_large", "message": "ответ больше предела канала"}]
         return [res, *after]
 
-    async def _dispatch(self, frame: dict, op, after: list[dict]) -> dict:
+    async def cancel_reads_for_exit(self) -> None:
+        pending = self._restart_safe_requests.copy()
+        for task in pending:
+            task.cancel()
+        if pending:
+            # Даём обработчикам закрыть временные ресурсы без нового бессрочного ожидания.
+            await asyncio.wait(pending, timeout=2)
+
+    async def _dispatch(self, frame: dict, op: str, after: list[dict]) -> dict:
         if not ID.fullmatch(frame["id"]):
             raise Refused("invalid")
         session = frame.get("session")
@@ -282,6 +313,11 @@ class Agent:
             if op not in SHARED_OPS or (op not in ("projects", "activity") and
                     ("project" not in OPS[op] or frame.get("project") not in scope)):
                 raise Refused("closed")
+        if self.local_exit_pending and op not in RESTART_SAFE_OPS:
+            raise Refused("busy", "Агент завершает работу по выбору на компьютере")
+        if (self.updater is not None and self.updater.state == "restarting"
+                and op not in ("agent_update_status", "agent_update_cancel")):
+            raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
         if op == "open":
             return await self._open(session, frame.get("pin"), idle_sec, passive=passive)
         if scope is None and not self.open.alive(session, idle_sec):
@@ -294,11 +330,9 @@ class Agent:
                     'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
             raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
-                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start", "mcp_save"):
+                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start",
+                "mcp_save", "usage_reset"):
             raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
-        if self.local_exit_pending and op in (
-                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start", "mcp_save"):
-            raise Refused("busy", "Агент завершает работу по выбору на компьютере")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
             raise Refused("invalid")
