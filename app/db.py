@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 46
+VERSION = 47
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -595,6 +595,14 @@ END;
 SCHEMA += SPEECH_45
 AGENT_PLATFORM_46 = "ALTER TABLE agents ADD COLUMN platform TEXT CHECK (platform IN ('win32','darwin','linux'));\n"
 SCHEMA += AGENT_PLATFORM_46
+F5_TTS_47 = """
+UPDATE section_links SET models = json_insert(models, '$[#]', 'f5-tts')
+WHERE section = 'speech'
+  AND connection_id IN (SELECT id FROM connections WHERE kind = 'srvllm')
+  AND EXISTS (SELECT 1 FROM json_each(models) WHERE value = 'qwen3-tts')
+  AND NOT EXISTS (SELECT 1 FROM json_each(models) WHERE value = 'f5-tts');
+"""
+SCHEMA += F5_TTS_47
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -695,6 +703,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     44: MEDIA_44,
     45: SPEECH_45,
     46: AGENT_PLATFORM_46,
+    47: F5_TTS_47,
 }
 
 

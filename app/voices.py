@@ -336,7 +336,8 @@ async def probe(voice_id: str, body: ProbeIn, request: Request):
         raise HTTPException(409, {"code": "busy", "message": "проба уже идёт — дождитесь её"})
     PROBING.add(uid)
     try:
-        await speech.free_card(conn)
+        if model == "qwen3-tts":
+            await speech.free_card(conn)
         data, mime = await speech.say(conn, model, text, reference_)
     except speech.Busy:
         raise HTTPException(503, {"code": "busy", "message": "карта занята — попробуйте пробу позже"}) from None

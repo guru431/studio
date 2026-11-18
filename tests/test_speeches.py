@@ -61,6 +61,19 @@ def test_two_phrases_in_a_cloned_voice_become_one_mp3(studio, fake_audio, caplog
     assert speeches.JOBS == {}                        # кончившееся в памяти не живёт
 
 
+def test_f5_clones_the_selected_voice_without_releasing_other_models(studio, fake_audio):
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    response = studio.c.post("/api/speeches", json={"text": "Проверка.", "voice": vid, "model": "f5-tts"})
+    assert response.status_code == 202, response.text
+    item = wait_sp(studio, response.json()["id"], {"done", "error"})
+    assert item["state"] == "done" and item["model"] == "f5-tts"
+    request, = studio.gw.tts_requests
+    assert request.url.path == "/speech/tts-f5"
+    assert b'name="ref_audio"' in request.content and "текст образца".encode() in request.content
+    assert not studio.gw.releases
+
+
 def test_done_is_written_after_the_temp_files_are_gone(studio, env, fake_audio, monkeypatch):
     """Как у расшифровки: «готово» — уже без частей и mp3 во временном каталоге (находка P3)."""
     add_gateway(studio)

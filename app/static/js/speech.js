@@ -70,6 +70,7 @@ function build(view, ctx) {
     placeholder: tr("Текст, который нужно озвучить") });
   const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${TEXT_MAX}`);
   const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': tr("Модель") });
+  const mcpModelPick = el('select', { class: 'chip', id: 'chip-mcp-model', 'aria-label': tr("Модель"), hidden: true });
   const voiceBox = el('span', { class: 'sp-voice' });
   const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, tr("Озвучить"));
   const hint = el('p', { class: 'muted small sp-voice-hint', hidden: true });
@@ -80,7 +81,7 @@ function build(view, ctx) {
     onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, hint,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, voiceBox, count, cancelEdit), go));
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, mcpModelPick, voiceBox, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const main = el('section', { class: 'split-main' }, head, toolbar, error, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
@@ -110,7 +111,7 @@ function build(view, ctx) {
     hint.hidden = true;
     const clone = active && mcp.canClone() && !!voices.length;
     voiceBox.hidden = active && !mcp.has('voice') && !clone;
-    if (active ? clone && (kind === 'srvllm' || !mcp.has('voice')) : kind === 'srvllm') {
+    if (active ? clone && (mcpModelPick.options.length || kind === 'srvllm' || !mcp.has('voice')) : kind === 'srvllm') {
       const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': tr("Голос") },
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
       if (voices.some(v => v.id === sampleId)) pick.value = sampleId;
@@ -139,7 +140,14 @@ function build(view, ctx) {
       nativeHint.hidden = active;
       if (active && !form.parentNode) nativeHint.after(form);
     }
-    modelPick.hidden = modelPick.options.length < 2 || (active && !mcp.has('model'));
+    const schema = mcp.argument('model');
+    const choices = mcp.canClone() && Array.isArray(schema?.enum) ? schema.enum.filter(id => typeof id === 'string') : [];
+    const previous = mcpModelPick.value;
+    mcpModelPick.replaceChildren(...choices.map(id => el('option', { value: id }, modelLabel(id))));
+    if (choices.includes(previous)) mcpModelPick.value = previous;
+    else if (choices.includes(schema?.default)) mcpModelPick.value = schema.default;
+    mcpModelPick.hidden = choices.length < 2 || !voices.length;
+    modelPick.hidden = modelPick.options.length < 2 || (active && (!mcp.has('model') || choices.length > 0));
     paintVoice();
   }
 
@@ -395,7 +403,8 @@ function build(view, ctx) {
       const { connection_id: connectionId, model } = chosen();
       if (mcp.tool) {
         const voiceId = voiceField?.tagName === 'SELECT' && mcp.canClone() ? voice : undefined;
-        const ok = await mcp.run({ text: value, model: model || undefined,
+        const mcpModel = mcpModelPick.options.length ? (voiceId ? mcpModelPick.value : undefined) : model || undefined;
+        const ok = await mcp.run({ text: value, model: mcpModel,
           voice: !voiceId && !voiceBox.hidden && voice ? voice : undefined }, { voiceId });
         if (ok) {
           draft.sent(raw);

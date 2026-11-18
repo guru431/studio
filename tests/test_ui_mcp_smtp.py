@@ -6,7 +6,8 @@ from fake_bridge import FakeMachine
 from fakes import PNG_REAL, WAV_FAKE
 from test_mcp import TOKEN, URL
 from test_mcp_sections import service
-from test_ui_browser import browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value, code_online, code_requests
+from test_ui_browser import (browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value,
+                             code_online, code_requests, add_voice)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -64,7 +65,7 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
 def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
     login = 'mcp-upload-forms'
     live.add_user(login)
-    calls = service(live.gw, uploads=True)
+    calls = service(live.gw, uploads=True, clone_models=True)
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
         ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
         ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
@@ -72,6 +73,11 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
         ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
         ('eval', 'speech', "location.hash='#/speech'"), ('wait', "document.querySelector('#speech-composer #section-mcp-tool')?.offsetWidth > 0"),
         ('type', '#speech-text', 'Read this'), set_value('#speech-composer #chip-voice', 'ExampleVoice'), ('click', '#speech-go'),
+        ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Synthesized speech'"),
+        add_voice(), ('eval', 'resetChoices', "location.hash='#/settings/chat'"),
+        ('wait', "document.querySelector('#mcp-add')"), ('eval', 'clone', "location.hash='#/speech'"),
+        ('wait', "document.querySelector('#chip-mcp-model')?.offsetWidth > 0 && document.querySelector('#chip-voice option')"),
+        set_value('#chip-mcp-model', 'f5-tts'), ('type', '#speech-text', 'Проверка голоса'), ('click', '#speech-go'),
         ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Synthesized speech'"),
         ('eval', 'transcribe', "location.hash='#/transcribe'"), ('wait', "document.querySelector('#transcribe-upload')?.offsetWidth > 0"),
         put_audio('#transcribe-add input', WAV_FAKE),
@@ -84,8 +90,10 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
     assert not result.get('failed'), result
     assert result['values']['onePage'] and result['values']['fits']
     assert calls[0] == ('speech_synthesize', {'text': 'Read this', 'voice': 'ExampleVoice'})
-    assert [name for name, _ in calls[1:]] == ['artifact_upload', 'audio_transcribe', 'artifact_upload', 'document_read']
-    assert [calls[i][1]['mime_type'] for i in [1, 3]] == ['audio/wav', 'image/png']
+    assert calls[1][0] == 'artifact_upload' and calls[1][1]['mime_type'] == 'audio/wav'
+    assert calls[2][0] == 'speech_synthesize' and calls[2][1]['model'] == 'f5-tts' and calls[2][1]['engine'] == 'clone'
+    assert [name for name, _ in calls[3:]] == ['artifact_upload', 'audio_transcribe', 'artifact_upload', 'document_read']
+    assert [calls[i][1]['mime_type'] for i in [3, 5]] == ['audio/wav', 'image/png']
     assert not problems(result), result.get('log')
 
 
