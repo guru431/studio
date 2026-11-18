@@ -48,7 +48,11 @@ def test_access_presets_are_explicit_and_context_is_not_cumulative():
     assert permissions.codex_turn(None) == permissions.codex_start(None) == {}
     assert permissions.codex_turn("workspace-write") == {
         "sandboxPolicy": {"type": "workspaceWrite", "networkAccess": False}, "approvalPolicy": "on-request"}
-    assert permissions.codex_start("danger-full-access") == {"sandbox": "danger-full-access", "approvalPolicy": "never"}
+    assert permissions.codex_start("danger-full-access") == {
+        "sandbox": "danger-full-access", "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
+    assert permissions.codex_turn("danger-full-access") == {
+        "sandboxPolicy": {"type": "dangerFullAccess"}, "approvalPolicy": "on-request",
+        "approvalsReviewer": "auto_review"}
     assert not permissions.valid("codex", "bypassPermissions") and not permissions.valid("claude", "danger-full-access")
     assert permissions.context(True, 100) is None and permissions.context(1, 0) is None
 
