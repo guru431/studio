@@ -130,6 +130,11 @@ def dispatch(ctrl, op, value):
         ctrl.request_quit()
     elif op == "reconnect":
         ctrl.restart_link()
+    elif op == "terminal":
+        from . import linux_terminal
+        if value is None:
+            return linux_terminal.load(ctrl.h)
+        linux_terminal.save(ctrl.h, value)
     elif op == "cancel-update":
         ctrl.cancel_update()
     elif op == "forget":
@@ -231,6 +236,25 @@ def _action(h, choice):
         with (h / "agent.log").open("rb") as log:
             log.seek(max(0, os.fstat(log.fileno()).st_size - 16 * 1024))
             print(log.read(16 * 1024).decode("utf-8", "replace"))
+    elif choice == "19":
+        from . import linux_terminal
+        try:
+            current = invoke(h, "terminal")
+        except (ValueError, RuntimeError):
+            current = linux_terminal.DEFAULT
+            print("Проверьте сохранённые параметры. Можно ввести их заново.")
+        print("Enter оставляет значение, минус очищает поле.")
+        def ask(label, key):
+            entry = input(f"{label} [{current[key]}]: ").strip()
+            return "" if entry == "-" else entry or current[key]
+        endpoint = ask("Адрес SSH (имя или IP)", "host")
+        user = ask("Пользователь SSH", "user") if endpoint else ""
+        port = int(ask("Порт SSH", "port") or 22) if endpoint else 22
+        web = ask("HTTPS-адрес веб-консоли", "web_url")
+        data = dict(host=endpoint, user=user, port=port, web_url=web)
+        linux_terminal.addresses(data)
+        invoke(h, "terminal", data)
+        print("Адреса терминала сохранены.")
     else:
         print("Введите номер пункта.")
 
@@ -248,7 +272,8 @@ def menu(h):
               " 8  Переключить автозапуск\n 9  Запустить службу\n10  Запросить или отменить выход после заданий\n"
               "11  Разрешить рабочий стол / выбрать экраны\n12  Выключить рабочий стол\n"
               "13  Завершить текущий сеанс экрана\n14  Отменить подготовку обновления\n"
-              "15  Отвязать компьютер\n16  Переподключиться к Студии\n17  Выйти сейчас\n18  Журнал\n 0  Закрыть меню")
+              "15  Отвязать компьютер\n16  Переподключиться к Студии\n17  Выйти сейчас\n18  Журнал\n"
+              "19  SSH и веб-консоль\n 0  Закрыть меню")
         try:
             choice = input("> ").strip()
             if choice == "0":

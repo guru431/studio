@@ -23,6 +23,35 @@ def computer(pin=None):
     return machine
 
 
+def test_headless_linux_terminal_shows_only_explicit_launch_links(browser, live):
+    login = 'linux-terminal'
+    live.add_user(login)
+    machine = FakeMachine({'alpha': {}}, pin='2468')
+    machine.platform, machine.terminal = 'linux', True
+    machine._op_terminal_info = lambda *_: {'ssh_uri': 'ssh://user@host.example.net:2222',
+                                            'web_url': 'https://host.example.net:9090/system/terminal'}
+    aid, server = code_online(live, login, machine)
+    row = f'#code-agents li[data-id="{aid}"]'
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', "!!document.querySelector('#code-pin-input')"),
+            ('click', row + ' .code-agent-terminal'),
+            ('eval', 'pin', "!document.querySelector('#code-terminal-dialog')?.open"),
+            ('type', '#code-pin-input', '2468'), ('click', '#code-pin-open'),
+            ('wait', "!!document.querySelector('#code-terminal-dialog[open] input')"),
+            ('eval', 'links', "Array.from(document.querySelectorAll('#code-terminal-dialog a'), a=>a.href)"),
+            ('eval', 'command', "document.querySelector('#code-terminal-dialog input').value"),
+            ('eval', 'headless', "!document.querySelector('.code-agent-desktop')")], width=320, mobile=True)
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    assert result['values'] == {'go': '#/code', 'pin': True, 'headless': True, 'command': 'ssh -p 2222 user@host.example.net',
+        'links': ['ssh://user@host.example.net:2222', 'https://host.example.net:9090/system/terminal']}
+    unexpected = [line for line in problems(result) if not (
+        'status of 409 ' in line and line.endswith(f'/api/code/agents/{aid}/open)'))]
+    assert not unexpected, unexpected
+
+
 SHOWN = "document.querySelector('#code-computer-dialog')?.open && document.querySelector('.code-computer-details')"
 FITS = """(() => {
   const dialog = document.querySelector('#code-computer-dialog'), bounds = dialog.getBoundingClientRect();

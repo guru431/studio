@@ -15,17 +15,18 @@ CATALOG = {"version": "codex-test", "models": [{"id": "codex-test", "label": "Co
            "efforts": ["minimal", "high", "ultra"]}
 
 
-def test_explicit_refresh_discovers_opencode_without_reconnecting(studio):
+@pytest.mark.parametrize("engine", ["opencode", "codex"])
+def test_explicit_refresh_discovers_new_cli_without_reconnecting(studio, engine):
     aid, machine, link = setup(studio)
     machine.passive_requests = True
-    link.hello = bridge.parse_hello({**machine.hello, "opencode_models": True})
-    assert "opencode" not in studio.c.get("/api/agents").json()["items"][0]
-    catalog = {"version": "2.3.0", "models": [{"id": "provider/model", "label": "Model"}], "efforts": []}
-    machine._op_models = lambda req, events: {"opencode": catalog}
-    assert studio.c.get("/api/agents?refresh=true").json()["items"][0]["opencode"] == catalog
+    link.hello = bridge.parse_hello({**machine.hello, engine + "_models": True})
+    assert engine not in studio.c.get("/api/agents").json()["items"][0]
+    catalog = {"version": "2.3.0", "models": [{"id": "model", "label": "Model"}], "efforts": []}
+    machine._op_models = lambda req, events: {engine: catalog}
+    assert studio.c.get("/api/agents?refresh=true").json()["items"][0][engine] == catalog
     assert bridge.LINKS[aid] is link
     request = next(req for req in machine.requests if req["op"] == "models")
-    assert request["engine"] == "opencode" and request["passive"] is True
+    assert request["engine"] == engine and request["passive"] is True
 
 
 def test_explicit_refresh_replaces_codex_catalog_on_the_same_link(studio):

@@ -625,6 +625,23 @@ async def computer_info(aid: int, request: Request):
                        headers={"Cache-Control": "no-store"})
 
 
+@router.get('/agents/{aid}/terminal')
+async def terminal_info(aid: int, request: Request):
+    from terminal_links import clean
+
+    project_access.owner(request, aid)
+    require_capability(aid, 'terminal')
+    link = bridge.LINKS.get(aid)
+    if link is not None and link.hello.get('platform') != 'linux':
+        raise _refuse(409, 'unsupported', 'Терминал доступен для компьютера с Linux')
+    data = await ask(request, aid, 'terminal_info')
+    try:
+        links = clean(data)
+    except ValueError:
+        raise _refuse(502, 'invalid', 'Проверьте адреса терминала в локальном меню агента') from None
+    return _BridgeJSON(links, headers={'Cache-Control': 'no-store'})
+
+
 @router.get('/agents/{aid}/software')
 async def software_versions(aid: int, request: Request, refresh: bool = False):
     from computer_info import software

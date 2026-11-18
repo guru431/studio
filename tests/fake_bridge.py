@@ -74,6 +74,7 @@ class FakeMachine:
         self.project_activity = False
         self.project_summary = False
         self.computer_info = False
+        self.terminal = False
         self.software_versions = False
         self.software_data = {'items': [], 'update': {'tool': None, 'state': 'idle'}}
         self.visualizations = False
@@ -122,7 +123,7 @@ class FakeMachine:
                 **({'platform': self.platform} if self.platform else {}),
                 **({'agent_version': self.agent_version} if self.agent_version else {}),
                 **({'agent_update': True} if self.agent_update else {}),
-                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "file_stats", "file_operations", "passive_requests",
+                **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "terminal", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models")
                    if getattr(self, name)},

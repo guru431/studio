@@ -1447,11 +1447,12 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-agent-update { flex: none; display: grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: var(--space-1);
   border-radius: 50%; text-decoration: none; }
 .code-agent-update.has-update { color: var(--accent); border-color: currentColor; }
-.code-agent-update .ico, .code-agent-desktop .ico { width: 18px; height: 18px; }
+.code-agent-update .ico, .code-agent-desktop .ico, .code-agent-terminal .ico { width: 18px; height: 18px; }
 .code-agent-update-status { flex-basis: 100%; padding: 0 var(--space-4) 5px; font-size: var(--fs-2xs); overflow-wrap: anywhere; }
-.code-agent-info, .code-agent-desktop { flex:none; display:grid; place-items:center; width:28px; min-height:30px; padding:var(--space-1);
+.code-terminal-url { overflow-wrap: anywhere; }
+.code-agent-info, .code-agent-desktop, .code-agent-terminal { flex:none; display:grid; place-items:center; width:28px; min-height:30px; padding:var(--space-1);
   border:0; background:transparent; color:var(--text-2); }
-@media (hover: hover) { .code-agent-info:hover, .code-agent-desktop:hover { color:var(--text-1); background:var(--surface-2); } }
+@media (hover: hover) { :is(.code-agent-info, .code-agent-desktop, .code-agent-terminal):hover { color:var(--text-1); background:var(--surface-2); } }
 .code-project { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; padding: var(--space-2) var(--space-3); border-radius: var(--r-control);
   color: var(--text-1); text-decoration: none; font-size:var(--fs-md); line-height: 1.3; cursor: pointer; }
 @media (pointer: coarse) { .code-project { min-height: var(--h-touch); } }
@@ -2035,9 +2036,9 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 /* касание: значки и малые кнопки ловят палец в квадрате 44 px (с поправкой на масштаб) — раскладка прежняя,
  * область касания расширяет прозрачный ::after; у .card-save его нет: в таблице она static и накрыла бы строку */
 @media (pointer: coarse) {
-  :is(.btn-sm, .btn-link, .msg-actions .btn, .code-agent-update, .code-agent-info, .code-agent-desktop) { position: relative; }
+  :is(.btn-sm, .btn-link, .msg-actions .btn, .code-agent-update, .code-agent-info, .code-agent-desktop, .code-agent-terminal) { position: relative; }
   :is(.icon-btn, .code-tab-close, .btn-sm, .btn-link, .msg-actions .btn, #avatar, .jobs-toggle, .search-toggle, .refresh-toggle, .copy,
-      .code-agent-update, .code-agent-info, .code-agent-desktop)::after {
+      .code-agent-update, .code-agent-info, .code-agent-desktop, .code-agent-terminal)::after {
     content: ''; position: absolute; inset: min(0px, calc(50% - var(--h-touch) / 2 / var(--ui-scale, 1))); }
 }
 /* режим высокой контрастности: фон выбранного пропадает — выбор обводкой системного цвета */
