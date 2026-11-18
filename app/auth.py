@@ -68,8 +68,8 @@ STALE_SEC = lock_policy.DEFAULT_TIMEOUT + lock_policy.HEARTBEAT_GRACE
 #: запросы самой блокировки: их запертая сессия делает (состояние, отметка, «заперто», отпирание)
 SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", "/api/lock/challenge",
                                "/api/lock/open", "/api/lock/password", "/api/lock/pin"})
-#: Без cookie/CSRF: привязка проверяет логин/пароль, пакет обновления — действующий ключ устройства (agents.py).
-OPEN_API = frozenset({"/api/agent/enroll", "/api/agent/package"})
+#: Свой вход: логин/пароль для привязки, ключ устройства для обновления, пропуск сессии для установки Linux.
+OPEN_API = frozenset({"/api/agent/enroll", "/api/agent/package", "/api/agent/linux-installer"})
 #: Экраны страницы (app.js LOADERS; сверяет tests/test_sections_meta.py) — куда вернуться после входа.
 PAGE_SECTIONS = ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code", "search", "settings",
                  "admin")

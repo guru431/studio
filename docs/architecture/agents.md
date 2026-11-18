@@ -81,7 +81,10 @@
   `OPEN_API`: ключ — только `Authorization: Bearer`, чужой `Origin` — 403 `origin`, ключ не найден — 401 `key`; учётка
   может быть и отключённой; событие `revoke` с `device` «мост», 204; журнал — «компьютер N: отвязан мостом»); установщик
   моста — `GET /api/agent/download` (сессия; EXE `studio-agent-setup.exe`, кладёт выкладка; нет файла — 404
-  `no_agent`), ZIP обновления `agents.AGENT_ZIP` = `<корень кода>/agent/studio-agent.zip` — `GET /api/agent/package`
+  `no_agent`). Для терминала Linux сессия запрашивает команду через `POST /api/agents/linux-install` с CSRF.
+  Команда передаёт пропуск в заголовке Bearer на `GET /api/agent/linux-installer`. Пропуск действует 10 минут
+  только для Linux-установщика и требует действующей сессии с доступом к разделу «Агенты».
+  ZIP обновления `agents.AGENT_ZIP` = `<корень кода>/agent/studio-agent.zip` — `GET /api/agent/package`
   (Bearer-ключ действующего устройства, `auth.OPEN_API`); `GET /api/agents` («на связи», модели, усилия — из `bridge.LINKS`), `GET /api/agents/events`. `bridge` —
   канал `/api/agent/link` (WebSocket, `Authorization: Bearer <ключ>`, не строка запроса): `hello` за `HELLO_SEC`,
   кадр до `FRAME_MAX` (48 МиБ; `--ws-max-size` юнита — на 1 КиБ больше, чтобы такой кадр получил 4400, а не 1009

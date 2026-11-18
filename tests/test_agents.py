@@ -1,5 +1,6 @@
 """Привязка моста Claude Code к учётке, компьютеры учётки и история подключений (app/agents.py, app/bridge.py)."""
 import logging
+import shlex
 
 import pytest
 
@@ -201,6 +202,41 @@ def test_download_needs_a_session(studio, monkeypatch, tmp_path):
     assert r.status_code == 401 and r.json()["detail"]["code"] == "login"
     assert agents.AGENT_ZIP.name == "studio-agent.zip"
     assert agents.AGENT_SETUP.name == "studio-agent-setup.exe"
+
+
+def test_linux_install_command_only_serves_the_installer_for_a_live_session(studio, monkeypatch, tmp_path):
+    install = "/api/agent/linux-installer"
+    issue = "/api/agents/linux-install"
+    assert studio.c.post(issue).status_code == 401
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    assert studio.c.post(issue, headers={"x-studio-csrf": ""}).status_code == 403
+    cmd = studio.c.post(issue).json()["command"]
+    args = shlex.split(cmd)
+    name, value = args[args.index("-H") + 1].split(": ", 1)
+    bearer = {name: value}
+    assert "https://testserver" + install in args
+    assert studio.c.cookies[auth.COOKIE] not in cmd
+    studio.c.cookies.clear()
+    package = tmp_path / "setup.sh"
+    monkeypatch.setattr(agents, "AGENT_LINUX", package)
+    assert studio.c.get(install, headers=bearer).status_code == 404
+    package.write_bytes(b"linux installer")
+    assert studio.c.get(install, headers={**bearer, "Origin": "https://example.org"}).status_code == 403
+    response = studio.c.get(install + "?platform=windows", headers=bearer)
+    assert response.content == package.read_bytes() and response.headers["cache-control"] == "no-store"
+    for path in ("/api/me", "/api/agent/download", "/api/agent/package"):
+        assert studio.c.get(path, headers=bearer).status_code == 401
+    assert studio.c.get(install).status_code == 401
+    assert studio.c.get(install, headers={"Authorization": "Bearer bogus"}).status_code == 401
+    state.DB.execute("UPDATE users SET disabled=1 WHERE id=?", (uid,))
+    assert studio.c.get(install, headers=bearer).status_code == 401
+    state.DB.execute("UPDATE users SET disabled=0 WHERE id=?", (uid,))
+    studio.clock[0] += agents.INSTALL_TTL
+    assert studio.c.get(install, headers=bearer).status_code == 401
+    studio.clock[0] -= agents.INSTALL_TTL
+    auth.end_sessions(uid)
+    assert studio.c.get(install, headers=bearer).status_code == 401
 
 
 def test_agent_zip_lies_next_to_the_code():

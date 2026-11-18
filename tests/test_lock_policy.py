@@ -298,7 +298,7 @@ ROUTES = {
         ("DELETE", "/api/passkeys/{key_id}")]},
     **{(m, p): "open" for m, p in [
         ("GET", "/api/agent/download"), ("DELETE", "/api/agent/enroll"), ("POST", "/api/agent/enroll"),
-        ("WS", "/api/agent/link"), ("GET", "/api/agent/package"),
+        ("WS", "/api/agent/link"), ("GET", "/api/agent/package"), ("GET", "/api/agent/linux-installer"),
         ("GET", "/api/connections"), ("POST", "/api/connections"), ("DELETE", "/api/connections/{conn_id}"),
         ("PATCH", "/api/connections/{conn_id}"), ("POST", "/api/connections/{conn_id}/check"),
         ("GET", "/api/connections/{conn_id}/models"), ("PUT", "/api/connections/{conn_id}/passport"),
