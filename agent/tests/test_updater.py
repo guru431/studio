@@ -5,7 +5,6 @@ import io
 import json
 import subprocess
 import sys
-import tempfile
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -16,12 +15,6 @@ from studio_agent import VERSION, store, update_helper, updater
 from studio_agent.errors import Refused
 
 FUTURE = {'version': '99.0.0', 'sha256': 'a' * 64, 'size': 100}
-
-
-@pytest.fixture
-def install_root(tmp_path_factory):
-    with tempfile.TemporaryDirectory(prefix='install-', dir=tmp_path_factory.getbasetemp()) as folder:
-        yield updater.Path(folder)
 
 
 def bundle(path, version='99.0.0', extra=None, prefix=''):

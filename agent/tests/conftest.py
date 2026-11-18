@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,13 @@ def pytest_configure(config):
 def pytest_asyncio_loop_factories(config, item):
     """Настоящий Windows Proactor с восстановлением чтения после WinError 995."""
     return {"studio": new_event_loop}
+
+
+@pytest.fixture
+def install_root(tmp_path_factory):
+    """Короткая временная папка для полной вложенной структуры установки на Windows."""
+    with tempfile.TemporaryDirectory(prefix='i-', dir=tmp_path_factory.getbasetemp()) as folder:
+        yield Path(folder)
 
 
 @pytest.fixture

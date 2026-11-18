@@ -94,18 +94,18 @@ def test_sealed_app_and_writable_readiness_marker_are_distinct(tmp_path, monkeyp
     assert not signed.ready_marker(str(repo / '_update_ready'))
 
 
-def test_signed_handoff_runs_the_helper_from_the_installed_bundle(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-    app = fake_app(tmp_path / 'Applications' / signed.NAME)
+def test_signed_handoff_runs_the_helper_from_the_installed_bundle(install_root, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: install_root)
+    app = fake_app(install_root / 'Applications' / signed.NAME)
     repo = app / 'Contents/Resources/agent'
-    stage = tmp_path / 'Library/Application Support/Studio Agent/app/releases/release-qa'
+    stage = install_root / 'Library/Application Support/Studio Agent/app/releases/release-qa'
     new = fake_app(signed.candidate(stage), version='2.0')
     monkeypatch.setattr(updater.host, 'MACOS', True)
     monkeypatch.setattr(updater, 'REPO', repo)
     monkeypatch.setattr(signed, 'verify', Mock())
     start = Mock()
     monkeypatch.setattr(updater.subprocess, 'Popen', start)
-    updater.launch(stage, tmp_path)
+    updater.launch(stage, install_root)
     args = start.call_args.args[0]
     assert args[:5] == [str(signed.interpreter(new)), '-I', '-B', str(repo / 'studio_agent/macos_signed.py'), '--update']
     assert args[5] == str(stage) and args[-1] == '2.0'
