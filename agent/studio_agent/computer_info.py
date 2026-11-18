@@ -20,6 +20,9 @@ def memory_status() -> dict | None:
     if host.MACOS:
         from .macos_info import memory_status as mac_memory
         return mac_memory()
+    if host.LINUX:
+        from .linux_info import memory_status as linux_memory
+        return linux_memory()
     class MemoryStatus(ctypes.Structure):
         _fields_ = [("length", wintypes.DWORD), ("load", wintypes.DWORD),
                     ("total", ctypes.c_ulonglong), ("available", ctypes.c_ulonglong),
@@ -50,6 +53,9 @@ $ips = @(Get-NetIPAddress | Where-Object { $_.AddressState -eq 'Preferred' } | F
 def _system_data() -> dict:
     if host.MACOS:
         from .macos_info import system_data
+        return system_data()
+    if host.LINUX:
+        from .linux_info import system_data
         return system_data()
     try:
         result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", SYSTEM_SCRIPT],

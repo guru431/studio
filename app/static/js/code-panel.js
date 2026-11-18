@@ -30,7 +30,7 @@ import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { lazy } from './stale.js';
-import { el, words } from './ui.js';
+import { agentInstallers, el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
 
@@ -596,13 +596,14 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
 
   function paintAgents() {
     agentsBox.replaceChildren(...items.map((agent) => {
+      const platform = agentInstallers[agent.platform];
+      const installer = platform || agentInstallers.win32;
       const row = el('button', { type: 'button', class: 'code-agent', 'aria-current': agent.id === selected ? 'true' : null,
         title: agent.online && agent.cc_version ? `Claude Code ${agent.cc_version}` : null },
       el('span', { class: `code-agent-state${agent.online ? ' on' : ''}` },
         el('span', { class: 'sr' }, agent.online ? tr("на связи") : tr("не на связи"))),
-      ['win32', 'darwin'].includes(agent.platform)
-        ? el('span', { class: 'code-agent-platform', role: 'img', 'aria-label': agent.platform === 'darwin' ? 'macOS' : 'Windows',
-          title: agent.platform === 'darwin' ? 'macOS' : 'Windows' }, icon(agent.platform === 'darwin' ? 'apple' : 'windows')) : null,
+      platform ? el('span', { class: 'code-agent-platform', role: 'img', 'aria-label': platform.name,
+        title: platform.name }, icon(platform.icon)) : null,
       el('span', { class: 'code-agent-name' }, agent.name),
       agent.has_pin ? el('span', { class: 'sr' }, tr("защищён PIN")) : null,
       el('span', { class: 'code-agent-version', title: agent.agent_version
@@ -619,10 +620,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const button = automatic || busy
         ? el('button', { type: 'button', class: 'btn code-agent-update', title: tr("Обновить агент до {0}", agent.latest_version),
           'aria-label': tr("Обновить агент · {0}", agent.name), disabled: busy })
-        : el('a', { class: 'btn code-agent-update', href: agent.platform === 'darwin' ? '/api/agent/download?platform=macos' : '/api/agent/download',
-          download: agent.platform === 'darwin' ? 'studio-agent-setup.pkg' : 'studio-agent-setup.exe',
-          title: agent.platform === 'darwin' ? tr("Скачать установщик Studio Agent{0} для macOS", agent.latest_version ? ' ' + agent.latest_version : '')
-            : tr("Скачать установщик Studio Agent{0} для Windows", agent.latest_version ? ' ' + agent.latest_version : ''),
+        : el('a', { class: 'btn code-agent-update', href: installer.href, download: installer.file,
+          title: tr("Скачать установщик Studio Agent{0} для {1}", agent.latest_version ? ' ' + agent.latest_version : '', installer.name),
           'aria-label': tr("Скачать установщик агента · {0}", agent.name) });
       button.append(icon('sync'));
       if (available) button.classList.add('has-update');

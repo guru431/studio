@@ -1,6 +1,6 @@
 # CLAUDE.md — компонент agent проекта studio
 
-Мост Windows/macOS к студии `https://studio.example.com`: держит исходящий канал WebSocket к студии и отдаёт ей локальные
+Мост Windows/macOS/Linux к студии `https://studio.example.com`: держит исходящий канал WebSocket к студии и отдаёт ей локальные
 Claude Code, Codex и OpenCode владельца — проекты, чаты, ход с карточками разрешений, файлы, git — строго по протоколу
 версии 1. Как ставить и пользоваться — [README.md](README.md); устройство подробно, решения плана и таблица
 capability → версия моста — [docs/architecture/agent-bridge.md](../docs/architecture/agent-bridge.md).

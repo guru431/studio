@@ -9,7 +9,7 @@ import socket
 import sys
 import threading
 
-from . import enroll, journal, setup, single, store
+from . import enroll, host, journal, setup, single, store
 from .pin import PinStore
 
 STOP = ("setup", "revoked", "replaced")  # консоль на них выходит: канал сам не поднимется
@@ -127,8 +127,27 @@ def main(argv: list[str]) -> int:
     sub.add_parser("clear-pin", help="убрать PIN")
     sub.add_parser("reset-pin", help="снять блок PIN")
     sub.add_parser("status", help="настройки (без ключа)")
+    if host.LINUX:
+        sub.add_parser("menu", help="интерактивные настройки и диагностика")
+        sub.add_parser("_service", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     h = store.home()
+    if host.LINUX:
+        from . import linux_menu
+        if args.cmd in (None, "menu"):
+            return linux_menu.menu(h)
+        if args.cmd in ("run", "_service"):
+            from . import linux_service
+            return linux_service.supervise(h) if args.cmd == "run" else linux_service.serve(h)
+        if args.cmd == "status":
+            return linux_menu.status(h)
+        if args.cmd == "enroll":
+            return linux_menu.enrollment(h)
+        if args.cmd == "set-pin":
+            return linux_menu.set_pin(h)
+        if args.cmd in ("clear-pin", "reset-pin"):
+            linux_menu.invoke(h, "pin" if args.cmd == "clear-pin" else "reset")
+            return 0
     if args.cmd in (None, "run"):
         if getattr(args, "console", False):
             return _run_console(h)

@@ -66,18 +66,25 @@ export function button(text, attrs = {}, onClick) {
   return node;
 }
 
-/** «Скачать мост для Windows»: ссылка на установщик моста
- * Claude Code, что нужно и шаги установки. Один источник — «Агенты» без компьютеров и корень настроек. */
+export const agentInstallers = {
+  win32: { name: 'Windows', icon: 'windows', href: '/api/agent/download', file: 'studio-agent-setup.exe' },
+  darwin: { name: 'macOS', icon: 'apple', href: '/api/agent/download?platform=macos', file: 'studio-agent-setup.pkg' },
+  linux: { name: 'Linux', icon: 'linux', href: '/api/agent/download?platform=linux', file: 'studio-agent-setup.sh' },
+};
+
 export function agentDownload() {
   return el('div', { class: 'agent-download' },
     el('p', { class: 'agent-install-note', role: 'note' },
-      tr("Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS.")),
-    el('a', { id: 'agent-download', class: 'btn btn-accent', href: '/api/agent/download', download: 'studio-agent-setup.exe' },
+      tr("Установите агент на компьютер, который хотите подключить к Студии.")),
+    el('a', { id: 'agent-download', class: 'btn btn-accent', href: agentInstallers.win32.href, download: agentInstallers.win32.file },
       tr("Скачать агент для Windows (.exe)")),
-    el('a', { id: 'agent-download-macos', class: 'btn', href: '/api/agent/download?platform=macos', download: 'studio-agent-setup.pkg' },
+    el('a', { id: 'agent-download-macos', class: 'btn', href: agentInstallers.darwin.href, download: agentInstallers.darwin.file },
       tr("Скачать агент для macOS (.pkg)")),
-    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Windows: Python 3.11+. macOS 13+: Python уже в установщике.")),
-    el('p', { class: 'agent-download-steps' }, tr("Windows: запустите studio-agent-setup.exe. macOS: откройте studio-agent-setup.pkg двойным щелчком — Python и зависимости уже внутри. В окне моста войдите в свою учётную запись Studio.")));
+    el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
+      tr("Скачать агент для Linux (.sh)")),
+    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
+    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик. В Linux выполните команду в каталоге загрузки и войдите в Студию через меню агента."),
+      el('br'), el('code', {}, 'sh ./studio-agent-setup.sh')));
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.

@@ -9,7 +9,7 @@ import pytest
 from studio_agent import host, opencode_rpc
 
 
-@pytest.mark.skipif(host.MACOS, reason='установка npm Windows')
+@pytest.mark.skipif(host.MACOS or host.LINUX, reason='установка npm Windows')
 def test_find_cli_resolves_installed_native_exe_without_cmd(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setattr(opencode_rpc.shutil, "which", lambda _: None)

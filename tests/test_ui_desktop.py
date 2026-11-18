@@ -205,8 +205,8 @@ def test_desktop_compact_start_fit_zoom_and_resize(desktop_browser, live, tmp_pa
         server.stop()
 
 
-@pytest.mark.parametrize('platform', ['win32', 'darwin'])
-def test_desktop_disabled_requires_a_person_at_the_computer(browser, live, platform):
+@pytest.mark.parametrize('platform,modifier', [('win32', 'Win'), ('darwin', '⌘ Cmd'), ('linux', 'Super')])
+def test_desktop_disabled_requires_a_person_at_the_computer(browser, live, platform, modifier):
     login = 'desktop-disabled-' + platform
     live.add_user(login)
     machine, _ = desktop(enabled=False)
@@ -225,7 +225,7 @@ def test_desktop_disabled_requires_a_person_at_the_computer(browser, live, platf
         server.stop()
     assert not result.get('failed'), result
     assert result['values']['disabled']
-    assert ('⌘ Cmd' if platform == 'darwin' else 'Win') in result['values']['controls']
+    assert modifier in result['values']['controls']
     assert ('⌥ Option' if platform == 'darwin' else 'Alt') in result['values']['controls']
     assert 'Человек за компьютером' in result['values']['text']
     assert not any('Включить' in value or 'Разрешить' in value for value in result['values']['controls'])

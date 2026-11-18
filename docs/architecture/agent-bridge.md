@@ -1,4 +1,4 @@
-# Мост Windows/macOS `agent/` (studio-agent)
+# Мост Windows/macOS/Linux `agent/` (studio-agent)
 
 Правила и карта модулей — [agent/CLAUDE.md](../../agent/CLAUDE.md); установка и пользование —
 [agent/README.md](../../agent/README.md); контракт — протокол

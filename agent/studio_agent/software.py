@@ -97,6 +97,9 @@ def _vscode():
             if exe.is_file() and script.is_file():
                 return [str(exe), str(script)]
         return None
+    if host.LINUX:
+        code = host.find_tool('code')
+        return [str(code)] if code else None
     command = shutil.which('code.cmd')
     if command:
         root = Path(command).parent.parent
@@ -116,7 +119,7 @@ def _vscode():
 
 
 def _npm():
-    if host.MACOS:
+    if host.MACOS or host.LINUX:
         node, npm = host.find_tool('node'), host.find_tool('npm')
         return [str(node), str(npm.resolve())] if node and npm else None
     node = shutil.which('node.exe')
@@ -127,6 +130,12 @@ def _npm():
     return None
 
 
+def _npm_prefix(modules):
+    # Global npm uses PREFIX/lib/node_modules on Unix and PREFIX/node_modules on Windows.
+    parent = modules.parent
+    return parent.parent if (host.MACOS or host.LINUX) and parent.name == 'lib' else parent
+
+
 def inspect(tool):
     """Тот же поиск exe, что у ходов; для расширения показываем также версию его пакета."""
     path = {'claude': cli.find_cli, 'codex': codex_rpc.find_cli, 'opencode': opencode_rpc.find_cli}[tool]()
@@ -134,7 +143,7 @@ def inspect(tool):
     if path is None and tool == 'claude':
         # SDK поставляет собственный CLI, обновляемый вместе с мостом.
         import claude_agent_sdk
-        bundled = Path(claude_agent_sdk.__file__).parent / '_bundled' / ('claude' if host.MACOS else 'claude.exe')
+        bundled = Path(claude_agent_sdk.__file__).parent / '_bundled' / ('claude' if host.MACOS or host.LINUX else 'claude.exe')
         path = bundled if bundled.is_file() else None
         source = 'sdk'
     cli_version = None
@@ -149,16 +158,16 @@ def inspect(tool):
                 source, installed = 'npm', version(manifest.get('version'))
                 package = manifest['name']
                 modules = parent.parent if parent.parent.name == 'node_modules' else parent.parent.parent
-                prefix = modules.parent
+                prefix = _npm_prefix(modules)
                 break
             # npm может вынести платформенный пакет в соседний node_modules, вне основного пакета.
             candidate = manifest.get('name')
             if isinstance(candidate, str) and (tool == 'codex' and candidate.startswith('@openai/codex-')
-                    or tool == 'opencode' and candidate.startswith(('opencode-windows-', 'opencode-darwin-'))):
+                    or tool == 'opencode' and candidate.startswith(('opencode-windows-', 'opencode-darwin-', 'opencode-linux-'))):
                 modules = parent.parent.parent if tool == 'codex' else parent.parent
                 primary = _manifest(modules / TOOLS[tool] / 'package.json')
                 if primary.get('name') == TOOLS[tool]:
-                    source, installed, prefix = 'npm', version(primary.get('version')), modules.parent
+                    source, installed, prefix = 'npm', version(primary.get('version')), _npm_prefix(modules)
                     break
         try:
             result = subprocess.run([str(path), '--version'], stdin=subprocess.DEVNULL,
@@ -173,7 +182,7 @@ def inspect(tool):
             if path.is_relative_to(root / 'Caskroom' / HOMEBREW[tool]) and (root / 'bin/brew').is_file():
                 source, package, brew = 'homebrew', HOMEBREW[tool], root / 'bin/brew'
                 break
-    native_claude = (host.MACOS and tool == 'claude' and path is not None
+    native_claude = ((host.MACOS or host.LINUX) and tool == 'claude' and path is not None
                      and path.is_relative_to(Path.home() / '.local/share/claude/versions'))
     bundled_opencode = (tool == 'opencode' and path is not None and
                         path.name == 'opencode-cli' and path.parent.name == 'Resources')
@@ -200,7 +209,7 @@ def command(item, target):
         env['HOMEBREW_NO_INSTALL_CLEANUP'] = '1'
         return [str(brew), 'upgrade', '--cask', package], env
     if item['source'] == 'native' and tool == 'claude' and item.get('reason') is None:
-        if not host.MACOS or not item['_path'].is_relative_to(Path.home() / '.local/share/claude/versions'):
+        if not (host.MACOS or host.LINUX) or not item['_path'].is_relative_to(Path.home() / '.local/share/claude/versions'):
             raise ValueError('manager')
         return [str(item['_path']), 'update'], env
     if item['source'] == 'native' and tool == 'opencode':

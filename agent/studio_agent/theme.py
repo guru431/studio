@@ -5,11 +5,12 @@
 
 import contextlib
 import ctypes
+import os
 import subprocess
 
 from . import host
 
-if not host.MACOS:
+if not (host.MACOS or host.LINUX):
     import winreg
 
 PERSONALIZE = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
@@ -23,7 +24,8 @@ PAPER = {"bg": "#fbfaf7", "panel": "#ffffff", "text": "#1f1d1a", "muted": "#7b76
 GRAPHITE = {"bg": "#1b1b1b", "panel": "#262626", "text": "#ececec", "muted": "#8f8f8f", "border": "#2a2a2a",
             "accent": "#ececec", "on_accent": "#111111", "ok": "#3ecf8e", "danger": "#f87171",
             "warn": "#f5b94a", "field": "#1f1f1f", "edge": "#3d3d3d"}
-FONTS = (".AppleSystemUIFont", "Helvetica Neue") if host.MACOS else ("Segoe UI Variable Text", "Segoe UI")
+FONTS = ((".AppleSystemUIFont", "Helvetica Neue") if host.MACOS else
+         ("Noto Sans", "DejaVu Sans") if host.LINUX else ("Segoe UI Variable Text", "Segoe UI"))
 SIZE = 10
 
 
@@ -40,6 +42,8 @@ def is_dark() -> bool:
             return result.returncode == 0 and result.stdout.strip() == b"Dark"
         except (OSError, subprocess.SubprocessError):
             return False
+    if host.LINUX:
+        return "dark" in os.environ.get("GTK_THEME", "").lower()
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE) as k:
             return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
@@ -54,7 +58,7 @@ def dark_for(choice: str) -> bool:
 
 def dark_title(win, dark: bool) -> None:
     """Тёмный заголовок окна (Windows 10 20H1+, 11); не вышло — светлый, как есть."""
-    if host.MACOS:
+    if host.MACOS or host.LINUX:
         return
     with contextlib.suppress(Exception):
         win.update_idletasks()

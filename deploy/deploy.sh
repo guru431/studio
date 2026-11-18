@@ -98,6 +98,8 @@ git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "
 git -C "$D" show "$REV:deploy/build-agent-installer.ps1" > "$package/build-agent-installer.ps1"
 git -C "$D" show "$REV:deploy/agent-installer.cs" > "$package/agent-installer.cs"
 git -C "$D" show "$REV:deploy/build-agent-macos.py" > "$package/build-agent-macos.py"
+git -C "$D" show "$REV:deploy/build-agent-linux.py" > "$package/build-agent-linux.py"
+"$PYTHON" "$package/build-agent-linux.py" --archive "$package/studio-agent.zip" --output "$package/studio-agent-setup.sh"
 git -C "$D" show "$REV:deploy/macos-runtime.json" > "$package/macos-runtime.json"
 echo "==> сборка автономного установщика macOS"
 "$PYTHON" "$package/build-agent-macos.py" --archive "$package/studio-agent.zip" \
@@ -137,7 +139,7 @@ git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" "${PARTS[@]}" \
 "${SSH[@]}" "sudo sh -c 'cat > $IN/deploy/md2pdf.py'" < "$MD2PDF_SOURCE"
 echo "==> мост ${REV:0:7} → ZIP и установщик EXE"
 "${SSH[@]}" "sudo install -d -m 0755 $IN/agent"
-for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg; do
+for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studio-agent-setup.sh; do
     "${SSH[@]}" "sudo sh -c 'cat > $IN/agent/$file'" < "$package/$file"
 done
 

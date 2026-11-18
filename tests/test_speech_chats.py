@@ -84,7 +84,7 @@ def test_failed_edit_preserves_audio_and_shared_audio_survives_replacement(studi
 def test_migration_preserves_old_speeches_and_previous_writer(env):
     from contextlib import closing
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45) + '\nPRAGMA user_version=44;')
+        conn.executescript(db.SCHEMA.split(db.SPEECH_45, 1)[0] + '\nPRAGMA user_version=44;')
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
         conn.execute("INSERT INTO voices VALUES('v',1,'Старый голос','образец','ref',8,0)")
         insert = ("INSERT INTO speeches(id,user_id,model,voice,text,state,detail,created)"

@@ -202,7 +202,7 @@ def parse_hello(frame: dict) -> dict:
               "projects_root": _string(frame.get("projects_root"), 1024),
               "has_pin": frame["has_pin"], "models": out_models, "efforts": list(dict.fromkeys(efforts))}
     if "platform" in frame:
-        if frame["platform"] not in ("win32", "darwin"):
+        if frame["platform"] not in ("win32", "darwin", "linux"):
             raise ProtocolError("hello")
         result["platform"] = frame["platform"]
     if "agent_version" in frame:
@@ -268,10 +268,11 @@ async def attach(link: Link) -> None:
     учётки компьютера — мост показывает, под кем он на связи."""
     hello = link.hello
     row = state.DB.execute(
-        "UPDATE agents SET has_pin = ?, cc_version = ?, projects_root = ?, last_seen = ?"
+        "UPDATE agents SET has_pin = ?, cc_version = ?, projects_root = ?, last_seen = ?, platform = COALESCE(?, platform)"
         " WHERE id = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0)"
         " RETURNING name, (SELECT login FROM users WHERE users.id = agents.user_id) AS login",
-        (int(hello["has_pin"]), hello["cc_version"], hello["projects_root"], clock.NOW(), link.agent_id)).fetchone()
+        (int(hello["has_pin"]), hello["cc_version"], hello["projects_root"], clock.NOW(),
+         hello.get("platform"), link.agent_id)).fetchone()
     if row is None:
         log.warning("агент %d: отозван до знакомства", link.agent_id)
         await link.close(CLOSE_AUTH)

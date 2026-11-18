@@ -13,10 +13,14 @@ import uuid
 from pathlib import Path
 
 MACOS = sys.platform == 'darwin'
+LINUX = sys.platform == 'linux'
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 def install_home():
+    if LINUX:
+        from .host import install_home as linux_home
+        return linux_home()
     return (Path.home() / 'Library/Application Support/Studio Agent/app' if MACOS else
             Path(os.environ['LOCALAPPDATA']) / 'Programs/studio-agent')
 
@@ -84,7 +88,7 @@ class ProcessReleases(set):
 
 
 def _lock_file(path, *, create=False, gate=False):
-    if MACOS:
+    if MACOS or LINUX:
         import fcntl
         flags = os.O_RDWR | os.O_NOFOLLOW
         if create or gate:
@@ -204,7 +208,7 @@ def _reparse(info):
 
 
 def _managed_location(stage):
-    local = str(Path.home()) if MACOS else os.environ.get('LOCALAPPDATA')
+    local = str(Path.home()) if MACOS or LINUX else os.environ.get('LOCALAPPDATA')
     if not local or not Path(local).is_absolute() or not RELEASE_NAME.fullmatch(stage.name):
         return None
     base = install_home() / 'releases'
@@ -217,10 +221,13 @@ def _managed_base(stage):
     base = _managed_location(stage)
     if base is None:
         return None
-    local = Path.home() if MACOS else Path(os.environ['LOCALAPPDATA'])
     try:
-        parents = (local, local / 'Library', local / 'Library/Application Support', base.parent.parent,
-                   base.parent, base, stage) if MACOS else (local, local / 'Programs', base.parent, base, stage)
+        if LINUX:
+            parents = (stage, base, base.parent, base.parent.parent)
+        else:
+            local = Path.home() if MACOS else Path(os.environ['LOCALAPPDATA'])
+            parents = (local, local / 'Library', local / 'Library/Application Support', base.parent.parent,
+                       base.parent, base, stage) if MACOS else (local, local / 'Programs', base.parent, base, stage)
         for path in parents:
             info = path.lstat()
             if _reparse(info) or not stat.S_ISDIR(info.st_mode):
@@ -282,7 +289,7 @@ def _safe_tree(root):
             with os.scandir(pending.pop()) as entries:
                 for entry in entries:
                     info = entry.stat(follow_symlinks=False)
-                    if MACOS and stat.S_ISLNK(info.st_mode) and shutil.rmtree.avoids_symlink_attacks:
+                    if (MACOS or LINUX) and stat.S_ISLNK(info.st_mode) and shutil.rmtree.avoids_symlink_attacks:
                         continue  # POSIX rmtree удаляет саму ссылку, не её цель (включая symlink venv).
                     if _reparse(info):
                         return False
@@ -295,14 +302,14 @@ def _safe_tree(root):
 
 def running_releases(base):
     """CIM только читает процессы; наружу выходят имена выпусков, без команд, путей или аргументов."""
-    if MACOS:
+    if MACOS or LINUX:
         try:
             result = subprocess.run(['/bin/ps', '-axww', '-o', 'command='], capture_output=True,
                                     timeout=10, check=True)
             if len(result.stdout) > 4 * 1024 * 1024:
                 return None
             pattern = re.escape(str(base)) + r'/(release-[A-Za-z0-9_-]{1,64})(?:/|\s|$)'
-            return ProcessReleases(re.findall(pattern, result.stdout.decode('utf-8', 'replace')))
+            return ProcessReleases(re.findall(pattern, result.stdout.decode('utf-8', 'replace')), complete=not LINUX)
         except (OSError, subprocess.SubprocessError):
             return None
     script = r'''
@@ -434,6 +441,11 @@ def prune(stage: Path, plan: dict, autostart: str | None = '', *, processes=None
 
 
 def _autostart():
+    if LINUX:
+        try:
+            return str((install_home() / 'current').resolve(strict=True)) + '/'
+        except OSError:
+            return None
     if MACOS:
         import plistlib
         try:

@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 45
+VERSION = 46
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -593,6 +593,8 @@ CREATE TRIGGER search_speeches_au AFTER UPDATE OF text ON speeches WHEN old.text
 END;
 """
 SCHEMA += SPEECH_45
+AGENT_PLATFORM_46 = "ALTER TABLE agents ADD COLUMN platform TEXT CHECK (platform IN ('win32','darwin','linux'));\n"
+SCHEMA += AGENT_PLATFORM_46
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -692,6 +694,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     43: MCP_43,
     44: MEDIA_44,
     45: SPEECH_45,
+    46: AGENT_PLATFORM_46,
 }
 
 

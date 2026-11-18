@@ -11,6 +11,8 @@
 !agent/
 !agent/studio-agent.zip
 !agent/studio-agent-setup.exe
+!agent/studio-agent-setup.pkg
+!agent/studio-agent-setup.sh
 **/__pycache__
 **/*.pyc
 **/*.local.*

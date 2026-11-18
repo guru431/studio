@@ -48,3 +48,10 @@ def macos_test_secrets(monkeypatch, request):
         from studio_agent import macos_keychain
         key = Fernet.generate_key()
         monkeypatch.setattr(macos_keychain, '_key', lambda account: key)
+
+
+@pytest.fixture(autouse=True)
+def linux_test_secrets(monkeypatch, request):
+    if sys.platform == 'linux' and request.node.get_closest_marker('manual') is None:
+        folder = request.getfixturevalue('tmp_path')
+        monkeypatch.setenv('XDG_CONFIG_HOME', str(folder / 'config'))

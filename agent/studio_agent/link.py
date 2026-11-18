@@ -186,7 +186,7 @@ class Link:
             log.info("канал: нет welcome")
             return None, welcomed
         finally:
-            self.agent.desktop.revoke()
+            self.agent.desktop.disconnect()
             if self._queue is queue:
                 self._queue = None
             if writer is not None and self._stop.is_set():  # выход: дослать, что уже в очереди (`done` ходов)

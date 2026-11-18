@@ -54,10 +54,12 @@ def find_cli(extensions: Path = VSCODE_EXTENSIONS) -> Path | None:
     with contextlib.suppress(OSError):
         for entry in extensions.iterdir():
             match = pattern.fullmatch(entry.name)
-            exe = entry / "resources" / "native-binary" / ("claude" if host.MACOS else "claude.exe")
+            exe = entry / "resources" / "native-binary" / ("claude" if host.MACOS or host.LINUX else "claude.exe")
             if match and exe.is_file():
                 found.append((tuple(int(part) for part in match.group(1).split(".")), exe))
-    return max(found, key=lambda item: item[0])[1] if found else host.find_tool("claude") if host.MACOS else None
+    if found:
+        return max(found, key=lambda item: item[0])[1]
+    return host.find_tool("claude") if host.MACOS or host.LINUX else None
 
 
 def current(path: Path | None, find=find_cli) -> Path | None:

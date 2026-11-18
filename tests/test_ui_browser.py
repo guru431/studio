@@ -7304,7 +7304,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
     v = r["values"]
     assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
     assert v["nested"] and v["other"]
-    assert v["notice"] == "Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS."
+    assert v["notice"] == "Установите агент на компьютер, который хотите подключить к Студии."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -7560,16 +7560,18 @@ def test_code_empty_offers_agent_download(browser, live):
             document.querySelectorAll('#agent-download').length]; })()"""),
         ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p')].map((p) => p.textContent)"),
         ("eval", "macos", "(() => {const a=document.querySelector('#agent-download-macos'); return [a.getAttribute('href'), a.download]})()"),
+        ("eval", "linux", "(() => {const a=document.querySelector('#agent-download-linux'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "badge", "!!document.querySelector('#code-empty .badge svg')"),
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
     assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
-    assert v["texts"] == ["Для работы раздела «Агенты» установите и запустите агент на компьютере с Windows или macOS.",
-                          "Нужны Claude Code, Codex или OpenCode. Windows: Python 3.11+. macOS 13+: Python уже в установщике.",
-                          "Windows: запустите studio-agent-setup.exe. macOS: откройте studio-agent-setup.pkg двойным щелчком — Python и зависимости уже внутри."
-                          " В окне моста войдите в свою учётную запись Studio."]
+    assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
+    assert v["texts"] == ["Установите агент на компьютер, который хотите подключить к Студии.",
+                          "Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
+                          "В Windows и macOS откройте установщик. В Linux выполните команду в каталоге загрузки и войдите в Студию через меню агента."
+                          "sh ./studio-agent-setup.sh"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
 

@@ -1,6 +1,6 @@
 claude-agent-sdk==0.2.174
 websockets==17.3
-pystray==0.19.5
+pystray==0.19.5; sys_platform != "linux"
 pillow==13.0.0
 pyobjc-framework-ApplicationServices==13.0; sys_platform == "darwin"
 pyobjc-framework-Cocoa==13.0; sys_platform == "darwin"

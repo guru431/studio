@@ -70,7 +70,7 @@ class Job:
 def attach(pid):
     """Свой job с `KILL_ON_JOB_CLOSE` для запущенного процесса; не Windows, нет pid, отказ — None
     (поведение прежнее, в журнал — только код ошибки)."""
-    if host.MACOS and type(pid) is int:
+    if (host.MACOS or host.LINUX) and type(pid) is int:
         try:
             if os.getpgid(pid) == pid and pid != os.getpgrp():
                 return ProcessGroup(pid)
