@@ -127,12 +127,14 @@ def test_standard_macos_install_uses_applications_and_launch_services(tmp_path, 
     macos_autostart.set_enabled(True, repo)
     assert macos_autostart.read()['ProgramArguments'] == [
         '/usr/bin/open', '-n', '-W', str(binary.parents[2]), '--args', '--studio-repo', str(repo)]
+    monkeypatch.setenv('STUDIO_AGENT_HOME', str(user / 'Library/Application Support/Studio Agent'))
+    assert macos_autostart.arguments(repo)[0] == str(binary)
     monkeypatch.setenv('STUDIO_AGENT_HOME', str(tmp_path / 'isolated'))
     assert macos_autostart.application_directory() == user / 'Applications'
 
 
 def test_first_update_from_python_switches_to_native_before_gui_start(tmp_path, monkeypatch):
-    from studio_agent import macos_launcher
+    from studio_agent import macos_launcher, single
     repo = tmp_path / 'release'
     (repo / 'macos').mkdir(parents=True)
     (repo / 'macos/studio-agent').touch()
@@ -144,8 +146,9 @@ def test_first_update_from_python_switches_to_native_before_gui_start(tmp_path, 
     monkeypatch.delenv('STUDIO_AGENT_HOME', raising=False)
     monkeypatch.delenv('STUDIO_AGENT_UPDATE_READY', raising=False)
     calls = []
+    monkeypatch.setattr(single, 'acquire', lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(macos_launcher, 'executable', lambda: Path('/runtime/python'))
-    monkeypatch.setitem(sys.modules, 'install_macos', SimpleNamespace(bundle=lambda *args: app))
+    monkeypatch.setitem(sys.modules, 'install_macos', SimpleNamespace(bundle=lambda *args, **kwargs: app))
     monkeypatch.setattr(macos_launcher.os, 'execv', lambda path, args: calls.append((path, args)))
     macos_launcher.ensure_native(repo)
     binary = str(app / 'Contents/MacOS/studio-agent')
@@ -153,6 +156,59 @@ def test_first_update_from_python_switches_to_native_before_gui_start(tmp_path, 
     monkeypatch.setattr(macos_launcher, 'executable', lambda: Path(binary))
     macos_launcher.ensure_native(repo)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_zip_update_refreshes_the_running_native_bundle_once(tmp_path, monkeypatch, legacy):
+    from studio_agent import macos_launcher, single
+
+    common = tmp_path / 'common'
+    monkeypatch.setattr(macos_autostart, 'SYSTEM_APPLICATIONS', common)
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setenv('STUDIO_AGENT_HOME', str(tmp_path / 'Library/Application Support/Studio Agent'))
+    repo = tmp_path / 'release'
+    (repo / 'macos').mkdir(parents=True)
+    (repo / 'macos/studio-agent').touch()
+    ready = str(repo / '_update_ready')
+    monkeypatch.setenv('STUDIO_AGENT_UPDATE_READY', ready)
+    app = common / 'Studio Agent.app'
+    executable = app / 'Contents/MacOS/studio-agent'
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b'\xca\xfe\xba\xbe fixture')
+    monkeypatch.setattr(os, 'getuid', lambda: app.stat().st_uid, raising=False)
+    metadata = app / 'Contents/Info.plist'
+    metadata.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.studio.agent'}))
+    running = executable
+    if legacy:
+        running = tmp_path / 'Applications/Studio Agent.app/Contents/MacOS/studio-agent'
+        running.parent.mkdir(parents=True)
+        running.write_bytes(executable.read_bytes())
+    monkeypatch.setattr(macos_launcher, 'executable', lambda: running)
+    calls = []
+
+    def refresh(stage, applications, *, launcher):
+        assert (stage, applications, launcher) == (repo, common, executable)
+        icon = app / 'Contents/Resources/StudioAgent.icns'
+        icon.parent.mkdir()
+        icon.write_bytes(b'icns fixture')
+        metadata.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.studio.agent',
+            'CFBundleIconFile': icon.name, 'NSScreenCaptureUsageDescription': 'Studio Agent'}))
+        calls.append('bundle')
+        return app
+
+    monkeypatch.setitem(sys.modules, 'install_macos', SimpleNamespace(bundle=refresh))
+    monkeypatch.setattr(macos_launcher.os, 'execv', lambda path, args: calls.append(args))
+    monkeypatch.setattr(single, 'acquire', lambda: None)
+    macos_launcher.ensure_native(repo)
+    assert not calls
+    monkeypatch.setattr(single, 'acquire', lambda: SimpleNamespace(close=lambda: calls.append('unlock')))
+    macos_launcher.ensure_native(repo)
+    assert calls[:2] == ['bundle', 'unlock']
+    assert '--env' in calls[2] and 'STUDIO_AGENT_UPDATE_READY=' + ready in calls[2]
+    assert calls[2][-3:] == ['--args', '--studio-repo', str(repo)]
+    running = executable
+    macos_launcher.ensure_native(repo)
+    assert calls.count('bundle') == 1 and calls[3:] == ['unlock']
 
 
 def test_standalone_helper_reads_only_its_trusted_autostart_source(tmp_path, monkeypatch):

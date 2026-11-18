@@ -10,14 +10,17 @@ SYSTEM_APPLICATIONS = Path('/Applications')
 
 def application_directory() -> Path:
     """Обычная установка доступна из «Программ», личная — из домашней папки."""
+    home = Path.home()
+    override = os.environ.get('STUDIO_AGENT_HOME')
+    standard_home = home / 'Library/Application Support/Studio Agent'
     app = SYSTEM_APPLICATIONS / APP_NAME
-    if not os.environ.get('STUDIO_AGENT_HOME') and os.access(SYSTEM_APPLICATIONS, os.W_OK | os.X_OK):
+    if (not override or Path(override) == standard_home) and os.access(SYSTEM_APPLICATIONS, os.W_OK | os.X_OK):
         try:
             if not app.is_symlink() and app.stat().st_uid == os.getuid():
                 return SYSTEM_APPLICATIONS
         except FileNotFoundError:
             return SYSTEM_APPLICATIONS
-    return Path.home() / 'Applications'
+    return home / 'Applications'
 
 
 def path() -> Path:

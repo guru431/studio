@@ -16,7 +16,7 @@ SOURCE = Path(__file__).resolve().parent
 BUSY = "Дождитесь завершения заданий и выйдите из Studio Agent через меню"
 
 
-def bundle(repo: Path, applications: Path) -> Path:
+def bundle(repo: Path, applications: Path, *, launcher: Path | None = None) -> Path:
     """Компилятор и codesign не могут повредить прежнее приложение при отказе."""
     applications.mkdir(parents=True, exist_ok=True)
     app = applications / "Studio Agent.app"
@@ -24,7 +24,7 @@ def bundle(repo: Path, applications: Path) -> Path:
         raise ValueError('приложение не должно быть ссылкой')
     with tempfile.TemporaryDirectory(prefix='.studio-agent-', dir=applications) as folder:
         pending = Path(folder) / 'Studio Agent.app'
-        _write_bundle(pending, repo)
+        _write_bundle(pending, repo, launcher=launcher)
         previous = Path(folder) / 'previous.app'
         if app.exists():
             app.rename(previous)
@@ -37,11 +37,11 @@ def bundle(repo: Path, applications: Path) -> Path:
     return app
 
 
-def _write_bundle(app: Path, repo: Path) -> None:
+def _write_bundle(app: Path, repo: Path, *, launcher: Path | None = None) -> None:
     contents = app / "Contents"
     executable = contents / "MacOS/studio-agent"
     executable.parent.mkdir(parents=True, exist_ok=True)
-    launcher = SOURCE / 'macos/studio-agent'
+    launcher = launcher if launcher is not None else SOURCE / 'macos/studio-agent'
     if launcher.is_file():
         shutil.copyfile(launcher, executable)
     else:
