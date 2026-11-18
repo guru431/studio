@@ -10,6 +10,7 @@ import config
 import db
 import security
 import state
+from historical_schema import install_schema
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -28,70 +29,6 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
         assert e.value.__cause__ is None and e.value.__suppress_context__
 
 
-DROP_V4 = "DROP TABLE section_links; DROP TABLE section_defaults;"
-DROP_V5 = "DROP TABLE transcripts; DROP TABLE voices; DROP TABLE speeches;"
-DROP_V6 = "ALTER TABLE users DROP COLUMN views;"
-DROP_V7 = ("ALTER TABLE users DROP COLUMN screen_lock; ALTER TABLE sessions DROP COLUMN mobile;"
-           " ALTER TABLE sessions DROP COLUMN seen; DROP TABLE passkeys;")
-DROP_V8 = "DROP TABLE purge;"
-DROP_V9 = "DROP INDEX media_user; DROP INDEX messages_streaming;"
-DROP_V10 = "ALTER TABLE connections DROP COLUMN passport;"
-DROP_V11 = "ALTER TABLE transcripts DROP COLUMN edits; ALTER TABLE attachments DROP COLUMN source_transcript_id;"
-DROP_V12 = "DROP TABLE presets; DROP INDEX images_user_source;"
-#: шаг 13 — триггеры раньше столбца: DROP COLUMN перечитывает схему, а триггер ссылался бы на снятую
-#: search_docs; снимать первой в цепочках — DROP_V5 сносит transcripts
-SEARCH_TRIGGERS = ("search_images_ai", "search_images_ad", "search_videos_ai", "search_videos_au", "search_videos_ad",
-                   "search_chats_ai", "search_chats_au", "search_chats_ad", "search_messages_ai", "search_messages_au",
-                   "search_messages_ad", "search_attachments_ai", "search_attachments_au", "search_attachments_ad",
-                   "search_transcripts_ai", "search_transcripts_au", "search_transcripts_ad", "search_speeches_ai",
-                   "search_speeches_ad", "search_users_ad")
-DROP_V13 = ("".join(f"DROP TRIGGER {t}; " for t in SEARCH_TRIGGERS)
-            + "DROP TABLE search; DROP TABLE search_docs; ALTER TABLE transcripts DROP COLUMN text;")
-DROP_V14 = ("ALTER TABLE chats DROP COLUMN web; ALTER TABLE chats DROP COLUMN web_consent;"
-            " ALTER TABLE users DROP COLUMN exa_key; ALTER TABLE messages DROP COLUMN tools;")
-DROP_V15 = ("ALTER TABLE chats DROP COLUMN thinking; ALTER TABLE messages DROP COLUMN reasoning;"
-            " ALTER TABLE messages DROP COLUMN reasoning_sec;")
-#: шаг 16 (распознавание): таблицы уносят свои индексы и триггеры поиска (связей ocr у новой базы нет —
-#: подключений нет); снимать первой — триггеры ссылаются на search_docs, а DROP_V13 её сносит; триггер текста
-#: вложений висит на attachments — его отдельно
-DROP_V16 = "DROP TABLE scan_pages; DROP TABLE scans; DROP TRIGGER search_attachments_text;"
-DROP_V17 = "ALTER TABLE users DROP COLUMN pin_hash; ALTER TABLE users DROP COLUMN pin_fails;"
-#: шаг 18 (перевод): таблицы уносят свои индексы и триггеры поиска; снимать первой — триггеры ссылаются на
-#: search_docs, а DROP_V13 её сносит (связи translate ставит код при старте — sections.adopt, не шаг)
-DROP_V18 = "DROP TABLE translation_parts; DROP TABLE translations;"
-#: шаг 19 (Claude Code): таблицы уносят свои индексы; снимать первой — code_chats и push_subs ссылаются на
-#: agents и sessions
-DROP_V19 = "DROP TABLE push_subs; DROP TABLE code_chats; DROP TABLE agent_events; DROP TABLE agents;"
-#: шаг 20 (рабочее место Claude Code): снимать раньше шага 19 — таблицы ссылаются на agents
-# Все старые фикстуры снимают и добавленное после рабочего места поле умолчаний.
-#: шаг 36: столбцы chat_shares и security_events уходят с их таблицами ниже, у users — отдельно
-DROP_V45 = ("DROP TRIGGER speeches_chat_ai; DROP TRIGGER search_speeches_au;"
-            " DROP INDEX speeches_user_chat; DROP INDEX speeches_user_chat_created;"
-            " ALTER TABLE speeches DROP COLUMN chat_id; ALTER TABLE speeches DROP COLUMN chat_created;"
-            " ALTER TABLE speeches DROP COLUMN voice_name;")
-DROP_V40 = DROP_V45 + "ALTER TABLE videos DROP COLUMN model;" + ("DROP TABLE mcp_servers; ALTER TABLE chats DROP COLUMN mcp_ids; "
-            "DROP TRIGGER voices_sample_ai; DROP TABLE voice_samples; ALTER TABLE code_chats DROP COLUMN origin; "
-            "DROP TABLE email_tokens; DROP TABLE email_limits; DROP TABLE invitations; DROP INDEX users_email;"
-            " ALTER TABLE users DROP COLUMN email; ALTER TABLE users DROP COLUMN email_codes;")
-DROP_V37 = DROP_V40 + "DROP TABLE code_member_tabs; DROP TABLE project_members;"
-DROP_V36 = DROP_V37 + ("ALTER TABLE sessions DROP COLUMN browser; ALTER TABLE sessions DROP COLUMN os;"
-            " ALTER TABLE sessions DROP COLUMN model; ALTER TABLE sessions DROP COLUMN label; ALTER TABLE sessions DROP COLUMN ip;")
-DROP_V35 = DROP_V36 + "ALTER TABLE users DROP COLUMN password_reset;"
-DROP_V33 = DROP_V35 + ("ALTER TABLE messages DROP COLUMN error; DROP TABLE security_events;"
-            " ALTER TABLE sessions DROP COLUMN created;"
-            " ALTER TABLE sessions DROP COLUMN device; ALTER TABLE sessions DROP COLUMN active;")
-DROP_V28 = DROP_V33 + "DROP TABLE chat_share_files; DROP TABLE chat_share_visitors; DROP TABLE chat_share_attempts; DROP TABLE chat_shares; ALTER TABLE connections DROP COLUMN s06; DROP TABLE chat_turn_requests; DROP TABLE ntfy_devices; DROP TABLE ntfy_settings; DROP TABLE code_attention;"
-DROP_V27 = DROP_V28 + "ALTER TABLE users DROP COLUMN timezone;"
-DROP_V26 = DROP_V27 + ("DROP TRIGGER cleaner_context_delete; DROP TRIGGER cleaner_chat_delete;"
-            " DROP TRIGGER cleaner_translation_delete; DROP TRIGGER cleaner_user_delete;"
-            " DROP TRIGGER cleaner_connection_delete; DROP TABLE cleaner_contexts; DROP TABLE cleaner_deletions;"
-            " ALTER TABLE connections DROP COLUMN cleaner; ALTER TABLE messages DROP COLUMN cleaner_raw;")
-DROP_V25 = DROP_V26 + "ALTER TABLE users DROP COLUMN code_quick_actions;"
-DROP_V24 = DROP_V25 + ("ALTER TABLE users DROP COLUMN screen_lock_sections; ALTER TABLE users DROP COLUMN screen_lock_timeout;"
-            " ALTER TABLE users DROP COLUMN computer_pin_timeout;")
-DROP_V20 = DROP_V24 + "ALTER TABLE users DROP COLUMN code_defaults; DROP TABLE code_place; DROP TABLE code_tabs;"
-
-
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 45
@@ -102,7 +39,7 @@ def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
 def test_step_42_preserves_references_and_accepts_previous_voice_writer(env):
     from contextlib import closing
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42) + "\nPRAGMA user_version=41;")
+        install_schema(conn, 41)
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         insert = "INSERT INTO voices VALUES(?,1,'Voice','Reference',?,8,0)"
         conn.execute(insert, ('before', 'before-audio'))
@@ -124,7 +61,7 @@ def test_step_41_preserves_legacy_chats_and_accepts_previous_writer(env):
     import sqlite3
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41) + "\nPRAGMA user_version=40;")
+        install_schema(conn, 40)
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         conn.execute("INSERT INTO agents(id,user_id,name,key_hash,created) VALUES(1,1,'PC','key',0)")
         insert = ("INSERT INTO code_chats(user_id,agent_id,project,session_id,state,created,updated)"
@@ -143,7 +80,7 @@ def test_step_41_preserves_legacy_chats_and_accepts_previous_writer(env):
 
 def test_step_38_keeps_owner_workspace_and_cascades_membership(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38) + '\nPRAGMA user_version=37;')
+    install_schema(conn, 37)
     conn.executemany("INSERT INTO users(id,login,name,pw_hash,created) VALUES(?,?,?,'hash',0)",
                      [(1, 'owner', 'Owner'), (2, 'friend', 'Friend')])
     conn.execute("INSERT INTO agents(id,user_id,name,key_hash,created) VALUES(1,1,'PC','key',0)")
@@ -161,7 +98,7 @@ def test_step_38_keeps_owner_workspace_and_cascades_membership(env):
 
 def test_step_31_keeps_history_and_cascades_acknowledgements_with_chat(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31) + '\nPRAGMA user_version=30;')
+    install_schema(conn, 30)
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('chat',1,'Keep history',0,0)")
     db.migrate(conn)
@@ -177,7 +114,7 @@ def test_step_34_keeps_sessions_and_cascades_security_events_with_the_account(en
     """Шаг 34: прежние сессии живы (новые столбцы — NULL), прежний код заводит сессии без них; журнал уходит с
     учёткой, а сессия — с push и ntfy устройства, как прежде."""
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34) + '\nPRAGMA user_version = 33;')
+    install_schema(conn, 33)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed, mobile, seen) VALUES ('d', 1, 'c', 9, 1, 1, 5)")
     db.migrate(conn); db.migrate(conn)
@@ -195,7 +132,7 @@ def test_step_35_adds_the_answer_error_and_keeps_messages(env):
     """Шаг 35: причина отказа ответа — `messages.error`, у прежних строк NULL. Прежний код (вставка по именам
     столбцов, выборка `*` по именам) с новой базой работает."""
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35) + '\nPRAGMA user_version=34;')
+    install_schema(conn, 34)
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
     conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'Keep',0,0)")
     conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
@@ -213,7 +150,7 @@ def test_step_35_adds_the_answer_error_and_keeps_messages(env):
 
 def test_step_25_keeps_profile_and_gives_existing_users_initial_quick_actions(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27).removesuffix(db.CLEANER_26).removesuffix(db.CODE_25) + "\nPRAGMA user_version = 24;")
+    install_schema(conn, 24)
     conn.execute("INSERT INTO users(login, name, pw_hash, created, theme, code_defaults)"
                  " VALUES ('owner', 'Owner', 'hash', 0, 'dark', ?)", ('{"codex":{"effort":"high"}}',))
     db.migrate(conn); db.migrate(conn)
@@ -225,7 +162,7 @@ def test_step_25_keeps_profile_and_gives_existing_users_initial_quick_actions(en
 
 def test_step_27_defaults_existing_users_to_moscow_without_changing_their_data(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28).removesuffix(db.TIMEZONE_27) + '\nPRAGMA user_version = 26;')
+    install_schema(conn, 26)
     conn.execute("INSERT INTO users(login, name, pw_hash, created, theme) VALUES ('owner', 'Owner', 'hash', 0, 'dark')")
     db.migrate(conn)
     assert conn.execute('SELECT timezone, theme FROM users').fetchone()[:] == ('Europe/Moscow', 'dark')
@@ -238,7 +175,7 @@ def test_step_27_defaults_existing_users_to_moscow_without_changing_their_data(e
 
 def test_step_28_keeps_profile_and_cascades_attention_with_computer(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.SPEECH_45).removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40).removesuffix(db.AGENT_EVENTS_39).removesuffix(db.PROJECTS_38).removesuffix(db.DEVICES_37).removesuffix(db.SHARES_36).removesuffix(db.CHAT_35).removesuffix(db.SECURITY_34).removesuffix(db.SHARES_33).removesuffix(db.S06_32).removesuffix(db.CHAT_31).removesuffix(db.NTFY_30).removesuffix(db.NTFY_29).removesuffix(db.CODE_28) + '\nPRAGMA user_version = 27;')
+    install_schema(conn, 27)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created, timezone) VALUES (1, 'u', 'U', 'h', 0, 'UTC')")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'k', 0)")
     db.migrate(conn)
@@ -254,10 +191,8 @@ def test_step_28_keeps_profile_and_cascades_attention_with_computer(env):
 
 def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
     """База прода — версии 1: шаг добавляет столбцы, строки и настройки остаются."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript("ALTER TABLE images DROP COLUMN mask_media_id; ALTER TABLE messages DROP COLUMN alive_at;"
-                       " ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 1;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 1)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'snofs', 'p', '64x48', 1, 'done', 'готово', 0)")
@@ -269,9 +204,8 @@ def test_migrate_brings_a_version_1_base_up_keeping_its_rows(env):
 
 def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
     """База прода — версии 2: шаг добавляет столбцы цепочки, строки остаются без неё."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript("ALTER TABLE images DROP COLUMN chain; ALTER TABLE videos DROP COLUMN chain;"
-                       f" {DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 2;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 2)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'edit', 'snofs', 'p', '64x48', 1, 'done', 'готово', 0)")
@@ -284,8 +218,8 @@ def test_migrate_brings_a_version_2_base_up_keeping_its_rows(env):
 def test_migrate_links_a_version_3_base_to_every_section(env):
     """Шаг 4: srvllm — во всех шести разделах с перечнем, чат — с моделью пользователя; openai — в чате.
     Шаг 16 добавляет srvllm в «Распознавание»."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V4} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 3;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 3)
     ins = ("INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
            " VALUES (?, 1, 'c', ?, ?, x'00', ?, 0)")
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
@@ -335,8 +269,8 @@ def test_token_encryption_needs_the_same_key(env, monkeypatch):
 
 
 def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V5} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 4;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 4)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -347,8 +281,8 @@ def test_migrate_adds_the_speech_tables_to_a_version_4_base(env):
 
 def test_migrate_gives_a_version_5_base_an_empty_view_choice(env):
     """Шаг 6: вид ленты — в учётке; у прежних учёток выбора нет — разделы берут свой вид по умолчанию."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V6} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 5;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 5)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -357,8 +291,8 @@ def test_migrate_gives_a_version_5_base_an_empty_view_choice(env):
 
 def test_migrate_adds_the_screen_lock_to_a_version_6_base(env):
     """Шаг 7: блокировка на телефоне выключена у прежних учёток, прежние сессии — без отметок."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V7} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 6;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 6)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d', 1, 'c', 9e12, 0)")
     db.migrate(conn)
@@ -370,8 +304,8 @@ def test_migrate_adds_the_screen_lock_to_a_version_6_base(env):
 
 def test_migrate_adds_the_purge_queue_to_a_version_7_base(env):
     """Шаг 8: очередь удаления файлов — пустая и без ссылки на учётку: удаление учётки путь не уносит."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V8} {DROP_V9} {DROP_V10} PRAGMA user_version = 7;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 7)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -383,8 +317,8 @@ def test_migrate_adds_the_purge_queue_to_a_version_7_base(env):
 def test_migrate_indexes_files_and_streaming_answers_in_a_version_8_base(env):
     """Шаг 9: файлы учётки и идущие ответы — по индексу, а не полным просмотром media («Хранилище»,
     стирание истории) и всей переписки (предел ответов на каждом ходу)."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V9} {DROP_V10} PRAGMA user_version = 8;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 8)
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
 
@@ -397,8 +331,8 @@ def test_migrate_indexes_files_and_streaming_answers_in_a_version_8_base(env):
 
 def test_migrate_adds_the_passport_to_a_version_9_base(env):
     """Шаг 10: паспорт подключения (checks.py) — у прежних подключений пуст: «не проверено»."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} {DROP_V10} PRAGMA user_version = 9;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 9)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created)"
                  " VALUES (1, 'c', 'openai', 'https://cloud.test/v1', x'00', '[]', 0)")
@@ -409,8 +343,8 @@ def test_migrate_adds_the_passport_to_a_version_9_base(env):
 
 def test_migrate_adds_transcript_edits_to_a_version_10_base(env):
     """Шаг 11: правки расшифровки и ссылка вложения на расшифровку; прежние строки — без них."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} {DROP_V11} PRAGMA user_version = 10;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 10)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
                  " VALUES ('t1', 1, 'whisperx', 'a.m4a', 'm', 'done', 'готово', 0)")
@@ -423,8 +357,8 @@ def test_migrate_adds_transcript_edits_to_a_version_10_base(env):
 
 def test_migrate_adds_presets_and_the_source_index_to_a_version_11_base(env):
     """Шаг 12 (фото): пресеты учётки (каскад с ней) и индекс вариантов — картинки по исходнику."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} {DROP_V12} PRAGMA user_version = 11;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 11)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -442,8 +376,8 @@ def test_migrate_adds_the_search_index_to_a_version_12_base(env):
     """Шаг 13: индекс поиска заполняется из таблиц истории — промпты, названия и сообщения диалогов,
     отправленные документы, расшифровки по имени, озвучки; идущий ответ и неотправленный документ — нет.
     Текст расшифровки (`transcripts.text`) пуст: его заполнит фон по файлу итога."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} {DROP_V13} PRAGMA user_version = 12;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 12)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
                  " VALUES ('i1', 1, 'generation', 'snofs', 'Кошка на крыше', '64x48', 1, 'done', 'готово', 1)")
@@ -478,8 +412,8 @@ def test_migrate_adds_the_search_index_to_a_version_12_base(env):
 def test_migrate_adds_the_internet_columns_to_a_version_13_base(env):
     """Шаг 14 (интернет в чате): у прежних диалогов «Интернет» выключен и подтверждения нет, у учёток
     нет ключа Exa, у сообщений — шагов инструментов; строки целы."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} PRAGMA user_version = 13;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 13)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO chats(id, user_id, title, model, created, updated) VALUES ('c1', 1, 'Про отпуск', 'm', 5, 5)")
     conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
@@ -495,10 +429,10 @@ def test_migrate_adds_the_internet_columns_to_a_version_13_base(env):
 def test_previous_code_still_works_on_a_version_14_base(env, stepped):
     """Откат install.sh на код схемы 13 (спека интернета, раздел 9): прежний код пишет строки без новых
     столбцов и читает `SELECT *` — у новой базы (SCHEMA) и у поднятой шагом 14."""
-    conn = db.connect(env.db_path); db.migrate(conn)
+    conn = db.connect(env.db_path)
     if stepped:
-        conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} {DROP_V14} PRAGMA user_version = 13;")
-        db.migrate(conn)
+        install_schema(conn, 13)
+    db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
@@ -518,8 +452,8 @@ def test_previous_code_still_works_on_a_version_14_base(env, stepped):
 def test_migrate_adds_the_reasoning_columns_to_a_version_14_base(env):
     """Шаг 15 (кнопка «Рассуждение»): у прежних диалогов кнопка выключена, у сообщений нет рассуждения и его
     длительности; строки целы."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} PRAGMA user_version = 14;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 14)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO chats(id, user_id, title, model, web, created, updated)"
                  " VALUES ('c1', 1, 'Про отпуск', 'm', 1, 5, 5)")
@@ -536,10 +470,10 @@ def test_migrate_adds_the_reasoning_columns_to_a_version_14_base(env):
 def test_previous_code_still_works_on_a_version_15_base(env, stepped):
     """Откат install.sh на код схемы 14: прежний код пишет строки без новых столбцов и читает `SELECT *` — у
     новой базы (SCHEMA) и у поднятой шагом 15."""
-    conn = db.connect(env.db_path); db.migrate(conn)
+    conn = db.connect(env.db_path)
     if stepped:
-        conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} {DROP_V15} PRAGMA user_version = 14;")
-        db.migrate(conn)
+        install_schema(conn, 14)
+    db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
@@ -560,8 +494,8 @@ def test_previous_code_still_works_on_a_version_15_base(env, stepped):
 def test_step_16_links_every_srvllm_connection_to_ocr(env):
     """Шаг 16 (распознавание): каждое подключение srvllm — в разделе «Распознавание» с hunyuan-ocr, умолчание —
     наименьшее из них у пользователя; openai — нет. Прежние связи целы."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} PRAGMA user_version = 15;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 15)
     ins = ("INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
            " VALUES (?, ?, 'c', ?, ?, x'00', '[]', ?)")
     for uid in (1, 2):
@@ -584,8 +518,8 @@ def test_step_16_links_every_srvllm_connection_to_ocr(env):
 
 
 def test_step_17_adds_the_pin_to_users(env):
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} PRAGMA user_version = 16;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 16)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created, screen_lock) VALUES (1, 'u', 'U', 'h', 0, 1)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
@@ -595,8 +529,8 @@ def test_step_17_adds_the_pin_to_users(env):
 def test_step_18_adds_translations_with_search_and_keeps_rows(env):
     """Шаг 18 (перевод): записи и куски, поиск триггерами — по исходнику и переводу (с «ё» = «е»); запись и
     куски уходят с учёткой, строка поиска — с ними."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18}PRAGMA user_version = 17;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 17)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     db.migrate(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 45
@@ -630,8 +564,8 @@ def test_step_18_adds_translations_with_search_and_keeps_rows(env):
 def test_step_19_adds_code_tables_and_cascades(env):
     """Шаг 19 (Claude Code): компьютеры, история подключений, чаты, подписки push. Подписка уходит с сессией,
     чаты — с компьютером (история подключений остаётся), всё — с учёткой."""
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"{DROP_V20} {DROP_V19} PRAGMA user_version = 18;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 18)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO sessions(digest, user_id, csrf, expires, renewed) VALUES ('d1', 1, 'c', 9, 0)")
     db.migrate(conn)
@@ -673,8 +607,8 @@ def test_step_20_adds_the_code_workspace_and_cascades(env):
     """Шаг 20 (рабочее место Claude Code): вкладки уходят с компьютером, место и панель с ним пустеют; всё — с
     учёткой; вид — только из перечня, у проекта компьютера — одна строка."""
     import sqlite3
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(f"ALTER TABLE code_chats DROP COLUMN engine; {DROP_V20} PRAGMA user_version = 19;")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 19)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (5, 1, 'ПК', 'h5', 1)")
     db.migrate(conn)
@@ -700,15 +634,8 @@ def test_step_20_adds_the_code_workspace_and_cascades(env):
 def test_step_39_widens_agent_event_kinds_and_keeps_rows(env):
     """Шаг 39: выдача и отзыв доступа к проекту — в истории подключений; прежние строки, id и каскад — на месте."""
     import sqlite3
-    conn = db.connect(env.db_path); db.migrate(conn)
-    conn.executescript(DROP_V40)
-    conn.executescript("""DROP TABLE agent_events;
-CREATE TABLE agent_events(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
-       agent_id INTEGER NOT NULL, agent_name TEXT NOT NULL, created REAL NOT NULL,
-       kind TEXT NOT NULL CHECK (kind IN ('enroll','revoke','online','offline','open','pin_ok','pin_fail','session_start')),
-       device TEXT, ip TEXT);
-CREATE INDEX agent_events_user ON agent_events(user_id, id);
-PRAGMA user_version = 38;""")
+    conn = db.connect(env.db_path)
+    install_schema(conn, 38)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO agent_events(id, user_id, agent_id, agent_name, created, kind, ip)"
                  " VALUES (7, 1, 5, 'ПК', 1, 'enroll', '10.77.1.9')")
@@ -756,10 +683,10 @@ def test_scans_and_their_pages_follow_the_user_and_the_constraints(env, stepped)
     """Документы распознавания (шаг 16): индексы ленты, вложения и состояния; страницы уходят с документом,
     документ — с учёткой; происхождение и состояние страницы — только из перечня."""
     import sqlite3
-    conn = db.connect(env.db_path); db.migrate(conn)
+    conn = db.connect(env.db_path)
     if stepped:
-        conn.executescript(f"{DROP_V20} {DROP_V19} {DROP_V18} {DROP_V17} {DROP_V16} PRAGMA user_version = 15;")
-        db.migrate(conn)
+        install_schema(conn, 15)
+    db.migrate(conn)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'u', 'U', 'h', 0)")
     conn.execute("INSERT INTO scans(id, user_id, model, name, origin, attachment_id, pages, state, detail, created)"
                  " VALUES ('s1', 1, 'hunyuan-ocr', 'Скан.pdf', 'chat', 'a1', 2, 'queued', 'в очереди', 1)")

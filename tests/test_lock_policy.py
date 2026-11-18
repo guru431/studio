@@ -12,8 +12,8 @@ import auth
 import security
 import state
 from conftest import make_user, signin
+from historical_schema import install_schema
 from test_code import setup, url
-from test_foundation import DROP_V24
 from test_search import CHAT, IMAGE, MESSAGE
 
 
@@ -35,11 +35,10 @@ def expire(studio):
 
 def test_migration_preserves_pin_and_sessions_and_adds_compatible_defaults(env):
     conn = db.connect(env.db_path)
-    db.migrate(conn)
+    install_schema(conn, 23)
     conn.execute("INSERT INTO users(id, login, name, pw_hash, pin_hash, screen_lock, created)"
                  " VALUES (1, 'owner', 'Owner', 'pw', 'pin', 1, 0)")
     conn.execute("INSERT INTO sessions(digest,user_id,csrf,expires,renewed,seen) VALUES ('d',1,'c',99,0,12)")
-    conn.executescript(DROP_V24 + "PRAGMA user_version = 23;")
     db.migrate(conn)
     db.migrate(conn)
     row = conn.execute("SELECT pin_hash, screen_lock, screen_lock_sections, screen_lock_timeout, computer_pin_timeout FROM users").fetchone()
