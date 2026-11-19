@@ -195,6 +195,7 @@ globalThis.StudioEnglish = Object.freeze({
   "на 15 минут": "for 15 minutes",
   "— отключена": "— disabled",
   "— все": "— all",
+  "оператором хоста": "by the host operator",
   "Обновить": "Refresh",
   "Устройство": "Device",
   "Например, рабочий ноутбук": "For example, work laptop",

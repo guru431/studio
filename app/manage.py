@@ -24,6 +24,9 @@ verify-backup [ПУТЬ] — поднимется ли студия из коп�
 Без пути краткий итог (check_summary: флаг, число проблем, время) ложится в рабочую базу — `settings`
 CHECK_KEY: его показывает панель, а провал служба сообщает администраторам (admin.notify_failed_check).
 Ночной юнит копии зовёт verify-backup сразу после backup.
+
+set-email — недостающая почта учётки; recover-email — замена почты и/или выключение кодов входа учётки, у
+которой нет доступа к ящику или сломан SMTP (recover_email). Обе читают значения из stdin, выводят только id.
 """
 import json
 import os
@@ -48,7 +51,7 @@ import security
 import state
 
 USAGE = ("использование: manage.py create-admin < файл со строками KEY=VALUE | manage.py backup"
-         " | manage.py verify-backup [ПУТЬ] | manage.py set-email < KEY=VALUE")
+         " | manage.py verify-backup [ПУТЬ] | manage.py set-email < KEY=VALUE | manage.py recover-email < KEY=VALUE")
 GATEWAY_NAME = "srvllm"
 GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
@@ -161,6 +164,63 @@ def set_email(values: dict[str, str]) -> int:
         print(f"пользователь {row['id']}: почта сохранена")
         return 0
     finally:
+        conn.close()
+
+
+def recover_email(values: dict[str, str]) -> int:
+    """Учётка без доступа к ящику или при сломанном SMTP: оператор заменяет почту (STUDIO_ACCOUNT_EMAIL) и/или
+    выключает коды входа (STUDIO_EMAIL_CODES=off). Почтовые токены учётки удаляются, её веб-сеансы закрываются,
+    в журнал безопасности учётки — событие с подробностью `operator`. В панель не вынесено: коды защищают учётку
+    и от сброса пароля администратором."""
+    import email_accounts
+    import security_log
+    login = values.get("STUDIO_ACCOUNT_LOGIN", "").strip().lower()
+    codes_off = values.get("STUDIO_EMAIL_CODES", "").strip().lower() == "off"
+    try:
+        email = (email_accounts.email_address(values["STUDIO_ACCOUNT_EMAIL"])
+                 if values.get("STUDIO_ACCOUNT_EMAIL", "").strip() else None)
+        cfg = config.load()
+    except (ValueError, RuntimeError):
+        print("нужны корректные STUDIO_ACCOUNT_LOGIN, STUDIO_ACCOUNT_EMAIL и конфигурация", file=sys.stderr)
+        return 2
+    if email is None and not codes_off:
+        print("нужен STUDIO_ACCOUNT_EMAIL или STUDIO_EMAIL_CODES=off", file=sys.stderr)
+        return 2
+    if not re.fullmatch(auth.LOGIN_RE, login) or not cfg.db_path.is_file():
+        print("учётка или база не найдена", file=sys.stderr)
+        return 2
+    conn = db.connect(cfg.db_path)
+    before, state.DB = state.DB, conn               # security_log и auth пишут через state.DB
+    try:
+        db.migrate(conn)
+        row = conn.execute("SELECT id FROM users WHERE login=?", (login,)).fetchone()
+        if row is None:
+            print("учётка не найдена", file=sys.stderr)
+            return 2
+        uid = row["id"]
+        conn.execute("BEGIN")
+        try:
+            if email is not None:
+                conn.execute("UPDATE users SET email=? WHERE id=?", (email, uid))
+                security_log.record(uid, "email_change", detail="operator")
+            if codes_off:
+                conn.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
+                security_log.record(uid, "email_codes_off", detail="operator")
+            conn.execute("DELETE FROM email_tokens WHERE user_id=?", (uid,))
+            auth.end_sessions(uid)
+            conn.execute("COMMIT")
+        except sqlite3.IntegrityError:
+            conn.execute("ROLLBACK")
+            print("почта уже используется", file=sys.stderr)
+            return 2
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        done = (["почта заменена"] if email is not None else []) + (["коды входа выключены"] if codes_off else [])
+        print(f"пользователь {uid}: {', '.join(done)}, сеансы закрыты")
+        return 0
+    finally:
+        state.DB = before
         conn.close()
 
 
@@ -452,6 +512,8 @@ def verify_command(argv: list[str]) -> int:
 def main(argv: list[str]) -> int:
     if argv == ["set-email"]:
         return set_email(read_pairs(sys.stdin.read()))
+    if argv == ["recover-email"]:
+        return recover_email(read_pairs(sys.stdin.read()))
     if argv == ["create-admin"]:
         return create_admin(read_pairs(sys.stdin.read()))
     if argv == ["backup"]:
