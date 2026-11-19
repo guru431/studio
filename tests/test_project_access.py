@@ -80,6 +80,25 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
     assert chat in [i["chat"] for i in studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]]
 
 
+def test_member_new_chat_is_recorded_in_owner_connection_history_without_member_details(studio):
+    aid, _, _, member, _ = share(studio)
+
+    def starts():
+        return [e for e in studio.c.get("/api/agents/events").json()["items"] if e["kind"] == "session_start"]
+
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+    own = starts()
+    assert len(own) == 1 and own[0]["device"].startswith("браузер ")   # свой чат — одна строка, как прежде
+    signin(studio, "friend")
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+    assert [e["device"][:8] for e in starts()] == ["браузер "]           # след участника — и у него
+    signin(studio, "owner")
+    rows = starts()
+    assert len(rows) == 2 and rows[0]["agent_id"] == aid
+    assert rows[0]["device"] == claude_code.MEMBER and rows[0]["ip"] is None
+    assert str(member) not in rows[0]["device"] and "friend" not in rows[0]["device"]
+
+
 def test_push_of_a_member_turn_goes_to_the_member_while_access_lasts(studio, monkeypatch):
     """Карточка и конец хода участника — push ему, не владельцу; ход владельца — владельцу; отозван — никому.
     Досланное завершение (§18) — тому же адресату."""

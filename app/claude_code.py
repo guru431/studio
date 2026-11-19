@@ -100,6 +100,7 @@ CHECK_SEC = 1                    # поток сверяет свою сесси
 PDF_TTL_SEC = 300
 PDF_RENDERS = 2                  # страниц PDF раздела в потоках сразу: остальные ждут на цикле, а не в пуле
 NEW_CHATS_PER_MIN = 10           # «Новых чатов» на компьютер за минуту (строки code_chats и события session_start)
+MEMBER = "участник"              # устройство строки истории владельца о новом чате участника
 ANSWER_MAX = 2000                # знаков в словах отказа и в каждом вопросе и ответе
 ANSWERS_MAX = 20                 # пар «вопрос → ответ»
 NO_TEXT = "задание пустое или длиннее 100 000 знаков"
@@ -466,8 +467,12 @@ def require_engine(aid: int, engine: str) -> None:
 
 
 def _event(request: Request, agent: sqlite3.Row, kind: str) -> None:
+    """Строка истории действующего; новый чат участника — ещё и владельцу компьютера: пометка `MEMBER` вместо
+    устройства, без IP и id участника (чужая сессия участника не проходит мимо владельца бесследно)."""
     bridge.record(request.state.user.id, agent["id"], agent["name"], kind, device=bridge.device(request),
                   ip=auth.client_ip(request))
+    if kind == "session_start" and agent["user_id"] != request.state.user.id:
+        bridge.record(agent["user_id"], agent["id"], agent["name"], kind, device=MEMBER)
 
 
 @router.post("/agents/{aid}/open", status_code=204)
