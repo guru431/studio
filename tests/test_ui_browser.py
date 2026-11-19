@@ -461,6 +461,33 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not known_refusals(problems(r), 422), problems(r)
 
 
+def test_settings_adds_the_first_gateway_to_every_section(browser, live):
+    live.add_user("everywhere")
+    every = "document.querySelector('#link-dialog [name=everywhere]')"
+    r = browser.drive(live.url + "/", [*signin("everywhere"), ("wait", READY), *go("settings/photo"),
+        ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")),
+        ("eval", "openaiHidden", f"{every}.closest('label').hidden"),
+        set_value("#link-dialog [name=kind]", "srvllm"),
+        ("eval", "first", f"!{every}.closest('label').hidden && {every}.checked"),
+        ("type", "#link-dialog [name=name]", "Шлюз"),
+        ("type", "#link-dialog [name=base_url]", GATEWAY_URL),
+        ("type", "#link-dialog [name=token]", live.gw.TOKEN),
+        ("click", "#link-save"), ("wait", f"!{is_open('#link-dialog')}"),
+        ("eval", "sections", f"(async () => (await {API}.api('GET', '/api/connections')).items.map(c => c.sections))()"),
+        # второе подключение — галочка снята: у учётки уже есть шлюз
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")),
+        set_value("#link-dialog [name=kind]", "s06"),
+        ("eval", "second", f"!{every}.closest('label').hidden && !{every}.checked"),
+        ("press", "Escape"), ("wait", f"!{is_open('#link-dialog')}")],
+        width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["openaiHidden"] and v["first"] and v["second"]
+    assert v["sections"] == [["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "dictation"]]
+    assert not problems(r), problems(r)
+
+
 def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
     live.add_user("pwuser")
     with socket.socket() as s:                 # порт, который никто не слушает
