@@ -22,6 +22,10 @@
   держатся согласованными (`sections._sync_legacy`) — новая логика их не читает. Ход начатого
   диалога пару не перепроверяет (`chat.create_turn` — `connections.get`, план section-connections,
   Task 4): галочки — правило выбора для нового, не запрет старого (README «Подключения и разделы»).
+- «+ Адрес для раздела» у видов «Шлюз srvllm» и «s06» — галочка «Добавить во все разделы этого шлюза»
+  (отмечена, пока у учётки нет подключений; так же в зеркале панели): POST подключения с разделами вида
+  `GATEWAY_SECTIONS` (`connection-form.js`; = `connections.KINDS` srvllm и ключи `sections.S06_CATALOG`, сверяет
+  `tests/test_connections.py`). API и проверки `sections.check_link` прежние: недоступный раздел — отказ всей формы.
 - Проверка подключения — `checks.py` (спека 2026-10-21-studio-connection-check-design): паспорт —
   `connections.passport` (JSON: строки `routes` по запросам, модели с возможностями и источником —
   `capabilities.py`, пробы), обнуляется сменой адреса, вида или токена; зеркала панели его убирают.

@@ -10,7 +10,8 @@ import { locale, tr } from './i18n.js';
  * на новые (OLD_IDS). Справа — выбранный раздел: его
  * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
  * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
- * «+ Адрес для раздела» — уже заведённое подключение или новый адрес. Галочка и радио сохраняются
+ * «+ Адрес для раздела» — уже заведённое подключение или новый адрес (у шлюзов srvllm и s06 — галочка «Добавить
+ * во все разделы этого шлюза», отмечена, пока у учётки нет подключений). Галочка и радио сохраняются
  * сразу; отказ — словами в строке статуса раздела.
  *
  * Модели: у шлюза srvllm вне чата — его встроенный перечень (`catalog`), прочее — после «Обновить
@@ -1307,8 +1308,11 @@ export function settingsView(host, { sections: base, connections: connBase, sect
 
   async function addLink(s, cleaner = false) {
     let conns = [];
+    let first = false;                     // у учётки ещё нет подключений — «во все разделы» отмечена
     try {
-      conns = (await api('GET', connBase)).items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner));
+      const items = (await api('GET', connBase)).items;
+      first = !items.length;
+      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner));
     } catch (err) {
       say(note, words(err), 'error');
       return;
@@ -1317,7 +1321,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       ...conns.map((c) => el('option', { value: String(c.id) }, `${c.name} — ${c.base_url}`)),
       el('option', { value: 'new' }, tr("Новый адрес…")));
     select.value = conns.length ? String(conns[0].id) : 'new';
-    const form = connectionForm(null, { cleaner });
+    const form = connectionForm(null, { cleaner, everywhere: cleaner ? null : first });
     form.el.hidden = select.value !== 'new';
     select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
     const box = el('div', {}, field(tr("Подключение"), select, 'existing'), form.el);
@@ -1327,7 +1331,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       if (save.disabled) return;
       save.disabled = true;
       try {
-        if (select.value === 'new') await api('POST', connBase, { ...form.value(), sections: [s.id] });
+        if (select.value === 'new') {
+          await api('POST', connBase, { ...form.value(), sections: [...new Set([s.id, ...form.sections()])] });
+        }
         else await api('POST', `${base}/${s.id}/links`, { connection_id: Number(select.value) });
         dialog.close();
         await changed();

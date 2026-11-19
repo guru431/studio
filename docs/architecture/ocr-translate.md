@@ -11,7 +11,9 @@
   загрузка — один PDF (все страницы, слой не читается) или 1…`PAGES_MAX` (50) фото PNG, JPEG, WebP одним
   документом, до `documents.DOC_MAX` на всё; лента, документ (`pages` — список страниц, в ленте и с
   `?brief=1` — число),
-  `cancel`, `DELETE`, `export?format=txt|md|docx`, `attachments` — «<имя>.md» в чат. Очередь — один раннер
+  `cancel`, `DELETE`, `export?format=txt|md|docx`, `attachments` — «<имя>.md» в чат, `PATCH {name}` —
+  переименование в любом состоянии (`documents.rename`: одной строкой, NFC, расширение прежнего имени остаётся —
+  по нему выгрузка и вложение берут основу; поиск — триггер `search_scans_au`). Очередь — один раннер
   на пользователя (`ocr.RUNNERS`, `kick`), ждущих до `QUEUE_MAX` (5, дальше 409 `busy`). Страница —
   `POST <адрес>/pages/ocr`, модель `tencent/HunyuanOCR` (в студии — `hunyuan-ocr`), `PROMPT` — дословно
   cleaner `_OCR_PROMPT`; обрезанный, пустой ответ, карта блоков `layout_type` и страница, которую не
