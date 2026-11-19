@@ -38,7 +38,8 @@
   `strengthOf` показывает сохранённую силу у моделей, которые её получали, включая снятые.
   `seedOf` показывает seed для моделей шлюза.
 - Кисть: `images._fit_mask` — маска с соотношением сторон исходника приводится к размеру `normalize_image` (NEAREST)
-  и сохраняется уменьшенной; в редакторе `#edit-size-tip` «Фото будет уменьшено до N×M.».
+  и сохраняется уменьшенной; в редакторе `#edit-size-tip` «Фото будет уменьшено до N×M.». Подсказка режима
+  `#edit-mode-tip` называет выбранную модель, а вид подсказки (сила или референс) — по `images.STRENGTH_MODELS`.
 - Фото из истории в формах — до `forms.HISTORY_MAX`/`forms.HISTORY_PIXELS` (= `images.RESULT_MAX`/`RESULT_PIXELS`,
   сверяет тест); `forms._fit_history` уменьшает до рамки `normalize_image`; `forms.history_file(…, limit)`. Фото с
   устройства — в прежних пределах. `image_upload.py` — копия модуля переводчика (CLAUDE.md), не меняется.
