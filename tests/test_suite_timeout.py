@@ -1,15 +1,51 @@
 """Срок теста в быстром наборе: зависший тест падает по сроку один раз и с именем, а не валит процесс xdist снова и
 снова (`pytest_xdist_make_scheduler` в conftest.py). Набор — отдельным pytest в подпроцессе: секунды."""
+import asyncio
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+
+def test_live_server_stops_with_an_open_stream(tmp_path, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from starlette.responses import StreamingResponse
+
+    import main
+    import manage
+    from live_app import start_live_app
+
+    app = FastAPI()
+    stopped = Event()
+
+    @app.get('/held')
+    async def held():
+        async def body():
+            try:
+                yield b'ready'
+                await asyncio.Future()
+            finally:
+                stopped.set()
+
+        return StreamingResponse(body())
+
+    monkeypatch.setattr(main, 'app', app)
+    monkeypatch.setattr(manage, 'create_admin', lambda _env: 0)
+    live = start_live_app(tmp_path)
+    try:
+        with httpx.stream('GET', live.url + '/held', timeout=5) as response:
+            assert response.status_code == 200 and next(response.iter_raw()) == b'ready'
+            live.stop()
+            assert stopped.is_set()
+    finally:
+        live.stop()
 
 
 def test_browser_driver_names_the_devtools_command_that_never_replies():
