@@ -310,7 +310,9 @@ def _copy_backup(cfg: config.Config) -> int:
     local = cfg.db_path.with_name(f".{target.name}.part")
     shared = folder / f".{target.name}.part"
     try:
-        local.unlink(missing_ok=True)
+        # и снимки убитых запусков прежних суток: запуски сериализованы блокировкой, чужого живого снимка нет
+        for old in cfg.db_path.parent.glob(".studio-????????.db.part"):
+            old.unlink(missing_ok=True)
         with closing(sqlite3.connect(cfg.db_path)) as src, closing(sqlite3.connect(local)) as dst:
             src.backup(dst)
             # копия — один файл без -wal/-shm: открывать её с шары и переносить проще
@@ -362,8 +364,8 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict) -> None
     if out["schema_from"] < 1:                  # migrate налил бы в неё свежую схему и «прошёл»
         problems.append("копия пуста: схемы студии в ней нет")
         return
-    if out["schema_from"] > db.VERSION:
-        problems.append(f"схема копии ({out['schema_from']}) новее кода ({db.VERSION})")
+    if out["schema_from"] > db.VERSION:          # после отката на прежний код — штатно: пропуск, не провал
+        out["skipped"] = True
         return
     try:
         db.migrate(conn)
@@ -419,14 +421,15 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     уронил бы audio.clean_tmp при старте; свободно меньше копии с запасом VERIFY_RESERVE или 10 % — не
     копируется) и там проверяется: целостность, схема (1…db.VERSION, шаги db.STEPS проходят), учётки,
     зашифрованные данные и настройки текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
-    обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется.
+    обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется. Схема копии новее
+    db.VERSION (после отката на прежний код) — `skipped`: не `ok`, но и не провал (без тревоги, код 0).
     Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
     или из main)."""
     cfg, start = state.CFG, clock.NOW()
     out = {"backup": None, "at": None, "size": None, "integrity": None, "schema_from": None, "schema_to": None,
            "users": None, **{name: {"ok": 0, "failed": 0} for name, _, _ in ENCRYPTED_BACKUP_FIELDS},
            "files": {"state": "skipped", "present": 0, "missing": 0, "checked": 0, "total": 0},
-           "ok": False, "took": 0, "problems": []}
+           "ok": False, "skipped": False, "took": 0, "problems": []}
     try:
         source = Path(path) if path else _newest_backup(cfg.media_dir / "backup")
         # stat — в том же try: между is_file и stat копию убирает уборка backup() или мигает шара
@@ -456,16 +459,18 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     finally:
         for extra in ("", "-journal", "-wal", "-shm"):
             Path(f"{tmp}{extra}").unlink(missing_ok=True)
-    out["ok"] = not out["problems"]
+    out["ok"] = not out["problems"] and not out["skipped"]
     out["took"] = round(clock.NOW() - start, 1)
     return out
 
 
 def check_summary(out: dict, *, notified: bool) -> dict:
     """Краткий итог verify_backup для `settings`: без путей, имён и слов — флаг, число проблем, время
-    проверки и время копии (None — копии нет). notified — о провале уже знают (проверка из панели)."""
-    return {"ok": bool(out["ok"]), "problems": len(out["problems"]), "at": clock.NOW(),
-            "backup_at": out.get("at"), "notified": bool(out["ok"] or notified)}
+    проверки и время копии (None — копии нет). notified — о провале уже знают (проверка из панели);
+    пропуск (`skipped`) — не провал, уведомлять не о чем."""
+    skipped = bool(out.get("skipped"))
+    return {"ok": bool(out["ok"]), "skipped": skipped, "problems": len(out["problems"]), "at": clock.NOW(),
+            "backup_at": out.get("at"), "notified": bool(out["ok"] or skipped or notified)}
 
 
 def record_check(conn: sqlite3.Connection, out: dict, *, notified: bool = False) -> None:
@@ -488,7 +493,8 @@ def last_copy(conn: sqlite3.Connection) -> "dict | None":
 
 
 def verify_command(argv: list[str]) -> int:
-    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается, 1 — нет, 2 — копии нет. Без пути
+    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается (или пропуск: копия новее кода), 1 — нет,
+    2 — копии нет. Без пути
     (новейшая копия, ночной юнит) краткий итог — в рабочую базу; не записался — только предупреждение."""
     try:
         state.CFG = config.load()
@@ -506,7 +512,7 @@ def verify_command(argv: list[str]) -> int:
                 conn.close()
         except sqlite3.Error as e:
             print(f"итог проверки не записан в базу ({type(e).__name__})", file=sys.stderr)
-    return 0 if out["ok"] else 2 if out["backup"] is None else 1
+    return 0 if out["ok"] or out["skipped"] else 2 if out["backup"] is None else 1
 
 
 def main(argv: list[str]) -> int:
