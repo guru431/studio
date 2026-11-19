@@ -3853,10 +3853,10 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
     assert v["pressed"] == "true"
     assert v["tile"] == ["5 с", False, 6 if width == 1280 else 2]
     src, controls, meta, actions = v["viewer"]
-    assert src.startswith("/api/media/") and controls and meta.startswith("5 с · 576p · 32 к/с")
+    assert src.startswith("/api/media/") and controls and meta.startswith("Wan · 5 с · 576p · 32 к/с")
     assert actions == ["Скачать", "Повторить", "Ещё варианты", "Удалить"] and v["inside"] and v["download"] == f"{src}?download=1"
     params, seed, when = v["row"]
-    assert params == "5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
+    assert params == "Wan · 5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
     assert v["tableFits"] and v["kept"] == "table"
     assert any(s.startswith("DELETE /api/videos/") for s in r["sent"])
     assert not problems(r), problems(r)
