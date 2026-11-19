@@ -109,8 +109,46 @@ def test_password_of_an_account_deleted_after_the_session_check_is_refused(studi
     """Учётку удалили между проверкой сессии и подтверждением паролем: 403, а не 500 на пустой строке."""
     import asyncio
     with pytest.raises(HTTPException) as e:
-        asyncio.run(auth.confirm_password(424242, "password-123", "проверка"))
+        asyncio.run(auth.confirm_password(424242, "password-123", "проверка", digest="d"))
     assert e.value.status_code == 403 and e.value.detail["code"] == "password"
+
+
+def sessions(s, login_name, count):
+    """(cookie, csrf) нескольких входов одной учётки; запросы дальше — с явным заголовком Cookie."""
+    found = []
+    for _ in range(count):
+        s.c.cookies.clear()
+        csrf = signin(s, login_name)
+        found.append((cookie(s), csrf))
+    s.c.cookies.clear()
+    return found
+
+
+def emergency(s, session, password):
+    return s.c.post("/api/me/emergency", json={"password": password},
+                    headers={"Cookie": f"{auth.COOKIE}={session[0]}", auth.CSRF_HEADER: session[1]})
+
+
+def test_password_pause_of_another_session_does_not_block_the_owner(studio):
+    """Чужая (украденная) сессия пятью неверными паролями запирает себя, а не аварийный выход владельца."""
+    make_user(studio, "owner")
+    owner, stolen = sessions(studio, "owner", 2)
+    for _ in range(auth.LOCK_FAILS):
+        assert emergency(studio, stolen, "wrong-password").status_code == 403
+    assert emergency(studio, stolen, "password-123").status_code == 429
+    assert emergency(studio, owner, "password-123").status_code == 204
+    assert state.DB.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_password_pause_covers_all_sessions_of_the_account_together(studio):
+    make_user(studio, "owner")
+    owner, *others = sessions(studio, "owner", 1 + auth.PASSWORD_ACCOUNT_FAILS // auth.LOCK_FAILS)
+    for session in others:
+        for _ in range(auth.LOCK_FAILS):
+            assert emergency(studio, session, "wrong-password").status_code == 403
+    assert emergency(studio, owner, "password-123").status_code == 429
+    studio.clock[0] += auth.LOCK_SEC + 1
+    assert emergency(studio, owner, "password-123").status_code == 204
 
 
 def test_five_failures_lock_the_pair_but_not_the_login_elsewhere(studio):

@@ -356,7 +356,7 @@ async def complete_login(request: Request):
 @router.post("/api/me/email")
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "подтверждение почты")
+    await auth.confirm_password(uid, body.password, "подтверждение почты", digest=request.state.digest)
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Эта почта уже используется"})
     throttle("email-user", str(uid), 3, 900)
@@ -396,7 +396,7 @@ async def confirm_email(request: Request):
 @router.put("/api/me/email-codes")
 async def email_codes(body: CodesIn, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "коды входа")
+    await auth.confirm_password(uid, body.password, "коды входа", digest=request.state.digest)
     if not has_email(uid):
         raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
     state.DB.execute("UPDATE users SET email_codes=? WHERE id=?", (int(body.enabled), uid))
