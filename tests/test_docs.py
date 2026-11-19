@@ -334,6 +334,67 @@ def test_module_map_lists_every_app_module():
     assert sorted(_modules(APP) - listed) == []
 
 
+GUIDE = ROOT / "docs" / "guide.ru.md"
+CLIENT = ROOT / "client"
+#: имя скрипта или значение `-Model`/`--model` после него: значение относится к последнему названному скрипту
+SCRIPT_MODEL = re.compile(r"(studio-(?:batch|video))|(?:-Model|--model)\s+([\w|.-]+)")
+
+
+def _batch_models() -> tuple[set, set]:
+    """Модели картинок скриптов: ValidateSet `$Model` версии PowerShell и ключи `MODELS` (choices) версии Python."""
+    ps1 = (CLIENT / "studio-batch.ps1").read_text(encoding="utf-8-sig")
+    validate = re.search(r"\[ValidateSet\(([^)]*)\)\]\[string\]\$Model\b", ps1).group(1)
+    tree = ast.parse((CLIENT / "studio-batch.py").read_text(encoding="utf-8"))
+    node = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "MODELS" for t in n.targets))
+    return set(re.findall(r"'([^']+)'", validate)), set(ast.literal_eval(node))
+
+
+def test_guide_batch_script_models_are_accepted_by_both_scripts():
+    """Значения `-Model`/`--model` у studio-batch в руководстве — из ValidateSet и choices скриптов."""
+    ps1, py = _batch_models()
+    written, script = set(), None
+    for match in SCRIPT_MODEL.finditer(GUIDE.read_text(encoding="utf-8")):
+        if match.group(1):
+            script = match.group(1)
+        elif script == "studio-batch":
+            written.update(filter(None, match.group(2).split("|")))
+    assert written, "руководство не показывает -Model/--model скрипта картинок"
+    assert sorted(written - ps1) == [] and sorted(written - py) == []
+
+
+def _model_labels() -> dict:
+    """Подписи моделей в настройках разделов — `LABELS` из settings.js."""
+    body = re.search(r"const LABELS = \{(.*?)\};", (APP / "static" / "js" / "settings.js").read_text(encoding="utf-8"),
+                     re.S).group(1)
+    return {key or bare: label for key, bare, label in re.findall(r"(?:'([^']+)'|([\w-]+))\s*:\s*'([^']+)'", body)}
+
+
+def test_guide_names_every_srvllm_catalog_model():
+    """Каждая модель встроенного перечня srvllm (`sections.CATALOG`) названа в руководстве — подписью настроек или id."""
+    catalog = ast.literal_eval(_module(APP, "sections")[2]["CATALOG"])
+    labels, text = _model_labels(), GUIDE.read_text(encoding="utf-8")
+    missing = sorted({model for models in catalog.values() for model in models
+                      if labels.get(model, model) not in text and f"`{model}`" not in text})
+    assert missing == []
+
+
+def _account_settings() -> dict:
+    """Группа «Учётка» настроек: `ACCOUNT_IDS` и разделы администратора (`smtp`) → подпись из `names` settingsView."""
+    text = (APP / "static" / "js" / "settings.js").read_text(encoding="utf-8")
+    ids = re.findall(r"'(\w+)'", re.search(r"const ACCOUNT_IDS = \[([^\]]*)\]", text).group(1))
+    ids += re.findall(r"is_admin \? \['(\w+)'\]", re.search(r"const accountIds = (.*)", text).group(1))
+    names = re.search(r"const names = \{(.*?)\};", text, re.S).group(1)
+    return {key: re.search(rf"\b{key}:[^,]*?[\"']([^\"']+)[\"']", names).group(1) for key in ids}
+
+
+def test_guide_shows_where_every_account_settings_section_is():
+    """Каждый раздел группы «Учётка» (с SMTP администратора) руководство называет путём «Настройки» → «…»."""
+    sections, text = _account_settings(), GUIDE.read_text(encoding="utf-8")
+    assert {"security", "smtp"} <= sections.keys()
+    assert sorted(name for name in sections.values() if f"«Настройки» → «{name}»" not in text) == []
+
+
 def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
     (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
     assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}
