@@ -6,12 +6,15 @@ import { button, computerPin, el, field, openDialog, words } from './ui.js';
 const HINT = tr("Модель сможет вызывать инструменты выбранных серверов и передавать им данные диалога.");
 const input = (id, type = 'text', value = '') => el('input', { id, type, value, class: 'input', autocomplete: 'off' });
 const area = (id, text = '') => el('textarea', { id, class: 'input', rows: '4', spellcheck: 'false' }, text);
-const lines = values => Object.entries(values || {}).map(([k, v]) => `${k}=${v}`).join('\n');
-function pairs(text) {
+// Сохранённое значение заголовка Studio (`GET /api/mcp/{id}` отдаёт null): не ASCII — настоящим значением не бывает.
+const MASK = '••••••';
+const lines = values => Object.entries(values || {}).map(([k, v]) => `${k}=${v ?? MASK}`).join('\n');
+function pairs(text, masked = false) {
   const entries = text.split(/\r?\n/).filter(s => s.trim()).map(line => {
     const at = line.indexOf('=');
     if (at < 1) throw new Error(tr("Каждая строка: ИМЯ=значение, без повторов"));
-    return [line.slice(0, at).trim(), line.slice(at + 1)];
+    const value = line.slice(at + 1);
+    return [line.slice(0, at).trim(), masked && value === MASK ? null : value];   // null — оставить прежнее
   });
   if (new Set(entries.map(([key]) => key)).size !== entries.length) throw new Error(tr("Каждая строка: ИМЯ=значение, без повторов"));
   return Object.fromEntries(entries);
@@ -33,7 +36,9 @@ function editor(host, previous, { local = false, save }) {
   const enabled = input('mcp-enabled', 'checkbox'); enabled.checked = !old.disabled && old.enabled !== false;
   const remote = el('div', {}, field(tr("Адрес MCP"), url), field(tr("Токен Bearer"), token),
     el('label', { class: 'check' }, clear, tr("Удалить сохранённый токен")),
-    field(tr("HTTP-заголовки (ИМЯ=значение, по одному на строку)"), headers));
+    field(tr("HTTP-заголовки (ИМЯ=значение, по одному на строку)"), headers),
+    ...(!local && Object.keys(oldHeaders).length
+      ? [el('p', { class: 'muted' }, tr("Сохранённые значения скрыты: {0} оставляет прежнее значение заголовка", MASK))] : []));
   const stdio = el('div', {}, field(tr("Команда"), command), field(tr("Аргументы (по одному на строку)"), args),
     field(tr("Переменные окружения (ИМЯ=значение, по одной на строку)"), env));
   const repaint = () => { remote.hidden = type.value === 'stdio'; stdio.hidden = !remote.hidden;
@@ -49,7 +54,7 @@ function editor(host, previous, { local = false, save }) {
     try {
       const value = type.value === 'stdio'
         ? { type: 'stdio', command: command.value.trim(), args: args.value ? args.value.split(/\r?\n/) : [], env: pairs(env.value) }
-        : { type: type.value, url: url.value.trim(), headers: pairs(headers.value) };
+        : { type: type.value, url: url.value.trim(), headers: pairs(headers.value, !local) };
       if (type.value !== 'stdio') {
         if (local) {
           if (token.value) value.headers.Authorization = `Bearer ${token.value}`;

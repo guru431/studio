@@ -35,6 +35,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Адрес MCP": "MCP URL",
   "Токен Bearer": "Bearer token",
   "HTTP-заголовки (ИМЯ=значение, по одному на строку)": "HTTP headers (one NAME=value per line)",
+  "Сохранённые значения скрыты: {0} оставляет прежнее значение заголовка": "Saved values are hidden: {0} keeps the header's previous value",
   "Аргументы (по одному на строку)": "Arguments (one per line)",
   "Переменные окружения (ИМЯ=значение, по одной на строку)": "Environment variables (one NAME=value per line)",
   "Имя сервера": "Server name",
