@@ -62,6 +62,24 @@ def clean_name(filename: str) -> str:
     return name[:NAME_MAX] or "file"
 
 
+#: расширение имени файла — латиница и цифры, хоть одна буква: «.m4a», «.pdf», но не «.03» даты
+_EXT = re.compile(r"\.(?=[0-9a-z]*[a-z])[0-9a-z]{1,8}", re.I)
+
+
+def rename(raw: str, old: str, limit: int) -> str:
+    """Новое имя записи раздела (расшифровка, скан) по вводу человека: одной строкой (управляющие знаки и
+    разделители строк — пробелом, пробелы схлопнуты), в NFC (`nfc`: имя идёт в поиск). Расширение прежнего имени
+    сохраняется — по нему выгрузки и вложение чата берут основу имени. Пусто или длиннее limit — ValueError."""
+    name = " ".join(re.sub(r"[\x00-\x1f\x7f-\x9f  ]", " ", nfc(raw)).split())
+    ext = "." + old.rsplit(".", 1)[1] if "." in old else ""
+    ext = ext if _EXT.fullmatch(ext) else ""
+    if ext and name.lower().endswith(ext.lower()):
+        name = name[:-len(ext)].rstrip()
+    if not name or len(name) + len(ext) > limit:
+        raise ValueError(f"имя — от 1 до {limit - len(ext)} знаков")
+    return name + ext
+
+
 def _parts(raw: bytes, content_type: str, max_files: int) -> list[tuple[str, bytes]]:
     """Части `file` по порядку: от 1 до max_files, каждая непустая, вместе — не больше DOC_MAX."""
     wrong = "нужен ровно один файл в поле file" if max_files == 1 else "нужны файлы в поле file"

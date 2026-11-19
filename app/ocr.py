@@ -861,6 +861,24 @@ async def get_scan(sid: str, request: Request, brief: bool = False):
     return _out(row) if brief else _out(row) | {"pages": _page_list(sid)}
 
 
+class RenameIn(BaseModel):
+    name: str = Field(max_length=documents.NAME_MAX * 4)       # предел имени — documents.rename
+
+
+@router.patch("/{sid}")
+async def rename(sid: str, body: RenameIn, request: Request):
+    """Имя документа — в любом состоянии (раннер его не читает); поиск подхватывает триггер search_scans_au.
+    Расширение прежнего имени остаётся: по нему выгрузка и вложение чата берут основу имени."""
+    uid = request.state.user.id
+    try:
+        name = documents.rename(body.name, _row(uid, sid)["name"], documents.NAME_MAX)
+    except ValueError as e:
+        raise HTTPException(422, {"code": "input", "message": str(e)}) from None
+    state.DB.execute("UPDATE scans SET name = ? WHERE id = ?", (name, sid))
+    log.info("ocr %s: переименован", sid[:8])
+    return _out(_row(uid, sid))
+
+
 @router.post("/{sid}/cancel")
 async def cancel(sid: str, request: Request):
     return {"state": await request_cancel(request.state.user.id, sid)}
