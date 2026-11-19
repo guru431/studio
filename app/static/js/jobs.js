@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { message, tr } from './i18n.js';
 /* «В работе» (спека 2026-10-21-studio-jobs-panel): значок, опрос GET /api/jobs и панель.
  *
  * Значок #jobs (полоса слева, на телефоне — вверху справа у темы): число идущих (`data-running`) и
@@ -101,11 +101,17 @@ function icon(section) {
   return box;
 }
 
+/** Заголовок строки: слова сервера (jobs.py — «Расшифровка «имя»», «Ролик · 5 с») — через словарь, имя внутри — как
+ * есть; название сессии «Агентов» — пользовательский текст, не переводится. */
+function titleText(item) {
+  return item.section === 'code' ? item.title : message(item.title);
+}
+
 function detailText(item) {
   if (item.section === 'code') return [ENGINE_NAMES[item.engine], CODE_ACTIVITY_LABELS[item.state]].filter(Boolean).join(' · ');
   const when = item.finished === null
-    ? [item.detail, item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
-    : [item.detail, timeOnly(item.finished)];
+    ? [message(item.detail), item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
+    : [message(item.detail), timeOnly(item.finished)];
   return when.filter(Boolean).join(' · ');
 }
 
@@ -121,7 +127,7 @@ function tick() {
  * закрытый раздел отвечает 423, как любой его запрос. Отказ — словами в строке до следующего опроса. */
 function cancelButton(item) {
   if (typeof item.cancel !== 'string' || !CANCEL.test(item.cancel)) return null;
-  const stop = el('button', { type: 'button', class: 'btn btn-sm jobs-cancel', 'aria-label': tr("Отменить: {0}", item.title) },
+  const stop = el('button', { type: 'button', class: 'btn btn-sm jobs-cancel', 'aria-label': tr("Отменить: {0}", titleText(item)) },
     tr("Отменить"));
   stop.addEventListener('click', async () => {
     stop.disabled = true;
@@ -145,7 +151,7 @@ function row(item, fresh) {
   open.addEventListener('click', () => openHref(item.href));
   return el('li', { class: `jobs-row${fresh ? ' new' : ''}`, 'data-id': item.id, 'data-section': item.section,
     'data-state': item.state }, icon(item.section),
-  el('div', { class: 'jobs-text' }, el('b', { class: 'jobs-title', title: item.title }, item.title),
+  el('div', { class: 'jobs-text' }, el('b', { class: 'jobs-title', title: titleText(item) }, titleText(item)),
     el('span', { class: `jobs-detail${item.state === 'error' ? ' error' : ''}` }, detailText(item))),
   el('div', { class: 'jobs-acts' }, item.finished === null ? cancelButton(item) : null, open));
 }
@@ -153,8 +159,8 @@ function row(item, fresh) {
 /** Строка того же id — тот же узел: меняются только слова и состояние. */
 function refresh(node, item) {
   node.dataset.state = item.state;
-  node.querySelector('.jobs-title').textContent = item.title;
-  node.querySelector('.jobs-title').title = item.title;
+  node.querySelector('.jobs-title').textContent = titleText(item);
+  node.querySelector('.jobs-title').title = titleText(item);
   const detail = node.querySelector('.jobs-detail');
   detail.textContent = detailText(item);
   detail.classList.toggle('error', item.state === 'error');
