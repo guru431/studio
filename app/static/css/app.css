@@ -536,6 +536,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .speech .split-main { overflow: hidden; }
 .speech .sp-view { flex: 1; min-height: 0; overflow: auto; }
 .sp-voice { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; }
+#speech-count { display: flex; align-items: center; min-height: var(--h-icon); }
 .sp-voice-hint { margin: 0; }
 .tr-text { overflow-wrap: anywhere; line-height: 1.5; }
 /* «Сканы» (ocr.js): листалка и две колонки — картинка страницы и её текст; на телефоне — одна */

@@ -22,6 +22,7 @@ import pytest
 DRIVER = Path(__file__).resolve().parent / "cdp_driver.mjs"
 #: `fetch` и `WebSocket` без зависимостей — с node 22.
 NODE_FLOOR = 22
+DEVTOOLS_TIMEOUT = 30
 
 BROWSERS = (
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -72,7 +73,7 @@ def find_node() -> str | None:
 
 def _command(socket, method, **params):
     socket.send(json.dumps({"id": 1, "method": method, "params": params}))
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + DEVTOOLS_TIMEOUT
     while (remaining := deadline - time.monotonic()) > 0:
         reply = json.loads(socket.recv(timeout=remaining))
         if reply.get("id") == 1:
@@ -90,7 +91,7 @@ class BrowserProcess:
     def isolated(self):
         from websockets.sync.client import connect
 
-        with connect(self.address, open_timeout=10, close_timeout=2, proxy=None) as socket:
+        with connect(self.address, open_timeout=DEVTOOLS_TIMEOUT, close_timeout=2, proxy=None) as socket:
             context = _command(socket, "Target.createBrowserContext", disposeOnDetach=True)
             yield Browser(self.node, self.port, socket, context["browserContextId"])
 
@@ -159,7 +160,7 @@ def launch(profile: Path):
              "--remote-debugging-port=0", f"--user-data-dir={profile}", *CHROMIUM_ARGS, "about:blank"],
             stdout=subprocess.DEVNULL, stderr=err)
     try:
-        for _attempt in range(300):
+        for _attempt in range(DEVTOOLS_TIMEOUT * 10):
             endpoint = _devtools_address(profile)
             if endpoint:
                 break
@@ -169,7 +170,7 @@ def launch(profile: Path):
                                    f"DevTools; {path}; профиль {profile}; stderr: {tail or 'пусто'}")
             time.sleep(0.1)
         else:
-            raise RuntimeError("браузер не открыл порт DevTools за 30 с")
+            raise RuntimeError(f"браузер не открыл порт DevTools за {DEVTOOLS_TIMEOUT} с")
         port, path = endpoint
         yield BrowserProcess(node, port, f"ws://127.0.0.1:{port}{path}")
     finally:
