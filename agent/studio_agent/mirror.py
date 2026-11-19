@@ -20,6 +20,7 @@ from .errors import Refused
 CHUNK = 4 * 1024 * 1024
 MANIFEST_MAX = 20 * 1024 * 1024  # вместе два манифеста могут поместиться в кадр
 ENTRY_MAX = 150_000
+EXCLUDE_MAX = 64
 REPARSE = stat.FILE_ATTRIBUTE_REPARSE_POINT
 DIRECTORY = ["dir", "", 0, 0]
 SKIPPED = ["skip", "", 0, 0]
@@ -157,11 +158,11 @@ def _stat(path):
         return None
 
 
-def destination(config, root_id, name, *, metadata_only=False):
+def destination(config, root_id, name, *, metadata_only=False, exclude=()):
     path = target(config, root_id, name)
     if metadata_only:
         _standalone_git(path)
-    data = {"exists": _stat(path) is not None} if metadata_only else scan(path)
+    data = {"exists": _stat(path) is not None} if metadata_only else scan(path, exclude)
     return {**data, "pid": projects.project_id(config, path.parent, path.name), "folder": str(path.parent)}
 
 
@@ -219,8 +220,24 @@ def _entry(root, path, info):
     return ["file", sha, info.st_size, int(bool(info.st_mode & 0o111)) if os.name != "nt" else 0]
 
 
-def scan(root: Path) -> dict:
-    """Все доступные обычные файлы и пустые папки, в том числе .git и gitignored."""
+def valid_exclude(value) -> bool:
+    """Постоянные исключения зеркала: точные относительные пути, без шаблонов; `.git` целиком переносится всегда."""
+    if not isinstance(value, list) or len(value) > EXCLUDE_MAX:
+        return False
+    for path in value:
+        try:
+            parts = files._parts(path)
+        except Refused:
+            return False
+        if not parts or parts[0] == ".git":
+            return False
+    return True
+
+
+def scan(root: Path, exclude=()) -> dict:
+    """Все доступные обычные файлы и пустые папки, в том числе .git и gitignored. Исключённый путь — запись
+    «пропущен» без чтения и обхода: план его не переносит и в копии не удаляет."""
+    exclude = set(exclude or ())
     try:
         info = _stat(root)
         if info is None:
@@ -240,7 +257,7 @@ def scan(root: Path) -> dict:
                     relative = path.relative_to(root).as_posix()
                     files._parts(relative)
                     # DirEntry.stat на Windows может не заполнять inode и номер тома.
-                    entry = _entry(root, path, path.lstat())
+                    entry = SKIPPED if relative in exclude else _entry(root, path, path.lstat())
                     entries[relative] = entry
                     if entry == DIRECTORY:
                         folders.append(path)
@@ -317,9 +334,9 @@ class Transfer:
                     raise Refused("conflict")
                 output.write(raw)
 
-    def apply(self, expected, updates, remove):
+    def apply(self, expected, updates, remove, exclude=()):
         dest = self.destination
-        before = scan(dest)["entries"]
+        before = scan(dest, exclude)["entries"]
         if fingerprint(before) != expected:
             raise Refused("conflict", "зеркало изменилось — обновите сравнение")
         new_project = before is None
@@ -504,7 +521,8 @@ class Transfers:
                         if destination != active.destination:
                             raise Refused("outside")
                         try:
-                            active.apply(frame["expected"], frame.get("updates"), frame.get("remove"))
+                            active.apply(frame["expected"], frame.get("updates"), frame.get("remove"),
+                                         frame.get("exclude") or ())
                             return {"pid": projects.project_id(config, destination.parent, destination.name)}
                         finally:
                             self._close()

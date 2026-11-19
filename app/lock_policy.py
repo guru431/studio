@@ -80,19 +80,24 @@ def hidden_scans(uid: int, closed) -> tuple[str, tuple]:
     return " UNION ".join(parts), tuple(args)
 
 
+#: раздел → таблицы и столбцы файлов его истории; сканы и снимки «Поделиться» — отдельными запросами
+#: `media_sections`. Вместе — все ссылки `media.REFERENCES` (сверяет tests/test_lock_policy.py).
+MEDIA_SOURCES = {
+    "chat": (("attachments", ("media_id",)),),
+    "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
+    "video": (("videos", ("media_id", "source_media_id")),),
+    "transcribe": (("transcripts", ("source_media_id", "result_media_id")),),
+    "speech": (("voices", ("media_id",)), ("voice_samples", ("media_id",)), ("speeches", ("media_id",))),
+    "translate": (("translations", ("source_media_id",)),),
+}
+
+
 def media_sections(uid: int, media_id: str) -> set[str]:
     """Один файл может использоваться в нескольких разделах: защищённая связь имеет приоритет.
-    Файл скана (исходный PDF, PNG страниц) — разделов его документа (`scan_sections`)."""
-    sources = {
-        "chat": (("attachments", ("media_id",)),),
-        "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
-        "video": (("videos", ("media_id", "source_media_id")),),
-        "transcribe": (("transcripts", ("source_media_id", "result_media_id")),),
-        "speech": (("voices", ("media_id",)), ("speeches", ("media_id",))),
-        "translate": (("translations", ("source_media_id",)),),
-    }
+    Файл скана (исходный PDF, PNG страниц) — разделов его документа (`scan_sections`); файл снимка
+    «Поделиться» — раздела снимка: «Чат» или «Агенты»."""
     found = set()
-    for section, tables in sources.items():
+    for section, tables in MEDIA_SOURCES.items():
         for table, columns in tables:
             where = " OR ".join(f"{column} = ?" for column in columns)
             if state.DB.execute(f"SELECT 1 FROM {table} WHERE user_id = ? AND ({where}) LIMIT 1",
@@ -103,6 +108,9 @@ def media_sections(uid: int, media_id: str) -> set[str]:
                                 " UNION SELECT scan_id FROM scan_pages WHERE user_id = ? AND media_id = ?",
                                 (uid, media_id, uid, media_id)).fetchall():
         found |= scan_sections(uid, row[0])
+    for row in state.DB.execute("SELECT s.chat_id FROM chat_share_files f JOIN chat_shares s ON s.id = f.share_id"
+                                " WHERE s.user_id = ? AND f.media_id = ?", (uid, media_id)).fetchall():
+        found.add("chat" if row[0] else "code")
     return found
 
 
@@ -128,7 +136,8 @@ def blocks(request, uid: int, digest: str) -> bool:
     if head == "media" and len(pieces) > 3 and pieces[3] != "archives":
         return bool(media_sections(uid, pieces[3]) & hidden(digest))
     # Общие выгрузки, управление защитой, сессиями и ключами не должны обходить закрытый раздел; изменение
-    # уведомлений (ntfy, push) увело бы на чужое устройство события закрытых разделов. Каждый маршрут /api/*
+    # уведомлений (ntfy, push) увело бы на чужое устройство события закрытых разделов, изменение подключений
+    # (адрес, ключ, разделы) — переписку закрытого раздела на чужой сервер. Каждый маршрут /api/*
     # отнесён к разделу, закрываемым или открытым явно — реестр в tests/test_lock_policy.py.
     return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin",
                              "/api/me/sessions", "/api/me/security-events", "/api/me/access", "/api/me/email"))
@@ -136,4 +145,5 @@ def blocks(request, uid: int, digest: str) -> bool:
                         "/api/me/password-reset")
             or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/exa-key")
                 and request.method != "GET")
+            or (head == "connections" and request.method != "GET")
             or (head == "connections" and path.endswith("/token") and protected(row, "chat")))

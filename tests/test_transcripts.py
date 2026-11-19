@@ -480,6 +480,41 @@ def test_running_cannot_be_edited_and_foreign_is_gone(studio, fake_audio, monkey
         assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
 
 
+def found_names(s, q) -> list:
+    return [i.get("title") or i.get("name") for i in s.c.post("/api/search", json={"q": q}).json()["items"]
+            if i.get("section") == "transcribe"]
+
+
+def test_rename_keeps_the_extension_and_search_finds_the_new_name(studio, fake_audio, caplog):
+    caplog.set_level(logging.DEBUG)
+    tid = done_tr(studio)
+    r = edit(studio, tid, name="  Встреча\nс  Чайковским ")                 # NFD — в NFC
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Встреча с Чайковским.m4a" and len(r.json()["segments"]) == 2
+    assert studio.c.get("/api/transcripts").json()["items"][0]["name"] == "Встреча с Чайковским.m4a"
+    assert found_names(studio, "Чайковским") and not found_names(studio, "Звонок")
+    disposition = studio.c.get(f"/api/transcripts/{tid}/export", params={"format": "txt"}).headers["content-disposition"]
+    assert "%D0%92%D1%81%D1%82%D1%80%D0%B5%D1%87%D0%B0" in disposition                 # «Встреча…».txt
+    assert edit(studio, tid, name="Итоги 12.03.M4A").json()["name"] == "Итоги 12.03.m4a"
+    assert "Встреча" not in caplog.text and "Итоги" not in caplog.text
+    for bad in ("", "  \n", ".m4a", "я" * transcripts.NAME_MAX):
+        r = edit(studio, tid, name=bad)
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "input", bad
+    assert studio.c.get(f"/api/transcripts/{tid}").json()["name"] == "Итоги 12.03.m4a"
+
+
+def test_a_running_record_is_renamed_and_foreign_is_gone(studio, fake_audio, monkeypatch):
+    add_gateway(studio)
+    monkeypatch.setattr(transcripts, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.asr_replies = [(503, {"error": "занято"})] * 10 ** 5
+    running = upload(studio).json()["id"]
+    r = edit(studio, running, name="Планёрка")
+    assert r.status_code == 200 and r.json()["name"] == "Планёрка.m4a" and r.json()["state"] in ("queued", "working")
+    studio.c.post(f"/api/transcripts/{running}/cancel")
+    make_user(studio, "bob"); signin(studio, "bob")
+    assert edit(studio, running, name="x").status_code == 404
+
+
 def test_delete_takes_the_recording_and_the_result(studio, env, fake_audio):
     add_gateway(studio)
     tid = upload(studio).json()["id"]

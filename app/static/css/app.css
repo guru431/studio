@@ -1478,6 +1478,8 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 #code-project-mirrors label, .project-mirror-form { display: grid; gap: var(--space-2); }
 .project-mirror-form { margin-block: var(--space-4); }
 .project-mirror-form .btn { justify-self: start; }
+.project-mirror-exclude[open] { display: grid; gap: var(--space-2); margin-block: var(--space-4); }
+.project-mirror-exclude .btn { justify-self: start; }
 #code-project-mirrors .input { min-width: 0; width: 100%; font-size: max(16px, 1em); }
 #code-project-mirrors h2, .project-mirror-state { overflow-wrap: anywhere; }
 .project-mirror-candidates { padding: 0; list-style: none; }
@@ -1517,7 +1519,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-pin-row { display: flex; gap: var(--space-4); }
 .code-pin-row .input { flex: 1; min-width: 0; background: var(--surface-0); letter-spacing: .2em; }
 /* PIN — не пароль: поле text с точками вместо цифр, менеджеры паролей его не сохраняют */
-#code-pin-input { -webkit-text-security: disc; }
+.computer-pin { -webkit-text-security: disc; }
 .code-pin .error { margin: 0; }
 .code-pin .error:empty { display: none; }
 /* «Скачать мост» (ui.js agentDownload): здесь — пустой раздел без компьютеров, в «Настройках» — блок «Компьютеры» */

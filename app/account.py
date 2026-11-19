@@ -121,10 +121,10 @@ async def end_session(sid: str, request: Request):
 
 @router.post("/emergency", status_code=204)
 async def emergency(body: Emergency, request: Request):
-    """Пароль — как у прочих действий из сессии (auth.confirm_password: общая пауза). После проверки — без await
+    """Пароль — как у прочих действий из сессии (auth.confirm_password: пауза этой сессии и общий предел учётки). После проверки — без await
     до конца транзакции: завершается то, что было на момент проверки, и ничего нового не проскочит."""
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "аварийный выход")
+    await auth.confirm_password(uid, body.password, "аварийный выход", digest=request.state.digest)
     security_log.record(uid, "emergency", detail="agents" if body.agents else None, digest=request.state.digest,
                         ip=auth.client_ip(request))
     digests = [r["digest"] for r in state.DB.execute("SELECT digest FROM sessions WHERE user_id = ?", (uid,))]

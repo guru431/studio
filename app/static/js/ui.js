@@ -37,6 +37,13 @@ export function field(label, input, key) {
     el('p', { class: 'error', 'data-for': key, 'aria-live': 'polite' }));
 }
 
+/** Поле PIN компьютера: не password и класть вне <form> — исчезнув после удачного запроса, они дали бы менеджеру
+ *  паролей сохранить PIN в синхронизируемое хранилище браузера; точки вместо цифр — `.computer-pin` (app.css). */
+export function computerPin(attrs = {}) {
+  return el('input', { class: 'input computer-pin', type: 'text', inputmode: 'numeric', autocomplete: 'off',
+    autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64', ...attrs });
+}
+
 /** Слова отказа с заглавной буквы. */
 export function words(err) {
   const text = message((err && err.message) || err || tr("Не получилось"));
@@ -126,5 +133,38 @@ export function openDialog(host, { id, title, body = [], actions = [], cancelTex
   dialog.addEventListener('close', () => dialog.remove());
   host.append(dialog);
   dialog.showModal();
+  return dialog;
+}
+
+/** Окно «Переименовать» записи раздела (расшифровка, скан): в поле — имя без расширения, его сохраняет сервер
+ * (documents.rename); save(имя) — Promise ответа, отказ — словами в окне. */
+export function renameDialog(host, { id, name, save }) {
+  const ext = /\.(?=[0-9a-z]*[a-z])[0-9a-z]{1,8}$/i.exec(name);
+  const input = el('input', { class: 'input', name: 'name', maxlength: '200', autocomplete: 'off',
+    value: ext && ext.index > 0 ? name.slice(0, ext.index) : name });
+  const fail = el('p', { class: 'error' });
+  const ok = button(tr("Сохранить"), { class: 'btn btn-accent', id: `${id}-save` });
+  const dialog = openDialog(host, { id, title: tr("Переименовать"), body: [field(tr("Название"), input, 'name'), fail],
+    actions: [ok] });
+  const submit = async () => {
+    if (ok.disabled) return;
+    ok.disabled = true;
+    try {
+      await save(input.value);
+      dialog.close();
+    } catch (err) {
+      fail.textContent = words(err);
+      ok.disabled = false;
+    }
+  };
+  ok.addEventListener('click', submit);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      submit();
+    }
+  });
+  input.focus();
+  input.select();
   return dialog;
 }

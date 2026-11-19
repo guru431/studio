@@ -1,5 +1,6 @@
 /* Настройки и статусы OpenCode; тексты сессии остаются на открытой странице. */
 import { tr } from './i18n.js';
+import { timeOnly } from './time.js';
 import { el } from './ui.js';
 
 export function opencodeView(form, text, { enabled, shared, changed }) {
@@ -43,8 +44,8 @@ export function opencodeView(form, text, { enabled, shared, changed }) {
       const rows = [];
       const retry = data?.retry;
       if (retry) {
-        const date = new Date(retry.next);
-        rows.push(tr('Повторная попытка {0}', retry.attempt) + (Number.isFinite(date.getTime()) ? ` · ${date.toLocaleTimeString()}` : '')
+        const stamp = Date.parse(retry.next) / 1000;   // ISO-время моста → секунды для time.js (пояс учётки)
+        rows.push(tr('Повторная попытка {0}', retry.attempt) + (Number.isFinite(stamp) ? ` · ${timeOnly(stamp)}` : '')
           + (Number.isFinite(retry.status) ? ` · HTTP ${retry.status}` : ''));
       }
       const states = { started: tr('Сжимаю контекст…'), in_progress: tr('Сжимаю контекст…'),

@@ -33,9 +33,13 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
                 select.dispatchEvent(new Event('change'));
                 return select.value;
             }})()"""),
-            ("wait", f"document.querySelector('{ui} input[type=password]')"),
-            ("type", f"{ui} input[type=password]", "2468"),
-            ("click", f"{ui} form:has(input[type=password]) button"),
+            ("wait", "document.querySelector('#code-mirror-pin input')"),
+            # PIN компьютера — не форма входа: text с точками вне <form>, как в панели «Агентов».
+            ("eval", "pin", """(() => { const i = document.querySelector('#code-mirror-pin input');
+                return [i.type, !!i.closest('form'), getComputedStyle(i).webkitTextSecurity, i.getAttribute('autocomplete')];
+            })()"""),
+            ("type", "#code-mirror-pin input", "2468"),
+            ("press", "Enter"),
             ("wait", f"document.querySelectorAll('{ui} .project-mirror-form select')[1]?.options.length === 3"),
             ("eval", "root", f"""(() => {{
                 const select = document.querySelectorAll('{ui} .project-mirror-form select')[1];
@@ -50,6 +54,12 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
             ("wait", f"document.querySelector('{ui} .project-mirror-diff')?.textContent.includes('local.env')"),
             ("click", f"{ui} .project-mirror-state .actions button:last-child"),
             ("wait", f"document.querySelector('{ui} .project-mirror-state')?.textContent.includes('файлы совпадают')"),
+            ("click", f"{ui} .project-mirror-exclude summary"),
+            ("type", "#code-mirror-exclude", "empty"),
+            ("click", f"{ui} .project-mirror-exclude button"),
+            ("wait", f"document.querySelector('{ui} .project-mirror-exclude summary')?.textContent === 'Постоянные исключения (1)'"),
+            ("eval", "excluded", f"document.querySelector('{ui} .project-mirror-state').textContent"
+                                 ".includes('Пропущено исключений, ссылок, специальных объектов и связанных папок: 1')"),
             ("eval", "fits", f"document.querySelector('{ui}').scrollWidth <= document.querySelector('{ui}').clientWidth + 1")],
             width=360, touch=True)
     finally:
@@ -57,7 +67,8 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
         right.stop()
     assert not result.get("failed"), result
     assert result["values"]["order"] == "Файлы/Доступ"
-    assert result["values"]["root"] and result["values"]["fits"]
+    assert result["values"]["pin"] == ["text", False, "disc", "off"]
+    assert result["values"]["root"] and result["values"]["fits"] and result["values"]["excluded"]
     assert (destination / "local.env").read_bytes() == (source / "local.env").read_bytes()
 
 
@@ -86,8 +97,8 @@ def test_mirror_dialog_finds_a_renamed_clone_and_preserves_a_selected_local_file
             ("click", "#code-project-mirror"),
             ("wait", f"document.querySelector('{found} button')?.textContent === 'Проверить копии'"),
             ("click", f"{found} button"),
-            ("type", f"{panel} input[type=password]", "2468"),
-            ("click", f"{panel} form:has(input[type=password]) button"),
+            ("type", "#code-mirror-pin input", "2468"),
+            ("click", "#code-mirror-pin button"),
             ("wait", f"document.querySelector('{found} button')?.textContent === 'Привязать'"),
             ("eval", "found", f"document.querySelector('{found} li').textContent"),
             ("eval", "partial", f"document.querySelector('{found}').textContent.includes('Проверена часть папок компьютера')"),

@@ -61,7 +61,7 @@ def test_opencode_mode_directories_commands_progress_and_fork(browser, live, wid
             ('eval', 'source', 'location.hash'),
             *([('click', '#code-status-more')] if width == 320 else []), ('click', '#code-fork-chat'),
             ('wait', "document.querySelector('#code-chat')?.dataset.loaded === '1' && !document.querySelector('#code-fork-chat').disabled"),
-            ('eval', 'branch', 'location.hash')], width=width, mobile=width == 320, timeout=5000)
+            ('eval', 'branch', 'location.hash')], width=width, mobile=width == 320, timeout=5000, timezone='UTC')
     finally:
         sb.stop()
     assert not result.get('failed'), result
@@ -69,6 +69,7 @@ def test_opencode_mode_directories_commands_progress_and_fork(browser, live, wid
     assert values['command'] == '/compact ' and values['buttons'] == [True, True]
     assert 'Стоимость сессии' in values['cost'] and 'Основной агент' in values['cost']
     assert 'Повторная попытка 2' in values['waiting'] and 'HTTP 429' in values['waiting'] and 'Сжимаю' in values['waiting']
+    assert '· 15:00 ·' in values['waiting']  # 12:00Z — в поясе учётки (Москва), не браузера (UTC)
     assert values['completed'] == 'Контекст сжат' and values['fits']
     assert values['source'] != values['branch']
     turn = code_requests(machine, 'turn')[-1]

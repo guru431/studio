@@ -83,6 +83,35 @@ def test_index_follows_changed_prompts_titles_and_texts(studio):
     assert found("сред") == found("звонок") == [("transcribe", "t1", "")]
 
 
+def test_a_video_row_carries_the_model_of_the_video(studio):
+    """Ролик H3 — в индексе с моделью h3: фильтр находит его по своей модели, wan — нет; смена модели — тоже."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute(VIDEO, ("w", uid, "Кошка бежит", T0))
+    state.DB.execute(VIDEO, ("h", uid, "Кошка прыгает", T0 + 1))
+    state.DB.execute("UPDATE videos SET model = 'h3' WHERE id = 'h'")
+    assert hits(search(studio, section="video", model="h3")) == [("video", "h")]
+    assert hits(search(studio, section="video", model="wan")) == [("video", "w")]
+    assert studio.c.get("/api/search/models").json()["models"]["video"] == ["h3", "wan"]
+    state.DB.execute("INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+                     " state, detail, created, model) VALUES ('n', ?, 1, 'm', 'Кошка', 1, 'fast', 0, 'completed',"
+                     " 'готово', ?, 'h3')", (uid, T0 + 2))
+    assert hits(search(studio, section="video", model="h3")) == [("video", "n"), ("video", "h")]
+
+
+def test_step_50_moves_old_video_rows_to_their_model(env):
+    from contextlib import closing
+    from historical_schema import install_schema
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 49)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        conn.execute(VIDEO.replace("created)", "created, model)").replace("?)", "?, 'h3')"), ("h", 1, "Кошка", 1))
+        assert conn.execute("SELECT model FROM search_docs WHERE item = 'h'").fetchone()[0] == "wan"
+        db.migrate(conn)
+        assert conn.execute("SELECT model FROM search_docs WHERE item = 'h'").fetchone()[0] == "h3"
+        conn.execute("UPDATE videos SET prompt = 'Пёс' WHERE id = 'h'")
+        assert conn.execute("SELECT model, body FROM search_docs WHERE item = 'h'").fetchone()[:] == ("h3", "Пёс")
+
+
 def test_a_chat_title_row_follows_the_model_of_the_chat(studio):
     """Строка названия несёт модель диалога: сменили модель — фильтр по модели находит по новой."""
     uid = make_user(studio, "owner"); signin(studio, "owner")

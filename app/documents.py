@@ -20,6 +20,8 @@ from xml.etree import ElementTree
 
 from pypdf import PdfReader
 
+import auth
+
 DOC_MAX = 20 * 1024 * 1024
 TEXT_MAX_CHARS = 2_000_000
 SUFFIXES = (".pdf", ".docx", ".txt", ".md")
@@ -58,6 +60,24 @@ def clean_name(filename: str) -> str:
     name = PurePosixPath(nfc(filename).replace("\\", "/")).name
     name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()
     return name[:NAME_MAX] or "file"
+
+
+#: расширение имени файла — латиница и цифры, хоть одна буква: «.m4a», «.pdf», но не «.03» даты
+_EXT = re.compile(r"\.(?=[0-9a-z]*[a-z])[0-9a-z]{1,8}", re.I)
+
+
+def rename(raw: str, old: str, limit: int) -> str:
+    """Новое имя записи раздела (расшифровка, скан) по вводу человека: одной строкой (управляющие знаки и
+    разделители строк — пробелом, пробелы схлопнуты), в NFC (`nfc`: имя идёт в поиск). Расширение прежнего имени
+    сохраняется — по нему выгрузки и вложение чата берут основу имени. Пусто или длиннее limit — ValueError."""
+    name = " ".join(re.sub(r"[\x00-\x1f\x7f-\x9f  ]", " ", nfc(raw)).split())
+    ext = "." + old.rsplit(".", 1)[1] if "." in old else ""
+    ext = ext if _EXT.fullmatch(ext) else ""
+    if ext and name.lower().endswith(ext.lower()):
+        name = name[:-len(ext)].rstrip()
+    if not name or len(name) + len(ext) > limit:
+        raise ValueError(f"имя — от 1 до {limit - len(ext)} знаков")
+    return name + ext
 
 
 def _parts(raw: bytes, content_type: str, max_files: int) -> list[tuple[str, bytes]]:
@@ -103,6 +123,7 @@ async def _body(request) -> bytes:
         raw.extend(chunk)
         if len(raw) > BODY_MAX:
             raise DocumentError(f"файл больше {DOC_MAX >> 20} МиБ", 413)
+    auth.recheck(request)
     return bytes(raw)
 
 

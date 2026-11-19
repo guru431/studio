@@ -1,6 +1,7 @@
 import { tr } from './i18n.js';
 import { api } from './api.js';
-import { el, openDialog, words } from './ui.js';
+import { dateTime } from './time.js';
+import { computerPin, el, openDialog, words } from './ui.js';
 import { changeView } from './code-diff.js';
 
 function* parents(path) {
@@ -85,14 +86,13 @@ export function projectMirrors(host, trigger, aid, project) {
       try { await request('POST', path, { pin: null }); }
       catch (err) {
         if (err.code !== 'pin_needed') throw err;
-        const pin = el('input', { class: 'input', type: 'password', inputmode: 'numeric',
-          autocomplete: 'off', minlength: '4', maxlength: '8', pattern: '[0-9]{4,8}', required: true });
-        const form = el('form', { class: 'project-mirror-form' },
-          label(tr("PIN компьютера назначения"), pin), el('button', { class: 'btn', type: 'submit' }, tr("Открыть")));
-        pinSlot.replaceChildren(form);
+        const pin = computerPin({ maxlength: '8' });
+        const go = button(tr("Открыть"));
+        pinSlot.replaceChildren(el('div', { class: 'project-mirror-form', id: 'code-mirror-pin' },
+          label(tr("PIN компьютера назначения"), pin), go));
         tell('');
-        form.addEventListener('submit', (event) => {
-          event.preventDefault();
+        const send = () => {
+          if (!pin.value) return;
           work(async () => {
             const value = pin.value;
             pin.value = '';
@@ -100,6 +100,12 @@ export function projectMirrors(host, trigger, aid, project) {
             pinSlot.replaceChildren();
             await next();
           });
+        };
+        go.addEventListener('click', send);
+        pin.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' || event.isComposing) return;
+          event.preventDefault();
+          send();
         });
         return;
       }
@@ -240,7 +246,7 @@ export function projectMirrors(host, trigger, aid, project) {
 
     function paint(item, data) {
       const { check, remove } = controls(item);
-      const updated = item.synced ? tr("Последняя синхронизация · {0}", new Date(item.synced * 1000).toLocaleString()) : '';
+      const updated = item.synced ? tr("Последняя синхронизация · {0}", dateTime(item.synced)) : '';
       const title = el('p', {}, `${item.computer} · ${item.name}`, el('br'), el('span', { class: 'muted' }, item.folder));
       const summary = el('p', { 'aria-live': 'polite' });
       const warning = el('p', { class: 'error' });
@@ -288,9 +294,27 @@ export function projectMirrors(host, trigger, aid, project) {
         await watch(item);
       }));
       state.replaceChildren(title, summary, ...(updated ? [el('p', { class: 'muted' }, updated)] : []), warning,
-        ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено ссылок, специальных объектов и связанных папок: {0}", data.skipped))] : []),
+        ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено исключений, ссылок, специальных объектов и связанных папок: {0}", data.skipped))] : []),
         ...(data.changes.length ? [difference(item, data, keep, omits, changed)] : []),
+        exclusions(item),
         el('div', { class: 'actions' }, check, remove, sync));
+    }
+
+    function exclusions(item) {
+      const saved = item.exclude || [];
+      const box = el('textarea', { id: 'code-mirror-exclude', class: 'input', rows: '3', spellcheck: 'false',
+        autocomplete: 'off', 'aria-label': tr("Исключения зеркала") }, saved.join('\n'));
+      const store = button(tr("Сохранить исключения"));
+      store.addEventListener('click', () => work(async () => {
+        const exclude = box.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        const fresh = await request('PUT', `${url}/${item.id}/exclude`, { exclude });
+        items = items.map((row) => (row.id === fresh.id ? fresh : row));
+        await inspect(fresh);
+      }));
+      return el('details', { class: 'project-mirror-exclude', open: saved.length > 0 },
+        el('summary', {}, tr("Постоянные исключения ({0})", saved.length)),
+        el('p', { class: 'muted' }, tr("Относительные пути папок и файлов проекта, по одному на строку, без шаблонов. Они не копируются, а в копии не удаляются. Каталог .git переносится целиком.")),
+        box, store);
     }
 
     async function inspect(item) {

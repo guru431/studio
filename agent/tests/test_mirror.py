@@ -129,3 +129,29 @@ def test_remote_config_ignores_include_and_returns_only_repository_signatures(tm
     assert mirror.identity(project) == {
         "name": "demo", "repositories": [mirror._repository_id("https://git.example.com/team/work")],
     }
+
+
+def test_excluded_paths_are_skipped_without_reading_or_walking(tmp_path, monkeypatch):
+    """Постоянные исключения: `.venv` не обходится (предел записей), содержимое не читается."""
+    project = tmp_path / "project"
+    (project / ".venv" / "lib").mkdir(parents=True)
+    (project / "web" / "node_modules").mkdir(parents=True)
+    (project / "web" / "node_modules" / "a.js").write_bytes(b"x")
+    (project / "web" / "app.js").write_bytes(b"app")
+    for index in range(5):
+        (project / ".venv" / "lib" / f"{index}.py").write_bytes(b"")
+    monkeypatch.setattr(mirror, "ENTRY_MAX", 6)
+    with pytest.raises(Refused, match="too_large"):
+        mirror.scan(project)
+    entries = mirror.scan(project, [".venv", "web/node_modules"])["entries"]
+    assert entries == {".venv": mirror.SKIPPED, "web": mirror.DIRECTORY, "web/node_modules": mirror.SKIPPED,
+                       "web/app.js": entries["web/app.js"]} and entries["web/app.js"][0] == "file"
+
+
+@pytest.mark.parametrize("value,ok", [
+    ([".venv", "web/node_modules"], True), ([], True), ([".git"], False), ([".git/objects"], False),
+    (["../x"], False), (["/abs"], False), (["a//b"], False), ([""], False), ("x", False), ([1], False),
+    ([f"d{i}" for i in range(mirror.EXCLUDE_MAX + 1)], False),
+])
+def test_exclusions_are_exact_relative_paths_outside_git(value, ok):
+    assert mirror.valid_exclude(value) is ok

@@ -21,6 +21,7 @@
    JSON `transcripts.edits` поверх файла итога, который не меняется (`raw` в нём — сегменты до склейки,
    для SRT). Показываемые реплики собирает одна `view` — для GET, выгрузок, «Копировать» и вложения в
    чат (`POST …/attachments`). Последнее сохранение побеждает; текст и имена в журнал не пишутся.
+   Имя записи (`name` того же PATCH, в любом состоянии) — documents.rename: расширение прежнего имени остаётся.
 7. Очередь (как у сканов): запись встаёт `queued` («в очереди · N»), один раннер на пользователя
    (`RUNNERS`, `kick`) берёт старейшую в `working`; ждущих — не больше QUEUE_MAX (дальше 409 busy).
    Отмена ждущей — сразу `cancelled`; перезапуск службы: идущая — «прервано», ждущие остаются в очереди
@@ -39,6 +40,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import audio
+import auth
 import chat
 import clock
 import connections
@@ -440,6 +442,11 @@ async def upload(request: Request):
         raise HTTPException(413, too_big) from None
     except media.StorageError as e:
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    try:
+        auth.recheck(request)                                 # сессию закрыли, пока шла загрузка
+    except HTTPException:
+        await media.delete_async(uid, source)
+        raise
     if _full_queue(uid) or not media.alive(uid, source):    # пока шла загрузка
         await media.delete_async(uid, source)
         raise _busy()
@@ -527,6 +534,7 @@ async def get_transcript(tid: str, request: Request):
 class EditIn(BaseModel):
     texts: dict[str, "str | None"] = Field(default_factory=dict)
     names: dict[str, "str | None"] = Field(default_factory=dict)
+    name: str | None = Field(default=None, max_length=NAME_MAX * 4)   # имя записи; предел — documents.rename
 
 
 def _bad(message: str) -> HTTPException:
@@ -562,13 +570,29 @@ def _checked(body: EditIn, segments: list) -> tuple[dict, dict]:
     return texts, names
 
 
+def _rename(uid: int, tid: str, raw: str) -> None:
+    """Имя записи — в любом состоянии (идущая не читает его); поиск подхватывает триггер search_transcripts_au."""
+    try:
+        name = documents.rename(raw, _row(uid, tid)["name"], NAME_MAX)
+    except ValueError as e:
+        raise _bad(str(e)) from None
+    state.DB.execute("UPDATE transcripts SET name = ? WHERE id = ?", (name, tid))
+    log.info("расшифровка %s: переименована", tid[:8])
+
+
 @router.patch("/{tid}")
 async def patch_transcript(tid: str, body: EditIn, request: Request):
-    """Правка текстов реплик и имён поверх распознавания; последнее сохранение побеждает."""
+    """Правка текстов реплик и имён поверх распознавания и имя записи (`name`); последнее сохранение побеждает."""
     uid = request.state.user.id
+    if not body.texts and not body.names:            # только имя: файл итога не нужен
+        if body.name is not None:
+            _rename(uid, tid, body.name)
+        return await _full(uid, _row(uid, tid))
     result = await result_of(uid, _done(uid, tid))
     texts, names = _checked(body, result["segments"])
     row = _done(uid, tid)                            # после чтения файла: свежие правки, без await до UPDATE
+    if body.name is not None:
+        _rename(uid, tid, body.name)
     edits = edits_of(row)
     for part, changes in (("texts", texts), ("names", names)):
         for key, value in changes.items():

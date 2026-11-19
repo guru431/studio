@@ -126,6 +126,7 @@ async def test_shared_requests_are_scoped_without_opening_the_computer(agent_wit
     scope = [projects.pid("demo")]
     response = (await agent.handle(req("projects", shared_projects=scope)))[0]
     assert response["ok"] and [i["name"] for i in response["data"]["items"]] == ["demo"]
+    assert "dir" not in response["data"]["items"][0]  # путь машины владельца участнику не уходит
     response = (await agent.handle(req("read", shared_projects=scope, project=scope[0], path="a.txt")))[0]
     assert response["ok"] and response["data"]["text"] == "shared"
     assert not agent.open.alive(SESSION)
@@ -291,7 +292,7 @@ def test_hello(agent):
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
-                             "project_mirror_discovery": True,
+                             "project_mirror_discovery": True, "mirror_exclude": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
                              **({'terminal': True} if host.platform_id() == 'linux' else {}),
                              "metadata_cache": True, "visualizations": True,
@@ -323,7 +324,8 @@ async def test_hello_does_not_read_the_pin_and_refresh_pin_does(agent, home, mon
 async def test_everything_but_open_is_closed_until_opened(agent):
     assert (await agent.handle(req("projects")))[0]["code"] == "closed"
     assert (await agent.handle(req("open", pin=None)))[0]["ok"] is True
-    assert (await agent.handle(req("projects")))[0]["data"]["items"] == [{"pid": projects.pid("demo"), "name": "demo"}]
+    items = (await agent.handle(req("projects")))[0]["data"]["items"]
+    assert [(i["pid"], i["name"]) for i in items] == [(projects.pid("demo"), "demo")] and items[0]["dir"].endswith("demo")
 
 
 async def test_update_obeys_pin_and_blocks_new_work_without_interrupting_existing(agent_with_pin):

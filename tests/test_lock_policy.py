@@ -164,6 +164,50 @@ def test_media_associated_with_a_closed_section_cannot_be_downloaded(studio):
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_extra_voice_sample_is_closed_with_the_speech_section(studio):
+    uid = owner(studio)
+    first = media.save(uid, b"first", "audio/wav", "first.wav")
+    extra = media.save(uid, b"extra", "audio/wav", "extra.wav")
+    now = studio.clock[0]
+    state.DB.execute("INSERT INTO voices(id, user_id, name, ref_text, media_id, duration, created)"
+                     " VALUES ('v', ?, 'Голос', 'текст', ?, 3, ?)", (uid, first, now))
+    state.DB.execute("INSERT INTO voice_samples(id, voice_id, user_id, ref_text, media_id, duration, created)"
+                     " VALUES ('s2', 'v', ?, 'ещё', ?, 3, ?)", (uid, extra, now + 1))
+    assert lock_policy.media_sections(uid, extra) == {"speech"}
+    enable(studio, ["speech"])
+    expire(studio)
+    assert studio.c.get("/api/media/" + extra).status_code == 423
+    assert studio.c.get("/api/media/" + first).status_code == 423
+
+
+@pytest.mark.parametrize("agent", [False, True])
+def test_share_snapshot_file_is_closed_with_its_section(studio, agent):
+    uid = owner(studio)
+    copy = media.save(uid, b"copy", "image/png", "copy.png")
+    if agent:
+        aid = state.DB.execute("INSERT INTO agents(user_id, name, key_hash, created) VALUES (?, 'pc', 'h', 0)",
+                               (uid,)).lastrowid
+        source = {"agent_id": aid, "project": "p" * 16, "session_id": "s"}
+    else:
+        state.DB.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES ('c', ?, 'Чат', 0, 0)", (uid,))
+        source = {"chat_id": "c"}
+    columns = ", ".join(source)
+    state.DB.execute(f"INSERT INTO chat_shares(id, user_id, {columns}, token_hash, token_enc, pin_hash, snapshot, created)"
+                     f" VALUES ('sh', ?, {', '.join('?' * len(source))}, 't', x'00', 'p', '{{}}', 0)",
+                     (uid, *source.values()))
+    state.DB.execute("INSERT INTO chat_share_files(share_id, media_id) VALUES ('sh', ?)", (copy,))
+    assert lock_policy.media_sections(uid, copy) == {"code" if agent else "chat"}
+
+
+def test_media_sections_cover_every_file_reference():
+    """Каждая ссылка на файл (media.REFERENCES) отнесена к разделу: иначе запертая сессия скачала бы файл
+    закрытого раздела по его id. Сканы и снимки «Поделиться» — отдельными запросами media_sections."""
+    covered = {(table, column) for tables in lock_policy.MEDIA_SOURCES.values()
+               for table, columns in tables for column in columns}
+    covered |= {("scans", "source_media_id"), ("scan_pages", "media_id"), ("chat_share_files", "media_id")}
+    assert covered == {(table, column) for table, columns in media.REFERENCES.items() for column in columns}
+
+
 def test_a_protected_file_cannot_be_reused_as_input_in_an_open_section(studio):
     uid = owner(studio)
     secret = media.save(uid, b"private", "image/png", "private.png")
@@ -296,14 +340,16 @@ ROUTES = {
         ("DELETE", "/api/me/access/members/{aid}/{pid}/{member}"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
-        ("DELETE", "/api/passkeys/{key_id}")]},
+        ("DELETE", "/api/passkeys/{key_id}"),
+        # адрес, ключ и разделы подключения: правка увела бы переписку закрытого раздела на чужой сервер
+        ("POST", "/api/connections"), ("DELETE", "/api/connections/{conn_id}"),
+        ("PATCH", "/api/connections/{conn_id}"), ("POST", "/api/connections/{conn_id}/check"),
+        ("PUT", "/api/connections/{conn_id}/passport"), ("POST", "/api/connections/{conn_id}/probe")]},
     **{(m, p): "open" for m, p in [
         ("GET", "/api/agent/download"), ("DELETE", "/api/agent/enroll"), ("POST", "/api/agent/enroll"),
         ("WS", "/api/agent/link"), ("GET", "/api/agent/package"), ("GET", "/api/agent/linux-installer"),
-        ("GET", "/api/connections"), ("POST", "/api/connections"), ("DELETE", "/api/connections/{conn_id}"),
-        ("PATCH", "/api/connections/{conn_id}"), ("POST", "/api/connections/{conn_id}/check"),
-        ("GET", "/api/connections/{conn_id}/models"), ("PUT", "/api/connections/{conn_id}/passport"),
-        ("POST", "/api/connections/{conn_id}/probe"), ("POST", "/api/dictation"), ("GET", "/api/jobs"),
+        ("GET", "/api/connections"), ("GET", "/api/connections/{conn_id}/models"),
+        ("POST", "/api/dictation"), ("GET", "/api/jobs"),
         ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/storage"),
         ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections")]},
     **{(m, p): "lock" for m, p in [
@@ -379,6 +425,23 @@ def test_partial_protection_closes_notification_and_key_changes(studio):
         assert studio.c.request(method, path, json=body).status_code == 423, path
     assert studio.c.get("/api/me/ntfy").status_code == 200
     assert studio.c.get("/api/me/push").status_code == 200
+
+
+def test_partial_protection_closes_connection_changes(studio):
+    """Защищён только «Чат»: подключение чата не перенаправить на свой сервер, пока сессия заперта."""
+    from conftest import add_connection
+    owner(studio)
+    cid = add_connection(studio, sections=["chat"])
+    enable(studio, ["chat"])
+    expire(studio)
+    for method, path, body in [("PATCH", f"/api/connections/{cid}", {"base_url": "https://thief.test/v1", "token": "t"}),
+                               ("POST", "/api/connections", {"name": "x", "kind": "openai",
+                                                             "base_url": "https://thief.test/v1", "token": "t"}),
+                               ("DELETE", f"/api/connections/{cid}", None)]:
+        r = studio.c.request(method, path, json=body)
+        assert r.status_code == 423 and r.json()["detail"]["code"] == "screen_locked", path
+    assert studio.c.get("/api/connections").status_code == 200
+    assert state.DB.execute("SELECT base_url FROM connections WHERE id = ?", (cid,)).fetchone()[0] == "https://cloud.test/v1"
 
 
 def test_computer_timer_is_persisted_and_relayed_to_capable_bridge(studio):

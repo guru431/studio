@@ -1,25 +1,33 @@
 /* Local links never become HTTP requests containing machine paths. */
 export function localFileHref(value) {
   if (typeof value !== 'string') return null;
+  let web = false;
   if (/^https?:/i.test(value)) {
     try {
       const url = new URL(value);
       if (url.origin !== location.origin) return null;
       value = url.pathname;
+      web = true;
     } catch { return null; }
   }
-  value = value.split('#')[0].replace(/^file:\/\/+([a-z]:)/i, '$1');
+  value = value.split('#')[0].replace(/^file:\/\/+([a-z]:)/i, '$1').replace(/^file:\/\/(?=\/)/i, '');
   let decoded = value;
   try { decoded = decodeURIComponent(value); } catch { /* malformed links remain local and cannot become HTTP */ }
-  if (!/^\/?[a-z]:[\\/]/i.test(decoded)) return null;
+  // POSIX: абсолютный путь моста macOS/Linux (`/Users/…`, `/home/…`); адрес своего сайта — только с буквой диска.
+  if (!/^\/?[a-z]:[\\/]/i.test(decoded) && (web || !/^\/(?![\/\\])/.test(decoded))) return null;
   return '/' + value.replace(/^\//, '').replaceAll('\\', '/');
+}
+
+function drive(path) {
+  return /^\/[a-z]:\//i.test(path);
 }
 
 export function visualizationFilePath(href) {
   const local = localFileHref(href);
   if (!local) return null;
   let path;
-  try { path = decodeURIComponent(local).slice(1); } catch { return null; }
+  try { path = decodeURIComponent(local); } catch { return null; }
+  if (drive(path)) path = path.slice(1);
   const image = /\.(?:png|jpe?g|webp|gif)$/i.test(path) && path.split('/').some(part => part.toLowerCase() === 'generated_images');
   if ((!path.toLowerCase().endsWith('.html') && !image) || path.length > 1024 || /[\x00-\x1f\x7f?"<>|]/.test(path)
       || path.split('/').some(part => part === '..' || part === '.')) return null;
@@ -32,11 +40,17 @@ export function projectFilePath(href, agent, project) {
   const local = localFileHref(href);
   let path;
   if (local) {
-    if (typeof agent.projects_root !== 'string') return null;
-    const root = `/${agent.projects_root.replaceAll('\\', '/').replace(/\/+$/, '')}/${project.name}/`;
+    // `project.dir` — настоящая папка от моста (второй корень, одноимённые проекты); прежний мост — первый корень + имя.
+    const folder = typeof project.dir === 'string' ? project.dir
+      : typeof agent.projects_root === 'string' && agent.projects_root
+        ? `${agent.projects_root.replace(/[\\/]+$/, '')}/${project.name}` : null;
+    if (!folder) return null;
+    const root = `/${folder.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')}/`;
     let decoded;
     try { decoded = decodeURIComponent(local); } catch { return null; }
-    if (!decoded.toLowerCase().startsWith(root.toLowerCase())) return null;
+    // Регистр не различают только пути Windows; на macOS/Linux `Alpha` и `alpha` — разные папки.
+    const fold = drive(root) ? (text) => text.toLowerCase() : (text) => text;
+    if (!fold(decoded).startsWith(fold(root))) return null;
     path = decoded.slice(root.length);
   } else {
     if (/^(?:[\/#?]|[a-z][a-z\d+.-]*:)/i.test(href)) return null;
