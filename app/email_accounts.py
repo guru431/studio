@@ -149,7 +149,9 @@ async def login_code(uid: int, request: Request, next_: str, kind: str = "login"
     code = f"{secrets.randbelow(1000000):06d}"
     token = new_token(uid, kind, row["email"], CODE_SEC, code=code, next_=next_)
     try:
-        await account_mail.send(row["email"], "Студия: код входа", f"Код входа: {code}\nДействует 10 минут. Никому его не сообщайте.")
+        await account_mail.send(row["email"], "Студия: код входа / Studio: sign-in code",
+                                "Код входа действует 10 минут. Никому его не сообщайте.\n"
+                                "The sign-in code is valid for 10 minutes. Do not share it with anyone.\n\n" + code)
         token_row(token, kind)  # за время SMTP могли изменить пароль, почту или отключить учётку
     except BaseException:
         delete_token(token)
@@ -217,9 +219,10 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if not old:
         state.DB.execute("INSERT INTO invitations(id,email,comment,is_admin,invited_by,created,expires) VALUES (?,?,?,?,?,?,?)",
                          (iid, body.email, body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC))
-    await account_mail.send(body.email, "Приглашение в Студию",
-                            "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке:\n"
-                            + link("invite", token) + "\nСсылка действует 48 часов.")
+    await account_mail.send(body.email, "Приглашение в Студию / Invitation to Studio",
+                            "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
+                            "You are invited to Studio. Choose a login and password with this one-time link,"
+                            " valid for 48 hours.\n\n" + link("invite", token))
     # После SMTP снова проверить права пригласившего и состояние приглашения.
     inviter = state.DB.execute("SELECT is_admin,disabled FROM users WHERE id=?", (admin.id,)).fetchone()
     if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
@@ -302,9 +305,11 @@ async def accept_invite(request: Request):
 
 async def recovery_mail(token: str, email: str) -> None:
     try:
-        await account_mail.send(email, "Студия: восстановление пароля",
-                                "Чтобы задать новый пароль, откройте одноразовую ссылку:\n" + link("reset", token)
-                                + "\nСсылка действует 30 минут. Если вы не запрашивали её, проигнорируйте письмо.")
+        await account_mail.send(email, "Студия: восстановление пароля / Studio: password recovery",
+                                "Чтобы задать новый пароль, откройте одноразовую ссылку, она действует 30 минут."
+                                " Если вы не запрашивали её, проигнорируйте письмо.\n"
+                                "To set a new password, open this one-time link, valid for 30 minutes."
+                                " If you did not request it, ignore this email.\n\n" + link("reset", token))
     except HTTPException:
         delete_token(token)
 
@@ -371,9 +376,11 @@ async def request_email(body: EmailIn, request: Request):
         raise HTTPException(409, {"code": "email", "message": "Эта почта уже используется"})
     token = new_token(uid, "email", body.email, RESET_SEC)
     try:
-        await account_mail.send(body.email, "Студия: подтвердите почту",
-                                "Подтвердите адрес почты для своей учётной записи:\n" + link("verify", token)
-                                + "\nСсылка действует 30 минут. Откройте её в браузере, где вошли в Студию.")
+        await account_mail.send(body.email, "Студия: подтвердите почту / Studio: confirm your email",
+                                "Подтвердите адрес почты для своей учётной записи. Ссылка действует 30 минут;"
+                                " откройте её в браузере, где вошли в Студию.\n"
+                                "Confirm the email address of your account. The link is valid for 30 minutes;"
+                                " open it in the browser where you are signed in to Studio.\n\n" + link("verify", token))
     except BaseException:
         delete_token(token)
         raise
