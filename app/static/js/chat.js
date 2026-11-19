@@ -1527,7 +1527,8 @@ function build(view, ctx) {
       chat = { chat: created, messages: [] };
       shareContext();
       draft = null;
-      history.replaceState(history.state, '', `#/chat/${created.id}`);
+      // ушли из раздела или в другой диалог, пока создавался этот, — адрес не трогать: ход дочитает «В работе»
+      if (alive && location.hash === '#/chat') history.replaceState(history.state, '', `#/chat/${created.id}`);
       loadList();
       const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
       if (draftMcp.length) {
