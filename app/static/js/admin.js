@@ -152,6 +152,12 @@ function usersBlock(host) {
   };
 }
 
+/** Отказ письма: ненастроенная почта (smtp_unset) — со ссылкой на «Настройки → SMTP». */
+function mailFailure(target, err) {
+  target.replaceChildren(words(err));
+  if (err?.code === 'smtp_unset') target.append(' ', el('a', { href: '#/settings/smtp', class: 'smtp-link' }, tr("Открыть настройки SMTP")));
+}
+
 function invitationsBlock(host) {
   const list = el('tbody', { id: 'invitations' });
   const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
@@ -160,7 +166,7 @@ function invitationsBlock(host) {
   async function act(action) {
     note.textContent = '';
     try { await action(); }
-    catch (err) { note.textContent = words(err); }
+    catch (err) { mailFailure(note, err); }
     await reload();
   }
   function edit(invite = null) {
@@ -185,7 +191,7 @@ function invitationsBlock(host) {
         else await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value, is_admin: admin.checked });
         dialog.close();
         await reload();
-      } catch (err) { fail.textContent = words(err); await reload(); }
+      } catch (err) { mailFailure(fail, err); await reload(); }
       finally { save.disabled = false; }
     });
   }

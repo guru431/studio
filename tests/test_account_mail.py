@@ -46,7 +46,8 @@ def test_delivery_failure_never_discloses_smtp_exception_or_message(monkeypatch,
         raise OSError("recipient@example.com secret-link password")
 
     monkeypatch.setattr(account_mail, "_send", failed)
-    monkeypatch.setattr(account_mail, "settings", lambda: {})
+    monkeypatch.setattr(account_mail, "settings", lambda: {"host": "smtp.example.com", "sender": "s@example.com",
+                                                           "tls": "starttls"})
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException) as caught:
         asyncio.run(account_mail.send("recipient@example.com", "Subject", "secret-link"))
@@ -139,3 +140,41 @@ def test_smtp_settings_under_a_previous_data_key_fall_back_to_environment(studio
     state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
     studio.c.cookies.clear()
     assert login(studio, 'owner', 'password-123').status_code == 503
+
+
+def test_unconfigured_mail_points_the_admin_to_smtp_settings_and_keeps_public_answers(studio, monkeypatch, caplog):
+    from conftest import login, make_user, signin
+    import state
+    uid = make_user(studio, 'owner', is_admin=True); signin(studio, 'owner')
+    for key in ('STUDIO_SMTP_HOST', 'STUDIO_MAIL_FROM'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(account_mail, '_send', lambda *args: pytest.fail('ненастроенная почта не отправляет'))
+    for path, body in [('/api/admin/invitations', {'email': 'friend@example.com'}), ('/api/admin/smtp/check', None),
+                       ('/api/admin/smtp/test', None)]:
+        response = studio.c.post(path, json=body)
+        assert response.status_code == 503 and response.json()['detail'] == {
+            'code': 'smtp_unset', 'message': account_mail.UNSET_MESSAGE}, path
+    assert studio.c.post('/account/forgot', json={'login': 'owner'}).status_code == 200
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    response = login(studio, 'owner', 'password-123')
+    assert response.status_code == 503 and account_mail.UNSET_MESSAGE not in response.text
+
+
+def test_smtp_test_letter_goes_only_to_the_admins_own_address_with_a_pause(studio, monkeypatch, caplog):
+    from conftest import make_user, signin
+    import email_accounts
+    make_user(studio, 'owner', is_admin=True); signin(studio, 'owner')
+    monkeypatch.setenv('STUDIO_SMTP_HOST', 'smtp.example.com'); monkeypatch.setenv('STUDIO_MAIL_FROM', 'studio@example.com')
+    sent = []
+    monkeypatch.setattr(account_mail, '_send', lambda *args: sent.append(args[:3]))
+    caplog.set_level(logging.INFO)
+    response = studio.c.post('/api/admin/smtp/test', json={'email': 'other@example.com'})
+    assert response.status_code == 200, response.text
+    assert [s[0] for s in sent] == ['owner@example.com'] and 'Studio' in sent[0][1]
+    assert studio.c.post('/api/admin/smtp/test').status_code == 429
+    studio.clock[0] += email_accounts.SMTP_TEST_SEC
+    assert studio.c.post('/api/admin/smtp/test').status_code == 200 and len(sent) == 2
+    assert 'owner@example.com' not in caplog.text
+    make_user(studio, 'other'); signin(studio, 'other')
+    assert studio.c.post('/api/admin/smtp/test').status_code == 403
