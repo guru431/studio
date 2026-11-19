@@ -475,7 +475,8 @@ def test_completions_after_an_outage_mark_unread_and_push_like_a_live_done(studi
     studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": items})
     rows = {r["chat"]: (r["finished"], r["seen"]) for r in state.DB.execute("SELECT * FROM code_attention")}
     assert rows == {CHAT: (T0 - 30, 0), other: (T0 - bridge.COMPLETION_AGE_MAX, 0)}
-    assert pushed == [(studio.c.portal.call(lambda: bridge.LINKS[aid].user_id), "Рабочий ПК · studio: ход окончен",
+    assert pushed == [(studio.c.portal.call(lambda: bridge.LINKS[aid].user_id),
+                       {"ru": "Рабочий ПК · studio: ход окончен", "en": "Рабочий ПК · studio: turn completed"},
                        f"code/{aid}/{pid('studio')}/{CHAT}", f"code-{CHAT}")]   # `other` смотрят — без push
     assert studio.c.portal.call(q.empty)
     studio.c.portal.call(bridge.unwatch, aid, other, q)

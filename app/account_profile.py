@@ -19,6 +19,7 @@ import cleaner_client
 import code_actions
 import history
 import media
+import ntfy
 import release
 import sections
 import security
@@ -66,6 +67,8 @@ class MePatch(BaseModel):
     code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
     code_quick_actions: list[CodeQuickAction] = Field(default_factory=list, max_length=20)
     computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
+    #: язык интерфейса устройства — его push и ntfy (только этой сессии; push-sync.js после смены языка)
+    notify_lang: ntfy.Lang | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -136,7 +139,9 @@ def _me(request: Request) -> dict:
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
             # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null
-            "password_reset": row["password_reset"]}
+            "password_reset": row["password_reset"],
+            # языки push и ntfy этой сессии: страница сверяет их с языком интерфейса устройства
+            "notify_langs": ntfy.session_langs(request.state.digest)}
 
 
 @router.get("/me")
@@ -185,6 +190,8 @@ async def patch_me(body: MePatch, request: Request):
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))
+    if body.notify_lang is not None:
+        ntfy.set_session_lang(request.state.digest, body.notify_lang)
     return _me(request)
 
 

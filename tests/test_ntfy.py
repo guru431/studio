@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 
@@ -217,6 +218,43 @@ def test_ntfy_receives_agent_and_job_events_without_webpush_and_channels_are_ind
     assert s.c.post('/api/me/ntfy/test').status_code == 204  # явная проверка сохранённого выключенного канала
     assert s.c.delete('/api/me/ntfy').status_code == 204
     assert not s.c.get('/api/me/ntfy').json()['has_token']
+
+
+def test_ntfy_speaks_the_interface_language_saved_with_the_device_settings(ntfy_ready):
+    s = ntfy_ready
+    uid = make_user(s, 'owner')
+    signin(s, 'owner')
+    assert s.c.put('/api/me/ntfy', json={**SETTINGS, 'lang': 'xx'}).status_code == 422
+    assert s.c.put('/api/me/ntfy', json={**SETTINGS, 'lang': 'en'}).status_code == 200
+    assert s.c.put('/api/me/ntfy', json={**SETTINGS, 'enabled': True}).status_code == 200   # без языка — прежний
+    assert s.c.post('/api/me/ntfy/test').status_code == 204
+    s.c.portal.call(push.notify_later, uid, {'ru': 'событие', 'en': 'event'}, 'code', 't')
+    settle(s)
+    payloads = [json.loads(r.content) for r in s.gw.ntfy_requests]
+    assert [(p['title'], p['message']) for p in payloads] == [
+        ('Studio', 'Studio notification test: ntfy connected'), ('Agents', 'event')]
+    assert s.c.get('/api/me').json()['notify_langs'] == ['en']
+    assert s.c.patch('/api/me', json={'notify_lang': 'ru'}).json()['notify_langs'] == ['ru']
+    assert s.c.post('/api/me/ntfy/test').status_code == 204
+    assert json.loads(s.gw.ntfy_requests[-1].content)['message'] == 'Проверка уведомлений Studio: ntfy подключён'
+
+
+def test_schema_51_keeps_existing_devices_in_russian_and_old_code_inserts_still_work(env):
+    conn = db.connect(env.db_path)
+    conn.executescript(db.SCHEMA.removesuffix(db.NOTIFY_LANG_51) + '\nPRAGMA user_version = 50;')
+    conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES (1,'u','U','h',0)")
+    conn.execute("INSERT INTO sessions(digest,user_id,csrf,expires,renewed) VALUES ('d',1,'c',1,0)")
+    conn.execute("INSERT INTO push_subs(endpoint,user_id,digest,p256dh,auth,created) VALUES ('e1',1,'d','k','a',0)")
+    conn.execute("INSERT INTO ntfy_devices(digest,user_id,server,topic) VALUES ('d',1,'s','t')")
+    db.migrate(conn)
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == db.VERSION
+    assert [r[0] for r in conn.execute('SELECT lang FROM push_subs UNION ALL SELECT lang FROM ntfy_devices')] == ['ru', 'ru']
+    # прежний код (откат) вставляет без столбца
+    conn.execute("INSERT INTO push_subs(endpoint,user_id,digest,p256dh,auth,created) VALUES ('e2',1,'d','k','a',0)")
+    assert conn.execute("SELECT lang FROM push_subs WHERE endpoint = 'e2'").fetchone()[0] == 'ru'
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE ntfy_devices SET lang = 'de'")
+    conn.close()
 
 
 def test_schema_29_adds_settings_without_enabling_or_changing_existing_accounts(env):

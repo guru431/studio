@@ -395,8 +395,11 @@ def _completions(link: Link, frame: dict) -> None:
 
 
 #: повод push → слова тела (тексты сервера плана)
-ASK_WORDS = {"permission": "ждёт подтверждения", "question": "вопрос"}
-DONE_WORDS = {"done": "ход окончен", "stopped": "ход прерван", "error": "ошибка"}
+#: повод push «Агентов» на языках подписки (те же слова, что в en.js)
+ASK_WORDS = {"permission": {"ru": "ждёт подтверждения", "en": "awaiting confirmation"},
+             "question": {"ru": "вопрос", "en": "question"}}
+DONE_WORDS = {"done": {"ru": "ход окончен", "en": "turn completed"},
+              "stopped": {"ru": "ход прерван", "en": "turn interrupted"}, "error": {"ru": "ошибка", "en": "error"}}
 
 
 def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
@@ -439,7 +442,7 @@ def _push(link: Link, frame: dict) -> None:
                   and project_name not in (".", "..") and not any(c in '/\\' or ord(c) < 32
                   or 0xD800 <= ord(c) <= 0xDFFF or ord(c) == 127 for c in project_name))
     place = f"{link.name} · {project_name}" if valid_name else link.name
-    push.notify_later(user_id, f"{place}: {text}",
+    push.notify_later(user_id, {lang: f"{place}: {words}" for lang, words in text.items()},
                       f"code/{link.agent_id}/{frame['project']}/{frame['chat']}", f"code-{frame['chat']}")
 
 

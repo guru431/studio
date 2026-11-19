@@ -8,6 +8,8 @@
   `HOSTS` (исключение из правила списка разрешённых адресов, CLAUDE.md «Правила»); иной адрес — 422.
 - Полезная нагрузка — RFC 8291 (aes128gcm, RFC 8188) одной записью, подпись — VAPID (RFC 8292, ES256); всё на
   `cryptography`. Текст — только повод (у «Кода» ещё имя компьютера и проекта), подробности — в студии.
+- Язык текста — язык подписки (`push_subs.lang`, язык интерфейса страницы): повод и заголовок — {язык: текст},
+  имена компьютера и проекта — как есть.
 - Журнал — без адреса подписки и текста: «push: ответ <код>», «push: сбой сети», «пользователь N: …».
 """
 import asyncio
@@ -45,13 +47,22 @@ JWT_SEC = 12 * 3600
 ENDPOINT_MAX = 1024
 RECORD_SIZE = 4096
 TITLE = "Агенты"                      # имя раздела (sections-meta.js); заголовок push и ntfy «Агентов»
+#: заголовок «Агентов» на языках подписки (английский — перевод имени раздела в en.js)
+TITLES = {"ru": TITLE, "en": "Agents"}
+STUDIO = ntfy.STUDIO                   # заголовок заданий разделов и служебных уведомлений
+#: раздел, «готово» и «не получилось» на языках подписки (те же слова, что у jobs.js и en.js)
 JOB_NOTICES = {
-    "images": ("photo", "картинка готова", "картинка не получилась"),
-    "videos": ("video", "ролик готов", "ролик не получился"),
-    "transcripts": ("transcribe", "расшифровка готова", "расшифровка не получилась"),
-    "scans": ("ocr", "распознавание готово", "распознавание не получилось"),
-    "translations": ("translate", "перевод готов", "перевод не получился"),
-    "speeches": ("speech", "озвучка готова", "озвучка не получилась"),
+    "images": ("photo", {"ru": "картинка готова", "en": "image ready"},
+               {"ru": "картинка не получилась", "en": "image failed"}),
+    "videos": ("video", {"ru": "ролик готов", "en": "video ready"}, {"ru": "ролик не получился", "en": "video failed"}),
+    "transcripts": ("transcribe", {"ru": "расшифровка готова", "en": "transcript ready"},
+                    {"ru": "расшифровка не получилась", "en": "transcription failed"}),
+    "scans": ("ocr", {"ru": "распознавание готово", "en": "recognition ready"},
+              {"ru": "распознавание не получилось", "en": "recognition failed"}),
+    "translations": ("translate", {"ru": "перевод готов", "en": "translation ready"},
+                     {"ru": "перевод не получился", "en": "translation failed"}),
+    "speeches": ("speech", {"ru": "озвучка готова", "en": "speech ready"},
+                 {"ru": "озвучка не получилась", "en": "speech failed"}),
 }
 
 #: ключ VAPID процесса (тесты очищают)
@@ -158,18 +169,19 @@ def vapid_header(endpoint: str) -> str:
 
 # ---- отправка ------------------------------------------------------------------
 
-async def notify(user_id: int, body: str, href: str, tag: str, *, title: str = TITLE) -> None:
-    """Уведомление живым сессиям активной учётки; 404 и 410 — подписки больше нет."""
+async def notify(user_id: int, body: str | dict[str, str], href: str, tag: str, *,
+                 title: str | dict[str, str] = TITLES) -> None:
+    """Уведомление живым сессиям активной учётки; 404 и 410 — подписки больше нет. `body` и `title` — строка или
+    {язык: текст}: каждой подписке — на её `lang`."""
     rows = state.DB.execute(
-        "SELECT p.endpoint, p.p256dh, p.auth, p.digest FROM push_subs p"
+        "SELECT p.endpoint, p.p256dh, p.auth, p.digest, p.lang FROM push_subs p"
         " JOIN sessions s ON s.digest = p.digest AND s.user_id = p.user_id"
         " JOIN users u ON u.id = p.user_id"
         " WHERE p.user_id = ? AND s.expires > ? AND u.disabled = 0", (user_id, clock.NOW())).fetchall()
-    if not rows:
-        return
-    payload = json.dumps({"title": title, "body": body, "href": href, "tag": tag}, ensure_ascii=False).encode()
     for row in rows:
         endpoint = row["endpoint"]
+        payload = json.dumps({"title": ntfy.pick(title, row["lang"]), "body": ntfy.pick(body, row["lang"]),
+                              "href": href, "tag": tag}, ensure_ascii=False).encode()
         # A previous network send can yield long enough for another device to be revoked.
         if state.DB.execute(
             "SELECT 1 FROM push_subs p JOIN sessions s ON s.digest = p.digest AND s.user_id = p.user_id"
@@ -191,7 +203,8 @@ async def notify(user_id: int, body: str, href: str, tag: str, *, title: str = T
             log.warning("push: ответ %d", r.status_code)
 
 
-def notify_later(user_id: int, body: str, href: str, tag: str, *, title: str = TITLE) -> None:
+def notify_later(user_id: int, body: str | dict[str, str], href: str, tag: str, *,
+                 title: str | dict[str, str] = TITLES) -> None:
     """`notify` фоном: завершение задания и событие моста не ждут службу push."""
     async def run():
         results = await asyncio.gather(notify(user_id, body, href, tag, title=title),
@@ -217,7 +230,7 @@ def job_finished(table: str, item_id: str) -> None:
                             (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
         notify_later(row["user_id"], done if row["state"] == "done" else error,
-                     f"{section}?id={item_id}", item_id, title="Студия")
+                     f"{section}?id={item_id}", item_id, title=STUDIO)
 
 
 async def stop() -> None:
@@ -236,6 +249,7 @@ class Keys(BaseModel):
 class Subscription(BaseModel):
     endpoint: str                        # длину и вид сверяет `allowed` — ответ 422 `endpoint`
     keys: Keys
+    lang: ntfy.Lang | None = None        # язык интерфейса; служебный работник его не знает — `ntfy.session_lang`
 
 
 def _keys(keys: Keys) -> tuple[bytes, bytes] | None:
@@ -272,13 +286,14 @@ async def subscribe(body: Subscription, request: Request):
         raise HTTPException(422, {"code": "keys", "message": "неверные ключи подписки"})
     uid = request.state.user.id
     vapid_key()                          # ключ — до строки: замена ключа стёрла бы и эту подписку
+    lang = body.lang or ntfy.session_lang(request.state.digest)     # до удаления прежней подписки сессии
     # у сессии (браузера) подписка одна: новая заменяет прежнюю, а не копится рядом мёртвым адресом
     state.DB.execute("DELETE FROM push_subs WHERE digest = ? AND endpoint != ?", (request.state.digest, body.endpoint))
     state.DB.execute(
-        "INSERT INTO push_subs(endpoint, user_id, digest, p256dh, auth, created) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO push_subs(endpoint, user_id, digest, p256dh, auth, created, lang) VALUES (?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, digest = excluded.digest,"
-        " p256dh = excluded.p256dh, auth = excluded.auth, created = excluded.created",
-        (body.endpoint, uid, request.state.digest, b64u(keys[0]), b64u(keys[1]), clock.NOW()))
+        " p256dh = excluded.p256dh, auth = excluded.auth, created = excluded.created, lang = excluded.lang",
+        (body.endpoint, uid, request.state.digest, b64u(keys[0]), b64u(keys[1]), clock.NOW(), lang))
     log.info("пользователь %d: подписка push", uid)
     return Response(status_code=204)
 

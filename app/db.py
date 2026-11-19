@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 50
+VERSION = 51
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -660,6 +660,13 @@ UPDATE search_docs SET model = (SELECT v.model FROM videos v WHERE v.id = search
 """
 SCHEMA += SEARCH_VIDEOS_50
 
+#: язык уведомлений устройства — язык интерфейса его страницы (push.py, ntfy.py): прежний код вставляет без столбца,
+#: строки до шага и его вставки — 'ru'
+NOTIFY_LANG_51 = """ALTER TABLE push_subs ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru' CHECK (lang IN ('ru', 'en'));
+ALTER TABLE ntfy_devices ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru' CHECK (lang IN ('ru', 'en'));
+"""
+SCHEMA += NOTIFY_LANG_51
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -765,6 +772,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     49: CONNECTIONS_49,
     # модель ролика в поиске — из videos.model
     50: SEARCH_VIDEOS_50,
+    # язык уведомлений push и ntfy устройства
+    51: NOTIFY_LANG_51,
 }
 
 

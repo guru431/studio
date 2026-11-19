@@ -30,6 +30,22 @@ def test_rail_order_is_grouped_and_names_match_the_server():
     assert names["speech"] == "Озвучка" and names["ocr"] == "Сканы" and names["code"] == push.TITLE == "Агенты"
 
 
+def test_english_notification_words_match_the_interface_catalog():
+    """push и ntfy на английском (язык подписки) говорят словами страницы: имя раздела «Агентов» и поводы —
+    переводы en.js, как у локальных уведомлений jobs.js."""
+    import admin
+    import bridge
+    from test_i18n import catalog
+
+    english = catalog()
+    assert push.TITLES == {"ru": push.TITLE, "en": english[push.TITLE]}
+    assert push.STUDIO == {"ru": "Студия", "en": english["Студия"]}
+    words = [*bridge.ASK_WORDS.values(), *bridge.DONE_WORDS.values(), admin.CHECK_NOTICE, admin.COPY_NOTICE,
+             *(text for _, *pair in push.JOB_NOTICES.values() for text in pair)]
+    for text in words:
+        assert english[text["ru"]] == text["en"], text
+
+
 def test_every_section_has_an_icon_and_no_module_keeps_its_own_table():
     icons = (JS / "icons.js").read_text(encoding="utf-8")
     for sid in ORDER:
