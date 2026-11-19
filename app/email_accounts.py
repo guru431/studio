@@ -249,6 +249,12 @@ async def revoke(iid: str):
     return Response(status_code=204)
 
 
+def revoke_invited_by(uid: int) -> None:
+    """Ожидающие приглашения держатся на правах пригласившего: разжалование, отключение и удаление их отзывают."""
+    state.DB.execute("UPDATE invitations SET revoked=?,token_hash=NULL WHERE invited_by=? AND accepted IS NULL"
+                     " AND revoked IS NULL", (clock.NOW(), uid))
+
+
 def invite_row(token: str):
     row = state.DB.execute("SELECT * FROM invitations WHERE token_hash=? AND accepted IS NULL AND revoked IS NULL"
                            " AND sent=1 AND expires>?", (security.digest(token), clock.NOW())).fetchone()
