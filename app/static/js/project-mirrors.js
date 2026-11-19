@@ -1,5 +1,6 @@
 import { tr } from './i18n.js';
 import { api } from './api.js';
+import { dateTime } from './time.js';
 import { computerPin, el, openDialog, words } from './ui.js';
 import { changeView } from './code-diff.js';
 
@@ -245,7 +246,7 @@ export function projectMirrors(host, trigger, aid, project) {
 
     function paint(item, data) {
       const { check, remove } = controls(item);
-      const updated = item.synced ? tr("Последняя синхронизация · {0}", new Date(item.synced * 1000).toLocaleString()) : '';
+      const updated = item.synced ? tr("Последняя синхронизация · {0}", dateTime(item.synced)) : '';
       const title = el('p', {}, `${item.computer} · ${item.name}`, el('br'), el('span', { class: 'muted' }, item.folder));
       const summary = el('p', { 'aria-live': 'polite' });
       const warning = el('p', { class: 'error' });
