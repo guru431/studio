@@ -12,11 +12,13 @@ NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")
 
 
 def _git(project, args):
-    """`core.fsmonitor` конфига репозитория не исполняется (`gitinfo.SAFE`). `worktree add` — по нажатию владельца:
-    фильтры (git-lfs) и хуки выгрузки файлов в новой копии работают, как у его собственного git."""
+    """`core.fsmonitor` конфига репозитория не исполняется (`gitinfo.SAFE`), чтения не дозагружают объекты
+    (`gitinfo.OFFLINE`). `worktree add` — по нажатию владельца: фильтры (git-lfs), хуки и дозагрузка частичного
+    клона при выгрузке файлов в новую копию работают, как у его собственного git."""
+    env = None if args[:2] == ["worktree", "add"] else dict(os.environ, **gitinfo.OFFLINE)
     try:
         result = subprocess.run(["git", "-C", str(project), *gitinfo.SAFE, *args], capture_output=True,
-                                stdin=subprocess.DEVNULL, timeout=20,
+                                stdin=subprocess.DEVNULL, timeout=20, env=env,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.TimeoutExpired):
         raise Refused("error", "Git не ответил при работе с рабочими копиями") from None

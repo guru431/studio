@@ -73,8 +73,8 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 - **Журнал** `%LOCALAPPDATA%\studio-agent\agent.log` — только id, коды, числа, имена типов исключений: ни ключа, ни PIN,
   ни пароля, ни имён проектов, файлов, путей, ни текстов, ни stderr Claude Code.
 - Блокирующее (файлы, scrypt, сессии SDK, git) — `asyncio.to_thread`: цикл держит пинги канала.
-- Git проекта — недоверенный: `gitinfo.SAFE`, фильтры репозитория выключены (`gitinfo._filters`), хуки не запускаются;
-  исключение — `worktree add` по действию владельца.
+- Git проекта — недоверенный: `gitinfo.SAFE`, фильтры репозитория выключены (`gitinfo._filters`), хуки не запускаются,
+  частичный клон не дозагружает объекты (`gitinfo.OFFLINE`); исключение — `worktree add` по действию владельца.
 - Автозапуск Windows — значение `StudioAgent` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; Task Scheduler не трогать.
   macOS — `~/Library/LaunchAgents/com.studio.agent.plist`, без принудительного перезапуска.
 - Кодировки: `.py` — UTF-8 без BOM, LF; `.ps1` — UTF-8 **с BOM**, CRLF (`.gitattributes`).
