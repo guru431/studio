@@ -9,8 +9,9 @@ import json
 import logging
 import struct
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import HTTPException
@@ -120,6 +121,15 @@ def unzip(z) -> zipfile.ZipFile:
     return zf
 
 
+def test_export_name_and_entry_times_follow_the_account_time_zone(studio):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute("UPDATE users SET timezone = 'Pacific/Kiritimati' WHERE id = ?", (uid,))   # UTC+14
+    studio.clock[0] = datetime(2027, 1, 15, 12, 0, 4, tzinfo=timezone.utc).timestamp()
+    _, z = download(studio, ["photo"])
+    assert z.headers["content-disposition"] == 'attachment; filename="studio-export-2027-01-16.zip"'
+    assert unzip(z).infolist()[0].date_time == (2027, 1, 16, 2, 0, 4)
+
+
 def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     m = history(uid, "mine")
@@ -129,7 +139,7 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     with caplog.at_level(logging.INFO, logger="studio"):
         est, z = download(studio)
     assert est["files"] == 9 and est["bytes"] == sum(len(DATA) + len(k) for k in m)
-    day = datetime.fromtimestamp(T0).strftime("%Y-%m-%d")
+    day = datetime.fromtimestamp(T0, ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d")
     assert z.headers["content-type"] == "application/zip" and "content-length" not in z.headers
     assert z.headers["content-disposition"] == f'attachment; filename="studio-export-{day}.zip"'
     assert z.headers["cache-control"] == "no-store" and z.headers["x-content-type-options"] == "nosniff"
