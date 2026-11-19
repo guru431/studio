@@ -21,7 +21,7 @@ import logging
 import mimetypes
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -159,7 +159,9 @@ async def headers(request: Request, call_next):
     return response
 
 
-app = FastAPI(title="studio", version=release.VERSION, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# auth.recheck: тело, которое разбирает FastAPI, прочитано до зависимостей — сессия и роль проверяются после него
+app = FastAPI(title="studio", version=release.VERSION, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None,
+              dependencies=[Depends(auth.recheck)])
 app.middleware("http")(auth.guard)
 app.middleware("http")(headers)
 app.mount(f"/static/v/{STATIC_VERSION}", static_assets.Snapshot(auth.STATIC), name="static-versioned")

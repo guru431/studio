@@ -401,6 +401,49 @@ def test_require_admin_refuses_plain_users():
     assert e.value.status_code == 403 and e.value.detail["code"] == "admin"
 
 
+MIDWAY = {
+    "demote": ("UPDATE users SET is_admin = 0 WHERE id = ?", 403, "admin"),
+    "disable": ("UPDATE users SET disabled = 1 WHERE id = ?", 401, "login"),
+    "logout": ("DELETE FROM sessions WHERE user_id = ?", 401, "login"),
+    "lock": ("UPDATE users SET screen_lock = 1 WHERE id = ?", 423, "screen_locked"),
+}
+
+
+def send_slowly(s, method, url, first, rest, change, uid, content_type="application/json"):
+    """Тело в два куска; между ними с учёткой что-то случается — как при медленном клиенте за прокси."""
+    async def body():
+        yield first
+        state.DB.execute(change, (uid,))
+        state.DB.execute("UPDATE sessions SET seen = 0 WHERE user_id = ?", (uid,))
+        yield rest
+
+    async def scenario(client):
+        return await client.request(method, url, content=body(), headers={"content-type": content_type})
+
+    return on_http(s, scenario)
+
+
+@pytest.mark.parametrize("change", MIDWAY)
+def test_session_and_role_are_checked_again_after_the_body(studio, change):
+    """Отключённый посреди тела администратор не вернёт себе права, разжалованный — не правит чужих."""
+    sql, status, code = MIDWAY[change]
+    boss, plain = make_user(studio, "boss", is_admin=True), make_user(studio, "plain")
+    signin(studio, "boss")
+    r = send_slowly(studio, "PATCH", f"/api/admin/users/{plain}", b'{"name": ', b'"renamed"}', sql, boss)
+    assert r.status_code == status and r.json()["detail"]["code"] == code
+    assert state.DB.execute("SELECT name FROM users WHERE id = ?", (plain,)).fetchone()[0] == "plain"
+
+
+@pytest.mark.parametrize("change", ["disable", "logout", "lock"])
+def test_streamed_bodies_check_the_session_again(studio, change):
+    sql, status, code = MIDWAY[change]
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    r = send_slowly(studio, "POST", "/api/images/presets", b'{"name": "p", ', b'"params": {}}', sql, uid)
+    assert r.status_code == status and r.json()["detail"]["code"] == code
+    assert state.DB.execute("SELECT count(*) FROM presets").fetchone()[0] == 0
+
+
 def test_create_admin_reads_stdin_and_is_idempotent(env, monkeypatch, capsys):
     # The real scrypt parameters are covered by test_password_hash_roundtrip_and_salt.
     monkeypatch.setattr(security, "_N", 16)
