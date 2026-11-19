@@ -319,7 +319,7 @@ def _last_check() -> "dict | None":
     """Последний записанный итог проверки новейшей копии (ночной или из панели) с возрастом; None — не было."""
     last = manage.last_check(state.DB)
     return None if last is None else {k: last[k] for k in ("ok", "problems", "at", "backup_at")} | {
-        "age": clock.NOW() - last["at"]}
+        "skipped": bool(last.get("skipped")), "age": clock.NOW() - last["at"]}
 
 
 #: как часто служба смотрит итоги копирования и проверки, записанные другим процессом
