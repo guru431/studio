@@ -67,6 +67,13 @@ assert.equal(en.message('пароль короче 10 символов'), 'passw
 assert.equal(en.message('нет связи с подключением «Чат»'), 'no connection to “Чат”');
 assert.equal(en.message('карта занята дольше 15 минут — попробуйте позже'), 'GPU busy for more than 15 minutes. Try again later');
 assert.equal(en.message('Custom provider error: Чат'), 'Custom provider error: Чат');
+// «В работе» (jobs.py): заголовки строк — шаблоном, имя внутри — как есть
+assert.equal(en.message('Расшифровка «Встреча.m4a»'), 'Transcription “Встреча.m4a”');
+assert.equal(en.message('Ролик · 5 с'), 'Video · 5 s');
+assert.equal(en.message('Озвучка · Привет, мир…'), 'Speech · Привет, мир…');
+assert.equal(en.message('Ответ · новый диалог'), 'Response · new conversation');
+assert.equal(en.message('Ответ · Планы'), 'Response · Планы');
+assert.equal(en.message('пишет ответ'), 'writing response');
 assert.equal(en.tr('__proto__'), '__proto__');
 """
     result = subprocess.run([node, '-e', program, str(STATIC)], capture_output=True,

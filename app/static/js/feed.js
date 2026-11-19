@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { message, tr } from './i18n.js';
 /* Лента карточек по дням («Сегодня», «Вчера», «15 октября») с подгрузкой при прокрутке —
  * общая для разделов «Фото» и «Видео».
  *
@@ -254,7 +254,7 @@ export function busyBlock(prev, item, { id, url, fail, after }) {
     prev = { id: item.id, text, box: make('div', { class: 'tr-busy' },
       make('span', { class: 'ring', 'aria-hidden': 'true' }), text, cancel) };
   }
-  const shown = item.detail ?? '';
+  const shown = message(item.detail ?? '');
   if (prev.text.textContent !== shown) prev.text.textContent = shown;
   return prev;
 }

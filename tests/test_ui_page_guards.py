@@ -54,3 +54,29 @@ def test_english_connection_history_names_the_devices_in_english(browser, live):
         init="localStorage.setItem('studio-language', 'en')")
     assert not r.get("failed"), r
     assert r["values"]["devices"] == ["Ноутбук", "member", "emergency sign-out", "bridge", "phone 0f9e8d", "browser a1b2c3"]
+
+
+#: /api/jobs страницы отвечает строками сервера (jobs.py) — русские слова и имя файла
+FAKE_JOBS = """localStorage.setItem('studio-language', 'en');
+  const real = window.fetch;
+  window.fetch = (url, options) => {
+    if (!String(url).startsWith('/api/jobs')) return real(url, options);
+    const now = Date.now() / 1000;
+    const row = (section, id, title, detail) => ({ section, id, state: 'running', title, detail, started: now - 5,
+      finished: null, href: section === 'chat' ? 'chat/c1' : `${section}?id=${id}`,
+      cancel: section === 'chat' ? '/api/chats/c1/stop' : `/api/transcripts/${id}/cancel` });
+    return Promise.resolve(new Response(JSON.stringify({ now, push: false, finished: [], running: [
+      row('transcribe', 't1', 'Расшифровка «Встреча.m4a»', 'жду карту'),
+      row('chat', 'm1', 'Ответ · новый диалог', 'пишет ответ')] }), { headers: { 'content-type': 'application/json' } }));
+  };"""
+
+
+def test_english_jobs_panel_translates_server_words_but_not_names(browser, live):
+    rows = "[...document.querySelectorAll('#jobs-running .jobs-row')].map(r => [r.querySelector('.jobs-title').textContent," \
+           " r.querySelector('.jobs-detail').textContent.split(' · ')[0]])"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("click", "#jobs"),
+        ("wait", "document.querySelectorAll('#jobs-running .jobs-row').length === 2"), ("eval", "rows", rows)],
+        init=FAKE_JOBS)
+    assert not r.get("failed"), r
+    assert sorted(r["values"]["rows"]) == [["Response · new conversation", "writing response"],
+                                           ["Transcription “Встреча.m4a”", "waiting for GPU"]]
