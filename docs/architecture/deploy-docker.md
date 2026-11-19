@@ -264,10 +264,27 @@ sudo systemctl start studio-docker.service studio-backup.timer
    не должно остаться: чужой журнал SQLite применил бы к копии.
 4. `sudo install -o 10001 -g 10001 -m 0600 /mnt/storage/SharedData/studio/backup/studio-YYYYMMDD.db
    /var/lib/studio/studio.db` — копия с владельцем контейнера (каталог остаётся `0700 10001:10001`).
-5. `sudo systemctl start studio-docker.service studio-backup.timer`, проверить `/health` и вход. Файлов,
+5. Пока служба остановлена, отложить файлы шары новее копии: у них нет строк `media` в восстановленной базе,
+   студия их не покажет, а стирание истории и удаление учётки до них не дойдут. Файлы пишутся только новыми
+   (`media.write`, `os.replace`), поэтому время изменения — время записи. Отбирать надо до запуска: после
+   него новее копии станут и новые загрузки пользователей.
+
+   ```bash
+   MEDIA=/mnt/storage/SharedData/studio
+   COPY=$MEDIA/backup/studio-YYYYMMDD.db
+   LATER=$MEDIA/before-restore-$(date +%Y%m%d)
+   cd "$MEDIA" && sudo find u* -type f -newer "$COPY" -exec sh -c \
+     'for f; do mkdir -p "$0/${f%/*}" && mv "$f" "$0/$f"; done' "$LATER" {} +
+   ```
+
+   Файлы, записанные за минуты между снимком базы и копированием его на шару, могут остаться: строк у них
+   нет, но и в отбор по времени копии они не попадают. Отказ от восстановления — вернуть файлы на место
+   (`cd "$LATER" && sudo find . -type f -exec sh -c 'for f; do mkdir -p "$0/${f%/*}" && mv "$f" "$0/$f"; done' "$MEDIA" {} +`)
+   вместе с сохранённой базой из шага 3.
+6. `sudo systemctl start studio-docker.service studio-backup.timer`, проверить `/health` и вход. Файлов,
    удалённых после даты копии, на шаре уже нет — их строки `media` отвечают 404. Токены подключений
    расшифровываются только тем `STUDIO_DATA_KEY`, что был при копии (запасной — vault).
-6. Сохранённую папку `before-restore-…` удалить, когда восстановление подтверждено.
+7. Сохранённые папки `before-restore-…` — базы и файлов шары — удалить, когда восстановление подтверждено.
 
 Для возвращения **на прежний хост** нельзя просто запустить оставленную старую базу:
 после переключения в Docker могли появиться новые записи. Отключить автозапуск
