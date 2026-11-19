@@ -263,6 +263,33 @@ def test_email_change_requires_password_and_link_for_same_account(studio, mail):
     assert studio.c.get("/api/me").json()["email"] == "new@example.com"
 
 
+def test_confirmed_email_change_notifies_the_previous_address_without_details(studio, mail, monkeypatch):
+    admin(studio)
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 200
+    assert studio.c.post("/api/me/email/confirm", json={"token": token(mail)}).status_code == 200
+    recipient, subject, body = mail[-1]
+    assert recipient == "owner@example.com" and "Studio" in subject
+    assert "new@example.com" not in body and "http" not in body and not re.search(r"\b[0-9]{6}\b", body)
+
+    async def failed(*args):            # отказ почты смену не отменяет
+        raise HTTPException(503, {"code": "mail", "message": "Delivery failed"})
+
+    sent = len(mail)
+    assert studio.c.post("/api/me/email", json={"email": "third@example.com", "password": PASSWORD}).status_code == 200
+    secret = token(mail)
+    monkeypatch.setattr(account_mail, "send", failed)
+    assert studio.c.post("/api/me/email/confirm", json={"token": secret}).status_code == 200
+    assert studio.c.get("/api/me").json()["email"] == "third@example.com" and len(mail) == sent + 1
+
+
+def test_first_email_confirmation_sends_no_change_notice(studio, mail):
+    uid = admin(studio)
+    state.DB.execute("UPDATE users SET email=NULL WHERE id=?", (uid,))
+    assert studio.c.post("/api/me/email", json={"email": "first@example.com", "password": PASSWORD}).status_code == 200
+    assert studio.c.post("/api/me/email/confirm", json={"token": token(mail)}).status_code == 200
+    assert [m[0] for m in mail] == ["first@example.com"]
+
+
 def test_probing_whose_email_is_registered_shares_the_email_change_pause(studio, mail):
     admin(studio)
     make_user(studio, "friend")
