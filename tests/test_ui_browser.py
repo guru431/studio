@@ -9111,9 +9111,16 @@ def test_code_closed_event_leads_to_the_pin_and_back_to_the_chat(browser, live):
     assert not known_refusals(problems(r), 409, 423), problems(r)
 
 
+#: где лежит набранное «Черновик задания»: ключи localStorage и sessionStorage и адрес страницы
+STORED_DRAFT = ("[...Object.entries(localStorage).map(([k, v]) => ['local:' + k, v]),"
+                " ...Object.entries(sessionStorage).map(([k, v]) => ['session:' + k, v]), ['href', location.href]]"
+                ".filter(([, v]) => v.includes('Черновик')).map(([k]) => k)")
+
+
 def test_code_closed_at_send_keeps_the_draft(browser, live):
     """Набранное задание не теряется: «Отправить» на запертой студии — отпирание, 409 closed, панель PIN; после
-    PIN — снова этот чат, задание в поле (черновик — только в памяти страницы, не в хранилищах)."""
+    PIN — снова этот чат, задание в поле. Пока студия заперта, черновика нет ни в одном хранилище; после отпирания
+    он — только в sessionStorage вкладки (`studio-agent-drafts`, agents-workspace.md), не в localStorage и не в адресе."""
     from fake_bridge import pid
     login = "code-draft"
     live.add_user(login)
@@ -9136,19 +9143,20 @@ def test_code_closed_at_send_keeps_the_draft(browser, live):
             ("type", "#code-text", "Черновик задания"),
             ("eval", "lock", CODE_LOCK_NOW),         # потока нет (простой): закрытость увидит «Отправить»
             ("click", "#code-send"),
-            ("wait", LOCK_OPEN), ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
+            ("wait", LOCK_OPEN), ("eval", "locked", STORED_DRAFT),
+            ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
             ("wait", CODE_PIN_SHOWN), ("eval", "old", "!!(window.oldChat = document.querySelector('#code-chat'))"),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
             ("wait", f"location.hash === '#/{here}' && document.querySelector('#code-chat') !== window.oldChat"
                      " && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "field", "document.querySelector('#code-text').value"),
-            ("eval", "stored", "JSON.stringify([{ ...localStorage }, { ...sessionStorage }, location.href])"
-                               ".includes('Черновик')")], **PHONE)
+            ("eval", "stored", STORED_DRAFT)], **PHONE)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["field"] == "Черновик задания" and v["stored"] is False
+    assert v["field"] == "Черновик задания"
+    assert v["locked"] == [] and v["stored"] == ["session:studio-agent-drafts"], (v["locked"], v["stored"])
     assert not code_requests(machine, "turn") and not machine.running  # Предварительная сверка отказала до отправки хода.
     assert not known_refusals(problems(r), 409, 423), problems(r)
 
