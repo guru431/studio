@@ -180,7 +180,7 @@ def test_service_worker_resubscribes_when_the_browser_changes_the_push_subscript
     # запертая студия (423): подписку не снимать — её отправит страница после отпирания (push-sync.js)
     assert "err.status === 423" in handler and "push: 'resync'" in handler
     sync = (STATIC / "js" / "push-sync.js").read_text(encoding="utf-8")
-    assert "data.push === 'resync'" in sync and "api('POST', '/api/me/push', sub.toJSON())" in sync
+    assert "data.push === 'resync'" in sync and "api('POST', '/api/me/push', { ...sub.toJSON(), lang: language() })" in sync
     assert "setupPushSync()" in (STATIC / "js" / "app.js").read_text(encoding="utf-8")
     settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
     assert "r.pushManager.getSubscription()" in settings and "PUSH_READY_SEC = 10" in settings
