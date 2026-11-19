@@ -2598,8 +2598,8 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
     """Все разделы — в порядке реестра (sections-meta.js); на телефоне — основные и «Ещё», подписи целиком, страница
-    без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
-    «В работе», профиль), место прежней кнопки темы отдано заголовку."""
+    без горизонтальной прокрутки. На телефоне шапка раздела кончается у «Обновить» — справа сверху четыре значка
+    (обновление, поиск, «В работе», профиль)."""
     fits = """[...document.querySelectorAll('#rail .tab > span:last-child, #mobile-more-label')]
       .filter(s => s.getBoundingClientRect().width).map(s => {
       const b = s.getBoundingClientRect(); return [s.textContent, b.left >= 0 && b.right <= innerWidth,
@@ -2614,7 +2614,7 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
       return [Math.max(...gaps) - Math.min(...gaps), labels.every((b, i) => !i || b.left >= labels[i - 1].right)];
     })()"""
     room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
-      - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#search-open').getBoundingClientRect().left - end; })()"""
+      - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#refresh-app').getBoundingClientRect().left - end; })()"""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("wait", "document.querySelector('#view .head')"),
                                        ("eval", "fits", fits), ("eval", "spacing", spacing),
                                        ("eval", "room", room), ("eval", "page", NO_OVERFLOW)],
@@ -4193,11 +4193,12 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
 
 @pytest.mark.parametrize("width", [320, 390])
 def test_photo_and_video_heads_fit_the_phone(browser, live, width):
-    """Шапки «Фото» и «Видео» на телефоне: заголовок целиком, «Выбрать» не сжата, всё — левее лупы."""
+    """Шапки «Фото» и «Видео» на телефоне: заголовок целиком, «Выбрать» не сжата, всё — левее значков справа сверху
+    (крайний левый — «Обновить»); на 320 px кнопки уходят второй строкой."""
     login = f"heads{width}"
     live.add_user(login)
     head = """((root) => { const h = document.querySelector(root + ' .head'); const t = h.querySelector('h1');
-      const end = document.querySelector('#search-open').getBoundingClientRect().left;
+      const end = document.querySelector('#refresh-app').getBoundingClientRect().left;
       const kids = [...h.children].filter(e => e.getBoundingClientRect().width > 0 && !e.classList.contains('grow'));
       return [t.textContent, t.scrollWidth <= t.clientWidth, h.querySelector('.select-btn').offsetWidth,
         kids.every(e => e.getBoundingClientRect().right <= end)]; })"""

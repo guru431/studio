@@ -357,12 +357,14 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
   .head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: calc(var(--fixed-icons-w) + var(--space-6)); }
   /* в режиме выделения «✕ Выбрано N» и кнопки вида не помещаются слева от значков — вторая строка */
   [data-selecting] .head { flex-wrap: wrap; row-gap: var(--space-3); }
-  /* 320–360 px: «Фото», «Выбрать», вид и «⋯» — плотнее (зазор 6, кнопка вида без стрелки),
-   * чтобы заголовок не срезался */
+  /* 320–360 px: «Фото», «Выбрать», вид и «⋯» — плотнее (зазор 6, кнопка вида без стрелки); рядом с четырьмя
+   * значками заголовок «Фото» и «Видео» всё равно срезался бы — кнопки уходят второй строкой */
   @media (max-width: 360px) {
     .head { gap: var(--space-3); padding-right: calc(var(--fixed-icons-w) + var(--space-4)); }
     .head .view-toggle { width: var(--h-icon); }
     .head .view-toggle svg.caret { display: none; }
+    :is(.photo, .video) .head { flex-wrap: wrap; row-gap: var(--space-3); }
+    :is(.photo, .video) .head h1 { flex-basis: 100%; }
   }
   /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
   #view > .head { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-0); }
