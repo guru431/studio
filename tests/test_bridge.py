@@ -3,6 +3,7 @@
 docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md."""
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import time
@@ -287,6 +288,35 @@ def test_odd_frames_are_ignored_or_close_4400(studio, monkeypatch, caplog):
             send(ws)
             assert closed_with(ws) == bridge.CLOSE_PROTOCOL
     assert not bridge.LINKS
+
+
+def test_a_large_frame_is_parsed_only_as_an_awaited_answer_of_bounded_structure(monkeypatch):
+    """Кадр до 48 МиБ из мелких структур — секунды цикла событий и ГиБ памяти: число значений любого кадра
+    ограничено; кадр крупнее снимка хода — только `res` на ждущую просьбу (`t` и `id` первыми); без просьбы — не
+    разбирается вовсе."""
+    monkeypatch.setattr(bridge, "EVENT_FRAME_MAX", 1000)
+    monkeypatch.setattr(bridge, "VALUES_MAX", 50)
+    link = bridge.Link(1, 1, "pc")
+    loop = asyncio.new_event_loop()
+    try:
+        link.pending["ab" * 8] = loop.create_future()
+        text = lambda frame: {"type": "websocket.receive", "text": json.dumps(frame)}   # noqa: E731
+        snapshot = {"t": "ev", "e": {"k": "snapshot", "text": "x" * 900}}
+        assert bridge._frame(text(snapshot), link) == snapshot
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"t": "ev", "e": [[]] * 60}), link)                  # мелкие структуры — и в малом
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"t": "ev", "pad": "x" * 2000}), link)               # событие крупнее предела
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"id": "ab" * 8, "t": "res", "pad": "x" * 2000}), link)  # `t` и `id` — первыми
+        answer = {"t": "res", "id": "ab" * 8, "ok": True, "data": {"data": "A" * 2000}}
+        assert bridge._frame(text(answer), link) == answer
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"t": "res", "id": "ab" * 8, "ok": True, "pad": "x" * 2000, "data": [[]] * 60}), link)
+        monkeypatch.setattr(bridge.json, "loads", lambda *_: pytest.fail("кадр без просьбы разобран"))
+        assert bridge._frame(text({"t": "res", "id": "cd" * 8, "data": "x" * 2000}), link) is None
+    finally:
+        loop.close()
 
 
 def test_revoke_and_disable_drop_the_link(studio):

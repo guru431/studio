@@ -28,6 +28,7 @@ import account_mail
 import bridge
 import clock
 import connections
+import email_accounts
 import history
 import images
 import manage
@@ -154,11 +155,16 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
 async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes: dict):
     state.DB.execute("BEGIN")
     try:
+        was = state.DB.execute("SELECT is_admin FROM users WHERE id = ?", (uid,)).fetchone()
         if changes:
             cols = ", ".join(f"{k} = ?" for k in changes)    # имена — из кода выше, не из запроса
             state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))
+        if was is not None and body.is_admin is not None and bool(was["is_admin"]) != body.is_admin:
+            security_log.record(uid, "admin_grant" if body.is_admin else "admin_revoke")   # без адреса администратора
         if body.disabled or body.password is not None:
             auth.end_sessions(uid)               # себя отключить и сменить себе пароль отсюда нельзя
+        if body.disabled or body.is_admin is False:
+            email_accounts.revoke_invited_by(uid)
         state.DB.execute("COMMIT")
     except sqlite3.IntegrityError:
         state.DB.execute("ROLLBACK")
@@ -182,6 +188,7 @@ async def _delete_user(uid: int, admin: auth.User):
     # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     auth.end_sessions(uid)
+    email_accounts.revoke_invited_by(uid)
     await bridge.drop_user(uid)
     await history.delete_all(uid)
     # отменённые задания освобождают карту подключением учётки — его каскад удалит вместе с ней;
@@ -257,7 +264,7 @@ async def get_storage():
     files, since = media.waiting()
     copy = manage.last_copy(state.DB)
     out = {"pending": {"files": files, "since": since}, "orphans": media.orphans(), "check": _last_check(),
-           "copy": {"ok": copy["ok"], "at": copy["at"]} if copy else None}
+           "copy": {"ok": copy["ok"], "at": copy["at"]} if copy else None, "stale_sec": COPY_STALE_SEC}
     probe = asyncio.wrap_future(PROBE)
     done, _ = await asyncio.wait({probe}, timeout=PROBE_SEC)
     if not done:
@@ -319,13 +326,18 @@ def _last_check() -> "dict | None":
     """Последний записанный итог проверки новейшей копии (ночной или из панели) с возрастом; None — не было."""
     last = manage.last_check(state.DB)
     return None if last is None else {k: last[k] for k in ("ok", "problems", "at", "backup_at")} | {
-        "age": clock.NOW() - last["at"]}
+        "skipped": bool(last.get("skipped")), "age": clock.NOW() - last["at"]}
 
 
 #: как часто служба смотрит итоги копирования и проверки, записанные другим процессом
 CHECK_WATCH_SEC = 900
+#: копия — раз в сутки в 04:30: последний итог копирования старше полутора суток — копия пропущена (и панель —
+#: красным: значение уходит ей в `/api/admin/storage`)
+COPY_STALE_SEC = 36 * 3600
 CHECK_NOTICE = "Копия базы не поднимается: проблем — {}. Подробности — «Администрирование» → «Хранилище»"
 COPY_NOTICE = "Не удалось выполнить резервное копирование базы. Подробности — «Администрирование» → «Хранилище»"
+STALE_NOTICE = (f"Резервная копия базы не запускалась больше {COPY_STALE_SEC // 3600} ч."
+                " Подробности — «Администрирование» → «Хранилище»")
 
 
 def notify_failed_check() -> int:
@@ -351,10 +363,29 @@ def notify_failed_check() -> int:
     return len(notified)
 
 
+def notify_stale_copy() -> int:
+    """Копия не запускалась (таймер выключен, юнит упал до manage.py, блокировка не взята): итог копирования
+    старше COPY_STALE_SEC — push и ntfy активным администраторам один раз, отметкой `stale` в той же записи;
+    новый итог manage.py её сбрасывает. Записи нет вовсе (копий ещё не было) — молчим."""
+    row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (manage.COPY_KEY,)).fetchone()
+    last = json.loads(row["value"]) if row else None
+    if last is None or last.get("stale") or clock.NOW() - last["at"] <= COPY_STALE_SEC:
+        return 0
+    if state.DB.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?",
+                        (json.dumps(last | {"stale": True}), manage.COPY_KEY, row["value"])).rowcount != 1:
+        return 0
+    admins = [r["id"] for r in state.DB.execute("SELECT id FROM users WHERE is_admin = 1 AND disabled = 0")]
+    for uid in admins:
+        push.notify_later(uid, STALE_NOTICE, "admin", "backup-stale", title="Студия")
+    log.warning("backup-stale: уведомлены администраторы (%d)", len(admins))
+    return len(admins)
+
+
 async def _watch_checks() -> None:
     while True:
         try:
             notify_failed_check()
+            notify_stale_copy()
         except Exception as e:                    # noqa: BLE001 — наблюдение не должно вставать
             log.warning("backup-check: сбой наблюдения (%s)", type(e).__name__)
         await clock.SLEEP(CHECK_WATCH_SEC)

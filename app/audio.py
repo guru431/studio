@@ -3,7 +3,7 @@
 - Длительность — у самого ffmpeg (`-progress pipe:1`, последнее `out_time_us`): ffprobe не нужен, и
   запись браузера (webm без длительности в заголовке) тоже меряется.
 - Команды — argv-списком (`asyncio.create_subprocess_exec`, без оболочки), `-nostdin -hide_banner
-  -loglevel error`. Только звук: аппаратное ускорение GPU тут ни при чём.
+  -loglevel error`, окружение — без окружения службы (`_env`). Только звук: аппаратное ускорение GPU тут ни при чём.
 - Перед распознаванием запись сжимается всегда: mp3 16 кГц моно 32 кбит/с (COMPRESS) — 20 минут
   ≈ 5 МБ; это и шлюзу (slot-gate держит тело в памяти), и внешним сервисам (у OpenAI — 25 МБ).
 - Временные файлы — `state.CFG.tmp_dir` (локальный диск рядом с базой, не шара): имена даёт
@@ -13,6 +13,7 @@
 """
 import asyncio
 import logging
+import os
 import uuid
 from asyncio.subprocess import DEVNULL, PIPE
 from pathlib import Path
@@ -33,9 +34,19 @@ class AudioError(Exception):
         super().__init__(message)
 
 
+def _env() -> dict:
+    """Окружение ffmpeg — по образцу web._env: без окружения службы (там STUDIO_DATA_KEY), а он разбирает
+    загруженные записи. PATH — службы: по нему ищется сам ffmpeg (на машине разработки — не /usr/bin);
+    Windows (тесты) без SYSTEMROOT процессы не запускает."""
+    env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "LANG": "C.UTF-8", "HOME": "/nonexistent"}
+    if os.name == "nt":
+        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    return env
+
+
 async def _run(argv: list[str]) -> bytes:
     try:
-        proc = await asyncio.create_subprocess_exec(*argv, stdin=DEVNULL, stdout=PIPE, stderr=PIPE)
+        proc = await asyncio.create_subprocess_exec(*argv, stdin=DEVNULL, stdout=PIPE, stderr=PIPE, env=_env())
     except OSError:
         log.warning("звук: %s не запустился", argv[0])
         raise AudioError("обработка звука недоступна") from None

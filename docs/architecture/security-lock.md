@@ -5,6 +5,13 @@
 - `auth` — вход по логину или email и паролю, сессии на сервере (cookie `__Host-studio_sid`, 30 дней), CSRF (заголовок
   `x-studio-csrf` у изменяющих запросов), пауза после неудач, признак «заперто»; всё `/api/*` — через `auth.guard`
   (HTTP-middleware; анонимные входы — CLAUDE.md «Инварианты»).
+- `guard` видит только заголовки, а тело идёт потоком (nginx — `proxy_request_buffering off`): пока клиент его тянет,
+  учётку могут отключить, разжаловать, запереть или закрыть сессии. Поэтому `auth.recheck` повторяет сессию
+  (`_live(…, renew=False)`) и блокировку после тела и кладёт свежую учётку в `request.state.user` (роль для
+  `auth.require_admin` — из базы): зависимость всего приложения (`main.app`, FastAPI читает объявленное тело до
+  зависимостей; асинхронная `auth.recheck_after_body` — синхронную FastAPI увёл бы в поток к общей базе) и вызов в конце чтения потоком — `auth.small_body`, `forms.read_body`, `documents` и записи
+  расшифровки (файл удаляется). GET, открытые входы и WebSocket не затрагивает. Apache ограничивает время тела
+  `RequestReadTimeout body=20-1800,MinRate=500` (mod_reqtimeout). Проверки — `test_auth.py`.
 - Защита входа от перебора — паузы (на пару «логин + адрес» и на адрес); растущая задержка ответа на неверный пароль
   параллельные попытки не тормозит — на неё не полагаться. Из LAN запрос на публичный адрес приходит с роутера
   (`config.hairpin_ip`): для него пауза — только на пару «логин + адрес», иначе запирался бы весь дом.
@@ -35,12 +42,16 @@
   `computer_pin_timeout`. Таймер активности с допуском `lock_policy.HEARTBEAT_GRACE` (30) с — больше интервала
   отметок 15 с плюс срок ответа 8 с; `alive.active=false` не продлевает доступ, истёкший доступ отметка не открывает.
 - Частичная защита закрывает API выбранных разделов, связанные media и повторное использование файлов, общие выгрузки
-  и изменение защиты. Скан принадлежит и своему разделу: `lock_policy.scan_sections` (ocr + chat при `origin=chat`,
+  и изменение защиты. Раздел файла — `lock_policy.media_sections`: таблицы `lock_policy.MEDIA_SOURCES` (у «Озвучки» —
+  и все образцы голоса `voice_samples`), сканы и файлы снимков «Поделиться» (раздел снимка: «Чат» или «Агенты»);
+  вместе — все ссылки `media.REFERENCES`, новую таблицу без раздела ловит `tests/test_lock_policy.py`. Скан принадлежит и своему разделу: `lock_policy.scan_sections` (ocr + chat при `origin=chat`,
   translate при ссылке `translations.scan_id`) и `lock_policy.hidden_scans` (подзапрос для лент) — в `media_sections`
   (исходный PDF, PNG страниц), `lock_policy.blocks` для `/api/ocr/<id>*`, ленте `/api/ocr` (`db.page` с
   `extra`/`extra_args`), `search.find`, `jobs`. Изменяющие `/api/me/ntfy*`, `/api/me/push`, `/api/me/exa-key`, а также
   `/api/me/sessions*`, `/api/me/access*`, `/api/me/emergency`, `/api/me/security-events`, `DELETE /api/me/password-reset` закрывает любая
-  частичная защита (GET ntfy/push открыты). Реестр маршрутов — `tests/test_lock_policy.py::ROUTES`: новый маршрут без
+  частичная защита (GET ntfy/push открыты). Так же — все изменяющие `/api/connections*` (создание, правка адреса,
+  ключа и разделов, удаление, паспорт, проверка): иначе запертая сессия перенаправила бы подключение защищённого
+  раздела на свой сервер; список и модели (GET) открыты, ключ — по защите «Чата». Реестр маршрутов — `tests/test_lock_policy.py::ROUTES`: новый маршрут без
   классификации роняет тест.
 - Закрытые разделы запроса — ContextVar `lock_policy.RESTRICTED` (`auth.guard`), и задача, созданная запросом,
   наследует его. Раннеры очередей на пользователя (`ocr._runner`, `translate._runner`, `transcripts._runner`,
@@ -55,7 +66,12 @@
   scrypt, `PUT /api/me/pin` — с паролем учётки, `DELETE` — без; `POST /api/lock/pin` — счёт `users.pin_fails` один на
   учётку, попытка занимает место атомарным `UPDATE … RETURNING` до scrypt, верный — только при том же хеше после
   scrypt; после `PIN_FAILS` (10) — 403 `pin_exhausted`, обнуляют только верный PIN и отпирание паролем (не passkey,
-  не новый вход и не смена PIN); пауза пароля `("pw", uid)` PIN не касается; `GET /api/lock` — `pin`, `pin_left`.
+  не новый вход и не смена PIN); пауза пароля PIN не касается; `GET /api/lock` — `pin`, `pin_left`.
+- Пароль действий из сессии (отпирание, смена пароля, PIN, ключ, защита, почта, коды входа, аварийный выход) —
+  `auth.confirm_password(…, digest=…)`: пауза после `auth.LOCK_FAILS` неудач за 15 минут — по ключу
+  `("pw", uid, digest сессии)`, а всех сессий учётки вместе — после `auth.PASSWORD_ACCOUNT_FAILS`. Чужая сессия (в том
+  числе запертая: `/api/lock/password`) своими ошибками запирает только себя — владелец со своего устройства
+  подтверждает аварийный выход и смену пароля.
 - Страница: шторка, экран блокировки, отметки и помощники passkey — `lock.js` (ставит `api.js` `hooks.locked`: 423
   ждёт отпирания и повторяется; цифровая панель PIN — по `pin`/`pin_left` `GET /api/lock`, набранные цифры только в
   памяти модуля; ответ не пришёл — перечитывает возвращение, таймер и «Открыть»).
@@ -95,7 +111,7 @@
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
   пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, отпирание и неудача
   (password|pin|passkey), `pin_exhausted`, смена пароля, `session_end`, `emergency`, `pin_set`, `pin_delete`,
-  `passkey_add`, `passkey_delete`, `password_reset`, `share_create`, `share_revoke`, `share_pin_fail`,
+  `passkey_add`, `passkey_delete`, `password_reset`, `admin_grant`, `admin_revoke`, `share_create`, `share_revoke`, `share_pin_fail`,
   `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest),
   `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
   подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
@@ -110,6 +126,10 @@
 - Сброс пароля администратором: `users.password_reset` + событие `password_reset` в журнал владельца (без адреса
   администратора); `GET /api/me.password_reset` — после входа владелец один раз видит окно «Открыть «Безопасность»»;
   закрытие снимает флаг (`DELETE /api/me/password-reset`), аварийный выход — тоже. Администратор флага не видит.
+- Права администратора — галочка «Администратор» в окне «Изменить» панели (`admin.js`; у своей строки выключена:
+  сервер ответил бы 409 `self`), PATCH `{is_admin}` только при перемене. Перемена — `admin_grant` / `admin_revoke`
+  в журнал затронутой учётки (без адреса администратора), в журнал службы — только id; снятие прав и отключение
+  отзывают её ожидающие приглашения ([email-accounts](email-accounts.md)).
 - Страница — `account-security.js`: `sessionsBlock`, `accessBlock`, `emergencyBlock`, `securityEventsBlock` в
   «Настройки → Защита» после блокировки.
 

@@ -49,7 +49,7 @@ read-токен живёт только в памяти страницы, не �
 поколения истории и исходного чата; у «Агентов» — ещё живой PIN. PDF — через общий CLI `md2pdf.py`,
 строго закреплённый `deploy/md2pdf.sha256` (доставка байт-в-байт из `STUDIO_MD2PDF_SOURCE` или
 `~/.claude/bin/md2pdf.py`). Markdown перед рендером разбирается без HTML; изображения превращаются
-в текст, внешние/локальные ресурсы не загружаются. Файлы и профиль браузера — в локальном приватном
+в текст, внешние/локальные ресурсы не загружаются, а Chromium сервера запущен без сети (ниже). Файлы и профиль браузера — в локальном приватном
 `tmp/chat-export-*`, удаляются в finally и при старте; ключ данных не передаётся конвертеру.
 `HOME`, `XDG_CONFIG_HOME` и `XDG_CACHE_HOME` дочернего процесса тоже указывают в этот каталог:
 у службы HOME `/nonexistent`, без этого Chromium отказывает `chrome_crashpad_handler: --database is required`.
@@ -62,7 +62,23 @@ read-токен живёт только в памяти страницы, не �
   для экспорта (`ExportIn.reasoning`) нет.
 - `chat_exports._safe_html` выдаёт один HTML-блок (переводы строк внутри `<pre>` → `&#10;`, пустые строки вне `<pre>`
   убраны): md2pdf (`MarkdownIt("commonmark", {"html": True})`) пропускает его без изменений — ни `<img>` из кода, ни
-  заголовков/курсива. Регрессия прогоняет вывод через markdown-it.
+  заголовков/курсива. Регрессия прогоняет вывод через markdown-it. markdown-it кончает строку и на CR, поэтому
+  `chat_exports._html_block` сначала приводит `\r\n` и `\r` (в том числе `&#13;` из текста модели и выделения) к `\n`,
+  NUL — к U+FFFD, и только потом убирает пустые строки; `chat_export_selection` переводит CR текста в `&#10;`.
+- Перед запуском конвертера `chat_exports._printable` проверяет готовый chat.md: повторный разбор так, как его
+  разберёт md2pdf (`chat_exports.MD2PDF`), обязан дать ровно один `html_block`, равный входу, а в нём — только теги
+  `chat_export_selection.TAGS` и `<style>` с печатными стилями сервера, атрибуты `chat_exports.PRINTED_ATTRS` и
+  `style` из `chat_exports.PRINTED_STYLES`. Любой `src`, `srcset`, `poster`, `<img>`, `<picture>` или `url()` в стиле —
+  отказ 503 `pdf_failed` до записи файла.
+- На Linux `render_pdf` подменяет браузер md2pdf (`MD2PDF_BROWSER`) обёрткой `deploy/chromium-offline.sh`
+  (`chat_exports.OFFLINE_BROWSER`; в образе — строкой `COPY` Dockerfile и `.dockerignore`, исполняемая в Git):
+  Chromium без сети — все http(s) через недостижимый прокси `socks5://255.255.255.255:9` без перехода на прямое
+  соединение, `--proxy-bypass-list=<-loopback>` снимает неявный обход loopback, `--host-resolver-rules=MAP * ~NOTFOUND`
+  не разрешает ни одно имя. Проверено 2026-11-19 на Edge и Chrome (Windows): адрес-литерал, 127.0.0.1, `localhost`,
+  адрес LAN, DNS-имя и `url()` в стиле — ни одного запроса; прокси без `<-loopback>` пропускал loopback. В
+  Linux-контейнере вживую не проверялось. Картинки `file:` флагами не закрыть (сама страница — `file:`, CSP md2pdf
+  разрешает `img-src file:`): от них защищает только `_printable`. Общий md2pdf не меняется. На Windows и macOS
+  (разработка) обёртки нет — браузер md2pdf выбирает сам.
 - Конвертер — `chat_exports.converter`: `STUDIO_MD2PDF`, иначе `deploy/md2pdf.py` выкладки (его хеш сверяет `install.sh`
   с `deploy/md2pdf.sha256`), иначе `~/.claude/bin/md2pdf.py` (разработка; без сверки хеша). На хосте нужен Chromium
   (`chromium` и `fonts-dejavu-core` входят в Docker-образ, в прежней установке их ставит `install.sh`);

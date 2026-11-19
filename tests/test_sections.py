@@ -153,7 +153,7 @@ def test_deleting_a_connection_drops_its_links_and_defaults(studio):
     assert state.DB.execute("SELECT count(*) FROM section_defaults").fetchone()[0] == 0
     assert studio.c.get(f"/api/chats/{chat_id}").status_code == 200
     r = studio.c.post(f"/api/chats/{chat_id}/turns", json={"text": "hi"})
-    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_connection"   # диалог просит выбрать
 
 
 def test_resolve_takes_an_explicit_checked_pair_and_finds_a_bare_model(studio):

@@ -50,15 +50,20 @@ function usersBlock(host) {
     const login = el('input', { class: 'input', name: 'login', maxlength: '32', autocomplete: 'off',
       autocapitalize: 'none', spellcheck: 'false', value: user.login });
     const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', value: user.name });
+    const self = user.id === me.id;
+    // себя разжаловать нельзя (сервер ответил бы 409), как и отключить
+    const admin = el('input', { type: 'checkbox', id: 'user-edit-admin', name: 'is_admin', checked: user.is_admin, disabled: self });
     const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'user-edit-save' });
     const form = el('div', {}, field(tr("Логин"), login, 'login'), field(tr("Имя"), name, 'name'),
+      el('label', { class: 'check', title: self ? tr("себя разжаловать нельзя") : null }, admin, tr("Администратор")),
       el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' }));
     const dialog = openDialog(host, { id: 'user-edit-dialog', title: tr("Изменить: {0}", user.login), body: [form], actions: [save] });
     login.focus();
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
-        await api('PATCH', `/api/admin/users/${user.id}`, { login: login.value.trim(), name: name.value.trim() });
+        await api('PATCH', `/api/admin/users/${user.id}`, { login: login.value.trim(), name: name.value.trim(),
+          ...(admin.checked !== user.is_admin ? { is_admin: admin.checked } : {}) });
         dialog.close();
         if (user.id === me.id) location.reload();         // меню аватара берёт логин из /api/me
         else await reload();
@@ -152,6 +157,12 @@ function usersBlock(host) {
   };
 }
 
+/** Отказ письма: ненастроенная почта (smtp_unset) — со ссылкой на «Настройки → SMTP». */
+function mailFailure(target, err) {
+  target.replaceChildren(words(err));
+  if (err?.code === 'smtp_unset') target.append(' ', el('a', { href: '#/settings/smtp', class: 'smtp-link' }, tr("Открыть настройки SMTP")));
+}
+
 function invitationsBlock(host) {
   const list = el('tbody', { id: 'invitations' });
   const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
@@ -160,7 +171,7 @@ function invitationsBlock(host) {
   async function act(action) {
     note.textContent = '';
     try { await action(); }
-    catch (err) { note.textContent = words(err); }
+    catch (err) { mailFailure(note, err); }
     await reload();
   }
   function edit(invite = null) {
@@ -185,7 +196,7 @@ function invitationsBlock(host) {
         else await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value, is_admin: admin.checked });
         dialog.close();
         await reload();
-      } catch (err) { fail.textContent = words(err); await reload(); }
+      } catch (err) { mailFailure(fail, err); await reload(); }
       finally { save.disabled = false; }
     });
   }
@@ -283,8 +294,8 @@ function allowlistBlock() {
 }
 
 /* «Хранилище»: шара (доступна — свободное место; недоступна или не отвечает — словами сервера), возраст
- * последней копии базы (старше STALE_SEC — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
-const STALE_SEC = 36 * 3600;          // копия — раз в сутки в 04:30: старше полутора суток — пропущена
+ * последней копии базы (старше `stale_sec` сервера — admin.COPY_STALE_SEC, тот же порог push о пропущенной
+ * копии — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
 
 function agoText(sec) {
   if (sec < 3600) return tr("{0} мин назад", Math.max(1, Math.round(sec / 60)));
@@ -312,8 +323,9 @@ function checkText(r) {
     parts.push(tr("файлов нет на шаре {0} из {1}", count(r.files.missing), count(r.files.total)));
   }
   if (r.files.state === 'partial') parts.push(tr("проверено {0} из {1}", count(r.files.checked), count(r.files.total)));
-  const text = tr("Копия {0} — {1}{2}", at, r.ok ? tr("поднимается") : tr("не поднимается"), parts.length ? `: ${parts.join(', ')}` : '');
-  return r.ok ? text : `${text}. ${r.problems.join('; ')}`;
+  const verdict = r.ok ? tr("поднимается") : r.skipped ? tr("пропущена: база новее кода") : tr("не поднимается");
+  const text = tr("Копия {0} — {1}{2}", at, verdict, parts.length ? `: ${parts.join(', ')}` : '');
+  return r.ok || r.skipped ? text : `${text}. ${r.problems.join('; ')}`;
 }
 
 function backupCheck() {
@@ -375,7 +387,7 @@ function storageBlock() {
     refresh.disabled = true;
     note.textContent = '';
     try {
-      const { share, backup, pending, orphans, check, copy } = await api('GET', '/api/admin/storage');
+      const { share, backup, pending, orphans, check, copy, stale_sec: staleSec } = await api('GET', '/api/admin/storage');
       const shareText = share.state === 'ok' ? tr("доступна, свободно {0} из {1}", sizeText(share.free), sizeText(share.total))
         : share.message;
       const backupText = backup.state === 'ok'
@@ -383,13 +395,14 @@ function storageBlock() {
         : backup.state === 'none' ? tr("копий нет") : tr("неизвестно: хранилище не прочитано");
       const [queue] = queueText(pending);
       list.replaceChildren(...line('share', tr("Шара"), shareText, share.state !== 'ok'),
-        ...line('backup', tr("Копия базы"), backupText, backup.state !== 'ok' || backup.age > STALE_SEC),
+        ...line('backup', tr("Копия базы"), backupText, backup.state !== 'ok' || backup.age > staleSec),
         ...(copy?.ok === false ? line('backup-attempt', tr("Последняя попытка копирования"),
           tr("Ошибка — {0}", momentText(copy.at)), true) : []),
         // итог последней проверки новейшей копии (ночной после копии или из «Проверить копию»), хранится в базе
         ...line('check', tr("Проверка копии"), !check ? tr("ещё не было: ночная идёт сразу после копии")
-          : `${check.ok ? tr("поднимается") : tr("не поднимается, проблем — {0}", check.problems)}`
-            + ` — ${agoText(check.age)} (${momentText(check.at)})`, check && (!check.ok || check.age > STALE_SEC)),
+          : `${check.ok ? tr("поднимается") : check.skipped ? tr("пропущена: база новее кода")
+            : tr("не поднимается, проблем — {0}", check.problems)}`
+            + ` — ${agoText(check.age)} (${momentText(check.at)})`, check && (!check.ok || check.age > staleSec)),
         ...line('queue', tr("Удаление"), queue, false),
         ...line('orphans', tr("Файлы без записи"), !orphans ? tr("проверки ещё не было")
           : orphans.found === null ? tr("проверка пропущена {0}: база новее кода", momentText(orphans.at))

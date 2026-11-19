@@ -14,7 +14,7 @@ WORKDIR /opt/studio
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt yt-dlp==2026.10.26
 COPY app ./app
-COPY deploy/md2pdf.py deploy/md2pdf.sha256 ./deploy/
+COPY deploy/md2pdf.py deploy/md2pdf.sha256 deploy/chromium-offline.sh ./deploy/
 RUN cd deploy && echo "$(cat md2pdf.sha256)  md2pdf.py" | sha256sum --check --status
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY agent/studio-agent.zip agent/studio-agent-setup.exe agent/studio-agent-setup.pkg agent/studio-agent-setup.sh ./agent/

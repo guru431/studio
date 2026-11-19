@@ -72,6 +72,23 @@ def test_invitation_registers_verified_email_and_self_selected_credentials(studi
         assert private not in caplog.text
 
 
+def test_account_letters_are_bilingual_russian_and_english(studio, mail):
+    """Язык интерфейса сервер не знает: каждое письмо учётки — по-русски и по-английски, ссылка или код — один раз."""
+    uid = admin(studio)
+    invite(studio, mail)
+    studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD})
+    studio.c.post("/account/forgot", json={"login": "owner"})
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    login(studio, "owner", PASSWORD)
+    assert len(mail) == 4
+    for _, subject, body in mail:
+        assert re.search("[А-Яа-я]", subject) and "Studio" in subject
+        assert re.search("[А-Яа-я]", body) and re.search(r"\b(?:link|code)\b", body)
+        secret = re.findall(r"#[A-Za-z0-9_-]{20,}|\b[0-9]{6}\b", body)
+        assert len(secret) == 1
+
+
 def test_only_admin_can_invite_or_read_comments_and_csrf_is_required(studio, mail):
     admin(studio)
     assert studio.c.post("/api/admin/invitations", json={"email": "a@example.com"}, headers={auth.CSRF_HEADER: "bad"}).status_code == 403
@@ -84,7 +101,8 @@ def test_only_admin_can_invite_or_read_comments_and_csrf_is_required(studio, mai
     assert mail == []
 
 
-@pytest.mark.parametrize("email", ["", "bad", "x@y", "x\r\nBcc:y@example.com", "a..b@example.com", "a@-example.com"])
+@pytest.mark.parametrize("email", ["", "bad", "x@y", "x\r\nBcc:y@example.com", "a..b@example.com", "a@-example.com",
+                                   "ſam@example.com", "sam@ınfo.example.com", "sam@example.ſite"])
 def test_invalid_email_cannot_receive_invitation(studio, mail, email):
     admin(studio)
     assert studio.c.post("/api/admin/invitations", json={"email": email}).status_code == 422
@@ -103,6 +121,46 @@ def test_resend_rotates_link_comment_persists_and_revoke_is_final(studio, mail):
     assert studio.c.post("/account/invite/accept", json={"token": second, "login": "friend", "password": PASSWORD}).status_code == 400
     listed = studio.c.get("/api/admin/invitations").json()["items"]
     assert listed[0]["status"] == "revoked" and listed[0]["comment"] == "Changed"
+
+
+@pytest.mark.parametrize("gone", ["deleted", "email_changed"])
+def test_accepted_invitation_of_a_gone_address_can_be_sent_again(studio, mail, gone):
+    admin(studio)
+    _, secret = invite(studio, mail)
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "friend", "password": PASSWORD}).status_code == 201
+    uid = state.DB.execute("SELECT id FROM users WHERE login='friend'").fetchone()[0]
+    assert studio.c.post("/api/admin/invitations", json={"email": "friend@example.com"}).status_code == 409
+    if gone == "deleted":
+        assert studio.c.delete(f"/api/admin/users/{uid}").status_code == 200
+    else:
+        state.DB.execute("UPDATE users SET email='moved@example.com' WHERE id=?", (uid,))
+    invitation, again = invite(studio, mail)
+    assert invitation["status"] == "pending" and invitation["user_id"] is None
+    login_ = "friend2" if gone == "email_changed" else "friend"
+    assert studio.c.post("/account/invite/accept", json={"token": again, "login": login_, "password": PASSWORD}).status_code == 201
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "other", "password": PASSWORD}).status_code == 400
+
+
+@pytest.mark.parametrize("change", ["demote", "disable", "delete"])
+def test_pending_invitations_die_with_the_inviters_admin_rights(studio, mail, change):
+    admin(studio)
+    boss = make_user(studio, "boss", is_admin=True)
+    signin(studio, "boss")
+    invitation, secret = invite(studio, mail, is_admin=True)
+    _, plain = invite(studio, mail, email="plain@example.com")
+    signin(studio, "owner")
+    if change == "delete":
+        assert studio.c.delete(f"/api/admin/users/{boss}").status_code == 200
+    else:
+        patch = {"is_admin": False} if change == "demote" else {"disabled": True}
+        assert studio.c.patch(f"/api/admin/users/{boss}", json=patch).status_code == 200
+    for link_ in (secret, plain):
+        assert studio.c.post("/account/invite/accept", json={"token": link_, "login": "friend", "password": PASSWORD}).status_code == 400
+    assert {x["status"] for x in studio.c.get("/api/admin/invitations").json()["items"]} == {"revoked"}
+    assert state.DB.execute("SELECT count(*) FROM users WHERE login='friend'").fetchone()[0] == 0
+    # другой администратор отправляет приглашение снова — от своего имени
+    _, again = invite(studio, mail, is_admin=True)
+    assert studio.c.post("/account/invite/accept", json={"token": again, "login": "friend", "password": PASSWORD}).status_code == 201
 
 
 def test_expired_invitation_and_conflicting_login_do_not_consume_other_invitations(studio, mail):
@@ -203,6 +261,43 @@ def test_email_change_requires_password_and_link_for_same_account(studio, mail):
     signin(studio, "owner")
     assert studio.c.post("/api/me/email/confirm", json={"token": secret}).status_code == 200
     assert studio.c.get("/api/me").json()["email"] == "new@example.com"
+
+
+def test_confirmed_email_change_notifies_the_previous_address_without_details(studio, mail, monkeypatch):
+    admin(studio)
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 200
+    assert studio.c.post("/api/me/email/confirm", json={"token": token(mail)}).status_code == 200
+    recipient, subject, body = mail[-1]
+    assert recipient == "owner@example.com" and "Studio" in subject
+    assert "new@example.com" not in body and "http" not in body and not re.search(r"\b[0-9]{6}\b", body)
+
+    async def failed(*args):            # отказ почты смену не отменяет
+        raise HTTPException(503, {"code": "mail", "message": "Delivery failed"})
+
+    sent = len(mail)
+    assert studio.c.post("/api/me/email", json={"email": "third@example.com", "password": PASSWORD}).status_code == 200
+    secret = token(mail)
+    monkeypatch.setattr(account_mail, "send", failed)
+    assert studio.c.post("/api/me/email/confirm", json={"token": secret}).status_code == 200
+    assert studio.c.get("/api/me").json()["email"] == "third@example.com" and len(mail) == sent + 1
+
+
+def test_first_email_confirmation_sends_no_change_notice(studio, mail):
+    uid = admin(studio)
+    state.DB.execute("UPDATE users SET email=NULL WHERE id=?", (uid,))
+    assert studio.c.post("/api/me/email", json={"email": "first@example.com", "password": PASSWORD}).status_code == 200
+    assert studio.c.post("/api/me/email/confirm", json={"token": token(mail)}).status_code == 200
+    assert [m[0] for m in mail] == ["first@example.com"]
+
+
+def test_probing_whose_email_is_registered_shares_the_email_change_pause(studio, mail):
+    admin(studio)
+    make_user(studio, "friend")
+    for _ in range(3):
+        assert studio.c.post("/api/me/email", json={"email": "friend@example.com", "password": PASSWORD}).status_code == 409
+    assert studio.c.post("/api/me/email", json={"email": "friend@example.com", "password": PASSWORD}).status_code == 429
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 429
+    assert not mail
 
 
 def test_codes_are_off_by_default_and_changing_option_requires_password(studio, mail):
@@ -312,6 +407,29 @@ def test_operator_adds_missing_email_without_resetting_password_or_sessions(stud
     assert state.DB.execute("SELECT email,pw_hash FROM users WHERE id=?", (uid,)).fetchone()[:] == ("owner@example.com", before)
     assert studio.c.get("/api/me").status_code == 200
     assert manage.set_email({"STUDIO_ACCOUNT_LOGIN": "owner", "STUDIO_ACCOUNT_EMAIL": "other@example.com"}) == 2
+
+
+def test_operator_replaces_email_and_turns_codes_off_without_mailbox_access(studio, mail, capsys):
+    uid = admin(studio)
+    make_user(studio, "friend")
+    signin(studio, "owner")
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    accounts.new_token(uid, "reset", "owner@example.com", accounts.RESET_SEC)
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "owner"}) == 2
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "owner", "STUDIO_ACCOUNT_EMAIL": "friend@example.com"}) == 2
+    assert state.DB.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()[0] == "owner@example.com"
+    capsys.readouterr()
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "Owner", "STUDIO_ACCOUNT_EMAIL": "Fresh@Example.com",
+                                 "STUDIO_EMAIL_CODES": "off"}) == 0
+    out = capsys.readouterr().out
+    assert f"пользователь {uid}" in out and "fresh@example.com" not in out
+    assert state.DB.execute("SELECT email,email_codes FROM users WHERE id=?", (uid,)).fetchone()[:] == ("fresh@example.com", 0)
+    assert not state.DB.execute("SELECT 1 FROM email_tokens WHERE user_id=?", (uid,)).fetchone()
+    assert not state.DB.execute("SELECT 1 FROM sessions WHERE user_id=?", (uid,)).fetchone()
+    kinds = [tuple(r) for r in state.DB.execute("SELECT kind,detail FROM security_events WHERE user_id=? ORDER BY id", (uid,))]
+    assert kinds[-2:] == [("email_change", "operator"), ("email_codes_off", "operator")]
+    assert login(studio, "fresh@example.com", PASSWORD).status_code == 303
+    assert not mail
 
 
 def test_migration_39_to_40_preserves_accounts_sessions_and_unique_email(env):

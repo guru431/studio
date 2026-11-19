@@ -271,10 +271,11 @@ def test_wrong_current_password_is_limited(studio):
         assert r.status_code == 403 and code(r) == "password"
     r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
     assert r.status_code == 429 and code(r) == "locked"
-    assert ("pw", uid) in auth.FAILS
+    key = ("pw", uid, security.digest(studio.c.cookies[auth.COOKIE]))
+    assert key in auth.FAILS
     studio.clock[0] += 901
     r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
-    assert r.status_code == 204 and ("pw", uid) not in auth.FAILS
+    assert r.status_code == 204 and key not in auth.FAILS
 
 
 def test_validation_errors_keep_the_error_format_and_do_not_echo_input(studio):
@@ -485,6 +486,17 @@ def test_admin_cannot_lock_themselves_out(studio):
     row = state.DB.execute("SELECT is_admin, disabled FROM users WHERE id = ?", (me,)).fetchone()
     assert row["is_admin"] == 1 and row["disabled"] == 0
     assert studio.c.get("/api/admin/users").status_code == 200
+
+
+def test_granting_and_revoking_admin_rights_is_in_the_users_security_log(studio, caplog):
+    caplog.set_level(logging.INFO)
+    make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
+    events = lambda: [r[0] for r in state.DB.execute("SELECT kind FROM security_events WHERE user_id = ? ORDER BY id", (bob,))]
+    assert studio.c.patch(f"/api/admin/users/{bob}", json={"is_admin": True}).json()["is_admin"] is True
+    assert studio.c.patch(f"/api/admin/users/{bob}", json={"is_admin": True}).status_code == 200      # без перемены
+    assert studio.c.patch(f"/api/admin/users/{bob}", json={"is_admin": False}).json()["is_admin"] is False
+    assert events() == ["admin_grant", "admin_revoke"]
+    assert "bob" not in caplog.text
 
 
 def test_deleting_a_user_removes_rows_and_files(studio, env):

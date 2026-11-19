@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 48
+VERSION = 50
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -619,6 +619,47 @@ CREATE INDEX project_mirrors_source ON project_mirrors(source, project);
 """
 SCHEMA += PROJECT_MIRRORS_48
 
+#: id подключения — AUTOINCREMENT, как у `agents`: id удалённого не достаётся новому, и `connection_id` истории
+#: (без FK) не начинает указывать на чужой адрес. Пересборка: DROP при foreign_keys=ON каскадом удаляет
+#: `section_links`/`section_defaults` — их строки переживают шаг во временных копиях; триггер Cleaner — заново.
+CONNECTIONS_49 = """CREATE TABLE connections_49(id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+            name TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('openai','srvllm')),
+            base_url TEXT NOT NULL, token_enc BLOB NOT NULL, sections TEXT NOT NULL, created REAL NOT NULL,
+            server_only INTEGER NOT NULL DEFAULT 0, passport TEXT, cleaner INTEGER NOT NULL DEFAULT 0,
+            s06 INTEGER NOT NULL DEFAULT 0);
+INSERT INTO connections_49(id, user_id, name, kind, base_url, token_enc, sections, created, server_only, passport,
+                           cleaner, s06)
+SELECT id, user_id, name, kind, base_url, token_enc, sections, created, server_only, passport, cleaner, s06
+  FROM connections;
+CREATE TEMP TABLE links_49 AS SELECT * FROM section_links;
+CREATE TEMP TABLE defaults_49 AS SELECT * FROM section_defaults;
+DROP TABLE connections;
+ALTER TABLE connections_49 RENAME TO connections;
+INSERT INTO section_links SELECT * FROM temp.links_49;
+INSERT INTO section_defaults SELECT * FROM temp.defaults_49;
+DROP TABLE temp.links_49;
+DROP TABLE temp.defaults_49;
+CREATE TRIGGER cleaner_connection_delete AFTER DELETE ON connections BEGIN
+  DELETE FROM cleaner_contexts WHERE connection_id = old.id;
+END;
+"""
+SCHEMA += CONNECTIONS_49
+
+#: модель ролика в поиске — из `videos.model` (шаг 44 добавил столбец, а триггеры шага 13 писали литерал 'wan')
+SEARCH_VIDEOS_50 = f"""DROP TRIGGER search_videos_ai;
+DROP TRIGGER search_videos_au;
+CREATE TRIGGER search_videos_ai AFTER INSERT ON videos BEGIN
+  {_DOC} ('video', new.id, '', new.user_id, new.model, new.created, new.prompt); END;
+CREATE TRIGGER search_videos_au AFTER UPDATE OF prompt, model ON videos
+  WHEN old.prompt IS NOT new.prompt OR old.model IS NOT new.model BEGIN
+  DELETE FROM search_docs WHERE section = 'video' AND item = old.id;
+  {_DOC} ('video', new.id, '', new.user_id, new.model, new.created, new.prompt); END;
+UPDATE search_docs SET model = (SELECT v.model FROM videos v WHERE v.id = search_docs.item)
+ WHERE section = 'video' AND EXISTS (SELECT 1 FROM videos v WHERE v.id = search_docs.item);
+"""
+SCHEMA += SEARCH_VIDEOS_50
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -720,6 +761,10 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     46: AGENT_PLATFORM_46,
     47: F5_TTS_47,
     48: PROJECT_MIRRORS_48,
+    # id подключения не переходит к новому после удаления
+    49: CONNECTIONS_49,
+    # модель ролика в поиске — из videos.model
+    50: SEARCH_VIDEOS_50,
 }
 
 
