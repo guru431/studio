@@ -2751,7 +2751,10 @@ def text_of(selector):
 def long_press(selector):
     """Палец на карточке 650 мс без сдвига, затем отпустить; следом браузер шлёт click (хвост касания)."""
     return ("eval", "pressed", f"""(async () => {{ const e = document.querySelector({selector!r});
-      e.scrollIntoView({{ block: 'center' }}); const b = e.getBoundingClientRect();
+      e.scrollIntoView({{ block: 'center', behavior: 'instant' }});
+      // Дождаться scroll: обработчик ленты отменяет удержание при прокрутке.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const b = e.getBoundingClientRect();
       const at = {{ bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true, pointerId: 7,
         clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 }};
       e.dispatchEvent(new PointerEvent('pointerdown', at));
