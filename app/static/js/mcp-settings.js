@@ -1,7 +1,7 @@
 /* Формы MCP: HTTP-подключения Studio и stdio/HTTP/SSE проекта на мосту. */
 import { api } from './api.js';
 import { tr } from './i18n.js';
-import { button, el, field, openDialog, words } from './ui.js';
+import { button, computerPin, el, field, openDialog, words } from './ui.js';
 
 const HINT = tr("Модель сможет вызывать инструменты выбранных серверов и передавать им данные диалога.");
 const input = (id, type = 'text', value = '') => el('input', { id, type, value, class: 'input', autocomplete: 'off' });
@@ -104,7 +104,7 @@ export function agentMcpBlock(agents) {
   const computers = el('select', { class: 'input', id: 'mcp-computer' }), projects = el('select', { class: 'input', id: 'mcp-project' });
   const engine = el('select', { class: 'input', id: 'mcp-engine' },
     ...[['claude', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode']].map(([value, name]) => el('option', { value }, name)));
-  const pin = input('mcp-pin', 'password'); pin.inputMode = 'numeric';
+  const pin = computerPin({ id: 'mcp-pin' });
   const note = el('p', { class: 'status', 'aria-live': 'polite', id: 'agent-mcp-status' }), list = el('div', { id: 'agent-mcp-servers' });
   const add = button(tr("Добавить MCP"), { class: 'btn', id: 'agent-mcp-add', disabled: true }, () => edit());
   const root = el('section', { class: 'block', id: 'agent-mcp-settings' }, el('h2', {}, tr("MCP агентов")),

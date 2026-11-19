@@ -1,6 +1,6 @@
 import { tr } from './i18n.js';
 import { api } from './api.js';
-import { el, openDialog, words } from './ui.js';
+import { computerPin, el, openDialog, words } from './ui.js';
 import { changeView } from './code-diff.js';
 
 function* parents(path) {
@@ -85,14 +85,13 @@ export function projectMirrors(host, trigger, aid, project) {
       try { await request('POST', path, { pin: null }); }
       catch (err) {
         if (err.code !== 'pin_needed') throw err;
-        const pin = el('input', { class: 'input', type: 'password', inputmode: 'numeric',
-          autocomplete: 'off', minlength: '4', maxlength: '8', pattern: '[0-9]{4,8}', required: true });
-        const form = el('form', { class: 'project-mirror-form' },
-          label(tr("PIN компьютера назначения"), pin), el('button', { class: 'btn', type: 'submit' }, tr("Открыть")));
-        pinSlot.replaceChildren(form);
+        const pin = computerPin({ maxlength: '8' });
+        const go = button(tr("Открыть"));
+        pinSlot.replaceChildren(el('div', { class: 'project-mirror-form', id: 'code-mirror-pin' },
+          label(tr("PIN компьютера назначения"), pin), go));
         tell('');
-        form.addEventListener('submit', (event) => {
-          event.preventDefault();
+        const send = () => {
+          if (!pin.value) return;
           work(async () => {
             const value = pin.value;
             pin.value = '';
@@ -100,6 +99,12 @@ export function projectMirrors(host, trigger, aid, project) {
             pinSlot.replaceChildren();
             await next();
           });
+        };
+        go.addEventListener('click', send);
+        pin.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' || event.isComposing) return;
+          event.preventDefault();
+          send();
         });
         return;
       }

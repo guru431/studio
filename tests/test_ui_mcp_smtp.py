@@ -144,6 +144,8 @@ def test_agent_mcp_fields_save_to_selected_project(browser, live):
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
             ('eval', 'nav', "location.hash='#/settings/code'"), ('wait', "document.querySelector('#mcp-pin')?.parentElement.parentElement.hidden === false"),
+            ('eval', 'pin', "(() => { const i = document.querySelector('#mcp-pin');"
+                            " return [i.type, !!i.closest('form'), getComputedStyle(i).webkitTextSecurity]; })()"),
             ('click', '#agent-mcp-settings button:last-child'),
             ('wait', "document.querySelector('#agent-mcp-add')?.disabled === false"),
             ('click', '#agent-mcp-add'), ('type', '#mcp-name', 'local-tools'), set_value('#mcp-type', 'stdio'),
@@ -152,6 +154,7 @@ def test_agent_mcp_fields_save_to_selected_project(browser, live):
             ('eval', 'fits', NO_OVERFLOW)], width=320, mobile=True)
         assert not result.get('failed'), result
         assert result['values']['fits']
+        assert result['values']['pin'] == ['text', False, 'disc']  # PIN компьютера — не password и не в <form>
         saved = code_requests(machine, 'mcp_save')[-1]
         assert saved['project'] and saved['engine'] == 'claude'
         assert saved['config']['mcpServers']['local-tools']['env'] == {'KEY': 'private'}
