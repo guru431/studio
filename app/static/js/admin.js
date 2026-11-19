@@ -312,8 +312,9 @@ function checkText(r) {
     parts.push(tr("файлов нет на шаре {0} из {1}", count(r.files.missing), count(r.files.total)));
   }
   if (r.files.state === 'partial') parts.push(tr("проверено {0} из {1}", count(r.files.checked), count(r.files.total)));
-  const text = tr("Копия {0} — {1}{2}", at, r.ok ? tr("поднимается") : tr("не поднимается"), parts.length ? `: ${parts.join(', ')}` : '');
-  return r.ok ? text : `${text}. ${r.problems.join('; ')}`;
+  const verdict = r.ok ? tr("поднимается") : r.skipped ? tr("пропущена: база новее кода") : tr("не поднимается");
+  const text = tr("Копия {0} — {1}{2}", at, verdict, parts.length ? `: ${parts.join(', ')}` : '');
+  return r.ok || r.skipped ? text : `${text}. ${r.problems.join('; ')}`;
 }
 
 function backupCheck() {
@@ -388,7 +389,8 @@ function storageBlock() {
           tr("Ошибка — {0}", momentText(copy.at)), true) : []),
         // итог последней проверки новейшей копии (ночной после копии или из «Проверить копию»), хранится в базе
         ...line('check', tr("Проверка копии"), !check ? tr("ещё не было: ночная идёт сразу после копии")
-          : `${check.ok ? tr("поднимается") : tr("не поднимается, проблем — {0}", check.problems)}`
+          : `${check.ok ? tr("поднимается") : check.skipped ? tr("пропущена: база новее кода")
+            : tr("не поднимается, проблем — {0}", check.problems)}`
             + ` — ${agoText(check.age)} (${momentText(check.at)})`, check && (!check.ok || check.age > STALE_SEC)),
         ...line('queue', tr("Удаление"), queue, false),
         ...line('orphans', tr("Файлы без записи"), !orphans ? tr("проверки ещё не было")
