@@ -980,16 +980,21 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
     # иначе блок заменялся новым, пустым до своего ответа, и строки читались пустыми
     slow = """(() => { const real = window.fetch; window.fetch = (u, o) => String(u) === '/api/sections'
       ? new Promise((r) => setTimeout(r, 600)).then(() => real(u, o)) : real(u, o); return true; })()"""
-    r = browser.drive(live.url + "/", [*signin("keeper"), ("wait", READY), ("eval", "slow", slow),
-        *go("settings/data"), ("wait", "document.querySelector('#storage dd[data-kind=\"total\"]')"),
-        ("eval", "mark", "document.querySelector('#storage').dataset.mark = '1'"),
-        ("eval", "same", settled("document.querySelector('#storage').dataset.mark === '1'", 1000)),
-        ("eval", "before", STORAGE_TEXTS), ("eval", "queue", "document.querySelector('#storage-queue').textContent"),
-        ("eval", "fits", NO_OVERFLOW),
-        ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")), ("click", "#wipe-next"),
-        ("wait", "!document.querySelector('#wipe-confirm').hidden"), ("click", "#wipe-confirm"),
-        ("wait", "document.querySelector('#storage-queue').textContent.startsWith('Очередь удаления пуста')"),
-        ("eval", "after", STORAGE_TEXTS)], width=390, mobile=True)
+    try:
+        r = browser.drive(live.url + "/", [*signin("keeper"), ("wait", READY), ("eval", "slow", slow),
+            *go("settings/data"), ("wait", "document.querySelector('#storage dd[data-kind=\"total\"]')"),
+            ("eval", "mark", "document.querySelector('#storage').dataset.mark = '1'"),
+            ("eval", "same", settled("document.querySelector('#storage').dataset.mark === '1'", 1000)),
+            ("eval", "before", STORAGE_TEXTS), ("eval", "queue", "document.querySelector('#storage-queue').textContent"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")), ("click", "#wipe-next"),
+            ("wait", "!document.querySelector('#wipe-confirm').hidden"), ("click", "#wipe-confirm"),
+            ("wait", "document.querySelector('#storage-queue').textContent.startsWith('Очередь удаления пуста')"),
+            ("eval", "after", STORAGE_TEXTS)], width=390, mobile=True)
+    finally:
+        # отложенное удаление переживает «Удалить всю историю», а x'00' не шифр ключа живой студии: иначе
+        # проверка копии общей базы (test_admin_checks_the_backup) видит нерасшифрованный токен Cleaner
+        live_sql(live, "DELETE FROM cleaner_deletions WHERE id = 'k-ctx'")
     assert not r.get("failed"), r
     v = r["values"]
     assert v["same"] is True
