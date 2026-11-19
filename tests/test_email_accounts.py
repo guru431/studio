@@ -26,6 +26,7 @@ def mail(monkeypatch):
         sent.append((email, subject, body))
 
     monkeypatch.setattr(account_mail, "send", send)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)    # почта настроена
     return sent
 
 
@@ -99,6 +100,23 @@ def test_only_admin_can_invite_or_read_comments_and_csrf_is_required(studio, mai
                                ("DELETE", "/api/admin/invitations/missing", None)]:
         assert studio.c.request(method, path, json=body).status_code == 403
     assert mail == []
+
+
+def test_invitation_without_smtp_leaves_no_row_and_spends_no_attempt(studio, monkeypatch):
+    """Ненастроенная почта — отказ до записи: ни строки «Письмо не отправлено», ни попытки из трёх за 15 минут."""
+    admin(studio)
+    for _ in range(4):
+        response = studio.c.post("/api/admin/invitations", json={"email": "friend@example.com"})
+        assert response.status_code == 503 and response.json()["detail"]["code"] == "smtp_unset"
+    assert studio.c.get("/api/admin/invitations").json()["items"] == []
+    sent = []
+
+    async def send(email, subject, body):
+        sent.append(email)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)
+    monkeypatch.setattr(account_mail, "send", send)
+    assert studio.c.post("/api/admin/invitations", json={"email": "friend@example.com"}).status_code == 201
+    assert sent == ["friend@example.com"]
 
 
 @pytest.mark.parametrize("email", ["", "bad", "x@y", "x\r\nBcc:y@example.com", "a..b@example.com", "a@-example.com",
@@ -194,6 +212,7 @@ def test_revoke_during_smtp_is_not_undone_by_the_completed_send(studio, monkeypa
         state.DB.execute("UPDATE invitations SET revoked=?", (studio.clock[0],))
 
     monkeypatch.setattr(account_mail, "send", revoke_during_send)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)
     response = studio.c.post("/api/admin/invitations", json={"email": "friend@example.com"})
     assert response.status_code == 400
     row = state.DB.execute("SELECT revoked,token_hash FROM invitations").fetchone()
