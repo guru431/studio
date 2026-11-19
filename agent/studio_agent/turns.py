@@ -37,6 +37,9 @@ STOPPED = "Остановлено"
 REFUSED = "Пользователь отказал"
 NO_CLI = "Claude Code не найден на компьютере"
 NO_START = "Claude Code не запустился"
+# Чтение состояния — фоновое, без действия владельца в папке: хуки её `.claude/settings*.json` (SessionStart и др.)
+# не исполняются. `--settings` сильнее настроек проекта и local; остальные настройки читаются как прежде.
+NO_HOOKS = json.dumps({"disableAllHooks": True})
 BRIDGE_STOPPED = "ход прерван: мост остановлен"
 CLOSING = "мост выходит"  # start() во время close(): ходы закрываются
 
@@ -47,7 +50,8 @@ async def _keep_alive(_input, _tool_use_id, _context) -> dict:
 
 
 def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, model: str | None,
-                effort: str | None, can_use_tool, access: str | None = None, *, subagent_hook=None, mcp_servers=None) -> ClaudeAgentOptions:
+                effort: str | None, can_use_tool, access: str | None = None, *, subagent_hook=None, mcp_servers=None,
+                settings: str | None = None) -> ClaudeAgentOptions:
     """Опции клиента хода: новая сессия — `session_id=chat`, существующая — `resume=chat`."""
     limits = cli.subagent_limits(project)
     hooks = {"PreToolUse": [HookMatcher(matcher=None, hooks=[_keep_alive])]}
@@ -58,7 +62,7 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
         cwd=project, cli_path=cli_path, session_id=chat if new else None, resume=None if new else chat,
         model=model, effort=effort, permission_mode=access, include_partial_messages=True, can_use_tool=can_use_tool,
         hooks=hooks, mcp_servers=mcp_servers or {},
-        setting_sources=list(cli.SETTINGS), system_prompt=cli.coding_prompt(limits),
+        setting_sources=list(cli.SETTINGS), settings=settings, system_prompt=cli.coding_prompt(limits),
         env={**limits, **cli.ENV, "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"},
         stderr=cli._drop, extra_args={"chrome": None})
 
@@ -321,7 +325,7 @@ class Runner:
         client = None
         try:
             client = self.factory(options=options_for(project, path, chat, new,
-                model, effort, deny, access, mcp_servers=config.path))
+                model, effort, deny, access, mcp_servers=config.path, settings=NO_HOOKS))
             await asyncio.wait_for(client.connect(), cli.PROBE_SEC)
             info = await client.get_server_info() or {}
             raw = await client.get_context_usage()

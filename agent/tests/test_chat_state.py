@@ -1,4 +1,6 @@
 """Реальные значения настройки, разрешения и статистика контекста — контракт SDK/RPC и моста."""
+import json
+
 from fake_sdk import FakeClient, result_ok
 from studio_agent import permissions, store
 from studio_agent.turns import Runner
@@ -27,6 +29,9 @@ async def test_state_reads_sdk_without_a_prompt_and_keeps_access(home, project):
                      "context": {"used": 2500, "limit": 100000, "percent": 2.5}}
     assert made[0].queries == [] and made[0].disconnected
     assert made[0].options.permission_mode == "plan"
+    # Хуки папки (SessionStart) не исполняются при чтении; остальные настройки проекта читаются как прежде.
+    assert json.loads(made[0].options.settings) == {"disableAllHooks": True}
+    assert made[0].options.setting_sources == ["user", "project", "local"]
     assert (await r.state(project, CHAT, access="acceptEdits"))["settings"]["access"] == "acceptEdits"
     assert r.choices.details(CHAT)["access"] == "plan"   # чтение состояния не меняет выбор
 
@@ -42,6 +47,17 @@ async def test_turn_applies_access_and_sends_context_and_snapshot(home, project)
     assert r.choices.details(CHAT)["access"] == "plan"
     assert r.choices.details(CHAT)["context"]["used"] == 2500
     assert all(f["e"].get("access") == "plan" for f in sent if f["e"]["k"] == "settings")
+
+
+async def test_turn_keeps_project_hooks(home, project):
+    made = []
+    def factory(options):
+        made.append(options)
+        return StateClient(options, [result_ok()])
+    r = Runner(lambda _: None, choices=store.Choices(home), cli_path=None, factory=factory)
+    r.start(project, PID, CHAT, "Вопрос", None, None)
+    await settle(r)
+    assert made and made[0].settings is None                 # ход — действие владельца, хуки как в VS Code
 
 
 def test_access_presets_are_explicit_and_context_is_not_cumulative():
