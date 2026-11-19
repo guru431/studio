@@ -64,6 +64,13 @@ export function refreshAfterFailure(error, { claim = false } = {}) {
   }
 }
 
+/** Сбой разбирают на месте (app.js: повтор профиля при запуске) — отложенная перезагрузка не нужна; отказ повтора
+ * снова зовёт refreshAfterFailure. Проба `/health`, начатая тем же `online`, после этого не перезагрузит. */
+export function cancelRefresh() {
+  clearTimeout(timer);
+  pending = null;
+}
+
 /** Идущая загрузка файла (XHR разделов): пока она не кончилась, автоматическая перезагрузка её не оборвёт. */
 export function holdRefresh(xhr) {
   uploads += 1;
