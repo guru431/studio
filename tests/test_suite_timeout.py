@@ -1,13 +1,47 @@
 """Срок теста в быстром наборе: зависший тест падает по сроку один раз и с именем, а не валит процесс xdist снова и
 снова (`pytest_xdist_make_scheduler` в conftest.py). Набор — отдельным pytest в подпроцессе: секунды."""
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from threading import Thread
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+
+def test_browser_driver_names_the_devtools_command_that_never_replies():
+    from browser import DRIVER, find_node
+    from websockets.exceptions import ConnectionClosed
+    from websockets.sync.server import serve
+
+    node = find_node()
+    if not node:
+        pytest.skip('нет node 22+ для драйвера DevTools')
+    commands = []
+
+    def stall(connection):
+        try:
+            for message in connection:
+                commands.append(json.loads(message)['method'])
+        except ConnectionClosed:
+            pass
+
+    with serve(stall, '127.0.0.1', 0) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            job = {'port': server.socket.getsockname()[1], 'page': 'stalled',
+                   'url': 'about:blank', 'timeout': 500}
+            result = subprocess.run([node, str(DRIVER)], input=json.dumps(job),
+                                    capture_output=True, encoding='utf-8', timeout=10)
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+    assert commands == ['Page.enable']
+    assert result.returncode != 0 and 'DevTools Page.enable за 500 мс' in result.stderr, result
 
 HUNG = '''
 import time
