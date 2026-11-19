@@ -509,6 +509,8 @@ function build(view, ctx) {
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
   const notice = el('p', { class: 'chat-error error', id: 'chat-error', 'aria-live': 'polite' });
+  // скринридеру — начало и конец ответа короткой фразой; сам текст ответа сюда не кладётся (поток не зачитывается кусками)
+  const answering = el('p', { class: 'sr', id: 'chat-status', role: 'status' });
   const chipsBox = el('div', { class: 'att-chips' });
   const input = el('textarea', { id: 'chat-input', rows: '1', placeholder: tr("Напишите сообщение…"), 'aria-label': tr("Сообщение"),
     maxlength: '200000' });
@@ -532,7 +534,7 @@ function build(view, ctx) {
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, webToggle, mcpToggle, thinkToggle), send, stop),
     webNote);
-  const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, form);
+  const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
@@ -1624,6 +1626,7 @@ function build(view, ctx) {
     const kept = regenerate && before.length && before[before.length - 1].role === 'assistant' ? before.slice(0, -1) : before;
     chat.messages = [...kept, ...(user ? [user] : []), message];
     jobs.set(id, job);
+    answering.textContent = tr("Модель отвечает…");
     renderFeed();
     syncBusy();
     scrollDown(true);
@@ -1641,6 +1644,7 @@ function build(view, ctx) {
         ...(cleanerTicket ? { cleaner_ticket: cleanerTicket } : {}) });
     } catch (err) {
       jobs.delete(id);
+      answering.textContent = '';                  // отказ — словами в #chat-error
       const uncertain = [0, 502, 503, 504].includes(err.status) || err.name === 'TimeoutError';
       if (uncertain) attempt.uncertain = true;
       else if (pendingTurn === attempt) pendingTurn = null;
@@ -1654,6 +1658,7 @@ function build(view, ctx) {
     acknowledgeTurn(attempt);
     if (reply.replayed) {
       jobs.delete(id);
+      answering.textContent = '';
       if (chatId === id) { chat.messages = before; needsReload = true; await reload(); }
       return;
     }
@@ -1686,6 +1691,8 @@ function build(view, ctx) {
     }
     clearTimeout(paintTimer);
     paintTimer = null;
+    const ending = { done: tr("Ответ готов"), stopped: tr("Ответ остановлен"), error: tr("Ответ прерван ошибкой") };
+    answering.textContent = job.lost ? '' : ending[job.message.status] || '';
     renderFeed();                                    // «Ответить заново» — у последнего
     syncBusy();
     scrollDown(false);

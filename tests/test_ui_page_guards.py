@@ -162,6 +162,21 @@ def test_unsaved_transcript_edit_asks_before_another_record_or_section(browser, 
     assert v["stayed"] == ["Звонок.wav", "Изменено."] and v["saved"] == ["Здравствуйте.", "Сохранено."]
 
 
+def test_chat_tells_the_screen_reader_when_the_answer_starts_and_is_ready(browser, live):
+    status = "document.querySelector('#chat-status')"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+        ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+        ("eval", "role", f"[{status}.getAttribute('role'), {status}.classList.contains('sr')]"),
+        ("eval", "spy", f"(() => {{ window.said = []; new MutationObserver(() => window.said.push({status}.textContent))"
+                        f".observe({status}, {{ childList: true, characterData: true, subtree: true }}); return true; }})()"),
+        ("type", "#chat-input", "Привет"), ("press", "Enter"),
+        ("wait", f"{status}.textContent === 'Ответ готов'"), ("eval", "said", "window.said")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["role"] == ["status", True] and v["said"][0] == "Модель отвечает…" and v["said"][-1] == "Ответ готов"
+    assert "Здравствуйте" not in "".join(v["said"])
+
+
 #: сбой связи раздела (refresh.js) с короткой первой паузой
 FAILURE = """import('/static/js/refresh.js').then(m => { m.refreshAfterFailure({ code: 'network' }); return true; })"""
 QUICK = """const delay = window.setTimeout;
