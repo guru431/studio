@@ -32,6 +32,8 @@ async def test_state_reads_sdk_without_a_prompt_and_keeps_access(home, project):
     # Хуки папки (SessionStart) не исполняются при чтении; остальные настройки проекта читаются как прежде.
     assert json.loads(made[0].options.settings) == {"disableAllHooks": True}
     assert made[0].options.setting_sources == ["user", "project", "local"]
+    # SDK поднимает серверы `.mcp.json` папки без одобрения: при чтении — только конфиг владельца (--mcp-config).
+    assert made[0].options.strict_mcp_config is True
     assert (await r.state(project, CHAT, access="acceptEdits"))["settings"]["access"] == "acceptEdits"
     assert r.choices.details(CHAT)["access"] == "plan"   # чтение состояния не меняет выбор
 
@@ -58,6 +60,7 @@ async def test_turn_keeps_project_hooks(home, project):
     r.start(project, PID, CHAT, "Вопрос", None, None)
     await settle(r)
     assert made and made[0].settings is None                 # ход — действие владельца, хуки как в VS Code
+    assert made[0].strict_mcp_config is False                # MCP папки ход поднимает, как прежде
 
 
 def test_access_presets_are_explicit_and_context_is_not_cumulative():
