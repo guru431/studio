@@ -283,8 +283,8 @@ function allowlistBlock() {
 }
 
 /* «Хранилище»: шара (доступна — свободное место; недоступна или не отвечает — словами сервера), возраст
- * последней копии базы (старше STALE_SEC — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
-const STALE_SEC = 36 * 3600;          // копия — раз в сутки в 04:30: старше полутора суток — пропущена
+ * последней копии базы (старше `stale_sec` сервера — admin.COPY_STALE_SEC, тот же порог push о пропущенной
+ * копии — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
 
 function agoText(sec) {
   if (sec < 3600) return tr("{0} мин назад", Math.max(1, Math.round(sec / 60)));
@@ -376,7 +376,7 @@ function storageBlock() {
     refresh.disabled = true;
     note.textContent = '';
     try {
-      const { share, backup, pending, orphans, check, copy } = await api('GET', '/api/admin/storage');
+      const { share, backup, pending, orphans, check, copy, stale_sec: staleSec } = await api('GET', '/api/admin/storage');
       const shareText = share.state === 'ok' ? tr("доступна, свободно {0} из {1}", sizeText(share.free), sizeText(share.total))
         : share.message;
       const backupText = backup.state === 'ok'
@@ -384,14 +384,14 @@ function storageBlock() {
         : backup.state === 'none' ? tr("копий нет") : tr("неизвестно: хранилище не прочитано");
       const [queue] = queueText(pending);
       list.replaceChildren(...line('share', tr("Шара"), shareText, share.state !== 'ok'),
-        ...line('backup', tr("Копия базы"), backupText, backup.state !== 'ok' || backup.age > STALE_SEC),
+        ...line('backup', tr("Копия базы"), backupText, backup.state !== 'ok' || backup.age > staleSec),
         ...(copy?.ok === false ? line('backup-attempt', tr("Последняя попытка копирования"),
           tr("Ошибка — {0}", momentText(copy.at)), true) : []),
         // итог последней проверки новейшей копии (ночной после копии или из «Проверить копию»), хранится в базе
         ...line('check', tr("Проверка копии"), !check ? tr("ещё не было: ночная идёт сразу после копии")
           : `${check.ok ? tr("поднимается") : check.skipped ? tr("пропущена: база новее кода")
             : tr("не поднимается, проблем — {0}", check.problems)}`
-            + ` — ${agoText(check.age)} (${momentText(check.at)})`, check && (!check.ok || check.age > STALE_SEC)),
+            + ` — ${agoText(check.age)} (${momentText(check.at)})`, check && (!check.ok || check.age > staleSec)),
         ...line('queue', tr("Удаление"), queue, false),
         ...line('orphans', tr("Файлы без записи"), !orphans ? tr("проверки ещё не было")
           : orphans.found === null ? tr("проверка пропущена {0}: база новее кода", momentText(orphans.at))
