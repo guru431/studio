@@ -661,27 +661,30 @@ def test_settings_check_of_a_cloud_runs_in_the_browser(browser, live):
 
 @pytest.mark.parametrize("width", [390, 1280])
 def test_settings_photo_unchecks_flux_and_the_chip_keeps_snofs(browser, live, width):
-    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела только SNOFS Krea 2."""
+    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела его нет, SNOFS Krea 2 первым
+    (каталог фото — `sections.CATALOG`)."""
     login = f"sect{width}"
     live.add_user(login)
     panel = ".section-panel[data-section=photo]"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
         *go("settings/photo"), ("wait", f"document.querySelector('{panel} .link')"),
         ("click", f"{panel} .link-refresh"),
-        ("wait", f"document.querySelectorAll('{panel} input.model-check').length === 2"
+        ("wait", f"document.querySelectorAll('{panel} input.model-check').length === 4"
                  " && document.querySelector('.section-status').textContent.startsWith('Найдено')"),
+        ("eval", "checked", f"[...document.querySelectorAll('{panel} input.model-check')].map(c => [c.value, c.checked])"),
         ("click", f"{panel} input.model-check[value=flux]"),
         ("wait", f"!document.querySelector('{panel} input.model-check[value=flux]').checked"
                  f" && document.querySelector('{panel} input.model-check[value=flux]')"), ("idle",),
         ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/sections')).sections[1].links[0].models)()"),
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
-        # в чипе «модель» раздела «Фото» — только SNOFS Krea 2
+        # в чипе «модель» раздела «Фото» — каталог без FLUX
         *go("photo"), ("wait", FEED_READY), ("click", "#chip-model"),
         ("eval", "options", "[...document.querySelectorAll('#chip-model-menu .menu-option')].map(o => o.textContent)")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["saved"] == ["snofs"] and not r["values"]["overflow"]
-    assert r["values"]["options"] == ["SNOFS Krea 2"]
+    assert r["values"]["checked"] == [["snofs", True], ["flux", True], ["fineview", True], ["jib-moss", True]]
+    assert r["values"]["saved"] == ["snofs", "fineview", "jib-moss"] and not r["values"]["overflow"]
+    assert r["values"]["options"] == ["SNOFS Krea 2", "FineView QW21", "Jib Mix Moss V2"]
     assert not problems(r), problems(r)
 
 
