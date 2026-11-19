@@ -76,11 +76,15 @@ if [ ! -x "$PYTHON" ]; then PYTHON=$D/.venv/Scripts/python.exe; fi
 [ -x "$PYTHON" ] || die "нет Python среды проекта; задайте STUDIO_PYTHON"
 # Validate the profile before building an installer or contacting the host.
 "$PYTHON" "$D/deploy/render-profile.py" --check
-MD2PDF_SOURCE=${STUDIO_MD2PDF_SOURCE:-$HOME/.claude/bin/md2pdf.py}
-[ -s "$MD2PDF_SOURCE" ] || die "нет общего md2pdf.py; задайте STUDIO_MD2PDF_SOURCE"
 md2pdf_expected=$(git -C "$D" show "$REV:deploy/md2pdf.sha256" | tr -d '\r\n')
-md2pdf_actual=$(sha256sum "$MD2PDF_SOURCE" | cut -d' ' -f1)
+md2pdf_actual=$(git -C "$D" show "$REV:deploy/md2pdf.py" | sha256sum | cut -d' ' -f1) \
+    || die "нет deploy/md2pdf.py в HEAD студии"
 [ "$md2pdf_actual" = "$md2pdf_expected" ] || die "версия md2pdf.py не совпала с deploy/md2pdf.sha256"
+if [ -n "${STUDIO_MD2PDF_SOURCE:-}" ]; then
+    [ -s "$STUDIO_MD2PDF_SOURCE" ] || die "нет файла STUDIO_MD2PDF_SOURCE"
+    md2pdf_override=$(sha256sum "$STUDIO_MD2PDF_SOURCE" | cut -d' ' -f1)
+    [ "$md2pdf_override" = "$md2pdf_expected" ] || die "версия STUDIO_MD2PDF_SOURCE не совпала с закреплённым md2pdf.py"
+fi
 
 mkdir -p "$D/.tmp"
 package=$(mktemp -d "$D/.tmp/deploy-XXXXXXXX")
@@ -135,8 +139,6 @@ uploaded=1
 git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" "${PARTS[@]}" \
     | "$PYTHON" "$D/deploy/render-profile.py" \
     | "${SSH[@]}" "sudo tar -xf - -C $IN"
-# Shared converter is delivered byte-for-byte, like the generated bridge artifacts.
-"${SSH[@]}" "sudo sh -c 'cat > $IN/deploy/md2pdf.py'" < "$MD2PDF_SOURCE"
 echo "==> мост ${REV:0:7} → ZIP и установщик EXE"
 "${SSH[@]}" "sudo install -d -m 0755 $IN/agent"
 for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studio-agent-setup.sh; do
