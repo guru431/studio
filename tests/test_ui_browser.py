@@ -10602,6 +10602,9 @@ def test_code_open_menu_survives_a_poll(browser, live):
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"), *code_project(aid, "alpha"),
             *code_from_list(CODE_CHAT_A), ("click", "#code-tab-add"),
             ("wait", f"document.querySelector(\"#code-tab-menu li[data-chat='{CODE_CHAT_B}']\")"),
+            # меню сначала показывает сохранённый список и само сверяет его с компьютером — это не опрос; строку
+            # запоминаем после сверки (aria-busy), иначе её ответ пересоберёт меню после снимка
+            ("wait", "document.querySelector('#code-tab-menu #code-chats')?.getAttribute('aria-busy') === 'false'"),
             ("eval", "keep", f"!!(window.menuRow = document.querySelector(\"#code-tab-menu li[data-chat='{CODE_CHAT_B}']\"))"
                              " && (window.polls0 = window.chatsCalls) >= 0"),
             ("wait", "window.chatsCalls >= window.polls0 + 2"),
