@@ -132,6 +132,7 @@ async function retry() {
 window.addEventListener('hashchange', () => {
   if (pending === location.hash) return;
   pending = null;
+  cancels += 1;              // проба прежнего ожидания не перезагрузит, если новый сбой снова взведёт тот же адрес
   attempts = 0;
   claimAgain = false;
   offered = false;
