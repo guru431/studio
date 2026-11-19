@@ -1024,8 +1024,9 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
                'curl() { printf 200; }; source "$0"')
 
     def deploy():
+        # errors="replace": powershell.exe сборки EXE пишет в кодовой странице консоли, не UTF-8
         return subprocess.run([bash, "-c", wrapper, (repo / "deploy" / "deploy.sh").as_posix()], capture_output=True, text=True,
-                              encoding="utf-8", timeout=60, env=env)
+                              encoding="utf-8", errors="replace", timeout=60, env=env)
 
     r = deploy()
     assert r.returncode == 1 and "нет agent/install.cmd в HEAD" in r.stderr, r
