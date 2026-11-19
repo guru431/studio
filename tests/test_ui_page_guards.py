@@ -1,7 +1,10 @@
 """Оболочка страницы: адрес раздела, блокировка, несохранённое и слова интерфейса в настоящем браузере."""
+import base64
+
 import pytest
 
-from test_ui_browser import READY, browser, go, live, open_new_chat, problems, set_value, signin
+from test_ui_browser import (READY, add_gateway, browser, go, live, open_new_chat, problems, set_value, signin,
+                             wav_of)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -195,3 +198,36 @@ def test_unsent_chat_text_turns_the_automatic_refresh_into_an_offer(browser, liv
     assert not r.get("failed"), r
     v = r["values"]
     assert v["kept"] == ["navigate", "Не потерять этот текст"] and v["offer"] is False
+
+
+#: После первой загрузки пачки список записей ждёт `window.releaseList()`: между файлами XHR нет (holdRefresh не держит)
+HOLD_LIST = """(() => { const real = window.fetch; let release; const gate = new Promise(r => { release = r; });
+  window.releaseList = () => { release(); return true; }; window.listHeld = false; window.armList = false;
+  window.fetch = (url, options = {}) => {
+    if (window.armList && String(url).startsWith('/api/transcripts') && (options.method || 'GET') === 'GET') {
+      window.armList = false; window.listHeld = true; return gate.then(() => real(url, options));
+    }
+    return real(url, options);
+  };
+  return true; })()"""
+
+
+def test_transcript_batch_between_files_turns_the_automatic_refresh_into_an_offer(browser, live):
+    login = "guard-batch"
+    live.add_user(login)
+    navigation = "performance.getEntriesByType('navigation')[0].type"
+    wav = base64.b64encode(wav_of(1.0)).decode()
+    pick = f"""(() => {{ const bytes = Uint8Array.from(atob('{wav}'), c => c.charCodeAt(0)); const dt = new DataTransfer();
+      for (const name of ['Первая.wav', 'Вторая.wav']) dt.items.add(new File([bytes], name, {{ type: 'audio/wav' }}));
+      window.armList = true;
+      const input = document.querySelector('#transcribe-add input'); input.files = dt.files;
+      input.dispatchEvent(new Event('change', {{ bubbles: true }})); return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        ("eval", "hold", HOLD_LIST), ("eval", "pick", pick), ("wait", "window.listHeld"),
+        ("eval", "failed", FAILURE), ("wait", "document.querySelector('#studio-refresh-offer')"),
+        ("eval", "release", "window.releaseList()"),
+        ("wait", "document.querySelectorAll('.tr-item').length === 2"),
+        ("eval", "kept", navigation)], init=QUICK)
+    assert not r.get("failed"), r
+    assert r["values"]["kept"] == "navigate"

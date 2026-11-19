@@ -49,8 +49,11 @@ const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("�
 let screen = null;
 let shownEntry = null;     // метка записи истории раздела ({ entry: n } — роутер app.js): сюда возвращает hold()
 const HOME = '#/transcribe';
-// перезагрузка стёрла бы несохранённую правку — автоматическую (refresh.js) она запрещает
-document.addEventListener('studio-before-auto-refresh', (event) => { if (screen?.dirty()) event.preventDefault(); });
+// перезагрузка стёрла бы несохранённую правку или оборвала пачку загрузок (между файлами holdRefresh не держит) —
+// автоматическую (refresh.js) они запрещают
+document.addEventListener('studio-before-auto-refresh', (event) => {
+  if (screen?.dirty() || screen?.sending()) event.preventDefault();
+});
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec || 0));
@@ -608,6 +611,7 @@ function build(view, ctx) {
   return {
     follow,
     dirty,
+    sending: () => uploading,
     leave,
     destroy() {
       window.removeEventListener('beforeunload', unload);
