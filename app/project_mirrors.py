@@ -26,6 +26,8 @@ log = logging.getLogger("studio")
 CHUNK = 4 * 1024 * 1024
 MAX_ENTRIES = 150_000
 DISCOVERY_CAP = "project_mirror_discovery"
+EXCLUDE_CAP = "mirror_exclude"
+EXCLUDE_MAX = 64
 SKIP = ["skip", "", 0, 0]
 DIR = ["dir", "", 0, 0]
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -45,6 +47,10 @@ class Sync(BaseModel):
     plan: str = Field(pattern=r"^[0-9a-f]{64}$")
     overwrite: bool = False
     keep: list[Annotated[int, Field(strict=True, ge=0)]] = Field(default_factory=list, max_length=MAX_ENTRIES)
+
+
+class Exclusions(BaseModel):
+    exclude: list[str] = Field(max_length=EXCLUDE_MAX)
 
 
 class FileDiff(BaseModel):
@@ -100,6 +106,17 @@ def _item(row):
 
 def _location(row):
     return json.loads(security.decrypt(row["location"]))
+
+
+def _exclude(row):
+    """Постоянные исключения зеркала (в зашифрованном `location`): оба моста обязаны их понимать — иначе прежний
+    мост назначения увидел бы исключённое как лишнее и удалил бы его в копии."""
+    exclude = _location(row).get("exclude") or []
+    if exclude:
+        for aid in (row["source"], row["destination"]):
+            code.require_capability(aid, EXCLUDE_CAP)
+        return {"exclude": exclude}
+    return {}
 
 
 async def _ask(request, aid, op, *, timeout=180, **args):
@@ -333,8 +350,9 @@ async def discover(aid: int, pid: str, request: Request, destination: int | None
 async def _compare(request, row):
     aid, pid, destination = row["source"], row["project"], row["destination"]
     to = {"root": row["root"], "name": _location(row)["name"]}
-    source, target = await asyncio.gather(_ask(request, aid, "mirror_scan", project=pid),
-                                          _ask(request, destination, "mirror_destination", **to))
+    exclude = _exclude(row)
+    source, target = await asyncio.gather(_ask(request, aid, "mirror_scan", project=pid, **exclude),
+                                          _ask(request, destination, "mirror_destination", **to, **exclude))
     if target.get("pid") is None or not code.PID_RE.fullmatch(str(target["pid"])):
         raise code._refuse(502, "bridge", "мост вернул неверное назначение зеркала")
     _private_destination(destination, target["pid"])
@@ -407,14 +425,15 @@ async def _sync(request, row, selected, progress):
                     raise code._refuse(502, "bridge", "мост вернул неверный блок файла")
                 await _ask(request, destination, "mirror_chunk", ticket=ticket, chunks=chunks)
                 progress["bytes"] += sum(read[2] for read in reads)
-            latest = await _ask(request, aid, "mirror_scan", project=pid)
+            exclude = _exclude(row)
+            latest = await _ask(request, aid, "mirror_scan", project=pid, **exclude)
             fresh = await asyncio.to_thread(lambda: _portable(_entries(latest), platform, source_platform))
             if fresh != source:
                 raise code._refuse(409, "conflict", "исходный проект изменился во время передачи — обновите сравнение")
             expected = await asyncio.to_thread(_digest, current)
             _private_destination(destination, plan["project"])
             await _ask(request, destination, "mirror_apply", ticket=ticket, expected=expected,
-                       updates=updates, remove=remove, **to)
+                       updates=updates, remove=remove, **to, **exclude)
             started = False
         sealed = await asyncio.to_thread(_next_baseline, source, current, baseline, updates, remove)
         state.DB.execute("UPDATE project_mirrors SET baseline=?, synced=? WHERE id=?", (sealed, clock.NOW(), mid))
@@ -482,6 +501,24 @@ async def compare(aid: int, pid: str, mid: int, request: Request):
         _row(request, aid, pid, mid)
         state.DB.execute("UPDATE project_mirrors SET baseline=? WHERE id=? AND baseline IS NULL", (sealed, mid))
     return result
+
+
+@router.put("/{mid}/exclude")
+async def set_exclude(aid: int, pid: str, mid: int, request: Request):
+    """Точные относительные пути без шаблонов; мост не переносит их и не удаляет в копии. `.git` — всегда целиком."""
+    row = _row(request, aid, pid, mid)
+    body = await _body(request, Exclusions, 4096 + EXCLUDE_MAX * (code.PATH_MAX + 8))
+    exclude = list(dict.fromkeys(code.check_path(path.strip("/")) for path in body.exclude if path.strip("/")))
+    if any(path.split("/")[0] == ".git" for path in exclude):
+        raise code._refuse(422, "invalid", "каталог .git переносится целиком")
+    if row["destination"] in TRANSFERS:
+        raise code._refuse(409, "busy", "дождитесь окончания передачи зеркала")
+    location = {**_location(row), "exclude": exclude}
+    if exclude:
+        for agent in (aid, row["destination"]):
+            code.require_capability(agent, EXCLUDE_CAP)
+    state.DB.execute("UPDATE project_mirrors SET location=? WHERE id=?", (security.encrypt(_json(location)), mid))
+    return _item(_row(request, aid, pid, mid))
 
 
 @router.post("/{mid}/diff")

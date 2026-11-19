@@ -1478,6 +1478,8 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 #code-project-mirrors label, .project-mirror-form { display: grid; gap: var(--space-2); }
 .project-mirror-form { margin-block: var(--space-4); }
 .project-mirror-form .btn { justify-self: start; }
+.project-mirror-exclude[open] { display: grid; gap: var(--space-2); margin-block: var(--space-4); }
+.project-mirror-exclude .btn { justify-self: start; }
 #code-project-mirrors .input { min-width: 0; width: 100%; font-size: max(16px, 1em); }
 #code-project-mirrors h2, .project-mirror-state { overflow-wrap: anywhere; }
 .project-mirror-candidates { padding: 0; list-style: none; }

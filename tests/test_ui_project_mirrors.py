@@ -54,6 +54,12 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
             ("wait", f"document.querySelector('{ui} .project-mirror-diff')?.textContent.includes('local.env')"),
             ("click", f"{ui} .project-mirror-state .actions button:last-child"),
             ("wait", f"document.querySelector('{ui} .project-mirror-state')?.textContent.includes('файлы совпадают')"),
+            ("click", f"{ui} .project-mirror-exclude summary"),
+            ("type", "#code-mirror-exclude", "empty"),
+            ("click", f"{ui} .project-mirror-exclude button"),
+            ("wait", f"document.querySelector('{ui} .project-mirror-exclude summary')?.textContent === 'Постоянные исключения (1)'"),
+            ("eval", "excluded", f"document.querySelector('{ui} .project-mirror-state').textContent"
+                                 ".includes('Пропущено исключений, ссылок, специальных объектов и связанных папок: 1')"),
             ("eval", "fits", f"document.querySelector('{ui}').scrollWidth <= document.querySelector('{ui}').clientWidth + 1")],
             width=360, touch=True)
     finally:
@@ -62,7 +68,7 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
     assert not result.get("failed"), result
     assert result["values"]["order"] == "Файлы/Доступ"
     assert result["values"]["pin"] == ["text", False, "disc", "off"]
-    assert result["values"]["root"] and result["values"]["fits"]
+    assert result["values"]["root"] and result["values"]["fits"] and result["values"]["excluded"]
     assert (destination / "local.env").read_bytes() == (source / "local.env").read_bytes()
 
 

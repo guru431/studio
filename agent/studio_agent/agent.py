@@ -45,13 +45,13 @@ OPS = {
     "project_create": ("root", "name"),
     "mirror_identity": ("project",),
     "mirror_candidates": ("name", "repositories"),
-    "mirror_scan": ("project",),
-    "mirror_destination": ("root", "name", "metadata_only"),
+    "mirror_scan": ("project", "exclude"),
+    "mirror_destination": ("root", "name", "metadata_only", "exclude"),
     "mirror_read": ("project",),
     "mirror_text": ("root", "name", "path"),
     "mirror_begin": ("root", "name", "ticket"),
     "mirror_chunk": ("ticket",),
-    "mirror_apply": ("root", "name", "ticket", "expected"),
+    "mirror_apply": ("root", "name", "ticket", "expected", "exclude"),
     "mirror_abort": ("ticket",),
     "project_summary": ("project", "refresh", "remote", "code_size"),
     "activity": (),
@@ -178,7 +178,7 @@ class Agent:
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
-                 "project_mirror_discovery": True,
+                 "project_mirror_discovery": True, "mirror_exclude": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
                  "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
@@ -483,6 +483,8 @@ class Agent:
         """Вид поля до исполнения; путь — как `files.resolve`, без диска."""
         if name == "repositories":
             return mirror.valid_repositories(value)
+        if name == "exclude":
+            return value is None or mirror.valid_exclude(value)
         if name == "ticket":
             return isinstance(value, str) and SESSION.fullmatch(value) is not None
         if name == "expected":
@@ -595,11 +597,11 @@ class Agent:
         return await asyncio.to_thread(mirror.candidates, self.cfg, frame["name"], frame["repositories"])
 
     async def _op_mirror_scan(self, frame, after):
-        return await asyncio.to_thread(mirror.scan, await self._project(frame))
+        return await asyncio.to_thread(mirror.scan, await self._project(frame), frame.get("exclude") or ())
 
     async def _op_mirror_destination(self, frame, after):
         return await asyncio.to_thread(mirror.destination, self.cfg, frame["root"], frame["name"],
-                                       metadata_only=frame.get("metadata_only"))
+                                       metadata_only=frame.get("metadata_only"), exclude=frame.get("exclude") or ())
 
     async def _op_mirror_read(self, frame, after):
         return await asyncio.to_thread(mirror.read, await self._project(frame), frame.get("reads"))
