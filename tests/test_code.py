@@ -46,6 +46,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/compare"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/diff"): {"path": "file.txt"},
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/sync"): {"plan": "0" * 64},
+    ("PUT", "/api/code/agents/1/projects/1/mirrors/1/exclude"): {"exclude": [".venv"]},
     ("DELETE", "/api/code/agents/1/projects/1/mirrors/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/export"): {"format": "md"},
     ("GET", "/api/code/agents/1/projects/1/chats/1/share"): None,
@@ -282,8 +283,9 @@ def test_unopened_computer_is_409_closed_and_screen_unlock_preserves_access(stud
     assert (r.status_code, detail(r)["code"]) == (409, "closed")
     assert studio.c.post(url(aid, "open"), json={"pin": None}).status_code == 204
     r = studio.c.get(url(aid, "projects"))
-    assert r.status_code == 200 and r.json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": False},
-                                                           {"pid": BETA, "name": "beta", "shared": False}]}
+    assert r.status_code == 200 and r.json() == {"items": [
+        {"pid": ALPHA, "name": "alpha", "shared": False, "dir": "C:\\work\\projects\\alpha"},
+        {"pid": BETA, "name": "beta", "shared": False, "dir": "C:\\work\\projects\\beta"}]}
     assert studio.c.post("/api/lock/now").status_code == 204
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     settle(studio)
@@ -480,8 +482,10 @@ def test_odd_bridge_answers_are_502_and_long_words_are_cut(studio, monkeypatch):
     assert (r.status_code, r.json()) == (200, {})
     assert studio.c.get(url(aid, "projects")).json() == {"items": []}
     assert studio.c.get(url(aid, "projects", ALPHA, "chats")).json() == {"items": []}
-    answer.update(ok=True, data={"items": [{"pid": "../x", "name": "x"}, "x", {"pid": ALPHA, "name": "alpha"}]})
-    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": False}]}
+    answer.update(ok=True, data={"items": [{"pid": "../x", "name": "x"}, "x", {"pid": ALPHA, "name": "alpha"},
+                                           {"pid": BETA, "name": "beta", "dir": "C:\\x\n"}]})
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": False},
+                                                                   {"pid": BETA, "name": "beta", "shared": False}]}
     answer.update(ok=True, data={"items": [{"chat": 5}, "x", {"chat": A, "title": "t", "modified": "вчера"}]})
     [item] = studio.c.get(url(aid, "projects", ALPHA, "chats")).json()["items"]
     assert (item["chat"], item["origin"], item["state"], item["running"]) == (A, "other", "open", False)

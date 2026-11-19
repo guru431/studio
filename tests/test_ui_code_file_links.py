@@ -18,7 +18,8 @@ def test_assistant_file_links_open_images_and_text_without_http_paths(desktop_br
     links = [f'/C:/work/projects/alpha/{picture}', f'C:/work/projects/alpha/{picture}',
              f'file:///C:/work/projects/alpha/{picture}', picture,
              'C:/work/projects/alpha/README.md:12', '/C:/work/projects/beta/private.png',
-             '/C:/work/projects/alpha/../beta/private.png', 'https://example.org/report']
+             '/C:/work/projects/alpha/../beta/private.png', 'https://example.org/report',
+             '/Users/owner/private.png', 'file:///home/owner/private.png']
     content = '\n\n'.join(f'[link-{index}](<{href}>)' for index, href in enumerate(links))
     messages = [{'id': 'answer', 'role': 'assistant', 'text': content + '\n\n' + 'Paragraph.\n\n' * 800,
                  'steps': [], 'time': T0}]
@@ -54,7 +55,7 @@ def test_assistant_file_links_open_images_and_text_without_http_paths(desktop_br
                 assert page.url.endswith('?tab=files') and picture not in page.url
             page.goto(route)
             page.locator('#code-chat[data-loaded="1"]').wait_for()
-            for index in (5, 6):
+            for index in (5, 6, 8, 9):  # 8, 9 — пути моста macOS/Linux вне проекта
                 assert page.get_by_text(f'link-{index}', exact=True).get_attribute('href') is None
             external = page.get_by_role('link', name='link-7', exact=True)
             assert external.get_attribute('href') == 'https://example.org/report'

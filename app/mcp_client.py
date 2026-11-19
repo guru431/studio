@@ -39,7 +39,8 @@ class ServerIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     url: str = Field(min_length=1, max_length=2048)
     token: str | None = Field(default=None, max_length=8192)
-    headers: dict[str, str] | None = Field(default=None, max_length=32)
+    # Значение null — оставить сохранённое значение заголовка с тем же именем (`detail` значения не отдаёт).
+    headers: dict[str, str | None] | None = Field(default=None, max_length=32)
     enabled: bool = True
 
 
@@ -72,10 +73,12 @@ def _values(body, old=None):
     if (not body.name.strip() or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in body.name)
             or not upstream.is_allowed(body.url) or httpx.URL(body.url).fragment):
         raise refused("Укажите имя и адрес MCP из списка разрешённых адресов администратора", "invalid", 422)
-    previous = secret(old) if old is not None and (body.token is None or body.headers is None) else {}
+    keep = body.token is None or body.headers is None or None in body.headers.values()
+    previous = secret(old) if old is not None and keep else {}
     token = body.token if body.token is not None else previous.get("token", "")
-    headers = body.headers if body.headers is not None else previous.get("headers", {})
-    if (len(headers) > 32 or any(not HEADER.fullmatch(k) or k.lower() in FORBIDDEN or len(v) > 8192
+    kept = previous.get("headers", {})
+    headers = kept if body.headers is None else {k: kept.get(k) if v is None else v for k, v in body.headers.items()}
+    if (len(headers) > 32 or any(v is None or not HEADER.fullmatch(k) or k.lower() in FORBIDDEN or len(v) > 8192
                               or any(not 32 <= ord(c) <= 126 for c in v) for k, v in headers.items())
             or any(not 32 <= ord(c) <= 126 for c in token)):
         raise refused("Проверьте токен и дополнительные HTTP-заголовки", "invalid", 422)
@@ -100,8 +103,10 @@ async def create(body: ServerIn, request: Request):
 
 @router.get("/{sid}")
 async def detail(sid: int, request: Request):
+    """Имена заголовков без значений: как и токен, значения только записываются (ключ вида `X-Api-Key` не уносится
+    с открытого устройства)."""
     item = row(request.state.user.id, sid)
-    return {**public(item), "headers": secret(item).get("headers", {})}
+    return {**public(item), "headers": dict.fromkeys(secret(item).get("headers", {}))}
 
 
 @router.put("/{sid}")

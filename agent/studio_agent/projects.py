@@ -182,7 +182,9 @@ class Catalog:
         with self.lock:
             items = []
             for row, path in self._read(config, refresh):
-                item = dict(row)
+                # `dir` — настоящий путь папки для ссылок на файлы в ответах владельцу (протокол §5); участнику
+                # совместного проекта его убирает `Agent._dispatch`, в журнал он не идёт.
+                item = {**row, "dir": os.fspath(path)}
                 if sizes and (size := sizes.get(code_size_key(path))) is not None:
                     item["last_code_bytes"] = size
                 items.append(item)

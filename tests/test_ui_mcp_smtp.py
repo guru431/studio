@@ -1,7 +1,11 @@
 """Владелец настраивает MCP и SMTP обычными полями на телефоне и компьютере."""
+import json
+
 import pytest
 import httpx
 
+import security
+import state
 from fake_bridge import FakeMachine
 from fakes import PNG_REAL, WAV_FAKE
 from test_mcp import TOKEN, URL
@@ -104,8 +108,12 @@ def test_mcp_and_smtp_settings_forms_save_without_showing_password(browser, live
     steps = [*signin(login), ('wait', READY),
         ('eval', 'nav', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
         ('click', '#mcp-add'), ('type', '#mcp-name', 'Tools'), ('type', '#mcp-url', 'http://10.77.1.15:4000/mcp'),
-        ('type', '#mcp-token', 'private-token'), ('click', '#mcp-save'),
+        ('type', '#mcp-token', 'private-token'), ('type', '#mcp-headers', 'X-Api-Key=private-key'), ('click', '#mcp-save'),
         ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
+        # Значение заголовка, как и токен, обратно не показывается; маска при сохранении оставляет прежнее.
+        ('click', '#mcp-servers [data-mcp-id] .row button'), ('wait', "document.querySelector('#mcp-headers')"),
+        ('eval', 'headers', "document.querySelector('#mcp-headers').value"),
+        ('click', '#mcp-save'), ('wait', "!document.querySelector('#mcp-editor')"),
         ('eval', 'mcpFits', NO_OVERFLOW),
         ('eval', 'nav', "location.hash='#/settings/smtp'"), ('wait', "document.querySelector('#smtp-save')?.disabled === false"),
         set_value('#smtp-host', 'smtp.example.com'), set_value('#smtp-port', '465'), set_value('#smtp-tls', 'ssl'),
@@ -120,6 +128,10 @@ def test_mcp_and_smtp_settings_forms_save_without_showing_password(browser, live
     assert not result.get('failed'), result
     assert result['values']['mcpFits'] and result['values']['smtpFits'] and result['values']['passwordCleared']
     assert result['values']['savedName'] == 'Tools'
+    assert result['values']['headers'] == 'X-Api-Key=••••••'
+    owner = state.DB.execute('SELECT id FROM users WHERE login = ?', (login,)).fetchone()[0]
+    sealed = state.DB.execute('SELECT secret_enc FROM mcp_servers WHERE user_id = ?', (owner,)).fetchone()[0]
+    assert json.loads(security.decrypt(sealed))['headers'] == {'X-Api-Key': 'private-key'}
     assert not problems(result), result.get('log')
 
 
@@ -144,6 +156,8 @@ def test_agent_mcp_fields_save_to_selected_project(browser, live):
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
             ('eval', 'nav', "location.hash='#/settings/code'"), ('wait', "document.querySelector('#mcp-pin')?.parentElement.parentElement.hidden === false"),
+            ('eval', 'pin', "(() => { const i = document.querySelector('#mcp-pin');"
+                            " return [i.type, !!i.closest('form'), getComputedStyle(i).webkitTextSecurity]; })()"),
             ('click', '#agent-mcp-settings button:last-child'),
             ('wait', "document.querySelector('#agent-mcp-add')?.disabled === false"),
             ('click', '#agent-mcp-add'), ('type', '#mcp-name', 'local-tools'), set_value('#mcp-type', 'stdio'),
@@ -152,6 +166,7 @@ def test_agent_mcp_fields_save_to_selected_project(browser, live):
             ('eval', 'fits', NO_OVERFLOW)], width=320, mobile=True)
         assert not result.get('failed'), result
         assert result['values']['fits']
+        assert result['values']['pin'] == ['text', False, 'disc']  # PIN компьютера — не password и не в <form>
         saved = code_requests(machine, 'mcp_save')[-1]
         assert saved['project'] and saved['engine'] == 'claude'
         assert saved['config']['mcpServers']['local-tools']['env'] == {'KEY': 'private'}
