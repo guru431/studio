@@ -30,7 +30,7 @@ CODE_SEC = 600
 CODE_ATTEMPTS = 5
 PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
 EMAIL_PATHS = frozenset({"/api/me", "/api/me/email", "/api/me/email/confirm"})
-EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}", re.I)
+EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}")  # после lower(); re.I сопоставил бы «ſ» и «ı» с s и i
 
 
 def email_address(value: str) -> str:

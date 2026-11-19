@@ -84,7 +84,8 @@ def test_only_admin_can_invite_or_read_comments_and_csrf_is_required(studio, mai
     assert mail == []
 
 
-@pytest.mark.parametrize("email", ["", "bad", "x@y", "x\r\nBcc:y@example.com", "a..b@example.com", "a@-example.com"])
+@pytest.mark.parametrize("email", ["", "bad", "x@y", "x\r\nBcc:y@example.com", "a..b@example.com", "a@-example.com",
+                                   "ſam@example.com", "sam@ınfo.example.com", "sam@example.ſite"])
 def test_invalid_email_cannot_receive_invitation(studio, mail, email):
     admin(studio)
     assert studio.c.post("/api/admin/invitations", json={"email": email}).status_code == 422
