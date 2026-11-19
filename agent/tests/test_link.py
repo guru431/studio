@@ -93,8 +93,8 @@ async def test_hello_first_then_requests_are_answered(fake_studio, agent, caplog
         await fake_studio.send_raw("[1]")
         await fake_studio.send_raw('{"t": "что-то новое"}')
         assert (await fake_studio.request("open", pin=None))["ok"] is True
-        assert (await fake_studio.request("projects"))["data"]["items"] == [{"pid": projects.pid("demo"),
-                                                                             "name": "demo"}]
+        items = (await fake_studio.request("projects"))["data"]["items"]
+        assert [(i["pid"], i["name"]) for i in items] == [(projects.pid("demo"), "demo")]
         assert agent.send == lk.send
         await lk.stop()
         assert await task == "stopped"

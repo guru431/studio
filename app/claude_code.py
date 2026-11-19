@@ -493,10 +493,13 @@ async def open_agent(aid: int, body: Open, request: Request):
 
 @router.get("/agents/{aid}/projects")
 async def projects(aid: int, request: Request):
-    own_agent(request, aid, shared=True)
+    owner = own_agent(request, aid, shared=True)["user_id"] == request.state.user.id
     items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
     shared = {r[0] for r in state.DB.execute("SELECT DISTINCT project FROM project_members WHERE agent_id = ?", (aid,))}
+    # `dir` — настоящий путь папки для ссылок на файлы (протокол §5): только владельцу, как `projects_root`.
     return {"items": [{"pid": i["pid"], "name": i["name"], "shared": i["pid"] in shared,
+                       **({"dir": folder} if owner and isinstance(folder := i.get("dir"), str)
+                          and 0 < len(folder) <= PATH_MAX and not re.search(r"[\x00-\x1f\x7f]", folder) else {}),
                        **({"last_code_bytes": size} if type(size := i.get("last_code_bytes")) is int and size >= 0 else {})}
                       for i in (items if isinstance(items, list) else [])
                       if isinstance(i, dict) and isinstance(i.get("pid"), str) and PID_RE.fullmatch(i["pid"])
