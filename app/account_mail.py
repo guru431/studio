@@ -10,6 +10,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr
 from contextlib import contextmanager
 
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -39,14 +40,23 @@ def _environment():
 
 
 def settings():
-    """База читается до to_thread; прежняя конфигурация окружения действует до первого сохранения."""
+    """База читается до to_thread; прежняя конфигурация окружения действует до первого сохранения.
+    Сохранённые настройки, зашифрованные прежним STUDIO_DATA_KEY, тоже уступают окружению — с признаком
+    `reenter`: панель просит ввести их заново, письма и вход с кодом отвечают 503, а не 500."""
     row = state.DB.execute("SELECT value FROM settings WHERE key='smtp'").fetchone() if state.DB is not None else None
-    return json.loads(security.decrypt(row[0])) if row else _environment()
+    if not row:
+        return _environment()
+    try:
+        return json.loads(security.decrypt(row[0]))
+    except InvalidToken:
+        log.warning("smtp settings: not decryptable with the current data key")
+        return _environment() | {"reenter": True}
 
 
 def public_settings():
     config = settings()
-    return {**{k: v for k, v in config.items() if k != "password"}, "password_set": bool(config.get("password"))}
+    return {**{k: v for k, v in config.items() if k not in ("password", "reenter")},
+            "password_set": bool(config.get("password")), "reenter": bool(config.get("reenter"))}
 
 
 def save_settings(body):

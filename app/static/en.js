@@ -93,6 +93,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Почта для приглашений, восстановления и кодов входа. Изменения действуют сразу. Проверка использует сохранённые настройки и не отправляет письмо.": "Email for invitations, recovery, and login codes. Changes apply immediately. The test uses saved settings and does not send an email.",
   "Пароль сохранён": "Password saved",
   "Пароль не задан": "No password set",
+  "Сохранённые настройки SMTP зашифрованы прежним ключом данных — введите их заново": "Saved SMTP settings are encrypted with a previous data key. Enter them again",
   "Настройки SMTP сохранены": "SMTP settings saved",
   "Соединение с SMTP установлено": "SMTP connection established",
   "Программы": "Software",

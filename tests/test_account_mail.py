@@ -113,3 +113,29 @@ def test_smtp_settings_are_admin_only_encrypted_and_used_without_restart(studio,
     make_user(studio, 'other'); signin(studio, 'other')
     for method, endpoint, value in [('GET', '/api/admin/smtp', None), ('PUT', '/api/admin/smtp', body), ('POST', '/api/admin/smtp/check', None)]:
         assert studio.c.request(method, endpoint, json=value).status_code == 403
+
+
+def test_smtp_settings_under_a_previous_data_key_fall_back_to_environment(studio, monkeypatch, caplog):
+    """Смена STUDIO_DATA_KEY: сохранённые настройки не расшифровать — действуют переменные окружения, панель
+    просит ввести настройки заново, почта и вход с кодом — 503, а не 500."""
+    from cryptography.fernet import Fernet
+    from conftest import login, make_user, signin
+    import state
+    uid = make_user(studio, 'owner', is_admin=True); signin(studio, 'owner')
+    state.DB.execute("INSERT INTO settings(key,value) VALUES('smtp',?)",
+                     (Fernet(Fernet.generate_key()).encrypt(b'{"host": "old.example.com"}'),))
+    for key in ('STUDIO_SMTP_HOST', 'STUDIO_MAIL_FROM'):
+        monkeypatch.delenv(key, raising=False)
+    caplog.set_level(logging.WARNING)
+    response = studio.c.get('/api/admin/smtp')
+    assert response.status_code == 200 and response.json()['reenter'] is True and response.json()['host'] == ''
+    assert studio.c.post('/api/admin/smtp/check').status_code == 503
+    assert studio.c.post('/api/admin/invitations', json={'email': 'friend@example.com'}).status_code == 503
+    body = {'host': 'smtp.example.com', 'port': 587, 'tls': 'starttls', 'username': '', 'sender': 'studio@example.com'}
+    response = studio.c.put('/api/admin/smtp', json=body)
+    assert response.status_code == 200 and response.json()['reenter'] is False
+    assert 'old.example.com' not in caplog.text
+    state.DB.execute("UPDATE settings SET value=? WHERE key='smtp'", (Fernet(Fernet.generate_key()).encrypt(b'{}'),))
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    assert login(studio, 'owner', 'password-123').status_code == 503
