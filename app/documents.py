@@ -20,6 +20,8 @@ from xml.etree import ElementTree
 
 from pypdf import PdfReader
 
+import auth
+
 DOC_MAX = 20 * 1024 * 1024
 TEXT_MAX_CHARS = 2_000_000
 SUFFIXES = (".pdf", ".docx", ".txt", ".md")
@@ -103,6 +105,7 @@ async def _body(request) -> bytes:
         raw.extend(chunk)
         if len(raw) > BODY_MAX:
             raise DocumentError(f"файл больше {DOC_MAX >> 20} МиБ", 413)
+    auth.recheck(request)
     return bytes(raw)
 
 

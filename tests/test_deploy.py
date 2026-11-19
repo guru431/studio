@@ -26,6 +26,7 @@ import images
 import manage
 import media
 import presets
+import transcripts
 import videos
 from conftest import DEPLOY, ROOT
 
@@ -157,6 +158,15 @@ def test_apache_lets_through_the_largest_body_the_studio_accepts():
     assert limit >= image_upload.MAX_BODY + image_upload.MAX_UPLOAD                   # правка: фото и маска
     assert limit >= presets.BODY_MAX                                                  # пресет с длинным промптом
     assert limit >= claude_code.FILE_BODY_MAX                                         # правка файла Claude Code
+
+
+def test_apache_bounds_the_time_a_request_body_may_take():
+    """auth.recheck решает после тела; Apache не держит тело дольше верхнего предела, а запись
+    для расшифровки (transcripts.UPLOAD_MAX) на 1 Мбит/с в него укладывается."""
+    first, most, rate = map(int, re.search(r"^\s*RequestReadTimeout body=(\d+)-(\d+),MinRate=(\d+)$",
+                                           uncommented(VHOST), re.M).groups())
+    assert first <= 20 and rate >= 500 and most <= 3600
+    assert most * 125_000 >= transcripts.UPLOAD_MAX
 
 
 def test_apache_accepts_agent_turn_bodies_including_followups():

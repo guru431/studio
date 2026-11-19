@@ -41,6 +41,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.requests import HTTPConnection
 
 import clock
 import lock_policy
@@ -251,6 +252,26 @@ async def guard(request: Request, call_next):
     return response
 
 
+def recheck(request: HTTPConnection) -> None:
+    """Сессия, роль и блокировка ещё раз — когда тело изменяющего запроса уже прочитано. `guard` смотрит
+    только заголовки, а тело идёт потоком (nginx и Apache его не копят): пока клиент тянет тело, учётку могут
+    отключить, разжаловать, запереть или закрыть её сессии. Зависимость всего приложения (`main.app`) —
+    тела, которые разбирает FastAPI, читаются до зависимостей; чтение тела потоком (`small_body`,
+    `forms.read_body`, `documents`, запись расшифровки) зовёт её само. Свежая учётка — в `request.state.user`:
+    `require_admin` видит роль из базы. Без сессии `guard` (открытые входы, WebSocket) и для GET — ничего."""
+    digest = getattr(request.state, "digest", None)
+    if digest is None or request.scope.get("method") in ("GET", "HEAD"):
+        return
+    live = _live(request.cookies.get(COOKIE), renew=False)
+    if live is None:
+        raise HTTPException(401, {"code": "login", "message": "нужен вход"})
+    user, _, _, screen = live
+    if screen and request.url.path not in SCREEN_LOCK_PATHS and lock_policy.blocks(request, user.id, digest):
+        raise HTTPException(423, {"code": "screen_locked", "message": "студия заперта"},
+                            headers={"Cache-Control": "no-store"})
+    request.state.user, request.state.locked = user, screen
+
+
 # ---- пауза после неудач ----------------------------------------------------
 
 def _keys(login: str, ip: str) -> list[tuple]:
@@ -349,6 +370,7 @@ async def small_body(request: Request, limit: int) -> bytes | None:
         body += chunk
         if len(body) > limit:
             return None
+    recheck(request)
     return body
 
 
