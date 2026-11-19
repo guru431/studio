@@ -150,9 +150,9 @@ def second_session(s, login_name="owner"):
 
 def test_mobile_mark_is_a_one_way_latch(studio):
     owner(studio)
-    assert alive(studio, touch=True).json() == {"locked": False}
+    assert alive(studio, touch=True).json() == {"locked": False, "expired": False}
     assert session_row(studio)["mobile"] == 1
-    assert alive(studio, touch=False).json() == {"locked": False}
+    assert alive(studio, touch=False).json() == {"locked": False, "expired": False}
     assert session_row(studio)["mobile"] == 1
 
 
@@ -161,7 +161,7 @@ def test_first_mark_of_an_old_phone_session_finds_it_locked(studio):
     uid = owner(studio)
     lock_on(uid)
     state.DB.execute("UPDATE sessions SET seen = NULL WHERE digest = ?", (digest(studio),))
-    assert alive(studio, touch=True).json() == {"locked": True}
+    assert alive(studio, touch=True).json() == {"locked": True, "expired": True}
     assert studio.c.get("/api/me").status_code == 423
 
 
@@ -170,11 +170,11 @@ def test_marks_keep_a_phone_open_and_never_open_a_locked_one(studio):
     lock_on(uid); phone(studio)
     for _ in range(3):
         studio.clock[0] += 70
-        assert alive(studio).json() == {"locked": False}
+        assert alive(studio).json() == {"locked": False, "expired": False}
     assert studio.c.get("/api/me").status_code == 200
     seen = session_row(studio)["seen"]
     studio.clock[0] += auth.STALE_SEC + 1
-    assert alive(studio).json() == {"locked": True}
+    assert alive(studio).json() == {"locked": True, "expired": True}
     assert session_row(studio)["seen"] == seen
     assert studio.c.get("/api/me").status_code == 423
 

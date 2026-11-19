@@ -17,7 +17,8 @@ def creation_machine(count=2, pin=None):
             raise Refused('not_found', 'папка проектов больше не разрешена — обновите список')
         if req['name'] in machine.projects:
             raise Refused('exists', 'проект или файл с таким именем уже существует')
-        machine.projects[req['name']] = {'files': {}, 'chats': {}, 'git': None}
+        root = next(item['path'] for item in machine.roots if item['id'] == req['root'])
+        machine.projects[req['name']] = {'files': {}, 'chats': {}, 'git': None, 'dir': root + '\\' + req['name']}
         return {'pid': pid(req['name']), 'name': req['name']}
 
     machine._op_project_create = create
@@ -43,7 +44,8 @@ def test_owner_creates_in_selected_root_without_logging_paths_or_name(studio, ca
     response = studio.c.post(url(aid, 'projects'), json={'root': roots[1]['id'], 'name': 'secret-project'})
     assert response.status_code == 201 and response.json()['pid'] == pid('secret-project')
     assert machine.requests[-1]['op'] == 'project_create' and machine.requests[-1]['root'] == roots[1]['id']
-    assert {**response.json(), 'shared': False} in studio.c.get(url(aid, 'projects')).json()['items']
+    assert ({**response.json(), 'shared': False, 'dir': 'C:\\Projects-2\\secret-project'}
+            in studio.c.get(url(aid, 'projects')).json()['items'])
     response = studio.c.post(url(aid, 'projects'), json={'root': roots[1]['id'], 'name': 'secret-project'})
     assert response.status_code == 409 and response.json()['detail']['code'] == 'exists'
     assert 'secret-project' not in caplog.text and roots[1]['path'] not in caplog.text
