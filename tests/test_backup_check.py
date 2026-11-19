@@ -421,6 +421,17 @@ def test_failed_copy_notifies_once_without_erasing_the_last_good_copy(studio, en
     assert admin.notify_failed_check() == 0 and len(sent) == 1
 
 
+def test_backup_removes_local_snapshots_of_killed_runs(base, env, monkeypatch):
+    """Убитый процесс оставлял снимок размером с базу рядом с ней навсегда: уборка шла только на шаре."""
+    add_rows(base, tokens=0, files=())
+    left = env.db_path.with_name(".studio-20000101.db.part")
+    left.write_bytes(b"x" * 100)
+    keep = env.db_path.with_name(".studio-notes.part")
+    keep.write_bytes(b"x")
+    backup_of(base, env, monkeypatch)
+    assert not left.exists() and keep.exists()
+
+
 def test_overlapping_backups_do_not_share_a_part_file(base, env, monkeypatch):
     add_rows(base, tokens=0, files=())
     monkeypatch.setattr(clock, "NOW", lambda: T0)

@@ -250,7 +250,9 @@ def _copy_backup(cfg: config.Config) -> int:
     local = cfg.db_path.with_name(f".{target.name}.part")
     shared = folder / f".{target.name}.part"
     try:
-        local.unlink(missing_ok=True)
+        # и снимки убитых запусков прежних суток: запуски сериализованы блокировкой, чужого живого снимка нет
+        for old in cfg.db_path.parent.glob(".studio-????????.db.part"):
+            old.unlink(missing_ok=True)
         with closing(sqlite3.connect(cfg.db_path)) as src, closing(sqlite3.connect(local)) as dst:
             src.backup(dst)
             # копия — один файл без -wal/-shm: открывать её с шары и переносить проще
