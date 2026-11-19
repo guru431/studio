@@ -1,12 +1,12 @@
 import { tr } from './i18n.js';
-/* Правка картинки ленты: инструкция, сила для Lustify, кисть по маске (перенос окна правки
+/* Правка картинки ленты: инструкция, сила для SNOFS и Jib, кисть по маске (перенос окна правки
  * прежней страницы app/index.html).
  *
  * openEditor(item, choice, onCreated): item — готовая запись ленты (media_id), choice — модель,
  * выбранная в разделе ({ connection_id, model, kind } или null — умолчание раздела); onCreated({ id,
  * seed, ids }) — задание принято (ids — все строки серии). Серия (series.js) — и здесь: правку
  * подбирают серией по силе; поле `series` уходит строкой JSON; с кистью выбора серии нет. Отправка — POST /api/images формой: connection_id, model, size=original,
- * prompt, source_media_id, strength (только Lustify) и mask (PNG: белое — менять, чёрное — взять из
+ * prompt, source_media_id, strength (только SNOFS и Jib) и mask (PNG: белое — менять, чёрное — взять из
  * исходника), если включено «Изменить только выделенную область» — кисть только у шлюза srvllm.
  * Маска снимается копией до первого await: штрих после нажатия в запрос не попадёт. */
 import { api } from './api.js';
@@ -63,6 +63,7 @@ function show(host, item, choice, photo, onCreated) {
   else y = near(x / aspect, (n) => (n === 0 ? 0 : Math.abs(aspect - x / n)));
   const sizeTip = el('p', { id: 'edit-size-tip', class: 'muted small', hidden: scale >= 1 },
     tr("Фото будет уменьшено до {0}×{1}.", x, y));
+  const name = choice ? modelLabel(choice.model) : tr("Модель раздела");
   const promptBox = fieldBox(prompt);
   const submit = button(tr("Применить изменения"), { class: 'btn btn-accent', id: 'edit-submit' });
   const dialog = openDialog(host, { id: 'editor', title: tr("Изменить фотографию"), actions: [submit], body: [
@@ -72,8 +73,8 @@ function show(host, item, choice, photo, onCreated) {
     el('p', { id: 'edit-mode-tip', class: 'muted small' }, !gateway
       ? tr("Внешний сервис меняет фото по инструкции. Правка кистью — только через шлюз srvllm.")
       : withStrength
-        ? tr("Lustify перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.")
-        : tr("FLUX использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.")),
+        ? tr("{0} перерисовывает фото. Меньшая сила лучше сохраняет исходник. Для сохранения окружения выделите область кистью.", name)
+        : tr("{0} использует исходное фото и инструкцию. Без выделения области соседние детали тоже могут измениться.", name)),
     sizeTip, strengthLabel, seriesBox,
     el('label', { class: 'check', hidden: !gateway }, local, tr("Изменить только выделенную область")),
     tools, error))] });

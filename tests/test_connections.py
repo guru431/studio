@@ -3,7 +3,9 @@ import asyncio
 import io
 import json
 import os
+import re
 import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -211,16 +213,22 @@ def test_new_token_for_the_same_address_reaches_an_old_snapshot(studio):
     assert q.headers["authorization"] == "Bearer fresh-key"
 
 
-def test_deleted_connection_and_its_reused_id_give_no_token(studio):
-    """Удалённое подключение — отказ; id, занятый потом подключением другой учётки к тому же адресу, — тоже."""
+def test_deleted_connection_gives_no_token_and_its_id_to_nobody(studio):
+    """Удалённое подключение — отказ; его id не достаётся новому (ни своему, ни чужой учётки): история с этим
+    `connection_id` не уходит другому адресу, а диалог остаётся без подключения."""
     cid = add_gateway(studio)
     old = conn_of(cid)
+    uid = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (cid,)).fetchone()[0]
+    state.DB.execute("INSERT INTO chats(id, user_id, connection_id, model, created, updated)"
+                     " VALUES('dialog', ?, ?, 'm', 0, 0)", (uid, cid))
     assert studio.c.delete(f"/api/connections/{cid}").status_code == 204
     assert refused_change(lambda: upstream.request(old, "GET", GW + "/v1/models")).deleted
+    assert state.DB.execute("SELECT connection_id FROM chats WHERE id = 'dialog'").fetchone()[0] is None
+    own = add_gateway(studio)
     other = make_user(studio, "other")
-    reused = connections.create(other, connections.ConnIn(name="srvllm", kind="srvllm", base_url=GW,
+    theirs = connections.create(other, connections.ConnIn(name="srvllm", kind="srvllm", base_url=GW,
                                                           token="other-key", sections=["photo"]))
-    assert reused["id"] == cid
+    assert cid not in (own, theirs["id"])
     assert refused_change(lambda: upstream.request(old, "GET", GW + "/v1/models")).deleted
     assert studio.gw.requests == []
 
@@ -478,6 +486,21 @@ def test_connection_with_all_sections_saves(studio, monkeypatch):
     assert r.status_code == 422 and code(r) == "sections"
     r = post(studio, kind="srvllm", base_url=GW, sections=[*every, "ninth", "tenth"])
     assert r.status_code == 422 and code(r) == "invalid"
+
+
+def test_add_to_every_section_matches_what_each_gateway_takes(studio):
+    """Галочка «Добавить во все разделы» (connection-form.js GATEWAY_SECTIONS) шлёт ровно разделы вида: лишний
+    раздел — отказ всей формы, недостающий — снова добавлять по одному."""
+    source =(Path(__file__).parents[1] / "app/static/js/connection-form.js").read_text(encoding="utf-8")
+    block = re.search(r"GATEWAY_SECTIONS = \{(.*?)\};", source, re.S).group(1)
+    page = {k: re.findall(r"'(\w+)'", v) for k, v in re.findall(r"(\w+): \[([^\]]*)\]", block)}
+    assert set(page) == {"srvllm", "s06"}
+    assert set(page["srvllm"]) == connections.KINDS["srvllm"] and set(page["s06"]) == set(sections.S06_CATALOG)
+    cid = add_connection(studio, kind="srvllm", base_url=GW, sections=page["srvllm"])
+    assert conn_of(cid).sections == set(page["srvllm"])
+    r = post(studio, kind="openai", s06=True, base_url=GW, sections=page["s06"])
+    assert r.status_code == 201, r.text
+    assert conn_of(r.json()["id"]).sections == set(page["s06"])
 
 
 def test_dropped_connection_can_be_renamed_and_taken_out_of_sections(studio):

@@ -43,7 +43,7 @@ def test_project_shared_flag_tracks_grants_until_last_member_is_removed(studio):
     aid, _, _, member, base = share(studio)
     other = make_user(studio, "another")
     assert studio.c.post(base, json={"login": "another"}).status_code == 201
-    assert studio.c.get(url(aid, "projects")).json()["items"] == [
+    assert [{k: v for k, v in i.items() if k != "dir"} for i in studio.c.get(url(aid, "projects")).json()["items"]] == [
         {"pid": ALPHA, "name": "alpha", "shared": True},
         {"pid": BETA, "name": "beta", "shared": False}]
     assert studio.c.delete(base + f"/{member}").status_code == 204
@@ -64,6 +64,16 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
         assert studio.c.request(method, f'/api/code/agents/{aid}' + suffix).status_code == 404
     assert len(machine.requests) == before
     assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}
+    original = machine.handle
+
+    def leaky(req):  # мост, забывший убрать путь владельца: сервер не передаёт его участнику сам
+        res, events = original(req)
+        if req.get("op") == "projects" and res.get("ok"):
+            res["data"]["items"] = [{**i, "dir": "C:\\owner\\alpha"} for i in res["data"]["items"]]
+        return res, events
+    machine.handle = leaky
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}
+    machine.handle = original
     response = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a.txt"})
     assert response.status_code == 200 and response.json()["text"] == "hello"
     version = response.json()["version"]
@@ -170,6 +180,9 @@ def test_member_cannot_reach_other_projects_or_manage_computer_or_members(studio
         ("POST", url(aid, "update"), None), ("GET", url(aid, "usage"), None),
         ("GET", base, None), ("POST", base, {"login": "owner"}), ("DELETE", base + "/1", None),
         ("PATCH", "/api/code/workspace", {"op": "place", "aid": aid, "pid": BETA, "view": "files"}),
+        # worktree — только владельцу и в выданном проекте: отказ на сервере, не одним мостом
+        ("GET", url(aid, "projects", ALPHA, "worktrees"), None),
+        ("POST", url(aid, "projects", ALPHA, "worktrees"), {"name": "feature"}),
     ]:
         response = studio.c.request(method, path, **({"json": body} if body is not None else {}))
         assert response.status_code == 404, (method, path, response.text)

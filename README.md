@@ -180,6 +180,7 @@ Studio is the application layer. Models and inference services are configured se
 | Models | srvllm gateway for the complete local media/OCR workflow; OpenAI-compatible endpoints for supported individual tasks |
 | Coding agents | Windows, macOS or Linux computer, Studio bridge and at least one installed, authenticated Claude Code, Codex or OpenCode CLI |
 | Optional services | Exa for chat web tools, Web Push or an HTTPS ntfy server for notifications, Cleaner for data cleaning |
+| Deployment workstation | Windows with Git Bash, the project `.venv` and `powershell.exe` (builds the bridge EXE); a Mac reachable over SSH (builds the macOS PKG); the `md2pdf.py` converter (below) |
 
 1. Clone the repository: `git clone https://github.com/guru431/studio.git`.
 2. Follow the [Docker deployment guide](docs/architecture/deploy-docker.md) to configure hosts, media mounts, Apache and the ignored `deploy/local-profile.sh`.
@@ -188,6 +189,8 @@ Studio is the application layer. Models and inference services are configured se
 5. Sign in, add connections and select models for the sections you want. Add the Windows, macOS or Linux bridge from Agents if you want remote coding.
 
 The supplied deployment scripts target a managed installation with SSH, shared media storage and a separate HTTPS proxy. They require a local profile; this repository does not provision the inference gateway. Addresses and paths in tracked examples are placeholders.
+
+PDF export uses an external Markdown-to-PDF converter, `md2pdf.py`, which is not part of this repository: the maintainer's copy comes from a personal Claude Code configuration bundle. `deploy.sh` reads it from `~/.claude/bin/md2pdf.py` or from `STUDIO_MD2PDF_SOURCE` and refuses to deploy, before contacting any host, unless its SHA-256 matches the committed `deploy/md2pdf.sha256`. To use your own converter, commit its hash to `deploy/md2pdf.sha256` in your clone; the contract is described in [publication and local installation](docs/publication.md#конвертер-pdf).
 
 ### Development
 

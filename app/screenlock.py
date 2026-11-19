@@ -216,7 +216,7 @@ async def lock_now(request: Request):
 async def open_with_password(body: Password, request: Request):
     uid = request.state.user.id
     try:
-        await auth.confirm_password(uid, body.password, "отпирание")
+        await auth.confirm_password(uid, body.password, "отпирание", digest=request.state.digest)
     except HTTPException as e:
         if e.status_code == 403:
             _journal(request, "unlock_fail", "password")
@@ -270,7 +270,7 @@ async def set_screen_lock(body: ScreenLock, request: Request):
     uid = request.state.user.id
     current = lock_policy.session(request.state.digest)
     if current["screen_lock"] and (not body.enabled or ({"sections", "timeout"} & body.model_fields_set)):
-        await auth.confirm_password(uid, body.password or "", "настройка блокировки")
+        await auth.confirm_password(uid, body.password or "", "настройка блокировки", digest=request.state.digest)
     sections = body.sections if body.sections is not None else json.loads(current["screen_lock_sections"])
     timeout = body.timeout if body.timeout is not None else current["screen_lock_timeout"]
     state.DB.execute("UPDATE users SET screen_lock = ?, screen_lock_sections = ?, screen_lock_timeout = ? WHERE id = ?",
@@ -291,7 +291,7 @@ async def set_pin(body: NewPin, request: Request):
     uid = request.state.user.id
     if not PIN_RE.fullmatch(body.pin):
         raise HTTPException(422, {"code": "pin_format", "message": "PIN — от 4 до 8 цифр"})
-    await auth.confirm_password(uid, body.password or "", "PIN")
+    await auth.confirm_password(uid, body.password or "", "PIN", digest=request.state.digest)
     pin_hash = await asyncio.to_thread(security.hash_password, body.pin)
     state.DB.execute("UPDATE users SET pin_hash = ? WHERE id = ?", (pin_hash, uid))
     _journal(request, "pin_set")
@@ -316,7 +316,7 @@ async def passkey_options(body: KeyPassword, request: Request):
     """Варианты создания ключа — только с паролем учётки: иначе получивший телефон открытым на минуту
     добавил бы свой. user.name — логин (его покажут «Пароли» iPhone), дескриптор — не логин и не имя."""
     user = request.state.user
-    await auth.confirm_password(user.id, body.password or "", "ключ")
+    await auth.confirm_password(user.id, body.password or "", "ключ", digest=request.state.digest)
     options = webauthn.generate_registration_options(
         rp_id=_rp()[0], rp_name="Студия", user_name=user.login, user_display_name=user.login,
         user_id=f"studio-{user.id}".encode(), challenge=_issue(request.state.digest, "register"),

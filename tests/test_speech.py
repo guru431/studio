@@ -161,3 +161,26 @@ def test_external_service_speaks_openai(studio, monkeypatch, tmp_path):
     assert json.loads(seen[1].content) == {"model": "tts-1", "input": "Привет.", "voice": "alloy", "response_format": "mp3"}
     asyncio.run(speech.free_card(conn))
     assert studio.gw.releases == []                         # карты студии у внешнего сервиса нет
+
+
+def test_ffmpeg_gets_no_environment_of_the_service(monkeypatch):
+    """ffmpeg разбирает загруженные записи: окружения службы (STUDIO_DATA_KEY) он не видит, как yt-dlp и md2pdf."""
+    import audio
+    monkeypatch.setenv("STUDIO_DATA_KEY", "секрет-службы")
+    seen = {}
+
+    class Done:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def spawn(*argv, **kwargs):
+        seen.update(kwargs)
+        return Done()
+
+    monkeypatch.setattr(audio.asyncio, "create_subprocess_exec", spawn)
+    asyncio.run(audio._run([audio.FFMPEG, "-version"]))
+    env = seen["env"]
+    assert "STUDIO_DATA_KEY" not in env and set(env) <= {"PATH", "LANG", "HOME", "SYSTEMROOT"}
+    assert env["HOME"] == "/nonexistent" and env["LANG"] == "C.UTF-8"

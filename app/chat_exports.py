@@ -1,6 +1,7 @@
 """Owner-only Markdown/PDF downloads; PDF uses the shared md2pdf CLI, without network images."""
 import asyncio
 import html
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field, model_validator
 
 import chat
 import chat_shares
-from chat_export_selection import selection_html
+from chat_export_selection import CSS, TAGS, selection_html
 import claude_code
 import media
 import state
@@ -27,6 +28,7 @@ router = APIRouter()
 RUNNING: set[int] = set()
 PDF_SECONDS = 45
 PDF_MAX_BYTES = 32 * 1024 * 1024
+OFFLINE_BROWSER = Path(__file__).resolve().parent.parent / "deploy" / "chromium-offline.sh"
 
 
 class ExportIn(BaseModel):
@@ -82,9 +84,43 @@ def _html_block(body: str) -> str:
     # md2pdf parses this file again as CommonMark with raw HTML: the <div> block ends at the first
     # blank line, and the rest would become Markdown again (images fetched, code re-formatted).
     # Newlines inside <pre> become character references; blank lines elsewhere are insignificant.
+    # markdown-it ends a line at CR as well (`&#13;` in model text arrives here as a raw CR) and
+    # turns NUL into U+FFFD: normalise the same way first, or the block check below refuses.
+    body = re.sub(r'\r\n?', '\n', body).replace('\0', '�')
     body = re.sub(r'<pre\b.*?</pre>', lambda match: match[0].replace('\n', '&#10;'), body, flags=re.S)
     body = re.sub(r'\n\s*\n', '\n', body)
     return '<div>\n' + body + '</div>\n'
+
+
+MD2PDF = MarkdownIt("commonmark", {"html": True, "typographer": False}).enable("table").enable("strikethrough")
+PRINTED_ATTRS = {"href", "title", "alt", "class", "align", "start", "value", "colspan", "rowspan", "style"}
+PRINTED_STYLES = {"white-space:pre-wrap;overflow-wrap:anywhere", "text-align:left", "text-align:center",
+                  "text-align:right"}
+
+
+class _Printed(HTMLParser):
+    """Only the tags and attributes Studio's two sanitizers write; none of them loads a resource."""
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in TAGS | {"style"}:
+            raise ValueError("pdf")
+        for key, value in attrs:
+            if key not in PRINTED_ATTRS or (key == "style" and value not in PRINTED_STYLES):
+                raise ValueError("pdf")
+
+    def handle_data(self, data):
+        if self.cdata_elem == "style" and data != CSS:
+            raise ValueError("pdf")
+
+
+def _printable(document: str) -> None:
+    """Refuse chat.md unless md2pdf's second pass (raw HTML on) keeps it as the one block Studio wrote."""
+    tokens = MD2PDF.parse(document)
+    if len(tokens) != 1 or tokens[0].type != "html_block" or tokens[0].content != document:
+        raise ValueError("pdf")
+    checker = _Printed(convert_charrefs=True)
+    checker.feed(document)
+    checker.close()
 
 
 def converter() -> Path:
@@ -109,8 +145,7 @@ def render_pdf(text: str, *, selection: bool = False) -> bytes:
     with tempfile.TemporaryDirectory(prefix="chat-export-", dir=state.CFG.tmp_dir) as folder:
         root = Path(folder)
         source, target = root / "chat.md", root / "chat.pdf"
-        source.write_text(_html_block(selection_html(text)) if selection else _safe_html(text), encoding="utf-8")
-        source.chmod(0o600)
+        document = _html_block(selection_html(text)) if selection else _safe_html(text)
         env = os.environ.copy()
         env.pop("STUDIO_DATA_KEY", None)
         env["MD2PDF_TIMEOUT"] = str(PDF_SECONDS)
@@ -121,7 +156,13 @@ def render_pdf(text: str, *, selection: bool = False) -> bytes:
         env["HOME"] = str(root)
         env["XDG_CONFIG_HOME"] = str(root / "config")
         env["XDG_CACHE_HOME"] = str(root / "cache")
+        if sys.platform.startswith("linux"):
+            # The server's Chromium: no network, whatever reaches the page (deploy/chromium-offline.sh).
+            env["MD2PDF_BROWSER"] = str(OFFLINE_BROWSER)
         try:
+            _printable(document)
+            source.write_text(document, encoding="utf-8")
+            source.chmod(0o600)
             result = subprocess.run([sys.executable, str(tool), str(source), str(target)],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     env=env, timeout=PDF_SECONDS + 30)

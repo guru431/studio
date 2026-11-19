@@ -44,6 +44,17 @@ def test_same_names_are_distinct_and_keep_ids_when_the_first_root_is_removed(tmp
     assert projects.find_project(cfg, second_id) == second / "demo"
 
 
+def test_listed_projects_carry_their_real_folder_for_file_links(tmp_path):
+    """Подпись одноимённых папок и второй корень не восстанавливают путь на странице: мост отдаёт его сам."""
+    first, second = tmp_path / "work", tmp_path / "personal"
+    for root in (first, second):
+        (root / "demo").mkdir(parents=True)
+    cfg = store.Config(projects_roots=[str(first), str(second)])
+    rows = projects.Catalog().list(cfg)
+    assert sorted(row["dir"] for row in rows) == sorted([str(first / "demo"), str(second / "demo")])
+    assert all(row["name"] != "demo" for row in rows)
+
+
 def test_roots_and_projects_do_not_duplicate_or_follow_junctions(tmp_path):
     root = tmp_path / "projects"
     (root / "demo").mkdir(parents=True)
@@ -69,7 +80,7 @@ def test_a_root_behind_a_junction_finds_its_projects(tmp_path):
     _winapi.CreateJunction(str(real), str(alias))
     cfg = store.Config(projects_roots=[str(alias)])  # прежняя запись, без нормализации при сохранении
     rows = projects.Catalog().list(cfg)
-    assert rows == [{"pid": projects.pid("demo"), "name": "demo"}]
+    assert rows == [{"pid": projects.pid("demo"), "name": "demo", "dir": str(real / "demo")}]
     assert projects.Catalog().find(cfg, rows[0]["pid"]) == real / "demo"
     assert projects.find_project(cfg, rows[0]["pid"]) == real / "demo"
     assert projects.parent_root(cfg, real / "demo") == str(real)

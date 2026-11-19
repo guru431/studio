@@ -6,6 +6,7 @@
 import asyncio
 import hmac
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -22,6 +23,7 @@ import security
 import security_log
 import state
 
+log = logging.getLogger("studio")
 router = APIRouter()
 CHALLENGE_COOKIE = "__Host-studio_email"
 INVITE_SEC = 2 * 86400
@@ -206,6 +208,8 @@ async def invitations():
 async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(auth.require_admin)):
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Пользователь с этой почтой уже есть"})
+    if not account_mail.configured(account_mail.settings()):
+        raise account_mail.unset()          # до паузы и строки: не тратить попытку и не оставлять неотправленное
     throttle("invite-admin", str(admin.id), 30, 900)
     throttle("invite-email", body.email, 3, 900)
     old = state.DB.execute("SELECT * FROM invitations WHERE email=?", (body.email,)).fetchone()
@@ -386,7 +390,7 @@ async def complete_login(request: Request):
 @router.post("/api/me/email")
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "подтверждение почты")
+    await auth.confirm_password(uid, body.password, "подтверждение почты", digest=request.state.digest)
     throttle("email-user", str(uid), 3, 900)        # до проверки занятости: 409 не даёт перебирать чужие адреса
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Эта почта уже используется"})
@@ -403,7 +407,7 @@ async def request_email(body: EmailIn, request: Request):
     return {"message": "Письмо отправлено. Откройте ссылку в этом браузере."}
 
 
-async def change_notice(email: str) -> None:
+async def change_notice(uid: int, email: str) -> None:
     """Прежнему адресу — без нового адреса и ссылок: смена почты переносит восстановление пароля."""
     try:
         await account_mail.send(email, "Студия: почта изменена / Studio: email changed",
@@ -411,8 +415,8 @@ async def change_notice(email: str) -> None:
                                 " срочно сообщите администратору Студии.\n"
                                 "The email address of your Studio account was changed. If it was not you,"
                                 " contact your Studio administrator right away.")
-    except HTTPException:
-        pass                         # смена уже состоялась; отказ записан в журнал без адреса
+    except HTTPException as err:     # смена уже состоялась; в журнал — только id учётки и код отказа
+        log.warning("account email: change notice for user %d failed (%s)", uid, err.detail.get("code"))
 
 
 @router.post("/api/me/email/confirm")
@@ -435,14 +439,14 @@ async def confirm_email(request: Request, tasks: BackgroundTasks):
         state.DB.execute("ROLLBACK")
         raise
     if row["current_email"] and row["current_email"] != row["email"]:
-        tasks.add_task(change_notice, row["current_email"])
+        tasks.add_task(change_notice, row["user_id"], row["current_email"])
     return {"ok": True}
 
 
 @router.put("/api/me/email-codes")
 async def email_codes(body: CodesIn, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "коды входа")
+    await auth.confirm_password(uid, body.password, "коды входа", digest=request.state.digest)
     if not has_email(uid):
         raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
     state.DB.execute("UPDATE users SET email_codes=? WHERE id=?", (int(body.enabled), uid))

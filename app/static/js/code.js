@@ -163,6 +163,7 @@ function projectName(p) {
     p.naming = projectsOf(p.aid).then((items) => {
       const project = items.find((x) => x.pid === p.pid);
       p.shared = !!project?.shared;
+      p.dir = typeof project?.dir === 'string' ? project.dir : null;   // ссылки на файлы в ответах (мост ≥ 0.41.0)
       return project?.name || null;
     });
     p.naming.catch(() => {
@@ -681,7 +682,8 @@ async function chat(mine, p, id, agent, section, status) {
   ui.statusBox.replaceChildren();            // у чата своя строка #code-status
   const fresh = freshChat === id;
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
-  view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent, project: name ? { pid: p.pid, name } : null,
+  view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent,
+    project: name ? { pid: p.pid, name, ...(p.dir ? { dir: p.dir } : {}) } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title,
     git: p.repo, gitAction,
     onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },

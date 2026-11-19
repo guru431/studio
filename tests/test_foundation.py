@@ -31,9 +31,38 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 48
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 50
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):
+    """Пересборка `connections` не теряет связи разделов (DROP с FK каскадом унёс бы их); id удалённого — не новому,
+    и прежний код (вставка своим списком столбцов) получает тот же монотонный id; триггер Cleaner жив."""
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 48)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        add = ("INSERT INTO connections(user_id,name,kind,base_url,token_enc,sections,created,passport,cleaner,s06)"
+               " VALUES(1,?,'openai','https://x.test',x'00','[]',0,'{}',?,1)")
+        conn.execute(add, ("first", 0))
+        conn.execute(add, ("second", 1))
+        conn.execute("INSERT INTO section_links VALUES(1,'chat',2,'[\"m\"]',0)")
+        conn.execute("INSERT INTO section_defaults VALUES(1,'chat',2,'m')")
+        conn.execute("INSERT INTO cleaner_contexts VALUES('c',1,'chat','chat',2,'r','https://x.test',x'00',0)")
+        db.migrate(conn)
+        db.migrate(conn)
+        assert [tuple(r) for r in conn.execute("SELECT id,name,passport,cleaner,s06 FROM connections")] == [
+            (1, "first", "{}", 0, 1), (2, "second", "{}", 1, 1)]
+        assert conn.execute("SELECT connection_id, models FROM section_links").fetchone()[:] == (2, '["m"]')
+        assert conn.execute("SELECT connection_id, model FROM section_defaults").fetchone()[:] == (2, "m")
+        conn.execute("DELETE FROM connections WHERE id = 2")
+        assert conn.execute("SELECT count(*) FROM section_links").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM cleaner_contexts").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM cleaner_deletions").fetchone()[0] == 1
+        conn.execute(add, ("third", 0))
+        assert conn.execute("SELECT max(id) FROM connections").fetchone()[0] == 3
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_step_42_preserves_references_and_accepts_previous_voice_writer(env):

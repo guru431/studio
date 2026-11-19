@@ -1,9 +1,10 @@
 import { tr } from './i18n.js';
 /* Подключение: форма и окно правки — общие для настроек и панели администратора.
  *
- * connectionForm(initial?) → { el, value(), showError(err) }: название, вид (OpenAI-совместимый /
- * шлюз srvllm), адрес, токен (при правке пустой — «не менять»). Разделы подключения ставят
- * настройки раздела (settings.js), а не эта форма. Отказ сохранения — словами под полем: токен (в
+ * connectionForm(initial?, { cleaner, everywhere }) → { el, value(), sections(), showError(err) }: название, вид
+ * (OpenAI-совместимый / шлюз srvllm), адрес, токен (при правке пустой — «не менять»). Разделы подключения ставят
+ * настройки раздела (settings.js), а не эта форма; `everywhere` (true/false — начальное состояние) добавляет
+ * у видов шлюза галочку «Добавить во все разделы», её разделы — sections(). Отказ сохранения — словами под полем: токен (в
  * том числе «новый адрес — введите токен заново») и название — под своими полями, прочее — под адресом.
  *
  * editConnection(host, base, initial, onSaved) — окно «Подключение»: `base` — '/api/connections'
@@ -21,13 +22,19 @@ const KINDS = {
 /** Разделы подключений (все, кроме «Агентов» — им модели сообщает мост) в порядке рельса и голосовой ввод. */
 export const SECTION_NAMES = { ...Object.fromEntries(sectionPairs().filter(([id]) => id !== 'code')),
   dictation: NAMES.dictation };
+/** Все разделы шлюза для галочки «Добавить во все разделы» (= connections.KINDS.srvllm и sections.S06_CATALOG,
+ * сверяет tests/test_connections.py). */
+export const GATEWAY_SECTIONS = {
+  srvllm: ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'dictation'],
+  s06: ['chat', 'transcribe', 'ocr', 'translate', 'dictation'],
+};
 const ERROR_FIELD = { name: 'name', token: 'token' };   // прочие коды — под адресом
 
 export function sectionsText(sections) {
   return Object.keys(SECTION_NAMES).filter((s) => sections.includes(s)).map((s) => SECTION_NAMES[s]).join(', ');
 }
 
-export function connectionForm(initial, { cleaner = false } = {}) {
+export function connectionForm(initial, { cleaner = false, everywhere = null } = {}) {
   const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', required: true });
   const kind = el('select', { class: 'input', name: 'kind' },
     ...Object.entries(KINDS).filter(([value]) => !cleaner || value === 'cleaner')
@@ -39,11 +46,13 @@ export function connectionForm(initial, { cleaner = false } = {}) {
     placeholder: initial ? tr("не менять ({0})", initial.token_hint) : tr("ключ API") });
   const cleanerNote = el('p', { class: 'muted small', hidden: true }, tr("Cleaner: только чат и перевод через сервер. Нужен ключ Cleaner с доступом к подключению и моделям; адрес должен разрешить администратор."));
   const s06Note = el('p', { class: 'muted small', hidden: true }, tr("s06: чат и перевод Qwen, разговоры WhisperX, сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет."));
+  const all = el('input', { type: 'checkbox', name: 'everywhere', checked: !!everywhere });
+  const allBox = el('label', { class: 'check', hidden: true }, all, tr("Добавить во все разделы этого шлюза"));
   const box = el('form', { class: 'conn-form', novalidate: true },
     field(tr("Название"), name, 'name'), field(tr("Вид"), kind, 'kind'),
     field(tr("Адрес"), url, 'base_url'),
     el('p', { class: 'muted small' }, tr("Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.")),
-    field(tr("Токен"), token, 'token'), cleanerNote, s06Note);
+    field(tr("Токен"), token, 'token'), cleanerNote, s06Note, everywhere === null ? null : allBox);
   box.addEventListener('submit', (event) => event.preventDefault());
 
   kind.value = initial ? (initial.cleaner ? 'cleaner' : initial.s06 ? 's06' : initial.kind) : (cleaner ? 'cleaner' : 'openai');
@@ -52,10 +61,12 @@ export function connectionForm(initial, { cleaner = false } = {}) {
   url.placeholder = KINDS[kind.value].placeholder;
   cleanerNote.hidden = kind.value !== 'cleaner';
   s06Note.hidden = kind.value !== 's06';
+  allBox.hidden = !GATEWAY_SECTIONS[kind.value];
   kind.addEventListener('change', () => {
     url.placeholder = KINDS[kind.value].placeholder;
     cleanerNote.hidden = kind.value !== 'cleaner';
     s06Note.hidden = kind.value !== 's06';
+    allBox.hidden = !GATEWAY_SECTIONS[kind.value];
   });
 
   return {
@@ -66,6 +77,8 @@ export function connectionForm(initial, { cleaner = false } = {}) {
       if (!initial || token.value.trim()) out.token = token.value.trim();
       return out;
     },
+    /** Разделы галочки «Добавить во все разделы»: она видна и отмечена — все разделы вида, иначе []. */
+    sections() { return everywhere !== null && !allBox.hidden && all.checked ? GATEWAY_SECTIONS[kind.value] : []; },
     showError(err) { showError(box, err, ERROR_FIELD, 'base_url'); },
   };
 }

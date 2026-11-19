@@ -271,10 +271,11 @@ def test_wrong_current_password_is_limited(studio):
         assert r.status_code == 403 and code(r) == "password"
     r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
     assert r.status_code == 429 and code(r) == "locked"
-    assert ("pw", uid) in auth.FAILS
+    key = ("pw", uid, security.digest(studio.c.cookies[auth.COOKIE]))
+    assert key in auth.FAILS
     studio.clock[0] += 901
     r = studio.c.post("/api/me/password", json={"current": "password-123", "new": "brand-new-pass"})
-    assert r.status_code == 204 and ("pw", uid) not in auth.FAILS
+    assert r.status_code == 204 and key not in auth.FAILS
 
 
 def test_validation_errors_keep_the_error_format_and_do_not_echo_input(studio):

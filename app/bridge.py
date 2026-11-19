@@ -51,6 +51,13 @@ EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "
                          "step_update", "progress"})
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 FRAME_MAX = 48 * 1024 * 1024
+#: json.loads идёт на цикле событий: кадр из мелких структур на 4 МиБ — 0,13 с, на 48 МиБ — секунды и ГиБ памяти.
+#: Любой кадр — не больше VALUES_MAX запятых и скобок (2 млн значений — около 0,1 с). Кадр больше EVENT_FRAME_MAX
+#: (снимок хода — событие до 8 МиБ, limits.HISTORY_BUDGET моста) — только `res` на ждущую просьбу (`t` и `id`
+#: первыми, как пишет мост); без просьбы (срок вышел) — не разбирается.
+EVENT_FRAME_MAX = 10 * 1024 * 1024
+VALUES_MAX = 2_000_000
+RES_HEAD = re.compile(r'\{\s*"t"\s*:\s*"res"\s*,\s*"id"\s*:\s*"([0-9a-f]{1,64})"')
 HELLO_SEC = 10
 CALL_SEC = 30
 WATCH_MAX = 1000
@@ -216,7 +223,7 @@ def parse_hello(frame: dict) -> dict:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
-                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
+                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models"):
         if capability in frame:
             if type(frame[capability]) is not bool:
@@ -567,11 +574,22 @@ async def stop() -> None:
 
 # ---- канал ---------------------------------------------------------------------
 
-def _frame(message: dict) -> dict:
+def _frame(message: dict, link: Link) -> "dict | None":
+    """Кадр JSON-объектом; большой ответ на просьбу, которой уже нет (срок вышел), — None без разбора."""
     if message.get("type") == "websocket.disconnect":
         raise WebSocketDisconnect(message.get("code", 1000))
     text = message.get("text")
     if not isinstance(text, str) or len(text) > FRAME_MAX or len(text.encode()) > FRAME_MAX:
+        raise ProtocolError("frame")
+    if len(text) > EVENT_FRAME_MAX:
+        head = RES_HEAD.match(text)
+        if head is None:
+            raise ProtocolError("frame")
+        fut = link.pending.get(head[1])
+        if fut is None or fut.done():
+            log.warning("агент %d: большой ответ без просьбы — пропущен", link.agent_id)
+            return None
+    if text.count(",") + text.count("[") + text.count("{") > VALUES_MAX:
         raise ProtocolError("frame")
     try:
         frame = json.loads(text)
@@ -599,7 +617,7 @@ async def link_socket(ws: WebSocket):
     link = SocketLink(ws, row["id"], row["user_id"], row["name"], ip)
     try:
         try:
-            link.hello = parse_hello(_frame(await asyncio.wait_for(ws.receive(), HELLO_SEC)))
+            link.hello = parse_hello(_frame(await asyncio.wait_for(ws.receive(), HELLO_SEC), link))
         except (TimeoutError, ProtocolError):
             log.warning("агент %d: нарушение протокола", link.agent_id)
             await link.close(CLOSE_PROTOCOL)
@@ -608,7 +626,9 @@ async def link_socket(ws: WebSocket):
         if LINKS.get(link.agent_id) is not link:
             return
         while True:
-            deliver(link, _frame(await ws.receive()))
+            frame = _frame(await ws.receive(), link)
+            if frame is not None:
+                deliver(link, frame)
     except ProtocolError:
         log.warning("агент %d: нарушение протокола", link.agent_id)
         await link.close(CLOSE_PROTOCOL)

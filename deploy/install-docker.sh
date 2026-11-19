@@ -26,10 +26,10 @@ case "${NEW##*/}" in .incoming-*) ;; *) echo 'studio: install must use an .incom
 exec 9>"$R/.deploy.lock"
 flock -n 9 || { echo 'studio: deployment already running' >&2; exit 1; }
 
-# This file contains validated nonsecret values rendered by render-profile.py.
-set -a
-. "$NEW/deploy/docker/host.conf"
-set +a
+# This file contains validated nonsecret values rendered by render-profile.py. Compose reads them only
+# through --env-file: exported values would win over the previous release's file during rollback.
+STUDIO_MEDIA_DIR=$(sed -n 's/^STUDIO_MEDIA_DIR=//p' "$NEW/deploy/docker/host.conf")
+[ -n "$STUDIO_MEDIA_DIR" ] || { echo 'studio: STUDIO_MEDIA_DIR missing in host.conf' >&2; exit 1; }
 [ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = cifs ] || {
     echo 'studio: media is not mounted from CIFS' >&2; exit 1;
 }
@@ -57,9 +57,10 @@ install -d -m 0755 /usr/local/share/studio "$R/releases"
 probe="$STUDIO_MEDIA_DIR/.studio-deploy-$$"
 setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"
 setpriv --reuid=10001 --regid=10001 --clear-groups rm "$probe"
-[ -s "$NEW/agent/studio-agent.zip" ] && [ -s "$NEW/agent/studio-agent-setup.exe" ]
-[ -s "$NEW/agent/studio-agent-setup.pkg" ]
-[ -s "$NEW/agent/studio-agent-setup.sh" ]
+# One check per file: under set -e a failed left side of `A && B` does not stop the script.
+for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studio-agent-setup.sh; do
+    [ -s "$NEW/agent/$file" ] || { echo "studio: bridge artifact $file is missing or empty" >&2; exit 1; }
+done
 version=$(sed -nE 's/^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$NEW/app/release.py")
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'studio: invalid application version' >&2; exit 1; }
 image="studio:$version-$REVISION"
@@ -73,6 +74,21 @@ docker compose --env-file "$NEW/deploy/docker/host.conf" -f "$NEW/deploy/docker/
 if [ "$PREPARE" = 1 ]; then
     printf 'studio: image %s prepared; application was not started\n' "$REVISION"
     exit 0
+fi
+
+# A schema step runs on the new image's first start and may rewrite data. Before switching, the running
+# release takes a consistent copy of the database (manage.py backup: lock, share, retention).
+schema=$(sed -nE 's/^VERSION = ([0-9]+)$/\1/p' "$NEW/app/db.py")
+[[ $schema =~ ^[0-9]+$ ]] || { echo 'studio: invalid schema version' >&2; exit 1; }
+running=(docker compose --env-file "$R/current/deploy/docker/host.conf" -f "$R/current/deploy/docker/compose.yaml")
+if [ -f "$R/current/deploy/docker/compose.yaml" ] && [ -n "$("${running[@]}" ps --status running --quiet web)" ]; then
+    database=$("${running[@]}" exec -T web python -c 'import os, sqlite3; print(sqlite3.connect("file:" + os.environ["STUDIO_DB"] + "?mode=ro", uri=True).execute("PRAGMA user_version").fetchone()[0])') || database=
+    [[ $database =~ ^[0-9]+$ ]] || { echo 'studio: cannot read the database schema version' >&2; exit 1; }
+    if [ "$schema" -gt "$database" ]; then
+        "${running[@]}" exec -T web python /opt/studio/app/manage.py backup || {
+            echo 'studio: backup before the schema change failed; the running release was kept' >&2; exit 1;
+        }
+    fi
 fi
 
 release="$R/releases/$REVISION-$(date -u +%Y%m%dT%H%M%S)"

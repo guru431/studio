@@ -94,17 +94,17 @@ minor для возможностей, major для несовместимых �
 
 | Область | Модули | Подробно |
 |---|---|---|
-| Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
+| Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `release` (версия Studio), `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
 | Вход и защита | `auth`, `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities` | [connections](docs/architecture/connections.md) |
-| Чат | `chat`, `web`, `documents`, `cleaner_client` | [chat](docs/architecture/chat.md) |
-| Ссылки и экспорт | `chat_shares`, `chat_exports` | [sharing-export](docs/architecture/sharing-export.md) |
+| Чат | `chat`, `web`, `documents`, `cleaner_client`, `mcp_client` (подключения MCP), `mcp_sections` (инструменты MCP разделов) | [chat](docs/architecture/chat.md) |
+| Ссылки и экспорт | `chat_shares`, `chat_exports`, `chat_export_selection` | [sharing-export](docs/architecture/sharing-export.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history` | [media](docs/architecture/media.md) |
 | Речь (раздел «Озвучка», «Расшифровка», голосовой ввод) | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |
 | Сканы и перевод | `ocr`, `ocr_render`, `translate`, `translate_text`, `translate_spot` | [ocr-translate](docs/architecture/ocr-translate.md) |
 | Поиск, задания, уведомления | `search`, `jobs`, `push`, `ntfy` | [search](docs/architecture/search.md), [notifications](docs/architecture/notifications.md) |
-| «Агенты» | `agents`, `agent_release`, `bridge`, `claude_code`, `workspace`, `code_activity`, `code_attention`, `code_usage`, `code_visualizations`, `code_actions`, `computer_info`, `desktop` | [agents](docs/architecture/agents.md), [agents-workspace](docs/architecture/agents-workspace.md) |
+| «Агенты» | `agents`, `agent_release`, `bridge`, `claude_code`, `workspace`, `code_activity`, `code_attention`, `code_usage`, `code_visualizations`, `code_actions`, `computer_info`, `desktop`, `terminal_links`, `project_access` (участники), `project_mirrors` (зеркала) | [agents](docs/architecture/agents.md), [agents-workspace](docs/architecture/agents-workspace.md), [project-collaboration](docs/architecture/project-collaboration.md) |
 | Мост `agent/` | `studio_agent/*`, правила — [agent/CLAUDE.md](agent/CLAUDE.md) | [agent-bridge](docs/architecture/agent-bridge.md) |
 | Страница: общее | `app/static/js/`: `app.js` (роутер, рельс `buildRail`, `announce`), `sections-meta.js` (реестр разделов), `icons.js` (значки), `menu.js` (меню и панели), `appearance.js` (тема, акцент, плотность, шрифт, масштаб), `settings.js`, `account-security.js` (сессии, аварийный выход, журнал), `mobile-navigation.js`; `theme.js` — до модулей | [shell](docs/architecture/shell.md), [security-lock](docs/architecture/security-lock.md) |
 | Страница: «Агенты» | `code.js`, `code-panel.js`, `code-tabs.js`, `code-chat.js`, `code-workspace.js`, `code-files.js`, `code-git.js`, `code-picker.js` и др. | [agents-workspace](docs/architecture/agents-workspace.md) |
@@ -139,7 +139,8 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt` и `.dockerignore` для Docker, мост — ZIP `HEAD:agent` и EXE
 `deploy/build-agent-installer.ps1`, macOS PKG — `deploy/build-agent-macos.py` через Mac из локального профиля);
 грязное дерево выкладываемых частей и `agent/` — отказ. `install-docker.sh`
-собирает образ до смены `current`, проверяет CIFS и здоровье обоих контейнеров; неудачный образ возвращает
+собирает образ до смены `current`, перед новым шагом схемы делает копию базы в работающем `web`
+(`manage.py backup`, отказ — выкладка прервана), проверяет CIFS и здоровье обоих контейнеров; неудачный образ возвращает
 предыдущий, сохраняя актуальную базу. `install-proxy.sh` проверяет конфигурацию Apache и перезагружает только
 прокси. `--prepare-only` собирает образ без запуска контейнеров и переключения прокси. Сборка — `--pull`, слой apt
 пересобирается первой выкладкой каждой ISO-недели (`ARG REFRESH`), таймера пересборки нет. Смоук —
@@ -153,10 +154,11 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 (Python образа от 10001:10001, остановить и таймер копии), нативная — `sudo -u studio sqlite3 /var/lib/studio/studio.db`;
 с `PRAGMA foreign_keys=ON;` для каскадов (`sql` включает сама); «стёршим» — тем, кто стирал историю прежним кодом, после возврата вперёд
 (или стереть историю снова). Развёрнуто — [deploy-host](docs/architecture/deploy-host.md#откат-по-шагам-схемы--подробности).
+Ночная проверка копии на прежнем коде видит схему новее своей: код с `skipped` в `manage.verify_backup` — пропуск
+без тревоги, более старый — провал с push каждую ночь до возврата вперёд ([deploy-docker](docs/architecture/deploy-docker.md#откат)).
 
 | Шаг | Что добавил | Что делает прежний код | SQL-обход |
 |---|---|---|---|
-| 40 | Email, коды, приглашения, почтовые токены и паузы | Не требует email/кодов, возвращает прежнее создание учёток; почтовая защита при откате не действует | Не нужен; данные сохраняются |
 | 16 | `scans`, раздел `ocr` | `PATCH` подключения srvllm без `sections` — 422; поиск с документом ocr — 500; стирание не уносит сканы; вложение со сканом — «None» | `DELETE FROM section_links WHERE section='ocr'; DELETE FROM section_defaults WHERE section='ocr'; DELETE FROM search_docs WHERE section='ocr';` вперёд — вернуть индекс (deploy-host); стёршим — `DELETE FROM scans WHERE user_id IN (…)` |
 | 17 | PIN учётки | не читает: открывают пароль и passkey | — |
 | 18 | `translations` | раздела нет; стирание не уносит переводы; удаление скана уносит файл перевода | стёршим — `DELETE FROM translations WHERE user_id IN (…)` |
@@ -178,6 +180,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 37 | браузер, ОС, модель, имя и IP сессии | столбцы не читает и не меняет; вход и завершение сессий работают | — |
 | 38 | `project_members`, `code_member_tabs` | совместные проекты не показывает, собственные проекты и вкладки работают | стёршим — `DELETE FROM code_member_tabs WHERE user_id IN (…)` |
 | 39 | `agent_events.kind` шире: `member_add`, `member_remove` | история подключений показывает их кодом; выдачу не журналирует; аварийный выход выдачи не снимает; участник снова может создать ссылку на чат владельца — при возврате вперёд её удалит `chat_shares.disown()` | после аварийного выхода прежним кодом — `DELETE FROM project_members WHERE agent_id IN (SELECT id FROM agents WHERE user_id = …)` |
+| 40 | Email, коды, приглашения, почтовые токены и паузы | Не требует email/кодов, возвращает прежнее создание учёток; почтовая защита при откате не действует | Не нужен; данные сохраняются |
 | 41 | `code_chats.origin` | столбец не читает; происхождение определяет по метке моста; новые строки получают `other` | — |
 | 42 | `voice_samples` | читает выбранный образец из прежних полей `voices`; новые голоса получают образец триггером; экспорт дополнительных образцов недоступен, чистка сирот при незнакомом столбце отключена | Не нужен; дополнительные образцы сохраняются до возврата вперёд |
 | 43 | `mcp_servers`, `chats.mcp_ids` | подключения MCP и выбор инструментов не читает; чаты и остальные подключения работают | Не нужен; настройки сохраняются до возврата вперёд |
@@ -185,6 +188,9 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 45 | `speeches.chat_id`, `chat_created`, `voice_name` — продолжения озвучки | показывает отдельные записи; триггер заполняет новые поля при вставке прежним кодом | Не нужен; записи и группы сохраняются до возврата вперёд |
 | 46 | `agents.platform` — последняя известная ОС для установщика отключённого компьютера | прежний код пропускает новое поле | Не нужен |
 | 47 | `f5-tts` в связях «Озвучки» с отмеченным Qwen3-TTS | прежняя Studio озвучит выбор F5 через Qwen3-TTS | Перед откатом снять отметку F5-TTS в разделе «Озвучка» |
+| 48 | `project_mirrors` — зеркала проектов (адрес и база шифром) | не читает: зеркал не показывает; отзыв компьютера уносит их каскадом | Не нужен; зеркала сохраняются до возврата вперёд |
+| 49 | `connections.id` — `AUTOINCREMENT` (пересборка с сохранением связей разделов) | работает как прежде, id тоже не повторяются; удаление подключения не обнуляет `connection_id` диалогов — их ход отвечает 404 вместо просьбы выбрать подключение | Не нужен |
+| 50 | модель ролика в поиске — из `videos.model` (триггеры `search_videos_*`, прежние строки) | поиск и фильтр по модели видят H3 как H3; выгрузка истории — без модели ролика | Не нужен |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.

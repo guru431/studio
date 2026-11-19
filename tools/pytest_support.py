@@ -1,6 +1,29 @@
-"""Общий цикл событий тестов сервера и Windows-моста."""
+"""Общий цикл событий и строгий режим пропусков тестов сервера и Windows-моста."""
 import asyncio
+import os
 import sys
+
+STRICT = "STUDIO_TESTS_STRICT"
+
+
+def strict_skip(report, deliberate, item=None):
+    """При STUDIO_TESTS_STRICT=1 (полный уровень контракта) пропуск — отказ: нет bash, PowerShell, git, node,
+    браузера или движка Playwright. Пропуском остаются метки skip/skipif (платформа объявлена заранее), xfail
+    и причины, начинающиеся с одной из `deliberate` (осознанные пропуски набора)."""
+    if os.environ.get(STRICT) != "1" or not report.skipped or hasattr(report, "wasxfail"):
+        return report
+    reason = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
+    if reason.startswith("Skipped: "):
+        reason = reason[len("Skipped: "):]
+    declared = set()
+    for mark in item.iter_markers() if item is not None else ():
+        if mark.name in ("skip", "skipif"):
+            declared.add(mark.kwargs.get("reason", mark.args[0] if mark.name == "skip" and mark.args else ""))
+    if reason in declared or reason.startswith(tuple(deliberate)):
+        return report
+    report.outcome = "failed"
+    report.longrepr = f"{STRICT}=1: пропуск — отказ (нет инструмента?): {reason}"
+    return report
 
 
 if sys.platform == "win32":

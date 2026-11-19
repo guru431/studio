@@ -30,7 +30,6 @@ import os
 import re
 import secrets
 import struct
-import time
 import uuid
 import zlib
 from dataclasses import dataclass
@@ -38,6 +37,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import AsyncIterator
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -695,10 +695,15 @@ def open_summed(file: Path, chunk: int = CHUNK, sha: bool = False):
     return f, crc, size, digest.hexdigest() if digest is not None else None
 
 
-def _dos_time(created: float) -> tuple[int, int]:
-    t = time.localtime(created)
-    return (t.tm_hour << 11 | t.tm_min << 5 | t.tm_sec // 2,
-            (t.tm_year - 1980) << 9 | t.tm_mon << 5 | t.tm_mday)
+def user_zone(user_id: int) -> ZoneInfo:
+    """Пояс учётки (`users.timezone`): часы процесса в контейнере — UTC, а лента показывает время учётки."""
+    return ZoneInfo(state.DB.execute("SELECT timezone FROM users WHERE id = ?", (user_id,)).fetchone()[0])
+
+
+def _dos_time(created: float, zone: ZoneInfo) -> tuple[int, int]:
+    t = datetime.fromtimestamp(created, zone)
+    return (t.hour << 11 | t.minute << 5 | t.second // 2,
+            (t.year - 1980) << 9 | t.month << 5 | t.day)
 
 
 def _zip_entry(name: bytes, flags: int, dos: tuple[int, int], crc: int, size: int, offset: int) -> tuple[bytes, bytes]:
@@ -732,10 +737,11 @@ def _zip_end(count: int, start: int, size: int) -> bytes:
 class ZipWriter:
     """Учёт потокового ZIP_STORED — общий у архива выделенного (_zip) и выгрузки истории (takeout.py):
     локальный заголовок записи по CRC, размеру и времени, смещения, центральный каталог, конец архива.
-    Данные записи вызывающий отдаёт сам, сразу после заголовка, ровно `size` байт."""
+    Данные записи вызывающий отдаёт сам, сразу после заголовка, ровно `size` байт. ZIP хранит время без пояса —
+    оно пишется в поясе учётки `zone`."""
 
-    def __init__(self):
-        self.offset, self.central = 0, []
+    def __init__(self, zone: ZoneInfo):
+        self.offset, self.central, self.zone = 0, [], zone
 
     @property
     def count(self) -> int:
@@ -743,7 +749,7 @@ class ZipWriter:
 
     def entry(self, name: str, created: float, crc: int, size: int) -> bytes:
         raw = name.encode()
-        local, row = _zip_entry(raw, 0 if raw.isascii() else 0x800, _dos_time(created), crc, size, self.offset)
+        local, row = _zip_entry(raw, 0 if raw.isascii() else 0x800, _dos_time(created, self.zone), crc, size, self.offset)
         self.central.append(row)
         self.offset += len(local) + size
         return local
@@ -753,10 +759,10 @@ class ZipWriter:
         return table + _zip_end(len(self.central), self.offset, len(table))
 
 
-def _zip(entries: list[tuple[str, Path, float]]):
+def _zip(entries: list[tuple[str, Path, float]], zone: ZoneInfo):
     """ZIP_STORED на лету; Starlette крутит обычный генератор в пуле потоков. Файла уже нет —
     пропускается; шара оборвала чтение — исключение без пути: ответ рвётся, браузер покажет сбой."""
-    out = ZipWriter()
+    out = ZipWriter(zone)
     try:
         for name, file, created in entries:
             try:
@@ -806,8 +812,9 @@ async def get_archive(token: str, request: Request):
     log.info("archive: %d файлов", len(rows))
     entries = [(name, state.CFG.media_dir / row["rel_path"], row["created"])
                for name, row in zip(_entry_names(rows), rows)]
-    day = datetime.fromtimestamp(clock.NOW()).strftime("%Y-%m-%d")
-    return StreamingResponse(_zip(entries), media_type="application/zip",
+    zone = user_zone(uid)
+    day = datetime.fromtimestamp(clock.NOW(), zone).strftime("%Y-%m-%d")
+    return StreamingResponse(_zip(entries, zone), media_type="application/zip",
                              headers={"Content-Disposition": disposition(f"studio-{day}.zip"),
                                       "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 

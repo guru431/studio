@@ -3,6 +3,7 @@
 docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md."""
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import time
@@ -289,6 +290,35 @@ def test_odd_frames_are_ignored_or_close_4400(studio, monkeypatch, caplog):
     assert not bridge.LINKS
 
 
+def test_a_large_frame_is_parsed_only_as_an_awaited_answer_of_bounded_structure(monkeypatch):
+    """Кадр до 48 МиБ из мелких структур — секунды цикла событий и ГиБ памяти: число значений любого кадра
+    ограничено; кадр крупнее снимка хода — только `res` на ждущую просьбу (`t` и `id` первыми); без просьбы — не
+    разбирается вовсе."""
+    monkeypatch.setattr(bridge, "EVENT_FRAME_MAX", 1000)
+    monkeypatch.setattr(bridge, "VALUES_MAX", 50)
+    link = bridge.Link(1, 1, "pc")
+    loop = asyncio.new_event_loop()
+    try:
+        link.pending["ab" * 8] = loop.create_future()
+        text = lambda frame: {"type": "websocket.receive", "text": json.dumps(frame)}   # noqa: E731
+        snapshot = {"t": "ev", "e": {"k": "snapshot", "text": "x" * 900}}
+        assert bridge._frame(text(snapshot), link) == snapshot
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"t": "ev", "e": [[]] * 60}), link)                  # мелкие структуры — и в малом
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"t": "ev", "pad": "x" * 2000}), link)               # событие крупнее предела
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"id": "ab" * 8, "t": "res", "pad": "x" * 2000}), link)  # `t` и `id` — первыми
+        answer = {"t": "res", "id": "ab" * 8, "ok": True, "data": {"data": "A" * 2000}}
+        assert bridge._frame(text(answer), link) == answer
+        with pytest.raises(bridge.ProtocolError):
+            bridge._frame(text({"t": "res", "id": "ab" * 8, "ok": True, "pad": "x" * 2000, "data": [[]] * 60}), link)
+        monkeypatch.setattr(bridge.json, "loads", lambda *_: pytest.fail("кадр без просьбы разобран"))
+        assert bridge._frame(text({"t": "res", "id": "cd" * 8, "data": "x" * 2000}), link) is None
+    finally:
+        loop.close()
+
+
 def test_revoke_and_disable_drop_the_link(studio):
     uid = make_user(studio, "owner")
     make_user(studio, "admin", is_admin=True)
@@ -403,7 +433,7 @@ def test_in_process_bridge_answers_and_streams(studio):
     assert e.value.code == "closed"
     assert studio.c.portal.call(lambda: bridge.call(aid, "open", SESSION, pin=None)) == {}
     assert studio.c.portal.call(lambda: bridge.call(aid, "projects", SESSION)) == {
-        "items": [{"pid": pid("studio"), "name": "studio"}]}
+        "items": [{"pid": pid("studio"), "name": "studio", "dir": "C:\\work\\projects\\studio"}]}
     q = studio.c.portal.call(bridge.watch, aid, CHAT)
     machine.script = [{"k": "text", "text": "При"}, {"k": "done", "status": "done"}]
     data = studio.c.portal.call(lambda: bridge.call(aid, "turn", SESSION, project=pid("studio"), chat=CHAT,
@@ -571,7 +601,8 @@ def test_fake_machine_follows_the_protocol():
         assert refused("open", session="s2", pin="9999").get("left") == left
     assert refused("open", session="s2", pin="9999")["code"] == "pin_locked"
     assert refused("open", session="s2", pin="1234")["code"] == "pin_locked" and m.pin_fails == 5
-    assert ok("projects")[0] == {"items": [{"pid": pid("alpha"), "name": "alpha"}, {"pid": pid("studio"), "name": "studio"}]}
+    assert ok("projects")[0] == {"items": [{"pid": pid("alpha"), "name": "alpha", "dir": "C:\\work\\projects\\alpha"},
+                                           {"pid": pid("studio"), "name": "studio", "dir": "C:\\work\\projects\\studio"}]}
     p = pid("studio")
     assert refused("chats", project="0" * 16)["code"] == "not_found"
     data, _ = ok("history", project=p, chat=CHAT, before=None, limit=2)

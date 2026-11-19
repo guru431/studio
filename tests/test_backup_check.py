@@ -138,6 +138,20 @@ def test_verify_backup_of_an_empty_base_is_not_a_pass(base, env):
     assert any("пуст" in p for p in out["problems"])
 
 
+def test_verify_backup_of_a_newer_schema_is_skipped_without_alarm(base, env, monkeypatch, capsys):
+    """После отката на прежний код база новее кода — штатно: ночная проверка не проходит, но и не тревожит
+    администраторов и не роняет юнит каждую ночь до возврата вперёд."""
+    add_rows(base, files=())
+    backup_of(base, env, monkeypatch)
+    monkeypatch.setattr(db, "VERSION", db.VERSION - 1)
+    out = manage.verify_backup()
+    assert out["ok"] is False and out["skipped"] is True and out["problems"] == [] and out["schema_to"] is None
+    assert manage.main(["verify-backup"]) == 0
+    capsys.readouterr()
+    stored = manage.last_check(base)
+    assert stored["ok"] is False and stored["skipped"] is True and stored["notified"] is True
+
+
 def test_verify_backup_without_users_is_not_a_pass(base, env, monkeypatch):
     backup_of(base, env, monkeypatch)
     out = manage.verify_backup()
@@ -358,12 +372,12 @@ def test_verify_command_stores_a_short_result_only_for_the_newest_copy(base, env
     add_rows(base)
     monkeypatch.setattr(clock, "NOW", lambda: 1_792_454_400.0)
     assert manage.main(["verify-backup"]) == 2                   # копий нет — тоже провал, и он записан
-    assert manage.last_check(base) == {"ok": False, "problems": 1, "at": 1_792_454_400.0, "backup_at": None,
+    assert manage.last_check(base) == {"ok": False, "skipped": False, "problems": 1, "at": 1_792_454_400.0, "backup_at": None,
                                        "notified": False}
     copy = backup_of(base, env, monkeypatch)
     assert manage.main(["verify-backup"]) == 0
     stored = manage.last_check(base)
-    assert stored == {"ok": True, "problems": 0, "at": 1_792_454_400.0, "backup_at": copy.stat().st_mtime,
+    assert stored == {"ok": True, "skipped": False, "problems": 0, "at": 1_792_454_400.0, "backup_at": copy.stat().st_mtime,
                       "notified": True}
     assert manage.main(["verify-backup", str(copy)]) == 0          # явный путь — не «последняя проверка»
     assert manage.last_check(base) == stored
@@ -419,6 +433,37 @@ def test_failed_copy_notifies_once_without_erasing_the_last_good_copy(studio, en
     assert manage.main(["backup"]) == 0
     assert manage.last_copy(state.DB)["ok"] is True
     assert admin.notify_failed_check() == 0 and len(sent) == 1
+
+
+def test_backup_removes_local_snapshots_of_killed_runs(base, env, monkeypatch):
+    """Убитый процесс оставлял снимок размером с базу рядом с ней навсегда: уборка шла только на шаре."""
+    add_rows(base, tokens=0, files=())
+    left = env.db_path.with_name(".studio-20000101.db.part")
+    left.write_bytes(b"x" * 100)
+    keep = env.db_path.with_name(".studio-notes.part")
+    keep.write_bytes(b"x")
+    backup_of(base, env, monkeypatch)
+    assert not left.exists() and keep.exists()
+
+
+def test_a_copy_that_never_ran_is_pushed_to_active_admins_once(studio, sent):
+    """Юнит не дошёл до manage.py — итог копирования не меняется: старше admin.COPY_STALE_SEC — один push; новый
+    итог сбрасывает отметку; записи нет вовсе — молчим. Порог панели — тот же, из ответа сервера."""
+    owner = make_user(studio, "owner", is_admin=True)
+    assert admin.notify_stale_copy() == 0                                  # копий ещё не было
+    at = clock.NOW()
+    manage._record_result(state.DB, manage.COPY_KEY, {"ok": True, "at": at, "notified": True})
+    studio.clock[0] = at + admin.COPY_STALE_SEC
+    assert admin.notify_stale_copy() == 0
+    studio.clock[0] += 1
+    assert admin.notify_stale_copy() == 1
+    assert sent == [(owner, admin.STALE_NOTICE, "admin", "Студия")]
+    assert admin.notify_stale_copy() == 0 and admin.notify_failed_check() == 0 and len(sent) == 1
+    manage._record_result(state.DB, manage.COPY_KEY, {"ok": True, "at": clock.NOW(), "notified": True})
+    studio.clock[0] += admin.COPY_STALE_SEC + 1
+    assert admin.notify_stale_copy() == 1 and len(sent) == 2
+    signin(studio, "owner")
+    assert studio.c.get("/api/admin/storage").json()["stale_sec"] == admin.COPY_STALE_SEC == 36 * 3600
 
 
 def test_overlapping_backups_do_not_share_a_part_file(base, env, monkeypatch):
@@ -493,5 +538,5 @@ def test_admin_storage_shows_the_last_check(studio, check, monkeypatch):
         if found:
             break
         time.sleep(0.01)
-    assert found == {"ok": False, "problems": 1, "at": clock.NOW(), "backup_at": 5.0, "age": 0}
+    assert found == {"ok": False, "skipped": False, "problems": 1, "at": clock.NOW(), "backup_at": 5.0, "age": 0}
     assert manage.last_check(state.DB)["notified"] is True             # из панели — не уведомлять

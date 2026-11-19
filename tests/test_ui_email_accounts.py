@@ -47,6 +47,7 @@ def mail(monkeypatch):
         sent.append((email, subject, body))
 
     monkeypatch.setattr(account_mail, "send", send)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)    # почта настроена
     return sent
 
 
@@ -217,6 +218,7 @@ def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser
             page.locator("#invite-save").click()
             failure = page.locator("#invite-form > p[role=alert]")
             pw.expect(failure).to_contain_text(account_mail.UNSET_MESSAGE)
+            assert page.locator(f'#invitations tr[data-email="nomail-{engine}@example.com"]').count() == 0
             failure.locator("a.smtp-link").click()
             page.locator("#smtp-test:not([disabled])").wait_for()
             page.locator("#smtp-test").click()
