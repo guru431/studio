@@ -181,6 +181,10 @@ if True:
             page.goto(live.url + '/#/' + route)
             md = page.locator(f'#{content_id} .md').last
             pw.expect(md.locator('pre code')).to_contain_text('Сохранено')
+            # На компьютере раздел ставит фокус в поле ввода кадром позже (ui.focusDesktop); фокус поля переносит
+            # выделение документа в него — выделяем после него, иначе меню видит пустое выделение.
+            if page.evaluate("matchMedia('(hover: hover) and (pointer: fine)').matches"):
+                pw.expect(page.locator('#code-text' if section == 'code' else '#chat-input')).to_be_focused()
             page.evaluate('(theme) => document.documentElement.dataset.theme = theme', theme)
             assert md.locator('th, td').evaluate_all(
                 "cells => cells.map(cell => getComputedStyle(cell).textAlign)") == [
