@@ -1373,6 +1373,7 @@ def test_strength_series_refusals(studio):
                     start(studio, series={"count": 2, "vary": "strength", "strength_to": 1}),
                     start(studio, series={"count": 2, "vary": "strength"}, **edit)):
         assert refused.status_code == 422 and refused.json()["detail"]["code"] == "series", refused.text
+        assert "Lustify" not in refused.json()["detail"]["message"]     # самостоятельная Lustify снята
     for bad in ({"count": 1, "vary": "seed"}, {"count": 5, "vary": "seed"}, {"count": 2, "vary": "prompt"},
                 {"count": 2, "vary": "strength", "strength_to": 0}):
         assert start(studio, series=bad, **edit).status_code == 422

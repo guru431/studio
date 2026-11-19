@@ -2011,6 +2011,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("click", "#viewer .act-edit"),
         ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
         ("eval", "defaultModel", "document.querySelector('#edit-model-label').textContent"),
+        ("eval", "defaultTip", "document.querySelector('#edit-mode-tip').textContent"),
         ("type", "#edit-prompt", "change only this patch to green"),
         ("click", "#edit-local"), ("click", "#edit-submit"),
         ("eval", "emptyMask", f"{is_open('#editor')} && document.querySelector('#edit-error').textContent.length > 0"),
@@ -2021,6 +2022,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
         ("eval", "reset", "!document.querySelector('#edit-local').checked && document.querySelector('#edit-prompt').value === ''"),
         ("eval", "nextLabel", "document.querySelector('#edit-model-label').textContent"),
+        ("eval", "nextTip", "document.querySelector('#edit-mode-tip').textContent"),
         ("eval", "strengthVisible", "!document.querySelector('#edit-strength-label').hidden"),
         ("eval", "editorOverflow", f"!({NO_OVERFLOW}) || document.querySelector('#editor').scrollWidth"
                                    " > document.querySelector('#editor').clientWidth"),
@@ -2035,6 +2037,9 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
     names = {"snofs": "SNOFS Krea 2", "flux": "FLUX"}
     assert v["strengthShown"] and not v["overflow"] and v["cleared"]
     assert names[model] in v["defaultModel"] and v["reset"] and names[nxt] in v["nextLabel"]
+    # подсказка режима называет выбранную модель, а не снятую Lustify и не FLUX по умолчанию
+    assert v["defaultTip"].startswith(names[model]) and v["nextTip"].startswith(names[nxt])
+    assert "Lustify" not in v["defaultTip"] + v["nextTip"]
     assert v["strengthVisible"] == (nxt == "snofs") and not v["editorOverflow"] and v["emptyMask"]
     # страница: исходник файлом, затем фото истории с маской и без
     _newest, middle, oldest = v["media"]
