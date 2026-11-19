@@ -128,7 +128,8 @@ def blocks(request, uid: int, digest: str) -> bool:
     if head == "media" and len(pieces) > 3 and pieces[3] != "archives":
         return bool(media_sections(uid, pieces[3]) & hidden(digest))
     # Общие выгрузки, управление защитой, сессиями и ключами не должны обходить закрытый раздел; изменение
-    # уведомлений (ntfy, push) увело бы на чужое устройство события закрытых разделов. Каждый маршрут /api/*
+    # уведомлений (ntfy, push) увело бы на чужое устройство события закрытых разделов, изменение подключений
+    # (адрес, ключ, разделы) — переписку закрытого раздела на чужой сервер. Каждый маршрут /api/*
     # отнесён к разделу, закрываемым или открытым явно — реестр в tests/test_lock_policy.py.
     return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin",
                              "/api/me/sessions", "/api/me/security-events", "/api/me/access", "/api/me/email"))
@@ -136,4 +137,5 @@ def blocks(request, uid: int, digest: str) -> bool:
                         "/api/me/password-reset")
             or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/exa-key")
                 and request.method != "GET")
+            or (head == "connections" and request.method != "GET")
             or (head == "connections" and path.endswith("/token") and protected(row, "chat")))
