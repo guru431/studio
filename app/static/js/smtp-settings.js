@@ -21,7 +21,8 @@ export function smtpSettings() {
   function fill(value) {
     for (const key of Object.keys(fields)) if (key !== 'password') fields[key].value = value[key] ?? '';
     fields.password.value = ''; clear.checked = false;
-    note.textContent = value.password_set ? tr("Пароль сохранён") : tr("Пароль не задан");
+    note.textContent = value.reenter ? tr("Сохранённые настройки SMTP зашифрованы прежним ключом данных — введите их заново")
+      : value.password_set ? tr("Пароль сохранён") : tr("Пароль не задан");
   }
   form.addEventListener('submit', async event => {
     event.preventDefault(); save.disabled = check.disabled = true;
