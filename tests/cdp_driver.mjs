@@ -54,8 +54,9 @@ async function readJob() {
 
 /** Вкладка: команды с ответом по номеру и подписка на события протокола. */
 class Tab {
-  constructor(socket) {
+  constructor(socket, timeout) {
     this.socket = socket;
+    this.timeout = timeout;
     this.sent = 0;
     this.waiting = new Map();
     this.handlers = new Map();
@@ -65,17 +66,34 @@ class Tab {
         (this.handlers.get(message.method) || []).forEach((fn) => fn(message.params));
         return;
       }
-      const { resolve, reject } = this.waiting.get(message.id);
+      const pending = this.waiting.get(message.id);
+      if (!pending) return;            // ответ пришёл после таймаута команды
+      clearTimeout(pending.timer);
       this.waiting.delete(message.id);
-      if (message.error) reject(new Error(message.error.message));
-      else resolve(message.result);
+      if (message.error) pending.reject(new Error(message.error.message));
+      else pending.resolve(message.result);
+    });
+    socket.addEventListener('close', () => {
+      for (const { timer, reject } of this.waiting.values()) {
+        clearTimeout(timer);
+        reject(new Error('соединение DevTools закрыто'));
+      }
+      this.waiting.clear();
     });
   }
 
   send(method, params = {}) {
     const id = ++this.sent;
     return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
+      if (this.socket.readyState !== WebSocket.OPEN) {
+        reject(new Error('соединение DevTools закрыто'));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.waiting.delete(id);
+        reject(new Error(`нет ответа DevTools ${method} за ${this.timeout} мс`));
+      }, this.timeout);
+      this.waiting.set(id, { resolve, reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -95,15 +113,23 @@ class Tab {
   }
 }
 
-async function openTab(port, page) {
+async function openTab(port, page, timeout) {
   const target = page ? { id: page, webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/${page}` }
-    : await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
+    : await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,
+        { method: 'PUT', signal: AbortSignal.timeout(timeout) })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve);
-    socket.addEventListener('error', () => reject(new Error('браузер не принял соединение DevTools')));
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error(`браузер не открыл соединение DevTools за ${timeout} мс`));
+    }, timeout);
+    socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    socket.addEventListener('error', () => {
+      clearTimeout(timer);
+      reject(new Error('браузер не принял соединение DevTools'));
+    }, { once: true });
   });
-  return { id: target.id, tab: new Tab(socket) };
+  return { id: target.id, tab: new Tab(socket, timeout) };
 }
 
 async function until(check, timeout, what) {
@@ -162,7 +188,7 @@ async function press(tab, key, modifiers = '') {
 async function run(job) {
   const out = { values: {}, probe: null, log: [], sent: [], failed: null, where: null };
   const timeout = job.timeout || 30000;
-  const { id, tab } = await openTab(job.port, job.page);
+  const { id, tab } = await openTab(job.port, job.page, timeout);
   try {
     // Запросы в полёте (id → «МЕТОД путь»). Поток событий не кончается никогда и «тишине» не мешает.
     const flying = new Map();
@@ -262,7 +288,8 @@ async function run(job) {
       try { out.probe = await tab.evaluate(job.probe); } catch (err) { out.failed = out.failed || String(err.message || err); }
     }
   } finally {
-    if (!job.page) await fetch(`http://127.0.0.1:${job.port}/json/close/${id}`).catch(() => {});
+    if (!job.page) await fetch(`http://127.0.0.1:${job.port}/json/close/${id}`,
+      { signal: AbortSignal.timeout(timeout) }).catch(() => {});
   }
   return out;
 }
