@@ -20,6 +20,7 @@
 | [sharing-export.md](sharing-export.md) | ссылки «Поделиться» и экспорт PDF/Markdown |
 | [agents.md](agents.md) | «Агенты» на сервере: компьютеры, канал моста, API `/api/code/*`, рабочее место |
 | [agents-workspace.md](agents-workspace.md) | «Агенты» на странице: чат, файлы, Git, панель проектов, возможности по capability |
+| [project-collaboration.md](project-collaboration.md) | совместная работа над проектом «Агентов»: участники, права, отзыв доступа |
 | [agent-bridge.md](agent-bridge.md) | Мост Windows/macOS `agent/`: модули, решения, пределы, capability → версия |
 | [agent-macos.md](agent-macos.md) | Установка macOS, Keychain, LaunchAgent, процессы и системные проверки |
 | [deploy-docker.md](deploy-docker.md) | Docker Compose, защищённый вход через Apache, переезд, копия базы и откат |

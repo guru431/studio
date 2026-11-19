@@ -355,6 +355,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Ошибка — {0}": "Failed — {0}",
   "ещё не было: ночная идёт сразу после копии": "none yet: nightly verification runs right after backup",
   "не поднимается, проблем — {0}": "cannot be restored, issues: {0}",
+  "пропущена: база новее кода": "skipped: database is newer than code",
   "Удаление": "Deletion",
   "Файлы без записи": "Unreferenced files",
   "проверки ещё не было": "not checked yet",
