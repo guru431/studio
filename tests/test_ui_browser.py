@@ -8714,9 +8714,11 @@ def test_code_turn_running_and_timeout_open_live(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-#: вкладка всегда видна: соседняя вкладка того же браузера не снимает её поток
+#: вкладка всегда видна: соседняя вкладка того же браузера не снимает её поток и не шлёт ей visibilitychange
+#: (иначе «возвращение на экран» перечитывает историю посреди хода, и проверка ленты попадает в перерисовку)
 ALWAYS_VISIBLE = """(() => { Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true,
   get: () => 'visible' }); Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => false });
+  window.addEventListener('visibilitychange', (event) => event.stopImmediatePropagation(), true);
 })();"""
 
 
