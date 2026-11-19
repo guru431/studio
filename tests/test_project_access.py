@@ -170,6 +170,9 @@ def test_member_cannot_reach_other_projects_or_manage_computer_or_members(studio
         ("POST", url(aid, "update"), None), ("GET", url(aid, "usage"), None),
         ("GET", base, None), ("POST", base, {"login": "owner"}), ("DELETE", base + "/1", None),
         ("PATCH", "/api/code/workspace", {"op": "place", "aid": aid, "pid": BETA, "view": "files"}),
+        # worktree — только владельцу и в выданном проекте: отказ на сервере, не одним мостом
+        ("GET", url(aid, "projects", ALPHA, "worktrees"), None),
+        ("POST", url(aid, "projects", ALPHA, "worktrees"), {"name": "feature"}),
     ]:
         response = studio.c.request(method, path, **({"json": body} if body is not None else {}))
         assert response.status_code == 404, (method, path, response.text)

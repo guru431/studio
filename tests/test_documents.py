@@ -1,6 +1,7 @@
 """Текст документов чата (app/documents.py): PDF, DOCX, TXT и MD; отказы — словами."""
 import asyncio
 import io
+from types import SimpleNamespace
 import unicodedata
 import zipfile
 
@@ -132,11 +133,13 @@ def test_docx_xml_is_limited_to_sixteen_mebibytes():
 
 
 class Upload:
-    """Запрос с телом multipart, как его отдаёт Starlette: `headers` и поток `stream()`."""
+    """Запрос с телом multipart, как его отдаёт Starlette: `headers`, поток `stream()` и `state` (без сессии
+    guard: auth.recheck пропускает)."""
 
     def __init__(self, files):
         built = httpx.Request("POST", "http://studio.test/", files=files)
         self.body, self.headers = built.read(), {"content-type": built.headers["content-type"]}
+        self.state = SimpleNamespace()
 
     async def stream(self):
         for n in range(0, len(self.body), 65536):
