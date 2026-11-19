@@ -379,6 +379,22 @@ def test_guide_names_every_srvllm_catalog_model():
     assert missing == []
 
 
+def _account_settings() -> dict:
+    """Группа «Учётка» настроек: `ACCOUNT_IDS` и разделы администратора (`smtp`) → подпись из `names` settingsView."""
+    text = (APP / "static" / "js" / "settings.js").read_text(encoding="utf-8")
+    ids = re.findall(r"'(\w+)'", re.search(r"const ACCOUNT_IDS = \[([^\]]*)\]", text).group(1))
+    ids += re.findall(r"is_admin \? \['(\w+)'\]", re.search(r"const accountIds = (.*)", text).group(1))
+    names = re.search(r"const names = \{(.*?)\};", text, re.S).group(1)
+    return {key: re.search(rf"\b{key}:[^,]*?[\"']([^\"']+)[\"']", names).group(1) for key in ids}
+
+
+def test_guide_shows_where_every_account_settings_section_is():
+    """Каждый раздел группы «Учётка» (с SMTP администратора) руководство называет путём «Настройки» → «…»."""
+    sections, text = _account_settings(), GUIDE.read_text(encoding="utf-8")
+    assert {"security", "smtp"} <= sections.keys()
+    assert sorted(name for name in sections.values() if f"«Настройки» → «{name}»" not in text) == []
+
+
 def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
     (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
     assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}
