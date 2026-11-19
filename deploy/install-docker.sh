@@ -26,10 +26,10 @@ case "${NEW##*/}" in .incoming-*) ;; *) echo 'studio: install must use an .incom
 exec 9>"$R/.deploy.lock"
 flock -n 9 || { echo 'studio: deployment already running' >&2; exit 1; }
 
-# This file contains validated nonsecret values rendered by render-profile.py.
-set -a
-. "$NEW/deploy/docker/host.conf"
-set +a
+# This file contains validated nonsecret values rendered by render-profile.py. Compose reads them only
+# through --env-file: exported values would win over the previous release's file during rollback.
+STUDIO_MEDIA_DIR=$(sed -n 's/^STUDIO_MEDIA_DIR=//p' "$NEW/deploy/docker/host.conf")
+[ -n "$STUDIO_MEDIA_DIR" ] || { echo 'studio: STUDIO_MEDIA_DIR missing in host.conf' >&2; exit 1; }
 [ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = cifs ] || {
     echo 'studio: media is not mounted from CIFS' >&2; exit 1;
 }

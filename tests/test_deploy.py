@@ -1041,6 +1041,36 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     assert calls[-1].endswith("stop --timeout 20") is first
 
 
+@pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
+def test_docker_rollback_runs_the_previous_release_with_its_own_host_conf(tmp_path):
+    """`set -a` у host.conf экспортировал значения нового релиза, а окружение у Compose сильнее `--env-file`:
+    откат поднимал прежний образ с новыми STUDIO_BIND_IP и STUDIO_URL. Скрипту нужен только STUDIO_MEDIA_DIR."""
+    bash, env = _symlink_bash(tmp_path)
+    root = tmp_path / "r"
+    new, old = root / ".incoming-x", root / "releases" / "old"
+    for folder, ip in ((new, "192.0.2.99"), (old, "192.0.2.15")):
+        (folder / "deploy" / "docker").mkdir(parents=True)
+        (folder / "deploy" / "docker" / "host.conf").write_text(
+            f"STUDIO_URL=https://{ip}\nSTUDIO_MEDIA_DIR=/mnt/media/studio\nSTUDIO_BIND_IP={ip}\n", newline="\n")
+    subprocess.run([bash, "-c", 'ln -s "$1/releases/old" "$1/current"', "x", root.as_posix()], env=env, check=True,
+                   timeout=20)
+    start = INSTALL_DOCKER.index("# This file contains")
+    read = INSTALL_DOCKER[start:INSTALL_DOCKER.index('[ "$(findmnt', start)]
+    start = INSTALL_DOCKER.index('release="$R/releases/')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("    exit 1\nfi\n", start) + len("    exit 1\nfi\n")]
+    # Compose видит только окружение процесса: заглушка пишет его, а не переменные оболочки.
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming-x; REVISION={'a' * 40}\n"
+             'docker() { echo "$(printenv STUDIO_BIND_IP || echo -) $(printenv STUDIO_URL || echo -) $*" >> "$R/calls";'
+             ' if [ "$6" = up ]; then [ -e "$R/failed" ] && return 0; touch "$R/failed"; return 1; fi; }\n')
+    script = stubs + read + 'echo "media=$STUDIO_MEDIA_DIR"\n' + block
+    r = subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True, timeout=20)
+    assert r.returncode == 1 and "previous image restored" in r.stderr, r
+    assert "media=/mnt/media/studio" in r.stdout
+    calls = (root / "calls").read_text().splitlines()
+    assert len(calls) == 2 and all(c.startswith("- - compose --env-file ") for c in calls), calls
+    assert calls[1].split()[4] == root.as_posix() + "/current/deploy/docker/host.conf"
+
+
 @pytest.fixture
 def docker_release_root(tmp_path):
     with tempfile.TemporaryDirectory(dir=tmp_path) as folder:
