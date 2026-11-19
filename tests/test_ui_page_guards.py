@@ -107,3 +107,29 @@ def test_locked_studio_leaves_picture_in_picture_and_pauses_any_play(browser, li
     assert not r.get("failed"), r
     v = r["values"]
     assert v["pip"] is True and v["lockedPaused"] is True and v["openPaused"] is False
+
+
+
+def test_expired_partial_lock_forgets_jobs_of_protected_sections_in_an_open_section(browser, live):
+    """«Озвучка» под защитой с таймером 0, открыт «Чат»: уход с экрана истекает срок — строка озвучки уходит из
+    открытой панели «В работе», хотя сервер её уже не отдаёт, а страница держала бы её в памяти час."""
+    import time
+    from test_ui_browser import API, hide, live_sql, show
+    login = "guard-partial"
+    uid = live.add_user(login)
+    live_sql(live, "INSERT INTO speeches(id, user_id, model, voice, text, state, detail, created, finished)"
+                   " VALUES ('sp-guard', ?, 'tts', 'v', 'Тайный текст озвучки', 'done', '', ?, ?)",
+             (uid, time.time() - 60, time.time() - 30))
+    configure = f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/me/screen-lock', {{enabled:true, sections:['speech'], timeout:0}});
+      await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
+    speech_row = "document.querySelector('#jobs-finished .jobs-row[data-section=speech]')"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure),
+        ("click", "#jobs"), ("wait", f"!!{speech_row}"),
+        ("eval", "title", f"{speech_row}.querySelector('.jobs-title').textContent"),
+        hide(), show(), ("wait", f"!{speech_row}"),
+        ("eval", "later", f"new Promise(r => setTimeout(() => r(!!{speech_row}), 1500))"),
+        ("eval", "hash", "location.hash")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["title"].startswith("Озвучка · Тайный") and v["later"] is False and v["hash"] == "#/chat"

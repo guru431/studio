@@ -186,7 +186,9 @@ async def lock_state(request: Request, section: str | None = None):
 @router.post("/lock/alive")
 async def alive(body: Alive, request: Request):
     """Только явная активность продлевает доступ; истёкший доступ отметка не открывает.
-    Прежняя отметка mobile сохраняется для совместимости с откатом, на область защиты не влияет."""
+    Прежняя отметка mobile сохраняется для совместимости с откатом, на область защиты не влияет.
+    `locked` — заперт показанный раздел, `expired` — срок защиты истёк: открытый раздел страница не запирает, но
+    забывает из памяти данные защищённых («В работе», «Поиск» — lock.js `studio-sections-locked`)."""
     if body.touch:
         state.DB.execute("UPDATE sessions SET mobile = 1 WHERE digest = ?", (request.state.digest,))
     row = lock_policy.session(request.state.digest)
@@ -198,7 +200,7 @@ async def alive(body: Alive, request: Request):
     expired = lock_policy.expired(row, now)
     if not expired and body.active:
         _seen(request, now)
-    return {"locked": expired and lock_policy.protected(row, body.section)}
+    return {"locked": expired and lock_policy.protected(row, body.section), "expired": expired}
 
 
 @router.post("/lock/now", status_code=204)
