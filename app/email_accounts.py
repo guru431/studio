@@ -206,6 +206,8 @@ async def invitations():
 async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(auth.require_admin)):
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Пользователь с этой почтой уже есть"})
+    if not account_mail.configured(account_mail.settings()):
+        raise account_mail.unset()          # до паузы и строки: не тратить попытку и не оставлять неотправленное
     throttle("invite-admin", str(admin.id), 30, 900)
     throttle("invite-email", body.email, 3, 900)
     old = state.DB.execute("SELECT * FROM invitations WHERE email=?", (body.email,)).fetchone()
