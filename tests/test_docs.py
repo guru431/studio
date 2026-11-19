@@ -290,6 +290,26 @@ def test_the_checker_catches_a_wrong_constant_and_a_missing_symbol(tmp_path, mon
     assert [p.split(":")[0] for p in _link_problems(doc)] == ["missing.md", "doc.md#нет"]
 
 
+def _claude_section(title: str) -> str:
+    text = _text(ROOT / "CLAUDE.md")
+    start = text.index(f"\n## {title}")
+    end = text.find("\n## ", start + 1)
+    return text[start:end if end != -1 else None]
+
+
+def test_rollback_table_covers_every_schema_step_from_16():
+    """Каждый шаг `db.STEPS` от 16 — строка «Откат по шагам схемы» (первый столбец — номера через запятую)."""
+    steps = {key.value for key in _module(APP, "db")[2]["STEPS"].keys if key.value >= 16}
+    rows = re.findall(r"^\|\s*(\d+(?:\s*,\s*\d+)*)\s*\|", _claude_section("Откат по шагам схемы"), re.M)
+    listed = {int(n) for row in rows for n in row.split(",")}
+    assert sorted(steps - listed) == [] and sorted(listed - steps) == []
+
+
+def test_module_map_lists_every_app_module():
+    listed = set(re.findall(r"`(\w+)`", _claude_section("Карта модулей")))
+    assert sorted(_modules(APP) - listed) == []
+
+
 def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
     (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
     assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}
