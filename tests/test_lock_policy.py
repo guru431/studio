@@ -295,14 +295,16 @@ ROUTES = {
         ("DELETE", "/api/me/access/members/{aid}/{pid}/{member}"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
-        ("DELETE", "/api/passkeys/{key_id}")]},
+        ("DELETE", "/api/passkeys/{key_id}"),
+        # адрес, ключ и разделы подключения: правка увела бы переписку закрытого раздела на чужой сервер
+        ("POST", "/api/connections"), ("DELETE", "/api/connections/{conn_id}"),
+        ("PATCH", "/api/connections/{conn_id}"), ("POST", "/api/connections/{conn_id}/check"),
+        ("PUT", "/api/connections/{conn_id}/passport"), ("POST", "/api/connections/{conn_id}/probe")]},
     **{(m, p): "open" for m, p in [
         ("GET", "/api/agent/download"), ("DELETE", "/api/agent/enroll"), ("POST", "/api/agent/enroll"),
         ("WS", "/api/agent/link"), ("GET", "/api/agent/package"), ("GET", "/api/agent/linux-installer"),
-        ("GET", "/api/connections"), ("POST", "/api/connections"), ("DELETE", "/api/connections/{conn_id}"),
-        ("PATCH", "/api/connections/{conn_id}"), ("POST", "/api/connections/{conn_id}/check"),
-        ("GET", "/api/connections/{conn_id}/models"), ("PUT", "/api/connections/{conn_id}/passport"),
-        ("POST", "/api/connections/{conn_id}/probe"), ("POST", "/api/dictation"), ("GET", "/api/jobs"),
+        ("GET", "/api/connections"), ("GET", "/api/connections/{conn_id}/models"),
+        ("POST", "/api/dictation"), ("GET", "/api/jobs"),
         ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/storage"),
         ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections")]},
     **{(m, p): "lock" for m, p in [
@@ -378,6 +380,23 @@ def test_partial_protection_closes_notification_and_key_changes(studio):
         assert studio.c.request(method, path, json=body).status_code == 423, path
     assert studio.c.get("/api/me/ntfy").status_code == 200
     assert studio.c.get("/api/me/push").status_code == 200
+
+
+def test_partial_protection_closes_connection_changes(studio):
+    """Защищён только «Чат»: подключение чата не перенаправить на свой сервер, пока сессия заперта."""
+    from conftest import add_connection
+    owner(studio)
+    cid = add_connection(studio, sections=["chat"])
+    enable(studio, ["chat"])
+    expire(studio)
+    for method, path, body in [("PATCH", f"/api/connections/{cid}", {"base_url": "https://thief.test/v1", "token": "t"}),
+                               ("POST", "/api/connections", {"name": "x", "kind": "openai",
+                                                             "base_url": "https://thief.test/v1", "token": "t"}),
+                               ("DELETE", f"/api/connections/{cid}", None)]:
+        r = studio.c.request(method, path, json=body)
+        assert r.status_code == 423 and r.json()["detail"]["code"] == "screen_locked", path
+    assert studio.c.get("/api/connections").status_code == 200
+    assert state.DB.execute("SELECT base_url FROM connections WHERE id = ?", (cid,)).fetchone()[0] == "https://cloud.test/v1"
 
 
 def test_computer_timer_is_persisted_and_relayed_to_capable_bridge(studio):

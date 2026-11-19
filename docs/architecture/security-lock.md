@@ -47,7 +47,9 @@
   (исходный PDF, PNG страниц), `lock_policy.blocks` для `/api/ocr/<id>*`, ленте `/api/ocr` (`db.page` с
   `extra`/`extra_args`), `search.find`, `jobs`. Изменяющие `/api/me/ntfy*`, `/api/me/push`, `/api/me/exa-key`, а также
   `/api/me/sessions*`, `/api/me/access*`, `/api/me/emergency`, `/api/me/security-events`, `DELETE /api/me/password-reset` закрывает любая
-  частичная защита (GET ntfy/push открыты). Реестр маршрутов — `tests/test_lock_policy.py::ROUTES`: новый маршрут без
+  частичная защита (GET ntfy/push открыты). Так же — все изменяющие `/api/connections*` (создание, правка адреса,
+  ключа и разделов, удаление, паспорт, проверка): иначе запертая сессия перенаправила бы подключение защищённого
+  раздела на свой сервер; список и модели (GET) открыты, ключ — по защите «Чата». Реестр маршрутов — `tests/test_lock_policy.py::ROUTES`: новый маршрут без
   классификации роняет тест.
 - Закрытые разделы запроса — ContextVar `lock_policy.RESTRICTED` (`auth.guard`), и задача, созданная запросом,
   наследует его. Раннеры очередей на пользователя (`ocr._runner`, `translate._runner`, `transcripts._runner`,
