@@ -50,15 +50,20 @@ function usersBlock(host) {
     const login = el('input', { class: 'input', name: 'login', maxlength: '32', autocomplete: 'off',
       autocapitalize: 'none', spellcheck: 'false', value: user.login });
     const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', value: user.name });
+    const self = user.id === me.id;
+    // себя разжаловать нельзя (сервер ответил бы 409), как и отключить
+    const admin = el('input', { type: 'checkbox', id: 'user-edit-admin', name: 'is_admin', checked: user.is_admin, disabled: self });
     const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'user-edit-save' });
     const form = el('div', {}, field(tr("Логин"), login, 'login'), field(tr("Имя"), name, 'name'),
+      el('label', { class: 'check', title: self ? tr("себя разжаловать нельзя") : null }, admin, tr("Администратор")),
       el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' }));
     const dialog = openDialog(host, { id: 'user-edit-dialog', title: tr("Изменить: {0}", user.login), body: [form], actions: [save] });
     login.focus();
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
-        await api('PATCH', `/api/admin/users/${user.id}`, { login: login.value.trim(), name: name.value.trim() });
+        await api('PATCH', `/api/admin/users/${user.id}`, { login: login.value.trim(), name: name.value.trim(),
+          ...(admin.checked !== user.is_admin ? { is_admin: admin.checked } : {}) });
         dialog.close();
         if (user.id === me.id) location.reload();         // меню аватара берёт логин из /api/me
         else await reload();
@@ -152,6 +157,12 @@ function usersBlock(host) {
   };
 }
 
+/** Отказ письма: ненастроенная почта (smtp_unset) — со ссылкой на «Настройки → SMTP». */
+function mailFailure(target, err) {
+  target.replaceChildren(words(err));
+  if (err?.code === 'smtp_unset') target.append(' ', el('a', { href: '#/settings/smtp', class: 'smtp-link' }, tr("Открыть настройки SMTP")));
+}
+
 function invitationsBlock(host) {
   const list = el('tbody', { id: 'invitations' });
   const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
@@ -160,7 +171,7 @@ function invitationsBlock(host) {
   async function act(action) {
     note.textContent = '';
     try { await action(); }
-    catch (err) { note.textContent = words(err); }
+    catch (err) { mailFailure(note, err); }
     await reload();
   }
   function edit(invite = null) {
@@ -185,7 +196,7 @@ function invitationsBlock(host) {
         else await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value, is_admin: admin.checked });
         dialog.close();
         await reload();
-      } catch (err) { fail.textContent = words(err); await reload(); }
+      } catch (err) { mailFailure(fail, err); await reload(); }
       finally { save.disabled = false; }
     });
   }
