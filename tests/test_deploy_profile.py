@@ -103,6 +103,30 @@ def test_docker_profile_preserves_trusted_proxy_and_storage_boundaries():
         assert "WorkingDirectory=/srv/studio" in unit
 
 
+@pytest.mark.parametrize("profile", [
+    {"STUDIO_PROXY_IP": "10.77.1.150", "STUDIO_BIND_IP": "192.0.2.20", "STUDIO_HAIRPIN_IP": "192.0.2.1"},
+    {"STUDIO_PROXY_IP": "10.77.1.15", "STUDIO_BIND_IP": "192.0.2.20", "STUDIO_HAIRPIN_IP": "192.0.2.1"},
+    {"STUDIO_PROXY_IP": "192.0.2.10", "STUDIO_BIND_IP": "192.0.2.20", "STUDIO_HAIRPIN_IP": "10.77.1.101"},
+], ids=["proxy-contains-example", "proxy-is-bind-example", "hairpin-contains-example"])
+def test_profile_values_that_contain_another_example_stay_intact(profile):
+    """Подстановки шли цепочкой `text.replace`: результат одной попадал под следующую."""
+    source, destination = io.BytesIO(), io.BytesIO()
+    root = Path(__file__).parents[1]
+    names = ["deploy/docker/host.conf", "deploy/docker/nginx.conf"]
+    with tarfile.open(fileobj=source, mode="w") as archive:
+        for name in names:
+            archive.add(root / name, arcname=name)
+    source.seek(0)
+    PROFILE.render(source, destination, profile)
+    destination.seek(0)
+    with tarfile.open(fileobj=destination) as archive:
+        host = archive.extractfile(names[0]).read().decode()
+        proxy = archive.extractfile(names[1]).read().decode()
+    assert f"allow {profile['STUDIO_PROXY_IP']};" in proxy
+    assert f"STUDIO_HAIRPIN_IP={profile['STUDIO_HAIRPIN_IP']}\n" in host
+    assert f"STUDIO_BIND_IP={profile['STUDIO_BIND_IP']}\n" in host
+
+
 def test_remote_backend_changes_only_the_proxy_destination_and_retains_route_options():
     source, destination = io.BytesIO(), io.BytesIO()
     root = Path(__file__).parents[1]
