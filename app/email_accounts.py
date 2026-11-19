@@ -28,6 +28,7 @@ INVITE_SEC = 2 * 86400
 RESET_SEC = 1800
 CODE_SEC = 600
 CODE_ATTEMPTS = 5
+SMTP_TEST_SEC = 60
 PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
 EMAIL_PATHS = frozenset({"/api/me", "/api/me/email", "/api/me/email/confirm"})
 EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}")  # после lower(); re.I сопоставил бы «ſ» и «ı» с s и i
@@ -219,10 +220,10 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if not old:
         state.DB.execute("INSERT INTO invitations(id,email,comment,is_admin,invited_by,created,expires) VALUES (?,?,?,?,?,?,?)",
                          (iid, body.email, body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC))
-    await account_mail.send(body.email, "Приглашение в Студию / Invitation to Studio",
-                            "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
-                            "You are invited to Studio. Choose a login and password with this one-time link,"
-                            " valid for 48 hours.\n\n" + link("invite", token))
+    await account_mail.send_admin(body.email, "Приглашение в Студию / Invitation to Studio",
+                                  "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
+                                  "You are invited to Studio. Choose a login and password with this one-time link,"
+                                  " valid for 48 hours.\n\n" + link("invite", token))
     # После SMTP снова проверить права пригласившего и состояние приглашения.
     inviter = state.DB.execute("SELECT is_admin,disabled FROM users WHERE id=?", (admin.id,)).fetchone()
     if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
@@ -235,6 +236,21 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if not changed:
         raise invalid_token()
     return invitation(state.DB.execute("SELECT * FROM invitations WHERE id=?", (iid,)).fetchone())
+
+
+@router.post("/api/admin/smtp/test")
+async def smtp_test(admin: auth.User = Depends(auth.require_admin)):
+    """Тестовое письмо — только на подтверждённый адрес самого администратора, не чаще раза в SMTP_TEST_SEC."""
+    row = state.DB.execute("SELECT email FROM users WHERE id=?", (admin.id,)).fetchone()
+    if not row["email"]:
+        raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
+    if not account_mail.configured(account_mail.settings()):
+        raise account_mail.unset()
+    throttle("smtp-test", str(admin.id), 1, SMTP_TEST_SEC)
+    await account_mail.send_admin(row["email"], "Студия: тестовое письмо / Studio: test email",
+                                  "Это тестовое письмо: почта Студии настроена.\n"
+                                  "This is a test email: Studio mail is set up.")
+    return {"ok": True}
 
 
 @router.patch("/api/admin/invitations/{iid}", dependencies=[Depends(auth.require_admin)])
