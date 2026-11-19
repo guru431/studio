@@ -211,16 +211,22 @@ def test_new_token_for_the_same_address_reaches_an_old_snapshot(studio):
     assert q.headers["authorization"] == "Bearer fresh-key"
 
 
-def test_deleted_connection_and_its_reused_id_give_no_token(studio):
-    """Удалённое подключение — отказ; id, занятый потом подключением другой учётки к тому же адресу, — тоже."""
+def test_deleted_connection_gives_no_token_and_its_id_to_nobody(studio):
+    """Удалённое подключение — отказ; его id не достаётся новому (ни своему, ни чужой учётки): история с этим
+    `connection_id` не уходит другому адресу, а диалог остаётся без подключения."""
     cid = add_gateway(studio)
     old = conn_of(cid)
+    uid = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (cid,)).fetchone()[0]
+    state.DB.execute("INSERT INTO chats(id, user_id, connection_id, model, created, updated)"
+                     " VALUES('dialog', ?, ?, 'm', 0, 0)", (uid, cid))
     assert studio.c.delete(f"/api/connections/{cid}").status_code == 204
     assert refused_change(lambda: upstream.request(old, "GET", GW + "/v1/models")).deleted
+    assert state.DB.execute("SELECT connection_id FROM chats WHERE id = 'dialog'").fetchone()[0] is None
+    own = add_gateway(studio)
     other = make_user(studio, "other")
-    reused = connections.create(other, connections.ConnIn(name="srvllm", kind="srvllm", base_url=GW,
+    theirs = connections.create(other, connections.ConnIn(name="srvllm", kind="srvllm", base_url=GW,
                                                           token="other-key", sections=["photo"]))
-    assert reused["id"] == cid
+    assert cid not in (own, theirs["id"])
     assert refused_change(lambda: upstream.request(old, "GET", GW + "/v1/models")).deleted
     assert studio.gw.requests == []
 
