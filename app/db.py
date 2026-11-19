@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 49
+VERSION = 50
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -646,6 +646,20 @@ END;
 """
 SCHEMA += CONNECTIONS_49
 
+#: модель ролика в поиске — из `videos.model` (шаг 44 добавил столбец, а триггеры шага 13 писали литерал 'wan')
+SEARCH_VIDEOS_50 = f"""DROP TRIGGER search_videos_ai;
+DROP TRIGGER search_videos_au;
+CREATE TRIGGER search_videos_ai AFTER INSERT ON videos BEGIN
+  {_DOC} ('video', new.id, '', new.user_id, new.model, new.created, new.prompt); END;
+CREATE TRIGGER search_videos_au AFTER UPDATE OF prompt, model ON videos
+  WHEN old.prompt IS NOT new.prompt OR old.model IS NOT new.model BEGIN
+  DELETE FROM search_docs WHERE section = 'video' AND item = old.id;
+  {_DOC} ('video', new.id, '', new.user_id, new.model, new.created, new.prompt); END;
+UPDATE search_docs SET model = (SELECT v.model FROM videos v WHERE v.id = search_docs.item)
+ WHERE section = 'video' AND EXISTS (SELECT 1 FROM videos v WHERE v.id = search_docs.item);
+"""
+SCHEMA += SEARCH_VIDEOS_50
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -749,6 +763,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     48: PROJECT_MIRRORS_48,
     # id подключения не переходит к новому после удаления
     49: CONNECTIONS_49,
+    # модель ролика в поиске — из videos.model
+    50: SEARCH_VIDEOS_50,
 }
 
 
