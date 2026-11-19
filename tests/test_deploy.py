@@ -15,6 +15,7 @@ import pytest
 
 import bridge
 import chat
+import chat_exports
 import claude_code
 import clock
 import config
@@ -597,8 +598,31 @@ def _bash():
     return None
 
 
+def test_pdf_chromium_wrapper_reaches_the_image_and_adds_the_offline_flags(tmp_path):
+    """chat_exports.OFFLINE_BROWSER: in the image, executable, LF, and every md2pdf argument passed through."""
+    wrapper = DEPLOY / "chromium-offline.sh"
+    assert chat_exports.OFFLINE_BROWSER == wrapper.resolve()
+    assert "COPY deploy/md2pdf.py deploy/md2pdf.sha256 deploy/chromium-offline.sh ./deploy/" in DOCKERFILE
+    assert "!deploy/chromium-offline.sh" in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert b"\r" not in wrapper.read_bytes()
+    staged = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-s", "deploy/chromium-offline.sh"],
+                            capture_output=True, text=True, timeout=20).stdout
+    assert staged.startswith("100755 "), staged              # md2pdf запускает его напрямую
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    (tmp_path / "chromium").write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n', newline="\n")
+    (tmp_path / "chromium").chmod(0o755)
+    url = "file:///tmp/chat-export-x/a b.html"
+    r = subprocess.run([bash, "-c", f'PATH="$PWD:$PATH" exec sh "$1" --headless "{url}"', "-", wrapper.as_posix()],
+                       cwd=tmp_path, capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["--proxy-server=socks5://255.255.255.255:9", "--proxy-bypass-list=<-loopback>",
+                                     "--host-resolver-rules=MAP * ~NOTFOUND", "--headless", url]
+
+
 @pytest.mark.parametrize("script", ["install.sh", "deploy.sh", "install-docker.sh", "install-proxy.sh",
-                                    "docker/entrypoint.sh"])
+                                    "docker/entrypoint.sh", "chromium-offline.sh"])
 def test_scripts_parse(script):
     bash = _bash()
     if not bash:
