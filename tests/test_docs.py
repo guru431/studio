@@ -290,6 +290,30 @@ def test_the_checker_catches_a_wrong_constant_and_a_missing_symbol(tmp_path, mon
     assert [p.split(":")[0] for p in _link_problems(doc)] == ["missing.md", "doc.md#нет"]
 
 
+#: Адреса в коде моста, к которым он сам не ходит: студия по умолчанию и ссылки для браузера (`subscription.LINKS`)
+LINK_ONLY = {"studio.example.com", "claude.ai", "chatgpt.com"}
+
+
+def _bridge_hosts() -> set:
+    tree = ast.parse((AGENT / "limits.py").read_text(encoding="utf-8"))
+    node = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "HOSTS" for t in n.targets))
+    return set(ast.literal_eval(node).values())
+
+
+def test_bridge_hosts_are_listed_in_both_claude_md_and_cover_the_code():
+    """Внешние адреса моста — `limits.HOSTS`: перечни инварианта называют каждый, литерала мимо константы нет."""
+    hosts = _bridge_hosts()
+    for doc in (ROOT / "CLAUDE.md", ROOT / "agent" / "CLAUDE.md"):
+        text = _text(doc)
+        assert [host for host in sorted(hosts)
+                if not re.search(rf"(?<![\w.-]){re.escape(host)}(?![\w-])", text)] == [], doc.name
+    literal = set()  # имена с доменом верхнего уровня: `http://127\.0\.0\.1` (loopback OpenCode) и `https://h` — не адреса
+    for path in AGENT.glob("*.py"):
+        literal.update(re.findall(r"\bhttps?://((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})", path.read_text(encoding="utf-8")))
+    assert literal - hosts - LINK_ONLY == set()
+
+
 def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
     (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
     assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}

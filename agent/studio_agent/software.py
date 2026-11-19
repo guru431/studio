@@ -11,7 +11,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import cli, codex_rpc, host, jobs, opencode_rpc
+from . import cli, codex_rpc, host, jobs, limits, opencode_rpc
 from .errors import Refused
 
 TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'opencode': 'opencode-ai'}
@@ -19,7 +19,8 @@ PACKAGES = {tool: (package,) for tool, package in TOOLS.items()}
 PACKAGES['opencode'] = ('opencode-ai', '@opencode/cli', '@opencode-ai/cli')
 EXTENSIONS = {'codex': 'openai.chatgpt', 'claude': 'anthropic.claude-code'}
 HOMEBREW = {'codex': ('codex',), 'claude': ('claude-code', 'claude-code@latest')}
-CLAUDE_RELEASES = 'https://downloads.claude.ai/claude-code-releases'
+CLAUDE_RELEASES = f"https://{limits.HOSTS['claude_releases']}/claude-code-releases"
+NPM = f"https://{limits.HOSTS['npm']}"
 VERSION = re.compile(r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}')
 INSTALLED_VERSION = re.compile(VERSION.pattern + r'(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,48})?')
 UPDATE_SEC = 300
@@ -62,7 +63,7 @@ def latest(tool, source, package=None):
     if source == 'homebrew':
         if package not in HOMEBREW.get(tool, ()):
             raise ValueError('package')
-        data = _json('https://formulae.brew.sh/api/cask/' + package + '.json')
+        data = _json(f"https://{limits.HOSTS['homebrew']}/api/cask/" + package + '.json')
         value = data.get('version')
         return value if isinstance(value, str) and VERSION.fullmatch(value) else None
     if host.MACOS and tool == 'claude' and source in ('native', 'sdk'):
@@ -73,7 +74,7 @@ def latest(tool, source, package=None):
     if source == 'vscode':
         body = {'filters': [{'criteria': [{'filterType': 7, 'value': EXTENSIONS[tool]}]}], 'flags': 17}
         request = urllib.request.Request(
-            'https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery',
+            f"https://{limits.HOSTS['marketplace']}/_apis/public/gallery/extensionquery",
             data=json.dumps(body).encode(), headers={'Content-Type': 'application/json',
                 'Accept': 'application/json;api-version=7.2-preview.1'})
         releases = _json(request)['results'][0]['extensions'][0]['versions']
@@ -86,7 +87,7 @@ def latest(tool, source, package=None):
     package = package or TOOLS[tool]
     if package not in PACKAGES[tool]:
         raise ValueError('package')
-    data = _json('https://registry.npmjs.org/' + package.replace('/', '%2F') + '/latest')
+    data = _json(NPM + '/' + package.replace('/', '%2F') + '/latest')
     value = data.get('version')
     return value if isinstance(value, str) and VERSION.fullmatch(value) else None
 
@@ -244,7 +245,7 @@ def command(item, target):
         if package not in PACKAGES[tool]:
             raise ValueError('package')
         return [*launcher, 'install', '--global', '--prefix', str(item['_prefix']),
-                package + '@' + target, '--registry=https://registry.npmjs.org', '--no-audit', '--no-fund'], env
+                package + '@' + target, '--registry=' + NPM, '--no-audit', '--no-fund'], env
     raise ValueError('manager')
 
 

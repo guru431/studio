@@ -31,3 +31,15 @@ PROTOCOL_PAUSE_SEC = 60  # пауза после закрытия 4400
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]-]{1,100}")
 CHAT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")  # UUID строчными
+# Внешние HTTPS-адреса, к которым мост ходит сам, помимо студии из `config.json` и шлюза OpenCode из конфига
+# пользователя. Перечень в CLAUDE.md и agent/CLAUDE.md и литералы адресов в коде моста сверяет tests/test_docs.py.
+HOSTS = {
+    "ipify": "api64.ipify.org",                    # внешний IP компьютера
+    "npm": "registry.npmjs.org",                   # версии и обновление CLI
+    "marketplace": "marketplace.visualstudio.com",  # версии расширений VS Code
+    "homebrew": "formulae.brew.sh",                # версии Homebrew (macOS)
+    "claude_releases": "downloads.claude.ai",      # версия Claude Code (macOS)
+    "anthropic": "api.anthropic.com",              # лимиты подписки Claude, OAuth-токен Claude Code
+    "opencode": "opencode.ai",                     # лимиты OpenCode Go, ключ OpenCode
+    "github": "github.com",                        # анонимная проверка публичной копии проекта
+}

@@ -72,6 +72,12 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
   суррогатами).
 - **Журнал** `%LOCALAPPDATA%\studio-agent\agent.log` — только id, коды, числа, имена типов исключений: ни ключа, ни PIN,
   ни пароля, ни имён проектов, файлов, путей, ни текстов, ни stderr Claude Code.
+- **Внешние адреса** — кроме студии, только `limits.HOSTS` (без перенаправлений на другие адреса): `api64.ipify.org`
+  (внешний IP, без данных); `registry.npmjs.org`, `marketplace.visualstudio.com`, `formulae.brew.sh`,
+  `downloads.claude.ai` (версии программ: имя пакета); `api.anthropic.com` (лимиты Claude: OAuth-токен Claude Code);
+  `https://opencode.ai` (лимиты OpenCode Go: ключ OpenCode); `github.com` (публичная копия: `owner/repo`, без учётных данных).
+  Плюс шлюз OpenCode из конфига пользователя (`opencode_usage.connection`) и штатные установщики CLI. Новый адрес — в
+  константу и в перечни обоих CLAUDE.md: их и литералы `https://` кода сверяет `tests/test_docs.py`.
 - Блокирующее (файлы, scrypt, сессии SDK, git) — `asyncio.to_thread`: цикл держит пинги канала.
 - Git проекта — недоверенный: `gitinfo.SAFE`, фильтры репозитория выключены (`gitinfo._filters`), хуки не запускаются,
   частичный клон не дозагружает объекты (`gitinfo.OFFLINE`); исключение — `worktree add` по действию владельца.
