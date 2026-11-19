@@ -12,7 +12,7 @@ import time
 import urllib.request
 from ctypes import wintypes
 
-from . import host
+from . import host, limits
 
 
 def memory_status() -> dict | None:
@@ -75,7 +75,7 @@ def _external_ip() -> str | None:
             def redirect_request(self, *args, **kwargs):
                 return None
 
-        with urllib.request.build_opener(NoRedirect).open("https://api64.ipify.org", timeout=3) as response:
+        with urllib.request.build_opener(NoRedirect).open(f"https://{limits.HOSTS['ipify']}", timeout=3) as response:
             address = ipaddress.ip_address(response.read(128).decode("ascii").strip())
         return str(address) if address.is_global else None
     except (OSError, ValueError, http.client.HTTPException):

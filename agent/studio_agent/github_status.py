@@ -8,8 +8,9 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import gitinfo
+from . import gitinfo, limits
 
+GITHUB = limits.HOSTS["github"]
 REFS_MAX = 2 * 1024 * 1024
 GIT_SEC = 3
 HTTP_SEC = 5
@@ -19,7 +20,7 @@ UNKNOWN = {"state": "unknown", "behind": None, "ahead": None}
 class _GithubRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         target = urlsplit(newurl)
-        if target.scheme != "https" or target.netloc != "github.com":
+        if target.scheme != "https" or target.netloc != GITHUB:
             raise ValueError("redirect")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -74,7 +75,7 @@ def read(project: Path, branch: str | None, head: str | None, *, repo=None) -> d
         repo = repo or repository(project)
         if not repo:
             return None
-        req = Request(f"https://github.com/{repo}.git/info/refs?service=git-upload-pack",
+        req = Request(f"https://{GITHUB}/{repo}.git/info/refs?service=git-upload-pack",
                       headers={"User-Agent": "studio-agent", "Cache-Control": "no-cache"})
         # Собственный opener не наследует cookie/auth handlers приложения или настройки Git/GCM.
         with build_opener(_GithubRedirect()).open(req, timeout=HTTP_SEC) as response:

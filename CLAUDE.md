@@ -64,8 +64,13 @@ minor для возможностей, major для несовместимых �
 - **Список разрешённых адресов** (панель администратора): только к ним ходит сервер (с учётом перенаправлений и
   разрешения имён; имя — только https и только публичные адреса). Исключения — только адреса, зашитые в `web.py`
   (`api.exa.ai`, YouTube через yt-dlp — правила в [chat.md](docs/architecture/chat.md))
-  и в `push.py` (`push.HOSTS`), и фиксированные HTTPS-адреса моста: `api64.ipify.org` (внешний IP),
-  `registry.npmjs.org`, `marketplace.visualstudio.com` и `formulae.brew.sh` (версии программ, `software.py`). Ключ Exa — свой у учётки, шифром.
+  и в `push.py` (`push.HOSTS`). Ключ Exa — свой у учётки, шифром.
+- **Мост ходит сам** (кроме студии) только на фиксированные HTTPS-адреса `agent/studio_agent/limits.py::HOSTS` (сверяет
+  `tests/test_docs.py`): `api64.ipify.org` (внешний IP, без данных); `registry.npmjs.org`, `marketplace.visualstudio.com`,
+  `formulae.brew.sh`, `downloads.claude.ai` (версии программ, `software.py`: имя пакета); `api.anthropic.com` (лимиты
+  подписки Claude — OAuth-токен Claude Code); `opencode.ai` (лимиты OpenCode Go — ключ OpenCode); `github.com`
+  (анонимная проверка публичной копии: путь `owner/repo` из `origin`/`github`, без учётных данных). Ещё — шлюз
+  OpenCode из конфига пользователя (https или `http://` частной сети) с его ключом; обновление CLI — штатные установщики.
 - **Путь к службе один — Apache debian**: приложение в Docker слушает только unix-сокет `/run/studio/web.sock`.
   nginx контейнера принимает запросы только от адреса Apache и передаёт его `X-Forwarded-For` без добавления своего
   адреса. Прямого TCP-входа в приложение нет: счёт попыток входа нельзя обходить поддельным заголовком.

@@ -11,6 +11,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+from . import limits
+
 TTL = 60
 WINDOWS = (("five_hour", "5 часов", 300), ("seven_day", "Неделя", 10080),
            ("monthly", "Месяц", None))
@@ -144,7 +146,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _claude_request(token):
-    request = urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers={
+    request = urllib.request.Request(f"https://{limits.HOSTS['anthropic']}/api/oauth/usage", headers={
         "Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20",
         "Accept": "application/json", "User-Agent": "studio-agent"})
     opener = urllib.request.build_opener(_NoRedirect())

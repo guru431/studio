@@ -9,12 +9,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import subscription
+from . import limits, subscription
 
 JSONC = re.compile(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/|,(?=\s*[}\]])')
 REFERENCE = re.compile(r"\{(env|file):([^{}]+)\}")
 GATEWAY_PATH = "/subscriptions/opencode-go/usage"
-OFFICIAL = "https://opencode.ai/zen/go/v1/usage"
+OFFICIAL = f"https://{limits.HOSTS['opencode']}/zen/go/v1/usage"
 
 
 def _json(path):
