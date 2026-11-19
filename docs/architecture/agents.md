@@ -71,7 +71,8 @@
   `cc_version`, `projects_root` — из `hello`; id `AUTOINCREMENT` — id отозванного не достаётся новому: им ключуются
   `agent_events` без FK, память службы и адреса push), `agent_events` (история подключений, только добавляется —
   `bridge.record`: `enroll`, `revoke`, `online`, `offline`, `open`, `pin_ok`, `pin_fail`, `session_start`; id и имя
-  компьютера без FK, `device` — `bridge.device`), `code_chats` (отметки студии поверх сессий машины: какие чаты
+  компьютера без FK, `device` — `bridge.device`; новый чат участника — ещё строка владельцу с `device`
+  `claude_code.MEMBER`, без IP), `code_chats` (отметки студии поверх сессий машины: какие чаты
   завела и `open`/`closed`; текста нет). При создании и ветвлении чата `code_chats.origin` сразу получает `studio`:
   первый незавершённый ход не зависит от запаздывающей метки моста. Закрытие внешней сессии эту отметку не ставит;
   прежние сессии по-прежнему распознаются по метке моста. `push_subs` — подписка устройства, каскад от `sessions`. `agents` —
