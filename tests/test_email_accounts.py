@@ -409,6 +409,29 @@ def test_operator_adds_missing_email_without_resetting_password_or_sessions(stud
     assert manage.set_email({"STUDIO_ACCOUNT_LOGIN": "owner", "STUDIO_ACCOUNT_EMAIL": "other@example.com"}) == 2
 
 
+def test_operator_replaces_email_and_turns_codes_off_without_mailbox_access(studio, mail, capsys):
+    uid = admin(studio)
+    make_user(studio, "friend")
+    signin(studio, "owner")
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    accounts.new_token(uid, "reset", "owner@example.com", accounts.RESET_SEC)
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "owner"}) == 2
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "owner", "STUDIO_ACCOUNT_EMAIL": "friend@example.com"}) == 2
+    assert state.DB.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()[0] == "owner@example.com"
+    capsys.readouterr()
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "Owner", "STUDIO_ACCOUNT_EMAIL": "Fresh@Example.com",
+                                 "STUDIO_EMAIL_CODES": "off"}) == 0
+    out = capsys.readouterr().out
+    assert f"пользователь {uid}" in out and "fresh@example.com" not in out
+    assert state.DB.execute("SELECT email,email_codes FROM users WHERE id=?", (uid,)).fetchone()[:] == ("fresh@example.com", 0)
+    assert not state.DB.execute("SELECT 1 FROM email_tokens WHERE user_id=?", (uid,)).fetchone()
+    assert not state.DB.execute("SELECT 1 FROM sessions WHERE user_id=?", (uid,)).fetchone()
+    kinds = [tuple(r) for r in state.DB.execute("SELECT kind,detail FROM security_events WHERE user_id=? ORDER BY id", (uid,))]
+    assert kinds[-2:] == [("email_change", "operator"), ("email_codes_off", "operator")]
+    assert login(studio, "fresh@example.com", PASSWORD).status_code == 303
+    assert not mail
+
+
 def test_migration_39_to_40_preserves_accounts_sessions_and_unique_email(env):
     connection = db.connect(env.db_path)
     connection.executescript(db.SCHEMA.split(db.SPEECH_45, 1)[0].removesuffix(db.MEDIA_44).removesuffix(db.MCP_43).removesuffix(db.VOICE_42).removesuffix(db.CODE_41).removesuffix(db.EMAIL_40) + "\nPRAGMA user_version=39;")

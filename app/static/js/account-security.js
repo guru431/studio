@@ -22,7 +22,8 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   password_reset: tr("пароль сброшен администратором"), project_member_add: tr("доступ к проекту выдан"),
   project_member_remove: tr("доступ к проекту отозван") };
 const DETAILS = { password: tr("паролем"), pin: 'PIN', passkey: tr("ключом"), bridge: tr("мост"), login: '', chat: tr("чат"),
-  code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все") };
+  code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все"),
+  operator: tr("оператором хоста") };
 
 function moment(ts) {
   return ts ? dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '—';
