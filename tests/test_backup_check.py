@@ -446,6 +446,26 @@ def test_backup_removes_local_snapshots_of_killed_runs(base, env, monkeypatch):
     assert not left.exists() and keep.exists()
 
 
+def test_a_copy_that_never_ran_is_pushed_to_active_admins_once(studio, sent):
+    """Юнит не дошёл до manage.py — итог копирования не меняется: старше admin.COPY_STALE_SEC — один push; новый
+    итог сбрасывает отметку; записи нет вовсе — молчим. Порог панели — тот же, из ответа сервера."""
+    owner = make_user(studio, "owner", is_admin=True)
+    assert admin.notify_stale_copy() == 0                                  # копий ещё не было
+    at = clock.NOW()
+    manage._record_result(state.DB, manage.COPY_KEY, {"ok": True, "at": at, "notified": True})
+    studio.clock[0] = at + admin.COPY_STALE_SEC
+    assert admin.notify_stale_copy() == 0
+    studio.clock[0] += 1
+    assert admin.notify_stale_copy() == 1
+    assert sent == [(owner, admin.STALE_NOTICE, "admin", "Студия")]
+    assert admin.notify_stale_copy() == 0 and admin.notify_failed_check() == 0 and len(sent) == 1
+    manage._record_result(state.DB, manage.COPY_KEY, {"ok": True, "at": clock.NOW(), "notified": True})
+    studio.clock[0] += admin.COPY_STALE_SEC + 1
+    assert admin.notify_stale_copy() == 1 and len(sent) == 2
+    signin(studio, "owner")
+    assert studio.c.get("/api/admin/storage").json()["stale_sec"] == admin.COPY_STALE_SEC == 36 * 3600
+
+
 def test_overlapping_backups_do_not_share_a_part_file(base, env, monkeypatch):
     add_rows(base, tokens=0, files=())
     monkeypatch.setattr(clock, "NOW", lambda: T0)
