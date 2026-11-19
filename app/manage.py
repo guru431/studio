@@ -24,6 +24,9 @@ verify-backup [ПУТЬ] — поднимется ли студия из коп�
 Без пути краткий итог (check_summary: флаг, число проблем, время) ложится в рабочую базу — `settings`
 CHECK_KEY: его показывает панель, а провал служба сообщает администраторам (admin.notify_failed_check).
 Ночной юнит копии зовёт verify-backup сразу после backup.
+
+set-email — недостающая почта учётки; recover-email — замена почты и/или выключение кодов входа учётки, у
+которой нет доступа к ящику или сломан SMTP (recover_email). Обе читают значения из stdin, выводят только id.
 """
 import json
 import os
@@ -48,7 +51,7 @@ import security
 import state
 
 USAGE = ("использование: manage.py create-admin < файл со строками KEY=VALUE | manage.py backup"
-         " | manage.py verify-backup [ПУТЬ] | manage.py set-email < KEY=VALUE")
+         " | manage.py verify-backup [ПУТЬ] | manage.py set-email < KEY=VALUE | manage.py recover-email < KEY=VALUE")
 GATEWAY_NAME = "srvllm"
 GATEWAY_URL = "http://10.77.1.15:4000"
 DEFAULT_MODEL = "local-gemma-abl"
@@ -164,6 +167,63 @@ def set_email(values: dict[str, str]) -> int:
         conn.close()
 
 
+def recover_email(values: dict[str, str]) -> int:
+    """Учётка без доступа к ящику или при сломанном SMTP: оператор заменяет почту (STUDIO_ACCOUNT_EMAIL) и/или
+    выключает коды входа (STUDIO_EMAIL_CODES=off). Почтовые токены учётки удаляются, её веб-сеансы закрываются,
+    в журнал безопасности учётки — событие с подробностью `operator`. В панель не вынесено: коды защищают учётку
+    и от сброса пароля администратором."""
+    import email_accounts
+    import security_log
+    login = values.get("STUDIO_ACCOUNT_LOGIN", "").strip().lower()
+    codes_off = values.get("STUDIO_EMAIL_CODES", "").strip().lower() == "off"
+    try:
+        email = (email_accounts.email_address(values["STUDIO_ACCOUNT_EMAIL"])
+                 if values.get("STUDIO_ACCOUNT_EMAIL", "").strip() else None)
+        cfg = config.load()
+    except (ValueError, RuntimeError):
+        print("нужны корректные STUDIO_ACCOUNT_LOGIN, STUDIO_ACCOUNT_EMAIL и конфигурация", file=sys.stderr)
+        return 2
+    if email is None and not codes_off:
+        print("нужен STUDIO_ACCOUNT_EMAIL или STUDIO_EMAIL_CODES=off", file=sys.stderr)
+        return 2
+    if not re.fullmatch(auth.LOGIN_RE, login) or not cfg.db_path.is_file():
+        print("учётка или база не найдена", file=sys.stderr)
+        return 2
+    conn = db.connect(cfg.db_path)
+    before, state.DB = state.DB, conn               # security_log и auth пишут через state.DB
+    try:
+        db.migrate(conn)
+        row = conn.execute("SELECT id FROM users WHERE login=?", (login,)).fetchone()
+        if row is None:
+            print("учётка не найдена", file=sys.stderr)
+            return 2
+        uid = row["id"]
+        conn.execute("BEGIN")
+        try:
+            if email is not None:
+                conn.execute("UPDATE users SET email=? WHERE id=?", (email, uid))
+                security_log.record(uid, "email_change", detail="operator")
+            if codes_off:
+                conn.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
+                security_log.record(uid, "email_codes_off", detail="operator")
+            conn.execute("DELETE FROM email_tokens WHERE user_id=?", (uid,))
+            auth.end_sessions(uid)
+            conn.execute("COMMIT")
+        except sqlite3.IntegrityError:
+            conn.execute("ROLLBACK")
+            print("почта уже используется", file=sys.stderr)
+            return 2
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        done = (["почта заменена"] if email is not None else []) + (["коды входа выключены"] if codes_off else [])
+        print(f"пользователь {uid}: {', '.join(done)}, сеансы закрыты")
+        return 0
+    finally:
+        state.DB = before
+        conn.close()
+
+
 def _ensure_gateway(conn, login: str, key: str) -> None:
     """Подключение «srvllm» во всех разделах (чат — с DEFAULT_MODEL); связи ставит sections.py на
     этом же соединении (state.DB — на время вызова)."""
@@ -250,7 +310,9 @@ def _copy_backup(cfg: config.Config) -> int:
     local = cfg.db_path.with_name(f".{target.name}.part")
     shared = folder / f".{target.name}.part"
     try:
-        local.unlink(missing_ok=True)
+        # и снимки убитых запусков прежних суток: запуски сериализованы блокировкой, чужого живого снимка нет
+        for old in cfg.db_path.parent.glob(".studio-????????.db.part"):
+            old.unlink(missing_ok=True)
         with closing(sqlite3.connect(cfg.db_path)) as src, closing(sqlite3.connect(local)) as dst:
             src.backup(dst)
             # копия — один файл без -wal/-shm: открывать её с шары и переносить проще
@@ -302,8 +364,8 @@ def _check_copy(conn: sqlite3.Connection, cfg: config.Config, out: dict) -> None
     if out["schema_from"] < 1:                  # migrate налил бы в неё свежую схему и «прошёл»
         problems.append("копия пуста: схемы студии в ней нет")
         return
-    if out["schema_from"] > db.VERSION:
-        problems.append(f"схема копии ({out['schema_from']}) новее кода ({db.VERSION})")
+    if out["schema_from"] > db.VERSION:          # после отката на прежний код — штатно: пропуск, не провал
+        out["skipped"] = True
         return
     try:
         db.migrate(conn)
@@ -359,14 +421,15 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     уронил бы audio.clean_tmp при старте; свободно меньше копии с запасом VERIFY_RESERVE или 10 % — не
     копируется) и там проверяется: целостность, схема (1…db.VERSION, шаги db.STEPS проходят), учётки,
     зашифрованные данные и настройки текущим STUDIO_DATA_KEY, файлы на шаре (`stat`, не дольше VERIFY_FILES_SEC от начала их
-    обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется.
+    обхода). Рабочую базу не открывает, шару только читает; временная копия удаляется. Схема копии новее
+    db.VERSION (после отката на прежний код) — `skipped`: не `ok`, но и не провал (без тревоги, код 0).
     Итог — только числа и слова, без путей, логинов и имён: его видит панель (state.CFG — из службы
     или из main)."""
     cfg, start = state.CFG, clock.NOW()
     out = {"backup": None, "at": None, "size": None, "integrity": None, "schema_from": None, "schema_to": None,
            "users": None, **{name: {"ok": 0, "failed": 0} for name, _, _ in ENCRYPTED_BACKUP_FIELDS},
            "files": {"state": "skipped", "present": 0, "missing": 0, "checked": 0, "total": 0},
-           "ok": False, "took": 0, "problems": []}
+           "ok": False, "skipped": False, "took": 0, "problems": []}
     try:
         source = Path(path) if path else _newest_backup(cfg.media_dir / "backup")
         # stat — в том же try: между is_file и stat копию убирает уборка backup() или мигает шара
@@ -396,16 +459,18 @@ def verify_backup(path: "str | Path | None" = None) -> dict:
     finally:
         for extra in ("", "-journal", "-wal", "-shm"):
             Path(f"{tmp}{extra}").unlink(missing_ok=True)
-    out["ok"] = not out["problems"]
+    out["ok"] = not out["problems"] and not out["skipped"]
     out["took"] = round(clock.NOW() - start, 1)
     return out
 
 
 def check_summary(out: dict, *, notified: bool) -> dict:
     """Краткий итог verify_backup для `settings`: без путей, имён и слов — флаг, число проблем, время
-    проверки и время копии (None — копии нет). notified — о провале уже знают (проверка из панели)."""
-    return {"ok": bool(out["ok"]), "problems": len(out["problems"]), "at": clock.NOW(),
-            "backup_at": out.get("at"), "notified": bool(out["ok"] or notified)}
+    проверки и время копии (None — копии нет). notified — о провале уже знают (проверка из панели);
+    пропуск (`skipped`) — не провал, уведомлять не о чем."""
+    skipped = bool(out.get("skipped"))
+    return {"ok": bool(out["ok"]), "skipped": skipped, "problems": len(out["problems"]), "at": clock.NOW(),
+            "backup_at": out.get("at"), "notified": bool(out["ok"] or skipped or notified)}
 
 
 def record_check(conn: sqlite3.Connection, out: dict, *, notified: bool = False) -> None:
@@ -428,7 +493,8 @@ def last_copy(conn: sqlite3.Connection) -> "dict | None":
 
 
 def verify_command(argv: list[str]) -> int:
-    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается, 1 — нет, 2 — копии нет. Без пути
+    """verify-backup [ПУТЬ]: итог JSON в stdout; 0 — поднимается (или пропуск: копия новее кода), 1 — нет,
+    2 — копии нет. Без пути
     (новейшая копия, ночной юнит) краткий итог — в рабочую базу; не записался — только предупреждение."""
     try:
         state.CFG = config.load()
@@ -446,12 +512,14 @@ def verify_command(argv: list[str]) -> int:
                 conn.close()
         except sqlite3.Error as e:
             print(f"итог проверки не записан в базу ({type(e).__name__})", file=sys.stderr)
-    return 0 if out["ok"] else 2 if out["backup"] is None else 1
+    return 0 if out["ok"] or out["skipped"] else 2 if out["backup"] is None else 1
 
 
 def main(argv: list[str]) -> int:
     if argv == ["set-email"]:
         return set_email(read_pairs(sys.stdin.read()))
+    if argv == ["recover-email"]:
+        return recover_email(read_pairs(sys.stdin.read()))
     if argv == ["create-admin"]:
         return create_admin(read_pairs(sys.stdin.read()))
     if argv == ["backup"]:

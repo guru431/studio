@@ -763,7 +763,7 @@ async def chat_search(aid: int, pid: str, body: DiscoveryQuery, request: Request
 
 @router.get("/agents/{aid}/projects/{pid}/worktrees")
 async def worktree_list(aid: int, pid: str, request: Request):
-    own_agent(request, aid)
+    project_access.owner(request, aid)
     check_pid(pid)
     require_capability(aid, "worktrees")
     return _relay(await ask(request, aid, "worktrees", project=pid))
@@ -771,7 +771,7 @@ async def worktree_list(aid: int, pid: str, request: Request):
 
 @router.post("/agents/{aid}/projects/{pid}/worktrees")
 async def worktree_create(aid: int, pid: str, body: WorktreeName, request: Request):
-    own_agent(request, aid)
+    project_access.owner(request, aid)
     check_pid(pid)
     require_capability(aid, "worktrees")
     return _relay(await ask(request, aid, "worktree_create", project=pid, query=body.name))

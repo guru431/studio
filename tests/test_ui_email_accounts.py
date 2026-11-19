@@ -193,6 +193,47 @@ def test_admin_invitation_list_and_comment_survive_reload(browser, live, mail, w
         assert not errors
 
 
+def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser, live, monkeypatch):
+    instance, engine = browser
+    login = "smtp-" + engine
+    live.add_user(login, is_admin=True)
+    for key in ("STUDIO_SMTP_HOST", "STUDIO_MAIL_FROM"):
+        monkeypatch.delenv(key, raising=False)
+    sent = []
+    monkeypatch.setattr(account_mail, "_send", lambda *args: sent.append(args[0]))
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"}, verify=False)
+    cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+    connection = db.connect(live.db_path)
+    try:
+        connection.execute("DELETE FROM settings WHERE key='smtp'")
+        with instance.new_context(viewport={"width": 390, "height": 900}, has_touch=True, ignore_https_errors=True,
+                                  extra_http_headers={"Cookie": cookie}, service_workers="block") as context:
+            page = context.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(live.url + "/#/admin")
+            page.locator("#user-add").click()
+            page.locator("#invite-email").fill(f"nomail-{engine}@example.com")
+            page.locator("#invite-save").click()
+            failure = page.locator("#invite-form > p[role=alert]")
+            pw.expect(failure).to_contain_text(account_mail.UNSET_MESSAGE)
+            failure.locator("a.smtp-link").click()
+            page.locator("#smtp-test:not([disabled])").wait_for()
+            page.locator("#smtp-test").click()
+            pw.expect(page.locator("#smtp-status")).to_have_text(account_mail.UNSET_MESSAGE)
+            page.locator("#smtp-host").fill("smtp.example.com")
+            page.locator("#smtp-sender").fill("studio@example.com")
+            page.locator("#smtp-save").click()
+            pw.expect(page.locator("#smtp-status")).to_have_text("Настройки SMTP сохранены")
+            page.locator("#smtp-test").click()
+            pw.expect(page.locator("#smtp-status")).to_contain_text("Тестовое письмо отправлено")
+            fits(page)
+            assert sent == [login + "@example.com"] and not errors
+    finally:
+        connection.execute("DELETE FROM settings WHERE key='smtp'")
+        connection.close()
+
+
 def test_email_code_form_finishes_login_only_after_correct_code(browser, live, mail):
     instance, engine = browser
     login = "code-" + engine

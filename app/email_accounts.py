@@ -28,9 +28,10 @@ INVITE_SEC = 2 * 86400
 RESET_SEC = 1800
 CODE_SEC = 600
 CODE_ATTEMPTS = 5
+SMTP_TEST_SEC = 60
 PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
 EMAIL_PATHS = frozenset({"/api/me", "/api/me/email", "/api/me/email/confirm"})
-EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}", re.I)
+EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}")  # после lower(); re.I сопоставил бы «ſ» и «ı» с s и i
 
 
 def email_address(value: str) -> str:
@@ -149,7 +150,9 @@ async def login_code(uid: int, request: Request, next_: str, kind: str = "login"
     code = f"{secrets.randbelow(1000000):06d}"
     token = new_token(uid, kind, row["email"], CODE_SEC, code=code, next_=next_)
     try:
-        await account_mail.send(row["email"], "Студия: код входа", f"Код входа: {code}\nДействует 10 минут. Никому его не сообщайте.")
+        await account_mail.send(row["email"], "Студия: код входа / Studio: sign-in code",
+                                "Код входа действует 10 минут. Никому его не сообщайте.\n"
+                                "The sign-in code is valid for 10 minutes. Do not share it with anyone.\n\n" + code)
         token_row(token, kind)  # за время SMTP могли изменить пароль, почту или отключить учётку
     except BaseException:
         delete_token(token)
@@ -207,16 +210,20 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     throttle("invite-email", body.email, 3, 900)
     old = state.DB.execute("SELECT * FROM invitations WHERE email=?", (body.email,)).fetchone()
     if old and old["accepted"] is not None:
-        raise HTTPException(409, {"code": "email", "message": "Приглашение уже принято"})
+        # учётки с этим адресом нет (проверено выше): её удалили или сменили почту — адрес приглашается снова
+        state.DB.execute("UPDATE invitations SET accepted=NULL,user_id=NULL,token_hash=NULL,revoked=NULL,sent=0"
+                         " WHERE id=?", (old["id"],))
+        old = state.DB.execute("SELECT * FROM invitations WHERE id=?", (old["id"],)).fetchone()
     token, now = security.new_token(), clock.NOW()
     iid = old["id"] if old else secrets.token_hex(12)
     # Неотправленное приглашение остаётся в списке. Ошибка повторной отправки не отзывает прежнюю ссылку.
     if not old:
         state.DB.execute("INSERT INTO invitations(id,email,comment,is_admin,invited_by,created,expires) VALUES (?,?,?,?,?,?,?)",
                          (iid, body.email, body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC))
-    await account_mail.send(body.email, "Приглашение в Студию",
-                            "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке:\n"
-                            + link("invite", token) + "\nСсылка действует 48 часов.")
+    await account_mail.send_admin(body.email, "Приглашение в Студию / Invitation to Studio",
+                                  "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
+                                  "You are invited to Studio. Choose a login and password with this one-time link,"
+                                  " valid for 48 hours.\n\n" + link("invite", token))
     # После SMTP снова проверить права пригласившего и состояние приглашения.
     inviter = state.DB.execute("SELECT is_admin,disabled FROM users WHERE id=?", (admin.id,)).fetchone()
     if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
@@ -229,6 +236,21 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if not changed:
         raise invalid_token()
     return invitation(state.DB.execute("SELECT * FROM invitations WHERE id=?", (iid,)).fetchone())
+
+
+@router.post("/api/admin/smtp/test")
+async def smtp_test(admin: auth.User = Depends(auth.require_admin)):
+    """Тестовое письмо — только на подтверждённый адрес самого администратора, не чаще раза в SMTP_TEST_SEC."""
+    row = state.DB.execute("SELECT email FROM users WHERE id=?", (admin.id,)).fetchone()
+    if not row["email"]:
+        raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
+    if not account_mail.configured(account_mail.settings()):
+        raise account_mail.unset()
+    throttle("smtp-test", str(admin.id), 1, SMTP_TEST_SEC)
+    await account_mail.send_admin(row["email"], "Студия: тестовое письмо / Studio: test email",
+                                  "Это тестовое письмо: почта Студии настроена.\n"
+                                  "This is a test email: Studio mail is set up.")
+    return {"ok": True}
 
 
 @router.patch("/api/admin/invitations/{iid}", dependencies=[Depends(auth.require_admin)])
@@ -244,6 +266,12 @@ async def revoke(iid: str):
                             (clock.NOW(), iid)).rowcount:
         raise HTTPException(409, {"code": "accepted", "message": "Приглашение уже принято или удалено"})
     return Response(status_code=204)
+
+
+def revoke_invited_by(uid: int) -> None:
+    """Ожидающие приглашения держатся на правах пригласившего: разжалование, отключение и удаление их отзывают."""
+    state.DB.execute("UPDATE invitations SET revoked=?,token_hash=NULL WHERE invited_by=? AND accepted IS NULL"
+                     " AND revoked IS NULL", (clock.NOW(), uid))
 
 
 def invite_row(token: str):
@@ -293,9 +321,11 @@ async def accept_invite(request: Request):
 
 async def recovery_mail(token: str, email: str) -> None:
     try:
-        await account_mail.send(email, "Студия: восстановление пароля",
-                                "Чтобы задать новый пароль, откройте одноразовую ссылку:\n" + link("reset", token)
-                                + "\nСсылка действует 30 минут. Если вы не запрашивали её, проигнорируйте письмо.")
+        await account_mail.send(email, "Студия: восстановление пароля / Studio: password recovery",
+                                "Чтобы задать новый пароль, откройте одноразовую ссылку, она действует 30 минут."
+                                " Если вы не запрашивали её, проигнорируйте письмо.\n"
+                                "To set a new password, open this one-time link, valid for 30 minutes."
+                                " If you did not request it, ignore this email.\n\n" + link("reset", token))
     except HTTPException:
         delete_token(token)
 
@@ -356,23 +386,37 @@ async def complete_login(request: Request):
 @router.post("/api/me/email")
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "подтверждение почты")
+    await auth.confirm_password(uid, body.password, "подтверждение почты", digest=request.state.digest)
+    throttle("email-user", str(uid), 3, 900)        # до проверки занятости: 409 не даёт перебирать чужие адреса
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Эта почта уже используется"})
-    throttle("email-user", str(uid), 3, 900)
     token = new_token(uid, "email", body.email, RESET_SEC)
     try:
-        await account_mail.send(body.email, "Студия: подтвердите почту",
-                                "Подтвердите адрес почты для своей учётной записи:\n" + link("verify", token)
-                                + "\nСсылка действует 30 минут. Откройте её в браузере, где вошли в Студию.")
+        await account_mail.send(body.email, "Студия: подтвердите почту / Studio: confirm your email",
+                                "Подтвердите адрес почты для своей учётной записи. Ссылка действует 30 минут;"
+                                " откройте её в браузере, где вошли в Студию.\n"
+                                "Confirm the email address of your account. The link is valid for 30 minutes;"
+                                " open it in the browser where you are signed in to Studio.\n\n" + link("verify", token))
     except BaseException:
         delete_token(token)
         raise
     return {"message": "Письмо отправлено. Откройте ссылку в этом браузере."}
 
 
+async def change_notice(email: str) -> None:
+    """Прежнему адресу — без нового адреса и ссылок: смена почты переносит восстановление пароля."""
+    try:
+        await account_mail.send(email, "Студия: почта изменена / Studio: email changed",
+                                "Почта вашей учётной записи Студии изменена. Если это сделали не вы,"
+                                " срочно сообщите администратору Студии.\n"
+                                "The email address of your Studio account was changed. If it was not you,"
+                                " contact your Studio administrator right away.")
+    except HTTPException:
+        pass                         # смена уже состоялась; отказ записан в журнал без адреса
+
+
 @router.post("/api/me/email/confirm")
-async def confirm_email(request: Request):
+async def confirm_email(request: Request, tasks: BackgroundTasks):
     data = await public_data(request)
     state.DB.execute("BEGIN")
     try:
@@ -390,13 +434,15 @@ async def confirm_email(request: Request):
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+    if row["current_email"] and row["current_email"] != row["email"]:
+        tasks.add_task(change_notice, row["current_email"])
     return {"ok": True}
 
 
 @router.put("/api/me/email-codes")
 async def email_codes(body: CodesIn, request: Request):
     uid = request.state.user.id
-    await auth.confirm_password(uid, body.password, "коды входа")
+    await auth.confirm_password(uid, body.password, "коды входа", digest=request.state.digest)
     if not has_email(uid):
         raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
     state.DB.execute("UPDATE users SET email_codes=? WHERE id=?", (int(body.enabled), uid))

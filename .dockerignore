@@ -8,6 +8,7 @@
 !deploy/docker/**
 !deploy/md2pdf.py
 !deploy/md2pdf.sha256
+!deploy/chromium-offline.sh
 !agent/
 !agent/studio-agent.zip
 !agent/studio-agent-setup.exe

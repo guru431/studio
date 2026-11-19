@@ -96,8 +96,9 @@ class SelectionHTML(HTMLParser):
     def handle_data(self, data):
         if not self.blocked:
             self.has_text |= bool(data.strip())
-            # Keep blank lines in pre-wrap user messages through md2pdf's second Markdown pass.
-            self.parts.append(html.escape(data).replace('\n', '&#10;'))
+            # Keep blank lines in pre-wrap user messages through md2pdf's second Markdown pass;
+            # a CR (also from &#13;) ends a line there as well.
+            self.parts.append(html.escape(re.sub(r'\r\n?', '\n', data)).replace('\n', '&#10;'))
 
 
 def selection_html(fragment: str) -> str:

@@ -216,9 +216,9 @@ def test_password_opens_and_shares_the_password_pause(studio):
         assert r.status_code == 403 and code(r) == "password"
     r = studio.c.post("/api/lock/password", json={"password": "password-123"})
     assert r.status_code == 429 and code(r) == "locked"
-    # пауза — та же, что у смены пароля: с компьютера той же учётки пароль сменить нельзя
-    r = second_session(studio).post("/api/me/password", json={"current": "password-123", "new": "new-password-456"})
-    assert r.status_code == 429 and code(r) == "locked"
+    # пауза — этой сессии (auth.confirm_password): другой браузер той же учётки пароль подтверждает
+    r = second_session(studio).put("/api/me/pin", json={"password": "password-123", "pin": "1234"})
+    assert r.status_code < 300, r.text
     assert studio.c.get("/api/me").status_code == 423
     studio.clock[0] += 900
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
@@ -525,7 +525,7 @@ def test_pin_format_is_four_to_eight_ascii_digits(studio):
     for pin in ("123", "123456789", "12a4", "１２３４", "١٢٣٤", " 1234", "", "12 34"):
         r = studio.c.put("/api/me/pin", json={"password": "password-123", "pin": pin})
         assert r.status_code == 422 and code(r) == "pin_format", pin
-        assert ("pw", uid) not in auth.FAILS
+        assert not any(key[:2] == ("pw", uid) for key in auth.FAILS)
     assert pin_hash(uid) is None
     for pin in ("1234", "12345678"):
         assert studio.c.put("/api/me/pin", json={"password": "password-123", "pin": pin}).status_code == 200, pin
@@ -737,7 +737,7 @@ def test_pin_and_password_pauses_are_apart(studio):
     set_pin(uid, "0007")
     for _ in range(PIN_FAILS):
         pin(studio, "1111")
-    assert ("pw", uid) not in auth.FAILS
+    assert not any(key[:2] == ("pw", uid) for key in auth.FAILS)
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     studio.c.post("/api/lock/now")
     for _ in range(5):
