@@ -10,12 +10,36 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.pytest_support import new_event_loop
+from tools.pytest_support import new_event_loop, strict_skip
 
 APP = ROOT / "app"
 CLIENT = ROOT / "client"
 DEPLOY = ROOT / "deploy"
 sys.path.insert(0, str(APP))             # модули службы импортируют друг друга по имени, как в main.py
+
+# Осознанные пропуски: при STUDIO_TESTS_STRICT=1 остаются пропусками (`strict_skip`), остальные — отказ.
+DELIBERATE_SKIPS = (
+    "Playwright не эмулирует мобильный Firefox",
+    "сценарии «Агентов» — Chromium и WebKit",
+    "forced-colors и contrast эмулирует только Chromium",
+    "Windows WebKit cannot play an independent PCM WAV Blob",
+    "нет прав на символические ссылки",
+    # живая приёмка без реквизитов владельца
+    "GATEWAY_KEY_OWNER_IMAGES is required",
+    "STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required",
+    "STUDIO_LIVE_VOICE (запись",
+    "PowerShell and studio-batch.local.ps1 are required",
+)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    return strict_skip((yield), DELIBERATE_SKIPS, item)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector):
+    return strict_skip((yield), DELIBERATE_SKIPS)       # importorskip на уровне модуля
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -323,6 +323,45 @@ def test_nginx_passes_every_body_and_wait_that_apache_passes():
         assert value.endswith("s") and int(value[:-1]) >= longest, (name, value, longest)
 
 
+COMPOSE = (DEPLOY / "docker" / "compose.yaml").read_text(encoding="utf-8")
+
+
+def _compose_block(start: str, end: "str | None") -> str:
+    """Текст блока compose.yaml между двумя строками-заголовками, без комментариев."""
+    text = uncommented(COMPOSE)
+    begin = text.index(start + "\n")
+    return text[begin:text.index(end + "\n", begin) if end else len(text)]
+
+
+def _keys(block: str, indent: int) -> dict:
+    """Ключи заданного отступа и их значения в той же строке."""
+    return dict(re.findall(rf"^ {{{indent}}}([A-Za-z_<]+):[ ]?(.*)$", block, re.M))
+
+
+def test_compose_keeps_the_container_restrictions_of_both_services():
+    """uid 10001, корень только для чтения, без capabilities и новых привилегий: ослабление якоря `common`
+    или переопределение в сервисе прошло бы зелёный набор."""
+    common = _keys(_compose_block("x-common: &common", "services:"), 2)
+    assert common["user"] == '"10001:10001"' and common["read_only"] == "true"
+    assert common["cap_drop"] == "[ALL]" and common["security_opt"] == "[no-new-privileges:true]"
+    for name, end in (("  web:", "  ingress:"), ("  ingress:", None)):
+        block = _compose_block(name, end)
+        keys = _keys(block, 4)
+        assert keys["<<"] == "*common", name
+        assert not {"user", "read_only", "cap_drop", "privileged", "pid", "ipc", "userns_mode"} & set(keys), name
+        if "security_opt" in keys:              # список сервиса заменяет список якоря целиком
+            options = re.search(r"^    security_opt:\n((?:      - .*\n)+)", block, re.M).group(1)
+            assert "      - no-new-privileges:true\n" in options, name
+    web = _compose_block("  web:", "  ingress:")
+    assert "ports" not in _keys(web, 4) and "expose" not in _keys(web, 4)     # TCP-входа в приложение нет
+    assert "      - seccomp:./chromium-seccomp.json\n" in web
+    assert _keys(web, 4)["cap_add"] == "[SYS_CHROOT]"
+    ingress = _compose_block("  ingress:", None)
+    ports = re.search(r"^    ports:\n((?:      - .*\n)+)", ingress, re.M).group(1)
+    assert ports == '      - "${STUDIO_BIND_IP:?Set STUDIO_BIND_IP}:${STUDIO_BACKEND_PORT:-8151}:8080"\n'
+    assert "network_mode" not in _keys(ingress, 4) and "cap_add" not in _keys(ingress, 4)
+
+
 def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
@@ -402,6 +441,16 @@ def test_deploy_cleanup_removes_only_the_folder_it_created(tmp_path, outcome):
         assert {p.name for p in root.iterdir()} == {".incoming-old", ".incoming-active", ".incoming-collision"}, result.stderr
         assert not package.exists()
         assert result.returncode == {"success": 0, "upload-failed": 7, "mkdir-failed": 1}[outcome], result.stderr
+
+
+@pytest.mark.parametrize("path", [".tmp/deploy-x/studio-agent.zip", ".tmp/browser-mcp-1/shot.png"])
+def test_local_build_folder_is_gitignored(path):
+    """Пакет выкладки (ZIP моста с адресом установки) и снимки MCP лежат в .tmp/: `git add -A` не уносит их."""
+    git = shutil.which("git")
+    if not git:
+        pytest.skip("нет git — проверка .gitignore пропущена")
+    r = subprocess.run([git, "-C", str(ROOT), "check-ignore", "-q", path], capture_output=True, timeout=20)
+    assert r.returncode == 0, f"{path} не покрыт .gitignore"
 
 
 def test_install_swaps_the_bridge_archive_with_the_code():
@@ -1063,6 +1112,144 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     calls = (root / "calls").read_text().splitlines()
     assert ("previous image restored" in r.stderr) is not first
     assert calls[-1].endswith("stop --timeout 20") is first
+
+
+def _posix(path: Path) -> str:
+    """Путь для проверок `^/…` скрипта: в Git Bash — /d/…, а не D:/…."""
+    text = path.as_posix()
+    return "/" + text[0].lower() + text[2:] if os.name == "nt" and text[1:2] == ":" else text
+
+
+@pytest.mark.integration                   # настоящий Bash и файловые процессы: > 1 с на Windows
+@pytest.mark.parametrize("outcome", ["installed", "unchanged", "empty", "configtest-failed", "reload-failed"])
+def test_install_proxy_restores_the_previous_vhost_on_refusal(tmp_path, outcome):
+    """Отказ configtest или reload Apache возвращает прежний vhost; успех сохраняет прежний для ручного отката."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    etc, target, log = tmp_path / "etc", tmp_path / "sites" / "studio.conf", tmp_path / "log"
+    etc.mkdir()
+    target.parent.mkdir()
+    target.write_text("old vhost\n", newline="\n")
+    incoming = {"unchanged": "old vhost\n", "empty": ""}.get(outcome, "new vhost\n")
+    proxy = (DEPLOY / "install-proxy.sh").read_text(encoding="utf-8").replace("/etc/studio", _posix(etc))
+    # Функции сильнее PATH: Apache и systemd не нужны; flock в Git Bash нет. Каждый вызов пишет, какой vhost видел.
+    stubs = ('flock() { :; }\n'
+             'apache2ctl() { echo "apache2ctl $* $(cat "$target")" >> "$LOG"; [ "$OUTCOME" != configtest-failed ]; }\n'
+             'systemctl() { echo "systemctl $* $(cat "$target")" >> "$LOG";'
+             ' if [ "$OUTCOME" = reload-failed ] && [ ! -e "$LOG.once" ]; then touch "$LOG.once"; return 1; fi; }\n')
+    script = proxy.replace("set -euo pipefail\n", "set -euo pipefail\n" + stubs, 1)
+    env = {**os.environ, "LOG": log.as_posix(), "OUTCOME": outcome}
+    r = subprocess.run([bash, "-c", script, "install-proxy.sh", _posix(target)], input=incoming.encode(), env=env,
+                       capture_output=True, timeout=20)
+    stderr = r.stderr.decode("utf-8")
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    previous = etc / "apache-vhost.previous.conf"
+    assert r.returncode == (0 if outcome in ("installed", "unchanged") else 1), stderr
+    assert target.read_text() == ("new vhost\n" if outcome == "installed" else "old vhost\n")
+    assert previous.exists() is (outcome == "installed")
+    assert [p.name for p in etc.iterdir() if p.name.startswith("proxy.")] == []      # рабочая папка убрана
+    expected = {"installed": ["apache2ctl -t new vhost", "systemctl reload apache2 new vhost"],
+                "unchanged": [], "empty": [], "configtest-failed": ["apache2ctl -t new vhost"],
+                "reload-failed": ["apache2ctl -t new vhost", "systemctl reload apache2 new vhost",
+                                  "systemctl reload apache2 old vhost"]}[outcome]
+    assert calls == expected, calls
+    if outcome == "installed":
+        assert previous.read_text() == "old vhost\n"
+    if outcome == "configtest-failed":
+        assert "proxy config rejected; previous file restored" in stderr
+    if outcome == "reload-failed":
+        assert "proxy reload failed; previous file restored" in stderr
+
+
+@pytest.mark.integration                   # настоящий Bash: > 1 с на Windows под нагрузкой набора
+@pytest.mark.parametrize("empty", ["studio-agent.zip", "studio-agent-setup.exe", "studio-agent-setup.pkg",
+                                   "studio-agent-setup.sh"])
+def test_docker_install_refuses_an_empty_bridge_artifact(tmp_path, empty):
+    """`[ -s zip ] && [ -s exe ]` под set -e: отказ левой части списка скрипт не завершает — пустой ZIP
+    проходил, а мосты переставали получать обновления."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    for name in ("studio-agent.zip", "studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh"):
+        (agent / name).write_bytes(b"" if name == empty else b"x")
+    start = INSTALL_DOCKER.index('rm "$probe"\n') + len('rm "$probe"\n')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("version=$(sed", start)]
+    script = f"set -euo pipefail\nNEW={tmp_path.as_posix()}\n" + block + "echo unreachable\n"
+    r = subprocess.run([bash, "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert r.returncode == 1 and "unreachable" not in r.stdout, r
+    assert empty in r.stderr
+
+
+@pytest.mark.integration                   # настоящий Bash: > 1 с на Windows под нагрузкой набора
+@pytest.mark.parametrize("current,running,database,fail,backup,code", [
+    (True, True, "47", "", True, 0),                # шаг схемы впереди — копия до переключения
+    (True, True, "48", "", False, 0),               # схема та же — копии нет
+    (True, True, "47", "1", True, 1),               # копия не вышла — выкладка прервана
+    (True, True, "unknown", "", False, 1),          # версию базы не прочесть — отказ, а не выкладка вслепую
+    (True, False, "47", "", False, 0),              # прежний контейнер не работает — копировать нечем
+    (False, False, "47", "", False, 0),             # первая установка
+], ids=["schema-step", "same-schema", "backup-failed", "unreadable", "stopped", "first-install"])
+def test_docker_install_backs_up_the_database_before_a_schema_step(tmp_path, current, running, database, fail,
+                                                                   backup, code):
+    """Шаг схемы применяется первым стартом нового образа: испорченные им данные возвращала только ночная копия."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    root = tmp_path / "r"
+    (root / ".incoming-x" / "app").mkdir(parents=True)
+    (root / ".incoming-x" / "app" / "db.py").write_text('"""db"""\nVERSION = 48\n', newline="\n")
+    if current:
+        (root / "current" / "deploy" / "docker").mkdir(parents=True)
+        (root / "current" / "deploy" / "docker" / "compose.yaml").write_text("name: studio\n", newline="\n")
+    start = INSTALL_DOCKER.index("# A schema step")
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index('release="$R/releases/', start)]
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming-x\n"
+             'docker() { echo "$*" >> "$R/calls"; case "$*" in'
+             ' *" ps "*) if [ "$RUNNING" = 1 ]; then echo 0123456789ab; fi ;;'
+             ' *"PRAGMA user_version"*) echo "$DATABASE" ;;'
+             ' *"manage.py backup"*) [ -z "$FAIL" ] ;; esac; }\n')
+    env = {**os.environ, "RUNNING": str(int(running)), "DATABASE": database, "FAIL": fail}
+    r = subprocess.run([bash, "-c", stubs + block + "echo switched\n"], env=env, capture_output=True, text=True,
+                       encoding="utf-8", timeout=20)
+    assert r.returncode == code and ("switched" in r.stdout) is (code == 0), r
+    calls = (root / "calls").read_text().splitlines() if (root / "calls").exists() else []
+    assert any("manage.py backup" in c for c in calls) is backup, calls
+    assert all(c.startswith(f"compose --env-file {root.as_posix()}/current/deploy/docker/host.conf ") for c in calls)
+    if fail:
+        assert "backup before the schema change failed" in r.stderr
+
+
+@pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
+def test_docker_rollback_runs_the_previous_release_with_its_own_host_conf(tmp_path):
+    """`set -a` у host.conf экспортировал значения нового релиза, а окружение у Compose сильнее `--env-file`:
+    откат поднимал прежний образ с новыми STUDIO_BIND_IP и STUDIO_URL. Скрипту нужен только STUDIO_MEDIA_DIR."""
+    bash, env = _symlink_bash(tmp_path)
+    root = tmp_path / "r"
+    new, old = root / ".incoming-x", root / "releases" / "old"
+    for folder, ip in ((new, "192.0.2.99"), (old, "192.0.2.15")):
+        (folder / "deploy" / "docker").mkdir(parents=True)
+        (folder / "deploy" / "docker" / "host.conf").write_text(
+            f"STUDIO_URL=https://{ip}\nSTUDIO_MEDIA_DIR=/mnt/media/studio\nSTUDIO_BIND_IP={ip}\n", newline="\n")
+    subprocess.run([bash, "-c", 'ln -s "$1/releases/old" "$1/current"', "x", root.as_posix()], env=env, check=True,
+                   timeout=20)
+    start = INSTALL_DOCKER.index("# This file contains")
+    read = INSTALL_DOCKER[start:INSTALL_DOCKER.index('[ "$(findmnt', start)]
+    start = INSTALL_DOCKER.index('release="$R/releases/')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("    exit 1\nfi\n", start) + len("    exit 1\nfi\n")]
+    # Compose видит только окружение процесса: заглушка пишет его, а не переменные оболочки.
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming-x; REVISION={'a' * 40}\n"
+             'docker() { echo "$(printenv STUDIO_BIND_IP || echo -) $(printenv STUDIO_URL || echo -) $*" >> "$R/calls";'
+             ' if [ "$6" = up ]; then [ -e "$R/failed" ] && return 0; touch "$R/failed"; return 1; fi; }\n')
+    script = stubs + read + 'echo "media=$STUDIO_MEDIA_DIR"\n' + block
+    r = subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True, timeout=20)
+    assert r.returncode == 1 and "previous image restored" in r.stderr, r
+    assert "media=/mnt/media/studio" in r.stdout
+    calls = (root / "calls").read_text().splitlines()
+    assert len(calls) == 2 and all(c.startswith("- - compose --env-file ") for c in calls), calls
+    assert calls[1].split()[4] == root.as_posix() + "/current/deploy/docker/host.conf"
 
 
 @pytest.fixture
