@@ -282,8 +282,8 @@ def test_email_change_requires_password_and_link_for_same_account(studio, mail):
     assert studio.c.get("/api/me").json()["email"] == "new@example.com"
 
 
-def test_confirmed_email_change_notifies_the_previous_address_without_details(studio, mail, monkeypatch):
-    admin(studio)
+def test_confirmed_email_change_notifies_the_previous_address_without_details(studio, mail, monkeypatch, caplog):
+    uid = admin(studio)
     assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 200
     assert studio.c.post("/api/me/email/confirm", json={"token": token(mail)}).status_code == 200
     recipient, subject, body = mail[-1]
@@ -297,8 +297,12 @@ def test_confirmed_email_change_notifies_the_previous_address_without_details(st
     assert studio.c.post("/api/me/email", json={"email": "third@example.com", "password": PASSWORD}).status_code == 200
     secret = token(mail)
     monkeypatch.setattr(account_mail, "send", failed)
+    caplog.set_level(logging.INFO)
     assert studio.c.post("/api/me/email/confirm", json={"token": secret}).status_code == 200
     assert studio.c.get("/api/me").json()["email"] == "third@example.com" and len(mail) == sent + 1
+    # отказ фонового письма — в журнал id учётки и код, без адресов
+    assert f"change notice for user {uid} failed (mail)" in caplog.text
+    assert "@example.com" not in caplog.text
 
 
 def test_first_email_confirmation_sends_no_change_notice(studio, mail):
