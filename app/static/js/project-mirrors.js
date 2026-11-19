@@ -294,9 +294,27 @@ export function projectMirrors(host, trigger, aid, project) {
         await watch(item);
       }));
       state.replaceChildren(title, summary, ...(updated ? [el('p', { class: 'muted' }, updated)] : []), warning,
-        ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено ссылок, специальных объектов и связанных папок: {0}", data.skipped))] : []),
+        ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено исключений, ссылок, специальных объектов и связанных папок: {0}", data.skipped))] : []),
         ...(data.changes.length ? [difference(item, data, keep, omits, changed)] : []),
+        exclusions(item),
         el('div', { class: 'actions' }, check, remove, sync));
+    }
+
+    function exclusions(item) {
+      const saved = item.exclude || [];
+      const box = el('textarea', { id: 'code-mirror-exclude', class: 'input', rows: '3', spellcheck: 'false',
+        autocomplete: 'off', 'aria-label': tr("Исключения зеркала") }, saved.join('\n'));
+      const store = button(tr("Сохранить исключения"));
+      store.addEventListener('click', () => work(async () => {
+        const exclude = box.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        const fresh = await request('PUT', `${url}/${item.id}/exclude`, { exclude });
+        items = items.map((row) => (row.id === fresh.id ? fresh : row));
+        await inspect(fresh);
+      }));
+      return el('details', { class: 'project-mirror-exclude', open: saved.length > 0 },
+        el('summary', {}, tr("Постоянные исключения ({0})", saved.length)),
+        el('p', { class: 'muted' }, tr("Относительные пути папок и файлов проекта, по одному на строку, без шаблонов. Они не копируются, а в копии не удаляются. Каталог .git переносится целиком.")),
+        box, store);
     }
 
     async function inspect(item) {

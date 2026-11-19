@@ -44,7 +44,7 @@ disconnect до освобождения хода. Codex получает config
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
-| 0.41.0 | `projects.items[].dir` — настоящая папка проекта владельцу (без capability) | §5 |
+| 0.41.0 | `projects.items[].dir` — настоящая папка проекта владельцу (без capability); `hello.mirror_exclude` — постоянные исключения зеркала | §5, §23.2 |
 | 0.40.0 | `hello.project_mirror_discovery` — поиск существующих копий | §23.1 |
 | 0.39.0 | `hello.project_mirror` и `hello.software_update_all` | §23, §21 |
 | 0.33.0 | `hello.codex_models` (`models`, `engine: codex`) — обновление каталога без смены канала | §22 |
