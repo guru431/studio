@@ -97,13 +97,13 @@ def test_background_polling_does_not_extend_activity_or_reopen_expired_sections(
     owner(studio)
     enable(studio, ["code"], timeout=300)
     studio.clock[0] += 200
-    assert studio.c.post("/api/lock/alive", json={"active": False, "section": "code"}).json() == {"locked": False}
+    assert studio.c.post("/api/lock/alive", json={"active": False, "section": "code"}).json() == {"locked": False, "expired": False}
     studio.clock[0] += 100 + lock_policy.HEARTBEAT_GRACE + 1
-    assert studio.c.post("/api/lock/alive", json={"active": True, "section": "chat"}).json() == {"locked": False}
+    assert studio.c.post("/api/lock/alive", json={"active": True, "section": "chat"}).json() == {"locked": False, "expired": True}
     assert studio.c.get("/api/lock?section=code").json()["locked"] is True
     assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
     studio.clock[0] += 250
-    assert studio.c.post("/api/lock/alive", json={"active": True, "section": "code"}).json() == {"locked": False}
+    assert studio.c.post("/api/lock/alive", json={"active": True, "section": "code"}).json() == {"locked": False, "expired": False}
     studio.clock[0] += 250
     assert studio.c.get("/api/lock?section=code").json()["locked"] is False
 
@@ -116,7 +116,7 @@ def test_zero_timer_keeps_an_active_tab_open_despite_late_marks(studio):
     enable(studio, ["*"], timeout=0)
     for gap in (15.05, 14.95, 15.05, 15.05, 15 + 8 + 0.05):
         studio.clock[0] += gap
-        assert studio.c.post("/api/lock/alive", json={"active": True}).json() == {"locked": False}, gap
+        assert studio.c.post("/api/lock/alive", json={"active": True}).json() == {"locked": False, "expired": False}, gap
         assert studio.c.get("/api/me").status_code == 200
     studio.clock[0] += lock_policy.HEARTBEAT_GRACE + 0.05
     assert studio.c.get("/api/me").status_code == 423

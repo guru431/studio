@@ -384,6 +384,16 @@ export function setupJobs({ navigate }) {
     else schedule();
   });
   document.addEventListener('studio-me', paint);
+  // срок частичной защиты истёк (lock.js): строки закрытых разделов уходят сразу; готовые за час (и сканы их документов —
+  // их раздел знает только сервер) перечитываются без since, как при открытии страницы, без уведомлений о них
+  document.addEventListener('studio-sections-locked', ({ detail }) => {
+    running = running.filter((item) => !detail.sections.includes(item.section));
+    finished = [];
+    since = null;
+    first = true;
+    paint();
+    poll();
+  });
   document.addEventListener('studio-code-snapshot', paint);
   document.addEventListener('studio-navigation', paint);
   // нажатие на уведомление при открытом окне студии: sw.js шлёт адрес записи

@@ -155,6 +155,7 @@ let activityAt = 0;      // только настоящие действия п�
 let markedAt = 0;
 let checkedAt = Date.now();
 let idleTimer = null;
+let forgotten = false;   // данные защищённых разделов уже забыты за это истечение (forgetGuarded)
 let elsewhere;
 
 function visibleSection() {
@@ -232,6 +233,21 @@ function requestLock() {
     .then(() => true, () => false);
 }
 
+/** Срок частичной защиты истёк, а показан открытый раздел: сервер уже не отдаёт данные защищённых разделов, страница
+ * забывает их из памяти — событие `studio-sections-locked` ({ sections }) для «В работе» (jobs.js) и «Поиска»
+ * (search.js), а при защищённых «Агентах» — ещё `studio-code-clear`. Один раз на истечение; отпирание его сбрасывает. */
+function forgetGuarded(expired) {
+  const { sections } = currentPolicy();
+  if (!expired || sections.includes('*')) {
+    forgotten = false;
+    return;
+  }
+  if (forgotten) return;
+  forgotten = true;
+  if (sections.includes('code')) document.dispatchEvent(new Event('studio-code-clear'));
+  document.dispatchEvent(new CustomEvent('studio-sections-locked', { detail: { sections: [...sections] } }));
+}
+
 /** Отметка «на экране»; true — сервер считает студию запертой (тогда экран блокировки), null — нет связи
  * или ответа нет дольше MARK_SEC (у fetch своего срока нет, iOS ждёт минуту и больше). */
 async function mark(allowActivity = true) {
@@ -242,10 +258,11 @@ async function mark(allowActivity = true) {
     const expired = currentPolicy().enabled && timeout > 0 && Date.now() - (activityAt || checkedAt) >= timeout * 1000;
     const active = timeout === 0 || (allowActivity && activityAt > markedAt && !expired);
     const sentAt = activityAt;
-    const { locked } = await api('POST', '/api/lock/alive', { touch: isTouch(), active, section: visibleSection() },
+    const { locked, expired: lapsed } = await api('POST', '/api/lock/alive', { touch: isTouch(), active, section: visibleSection() },
       { signal: AbortSignal.timeout(MARK_SEC * 1000) });
     if (active) markedAt = Math.max(markedAt, sentAt);
     if (locked && guarded()) waitOpen();
+    else forgetGuarded(!!lapsed);
     return locked;
   } catch {
     return null;         // нет связи: сервер проверит срок перед следующим защищённым запросом
@@ -487,6 +504,8 @@ function waitOpen(lockNow = null, knownState = null, forced = false) {
     waiting = { promise: new Promise((done) => { resolve = done; }), resolve, forced };
   } else if (forced) waiting.forced = true;
   clearTimeout(idleTimer);
+  // и в открытом разделе: отметок до отпирания нет, а «заперто» сервер узнает после запроса lockNow
+  Promise.resolve(lockNow).then(() => { if (waiting) forgetGuarded(true); });
   shroud();
   if (blocking() && !screen.open) {
     showLock(lockNow, knownState);

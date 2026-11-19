@@ -38,6 +38,11 @@ const memory = { q: '', section: '', model: '', since: '', until: '' };
 let returnTo = null;
 let screen = null;
 document.addEventListener('studio-locked', () => { returnTo = null; });
+// срок частичной защиты истёк (lock.js): выдача с кусками закрытых разделов уходит, тот же запрос — заново
+document.addEventListener('studio-sections-locked', () => {
+  returnTo = null;
+  if (screen) screen.forget();
+});
 
 function icon(section) {
   const box = el('span', { class: 'search-ico', 'aria-hidden': 'true' });
@@ -253,7 +258,17 @@ function mountScreen(view, ctx) {
   const restore = returnTo?.key === JSON.stringify(wanted()) ? returnTo : null;
   run(false, restore);
   if (!restore && matchMedia('(hover: hover)').matches) q.focus();
-  return { results, stop() { clearTimeout(timer); asked += 1; } };
+  return {
+    results,
+    stop() { clearTimeout(timer); asked += 1; },
+    forget() {
+      items = [];
+      shown = '';
+      more = false;
+      paint();
+      run();
+    },
+  };
 }
 
 export function mount(view, ctx) {
