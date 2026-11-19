@@ -38,7 +38,7 @@ import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy } from './stale.js';
-import { claimActiveSessions, refreshAfterFailure, refreshRequested, reloadStudio } from './refresh.js';
+import { claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
 import './code-drafts.js';
 
 const LOADERS = {
@@ -384,14 +384,14 @@ async function enter(worker) {
   window.addEventListener('hashchange', render);
   document.addEventListener('keydown', sectionKey);
   await render();
-  if (refreshRequested) {
+  if (claimRequested) {
     let failed;
     try { failed = await claimActiveSessions(); }
     catch { failed = true; }
     if (failed) {
       view.prepend(el('p', { id: 'refresh-status', class: 'status error', role: 'status' },
         tr("Не все активные сессии удалось перенести сюда. Студия повторит обновление.")));
-      refreshAfterFailure();
+      refreshAfterFailure(undefined, { claim: true });
     }
   }
   setupCodeActivity();

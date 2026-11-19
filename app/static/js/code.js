@@ -600,10 +600,7 @@ function opened(aid) {
 
 function usable(agent, status) {
   if (!agent) status.textContent = NO_AGENT;
-  else if (!agent.online) {
-    status.textContent = OFFLINE;
-    refreshAfterFailure();
-  }
+  else if (!agent.online) status.textContent = OFFLINE;
   return !!agent && agent.online;
 }
 

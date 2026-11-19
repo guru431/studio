@@ -1,12 +1,19 @@
 /* Полная перезагрузка сохраняет адрес чата и метку истории. Одноразовый флаг в записи
- * переживает reload без local/sessionStorage и просит раздел заново прочитать кэши моста. */
+ * переживает reload без local/sessionStorage и просит раздел заново прочитать кэши моста.
+ * Флаг `true` — кнопка «Обновить»: после загрузки окно забирает управление всеми идущими сессиями
+ * (claimRequested). Автоматическая перезагрузка после сбоя ставит `'auto'`: кэши читаются заново, а сессии других
+ * окон не трогаются; своё окно остаётся владельцем, потому что id окна переживает перезагрузку (code-window.js).
+ * Компьютер не на связи (409 `offline`) — не сбой страницы: перезагрузка его не вернёт, поток live ждёт `online` сам. */
 import { api } from './api.js';
 import { WINDOW } from './code-window.js';
 
 const KEY = 'studioRefresh';
 const RETRIES = 'studioRefreshRetries';
-export const refreshRequested = history.state?.[KEY] === true;
-if (refreshRequested) {
+const OWNER = 'studioWindow';
+const asked = history.state?.[KEY];
+export const refreshRequested = asked === true || asked === 'auto';
+export const claimRequested = asked === true;
+if (asked !== undefined) {
   const state = { ...history.state };
   delete state[KEY];
   history.replaceState(state, '');
@@ -15,7 +22,10 @@ if (refreshRequested) {
 let pending = null;
 let timer;
 let probing = false;
+let claimAgain = false;      // повтор кнопки «Обновить», перенёсшей не все сессии, — тоже с переносом
 const delays = [5000, 10000, 20000, 40000, 60000];
+/** Попыток подряд для одного адреса (счёт переживает перезагрузку): дальше — только кнопка «Обновить». */
+const ATTEMPTS_MAX = 10;
 let attempts = history.state?.[RETRIES]?.hash === location.hash ? history.state[RETRIES].attempts : 0;
 if (attempts) {
   const state = { ...history.state };
@@ -26,7 +36,7 @@ if (attempts) {
 function reload(automatic) {
   clearTimeout(timer);
   pending = null;
-  const state = { ...history.state, [KEY]: true };
+  const state = { ...history.state, [KEY]: automatic && !claimAgain ? 'auto' : true, [OWNER]: WINDOW };
   if (automatic) state[RETRIES] = { hash: location.hash, attempts };
   else delete state[RETRIES];
   history.replaceState(state, '');
@@ -35,8 +45,11 @@ function reload(automatic) {
 
 export function reloadStudio() { reload(false); }
 
-export function refreshAfterFailure(error) {
-  if (error && !['offline', 'network', 'timeout', 'busy', 'module', 'updated'].includes(error.code)
+/** Сбой связи, срока, сервера или модуля — перезагрузка с паузами. `claim` — повтор кнопки «Обновить» (app.js: не все
+ * сессии перенеслись): он и перенесёт оставшиеся. */
+export function refreshAfterFailure(error, { claim = false } = {}) {
+  if (claim) claimAgain = true;
+  if (error && !['network', 'timeout', 'busy', 'module', 'updated'].includes(error.code)
     && error.name !== 'TimeoutError' && !(error.status >= 500)) return;
   if (pending !== location.hash) {
     if (pending !== null) attempts = 0;
@@ -47,7 +60,7 @@ export function refreshAfterFailure(error) {
 
 function scheduleRetry() {
   clearTimeout(timer);
-  if (pending === null || document.visibilityState === 'hidden') return;
+  if (pending === null || document.visibilityState === 'hidden' || attempts >= ATTEMPTS_MAX) return;
   timer = setTimeout(retry, delays[Math.min(attempts, delays.length - 1)]);
 }
 
@@ -75,6 +88,7 @@ window.addEventListener('hashchange', () => {
   if (pending === location.hash) return;
   pending = null;
   attempts = 0;
+  claimAgain = false;
   clearTimeout(timer);
 });
 window.addEventListener('online', retry);
