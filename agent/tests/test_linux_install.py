@@ -78,7 +78,52 @@ def test_local_desktop_consent_failure_keeps_desktop_disabled():
         linux_menu.dispatch(ctrl, "desktop", True)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux abstract Unix socket and peer credentials")
+def test_menu_socket_is_a_file_in_the_bridge_home_not_an_abstract_name():
+    # Абстрактное имя без прав файловой системы мог занять другой пользователь — мост не стартовал бы.
+    home = Path(Path.cwd().anchor) / "home" / "studio-agent"   # адрес только вычисляется, каталог не создаётся
+    assert linux_menu._address(home) == home.resolve() / "run" / "menu.sock"
+
+
+def test_long_bridge_home_puts_the_menu_socket_into_the_runtime_directory(monkeypatch):
+    runtime = Path(Path.cwd().anchor) / "rt"
+    home = runtime / ("x" * 120)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    address = linux_menu._address(home)
+    assert address.parent.parent == runtime and address.parent.name.startswith("studio-agent-")
+    assert address != linux_menu._address(runtime / ("y" * 120))
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    with pytest.raises(OSError):
+        linux_menu._address(home)
+
+
+def test_menu_socket_directory_is_private_and_owned(tmp_path, monkeypatch):
+    folder = tmp_path / "run"
+    modes = []
+    monkeypatch.setattr(linux_menu.os, "chmod", lambda path, mode: modes.append(mode))
+    monkeypatch.setattr(linux_menu.os, "geteuid", lambda: tmp_path.stat().st_uid, raising=False)
+    linux_menu._private(folder)
+    assert folder.is_dir() and modes == [0o700]
+    monkeypatch.setattr(linux_menu.os, "geteuid", lambda: tmp_path.stat().st_uid + 1, raising=False)
+    with pytest.raises(PermissionError):
+        linux_menu._private(folder)                           # каталог другой учётной записи
+    (tmp_path / "file").write_text("")
+    with pytest.raises(OSError):
+        linux_menu._private(tmp_path / "file")
+
+
+def test_menu_socket_directory_refuses_a_symlink(tmp_path, monkeypatch):
+    (tmp_path / "elsewhere").mkdir()
+    try:
+        (tmp_path / "run").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    monkeypatch.setattr(linux_menu.os, "geteuid", lambda: (tmp_path / "run").lstat().st_uid, raising=False)
+    monkeypatch.setattr(linux_menu.os, "chmod", lambda path, mode: pytest.fail("chmod through a symlink"))
+    with pytest.raises(PermissionError):
+        linux_menu._private(tmp_path / "run")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux Unix socket and peer credentials")
 def test_local_control_reports_rejected_action_and_preserves_listener(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     def set_limit(n):

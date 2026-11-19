@@ -5,19 +5,40 @@ import hashlib
 import json
 import os
 import socket
+import stat
 import struct
 import subprocess
+from pathlib import Path
 
 from . import VERSION, app, enroll, host, linux_autostart, setup, single
 from .errors import Refused
 
 LIMIT = 64 * 1024
+UNIX_PATH_MAX = 108  # sun_path с завершающим NUL
 
 
 def _address(h):
-    # Abstract sockets disappear on exit and also work with long XDG paths.
-    digest = hashlib.sha256(os.fsencode(h.resolve())).hexdigest()[:32]
-    return f"\0studio-agent-{os.geteuid()}-{digest}"
+    """Сокет меню — в каталоге только владельца: имя абстрактного сокета занял бы любой локальный пользователь,
+    и мост не стартовал бы. Длинный путь каталога моста — в `$XDG_RUNTIME_DIR` (тоже только владельца)."""
+    path = h.resolve() / "run" / "menu.sock"
+    if len(os.fsencode(path)) < UNIX_PATH_MAX:
+        return path
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        digest = hashlib.sha256(os.fsencode(h.resolve())).hexdigest()[:32]
+        path = Path(runtime) / f"studio-agent-{digest}" / "menu.sock"
+        if len(os.fsencode(path)) < UNIX_PATH_MAX:
+            return path
+    raise OSError("Путь каталога моста слишком длинный для канала меню")
+
+
+def _private(folder):
+    """Каталог сокета: свой, не ссылка, режим 0700; чужой или подменённый — отказ."""
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    st = os.lstat(folder)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        raise PermissionError("Каталог канала меню принадлежит другой учётной записи")
+    os.chmod(folder, 0o700)
 
 
 def _check_peer(sock):
@@ -28,11 +49,20 @@ def _check_peer(sock):
 
 @contextlib.contextmanager
 def listener(h):
+    """Слушает один мост — `serve` под мьютексом надзирателя, поэтому прежний файл сокета (после падения) убирается."""
+    path = _address(h)
+    _private(path.parent)
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(path)
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as sock:
-        sock.bind(_address(h))
-        sock.listen(4)
-        sock.settimeout(0.25)
-        yield sock
+        sock.bind(str(path))
+        try:
+            sock.listen(4)
+            sock.settimeout(0.25)
+            yield sock
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
 
 
 def _receive(sock):
@@ -66,8 +96,8 @@ def handle_one(server, ctrl):
 def invoke(h, op, value=None):
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as sock:
         try:
-            sock.connect(_address(h))
-        except ConnectionRefusedError:
+            sock.connect(str(_address(h)))
+        except (ConnectionRefusedError, FileNotFoundError):  # мост не запущен: сокета нет или он остался от упавшего
             mutex = single.acquire()
             if mutex is None:
                 raise RuntimeError("Мост запускается или обновляется. Повторите действие.") from None
