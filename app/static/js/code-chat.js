@@ -1410,7 +1410,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         finish(data);
         return true;
       case 'offline':
-        refreshAfterFailure();
         if (data.wait === true) {     // live без компьютера: поток ждёт online, без опроса
           setRunning(false);
           paintActivity('offline');
@@ -1458,7 +1457,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function waitForComputer() {
-    refreshAfterFailure();
     setRunning(false);
     paintActivity('offline');
     showStatus(WAITING);

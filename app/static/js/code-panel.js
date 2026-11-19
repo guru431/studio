@@ -532,7 +532,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         } catch (err) {
           if (own.signal.aborted || !alive || mine !== gen) return;
           failures += 1;
-          if (err.code !== 'closed') refreshAfterFailure();
+          if (!['closed', 'offline'].includes(err.code)) refreshAfterFailure();   // компьютер не на связи — не сбой страницы
           publish(project, { ...results.get(project.pid), stale: true });
           if (['closed', 'offline'].includes(err.code)) {
             blocked = true;
@@ -760,7 +760,6 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   }
 
   function offline() {
-    refreshAfterFailure();
     summaries.delete(selected);
     checked.delete(selected);
     mode = 'offline';

@@ -170,7 +170,7 @@ def test_automatic_refresh_retries_all_summaries_and_preserves_composer(browser,
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(address),
             ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 1')"),
             ("type", "#code-text", text),
-            ("route", summary, 503, '{"detail":{"code":"offline","message":"Временная ошибка"}}'),
+            ("route", summary, 503, '{"detail":{"code":"busy","message":"Временная ошибка"}}'),
             ("click", "#refresh-app"),
             ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 3')"),
             ("eval", "afterFirstRetry", "document.querySelector('#code-text').value"),
@@ -286,3 +286,53 @@ def test_refresh_supports_keyboard_english_and_blocked_storage(live, engine, tmp
                 assert page.evaluate("!('studioRefresh' in history.state)")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 assert not errors
+
+
+#: паузы перезагрузки после сбоя (refresh.js: 5 и 10 с) — коротко, чтобы не ждать
+QUICK_RETRY = """const delay = window.setTimeout;
+  window.setTimeout = (fn, ms, ...args) => delay(fn, ms === 5000 || ms === 10000 ? 1200 : ms, ...args);"""
+WINDOW_ID = "import('/static/js/code-window.js').then(m => m.WINDOW)"
+
+
+def test_automatic_refresh_keeps_its_window_and_takes_no_sessions_from_other_windows(browser, live):
+    login = "refresh-own-window"
+    live.add_user(login)
+    machine = RefreshMachine({"alpha": {"chats": {CODE_CHAT_A: code_session("Current chat")}},
+                              "beta": {"chats": {CODE_CHAT_B: code_session("Other window")}}})
+    machine.project_summary, machine.project_activity = True, True
+    machine.running[CODE_CHAT_B] = {"turn": "elsewhere", "project": pid("beta"), "text": "В работе", "steps": [],
+                                    "asks": {}, "owner": "a" * 32, "followups": [], "engine": "claude"}
+    aid, server = code_online(live, login, machine)
+    address = f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"
+    summary = f"/api/code/agents/{aid}/projects/{pid('alpha')}/summary"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(address),
+            ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 1')"),
+            ("eval", "before", WINDOW_ID),
+            ("route", summary, 503, '{"detail":{"code":"busy","message":"Временная ошибка"}}'),
+            ("click", "#refresh-app"), ("wait", READY),
+            ("wait", "document.querySelector('#code-feed')?.textContent.includes('history revision 3')"),
+            ("wait", READY), ("unroute", summary), ("eval", "after", WINDOW_ID),
+            ("eval", "state", "'studioWindow' in history.state || 'studioRefresh' in history.state")],
+            init=QUICK_RETRY)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    # «Обновить» переносит сессию другого окна один раз; автоматический повтор — уже нет, а окно то же
+    claims = code_requests(machine, "claim")
+    assert [q["chat"] for q in claims] == [CODE_CHAT_B] and claims[0]["window"] == values["before"]
+    assert values["after"] == values["before"] and values["state"] is False
+
+
+def test_computer_off_line_does_not_reload_the_page(browser, live):
+    from test_ui_browser import enroll_live
+    login = "refresh-offline"
+    live.add_user(login)
+    aid, _ = enroll_live(live, login, "Выключенный ПК")
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"code/{aid}"),
+        ("wait", "document.querySelector('#code-offline')"),
+        ("eval", "later", "new Promise(r => setTimeout(() => r(performance.getEntriesByType('navigation')[0].type), 3000))")],
+        init=QUICK_RETRY)
+    assert not result.get("failed"), result
+    assert result["values"]["later"] == "navigate"
