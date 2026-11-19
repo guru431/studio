@@ -746,7 +746,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["records"] == "Расшифровка" and v["scans"] == "Сканы"
     assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]
     assert v["securityCurrent"] == "security"
-    assert v["security"] == ["Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
+    assert v["security"] == ["Электронная почта", "Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
                              "Журнал безопасности"]
     assert v["appearance"] == ["Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
     assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
