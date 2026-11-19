@@ -32,6 +32,7 @@ import { api } from './api.js';
 import { icon as svgIcon } from './icons.js';
 import { dateTime } from './time.js';
 import { fileMark } from './code-git.js';
+import { restoreEndings } from './line-endings.js';
 import { renderMarkdown } from './markdown.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
@@ -575,7 +576,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     }
     if (!alive || mine !== fileGen) return;
     let version = got.version;
-    const crlf = got.text.includes('\r\n');          // textarea отдаст \n — при сохранении вернуть \r\n
+    let original = got.text;                          // textarea отдаст \n — при сохранении вернуть прежние концы строк
     const editor = el('textarea', { id: 'code-editor', class: 'input code-editor', spellcheck: 'false',
       autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': nameOf(path) });
     editor.value = got.text;
@@ -601,10 +602,11 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       save.disabled = true;
       say(status, '', false);
       const sent = editor.value;
-      const text = crlf ? sent.replace(/\n/g, '\r\n') : sent;
+      const text = restoreEndings(original, sent);
       try {
         ({ version } = await api('PUT', `${url}/file`, { path, text, version }));
         mark.base = sent;
+        original = text;
         clearStats();
         if (alive && mine === fileGen) say(status, SAVED, false);
         if (alive) {
