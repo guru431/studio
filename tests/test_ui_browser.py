@@ -4062,15 +4062,15 @@ def test_every_field_has_the_mic_and_clear_inside(browser, live, width):
     assert not problems(r), problems(r)
 
 
-#: [середина главной кнопки − середина последнего видимого чипа, главная кнопка правее всех чипов, её высота]
+#: [разница центров кнопки и последней строки, выступ параметров вправо за кнопку, высота кнопки]
 BAR = """((go) => { const g = document.querySelector(go); const bar = g.closest('.composer-bar');
   const opts = [...bar.querySelector('.composer-opts').querySelectorAll(':scope > *, :scope > .chip-wrap > .chip')]
     .filter(e => !e.classList.contains('chip-wrap') && e.getBoundingClientRect().width > 0);
   const mid = (e) => { const b = e.getBoundingClientRect(); return b.top + b.height / 2; };
   const last = opts.reduce((a, e) => (mid(e) > mid(a) ? e : a));
   const gb = g.getBoundingClientRect();
-  return [Math.round(Math.abs(mid(g) - mid(last))), opts.every(e => e.getBoundingClientRect().right <= gb.left),
-    g.offsetHeight]; })"""
+  const overlap = Math.max(...opts.map(e => e.getBoundingClientRect().right)) - gb.left;
+  return [Math.round(Math.abs(mid(g) - mid(last))), overlap, g.offsetHeight]; })"""
 
 
 @pytest.mark.parametrize("width", [320, 390])
@@ -4092,7 +4092,7 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width
         ("eval", "photo", f"({BAR})('#photo-go')"),
         ("eval", "photoSeed", "!!document.querySelector('#chip-seed, #photo-seed')"),
         ("eval", "sizeChip", text_of("#chip-size")),
-        *go("video"), ("wait", "document.querySelector('#video-go')"),
+        *go("video"), ("wait", "document.querySelector('#video-model option')"),
         ("eval", "video", f"({BAR})('#video-go')"),
         ("eval", "videoSeed", "!!document.querySelector('#chip-vseed, #video-seed')"),
         ("eval", "videoChips", "[document.querySelector('#chip-quality').textContent,"
@@ -4102,7 +4102,7 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width
         ("click", "#chip-quality"), ("click", "#chip-quality-menu [data-value=high]"),
         ("eval", "qualityHigh", "[document.querySelector('#chip-quality').textContent,"
                                 " document.querySelector('#chip-quality').getAttribute('aria-label')]"),
-        *go("speech"), ("wait", "document.querySelector('#speech-go')"),
+        *go("speech"), ("wait", "document.querySelector('#speech-composer #chip-voice')"),
         ("eval", "speech", f"({BAR})('#speech-go')"),
         ("eval", "exa", EXA_KEY_SET), ("eval", "local", local),
         *open_new_chat(mobile=True),
@@ -4113,8 +4113,8 @@ def test_composer_bars_keep_the_main_button_on_the_last_row(browser, live, width
     assert not r.get("failed"), r
     v = r["values"]
     for name in ("photo", "video", "speech"):
-        gap, rightmost, height = v[name]
-        assert gap <= 4 and rightmost and height == 34, (name, v[name])
+        gap, overlap, height = v[name]
+        assert gap <= 4 and overlap <= 1 and height == 34, (name, v[name])
     assert not v["photoSeed"] and not v["videoSeed"] and v["sizeChip"] == "Портрет"
     quality, smooth, smooth_title = v["videoChips"]
     assert quality == "576p" and smooth == "плавно" and "32 к/с" in smooth_title
@@ -5017,7 +5017,8 @@ def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
         ("type", "#speech-text", "Привет. Как дела?"),
         ("eval", "count", "document.querySelector('#speech-count').textContent"),
         ("click", "#speech-go"),
-        ("wait", "document.querySelector('.sp-item[data-state=done]') && document.querySelector('.sp-view audio.sp-audio')"),
+        ("wait", "document.querySelector('.sp-item[data-state=done]') && "
+                 "document.querySelector('.sp-view audio.sp-audio[src^=\"/api/media/\"]')"),
         ("eval", "audio", "document.querySelector('.sp-view audio.sp-audio').getAttribute('src')"),
         ("eval", "text", "document.querySelector('.sp-view .sp-text').textContent"),
         ("eval", "spy", CLICKS), ("click", "#sp-download"), ("wait", "window.clicked.length === 1"),
