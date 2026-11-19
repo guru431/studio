@@ -7,7 +7,26 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from tools.pytest_support import new_event_loop
+from tools.pytest_support import new_event_loop, strict_skip
+
+# Осознанные пропуски: при STUDIO_TESTS_STRICT=1 остаются пропусками (`strict_skip`), остальные — отказ.
+DELIBERATE_SKIPS = (
+    "символические ссылки недоступны",
+    "symlinks are not available",
+    "нет свободной буквы диска",
+    "нужен распакованный PKG",
+    "could not import 'winreg'",         # модуль только Windows
+)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    return strict_skip((yield), DELIBERATE_SKIPS, item)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector):
+    return strict_skip((yield), DELIBERATE_SKIPS)       # importorskip на уровне модуля
 
 
 @pytest.hookimpl(tryfirst=True)
