@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from browser import find_browser
+from browser import find_browser, run_playwright
 from test_ui_browser import FAKE_MIC, READY, add_gateway, put_audio, wav_of
 from test_ui_email_accounts import live  # HTTPS fixture: Secure cookies work in Linux WebKit too.
 
@@ -28,7 +28,7 @@ def activate(page, selector):
 @pytest.fixture(scope="module", params=["chromium", "firefox", "webkit"])
 def engine(request):
     pw = pytest.importorskip("playwright.sync_api")
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         kind = getattr(driver, request.param)
         executable = find_browser() if request.param == "chromium" else kind.executable_path
         if not executable or not Path(executable).is_file():

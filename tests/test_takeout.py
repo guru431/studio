@@ -2,7 +2,6 @@
 import asyncio
 import builtins
 import dataclasses
-import gc
 import hashlib
 import io
 import json
@@ -600,16 +599,15 @@ def test_export_runs_one_at_a_time_per_user(studio):
         await first.__anext__()
         with pytest.raises(HTTPException) as busy:
             await takeout.get_export(token, as_user(uid))
-        other = await takeout.get_export(theirs, as_user(bob))               # у другого пользователя — своя
+        other = (await takeout.get_export(theirs, as_user(bob))).status_code
         await first.aclose()
-        again = await takeout.get_export(token, as_user(uid))
-        return (busy.value.status_code, busy.value.detail), other.status_code, again.status_code
+        again = (await takeout.get_export(token, as_user(uid))).status_code
+        return (busy.value.status_code, busy.value.detail), other, again
 
     busy, other, again = asyncio.run(go())
     assert busy[0] == 409 and busy[1]["code"] == "busy" and "выгрузка" in busy[1]["message"]
     assert other == again == 200
-    gc.collect()                                         # не начатый ответ отпускает очередь, уходя из памяти
-    assert not takeout.RUNNING
+    assert not takeout.RUNNING                         # не начатые ответы уже освобождены
     assert zipfile.ZipFile(io.BytesIO(b"".join(drain(uid, token)))).testzip() is None
 
 

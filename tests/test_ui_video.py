@@ -6,6 +6,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+from browser import run_playwright
 from PIL import Image
 
 from fakes import video_object
@@ -108,7 +110,7 @@ def test_repeat_and_more_variants_of_a_clip(browser, live, ready_clips, width):
 @pytest.fixture(scope="module")
 def webkit():
     pw = pytest.importorskip("playwright.sync_api")
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         if not Path(driver.webkit.executable_path).is_file():
             pytest.skip("нет WebKit: .venv/Scripts/python -m playwright install webkit")
         engine = driver.webkit.launch()

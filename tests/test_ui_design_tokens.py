@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from browser import CHROMIUM_ARGS, find_browser
+from browser import CHROMIUM_ARGS, find_browser, run_playwright
 from test_ui_browser import live
 from test_ui_webkit import pw
 
@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 @pytest.fixture(scope="module", params=["chromium", "webkit"])
 def engine(request):
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         if request.param == "chromium":
             executable = find_browser()
             if not executable:

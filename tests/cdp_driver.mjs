@@ -95,9 +95,9 @@ class Tab {
   }
 }
 
-async function openTab(port) {
-  const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,
-                                    { method: 'PUT' })).json();
+async function openTab(port, page) {
+  const target = page ? { id: page, webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/${page}` }
+    : await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve);
@@ -162,7 +162,7 @@ async function press(tab, key, modifiers = '') {
 async function run(job) {
   const out = { values: {}, probe: null, log: [], sent: [], failed: null, where: null };
   const timeout = job.timeout || 30000;
-  const { id, tab } = await openTab(job.port);
+  const { id, tab } = await openTab(job.port, job.page);
   try {
     // Запросы в полёте (id → «МЕТОД путь»). Поток событий не кончается никогда и «тишине» не мешает.
     const flying = new Map();
@@ -262,7 +262,7 @@ async function run(job) {
       try { out.probe = await tab.evaluate(job.probe); } catch (err) { out.failed = out.failed || String(err.message || err); }
     }
   } finally {
-    await fetch(`http://127.0.0.1:${job.port}/json/close/${id}`).catch(() => {});
+    if (!job.page) await fetch(`http://127.0.0.1:${job.port}/json/close/${id}`).catch(() => {});
   }
   return out;
 }

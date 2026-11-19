@@ -7,7 +7,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from browser import CHROMIUM_ARGS, find_browser
+from browser import CHROMIUM_ARGS, find_browser, run_playwright
 from fake_bridge import FakeMachine, Refused
 from test_ui_browser import READY, browser, code_online, enroll_live, go, live, problems, signin
 from test_ui_webkit import pw, webkit
@@ -94,10 +94,23 @@ def desktop_requests(machine):
     return [req for req in machine.requests if req['op'].startswith('desktop_')]
 
 
+WATCH_DESKTOP = """(() => {
+  const original = window.fetch;
+  window.desktopRequests = { frames: 0, stops: 0 };
+  window.fetch = async (path, options) => {
+    if (String(path).endsWith('/desktop/frame')) window.desktopRequests.frames++;
+    const response = await original(path, options);
+    if (String(path).endsWith('/desktop/stop') && response.ok) window.desktopRequests.stops++;
+    return response;
+  };
+  return true;
+})()"""
+
+
 @pytest.fixture(params=['firefox', 'chromium', 'webkit'])
 def desktop_browser(request):
     # Function scope avoids keeping a second Playwright loop alive alongside the WebKit fixture.
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         kind = getattr(driver, request.param)
         executable = find_browser() if request.param == 'chromium' else kind.executable_path
         if not executable or not Path(executable).is_file():
@@ -304,18 +317,20 @@ def test_desktop_background_stops_and_never_reconnects_or_reuses_control(browser
         leave = "window.dispatchEvent(new Event('pagehide'))"
         back = "true"
     try:
-        result = browser.drive(live.url + '/', [*opened(login, aid),
+        result = browser.drive(live.url + '/', [*opened(login, aid), ('eval', 'watchDesktop', WATCH_DESKTOP),
             ('wait', "!document.querySelector('#code-desktop-connect').disabled"),
             ('click', '#code-desktop-connect'), ('wait', CONNECTED),
             ('click', '#code-desktop-screen'),
             ('eval', 'hold', "document.querySelector('#code-desktop-screen').dispatchEvent(new KeyboardEvent('keydown',"
              "{code:'ControlLeft',key:'Control',bubbles:true,cancelable:true}));true"),
             ('eval', 'leave', f'(() => {{{leave};return true;}})()'),
-            ('wait', "document.querySelector('.code-desktop-stage').hidden"),
+            ('wait', "document.querySelector('.code-desktop-stage').hidden && window.desktopRequests.stops === 1"),
+            ('eval', 'before', 'window.desktopRequests.frames'),
             ('eval', 'back', f'(() => {{{back};return true;}})()'),
             ('eval', 'waitAfter', 'new Promise(resolve => setTimeout(() => resolve(true), 650))'),
             ('eval', 'stillStopped', "document.querySelector('.code-desktop-stage').hidden && "
              "document.querySelector('#code-desktop-screen').width === 1 && !document.querySelector('#code-desktop-connect').disabled"),
+            ('eval', 'after', 'window.desktopRequests.frames'),
             ('click', '#code-desktop-close')])
     finally:
         server.stop()
@@ -323,7 +338,7 @@ def test_desktop_background_stops_and_never_reconnects_or_reuses_control(browser
     assert result['values']['stillStopped'] and state['control'] is None and state['starts'] == 1
     requests = desktop_requests(machine)
     assert requests[-1]['op'] == 'desktop_stop'
-    assert len([req for req in requests if req['op'] == 'desktop_frame']) <= 2
+    assert result['values']['after'] == result['values']['before'], result
     assert not problems(result), problems(result)
 
 
@@ -373,11 +388,12 @@ def test_desktop_late_frame_cannot_repaint_a_new_connection(browser, live):
       return true;
     })()"""
     try:
-        result = browser.drive(live.url + '/', [*opened(login, aid), ('eval', 'delay', delay),
+        result = browser.drive(live.url + '/', [*opened(login, aid), ('eval', 'watchDesktop', WATCH_DESKTOP),
+            ('eval', 'delay', delay),
             ('wait', "!document.querySelector('#code-desktop-connect').disabled"),
             ('click', '#code-desktop-connect'), ('wait', 'window.desktopFrameReplies.length === 1'),
             ('click', '#code-desktop-close'),
-            ('eval', 'waitStop', 'new Promise(resolve => setTimeout(() => resolve(true), 200))'),
+            ('wait', 'window.desktopRequests.stops === 1'),
             ('click', f'#code-agents li[data-id="{aid}"] .code-agent-desktop'), ('wait', OPEN),
             ('wait', "!document.querySelector('#code-desktop-connect').disabled"),
             ('click', '#code-desktop-connect'), ('wait', 'window.desktopFrameReplies.length === 2'),
@@ -387,13 +403,14 @@ def test_desktop_late_frame_cannot_repaint_a_new_connection(browser, live):
              "document.querySelector('#code-desktop-screen').width === 1"),
             ('eval', 'releaseNew', 'window.desktopFrameReplies[1]();true'), ('wait', CONNECTED),
             ('click', '#code-desktop-close'),
-            ('eval', 'finishStop', 'new Promise(resolve => setTimeout(() => resolve(true), 200))')])
+            ('wait', 'window.desktopRequests.stops === 2')])
     finally:
         server.stop()
     assert not result.get('failed'), result
     assert result['values']['oldInvisible'] and state['starts'] == 2 and state['control'] is None
     frames = [req for req in desktop_requests(machine) if req['op'] == 'desktop_frame']
-    assert len(frames) == 2 and len({req['control'] for req in frames}) == 2
+    assert len(frames) >= 2 and frames[0]['control'] != frames[1]['control'], frames
+    assert all(req['control'] == frames[1]['control'] for req in frames[1:])
     assert not problems(result), problems(result)
 
 

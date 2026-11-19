@@ -7,6 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from browser import run_playwright
+
 from fake_bridge import pid
 from test_codex import CATALOG
 from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live, visibility_js, wait_for
@@ -17,7 +19,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 @pytest.fixture(scope="module")
 def webkit():
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         if not Path(driver.webkit.executable_path).is_file():
             pytest.skip("нет WebKit: .venv/Scripts/python -m playwright install webkit")
         browser = driver.webkit.launch()

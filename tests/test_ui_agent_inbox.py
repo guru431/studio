@@ -2,6 +2,8 @@
 поиск проектов, «Отметить прочитанными» и «был на связи» — в настоящем браузере."""
 import pytest
 
+from browser import run_playwright
+
 from fake_bridge import T0, pid
 from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine, code_loaded,
                              code_online, code_requests, code_session, go, live, problems, set_value, signin)
@@ -206,7 +208,7 @@ def test_webkit_taps_open_workspace_jobs_and_pinned_question_and_long_press_reor
       return [...document.querySelectorAll('#code-tabbar .code-tab')].map(n => n.dataset.chat);
     }"""
     try:
-        with pw.sync_playwright() as driver:
+        with run_playwright(pw) as driver:
             from pathlib import Path
             if not Path(driver.webkit.executable_path).is_file():
                 pytest.skip('нет WebKit: .venv/Scripts/python -m playwright install webkit')

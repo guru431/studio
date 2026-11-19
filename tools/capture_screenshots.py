@@ -14,7 +14,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tests")]
+sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tests"), str(ROOT)]
 
 import db
 from browser import find_browser

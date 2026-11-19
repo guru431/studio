@@ -6,6 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from browser import run_playwright
+
 import account_mail
 import db
 from live_app import start_live_app
@@ -53,7 +55,7 @@ def mail(monkeypatch):
 
 @pytest.fixture(params=["chromium", "firefox", "webkit"])
 def browser(request):
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         engine = getattr(driver, request.param)
         if not Path(engine.executable_path).is_file():
             pytest.skip(f"Нет установленного {request.param}")

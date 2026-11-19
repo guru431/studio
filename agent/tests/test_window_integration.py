@@ -229,7 +229,7 @@ def test_local_activity_buttons_stop_only_desktop_and_wait_for_work_before_exit(
     desktop = {"active": True, "enabled": True}
     ctrl.agent = SimpleNamespace(desktop=SimpleNamespace(status=lambda: dict(desktop),
         revoke=lambda: desktop.update(active=False)), software=SimpleNamespace(busy=False),
-        restart_blocking_requests=0)
+        mirror_active=False, restart_blocking_requests=0)
     work = {"task": True}
     ctrl.codex = SimpleNamespace(live=lambda: dict(work))
     exits = []

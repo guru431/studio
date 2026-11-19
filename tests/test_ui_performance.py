@@ -125,8 +125,19 @@ def test_offline_retry_preserves_navigation_url(desktop_browser, live, route, au
         retry.wait_for()
         assert page.url == target
         if automatic:
+            probes = []
+
+            def health(route):
+                probes.append(route.request.method)
+                if len(probes) == 1:
+                    route.fulfill(status=503)
+                else:
+                    route.continue_()
+
+            context.route('**/health', health)
             with page.expect_event("domcontentloaded"):
                 context.set_offline(False)
+            assert probes[:2] == ['HEAD', 'HEAD'], probes
         else:
             context.set_offline(False)
             with page.expect_event("domcontentloaded"):

@@ -6,6 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from browser import run_playwright
+
 from test_ui_browser import (JOBS_POLLED, NO_OVERFLOW, READY, browser, go, is_open, live, live_sql,  # noqa: F401
                              problems, signin)
 
@@ -50,7 +52,7 @@ def test_jobs_panel_cancels_a_queued_record(browser, live, width):
 @pytest.fixture(scope="module")
 def webkit():
     pw = pytest.importorskip("playwright.sync_api")
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         if not Path(driver.webkit.executable_path).is_file():
             pytest.skip("нет WebKit: .venv/Scripts/python -m playwright install webkit")
         engine = driver.webkit.launch()
