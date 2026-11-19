@@ -372,6 +372,9 @@ def delete(user_id: int, conn_id: int) -> None:
     get(user_id, conn_id)
     with sections.transaction():               # связи и умолчания — каскадом, затем порядок в разделах
         state.DB.execute("DELETE FROM connections WHERE id = ? AND user_id = ?", (conn_id, user_id))
+        # диалог без подключения просит выбрать новое; ждущие задания разделов отказывают сами (id не повторяется)
+        state.DB.execute("UPDATE chats SET connection_id = NULL WHERE user_id = ? AND connection_id = ?",
+                         (user_id, conn_id))
         sections.settle_all(user_id)
     log.info("пользователь %d: подключение %d удалено", user_id, conn_id)
 
