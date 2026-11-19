@@ -889,6 +889,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Уйти без сохранения": "Leave without saving",
   "Изменения не сохранены": "Unsaved changes",
   "Остаться": "Stay",
+  "Не сохранять": "Don't save",
   "Изменений в папке: {0}": "Changes in folder: {0}",
   "Папка": "Folder",
   " Б": " B",

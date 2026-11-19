@@ -47,6 +47,10 @@ const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx'], ['srt',
 const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Составить итоги")], ['tasks', tr("Выделить решения и задачи")]];
 
 let screen = null;
+let shownEntry = null;     // метка записи истории раздела ({ entry: n } — роутер app.js): сюда возвращает hold()
+const HOME = '#/transcribe';
+// перезагрузка стёрла бы несохранённую правку — автоматическую (refresh.js) она запрещает
+document.addEventListener('studio-before-auto-refresh', (event) => { if (screen?.dirty()) event.preventDefault(); });
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec || 0));
@@ -117,9 +121,11 @@ function build(view, ctx) {
     state: (item) => (item.state === 'done' ? clock(item.duration)
       : RUNNING.has(item.state) ? serverMessage(item.detail) : item.state === 'cancelled' ? tr("отменено") : tr("ошибка")),
     pick(id) {
-      panel(false);
-      picked = true;
-      select(id);
+      leave(() => {
+        panel(false);
+        picked = true;
+        select(id);
+      }, id);
     } });
 
   function paintList() {
@@ -254,23 +260,69 @@ function build(view, ctx) {
     });
   }
 
+  /** Правка выбранной записи изменила хоть одну реплику и не сохранена. */
+  function dirty() {
+    const item = records.current;
+    // идущее «Сохранить» — уже не потеря: ответ ляжет, только если запись та же (adopt)
+    return !!editing && !editing.saving && !!item && editing.id === item.id && !!item.segments
+      && [...editing.drafts].some(([i, text]) => text !== item.segments[i].text);
+  }
+
+  /** Уйти от несохранённой правки (другая запись `to`, другой адрес): «Сохранить» (ушла — уйти), «Не сохранять»
+   * (правка отброшена) или «Остаться». Нет правки или та же запись — сразу. */
+  function leave(go, to = null) {
+    if (!dirty() || (to !== null && to === records.current.id)) {
+      go();
+      return;
+    }
+    const item = records.current;
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const keep = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-unsaved-save' }, tr("Сохранить"));
+    const drop = el('button', { type: 'button', class: 'btn btn-danger', id: 'tr-unsaved-drop' }, tr("Не сохранять"));
+    const dialog = openDialog(root, { id: 'tr-unsaved', title: tr("Изменения не сохранены"), body: [fail],
+      actions: [drop, keep], cancelText: tr("Остаться") });
+    keep.addEventListener('click', async () => {
+      drop.disabled = true;
+      const saved = await saveEdits(item, keep);
+      drop.disabled = false;
+      if (!saved) {
+        fail.textContent = error.textContent;
+        return;
+      }
+      dialog.close();
+      go();
+    });
+    drop.addEventListener('click', () => {
+      dialog.close();
+      editing = null;
+      paintView();
+      go();
+    });
+  }
+
+  /** true — правка сохранена (или нечего сохранять); отказ — словами, черновик цел. */
   async function saveEdits(item, save) {
     const texts = {};
     for (const [i, text] of editing.drafts) if (text !== item.segments[i].text) texts[i] = text;
     if (!Object.keys(texts).length) {
       editing = null;
       paintView();
-      return;
+      return true;
     }
     save.disabled = true;
     error.textContent = '';
+    const own = editing;
+    own.saving = true;
     try {
       const got = await api('PATCH', `/api/transcripts/${item.id}`, { texts });
       if (editing && editing.id === item.id) editing = null;   // черновик другой записи — не трогать
       adopt(got);
+      return true;
     } catch (err) {
+      own.saving = false;
       if (records.current && records.current.id === item.id) error.textContent = words(err);   // черновик остаётся
       save.disabled = false;
+      return false;
     }
   }
 
@@ -489,7 +541,7 @@ function build(view, ctx) {
           kick();
           picked = true;
           await records.load();
-          await select(answer.id);
+          if (!dirty()) await select(answer.id);   // несохранённая правка открытой записи остаётся на экране
           resolve(true);
           return;
         }
@@ -545,9 +597,20 @@ function build(view, ctx) {
   paintView();
   follow(ctx.query && ctx.query.get('id'));
 
+  /** Закрытие вкладки и ручная перезагрузка с несохранённой правкой — вопрос браузера. */
+  function unload(event) {
+    if (!dirty()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
+  window.addEventListener('beforeunload', unload);
+
   return {
     follow,
+    dirty,
+    leave,
     destroy() {
+      window.removeEventListener('beforeunload', unload);
       mcp.destroy();
       records.stop();
     },
@@ -555,7 +618,25 @@ function build(view, ctx) {
 }
 
 export function mount(view, ctx) {
+  shownEntry = history.state?.entry ?? null;
   screen = build(view, ctx);
+}
+
+/** Роутер app.js перед любой сменой адреса (раздел, «Открыть» из «В работе», push, «Назад»): правка не сохранена —
+ * адрес назад, вопрос окном; уйти — снова на новый адрес. Как code.js: переход по истории (запись с меткой) не
+ * трогает запись, куда ушли, — адрес раздела новой записью, «уйти» — назад на неё. Под блокировкой app.js проверяет
+ * раздел, как у «Агентов». true — переход задержан. */
+export function hold() {
+  if (!screen || !screen.dirty() || location.hash === HOME) return false;
+  const target = location.hash;
+  if (history.state && history.state.entry) {
+    history.pushState({ entry: shownEntry }, '', HOME);
+    screen.leave(() => history.back());
+  } else {
+    history.replaceState({ entry: shownEntry }, '', HOME);
+    screen.leave(() => location.replace(target));
+  }
+  return true;
 }
 
 /** Переход внутри открытого раздела (#/transcribe?id=…): только ?id — правка и прочее состояние целы. */

@@ -135,6 +135,33 @@ def test_expired_partial_lock_forgets_jobs_of_protected_sections_in_an_open_sect
     assert v["title"].startswith("Озвучка · Тайный") and v["later"] is False and v["hash"] == "#/chat"
 
 
+def test_unsaved_transcript_edit_asks_before_another_record_or_section(browser, live):
+    from test_ui_browser import seed_list, transcribed
+    login = "guard-transcript"
+    other = seed_list(live, "transcribe", live.add_user(login), 1)[0]
+    heading = "document.querySelector('.split-main h1').textContent"
+    second = ".tr-turn[data-index='1'] .tr-edit-text"
+    asked = "!!document.querySelector('#tr-unsaved')?.open"
+    r = browser.drive(live.url + "/", [*transcribed(login),
+        ("eval", "id", "window.trId = document.querySelector('.tr-item[aria-current=true]').dataset.id"),
+        ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
+        set_value(second, "Изменено."), ("click", f".tr-item[data-id='{other}']"), ("wait", asked),
+        ("click", "#tr-unsaved .dialog-close"),
+        ("eval", "stayed", f"[{heading}, document.querySelector({second!r}).value]"),
+        ("click", f".tr-item[data-id='{other}']"), ("wait", asked), ("click", "#tr-unsaved-drop"),
+        ("wait", f"{heading} === 'Запись 0'"),
+        ("click", f".tr-item:not([data-id='{other}'])"), ("wait", f"{heading} === 'Звонок.wav'"),
+        ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
+        set_value(second, "Сохранено."), *go("photo"), ("wait", f"{asked} && location.hash === '#/transcribe'"),
+        ("click", "#tr-unsaved-save"), ("wait", "location.hash === '#/photo'"),
+        ("wait", "document.querySelector('#rail [data-section=photo][aria-current=page]')"),
+        ("eval", "saved", "fetch('/api/transcripts/' + window.trId).then(r => r.json()).then(j => j.segments.map(s => s.text))")],
+        timeout=20000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["stayed"] == ["Звонок.wav", "Изменено."] and v["saved"] == ["Здравствуйте.", "Сохранено."]
+
+
 #: сбой связи раздела (refresh.js) с короткой первой паузой
 FAILURE = """import('/static/js/refresh.js').then(m => { m.refreshAfterFailure({ code: 'network' }); return true; })"""
 QUICK = """const delay = window.setTimeout;
