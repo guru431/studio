@@ -75,6 +75,18 @@ def settings(environ):
     return replacements, hairpin
 
 
+def substitute(text, replacements):
+    """One pass: a substituted value is never matched again by another example.
+
+    The longest example wins at a position; examples that begin or end with a digit match only whole
+    addresses and ports."""
+    values = dict(replacements)
+    pattern = "|".join(
+        ("(?<![0-9.])" if old[0].isdigit() else "") + re.escape(old) + ("(?![0-9])" if old[-1].isdigit() else "")
+        for old in sorted(values, key=len, reverse=True))
+    return re.sub(pattern, lambda match: values[match[0]], text)
+
+
 def render(source, destination, environ):
     replacements, hairpin = settings(environ)
     with tarfile.open(fileobj=source, mode="r|") as incoming:
@@ -84,9 +96,7 @@ def render(source, destination, environ):
                     with incoming.extractfile(member) as contents:
                         body = contents.read()
                     if member.name in TEMPLATES:
-                        text = body.decode("utf-8")
-                        for old, new in replacements:
-                            text = text.replace(old, new)
+                        text = substitute(body.decode("utf-8"), replacements)
                         if hairpin and member.name.endswith(".service"):
                             text = re.sub(r"(?m)^(Environment=STUDIO_ORIGIN=.*)$",
                                           lambda m: m[0] + "\nEnvironment=STUDIO_HAIRPIN_IP=" + hairpin,
