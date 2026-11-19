@@ -256,6 +256,81 @@ def test_md2pdf_second_parse_keeps_the_safe_html_as_one_block():
     assert 'шаг\n\n![r](http://r.invalid/r)\n# заголовок\n\n' in blocks
 
 
+MD2PDF_PARSER = None
+
+
+def md2pdf_render(text):
+    """What md2pdf makes of chat.md: CommonMark with raw HTML, CR and CRLF are line ends."""
+    from markdown_it import MarkdownIt
+    global MD2PDF_PARSER
+    MD2PDF_PARSER = MD2PDF_PARSER or MarkdownIt(
+        'commonmark', {'html': True, 'typographer': False}).enable('table').enable('strikethrough')
+    return MD2PDF_PARSER.render(text)
+
+
+CARRIAGE = ['a\r\r![x](http://127.0.0.1:9/p)', 'a&#13;&#13;![x](http://127.0.0.1:9/p)',
+            'a\r\n\r\n![x](http://127.0.0.1:9/p)', 'a&#13;&#10;&#13;&#10;![x](http://127.0.0.1:9/p)']
+
+
+@pytest.mark.parametrize('text', CARRIAGE)
+def test_carriage_returns_do_not_end_the_safe_html_block(text):
+    first = chat_exports._safe_html(text)
+    assert md2pdf_render(first) == first and '<img' not in md2pdf_render(first)
+    chat_exports._printable(first)
+
+
+@pytest.mark.parametrize('text', CARRIAGE + [t.replace('a', '<b>a</b>', 1) for t in CARRIAGE])
+@pytest.mark.parametrize('wrap', ['<p>{}</p>', '<pre><code>{}</code></pre>', '<p title="{}">t</p>'])
+def test_carriage_returns_do_not_end_the_selection_block(text, wrap):
+    first = chat_exports._html_block(selection_html(wrap.format(text)))
+    assert md2pdf_render(first) == first and '<img' not in md2pdf_render(first)
+    chat_exports._printable(first)
+
+
+@pytest.mark.parametrize('text', [
+    '<div>\na\n\n![x](http://127.0.0.1:9/p)</div>\n',
+    '<div>\n<img src="file:///etc/passwd"></div>\n',
+    '<div>\n<p style="background:url(http://127.0.0.1:9/p)">x</p></div>\n',
+    '<div>\n<picture><source srcset="http://127.0.0.1:9/p"></picture></div>\n',
+    '<div>\n<style>body{background:url(http://127.0.0.1:9/p)}</style></div>\n',
+    '<div>\n<video poster="http://127.0.0.1:9/p"></video></div>\n',
+])
+def test_printable_refuses_what_studio_did_not_write(text):
+    with pytest.raises(ValueError):
+        chat_exports._printable(text)
+
+
+def test_render_pdf_refuses_before_starting_the_converter(studio, monkeypatch, tmp_path):
+    tool = tmp_path / 'converter.py'
+    tool.write_text('# converter fixture\n', encoding='utf-8')
+    monkeypatch.setattr(chat_exports, 'converter', lambda: tool)
+    monkeypatch.setattr(chat_exports, '_html_block', lambda body: '<div>\n<img src="http://127.0.0.1:9/p"></div>\n')
+    monkeypatch.setattr(chat_exports.subprocess, 'run', lambda *a, **k: pytest.fail('converter started'))
+    with pytest.raises(HTTPException) as refused:
+        chat_exports.render_pdf('<p>x</p>', selection=True)
+    assert refused.value.status_code == 503 and refused.value.detail['code'] == 'pdf_failed'
+    assert not list(state.CFG.tmp_dir.glob('chat-export-*'))
+
+
+@pytest.mark.parametrize('platform', ['linux', 'win32'])
+def test_server_chromium_gets_no_network(studio, monkeypatch, tmp_path, platform):
+    tool = tmp_path / 'converter.py'
+    tool.write_text('# converter fixture\n', encoding='utf-8')
+    monkeypatch.setattr(chat_exports, 'converter', lambda: tool)
+    monkeypatch.delenv('MD2PDF_BROWSER', raising=False)
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs['env'].get('MD2PDF_BROWSER'))
+        Path(argv[3]).write_bytes(b'%PDF-' + b'x' * 2048)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(chat_exports.subprocess, 'run', run)
+    monkeypatch.setattr(chat_exports.sys, 'platform', platform)
+    assert chat_exports.render_pdf('<p>x</p>', selection=True).startswith(b'%PDF-')
+    assert seen == [str(chat_exports.OFFLINE_BROWSER) if platform == 'linux' else None]
+
+
 def test_markdown_tool_fences_preserve_nested_code_and_attachment_names():
     result = chat_exports.markdown({'title': 'Чат', 'messages': [
         {'role': 'assistant', 'text': '**Ответ**', 'steps': [

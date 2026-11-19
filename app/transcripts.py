@@ -39,6 +39,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import audio
+import auth
 import chat
 import clock
 import connections
@@ -440,6 +441,11 @@ async def upload(request: Request):
         raise HTTPException(413, too_big) from None
     except media.StorageError as e:
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    try:
+        auth.recheck(request)                                 # сессию закрыли, пока шла загрузка
+    except HTTPException:
+        await media.delete_async(uid, source)
+        raise
     if _full_queue(uid) or not media.alive(uid, source):    # пока шла загрузка
         await media.delete_async(uid, source)
         raise _busy()

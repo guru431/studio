@@ -191,7 +191,8 @@ async def patch_me(body: MePatch, request: Request):
 @router.post("/me/password", status_code=204)
 async def change_password(body: PasswordChange, request: Request):
     uid = request.state.user.id
-    confirmed = await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен")
+    confirmed = await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен",
+                                            digest=request.state.digest)
     check_password(body.new)
     pw_hash = await asyncio.to_thread(security.hash_password, body.new)
     state.DB.execute("BEGIN")

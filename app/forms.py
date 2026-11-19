@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 from PIL import Image, ImageOps
 
+import auth
 import media
 from image_upload import IMAGE_FIELDS, MAX_PIXELS, MAX_UPLOAD, UploadError, decode_form, normalize_image
 
@@ -40,6 +41,7 @@ async def read_body(request: Request, limit: int) -> bytes:
         raw.extend(chunk)
         if len(raw) > limit:
             raise HTTPException(413, {"code": "too_big", "message": "слишком большое тело запроса"})
+    auth.recheck(request)
     return bytes(raw)
 
 

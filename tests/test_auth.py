@@ -109,8 +109,46 @@ def test_password_of_an_account_deleted_after_the_session_check_is_refused(studi
     """Учётку удалили между проверкой сессии и подтверждением паролем: 403, а не 500 на пустой строке."""
     import asyncio
     with pytest.raises(HTTPException) as e:
-        asyncio.run(auth.confirm_password(424242, "password-123", "проверка"))
+        asyncio.run(auth.confirm_password(424242, "password-123", "проверка", digest="d"))
     assert e.value.status_code == 403 and e.value.detail["code"] == "password"
+
+
+def sessions(s, login_name, count):
+    """(cookie, csrf) нескольких входов одной учётки; запросы дальше — с явным заголовком Cookie."""
+    found = []
+    for _ in range(count):
+        s.c.cookies.clear()
+        csrf = signin(s, login_name)
+        found.append((cookie(s), csrf))
+    s.c.cookies.clear()
+    return found
+
+
+def emergency(s, session, password):
+    return s.c.post("/api/me/emergency", json={"password": password},
+                    headers={"Cookie": f"{auth.COOKIE}={session[0]}", auth.CSRF_HEADER: session[1]})
+
+
+def test_password_pause_of_another_session_does_not_block_the_owner(studio):
+    """Чужая (украденная) сессия пятью неверными паролями запирает себя, а не аварийный выход владельца."""
+    make_user(studio, "owner")
+    owner, stolen = sessions(studio, "owner", 2)
+    for _ in range(auth.LOCK_FAILS):
+        assert emergency(studio, stolen, "wrong-password").status_code == 403
+    assert emergency(studio, stolen, "password-123").status_code == 429
+    assert emergency(studio, owner, "password-123").status_code == 204
+    assert state.DB.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_password_pause_covers_all_sessions_of_the_account_together(studio):
+    make_user(studio, "owner")
+    owner, *others = sessions(studio, "owner", 1 + auth.PASSWORD_ACCOUNT_FAILS // auth.LOCK_FAILS)
+    for session in others:
+        for _ in range(auth.LOCK_FAILS):
+            assert emergency(studio, session, "wrong-password").status_code == 403
+    assert emergency(studio, owner, "password-123").status_code == 429
+    studio.clock[0] += auth.LOCK_SEC + 1
+    assert emergency(studio, owner, "password-123").status_code == 204
 
 
 def test_five_failures_lock_the_pair_but_not_the_login_elsewhere(studio):
@@ -399,6 +437,49 @@ def test_require_admin_refuses_plain_users():
     with pytest.raises(HTTPException) as e:
         auth.require_admin(request(False))
     assert e.value.status_code == 403 and e.value.detail["code"] == "admin"
+
+
+MIDWAY = {
+    "demote": ("UPDATE users SET is_admin = 0 WHERE id = ?", 403, "admin"),
+    "disable": ("UPDATE users SET disabled = 1 WHERE id = ?", 401, "login"),
+    "logout": ("DELETE FROM sessions WHERE user_id = ?", 401, "login"),
+    "lock": ("UPDATE users SET screen_lock = 1 WHERE id = ?", 423, "screen_locked"),
+}
+
+
+def send_slowly(s, method, url, first, rest, change, uid, content_type="application/json"):
+    """Тело в два куска; между ними с учёткой что-то случается — как при медленном клиенте за прокси."""
+    async def body():
+        yield first
+        state.DB.execute(change, (uid,))
+        state.DB.execute("UPDATE sessions SET seen = 0 WHERE user_id = ?", (uid,))
+        yield rest
+
+    async def scenario(client):
+        return await client.request(method, url, content=body(), headers={"content-type": content_type})
+
+    return on_http(s, scenario)
+
+
+@pytest.mark.parametrize("change", MIDWAY)
+def test_session_and_role_are_checked_again_after_the_body(studio, change):
+    """Отключённый посреди тела администратор не вернёт себе права, разжалованный — не правит чужих."""
+    sql, status, code = MIDWAY[change]
+    boss, plain = make_user(studio, "boss", is_admin=True), make_user(studio, "plain")
+    signin(studio, "boss")
+    r = send_slowly(studio, "PATCH", f"/api/admin/users/{plain}", b'{"name": ', b'"renamed"}', sql, boss)
+    assert r.status_code == status and r.json()["detail"]["code"] == code
+    assert state.DB.execute("SELECT name FROM users WHERE id = ?", (plain,)).fetchone()[0] == "plain"
+
+
+@pytest.mark.parametrize("change", ["disable", "logout", "lock"])
+def test_streamed_bodies_check_the_session_again(studio, change):
+    sql, status, code = MIDWAY[change]
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    r = send_slowly(studio, "POST", "/api/images/presets", b'{"name": "p", ', b'"params": {}}', sql, uid)
+    assert r.status_code == status and r.json()["detail"]["code"] == code
+    assert state.DB.execute("SELECT count(*) FROM presets").fetchone()[0] == 0
 
 
 def test_create_admin_reads_stdin_and_is_idempotent(env, monkeypatch, capsys):
