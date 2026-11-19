@@ -25,6 +25,7 @@ from fakes import FakeCloud, FakeGateway
 
 PASSWORD = "password-123"
 POLL_SEC = 0.2
+_server_thread: threading.Thread | None = None
 
 
 @dataclass
@@ -58,7 +59,8 @@ class LiveApp:
 
     def stop(self) -> None:
         while self._stop:
-            self._stop.pop()()
+            self._stop[-1]()
+            self._stop.pop()
 
 
 def _free_port() -> int:
@@ -75,6 +77,10 @@ def start_live_app(tmp_path: Path, *, tls: tuple[Path, Path] | None = None) -> L
     import manage
     import state
     import videos
+
+    global _server_thread
+    if _server_thread is not None and _server_thread.is_alive():
+        raise RuntimeError("предыдущий тестовый сервер ещё использует общую базу")
 
     port = _free_port()
     url = f"{'https' if tls else 'http'}://localhost:{port}"
@@ -110,13 +116,17 @@ def start_live_app(tmp_path: Path, *, tls: tuple[Path, Path] | None = None) -> L
     ssl_options = {"ssl_certfile": str(tls[0]), "ssl_keyfile": str(tls[1])} if tls else {}
     server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning",
                                            loop="tools.pytest_support:new_event_loop",
+                                           timeout_graceful_shutdown=3,
                                            access_log=False, lifespan="on", **ssl_options))
     thread = threading.Thread(target=server.run, daemon=True)
+    _server_thread = thread
     thread.start()
 
     def shutdown():
         server.should_exit = True
         thread.join(10)
+        if thread.is_alive():
+            raise RuntimeError("тестовый сервер не остановился за 10 с")
 
     live._stop.append(shutdown)
     deadline = time.monotonic() + 15
