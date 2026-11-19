@@ -211,6 +211,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const unsentFollowups = new Set();
 
   const status = el('p', { id: 'code-status', class: 'error', 'aria-live': 'polite' });
+  const defaultsNotice = el('p', { id: 'code-defaults-notice', class: 'muted', role: 'status', hidden: true },
+    tr("Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате"));
   function showStatus(message, error = true) {
     status.classList.toggle('error', error);
     status.classList.toggle('muted', !error);
@@ -267,16 +269,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     hasGit = !!data;
   });
 
+  const savedDefaults = me?.code_defaults?.[engine] || {};
+  let usingDefaults = false;
   /** Умолчания учётки — в новый чат, пока свой выбор не тронут. */
   function applyDefaults() {
     if (touched) return;
-    const saved = me?.code_defaults?.[engine] || {};
-    if (models.some((m) => String(m.id) === saved.model)) model.value = saved.model;
-    if (efforts.some((e) => String(e) === saved.effort)) effort.value = saved.effort;
-    if (ACCESS[engine][saved.access]) access.value = saved.access;
-    if ((saved.model && !model.value) || (saved.effort && !effort.value)) {
-      showStatus(tr("Часть умолчаний недоступна на этом компьютере — выберите модель и усилие в чате"));
-    }
+    usingDefaults = true;
+    if (models.some((m) => String(m.id) === savedDefaults.model)) model.value = savedDefaults.model;
+    if (efforts.some((e) => String(e) === savedDefaults.effort)) effort.value = savedDefaults.effort;
+    if (ACCESS[engine][savedDefaults.access]) access.value = savedDefaults.access;
     paintPicks();
   }
 
@@ -383,7 +384,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const askObserver = new MutationObserver(paintAskPin);
   askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
   host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
-    el('div', { class: 'code-compose-area' }, status, sessionNotice, askPin, statusBar, form));
+    el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, askPin, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -451,6 +452,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function acceptSettings(data) {
     paintSettings(data);
+    defaultsNotice.hidden = !usingDefaults || touched
+      || !((savedDefaults.model && savedDefaults.model !== data.model)
+        || (savedDefaults.effort && savedDefaults.effort !== data.effort));
     settingsReady = true;
     if (stateError && status.textContent === stateError) showStatus('');
     stateError = null;
@@ -1653,6 +1657,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   /** Выбор здесь действует в этом чате; умолчания учётки меняются в настройках. */
   function remember() {
     touched = true;
+    defaultsNotice.hidden = true;
     paintPicks();
     if (!settingsReady && !resolving) loadState();
   }

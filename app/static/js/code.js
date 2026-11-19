@@ -939,7 +939,12 @@ export function mount(node, context) {
   acted = Date.now();                     // вход в раздел — действие владельца
   const mine = ++gen;
   layout();
-  const initialAgents = api('GET', `/api/agents${refreshModels ? '?refresh=true' : ''}`);
+  const agents = () => api('GET', '/api/agents');
+  const initialAgents = refreshModels
+    ? api('GET', '/api/agents?refresh=true', undefined, { signal: AbortSignal.timeout(10000) }).catch((err) => {
+      if (err.code === 'network' || err.name === 'TimeoutError' || err.status >= 500) return agents();
+      throw err;
+    }) : agents();
   refreshModels = false;
   initialAgents.catch(() => {});
   load().catch((err) => { refreshAfterFailure(err); }).then(() => {

@@ -26,6 +26,7 @@ if (asked !== undefined) {
 let pending = null;
 let timer;
 let probing = false;
+let reloadProbe = null;
 let cancels = 0;             // cancelRefresh: проба /health в пути не перезагружает, даже если сбой снова взвёл тот же адрес
 let claimAgain = false;      // повтор кнопки «Обновить», перенёсшей не все сессии, — тоже с переносом
 let offered = false;         // перезагрузку запретило несохранённое — плашка вместо неё, до перехода в другой адрес
@@ -50,7 +51,30 @@ function reload(automatic) {
   location.reload();
 }
 
-export function reloadStudio() { reload(false); }
+async function studioReachable() {
+  try {
+    return (await fetch('/health', { cache: 'no-store', signal: AbortSignal.timeout(7000) })).ok;
+  } catch {
+    return false;
+  }
+}
+
+async function requestReload(automatic) {
+  if (reloadProbe) return;
+  const probe = Symbol();
+  reloadProbe = probe;
+  const hash = location.hash;
+  try {
+    const reachable = await studioReachable();
+    if (reloadProbe !== probe || location.hash !== hash || document.visibilityState === 'hidden') return;
+    if (reachable) reload(automatic);
+    else offer(tr("Нет связи со Студией. Текущая страница остаётся открытой."), automatic);
+  } finally {
+    if (reloadProbe === probe) reloadProbe = null;
+  }
+}
+
+export function reloadStudio() { return requestReload(false); }
 
 /** Сбой связи, срока, сервера или модуля — перезагрузка с паузами. `claim` — повтор кнопки «Обновить» (app.js: не все
  * сессии перенеслись): он и перенесёт оставшиеся. */
@@ -84,22 +108,28 @@ function allowed() {
 }
 
 /** Плашка вместо молчаливой перезагрузки: несохранённое остаётся, обновить — по нажатию (как автоматическая). */
-function offer() {
+function offer(message, automatic = true) {
   offered = true;
   clearTimeout(timer);
-  if (document.getElementById('studio-refresh-offer')) return;
+  const retryClick = () => requestReload(automatic);
+  const existing = document.getElementById('studio-refresh-offer');
+  if (existing) {
+    existing.firstElementChild.textContent = message;
+    existing.lastElementChild.onclick = retryClick;
+    return;
+  }
   const bar = document.createElement('div');
   bar.id = 'studio-refresh-offer';
   bar.className = 'update-bar';
   bar.setAttribute('role', 'status');
   const words = document.createElement('span');
-  words.textContent = tr("Связь восстановилась — обновите Студию, когда сохраните изменения");
+  words.textContent = message;
   const go = document.createElement('button');
   go.type = 'button';
   go.className = 'btn btn-accent';
   go.id = 'studio-refresh-go';
   go.textContent = tr("Обновить");
-  go.addEventListener('click', () => reload(true));
+  go.onclick = retryClick;
   bar.append(words, go);
   document.body.append(bar);
 }
@@ -111,25 +141,25 @@ function scheduleRetry() {
 }
 
 async function retry() {
-  if (probing || offered || pending !== location.hash || document.visibilityState === 'hidden') return;
+  if (reloadProbe || probing || offered || pending !== location.hash || document.visibilityState === 'hidden') return;
   probing = true;
   const hash = pending;
   const cancelled = cancels;
   attempts += 1;
   try {
     // Не заменяем открытую страницу ошибкой браузера, пока недоступна сама Студия.
-    const response = await fetch('/health', { cache: 'no-store', signal: AbortSignal.timeout(7000) });
-    if (response.ok && cancelled === cancels && pending === hash && location.hash === hash && document.visibilityState !== 'hidden') {
+    if (await studioReachable() && !reloadProbe && cancelled === cancels && pending === hash
+      && location.hash === hash && document.visibilityState !== 'hidden') {
       if (allowed()) reload(true);
-      else offer();
+      else offer(tr("Связь восстановилась — обновите Студию, когда сохраните изменения"));
       return;
     }
-  } catch { /* Следующая попытка проверит восстановление связи. */ }
-  finally { probing = false; }
+  } finally { probing = false; }
   scheduleRetry();
 }
 
 window.addEventListener('hashchange', () => {
+  reloadProbe = null;
   if (pending === location.hash) return;
   pending = null;
   cancels += 1;              // проба прежнего ожидания не перезагрузит, если новый сбой снова взведёт тот же адрес
