@@ -106,6 +106,24 @@ def test_resend_rotates_link_comment_persists_and_revoke_is_final(studio, mail):
     assert listed[0]["status"] == "revoked" and listed[0]["comment"] == "Changed"
 
 
+@pytest.mark.parametrize("gone", ["deleted", "email_changed"])
+def test_accepted_invitation_of_a_gone_address_can_be_sent_again(studio, mail, gone):
+    admin(studio)
+    _, secret = invite(studio, mail)
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "friend", "password": PASSWORD}).status_code == 201
+    uid = state.DB.execute("SELECT id FROM users WHERE login='friend'").fetchone()[0]
+    assert studio.c.post("/api/admin/invitations", json={"email": "friend@example.com"}).status_code == 409
+    if gone == "deleted":
+        assert studio.c.delete(f"/api/admin/users/{uid}").status_code == 200
+    else:
+        state.DB.execute("UPDATE users SET email='moved@example.com' WHERE id=?", (uid,))
+    invitation, again = invite(studio, mail)
+    assert invitation["status"] == "pending" and invitation["user_id"] is None
+    login_ = "friend2" if gone == "email_changed" else "friend"
+    assert studio.c.post("/account/invite/accept", json={"token": again, "login": login_, "password": PASSWORD}).status_code == 201
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "other", "password": PASSWORD}).status_code == 400
+
+
 def test_expired_invitation_and_conflicting_login_do_not_consume_other_invitations(studio, mail):
     admin(studio)
     _, secret = invite(studio, mail)

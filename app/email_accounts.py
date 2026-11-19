@@ -207,7 +207,10 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     throttle("invite-email", body.email, 3, 900)
     old = state.DB.execute("SELECT * FROM invitations WHERE email=?", (body.email,)).fetchone()
     if old and old["accepted"] is not None:
-        raise HTTPException(409, {"code": "email", "message": "Приглашение уже принято"})
+        # учётки с этим адресом нет (проверено выше): её удалили или сменили почту — адрес приглашается снова
+        state.DB.execute("UPDATE invitations SET accepted=NULL,user_id=NULL,token_hash=NULL,revoked=NULL,sent=0"
+                         " WHERE id=?", (old["id"],))
+        old = state.DB.execute("SELECT * FROM invitations WHERE id=?", (old["id"],)).fetchone()
     token, now = security.new_token(), clock.NOW()
     iid = old["id"] if old else secrets.token_hex(12)
     # Неотправленное приглашение остаётся в списке. Ошибка повторной отправки не отзывает прежнюю ссылку.
