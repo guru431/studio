@@ -217,6 +217,8 @@ disconnect до освобождения хода. Codex получает config
   (иначе исполнился бы `remote.<имя>.uploadpack` конфига): `gitinfo.OFFLINE` — `GIT_NO_LAZY_FETCH=1` и пустой
   `GIT_ALLOW_PROTOCOL` для git старше 2.45; недостающий объект — `not_git`/`error`. `worktree add` — действие
   владельца: фильтры, хуки и дозагрузка работают как у его git. Тест — `tests/test_git_untrusted_config.py` (integration).
+- Хуки Claude Code папки: фоновое чтение состояния `turns.Runner.state` подключает клиента SDK с `turns.NO_HOOKS`
+  (`--settings {"disableAllHooks": true}` сильнее project/local), ход — без него. Живьём не проверено.
 - Корни: `projects.Catalog.find` сверяет с `realpath` корня; `store.Config.set_project_roots` хранит `realpath` (окно
   покажет настоящий путь, для сетевого диска — `\\сервер\…`); id проектов не меняются.
 - Установщик: `install.ps1::Assert-BridgeStopped` находит `studio_agent.pyw` и в `releases\*`.
