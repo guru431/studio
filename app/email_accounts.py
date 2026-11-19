@@ -357,9 +357,9 @@ async def complete_login(request: Request):
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
     await auth.confirm_password(uid, body.password, "подтверждение почты")
+    throttle("email-user", str(uid), 3, 900)        # до проверки занятости: 409 не даёт перебирать чужие адреса
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Эта почта уже используется"})
-    throttle("email-user", str(uid), 3, 900)
     token = new_token(uid, "email", body.email, RESET_SEC)
     try:
         await account_mail.send(body.email, "Студия: подтвердите почту",

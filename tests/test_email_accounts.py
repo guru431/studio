@@ -206,6 +206,16 @@ def test_email_change_requires_password_and_link_for_same_account(studio, mail):
     assert studio.c.get("/api/me").json()["email"] == "new@example.com"
 
 
+def test_probing_whose_email_is_registered_shares_the_email_change_pause(studio, mail):
+    admin(studio)
+    make_user(studio, "friend")
+    for _ in range(3):
+        assert studio.c.post("/api/me/email", json={"email": "friend@example.com", "password": PASSWORD}).status_code == 409
+    assert studio.c.post("/api/me/email", json={"email": "friend@example.com", "password": PASSWORD}).status_code == 429
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 429
+    assert not mail
+
+
 def test_codes_are_off_by_default_and_changing_option_requires_password(studio, mail):
     admin(studio)
     assert not studio.c.get("/api/me").json()["email_codes"]
