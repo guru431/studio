@@ -61,6 +61,8 @@ SESSION_SEC = 30 * 86400
 RENEW_SEC = 86400
 LOCK_FAILS = 5
 LOCK_SEC = 900
+#: неверных паролей подтверждения за LOCK_SEC по всем сессиям учётки вместе (на сессию — LOCK_FAILS)
+PASSWORD_ACCOUNT_FAILS = 4 * LOCK_FAILS
 LOGIN_BODY_MAX = 4096
 CSRF_HEADER = "x-studio-csrf"
 LOGIN_RE = r"[a-z0-9._-]{2,32}"
@@ -102,7 +104,7 @@ MODULE_PRELOADS = html.escape(json.dumps(static_assets.module_preloads(STATIC), 
 _PAGES = {name: (STATIC / name).read_text(encoding='utf-8')
           for name in ('index.html', 'login.html', 'offline.html', 'share.html', 'account.html')}
 
-#: ("pair", логин, адрес) и ("ip", адрес) → моменты неудач за последние LOCK_SEC.
+#: ("pair", логин, адрес), ("ip", адрес) и ("pw", uid, digest сессии) → моменты неудач за последние LOCK_SEC.
 FAILS: dict[tuple, list[float]] = {}
 router = APIRouter()
 
@@ -272,6 +274,11 @@ def recheck(request: HTTPConnection) -> None:
     request.state.user, request.state.locked = user, screen
 
 
+async def recheck_after_body(request: HTTPConnection) -> None:
+    """`recheck` зависимостью приложения — на цикле событий: синхронную FastAPI увёл бы в поток к общей базе."""
+    recheck(request)
+
+
 # ---- пауза после неудач ----------------------------------------------------
 
 def _keys(login: str, ip: str) -> list[tuple]:
@@ -303,12 +310,19 @@ def still_valid(uid: int, pw_hash: str) -> bool:
                             (uid, pw_hash)).fetchone() is not None
 
 
-async def confirm_password(uid: int, password: str, what: str, message: str = "пароль неверен") -> str:
-    """Пароль учётки для действия из сессии (смена пароля, отпирание, ключ, выключение блокировки):
-    укравший сессию не переберёт его — пауза по ключу ("pw", uid), общая для всех этих действий.
+def _password_fails(uid: int) -> int:
+    return sum(len(times) for key, times in FAILS.items() if key[0] == "pw" and key[1] == uid)
+
+
+async def confirm_password(uid: int, password: str, what: str, message: str = "пароль неверен", *,
+                           digest: str) -> str:
+    """Пароль учётки для действия из сессии (смена пароля, отпирание, ключ, выключение блокировки,
+    аварийный выход): укравший сессию не переберёт его — пауза по ключу ("pw", uid, digest сессии), общая для
+    всех этих действий, и по всем сессиям учётки вместе после PASSWORD_ACCOUNT_FAILS. Чужая сессия своими
+    ошибками запирает только себя: владелец со своего устройства делает аварийный выход и меняет пароль.
     Возвращает проверенный хеш: действие, которое ждёт ещё раз (смена пароля), сверяет его снова."""
-    key = ("pw", uid)
-    if locked_key(key):
+    key = ("pw", uid, digest)
+    if locked_key(key) or _password_fails(uid) >= PASSWORD_ACCOUNT_FAILS:
         log.warning("пользователь %d: %s — пауза", uid, what)
         raise HTTPException(429, {"code": "locked", "message": "слишком много попыток — подождите 15 минут"})
     attempt = clock.NOW()
