@@ -6,6 +6,7 @@ import pytest
 from pypdf import PdfReader
 
 import db
+from chat_exports import PDF_SECONDS
 from fake_bridge import pid
 from test_ui_browser import CODE_CHAT_A, code_free_machine, code_online, code_session, live
 from test_ui_chat_focus import focus_browser
@@ -13,6 +14,11 @@ from test_ui_chat_shares import owner
 from test_ui_webkit import pw
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+PDF_RESPONSE_MS = (PDF_SECONDS + 30) * 1000
+
+
+def is_export_response(response):
+    return '/export' in response.url and response.request.method == 'POST'
 
 
 @pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320), (True, 852)])
@@ -33,9 +39,9 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
                                      'httpOnly': True, 'sameSite': 'Lax'} for key, value in cookies.items()])
             page = context.new_page()
             page.set_default_timeout(15000)
-            page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+            page.goto(f'{live.url}/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}', wait_until='commit')
             trigger = page.locator('#code-share-chat')
-            pw.expect(trigger).to_be_enabled()
+            pw.expect(trigger).to_be_enabled(timeout=15000)
             assert page.locator('.code-status-bar #code-share-chat, #code-status-menu #code-share-chat').count() == 1
             assert page.locator('.code-project-tools #code-share-chat').count() == 0
             overflow = not trigger.is_visible()
@@ -98,8 +104,11 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             assert text.count('## Пользователь\n') + text.count('## Помощник\n') == 135
             pw.expect(trigger).to_be_enabled()
             open_share()
-            with page.expect_download(timeout=60000) as saved_pdf:
-                menu.locator('[data-action="pdf"]').click()
+            with page.expect_download(timeout=PDF_RESPONSE_MS + 10000) as saved_pdf:
+                with page.expect_response(is_export_response, timeout=PDF_RESPONSE_MS) as exported:
+                    menu.locator('[data-action="pdf"]').click()
+                response = exported.value
+                assert response.ok, (response.status, response.text())
             pdf = saved_pdf.value
             assert pdf.suggested_filename.endswith('.pdf')
             reader = PdfReader(pdf.path())
@@ -178,9 +187,11 @@ if True:
                                      'httpOnly': True, 'sameSite': 'Lax'} for key, value in cookies.items()])
             page = context.new_page()
             page.set_default_timeout(15000)
-            page.goto(live.url + '/#/' + route)
+            page.goto(live.url + '/#/' + route, wait_until='commit')
             md = page.locator(f'#{content_id} .md').last
-            pw.expect(md.locator('pre code')).to_contain_text('Сохранено')
+            pw.expect(md.locator('pre code')).to_contain_text('Сохранено', timeout=15000)
+            trigger = page.locator('#' + trigger_id)
+            pw.expect(trigger).to_be_enabled()
             # На компьютере раздел ставит фокус в поле ввода кадром позже (ui.focusDesktop); фокус поля переносит
             # выделение документа в него — выделяем после него, иначе меню видит пустое выделение.
             if page.evaluate("matchMedia('(hover: hover) and (pointer: fine)').matches"):
@@ -233,7 +244,6 @@ if True:
               getSelection().removeAllRanges(); getSelection().addRange(range);
               document.dispatchEvent(new Event('selectionchange'));
             }''')
-            trigger = page.locator('#' + trigger_id)
             if not trigger.is_visible():
                 page.locator('#code-status-more').tap() if mobile else page.locator('#code-status-more').click()
             trigger.tap() if mobile else trigger.click()
@@ -246,13 +256,15 @@ if True:
                 page.keyboard.press('ArrowDown')
                 page.keyboard.press('ArrowDown')
                 pw.expect(selected).to_be_focused()
-            with page.expect_download(timeout=60000) as download, page.expect_request(
-                    lambda r: '/export' in r.url and r.method == 'POST') as sent:
-                if mobile:
-                    selected.tap()
-                else:
-                    page.keyboard.press('Enter')
-            fragment = sent.value.post_data_json['selection']
+            with page.expect_download(timeout=PDF_RESPONSE_MS + 10000) as download:
+                with page.expect_response(is_export_response, timeout=PDF_RESPONSE_MS) as exported:
+                    if mobile:
+                        selected.tap()
+                    else:
+                        page.keyboard.press('Enter')
+                response = exported.value
+                assert response.ok, (response.status, response.text())
+            fragment = response.request.post_data_json['selection']
             for kept in ['<h2>', '<strong>', '<em>', '<del>', '<blockquote>', '<table>', '<pre>',
                          'hljs-keyword', 'start="4"', 'align="right"']:
                 assert kept in fragment

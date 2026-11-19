@@ -1,7 +1,7 @@
 """Оболочка приложения в настоящем браузере (app/static): вход, темы, раскладка, PWA.
 
-Студия — живая (`live_app.py`), шлюз подменён. Браузер — свой на каждый тест: cookie у
-браузера общие для всех портов localhost, и вход одного теста достался бы следующему.
+Студия — живая (`live_app.py`), шлюз подменён. У каждого теста свой браузерный контекст:
+cookie localhost общие для портов, и вход одного теста иначе достался бы следующему.
 """
 import asyncio
 import base64
@@ -20,7 +20,7 @@ import release
 import fake_bridge
 from PIL import Image
 
-from browser import launch
+from conftest import browser
 from fakes import PNG_REAL, TOKEN as GW_TOKEN, VIDEO_MODEL, video_object
 from live_app import start_live_app
 
@@ -28,11 +28,6 @@ from live_app import start_live_app
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 READY = "document.documentElement.dataset.ready === '1'"
-
-
-@pytest.fixture
-def browser(tmp_path_factory):
-    yield from launch(tmp_path_factory.mktemp("studio-ui-browser"))
 
 
 @pytest.fixture(scope="module")
@@ -4196,18 +4191,19 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
     assert not problems(r), problems(r)
 
 
-@pytest.mark.parametrize("width", [320, 390])
-def test_photo_and_video_heads_fit_the_phone(browser, live, width):
+@pytest.mark.parametrize("width,scale", [(320, 1), (390, 1), (390, 1.5)])
+def test_photo_and_video_heads_fit_the_phone(browser, live, width, scale):
     """Шапки «Фото» и «Видео» на телефоне: заголовок целиком, «Выбрать» не сжата, всё — левее значков справа сверху
     (крайний левый — «Обновить»); на 320 px кнопки уходят второй строкой."""
-    login = f"heads{width}"
+    login = f"heads{width}-{scale}"
     live.add_user(login)
     head = """((root) => { const h = document.querySelector(root + ' .head'); const t = h.querySelector('h1');
       const end = document.querySelector('#refresh-app').getBoundingClientRect().left;
       const kids = [...h.children].filter(e => e.getBoundingClientRect().width > 0 && !e.classList.contains('grow'));
       return [t.textContent, t.scrollWidth <= t.clientWidth, h.querySelector('.select-btn').offsetWidth,
         kids.every(e => e.getBoundingClientRect().right <= end)]; })"""
-    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "photo", f"({head})('.photo')"),
+    font = f"document.documentElement.style.setProperty('--font-scale', '{scale}'); true"
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "font", font), ("eval", "photo", f"({head})('.photo')"),
         *go("video"), ("wait", VIDEO_FEED_READY), ("eval", "video", f"({head})('.video')")],
         width=width, mobile=True)
     assert not r.get("failed"), r

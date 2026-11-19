@@ -1,6 +1,7 @@
 """Помощники тестов распознавания: PDF из сканов и текстовых страниц, фото.
 
 Страница скана — картинка 850×1100 точек при 100 DPI (612×792 pt), без текстового слоя."""
+from functools import lru_cache
 import io
 import struct
 import zlib
@@ -28,6 +29,7 @@ def _text_page(text: str) -> bytes:
     return out.getvalue()
 
 
+@lru_cache(maxsize=2)
 def _image_page(ink: bool) -> bytes:
     img = Image.new("RGB", SCAN_SIZE, "white")
     if ink:

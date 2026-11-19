@@ -12,6 +12,10 @@ Cleaner: `.venv/Scripts/python -m pytest -q -n0 tests/test_cleaner.py`; скво
 Контракт — `local-config/cron/project-registry.json::studio.tests`: `main` (корень, среда `.venv`) и `agent`
 (`agent/`, своя `.venv`, [подробности](../../agent/CLAUDE.md#тесты)). Быстрый и полный уровни запускают оба набора;
 нижеследующие команды относятся к `main`. Windows-зависимости моста не ставятся в среду сервера.
+Файлы `tests/test_ui_*.py` целиком относятся к `integration`. Быстрый уровень пропускает их при сборе,
+чтобы каждый процесс `xdist` не загружал браузерные сценарии и Playwright.
+В сценариях CDP Chromium запускается один раз на модуль. Каждый тест получает отдельные cookie,
+хранилище и service workers в своём браузерном контексте.
 
 Строгий режим полного уровня — `STUDIO_TESTS_STRICT=1` в окружении команд полного уровня обоих наборов:
 пропуск теста или модуля (`pytest.skip`, `importorskip`) становится отказом — нет bash, PowerShell, git, node,
@@ -28,7 +32,7 @@ Chrome уже подключён через расширение; дополни
 Локальный лаунчер Playwright MCP сохраняет автоматические снимки и временные файлы дочернего процесса
 в `.tmp/browser-mcp-*` рабочего каталога и очищает каталог при штатном завершении MCP.
 
-    .venv/Scripts/python -m pytest -q                                   # быстрый набор: бюджет 60 с, 12 процессов
+    .venv/Scripts/python -m pytest -q                                   # быстрый набор: бюджет 60 с, 10 процессов
     .venv/Scripts/python -m pytest -q -m integration                    # браузер (Edge/Chrome + node 22), PowerShell
     # В отдельной оболочке введите разрешённые для приёмки рабочие реквизиты.
     read -r -p 'Логин для приёмки: ' STUDIO_ADMIN_LOGIN
@@ -90,7 +94,7 @@ WAV до сохранения и после перезагрузки стран�
 Договорённость юнитов, vhost и скриптов выкладки сверяет `tests/test_deploy.py`, в том числе ограничения
 обоих сервисов `deploy/docker/compose.yaml` (быстро, по тексту) и возврат прежнего vhost в `install-proxy.sh`
 при отказе configtest или reload (`integration`, Bash на заглушках). Набор идёт двенадцатью процессами
-(`-n 12 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
+(`-n 10 --dist loadgroup` в `pytest.ini`, pytest-xdist): состояние заданий — модульное, процессы
 его не делят. Планировщик `tests/conftest.py` выдаёт обычный файл целиком одному процессу вместо
 отдельной выдачи каждого теста; явные группы сохраняются. `integration` и `manual` — группой `serial`, одним
 процессом по очереди. Один тест без параллели — `-n0`. Срок теста (`timeout = 30`, на Windows метод `thread`)

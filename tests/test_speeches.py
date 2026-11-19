@@ -11,6 +11,7 @@ import state
 import upstream
 from conftest import add_connection, add_gateway, make_user, signin
 from fakes import WAV_FAKE
+from http_checks import on_http
 from test_transcripts import hold_temp_unlink
 
 LONG_A = "А" * 150 + "."
@@ -26,12 +27,15 @@ def voice(s, fake_audio) -> str:
 
 
 def wait_sp(s, sid, states, limit=3000):
-    body = None
-    for _ in range(limit):
-        body = s.c.get(f"/api/speeches/{sid}").json()
-        if body["state"] in states:
-            return body
-    raise AssertionError(f"озвучка не дошла до {states}: {body}")
+    async def poll(client):
+        body = None
+        for _ in range(limit):
+            body = (await client.get(f"/api/speeches/{sid}")).json()
+            if body["state"] in states:
+                return body
+        raise AssertionError(f"озвучка не дошла до {states}: {body}")
+
+    return on_http(s, poll)
 
 
 def test_phrases_split_by_sentences_and_keep_the_text():

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+from browser import run_playwright
 import release
 
 from fake_bridge import FakeMachine, Refused, pid
@@ -335,7 +337,7 @@ def test_refresh_supports_keyboard_english_and_blocked_storage(live, engine, tmp
     live.add_user(login)
     signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
     cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         kind = getattr(driver, engine)
         if not Path(kind.executable_path).is_file():
             pytest.skip(f"{engine} unavailable")

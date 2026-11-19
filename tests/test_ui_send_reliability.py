@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from browser import CHROMIUM_ARGS, find_browser
+from browser import CHROMIUM_ARGS, find_browser, run_playwright
 from fake_bridge import pid
 from test_ui_browser import CODE_CHAT_A, code_free_machine, code_online, code_session, live  # noqa: F401
 from test_ui_webkit import pw
@@ -20,7 +20,7 @@ DONE = {"k": "done", "status": "done"}
 @pytest.fixture(scope="module")
 def driver():
     """Один Playwright на модуль: второй sync_playwright при живом первом — отказ «Sync API inside the asyncio loop»."""
-    with pw.sync_playwright() as playwright:
+    with run_playwright(pw) as playwright:
         yield playwright
 
 

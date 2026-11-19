@@ -44,7 +44,9 @@ def test_project_times_use_moscow_across_browser_timezones(browser, live, width,
             ("eval", "timezone", "Intl.DateTimeFormat().resolvedOptions().timeZone"),
             ("eval", "clock", f"Date.now = () => {stamp * 1000}; true"),
             *go("code"), ("wait", ready), ("eval", "initial", dates),
-            *reread_projects(), ("wait", ready), ("eval", "refreshed", dates)],
+            ("eval", "advance", f"Date.now = () => {(stamp + 1) * 1000}; true"),
+            *reread_projects(), ("wait", "document.querySelector('#code-project-updated').textContent.endsWith('00:30:46')"),
+            ("eval", "refreshed", dates)],
             width=width, mobile=width == 320, timezone=timezone)
     finally:
         server.stop()
@@ -55,7 +57,7 @@ def test_project_times_use_moscow_across_browser_timezones(browser, live, width,
         "GitHub синхронизирован с текущей веткой. Проверено: 01.01.2026, 00:30:45",
         "Обновлено: 01.01.2026, 00:30:45", "—"]
     assert result["values"]["initial"] == expected
-    assert result["values"]["refreshed"] == expected
+    assert result["values"]["refreshed"] == [*expected[:4], "Обновлено: 01.01.2026, 00:30:46", expected[-1]]
     assert not problems(result), problems(result)
 
 

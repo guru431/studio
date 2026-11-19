@@ -22,6 +22,7 @@ import state
 import upstream
 from conftest import T0, add_connection, add_gateway, login, make_user, signin
 from fakes import PNG_REAL, TOKEN
+from http_checks import on_http
 from image_upload import decode_form, image_size, normalize_image
 
 PROMPT = "секретный промпт: женщина у окна"
@@ -35,23 +36,25 @@ def start(s, prompt=PROMPT, size="square", seed=None, model=None, **extra):
     return s.c.post("/api/images", json=body)
 
 
+def _wait_image(s, url, states, limit):
+    async def poll(client):
+        body = None
+        for _ in range(limit):
+            body = (await client.get(url)).json()
+            if body["state"] in states:
+                return body
+        raise AssertionError(f"задание не дошло до {states}: {body}")
+
+    return on_http(s, poll)
+
+
 def wait_state(s, job_id, states, limit=3000):
-    body = None
-    for _ in range(limit):
-        body = s.c.get(f"/api/images/{job_id}").json()
-        if body["state"] in states:
-            return body
-    raise AssertionError(f"задание не дошло до {states}: {body}")
+    return _wait_image(s, f"/api/images/{job_id}", states, limit)
 
 
 def wait_description(s, job_id, limit=3000):
     """Первый ответ опроса описания с концом задания (готовое описание — им же)."""
-    body = None
-    for _ in range(limit):
-        body = s.c.get(f"/api/images/descriptions/{job_id}").json()
-        if body["state"] in images.TERMINAL:
-            return body
-    raise AssertionError(f"описание не дошло до конца: {body}")
+    return _wait_image(s, f"/api/images/descriptions/{job_id}", images.TERMINAL, limit)
 
 
 def wait_for(cond, limit=3000):

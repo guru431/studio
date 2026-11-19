@@ -109,6 +109,7 @@ def start_live_app(tmp_path: Path, *, tls: tuple[Path, Path] | None = None) -> L
 
     ssl_options = {"ssl_certfile": str(tls[0]), "ssl_keyfile": str(tls[1])} if tls else {}
     server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning",
+                                           loop="tools.pytest_support:new_event_loop",
                                            access_log=False, lifespan="on", **ssl_options))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

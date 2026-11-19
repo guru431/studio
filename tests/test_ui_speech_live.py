@@ -6,6 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from browser import run_playwright
+
 from fakes import WAV_FAKE
 from test_ui_browser import (NO_OVERFLOW, READY, add_gateway, add_voice, browser, go, is_open, live,  # noqa: F401
                              problems, signin)
@@ -65,7 +67,7 @@ def test_voice_probe_plays_a_short_phrase(browser, live, width):
 @pytest.fixture(scope="module")
 def webkit():
     pw = pytest.importorskip("playwright.sync_api")
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         if not Path(driver.webkit.executable_path).is_file():
             pytest.skip("нет WebKit: .venv/Scripts/python -m playwright install webkit")
         engine = driver.webkit.launch()

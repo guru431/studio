@@ -5,6 +5,8 @@ import re
 import httpx
 import pytest
 
+from browser import run_playwright
+
 from fake_bridge import FakeMachine, pid
 from scans import scan_pdf
 from test_ui_browser import live, code_online
@@ -27,7 +29,7 @@ def test_file_tree_and_content_keep_independent_scroll_positions(live, engine, w
         signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
         assert signed.status_code == 303
         cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
-        with pw.sync_playwright() as driver:
+        with run_playwright(pw) as driver:
             kind = getattr(driver, engine)
             if engine == 'webkit' and not Path(kind.executable_path).exists():
                 pytest.skip('WebKit is not installed')

@@ -5,6 +5,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from browser import run_playwright
+
 import code_actions
 
 from test_ui_browser import (CODE_CHAT_A, READY, browser, code_chat, code_free_machine,
@@ -80,7 +82,7 @@ def test_english_touch_settings_errors_and_public_pages_in_other_engines(live, e
     live.add_user(login)
     signed = httpx.post(live.url + '/login', data={'login': login, 'password': 'password-123'})
     cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         browser_type = getattr(driver, engine)
         if not Path(browser_type.executable_path).is_file():
             pytest.skip(f'{engine} unavailable')

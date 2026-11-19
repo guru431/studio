@@ -2,16 +2,20 @@
 
 Не тестовый файл, а помощник `test_ui_browser.py`. Урезанная копия
 `dashboard/tests/browser_stand.py` из llm_routers (без стенда панели): браузер один на модуль,
-на каждый сценарий — своя вкладка, её открывает и закрывает драйвер `cdp_driver.mjs`,
-которому сценарий уходит заданием в JSON.
+на каждый тест — изолированный контекст, на каждый запуск `cdp_driver.mjs` — вкладка.
+Сценарий передаётся драйверу в JSON.
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import ExitStack, contextmanager
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -34,6 +38,20 @@ BROWSERS = (
 CHROMIUM_ARGS = ["--disable-features=AutofillAiWalletPrivatePasses"]
 
 
+@contextmanager
+def run_playwright(pw):
+    """Use the test loop's Windows I/O recovery for the synchronous driver as well."""
+    with ExitStack() as stack:
+        if sys.platform == 'win32':
+            from tools.pytest_support import new_event_loop
+
+            with patch.object(asyncio, 'new_event_loop', new_event_loop):
+                driver = stack.enter_context(pw.sync_playwright())
+        else:
+            driver = stack.enter_context(pw.sync_playwright())
+        yield driver
+
+
 def find_browser() -> str | None:
     for path in BROWSERS:
         if Path(path).exists():
@@ -52,9 +70,34 @@ def find_node() -> str | None:
     return node if major.isdigit() and int(major) >= NODE_FLOOR else None
 
 
+def _command(socket, method, **params):
+    socket.send(json.dumps({"id": 1, "method": method, "params": params}))
+    deadline = time.monotonic() + 10
+    while (remaining := deadline - time.monotonic()) > 0:
+        reply = json.loads(socket.recv(timeout=remaining))
+        if reply.get("id") == 1:
+            if "error" in reply:
+                raise RuntimeError(f"{method}: {reply['error']['message']}")
+            return reply["result"]
+    raise TimeoutError(f"No response to {method}")
+
+
+class BrowserProcess:
+    def __init__(self, node, port, address):
+        self.node, self.port, self.address = node, port, address
+
+    @contextmanager
+    def isolated(self):
+        from websockets.sync.client import connect
+
+        with connect(self.address, open_timeout=10, close_timeout=2, proxy=None) as socket:
+            context = _command(socket, "Target.createBrowserContext", disposeOnDetach=True)
+            yield Browser(self.node, self.port, socket, context["browserContextId"])
+
+
 class Browser:
-    def __init__(self, node: str, port: int):
-        self.node, self.port = node, port
+    def __init__(self, node, port, socket, context):
+        self.node, self.port, self.socket, self.context = node, port, socket, context
 
     def drive(self, url: str, steps=(), *, width: int = 1280, height: int = 900,
               mobile: bool = False, touch: bool = False, authenticator: bool = False, init: str | None = None,
@@ -65,7 +108,9 @@ class Browser:
         timeout — срок одного шага: 15 с не хватило
         входу в длинном прогоне при занятой машине (2026-10-21; под нагрузкой сценарии идут в 3–4 раза
         дольше); отказ шага приносит `where` — где стояла страница."""
-        job = {"port": self.port, "url": url, "width": width, "height": height, "mobile": mobile,
+        target = _command(self.socket, "Target.createTarget", url="about:blank", browserContextId=self.context)
+        page = target["targetId"]
+        job = {"port": self.port, "page": page, "url": url, "width": width, "height": height, "mobile": mobile,
                "touch": touch, "authenticator": authenticator, "init": init, "timezone": timezone,
                "timeout": timeout, "steps": [list(step) for step in steps]}
         # весь сценарий — до 180 с: в длинном прогоне отдельный сценарий шёл 76 с (обычно 4 с) — машина
@@ -73,17 +118,20 @@ class Browser:
         out = subprocess.run([self.node, str(DRIVER)], input=json.dumps(job), capture_output=True,
                              encoding="utf-8", timeout=180)
         assert out.returncode == 0, f"драйвер упал: {out.stderr[-800:]}"
+        _command(self.socket, "Target.closeTarget", targetId=page)
         return json.loads(out.stdout)
 
 
-def _devtools_port(profile: Path) -> int | None:
-    """Порт из файла, который браузер кладёт в профиль; None — файла ещё нет."""
+def _devtools_address(profile: Path) -> tuple[int, str] | None:
+    """Порт и сокет DevTools из файла, который браузер кладёт в профиль."""
     try:
         words = (profile / "DevToolsActivePort").read_text(encoding="utf-8").split()
     except OSError:
         # Файла нет либо браузер его пишет прямо сейчас: Windows на это время отказывает в чтении.
         return None
-    return int(words[0]) if words else None
+    if len(words) == 2 and words[0].isdigit() and words[1].startswith('/devtools/browser/'):
+        return int(words[0]), words[1]
+    return None
 
 
 def launch(profile: Path):
@@ -112,8 +160,8 @@ def launch(profile: Path):
             stdout=subprocess.DEVNULL, stderr=err)
     try:
         for _attempt in range(300):
-            port = _devtools_port(profile)
-            if port:
+            endpoint = _devtools_address(profile)
+            if endpoint:
                 break
             if proc.poll() is not None:
                 tail = errlog.read_text(encoding="utf-8", errors="replace").strip()[-600:]
@@ -122,7 +170,8 @@ def launch(profile: Path):
             time.sleep(0.1)
         else:
             raise RuntimeError("браузер не открыл порт DevTools за 30 с")
-        yield Browser(node, port)
+        port, path = endpoint
+        yield BrowserProcess(node, port, f"ws://127.0.0.1:{port}{path}")
     finally:
         proc.terminate()
         try:

@@ -80,10 +80,30 @@ def no_fsync(monkeypatch):
     monkeypatch.setattr(db, "connect", connect)
 
 
+def pytest_ignore_collect(collection_path, config):
+    # Browser modules belong to integration; skip even importing them in each fast worker.
+    if config.option.markexpr == "not integration and not manual" and collection_path.match("test_ui_*.py"):
+        return True
+    return None
+
+
+@pytest.fixture(scope="module")
+def cdp_process(tmp_path_factory):
+    from browser import launch
+
+    yield from launch(tmp_path_factory.mktemp("studio-ui-browser"))
+
+
+@pytest.fixture
+def browser(cdp_process):
+    with cdp_process.isolated() as context:
+        yield context
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Браузерные, PowerShell и живая приёмка — одной группой xdist: один процесс, по очереди
-    (браузер на тест и карта прода не делятся). Раньше хука xdist: он дописывает группу к id теста
+    (контекст браузера на тест и карта прода не делятся). Раньше хука xdist: он дописывает группу к id теста
     в своём хуке того же имени, и метка, поставленная после, до раскладки не доходит."""
     for item in items:
         if item.get_closest_marker("integration") or item.get_closest_marker("manual"):

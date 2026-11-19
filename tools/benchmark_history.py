@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / 'app'), str(ROOT / 'tests')]
+sys.path[:0] = [str(ROOT / 'app'), str(ROOT / 'tests'), str(ROOT)]
 
 from browser import find_browser
 from fake_bridge import FakeMachine, T0, pid

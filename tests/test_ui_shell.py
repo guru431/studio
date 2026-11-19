@@ -1,23 +1,18 @@
 """Оболочка страницы в настоящем браузере: статика после выкладки (stale.js), клавиши разделов, вход с адресом.
 
-Студия — живая (`live_app.py`), браузер — свой на каждый тест (cookie localhost общие для портов).
+Студия — живая (`live_app.py`), у каждого теста свой браузерный контекст.
 """
 import json
 from pathlib import Path
 
 import pytest
 
-from browser import launch
+from browser import run_playwright
 from live_app import start_live_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 READY = "document.documentElement.dataset.ready === '1'"
-
-
-@pytest.fixture
-def browser(tmp_path_factory):
-    yield from launch(tmp_path_factory.mktemp("studio-ui-shell"))
 
 
 @pytest.fixture(scope="module")
@@ -142,7 +137,7 @@ def test_login_keeps_the_address_in_webkit_and_firefox(live, engine):
     pw = pytest.importorskip("playwright.sync_api")
     login = f"back-{engine}"
     live.add_user(login)
-    with pw.sync_playwright() as driver:
+    with run_playwright(pw) as driver:
         kind = getattr(driver, engine)
         if not Path(kind.executable_path).is_file():
             pytest.skip(f"нет {engine}: .venv/Scripts/python -m playwright install {engine}")

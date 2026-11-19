@@ -82,6 +82,7 @@ def computers(tmp_path):
     return source, MirrorMachine([source.parent], source=source), MirrorMachine(destinations, pin="2468")
 
 
+@pytest.mark.integration  # Реальные деревья файлов, несколько полных циклов синхронизации.
 def test_project_mirror_copies_all_files_detects_conflicts_and_recovers(studio, computers, caplog, monkeypatch):
     source, first, second = computers
     second.discovery = False  # Ручная привязка моста 0.39.0.
