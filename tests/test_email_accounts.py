@@ -72,6 +72,23 @@ def test_invitation_registers_verified_email_and_self_selected_credentials(studi
         assert private not in caplog.text
 
 
+def test_account_letters_are_bilingual_russian_and_english(studio, mail):
+    """Язык интерфейса сервер не знает: каждое письмо учётки — по-русски и по-английски, ссылка или код — один раз."""
+    uid = admin(studio)
+    invite(studio, mail)
+    studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD})
+    studio.c.post("/account/forgot", json={"login": "owner"})
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    login(studio, "owner", PASSWORD)
+    assert len(mail) == 4
+    for _, subject, body in mail:
+        assert re.search("[А-Яа-я]", subject) and "Studio" in subject
+        assert re.search("[А-Яа-я]", body) and re.search(r"\b(?:link|code)\b", body)
+        secret = re.findall(r"#[A-Za-z0-9_-]{20,}|\b[0-9]{6}\b", body)
+        assert len(secret) == 1
+
+
 def test_only_admin_can_invite_or_read_comments_and_csrf_is_required(studio, mail):
     admin(studio)
     assert studio.c.post("/api/admin/invitations", json={"email": "a@example.com"}, headers={auth.CSRF_HEADER: "bad"}).status_code == 403
