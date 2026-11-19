@@ -15,7 +15,8 @@ import { tr } from './i18n.js';
  * Escape их не закрывает (cancel отменён, closedby="none", а закрытое силой окно открывается снова);
  * пока заперто или под шторкой, <html class="shrouded"> прячет оболочку и в миг до нового showModal.
  * Отметка без ответа дольше MARK_SEC — как без связи. Под шторкой запись голоса отменяется
- * (mic.js), при запирании плееры встают на паузу; после отпирания картинки и плееры /api/media/…,
+ * (mic.js), при запирании плееры встают на паузу, PiP и полноэкранный режим закрываются, а play до отпирания
+ * снова ставит паузу (медиа-клавиши и окно PiP мимо экрана блокировки); после отпирания картинки и плееры /api/media/…,
  * получившие 423 мимо api.js, грузятся заново. CSRF до профиля — из GET /api/lock; не пришёл
  * (холодный старт без связи) — отметка, подготовка входа и пароль берут его заново.
  *
@@ -377,6 +378,19 @@ function pinGone(text) {
   say(text, 'error');
 }
 
+/** Запирание: плееры на паузе, «картинка в картинке» и полноэкранный режим закрыты — оболочка спрятана только
+ * `visibility`, а звук и окно PiP её не слушают. */
+function quietMedia() {
+  for (const player of document.querySelectorAll('video, audio')) player.pause();
+  if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+/** Пока заперто, play (медиа-клавиша, панель мультимедиа ОС, кнопка окна PiP) сразу снова ставит паузу. */
+function stayQuiet(event) {
+  if (blocking() && event.target instanceof HTMLMediaElement) event.target.pause();
+}
+
 /** Экран блокировки. lockNow — обещание запроса «заперто» (true — сервер согласился): пока он не
  * прошёл, ответу «не заперто» не верить — иначе обрыв связи открыл бы студию без ключа. */
 async function showLock(lockNow, knownState) {
@@ -385,7 +399,7 @@ async function showLock(lockNow, knownState) {
   document.getElementById('lock-password-go').disabled = checking;
   say('');
   cancelRecording();
-  for (const player of document.querySelectorAll('video, audio')) player.pause();
+  quietMedia();
   options = null;
   paintOpen();
   pinOn = knownState ? !!knownState.pin && knownState.pin_left > 0 : me ? !!me.pin : pinOn;
@@ -718,6 +732,7 @@ export function installLock() {
   document.addEventListener('keydown', onKey);
   for (const event of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel']) document.addEventListener(event, activity, { passive: true, capture: true });
   document.addEventListener('visibilitychange', onVisibility);
+  document.addEventListener('play', stayQuiet, true);          // play не всплывает — ловим при погружении
   document.addEventListener('studio-me', () => {
     if (!guarded() && !waiting?.forced) {
       if (screen.open) screen.close();

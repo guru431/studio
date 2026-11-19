@@ -80,3 +80,30 @@ def test_english_jobs_panel_translates_server_words_but_not_names(browser, live)
     assert not r.get("failed"), r
     assert sorted(r["values"]["rows"]) == [["Response · new conversation", "writing response"],
                                            ["Transcription “Встреча.m4a”", "waiting for GPU"]]
+
+
+#: плеер на странице и «картинка в картинке», выход из которой виден по window.leftPip
+PLAYER = """(() => { const v = document.createElement('video'); v.id = 'guard-video'; v.muted = true;
+  document.body.append(v);
+  Object.defineProperty(document, 'pictureInPictureElement', { configurable: true, get: () => window.leftPip ? null : v });
+  document.exitPictureInPicture = () => { window.leftPip = true; return Promise.resolve(); };
+  return true; })()"""
+PLAY = """(() => { const v = document.querySelector('#guard-video'); v.play().catch(() => {});
+  return new Promise(r => setTimeout(() => r(v.paused), 300)); })()"""
+
+
+def test_locked_studio_leaves_picture_in_picture_and_pauses_any_play(browser, live):
+    from test_ui_browser import API, LOCK_OPEN, hide, show
+    login = "guard-player"
+    live.add_user(login)
+    configure = f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/me/screen-lock', {{enabled:true, timeout:0}});
+      await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure),
+        ("eval", "player", PLAYER), hide(), ("wait", LOCK_OPEN), show(),
+        ("eval", "pip", "window.leftPip === true"), ("eval", "lockedPaused", PLAY),
+        ("type", "#lock-password", "password-123"), ("click", "#lock-password-go"), ("wait", f"!{LOCK_OPEN}"),
+        ("eval", "openPaused", PLAY)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["pip"] is True and v["lockedPaused"] is True and v["openPaused"] is False
