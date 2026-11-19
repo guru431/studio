@@ -20,6 +20,7 @@ import { message as serverMessage, tr } from './i18n.js';
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me, toLogin } from './api.js';
+import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
@@ -353,6 +354,7 @@ function build(view, ctx) {
     for (const file of files) form.append('file', file, file.name);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/ocr');
+    holdRefresh(xhr);                // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
     xhr.setRequestHeader('x-studio-csrf', me.csrf);
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) progress.textContent = tr("Загружаю · {0}%", Math.round(event.loaded * 100 / event.total));

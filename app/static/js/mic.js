@@ -23,6 +23,8 @@ const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;c
 const ICON = svg('mic');
 
 let active = null;       // { cancel() } — идущая запись (или ожидание разрешения) студии
+// перезагрузка оборвала бы запись — автоматическую (refresh.js) идущая запись запрещает
+document.addEventListener('studio-before-auto-refresh', (event) => { if (active) event.preventDefault(); });
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec));
