@@ -95,7 +95,7 @@
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
   пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, отпирание и неудача
   (password|pin|passkey), `pin_exhausted`, смена пароля, `session_end`, `emergency`, `pin_set`, `pin_delete`,
-  `passkey_add`, `passkey_delete`, `password_reset`, `share_create`, `share_revoke`, `share_pin_fail`,
+  `passkey_add`, `passkey_delete`, `password_reset`, `admin_grant`, `admin_revoke`, `share_create`, `share_revoke`, `share_pin_fail`,
   `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest),
   `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
   подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
@@ -110,6 +110,10 @@
 - Сброс пароля администратором: `users.password_reset` + событие `password_reset` в журнал владельца (без адреса
   администратора); `GET /api/me.password_reset` — после входа владелец один раз видит окно «Открыть «Безопасность»»;
   закрытие снимает флаг (`DELETE /api/me/password-reset`), аварийный выход — тоже. Администратор флага не видит.
+- Права администратора — галочка «Администратор» в окне «Изменить» панели (`admin.js`; у своей строки выключена:
+  сервер ответил бы 409 `self`), PATCH `{is_admin}` только при перемене. Перемена — `admin_grant` / `admin_revoke`
+  в журнал затронутой учётки (без адреса администратора), в журнал службы — только id; снятие прав и отключение
+  отзывают её ожидающие приглашения ([email-accounts](email-accounts.md)).
 - Страница — `account-security.js`: `sessionsBlock`, `accessBlock`, `emergencyBlock`, `securityEventsBlock` в
   «Настройки → Защита» после блокировки.
 

@@ -28,6 +28,7 @@ import account_mail
 import bridge
 import clock
 import connections
+import email_accounts
 import history
 import images
 import manage
@@ -154,11 +155,16 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
 async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes: dict):
     state.DB.execute("BEGIN")
     try:
+        was = state.DB.execute("SELECT is_admin FROM users WHERE id = ?", (uid,)).fetchone()
         if changes:
             cols = ", ".join(f"{k} = ?" for k in changes)    # имена — из кода выше, не из запроса
             state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))
+        if was is not None and body.is_admin is not None and bool(was["is_admin"]) != body.is_admin:
+            security_log.record(uid, "admin_grant" if body.is_admin else "admin_revoke")   # без адреса администратора
         if body.disabled or body.password is not None:
             auth.end_sessions(uid)               # себя отключить и сменить себе пароль отсюда нельзя
+        if body.disabled or body.is_admin is False:
+            email_accounts.revoke_invited_by(uid)
         state.DB.execute("COMMIT")
     except sqlite3.IntegrityError:
         state.DB.execute("ROLLBACK")
@@ -182,6 +188,7 @@ async def _delete_user(uid: int, admin: auth.User):
     # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     auth.end_sessions(uid)
+    email_accounts.revoke_invited_by(uid)
     await bridge.drop_user(uid)
     await history.delete_all(uid)
     # отменённые задания освобождают карту подключением учётки — его каскад удалит вместе с ней;

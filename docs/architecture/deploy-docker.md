@@ -132,6 +132,17 @@ sudo systemctl start studio-backup.service
 sudo systemctl status studio-docker-start.service studio-docker.service studio-backup.timer
 ```
 
+Учётка с кодами входа без доступа к ящику или при сломанном SMTP (подробно — [email-accounts](email-accounts.md#настройка-почты-и-выпуск)):
+сначала согласованная копия базы, затем `recover-email` — значения только через stdin (`printf` — встроенная
+команда оболочки, в список процессов не попадает); `STUDIO_ACCOUNT_EMAIL=` вместо или вместе с
+`STUDIO_EMAIL_CODES=off` заменяет адрес:
+
+```bash
+sudo systemctl start studio-backup.service
+printf 'STUDIO_ACCOUNT_LOGIN=%s\nSTUDIO_EMAIL_CODES=off\n' alice | sudo docker compose --env-file current/deploy/docker/host.conf \
+  -f current/deploy/docker/compose.yaml exec -T web python /opt/studio/app/manage.py recover-email
+```
+
 Приёмка YouTube после выкладки или смены версии yt-dlp — выгрузка субтитров одного публичного ролика внутри `web`
 с окружением службы (`web._env`) и аргументами `web.youtube`, без загрузки видео; `/tmp` контейнера — tmpfs.
 Штатный код выбирает одну дорожку, скачивает её и разбирает VTT; проверка требует непустого текста.

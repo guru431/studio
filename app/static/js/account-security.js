@@ -19,10 +19,12 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   emergency: tr("аварийный выход"), share_create: tr("ссылка создана"), share_revoke: tr("ссылка отозвана"),
   share_pin_fail: tr("неверный PIN ссылки"), share_locked: tr("ссылка остановлена"), pin_set: tr("PIN задан"),
   pin_delete: tr("PIN убран"), passkey_add: tr("ключ добавлен"), passkey_delete: tr("ключ удалён"),
-  password_reset: tr("пароль сброшен администратором"), project_member_add: tr("доступ к проекту выдан"),
+  password_reset: tr("пароль сброшен администратором"), admin_grant: tr("права администратора выданы"),
+  admin_revoke: tr("права администратора сняты"), project_member_add: tr("доступ к проекту выдан"),
   project_member_remove: tr("доступ к проекту отозван") };
 const DETAILS = { password: tr("паролем"), pin: 'PIN', passkey: tr("ключом"), bridge: tr("мост"), login: '', chat: tr("чат"),
-  code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все") };
+  code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все"),
+  operator: tr("оператором хоста") };
 
 function moment(ts) {
   return ts ? dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '—';

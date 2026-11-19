@@ -10,6 +10,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr
 from contextlib import contextmanager
 
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -39,14 +40,23 @@ def _environment():
 
 
 def settings():
-    """База читается до to_thread; прежняя конфигурация окружения действует до первого сохранения."""
+    """База читается до to_thread; прежняя конфигурация окружения действует до первого сохранения.
+    Сохранённые настройки, зашифрованные прежним STUDIO_DATA_KEY, тоже уступают окружению — с признаком
+    `reenter`: панель просит ввести их заново, письма и вход с кодом отвечают 503, а не 500."""
     row = state.DB.execute("SELECT value FROM settings WHERE key='smtp'").fetchone() if state.DB is not None else None
-    return json.loads(security.decrypt(row[0])) if row else _environment()
+    if not row:
+        return _environment()
+    try:
+        return json.loads(security.decrypt(row[0]))
+    except InvalidToken:
+        log.warning("smtp settings: not decryptable with the current data key")
+        return _environment() | {"reenter": True}
 
 
 def public_settings():
     config = settings()
-    return {**{k: v for k, v in config.items() if k != "password"}, "password_set": bool(config.get("password"))}
+    return {**{k: v for k, v in config.items() if k not in ("password", "reenter")},
+            "password_set": bool(config.get("password")), "reenter": bool(config.get("reenter"))}
 
 
 def save_settings(body):
@@ -112,17 +122,45 @@ def _send(recipient: str, subject: str, body: str, config=None) -> None:
         smtp.send_message(message)
 
 
+FAILED_MESSAGE = "Не удалось отправить письмо. Попробуйте позже."
+UNSET_MESSAGE = "Почта не настроена — Настройки → SMTP"
+
+
+def configured(config) -> bool:
+    return bool(config.get("host") and config.get("sender")) and config.get("tls") in ("starttls", "ssl")
+
+
+def unset() -> HTTPException:
+    """Отказ для администратора; публичные формы и вход отвечают общими словами (код тот же)."""
+    return HTTPException(503, {"code": "smtp_unset", "message": UNSET_MESSAGE})
+
+
 async def send(recipient: str, subject: str, body: str) -> None:
+    config = settings()
+    if not configured(config):
+        log.warning("account email: not configured")
+        raise HTTPException(503, {"code": "smtp_unset", "message": FAILED_MESSAGE})
     try:
-        config = settings()
         await asyncio.to_thread(_send, recipient, subject, body, config)
     except (OSError, ValueError):
         log.warning("account email: delivery failed")
-        raise HTTPException(503, {"code": "mail", "message": "Не удалось отправить письмо. Попробуйте позже."}) from None
+        raise HTTPException(503, {"code": "mail", "message": FAILED_MESSAGE}) from None
+
+
+async def send_admin(recipient: str, subject: str, body: str) -> None:
+    """Письмо по действию администратора: ненастроенная почта — отказ со ссылкой на «Настройки → SMTP»."""
+    try:
+        await send(recipient, subject, body)
+    except HTTPException as err:
+        if err.detail["code"] == "smtp_unset":
+            raise unset() from None
+        raise
 
 
 async def check():
     config = settings()
+    if not configured(config):
+        raise unset()
 
     def connect():
         with _connection(config):
