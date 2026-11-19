@@ -6,6 +6,7 @@
 import asyncio
 import hmac
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -22,6 +23,7 @@ import security
 import security_log
 import state
 
+log = logging.getLogger("studio")
 router = APIRouter()
 CHALLENGE_COOKIE = "__Host-studio_email"
 INVITE_SEC = 2 * 86400
@@ -405,7 +407,7 @@ async def request_email(body: EmailIn, request: Request):
     return {"message": "Письмо отправлено. Откройте ссылку в этом браузере."}
 
 
-async def change_notice(email: str) -> None:
+async def change_notice(uid: int, email: str) -> None:
     """Прежнему адресу — без нового адреса и ссылок: смена почты переносит восстановление пароля."""
     try:
         await account_mail.send(email, "Студия: почта изменена / Studio: email changed",
@@ -413,8 +415,8 @@ async def change_notice(email: str) -> None:
                                 " срочно сообщите администратору Студии.\n"
                                 "The email address of your Studio account was changed. If it was not you,"
                                 " contact your Studio administrator right away.")
-    except HTTPException:
-        pass                         # смена уже состоялась; отказ записан в журнал без адреса
+    except HTTPException as err:     # смена уже состоялась; в журнал — только id учётки и код отказа
+        log.warning("account email: change notice for user %d failed (%s)", uid, err.detail.get("code"))
 
 
 @router.post("/api/me/email/confirm")
@@ -437,7 +439,7 @@ async def confirm_email(request: Request, tasks: BackgroundTasks):
         state.DB.execute("ROLLBACK")
         raise
     if row["current_email"] and row["current_email"] != row["email"]:
-        tasks.add_task(change_notice, row["current_email"])
+        tasks.add_task(change_notice, row["user_id"], row["current_email"])
     return {"ok": True}
 
 
