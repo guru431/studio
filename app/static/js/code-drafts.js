@@ -41,6 +41,7 @@ function clear() {
 }
 
 document.addEventListener('studio-locked', clear);
+document.addEventListener('studio-signed-out', clear);     // api.js toLogin, аварийный выход; login.js — тоже
 document.addEventListener('submit', (event) => {
   if (event.target.matches('form[action="/logout"]')) clear();
 });

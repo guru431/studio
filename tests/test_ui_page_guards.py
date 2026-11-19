@@ -1,7 +1,7 @@
 """Оболочка страницы: адрес раздела, блокировка, несохранённое и слова интерфейса в настоящем браузере."""
 import pytest
 
-from test_ui_browser import READY, browser, go, live, open_new_chat, problems, signin
+from test_ui_browser import READY, browser, go, live, open_new_chat, problems, set_value, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -24,3 +24,17 @@ def test_chat_created_after_leaving_keeps_the_address_of_the_open_section(browse
     assert not r.get("failed"), r
     assert r["values"]["settled"] == "#/photo"
     assert not problems(r), problems(r)
+
+
+def test_agent_drafts_leave_the_tab_with_the_emergency_exit(browser, live):
+    login = "guard-drafts"
+    live.add_user(login)
+    stored = "sessionStorage.getItem('studio-agent-drafts')"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "saved", "import('/static/js/code-drafts.js').then(m => { m.saveDraft('1/a/b', 'неотправленное задание');"
+                          f" return {stored}.includes('неотправленное'); }})"),
+        *go("settings/security"), ("wait", "document.querySelector('#emergency-password')"),
+        set_value("#emergency-password", "password-123"), ("click", "#emergency-start"), ("click", "#emergency-confirm"),
+        ("wait", "location.pathname === '/login'"), ("eval", "after", stored)])
+    assert not r.get("failed"), r
+    assert r["values"]["saved"] is True and r["values"]["after"] is None

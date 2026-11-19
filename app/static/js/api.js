@@ -41,8 +41,10 @@ export function useCsrf(token) {
   csrf = token;
 }
 
-/** Страница входа с текущим адресом студии: после входа сервер вернёт сюда же (auth.login_target). */
+/** Страница входа с текущим адресом студии: после входа сервер вернёт сюда же (auth.login_target). Событие
+ * `studio-signed-out` стирает черновики «Агентов» вкладки (code-drafts.js). */
 export function toLogin() {
+  document.dispatchEvent(new Event('studio-signed-out'));
   location.href = '/login' + location.hash;
 }
 
