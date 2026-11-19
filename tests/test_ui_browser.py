@@ -6683,7 +6683,10 @@ def test_search_back_restores_third_page_and_focus(browser, live):
         ("wait", "document.querySelector('#search-q')"), set_value("#search-q", "река"),
         ("wait", search_ready(30)), ("click", "#search-more"), ("wait", search_ready(60)),
         ("click", "#search-more"), ("wait", search_ready(70)), ("click", selected),
-        ("wait", "location.hash === '#/photo?id=restore-9'"), ("eval", "back", "history.back(); true"),
+        # «Фото» смонтировано: иначе его hashchange приходит уже после back, и роутер монтирует поиск дважды —
+        # второй монтаж стирает восстановленную выдачу
+        ("wait", "location.hash.startsWith('#/photo') && document.querySelector('#view .photo')"),
+        ("eval", "back", "history.back(); true"),
         ("wait", search_ready(70)),
         ("eval", "restored", f"document.activeElement.matches({json.dumps(selected)})"
                              " && document.querySelector('#view').scrollTop > 0")])
