@@ -8,7 +8,8 @@ import { message as serverMessage, tr } from './i18n.js';
  *
  * Загрузка — XMLHttpRequest (ход в процентах): тело — сама запись, имя — заголовком X-Studio-Name
  * (encodeURIComponent; строка запроса попала бы в журнал Apache); 423 запертой студии (XHR идёт
- * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Идущие записи опрашиваются
+ * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Несколько файлов — по одному (sendAll), пока
+ * очередь принимает; «Переименовать» — PATCH `name` (расширение сохраняет сервер). Идущие записи опрашиваются
  * раз в POLL_MS. Список — страницами по PAGE (курсор — created и id последней, feed.js), старше —
  * «Показать ещё»; опрос обновляет первую страницу, подгруженные остаются. Выбор — по номеру:
  * запоздалый ответ прежнего выбора вид не занимает (всё это — createPicker, feed.js). Раздел без
@@ -34,7 +35,7 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
-import { el, field, openDialog, words } from './ui.js';
+import { el, field, openDialog, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
@@ -81,7 +82,7 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
   const { select, refresh } = records;
 
-  const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT });
+  const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"), input);
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Записи") });
@@ -200,6 +201,15 @@ function build(view, ctx) {
     if (!records.current || records.current.id !== got.id) return;   // пока сохраняли, выбрали другую
     records.current = got;
     paintView();
+  }
+
+  function rename(item) {
+    renameDialog(root, { id: 'tr-rename-dialog', name: item.name, async save(name) {
+      const got = await api('PATCH', `/api/transcripts/${item.id}`, { name });
+      for (const x of records.items) if (x.id === got.id) x.name = got.name;
+      paintList();
+      adopt(got);
+    } });
   }
 
   function confirmReset(item) {
@@ -394,6 +404,11 @@ function build(view, ctx) {
       }
       if (!editing) acts.append(chatMenu(item));
     }
+    if (!editing) {
+      const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-rename' }, tr("Переименовать"));
+      ren.addEventListener('click', () => rename(item));
+      acts.append(ren);
+    }
     if (!RUNNING.has(item.state)) {
       if (!editing && item.source_media_id) {
         const retry = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-retry' }, tr("Расшифровать ещё раз"));
@@ -435,64 +450,83 @@ function build(view, ctx) {
         toolbar.append(upload);
       }
     }
+    input.multiple = !mcp.tool;                    // инструмент MCP берёт один файл
   }
 
   function paintBusy() {
     input.disabled = upload.disabled = uploading || mcp.busy;
   }
 
-  function send(file) {
+  /** Одна запись; true — принята, false — отказ (словами в error). `label` — «запись N из M» пачки. */
+  function send(file, label) {
     if (file.size > UPLOAD_MAX) {
       error.textContent = tr("Запись больше 200 МиБ");
-      return;
+      return Promise.resolve(false);
     }
     error.textContent = '';
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/transcripts');
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
+      xhr.setRequestHeader('x-studio-csrf', me.csrf);
+      xhr.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const percent = Math.round(event.loaded * 100 / event.total);
+        progress.textContent = label ? tr("Загружаю запись {0} · {1}%", label, percent) : tr("Загружаю запись · {0}%", percent);
+      });
+      xhr.addEventListener('loadend', async () => {
+        progress.textContent = '';
+        let answer = null;
+        try {
+          answer = JSON.parse(xhr.responseText);
+        } catch {
+          // не JSON — ниже словами по коду
+        }
+        if (xhr.status === 202 && answer) {
+          kick();
+          picked = true;
+          await records.load();
+          await select(answer.id);
+          resolve(true);
+          return;
+        }
+        if (xhr.status === 401) toLogin();
+        const detail = answer && answer.detail;
+        if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
+          await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания
+          resolve(await send(file, label));
+          return;
+        }
+        error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
+        resolve(false);
+      });
+      xhr.send(file);
+    });
+  }
+
+  /** Несколько записей — по одной, пока сервер принимает (очередь transcripts.QUEUE_MAX); первая неудача
+   * останавливает пачку, не отправленные называются словами. */
+  async function sendAll(files) {
     uploading = true;
     paintBusy();
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/transcripts');
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-    xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
-    xhr.setRequestHeader('x-studio-csrf', me.csrf);
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) progress.textContent = tr("Загружаю запись · {0}%", Math.round(event.loaded * 100 / event.total));
-    });
-    xhr.addEventListener('loadend', async () => {
-      uploading = false;
-      paintBusy();
-      progress.textContent = '';
-      let answer = null;
-      try {
-        answer = JSON.parse(xhr.responseText);
-      } catch {
-        // не JSON — ниже словами по коду
-      }
-      if (xhr.status === 202 && answer) {
-        kick();
-        picked = true;
-        await records.load();
-        await select(answer.id);
-        return;
-      }
-      if (xhr.status === 401) toLogin();
-      const detail = answer && answer.detail;
-      if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
-        await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания
-        send(file);
-        return;
-      }
-      error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
-    });
-    xhr.send(file);
+    for (const [i, file] of files.entries()) {
+      if (await send(file, files.length > 1 ? tr("{0} из {1}", i + 1, files.length) : '')) continue;
+      const left = files.slice(i).map((f) => f.name);
+      if (files.length > 1) error.textContent += ` ${tr("Не отправлены: {0}", left.join(', '))}`;
+      break;
+    }
+    uploading = false;
+    paintBusy();
   }
 
   input.addEventListener('change', () => {
-    const file = input.files[0];
+    const files = [...input.files];
     input.value = '';
-    if (!file || input.disabled) return;
+    if (!files.length || input.disabled) return;
     error.textContent = '';
-    if (mcp.tool) mcp.run({}, { files: { artifact_id: file } });
-    else send(file);
+    if (mcp.tool) mcp.run({}, { files: { artifact_id: files[0] } });
+    else sendAll(files);
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));

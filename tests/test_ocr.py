@@ -893,6 +893,30 @@ def test_to_chat_attaches_markdown(studio, monkeypatch):
     assert r.status_code == 413 and "в чат его не передать" in r.json()["detail"]["message"]
 
 
+def test_rename_keeps_the_extension_for_exports_and_the_search_finds_it(studio, caplog):
+    caplog.set_level(logging.DEBUG)
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    sid = post_files(studio, [("IMG_2231.jpg", photo())]).json()["id"]
+    r = studio.c.patch(f"/api/ocr/{sid}", json={"name": " Счёт\nза  март "})            # идущий — тоже
+    assert r.status_code == 200 and r.json()["name"] == "Счёт за март.jpg" and r.json()["state"] != "done"
+    studio.gw.ocr_hold = False
+    wait_ocr(studio, sid, {"done"})
+    assert studio.c.get("/api/ocr").json()["items"][0]["name"] == "Счёт за март.jpg"
+    found = studio.c.post("/api/search", json={"q": "март"}).json()["items"]
+    assert [i["id"] for i in found if i.get("section") == "ocr"] == [sid], found
+    assert not [i for i in studio.c.post("/api/search", json={"q": "IMG_2231"}).json()["items"] if i.get("section") == "ocr"]
+    assert quote("Счёт за март.txt", safe="") in studio.c.get(f"/api/ocr/{sid}/export?format=txt").headers["content-disposition"]
+    assert studio.c.post(f"/api/ocr/{sid}/attachments").json()["name"] == "Счёт за март.md"
+    assert "Счёт" not in caplog.text and "март" not in caplog.text
+    for bad in ("", "   ", ".jpg", "я" * documents.NAME_MAX):
+        r = studio.c.patch(f"/api/ocr/{sid}", json={"name": bad})
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "input", bad
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    assert studio.c.patch(f"/api/ocr/{sid}", json={"name": "x"}).status_code == 404
+
+
 def test_delete_running_is_409_and_done_removes_files(studio):
     add_gateway(studio)
     studio.gw.ocr_hold = True

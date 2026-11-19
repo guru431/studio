@@ -1846,6 +1846,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Сбросить правки": "Reset edits",
   "Запись больше 200 МиБ": "Recording exceeds 200 MiB",
   "Загружаю запись · {0}%": "Uploading recording · {0}%",
+  "Загружаю запись {0} · {1}%": "Uploading recording {0} · {1}%",
+  "Не отправлены: {0}": "Not sent: {0}",
   "снимок": "photo",
   "Поверх снимка": "Over photo",
   "Текстом": "As text",
