@@ -78,9 +78,16 @@ def test_share_menu_location_keyboard_and_exported_files(focus_browser, live, mo
             pw.expect(menu.locator('[data-action="selection"]')).to_be_disabled()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             if mobile:
+                settle = 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))'
                 page.evaluate("document.documentElement.style.setProperty('--font-scale', '1.5')")
+                page.evaluate(settle)
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 page.evaluate("document.documentElement.style.removeProperty('--font-scale')")
+                page.evaluate(settle)
+                # крупный шрифт уносит «Поделиться» в «…» строки статуса, и меню скрытой кнопки закрывается
+                if not menu.is_visible():
+                    open_share()
+                pw.expect(menu).to_be_visible()
             page.screenshot(path=str(tmp_path / f'share-menu-{focus_browser.browser_type.name}-{width}.png'))
             with page.expect_download() as saved:
                 menu.locator('[data-action="md"]').click()
