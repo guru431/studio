@@ -38,3 +38,19 @@ def test_agent_drafts_leave_the_tab_with_the_emergency_exit(browser, live):
         ("wait", "location.pathname === '/login'"), ("eval", "after", stored)])
     assert not r.get("failed"), r
     assert r["values"]["saved"] is True and r["values"]["after"] is None
+
+
+def test_english_connection_history_names_the_devices_in_english(browser, live):
+    from test_ui_browser import live_sql
+    import time
+    login = "guard-devices"
+    uid = live.add_user(login)
+    for i, device in enumerate(["браузер a1b2c3", "телефон 0f9e8d", "мост", "аварийный выход", "участник", "Ноутбук"]):
+        live_sql(live, "INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind, device, ip)"
+                       " VALUES (?, 7, 'PC', ?, 'open', ?, NULL)", (uid, time.time() - 100 + i, device))
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
+        ("wait", "document.querySelectorAll('#agent-events li').length === 6"),
+        ("eval", "devices", "[...document.querySelectorAll('#agent-events li')].map(li => li.textContent.split(' · ').at(-1))")],
+        init="localStorage.setItem('studio-language', 'en')")
+    assert not r.get("failed"), r
+    assert r["values"]["devices"] == ["Ноутбук", "member", "emergency sign-out", "bridge", "phone 0f9e8d", "browser a1b2c3"]

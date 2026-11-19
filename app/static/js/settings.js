@@ -874,6 +874,14 @@ function notifyBlock() {
 const AGENT_EVENTS = { enroll: tr("привязан"), revoke: tr("отозван"), online: tr("на связи"), offline: tr("связь потеряна"),
   open: tr("открыт"), pin_ok: tr("открыт PIN"), pin_fail: tr("неверный PIN"), session_start: tr("новый чат"),
   member_add: tr("доступ к проекту выдан"), member_remove: tr("доступ к проекту отозван") };
+/** Устройство строки (`agent_events.device`) сервер хранит по-русски: `bridge.device` — «браузер|телефон <признак>»,
+ * «мост», «аварийный выход», `claude_code.MEMBER` — «участник». Известное — словами интерфейса, прочее — как есть. */
+const AGENT_DEVICES = { 'мост': tr("мост"), 'аварийный выход': tr("аварийный выход"), 'участник': tr("участник") };
+function agentDevice(device) {
+  const tagged = /^(браузер|телефон) ([0-9a-f]{6})$/.exec(device || '');
+  if (tagged) return tagged[1] === 'браузер' ? tr("браузер {0}", tagged[2]) : tr("телефон {0}", tagged[2]);
+  return Object.hasOwn(AGENT_DEVICES, device) ? AGENT_DEVICES[device] : device;
+}
 
 function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   const list = el('ul', { class: 'agents', id: 'agents' });
@@ -921,7 +929,7 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
     try {
       const page = await api('GET', before ? `/api/agents/events?before=${before}` : '/api/agents/events');
       const rows = page.items.map((e) => el('li', {}, [momentText(e.created), e.agent_name, AGENT_EVENTS[e.kind] || e.kind,
-        e.device, e.ip].filter(Boolean).join(' · ')));
+        agentDevice(e.device), e.ip].filter(Boolean).join(' · ')));
       if (before) events.append(...rows);
       else events.replaceChildren(...rows);
       next = page.next;
