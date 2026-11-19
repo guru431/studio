@@ -312,6 +312,45 @@ def test_nginx_passes_every_body_and_wait_that_apache_passes():
         assert value.endswith("s") and int(value[:-1]) >= longest, (name, value, longest)
 
 
+COMPOSE = (DEPLOY / "docker" / "compose.yaml").read_text(encoding="utf-8")
+
+
+def _compose_block(start: str, end: "str | None") -> str:
+    """Текст блока compose.yaml между двумя строками-заголовками, без комментариев."""
+    text = uncommented(COMPOSE)
+    begin = text.index(start + "\n")
+    return text[begin:text.index(end + "\n", begin) if end else len(text)]
+
+
+def _keys(block: str, indent: int) -> dict:
+    """Ключи заданного отступа и их значения в той же строке."""
+    return dict(re.findall(rf"^ {{{indent}}}([A-Za-z_<]+):[ ]?(.*)$", block, re.M))
+
+
+def test_compose_keeps_the_container_restrictions_of_both_services():
+    """uid 10001, корень только для чтения, без capabilities и новых привилегий: ослабление якоря `common`
+    или переопределение в сервисе прошло бы зелёный набор."""
+    common = _keys(_compose_block("x-common: &common", "services:"), 2)
+    assert common["user"] == '"10001:10001"' and common["read_only"] == "true"
+    assert common["cap_drop"] == "[ALL]" and common["security_opt"] == "[no-new-privileges:true]"
+    for name, end in (("  web:", "  ingress:"), ("  ingress:", None)):
+        block = _compose_block(name, end)
+        keys = _keys(block, 4)
+        assert keys["<<"] == "*common", name
+        assert not {"user", "read_only", "cap_drop", "privileged", "pid", "ipc", "userns_mode"} & set(keys), name
+        if "security_opt" in keys:              # список сервиса заменяет список якоря целиком
+            options = re.search(r"^    security_opt:\n((?:      - .*\n)+)", block, re.M).group(1)
+            assert "      - no-new-privileges:true\n" in options, name
+    web = _compose_block("  web:", "  ingress:")
+    assert "ports" not in _keys(web, 4) and "expose" not in _keys(web, 4)     # TCP-входа в приложение нет
+    assert "      - seccomp:./chromium-seccomp.json\n" in web
+    assert _keys(web, 4)["cap_add"] == "[SYS_CHROOT]"
+    ingress = _compose_block("  ingress:", None)
+    ports = re.search(r"^    ports:\n((?:      - .*\n)+)", ingress, re.M).group(1)
+    assert ports == '      - "${STUDIO_BIND_IP:?Set STUDIO_BIND_IP}:${STUDIO_BACKEND_PORT:-8151}:8080"\n'
+    assert "network_mode" not in _keys(ingress, 4) and "cap_add" not in _keys(ingress, 4)
+
+
 def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
@@ -1039,6 +1078,54 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     calls = (root / "calls").read_text().splitlines()
     assert ("previous image restored" in r.stderr) is not first
     assert calls[-1].endswith("stop --timeout 20") is first
+
+
+def _posix(path: Path) -> str:
+    """Путь для проверок `^/…` скрипта: в Git Bash — /d/…, а не D:/…."""
+    text = path.as_posix()
+    return "/" + text[0].lower() + text[2:] if os.name == "nt" and text[1:2] == ":" else text
+
+
+@pytest.mark.integration                   # настоящий Bash и файловые процессы: > 1 с на Windows
+@pytest.mark.parametrize("outcome", ["installed", "unchanged", "empty", "configtest-failed", "reload-failed"])
+def test_install_proxy_restores_the_previous_vhost_on_refusal(tmp_path, outcome):
+    """Отказ configtest или reload Apache возвращает прежний vhost; успех сохраняет прежний для ручного отката."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    etc, target, log = tmp_path / "etc", tmp_path / "sites" / "studio.conf", tmp_path / "log"
+    etc.mkdir()
+    target.parent.mkdir()
+    target.write_text("old vhost\n", newline="\n")
+    incoming = {"unchanged": "old vhost\n", "empty": ""}.get(outcome, "new vhost\n")
+    proxy = (DEPLOY / "install-proxy.sh").read_text(encoding="utf-8").replace("/etc/studio", _posix(etc))
+    # Функции сильнее PATH: Apache и systemd не нужны; flock в Git Bash нет. Каждый вызов пишет, какой vhost видел.
+    stubs = ('flock() { :; }\n'
+             'apache2ctl() { echo "apache2ctl $* $(cat "$target")" >> "$LOG"; [ "$OUTCOME" != configtest-failed ]; }\n'
+             'systemctl() { echo "systemctl $* $(cat "$target")" >> "$LOG";'
+             ' if [ "$OUTCOME" = reload-failed ] && [ ! -e "$LOG.once" ]; then touch "$LOG.once"; return 1; fi; }\n')
+    script = proxy.replace("set -euo pipefail\n", "set -euo pipefail\n" + stubs, 1)
+    env = {**os.environ, "LOG": log.as_posix(), "OUTCOME": outcome}
+    r = subprocess.run([bash, "-c", script, "install-proxy.sh", _posix(target)], input=incoming.encode(), env=env,
+                       capture_output=True, timeout=20)
+    stderr = r.stderr.decode("utf-8")
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    previous = etc / "apache-vhost.previous.conf"
+    assert r.returncode == (0 if outcome in ("installed", "unchanged") else 1), stderr
+    assert target.read_text() == ("new vhost\n" if outcome == "installed" else "old vhost\n")
+    assert previous.exists() is (outcome == "installed")
+    assert [p.name for p in etc.iterdir() if p.name.startswith("proxy.")] == []      # рабочая папка убрана
+    expected = {"installed": ["apache2ctl -t new vhost", "systemctl reload apache2 new vhost"],
+                "unchanged": [], "empty": [], "configtest-failed": ["apache2ctl -t new vhost"],
+                "reload-failed": ["apache2ctl -t new vhost", "systemctl reload apache2 new vhost",
+                                  "systemctl reload apache2 old vhost"]}[outcome]
+    assert calls == expected, calls
+    if outcome == "installed":
+        assert previous.read_text() == "old vhost\n"
+    if outcome == "configtest-failed":
+        assert "proxy config rejected; previous file restored" in stderr
+    if outcome == "reload-failed":
+        assert "proxy reload failed; previous file restored" in stderr
 
 
 @pytest.mark.integration                   # настоящий Bash: > 1 с на Windows под нагрузкой набора
