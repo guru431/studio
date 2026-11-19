@@ -403,7 +403,7 @@ def test_in_process_bridge_answers_and_streams(studio):
     assert e.value.code == "closed"
     assert studio.c.portal.call(lambda: bridge.call(aid, "open", SESSION, pin=None)) == {}
     assert studio.c.portal.call(lambda: bridge.call(aid, "projects", SESSION)) == {
-        "items": [{"pid": pid("studio"), "name": "studio"}]}
+        "items": [{"pid": pid("studio"), "name": "studio", "dir": "C:\\work\\projects\\studio"}]}
     q = studio.c.portal.call(bridge.watch, aid, CHAT)
     machine.script = [{"k": "text", "text": "При"}, {"k": "done", "status": "done"}]
     data = studio.c.portal.call(lambda: bridge.call(aid, "turn", SESSION, project=pid("studio"), chat=CHAT,
@@ -571,7 +571,8 @@ def test_fake_machine_follows_the_protocol():
         assert refused("open", session="s2", pin="9999").get("left") == left
     assert refused("open", session="s2", pin="9999")["code"] == "pin_locked"
     assert refused("open", session="s2", pin="1234")["code"] == "pin_locked" and m.pin_fails == 5
-    assert ok("projects")[0] == {"items": [{"pid": pid("alpha"), "name": "alpha"}, {"pid": pid("studio"), "name": "studio"}]}
+    assert ok("projects")[0] == {"items": [{"pid": pid("alpha"), "name": "alpha", "dir": "C:\\work\\projects\\alpha"},
+                                           {"pid": pid("studio"), "name": "studio", "dir": "C:\\work\\projects\\studio"}]}
     p = pid("studio")
     assert refused("chats", project="0" * 16)["code"] == "not_found"
     data, _ = ok("history", project=p, chat=CHAT, before=None, limit=2)

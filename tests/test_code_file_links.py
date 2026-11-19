@@ -53,3 +53,17 @@ def test_posix_paths_never_become_http_links_and_resolve_inside_the_project():
                '/Users/owner/projects/alpha/report.html');
   assert.equal(links.visualizationFilePath('C:\\work\\report.html'), 'C:/work/report.html');
 """)
+
+
+def test_project_folder_from_the_bridge_wins_over_the_first_root_and_label():
+    run(r"""
+  const agent = { projects_root: 'C:\\work' };
+  // Второй корень и одноимённая папка: подпись не совпадает с именем папки, путь — от моста.
+  const project = { name: 'demo · personal · abc123', dir: 'D:\\personal\\demo' };
+  assert.equal(links.projectFilePath('D:\\personal\\demo\\src\\a.py', agent, project), 'src/a.py');
+  assert.equal(links.projectFilePath('C:\\work\\demo\\a.py', agent, project), null);
+  assert.equal(links.projectFilePath('/home/me/demo/a.py', agent, { name: 'x', dir: '/home/me/demo' }), 'a.py');
+  // Участник совместного проекта: ни корня, ни папки — абсолютные пути не сопоставляются.
+  assert.equal(links.projectFilePath('/alpha/a.py', { projects_root: '' }, { name: 'alpha' }), null);
+  assert.equal(links.projectFilePath('src/a.py', { projects_root: '' }, { name: 'alpha' }), 'src/a.py');
+""")

@@ -40,8 +40,12 @@ export function projectFilePath(href, agent, project) {
   const local = localFileHref(href);
   let path;
   if (local) {
-    if (typeof agent.projects_root !== 'string') return null;
-    const root = `/${agent.projects_root.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')}/${project.name}/`;
+    // `project.dir` — настоящая папка от моста (второй корень, одноимённые проекты); прежний мост — первый корень + имя.
+    const folder = typeof project.dir === 'string' ? project.dir
+      : typeof agent.projects_root === 'string' && agent.projects_root
+        ? `${agent.projects_root.replace(/[\\/]+$/, '')}/${project.name}` : null;
+    if (!folder) return null;
+    const root = `/${folder.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')}/`;
     let decoded;
     try { decoded = decodeURIComponent(local); } catch { return null; }
     // Регистр не различают только пути Windows; на macOS/Linux `Alpha` и `alpha` — разные папки.

@@ -394,7 +394,8 @@ class Agent:
         result = await getattr(self, "_op_" + op)(frame, after)
         if scope is not None and op in ("projects", "activity"):
             key = "pid" if op == "projects" else "project"
-            result = {**result, "items": [i for i in result.get("items", []) if i.get(key) in scope]}
+            result = {**result, "items": [{k: v for k, v in i.items() if k != "dir"}
+                                          for i in result.get("items", []) if i.get(key) in scope]}
         if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork"):
             self._metadata.invalidate(frame.get("project"))
         return result
