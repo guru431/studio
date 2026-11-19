@@ -140,8 +140,10 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
   if (pending) {
     pending.then((next) => {
       if (!alive) return;
+      // сверка совпала с сохранённым списком — строки под курсором и фокус клавиатуры остаются прежними
+      const same = Array.isArray(found) && JSON.stringify(found) === JSON.stringify(next);
       found = next;
-      paint();
+      if (!same) paint();
     }, (err) => {
       if (!alive) return;
       if (found === null) { loadError = true; paint(); }
