@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import db
+import security
 import state
 from conftest import APP, add_gateway, make_user, signin
 from test_chat import messages, new_chat, sse, turn
@@ -106,6 +107,23 @@ def test_mcp_account_isolation_allowlist_and_token_preservation(studio):
                                ('PUT', f'/api/mcp/{sid}', {'name': 'x', 'url': URL}), ('DELETE', f'/api/mcp/{sid}', None)]:
         assert studio.c.request(method, path, json=body).status_code == 404
     assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).status_code == 404
+
+
+def test_mcp_header_values_are_write_only_and_kept_by_null(studio):
+    """Как и токен, значения заголовков только записываются: `detail` отдаёт имена с null, null в PUT — прежнее значение."""
+    add_gateway(studio)
+    sid = studio.c.post('/api/mcp', json={'name': 'Tools', 'url': URL,
+                                          'headers': {'X-Api-Key': 'private-key', 'X-Team': 'red'}}).json()['id']
+    shown = studio.c.get(f'/api/mcp/{sid}')
+    assert shown.json()['headers'] == {'X-Api-Key': None, 'X-Team': None} and 'private-key' not in shown.text
+    body = {'name': 'Tools', 'url': URL, 'headers': {'X-Api-Key': None, 'X-Team': 'blue', 'X-New': 'n'}}
+    assert studio.c.put(f'/api/mcp/{sid}', json=body).status_code == 200
+    stored = json.loads(security.decrypt(state.DB.execute('SELECT secret_enc FROM mcp_servers WHERE id=?', (sid,)).fetchone()[0]))
+    assert stored['headers'] == {'X-Api-Key': 'private-key', 'X-Team': 'blue', 'X-New': 'n'}
+    # Прежнего значения нет (новое имя, создание) — сохранять нечего: 422, а не пустой заголовок.
+    for method, path in (('PUT', f'/api/mcp/{sid}'), ('POST', '/api/mcp')):
+        response = studio.c.request(method, path, json={'name': 'Tools', 'url': URL, 'headers': {'X-Other': None}})
+        assert response.status_code == 422, (method, response.text)
 
 
 def test_model_without_tools_explains_how_to_disable_mcp(studio):
