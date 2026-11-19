@@ -37,6 +37,13 @@ export function field(label, input, key) {
     el('p', { class: 'error', 'data-for': key, 'aria-live': 'polite' }));
 }
 
+/** Поле PIN компьютера: не password и класть вне <form> — исчезнув после удачного запроса, они дали бы менеджеру
+ *  паролей сохранить PIN в синхронизируемое хранилище браузера; точки вместо цифр — `.computer-pin` (app.css). */
+export function computerPin(attrs = {}) {
+  return el('input', { class: 'input computer-pin', type: 'text', inputmode: 'numeric', autocomplete: 'off',
+    autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64', ...attrs });
+}
+
 /** Слова отказа с заглавной буквы. */
 export function words(err) {
   const text = message((err && err.message) || err || tr("Не получилось"));

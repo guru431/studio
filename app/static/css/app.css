@@ -1517,7 +1517,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-pin-row { display: flex; gap: var(--space-4); }
 .code-pin-row .input { flex: 1; min-width: 0; background: var(--surface-0); letter-spacing: .2em; }
 /* PIN — не пароль: поле text с точками вместо цифр, менеджеры паролей его не сохраняют */
-#code-pin-input { -webkit-text-security: disc; }
+.computer-pin { -webkit-text-security: disc; }
 .code-pin .error { margin: 0; }
 .code-pin .error:empty { display: none; }
 /* «Скачать мост» (ui.js agentDownload): здесь — пустой раздел без компьютеров, в «Настройках» — блок «Компьютеры» */

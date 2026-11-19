@@ -30,7 +30,7 @@ import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { lazy } from './stale.js';
-import { agentInstallers, el, words } from './ui.js';
+import { agentInstallers, computerPin, el, words } from './ui.js';
 import { gitLevel } from './code-git.js';
 import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
 
@@ -884,11 +884,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     checked.delete(agent.id);
     mode = 'pin';
     footer.hidden = true;
-    // не <form> и не password: исчезнув после удачного запроса, они дали бы менеджеру паролей сохранить PIN
-    // компьютера в синхронизируемое хранилище браузера; точки вместо цифр — -webkit-text-security (app.css)
-    const input = el('input', { id: 'code-pin-input', class: 'input', type: 'text', inputmode: 'numeric',
-      autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64',
-      'aria-label': tr("PIN компьютера") });
+    const input = computerPin({ id: 'code-pin-input', 'aria-label': tr("PIN компьютера") });   // вне <form>: ui.js
     const go = el('button', { id: 'code-pin-open', class: 'btn btn-accent', type: 'button' }, tr("Открыть"));
     const error = el('p', { id: 'code-pin-error', class: 'error', 'aria-live': 'polite' });
     const box = el('div', { id: 'code-pin', class: 'code-pin', role: 'group', 'aria-label': tr("PIN компьютера"), 'data-id': agent.id },
