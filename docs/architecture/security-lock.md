@@ -42,7 +42,9 @@
   `computer_pin_timeout`. Таймер активности с допуском `lock_policy.HEARTBEAT_GRACE` (30) с — больше интервала
   отметок 15 с плюс срок ответа 8 с; `alive.active=false` не продлевает доступ, истёкший доступ отметка не открывает.
 - Частичная защита закрывает API выбранных разделов, связанные media и повторное использование файлов, общие выгрузки
-  и изменение защиты. Скан принадлежит и своему разделу: `lock_policy.scan_sections` (ocr + chat при `origin=chat`,
+  и изменение защиты. Раздел файла — `lock_policy.media_sections`: таблицы `lock_policy.MEDIA_SOURCES` (у «Озвучки» —
+  и все образцы голоса `voice_samples`), сканы и файлы снимков «Поделиться» (раздел снимка: «Чат» или «Агенты»);
+  вместе — все ссылки `media.REFERENCES`, новую таблицу без раздела ловит `tests/test_lock_policy.py`. Скан принадлежит и своему разделу: `lock_policy.scan_sections` (ocr + chat при `origin=chat`,
   translate при ссылке `translations.scan_id`) и `lock_policy.hidden_scans` (подзапрос для лент) — в `media_sections`
   (исходный PDF, PNG страниц), `lock_policy.blocks` для `/api/ocr/<id>*`, ленте `/api/ocr` (`db.page` с
   `extra`/`extra_args`), `search.find`, `jobs`. Изменяющие `/api/me/ntfy*`, `/api/me/push`, `/api/me/exa-key`, а также
