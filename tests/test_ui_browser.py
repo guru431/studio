@@ -461,6 +461,33 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not known_refusals(problems(r), 422), problems(r)
 
 
+def test_settings_adds_the_first_gateway_to_every_section(browser, live):
+    live.add_user("everywhere")
+    every = "document.querySelector('#link-dialog [name=everywhere]')"
+    r = browser.drive(live.url + "/", [*signin("everywhere"), ("wait", READY), *go("settings/photo"),
+        ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")),
+        ("eval", "openaiHidden", f"{every}.closest('label').hidden"),
+        set_value("#link-dialog [name=kind]", "srvllm"),
+        ("eval", "first", f"!{every}.closest('label').hidden && {every}.checked"),
+        ("type", "#link-dialog [name=name]", "Шлюз"),
+        ("type", "#link-dialog [name=base_url]", GATEWAY_URL),
+        ("type", "#link-dialog [name=token]", live.gw.TOKEN),
+        ("click", "#link-save"), ("wait", f"!{is_open('#link-dialog')}"),
+        ("eval", "sections", f"(async () => (await {API}.api('GET', '/api/connections')).items.map(c => c.sections))()"),
+        # второе подключение — галочка снята: у учётки уже есть шлюз
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")),
+        set_value("#link-dialog [name=kind]", "s06"),
+        ("eval", "second", f"!{every}.closest('label').hidden && !{every}.checked"),
+        ("press", "Escape"), ("wait", f"!{is_open('#link-dialog')}")],
+        width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["openaiHidden"] and v["first"] and v["second"]
+    assert v["sections"] == [["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "dictation"]]
+    assert not problems(r), problems(r)
+
+
 def test_settings_lists_gateway_models_and_changes_the_password(browser, live):
     live.add_user("pwuser")
     with socket.socket() as s:                 # порт, который никто не слушает
@@ -2011,6 +2038,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("click", "#viewer .act-edit"),
         ("wait", f"{is_open('#editor')} && !document.querySelector('#viewer')"),
         ("eval", "defaultModel", "document.querySelector('#edit-model-label').textContent"),
+        ("eval", "defaultTip", "document.querySelector('#edit-mode-tip').textContent"),
         ("type", "#edit-prompt", "change only this patch to green"),
         ("click", "#edit-local"), ("click", "#edit-submit"),
         ("eval", "emptyMask", f"{is_open('#editor')} && document.querySelector('#edit-error').textContent.length > 0"),
@@ -2021,6 +2049,7 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
         ("click", "#viewer .act-edit"), ("wait", is_open("#editor")),
         ("eval", "reset", "!document.querySelector('#edit-local').checked && document.querySelector('#edit-prompt').value === ''"),
         ("eval", "nextLabel", "document.querySelector('#edit-model-label').textContent"),
+        ("eval", "nextTip", "document.querySelector('#edit-mode-tip').textContent"),
         ("eval", "strengthVisible", "!document.querySelector('#edit-strength-label').hidden"),
         ("eval", "editorOverflow", f"!({NO_OVERFLOW}) || document.querySelector('#editor').scrollWidth"
                                    " > document.querySelector('#editor').clientWidth"),
@@ -2035,6 +2064,9 @@ def test_photo_source_strength_mask_and_model_switch(browser, live, width, model
     names = {"snofs": "SNOFS Krea 2", "flux": "FLUX"}
     assert v["strengthShown"] and not v["overflow"] and v["cleared"]
     assert names[model] in v["defaultModel"] and v["reset"] and names[nxt] in v["nextLabel"]
+    # подсказка режима называет выбранную модель, а не снятую Lustify и не FLUX по умолчанию
+    assert v["defaultTip"].startswith(names[model]) and v["nextTip"].startswith(names[nxt])
+    assert "Lustify" not in v["defaultTip"] + v["nextTip"]
     assert v["strengthVisible"] == (nxt == "snofs") and not v["editorOverflow"] and v["emptyMask"]
     # страница: исходник файлом, затем фото истории с маской и без
     _newest, middle, oldest = v["media"]
@@ -4265,6 +4297,42 @@ def test_transcribe_retries_using_the_saved_recording(browser, live):
 
 
 @pytest.mark.parametrize("width", [390, 1280])
+def test_transcribe_uploads_several_files_and_renames_a_record(browser, live, width):
+    """Несколько файлов одним выбором уходят по одному; первый отказ (не звук) останавливает пачку и называет
+    неотправленные. «Переименовать» меняет имя в списке и заголовке, расширение остаётся."""
+    login = f"trmany{width}"
+    live.add_user(login)
+    wav = base64.b64encode(wav_of(1.0)).decode()
+    pick = f"""(() => {{ const bytes = Uint8Array.from(atob('{wav}'), c => c.charCodeAt(0)); const dt = new DataTransfer();
+      for (const [name, type] of [['Первая.wav', 'audio/wav'], ['Вторая.wav', 'audio/wav'], ['notes.txt', 'text/plain'],
+                                  ['Четвёртая.wav', 'audio/wav']]) dt.items.add(new File([bytes], name, {{ type }}));
+      const input = document.querySelector('#transcribe-add input'); input.files = dt.files;
+      input.dispatchEvent(new Event('change', {{ bubbles: true }})); return input.multiple; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        ("eval", "multiple", pick),
+        ("wait", "document.querySelector('.tr-error').textContent.includes('notes.txt')"),
+        ("wait", "document.querySelectorAll('.tr-item').length === 2"),
+        ("eval", "error", "document.querySelector('.tr-error').textContent"),
+        ("eval", "items", "[...document.querySelectorAll('.tr-item')].map(e => e.textContent)"),
+        ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ("click", "#tr-rename"), ("wait", is_open("#tr-rename-dialog")),
+        ("eval", "field", "document.querySelector('#tr-rename-dialog [name=name]').value"),
+        set_value("#tr-rename-dialog [name=name]", "Планёрка"), ("click", "#tr-rename-dialog-save"),
+        ("wait", "!document.querySelector('#tr-rename-dialog')"),
+        ("wait", "document.querySelector('.tr-item[aria-current=true]')?.textContent.includes('Планёрка.wav')"),
+        ("eval", "title", "document.querySelector('.split-main h1').textContent"),
+        ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["multiple"] is True
+    assert "Не отправлены: notes.txt, Четвёртая.wav" in v["error"] and "Первая.wav" not in v["error"]
+    assert any("Первая.wav" in i for i in v["items"]) and any("Вторая.wav" in i for i in v["items"])
+    assert v["field"] in ("Первая", "Вторая") and v["title"] == "Планёрка.wav" and v["fits"]
+    assert not known_refusals(problems(r), 415), problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
 def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
     """«Править» → текст реплики → «Сохранить»; «Имена» → «Иван»; выгрузка TXT — с ними; нажатие по
     реплике ставит плеер на её начало и подсвечивает её; «Сбросить правки» — исходное распознавание."""
@@ -4616,6 +4684,26 @@ def test_ocr_uploads_photos_and_pages_through_scan_and_text(browser, live, ocr_r
     assert v["placed"] == ([True, False] if width == 390 else [False, True])   # телефон — над текстом, иначе — слева
     assert v["fits"] is True and v["viewer"] is True
     assert not problems(r), problems(r)
+
+
+def test_ocr_renames_a_document_keeping_its_pages(browser, live, ocr_reply):
+    from scans import photo
+    live.add_user("ocrren")
+    r = browser.drive(live.url + "/", [*recognized("ocrren", [("IMG_2231.png", photo("PNG"))]),
+        ("click", "#ocr-rename"), ("wait", is_open("#ocr-rename-dialog")),
+        ("eval", "field", "document.querySelector('#ocr-rename-dialog [name=name]').value"),
+        set_value("#ocr-rename-dialog [name=name]", ""), ("click", "#ocr-rename-dialog-save"),
+        ("wait", "document.querySelector('#ocr-rename-dialog .error:not([data-for])').textContent.length > 0"),
+        set_value("#ocr-rename-dialog [name=name]", "Счёт за март"), ("click", "#ocr-rename-dialog-save"),
+        ("wait", "!document.querySelector('#ocr-rename-dialog')"),
+        ("eval", "item", "document.querySelector('.ocr-item').textContent"),
+        ("eval", "title", "document.querySelector('.split-main h1').textContent"),
+        ("eval", "pages", "!!document.querySelector('.ocr-text td')")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["field"] == "IMG_2231" and "Счёт за март.png" in v["item"] and v["title"] == "Счёт за март.png"
+    assert v["pages"] is True
+    assert not known_refusals(problems(r), 422), problems(r)
 
 
 def test_ocr_download_and_to_chat(browser, live, ocr_reply):

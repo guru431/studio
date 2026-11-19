@@ -29,7 +29,7 @@
 7. Подключение и модель — из раздела «Фото» (sections.resolve). Внешний сервис (`openai`):
    `/images/generations` и `/images/edits` без seed и силы, размеры — EXTERNAL_SIZES, ответ — только
    `b64_json` (по ссылке из ответа сервер не ходит). Кисть, «Описать», «Освободить карту» и release —
-   только у шлюза srvllm. Сила пишется в строку только у Lustify (FLUX её не получает).
+   только у шлюза srvllm. Сила пишется в строку только у STRENGTH_MODELS (FLUX и FineView её не получают).
 8. Серия (поле `series`, спека 2026-10-21-studio-photo-presets-compare-series, раздел 7): `count`
    строк сразу — первая `working`, остальные `queued` со своими seed и силой; одна задача
    (run_series) ведёт их по одной тем же run_job, так что серия держит слот пользователя до
@@ -464,7 +464,7 @@ async def create_job(request: Request):
     strengths = [body.strength if lustify_edit else None] * count
     if vary == "strength":
         if not lustify_edit:
-            raise _series_refused("серия по силе — только Lustify с исходным фото")
+            raise _series_refused("серия по силе — только модели с силой изменения и с исходным фото")
         if body.series.strength_to is None:
             raise _series_refused("для серии по силе нужна сила «до»")
         try:

@@ -3,7 +3,9 @@ import asyncio
 import io
 import json
 import os
+import re
 import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -484,6 +486,21 @@ def test_connection_with_all_sections_saves(studio, monkeypatch):
     assert r.status_code == 422 and code(r) == "sections"
     r = post(studio, kind="srvllm", base_url=GW, sections=[*every, "ninth", "tenth"])
     assert r.status_code == 422 and code(r) == "invalid"
+
+
+def test_add_to_every_section_matches_what_each_gateway_takes(studio):
+    """Галочка «Добавить во все разделы» (connection-form.js GATEWAY_SECTIONS) шлёт ровно разделы вида: лишний
+    раздел — отказ всей формы, недостающий — снова добавлять по одному."""
+    source =(Path(__file__).parents[1] / "app/static/js/connection-form.js").read_text(encoding="utf-8")
+    block = re.search(r"GATEWAY_SECTIONS = \{(.*?)\};", source, re.S).group(1)
+    page = {k: re.findall(r"'(\w+)'", v) for k, v in re.findall(r"(\w+): \[([^\]]*)\]", block)}
+    assert set(page) == {"srvllm", "s06"}
+    assert set(page["srvllm"]) == connections.KINDS["srvllm"] and set(page["s06"]) == set(sections.S06_CATALOG)
+    cid = add_connection(studio, kind="srvllm", base_url=GW, sections=page["srvllm"])
+    assert conn_of(cid).sections == set(page["srvllm"])
+    r = post(studio, kind="openai", s06=True, base_url=GW, sections=page["s06"])
+    assert r.status_code == 201, r.text
+    assert conn_of(r.json()["id"]).sections == set(page["s06"])
 
 
 def test_dropped_connection_can_be_renamed_and_taken_out_of_sections(studio):

@@ -2,7 +2,8 @@ import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
- * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx), «В чат ▾», «Удалить»; идущий — состояние
+ * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx), «В чат ▾», «Переименовать» (PATCH `name`,
+ * расширение сохраняет сервер), «Удалить»; идущий — состояние
  * и «Отменить». Ниже — листалка «‹ страница N из M ›» и две колонки: картинка страницы (нажатие — окно
  * просмотра #ocr-viewer) и её текст. На телефоне (≤ 760 px) картинка над текстом, список выезжает сбоку,
  * как у «Расшифровки». Готовые страницы идущего документа уже листаются.
@@ -27,7 +28,7 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
-import { el, openDialog, plural, words } from './ui.js';
+import { el, openDialog, plural, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
@@ -120,6 +121,15 @@ function build(view, ctx) {
   /* выбранный */
   function download(format) {
     el('a', { href: `/api/ocr/${docs.current.id}/export?format=${format}`, download: '' }).click();
+  }
+
+  function rename(item) {
+    renameDialog(root, { id: 'ocr-rename-dialog', name: item.name, async save(name) {
+      const got = await api('PATCH', `/api/ocr/${item.id}`, { name });     // ответ ленты: pages — числом
+      for (const x of [...docs.items, docs.current]) if (x && x.id === got.id) x.name = got.name;
+      paintList();
+      paintView();
+    } });
   }
 
   function confirmDelete(item) {
@@ -294,6 +304,9 @@ function build(view, ctx) {
         && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed')) {
       acts.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // ошибка или отмена документа
     }
+    const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-rename' }, tr("Переименовать"));
+    ren.addEventListener('click', () => rename(item));
+    acts.append(ren);
     if (!RUNNING.has(item.state)) {
       const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, tr("Удалить"));
       del.addEventListener('click', () => confirmDelete(item));
