@@ -38,7 +38,7 @@ import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy } from './stale.js';
-import { claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
+import { cancelRefresh, claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
 import './code-drafts.js';
 
 const LOADERS = {
@@ -355,6 +355,7 @@ function retryLater(first, worker) {
   async function retry() {
     if (asking || document.visibilityState !== 'visible') return;
     asking = true;
+    cancelRefresh();         // повтор на месте: перезагрузка refresh.js по тому же `online` открыла бы студию второй раз
     try {
       await loadMe();
     } catch (err) {
