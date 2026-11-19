@@ -8761,6 +8761,71 @@ def test_code_answer_in_one_tab_removes_card_in_other(browser, live):
     assert not known_refusals(problems(first["r"]), 409), problems(first["r"])
 
 
+#: видимость вкладки задаёт тест: `window.testHidden` и свои события visibilitychange (чужие гасятся);
+#: `window.liveOpened` — сколько раз страница открывала live
+CONTROLLED_VISIBILITY = """(() => { window.testHidden = false; window.liveOpened = 0;
+  Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true,
+    get: () => window.testHidden ? 'hidden' : 'visible' });
+  Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => window.testHidden });
+  window.addEventListener('visibilitychange', (event) => { if (!event.testOwned) event.stopImmediatePropagation(); }, true);
+  const real = window.fetch;
+  window.fetch = (u, o) => { if (String(u).split('?')[0].endsWith('/live')) window.liveOpened++; return real(u, o); };
+})();"""
+
+
+def visibility(hidden):
+    return ("eval", f"hidden-{hidden}".lower(), f"""(() => {{ window.testHidden = {'true' if hidden else 'false'};
+      const event = new Event('visibilitychange'); event.testOwned = true; document.dispatchEvent(event); return true; }})()""")
+
+
+def test_code_return_to_tab_keeps_running_turn_text(browser, live):
+    """Вкладка ушла в фон посреди хода и вернулась: перечитанная история не стирает текст идущего хода до снимка
+    live — ни один кадр без него (MutationObserver; проверка — после кадра отрисовки). Ход кончился, пока вкладка
+    была скрыта, — лента приходит к итоговой истории с одним ответом."""
+    from fake_bridge import pid
+    login = "code-return-running"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "text", "text": "Пишу ответ"}, code_permission("r1", False),
+                      {"k": "text", "text": " и дописал"}, {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    endpoint = f"/api/code/agents/{aid}/projects/{pid('alpha')}/chats/{CODE_CHAT_A}"
+    card = "document.querySelector(\".code-ask[data-request='r1']\")"
+    watch = """(() => { const feed = document.querySelector('#code-feed'); window.feedGaps = 0;
+      const missing = () => !feed.textContent.includes('Пишу ответ');
+      new MutationObserver(() => { if (missing()) requestAnimationFrame(() => { if (missing()) window.feedGaps++; }); })
+        .observe(feed, { childList: true, subtree: true, characterData: true });
+      return true; })()"""
+    frames = "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            *code_send("Задача"), ("wait", f"{card} && document.querySelector('#code-feed').textContent.includes('Пишу ответ')"),
+            ("eval", "marked", f"{card}.dataset.old = '1'; window.livesBefore = window.liveOpened; true"),
+            ("eval", "watching", watch),
+            visibility(True), visibility(False),
+            # снимок live заменил карточку новой
+            ("wait", f"window.liveOpened > window.livesBefore && {card} && !{card}.dataset.old"),
+            ("eval", "frames", frames),
+            ("eval", "gaps", "window.feedGaps"),
+            ("eval", "running", CODE_MSGS),
+            visibility(True),
+            ("eval", "answered", f"import('/static/js/api.js').then((m) => m.api('POST', '{endpoint}/answer',"
+                                 " { request_id: 'r1', decision: 'allow' })).then(() => true)"),
+            visibility(False),
+            ("wait", CODE_IDLE_AFTER.format(n=1)
+                     + " && document.querySelector('#code-feed').textContent.includes('и дописал')"),
+            ("eval", "frames2", frames),
+            ("eval", "final", CODE_MSGS)], width=320, mobile=True, init=CONTROLLED_VISIBILITY)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["gaps"] == 0, v
+    assert v["running"] == [["user", "Задача"], ["assistant", "Пишу ответ"]]
+    assert v["final"] == [["user", "Задача"], ["assistant", "Пишу ответ и дописал"]]
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
 def test_code_stop_and_offline(browser, live):
     """«Остановить» — stop мосту, карточка ушла, «Ход прерван». Затем ход идёт и мост пропал — «Компьютер пропал
     со связи — жду его»; мост снова на связи — надпись ушла (новый канал закрыл сессии — к панели PIN, у

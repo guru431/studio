@@ -1556,12 +1556,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       historyCache.delete(key);
     }
     if (first && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
-    const offset = renderedHistory ? feed.children.length - renderedHistory.nodes.length : -1;
+    // Ответ идущего хода остаётся в конце ленты до снимка live (возврат на экран): иначе его текст мигает.
+    // Кончился, пока не смотрели, — live ответит idle, и он сам перечитает историю.
+    const tail = turn && turn.node === feed.lastElementChild ? turn.node : null;
+    const offset = renderedHistory ? feed.children.length - (tail ? 1 : 0) - renderedHistory.nodes.length : -1;
     const unchanged = renderedHistory?.serial === serial && offset >= 0 && (offset === 0 || start < page.start)
       && renderedHistory.nodes.every((node, index) => feed.children[offset + index] === node);
     if (!unchanged) {
       feed.replaceChildren(...messages(page.items));
       renderedHistory = { serial, nodes: [...feed.children] };
+      if (tail) feed.append(tail);
     }
     paintChangedFiles();
     historyEmpty = page.total === 0;
@@ -1570,7 +1574,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const pending = pendingInputs.get(draftKey);
     const lastUser = page.items?.findLast((m) => m.role === 'user');
     if (pending && page.total > pending.beforeTotal && lastUser?.text === pending.value) acknowledgeInput();
-    turn = null;
+    if (!tail) turn = null;
     if (!unchanged) start = Number.isInteger(page.start) ? page.start : 0;
     more.hidden = start <= 0;
     if (thenLive) {
