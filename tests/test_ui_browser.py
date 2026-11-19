@@ -765,6 +765,33 @@ def test_admin_renames_a_user_in_the_panel(browser, live):
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_admin_grants_and_revokes_admin_rights_in_the_edit_dialog(browser, live, width):
+    chief, mate = f"boss{width}", f"aide{width}"
+    live.add_user(chief, is_admin=True); live.add_user(mate)
+    dialog, row = "#user-edit-dialog", f"#users tr[data-login={mate}]"
+    admin_cell = f"document.querySelector('{row} td[data-col=admin]').textContent"
+    r = browser.drive(live.url + "/", [*signin(chief), ("wait", READY), *go("admin"),
+        ("wait", f"document.querySelector('{row} .user-edit')"),
+        ("click", f"#users tr[data-login={chief}] .user-edit"), ("wait", is_open(dialog)),
+        ("eval", "selfLocked", "[document.querySelector('#user-edit-admin').checked,"
+                               " document.querySelector('#user-edit-admin').disabled]"),
+        ("click", f"{dialog} .dialog-close"), ("wait", "!" + is_open(dialog)),
+        ("click", f"{row} .user-edit"), ("wait", is_open(dialog)),
+        ("eval", "before", "[document.querySelector('#user-edit-admin').checked,"
+                           " document.querySelector('#user-edit-admin').disabled]"),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", "#user-edit-admin"), ("click", "#user-edit-save"),
+        ("wait", f"!{is_open(dialog)} && {admin_cell} === 'да'"),
+        ("click", f"{row} .user-edit"), ("wait", is_open(dialog)),
+        ("click", "#user-edit-admin"), ("click", "#user-edit-save"),
+        ("wait", f"!{is_open(dialog)} && {admin_cell} === 'нет'")], width=width, mobile=width == 320)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["selfLocked"] == [True, True] and v["before"] == [False, False] and v["fits"]
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_admin_manages_users_connections_and_the_allowlist(browser, live, width):
     login = f"mate{width}"

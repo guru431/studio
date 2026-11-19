@@ -28,6 +28,7 @@ KINDS = frozenset({
     "pin_set", "pin_delete",                          # PIN приложения задан или сменён, убран
     "passkey_add", "passkey_delete",                  # ключ passkey добавлен, удалён
     "password_reset",                                 # пароль учётки сбросил администратор
+    "admin_grant", "admin_revoke",                    # права администратора выданы, сняты (панель)
     "project_member_add", "project_member_remove",    # доступ к проекту «Агентов» выдан, отозван (project_access)
 })
 DETAIL_MAX = 32
