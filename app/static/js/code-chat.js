@@ -22,7 +22,9 @@ import { opencodeView } from './code-opencode.js';
  * - offline (событие или 409, и у «Отправить») — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS,
  *   пока страница видна; live без компьютера — поток ожидания (offline {wait: true}), его online открывает live
  *   сразу; ошибка загрузки истории — слова и «Повторить» (#code-reload) в строке статуса, сбой связи, моста
- *   или шлюза — ещё и повтор через RETRY_MS; closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
+ *   или шлюза — ещё и повтор через RETRY_MS; повтор на месте снимает ожидающую перезагрузку refresh.js (её срок совпадал
+ *   с RETRY_MS: страница перезагружалась под нажатием «Повторить»), отказ повтора взводит её снова;
+ *   closed (событие или 409) — closed() из code.js: к панели PIN этого компьютера, после
  *   PIN — снова сюда; ответ, пришедший после ухода с чата, никуда не уводит;
  * - страница ушла с экрана — свой поток она снимает (push от сервера уходит, только если чат никто не
  *   смотрит), вернулась — снова live: снимок догонит ход, ход на машине от этого не прерывается.
@@ -58,7 +60,7 @@ import { statusActions } from './code-status-bar.js';
 import { historyImages } from './code-chat-images.js';
 import { commandsView } from './code-commands.js';
 import { WINDOW } from './code-window.js';
-import { refreshAfterFailure } from './refresh.js';
+import { cancelRefresh, refreshAfterFailure } from './refresh.js';
 import { saveDraft, savedDrafts } from './code-drafts.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
@@ -1635,6 +1637,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function reload(passive = false) {
     clearTimeout(retry);
     retry = null;
+    cancelRefresh();         // повтор на месте; отказ (loadFailed) взводит перезагрузку снова
     if (!passive) acted = Date.now();
     reloadButton.hidden = true;
     if (await loadHistory(false, opened, passive) === false) openLive(passive);

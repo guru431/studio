@@ -142,6 +142,8 @@ def test_failed_first_history_offers_retry_in_the_status_bar(focus_browser, live
             ready(page)
             pw.expect(retry).to_be_hidden()
             pw.expect(page.locator("#code-status")).to_have_text("")
+            # Повтор на месте снимает перезагрузку refresh.js: её 5 с совпадали с повтором и уносили нажатие.
+            assert page.evaluate("performance.getEntriesByType('navigation')[0].type") == "navigate"
             assert not errors, errors
     finally:
         bridge.stop()
