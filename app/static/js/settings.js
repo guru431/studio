@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { language, locale, tr } from './i18n.js';
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
@@ -779,7 +779,7 @@ async function subscribePush() {
     await old.unsubscribe();
     sub = await registration.pushManager.subscribe(options);
   }
-  await api('POST', '/api/me/push', sub.toJSON());
+  await api('POST', '/api/me/push', { ...sub.toJSON(), lang: language() });
 }
 
 async function unsubscribePush() {

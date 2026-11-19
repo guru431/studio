@@ -334,10 +334,14 @@ CHECK_WATCH_SEC = 900
 #: копия — раз в сутки в 04:30: последний итог копирования старше полутора суток — копия пропущена (и панель —
 #: красным: значение уходит ей в `/api/admin/storage`)
 COPY_STALE_SEC = 36 * 3600
-CHECK_NOTICE = "Копия базы не поднимается: проблем — {}. Подробности — «Администрирование» → «Хранилище»"
-COPY_NOTICE = "Не удалось выполнить резервное копирование базы. Подробности — «Администрирование» → «Хранилище»"
-STALE_NOTICE = (f"Резервная копия базы не запускалась больше {COPY_STALE_SEC // 3600} ч."
-                " Подробности — «Администрирование» → «Хранилище»")
+#: push и ntfy администраторам на языках подписки (английские — как в en.js)
+CHECK_NOTICE = {"ru": "Копия базы не поднимается: проблем — {}. Подробности — «Администрирование» → «Хранилище»",
+                "en": "Database backup cannot be restored: {} issues. See Administration → Storage"}
+COPY_NOTICE = {"ru": "Не удалось выполнить резервное копирование базы. Подробности — «Администрирование» → «Хранилище»",
+               "en": "Database backup failed. See Administration → Storage"}
+STALE_NOTICE = {"ru": f"Резервная копия базы не запускалась больше {COPY_STALE_SEC // 3600} ч."
+                      " Подробности — «Администрирование» → «Хранилище»",
+                "en": f"Database backup has not run for more than {COPY_STALE_SEC // 3600} h. See Administration → Storage"}
 
 
 def notify_failed_check() -> int:
@@ -354,10 +358,11 @@ def notify_failed_check() -> int:
         if state.DB.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?",
                             (marked, key, row["value"])).rowcount != 1:
             continue
-        notice = COPY_NOTICE if key == manage.COPY_KEY else CHECK_NOTICE.format(last["problems"])
+        notice = COPY_NOTICE if key == manage.COPY_KEY else {
+            lang: text.format(last["problems"]) for lang, text in CHECK_NOTICE.items()}
         admins = [r["id"] for r in state.DB.execute("SELECT id FROM users WHERE is_admin = 1 AND disabled = 0")]
         for uid in admins:
-            push.notify_later(uid, notice, "admin", tag, title="Студия")
+            push.notify_later(uid, notice, "admin", tag, title=push.STUDIO)
         notified.update(admins)
         log.warning("%s: уведомлены администраторы (%d)", tag, len(admins))
     return len(notified)
@@ -376,7 +381,7 @@ def notify_stale_copy() -> int:
         return 0
     admins = [r["id"] for r in state.DB.execute("SELECT id FROM users WHERE is_admin = 1 AND disabled = 0")]
     for uid in admins:
-        push.notify_later(uid, STALE_NOTICE, "admin", "backup-stale", title="Студия")
+        push.notify_later(uid, STALE_NOTICE, "admin", "backup-stale", title=push.STUDIO)
     log.warning("backup-stale: уведомлены администраторы (%d)", len(admins))
     return len(admins)
 

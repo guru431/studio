@@ -426,3 +426,49 @@ def test_push_log_holds_no_endpoint(studio, caplog):
     for secret in ("fcm.googleapis.com", "секрет-адреса", "7319", d.body()["keys"]["p256dh"],
                    d.body()["keys"]["auth"], "Рабочий ПК", "вопрос"):
         assert secret not in text, secret
+
+
+def test_notifications_follow_the_interface_language_of_each_subscription(studio):
+    """Решение владельца 2026-11-19: push — на языке интерфейса устройства. Сервер языка страницы не знает:
+    страница передаёт его при подписке и после смены языка (`PATCH /api/me` `notify_lang`); служебный работник
+    языка не знает — переподписка сохраняет прежний язык сессии. Пользовательские имена не переводятся."""
+    from test_jobs import image
+
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    ru = Device()
+    assert studio.c.post("/api/me/push", json=ru.body()).status_code == 204       # прежняя страница — без языка
+    assert studio.c.get("/api/me").json()["notify_langs"] == ["ru"]
+    studio.c.cookies.clear()
+    signin(studio, "owner")
+    en = Device("https://web.push.apple.com/english")
+    assert studio.c.post("/api/me/push", json={**en.body(), "lang": "de"}).status_code == 422
+    assert studio.c.post("/api/me/push", json={**en.body(), "lang": "en"}).status_code == 204
+    assert studio.c.get("/api/me").json()["notify_langs"] == ["en"]
+    aid, _ = enroll(studio)
+    link = connect(studio, aid, FakeMachine({"alpha": {}}))
+    studio.c.portal.call(bridge.deliver, link, {"t": "ev", "project": ALPHA, "project_name": "Проект",
+                                               "chat": A, "e": {"k": "done", "status": "done"}})
+    settle(studio)
+    image(uid, "finished")
+    state.DB.execute("UPDATE images SET state = 'done', finished = ? WHERE id = 'finished'", (T0,))
+    studio.c.portal.call(push.job_finished, "images", "finished")
+    settle(studio)
+    got = {}
+    for req in studio.gw.push_requests:
+        device = ru if str(req.url) == ru.endpoint else en
+        message = device.decrypt(req.content)
+        got.setdefault(device.endpoint, []).append((message["title"], message["body"]))
+    assert got[ru.endpoint] == [("Агенты", "Рабочий ПК · Проект: ход окончен"), ("Студия", "картинка готова")]
+    assert got[en.endpoint] == [("Agents", "Рабочий ПК · Проект: turn completed"), ("Studio", "image ready")]
+    # служебный работник переподписывает без языка — язык сессии остаётся английским
+    renewed = Device("https://web.push.apple.com/renewed")
+    assert studio.c.post("/api/me/push", json=renewed.body()).status_code == 204
+    assert state.DB.execute("SELECT lang FROM push_subs WHERE endpoint = ?", (renewed.endpoint,)).fetchone()[0] == "en"
+    # смена языка интерфейса: страница при запуске сверяет `notify_langs` и правит только свою сессию
+    assert studio.c.patch("/api/me", json={"notify_lang": "fr"}).status_code == 422
+    answer = studio.c.patch("/api/me", json={"notify_lang": "ru"})
+    assert answer.status_code == 200 and answer.json()["notify_langs"] == ["ru"]
+    studio.c.portal.call(push.notify, uid, {"ru": "русский", "en": "english"}, "code", "t")
+    assert [renewed.decrypt(r.content)["body"] for r in studio.gw.push_requests[-2:]
+            if str(r.url) == renewed.endpoint] == ["русский"]

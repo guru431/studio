@@ -55,3 +55,40 @@ def test_ntfy_settings_save_reload_test_and_disable(browser, live, monkeypatch, 
     assert len(live.gw.ntfy_requests) == before + 1
     assert json.loads(live.gw.ntfy_requests[-1].content)['topic'] == 'ui-private-topic'
     assert not problems(result), problems(result)
+
+
+def test_ntfy_follows_the_device_language_after_save_and_after_switching(browser, live, monkeypatch):
+    """Сохранение ntfy передаёт язык интерфейса; после смены языка страница при запуске правит язык сессии."""
+    login = 'ntfy-language'
+    live.add_user(login)
+    conn = db.connect(live.db_path)
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", ('["psh.example.net:443"]',))
+    conn.close()
+    async def resolve(host, port):
+        return ['93.184.216.34']
+    monkeypatch.setattr(upstream, 'RESOLVE', resolve)
+    ready = "document.querySelector('#ntfy-save') && !document.querySelector('#ntfy-save').disabled"
+    langs = """(async () => {
+      for (let i = 0; i < 50; i++) {
+        const langs = (await fetch('/api/me').then(r => r.json())).notify_langs;
+        if (langs.length && langs[0] === localStorage.getItem('studio-language')) return langs;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return (await fetch('/api/me').then(r => r.json())).notify_langs;
+    })()"""
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
+        ('eval', 'english', "localStorage.setItem('studio-language', 'en'); location.reload(); true"),
+        ('wait', READY), *go('settings/notifications'), ('wait', ready),
+        set_value('#ntfy-server', 'https://psh.example.net'), set_value('#ntfy-topic', 'ui-language-topic'),
+        ('click', '#ntfy-enabled'), ('click', '#ntfy-save'),
+        ('wait', "document.querySelector('#ntfy-status').textContent !== ''"),
+        ('eval', 'saved', langs),
+        ('eval', 'russian', "localStorage.setItem('studio-language', 'ru'); location.reload(); true"),
+        ('wait', READY), ('eval', 'switched', langs)], width=1280)
+    assert not result.get('failed'), result
+    assert result['values']['saved'] == ['en'] and result['values']['switched'] == ['ru']
+    conn = db.connect(live.db_path)
+    assert [r[0] for r in conn.execute('SELECT n.lang FROM ntfy_devices n JOIN sessions s ON s.digest = n.digest'
+                                       ' JOIN users u ON u.id = s.user_id WHERE u.login = ?', (login,))] == ['ru']
+    conn.close()
+    assert not problems(result), problems(result)

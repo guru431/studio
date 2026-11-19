@@ -18,6 +18,7 @@ import clock
 import config
 import db
 import manage
+import push
 import security
 import state
 from conftest import T0, make_user, signin
@@ -400,7 +401,8 @@ def test_failed_nightly_check_is_pushed_to_active_admins_once(studio, sent):
     make_user(studio, "bob")
     manage.record_check(state.DB, {"ok": False, "problems": ["a", "b"], "at": None})
     assert admin.notify_failed_check() == 1
-    assert sent == [(owner, admin.CHECK_NOTICE.format(2), "admin", "Студия")]
+    assert sent == [(owner, {"ru": admin.CHECK_NOTICE["ru"].format(2), "en": admin.CHECK_NOTICE["en"].format(2)},
+                     "admin", push.STUDIO)]
     assert admin.notify_failed_check() == 0 and len(sent) == 1        # один раз
     manage.record_check(state.DB, {"ok": True, "problems": [], "at": None})
     assert admin.notify_failed_check() == 0
@@ -427,7 +429,7 @@ def test_failed_copy_notifies_once_without_erasing_the_last_good_copy(studio, en
     assert storage["copy"] == {"ok": False, "at": clock.NOW()}
     assert storage["backup"]["at"] == copy.stat().st_mtime
     assert admin.notify_failed_check() == 1
-    assert sent == [(owner, admin.COPY_NOTICE, "admin", "Студия")]
+    assert sent == [(owner, admin.COPY_NOTICE, "admin", push.STUDIO)]
     assert admin.notify_failed_check() == 0
 
     assert manage.main(["backup"]) == 0
@@ -457,7 +459,7 @@ def test_a_copy_that_never_ran_is_pushed_to_active_admins_once(studio, sent):
     assert admin.notify_stale_copy() == 0
     studio.clock[0] += 1
     assert admin.notify_stale_copy() == 1
-    assert sent == [(owner, admin.STALE_NOTICE, "admin", "Студия")]
+    assert sent == [(owner, admin.STALE_NOTICE, "admin", push.STUDIO)]
     assert admin.notify_stale_copy() == 0 and admin.notify_failed_check() == 0 and len(sent) == 1
     manage._record_result(state.DB, manage.COPY_KEY, {"ok": True, "at": clock.NOW(), "notified": True})
     studio.clock[0] += admin.COPY_STALE_SEC + 1

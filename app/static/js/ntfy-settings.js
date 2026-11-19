@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { language, tr } from './i18n.js';
 /* Прямая доставка ntfy — отдельная настройка сессии устройства, по умолчанию выключена. */
 import { api } from './api.js';
 import { el, field, words } from './ui.js';
@@ -44,7 +44,7 @@ export function ntfyBlock() {
     finally { busy(false); }
   }
   save.addEventListener('click', () => action(async () => {
-    const value = { server: server.value.trim(), topic: topic.value.trim(), enabled: enabled.checked };
+    const value = { server: server.value.trim(), topic: topic.value.trim(), enabled: enabled.checked, lang: language() };
     if (clearToken.checked) value.token = '';
     else if (token.value) value.token = token.value;
     paint(await api('PUT', '/api/me/ntfy', value));

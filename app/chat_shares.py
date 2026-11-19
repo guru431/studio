@@ -372,8 +372,9 @@ def _wrong_pin(request: Request, row, reserved: int) -> None:
     if fails >= FAILS_MAX:
         state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (row["id"],))
         security_log.record(uid, "share_locked", detail="revoked", ip=ip)
-        push.notify_later(uid, f"Ссылка «Поделиться» отключена: {FAILS_MAX} неверных PIN", "settings/security",
-                          "share-" + row["id"], title="Студия")
+        push.notify_later(uid, {"ru": f"Ссылка «Поделиться» отключена: {FAILS_MAX} неверных PIN",
+                                "en": f"Shared link disabled: {FAILS_MAX} incorrect PINs"}, "settings/security",
+                          "share-" + row["id"], title=push.STUDIO)
         log.info("пользователь %d: ссылка отозвана после %d неверных PIN", uid, fails)
         raise _refuse()
     if reserved == PIN_FAILS:
