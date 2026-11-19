@@ -154,7 +154,8 @@ class FakeMachine:
                 data = handler(req, events)
                 if scope is not None and op in ("projects", "activity"):
                     key = "pid" if op == "projects" else "project"
-                    data["items"] = [i for i in data.get("items", []) if i.get(key) in scope]
+                    data["items"] = [{k: v for k, v in i.items() if k != "dir"}  # путь владельца участнику не уходит
+                                     for i in data.get("items", []) if i.get(key) in scope]
         except Refused as e:
             return {"t": "res", "id": req.get("id"), "ok": False, "code": e.code, "message": e.message,
                     **e.extra}, []
@@ -269,7 +270,7 @@ class FakeMachine:
         return chat
 
     def _op_projects(self, req, events):
-        return {"items": [{"pid": pid(name), "name": name,
+        return {"items": [{"pid": pid(name), "name": name, "dir": p.get("dir", "C:\\work\\projects\\" + name),
                            **({"last_code_bytes": p["last_code_bytes"]} if "last_code_bytes" in p else {})}
                           for name, p in sorted(self.projects.items())]}
 

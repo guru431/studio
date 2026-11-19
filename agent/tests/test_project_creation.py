@@ -85,7 +85,7 @@ async def test_creation_requires_open_owner_session_and_rejects_shared_scope(age
     assert [response[0].get('code') for response in responses].count('exists') == 1
     row = next(response[0]['data'] for response in responses if response[0]['ok'])
     assert (root / 'новый').is_dir()
-    assert row in (await agent.handle(req('projects')))[0]['data']['items']
+    assert row in [{'pid': i['pid'], 'name': i['name']} for i in (await agent.handle(req('projects')))[0]['data']['items']]
 
 
 @pytest.mark.parametrize('state', ['updating', 'exiting'])

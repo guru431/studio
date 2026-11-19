@@ -21,10 +21,12 @@ class MirrorMachine(FakeMachine):
         self.project_create = True
         self.platform = "win32"
         self.discovery = True
+        self.exclusions = True
 
     @property
     def hello(self):
-        return {**super().hello, "project_mirror": True, "project_mirror_discovery": self.discovery}
+        return {**super().hello, "project_mirror": True, "project_mirror_discovery": self.discovery,
+                "mirror_exclude": self.exclusions}
 
     def handle(self, req):
         try:
@@ -43,10 +45,11 @@ class MirrorMachine(FakeMachine):
 
     def _op_mirror_scan(self, req, events):
         assert req["project"] == pid(self.source.name)
-        return mirror.scan(self.source)
+        return mirror.scan(self.source, req.get("exclude") or ())
 
     def _op_mirror_destination(self, req, events):
-        return mirror.destination(self.roots, req["root"], req["name"], metadata_only=req.get("metadata_only"))
+        return mirror.destination(self.roots, req["root"], req["name"], metadata_only=req.get("metadata_only"),
+                                  exclude=req.get("exclude") or ())
 
     def _op_mirror_read(self, req, events):
         return mirror.read(self.source, req["reads"])
@@ -242,6 +245,56 @@ def test_first_equal_comparison_establishes_baseline_for_both_directions(studio,
     (source / "notes.txt").write_bytes(b"original\n")
     (clone / "notes.txt").write_bytes(b"copy only")
     assert client.post(endpoint + "/compare").json()["conflicts"] == 1
+
+
+def test_permanent_exclusions_are_neither_copied_nor_removed_in_the_copy(studio, computers):
+    """Платформенные каталоги: исходный `.venv` не переносится, местный `.venv` копии не предлагается удалить."""
+    import project_mirrors
+    source, first, second = computers
+    (source / ".venv" / "Scripts").mkdir(parents=True)
+    (source / ".venv" / "Scripts" / "site.py").write_bytes(b"windows")
+    root = mirror.projects.list_roots(second.roots)[1]
+    clone = Path(root["path"]) / source.name
+    (clone / ".venv" / "bin").mkdir(parents=True)
+    (clone / ".venv" / "bin" / "site.py").write_bytes(b"linux")
+    make_user(studio, "owner")
+    left, _ = enroll(studio, name="Source")
+    right, _ = enroll(studio, name="Destination")
+    connect(studio, left, first)
+    connect(studio, right, second)
+    signin(studio, "owner")
+    client = studio.c
+    assert client.post(f"/api/code/agents/{left}/open", json={"pin": None}).status_code == 204
+    assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+    url = f"/api/code/agents/{left}/projects/{pid(source.name)}/mirrors"
+    created = client.post(url, json={"destination": right, "root": root["id"], "name": source.name, "existing": True})
+    endpoint = f"{url}/{created.json()['id']}"
+    plan = client.post(endpoint + "/compare").json()
+    assert ".venv/Scripts/site.py" in {path for path, *_ in plan["changes"]} and plan["deletions"] > 0
+    for bad in ([".git"], [".git/objects"], ["../x"], [f"d{i}" for i in range(project_mirrors.EXCLUDE_MAX + 1)]):
+        assert client.put(endpoint + "/exclude", json={"exclude": bad}).status_code == 422, bad
+    for capable in (False, True):  # прежний мост назначения удалил бы исключённое в копии
+        second.exclusions = capable
+        connect(studio, right, second)
+        assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+        if not capable:
+            refused = client.put(endpoint + "/exclude", json={"exclude": [".venv"]})
+            assert refused.json()["detail"]["code"] == "unsupported"
+    saved = client.put(endpoint + "/exclude", json={"exclude": [".venv", "/.venv/"]})
+    assert saved.status_code == 200 and saved.json()["exclude"] == [".venv"], saved.text
+    plan = client.post(endpoint + "/compare").json()
+    assert [change[:2] for change in plan["changes"] if change[0].startswith(".venv")] == [[".venv", "skipped"]]
+    response = client.post(endpoint + "/sync", json={"plan": plan["plan"], "overwrite": True})
+    assert response.status_code == 202, response.text
+
+    async def finish():
+        if (running := project_mirrors.TRANSFERS.get(right)) is not None:
+            await running
+    client.portal.call(finish)
+    assert client.get(endpoint).json()["job"]["state"] == "done"
+    assert (clone / ".venv" / "bin" / "site.py").read_bytes() == b"linux" and not (clone / ".venv" / "Scripts").exists()
+    assert (clone / "notes.txt").read_bytes() == b"original\n"
+    assert client.put(endpoint + "/exclude", json={"exclude": []}).json()["exclude"] == []
 
 
 def test_discovery_respects_pin_and_links_only_a_present_unreserved_copy(studio, computers, monkeypatch):
