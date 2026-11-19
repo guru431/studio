@@ -1,4 +1,5 @@
 """Полная перезагрузка интерфейса, всех сводок и открытого чата."""
+import json
 from pathlib import Path
 
 import httpx
@@ -9,9 +10,91 @@ from fake_bridge import FakeMachine, Refused, pid
 from test_codex import CATALOG
 from test_ui_desktop import desktop_browser
 from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, CODE_CHAT_C, READY, browser, code_online, code_requests,
-                             code_session, go, live, problems, signin, wait_for)
+                             code_session, go, live, live_sql, problems, signin, wait_for)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+
+
+@pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
+def test_refresh_keeps_the_open_screen_when_studio_is_unreachable(desktop_browser, live):
+    with desktop_browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True) as context:
+        signed = context.request.post(live.url + "/login", form={"login": "owner", "password": "password-123"},
+                                      max_redirects=0)
+        assert signed.status == 303
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        page.goto(live.url + "/#/settings/appearance")
+        page.wait_for_function(f"() => {READY}")
+        page.evaluate("window.beforeRefresh = true")
+        context.set_offline(True)
+        page.locator("#refresh-app").click()
+        page.locator("#studio-refresh-offer").wait_for()
+        assert page.evaluate(f"{READY} && window.beforeRefresh")
+        assert page.locator("#view").is_visible()
+        context.set_offline(False)
+        page.locator("#studio-refresh-go").click()
+        page.wait_for_function(f"() => {READY} && !window.beforeRefresh")
+        assert page.evaluate("location.hash") == "#/settings/appearance"
+
+
+@pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
+def test_refresh_opens_chat_when_the_optional_catalog_request_fails(desktop_browser, live):
+    login = "refresh-catalog-fallback"
+    live.add_user(login)
+    machine = FakeMachine({"alpha": {"chats": {CODE_CHAT_B: {**code_session("Codex"), "engine": "codex"}}}})
+    machine.codex = CATALOG
+    aid, channel = code_online(live, login, machine)
+    try:
+        with desktop_browser.new_context(service_workers="block") as context:
+            signed = context.request.post(live.url + "/login", form={"login": login, "password": "password-123"},
+                                          max_redirects=0)
+            assert signed.status == 303
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_B}")
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            page.route("**/api/agents?refresh=true", lambda route: route.fulfill(status=503))
+            with page.expect_event("domcontentloaded"):
+                page.locator("#refresh-app").click()
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            assert page.locator('#code-model option[value="codex-test"]').count() == 1
+    finally:
+        channel.stop()
+
+
+@pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
+@pytest.mark.parametrize("saved_effort", ["xhigh", "low"])
+def test_codex_defaults_warning_uses_resolved_settings(desktop_browser, live, saved_effort):
+    login = f"refresh-effective-defaults-{saved_effort}"
+    live.add_user(login)
+    model = "gpt-6.2-sol"
+    live_sql(live, "UPDATE users SET code_defaults = ? WHERE login = ?",
+             (json.dumps({"codex": {"model": model, "effort": saved_effort}}), login))
+    row = {**code_session("Codex"), "engine": "codex", "settings": {"model": model, "effort": "xhigh"}}
+    machine = FakeMachine({"alpha": {"chats": {CODE_CHAT_B: row}}})
+    machine.codex = CATALOG
+    aid, channel = code_online(live, login, machine)
+    try:
+        with desktop_browser.new_context(service_workers="block") as context:
+            signed = context.request.post(live.url + "/login", form={"login": login, "password": "password-123"},
+                                          max_redirects=0)
+            assert signed.status == 303
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_B}")
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            assert model in page.locator("#code-model-pick").inner_text()
+            assert "xhigh" in page.locator("#code-effort-pick").inner_text()
+            warning = page.get_by_text("Часть умолчаний недоступна", exact=False)
+            if saved_effort == "xhigh":
+                assert not warning.is_visible()
+            else:
+                assert warning.is_visible()
+                page.locator("#code-model-pick").click()
+                page.locator("#code-model-menu").get_by_role("menuitemradio", name="Codex Test", exact=True).click()
+                assert not warning.is_visible()
+    finally:
+        channel.stop()
 
 
 def test_refresh_updates_the_codex_picker_without_replacing_the_bridge(desktop_browser, live):
