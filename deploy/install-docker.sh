@@ -57,9 +57,10 @@ install -d -m 0755 /usr/local/share/studio "$R/releases"
 probe="$STUDIO_MEDIA_DIR/.studio-deploy-$$"
 setpriv --reuid=10001 --regid=10001 --clear-groups touch "$probe"
 setpriv --reuid=10001 --regid=10001 --clear-groups rm "$probe"
-[ -s "$NEW/agent/studio-agent.zip" ] && [ -s "$NEW/agent/studio-agent-setup.exe" ]
-[ -s "$NEW/agent/studio-agent-setup.pkg" ]
-[ -s "$NEW/agent/studio-agent-setup.sh" ]
+# One check per file: under set -e a failed left side of `A && B` does not stop the script.
+for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studio-agent-setup.sh; do
+    [ -s "$NEW/agent/$file" ] || { echo "studio: bridge artifact $file is missing or empty" >&2; exit 1; }
+done
 version=$(sed -nE 's/^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$NEW/app/release.py")
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'studio: invalid application version' >&2; exit 1; }
 image="studio:$version-$REVISION"

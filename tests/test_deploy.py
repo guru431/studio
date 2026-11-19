@@ -1041,6 +1041,27 @@ def test_failed_docker_start_never_links_current_to_itself(tmp_path, first):
     assert calls[-1].endswith("stop --timeout 20") is first
 
 
+@pytest.mark.integration                   # настоящий Bash: > 1 с на Windows под нагрузкой набора
+@pytest.mark.parametrize("empty", ["studio-agent.zip", "studio-agent-setup.exe", "studio-agent-setup.pkg",
+                                   "studio-agent-setup.sh"])
+def test_docker_install_refuses_an_empty_bridge_artifact(tmp_path, empty):
+    """`[ -s zip ] && [ -s exe ]` под set -e: отказ левой части списка скрипт не завершает — пустой ZIP
+    проходил, а мосты переставали получать обновления."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    for name in ("studio-agent.zip", "studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh"):
+        (agent / name).write_bytes(b"" if name == empty else b"x")
+    start = INSTALL_DOCKER.index('rm "$probe"\n') + len('rm "$probe"\n')
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index("version=$(sed", start)]
+    script = f"set -euo pipefail\nNEW={tmp_path.as_posix()}\n" + block + "echo unreachable\n"
+    r = subprocess.run([bash, "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert r.returncode == 1 and "unreachable" not in r.stdout, r
+    assert empty in r.stderr
+
+
 @pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
 def test_docker_rollback_runs_the_previous_release_with_its_own_host_conf(tmp_path):
     """`set -a` у host.conf экспортировал значения нового релиза, а окружение у Compose сильнее `--env-file`:
