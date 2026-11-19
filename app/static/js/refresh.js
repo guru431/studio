@@ -26,6 +26,7 @@ if (asked !== undefined) {
 let pending = null;
 let timer;
 let probing = false;
+let cancels = 0;             // cancelRefresh: проба /health в пути не перезагружает, даже если сбой снова взвёл тот же адрес
 let claimAgain = false;      // повтор кнопки «Обновить», перенёсшей не все сессии, — тоже с переносом
 let offered = false;         // перезагрузку запретило несохранённое — плашка вместо неё, до перехода в другой адрес
 let uploads = 0;             // идущие загрузки файлов (holdRefresh)
@@ -69,6 +70,7 @@ export function refreshAfterFailure(error, { claim = false } = {}) {
 export function cancelRefresh() {
   clearTimeout(timer);
   pending = null;
+  cancels += 1;
 }
 
 /** Идущая загрузка файла (XHR разделов): пока она не кончилась, автоматическая перезагрузка её не оборвёт. */
@@ -112,11 +114,12 @@ async function retry() {
   if (probing || offered || pending !== location.hash || document.visibilityState === 'hidden') return;
   probing = true;
   const hash = pending;
+  const cancelled = cancels;
   attempts += 1;
   try {
     // Не заменяем открытую страницу ошибкой браузера, пока недоступна сама Студия.
     const response = await fetch('/health', { cache: 'no-store', signal: AbortSignal.timeout(7000) });
-    if (response.ok && pending === hash && location.hash === hash && document.visibilityState !== 'hidden') {
+    if (response.ok && cancelled === cancels && pending === hash && location.hash === hash && document.visibilityState !== 'hidden') {
       if (allowed()) reload(true);
       else offer();
       return;
