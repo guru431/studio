@@ -568,7 +568,7 @@ def test_agent_attachments_context_project_status_and_subscription(browser, live
             ("eval", "accept", "document.querySelector('#code-image-input').hasAttribute('accept')"),
             ("click", "#code-usage"), ("wait", "!!document.querySelector('[data-window=five_hour]')"),
             ("eval", "usage", "document.querySelector('#code-usage-dialog').textContent"),
-            ("screenshot", str(tmp_path / f"agent-usage-{width}.png")), ("click", "#code-usage-dialog .dialog-actions .btn:last-child"),
+            ("screenshot", str(tmp_path / f"agent-usage-{width}.png")), ("click", "#code-usage-dialog .actions .btn:last-child"),
             ("screenshot", str(tmp_path / f"agent-controls-{width}.png")),
             ("click", "#code-send"), ("wait", "document.querySelector('#code-feed').textContent.includes('Получил файлы')"),
             ("eval", "overflow", "document.documentElement.scrollWidth > innerWidth")], width=width, mobile=width == 390)

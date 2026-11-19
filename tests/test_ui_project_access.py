@@ -52,7 +52,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-name').click()
             button = page.locator('#code-project-access')
             button.wait_for()
-            assert page.locator('.code-views > button').all_text_contents() == ['Git', 'Файлы', 'Доступ', 'Чат']
+            assert page.locator('.code-views > button').all_text_contents() == ['Git', 'Файлы', 'Зеркало', 'Доступ', 'Чат']
             initial_hash = page.url
             button.tap() if width == 320 and engine != 'firefox' else button.click()
             popup = page.locator('.project-members:popover-open')
@@ -86,8 +86,9 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             assert page.evaluate('''() => {
                 const buttons = [...document.querySelectorAll('.code-project-tools button')]
                     .map(button => button.getBoundingClientRect());
+                const apart = (a, b) => a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
                 return buttons.every((box, index) => box.left >= 0 && box.right <= innerWidth
-                    && (!index || box.left >= buttons[index - 1].right)) && buttons[0].width >= 28;
+                    && buttons.slice(0, index).every(other => apart(other, box))) && buttons[0].width >= 28;
             }''')
             assert page.evaluate('''() => {
                 const badge = document.querySelector('#code-project-shared').getBoundingClientRect();
@@ -114,6 +115,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 member_page.locator('#code-chat[data-loaded="1"]').wait_for()
                 expect(member_page.locator('#code-project-shared')).to_be_visible()
                 assert not member_page.locator('#code-project-access').is_visible()
+                assert not member_page.locator('#code-project-mirror').is_visible()
                 popup.get_by_role('button', name=f'Отозвать доступ · {friend}').click()
                 popup.get_by_text('Доступ отозван', exact=True).wait_for()
                 expect(header_badge).to_be_hidden()

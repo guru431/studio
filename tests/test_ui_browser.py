@@ -661,27 +661,30 @@ def test_settings_check_of_a_cloud_runs_in_the_browser(browser, live):
 
 @pytest.mark.parametrize("width", [390, 1280])
 def test_settings_photo_unchecks_flux_and_the_chip_keeps_snofs(browser, live, width):
-    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела только SNOFS Krea 2."""
+    """Критерий успеха 1 спеки: «Обновить модели» → снять FLUX — в чипе «модель» раздела его нет, SNOFS Krea 2 первым
+    (каталог фото — `sections.CATALOG`)."""
     login = f"sect{width}"
     live.add_user(login)
     panel = ".section-panel[data-section=photo]"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
         *go("settings/photo"), ("wait", f"document.querySelector('{panel} .link')"),
         ("click", f"{panel} .link-refresh"),
-        ("wait", f"document.querySelectorAll('{panel} input.model-check').length === 2"
+        ("wait", f"document.querySelectorAll('{panel} input.model-check').length === 4"
                  " && document.querySelector('.section-status').textContent.startsWith('Найдено')"),
+        ("eval", "checked", f"[...document.querySelectorAll('{panel} input.model-check')].map(c => [c.value, c.checked])"),
         ("click", f"{panel} input.model-check[value=flux]"),
         ("wait", f"!document.querySelector('{panel} input.model-check[value=flux]').checked"
                  f" && document.querySelector('{panel} input.model-check[value=flux]')"), ("idle",),
         ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/sections')).sections[1].links[0].models)()"),
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
-        # в чипе «модель» раздела «Фото» — только SNOFS Krea 2
+        # в чипе «модель» раздела «Фото» — каталог без FLUX
         *go("photo"), ("wait", FEED_READY), ("click", "#chip-model"),
         ("eval", "options", "[...document.querySelectorAll('#chip-model-menu .menu-option')].map(o => o.textContent)")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["saved"] == ["snofs"] and not r["values"]["overflow"]
-    assert r["values"]["options"] == ["SNOFS Krea 2"]
+    assert r["values"]["checked"] == [["snofs", True], ["flux", True], ["fineview", True], ["jib-moss", True]]
+    assert r["values"]["saved"] == ["snofs", "fineview", "jib-moss"] and not r["values"]["overflow"]
+    assert r["values"]["options"] == ["SNOFS Krea 2", "FineView QW21", "Jib Mix Moss V2"]
     assert not problems(r), problems(r)
 
 
@@ -746,7 +749,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["records"] == "Расшифровка" and v["scans"] == "Сканы"
     assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]
     assert v["securityCurrent"] == "security"
-    assert v["security"] == ["Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
+    assert v["security"] == ["Электронная почта", "Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
                              "Журнал безопасности"]
     assert v["appearance"] == ["Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
     assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
@@ -2595,8 +2598,8 @@ def test_photo_feed_module_groups_days_and_pages(browser, live):
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_rail_labels_fit_their_tabs(browser, live, width):
     """Все разделы — в порядке реестра (sections-meta.js); на телефоне — основные и «Ещё», подписи целиком, страница
-    без горизонтальной прокрутки. На телефоне шапка раздела кончается у лупы — справа сверху три значка (поиск,
-    «В работе», профиль), место прежней кнопки темы отдано заголовку."""
+    без горизонтальной прокрутки. На телефоне шапка раздела кончается у «Обновить» — справа сверху четыре значка
+    (обновление, поиск, «В работе», профиль)."""
     fits = """[...document.querySelectorAll('#rail .tab > span:last-child, #mobile-more-label')]
       .filter(s => s.getBoundingClientRect().width).map(s => {
       const b = s.getBoundingClientRect(); return [s.textContent, b.left >= 0 && b.right <= innerWidth,
@@ -2611,7 +2614,7 @@ def test_rail_labels_fit_their_tabs(browser, live, width):
       return [Math.max(...gaps) - Math.min(...gaps), labels.every((b, i) => !i || b.left >= labels[i - 1].right)];
     })()"""
     room = """(() => { const h = document.querySelector('#view .head'); const end = h.getBoundingClientRect().right
-      - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#search-open').getBoundingClientRect().left - end; })()"""
+      - parseFloat(getComputedStyle(h).paddingRight); return document.querySelector('#refresh-app').getBoundingClientRect().left - end; })()"""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("wait", "document.querySelector('#view .head')"),
                                        ("eval", "fits", fits), ("eval", "spacing", spacing),
                                        ("eval", "room", room), ("eval", "page", NO_OVERFLOW)],
@@ -3850,10 +3853,10 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
     assert v["pressed"] == "true"
     assert v["tile"] == ["5 с", False, 6 if width == 1280 else 2]
     src, controls, meta, actions = v["viewer"]
-    assert src.startswith("/api/media/") and controls and meta.startswith("5 с · 576p · 32 к/с")
+    assert src.startswith("/api/media/") and controls and meta.startswith("Wan · 5 с · 576p · 32 к/с")
     assert actions == ["Скачать", "Повторить", "Ещё варианты", "Удалить"] and v["inside"] and v["download"] == f"{src}?download=1"
     params, seed, when = v["row"]
-    assert params == "5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
+    assert params == "Wan · 5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
     assert v["tableFits"] and v["kept"] == "table"
     assert any(s.startswith("DELETE /api/videos/") for s in r["sent"])
     assert not problems(r), problems(r)
@@ -4190,11 +4193,12 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
 
 @pytest.mark.parametrize("width", [320, 390])
 def test_photo_and_video_heads_fit_the_phone(browser, live, width):
-    """Шапки «Фото» и «Видео» на телефоне: заголовок целиком, «Выбрать» не сжата, всё — левее лупы."""
+    """Шапки «Фото» и «Видео» на телефоне: заголовок целиком, «Выбрать» не сжата, всё — левее значков справа сверху
+    (крайний левый — «Обновить»); на 320 px кнопки уходят второй строкой."""
     login = f"heads{width}"
     live.add_user(login)
     head = """((root) => { const h = document.querySelector(root + ' .head'); const t = h.querySelector('h1');
-      const end = document.querySelector('#search-open').getBoundingClientRect().left;
+      const end = document.querySelector('#refresh-app').getBoundingClientRect().left;
       const kids = [...h.children].filter(e => e.getBoundingClientRect().width > 0 && !e.classList.contains('grow'));
       return [t.textContent, t.scrollWidth <= t.clientWidth, h.querySelector('.select-btn').offsetWidth,
         kids.every(e => e.getBoundingClientRect().right <= end)]; })"""
@@ -8710,9 +8714,11 @@ def test_code_turn_running_and_timeout_open_live(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
-#: вкладка всегда видна: соседняя вкладка того же браузера не снимает её поток
+#: вкладка всегда видна: соседняя вкладка того же браузера не снимает её поток и не шлёт ей visibilitychange
+#: (иначе «возвращение на экран» перечитывает историю посреди хода, и проверка ленты попадает в перерисовку)
 ALWAYS_VISIBLE = """(() => { Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true,
   get: () => 'visible' }); Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => false });
+  window.addEventListener('visibilitychange', (event) => event.stopImmediatePropagation(), true);
 })();"""
 
 
@@ -9107,9 +9113,16 @@ def test_code_closed_event_leads_to_the_pin_and_back_to_the_chat(browser, live):
     assert not known_refusals(problems(r), 409, 423), problems(r)
 
 
+#: где лежит набранное «Черновик задания»: ключи localStorage и sessionStorage и адрес страницы
+STORED_DRAFT = ("[...Object.entries(localStorage).map(([k, v]) => ['local:' + k, v]),"
+                " ...Object.entries(sessionStorage).map(([k, v]) => ['session:' + k, v]), ['href', location.href]]"
+                ".filter(([, v]) => v.includes('Черновик')).map(([k]) => k)")
+
+
 def test_code_closed_at_send_keeps_the_draft(browser, live):
     """Набранное задание не теряется: «Отправить» на запертой студии — отпирание, 409 closed, панель PIN; после
-    PIN — снова этот чат, задание в поле (черновик — только в памяти страницы, не в хранилищах)."""
+    PIN — снова этот чат, задание в поле. Пока студия заперта, черновика нет ни в одном хранилище; после отпирания
+    он — только в sessionStorage вкладки (`studio-agent-drafts`, agents-workspace.md), не в localStorage и не в адресе."""
     from fake_bridge import pid
     login = "code-draft"
     live.add_user(login)
@@ -9132,19 +9145,20 @@ def test_code_closed_at_send_keeps_the_draft(browser, live):
             ("type", "#code-text", "Черновик задания"),
             ("eval", "lock", CODE_LOCK_NOW),         # потока нет (простой): закрытость увидит «Отправить»
             ("click", "#code-send"),
-            ("wait", LOCK_OPEN), ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
+            ("wait", LOCK_OPEN), ("eval", "locked", STORED_DRAFT),
+            ("wait", PASSKEY_READY), ("click", "#lock-open"), ("wait", f"!{LOCK_OPEN}"),
             ("wait", CODE_PIN_SHOWN), ("eval", "old", "!!(window.oldChat = document.querySelector('#code-chat'))"),
             ("type", "#code-pin-input", CODE_PIN), ("click", "#code-pin-open"),
             ("wait", f"location.hash === '#/{here}' && document.querySelector('#code-chat') !== window.oldChat"
                      " && document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "field", "document.querySelector('#code-text').value"),
-            ("eval", "stored", "JSON.stringify([{ ...localStorage }, { ...sessionStorage }, location.href])"
-                               ".includes('Черновик')")], **PHONE)
+            ("eval", "stored", STORED_DRAFT)], **PHONE)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["field"] == "Черновик задания" and v["stored"] is False
+    assert v["field"] == "Черновик задания"
+    assert v["locked"] == [] and v["stored"] == ["session:studio-agent-drafts"], (v["locked"], v["stored"])
     assert not code_requests(machine, "turn") and not machine.running  # Предварительная сверка отказала до отправки хода.
     assert not known_refusals(problems(r), 409, 423), problems(r)
 
