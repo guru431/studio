@@ -8773,7 +8773,7 @@ CONTROLLED_VISIBILITY = """(() => { window.testHidden = false; window.liveOpened
 })();"""
 
 
-def visibility(hidden):
+def controlled_visibility(hidden):
     return ("eval", f"hidden-{hidden}".lower(), f"""(() => {{ window.testHidden = {'true' if hidden else 'false'};
       const event = new Event('visibilitychange'); event.testOwned = true; document.dispatchEvent(event); return true; }})()""")
 
@@ -8802,16 +8802,16 @@ def test_code_return_to_tab_keeps_running_turn_text(browser, live):
             *code_send("Задача"), ("wait", f"{card} && document.querySelector('#code-feed').textContent.includes('Пишу ответ')"),
             ("eval", "marked", f"{card}.dataset.old = '1'; window.livesBefore = window.liveOpened; true"),
             ("eval", "watching", watch),
-            visibility(True), visibility(False),
+            controlled_visibility(True), controlled_visibility(False),
             # снимок live заменил карточку новой
             ("wait", f"window.liveOpened > window.livesBefore && {card} && !{card}.dataset.old"),
             ("eval", "frames", frames),
             ("eval", "gaps", "window.feedGaps"),
             ("eval", "running", CODE_MSGS),
-            visibility(True),
+            controlled_visibility(True),
             ("eval", "answered", f"import('/static/js/api.js').then((m) => m.api('POST', '{endpoint}/answer',"
                                  " { request_id: 'r1', decision: 'allow' })).then(() => true)"),
-            visibility(False),
+            controlled_visibility(False),
             ("wait", CODE_IDLE_AFTER.format(n=1)
                      + " && document.querySelector('#code-feed').textContent.includes('и дописал')"),
             ("eval", "frames2", frames),
