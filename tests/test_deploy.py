@@ -393,6 +393,16 @@ def test_deploy_cleanup_removes_only_the_folder_it_created(tmp_path, outcome):
         assert result.returncode == {"success": 0, "upload-failed": 7, "mkdir-failed": 1}[outcome], result.stderr
 
 
+@pytest.mark.parametrize("path", [".tmp/deploy-x/studio-agent.zip", ".tmp/browser-mcp-1/shot.png"])
+def test_local_build_folder_is_gitignored(path):
+    """Пакет выкладки (ZIP моста с адресом установки) и снимки MCP лежат в .tmp/: `git add -A` не уносит их."""
+    git = shutil.which("git")
+    if not git:
+        pytest.skip("нет git — проверка .gitignore пропущена")
+    r = subprocess.run([git, "-C", str(ROOT), "check-ignore", "-q", path], capture_output=True, timeout=20)
+    assert r.returncode == 0, f"{path} не покрыт .gitignore"
+
+
 def test_install_swaps_the_bridge_archive_with_the_code():
     """`agent` переезжает вместе с кодом и откатывается с ним; без архива — отказ до подмены кода."""
     code = uncommented(INSTALL)
