@@ -1834,6 +1834,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Выберите голос": "Choose a voice",
   "Студия обновилась — нажмите «Обновить» вверху страницы.": "Studio has been updated. Click Refresh at the top of the page.",
   "Студия обновилась": "Studio updated",
+  "Связь восстановилась — обновите Студию, когда сохраните изменения": "Connection restored. Refresh Studio once your changes are saved",
   "Раздел не загрузился": "Could not load section",
   "{0}. Проверьте связь и обновите страницу.": "{0}. Check your connection and refresh the page.",
   "Субтитры .srt": "Subtitles .srt",

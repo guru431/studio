@@ -27,6 +27,7 @@ import { message as serverMessage, tr } from './i18n.js';
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
 import { api, hooks, me, toLogin } from './api.js';
+import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
@@ -467,6 +468,7 @@ function build(view, ctx) {
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/transcripts');
+      holdRefresh(xhr);              // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
       xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
       xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
       xhr.setRequestHeader('x-studio-csrf', me.csrf);

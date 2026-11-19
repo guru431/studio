@@ -133,3 +133,23 @@ def test_expired_partial_lock_forgets_jobs_of_protected_sections_in_an_open_sect
     assert not r.get("failed"), r
     v = r["values"]
     assert v["title"].startswith("Озвучка · Тайный") and v["later"] is False and v["hash"] == "#/chat"
+
+
+#: сбой связи раздела (refresh.js) с короткой первой паузой
+FAILURE = """import('/static/js/refresh.js').then(m => { m.refreshAfterFailure({ code: 'network' }); return true; })"""
+QUICK = """const delay = window.setTimeout;
+  window.setTimeout = (fn, ms, ...args) => delay(fn, ms === 5000 ? 300 : ms, ...args);"""
+
+
+def test_unsent_chat_text_turns_the_automatic_refresh_into_an_offer(browser, live):
+    navigation = "performance.getEntriesByType('navigation')[0].type"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("chat"),
+        ("wait", "document.querySelector('#chat-input')"), ("type", "#chat-input", "Не потерять этот текст"),
+        ("eval", "failed", FAILURE), ("wait", "document.querySelector('#studio-refresh-offer')"),
+        ("eval", "kept", f"new Promise(r => setTimeout(() => r([{navigation},"
+                         " document.querySelector('#chat-input').value]), 1000))"),
+        ("click", "#studio-refresh-go"), ("wait", f"{navigation} === 'reload' && {READY}"),
+        ("eval", "offer", "!!document.querySelector('#studio-refresh-offer')")], init=QUICK)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["kept"] == ["navigate", "Не потерять этот текст"] and v["offer"] is False

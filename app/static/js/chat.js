@@ -119,6 +119,11 @@ const tokens = new Map();        // id подключения → { token, url }
  * вкладки; у ответа «Сохранить ещё раз», пока сервер держит его `streaming`. */
 const unsaved = new Map();
 let screen = null;               // смонтированный раздел
+// перезагрузка потеряла бы ответ, который читает сама вкладка (прямое подключение, ещё не принятый ход), и
+// несохранённые ответы — автоматическую (refresh.js) они запрещают; ответ через сервер идёт и без вкладки
+document.addEventListener('studio-before-auto-refresh', (event) => {
+  if (unsaved.size || [...jobs.values()].some((job) => job.message.via !== 'server')) event.preventDefault();
+});
 
 function elapsed(since) {
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));

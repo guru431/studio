@@ -3,9 +3,13 @@
  * Флаг `true` — кнопка «Обновить»: после загрузки окно забирает управление всеми идущими сессиями
  * (claimRequested). Автоматическая перезагрузка после сбоя ставит `'auto'`: кэши читаются заново, а сессии других
  * окон не трогаются; своё окно остаётся владельцем, потому что id окна переживает перезагрузку (code-window.js).
- * Компьютер не на связи (409 `offline`) — не сбой страницы: перезагрузка его не вернёт, поток live ждёт `online` сам. */
+ * Компьютер не на связи (409 `offline`) — не сбой страницы: перезагрузка его не вернёт, поток live ждёт `online` сам.
+ * Несохранённое молча не теряется: идущая загрузка файла (holdRefresh) или вето события `studio-before-auto-refresh`
+ * (черновики полей, запись голоса, ответ, который читает вкладка, правка файла или расшифровки) — вместо перезагрузки
+ * плашка #studio-refresh-offer с «Обновить», автоматических попыток для этого адреса больше нет. */
 import { api } from './api.js';
 import { WINDOW } from './code-window.js';
+import { tr } from './i18n.js';
 
 const KEY = 'studioRefresh';
 const RETRIES = 'studioRefreshRetries';
@@ -23,6 +27,8 @@ let pending = null;
 let timer;
 let probing = false;
 let claimAgain = false;      // повтор кнопки «Обновить», перенёсшей не все сессии, — тоже с переносом
+let offered = false;         // перезагрузку запретило несохранённое — плашка вместо неё, до перехода в другой адрес
+let uploads = 0;             // идущие загрузки файлов (holdRefresh)
 const delays = [5000, 10000, 20000, 40000, 60000];
 /** Попыток подряд для одного адреса (счёт переживает перезагрузку): дальше — только кнопка «Обновить». */
 const ATTEMPTS_MAX = 10;
@@ -58,25 +64,54 @@ export function refreshAfterFailure(error, { claim = false } = {}) {
   }
 }
 
+/** Идущая загрузка файла (XHR разделов): пока она не кончилась, автоматическая перезагрузка её не оборвёт. */
+export function holdRefresh(xhr) {
+  uploads += 1;
+  xhr.addEventListener('loadend', () => { uploads -= 1; }, { once: true });
+}
+
+function allowed() {
+  return !uploads && document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }));
+}
+
+/** Плашка вместо молчаливой перезагрузки: несохранённое остаётся, обновить — по нажатию (как автоматическая). */
+function offer() {
+  offered = true;
+  clearTimeout(timer);
+  if (document.getElementById('studio-refresh-offer')) return;
+  const bar = document.createElement('div');
+  bar.id = 'studio-refresh-offer';
+  bar.className = 'update-bar';
+  bar.setAttribute('role', 'status');
+  const words = document.createElement('span');
+  words.textContent = tr("Связь восстановилась — обновите Студию, когда сохраните изменения");
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'btn btn-accent';
+  go.id = 'studio-refresh-go';
+  go.textContent = tr("Обновить");
+  go.addEventListener('click', () => reload(true));
+  bar.append(words, go);
+  document.body.append(bar);
+}
+
 function scheduleRetry() {
   clearTimeout(timer);
-  if (pending === null || document.visibilityState === 'hidden' || attempts >= ATTEMPTS_MAX) return;
+  if (pending === null || offered || document.visibilityState === 'hidden' || attempts >= ATTEMPTS_MAX) return;
   timer = setTimeout(retry, delays[Math.min(attempts, delays.length - 1)]);
 }
 
 async function retry() {
-  if (probing || pending !== location.hash || document.visibilityState === 'hidden') return;
-  const allowed = () => document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }));
-  if (!allowed()) { scheduleRetry(); return; }
+  if (probing || offered || pending !== location.hash || document.visibilityState === 'hidden') return;
   probing = true;
   const hash = pending;
   attempts += 1;
   try {
     // Не заменяем открытую страницу ошибкой браузера, пока недоступна сама Студия.
     const response = await fetch('/health', { cache: 'no-store', signal: AbortSignal.timeout(7000) });
-    if (response.ok && pending === hash && location.hash === hash && document.visibilityState !== 'hidden'
-      && allowed()) {
-      reload(true);
+    if (response.ok && pending === hash && location.hash === hash && document.visibilityState !== 'hidden') {
+      if (allowed()) reload(true);
+      else offer();
       return;
     }
   } catch { /* Следующая попытка проверит восстановление связи. */ }
@@ -89,6 +124,8 @@ window.addEventListener('hashchange', () => {
   pending = null;
   attempts = 0;
   claimAgain = false;
+  offered = false;
+  document.getElementById('studio-refresh-offer')?.remove();
   clearTimeout(timer);
 });
 window.addEventListener('online', retry);

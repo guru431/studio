@@ -38,6 +38,7 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * переводом блоков вместо #tl-output, слева — только плашка) / «Текстом» (слева распознанный текст, справа
  * перевод). Режим живёт в памяти экрана; оба вида — из одной записи, без нового распознавания. */
 import { api, hooks, me, toLogin } from './api.js';
+import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
 import { actionMenu, menuItem, popupMenu } from './menu.js';
 import { timeOnly } from './time.js';
@@ -198,7 +199,8 @@ function build(view, ctx) {
   const body = el('div', { class: 'tl-view' }, nativeHint, right, error,
     el('section', { class: 'tl-past', 'aria-label': tr("История переводов") }, el('h2', {}, tr("История")), list));
   view.append(el('div', { class: 'translate' }, head, body, left));
-  const draft = sectionDraft('translate', input);  // запись по ?id — позже, её исходник встанет вместо черновика
+  // запись по ?id — позже, её исходник встанет вместо черновика; исходник открытой записи — не набранный текст
+  const draft = sectionDraft('translate', input, () => !rec || input.value !== (rec.source || ''));
 
   /* модель и языки */
   function chosen() {
@@ -462,6 +464,7 @@ function build(view, ctx) {
     form.append('file', file, file.name);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/translate/files');
+    holdRefresh(xhr);                // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
     try {
       xhr.setRequestHeader('x-studio-csrf', me.csrf);
       xhr.setRequestHeader('x-studio-source-lang', langs.source_lang);
