@@ -423,7 +423,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
   border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface-1); color: var(--text-1); box-shadow: var(--shadow-2); }
 .dialog::backdrop { background: var(--backdrop); }
 .dialog h2 { margin: 0 0 var(--space-6); font-size:var(--fs-xl); }
-.dialog .actions { display: flex; justify-content: flex-end; gap: var(--space-4); margin-top: var(--space-7); flex-wrap: wrap; }
+.dialog .actions, .dialog .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-4); margin-top: var(--space-7); flex-wrap: wrap; }
 
 /* пустой раздел и подсказка «нужно подключение» */
 .hint, .empty { margin: auto; max-width: 420px; padding: 32px var(--space-8); display: flex; flex-direction: column; align-items: center;
@@ -1645,7 +1645,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   .code-ws.panel-open .code-panel { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-2); }
   .code-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
   .code-panel-toggle { display: inline-grid; margin-left: -6px; }
-  /* справа сверху три значка (поиск, «В работе», профиль): плашка кончается там же, где .head (без своего отступа 16) */
+  /* справа сверху четыре значка («Обновить», поиск, «В работе», профиль): плашка кончается там же, где .head (без своего отступа 16) */
   .code-head { flex-wrap: wrap; row-gap: var(--space-3); padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-right: var(--space-7); }
   .code-location { display: flex; flex-basis: 100%; align-items: center; gap: var(--space-5); min-width: 0; padding-right: calc(var(--fixed-icons-w) - 4px); }
   .code-place { flex: 0 1 auto; max-width: 100%; }
