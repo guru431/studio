@@ -124,6 +124,28 @@ def test_accepted_invitation_of_a_gone_address_can_be_sent_again(studio, mail, g
     assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "other", "password": PASSWORD}).status_code == 400
 
 
+@pytest.mark.parametrize("change", ["demote", "disable", "delete"])
+def test_pending_invitations_die_with_the_inviters_admin_rights(studio, mail, change):
+    admin(studio)
+    boss = make_user(studio, "boss", is_admin=True)
+    signin(studio, "boss")
+    invitation, secret = invite(studio, mail, is_admin=True)
+    _, plain = invite(studio, mail, email="plain@example.com")
+    signin(studio, "owner")
+    if change == "delete":
+        assert studio.c.delete(f"/api/admin/users/{boss}").status_code == 200
+    else:
+        patch = {"is_admin": False} if change == "demote" else {"disabled": True}
+        assert studio.c.patch(f"/api/admin/users/{boss}", json=patch).status_code == 200
+    for link_ in (secret, plain):
+        assert studio.c.post("/account/invite/accept", json={"token": link_, "login": "friend", "password": PASSWORD}).status_code == 400
+    assert {x["status"] for x in studio.c.get("/api/admin/invitations").json()["items"]} == {"revoked"}
+    assert state.DB.execute("SELECT count(*) FROM users WHERE login='friend'").fetchone()[0] == 0
+    # другой администратор отправляет приглашение снова — от своего имени
+    _, again = invite(studio, mail, is_admin=True)
+    assert studio.c.post("/account/invite/accept", json={"token": again, "login": "friend", "password": PASSWORD}).status_code == 201
+
+
 def test_expired_invitation_and_conflicting_login_do_not_consume_other_invitations(studio, mail):
     admin(studio)
     _, secret = invite(studio, mail)
