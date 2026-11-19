@@ -76,6 +76,21 @@ if [ "$PREPARE" = 1 ]; then
     exit 0
 fi
 
+# A schema step runs on the new image's first start and may rewrite data. Before switching, the running
+# release takes a consistent copy of the database (manage.py backup: lock, share, retention).
+schema=$(sed -nE 's/^VERSION = ([0-9]+)$/\1/p' "$NEW/app/db.py")
+[[ $schema =~ ^[0-9]+$ ]] || { echo 'studio: invalid schema version' >&2; exit 1; }
+running=(docker compose --env-file "$R/current/deploy/docker/host.conf" -f "$R/current/deploy/docker/compose.yaml")
+if [ -f "$R/current/deploy/docker/compose.yaml" ] && [ -n "$("${running[@]}" ps --status running --quiet web)" ]; then
+    database=$("${running[@]}" exec -T web python -c 'import os, sqlite3; print(sqlite3.connect("file:" + os.environ["STUDIO_DB"] + "?mode=ro", uri=True).execute("PRAGMA user_version").fetchone()[0])') || database=
+    [[ $database =~ ^[0-9]+$ ]] || { echo 'studio: cannot read the database schema version' >&2; exit 1; }
+    if [ "$schema" -gt "$database" ]; then
+        "${running[@]}" exec -T web python /opt/studio/app/manage.py backup || {
+            echo 'studio: backup before the schema change failed; the running release was kept' >&2; exit 1;
+        }
+    fi
+fi
+
 release="$R/releases/$REVISION-$(date -u +%Y%m%dT%H%M%S)"
 previous=
 if [ -L "$R/current" ]; then previous=$(readlink -f "$R/current" || true); fi

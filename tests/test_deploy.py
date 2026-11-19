@@ -1062,6 +1062,45 @@ def test_docker_install_refuses_an_empty_bridge_artifact(tmp_path, empty):
     assert empty in r.stderr
 
 
+@pytest.mark.integration                   # настоящий Bash: > 1 с на Windows под нагрузкой набора
+@pytest.mark.parametrize("current,running,database,fail,backup,code", [
+    (True, True, "47", "", True, 0),                # шаг схемы впереди — копия до переключения
+    (True, True, "48", "", False, 0),               # схема та же — копии нет
+    (True, True, "47", "1", True, 1),               # копия не вышла — выкладка прервана
+    (True, True, "unknown", "", False, 1),          # версию базы не прочесть — отказ, а не выкладка вслепую
+    (True, False, "47", "", False, 0),              # прежний контейнер не работает — копировать нечем
+    (False, False, "47", "", False, 0),             # первая установка
+], ids=["schema-step", "same-schema", "backup-failed", "unreadable", "stopped", "first-install"])
+def test_docker_install_backs_up_the_database_before_a_schema_step(tmp_path, current, running, database, fail,
+                                                                   backup, code):
+    """Шаг схемы применяется первым стартом нового образа: испорченные им данные возвращала только ночная копия."""
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    root = tmp_path / "r"
+    (root / ".incoming-x" / "app").mkdir(parents=True)
+    (root / ".incoming-x" / "app" / "db.py").write_text('"""db"""\nVERSION = 48\n', newline="\n")
+    if current:
+        (root / "current" / "deploy" / "docker").mkdir(parents=True)
+        (root / "current" / "deploy" / "docker" / "compose.yaml").write_text("name: studio\n", newline="\n")
+    start = INSTALL_DOCKER.index("# A schema step")
+    block = INSTALL_DOCKER[start:INSTALL_DOCKER.index('release="$R/releases/', start)]
+    stubs = (f"set -euo pipefail\nR={root.as_posix()}; NEW=$R/.incoming-x\n"
+             'docker() { echo "$*" >> "$R/calls"; case "$*" in'
+             ' *" ps "*) if [ "$RUNNING" = 1 ]; then echo 0123456789ab; fi ;;'
+             ' *"PRAGMA user_version"*) echo "$DATABASE" ;;'
+             ' *"manage.py backup"*) [ -z "$FAIL" ] ;; esac; }\n')
+    env = {**os.environ, "RUNNING": str(int(running)), "DATABASE": database, "FAIL": fail}
+    r = subprocess.run([bash, "-c", stubs + block + "echo switched\n"], env=env, capture_output=True, text=True,
+                       encoding="utf-8", timeout=20)
+    assert r.returncode == code and ("switched" in r.stdout) is (code == 0), r
+    calls = (root / "calls").read_text().splitlines() if (root / "calls").exists() else []
+    assert any("manage.py backup" in c for c in calls) is backup, calls
+    assert all(c.startswith(f"compose --env-file {root.as_posix()}/current/deploy/docker/host.conf ") for c in calls)
+    if fail:
+        assert "backup before the schema change failed" in r.stderr
+
+
 @pytest.mark.integration                   # bash со ссылками: под нагрузкой набора — больше 1 с
 def test_docker_rollback_runs_the_previous_release_with_its_own_host_conf(tmp_path):
     """`set -a` у host.conf экспортировал значения нового релиза, а окружение у Compose сильнее `--env-file`:
