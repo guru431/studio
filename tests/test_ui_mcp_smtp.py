@@ -25,26 +25,29 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
     choose = lambda tool: ('eval', 'tool', "(() => { const s = document.querySelector('#section-mcp-tool');"
                            f"s.value = [...s.options].find(o => o.value.endsWith(':{tool}')).value;"
                            "s.dispatchEvent(new Event('change', { bubbles: true })); })()")
-    tool_ready = "document.querySelector('#section-mcp-tool:not([hidden])')?.offsetWidth > 0"
+    def tool_ready(tool):
+        return ("document.querySelector('#section-mcp-tool:not([hidden])')?.offsetWidth > 0 && "
+                f"""document.querySelector('#section-mcp-tool option[value$=":{tool}"]')""")
+
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
         ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
         ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
         ('type', '#mcp-token', TOKEN), ('click', '#mcp-save'),
         ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
-        ('eval', 'photo', "location.hash='#/photo'"), ('wait', tool_ready),
+        ('eval', 'photo', "location.hash='#/photo'"), ('wait', tool_ready('image_generate')),
         ('eval', 'provider', "document.querySelector('#photo-composer #section-mcp-tool').value"),
         ('type', '#photo-prompt', 'A photo via MCP'), choose('image_generate'),
         ('click', '#chip-size'), ('click', '#chip-size-menu [data-value=square]'),
         ('click', '#photo-go'),
         ('wait', "document.querySelector('#section-mcp-result img')?.naturalWidth === 64"),
         ('eval', 'photoFits', NO_OVERFLOW),
-        ('eval', 'video', "location.hash='#/video'"), ('wait', tool_ready), choose('video_estimate'),
+        ('eval', 'video', "location.hash='#/video'"), ('wait', tool_ready('video_estimate')), choose('video_estimate'),
         put_files('#video-file', [("source.png", PNG_REAL)]),
         ('type', '#video-prompt', 'A slow pan'), set_value('#video-seconds', '9'),
         ('click', '#chip-quality'), ('click', '#chip-quality-menu [data-value=high]'), ('click', '#chip-smooth'),
         ('click', '#video-go'), ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'Estimated time'"),
         ('eval', 'videoFits', NO_OVERFLOW),
-        ('eval', 'translate', "location.hash='#/translate'"), ('wait', tool_ready), choose('text_translate'),
+        ('eval', 'translate', "location.hash='#/translate'"), ('wait', tool_ready('text_translate')), choose('text_translate'),
         ('wait', "document.querySelector('#tl-target option[value=en]')"),
         set_value('#tl-source', 'ru'), set_value('#tl-target', 'en'),
         ('type', '#tl-input', 'Текст для перевода'), ('click', '#tl-go'),
