@@ -323,7 +323,7 @@ class _Revoked(Exception):
 
 
 async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: object, *, session_digest: str | None = None):
-    out, now = media.ZipWriter(), clock.NOW()
+    out, now = media.ZipWriter(media.user_zone(user_id)), clock.NOW()
     files = {r["id"]: _file_name(r) for r in rows}
     entries, counts = [], {}
 
@@ -465,7 +465,7 @@ async def get_export(token: str, request: Request):
     body = _stream(uid, held[1], rows, mark, session_digest=request.state.digest)
     weakref.finalize(body, _release, uid, mark)            # ответ так и не начался — метку снимет уход из памяти
     log.info("export: %d файлов", len(rows))
-    day = datetime.fromtimestamp(clock.NOW()).strftime("%Y-%m-%d")
+    day = datetime.fromtimestamp(clock.NOW(), media.user_zone(uid)).strftime("%Y-%m-%d")
     return StreamingResponse(body, media_type="application/zip",
                              headers={"Content-Disposition": media.disposition(f"studio-export-{day}.zip"),
                                       "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})

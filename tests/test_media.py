@@ -9,7 +9,8 @@ import threading
 import time
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import HTTPException
@@ -572,7 +573,7 @@ def test_archive_streams_the_chosen_files_in_order(studio, caplog):
         assert r.status_code == 200 and r.json()["files"] == 3
         z = studio.c.get(f"/api/media/archives/{r.json()['id']}")
     assert z.status_code == 200 and z.headers["content-type"] == "application/zip"
-    day = datetime.fromtimestamp(T0).strftime("%Y-%m-%d")
+    day = datetime.fromtimestamp(T0, ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d")
     assert z.headers["content-disposition"] == f'attachment; filename="studio-{day}.zip"'
     assert z.headers["cache-control"] == "no-store" and z.headers["x-content-type-options"] == "nosniff"
     zf = zipfile.ZipFile(io.BytesIO(z.content))
@@ -586,6 +587,17 @@ def test_archive_streams_the_chosen_files_in_order(studio, caplog):
     assert "archive: 3" in caplog.text
     for secret in ("studio-snofs", "studio-video", a, b, c):
         assert secret not in caplog.text
+
+
+def test_archive_name_and_entry_times_follow_the_account_time_zone(studio):
+    """Пояс процесса в контейнере — UTC: имя архива и время записей — по `users.timezone`, как в ленте."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    state.DB.execute("UPDATE users SET timezone = 'Pacific/Kiritimati' WHERE id = ?", (uid,))   # UTC+14
+    studio.clock[0] = datetime(2027, 1, 15, 12, 0, 4, tzinfo=timezone.utc).timestamp()
+    mid = media.save(uid, DATA, "video/mp4", "clip.mp4")
+    z = studio.c.get(f"/api/media/archives/{archive(studio, [mid]).json()['id']}")
+    assert z.headers["content-disposition"] == 'attachment; filename="studio-2027-01-16.zip"'
+    assert zipfile.ZipFile(io.BytesIO(z.content)).infolist()[0].date_time == (2027, 1, 16, 2, 0, 4)
 
 
 def test_archive_big_sizes_and_offsets_go_to_zip64_fields(studio, monkeypatch):
