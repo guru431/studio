@@ -46,6 +46,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/compare"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/diff"): {"path": "file.txt"},
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/sync"): {"plan": "0" * 64},
+    ("PUT", "/api/code/agents/1/projects/1/mirrors/1/exclude"): {"exclude": [".venv"]},
     ("DELETE", "/api/code/agents/1/projects/1/mirrors/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/export"): {"format": "md"},
     ("GET", "/api/code/agents/1/projects/1/chats/1/share"): None,
