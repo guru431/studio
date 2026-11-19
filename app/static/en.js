@@ -1207,6 +1207,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Вид": "View",
   "Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.": "Studio connects to addresses allowed by the administrator. Your browser handles the rest. Photos, video and speech go through Studio only.",
   "Токен": "Token",
+  "Добавить во все разделы этого шлюза": "Add to every section this gateway supports",
   "Подключение": "Connection",
   "Новое подключение": "New connection",
   "Фото для изменения": "Photo to edit",
