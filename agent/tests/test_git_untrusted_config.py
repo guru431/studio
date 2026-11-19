@@ -1,7 +1,8 @@
 """Скопированный проект с чужим `.git/config`: фоновые чтения Git моста не исполняют его команды.
 
 Маркер-команда (`touch`) в ключах, которые git исполняет при `status`/`log`: `core.fsmonitor`, драйверы фильтров
-(`clean`, `process`, в том числе через `include` и в конфиге подмодуля), `gpg.program` при `log.showSignature`."""
+(`clean`, `process`, в том числе через `include` и в конфиге подмодуля), `gpg.program` при `log.showSignature`,
+`uploadpack` promisor-remote при дозагрузке частичного клона."""
 
 import os
 import subprocess
@@ -9,6 +10,7 @@ import subprocess
 import pytest
 
 from studio_agent import gitinfo, project_summary, worktrees
+from studio_agent.errors import Refused
 
 pytestmark = pytest.mark.integration
 
@@ -103,6 +105,27 @@ def test_filter_driver_of_a_submodule_is_not_run(repo, tmp_path):
     hit.unlink()
     stale(repo, "sub/b.txt")
     readers(repo, worktree_list=False)
+    assert not hit.exists()
+
+
+def test_lazy_fetch_of_a_promisor_remote_is_not_run(repo, tmp_path):
+    """Частичный клон без объекта дерева: чтение дозагружает его с promisor-remote, а `uploadpack` из конфига
+    исполняется через shell."""
+    hit = marker(tmp_path, "uploadpack")
+    tree = git(repo, "rev-parse", "HEAD^{tree}").decode().strip()
+    loose = repo / ".git" / "objects" / tree[:2] / tree[2:]
+    loose.chmod(0o644)                                        # объекты git — только для чтения
+    loose.unlink()
+    poison(repo, f'[core]\n  repositoryformatversion = 1\n[extensions]\n  partialClone = origin\n'
+                 f'[remote "origin"]\n  url = {tmp_path.as_posix()}/nowhere\n  promisor = true\n'
+                 f'  uploadpack = "touch {hit.as_posix()}; false"\n')
+    subprocess.run(["git", "-C", str(repo), "status"], capture_output=True, timeout=20)
+    assert hit.exists()                                       # обычный git дозагружает и исполняет команду
+    hit.unlink()
+    with pytest.raises(Refused):
+        gitinfo.status(repo)                                  # дерева нет — статус не читается
+    project_summary.read(repo, local=True)
+    worktrees.list_worktrees(repo, repo.parent)
     assert not hit.exists()
 
 

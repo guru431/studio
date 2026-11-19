@@ -52,6 +52,10 @@ def parse(out: bytes, *, truncate: bool = True) -> dict:
 # при `log`, если `log.showSignature`. Драйверы фильтров — `_filters`; хуки чтения не запускают
 # (`post-index-change` — только при записи индекса, а её нет: `GIT_OPTIONAL_LOCKS=0`).
 SAFE = ["-c", "core.fsmonitor=false", "-c", "log.showSignature=false"]
+# Частичный клон без объекта дозагружает его с promisor-remote и исполняет `remote.<имя>.uploadpack` конфига через
+# shell. Чтения моста локальные: дозагрузку гасит `GIT_NO_LAZY_FETCH` (git 2.45+), а старый git без неё — пустой
+# список разрешённых протоколов (никакой транспорт не запускается).
+OFFLINE = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": ""}
 FILTER_KEYS = r"^filter\..*\.(clean|smudge|process)$"
 UNTRUSTED = (b"local", b"worktree")  # конфиг самого репозитория, включая его include
 
@@ -85,9 +89,9 @@ def _filters(base: list[str], env: dict, timeout: float) -> list[str] | None:
 
 def run(project: Path, args: list[str], *, timeout: float = GIT_SEC) -> subprocess.CompletedProcess:
     """Локальное чтение Git в границах проекта, без окна, запроса пароля и необязательных замков и без команд
-    из конфига репозитория (`SAFE`, `_filters`). `status` не спускается в рабочие копии подмодулей
+    из конфига репозитория (`SAFE`, `_filters`, `OFFLINE`). `status` не спускается в рабочие копии подмодулей
     (`--ignore-submodules=dirty`): там свой конфиг; сдвиг коммита подмодуля по-прежнему виден."""
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
+    env = dict(os.environ, **OFFLINE, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
                GIT_CEILING_DIRECTORIES=str(Path(os.path.realpath(project)).parent))
     base = ["git", "-C", str(project), *SAFE]
     if args[:1] == ["status"]:
