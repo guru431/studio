@@ -210,7 +210,7 @@ def _images(user_id: int, rows: list, files: dict) -> list:
 
 
 def _videos(user_id: int, rows: list, files: dict) -> list:
-    return [_pick(r, "id", "prompt", "prompt_source", "seconds", "quality", "smooth", "seed", "state", "progress",
+    return [_pick(r, "id", "model", "prompt", "prompt_source", "seconds", "quality", "smooth", "seed", "state", "progress",
                   "detail", "created", "finished")
             | {"chain": chains.of_video(user_id, r), "file": files.get(r["media_id"]),
                "source_file": files.get(r["source_media_id"])}

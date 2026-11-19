@@ -67,8 +67,8 @@ def history(uid, tag):
         " detail, created, finished, mask_media_id, chain) VALUES (?, ?, 'edit', 'snofs', ?, '1024x1024', 42, 0.5,"
         " ?, ?, 'done', '', ?, ?, ?, NULL)", f"{tag}img", uid, f"{tag} prompt", m["src"], m["img"], T0, T0 + 5, m["mask"])
     put("INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, media_id, prompt, prompt_source,"
-        " seconds, quality, smooth, seed, state, progress, detail, created, finished, chain) VALUES (?, ?, 1, 'gw', ?, ?,"
-        " ?, NULL, 3, 'fast', 0, 7, 'done', 100, '', ?, ?, NULL)", f"{tag}vid", uid, m["img"], m["clip"],
+        " seconds, quality, smooth, seed, state, progress, detail, created, finished, chain, model) VALUES (?, ?, 1, 'gw',"
+        " ?, ?, ?, NULL, 3, 'fast', 0, 7, 'done', 100, '', ?, ?, NULL, 'h3')", f"{tag}vid", uid, m["img"], m["clip"],
         f"{tag} motion", T0, T0 + 9)
     put("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, result_media_id, duration,"
         " speakers, state, detail, created, finished) VALUES (?, ?, 1, 'whisperx', ?, ?, ?, 61, 2, 'done', '', ?, ?)",
@@ -157,6 +157,7 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
     assert image["chain"][-1]["prompt"] == "mine prompt"
     video = json.loads(zf.read("videos/0001.json"))[0]
     assert video["file"] == f"files/{m['clip']}.mp4" and video["source_file"] == f"files/{m['img']}.png"
+    assert video["model"] == "h3"
     tr = json.loads(zf.read("transcripts/0001.json"))[0]
     assert tr["name"] == "mine meeting" and tr["file"].endswith(".mp3") and tr["result_file"].endswith(".json")
     assert json.loads(zf.read("speeches/0001.json"))[0]["text"] == "mine spoken"
