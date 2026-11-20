@@ -41,7 +41,7 @@ import { ntfyBlock } from './ntfy-settings.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
-import { editVoice } from './voice-editor.js';
+import { editVoice, holdVoiceEditor } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
@@ -1572,6 +1572,12 @@ export function mount(view, ctx) {
 
 export function update(ctx) {
   if (screen) screen.show(ctx.id);
+}
+
+/** Роутер перед сменой адреса: открытый редактор голоса с несохранённым возвращает адрес и спрашивает (жест «назад»
+ * iOS Safari иначе размонтировал бы настройки без вопроса). true — переход задержан. */
+export function hold() {
+  return holdVoiceEditor();
 }
 
 export function unmount() {
