@@ -4,6 +4,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Request
 
 import bridge
+import code_attention
 import state
 import project_access
 from claude_code import _refuse, ask, open_without_pin, own_agent
@@ -13,7 +14,8 @@ SUMMARY_TIMEOUT = 5
 
 
 async def session_activity(request: Request, aid: int, data: dict, *, passive: bool = False) -> list:
-    """Названия — из каталога моста; непрочитанные отметки живут до просмотра, без часового лимита."""
+    """Названия — из каталога моста; непрочитанные отметки живут до просмотра этой учёткой, без часового лимита
+    (участнику — завершения в выданных проектах после выдачи)."""
     agent = project_access.agent(request.state.user.id, aid, shared=True)
     allowed = None if agent["user_id"] == request.state.user.id else project_access.projects(request.state.user.id, aid)
     items = {}
@@ -22,10 +24,10 @@ async def session_activity(request: Request, aid: int, data: dict, *, passive: b
                 and bridge.PID.fullmatch(item["project"]) and isinstance(item.get("chat"), str)
                 and bridge.UUID.fullmatch(item["chat"]) and (item.get("running") or item.get("asking"))):
             items[item["chat"]] = {**item, "running": True, "title": None}
-    for row in state.DB.execute("SELECT project, chat, revision, finished FROM code_attention"
-                                " WHERE agent_id = ? AND seen = 0 ORDER BY finished DESC", (aid,)):
-        if allowed is not None and row["project"] not in allowed:
-            continue
+    since = None if allowed is None else {r[0]: r[1] for r in state.DB.execute(
+        "SELECT project, created FROM project_members WHERE agent_id = ? AND user_id = ?",
+        (aid, request.state.user.id)) if r[0] in allowed}
+    for row in code_attention.unread(aid, request.state.user.id, since):
         item = items.setdefault(row["chat"], {"project": row["project"], "chat": row["chat"],
                                              "running": False, "asking": False, "engine": "claude", "title": None})
         item.update(unread=True, attention=row["revision"], finished=row["finished"])

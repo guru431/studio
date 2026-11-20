@@ -974,18 +974,18 @@ async def chat_seen(aid: int, pid: str, chat: str, body: ChatSeen, request: Requ
     check_pid(pid)
     check_chat(chat)
     await agent_access(aid, request)
-    code_attention.seen(aid, pid, chat, body.attention)
+    code_attention.seen(aid, pid, chat, body.attention, request.state.user.id)
     return Response(status_code=204)
 
 
 @router.post("/agents/{aid}/projects/{pid}/seen", status_code=204)
 async def project_seen(aid: int, pid: str, body: ProjectSeen, request: Request):
-    """Как `chat_seen`, пачкой для одного проекта: свой компьютер, открытый PIN, CSRF (guard)."""
+    """Как `chat_seen`, пачкой для одного проекта: свой компьютер или выданный проект, открытый PIN, CSRF (guard)."""
     own_agent(request, aid)
     check_pid(pid)
     await agent_access(aid, request)
     for item in body.items:
-        code_attention.seen(aid, pid, item.chat, item.attention)
+        code_attention.seen(aid, pid, item.chat, item.attention, request.state.user.id)
     return Response(status_code=204)
 
 
