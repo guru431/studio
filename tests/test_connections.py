@@ -428,8 +428,11 @@ def test_capabilities_follow_connections(studio):
     assert caps() == none
     cid = add_connection(studio, kind="srvllm", base_url=GW, sections=["chat", "photo"])
     assert caps() == none | {"chat": True, "photo": True}
-    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")   # не через сервер — не фото
-    assert caps() == none | {"chat": True}
+    # адрес убран из списка: srvllm прямым не станет (`dropped`) — ни фото, ни чата
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
+    assert caps() == none
+    sections.set_default(1, "chat", add_connection(studio, sections=["chat"]), "local-gemma-abl")
+    assert caps() == none | {"chat": True}                          # прямое https-подключение — чат из браузера
 
 
 def test_urls_of_each_kind():

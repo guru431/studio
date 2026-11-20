@@ -119,11 +119,13 @@ def is_local(conn: "connections.Connection", model: str) -> bool:
 
 
 def capabilities(user_id: int) -> dict[str, bool]:
-    """Раздел готов: есть умолчание, а у раздела только через сервер — его адрес в списке."""
+    """Раздел готов: есть умолчание, а у раздела только через сервер — его адрес в списке; у чата — адрес не
+    убран из списка (`connections.dropped`: ни сервер, ни браузер туда не пойдут)."""
     out = {}
     for section in SECTIONS:
         chosen = default(user_id, section)
-        out[section] = chosen is not None and (section not in SERVER_ONLY or chosen[0].proxied)
+        out[section] = chosen is not None and (chosen[0].proxied if section in SERVER_ONLY
+                                               else not connections.dropped(chosen[0]))
     return out
 
 
@@ -150,7 +152,7 @@ def resolve(user_id: int, section: str, connection_id: "int | None",
         if link is None:
             raise _bad("model", "этой модели нет среди отмеченных в настройках раздела")
         conn = link.connection
-    if section in SERVER_ONLY and not conn.proxied:
+    if (section in SERVER_ONLY and not conn.proxied) or connections.dropped(conn):
         raise _bad("server", unlisted(conn), 409)
     return conn, model
 
