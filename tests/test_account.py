@@ -5,6 +5,7 @@ import pytest
 import account
 import auth
 import bridge
+import email_accounts
 import security
 import security_log
 import state
@@ -124,6 +125,9 @@ def test_emergency_exit_ends_everything_with_the_password(studio, monkeypatch, r
     device_subs(security.digest(other), uid)
     state.DB.execute("INSERT INTO ntfy_settings(user_id, server, topic) VALUES (?, 'https://n', 'shared')", (uid,))
     pc = agent(uid)
+    # почтовые ссылки и коды: чужой, знающий пароль, мог запросить смену почты на свой адрес
+    for kind in ("email", "reset", "login"):
+        email_accounts.new_token(uid, kind, "attacker@example.com", email_accounts.RESET_SEC)
     dropped = []
 
     async def drop(agent_id, code=bridge.CLOSE_AUTH):
@@ -137,7 +141,7 @@ def test_emergency_exit_ends_everything_with_the_password(studio, monkeypatch, r
     assert r.headers["clear-site-data"] == '"cache"' and auth.COOKIE in r.headers["set-cookie"]
     assert studio.c.get("/api/me").status_code == 401
     assert auth.session_user(other) is None
-    for table in ("sessions", "chat_shares", "push_subs", "ntfy_devices", "ntfy_settings"):
+    for table in ("sessions", "chat_shares", "push_subs", "ntfy_devices", "ntfy_settings", "email_tokens"):
         assert state.DB.execute(f"SELECT count(*) FROM {table} WHERE user_id = ?", (uid,)).fetchone()[0] == 0, table
     left = [r[0] for r in state.DB.execute("SELECT id FROM agents WHERE user_id = ?", (uid,))]
     assert left == ([] if revoke_agents else [pc]) and dropped == ([pc] if revoke_agents else [])

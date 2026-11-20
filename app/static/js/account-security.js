@@ -256,7 +256,7 @@ export function emergencyBlock(host) {
     const yes = button(tr("Выйти везде"), { class: 'btn btn-danger solid', id: 'emergency-confirm' });
     const fail = el('p', { class: 'error' });
     const dialog = openDialog(host, { id: 'emergency-dialog', title: tr("Выйти на всех устройствах?"), actions: [yes], body: [
-      el('p', {}, tr("Все сессии, включая эту, завершатся; ссылки «Поделиться» отключатся; участники потеряют доступ к проектам ваших компьютеров; push и ntfy придётся включить заново.")
+      el('p', {}, tr("Все сессии, включая эту, завершатся; ссылки «Поделиться», почтовые ссылки и коды отключатся; участники потеряют доступ к проектам ваших компьютеров; push и ntfy придётся включить заново. После выхода смените пароль: со старым можно войти снова.")
         + (agents.checked ? tr(" Компьютеры будут отвязаны — мосты войдут снова только с паролем.") : '')),
       fail] });
     yes.addEventListener('click', async () => {
@@ -273,7 +273,7 @@ export function emergencyBlock(host) {
     });
   });
   return el('section', { class: 'block emergency-block' }, el('h2', {}, tr("Аварийный выход")),
-    el('p', { class: 'muted small' }, tr("Если телефон или пароль могли попасть в чужие руки: завершает все сессии, отключает ссылки «Поделиться», доступ участников к проектам, push и ntfy. История и настройки остаются.")),
+    el('p', { class: 'muted small' }, tr("Если телефон или пароль могли попасть в чужие руки: завершает все сессии, отключает ссылки «Поделиться», почтовые ссылки и коды, доступ участников к проектам, push и ntfy. История и настройки остаются. Затем смените пароль.")),
     field(tr("Пароль учётки"), password, 'emergency-password'),
     el('label', { class: 'check' }, agents, tr("Отозвать и ключи компьютеров (агенты)")),
     el('div', { class: 'row' }, start, note));
