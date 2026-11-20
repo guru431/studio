@@ -2505,6 +2505,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Сообщения чата": "Chat messages",
   "Студия — нет связи": "Studio — offline",
   "Нет связи. Студия откроется, когда появится интернет.": "No connection. Studio will open when the internet returns.",
+  "Студия перезапускается": "Studio is restarting",
+  "Студия перезапускается и откроется сама, когда будет готова.": "Studio is restarting and will open by itself when it is ready.",
   "Неверный логин или пароль": "Incorrect login or password",
   "Слишком много попыток — подождите 15 минут": "Too many attempts. Wait 15 minutes",
   "пароль неверен": "incorrect password",

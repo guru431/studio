@@ -6,7 +6,7 @@
  * `Cache-Control: private, max-age=86400` (media.py, иначе перемотка ролика качает его заново) и
  * остаются на диске устройства до суток; выход, «Удалить всю историю» и аварийный выход стирают HTTP-кэш
  * заголовком `Clear-Site-Data: "cache"` — этот кэш оболочки (Cache Storage) он не трогает. Навигация — из
- * сети, без связи — /offline.html. Новая версия удаляет кэш прежних. Ещё — уведомления: «В работе»
+ * сети, без связи и при 502/503/504 прокси — /offline.html. Новая версия удаляет кэш прежних. Ещё — уведомления: «В работе»
  * без подписки показывает открытая студия (jobs.js), Web Push заданий и «Кода» — обработчик `push` здесь; нажатие на
  * любое — notificationclick; смена подписки браузером — pushsubscriptionchange. */
 const CACHE = `studio-shell-${VERSION}`;
@@ -112,16 +112,27 @@ self.addEventListener('pushsubscriptionchange', (event) => {
   })());
 });
 
+/** Офлайн-оболочка по исходному адресу (у ответа из Cache Storage свой URL). reason — `data-reason` у <body>
+ * (offline.js меняет слова); оболочки в кэше нет — fallback либо ошибка сети. */
+async function shell(reason, fallback) {
+  const page = await caches.match('/offline.html');
+  if (!page) return fallback || Response.error();
+  const body = reason ? (await page.text()).replace('<body class="solo">', `<body class="solo" data-reason="${reason}">`)
+    : page.body;
+  return new Response(body, { status: page.status, headers: page.headers });
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(async () => {
-      const page = await caches.match('/offline.html');
-      // У ответа из Cache Storage свой URL. Оболочка должна открыться по исходному адресу.
-      return page ? new Response(page.body, { status: page.status, headers: page.headers }) : Response.error();
-    }));
+    // 502/503/504 страницы — прокси без службы (выкладка, перезапуск): та же оболочка с «Повторить», что без связи,
+    // со словами о перезапуске; она сама откроет адрес, когда служба ответит. Адреса API (файл в новой вкладке) —
+    // как есть: их 503 — отказ самой службы.
+    const pageAddress = !url.pathname.startsWith('/api/');
+    event.respondWith(fetch(request).then((response) => (pageAddress && [502, 503, 504].includes(response.status)
+      ? shell('restart', response) : response), () => shell()));
     return;
   }
   // API (и медиа под ним) и модули — только сеть, мимо кэша
