@@ -1999,6 +1999,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Выберите фото для ролика": "Choose a photo for the video",
   "Длительность — целое число секунд от 1 до 30": "Duration must be an integer between 1 and 30 seconds",
   "Фото больше 20 МиБ": "Photo exceeds 20 MiB",
+  "Без описания фото": "Without photo description",
+  "{0} / {1} знаков вместе с движением": "{0} / {1} characters including motion",
   "Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото.": "Photo description and movement must total at most 4000 characters. Shorten the photo description.",
   "Предыдущий файл": "Previous file",
   "Следующий файл": "Next file",

@@ -57,6 +57,11 @@ function cap(text) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
 }
 
+/** Промпт ролика: описание исходного фото (если есть) и движение — одним текстом с подписями. */
+function videoText(context, motion) {
+  return context ? `Описание исходного фото:\n${context}\n\nДвижение в видео:\n${motion || 'Естественное движение в кадре.'}` : motion;
+}
+
 function media(id, query = '') {
   return `/api/media/${encodeURIComponent(id)}${query}`;
 }
@@ -95,9 +100,13 @@ function build(view, ctx) {
   const sourceBox = el('div', { id: 'video-source', class: 'video-source', hidden: true }, chosen);
   const photoPrompt = el('textarea', { id: 'video-photo-prompt', class: 'input', rows: '3',
     'aria-label': tr("Описание исходного фото"), maxlength: '24000' });
+  // счётчик: описание фото и движение уходят одним промптом до PROMPT_MAX; «Без описания фото» — только движение
+  const photoCount = el('span', { id: 'video-photo-count', class: 'small muted' });
+  const photoDrop = el('button', { type: 'button', class: 'btn-link', id: 'video-photo-drop' }, tr("Без описания фото"));
   const photoContext = el('details', { id: 'video-photo-context', hidden: true },
     el('summary', { class: 'small muted' }, tr("Описание исходного фото")),
-    el('p', { class: 'small muted' }, tr("Передаётся вместе с описанием движения. Можно изменить или очистить.")), photoPrompt);
+    el('p', { class: 'small muted' }, tr("Передаётся вместе с описанием движения. Можно изменить или очистить.")), photoPrompt,
+    el('p', { class: 'small' }, photoCount, ' ', photoDrop));
   const prompt = el('textarea', { id: 'video-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': tr("Промпт движения"),
     placeholder: MOTION_HINT });
   const seconds = el('input', { id: 'video-seconds', inputmode: 'numeric', maxlength: '2', value: '5',
@@ -246,6 +255,9 @@ function build(view, ctx) {
 
   function paintPromptHint() {
     prompt.placeholder = photoPrompt.value.trim() ? tr("Опишите движение в кадре; описание фото уже добавлено") : MOTION_HINT;
+    const n = videoText(photoPrompt.value.trim(), prompt.value.trim()).length;
+    photoCount.textContent = tr("{0} / {1} знаков вместе с движением", n, PROMPT_MAX);
+    photoCount.classList.toggle('error', n > PROMPT_MAX);
   }
 
   /** Перенос читает только свою запись через обычный API; тексты остаются в памяти страницы,
@@ -645,10 +657,12 @@ function build(view, ctx) {
     }
     if (isH3() && Number(sec) !== 5) throw new Error(tr("H3: используйте 5 секунд; короткие ролики давали артефакты"));
     if (needSource && source?.file?.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
-    const context = needSource ? photoPrompt.value.trim() : '';
-    const motion = prompt.value.trim();
-    const text = context ? `Описание исходного фото:\n${context}\n\nДвижение в видео:\n${motion || 'Естественное движение в кадре.'}` : motion;
-    if (text.length > PROMPT_MAX) throw new Error(tr("Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото."));
+    const text = videoText(needSource ? photoPrompt.value.trim() : '', prompt.value.trim());
+    if (text.length > PROMPT_MAX) {
+      photoContext.open = true;                     // свёрнутое поле резать наугад нельзя: раскрыть со счётчиком
+      photoPrompt.focus();
+      throw new Error(tr("Описание фото и движение вместе — до 4000 знаков. Сократите описание исходного фото."));
+    }
     const [connId, ...model] = modelPick.value.split(':');
     return { prompt: text, seconds: Number(sec), quality: isH3() ? 'native' : quality, smooth: !isH3() && smooth,
       ...(connId ? { connection_id: connId, model: model.join(':') } : {}) };
@@ -710,7 +724,14 @@ function build(view, ctx) {
     setSource(null);
   });
   prompt.addEventListener('input', autosize);
+  prompt.addEventListener('input', paintPromptHint);
   photoPrompt.addEventListener('input', paintPromptHint);
+  photoDrop.addEventListener('click', () => {
+    photoPrompt.value = '';
+    photoContext.hidden = true;
+    paintPromptHint();
+    prompt.focus();
+  });
   enterSends(prompt, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
