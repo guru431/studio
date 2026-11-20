@@ -68,6 +68,12 @@ image="studio:$version-$REVISION"
 # --pull: a newer base image (Debian and Python patches) replaces the cached one. REFRESH: the
 # first build of each ISO week reinstalls apt packages. --refresh-base: rebuild every layer now.
 build=(docker build --pull --build-arg "STUDIO_VERSION=$version" --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
+build_network=$(sed -n 's/^STUDIO_BUILD_NETWORK=//p' "$NEW/deploy/docker/host.conf")
+case "$build_network" in
+    ''|default) ;;
+    host) build+=(--network host) ;;
+    *) echo 'studio: invalid Docker build network' >&2; exit 1 ;;
+esac
 if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi
 "${build[@]}" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
 printf '\nSTUDIO_IMAGE=%s\n' "$image" >> "$NEW/deploy/docker/host.conf"
