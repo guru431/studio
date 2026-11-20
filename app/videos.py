@@ -448,7 +448,7 @@ class RepeatIn(BaseModel):
 @router.post("/{video_id}/repeat", status_code=201)
 async def repeat_video(video_id: str, request: Request):
     """«Повторить» (count 1) и «Ещё варианты» (2–REPEAT_MAX): тот же исходник, промпт, длительность, качество и
-    дорисовка, подключение ролика и новый seed студии у каждого. Промпт — тот, что был в запросе: свой
+    дорисовка, подключение ролика (удалённое — связь раздела с моделью ролика) и новый seed студии у каждого. Промпт — тот, что был в запросе: свой
     (`given`) повторяется, придуманный шлюзом — снова на усмотрение шлюза. Задания уходят шлюзу по одному
     (очередь — у шлюза); отказ после первого — уже принятые остаются, в ответе `message` словами."""
     uid = request.state.user.id
@@ -457,7 +457,9 @@ async def repeat_video(video_id: str, request: Request):
         body = RepeatIn.model_validate_json(await forms.read_body(request, 1024) or b"{}")
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": f"вариантов — от 1 до {REPEAT_MAX}"}) from None
-    conn = _video_connection(uid, row["connection_id"], row["model"])
+    # подключение ролика удалили (id не повторяются) — связь раздела с моделью ролика, как у фото
+    conn_id = row["connection_id"] if _connection(row) is not None else None
+    conn = _video_connection(uid, conn_id, row["model"])
     try:
         image = await forms.photo(uid, None, row["source_media_id"], VIDEO_PIXELS)
     except UploadError as e:
