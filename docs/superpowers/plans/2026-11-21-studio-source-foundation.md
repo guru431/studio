@@ -98,6 +98,13 @@ Test `tests/test_mcp_sections.py`, `tests/test_ui_section_limits.py` (integratio
 - [ ] FAIL → реализация → PASS (`.venv/Scripts/python -m pytest -q` в каталоге обёртки).
 - [ ] Commit в локальный git обёртки. Выкладку на Spark делает координатор.
 
+### Task A1b: Дополнение шага 57 по ревью (спека §7a)
+
+**Files:** `app/db.py` (`CAPABILITIES_57` на месте — шаг не выпущен), `CLAUDE.md` (строка 57), `tests/test_foundation.py`.
+- [ ] Тест шага 57 дополняется: `chats.mcp_file_consent`, `mcp_tool_policy`, `chat_media`, `mcp_media_uploads`,
+  триггеры удаления с `mcp_servers`, каскады с `chats`/`users`/`chat_media`.
+- [ ] FAIL → реализация → PASS → Commit «Extend schema step 57 with consent, tool policy and dialog media».
+
 ## Партия 2 (параллельно, после слияния A1)
 
 ### Task A3: Профиль подключения — `profiles`
@@ -134,7 +141,9 @@ Test `tests/test_chat_roles.py` (без хода чата).
 `clean`, константы спеки §0.
 
 - [ ] Тесты: порядок кусков; профиль только своему подключению; роль в сообщении и у Cleaner; прямой ход получает
-  куски и `params` (Review Focus 5); `clean` режет управляющие символы и `<mcp-rules`; токены учитывают куски.
+  куски и `params` (Review Focus 5); `clean` режет управляющие символы и `<mcp-rules`; токены учитывают куски;
+  браузерный `tests/test_ui_profile_refused.py` — прямой ход, провайдер отвечает 400 на отправленный параметр,
+  пользователь видит слова `profiles.REFUSED`.
 - [ ] FAIL → реализация → PASS (`test_chat*.py test_connection_profiles.py test_chat_roles.py`) → Commit.
 
 ### Task B2: MCP в диалоге
@@ -145,7 +154,11 @@ Test `tests/test_chat_roles.py` (без хода чата).
 `POST /api/mcp/{sid}/prompt`; Test `tests/test_mcp_dialog.py`, правка `tests/test_mcp.py`, `tests/test_access_groups.py`.
 **Interfaces:** Consumes — A2; Produces — `mcp_sources.dialog_servers(uid, row, conn) -> list`.
 
-- [ ] Тесты спеки §4 + `test_unreachable_default_server_does_not_block_turn`, `test_default_servers_capped`.
+- [ ] Тесты спеки §4 + `test_unreachable_default_server_does_not_block_turn` (холодный кэш, общий срок
+  `DEFAULT_WAIT_SEC`), `test_default_servers_capped`, `test_tools_over_limit_trimmed_not_refused` (явные — первыми),
+  `test_open_world_only_with_internet_and_rechecked_midturn`, `test_confirm_tools_not_in_default_set`,
+  `test_admin_tool_policy_overrides_server_hints` (политика `mcp_tool_policy` — маршрут админа и диалог «Доступ»
+  дополняются полями «интернет» и «подтверждение» в C3).
 - [ ] FAIL → реализация → PASS → Commit.
 
 ### Task B3: Файлы между чатом и MCP — `mcp_files`
@@ -155,7 +168,11 @@ Test `tests/test_chat_roles.py` (без хода чата).
 `relay`), `app/web.py` (`public` — `{name, mime}`), маршрут скачивания; Test `tests/test_mcp_chat_files.py`.
 **Interfaces:** Consumes — A2, B2; Produces — `mcp_files.sync`, `result_files`, `mcp_sections.relay`.
 
-- [ ] Тесты спеки §5 + `test_attachment_over_server_limit_refused`.
+- [ ] Тесты спеки §5 + `test_attachment_over_server_limit_refused`, `test_no_upload_without_dialog_consent`
+  (старый диалог с PDF, новый общий MCP, текстовое сообщение → ни одного `artifact_upload`, запрос согласия в
+  ленте), `test_consent_reset_on_stamp_change`, `test_media_upload_contract` (`POST /api/chats/{id}/media`:
+  проверка до приёма байтов, только серверам с вмещающим `max_bytes`, пределы `SYNC_BYTES`/`SYNC_SEC`),
+  `test_result_file_404_after_address_or_key_change`.
 - [ ] FAIL → реализация → PASS → Commit.
 
 ## Партия 4 (интерфейс параллельно, затем документы)
