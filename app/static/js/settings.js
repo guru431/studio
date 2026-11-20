@@ -8,8 +8,8 @@ import { language, locale, message, tr } from './i18n.js';
  * account-security.js), «Уведомления» (push, ntfy), «Данные» (хранилище, выгрузка, удаление истории),
  * «Ввод и интернет» (голосовой ввод, ключ Exa). Прежние адреса (`other` — «Прочее», `dictation`) ведут
  * на новые (OLD_IDS). Справа — выбранный раздел: его
- * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, убрать из
- * раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
+ * подключения карточками (имя, адрес, хвост ключа, «Обновить модели», меню «⋯»: изменить, профиль (в «Чате»,
+ * connection-profile.js), убрать из раздела, удалить подключение целиком), галочки моделей и одна модель по умолчанию (радио);
  * «+ Адрес для раздела» — уже заведённое подключение или новый адрес (у шлюзов srvllm и s06 — галочка «Добавить
  * во все разделы этого шлюза», отмечена, пока у учётки нет подключений). Галочка и радио сохраняются
  * сразу; отказ — словами в строке статуса раздела.
@@ -40,6 +40,7 @@ import { quickActionsBlock } from './code-quick-actions.js';
 import { ntfyBlock } from './ntfy-settings.js';
 import { pushFlag } from './push-sync.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
+import { profileDialog } from './connection-profile.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
 import { editVoice, holdVoiceEditor } from './voice-editor.js';
@@ -1172,7 +1173,7 @@ const OLD_IDS = { other: 'security', dictation: 'input' };
 const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
-  other = false, direct = false, voices = false, onChange = null, shared = false, access = null }) {
+  other = false, direct = false, voices = false, onChange = null, shared = false, access = null, profiles = false }) {
   const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
     security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
@@ -1362,6 +1363,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
     const actions = el('div', { class: 'link-actions', hidden: true },
       button(tr("Изменить"), { class: 'btn btn-sm link-edit' }, () => editConnection(host, connBase, conn, changed)),
+      // профиль (profiles.py) — для хода чата: системный текст, параметры, подсказки; у Cleaner его нет
+      profiles && s.id === 'chat' && !conn.cleaner ? button(tr("Профиль"), { class: 'btn btn-sm link-profile' },
+        () => profileDialog(host, `${connBase}/${conn.id}/profile`, conn, { shared, onSaved: changed })) : null,
       button(tr("Убрать из раздела"), { class: 'btn btn-sm link-remove' }, async () => {
         try {
           await api('DELETE', `${base}/${s.id}/links/${conn.id}`);
@@ -1409,6 +1413,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
             conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner · очистка данных")) : null,
             inherited ? el('span', { class: 'tag server' }, tr("Общее подключение")) :
               el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
+            conn.profile_set && s.id === 'chat' ? el('span', { class: 'tag link-profile-set' }, tr("профиль")) : null,
             inherited ? null : tr(" ключ {0}", message(conn.token_hint)))),
         inherited ? null : el('div', { class: 'link-buttons' }, checkButton,
           button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)),
@@ -1577,7 +1582,7 @@ let screen = null;
 
 export function mount(view, ctx) {
   screen = settingsView(view, { sections: '/api/sections', connections: '/api/connections', section: ctx.id,
-    hash: true, other: true, direct: true, voices: true, onChange: () => loadMe().catch(() => null) });
+    hash: true, other: true, direct: true, voices: true, profiles: true, onChange: () => loadMe().catch(() => null) });
   view.append(el('header', { class: 'head' }, el('h1', {}, tr("Настройки"))), el('div', { class: 'page wide' }, screen.el));
   screen.reload();
 }
