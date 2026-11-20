@@ -9,7 +9,8 @@ const number = (n) => Number.isFinite(n) ? n.toLocaleString(locale()) : '—';
 const date = (n) => Number.isFinite(n) ? dateTime(n) : tr("Не сообщается");
 const resetAttempts = new Map();
 
-export function usageView(host, { aid, engine, supported, canReset = false, model = () => '' }) {
+/** shared — компьютер чужой (участник проекта): лимиты подписки видит только владелец, кнопки нет. */
+export function usageView(host, { aid, engine, supported, shared = false, canReset = false, model = () => '' }) {
   let alive = true;
   let controller = null;
   let loading = false;
@@ -30,7 +31,8 @@ export function usageView(host, { aid, engine, supported, canReset = false, mode
     } catch { /* Закрытое хранилище не мешает повтору с тем же ключом. */ }
   }
   const button = el('button', { type: 'button', id: 'code-usage', class: 'icon-btn code-usage',
-    title: tr("Лимиты и статистика подписки"), 'aria-label': tr("Лимиты и статистика подписки"), 'aria-haspopup': 'dialog' });
+    title: tr("Лимиты и статистика подписки"), 'aria-label': tr("Лимиты и статистика подписки"), 'aria-haspopup': 'dialog',
+    hidden: shared });
   const remainingText = el('b', { id: 'code-usage-remaining' }, '—');
   button.append(el('span', {}, tr("Неделя")), remainingText);
   const content = el('div', { class: 'code-usage-content', 'aria-live': 'polite' });
@@ -106,6 +108,7 @@ export function usageView(host, { aid, engine, supported, canReset = false, mode
   }
   /** passive — обновление после конца задания, не по действию владельца: срок PIN компьютера не продлевает. */
   async function load(fresh = false, passive = false) {
+    if (shared) return;
     const selectedModel = engine === 'opencode' ? model() : '';
     if (engine === 'opencode' && selectedModel !== paintedModel) {
       remainingText.textContent = '—';

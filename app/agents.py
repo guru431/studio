@@ -207,6 +207,7 @@ async def list_agents(request: Request, refresh: bool = False):
                       "mcp": hello.get("mcp", False),
                       "chat_control": hello.get("chat_control", False),
                       "attachments": hello.get("attachments", False),
+                      "large_attachments": hello.get("large_attachments", False),
                       "project_activity": hello.get("project_activity", False),
                       "project_summary": hello.get("project_summary", False),
                       "metadata_cache": hello.get("metadata_cache", False),

@@ -8,6 +8,9 @@ import { dateTime } from './time.js';
 
 const POLL_MS = 10000; // События хода обновляют счётчик сразу; опрос сверяет историю и фоновые завершения.
 const HISTORY_POLL_MS = 2000;
+// Опрос идёт, пока идёт ход (`polling` чата) или открыто окно подзадач, и не дольше этого после действия в окне —
+// как опрос live чата: мосты до passive_requests (0.17.0) считают каждый запрос действием и не закрываются.
+const IDLE_POLL_FOR_SEC = 1800;
 const ACTIVE = ['running', 'inProgress', 'pending', 'waiting'];
 
 function duration(row) {
@@ -19,7 +22,8 @@ function duration(row) {
   return tr("{0}{1}{2} с", hours ? tr("{0} ч ", hours) : '', hours || minutes ? tr("{0} мин ", minutes) : '', seconds % 60);
 }
 
-export function subagentView(host, { endpoint, supported = true }) {
+/** polling — чат просит опрашивать (идёт ход, владелец недавно действовал); без него — разовые чтения. */
+export function subagentView(host, { endpoint, supported = true, polling = () => false }) {
   const button = el('button', { type: 'button', id: 'code-subagents', class: 'icon-btn',
     'aria-label': tr("Подзадачи"), title: tr("Подзадачи") });
   button.append(icon('subagents'));
@@ -44,6 +48,9 @@ export function subagentView(host, { endpoint, supported = true }) {
   let pending = false;
   let selected = null;
   let historyVersion = null;
+  let touched = 0;               // последнее действие в окне подзадач
+  const touch = () => { touched = Date.now(); };
+  const wanted = () => polling() || (dialog.open && Date.now() - touched < IDLE_POLL_FOR_SEC * 1000);
   const known = new Map();
   const statuses = { running: tr("работает"), inProgress: tr("работает"), pending: tr("ожидает"), waiting: tr("ждёт ответа"), completed: tr("завершён"),
     failed: tr("ошибка"), errored: tr("ошибка"), stopped: tr("остановлен"), shutdown: tr("остановлен"), interrupted: tr("остановлен"), unknown: tr("статус не сообщается") };
@@ -154,10 +161,8 @@ export function subagentView(host, { endpoint, supported = true }) {
       if (alive && !own.signal.aborted && dialog.open) status.textContent = words(err);
     } finally {
       if (listing === own) listing = null;
-      if (alive) {
-        timer = setTimeout(load, pending ? 150 : dialog.open && selected ? HISTORY_POLL_MS : POLL_MS);
-        pending = false;
-      }
+      if (alive && (pending || wanted())) timer = setTimeout(load, pending ? 150 : dialog.open && selected ? HISTORY_POLL_MS : POLL_MS);
+      pending = false;
     }
   }
   function schedule() {
@@ -179,8 +184,9 @@ export function subagentView(host, { endpoint, supported = true }) {
     }
     paint();
   }
-  button.addEventListener('click', () => { dialog.showModal(); paint(); load(); });
-  refresh.addEventListener('click', load);
+  button.addEventListener('click', () => { touch(); dialog.showModal(); paint(); load(); });
+  refresh.addEventListener('click', () => { touch(); load(); });
+  for (const event of ['pointerdown', 'keydown']) dialog.addEventListener(event, touch, { passive: true });
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => {
     request?.abort(); selected = null; historyVersion = null; history.replaceChildren();
@@ -198,7 +204,7 @@ export function subagentView(host, { endpoint, supported = true }) {
     }
   }, 1000);
   load();
-  return { button, refresh: schedule, update, open(row) { dialog.showModal(); paint(); openChild(row); load(); },
+  return { button, refresh: schedule, update, open(row) { touch(); dialog.showModal(); paint(); openChild(row); load(); },
     unmount() {
       alive = false; request?.abort(); listing?.abort(); clearTimeout(timer); clearInterval(ticker);
       document.removeEventListener('visibilitychange', visibility);

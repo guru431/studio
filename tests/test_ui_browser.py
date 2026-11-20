@@ -10171,7 +10171,7 @@ def test_code_draft_goes_once_the_turn_is_accepted_even_after_leaving(browser, l
 # файлы и git проекта (code-files.js): список, правка, просмотр .md и .pdf, статус git, ссылка из шага чата
 
 CODE_APP = b"print(1)\r\nprint(2)\r\n"
-CODE_CONFLICT = "Файл изменился на компьютере — откройте его заново, чтобы не затереть правки"
+CODE_CONFLICT = "Файл изменился на компьютере — сравните версии и выберите, какую оставить"
 CODE_FILE_NAMES = "[...document.querySelectorAll('#code-files li[data-name]')].map((li) => li.dataset.name)"
 #: части пути файлов (без разделителей «›»)
 CODE_PATH = "[...document.querySelectorAll('#code-path > :not([aria-hidden])')].map((e) => e.textContent)"
@@ -10404,10 +10404,12 @@ def test_code_files_open_edit_and_save(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_code_file_conflict_is_said_in_words(browser, live):
+@pytest.mark.parametrize("choice", ["take", "overwrite"])
+def test_code_file_conflict_is_said_in_words(browser, live, choice):
     """Файл открыт, а машина его меняет (его поправил Claude): «Сохранить» — 409 conflict, слова из «Текстов»;
-    на машине — её правка, в редакторе — своя."""
-    login = "code-conflict"
+    на машине — её правка, в редакторе — своя; сравнение двух версий и выбор: взять версию компьютера (правка не
+    сохраняется, файл не правлен) или сохранить свою поверх (второй save с version прочитанной заново)."""
+    login = f"code-conflict-{choice}"
     live.add_user(login)
     machine = code_files_machine()
     read = machine._op_read
@@ -10428,15 +10430,29 @@ def test_code_file_conflict_is_said_in_words(browser, live):
             ("wait", f"{CODE_FILE_STATUS} !== ''"), ("eval", "status", CODE_FILE_STATUS),
             ("eval", "error", "document.querySelector('#code-file-status').classList.contains('error')"),
             ("eval", "text", "document.querySelector('#code-editor').value"),
-            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+            ("wait", "document.querySelector('#code-conflict')"),
+            ("eval", "diff", "document.querySelector('#code-conflict .code-diff-unified').textContent"),
+            ("eval", "fits", NO_OVERFLOW), ("click", f"#code-conflict-{choice}"),
+            ("wait", "!document.querySelector('#code-conflict')"),
+            ("wait", f"![{json.dumps(CODE_CONFLICT)}, ''].includes({CODE_FILE_STATUS})"),
+            ("eval", "after", "document.querySelector('#code-editor').value"),
+            ("eval", "final", CODE_FILE_STATUS)], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["status"] == CODE_CONFLICT and v["error"] is True and v["fits"] is True
     assert v["text"] == "print('мой')\n"
-    assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
-    assert len(code_requests(machine, "save")) == 1
+    assert "print('claude')" in v["diff"] and "print('мой')" in v["diff"]
+    saves = code_requests(machine, "save")
+    if choice == "take":
+        assert v["after"] == "print('claude')\n" and v["final"] == "Открыта версия компьютера"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
+        assert len(saves) == 1
+    else:
+        assert v["after"] == "print('мой')\n" and v["final"] == "Сохранено"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == "print('мой')\n".encode()
+        assert len(saves) == 2 and saves[1]["version"] != saves[0]["version"]
     assert not known_refusals(problems(r), 409), problems(r)
 
 

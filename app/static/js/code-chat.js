@@ -79,8 +79,10 @@ const STICK_PX = 80;             // лента у низа — новое её �
 const PREVIEW_MAX = 80;          // начало ввода шага в его заголовке
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-const IMAGE_MAX = 10 * 1024 * 1024;
-const IMAGES_MAX = 30 * 1024 * 1024;
+// Пределы вложений, МиБ: мост с hello.large_attachments (0.22.1+) — 10 на файл и 30 на сообщение, старый — 5 и 8
+// (сервер, claude_code.py, отказал бы уже после загрузки всего сообщения).
+const attachLimits = (agent) => agent?.large_attachments ? { file: 10, total: 30 } : { file: 5, total: 8 };
+const MIB = 1024 * 1024;
 const IMAGE_COUNT = 8;
 
 /** Черновики чатов (`${aid}/${chat}`). Смена «есть черновик / нет» — событие
@@ -254,7 +256,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
   let effectiveModel = '';
-  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage, canReset: agent?.usage_reset,
+  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage, shared: !!agent?.shared,
+    canReset: agent?.usage_reset,
     model: () => model.value || effectiveModel || catalog?.defaults?.model || '' });
   const changedFiles = changesView(host, { openFile: (path) => {
     const relative = projectFilePath(path, agent, project);
@@ -324,7 +327,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const picker = el('input', { type: 'file', id: 'code-image-input',
     multiple: true, hidden: true, 'aria-label': tr("Вложения") });
   const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': tr("Добавить вложение"),
-    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до 8 файлов, 10 МиБ на файл, 30 МиБ на сообщение")
+    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до 8 файлов, {0} МиБ на файл, {1} МиБ на сообщение",
+      attachLimits(agent).file, attachLimits(agent).total)
       : tr("Изображения · обновите мост для файлов любого типа"), disabled: !agent?.images && !agent?.attachments });
   attach.append(icon('clip'));
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
@@ -359,6 +363,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function paintAskPin() {
     const cards = feed.querySelectorAll('.code-ask');
     const card = cards[0];
+    paintSessionNotice();
     askPin.hidden = !card;
     if (!card) return;
     const yes = card.querySelector('.code-ask-yes');
@@ -398,7 +403,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }
-  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && (engine !== 'opencode' || agent?.opencode_features) });
+  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && (engine !== 'opencode' || agent?.opencode_features),
+    polling: () => running && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000 });
   const children = subtaskControl.button.disabled ? null : subtaskControl;
   const commands = commandsView(host, { stepNode, repaint: node => stepPaint.get(node)?.() });
   statusFixed.prepend(subtaskControl.button, commands.button, changedFiles.button);
@@ -526,12 +532,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!agent?.attachments && files.some((f) => !IMAGE_TYPES.has(f.type))) {
         throw new Error(tr("Обновите мост на компьютере для отправки файлов любого типа"));
       }
-      if (files.some((f) => f.size > IMAGE_MAX)) throw new Error(tr("Размер файла — до 10 МиБ"));
+      const limits = attachLimits(agent);
+      if (files.some((f) => f.size > limits.file * MIB)) throw new Error(tr("Размер файла — до {0} МиБ", limits.file));
       if ([...images, ...files].filter((f) => IMAGE_TYPES.has(f.mime || f.type)).length > 4) {
         throw new Error(tr("Можно прикрепить до 4 изображений к сообщению"));
       }
-      if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > IMAGES_MAX) {
-        throw new Error(tr("Общий размер вложений — до 30 МиБ"));
+      if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > limits.total * MIB) {
+        throw new Error(tr("Общий размер вложений — до {0} МиБ", limits.total));
       }
       const selected = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -913,7 +920,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     send.querySelector('.code-go-label').textContent = label;
     text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
     for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
+    paintSessionNotice();
+  }
+
+  /** Плашка чужого окна. Ход, ждущий ответа на карточку, сам не завершится: «Дождаться» тогда не предлагается. */
+  function paintSessionNotice() {
     sessionNotice.hidden = !foreign && !external;
+    const asking = foreign && !!feed.querySelector('.code-ask');
+    waitSession.hidden = asking;
     if (external) {
       sessionText.textContent = waitingForRelease
         ? tr("Жду освобождения сессии в Codex Desktop или другом приложении. Текст и вложения сохранены.")
@@ -921,7 +935,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       takeSession.textContent = tr("Продолжить копией");
       waitSession.textContent = tr("Дождаться освобождения");
     } else if (foreign) {
-      sessionText.textContent = waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
+      sessionText.textContent = asking ? tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить.")
+        : waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
         : tr("Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.");
       takeSession.textContent = tr("Продолжить здесь");
       waitSession.textContent = tr("Дождаться завершения");
