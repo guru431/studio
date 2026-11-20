@@ -249,10 +249,13 @@ class Controller:
             return errors
         try:
             with self._cfg_lock:
+                old = setup.previous(self.h, form)
                 setup.apply(self.h, form, enroll_fn=self._enroll_fn)
         except enroll.EnrollError as e:
             log.info("привязка: %s", e.code)
             return [e.words]
+        if old is not None:  # повторная привязка: прежний компьютер — прочь из студии (канал тут же заново)
+            setup.revoke(*old, self._unenroll_fn)
         if (form.get("login") or "").strip():
             self.fresh = True
         self._autostart.set_enabled(bool(form.get("autostart")))

@@ -197,8 +197,10 @@ def status(h):
 
 
 def enrollment(h):
-    from .__main__ import _ask, _ask_folders
+    from .__main__ import _ask, _ask_folders, rebind_confirmed
     s = invoke(h, "status")
+    if not rebind_confirmed(s["enrolled"], s["login"]):
+        return 1
     form = {"url": _ask("Адрес студии", s["url"]), "login": _ask("Логин"),
             "name": _ask("Имя компьютера", s["name"] or socket.gethostname()),
             "projects_roots": _ask_folders(s["roots"]), "password": getpass.getpass("Пароль: "),
