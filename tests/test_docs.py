@@ -437,3 +437,18 @@ def test_guide_shows_where_every_account_settings_section_is():
 def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
     (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
     assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}
+
+
+def test_guide_and_architecture_do_not_use_retired_section_names():
+    """Прежние имена разделов из глоссария («Речь» (стало «Озвучка») …) не пишутся ни в руководстве, ни в
+    docs/architecture: ни в кавычках, ни заголовком главы. «Распознавание «…»» — имя действия, не раздела."""
+    glossary = (ROOT / "docs" / "glossary.md").read_text(encoding="utf-8")
+    retired = re.findall(r"«([^«»]+)»(?: как имя раздела)? \(стало", glossary)
+    assert {"Речь", "Разговоры", "Распознавание"} <= set(retired)
+    found = []
+    for path in [GUIDE, *sorted((ROOT / "docs" / "architecture").glob("*.md"))]:
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for name in retired:
+                if re.search(rf"«{name}»|^#+ {name}\s*$", line):
+                    found.append(f"{path.name}:{number}: {name}")
+    assert found == []
