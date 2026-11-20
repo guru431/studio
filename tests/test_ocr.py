@@ -461,6 +461,35 @@ def test_retry_page_recognizes_only_that_page_again(studio):
     assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).json()["detail"]["code"] == "nothing"
 
 
+def test_recognize_again_with_another_engine_makes_a_new_document(studio):
+    """05:F11: «Распознать заново» с другим движком раздела (s06) — новый документ из тех же фото, все страницы
+    заново; прежний остаётся, и его удаление файлов нового не уносит. Тот же движок — повтор на месте."""
+    from fakes import TOKEN
+    gw = add_gateway(studio)
+    r = studio.c.post("/api/connections", json={"name": "s06", "kind": "openai", "s06": True,
+                                                "base_url": "http://10.77.1.15:4000", "token": TOKEN, "sections": ["ocr"]})
+    assert r.status_code == 201, r.text
+    s06 = r.json()["id"]
+    studio.gw.ocr_reply = {"markdown": "Текст s06", **answer(TEXT)}
+    sid = post_files(studio, [("a.jpg", photo()), ("b.png", photo("PNG"))]).json()["id"]
+    first = wait_ocr(studio, sid, {"done"})
+    assert (first["connection_id"], first["model"]) == (gw, "hunyuan-ocr")
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"connection_id": gw, "model": "hunyuan-ocr"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "nothing"
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 1, "connection_id": s06, "model": "ocr-ru"})
+    assert r.status_code == 422
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"connection_id": s06, "model": "ocr-ru"})
+    assert r.status_code == 202, r.text
+    new = r.json()["id"]
+    assert new != sid and (r.json()["connection_id"], r.json()["model"], r.json()["name"]) == (s06, "ocr-ru", "a.jpg")
+    second = wait_ocr(studio, new, {"done"})
+    assert [p["text"] for p in second["pages"]] == ["Текст s06"] * 2
+    assert [p["media_id"] for p in second["pages"]] == [p["media_id"] for p in first["pages"]]
+    assert [p["text"] for p in studio.c.get(f"/api/ocr/{sid}").json()["pages"]] == [TEXT] * 2
+    assert studio.c.delete(f"/api/ocr/{sid}").status_code == 204
+    assert all(studio.c.get(f"/api/media/{p['media_id']}").status_code == 200 for p in second["pages"])
+
+
 def test_failed_pages_of_a_done_document_are_counted_and_recognized_again(studio):
     """05:F6: «готово» с нераспознанными страницами — их число в ленте и в документе; «Распознать заново» у
     готового повторяет все такие страницы разом."""
@@ -823,8 +852,8 @@ def test_upload_photos_make_one_document_in_order(studio, caplog):
     add_gateway(studio)
     r = post_files(studio, [("a.jpg", photo()), ("b.png", photo("PNG"))])
     assert r.status_code == 202 and r.json()["pages"] == 2 and r.json()["name"] == "a.jpg"
-    assert set(r.json()) == {"id", "name", "state", "detail", "model", "pages", "done_pages", "failed_pages", "origin",
-                             "created", "finished"}
+    assert set(r.json()) == {"id", "name", "state", "detail", "connection_id", "model", "pages", "done_pages",
+                             "failed_pages", "origin", "created", "finished"}
     assert (r.json()["origin"], r.json()["model"]) == ("section", "hunyuan-ocr")
     item = wait_ocr(studio, r.json()["id"], {"done"})
     assert [p["n"] for p in item["pages"]] == [1, 2] and all(p["media_id"] for p in item["pages"])

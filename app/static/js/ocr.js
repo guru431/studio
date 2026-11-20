@@ -30,7 +30,8 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
-import { el, openDialog, plural, renameDialog, words } from './ui.js';
+import { modelLabel } from './settings.js';
+import { el, field, openDialog, plural, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
@@ -84,6 +85,7 @@ function build(view, ctx) {
   // вид выбранного переживает опрос (05:F14): узлы — по ключу своих данных, иначе меняются только тексты
   let acts = null;             // { key, box } — кнопки документа
   let two = null;              // { key, box, scan, text } — показанная страница: картинка и текст
+  let engines = [];            // движки раздела через сервер: { connection_id, model, label } (GET /api/sections)
   const docs = createPicker({ url: '/api/ocr', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
     show() {
@@ -107,7 +109,9 @@ function build(view, ctx) {
   const mcp = sectionMcp('ocr', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
   const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
   const title = el('h1', {}, NAMES.ocr);
-  const head = el('header', { class: 'head' }, title);
+  // движок загрузки — когда отмеченных пар раздела больше одной; иначе — умолчание раздела на сервере
+  const engine = el('select', { id: 'ocr-model', class: 'chip tl-model', 'aria-label': tr("Модель распознавания"), hidden: true });
+  const head = el('header', { class: 'head' }, title, engine);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
   const nativeHint = ctx.hint?.('hint-bar');
@@ -210,6 +214,62 @@ function build(view, ctx) {
     }
     return el('p', { class: 'ocr-noscan muted small' },
       page.state === 'layer' ? tr("страница взята из текстового слоя") : tr("картинка страницы ещё не готова"));
+  }
+
+  async function loadEngines() {
+    try {
+      const { sections } = await api('GET', '/api/sections');
+      const section = sections.find((s) => s.id === 'ocr');
+      engines = !section ? [] : section.links.filter((l) => l.connection.proxied).flatMap(({ connection: c, models }) =>
+        models.map((m) => ({ connection_id: c.id, model: m, label: `${c.name} · ${modelLabel(m)}` })));
+      engine.replaceChildren(...engines.map((e, i) => el('option', { value: String(i) }, e.label)));
+      const chosen = section && section.default;
+      engine.selectedIndex = Math.max(0, engines.findIndex((e) => chosen && e.connection_id === chosen.connection_id
+        && e.model === chosen.model));
+      engine.hidden = engines.length < 2;
+    } catch (err) {
+      error.textContent = words(err);
+    }
+    paintView();
+  }
+
+  /** Чем распознан документ: «подключение · модель» из движков раздела, иначе — имя модели. */
+  function engineName(item) {
+    const found = engines.find((e) => e.connection_id === item.connection_id && e.model === item.model);
+    return found ? found.label : modelLabel(item.model);
+  }
+
+  /** «Распознать заново» с выбором движка (их больше одного): тот же — нераспознанные страницы на месте, другой —
+   * новый документ со всеми страницами (ocr.again), он и открывается. */
+  function retryDialog(item) {
+    if (root.querySelector('#ocr-retry-dialog')) return;
+    const pick = el('select', { class: 'input', id: 'ocr-retry-model' },
+      ...engines.map((e, i) => el('option', { value: String(i) }, e.label)));
+    pick.selectedIndex = Math.max(0, engines.findIndex((e) => e.connection_id === item.connection_id && e.model === item.model));
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const yes = el('button', { type: 'button', class: 'btn btn-accent', id: 'ocr-retry-confirm' }, tr("Распознать"));
+    const dialog = openDialog(root, { id: 'ocr-retry-dialog', title: tr("Распознать заново"), actions: [yes],
+      body: [field(tr("Модель"), pick, 'model'),
+        el('p', { class: 'muted small' }, tr("Той же моделью — только нераспознанные страницы. Другой — новый документ со всеми страницами, прежний остаётся.")),
+        fail] });
+    yes.addEventListener('click', async () => {
+      const { connection_id, model } = engines[pick.selectedIndex];
+      yes.disabled = pick.disabled = true;
+      fail.textContent = '';
+      let answer;
+      try {
+        answer = await api('POST', `/api/ocr/${item.id}/retry`, { connection_id, model });
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = pick.disabled = false;
+        return;
+      }
+      kick();
+      if (dialog.open) dialog.close();
+      picked = true;
+      await docs.load();
+      await select(answer.id);
+    });
   }
 
   /* «Повторить страницу» (page) и «Распознать заново» (без page): документ снова в очереди — POST …/retry */
@@ -315,8 +375,9 @@ function build(view, ctx) {
    * нажатия (docs.current: опрос его заменяет). */
   function actions(item) {
     const running = RUNNING.has(item.state);
-    const again = !running && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed');
-    const key = JSON.stringify([item.id, readable(item), again, running]);
+    const choose = engines.length > 1;
+    const again = !running && (choose || item.pages.some((p) => p.state === 'waiting' || p.state === 'failed'));
+    const key = JSON.stringify([item.id, readable(item), again, choose, running]);
     if (acts && acts.key === key) return acts.box;
     const box = el('div', { class: 'tr-acts' });
     if (readable(item)) {
@@ -334,7 +395,13 @@ function build(view, ctx) {
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
     }
-    if (again) box.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // все нераспознанные разом
+    if (again && choose) {
+      const go = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-retry' }, tr("Распознать заново"));
+      go.addEventListener('click', () => retryDialog(docs.current));
+      box.append(go);
+    } else if (again) {
+      box.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));          // все нераспознанные разом
+    }
     const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-rename' }, tr("Переименовать"));
     ren.addEventListener('click', () => rename(docs.current));
     box.append(ren);
@@ -368,7 +435,7 @@ function build(view, ctx) {
       nodes.push(note);
     }
     const n = item.pages.length;
-    put(meta, `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)}`);
+    put(meta, `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)} · ${engineName(item)}`);
     nodes.push(meta);
     const missed = item.pages.filter((p) => p.state === 'failed').length;
     if (missed) {
@@ -418,6 +485,11 @@ function build(view, ctx) {
     xhr.open('POST', '/api/ocr');
     holdRefresh(xhr);                // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
     xhr.setRequestHeader('x-studio-csrf', me.csrf);
+    const pick = engines.length > 1 ? engines[engine.selectedIndex] : null;
+    if (pick) {
+      xhr.setRequestHeader('x-studio-connection', String(pick.connection_id));
+      xhr.setRequestHeader('x-studio-model', pick.model);
+    }
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) progress.textContent = tr("Загружаю · {0}%", Math.round(event.loaded * 100 / event.total));
     });
@@ -471,6 +543,7 @@ function build(view, ctx) {
     docs.load().then(() => { if (wanted && !picked) select(wanted, true); });
   }
   paintView();
+  loadEngines();
   follow(ctx.query && ctx.query.get('id'));
 
   return {

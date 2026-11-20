@@ -1,5 +1,7 @@
 """«Сканы» — вид документа: опрос не пересобирает страницу (05:F14), нераспознанные страницы видны и
-повторяются разом (05:F6), распознанное документа с ошибкой выгружается (05:F5)."""
+повторяются разом (05:F6), распознанное документа с ошибкой выгружается (05:F5), выбор движка (05:F11)."""
+import json
+
 import pytest
 
 from test_ui_browser import (API, NO_OVERFLOW, READY, add_gateway, browser, go, live, problems, put_files, recognized,
@@ -37,6 +39,50 @@ def test_failed_pages_of_a_done_document_are_shown_and_recognized_again(browser,
     v = r["values"]
     assert v["row"] == "3 стр. · готово · не распознано: 2" and v["line"] == "не распознано страниц: 2 из 3"
     assert v["acts"] == [True, True] and v["fits"] is True and v["after"] == "3 стр. · готово"
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_engine_is_chosen_for_upload_and_for_recognizing_again(browser, live, width):
+    """05:F11: два движка «Сканов» — выбор у «Загрузить скан», в шапке документа — чем он распознан;
+    «Распознать заново» другим движком — новый документ, прежний остаётся."""
+    from fakes import TOKEN
+    from scans import photo
+    login = f"ocreng{width}"
+    live.add_user(login)
+    before = live.gw.ocr_reply
+    live.gw.ocr_reply = {**before, "markdown": "Текст s06"}
+    first = len(live.gw.ocr_requests)
+    meta = "document.querySelector('.ocr-meta')?.textContent"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+            ("eval", "s06", f"""(async () => {{ const m = {API};
+              await m.api('POST', '/api/connections', {{ name: 's06', kind: 'openai', s06: true,
+                base_url: 'http://10.77.1.15:4000', token: {TOKEN!r}, sections: ['ocr'] }}); return true; }})()"""),
+            *go("ocr"), ("wait", "document.querySelector('#ocr-model:not([hidden]) option:nth-child(2)')"),
+            ("eval", "options", "[...document.querySelectorAll('#ocr-model option')].map(o => o.textContent)"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("eval", "pick", "(() => { const s = document.querySelector('#ocr-model'); s.selectedIndex ="
+                             " [...s.options].findIndex(o => o.textContent.includes('ocr-ru')); return s.value; })()"),
+            put_files("#ocr-add input", [("Лист.png", photo("PNG"))]),
+            ("wait", "document.querySelector('.ocr-item[data-state=done]') && document.querySelector('.ocr-text.md')"),
+            ("wait", f"{meta}?.endsWith('s06 · ocr-ru')"),
+            ("click", "#ocr-retry"), ("wait", "document.querySelector('#ocr-retry-dialog')?.open"),
+            ("eval", "chosen", "document.querySelector('#ocr-retry-model').selectedOptions[0].textContent"),
+            ("eval", "other", "(() => { const s = document.querySelector('#ocr-retry-model'); s.selectedIndex ="
+                              " [...s.options].findIndex(o => o.textContent.includes('hunyuan-ocr')); return true; })()"),
+            ("click", "#ocr-retry-confirm"),
+            ("wait", f"!document.querySelector('#ocr-retry-dialog') && {meta}?.endsWith('hunyuan-ocr')"
+                     " && document.querySelectorAll('.ocr-item[data-state=done]').length === 2"),
+            ("eval", "text", "document.querySelector('.ocr-text.md').textContent")],
+            width=width, mobile=width == 320)
+    finally:
+        live.gw.ocr_reply = before
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["options"] == ["Шлюз · hunyuan-ocr", "s06 · ocr-ru"] and v["fits"] is True
+    assert v["chosen"] == "s06 · ocr-ru" and "Текст s06" not in v["text"]
+    assert [json.loads(q.content)["model"] for q in live.gw.ocr_requests[first:]] == ["ocr-ru", "tencent/HunyuanOCR"]
     assert not problems(r), problems(r)
 
 
