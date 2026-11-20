@@ -601,7 +601,7 @@ def test_message_arrows_accept_taps_and_align_below_header_at_reduced_scale(ipho
 def test_session_picker_keeps_titles_after_leaving_the_section(iphone):
     page, aid = iphone
     page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] .code-project-name").tap()
-    page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button").tap()
+    page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button.code-chat-link").tap()
     page.locator('#code-chat[data-loaded="1"]').wait_for()
     page.locator('#rail [data-section=photo]').tap()
     page.locator('#code-chat').wait_for(state='detached')
@@ -1105,7 +1105,7 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     page.locator(f"#code-projects li[data-pid='{pid('alpha')}'] .code-project-name").tap()
     if page.viewport_size["width"] <= 760:
         page.locator("#code-panel").wait_for(state="hidden")
-    page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button").tap()
+    page.locator(f"#code-chats li[data-chat='{CODE_CHAT_A}'] button.code-chat-link").tap()
     pw.expect(page.locator("#code-feed")).to_contain_text("про A")
     page.locator('#code-chat[data-loaded="1"]').wait_for()
     pw.expect(page.locator("#code-feed")).to_be_in_viewport()
@@ -1113,7 +1113,7 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     page.locator("#code-tab-add").tap()
     pw.expect(page.locator('#code-chat-search')).to_be_in_viewport()
     assert page.locator('#view').evaluate('view => view.scrollTop === 0')
-    page.locator(f"#code-tab-menu li[data-chat='{CODE_CHAT_B}'] button").tap()
+    page.locator(f"#code-tab-menu li[data-chat='{CODE_CHAT_B}'] button.code-chat-link").tap()
     pw.expect(page.locator("#code-feed")).to_contain_text("про B")
     page.locator(f"#code-tabbar .code-tab[data-chat='{CODE_CHAT_A}'] .code-tab-title").tap()
     pw.expect(page.locator("#code-feed")).to_contain_text("про A")
