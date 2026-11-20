@@ -251,6 +251,30 @@ def test_call_round_trip_and_errors(studio, monkeypatch):
         assert isinstance(e, bridge.Offline) and time.monotonic() - started < 1
 
 
+def test_reply_deadline_starts_after_the_frame_is_sent(studio, monkeypatch):
+    """Большой кадр (вложения хода) по медленному каналу уходит дольше срока ответа: срок считается от конца
+    отправки — иначе страница получила бы 504, а кадр дошёл бы и ход начался. Отправку держит свой `SEND_SEC`."""
+    make_user(studio, "owner")
+    aid, key = enroll(studio)
+    with online(studio, key) as ws:
+        link = bridge.LINKS[aid]
+        sent = link.send
+
+        async def slow(frame):
+            await asyncio.sleep(0.4)
+            await sent(frame)
+
+        monkeypatch.setattr(link, "send", slow)
+        monkeypatch.setattr(bridge, "CALL_SEC", 0.3)
+        fut = start_call(studio, aid, "turn", project=pid("studio"), chat=CHAT, text="x")
+        answer(ws, ok=True, data={"started": True})
+        assert fut.result(2) == {"started": True}
+        monkeypatch.setattr(bridge, "SEND_SEC", 0.1)
+        fut = start_call(studio, aid)
+        assert isinstance(fut.exception(2), TimeoutError)
+        assert not link.pending
+
+
 def test_odd_frames_are_ignored_or_close_4400(studio, monkeypatch, caplog):
     caplog.set_level(logging.DEBUG)
     make_user(studio, "owner")

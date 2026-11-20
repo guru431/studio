@@ -6,8 +6,8 @@
   ответы и поток событий Claude Code. «На связи» — есть ли канал (`LINKS`), в памяти, не в базе. Канал
   у компьютера один: новый заменяет прежний (4409). Отзыв, отключение и удаление учётки рвут канал (4401),
   смена пароля — нет: ключ устройства самостоятелен (спека 6.2).
-- Просьба (`call`) ждёт ответа с тем же `id` не дольше `CALL_SEC`; канал пропал — сразу `Offline`, а не по
-  сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал или его заменил новый —
+- Просьба (`call`) уходит не дольше `SEND_SEC` и потом ждёт ответа с тем же `id` не дольше `CALL_SEC`; канал
+  пропал — сразу `Offline`, а не по сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал или его заменил новый —
   им `("offline", None)`; канал появился (`attach`) — `("online", None)`: поток `live`, что ждёт компьютер,
   кончается, и страница сразу открывает новый. Кадры канала, который уже не текущий (заменён, снят), никуда не идут.
   Карточку (`ask`) или конец хода (`done`) чата, который начавший ход не смотрит, ему сообщает push
@@ -64,6 +64,9 @@ VALUES_MAX = 2_000_000
 RES_HEAD = re.compile(r'\{\s*"t"\s*:\s*"res"\s*,\s*"id"\s*:\s*"([0-9a-f]{1,64})"')
 HELLO_SEC = 10
 CALL_SEC = 30
+#: отправка кадра просьбы (с ожиданием замка канала): 40 МиБ вложений хода — около 1 Мбит/с; вместе с `CALL_SEC`
+#: меньше предела Apache для `/api/code/` (600 с, сверяет tests/test_deploy.py)
+SEND_SEC = 300
 WATCH_MAX = 1000
 COMPLETIONS_MAX = 50  # досланных завершений в кадре (протокол §18)
 COMPLETION_AGE_MAX = 7 * 24 * 3600  # давность конца хода, с: старше — время отметки по этому пределу
@@ -481,24 +484,24 @@ def _refusal(frame: dict) -> BridgeError:
 
 
 async def call(agent_id: int, op: str, session: str, timeout: float | None = None, **args) -> dict:
-    """Просьба мосту и его `data`. Нет канала или пропал — `Offline`; отказ — `BridgeError`; молчание дольше
-    `timeout` (по умолчанию `CALL_SEC`) — `TimeoutError`."""
+    """Просьба мосту и его `data`. Нет канала или пропал — `Offline`; отказ — `BridgeError`; отправка дольше
+    `SEND_SEC` или молчание после неё дольше `timeout` (по умолчанию `CALL_SEC`) — `TimeoutError`."""
     link = LINKS.get(agent_id)
     if link is None:
         raise Offline()
     rid = secrets.token_hex(8)
     fut = asyncio.get_running_loop().create_future()
     link.pending[rid] = fut
-
-    async def ask():
+    try:
+        # Срок ответа — от конца отправки: кадр с вложениями хода (до 40 МиБ) по медленному каналу уходит дольше
+        # него, а отказ после частичной отправки не помешал бы кадру дойти и ходу начаться.
         try:
-            await link.send({"t": "req", "id": rid, "op": op, "session": session, **args})
+            await asyncio.wait_for(link.send({"t": "req", "id": rid, "op": op, "session": session, **args}), SEND_SEC)
+        except TimeoutError:
+            raise
         except Exception:
             raise Offline() from None
-        return await fut
-
-    try:
-        frame = await asyncio.wait_for(ask(), CALL_SEC if timeout is None else timeout)
+        frame = await asyncio.wait_for(fut, CALL_SEC if timeout is None else timeout)
     finally:
         link.pending.pop(rid, None)
     if frame.get("ok") is True:
