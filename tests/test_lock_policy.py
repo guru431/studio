@@ -70,11 +70,40 @@ def test_all_eight_is_distinct_from_whole_app_and_changes_need_password(studio):
     owner(studio)
     enable(studio, list(lock_policy.SECTIONS))
     for body in ({"enabled": True, "sections": ["code"]}, {"enabled": True, "timeout": 3600}):
-        assert studio.c.post("/api/me/screen-lock", json=body).status_code == 403
+        assert studio.c.post("/api/me/screen-lock", json=body).status_code == 422          # пароль не указан
+        assert studio.c.post("/api/me/screen-lock", json={**body, "password": "wrong"}).status_code == 403
     assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "sections": ["*"], "timeout": 3600,
                                                       "password": "password-123"}).status_code == 200
     expire(studio)
     assert studio.c.get("/api/me").status_code == 423
+
+
+def test_empty_password_spends_no_attempt_and_does_not_lock_password_unlock(studio):
+    """Пять «Сохранить» с пустым полем пароля запирали сессию на 15 минут, включая отпирание верным паролем."""
+    owner(studio)
+    enable(studio, ["*"])
+    for _ in range(auth.LOCK_FAILS + 1):
+        response = studio.c.post("/api/me/screen-lock", json={"enabled": True, "timeout": 900, "password": ""})
+        assert response.status_code == 422 and response.json()["detail"]["code"] == "password"
+    for path, body in [("/api/me/screen-lock", {"enabled": False}), ("/api/me/pin", {"pin": "1234"}),
+                       ("/api/passkeys/options", {}), ("/api/lock/password", {"password": ""})]:
+        method = "PUT" if path == "/api/me/pin" else "POST"
+        assert studio.c.request(method, path, json=body).status_code == 422, path
+    expire(studio)
+    assert studio.c.post("/api/lock/password", json={"password": "password-123"}).status_code == 204
+
+
+def test_security_log_records_turning_the_lock_on_off_and_reconfiguring_it(studio):
+    uid = owner(studio)
+    enable(studio, ["chat"])
+    password = {"password": "password-123"}
+    same = {"enabled": True, "sections": ["chat"], "timeout": 300, **password}       # без изменений — без строки
+    assert studio.c.post("/api/me/screen-lock", json=same).status_code == 200
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "timeout": 900, **password}).status_code == 200
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": False, **password}).status_code == 200
+    rows = [tuple(r) for r in state.DB.execute("SELECT kind, ip IS NOT NULL, session IS NOT NULL FROM security_events"
+                                               " WHERE user_id = ? AND kind LIKE 'screen_lock%' ORDER BY id", (uid,))]
+    assert rows == [("screen_lock_on", 1, 1), ("screen_lock_change", 1, 1), ("screen_lock_off", 1, 1)]
 
 
 @pytest.mark.parametrize("extra", [{"sections": []}, {"sections": ["*", "chat"]}, {"sections": ["dictation"]},

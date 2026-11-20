@@ -65,13 +65,14 @@ export function isTouch() {
   return matchMedia('(pointer: coarse)').matches;
 }
 
-/** Название ключа по устройству — из screenlock.NAMES; iPad по умолчанию представляется Mac. */
+/** Название ключа по устройству — код из screenlock.NAMES, не переводится (сервер сверяет его по списку); iPad по
+ *  умолчанию представляется Mac. Переводится только показ (список ключей в настройках). */
 export function deviceName() {
   const ua = navigator.userAgent;
   if (/iPhone/.test(ua)) return 'iPhone';
   if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
   if (/Android/.test(ua)) return 'Android';
-  return tr("Устройство");
+  return 'Устройство';
 }
 
 export function b64u(bytes) {

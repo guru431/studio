@@ -25,6 +25,9 @@ IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6_2 like Mac OS X) AppleWebKit/6
     ("Mozilla/5.0 (Linux; Android 10; K) Chrome/142.0.0.0 Mobile Safari/537.36", ("Chrome 142", "Android", None)),
     ("Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0", ("Firefox 144", "Linux", None)),
     ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_1) Version/18.6 Safari/605.1.15", ("Safari 18.6", "macOS 14.7.1", None)),
+    # замороженные браузерами версии (session_devices.FROZEN) — без числа
+    ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/142.0.0.0 Safari/537.36", ("Chrome 142", "macOS", None)),
+    (IPHONE.replace("18_6_2", "18_6").replace("Version/18.6", "Version/26.0"), ("Safari 26", "iOS", "iPhone")),
     (None, (None, None, None)),
     ("private-unknown-agent", (None, None, None)),
 ])

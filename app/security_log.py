@@ -1,4 +1,5 @@
-"""Журнал безопасности учётки (db.SECURITY_34): входы и неудачи, отпирания, исчерпание PIN, завершение сессий,
+"""Журнал безопасности учётки (db.SECURITY_34): входы и неудачи (и коды из письма), отпирания, настройка блокировки,
+исчерпание PIN, завершение сессий,
 аварийный выход, ссылки «Поделиться», выдача и отзыв доступа к проектам. По образцу `agent_events`: только добавляется (`record`), владелец видит
 свои события (account.py), уходит с учёткой; «Удалить всю историю» его не трогает — это след входов в учётку, а не
 история работы (стирание истории не требует пароля, и чужая сессия не заметёт им свои следы).
@@ -20,7 +21,9 @@ import state
 KINDS = frozenset({
     "email_change", "email_codes_on", "email_codes_off", "password_recovery",
     "login", "login_fail", "logout",                  # вход паролем, неверный пароль известного логина, выход
+    "login_code_sent", "login_code_fail",             # пароль верен — код отправлен; неверный код (detail — login | bridge)
     "unlock", "unlock_fail", "pin_exhausted",         # отпирание (detail — password | pin | passkey)
+    "screen_lock_on", "screen_lock_off", "screen_lock_change",   # блокировка включена, выключена, область или таймер
     "password",                                       # смена пароля из профиля
     "session_end", "emergency",                       # завершение одной сессии, аварийный выход (detail — agents)
     "share_create", "share_revoke",                   # ссылка «Поделиться» (detail — chat | code)
@@ -39,7 +42,7 @@ KEEP_MAX = 1000
 #: время последней, `first` — первой). Разные
 #: адреса — разные строки, поэтому ещё и квота: строк этих видов не больше NOISY_MAX, лишние уходят старшими, и подбор
 #: с тысяч адресов не вытеснит за KEEP_MAX входы, отпирания и прочие события
-NOISY = frozenset({"login_fail", "share_pin_fail"})
+NOISY = frozenset({"login_fail", "login_code_fail", "share_pin_fail"})
 COLLAPSE_SEC = 3600
 NOISY_MAX = 200
 
