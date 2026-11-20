@@ -759,6 +759,7 @@ FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
 FILE_GONE = "исходный файл удалён"
 NO_OCR_PHOTO = "чтобы переводить снимки, подключите «Сканы» в настройках"
+NO_HUNYUAN = "для снимков нужен HunyuanOCR шлюза srvllm — добавьте его в «Сканы»"
 #: имя выгрузки текстовой записи: «Перевод.ru.txt»
 TEXT_STEM = "Перевод"
 
@@ -907,8 +908,16 @@ def _is_photo(data: bytes) -> bool:
 
 
 def _photo_reader(user_id: int):
-    """(подключение, модель) «Сканов» для снимка: только через сервер, иначе 409 no_ocr словами."""
+    """(подключение, модель) «Сканов» для снимка: умолчание раздела, а если оно s06 (координат не даёт) — первая
+    связь «Сканов» с HunyuanOCR (не s06; через сервер — первой); такой нет — 409 no_ocr NO_HUNYUAN. Только через
+    сервер, иначе 409 no_ocr словами."""
     reader = sections.default(user_id, "ocr")
+    if reader is not None and reader[0].s06:
+        found = sorted(((l.connection, l.models[0]) for l in sections.links(user_id, "ocr")
+                        if not l.connection.s06 and l.models), key=lambda r: not r[0].proxied)
+        if not found:
+            raise HTTPException(409, {"code": "no_ocr", "message": NO_HUNYUAN})
+        reader = found[0]
     if reader is None or not reader[0].proxied:
         raise HTTPException(409, {"code": "no_ocr", "message": (
             NO_OCR_PHOTO if reader is None else sections.unlisted(reader[0]))})
