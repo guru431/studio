@@ -70,14 +70,15 @@ def test_profile_renders_only_deployment_templates():
     ("STUDIO_PROXY_VHOST", "/srv/studio/../other.conf"),
     ("STUDIO_APACHE_PORT", "9443\nunsafe"),
     ("STUDIO_MEDIA_FSTYPE", "tmpfs"), ("STUDIO_MEDIA_FSTYPE", "ext4"),
+    ("STUDIO_BUILD_NETWORK", "custom"),
 ])
 def test_profile_rejects_values_unsafe_for_commands_or_configuration(name, value):
     with pytest.raises(ValueError):
         PROFILE.settings({name: value})
 
 
-@pytest.mark.parametrize("media_fstype", ["cifs", "ext4"])
-def test_docker_profile_preserves_trusted_proxy_and_storage_boundaries(media_fstype):
+@pytest.mark.parametrize("media_fstype,build_network", [("cifs", "default"), ("ext4", "host")])
+def test_docker_profile_preserves_trusted_proxy_and_storage_boundaries(media_fstype, build_network):
     source, destination = io.BytesIO(), io.BytesIO()
     root = Path(__file__).parents[1]
     names = ["deploy/docker/host.conf", "deploy/docker/nginx.conf",
@@ -88,6 +89,7 @@ def test_docker_profile_preserves_trusted_proxy_and_storage_boundaries(media_fst
     source.seek(0)
     PROFILE.render(source, destination, {
         "STUDIO_RUNTIME": "docker", "STUDIO_MEDIA_FSTYPE": media_fstype,
+        "STUDIO_BUILD_NETWORK": build_network,
         "STUDIO_PROXY_IP": "198.51.100.10", "STUDIO_BIND_IP": "198.51.100.15",
         "STUDIO_MEDIA_DIR": "/mnt/media/studio", "STUDIO_REMOTE_ROOT": "/srv/studio",
         "STUDIO_URL": "https://studio.example.net", "STUDIO_HAIRPIN_IP": "198.51.100.1",
@@ -102,6 +104,7 @@ def test_docker_profile_preserves_trusted_proxy_and_storage_boundaries(media_fst
         assert "STUDIO_HAIRPIN_IP=198.51.100.1" in host
         assert "STUDIO_MEDIA_DIR=/mnt/media/studio" in host
         assert f"STUDIO_MEDIA_FSTYPE={media_fstype}" in host
+        assert f"STUDIO_BUILD_NETWORK={build_network}" in host
         unit = archive.extractfile(names[2]).read().decode()
         assert "RequiresMountsFor=/mnt/media/studio /var/lib/studio" in unit
         assert "WorkingDirectory=/srv/studio" in unit

@@ -90,6 +90,10 @@ STUDIO_CERT_DIR=/etc/letsencrypt/live/example.net
 STUDIO_APACHE_PORT=8443
 ```
 
+Если хост позволяет скачивать зависимости только через свою сеть, для сборки задайте
+`STUDIO_BUILD_NETWORK=host`. Настройка применяется к `docker build` и не меняет сеть
+запущенных контейнеров.
+
 `bash deploy/deploy.sh --prepare-only` доставляет HEAD, собирает образ и проверяет Compose без запуска
 приложения и переключения Apache. Обычный `bash deploy/deploy.sh` собирает образ до смены релиза,
 переключает `current`, ожидает здоровье обоих контейнеров и обновляет vhost. Неудачный запуск возвращает
