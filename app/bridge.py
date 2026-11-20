@@ -303,9 +303,10 @@ async def attach(link: Link) -> None:
         _offline(link.agent_id)          # потоки переподключатся к новому каналу
         _close_later(old, CLOSE_REPLACED)
     try:
-        # `completions` — студия принимает кадр досланных завершений (протокол §18); старый мост поле не читает.
+        # `completions` — студия принимает кадр досланных завершений (протокол §18), `pending_asks` — и открытых
+        # карточек в нём; старый мост поля не читает.
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"],
-                         "studio_version": release.VERSION, "completions": True})
+                         "studio_version": release.VERSION, "completions": True, "pending_asks": True})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
     if old is None and LINKS.get(link.agent_id) is link:
@@ -384,17 +385,23 @@ def deliver(link: Link, frame: dict) -> None:
 
 def _completions(link: Link, frame: dict) -> None:
     """Ходы, кончившиеся без канала (протокол §18): отметка «непрочитано» и push — как у живого `done`. Строки
-    `code_attention` — только этого компьютера (`link.agent_id`): чужой чат кадр не тронет."""
+    `code_attention` — только этого компьютера (`link.agent_id`): чужой чат кадр не тронет. Открытые карточки,
+    возникшие без канала (`status` `permission|question`, `welcome.pending_asks`), — только push, как у живого
+    `ask`."""
     if LINKS.get(link.agent_id) is not link:
         return
     items = frame.get("items")
     if not (isinstance(items, list) and len(items) <= COMPLETIONS_MAX and all(
-            isinstance(i, dict) and isinstance(i.get("status"), str) and i["status"] in DONE_WORDS
+            isinstance(i, dict) and isinstance(i.get("status"), str) and (i["status"] in DONE_WORDS or i["status"] in ASK_WORDS)
             and type(i.get("ago")) is int and i["ago"] >= 0
             and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}}) for i in items)):
         log.warning("агент %d: неверные досланные завершения", link.agent_id)
         return
     for item in items:
+        if item["status"] in ASK_WORDS:
+            _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
+                         "e": {"k": "ask", "kind": item["status"]}})
+            continue
         finished = clock.NOW() - min(item["ago"], COMPLETION_AGE_MAX)
         code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
         _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),

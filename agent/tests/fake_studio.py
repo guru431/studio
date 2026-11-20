@@ -27,6 +27,7 @@ class FakeStudio:
         self.silent = False
         self.login: str | None = "owner"
         self.completions = False  # `welcome.completions`: студия принимает досланные завершения (§18)
+        self.pending_asks = False  # `welcome.pending_asks`: и открытые карточки в том же кадре
         self.links = []
         self._pending: dict[str, asyncio.Future] = {}
         self._changed = asyncio.Condition()
@@ -62,6 +63,8 @@ class FakeStudio:
                 welcome["login"] = self.login
             if self.completions:
                 welcome["completions"] = True
+            if self.pending_asks:
+                welcome["pending_asks"] = True
             await ws.send(json.dumps(welcome))
             async with self._changed:
                 n = len(self.links)
