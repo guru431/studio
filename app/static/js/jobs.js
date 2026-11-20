@@ -10,7 +10,8 @@ import { message, tr } from './i18n.js';
  * панель на опросе строки не пересобирает: сопоставляет по id (fill), фокус и нажатие не теряются.
  *
  * Опрос: раз в JOBS_POLL_MS, пока что-то идёт или открыта панель, иначе раз в IDLE_POLL_MS и при
- * возвращении на экран; первый — без since (готовое за час), дальше since — `now` прошлого ответа.
+ * возвращении на экран; первый и при открытии панели — без since (готовое за час целиком: удалённое уходит), дальше
+ * since — `now` прошлого ответа. Повторённое задание (тот же id) — новый итог: строка заменяется (`take`).
  * У запроса срок POLL_TIMEOUT_MS: зависший fetch не держит следующие опросы.
  * Скрытая страница опрашивает, только если включены уведомления и что-то идёт. Запертая сессия: api() ждёт отпирания —
  * опрос стоит (отметку «на экране» он не ставит: она — только POST /api/lock/alive). Раздел, запустивший
@@ -43,6 +44,7 @@ const NOTICES = {
   ocr: [tr("распознавание готово"), tr("распознавание не получилось")],
   translate: [tr("перевод готов"), tr("перевод не получился")],
   speech: [tr("озвучка готова"), tr("озвучка не получилась")],
+  chat: [tr("ответ готов"), tr("ответ не получился")],
 };
 /** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. Push Claude Code
  * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>. */
@@ -240,12 +242,17 @@ function paint() {
   if (panel.open) renderPanel();
 }
 
-function take(out) {
-  const known = new Set(finished.map((f) => f.id));
-  const fresh = out.finished.filter((f) => !known.has(f.id));
+/** Ответ опроса. Тот же id с более поздним `finished` — новый итог повторённого задания (скан, перевод, озвучка
+ * заново): заменяет прежний и уведомляет; id, снова идущий, из «Готово за час» уходит. `full` — ответ без since
+ * (открытие панели): список готового — целиком серверный, удалённые в разделе записи уходят. */
+function take(out, full = false) {
+  const known = new Map(finished.map((f) => [f.id, f.finished]));
+  const fresh = out.finished.filter((f) => !known.has(f.id) || f.finished > known.get(f.id));
   if (!first && !out.push) for (const item of fresh) notify(item);
   first = false;
-  finished = [...fresh, ...finished].filter((f) => f.finished >= out.now - RECENT_SEC)
+  const taken = new Set(out.running.map((r) => r.id));       // идёт снова — не «готово»; первая строка id — свежая
+  finished = (full ? out.finished : [...fresh, ...finished])
+    .filter((f) => f.finished >= out.now - RECENT_SEC && !taken.has(f.id) && taken.add(f.id))
     .sort((a, b) => b.finished - a.finished);
   running = out.running;
   since = out.now;
@@ -261,26 +268,31 @@ function schedule() {
   timer = setTimeout(poll, running.length || panel.open ? JOBS_POLL_MS : IDLE_POLL_MS);
 }
 
-async function poll() {
+/** `full` — без since: весь «Готово за час» с сервера (открытие панели). */
+async function poll(full = false) {
   if (!badge) return;
   if (inflight) {
-    again = true;
+    again = again || 'poll';
+    if (full) again = 'full';
     return;
   }
   clearTimeout(timer);
   inflight = true;
   again = false;
+  const whole = full || since === null;
   let out = null;
   try {
     // срок: iOS после сна держит fetch минуту и дольше, а inflight держал бы все следующие опросы
-    out = await api('GET', `/api/jobs${since === null ? '' : `?since=${since}`}`, undefined,
+    // visible: страница на экране — сервер не шлёт ей push и ntfy о готовом (push.screen)
+    const visible = document.visibilityState === 'visible' ? 1 : 0;
+    out = await api('GET', `/api/jobs?visible=${visible}${whole ? '' : `&since=${since}`}`, undefined,
       { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
   } catch {
     // нет связи или срок вышел — следующий опрос по расписанию
   }
   inflight = false;
-  if (out) take(out);
-  if (again) poll();
+  if (out) take(out, whole);
+  if (again) poll(again === 'full');
   else schedule();
 }
 
@@ -306,7 +318,7 @@ function openPanel() {
   paint();
   clearInterval(ticker);
   ticker = setInterval(tick, 1000);
-  poll();
+  poll(true);                                 // удалённые в разделах записи уходят из «Готово за час»
   refreshCodeActivity();
 }
 
@@ -356,7 +368,8 @@ async function notify(item) {
   try {
     const registration = await navigator.serviceWorker.ready;
     await registration.showNotification(tr("Студия: {0}", words[item.state === 'done' ? 0 : 1]),
-      { tag: item.id, icon: '/static/icons/icon-192.png', data: { href: item.href } });
+      // renotify: повторённое задание с тем же id — новый итог, не тихая замена прежнего уведомления
+      { tag: item.id, renotify: true, icon: '/static/icons/icon-192.png', data: { href: item.href } });
   } catch {
     // браузер отказал — значок всё скажет при возвращении
   }
@@ -379,10 +392,8 @@ export function setupJobs({ navigate }) {
     paint();
     schedule();
   });
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') poll();
-    else schedule();
-  });
+  // скрываясь, страница сразу говорит серверу «не на экране»: готовое после этого придёт push и ntfy
+  document.addEventListener('visibilitychange', () => poll());
   document.addEventListener('studio-me', paint);
   // срок частичной защиты истёк (lock.js): строки закрытых разделов уходят сразу; готовые за час (и сканы их документов —
   // их раздел знает только сервер) перечитываются без since, как при открытии страницы, без уведомлений о них
