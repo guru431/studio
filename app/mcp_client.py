@@ -231,7 +231,8 @@ class Session:
                 or item["secret_enc"] != self.stamp):
             raise refused("Подключение MCP изменено или выключено — запустите ответ заново")
         values = secret(item)
-        headers = httpx.Headers(values.get("headers", {}))
+        headers = httpx.Headers({key: value for key, value in values.get("headers", {}).items()
+                                 if key.lower() not in FORBIDDEN})
         if values.get("token"):
             headers["Authorization"] = f"Bearer {values['token']}"
         if self.owner_id is None and self.uid is not None:

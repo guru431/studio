@@ -14,6 +14,7 @@ import httpx
 import pytest
 from PIL import Image
 
+import access
 import clock
 import forms
 import media
@@ -976,6 +977,26 @@ def test_repeat_survives_a_recreated_connection(studio):
     made = [state.DB.execute("SELECT connection_id FROM videos WHERE id = ?", (v["id"],)).fetchone()[0]
             for v in r.json()["items"]]
     assert made == [new, new] and new != old
+
+
+def test_repeat_uses_available_connection_after_group_access_is_revoked(studio):
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    signin(studio, "admin")
+    response = studio.c.post("/api/admin/shared/connections", json={
+        "name": "Shared gateway", "kind": "srvllm", "base_url": "http://10.77.1.15:4000", "token": TOKEN,
+        "sections": ["video"]})
+    assert response.status_code == 201, response.text
+    shared = response.json()["id"]
+    signin(studio, "member")
+    first = create_video(studio, connection_id=str(shared), prompt=PROMPT)
+    assert first.status_code == 201, first.text
+    personal = add_gateway(studio)
+    access.set_rule("connection", shared, [])
+    repeated = studio.c.post(f"/api/videos/{first.json()['id']}/repeat", json={})
+    assert repeated.status_code == 201, repeated.text
+    video = repeated.json()["items"][0]["id"]
+    assert state.DB.execute("SELECT connection_id FROM videos WHERE id = ?", (video,)).fetchone()[0] == personal
 
 
 def test_more_variants_stop_at_the_first_refusal_and_keep_what_was_accepted(studio):

@@ -80,8 +80,9 @@ async def check_smtp_settings():
 
 USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
              " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections,"
-             " (SELECT json_group_array(group_id) FROM (SELECT m.group_id FROM access_group_members m"
-             "   WHERE m.user_id = u.id ORDER BY m.group_id)) AS access_groups FROM users u")
+             " (SELECT json_group_array(json_array(id, name)) FROM (SELECT g.id, g.name FROM access_group_members m"
+             "   JOIN access_groups g ON g.id = m.group_id WHERE m.user_id = u.id ORDER BY g.id))"
+             " AS access_groups FROM users u")
 
 
 def _user_out(uid: int) -> dict:
@@ -92,10 +93,11 @@ def _user_out(uid: int) -> dict:
 
 
 def _user_doc(row) -> dict:
+    groups = json.loads(row["access_groups"])
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "email": row["email"],
             "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"],
-            "groups": json.loads(row["access_groups"])}
+            "groups": [gid for gid, _ in groups], "group_names": [name for _, name in groups]}
 
 
 def _login(text: str) -> str:
