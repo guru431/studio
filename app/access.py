@@ -81,12 +81,12 @@ def _group_name(name: str) -> str:
     return clean
 
 
-def _taken(name: str, gid: int | None = None) -> None:
-    # NOCASE в базе складывает только латиницу: «Медиа» и «медиа» сравниваются здесь
-    folded = name.casefold()
-    for row in state.DB.execute("SELECT id, name FROM access_groups"):
-        if row["id"] != gid and row["name"].casefold() == folded:
-            raise _bad("taken", "группа с таким именем уже есть", 409)
+def _taken(name: str, gid: int | None = None) -> str:
+    """Ключ уникальности имени (`access_groups.name_key`): casefold складывает и кириллицу, NOCASE — только латиницу."""
+    key = name.casefold()
+    if state.DB.execute("SELECT 1 FROM access_groups WHERE name_key = ? AND id IS NOT ?", (key, gid)).fetchone():
+        raise _bad("taken", "группа с таким именем уже есть", 409)
+    return key
 
 
 def _group(gid: int):
@@ -114,8 +114,9 @@ def user_groups(uid: int) -> list[int]:
 def create_group(name: str) -> dict:
     clean = _group_name(name)
     with sections.transaction():
-        _taken(clean)
-        gid = state.DB.execute("INSERT INTO access_groups(name, created) VALUES (?, ?)", (clean, clock.NOW())).lastrowid
+        key = _taken(clean)
+        gid = state.DB.execute("INSERT INTO access_groups(name, name_key, created) VALUES (?, ?, ?)",
+                               (clean, key, clock.NOW())).lastrowid
     log.info("группа доступа %d создана", gid)
     return {"id": gid, "name": clean, "members": []}
 
@@ -124,8 +125,8 @@ def rename_group(gid: int, name: str) -> dict:
     clean = _group_name(name)
     with sections.transaction():
         _group(gid)
-        _taken(clean, gid)
-        state.DB.execute("UPDATE access_groups SET name = ? WHERE id = ?", (clean, gid))
+        key = _taken(clean, gid)
+        state.DB.execute("UPDATE access_groups SET name = ?, name_key = ? WHERE id = ?", (clean, key, gid))
     log.info("группа доступа %d переименована", gid)
     return {"id": gid, "name": clean, "members": _members(gid)}
 

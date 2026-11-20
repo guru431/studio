@@ -107,16 +107,21 @@ def test_item_delete_drops_rules(studio):
     assert state.DB.execute("SELECT count(*) FROM access_rules").fetchone()[0] == 0
 
 
-def test_group_name_unique_case_insensitive(studio):
+def test_group_names_unique_casefold_cyrillic(studio):
+    import sqlite3
     first = access.create_group("Медиа")
-    with pytest.raises(HTTPException) as e:
-        access.create_group("  медиа ")
-    assert e.value.status_code == 409
+    for name in ("  медиа ", "МЕДИА"):
+        with pytest.raises(HTTPException) as e:
+            access.create_group(name)
+        assert e.value.status_code == 409
     second = access.create_group("Other")
     with pytest.raises(HTTPException) as e:
         access.rename_group(second["id"], "МЕДИА")
     assert e.value.status_code == 409
+    with pytest.raises(sqlite3.IntegrityError):                       # уникальность держит сама база
+        state.DB.execute("INSERT INTO access_groups(name, name_key, created) VALUES ('X', 'медиа', 0)")
     assert access.rename_group(first["id"], "МЕДИА")["name"] == "МЕДИА"
+    assert state.DB.execute("SELECT name_key FROM access_groups WHERE id = ?", (first["id"],)).fetchone()[0] == "медиа"
     with pytest.raises(HTTPException) as e:
         access.rename_group(9999, "x")
     assert e.value.status_code == 404

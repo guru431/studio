@@ -744,8 +744,9 @@ SCHEMA += SHARED_55
 #: группы доступа к общему (access.py): правило на общее подключение или MCP (`tool = ''`) и на инструмент MCP;
 #: правило без групп — только администраторам. Правила уходят вместе с подключением или сервером (id не повторяются).
 #: Прежний код таблицы не читает: закрытое становится общим для всех — обход в таблице отката CLAUDE.md
-ACCESS_56 = """CREATE TABLE access_groups(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-       created REAL NOT NULL);
+#: `name_key` — `name.strip().casefold()`: NOCASE SQLite складывает только латиницу, «Медиа» и «медиа» — нет.
+ACCESS_56 = """CREATE TABLE access_groups(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+       name_key TEXT NOT NULL UNIQUE, created REAL NOT NULL);
 CREATE TABLE access_group_members(group_id INTEGER NOT NULL REFERENCES access_groups ON DELETE CASCADE,
        user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, PRIMARY KEY (group_id, user_id));
 CREATE INDEX access_group_members_user ON access_group_members(user_id);
