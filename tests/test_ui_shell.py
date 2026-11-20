@@ -125,21 +125,23 @@ def test_alt_digits_open_sections_in_rail_order(browser, live):
 @pytest.mark.parametrize("width", [320, 1280])
 def test_login_returns_to_the_address_it_came_from(browser, live, width):
     """Ссылка без сессии (нажатие на push) — `/` уводит на вход с тем же фрагментом; неверный пароль его не теряет,
-    после верного студия открывает этот адрес, а не «Чат»."""
+    после верного студия открывает этот адрес, а не «Чат». Логин после отказа уже набран (`auth._login_page`) —
+    вводится только пароль."""
     login = f"back{width}"
     live.add_user(login)
     r = browser.drive(live.url + "/#/settings/security", [("idle",),
         ("eval", "page", "[location.pathname, location.hash, document.querySelector('#next').value]"),
         ("type", "#login", login), ("type", "#password", "wrong-password"), ("click", "#submit"),
         ("wait", "document.querySelector('.error').textContent.trim() !== ''"), ("idle",),
-        ("eval", "again", "[location.pathname, location.hash, document.querySelector('#next').value]"),
-        ("type", "#login", login), ("type", "#password", "password-123"), ("click", "#submit"),
+        ("eval", "again", "[location.pathname, location.hash, document.querySelector('#next').value,"
+                          " document.querySelector('#login').value]"),
+        ("type", "#password", "password-123"), ("click", "#submit"),
         ("wait", READY), ("eval", "after", "[location.pathname, location.hash, document.title]")],
         width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["page"] == ["/login", "#/settings/security", "#/settings/security"]
-    assert v["again"] == ["/login", "#/settings/security", "#/settings/security"]
+    assert v["again"] == ["/login", "#/settings/security", "#/settings/security", login]
     assert v["after"] == ["/", "#/settings/security", "Настройки — Студия"]
     assert not problems(r, "status of 401"), problems(r, "status of 401")
 
