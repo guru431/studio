@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message as serverMessage, tr } from './i18n.js';
 /* История штатных дочерних агентов. Все ответы остаются в памяти открытой страницы. */
 import { api } from './api.js';
 import { icon } from './icons.js';
@@ -93,7 +93,7 @@ export function subagentView(host, { endpoint, supported = true, polling = () =>
       const atEnd = history.scrollHeight - history.clientHeight - top < 8;
       const expanded = new Set([...history.querySelectorAll('details[open]')].map(node => node.dataset.step));
       const focus = document.activeElement?.closest('details')?.dataset.step;
-      const content = [el('h3', {}, row.title)];
+      const content = [el('h3', {}, serverMessage(String(row.title)))];
       for (const [index, message] of (data.items || []).entries()) {
         const text = el('div', { class: message.role === 'assistant' ? 'md' : 'code-subagent-user' });
         if (message.role === 'assistant') text.append(renderMarkdown(message.text || ''));
@@ -102,7 +102,7 @@ export function subagentView(host, { endpoint, supported = true, polling = () =>
         for (const [number, step] of (message.steps || []).entries()) {
           const key = `${index}:${number}`;
           const detail = el('details', { 'data-step': key },
-            el('summary', {}, String(step.tool || tr("Инструмент"))), el('pre', {}, String(step.text || '')));
+            el('summary', {}, step.tool ? serverMessage(String(step.tool)) : tr("Инструмент")), el('pre', {}, String(step.text || '')));
           detail.open = expanded.has(key);
           content.push(detail);
         }
@@ -131,7 +131,7 @@ export function subagentView(host, { endpoint, supported = true, polling = () =>
     list.replaceChildren(...rows.map((row) => {
         const entry = el('button', { type: 'button', class: 'btn code-subagent-row',
           'data-status': row.status || 'unknown' },
-          el('span', { class: 'code-subagent-title' }, `${row.title} · ${statuses[row.status] || tr("статус не сообщается")}`),
+          el('span', { class: 'code-subagent-title' }, `${serverMessage(String(row.title))} · ${statuses[row.status] || tr("статус не сообщается")}`),
           el('span', { class: 'code-subagent-metrics' },
             tr("Запуск: {0}", Number.isFinite(row.started_at) ? dateTime(row.started_at) : tr("нет данных")),
             el('span', { 'data-duration': row.id }, tr("Длительность: {0}", duration(row))),

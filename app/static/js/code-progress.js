@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { message, tr } from './i18n.js';
 /* Сводка только из фактических событий/правок CLI. Данные живут вместе с DOM чата. */
 import { el } from './ui.js';
 import { patchFiles } from './code-diff.js';
@@ -50,7 +50,7 @@ export function progressView({ onChanges, openChild } = {}) {
         'data-state': row.status }, `${row.status === 'completed' ? '✓' : row.status === 'inProgress' ? '◉' : '○'} ${row.step}`))));
       if (agents.length) blocks.push(el('div', { class: 'code-progress-agents' }, ...agents.map((row) => {
         const button = el('button', { type: 'button', class: 'btn code-progress-agent', disabled: !openChild },
-          el('b', {}, row.title || tr("Агент {0}", String(row.id).slice(0, 8))),
+          el('b', {}, row.title ? message(String(row.title)) : tr("Агент {0}", String(row.id).slice(0, 8))),
           el('span', {}, STATES[row.status] || STATES.unknown),
           row.task ? el('span', { class: 'muted small' }, row.task) : null);
         button.addEventListener('click', () => openChild?.(row));

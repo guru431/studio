@@ -705,7 +705,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const timing = el('span', { class: 'code-step-duration' });
     const head = el('span', { class: 'code-step-head' });
     const details = el('details', { class: `code-step${s.error ? ' error' : ''}`, 'data-id': String(s.id ?? '') },
-      el('summary', {}, el('b', { class: 'code-step-tool' }, String(s.tool ?? '')), head, state, timing, links));
+      el('summary', {}, el('b', { class: 'code-step-tool' }, message(String(s.tool ?? ''))), head, state, timing, links));
     stepData.set(details, s);
     let filled = false, changeSerial = null;
     let result, inputNode, changeNode;
@@ -1098,7 +1098,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const labels = { idle: tr("Нет активной задачи"), thinking: tr("Думает…"), responding: tr("Пишет ответ…"),
       waiting: tr("Ждёт вашего ответа"), done: tr("Задача завершена"), stopped: tr("Ход остановлен"),
       error: tr("Ошибка выполнения"), offline: tr("Нет связи с компьютером") };
-    const text = state === 'tool' ? tr("Выполняет: {0}", String(tool || tr("действие"))) : labels[state];
+    const text = state === 'tool' ? tr("Выполняет: {0}", tool ? message(String(tool)) : tr("действие")) : labels[state];
     if (!text) return;
     activity.dataset.state = state;
     activityText.textContent = text;
@@ -1195,7 +1195,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const instead = el('textarea', { class: 'input code-ask-instead', rows: '2', maxlength: '2000',
       placeholder: INSTEAD, 'aria-label': INSTEAD });
     card.append(el('p', { class: 'code-ask-title' }, tr("{0} просит разрешения", assistant)),
-      el('b', { class: 'code-ask-tool' }, String(a.tool ?? '')),
+      el('b', { class: 'code-ask-tool' }, message(String(a.tool ?? ''))),
       el('pre', { class: 'code-ask-input' }, JSON.stringify(a.input && typeof a.input === 'object' ? a.input : {}, null, 2)),
       el('div', { class: 'code-ask-actions' },
         action('code-ask-yes', tr("Да"), () => ({ decision: 'allow' }), true),

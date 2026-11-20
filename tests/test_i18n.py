@@ -95,6 +95,12 @@ assert.equal(en.message('нет связи с подключением «Гол�
 assert.equal(en.message('Ответ · Чат'), 'Response · Чат');
 assert.equal(['Чат'].map(en.message)[0], 'Chat');
 assert.equal(en.message('Имя — от 1 до 196 знаков'), 'Name must be 1–196 characters');
+// Слова моста: составные подписи окон лимитов «{limitName} · {label}», имя подзадачи, отказ с именем CLI
+assert.equal(en.message('codex_other · 5 часов'), 'codex_other · 5 hours');
+assert.equal(en.message('gpt · Неделя'), 'gpt · Week');
+assert.equal(en.message('gpt · spark · 300 мин'), 'gpt · spark · 300 min');
+assert.equal(en.message('Агент 019a2b3c'), 'Agent 019a2b3c');
+assert.equal(en.message('Codex не найден на компьютере'), 'Codex not found on the computer');
 assert.equal(en.tr('__proto__'), '__proto__');
 """
     result = subprocess.run([node, '-e', program, str(STATIC)], capture_output=True,
