@@ -124,7 +124,11 @@ def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, mon
         ("eval", "restored", "document.querySelector('.msg.assistant .md')?.textContent || document.querySelector('#messages').textContent"),
         ("click", ".msg-cleaner-view"),
         ("eval", "raw", "document.querySelector('#messages').textContent"),
-        ("click", ".msg-cleaner-copy"), ("wait", "document.querySelector('#cleaner-copy-dialog[open]')"),
+        # 02:F2: «Очищенная копия» и у своего сообщения — без обращения к модели
+        ("click", ".msg.user .msg-cleaner-copy"), ("wait", "document.querySelector('#cleaner-copy-dialog[open]')"),
+        ("eval", "userCopy", "document.querySelector('.cleaner-copy-text').value"),
+        ("click", "#cleaner-copy-dialog .dialog-close"), ("wait", "!document.querySelector('#cleaner-copy-dialog')"),
+        ("click", ".msg.assistant .msg-cleaner-copy"), ("wait", "document.querySelector('#cleaner-copy-dialog[open]')"),
         ("eval", "copy", "document.querySelector('.cleaner-copy-text').value"),
     ], width=width, mobile=width == 320)
     assert not result.get("failed"), result
@@ -138,4 +142,5 @@ def test_cleaner_review_edit_restore_and_copy(browser, live, cleaner_server, mon
     else:
         assert "Ответ <EMAIL_1>" in values["raw"]
     assert "ivan@contoso.ru" not in values["copy"]
+    assert values["userCopy"].startswith("Почта ") and "ivan@contoso.ru" not in values["userCopy"]
     assert not problems(result), problems(result)
