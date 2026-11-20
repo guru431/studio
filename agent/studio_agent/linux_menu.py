@@ -224,6 +224,40 @@ def set_pin(h):
     return 0
 
 
+def command(h, cmd):
+    """Консольная команда Linux: отказ моста («Мост запускается…», слова студии) — строкой и кодом 1, как в меню,
+    а не трассировкой Python."""
+    try:
+        if cmd == "status":
+            return status(h)
+        if cmd == "enroll":
+            return enrollment(h)
+        if cmd == "set-pin":
+            return set_pin(h)
+        if cmd == "clear-pin":
+            invoke(h, "pin", None)
+            print("PIN убран.")
+        else:  # reset-pin
+            invoke(h, "reset")
+            print("Блок PIN снят.")
+        return 0
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 1
+    except Refused as error:
+        print(error.message)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(str(error))
+    return 1
+
+
+def _number(prompt):
+    value = input(prompt).strip()
+    if not value.isascii() or not value.isdigit():
+        raise ValueError("Введите число")
+    return int(value)
+
+
 def _action(h, choice):
     from .__main__ import _ask_folders
     if choice == "1":
@@ -240,7 +274,7 @@ def _action(h, choice):
     elif choice == "6":
         return invoke(h, "reset")
     elif choice == "7":
-        return invoke(h, "limit", int(input("Одновременных заданий: ")))
+        return invoke(h, "limit", _number("Одновременных заданий: "))
     elif choice == "8":
         return invoke(h, "autostart", not invoke(h, "status")["autostart"])
     elif choice == "9":
@@ -281,7 +315,10 @@ def _action(h, choice):
             return "" if entry == "-" else entry or current[key]
         endpoint = ask("Адрес SSH (имя или IP)", "host")
         user = ask("Пользователь SSH", "user") if endpoint else ""
-        port = int(ask("Порт SSH", "port") or 22) if endpoint else 22
+        port = str(ask("Порт SSH", "port") or 22) if endpoint else "22"
+        if not port.isascii() or not port.isdigit():
+            raise ValueError("Введите число")
+        port = int(port)
         web = ask("HTTPS-адрес веб-консоли", "web_url")
         data = dict(host=endpoint, user=user, port=port, web_url=web)
         linux_terminal.addresses(data)
