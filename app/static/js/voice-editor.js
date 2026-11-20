@@ -1,4 +1,8 @@
-/* A voice owns up to ten independent references. The selected one is used for synthesis. */
+/* A voice owns up to ten independent references. The selected one is used for synthesis.
+ * Recognition (`POST /api/voices/transcribe`) also returns `upload`, the prepared WAV token: saving reuses it while it
+ * is fresh, so a file is uploaded once; only a sample without a fresh token goes to `prepare-sample`. Tokens that were
+ * not saved are discarded when the dialog closes (the server keeps referenced ones). Closing with unsaved changes
+ * («Отмена», Escape, Android back) asks first (`#voice-unsaved`). */
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { cancelRecording, recordingName, startRecording } from './mic.js';
@@ -7,6 +11,7 @@ import { button, el, field, openDialog, words } from './ui.js';
 const MAX_SAMPLES = 10;
 const MAX_SECONDS = 60;
 const TEXT_MAX = 2000;
+const DRAFT_MS = 10 * 60 * 1000;   // token of a recognized sample: voices.DRAFT_SEC (900) with a margin
 
 function clock(sec) {
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
@@ -22,6 +27,8 @@ export async function editVoice(host, voice, onSaved) {
   let recording = null;
   let starting = false;
   let saving = false;
+  let initial = null;          // snapshot() right after opening: anything else is an unsaved change
+  const issued = [];           // every upload token recognition returned: discarded on close unless saved
   const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', value: original?.name || '' });
   const list = el('div', { class: 'voice-samples' });
   const file = el('input', { type: 'file', id: 'voice-files', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm', multiple: true });
@@ -30,7 +37,7 @@ export async function editVoice(host, voice, onSaved) {
   const fail = el('p', { class: 'error', 'data-for': 'form', 'aria-live': 'polite' });
   const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'voice-save' });
   const dialog = openDialog(host, { id: 'voice-dialog', title: voice ? tr("Изменить голос") : tr("Новый голос"),
-    actions: [save], body: [field(tr("Имя голоса"), name, 'name'),
+    guard: () => !dirty() || askClose(), actions: [save], body: [field(tr("Имя голоса"), name, 'name'),
       el('p', { class: 'muted small' }, tr("Запись 5–60 секунд чистой речи. Можно выбрать несколько файлов, до 10 образцов на голос.")),
       field(tr("Добавить образцы"), file, 'audio'), rec, recNote,
       el('p', { class: 'muted small' }, tr("Для озвучки используется выбранный образец.")), list, fail] });
@@ -53,6 +60,28 @@ export async function editVoice(host, voice, onSaved) {
   function choose(entry) {
     selected = entry;
     for (const e of entries) e.radio.checked = e === entry;
+  }
+
+  /** Name, samples (saved id, new recording, text) and the selected one — what saving would send. */
+  function snapshot() {
+    return JSON.stringify([name.value, entries.map(e => [e.id || null, !!e.file, e.text.value]), entries.indexOf(selected)]);
+  }
+
+  function dirty() {
+    return initial !== null && snapshot() !== initial;
+  }
+
+  /** «Изменения не сохранены»: «Не сохранять» closes the editor, «Остаться» keeps it. Always false (stay for now). */
+  function askClose() {
+    if (host.querySelector('#voice-unsaved')) return false;
+    const drop = button(tr("Не сохранять"), { class: 'btn btn-danger', id: 'voice-unsaved-drop' });
+    const ask = openDialog(host, { id: 'voice-unsaved', title: tr("Изменения не сохранены"), actions: [drop],
+      cancelText: tr("Остаться"), body: [el('p', {}, tr("Образцы, тексты и имя голоса не сохранятся."))] });
+    drop.addEventListener('click', () => {
+      ask.close();
+      dialog.close();
+    });
+    return false;
   }
 
   function stopPreview(entry) {
@@ -124,6 +153,7 @@ export async function editVoice(host, voice, onSaved) {
     const controller = new AbortController();
     entry.controller = controller;
     entry.pending = true;
+    entry.upload = null;               // the token belonged to the previous recording or recognition
     entry.text.value = '';
     entry.error.textContent = '';
     entry.note.textContent = tr("Распознаю текст образца…");
@@ -134,7 +164,15 @@ export async function editVoice(host, voice, onSaved) {
     body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
     try {
       const result = await api('POST', '/api/voices/transcribe', body, { signal: controller.signal });
+      if (result.upload) {
+        if (dialog.isConnected) issued.push(result.upload);
+        else discard([result.upload]);   // the editor closed while recognizing: nobody will save it
+      }
       if (entry.controller !== controller || entry.discarded || !dialog.open || !dialog.isConnected) return;
+      if (result.upload) {
+        entry.upload = result.upload;
+        entry.uploadAt = Date.now();
+      }
       entry.text.value = result.text;
       entry.note.textContent = tr("Текст распознан. Проверьте его перед сохранением.");
     } catch (err) {
@@ -233,7 +271,9 @@ export async function editVoice(host, voice, onSaved) {
       const samples = [];
       for (const entry of entries) {
         const sample = { id: entry.id, text: entry.text.value.trim() };
-        if (entry.file) {
+        if (entry.file && entry.upload && Date.now() - entry.uploadAt < DRAFT_MS) {
+          sample.upload = entry.upload;        // prepared by recognition: no second upload
+        } else if (entry.file) {
           const body = new FormData();
           body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
           const { upload } = await api('POST', '/api/voices/prepare-sample', body);
@@ -250,11 +290,13 @@ export async function editVoice(host, voice, onSaved) {
       onSaved();
     } catch (err) {
       fail.textContent = words(err);
+      // «prepared sample unavailable» (an expired token among others): the next save uploads the files again
+      if (err.code === 'samples') for (const entry of entries) entry.upload = null;
     } finally {
       saving = false;
       busy();
       // A lost response may mean that the voice was already saved. The server keeps referenced uploads.
-      if (uploads.length) api('POST', '/api/voices/discard-samples', { uploads }).catch(() => {});
+      if (uploads.length) discard(uploads);
     }
   });
   dialog.addEventListener('close', () => {
@@ -263,8 +305,17 @@ export async function editVoice(host, voice, onSaved) {
       stopPreview(entry);
     }
     if (recording || starting) cancelRecording();
+    discard(issued);                   // the saved ones are referenced and stay
   });
   for (const sample of original?.samples || [{}]) makeEntry(sample);
+  initial = snapshot();
   busy();
   name.focus();
+}
+
+/** Prepared WAV tokens nobody will save: the server retires the unreferenced ones (DraftsIn takes up to ten). */
+function discard(tokens) {
+  for (let i = 0; i < tokens.length; i += MAX_SAMPLES) {
+    api('POST', '/api/voices/discard-samples', { uploads: tokens.slice(i, i + MAX_SAMPLES) }).catch(() => {});
+  }
 }
