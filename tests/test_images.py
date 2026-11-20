@@ -16,6 +16,7 @@ import pytest
 from PIL import Image
 
 import forms
+import image_upload
 import images
 import media
 import state
@@ -493,7 +494,7 @@ def test_brush_mask_of_a_picture_larger_than_2_mp_is_fitted_to_the_reduced_sourc
 def test_a_feed_picture_above_16_mp_is_a_brush_source(studio):
     """Картинка ленты допускается до RESULT_PIXELS (4096², 16,7 Мп), а normalize_image копии модуля
     переводчика — до 16 Мп: «Изменить» кистью и «Описать» такую картинку отклоняли. Студия уменьшает фото
-    истории до рамки normalize_image сама, копию модуля не трогая; фото с устройства — в прежних пределах."""
+    истории до рамки normalize_image сама, копию модуля не трогая; фото с устройства — в пределах ролика."""
     assert (forms.HISTORY_MAX, forms.HISTORY_PIXELS) == (images.RESULT_MAX, images.RESULT_PIXELS)
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
@@ -523,9 +524,40 @@ def test_a_feed_picture_above_16_mp_is_a_brush_source(studio):
     with Image.open(io.BytesIO(studio.c.get(f"/api/media/{body['media_id']}").content)) as result:
         assert result.getpixel((10, 10)) == (255, 0, 0)                              # выделено — правка
         assert result.getpixel((reduced[0] - 10, reduced[1] - 10)) == (0, 0, 255)    # вне — исходник
+    # фото с устройства того же размера — тоже исходник: предел устройства — как у ролика (VIDEO_PIXELS)
     r = studio.c.post("/api/images", data={"model": "flux", "size": "original", "prompt": "x"},
                       files={"image": ("big.png", big_png, "image/png")})
-    assert r.status_code == 400 and "16 Мп" in r.json()["detail"]["message"]
+    assert r.status_code == 202, r.text
+    assert wait_state(studio, r.json()["id"], {"done", "error"})["state"] == "done"
+
+
+def test_a_device_photo_has_the_limits_of_a_video_picture(studio, monkeypatch):
+    """Снимок телефона 24–48 Мп: «Фото» и «Описать» принимают его, как «Видео» (до VIDEO_UPLOAD и
+    VIDEO_PIXELS) — шлюз всё равно получает его уменьшенным normalize_image до ≤2 Мп."""
+    seen = []
+    real_decode, real_normalize = forms.decode_form, forms.normalize_image
+
+    def decode_spy(*args, **kwargs):
+        seen.append(("upload", kwargs.get("max_upload")))
+        return real_decode(*args, **kwargs)
+
+    def normalize_spy(raw, max_pixels=None):
+        seen.append(("pixels", max_pixels))
+        return real_normalize(raw, max_pixels)
+
+    monkeypatch.setattr(forms, "decode_form", decode_spy)
+    monkeypatch.setattr(forms, "normalize_image", normalize_spy)
+    add_gateway(studio)
+    r = studio.c.post("/api/images", data={"prompt": "x", "size": "square"},
+                      files={"image": ("s.png", photo(), "image/png")})
+    assert r.status_code == 202, r.text
+    wait_state(studio, r.json()["id"], {"done"})
+    r = describe(studio)
+    assert r.status_code == 202, r.text
+    wait_description(studio, r.json()["id"])
+    expected = [("upload", image_upload.VIDEO_UPLOAD), ("pixels", image_upload.VIDEO_PIXELS)]
+    assert seen == expected * 2
+    assert image_upload.MAX_BODY + image_upload.MAX_UPLOAD > image_upload.VIDEO_UPLOAD   # тело с полями — в пределе
 
 
 @pytest.mark.integration
@@ -682,7 +714,10 @@ def test_description_cancellation_waits_then_discards_text_and_releases(studio):
     add_gateway(studio)
     job_id = describe(studio).json()["id"]
     assert arrived.wait(1)
-    assert start(studio).status_code == 409
+    # описания нет в ленте: после перезагрузки страница узнаёт его из 409 — id и вид — и отменяет по id
+    busy = start(studio)
+    assert busy.status_code == 409 and studio.c.get("/api/images").json()["items"] == []
+    assert {k: busy.json()["detail"][k] for k in ("id", "kind")} == {"id": job_id, "kind": "description"}
     assert studio.c.post(f"/api/images/{job_id}/cancel").json()["state"] == "cancelling"
     finish.set()
     result = wait_description(studio, job_id)
@@ -845,7 +880,7 @@ def test_one_job_per_user_not_per_service(studio):
     signin(studio, "owner")
     second = start(studio)
     assert second.status_code == 409 and second.json()["detail"] == {
-        "code": "busy", "message": "предыдущее задание ещё выполняется", "id": mine}
+        "code": "busy", "message": "предыдущее задание ещё выполняется", "id": mine, "kind": "generation"}
     studio.gw.hold = False
     wait_state(studio, mine, {"done"})
     wait_for(lambda: images.JOBS[theirs.json()["id"]].state == "done")

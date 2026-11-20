@@ -142,10 +142,18 @@ def test_photo_context_is_editable_bounded_and_cleared_with_a_new_source(browser
         ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-animate"),
         ("wait", "document.querySelector('#video-photo-prompt')?.value === 'кот 0'"),
         ("eval", "url", "location.hash"),
-        ("click", "#video-photo-context summary"),
-        ("eval", "long", "(document.querySelector('#video-photo-prompt').value = 'я'.repeat(4001), true)"),
+        # длинное описание в свёрнутом поле: отказ раскрывает его, фокус — в нём, счётчик — над пределом
+        ("eval", "long", "(() => { const p = document.querySelector('#video-photo-prompt'); p.value = 'я'.repeat(4001);"
+                         " p.dispatchEvent(new Event('input')); return document.querySelector('#video-photo-context').open; })()"),
         ("click", "#video-go"), ("wait", "document.querySelector('#video-error').textContent.includes('4000')"),
+        ("eval", "opened", "[document.querySelector('#video-photo-context').open,"
+                           " document.activeElement === document.querySelector('#video-photo-prompt'),"
+                           " document.querySelector('#video-photo-count').textContent,"
+                           " document.querySelector('#video-photo-count').classList.contains('error')]"),
         ("eval", "bounded", NO_OVERFLOW),
+        # «Без описания фото» — ролик только с движением
+        ("click", "#video-photo-drop"),
+        ("eval", "dropped", "[document.querySelector('#video-photo-context').hidden, document.querySelector('#video-photo-prompt').value]"),
         ("type", "#video-prompt", "медленный поворот"),
         # Внутри уже открытого видео снова переносится исходник; движение остаётся своим.
         ("eval", "again", "(location.hash = '#/video?photo=' + window.photoId, true)"),
@@ -158,7 +166,10 @@ def test_photo_context_is_editable_bounded_and_cleared_with_a_new_source(browser
         ("click", "#video-go"), ("wait", clips("queued", 1))],
         width=width, height=900, mobile=width == 320, timeout=20000)
     assert not r.get("failed"), r
-    assert r["values"]["url"] == "#/video" and r["values"]["bounded"]
+    assert r["values"]["url"] == "#/video" and r["values"]["bounded"] and r["values"]["long"] is False
+    total = len("Описание исходного фото:\n" + "я" * 4001 + "\n\nДвижение в видео:\nЕстественное движение в кадре.")
+    assert r["values"]["opened"] == [True, True, f"{total} / 4000 знаков вместе с движением", True]
+    assert r["values"]["dropped"] == [True, ""]
     assert r["values"]["cleared"] == [True, ""] and r["values"]["motion"] == "медленный поворот"
     assert len(live.gw.video_forms) - v0 == 1
     assert live.gw.video_forms[-1][0]["prompt"] == "медленный поворот"
