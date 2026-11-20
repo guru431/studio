@@ -380,9 +380,9 @@ def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(stud
     assert studio.c.post(url(aid, "projects", BETA, "members"), json={"login": "friend"}).status_code == 201
     owner_id = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()[0]
     state.DB.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c1',?,'Мой чат',0,0)", (owner_id,))
-    assert studio.c.post("/api/chats/c1/share", json={"pin": "0123", "days": None}).status_code == 201
-    assert studio.c.post(url(aid, "projects", ALPHA, "chats", A, "share"),
-                         json={"pin": "0123", "title": "Чат агента"}).status_code == 201
+    chat_url = studio.c.post("/api/chats/c1/share", json={"pin": "0123", "days": None}).json()["url"]
+    code_url = studio.c.post(url(aid, "projects", ALPHA, "chats", A, "share"),
+                             json={"pin": "0123", "title": "Чат агента"}).json()["url"]
     # название чата «Агентов» — только шифром (шаг 53)
     label = state.DB.execute("SELECT label FROM chat_shares WHERE agent_id IS NOT NULL").fetchone()[0]
     assert label and "Чат агента".encode() not in label
@@ -393,12 +393,22 @@ def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(stud
     shares = {s["kind"]: s for s in data["shares"]}
     assert (shares["chat"]["title"], shares["chat"]["expires"], "name" in shares["chat"]) == ("Мой чат", None, False)
     assert (shares["code"]["title"], shares["code"]["name"], shares["code"]["project"]) == ("Чат агента", "alpha", ALPHA)
+    # FINDINGS 06:F15: куда перейти и «Копировать ссылку» — адрес только владельцу, no-store, без журнала
+    assert (shares["chat"]["chat_id"], shares["chat"]["computer_id"], shares["chat"]["session_id"]) == ("c1", None, None)
+    assert (shares["code"]["chat_id"], shares["code"]["computer_id"], shares["code"]["session_id"]) == (None, aid, A)
+    events = state.DB.execute("SELECT count(*) FROM security_events").fetchone()[0]
+    for kind, expected in (("chat", chat_url), ("code", code_url)):
+        answer = studio.c.get(f"/api/me/access/shares/{shares[kind]['id']}/link")
+        assert answer.json() == {"url": expected} and answer.headers["cache-control"] == "no-store"
+    assert state.DB.execute("SELECT count(*) FROM security_events").fetchone()[0] == events
+    assert studio.c.get("/api/me/access/shares/nope/link").status_code == 404
     machine.open_sessions.clear()                                    # PIN закрыт — имён нет, id остаются
     closed = studio.c.get("/api/me/access").json()["members"]
     assert {(m["project"], m["name"], m["missing"]) for m in closed} == {(ALPHA, None, None), (BETA, None, None)}
     make_user(studio, "stranger")
     signin(studio, "stranger")
     assert studio.c.get("/api/me/access").json() == {"members": [], "shares": []}
+    assert studio.c.get(f"/api/me/access/shares/{shares['chat']['id']}/link").status_code == 404   # чужая — не видна
     assert studio.c.delete(f"/api/me/access/members/{aid}/{BETA}/{member}").status_code == 404
     assert studio.c.delete("/api/me/access/shares/" + data["shares"][0]["id"]).status_code == 204
     assert studio.c.delete("/api/me/access").json() == {"members": 0, "shares": 0}
