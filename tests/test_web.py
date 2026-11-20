@@ -151,6 +151,15 @@ def test_exa_timeout_and_network_words(studio, exc, words):
     assert e.value.args[0] == words
 
 
+def test_non_ascii_key_saved_by_older_code_is_named_not_an_exception(studio):
+    """Ключ с кириллицей или неразрывным пробелом (запись прежним кодом) — «ключ не подходит», без запроса."""
+    import web
+    for key in ("exa-ключ", "exa key"):
+        step = run(studio, web.call, "web_search", json.dumps({"query": "запрос"}), key)
+        assert step["error"] == web.BAD_KEY
+    assert studio.gw.exa_requests == []
+
+
 # --- YouTube (спека 6.4): адрес разбирает студия, yt-dlp получает только канонический ------------------
 
 VID = "dM4yjJzDUvo"

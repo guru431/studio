@@ -24,6 +24,7 @@ MAX_SERVERS = 16
 MAX_TOOLS = 128
 MAX_BYTES = 1024 * 1024
 TIMEOUT = 30
+DISCOVER_SEC = 60                            # срок списка инструментов одного сервера в ходе чата
 PROTOCOL = "2025-06-18"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 HEADER = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
@@ -69,12 +70,35 @@ def selected(uid, ids):
     return [row(uid, sid) for sid in ids]
 
 
+def present(uid, raw):
+    """id из `chats.mcp_ids`, чьи подключения у учётки ещё есть: удалённый сервер (id не повторяются —
+    AUTOINCREMENT) не остаётся выбранным в диалоге и не мешает смене модели."""
+    ids = json.loads(raw)
+    if not ids:
+        return []
+    found = {r[0] for r in state.DB.execute(
+        f"SELECT id FROM mcp_servers WHERE user_id=? AND id IN ({','.join('?' * len(ids))})", (uid, *ids))}
+    return [sid for sid in ids if sid in found]
+
+
+def _address(url):
+    """Куда на самом деле идёт запрос: схема, хост, порт (с умолчанием) и путь."""
+    url = httpx.URL(url)
+    return url.scheme, url.host, url.port or upstream.DEFAULT_PORTS.get(url.scheme), url.path
+
+
 def _values(body, old=None):
     if (not body.name.strip() or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in body.name)
             or not upstream.is_allowed(body.url) or httpx.URL(body.url).fragment):
         raise refused("Укажите имя и адрес MCP из списка разрешённых адресов администратора", "invalid", 422)
     keep = body.token is None or body.headers is None or None in body.headers.values()
     previous = secret(old) if old is not None and keep else {}
+    # Прежние токен и значения заголовков — только прежнему адресу (как connections.patch): иначе PUT без них
+    # унёс бы write-only секреты на другой адрес из списка.
+    if previous and _address(body.url) != _address(old["url"]) and (
+            (body.token is None and previous.get("token")) or (body.headers is None and previous.get("headers"))
+            or (body.headers is not None and None in body.headers.values())):
+        raise refused("Новый адрес MCP — введите токен и значения заголовков заново", "invalid", 422)
     token = body.token if body.token is not None else previous.get("token", "")
     kept = previous.get("headers", {})
     headers = kept if body.headers is None else {k: kept.get(k) if v is None else v for k, v in body.headers.items()}
@@ -126,7 +150,8 @@ async def delete(sid: int, request: Request):
 
 @router.post("/{sid}/check")
 async def check(sid: int, request: Request):
-    session = Session(row(request.state.user.id, sid))
+    """«Проверить» — и выключенный сервер: проверить его до включения."""
+    session = Session(row(request.state.user.id, sid), disabled_ok=True)
     try:
         tools = await session.tools()
         return {"tools": [t.get("name", "") for t in tools if isinstance(t, dict)]}
@@ -135,16 +160,18 @@ async def check(sid: int, request: Request):
 
 
 class Session:
-    def __init__(self, item):
+    def __init__(self, item, *, disabled_ok=False):
         self.uid, self.sid = item["user_id"], item["id"]
         self.url, self.stamp = item["url"], item["secret_enc"]
+        self.disabled_ok = disabled_ok       # только «Проверить»: ходы и разделы выключенный сервер не зовут
         self.session = None
         self.version = None
         self.seq = 0
 
     def headers(self, *, rpc=True):
         item = row(self.uid, self.sid)
-        if not item["enabled"] or item["url"] != self.url or item["secret_enc"] != self.stamp:
+        if ((not item["enabled"] and not self.disabled_ok) or item["url"] != self.url
+                or item["secret_enc"] != self.stamp):
             raise refused("Подключение MCP изменено или выключено — запустите ответ заново")
         values = secret(item)
         headers = httpx.Headers(values.get("headers", {}))
@@ -256,19 +283,36 @@ class Tools:
         self.uid, self.chat_id = uid, chat_id
         self.ids = list(ids)
         self.sessions, self.calls, self.specs = [], {}, []
+        self.failed = []                     # (имя сервера, слова) — сервер пропущен, ход идёт без него
+
+    @staticmethod
+    async def _list(session):
+        """Инструменты сервера или слова отказа: недоступный сервер не рвёт ход."""
+        try:
+            async with asyncio.timeout(DISCOVER_SEC):
+                tools = await session.tools()
+        except HTTPException as exc:
+            return exc.detail["message"]
+        except TimeoutError:
+            return "MCP не ответил вовремя"
+        if any(not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not NAME.fullmatch(tool["name"])
+               or not isinstance(tool.get("inputSchema"), dict) for tool in tools):
+            return "MCP вернул неверное описание инструмента"
+        return tools
 
     async def discover(self):
-        for sid in self.ids:
-            item = state.DB.execute("SELECT * FROM mcp_servers WHERE id=? AND user_id=? AND enabled=1", (sid, self.uid)).fetchone()
-            if item is None:
+        """Выбранные включённые серверы опрашиваются параллельно, каждый в свой срок DISCOVER_SEC. Отказавший
+        пропускается — его имя и слова в `failed`; превышение MAX_TOOLS суммарно — отказ хода."""
+        items = [item for sid in self.ids if (item := state.DB.execute(
+            "SELECT * FROM mcp_servers WHERE id=? AND user_id=? AND enabled=1", (sid, self.uid)).fetchone()) is not None]
+        self.sessions = [Session(item) for item in items]
+        found = await asyncio.gather(*(self._list(session) for session in self.sessions))
+        for item, session, tools in zip(items, self.sessions, found):
+            if isinstance(tools, str):
+                self.failed.append((item["name"], tools))
                 continue
-            session = Session(item)
-            self.sessions.append(session)
-            for tool in await session.tools():
-                if (not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not NAME.fullmatch(tool["name"])
-                        or not isinstance(tool.get("inputSchema"), dict)):
-                    raise refused("MCP вернул неверное описание инструмента")
-                name = f"mcp_{sid}_{len(self.calls)}"
+            for tool in tools:
+                name = f"mcp_{item['id']}_{len(self.calls)}"
                 if len(self.calls) >= MAX_TOOLS:
                     raise refused("Выберите MCP с суммарно не больше 128 инструментов")
                 self.calls[name] = (session, tool["name"], item["name"])
@@ -283,7 +327,7 @@ class Tools:
             selected_row = state.DB.execute("SELECT mcp_ids FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
             if selected_row is None or session.sid not in json.loads(selected_row[0]):
                 raise refused("MCP выключен в этом диалоге")
-            args = json.loads(arguments)
+            args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""
             if not isinstance(args, dict):
                 raise refused("Неверные аргументы инструмента MCP")
             result = await session.rpc("tools/call", {"name": tool, "arguments": args})

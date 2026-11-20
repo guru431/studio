@@ -311,7 +311,7 @@ def test_exa_key_is_stored_encrypted_and_never_returned(studio, caplog):
         assert web.has_exa_key(uid) and web.exa_key(uid) == EXA_KEY
         me = studio.c.get("/api/me")
         assert me.json()["exa_key"] is True and EXA_KEY not in me.text
-        for bad in ("", "   ", "k" * 201):
+        for bad in ("", "   ", "k" * 201, "exa-ключ", "exa key", "exa\tkey"):   # не ASCII — заголовок не примет
             r = studio.c.put("/api/me/exa-key", json={"key": bad})
             assert r.status_code == 422 and code(r) == "exa_key" and "k" * 201 not in r.text
         assert security.decrypt(stored_exa_key(uid)) == EXA_KEY             # отказ ключ не трогает
