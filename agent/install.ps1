@@ -29,7 +29,7 @@ function Assert-BridgeStopped([string]$Dir) {
     $found = @(Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
         Where-Object { $_.CommandLine -and $_.CommandLine -match $script })
     if ($found.Count) {
-        throw 'Мост запущен. Обновление не выполнено: дождитесь завершения заданий, выберите «Выйти» в трее и запустите установку снова.'
+        throw 'Мост запущен. Обновление не выполнено: выберите в меню значка в трее «Выйти после завершения» (заданий нет — «Выход сейчас») и, когда мост закроется, запустите установку снова.'
     }
 }
 
