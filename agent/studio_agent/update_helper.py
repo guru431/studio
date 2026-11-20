@@ -523,13 +523,24 @@ def _result(item):
         return None
 
 
+def _signed_repo(repo):
+    """Подписанное приложение macOS (`Studio Agent.app/Contents/Resources/agent` в /Applications или ~/Applications)
+    — тоже установленная копия: итог своего перехода `macos_signed.py --update` оставляет в общем `releases/`."""
+    repo = Path(repo)
+    if not MACOS or repo.parts[-3:] != ('Contents', 'Resources', 'agent'):
+        return False
+    app = repo.parents[2]
+    return app.name == 'Studio Agent.app' and app.parent in (Path('/Applications'), Path.home() / 'Applications')
+
+
 def failed_update(repo: Path):
     """Неудачный переход к соседнему выпуску, о котором ещё не сообщали (`FAILED_RESULTS`), — код итога или None.
     Читает работающая копия (прежняя после отката или после перезагрузки); каждый итог сообщается один раз
-    (`_update_reported`). Только для установленной копии: корень установки или её `releases/release-*`."""
+    (`_update_reported`). Только для установленной копии: корень установки, её `releases/release-*` или
+    подписанное приложение macOS (`_signed_repo`)."""
     home = install_home()
     if (os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(home))
-            and _managed_location(repo) is None):
+            and _managed_location(repo) is None and not _signed_repo(repo)):
         return None
     base = home / 'releases'
     own = os.path.normcase(os.path.realpath(repo))

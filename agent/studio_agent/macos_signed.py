@@ -19,6 +19,14 @@ MAX_PKG = 2 << 30
 READY_POLLS = 1800  # по 0,5 с — до 15 минут, как `update_helper.READY_POLLS`
 
 
+class RolledBack(RuntimeError):
+    """Новая копия вышла до готовности: прежнее приложение возвращено на место."""
+
+
+class NotReady(RuntimeError):
+    """Готовности не дождались: новая копия на месте и может ещё подняться — итог неизвестен."""
+
+
 def info(app):
     with (app / 'Contents/Info.plist').open('rb') as source:
         return plistlib.load(source)
@@ -144,12 +152,29 @@ def _replace_app(source, target, team, version, lock, wait_ready):
                 return
             if process.poll() is not None:
                 restore_after_exit()
-                raise RuntimeError('Новый агент завершился до готовности')
+                raise RolledBack('Новый агент завершился до готовности')
             time.sleep(0.5)
-        raise RuntimeError('Ожидание запуска истекло; предыдущий пакет сохранён')
+        raise NotReady('Ожидание запуска истекло; предыдущий пакет сохранён')
     finally:
         if not keep_backup or not old.exists():
             shutil.rmtree(work)
+
+
+def _finish(stage, result):
+    """Выпуск после перехода. Неудача — от него остаётся папка с одним `_update_result`: прежняя копия при запуске
+    сообщает итог студии (`update_helper.failed_update`), уборка выпусков потом удаляет и её."""
+    if result is None:
+        shutil.rmtree(stage)
+        return
+    try:
+        for child in stage.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        (stage / '_update_result').write_text(result, encoding='ascii')
+    except OSError:
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def main():
@@ -177,18 +202,22 @@ def main():
             raise ValueError('Неизвестный путь приложения')
         # Не сдаваться через 120 с: прежний агент может выходить дольше, а после него не запустился бы никто.
         wait_exit = runpy.run_path(str(Path(__file__).with_name('update_helper.py')))['wait_exit']
+        result = None
         try:
             if not wait_exit(int(sys.argv[3])):
+                result = 'old_running'
                 raise BlockingIOError('Предыдущий агент продолжает работу')
             replace_app(candidate(stage), target, info(target)['StudioSigningTeam'], sys.argv[4], wait_ready=stage)
         except BlockingIOError:
             raise  # уже запущен другой экземпляр
-        except Exception:
+        except Exception as error:
+            if not isinstance(error, NotReady):
+                result = 'rolled_back' if isinstance(error, RolledBack) else 'failed'
             # open без -n поднимет текущий экземпляр при неподтверждённом запуске.
             subprocess.run(['/usr/bin/open', str(target)], check=False, timeout=15)
             raise
         finally:
-            shutil.rmtree(stage)
+            _finish(stage, result)
     else:
         raise ValueError('Неизвестное действие')
 
