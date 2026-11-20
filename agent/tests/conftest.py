@@ -7,6 +7,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+# Слова окна, трея и консоли тесты сверяют по-русски на любом языке системы; английский — `tests/test_i18n.py`.
+os.environ.update(STUDIO_AGENT_LANG="ru")
 from tools.pytest_support import new_event_loop, strict_skip
 
 # Осознанные пропуски: при STUDIO_TESTS_STRICT=1 остаются пропусками (`strict_skip`), остальные — отказ.

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import host, journal, single, store, update_helper, updater
 from .atomic import write_atomic
+from .i18n import tr
 from .linux_autostart import switch_current
 
 _handover = None
@@ -28,7 +29,7 @@ def supervise(h: Path) -> int:
     """The owner lock covers staging, confirmation, rollback and the next process."""
     mutex = single.acquire()
     if mutex is None:
-        print("Мост уже запущен")
+        print(tr("Мост уже запущен"))
         return 1
     repo = updater.REPO
     previous = None

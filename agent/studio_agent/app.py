@@ -17,6 +17,7 @@ from .codex import CodexRunner
 from .opencode import OpenCodeRunner
 from .agent import Agent, read_has_pin
 from .link import Link
+from .i18n import tr
 from .pin import PinStore
 from .turns import Runner
 
@@ -404,11 +405,11 @@ class Controller:
                 if attempt + 1 == ERASE_TRIES:
                     gone = not (self.h / store.KEY).exists()  # ключ ушёл, остался PIN — окно уже «Вход»
                     log.error("отвязка: %s не стёрт: %s", "PIN" if gone else "ключ", type(e).__name__)
-                    return False, PIN_LEFT if gone else ERASE_FAILED
+                    return False, tr(PIN_LEFT if gone else ERASE_FAILED)
                 await self._sleep(ERASE_PAUSE_SEC)
         self.fresh = False
         log.info("отвязка: ключ и PIN стёрты")
-        return True, enroll.KEPT if kept else ""
+        return True, tr(enroll.KEPT) if kept else ""
 
     def _ask_studio(self) -> bool:
         """`DELETE` к студии (блокирует) → забыла ли она компьютер; любой сбой — не забыла."""
@@ -457,7 +458,7 @@ class Controller:
                 return result
         await self._relink_task()  # сбой: не «на связи» без канала — канал заново или `setup` (ключа уже нет)
         if result is None:
-            raise RuntimeError("отвязка не удалась")
+            raise RuntimeError("unenroll failed")
         return result
 
     def _on_welcome(self, gen: int, frame: dict) -> None:
@@ -791,7 +792,7 @@ def main(argv: list[str]) -> int:
     if mutex is None:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showinfo(TITLE, ALREADY, parent=root)
+        messagebox.showinfo(TITLE, tr(ALREADY), parent=root)
         root.destroy()
         return 1
     journal.setup(h)
