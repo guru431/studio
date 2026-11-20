@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 54
+VERSION = 55
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -702,6 +702,45 @@ UNION SELECT c.agent_id, c.chat, m.user_id, c.revision FROM code_attention c
 """
 SCHEMA += CODE_54
 
+# NULL owner denotes a Studio-wide integration. Keep ids and their high-water marks across the rebuild.
+SHARED_55 = """CREATE TEMP TABLE integration_sequences_55 AS
+  SELECT name, seq FROM sqlite_sequence WHERE name IN ('connections', 'mcp_servers');
+CREATE TABLE connections_55(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id INTEGER REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('openai','srvllm')),
+       base_url TEXT NOT NULL, token_enc BLOB NOT NULL, sections TEXT NOT NULL, created REAL NOT NULL,
+       server_only INTEGER NOT NULL DEFAULT 0, passport TEXT, cleaner INTEGER NOT NULL DEFAULT 0,
+       s06 INTEGER NOT NULL DEFAULT 0, CHECK (user_id IS NOT NULL OR server_only = 1));
+INSERT INTO connections_55 SELECT * FROM connections;
+CREATE TABLE section_links_55(user_id INTEGER REFERENCES users ON DELETE CASCADE, section TEXT NOT NULL,
+       connection_id INTEGER NOT NULL REFERENCES connections_55 ON DELETE CASCADE, models TEXT NOT NULL,
+       created REAL NOT NULL, PRIMARY KEY (user_id, section, connection_id));
+INSERT INTO section_links_55 SELECT * FROM section_links ORDER BY rowid;
+CREATE TEMP TABLE defaults_55 AS SELECT * FROM section_defaults;
+DROP TABLE section_links;
+DROP TABLE connections;
+ALTER TABLE connections_55 RENAME TO connections;
+ALTER TABLE section_links_55 RENAME TO section_links;
+CREATE UNIQUE INDEX section_links_shared ON section_links(section, connection_id) WHERE user_id IS NULL;
+INSERT INTO section_defaults SELECT * FROM temp.defaults_55;
+DROP TABLE temp.defaults_55;
+CREATE TRIGGER cleaner_connection_delete AFTER DELETE ON connections BEGIN
+  DELETE FROM cleaner_contexts WHERE connection_id = old.id;
+END;
+CREATE TABLE mcp_servers_55(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id INTEGER REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, url TEXT NOT NULL, secret_enc TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 1);
+INSERT INTO mcp_servers_55 SELECT * FROM mcp_servers;
+DROP TABLE mcp_servers;
+ALTER TABLE mcp_servers_55 RENAME TO mcp_servers;
+CREATE INDEX mcp_servers_user ON mcp_servers(user_id);
+DELETE FROM sqlite_sequence WHERE name IN ('connections', 'mcp_servers');
+INSERT INTO sqlite_sequence SELECT * FROM temp.integration_sequences_55;
+DROP TABLE temp.integration_sequences_55;
+"""
+SCHEMA += SHARED_55
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -815,6 +854,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     53: SHARES_53,
     # «непрочитано» «Агентов» — у каждой учётки своё
     54: CODE_54,
+    55: SHARED_55,
 }
 
 

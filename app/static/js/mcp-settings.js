@@ -67,28 +67,31 @@ function editor(host, previous, { local = false, save }) {
   });
 }
 
-export function chatMcpBlock() {
+export function chatMcpBlock({ admin = false } = {}) {
+  const base = admin ? '/api/admin/shared/mcp' : '/api/mcp';
   const list = el('div', { id: 'mcp-servers' }), note = el('p', { class: 'status', 'aria-live': 'polite' });
-  const root = el('section', { class: 'block', id: 'chat-mcp-settings' }, el('h2', {}, 'MCP'),
-    el('p', { class: 'muted' }, tr("Подключения для чата и других разделов Studio. Поддерживаемые инструменты появятся в своих разделах. Адрес должен разрешить администратор Studio.")), list, note);
+  const root = el('section', { class: 'block', id: admin ? 'admin-shared-mcp' : 'chat-mcp-settings' },
+    el('h2', {}, admin ? tr("Общие подключения MCP") : 'MCP'), el('p', { class: 'muted' }, admin
+      ? tr("Все пользователи смогут вызывать инструменты с правами этого подключения. Адрес должен быть в списке разрешённых.")
+      : tr("Подключения для чата и других разделов Studio. Поддерживаемые инструменты появятся в своих разделах. Адрес должен разрешить администратор Studio.")), list, note);
   async function run(action) { try { await action(); } catch (err) { note.textContent = words(err); } }
   async function reload() {
-    const { items } = await api('GET', '/api/mcp');
+    const { items } = await api('GET', base);
     if (!root.isConnected) return;
     list.replaceChildren(...items.map(item => el('div', { class: 'block', 'data-mcp-id': item.id },
-      el('b', {}, item.name), el('p', { class: 'muted' }, item.url),
-      el('p', {}, item.enabled ? tr("Включено") : tr("Выключено")), el('div', { class: 'row' },
-        button(tr("Изменить"), { class: 'btn' }, () => run(async () => edit(await api('GET', `/api/mcp/${item.id}`)))),
+      el('b', {}, item.name), item.url ? el('p', { class: 'muted' }, item.url) : el('p', { class: 'muted' }, tr("Общее подключение")),
+      el('p', {}, item.enabled ? tr("Включено") : tr("Выключено")), item.shared && !admin ? null : el('div', { class: 'row' },
+        button(tr("Изменить"), { class: 'btn' }, () => run(async () => edit(await api('GET', `${base}/${item.id}`)))),
         button(tr("Проверить"), { class: 'btn' }, event => run(async () => {
           const control = event.currentTarget; control.disabled = true;
-          try { const { tools } = await api('POST', `/api/mcp/${item.id}/check`); note.textContent = tr("Подключено, инструментов: {0}", tools.length); }
+          try { const { tools } = await api('POST', `${base}/${item.id}/check`); note.textContent = tr("Подключено, инструментов: {0}", tools.length); }
           finally { control.disabled = false; }
         })), button(tr("Удалить"), { class: 'btn' }, () => {
           const remove = button(tr("Удалить"), { class: 'btn btn-danger' });
           const dialog = openDialog(root, { id: 'mcp-remove', title: tr("Удалить подключение MCP?"), body: [el('p', {}, item.name)], actions: [remove] });
           remove.addEventListener('click', () => run(async () => {
             remove.disabled = true;
-            try { await api('DELETE', `/api/mcp/${item.id}`); dialog.close(); await reload(); }
+            try { await api('DELETE', `${base}/${item.id}`); dialog.close(); await reload(); }
             finally { remove.disabled = false; }
           }));
         })))));
@@ -97,7 +100,7 @@ export function chatMcpBlock() {
   function edit(item) {
     editor(root, item, { save: async (name, value, enabled) => {
       const { type, ...fields } = value;
-      await api(item ? 'PUT' : 'POST', item ? `/api/mcp/${item.id}` : '/api/mcp', { ...fields, name, enabled }); await reload();
+      await api(item ? 'PUT' : 'POST', item ? `${base}/${item.id}` : base, { ...fields, name, enabled }); await reload();
     } });
   }
   root.append(button(tr("Добавить MCP"), { class: 'btn', id: 'mcp-add' }, () => edit(null)));

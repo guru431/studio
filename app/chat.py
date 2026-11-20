@@ -1784,6 +1784,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     model = row["model"] or manage.DEFAULT_MODEL
+    if conn.shared:
+        _chat_pair(uid, conn.id, model)
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     if not body.regenerate and not body.text.strip() and not atts:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
@@ -1793,6 +1795,11 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if receipt is not None:
         return {"replayed": True, **receipt}
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться другой ход
+    if conn.shared:
+        fresh = _chat_row(uid, chat_id)
+        if fresh["connection_id"] != conn.id or fresh["model"] != row["model"]:
+            raise HTTPException(409, {"code": "changed", "message": "Модель диалога изменилась — отправьте запрос заново"})
+        _chat_pair(uid, conn.id, model)
     preview = None
     if conn.cleaner:
         fresh = _chat_row(uid, chat_id)

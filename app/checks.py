@@ -369,14 +369,14 @@ def _uid(request: Request) -> int:
 
 @router.post("/{conn_id}/check")
 async def post_check(conn_id: int, request: Request):
-    return await check(connections.get(_uid(request), conn_id))
+    return await check(connections.get(_uid(request), conn_id, own=True))
 
 
 @router.put("/{conn_id}/passport")
 async def put_passport_route(conn_id: int, body: PassportIn, request: Request):
-    return put_passport(connections.get(_uid(request), conn_id), body)
+    return put_passport(connections.get(_uid(request), conn_id, own=True), body)
 
 
 @router.post("/{conn_id}/probe")
 async def post_probe(conn_id: int, body: ProbeBody, request: Request):
-    return await probe(connections.get(_uid(request), conn_id), body.model)
+    return await probe(connections.get(_uid(request), conn_id, own=True), body.model)

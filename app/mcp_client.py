@@ -1,4 +1,4 @@
-"""Личные HTTP-подключения MCP, Streamable HTTP и инструменты чата.
+"""Личные и общие HTTP-подключения MCP, Streamable HTTP и инструменты чата.
 
 Адреса проходят ту же SSRF-проверку и закрепление DNS, что подключения моделей.
 Ключи — шифром в базе, запросы/ответы и заголовки никогда не пишутся в журнал.
@@ -45,8 +45,9 @@ class ServerIn(BaseModel):
     enabled: bool = True
 
 
-def row(uid, sid):
-    found = state.DB.execute("SELECT * FROM mcp_servers WHERE id=? AND user_id=?", (sid, uid)).fetchone()
+def row(uid, sid, *, own=False):
+    scope = "user_id IS ?" if own else "(user_id IS ? OR user_id IS NULL)"
+    found = state.DB.execute(f"SELECT * FROM mcp_servers WHERE id=? AND {scope}", (sid, uid)).fetchone()
     if found is None:
         raise refused("Подключение MCP не найдено", "not_found", 404)
     return found
@@ -59,8 +60,19 @@ def secret(item):
         raise refused("Ключ MCP не расшифрован — введите его заново") from None
 
 
-def public(item):
-    return {"id": item["id"], "name": item["name"], "url": item["url"], "enabled": bool(item["enabled"])}
+def public(item, uid=None):
+    shared = item["user_id"] is None
+    out = {"id": item["id"], "name": item["name"], "url": "" if shared and uid is not None else item["url"],
+           "enabled": bool(item["enabled"])}
+    if shared:
+        out["shared"] = True
+    return out
+
+
+def servers(uid, *, enabled_only=False):
+    enabled = " AND enabled=1" if enabled_only else ""
+    return state.DB.execute(f"SELECT * FROM mcp_servers WHERE (user_id IS ? OR user_id IS NULL){enabled}"
+                            " ORDER BY user_id IS NULL, id", (uid,)).fetchall()
 
 
 def selected(uid, ids):
@@ -77,7 +89,8 @@ def present(uid, raw):
     if not ids:
         return []
     found = {r[0] for r in state.DB.execute(
-        f"SELECT id FROM mcp_servers WHERE user_id=? AND id IN ({','.join('?' * len(ids))})", (uid, *ids))}
+        f"SELECT id FROM mcp_servers WHERE (user_id IS ? OR user_id IS NULL) AND id IN ({','.join('?' * len(ids))})",
+        (uid, *ids))}
     return [sid for sid in ids if sid in found]
 
 
@@ -109,49 +122,45 @@ def _values(body, old=None):
     return body.name.strip(), body.url, security.encrypt(json.dumps({"token": token, "headers": headers})), int(body.enabled)
 
 
-@router.get("")
-async def list_servers(request: Request):
-    return {"items": [public(r) for r in state.DB.execute("SELECT * FROM mcp_servers WHERE user_id=? ORDER BY id",
-                                                         (request.state.user.id,))]}
+def list_for(uid):
+    return {"items": [public(item, uid) for item in servers(uid)]}
 
 
-@router.post("", status_code=201)
-async def create(body: ServerIn, request: Request):
-    uid = request.state.user.id
-    if state.DB.execute("SELECT count(*) FROM mcp_servers WHERE user_id=?", (uid,)).fetchone()[0] >= MAX_SERVERS:
+def _save_values(uid, body, old=None):
+    if uid is None and "?" in body.url:
+        raise refused("Адрес общего MCP — без строки запроса. Передайте ключ в токене или HTTP-заголовке", "invalid", 422)
+    return _values(body, old)
+
+
+def create_for(uid, body):
+    if state.DB.execute("SELECT count(*) FROM mcp_servers WHERE user_id IS ?", (uid,)).fetchone()[0] >= MAX_SERVERS:
         raise refused("Не больше 16 подключений MCP")
-    values = _values(body)
+    values = _save_values(uid, body)
     cursor = state.DB.execute("INSERT INTO mcp_servers(name,url,secret_enc,enabled,user_id) VALUES(?,?,?,?,?)", (*values, uid))
-    return public(row(uid, cursor.lastrowid))
+    return public(row(uid, cursor.lastrowid, own=True), uid)
 
 
-@router.get("/{sid}")
-async def detail(sid: int, request: Request):
+def detail_for(uid, sid):
     """Имена заголовков без значений: как и токен, значения только записываются (ключ вида `X-Api-Key` не уносится
     с открытого устройства)."""
-    item = row(request.state.user.id, sid)
-    return {**public(item), "headers": dict.fromkeys(secret(item).get("headers", {}))}
+    item = row(uid, sid, own=True)
+    return {**public(item, uid), "headers": dict.fromkeys(secret(item).get("headers", {}))}
 
 
-@router.put("/{sid}")
-async def update(sid: int, body: ServerIn, request: Request):
-    uid = request.state.user.id
-    values = _values(body, row(uid, sid))
-    state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=? WHERE id=? AND user_id=?", (*values, sid, uid))
-    return public(row(uid, sid))
+def update_for(uid, sid, body):
+    values = _save_values(uid, body, row(uid, sid, own=True))
+    state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=? WHERE id=? AND user_id IS ?", (*values, sid, uid))
+    return public(row(uid, sid, own=True), uid)
 
 
-@router.delete("/{sid}", status_code=204)
-async def delete(sid: int, request: Request):
-    uid = request.state.user.id
-    row(uid, sid)
-    state.DB.execute("DELETE FROM mcp_servers WHERE id=? AND user_id=?", (sid, uid))
+def delete_for(uid, sid):
+    row(uid, sid, own=True)
+    state.DB.execute("DELETE FROM mcp_servers WHERE id=? AND user_id IS ?", (sid, uid))
 
 
-@router.post("/{sid}/check")
-async def check(sid: int, request: Request):
+async def check_for(uid, sid):
     """«Проверить» — и выключенный сервер: проверить его до включения."""
-    session = Session(row(request.state.user.id, sid), disabled_ok=True)
+    session = Session(row(uid, sid, own=True), uid=uid, disabled_ok=True)
     try:
         tools = await session.tools()
         return {"tools": [t.get("name", "") for t in tools if isinstance(t, dict)]}
@@ -159,9 +168,40 @@ async def check(sid: int, request: Request):
         await session.close()
 
 
+@router.get("")
+async def list_servers(request: Request):
+    return list_for(request.state.user.id)
+
+
+@router.post("", status_code=201)
+async def create(body: ServerIn, request: Request):
+    return create_for(request.state.user.id, body)
+
+
+@router.get("/{sid}")
+async def detail(sid: int, request: Request):
+    return detail_for(request.state.user.id, sid)
+
+
+@router.put("/{sid}")
+async def update(sid: int, body: ServerIn, request: Request):
+    return update_for(request.state.user.id, sid, body)
+
+
+@router.delete("/{sid}", status_code=204)
+async def delete(sid: int, request: Request):
+    delete_for(request.state.user.id, sid)
+
+
+@router.post("/{sid}/check")
+async def check(sid: int, request: Request):
+    return await check_for(request.state.user.id, sid)
+
+
 class Session:
-    def __init__(self, item, *, disabled_ok=False):
-        self.uid, self.sid = item["user_id"], item["id"]
+    def __init__(self, item, *, uid, disabled_ok=False):
+        self.uid, self.sid = uid, item["id"]
+        self.owner_id = item["user_id"]
         self.url, self.stamp = item["url"], item["secret_enc"]
         self.disabled_ok = disabled_ok       # только «Проверить»: ходы и разделы выключенный сервер не зовут
         self.session = None
@@ -169,7 +209,7 @@ class Session:
         self.seq = 0
 
     def headers(self, *, rpc=True):
-        item = row(self.uid, self.sid)
+        item = row(self.owner_id, self.sid, own=True)
         if ((not item["enabled"] and not self.disabled_ok) or item["url"] != self.url
                 or item["secret_enc"] != self.stamp):
             raise refused("Подключение MCP изменено или выключено — запустите ответ заново")
@@ -303,9 +343,9 @@ class Tools:
     async def discover(self):
         """Выбранные включённые серверы опрашиваются параллельно, каждый в свой срок DISCOVER_SEC. Отказавший
         пропускается — его имя и слова в `failed`; превышение MAX_TOOLS суммарно — отказ хода."""
-        items = [item for sid in self.ids if (item := state.DB.execute(
-            "SELECT * FROM mcp_servers WHERE id=? AND user_id=? AND enabled=1", (sid, self.uid)).fetchone()) is not None]
-        self.sessions = [Session(item) for item in items]
+        enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
+        items = [enabled[sid] for sid in self.ids if sid in enabled]
+        self.sessions = [Session(item, uid=self.uid) for item in items]
         found = await asyncio.gather(*(self._list(session) for session in self.sessions))
         for item, session, tools in zip(items, self.sessions, found):
             if isinstance(tools, str):

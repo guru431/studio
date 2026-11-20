@@ -82,34 +82,47 @@ def transaction():
 
 # ---- чтение ------------------------------------------------------------------------
 
-def _rows(user_id: int, section: str):
-    return state.DB.execute("SELECT connection_id, models FROM section_links WHERE user_id = ? AND section = ?"
-                            " ORDER BY created, rowid", (user_id, section)).fetchall()
+def _rows(user_id: int | None, section: str, *, include_shared: bool = True):
+    scope = "(user_id IS ? OR user_id IS NULL)" if include_shared else "user_id IS ?"
+    return state.DB.execute(f"SELECT connection_id, models FROM section_links WHERE {scope} AND section = ?"
+                            " ORDER BY user_id IS NULL, created, rowid", (user_id, section)).fetchall()
 
 
-def links(user_id: int, section: str) -> list[Link]:
+def links(user_id: int | None, section: str) -> list[Link]:
+    rows = _rows(user_id, section)
+    if not rows:
+        return []
     by_id = {c.id: c for c in connections.list_for(user_id)}
     return [Link(section, by_id[r["connection_id"]], tuple(json.loads(r["models"])))
-            for r in _rows(user_id, section) if r["connection_id"] in by_id]
+            for r in rows if r["connection_id"] in by_id]
 
 
-def sections_of(user_id: int, conn_id: int) -> list[str]:
+def sections_of(user_id: int | None, conn_id: int) -> list[str]:
     linked = {r["section"] for r in state.DB.execute(
-        "SELECT section FROM section_links WHERE user_id = ? AND connection_id = ?", (user_id, conn_id))}
+        "SELECT section FROM section_links WHERE user_id IS ? AND connection_id = ?", (user_id, conn_id))}
     return [s for s in SECTIONS if s in linked]
 
 
-def _default_row(user_id: int, section: str):
+def _default_row(user_id: int | None, section: str):
+    if user_id is None:
+        return None
     return state.DB.execute("SELECT connection_id, model FROM section_defaults WHERE user_id = ? AND section = ?",
                             (user_id, section)).fetchone()
 
 
-def default(user_id: int, section: str) -> "tuple[connections.Connection, str] | None":
+def default(user_id: int | None, section: str, available: list[Link] | None = None) -> "tuple[connections.Connection, str] | None":
+    available = links(user_id, section) if available is None else available
     row = _default_row(user_id, section)
-    if row is None:
-        return None
-    conn = next((c for c in connections.list_for(user_id) if c.id == row["connection_id"]), None)
-    return (conn, row["model"]) if conn is not None else None
+    if row is not None:
+        for link in available:
+            conn = link.connection
+            if conn.id == row["connection_id"] and row["model"] in link.models:
+                if not conn.shared or not connections.dropped(conn):
+                    return conn, row["model"]
+    for link in available:
+        if link.models and (not link.connection.shared or not connections.dropped(link.connection)):
+            return link.connection, link.models[0]
+    return None
 
 
 def is_local(conn: "connections.Connection", model: str) -> bool:
@@ -137,13 +150,14 @@ def resolve(user_id: int, section: str, connection_id: "int | None",
     check_section(section)
     if connection_id is not None:
         connections.get(user_id, connection_id)              # чужое и неизвестное — 404 gone
-    chosen = default(user_id, section)
+    available = links(user_id, section)
+    chosen = default(user_id, section, available)
     if connection_id is None and not model:
         if chosen is None:
             raise _bad("no_model", f"выберите модель в настройках раздела «{NAMES[section]}»", 409)
         conn, model = chosen
     else:
-        found = sorted(links(user_id, section), key=lambda l: chosen is None or l.connection.id != chosen[0].id)
+        found = sorted(available, key=lambda l: chosen is None or l.connection.id != chosen[0].id)
         if connection_id is not None:
             found = [l for l in found if l.connection.id == connection_id]
         if not model and found:
@@ -164,8 +178,8 @@ def unlisted(conn: "connections.Connection") -> str:
 
 # ---- правка ------------------------------------------------------------------------
 
-def _link_row(user_id: int, section: str, conn_id: int):
-    return state.DB.execute("SELECT models FROM section_links WHERE user_id = ? AND section = ? AND connection_id = ?",
+def _link_row(user_id: int | None, section: str, conn_id: int):
+    return state.DB.execute("SELECT models FROM section_links WHERE user_id IS ? AND section = ? AND connection_id = ?",
                             (user_id, section, conn_id)).fetchone()
 
 
@@ -184,14 +198,14 @@ def check_link(conn: "connections.Connection", section: str) -> None:
         if conn.s06:
             raise _bad("kind", "шлюз s06 поддерживает чат, перевод, расшифровку, сканы и голосовой ввод")
         raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")
-    if section in SERVER_ONLY and not conn.proxied:
+    if not conn.proxied and (section in SERVER_ONLY or conn.shared):
         raise _bad("server", f"раздел «{NAMES[section]}» — только через сервер: попросите администратора"
                              " внести адрес в список разрешённых")
 
 
-def link(user_id: int, section: str, conn_id: int) -> None:
+def link(user_id: int | None, section: str, conn_id: int) -> None:
     check_section(section)
-    conn = connections.get(user_id, conn_id)
+    conn = connections.get(user_id, conn_id, own=True)
     check_link(conn, section)
     with transaction():
         if _link_row(user_id, section, conn_id) is not None:
@@ -203,18 +217,18 @@ def link(user_id: int, section: str, conn_id: int) -> None:
                          " VALUES (?, ?, ?, ?, ?)", (user_id, section, conn_id, json.dumps(models), clock.NOW()))
         _settle(user_id, section)
         _sync_legacy(user_id)
-    log.info("пользователь %d: подключение %d — в разделе %s", user_id, conn_id, section)
+    log.info("владелец %s: подключение %d — в разделе %s", user_id, conn_id, section)
 
 
-def unlink(user_id: int, section: str, conn_id: int) -> None:
+def unlink(user_id: int | None, section: str, conn_id: int) -> None:
     check_section(section)
-    connections.get(user_id, conn_id)
+    connections.get(user_id, conn_id, own=True)
     with transaction():
-        state.DB.execute("DELETE FROM section_links WHERE user_id = ? AND section = ? AND connection_id = ?",
+        state.DB.execute("DELETE FROM section_links WHERE user_id IS ? AND section = ? AND connection_id = ?",
                          (user_id, section, conn_id))
         _settle(user_id, section)
         _sync_legacy(user_id)
-    log.info("пользователь %d: подключение %d убрано из раздела %s", user_id, conn_id, section)
+    log.info("владелец %s: подключение %d убрано из раздела %s", user_id, conn_id, section)
 
 
 def _clean(conn: "connections.Connection", section: str, models: list[str]) -> list[str]:
@@ -232,23 +246,25 @@ def _clean(conn: "connections.Connection", section: str, models: list[str]) -> l
     return out
 
 
-def set_models(user_id: int, section: str, conn_id: int, models: list[str]) -> None:
+def set_models(user_id: int | None, section: str, conn_id: int, models: list[str]) -> None:
     check_section(section)
-    clean = _clean(connections.get(user_id, conn_id), section, models)
+    clean = _clean(connections.get(user_id, conn_id, own=True), section, models)
     if _link_row(user_id, section, conn_id) is None:
         raise _bad("link", "подключения нет в этом разделе", 404)
     with transaction():
-        state.DB.execute("UPDATE section_links SET models = ? WHERE user_id = ? AND section = ? AND connection_id = ?",
+        state.DB.execute("UPDATE section_links SET models = ? WHERE user_id IS ? AND section = ? AND connection_id = ?",
                          (json.dumps(clean), user_id, section, conn_id))
         _settle(user_id, section)
         _sync_legacy(user_id)
-    log.info("пользователь %d: раздел %s, подключение %d — отмечено моделей %d", user_id, section, conn_id, len(clean))
+    log.info("владелец %s: раздел %s, подключение %d — отмечено моделей %d", user_id, section, conn_id, len(clean))
 
 
 def set_default(user_id: int, section: str, conn_id: int, model: str) -> None:
     check_section(section)
-    connections.get(user_id, conn_id)
-    row = _link_row(user_id, section, conn_id)
+    conn = connections.get(user_id, conn_id)
+    if conn.shared and connections.dropped(conn):
+        raise _bad("server", unlisted(conn), 409)
+    row = _link_row(conn.owner_id, section, conn_id)
     if row is None or model not in json.loads(row["models"]):
         raise _bad("model", "по умолчанию — только отмеченная модель")
     with transaction():
@@ -259,7 +275,7 @@ def set_default(user_id: int, section: str, conn_id: int, model: str) -> None:
     log.info("пользователь %d: раздел %s — умолчание у подключения %d", user_id, section, conn_id)
 
 
-def set_sections(user_id: int, conn_id: int, wanted: list[str]) -> None:
+def set_sections(user_id: int | None, conn_id: int, wanted: list[str]) -> None:
     """Связи подключения — ровно эти разделы (поле `sections` прежнего API подключений)."""
     for section in wanted:
         check_section(section)
@@ -284,14 +300,14 @@ def retire_photo_models() -> None:
     affected = set()
     with transaction():
         rows = state.DB.execute("SELECT l.user_id, l.connection_id, l.models FROM section_links l"
-                                " JOIN connections c ON c.id=l.connection_id AND c.user_id=l.user_id"
+                                " JOIN connections c ON c.id=l.connection_id AND c.user_id IS l.user_id"
                                 " WHERE l.section='photo' AND c.kind='srvllm'").fetchall()
         for row in rows:
             selected = json.loads(row["models"])
             models = [m for m in selected if m not in RETIRED_PHOTO_MODELS] or ["snofs"]
             uid, cid = row["user_id"], row["connection_id"]
             if models != selected:
-                state.DB.execute("UPDATE section_links SET models=? WHERE user_id=? AND section='photo' AND connection_id=?",
+                state.DB.execute("UPDATE section_links SET models=? WHERE user_id IS ? AND section='photo' AND connection_id=?",
                                  (json.dumps(models), uid, cid))
                 affected.add(uid)
             chosen = _default_row(uid, "photo")
@@ -338,7 +354,7 @@ def adopt(section: str, source: str) -> None:
         if state.DB.execute("SELECT 1 FROM settings WHERE key = ?", (flag,)).fetchone() is not None:
             return
         users = [r[0] for r in state.DB.execute(
-            "SELECT DISTINCT user_id FROM section_links WHERE section = ?", (source,)).fetchall()]
+            "SELECT DISTINCT user_id FROM section_links WHERE section = ? AND user_id IS NOT NULL", (source,)).fetchall()]
         for user_id in users:
             by_id = {c.id: c for c in connections.list_for(user_id)}
             for row in state.DB.execute("SELECT connection_id, models, created FROM section_links"
@@ -360,14 +376,16 @@ def adopt(section: str, source: str) -> None:
     log.info("раздел %s: из %s перенесено связей %d", section, source, moved)
 
 
-def _settle(user_id: int, section: str) -> None:
+def _settle(user_id: int | None, section: str) -> None:
+    if user_id is None:
+        return
     row = _default_row(user_id, section)
     if row is not None:
-        current = _link_row(user_id, section, row["connection_id"])
-        if current is not None and row["model"] in json.loads(current["models"]):
+        if any(r["connection_id"] == row["connection_id"] and row["model"] in json.loads(r["models"])
+               for r in _rows(user_id, section)):
             return
     state.DB.execute("DELETE FROM section_defaults WHERE user_id = ? AND section = ?", (user_id, section))
-    for r in _rows(user_id, section):
+    for r in _rows(user_id, section, include_shared=False):
         models = json.loads(r["models"])
         if models:
             state.DB.execute("INSERT INTO section_defaults(user_id, section, connection_id, model) VALUES (?, ?, ?, ?)",
@@ -375,11 +393,15 @@ def _settle(user_id: int, section: str) -> None:
             return
 
 
-def _sync_legacy(user_id: int) -> None:
+def _sync_legacy(user_id: int | None) -> None:
+    if user_id is None:
+        return
     for row in state.DB.execute("SELECT id FROM connections WHERE user_id = ?", (user_id,)).fetchall():
         linked = [s for s in sections_of(user_id, row["id"]) if s in LEGACY]
         state.DB.execute("UPDATE connections SET sections = ? WHERE id = ?", (json.dumps(sorted(linked)), row["id"]))
     chat = _default_row(user_id, "chat")
+    if chat and _link_row(user_id, "chat", chat["connection_id"]) is None:
+        chat = None  # The previous version only resolves personal connections.
     state.DB.execute("UPDATE users SET default_connection_id = ?, default_model = ? WHERE id = ?",
                      (chat["connection_id"] if chat else None, chat["model"] if chat else None, user_id))
 
@@ -405,26 +427,27 @@ def catalog(conn: "connections.Connection", section: str) -> list[str] | None:
     return CATALOG.get(section) if conn.kind == "srvllm" else None
 
 
-def section_out(user_id: int, section: str, passport: bool = True) -> dict:
+def section_out(user_id: int | None, section: str, passport: bool = True) -> dict:
     """passport=False — панель администратора: паспорт подключения туда не идёт."""
-    chosen = _default_row(user_id, section)
+    available = links(user_id, section)
+    chosen = default(user_id, section, available)
     return {"id": section, "name": NAMES[section],
             "links": [{"connection": connections.out(l.connection, passport), "models": list(l.models),
-                       "catalog": catalog(l.connection, section),
+                       "catalog": None if l.connection.shared and user_id is not None else catalog(l.connection, section),
                        "local_models": [m for m in l.models if is_local(l.connection, m)]}
-                      for l in links(user_id, section)],
-            "default": {"connection_id": chosen["connection_id"], "model": chosen["model"]} if chosen else None}
+                      for l in available],
+            "default": {"connection_id": chosen[0].id, "model": chosen[1]} if chosen else None}
 
 
-def all_out(user_id: int, passport: bool = True) -> dict:
+def all_out(user_id: int | None, passport: bool = True) -> dict:
     return {"sections": [section_out(user_id, s, passport) for s in SECTIONS]}
 
 
-async def found(user_id: int, section: str, conn_id: int) -> dict:
+async def found(user_id: int | None, section: str, conn_id: int) -> dict:
     """Найденные модели: srvllm вне чата — встроенный перечень; прочее — `GET …/models` через сервер.
     Адрес убран из списка — отказ словами и с перечнем (`connections.check_reachable`)."""
     check_section(section)
-    conn = connections.get(user_id, conn_id)
+    conn = connections.get(user_id, conn_id, own=True)
     if connections.dropped(conn):
         connections.check_reachable(conn)
     choices = catalog(conn, section)
