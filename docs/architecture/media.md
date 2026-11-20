@@ -105,6 +105,10 @@
   (`media.open_summed`, общий с архивом выделенного: суммы и данные с одного дескриптора); README, диалог — своим
   файлом, разделы — `images/0001.json` …, `files/<media id><расш.>`, `manifest.json` с sha256 последним; без токенов,
   хешей, сессий, passkey. Разделы — `takeout.SECTIONS` (с журналом безопасности `security`).
+  `GET /api/me/export/<токен>/check` — те же проверки (`takeout._export_ready`: 404 `gone`, 503 `storage`, 409 `busy`)
+  без загрузки, 204: ссылка `<a download>` отказ JSON не покажет, и окно спрашивает перед переходом, отказ — словами,
+  истёкший токен — «нажмите «Подготовить» ещё раз». Архив выделенного так не нужен: `POST` делает те же проверки
+  перед самой загрузкой, его отказ страница говорит словами.
 - Реестр ссылок на файлы — `media.REFERENCES` / `media.NOT_REFERENCES`: единственный источник для `media.referenced`
   (с `chat_share_files`). Новый столбец `*media_id` требует строки в реестре, иначе падает `tests/test_media_orphans.py`.
 - `media.sweep_orphans`: раз в `media.ORPHAN_EVERY_SEC` (86400) с (из `_purge_loop`, отметка `settings` `orphans`
