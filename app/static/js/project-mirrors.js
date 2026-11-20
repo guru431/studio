@@ -112,6 +112,17 @@ export function projectMirrors(host, trigger, aid, project) {
       await next();
     }
 
+    /* Привязка папки копии. Папка — зеркало другого проекта (прежнее имя этого, удалённый): после подтверждения
+     * та привязка снимается и папка назначается этому проекту (`replace`); отказ подтверждения — `null`. */
+    async function attachFolder(data) {
+      try { return await request('POST', url, data); }
+      catch (err) {
+        if (err.code !== 'exists' || !err.detail?.elsewhere) throw err;
+        if (!window.confirm(tr("Эта папка уже назначена зеркалом другого проекта — например, этого же проекта под прежним именем. Перепривязать её к этому проекту? Прежняя привязка будет снята, файлы останутся на компьютере."))) return null;
+        return request('POST', url, { ...data, replace: true });
+      }
+    }
+
     function paintCopies() {
       const groups = [...discovered.values()];
       const rows = groups.flatMap((device) => {
@@ -128,18 +139,20 @@ export function projectMirrors(host, trigger, aid, project) {
           error: tr("Не удалось проверить папки компьютера"), partial: tr("Проверена часть папок компьютера") };
         const note = labels[device.state === 'ready' && !device.complete ? 'partial' : device.state];
         const copies = device.items.map((candidate) => {
-          const attach = button(tr("Привязать"));
+          const attach = button(candidate.elsewhere ? tr("Перепривязать") : tr("Привязать"));
           attach.addEventListener('click', () => work(async () => {
-            const item = await request('POST', url, {
+            const item = await attachFolder({
               destination: device.id, root: candidate.root, name: candidate.name, existing: true,
             });
-            await load(item.id);
+            if (item) await load(item.id);
           }));
           return el('li', {}, el('div', {},
             el('strong', {}, `${device.computer} · ${candidate.name}`),
             el('div', { class: 'muted' }, candidate.folder),
             el('small', { class: 'muted' }, candidate.match === 'repository'
-              ? tr("Тот же Git-репозиторий") : tr("Совпадает имя папки"))), attach);
+              ? tr("Тот же Git-репозиторий") : tr("Совпадает имя папки")),
+            ...(candidate.elsewhere ? [el('br'), el('small', { class: 'muted' }, tr("Уже зеркало другого проекта"))] : [])),
+          attach);
         });
         return note ? [...copies, el('li', { class: 'muted' }, `${device.computer} · ${note}`)] : copies;
       });
@@ -349,7 +362,12 @@ export function projectMirrors(host, trigger, aid, project) {
       pinSlot.replaceChildren();
       const item = items.find((row) => String(row.id) === choices.value);
       targetForm.hidden = !!item;
-      if (item?.job?.state === 'running') await watch(item);
+      if (item?.reenter) {
+        state.replaceChildren(el('p', { class: 'error' },
+          tr("Настройка зеркала недоступна после смены ключа Студии — отвяжите зеркало и привяжите папку заново.")),
+        el('div', { class: 'actions' }, controls(item).remove));
+        tell('');
+      } else if (item?.job?.state === 'running') await watch(item);
       else if (item) await inspect(item);
       else { state.replaceChildren(); tell(''); }
     }
@@ -360,7 +378,8 @@ export function projectMirrors(host, trigger, aid, project) {
       items = saved.items;
       devices = agents.items.filter((agent) => agent.id !== Number(aid) && !agent.shared);
       selectField(choices, tr("Новое зеркало"),
-        items.map((item) => option(item.id, `${item.computer} · ${item.name} · ${item.folder}`)));
+        items.map((item) => option(item.id, item.reenter ? `${item.computer} · ${tr("настройка недоступна")}`
+          : `${item.computer} · ${item.name} · ${item.folder}`)));
       mirrorPicker.hidden = !items.length;
       choices.value = String(prefer ?? items[0]?.id ?? '');
       selectField(targets, tr("Выберите компьютер"), devices.map((agent) =>
@@ -392,8 +411,9 @@ export function projectMirrors(host, trigger, aid, project) {
       event.preventDefault();
       work(async () => {
         tell(tr("Сохраняю настройки зеркала…"));
-        const saved = await request('POST', url, { destination: Number(targets.value), root: roots.value, name: name.value.trim() });
-        await load(saved.id);
+        const saved = await attachFolder({ destination: Number(targets.value), root: roots.value, name: name.value.trim() });
+        if (saved) await load(saved.id);
+        else tell('');
       });
     });
     if (project.capable) work(load);

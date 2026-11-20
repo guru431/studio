@@ -41,7 +41,7 @@ def test_project_image_limits_and_revocation_during_decode(studio, monkeypatch):
 
     def decode(data):
         result = original(data)
-        monkeypatch.setattr(claude_code, '_session_open', lambda digest: False)
+        monkeypatch.setattr(claude_code, '_session_open', lambda *a: False)
         return result
 
     monkeypatch.setattr(claude_code, '_image_bytes', decode)

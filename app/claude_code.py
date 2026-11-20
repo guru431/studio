@@ -369,14 +369,14 @@ def _warn(request: Request, aid: int, op: str, error: HTTPException) -> None:
 
 
 async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passive: bool = False,
-              reply_timeout: float | None = None, **args) -> dict:
+              reply_timeout: float | None = None, while_locked: bool = False, **args) -> dict:
     """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим, в журнал — `_warn`
     (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
     запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи».
 
     Фоновая просьба (`passive` или заголовок страницы `X-Studio-Passive: 1` у опросов по таймеру) мосту с
     `hello.passive_requests` идёт с `passive: true`: он проверяет срок PIN компьютера, не продлевая его.
-    Заголовок может только ужесточить доступ, поэтому ему можно верить."""
+    Заголовок может только ужесточить доступ, поэтому ему можно верить. `while_locked` — см. `_session_open`."""
     passive = passive or request.headers.get("x-studio-passive") == "1"
     pid = args.get("project") or request.path_params.get("pid")
     agent = project_access.agent(request.state.user.id, aid, pid, shared=op in ("projects", "activity"))
@@ -418,7 +418,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
                                  **({"timeout": reply_timeout} if reply_timeout is not None else {}), **args)
         # The computer may finish its work after logout, expiry, disable or a screen lock.
         # Keeping that result on the computer does not authorize delivery to this request.
-        if not _session_open(request.state.digest):
+        if not _session_open(request.state.digest, while_locked):
             raise _refuse(409, "closed", "Сеанс Студии закрыт")
         if scope is not None:
             project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
@@ -436,7 +436,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         status = STATUS.get(e.code)
         error = (_refuse(502, "bridge", "мост ответил непонятно") if status is None
                  else _refuse(status, e.code, e.message, **e.extra))
-    if not _session_open(request.state.digest):
+    if not _session_open(request.state.digest, while_locked):
         raise _refuse(409, "closed", "Сеанс Студии закрыт")
     if scope is not None:
         project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
@@ -489,6 +489,21 @@ async def open_agent(aid: int, body: Open, request: Request):
         raise
     _event(request, agent, "pin_ok" if body.pin is not None and agent["has_pin"] else "open")
     return Response(status_code=204)
+
+
+async def open_without_pin(request: Request, agent, call):
+    """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` —
+    открыть его для сессии и повторить. Открытие пишет ту же строку `open` истории подключений, что `open_agent`:
+    след новой сессии не зависит от того, кто открыл компьютер первым. `agent` — строка с `id`, `name`,
+    `user_id`, `has_pin`."""
+    try:
+        return await call()
+    except HTTPException as error:
+        if error.detail.get("code") != "closed" or agent["has_pin"]:
+            raise
+    await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, pin=None)
+    _event(request, agent, "open")
+    return await call()
 
 
 @router.get("/agents/{aid}/projects")
@@ -1005,13 +1020,15 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True, allow_nan=False)}\n\n"
 
 
-def _session_open(digest: str) -> bool:
-    """Сессия студии жива и не заперта — как её видит `auth.guard` (без продления)."""
+def _session_open(digest: str, while_locked: bool = False) -> bool:
+    """Сессия студии жива и не заперта — как её видит `auth.guard` (без продления). `while_locked` — фоновое
+    задание, начатое незапертой сессией (передача зеркала): блокировка экрана его не обрывает, выход, истёкшая
+    сессия и отключённая учётка — обрывают."""
     row = state.DB.execute("SELECT u.disabled, s.expires FROM sessions s"
                            " JOIN users u ON u.id = s.user_id WHERE s.digest = ?", (digest,)).fetchone()
     now = clock.NOW()
     return (row is not None and not row["disabled"] and row["expires"] > now
-            and not lock_policy.locked(digest, "code"))
+            and (while_locked or not lock_policy.locked(digest, "code")))
 
 
 def _stream_open(digest: str, access: tuple[int, str] | None) -> bool:
@@ -1101,7 +1118,7 @@ async def _watched(request: Request, aid: int, chat: str, op: str, *, quiet: boo
                    **args) -> tuple[bridge.Watch, dict]:
     """Очередь наблюдателя (с признаком сессии запроса) — до просьбы: события хода идут сразу за ответом моста
     и не должны пройти мимо. Отказ — очередь прочь."""
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
     try:
         return q, await ask(request, aid, op, quiet=quiet, chat=chat, **args)
     except BaseException:
@@ -1177,7 +1194,8 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
     previous = bridge.initiated(aid, chat, member)
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest))   # до просьбы, как `_watched`
+    # до просьбы, как `_watched`
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
     try:
         data = await _first(key, op, ask(request, aid, "turn", chat=chat, project=pid, text=body.text,
                                          model=body.model, effort=body.effort,
@@ -1252,7 +1270,7 @@ async def live(aid: int, pid: str, chat: str, request: Request):
         q, data = await _watched(request, aid, chat, "watch", quiet=True, project=pid)
     except HTTPException as e:
         if e.detail["code"] == "offline":
-            q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
+            q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
             if aid in bridge.LINKS:                  # вернулся, пока шёл отказ: ждать нечего
                 q.put_nowait(("online", None))
             return _Watch(aid, chat, q, request.state.digest, first=("offline", {"wait": True}), live=True, pid=pid)
