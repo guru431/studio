@@ -50,7 +50,7 @@ def test_assistant_file_links_open_images_and_text_without_http_paths(desktop_br
                     page.wait_for_function("() => document.querySelector('#code-file-image')?.naturalWidth === 160")
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 else:
-                    page.locator('#code-md').wait_for()
+                    page.locator('#code-md h1').wait_for()   # разметка строится кадром позже
                     assert page.locator('#code-md').inner_text() == 'Preview text'
                 assert page.url.endswith('?tab=files') and picture not in page.url
             page.goto(route)

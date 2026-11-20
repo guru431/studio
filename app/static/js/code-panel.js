@@ -203,6 +203,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   let gen = 0;             // номер показа компьютера: ответ прежнего показ не трогает
   let items = [];          // последний GET /api/agents
   let known = false;       // items хоть раз прочитан: agents() отдаёт его, а не первый ответ (опрос его обновляет)
+  let agentsSignature = null; // что нарисовано в списке компьютеров (paintAgents)
   const updates = new Map(); // Только память панели: версия и стадия запрошенного обновления.
   let updateTimer = null;
   let updatePolling = false;
@@ -276,6 +277,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     } catch (err) {
       update.message = words(err);
     }
+    agentsSignature = null;    // кнопка «Отменить» выключена нажатием: та же строка рисуется заново
     if (alive) { paintAgents(); scheduleUpdates(); }
   }
   function resumeUpdate(aid) {
@@ -601,7 +603,23 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     show(got.some((a) => a.id === first) ? first : got[0].id, 'open');
   });
 
+  /* Опрос раз в 30 с перерисовывает список, только если он изменился: иначе фокус клавиатуры и подсказка пропадали
+   * бы на ровном месте. После перерисовки фокус возвращается на ту же кнопку той же строки. */
   function paintAgents() {
+    // Выбор компьютера в подпись не входит: его отметку ведёт paintSelected.
+    const signature = JSON.stringify([items, [...updates],
+      items.map((agent) => !agent.online && Number.isFinite(agent.last_seen) ? lastSeenText(agent.last_seen) : '')]);
+    if (signature === agentsSignature && agentsBox.childElementCount === items.length) return;
+    agentsSignature = signature;
+    const active = document.activeElement;
+    const focusRow = agentsBox.contains(active) ? active.closest('li[data-id]')?.dataset.id : null;
+    const focusClass = focusRow ? [...active.classList].find((name) => name.startsWith('code-agent')) : null;
+    paintAgentRows();
+    if (focusRow && focusClass && !agentsBox.contains(document.activeElement)) {
+      agentsBox.querySelector(`li[data-id="${CSS.escape(focusRow)}"] .${CSS.escape(focusClass)}`)?.focus({ preventScroll: true });
+    }
+  }
+  function paintAgentRows() {
     agentsBox.replaceChildren(...items.map((agent) => {
       const platform = agentInstallers[agent.platform];
       const installer = platform || agentInstallers.win32;
