@@ -743,7 +743,8 @@ SCHEMA += SHARED_55
 
 #: группы доступа к общему (access.py): правило на общее подключение или MCP (`tool = ''`) и на инструмент MCP;
 #: правило без групп — только администраторам. Правила уходят вместе с подключением или сервером (id не повторяются).
-#: Прежний код таблицы не читает: закрытое становится общим для всех — обход в таблице отката CLAUDE.md
+#: Прежний код таблицы не читает: закрытое становится общим для всех — перед откатом `access.ROLLBACK_56` прячет
+#: закрытое в `access_rollback` (в обычной работе пуста), после возврата вперёд `access.FORWARD_56` возвращает
 #: `name_key` — `name.strip().casefold()`: NOCASE SQLite складывает только латиницу, «Медиа» и «медиа» — нет.
 ACCESS_56 = """CREATE TABLE access_groups(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
        name_key TEXT NOT NULL UNIQUE, created REAL NOT NULL);
@@ -761,6 +762,8 @@ END;
 CREATE TRIGGER access_rules_mcp_delete AFTER DELETE ON mcp_servers BEGIN
   DELETE FROM access_rules WHERE kind = 'mcp' AND item_id = old.id;
 END;
+CREATE TABLE access_rollback(kind TEXT NOT NULL CHECK (kind IN ('connection', 'mcp')), item_id INTEGER NOT NULL,
+       token_enc BLOB, enabled INTEGER, PRIMARY KEY (kind, item_id));
 """
 SCHEMA += ACCESS_56
 
