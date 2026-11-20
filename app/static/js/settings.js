@@ -45,22 +45,19 @@ import { editVoice } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
+import { pageVersion } from './stale.js';
+import { modelLabel } from './models.js';
+import { deviceZone, offsetOf } from './timezone-offer.js';
 import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { smtpSettings } from './smtp-settings.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
 
+export { modelLabel };     // подписи моделей — models.js; разделы берут их отсюда
+
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
-const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'WhisperX', 'qwen3-tts': 'Qwen3-TTS',
-  'f5-tts': 'F5-TTS', gigaam: 'GigaAM', snofs: 'SNOFS Krea 2', 'big-love': 'Big Love Eryn1',
-  fineview: 'FineView QW21', h3: 'H3 · DR34ML4Y', muse: 'Muse 3.5 Krea 2',
-  'jib-moss': 'Jib Mix Moss V2', fineporn: 'FinePorn v5', 'moody-krea': 'Moody Krea v8' };
 const SEARCH_FROM = 8;
 const CLEANER_SECTIONS = ['chat', 'translate'];   // = sections.CLEANER: другие разделы Cleaner сервер не примет
 
-/** Подпись модели: короткие имена шлюза — словами, прочие — как есть. */
-export function modelLabel(id) {
-  return LABELS[id] || id;
-}
 
 /* ---- модели прямого подключения ------------------------------------------------ */
 
@@ -224,10 +221,18 @@ function mobileNavBlock() {
 }
 
 function timezoneBlock(refreshTimes) {
-  const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone,
+  // пояс этого устройства — первым, у каждого — смещение сейчас: искать среди четырёхсот имён IANA вслепую не нужно
+  const device = deviceZone();
+  const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone, device,
     ...(Intl.supportedValuesOf?.('timeZone') || [])].filter(Boolean))].sort();
+  if (device) zones.unshift(...zones.splice(zones.indexOf(device), 1));
+  const label = (zone) => {
+    const name = zone === DEFAULT_TIMEZONE ? tr("Москва (Europe/Moscow)") : zone;
+    const offset = offsetOf(zone);
+    return `${offset ? `${offset} · ` : ''}${name}${zone === device ? tr(" — это устройство") : ''}`;
+  };
   const select = el('select', { class: 'input', id: 'timezone' }, ...zones.map((zone) =>
-    el('option', { value: zone }, zone === DEFAULT_TIMEZONE ? tr("Москва (Europe/Moscow)") : zone)));
+    el('option', { value: zone }, label(zone))));
   select.value = me.timezone || DEFAULT_TIMEZONE;
   const note = status('timezone-status');
   const save = button(tr("Сохранить"), { class: 'btn', id: 'timezone-save' }, async () => {
@@ -1223,7 +1228,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
   }
 
-  if (other && me?.studio_version) nav.append(el('p', { class: 'muted small', id: 'studio-version' }, `Studio ${me.studio_version}`));
+  if (other && pageVersion) nav.append(el('p', { class: 'muted small', id: 'studio-version' }, `Studio ${pageVersion}`));
 
   async function changed() {
     await reload();

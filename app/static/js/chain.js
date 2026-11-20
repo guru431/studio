@@ -9,12 +9,13 @@ import { tr } from './i18n.js';
  * у внешнего сервиса (модель не из перечня шлюза). */
 import { el } from './ui.js';
 import { dateOnly } from './time.js';
+import { LABELS } from './models.js';
 
 const KINDS = { generation: tr("Генерация"), upload: tr("Фото с устройства"), edit: tr("Правка"), brush: tr("Правка кистью"),
   video: tr("Ролик") };
-export const NAMES = { lustify: 'Lustify', flux: 'FLUX', snofs: 'SNOFS Krea 2',
-  'big-love': 'Big Love Eryn1', fineview: 'FineView QW21', muse: 'Muse 3.5 Krea 2',
-  'jib-moss': 'Jib Mix Moss V2', fineporn: 'FinePorn v5', 'moody-krea': 'Moody Krea v8' };
+/** Модели картинок шлюза (images.MODELS и снятые) → подпись из общей таблицы models.js. */
+export const NAMES = Object.fromEntries(['lustify', 'flux', 'snofs', 'big-love', 'fineview', 'muse', 'jib-moss', 'fineporn',
+  'moody-krea'].map((id) => [id, LABELS[id]]));
 const RESOLUTION = { fast: '480p', standard: '576p', high: '720p', native: '768p' };
 const STRENGTH_HISTORY = new Set(['lustify', 'snofs', 'big-love', 'muse', 'jib-moss', 'fineporn', 'moody-krea']);
 

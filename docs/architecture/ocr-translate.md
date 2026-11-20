@@ -1,9 +1,9 @@
 # «Сканы» и «Перевод»
 
-## Распознавание
+## Сканы
 
 - Распознавание (спека 2026-10-27-studio-ocr-design, шаг схемы 16 `db.OCR_16`): раздел `ocr`
-  «Распознавание», вкладка рельса «Сканы» (`ocr.js`, `#/ocr`). Документ — `scans` (`queued`, `working`,
+  «Сканы» (`ocr.js`, `#/ocr`). Документ — `scans` (`queued`, `working`,
   `cancelling`, `done`, `error`, `cancelled`; `origin` — `section`/`chat`, `attachment_id` без FK; `text` —
   распознанные страницы по итогу — и при ошибке и отмене (`ocr._text`), для поиска триггерами `search_scans_*`), страницы — `scan_pages` (n с 1, свой
   `user_id` — для `media.referenced`; `waiting`, `done`, `failed`, `layer`, `blank`). Шаг 16 связал каждое

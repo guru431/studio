@@ -103,3 +103,45 @@ def test_saved_timezone_controls_dates_and_day_groups_across_dst(browser, live):
     assert not result.get('failed'), result
     assert result['values'] == {str(index): case[-1] for index, case in enumerate(cases)}
     assert not problems(result), problems(result)
+
+
+OFFER = "document.querySelector('#timezone-offer')"
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_device_timezone_is_offered_once_and_listed_first(browser, live, width):
+    """Устройство в Екатеринбурге, учётка — по Москве: над разделом предложение перейти на пояс устройства.
+    «Оставить» запоминается на устройстве (после перезагрузки не спрашивает); в настройках пояс устройства — первым,
+    у поясов — смещение; «Перейти на …» в другой учётке сохраняет пояс в профиле."""
+    keep, move = f'tz-offer-keep-{width}', f'tz-offer-move-{width}'
+    live.add_user(keep)
+    live.add_user(move)
+    zone = 'Asia/Yekaterinburg'
+    first = browser.drive(live.url + '/', [*signin(keep), ('wait', READY), ('wait', OFFER),
+        ('eval', 'text', f"{OFFER}.textContent"),
+        ('eval', 'inside', f"(() => {{ const r = {OFFER}.getBoundingClientRect();"
+                           " return r.left >= 0 && r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth; })()"),
+        ('click', '#timezone-offer-no'), ('wait', f"!{OFFER}"),
+        ('eval', 'reload', 'location.reload(); true'), ('wait', READY),
+        ('eval', 'again', f"!!{OFFER}"),
+        *go('settings/appearance'), ('wait', "document.querySelector('#timezone')"),
+        ('eval', 'options', "[...document.querySelectorAll('#timezone option')].slice(0, 1).map((o) => [o.value, o.textContent])"
+                            ".concat([...document.querySelectorAll('#timezone option')].filter((o) => o.value === 'Europe/Moscow')"
+                            ".map((o) => [o.value, o.textContent]))"),
+        ('eval', 'out', "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")],   # следующий проход — другая учётка
+        width=width, mobile=width == 320, timezone=zone)
+    assert not first.get('failed'), first
+    v = first['values']
+    assert v['text'].startswith('Время в Студии — по поясу Москва (UTC+03:00), а на этом устройстве — '
+                                'Asia/Yekaterinburg (UTC+05:00).') and v['inside'] is True
+    assert v['again'] is False
+    assert v['options'] == [[zone, 'UTC+05:00 · Asia/Yekaterinburg — это устройство'],
+                            ['Europe/Moscow', 'UTC+03:00 · Москва (Europe/Moscow)']]
+    second = browser.drive(live.url + '/', [*signin(move), ('wait', READY), ('wait', OFFER),
+        ('click', '#timezone-offer-yes'), ('wait', f"{OFFER}.textContent.startsWith('Часовой пояс сохранён')"),
+        ('eval', 'profile', "fetch('/api/me').then((r) => r.json()).then((me) => me.timezone)"),
+        ('eval', 'reload', 'location.reload(); true'), ('wait', READY), ('eval', 'again', f"!!{OFFER}")],
+        width=width, mobile=width == 320, timezone=zone)
+    assert not second.get('failed'), second
+    assert second['values']['profile'] == zone and second['values']['again'] is False
+    assert not problems(first) and not problems(second), (problems(first), problems(second))

@@ -6,11 +6,17 @@ import { tr } from './i18n.js';
  * со `static` из /health: другой — плашка «Студия обновилась» с кнопкой «Обновить» (location.reload — работает
  * и в standalone-PWA без адресной строки) и отказ code 'updated'; тот же или нет связи — прежние слова о связи
  * (code 'module'). Английский TypeError браузера наружу не выходит. `check()` — та же сверка для отказа обычной
- * статики (скрипты Markdown). Навигацию служебный работник берёт из сети: перезагрузка получает новую оболочку. */
+ * статики (скрипты Markdown). Навигацию служебный работник берёт из сети: перезагрузка получает новую оболочку.
+ *
+ * Разделы, загруженные до выкладки, 404 не получат: `watchDeploys()` сверяет хеш и при каждом возвращении на экран
+ * (событие `studio-me` — профиль перечитан). `pageVersion` — версия Studio, с которой открыта страница: меню и
+ * настройки показывают её, а версию перечитанного профиля принимают, только когда статика службы та же. */
 import { el } from './ui.js';
+import { me } from './api.js';
 
 const PAGE = (/\/static\/v\/([0-9a-f]+)\//.exec(import.meta.url) || [])[1] || null;
 export const UPDATED = tr("Студия обновилась — нажмите «Обновить» вверху страницы.");
+export let pageVersion = null;
 
 let stale = false;
 let asking = null;
@@ -24,7 +30,7 @@ function bar() {
     el('span', {}, tr("Студия обновилась")), go));
 }
 
-/** true — служба уже другой версии (плашка показана); тот же хеш, нет связи, нет ответа — false. */
+/** true — служба уже другой версии (плашка показана); тот же хеш — false; нет связи, нет ответа — null. */
 export function check() {
   if (stale) return Promise.resolve(true);
   if (!asking) {
@@ -32,9 +38,10 @@ export function check() {
       try {
         const answer = await fetch('/health', { cache: 'no-store', credentials: 'same-origin' });
         const current = answer.ok ? (await answer.json()).static : null;
-        stale = !!PAGE && typeof current === 'string' && current !== PAGE;
+        if (!PAGE || typeof current !== 'string') return null;
+        stale = current !== PAGE;
       } catch {
-        return false;
+        return null;
       } finally {
         asking = null;
       }
@@ -43,6 +50,14 @@ export function check() {
     })();
   }
   return asking;
+}
+
+/** Один раз после профиля (app.js): версия страницы и сверка выкладки при возвращении на экран. */
+export function watchDeploys() {
+  pageVersion = me.studio_version || null;
+  document.addEventListener('studio-me', async () => {
+    if (await check() === false) pageVersion = me.studio_version || null;
+  });
 }
 
 /** Модуль из load() или отказ русскими словами: what — «Раздел не загрузился», «Чат не загрузился»… */

@@ -148,6 +148,33 @@ def test_offline_retry_preserves_navigation_url(desktop_browser, live, route, au
         assert page.evaluate("window.initialFragment") == f"#{fragment}"
 
 
+@pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
+def test_offline_shell_opens_the_address_when_the_service_answers_again(desktop_browser, live):
+    """Сеть была, а служба не отвечала: события `online` не будет — офлайн-оболочка сама опрашивает `/health` и
+    открывает исходный адрес, как только служба ответила."""
+    with desktop_browser.new_context() as context:
+        signed = context.request.post(live.url + "/login", form={"login": "owner", "password": "password-123"},
+                                      max_redirects=0)
+        assert signed.status == 303
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        page.add_init_script("addEventListener('online', event => event.stopImmediatePropagation())")
+        page.goto(live.url + "/robots.txt")
+        page.evaluate("""async () => {
+          await navigator.serviceWorker.register('/sw.js');
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true}));
+          }
+        }""")
+        context.set_offline(True)
+        target = live.url + "/#/photo"
+        page.goto(target)
+        page.locator("#retry").wait_for()
+        with page.expect_event("domcontentloaded"):
+            context.set_offline(False)
+        assert page.url == target and page.locator("#retry").count() == 0
+
+
 def test_history_strength_includes_retired_models(browser, live):
     check = """(async () => {
       const {strengthOf} = await import('/static/js/chain.js');
