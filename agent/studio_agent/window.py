@@ -570,6 +570,12 @@ class MainWindow:
                     "email_code": email_code.get(),
                     "projects_roots": list(folders), "pin": pin.get(), "pin2": pin2.get(), "no_pin": False,
                     "autostart": auto.get()}
+            # Сначала проверка без сети: при опечатке пароль и PIN остаются в полях. Пара логин/пароль — мягко
+            # (`enrolled=True`): привязан ли компьютер к этому адресу, знает ядро (`apply_setup`), окно DPAPI не читает.
+            found = setup.validate(form, enrolled=True)
+            if found:
+                errors.set("\n".join(found))
+                return
             password.set("")
             pin.set("")
             pin2.set("")

@@ -261,3 +261,44 @@ def test_local_activity_buttons_stop_only_desktop_and_wait_for_work_before_exit(
     assert exits == [True]
     immediate.invoke()
     assert exits == [True, True]
+
+
+def _widgets(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _widgets(child)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("folder, pin2, error", [(False, "2468", "Папки нет"), (True, "1357", "PIN не совпадает")])
+def test_login_form_keeps_password_and_pin_until_local_checks_pass(home, monkeypatch, tk_root, tmp_path,
+                                                                   folder, pin2, error):
+    """«Подключить» с ошибкой формы (нет папки, PIN не совпал) не стирает пароль и PIN и не зовёт привязку."""
+    from tkinter import ttk
+
+    cfg = store.Config(projects_roots=[str(tmp_path)] if folder else [])
+    started = []  # привязка (`apply_setup` в потоке) — только после локальной проверки
+    ctrl = SimpleNamespace(state="setup", studio_version=None, config=lambda: cfg, backend_status=lambda: {},
+                           login="")
+    monkeypatch.setattr(window.MainWindow, "lift", lambda self: None)
+    monkeypatch.setattr(window.MainWindow, "work", lambda self, fn, done, **kwargs: started.append(fn))
+    main = window.MainWindow(tk_root, ctrl)
+    tk_root.update()
+    entries = [w for w in _widgets(main.win) if isinstance(w, ttk.Entry)]
+    secrets = [w for w in entries if w.cget("show")]
+    login = next(w for w in entries if not w.cget("show") and not w.get())  # адрес и имя уже заполнены
+    login.insert(0, "owner")
+    for entry, value in zip(secrets, ("пароль", "2468", pin2)):
+        entry.insert(0, value)
+    go = next(w for w in _widgets(main.win) if isinstance(w, ttk.Button) and w.cget("text") == "Подключить")
+    go.invoke()
+    tk_root.update()
+    assert started == [] and [w.get() for w in secrets] == ["пароль", "2468", pin2]
+    assert any(isinstance(w, ttk.Label) and w.cget("text") == error for w in _widgets(main.win))
+    assert go.instate(["!disabled"])
+    if folder:
+        secrets[2].delete(0, "end")
+        secrets[2].insert(0, "2468")
+        go.invoke()   # всё верно — привязка уходит в поток, секреты из полей стёрты
+        tk_root.update()
+        assert len(started) == 1 and [w.get() for w in secrets] == ["", "", ""]
