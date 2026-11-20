@@ -505,7 +505,9 @@ HTTP разрешён только для IP частной сети/loopback, H
 ## 10. Статусы проектов
 
 `hello.project_activity: true` объявляет `activity` без project/chat/engine. Просьба требует
-открытую PIN-сессию. HTTP: `GET /api/code/agents/<aid>/activity`, только владелец компьютера.
+открытую PIN-сессию (участнику — разрешения §17: только выданные проекты). Отдельного HTTP-маршрута
+на один компьютер нет: просьбу шлёт сводка `GET /api/code/activity` по всем доступным компьютерам —
+своим и с выданными проектами (§16), добавляя названия из `chats` и непрочитанные завершения.
 Ответ `{items: [{project, chat, engine, running: true, asking: bool}]}` включает все текущие ходы
 Claude, Codex и OpenCode, запущенные этим мостом; названий, текстов и истории в нём нет.
 Пустой список означает отсутствие текущих ходов моста, не отсутствие активности внешнего CLI.
@@ -516,7 +518,8 @@ Claude, Codex и OpenCode, запущенные этим мостом; назв�
 ### 10.1. Сводка файлов проекта и Git (studio-agent 0.7.3)
 
 `hello.project_summary: true` объявляет просьбу `project_summary {project}`. Требуется открытая PIN-сессия;
-HTTP — `GET /api/code/agents/<aid>/projects/<pid>/summary`, только владелец. Старому мосту — 409 `unsupported`.
+HTTP — `GET /api/code/agents/<aid>/projects/<pid>/summary`, владелец или участник выданного проекта (§17).
+Старому мосту — 409 `unsupported`.
 Ответ: `{findings, ideas, changed, unpushed, modified, checked_at, git}`. Счётчики — целые неотрицательные
 или `null` (нет достоверных сведений); даты — Unix seconds. `git` — `ok|not_git|error`.
 `findings`/`ideas` — записи уровня `##` в корневых `FINDINGS.md`/`IDEAS.md` со статусом `open`/`proposed`,
@@ -568,7 +571,8 @@ shallow/detached/пустая история и ошибки дают `unknown`,
 ## 11. Инструменты рабочего места (studio-agent 0.8.0)
 
 Возможности `hello.file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`, `subagents`, `worktrees` —
-необязательные boolean. HTTP всегда проверяет владельца, открытую сессию и соответствующую возможность;
+необязательные boolean. HTTP всегда проверяет право — владелец с открытой сессией или участник выданного
+проекта (§17; `worktrees` — только владелец) — и соответствующую возможность;
 старому мосту — 409 `unsupported`. Версия протокола остаётся 1. Тексты, имена и результаты не записываются
 в серверную БД, журналы или browser storage. Новые файлы не требуют зависимостей в серверной среде.
 
