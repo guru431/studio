@@ -7908,7 +7908,7 @@ def test_socket_bridge_comes_online(live):
     sb = SocketBridge(live.url, key, machine).start()
     try:
         assert sb.welcome == {"t": "welcome", "agent_id": aid, "name": "Сетевой ПК", "login": "owner",
-                              "studio_version": release.VERSION, "completions": True}
+                              "studio_version": release.VERSION, "completions": True, "pending_asks": True}
         wait_for(lambda: aid in bridge.LINKS)
         assert bridge.LINKS[aid].hello["has_pin"] is True
     finally:
@@ -7992,6 +7992,42 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     assert revoked[0][3] == "127.0.0.1"
     assert ["Рабочий ПК", "связь потеряна", "127.0.0.1"] in v["events"][:3]
     assert sb.close_code == 4401 and work not in bridge.LINKS
+    assert not problems(r), problems(r)
+
+
+def test_settings_member_leaves_a_shared_computer_instead_of_revoking_it(browser, live):
+    """FINDINGS 07:F3: чужой компьютер участника — метка «Совместные» и «Покинуть» вместо «Отозвать»; подтверждение
+    снимает выдачи, строка уходит."""
+    live.add_user("sharer")
+    member = live.add_user("sharee")
+    aid, _ = enroll_live(live, "sharer", "ПК владельца")
+    live_sql(live, "INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, 0)",
+             (aid, "0123456789abcdef", member))
+    rows = """[...document.querySelectorAll('#agents li[data-id]')].map((li) => [li.querySelector('.agent-name').textContent,
+      li.querySelector('.agent-shared')?.textContent ?? null, li.querySelector('.agent-revoke') !== null,
+      li.querySelector('.agent-leave')?.textContent ?? null])"""
+    r = browser.drive(live.url + "/", [*signin("sharee"), ("wait", READY), *go("settings/code"),
+        ("wait", "document.querySelectorAll('#agents li[data-id]').length === 1"),
+        ("eval", "rows", rows),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", f"#agents li[data-id='{aid}'] .agent-leave"), ("wait", is_open("#agent-leave-dialog")),
+        ("eval", "dialogTitle", "document.querySelector('#agent-leave-dialog h2').textContent"),
+        ("eval", "confirmText", "document.querySelector('#agent-leave-confirm').textContent"),
+        ("eval", "dialogFits", NO_OVERFLOW),
+        ("click", "#agent-leave-confirm"),
+        ("wait", "document.querySelectorAll('#agents li[data-id]').length === 0"),
+        ("eval", "closed", "!" + is_open("#agent-leave-dialog"))], width=320, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["rows"] == [["ПК владельца", "Совместные", False, "Покинуть"]] and v["fits"] is True
+    assert v["dialogTitle"] == "Покинуть совместные проекты?" and v["confirmText"] == "Покинуть"
+    assert v["dialogFits"] is True and v["closed"] is True
+    import db
+    conn = db.connect(live.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM project_members").fetchone()[0] == 0
+    finally:
+        conn.close()
     assert not problems(r), problems(r)
 
 

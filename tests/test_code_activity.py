@@ -76,6 +76,25 @@ def test_background_open_of_a_computer_without_pin_is_recorded_once_in_connectio
     assert len(opens()) == 1
 
 
+def test_activity_summary_never_opens_a_computer_of_a_shared_project(studio, monkeypatch):
+    """Чужой компьютер участника открывает только владелец: на `closed` опрос значка `open` не шлёт."""
+    import claude_code
+    aid, machine, link = setup(studio)
+    link.hello["project_activity"] = True
+    make_user(studio, "friend")
+    assert studio.c.post(f"/api/code/agents/{aid}/projects/{ALPHA}/members", json={"login": "friend"}).status_code == 201
+    signin(studio, "friend")
+    machine.handle = lambda req: ({"t": "res", "id": req.get("id"), "ok": False, "code": "closed",
+                                   "message": "x"}, [])
+    ops = []
+    original = claude_code.ask
+    monkeypatch.setattr(claude_code, "ask", lambda request, computer, op, **kw: ops.append(op) or original(
+        request, computer, op, **kw))
+    assert studio.c.get("/api/code/activity").json() == {"items": [{"aid": aid, "items": []}]}
+    assert "open" not in ops
+    assert not [e for e in studio.c.get("/api/agents/events").json()["items"] if e["kind"] == "open"]
+
+
 def test_activity_summary_keeps_pin_closed_and_drops_offline_or_unsupported(studio, caplog):
     aid, machine, link = setup(studio, pin="2468", opened=False)
     link.hello["project_activity"] = True
@@ -144,6 +163,61 @@ def test_completed_session_keeps_title_and_unread_until_that_result_is_viewed(st
     assert studio.c.get("/api/code/activity").json() == {"items": [{"aid": aid, "items": []}]}
     assert [r["name"] for r in state.DB.execute("PRAGMA table_info(code_attention)")] == [
         "agent_id", "project", "chat", "revision", "finished", "seen"]
+
+
+def test_unread_is_per_user_and_member_sees_only_completions_after_the_grant(studio):
+    """FINDINGS 07:F2: просмотр участника не снимает «непрочитано» у владельца и наоборот; завершения до выдачи
+    участнику непрочитанными не показываются."""
+    aid, machine, link = setup(studio)
+    link.hello["project_activity"] = True
+    third = "33333333-4444-4555-8666-777777777777"
+    emit(studio, link, ALPHA, third, {"k": "done", "status": "done"})      # до выдачи
+    studio.clock[0] += 60
+    make_user(studio, "friend")
+    assert studio.c.post(f"/api/code/agents/{aid}/projects/{ALPHA}/members", json={"login": "friend"}).status_code == 201
+    studio.clock[0] += 60
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})
+    token = code_attention.revision(aid, ALPHA, A)
+    path = f"/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}/seen"
+
+    def unread():
+        return {i["chat"] for g in studio.c.get("/api/code/activity").json()["items"] for i in g["items"] if i.get("unread")}
+
+    assert unread() == {A, third}
+    signin(studio, "friend")
+    assert unread() == {A}
+    assert studio.c.post(path, json={"attention": token}).status_code == 204
+    assert unread() == set()
+    signin(studio, "owner")
+    assert unread() == {A, third}                                          # у владельца отметка на месте
+    assert studio.c.post(path, json={"attention": token}).status_code == 204
+    assert unread() == {third}
+    emit(studio, link, ALPHA, A, {"k": "done", "status": "done"})          # новое завершение — снова обоим
+    assert unread() == {A, third}
+    signin(studio, "friend")
+    assert unread() == {A}
+
+
+def test_step_53_keeps_seen_marks_for_owner_and_members(env):
+    """Шаг 53: прежняя общая отметка `seen` переходит владельцу и участникам проекта; удаление отметки или учётки
+    уносит их строки."""
+    from historical_schema import install_schema
+    import db
+    conn = db.connect(env.db_path)
+    install_schema(conn, 52)
+    conn.execute("INSERT INTO users(id, login, name, pw_hash, created) VALUES (1, 'o', 'O', 'h', 0), (2, 'm', 'M', 'h', 0)")
+    conn.execute("INSERT INTO agents(id, user_id, name, key_hash, created) VALUES (1, 1, 'PC', 'k', 0)")
+    conn.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (1, 'p', 2, 0)")
+    conn.execute("INSERT INTO code_attention VALUES (1, 'p', 'seen', 'r1', 1, 1), (1, 'p', 'new', 'r2', 1, 0),"
+                 " (1, 'q', 'other', 'r3', 1, 1)")
+    db.migrate(conn)
+    assert sorted(tuple(r) for r in conn.execute("SELECT chat, user_id, revision FROM code_attention_seen")) == [
+        ("other", 1, "r3"), ("seen", 1, "r1"), ("seen", 2, "r1")]
+    conn.execute("DELETE FROM users WHERE id = 2")
+    conn.execute("DELETE FROM code_attention WHERE chat = 'other'")
+    assert [tuple(r) for r in conn.execute("SELECT chat, user_id FROM code_attention_seen")] == [("seen", 1)]
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
 
 
 def test_unread_and_seen_require_own_open_computer(studio):

@@ -13,6 +13,7 @@ PIN check grants a separate, expiring read token, never a Studio account session
 отзывает ссылку, владельцу — push/ntfy без содержимого и `share_locked` в журнале безопасности.
 """
 import asyncio
+import base64
 import json
 import logging
 import uuid
@@ -23,6 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import auth
+import bridge
 import chat
 import claude_code
 import clock
@@ -284,7 +286,74 @@ async def agent_share(aid: int, pid: str, session_id: str, request: Request):
     return _out(_owned(request, **source))
 
 
-async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, title: str) -> dict:
+def _changes(value) -> list:
+    """Правки шага для диффа на странице ссылки: только путь и тексты правки, как их отдал мост."""
+    return [{key: change[key] for key in ("path", "patch", "before", "after") if isinstance(change.get(key), str)}
+            | ({"truncated": True} if change.get("truncated") is True else {})
+            for change in (value if isinstance(value, list) else []) if isinstance(change, dict)
+            and isinstance(change.get("path"), str)]
+
+
+def _parts(item: dict, text: str, steps: list) -> list | None:
+    """Порядок текста и шагов ответа по `timeline` моста (протокол, мост 0.15.0): `[{text}, {step: номер}]` — без id
+    шагов. Те же правила, что у страницы (`code-chat.js` renderTimeline): куски текста подряд от начала до конца в
+    единицах UTF-16, каждый шаг ровно раз; иначе None — прежний показ «текст, затем шаги»."""
+    timeline = item.get("timeline")
+    ids = {step.get("id"): n for n, step in enumerate(steps)}
+    if not isinstance(timeline, list) or not timeline or len(timeline) > 2000 or len(ids) != len(steps) or None in ids:
+        return None
+    units = text.encode("utf-16-le", "surrogatepass")
+    parts, position, seen = [], 0, set()
+    try:
+        for part in timeline:
+            if not isinstance(part, dict):
+                return None
+            if part.get("kind") == "step" and part.get("id") in ids and part["id"] not in seen:
+                seen.add(part["id"])
+                parts.append({"step": ids[part["id"]]})
+            elif (part.get("kind") == "text" and type(part.get("start")) is int and type(part.get("end")) is int
+                    and part["start"] == position <= part["end"] <= len(units) // 2):
+                parts.append({"text": units[2 * position:2 * part["end"]].decode("utf-16-le", "surrogatepass")})
+                position = part["end"]
+            else:
+                return None
+    except UnicodeDecodeError:
+        return None
+    return parts if position == len(units) // 2 and len(seen) == len(steps) else None
+
+
+#: картинок истории, которые ссылка «Поделиться» дочитывает у моста (по просьбе `history_image` на каждую)
+SHARE_IMAGES_MAX = 50
+
+
+async def _history_images(request: Request, aid: int, pid: str, session_id: str, snapshot: dict, wanted: list) -> None:
+    """Байты картинок истории — в снимок ссылки, пока он не больше `MAX_SNAPSHOT`; не вошедшие остаются
+    `{name, missing: true}` — получатель видит, что картинка была. Мост без `hello.history_images` — все заглушки."""
+    link = bridge.LINKS.get(aid)
+    if not wanted or link is None or not link.hello.get("history_images"):
+        return
+    size = len(json.dumps(snapshot, ensure_ascii=False).encode("utf-8"))
+    for image, message_id, index in wanted[:SHARE_IMAGES_MAX]:
+        try:
+            data = await claude_code.ask(request, aid, "history_image", quiet=True, passive=True, project=pid,
+                                         chat=session_id, message_id=message_id, index=index)
+            raw, mime = await asyncio.to_thread(claude_code._image_bytes, data, max_bytes=claude_code.IMAGE_MAX)
+        except HTTPException as error:
+            if error.detail.get("code") in ("closed", "offline"):
+                raise
+            continue
+        encoded = base64.b64encode(raw).decode("ascii")
+        if size + len(encoded) + 64 > MAX_SNAPSHOT:
+            continue
+        size += len(encoded) + 64
+        image.pop("missing")
+        image.update(mime=mime, data=encoded)
+
+
+async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, title: str, *,
+                         images: bool = False) -> dict:
+    """Снимок агентского чата. `images` — ссылка «Поделиться»: картинки истории дочитываются у моста
+    (`_history_images`); экспорт их не читает."""
     _agent_source(request, aid, pid, session_id)
     pages, before, total_size, count = [], None, 0, 0
     while True:
@@ -300,20 +369,36 @@ async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, 
         if start == 0:
             break
         before = start
-    messages = []
+    messages, wanted = [], []
     for page in reversed(pages):
         for item in page:
             if not isinstance(item, dict) or item.get("role") not in ("user", "assistant"):
                 continue
             # Explicit fields: never publish project paths, machine/session metadata or live controls.
-            steps, images = item.get("steps"), item.get("images")
-            messages.append({"role": item["role"], "text": item.get("text") if isinstance(item.get("text"), str) else "",
-                             "steps": [{key: step[key] for key in ("name", "tool", "input", "text", "error") if key in step}
-                                       for step in (steps if isinstance(steps, list) else []) if isinstance(step, dict)],
-                             "images": [{key: image[key] for key in ("mime", "name", "data") if key in image}
-                                        for image in (images if isinstance(images, list) else []) if isinstance(image, dict)]})
+            text = item.get("text") if isinstance(item.get("text"), str) else ""
+            steps = [step for step in (item["steps"] if isinstance(item.get("steps"), list) else [])
+                     if isinstance(step, dict)]
+            message = {"role": item["role"], "text": text,
+                       "steps": [{key: step[key] for key in ("name", "tool", "input", "text", "error") if key in step}
+                                 | ({"changes": changes} if not step.get("error") and (changes := _changes(step.get("changes")))
+                                    else {}) for step in steps], "images": []}
+            for image in (item["images"] if isinstance(item.get("images"), list) else []):
+                if not isinstance(image, dict):
+                    continue
+                kept = {key: image[key] for key in ("mime", "name", "data") if key in image}
+                if "data" not in kept:
+                    # Картинка истории — ссылкой {index, name} (протокол §2.2): байты дочитываются ниже или её нет.
+                    kept = {**({"name": image["name"]} if isinstance(image.get("name"), str) else {}), "missing": True}
+                    if isinstance(item.get("id"), str) and type(image.get("index")) is int and image["index"] >= 0:
+                        wanted.append((kept, item["id"], image["index"]))
+                message["images"].append(kept)
+            if (parts := _parts(item, text, steps)) is not None:
+                message["parts"] = parts
+            messages.append(message)
     snapshot = {"title": title, "messages": messages}
     _encode(snapshot)
+    if images:
+        await _history_images(request, aid, pid, session_id, snapshot, wanted)
     return snapshot
 
 
@@ -322,7 +407,7 @@ async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn,
     source = _agent_source(request, aid, pid, session_id)
     _own_computer(request, aid)
     expected = _owned(request, **source)
-    snapshot = await agent_snapshot(request, aid, pid, session_id, body.title)
+    snapshot = await agent_snapshot(request, aid, pid, session_id, body.title, images=True)
     return await _store(request, body, snapshot, expected, **source)
 
 

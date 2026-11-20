@@ -92,7 +92,7 @@ def test_hello_brings_the_agent_online(studio):
     with link_ws(studio, key) as ws:
         ws.send_json(HELLO)
         assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
-                                     "studio_version": release.VERSION, "completions": True}
+                                     "studio_version": release.VERSION, "completions": True, "pending_asks": True}
         [item] = agents(studio)
         assert {k: item[k] for k in ("online", "has_pin", "cc_version", "projects_root", "models", "efforts",
                                      "last_seen")} == {
@@ -406,7 +406,7 @@ def test_lock_and_unlock_preserve_computer_pin_but_block_access_while_locked(stu
     foreign = connect(studio, enroll(studio, login="friend")[0], other)
     session = bridge.tag(security.digest(studio.c.cookies[auth.COOKIE]))
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
-                          "studio_version": release.VERSION, "completions": True}]
+                          "studio_version": release.VERSION, "completions": True, "pending_asks": True}]
 
     def closes():
         settle(studio)
@@ -507,6 +507,32 @@ def test_completions_after_an_outage_mark_unread_and_push_like_a_live_done(studi
     studio.c.portal.call(bridge.unwatch, aid, other, q)
 
 
+def test_pending_asks_after_an_outage_push_without_marking_unread(studio, monkeypatch):
+    """FINDINGS 07:F12: вопрос или запрос разрешения, возникший без канала, мост досылает в `completions` со
+    статусом `permission|question` (welcome.pending_asks); студия шлёт тот же push, что живой `ask`, если чат никто
+    не смотрит, — без отметки «непрочитано» и не снимая начавшего ход."""
+    import code_attention
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a: pushed.append(a))
+    other = "1f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
+    machine = FakeMachine()
+    machine.completions = True
+    link = connect(studio, aid, machine)
+    assert link.sent[0]["pending_asks"] is True
+    bridge.initiated(aid, other, None)
+    q = studio.c.portal.call(bridge.watch, aid, other, None, link.user_id)
+    items = [{"project": pid("studio"), "chat": CHAT, "status": "permission", "project_name": "studio", "ago": 3},
+             {"project": pid("studio"), "chat": other, "status": "question", "ago": 1}]
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": items})
+    assert code_attention.revision(aid, pid("studio"), CHAT) is None
+    assert pushed == [(link.user_id, {"ru": "Рабочий ПК · studio: ждёт подтверждения",
+                                      "en": "Рабочий ПК · studio: awaiting confirmation"},
+                       f"code/{aid}/{pid('studio')}/{CHAT}", f"code-{CHAT}")]          # `other` смотрят — без push
+    studio.c.portal.call(bridge.unwatch, aid, other, q)
+
+
 def test_stop_and_drop_user_close_links(studio):
     owner = make_user(studio, "owner")
     make_user(studio, "friend")
@@ -531,7 +557,7 @@ def test_welcome_carries_login(studio):
     aid, _ = enroll(studio, login="friend", name="Ноутбук")
     link = connect(studio, aid, FakeMachine())
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Ноутбук", "login": "friend",
-                          "studio_version": release.VERSION, "completions": True}]
+                          "studio_version": release.VERSION, "completions": True, "pending_asks": True}]
 
 
 def test_hanging_close_holds_neither_the_new_link_nor_the_revoke(studio, monkeypatch):

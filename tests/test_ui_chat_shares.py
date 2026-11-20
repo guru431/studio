@@ -148,7 +148,14 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
         pytest.skip('Playwright не эмулирует мобильный Firefox')
     client, cookie, cookies = owner(live)
     machine = code_free_machine({CODE_CHAT_A: code_session('Обсуждение', messages=[
-        {'id': 'u', 'role': 'user', 'text': 'Вопрос к агенту', 'steps': [], 'time': 1},
+        {'id': 'u', 'role': 'user', 'text': 'Вопрос к агенту', 'steps': [], 'time': 1,
+         'images': [{'index': 0, 'name': 'shot.png'}]},
+        # FINDINGS 07:F4: правка — диффом, порядок текста и шагов — по timeline, картинка без байтов — заглушкой
+        {'id': 'e', 'role': 'assistant', 'text': 'СначалаПотом', 'time': 2, 'steps': [
+            {'id': 'edit', 'tool': 'Edit', 'input': {'file_path': 'a.py'}, 'text': 'ok',
+             'changes': [{'path': 'a.py', 'before': 'old line', 'after': 'new line'}]}],
+         'timeline': [{'kind': 'text', 'start': 0, 'end': 7}, {'kind': 'step', 'id': 'edit'},
+                      {'kind': 'text', 'start': 7, 'end': 12}]},
         {'id': 'a', 'role': 'assistant', 'text': 'Ответ агента', 'steps': [
             {'id': 'cmd', 'tool': 'Bash', 'input': {'command': 'echo test'}, 'text': 'test'}], 'time': 2}])})
     aid, bridge = code_online(live, 'owner', machine)
@@ -180,8 +187,15 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
                 reader.locator('#share-pin').fill('4567')
                 reader.locator('#share-open').click()
                 pw.expect(reader.locator('#shared-messages')).to_contain_text('Ответ агента')
-                reader.locator('#shared-messages summary').click()
+                reader.locator('#shared-messages summary', has_text='Bash').click()
                 pw.expect(reader.locator('#shared-messages details pre').last).to_have_text('test')
+                pw.expect(reader.locator('#shared-messages')).to_contain_text('Изображение «shot.png» в ссылку не вошло')
+                edited = reader.locator('#shared-messages article').nth(1)
+                assert edited.evaluate("node => [...node.children].slice(1, -1).map((child) => child.tagName"
+                                       " === 'DETAILS' ? 'step' : child.textContent.trim())") == ['Сначала', 'step', 'Потом']
+                edited.locator('summary').click()
+                pw.expect(edited.locator('.code-change')).to_contain_text('new line')
+                assert reader.evaluate('document.documentElement.scrollWidth <= innerWidth')
             page.locator('#chat-share-revoke').click()
             pw.expect(page.locator('#chat-share-link')).not_to_be_visible()
     finally:

@@ -125,6 +125,10 @@
   `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` (`project_access.revoke`, без моста) и
   `DELETE /api/me/access/shares/<id>`; `DELETE /api/me/access` — «Отозвать всё» (`project_access.revoke_all` и все
   ссылки, `share_revoke` с `detail` all). Чужие строки не видны и не отзываются (404 / 204 без изменений).
+  Участник сам покидает совместные проекты чужого компьютера — `DELETE /api/me/access/shared/<компьютер>`
+  (`project_access.leave`, без моста; «Покинуть» в «Настройки → Агенты → Компьютеры»): его выдачи этого компьютера
+  со вкладками и местом — прочь, ему `project_leave`, владельцу — строка `member_remove` истории подключений с
+  устройством `claude_code.MEMBER` без адреса; свой компьютер и компьютер без выдач — 404.
 - `GET /api/me/security-events?before=` — журнал `security_events` (шаг 34; `kind` без CHECK, каскад от учётки).
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
   пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, при кодах входа —

@@ -14,7 +14,8 @@
 - `GET /api/me/access` — все выдачи проектов компьютеров учётки (участник, компьютер, проект — имя от моста, если
   он на связи и открыт, иначе id; `missing` — папки уже нет) и все её ссылки «Поделиться» (срок, открытия, неверные
   PIN). `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` и `DELETE /api/me/access/shares/<id>` —
-  отозвать одну, без моста; `DELETE /api/me/access` — «Отозвать всё».
+  отозвать одну, без моста; `DELETE /api/me/access` — «Отозвать всё». `DELETE /api/me/access/shared/<компьютер>` —
+  участник сам покидает совместные проекты чужого компьютера (`project_access.leave`).
 - `GET /api/me/security-events?before=<id>` — журнал безопасности страницами, новые сверху; свёрнутые повторы
   неудач — `count` и время первой `first` (security_log.NOISY).
 - Сброс пароля администратором (admin.py) ставит `users.password_reset`: `GET /api/me` отдаёт его владельцу, и
@@ -225,6 +226,13 @@ async def revoke_member(aid: int, pid: str, member: int, request: Request):
     import claude_code
     claude_code.check_pid(pid)
     project_access.revoke(request, aid, pid, member)
+    return Response(status_code=204)
+
+
+@router.delete("/access/shared/{aid}", status_code=204)
+async def leave_shared(aid: int, request: Request):
+    """Участник покидает совместные проекты чужого компьютера («Настройки → Агенты → Компьютеры»), без моста."""
+    project_access.leave(request, aid)
     return Response(status_code=204)
 
 

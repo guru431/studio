@@ -272,6 +272,70 @@ def test_agent_snapshot_fetches_all_pages_and_is_readable_without_bridge(studio)
     assert unlock(studio, token).status_code == 404
 
 
+def test_agent_link_keeps_history_images_diffs_and_order_of_text_and_steps(studio):
+    """FINDINGS 07:F4: картинки истории (ссылкой {index, name}) дочитываются у моста в снимок ссылки, не вошедшие —
+    заглушкой с именем; правки шагов — для диффа; порядок текста и шагов — по timeline, без id шагов. Экспорт
+    картинок у моста не читает."""
+    import base64
+    import bridge
+    from test_media import png
+    aid, machine, link = setup(studio)
+    machine.history_images = True
+    link.hello = bridge.parse_hello(machine.hello)
+    head = 'До 😀'                                                     # суррогатная пара: позиции — в UTF-16
+    cut = len(head.encode('utf-16-le')) // 2
+    raw = png(4, 3)
+    chat = machine.projects['alpha']['chats'][A]
+    chat['messages'] = [
+        {'id': 'm1', 'role': 'user', 'text': 'Смотри', 'images': [{'index': 0, 'name': 'screen.png'},
+                                                                 {'index': 1, 'name': 'lost.png'}]},
+        {'id': 'm2', 'role': 'assistant', 'text': head + '\nПосле', 'steps': [
+            {'id': 's1', 'tool': 'Edit', 'input': {'file_path': 'a.py'}, 'text': 'ok',
+             'changes': [{'path': 'a.py', 'before': 'x', 'after': 'y', 'secret': 'z'}, 'junk']},
+            {'id': 's2', 'tool': 'Edit', 'input': {}, 'text': 'fail', 'error': True,
+             'changes': [{'path': 'b.py', 'after': 'q'}]}],
+         'timeline': [{'kind': 'text', 'start': 0, 'end': cut}, {'kind': 'step', 'id': 's2'},
+                      {'kind': 'step', 'id': 's1'}, {'kind': 'text', 'start': cut, 'end': cut + 6}]},
+        {'id': 'm3', 'role': 'assistant', 'text': 'плохой порядок', 'steps': [{'id': 's3', 'tool': 'Bash'}],
+         'timeline': [{'kind': 'text', 'start': 0, 'end': 3}]}]
+    chat['image_data'] = {('m1', 0): {'mime': 'image/png', 'data': base64.b64encode(raw).decode()}}
+    endpoint = f'/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}/share'
+    _, token = create(studio, endpoint)
+    first, second, third = unlock(studio, token).json()['messages']
+    assert first['images'] == [{'name': 'screen.png', 'mime': 'image/png', 'data': base64.b64encode(raw).decode()},
+                               {'name': 'lost.png', 'missing': True}]
+    assert second['steps'][0]['changes'] == [{'path': 'a.py', 'before': 'x', 'after': 'y'}]
+    assert 'changes' not in second['steps'][1] and 'id' not in second['steps'][0]
+    assert second['parts'] == [{'text': head}, {'step': 1}, {'step': 0}, {'text': '\nПосле'}]
+    assert 'parts' not in third
+    machine.requests.clear()
+    exported = studio.c.post(endpoint[:-len('share')] + 'export', json={'format': 'md'})
+    assert exported.status_code == 200 and 'Вложение: screen.png' in exported.text
+    assert not [r for r in machine.requests if r['op'] == 'history_image']
+
+
+def test_agent_link_without_history_images_bridge_or_budget_keeps_named_placeholders(studio, monkeypatch):
+    import base64
+    import bridge
+    from test_media import png
+    aid, machine, link = setup(studio)
+    chat = machine.projects['alpha']['chats'][A]
+    chat['messages'] = [
+        {'id': 'm1', 'role': 'user', 'text': 'x', 'images': [{'index': 0, 'name': 'screen.png'}, {'index': 1}]}]
+    chat['image_data'] = {('m1', 0): {'mime': 'image/png', 'data': base64.b64encode(png(40, 40)).decode()}}
+    endpoint = f'/api/code/agents/{aid}/projects/{ALPHA}/chats/{A}/share'
+    _, token = create(studio, endpoint)
+    placeholders = [{'name': 'screen.png', 'missing': True}, {'missing': True}]
+    assert unlock(studio, token).json()['messages'][0]['images'] == placeholders
+    assert not [r for r in machine.requests if r['op'] == 'history_image']
+    machine.history_images = True
+    link.hello = bridge.parse_hello(machine.hello)
+    monkeypatch.setattr(chat_shares, 'MAX_SNAPSHOT', 300)                # картинка в предел снимка не входит
+    _, token = create(studio, endpoint, pin='4567')
+    assert unlock(studio, token, pin='4567').json()['messages'][0]['images'] == placeholders
+    assert [r['op'] for r in machine.requests].count('history_image') == 2
+
+
 def _row(chat_id='chat'):
     return state.DB.execute('SELECT * FROM chat_shares WHERE chat_id = ?', (chat_id,)).fetchone()
 

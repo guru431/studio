@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 53
+VERSION = 54
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -687,6 +687,20 @@ SCHEMA += SPEECH_52
 #: Прежний код столбец не читает и не пишет; ссылки до шага — без названия
 SHARES_53 = "ALTER TABLE chat_shares ADD COLUMN label BLOB;\n"
 SCHEMA += SHARES_53
+#: «непрочитано» «Агентов» — у каждой учётки своё (code_attention.py): просмотренная ревизия завершения по
+#: пользователю; общий `code_attention.seen` переходит владельцу и участникам проекта и дальше пишется для отката
+CODE_54 = """CREATE TABLE code_attention_seen(
+       agent_id INTEGER NOT NULL, chat TEXT NOT NULL,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       revision TEXT NOT NULL, PRIMARY KEY(agent_id, chat, user_id),
+       FOREIGN KEY(agent_id, chat) REFERENCES code_attention(agent_id, chat) ON DELETE CASCADE);
+INSERT INTO code_attention_seen(agent_id, chat, user_id, revision)
+SELECT c.agent_id, c.chat, a.user_id, c.revision FROM code_attention c JOIN agents a ON a.id = c.agent_id
+ WHERE c.seen = 1
+UNION SELECT c.agent_id, c.chat, m.user_id, c.revision FROM code_attention c
+  JOIN project_members m ON m.agent_id = c.agent_id AND m.project = c.project WHERE c.seen = 1;
+"""
+SCHEMA += CODE_54
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -799,6 +813,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     52: SPEECH_52,
     # название чата «Агентов» у ссылки «Поделиться» (шифром)
     53: SHARES_53,
+    # «непрочитано» «Агентов» — у каждой учётки своё
+    54: CODE_54,
 }
 
 
