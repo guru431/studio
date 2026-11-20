@@ -263,6 +263,17 @@ def _needs_web_consent(chat_id: str, consent: "float | None") -> bool:
         (chat_id, consent, consent)).fetchone() is not None
 
 
+def _chat_connection(user_id: int, conn_id: "int | None") -> "Connection | None":
+    """Подключение диалога, видимое учётке; None — не выбрано, удалено или общее закрыто группами доступа
+    (access.py). Закрытое выглядит как удалённое, но строка диалога его хранит: доступ вернули — диалог снова на нём."""
+    if conn_id is None:
+        return None
+    try:
+        return connections.get(user_id, conn_id)
+    except HTTPException:
+        return None
+
+
 def _chat_view(user_id: int, row) -> dict:
     """Диалог для страницы (GET, POST, PATCH одного): ещё `local` — модель диалога локальная
     (sections.is_local) и `external` — следующий ход уносит расшифровку истории во внешний сервис без
@@ -274,12 +285,9 @@ def _chat_view(user_id: int, row) -> dict:
     бы 409 `external_web`); `thinking` — кнопка «Рассуждение» и `thinking_ok` — действует ли она у модели диалога
     (та же `local`: параметр уходит только ролям `local-*` srvllm через сервер); `dropped` — адрес подключения
     убран из списка (`connections.dropped`: ход ответит 409 `server`)."""
-    out, conn = _chat_out(row), None
-    if row["connection_id"] is not None:
-        try:
-            conn = connections.get(user_id, row["connection_id"])
-        except HTTPException:                        # подключение удалено — ход ответит 404
-            pass
+    out, conn = _chat_out(row), _chat_connection(user_id, row["connection_id"])
+    if conn is None:                                 # удалено или закрыто группами — страница просит выбрать модель
+        out["connection_id"] = None
     model = row["model"] or manage.DEFAULT_MODEL
     out["local"] = conn is not None and sections.is_local(conn, model)
     out["dropped"] = conn is not None and connections.dropped(conn)
@@ -1385,7 +1393,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         changes["connection_id"], changes["model"] = conn.id, model
     if body.web is not None:
         row = _chat_row(uid, chat_id)
-        if body.web and row["connection_id"] is not None and connections.get(uid, row["connection_id"]).cleaner:
+        conn = _chat_connection(uid, row["connection_id"])
+        if body.web and conn is not None and conn.cleaner:
             raise cleaner.refused("Интернет недоступен в подключении Cleaner: поисковые запросы уходят отдельно")
         if body.web and not web.has_exa_key(uid):            # без ключа «Интернет» не включается
             raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})
@@ -1406,7 +1415,7 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         row = _chat_row(uid, chat_id)
         ids = body.mcp_ids if body.mcp_ids is not None else mcp_client.present(uid, row["mcp_ids"])
         cid = changes.get("connection_id", row["connection_id"])
-        conn = connections.get(uid, cid) if cid is not None else None
+        conn = _chat_connection(uid, cid)
         if ids and (conn is None or not conn.proxied or conn.cleaner):
             raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     if changes:
@@ -1701,9 +1710,9 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     uid = request.state.user.id
     row = _chat_row(uid, chat_id)
     _busy(chat_id)
-    if row["connection_id"] is None:
+    conn = _chat_connection(uid, row["connection_id"])
+    if conn is None:
         raise cleaner.refused("Выберите подключение Cleaner")
-    conn = connections.get(uid, row["connection_id"])
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
@@ -1721,10 +1730,8 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
 async def cleaner_copy(chat_id: str, body: CleanerCopyIn, request: Request):
     uid = request.state.user.id
     row = _chat_row(uid, chat_id)
-    if row["connection_id"] is None:
-        raise cleaner.refused("Выберите подключение Cleaner")
-    conn = connections.get(uid, row["connection_id"])
-    if not conn.cleaner:
+    conn = _chat_connection(uid, row["connection_id"])
+    if conn is None or not conn.cleaner:
         raise cleaner.refused("Выберите подключение Cleaner")
     message = state.DB.execute("SELECT * FROM messages WHERE id = ? AND chat_id = ?",
                                (body.message_id, chat_id)).fetchone()
@@ -1776,9 +1783,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if receipt is not None:
         return {"replayed": True, **receipt}
     _busy(chat_id)
-    if row["connection_id"] is None:
+    conn = _chat_connection(uid, row["connection_id"])
+    if conn is None:                                 # не выбрано, удалено или закрыто группами доступа
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
-    conn = connections.get(uid, row["connection_id"])
     if connections.dropped(conn):                    # ни сервер, ни браузер туда не пойдут — до записи хода
         raise HTTPException(409, {"code": "server", "message": sections.unlisted(conn)})
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):

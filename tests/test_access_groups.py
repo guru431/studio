@@ -265,11 +265,20 @@ def test_closed_shared_model_in_existing_chat(studio):
     chat_id = new_chat(studio)
     assert sse(turn(studio, chat_id))[-1] == ("done", {"status": "done"})
     access.set_rule("connection", cid, [group])                       # группа без этой учётки
+    # закрытое — как удалённое: страница просит выбрать модель, правки диалога проходят, ход — `no_connection`
     opened = studio.c.get(f"/api/chats/{chat_id}")
-    assert opened.status_code == 200 and opened.json()["chat"]["connection_id"] == cid
+    assert opened.status_code == 200 and opened.json()["chat"]["connection_id"] is None
+    assert opened.json()["chat"]["model"] == MODEL
+    for patch in ({"web": False}, {"mcp_ids": []}):
+        changed = studio.c.patch(f"/api/chats/{chat_id}", json=patch)
+        assert changed.status_code == 200, (patch, changed.text)
+        assert changed.json()["connection_id"] is None
     refused = turn(studio, chat_id)
-    assert refused.status_code == 404 and refused.json()["detail"]["code"] == "gone"
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "no_connection"
     assert studio.c.get("/api/me").json()["default_connection_id"] == personal
+    assert state.DB.execute("SELECT connection_id FROM chats WHERE id = ?", (chat_id,)).fetchone()[0] == cid
+    access.set_rule("connection", cid, None)                          # доступ вернули — диалог снова на общей модели
+    assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["connection_id"] == cid
 
 
 def test_background_paths_ignore_rules(studio):
