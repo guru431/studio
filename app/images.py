@@ -17,7 +17,9 @@
    до KEEP_DONE_SEC. Перевод — тот же путь, что описание (маршрут шлюза
    `/slot/images/descriptions`, gemma-abl), без картинки.
 3. Фото — файл с устройства (сохраняется в media как исходник) или фото истории
-   (`source_media_id`); оба нормализуются normalize_image. Маска (PNG) остаётся в студии: снаружи
+   (`source_media_id`); оба нормализуются normalize_image. Фото с устройства — в пределах картинки
+   ролика (VIDEO_UPLOAD, VIDEO_PIXELS: снимок телефона 24–48 Мп): шлюз получает его уже уменьшенным
+   до ≤2 Мп, так что предел входа — свой, а не переводчика. Маска (PNG) остаётся в студии: снаружи
    выделения результат берётся из исходника, модель получает только фото и инструкцию. Маска с
    устройства ложится в media (`mask_media_id`) — повтор правки идёт с ней же. Фото и маска
    задания в памяти очищаются в finally.
@@ -71,7 +73,8 @@ import sections
 import state
 import upstream
 from connections import Connection
-from image_upload import MAX_BODY, MAX_UPLOAD, UploadError, image_size, prepare_mask, restrict_edit
+from image_upload import (MAX_BODY, MAX_UPLOAD, VIDEO_PIXELS, VIDEO_UPLOAD, UploadError, image_size, prepare_mask,
+                          restrict_edit)
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/images")
@@ -262,8 +265,9 @@ def ensure_idle(user_id: int) -> None:
     if active is not None:
         message = ("предыдущее задание отменяется — дождитесь освобождения карты"
                    if active.state == "cancelling" else "предыдущее задание ещё выполняется")
+        # kind: описание или перевод в ленте не видны — страница по нему показывает их строкой с «Отменить»
         raise HTTPException(409, {"code": "busy", "message": message,
-                                  "id": active.id})
+                                  "id": active.id, "kind": active.kind})
 
 
 def _srvllm_photo(user_id: int) -> Connection:
@@ -427,10 +431,11 @@ async def create_job(request: Request):
     upload, mask = None, None
     try:
         if _multipart(request):
-            # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается)
+            # разбор формы до 20 МиБ — доли секунды: в потоке (базы он не касается); тело — до фото ролика
+            # с полями (предел Apache), маска страницы идёт с фото истории, а не с файлом устройства
             fields, upload, mask = await asyncio.to_thread(
                 forms.decode, await forms.read_body(request, MAX_BODY + MAX_UPLOAD), request.headers["content-type"],
-                with_mask=True)
+                with_mask=True, max_upload=VIDEO_UPLOAD)
             if fields.get("seed") == "":
                 fields.pop("seed")
             if "series" in fields:                   # серия в форме — строкой JSON
@@ -443,7 +448,7 @@ async def create_job(request: Request):
             body = JobIn.model_validate_json(await forms.read_body(request, JSON_MAX))
         if body.series is not None and (mask is not None or body.mask_media_id is not None):
             raise _series_refused("серия — без кисти: правка по маске — только одиночная")
-        image = await forms.photo(uid, upload, body.source_media_id)
+        image = await forms.photo(uid, upload, body.source_media_id, VIDEO_PIXELS)
         if body.mask_media_id is not None:
             if mask is not None:
                 raise UploadError("нужна одна маска: файл или маска прежней правки")
@@ -538,9 +543,11 @@ async def create_description(request: Request):
     conn = _srvllm_photo(uid)
     ensure_idle(uid)
     try:
-        fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, MAX_BODY),
-                                                    request.headers.get("content-type", ""))
-        image = await forms.photo(uid, upload, fields.get("source_media_id"))
+        # тело — как у create_job (фото до VIDEO_UPLOAD с полями, предел Apache); больший файл страница
+        # отклоняет до отправки, называя предел
+        fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, MAX_BODY + MAX_UPLOAD),
+                                                    request.headers.get("content-type", ""), max_upload=VIDEO_UPLOAD)
+        image = await forms.photo(uid, upload, fields.get("source_media_id"), VIDEO_PIXELS)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     ensure_idle(uid)

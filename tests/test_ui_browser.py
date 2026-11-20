@@ -2280,6 +2280,82 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
     assert not problems(r), problems(r)
 
 
+def test_photo_description_asks_before_replacing_the_prompt(browser, live):
+    """«Описать фото с устройства» больше 20 МиБ — предел словами до отправки; «В поле промпта» ставит
+    описание без генерации, свой промпт — только после вопроса («Отмена» его оставляет)."""
+    login = "descask"
+    live.add_user(login)
+    saved = live.gw.description_reply
+    live.gw.description_reply = {"choices": [{"message": {"content": "a red boat"}, "finish_reason": "stop"}]}
+    d0, g0 = len(live.gw.descriptions), len(live.gw.generations)
+    big = ("eval", "big", """(() => { const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(20 * 1024 * 1024 + 1)], 'big.jpg', { type: 'image/jpeg' }));
+      const input = document.querySelector('#describe-file'); input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true })); return true; })()""")
+    prompt = "document.querySelector('#photo-prompt').value"
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login),
+            ("type", "#photo-prompt", "мой промпт"), big,
+            ("eval", "tooBig", f"[document.querySelector('#photo-error').textContent, {is_open('#describe-dialog')}]"),
+            put_file("#describe-file", png_of(64, 48, "blue"), "source.png"),
+            ("wait", "document.querySelector('#describe-text')?.value === 'a red boat'"),
+            ("click", "#describe-to-field"), ("wait", is_open("#describe-replace-dialog")),
+            ("click", "#describe-replace-dialog .dialog-close"), ("wait", f"!{is_open('#describe-replace-dialog')}"),
+            ("eval", "kept", f"[{prompt}, {is_open('#describe-dialog')}]"),
+            ("click", "#describe-to-field"), ("wait", is_open("#describe-replace-dialog")),
+            ("click", "#describe-replace"), ("wait", f"!{is_open('#describe-dialog')}"),
+            ("eval", "placed", f"[{prompt}, document.querySelector('#photo-go').disabled]")],
+            width=390, height=900, mobile=True)
+    finally:
+        live.gw.description_reply = saved
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tooBig"] == ["Фото больше 20 МиБ", False]
+    assert v["kept"] == ["мой промпт", True]
+    assert v["placed"] == ["a red boat", False]
+    assert len(live.gw.descriptions) == d0 + 1 and len(live.gw.generations) == g0     # без генерации
+    assert not problems(r), problems(r)
+
+
+def test_photo_shows_a_description_started_before_the_reload(browser, live):
+    """Описание, начатое до перезагрузки (или в другой вкладке), в ленте не видно: «Создать» получает 409
+    busy — страница показывает строку с «Отменить», закрывает кнопки до конца задания и открывает после."""
+    import images
+    login = "orphan"
+    live.add_user(login)
+
+    async def held(request):
+        """Описание «идёт», пока задание не отменят (предел — 20 с)."""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not any(j.state == "cancelling" for j in images.JOBS.values()):
+            await asyncio.sleep(0.01)
+        return await live.gw.builtin(request)
+
+    # описание — запросом страницы мимо раздела: раздел о нём не знает, как после перезагрузки
+    elsewhere = ("eval", "started", f"""(async () => {{ const m = {API}; const form = new FormData();
+      form.append('image', new File([Uint8Array.from(atob('{base64.b64encode(png_of(8, 8, "red")).decode()}'),
+        c => c.charCodeAt(0))], 's.png', {{ type: 'image/png' }}));
+      return !!(await m.api('POST', '/api/images/descriptions', form)).id; }})()""")
+    line = "document.querySelector('#photo-orphan')"
+    live.gw.on["/slot/images/descriptions"] = held
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), elsewhere,
+            ("type", "#photo-prompt", "закат"), ("click", "#photo-go"),
+            ("wait", f"{line}.querySelector('#photo-orphan-cancel')"),
+            ("eval", "shown", f"[{line}.textContent, document.querySelector('#photo-go').disabled]"),
+            ("click", "#photo-orphan-cancel"),
+            ("wait", f"!{line}.textContent && !document.querySelector('#photo-go').disabled"),
+            ("eval", "error", "document.querySelector('#photo-error').textContent")], timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/descriptions", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["started"] is True and v["shown"][1] is True
+    assert v["shown"][0].startswith("Идёт описание фото, начатое раньше") and v["error"] == ""
+    assert any(s.endswith("/cancel") for s in r["sent"])
+    assert not [p for p in problems(r) if not ("status of 409" in p and p.endswith("/api/images)"))], problems(r)
+
+
 @pytest.mark.parametrize("created", [True, False])
 def test_photo_description_is_cancelled_when_the_section_goes_away(browser, live, created):
     """Ушли из раздела («Назад» браузера) при открытом «Описать»: удалённое окно события close не шлёт,
@@ -3256,6 +3332,11 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
             ("eval", "clearBusy", "[document.querySelector('#photo-prompt').value, document.querySelector('#photo-translate').hidden,"
                                   " document.querySelector('#photo-translate').textContent.startsWith('EN · ')]"),
             ("wait", "document.querySelector('#photo-prompt').value === 'a cat on the windowsill'"), ("wait", idle),
+            # «Вернуть оригинал» — промпт до перевода, пока поле не правили
+            ("eval", "undoShown", "!document.querySelector('#photo-translate-undo').hidden"),
+            ("click", "#photo-translate-undo"),
+            ("eval", "undone", "[document.querySelector('#photo-prompt').value,"
+                               " document.querySelector('#photo-translate-undo').hidden]"),
             # второй перевод — отменён «EN»: промпт тот же
             ("eval", "edit", "(() => { const p = document.querySelector('#photo-prompt'); p.value = 'собака'; return true; })()"),
             ("click", "#photo-translate"),
@@ -3271,6 +3352,7 @@ def test_photo_translates_the_prompt_into_the_field(browser, live):
     assert v["title"] == "Перевести промпт на английский (gemma-abl)" and v["empty"] is True
     assert v["busy"] == [True, True, "Отменить перевод"]
     assert v["clearBusy"] == ["кошка на подоконнике", False, True]
+    assert v["undoShown"] is True and v["undone"] == ["кошка на подоконнике", True]
     assert v["after"] == ["собака", False, ""]
     first, second = gw.descriptions[d0:]
     assert first["messages"][0]["content"].endswith("кошка на подоконнике")
