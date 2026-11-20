@@ -27,11 +27,13 @@ const CAPS = { generate: tr("генерация"), edit: tr("правка"), mas
   video: tr("ролик из картинки"), diarize: tr("расшифровка с собеседниками"), transcribe: tr("расшифровка без собеседников"),
   dictation: tr("голосовой ввод"), dictation_ru: tr("голосовой ввод (только русский)"), voices: tr("озвучка своими образцами"),
   tts: tr("озвучка голосом по имени"), describe: tr("«Описать»"), translate: '«EN»', vision: tr("смотрит фото"),
-  chat: tr("отвечает") };
+  chat: tr("отвечает"), text: tr("чат и перевод"), ocr: tr("распознавание сканов") };
+const S06_CATALOG = tr("встроенный перечень s06");   // источник `catalog` у профиля s06
 const SOURCES = { catalog: tr("встроенный перечень srvllm"), metadata: tr("по описанию модели у сервиса"),
   name: tr("по названию, не проверено"), probe: tr("пробный ответ"), probe_browser: tr("пробный ответ, по словам браузера") };
 const PROFILES = { srvllm: tr("шлюз srvllm"), s06: tr("шлюз s06"), openai: 'OpenAI', openrouter: 'OpenRouter', compatible: tr("OpenAI-совместимый") };
 const NOT_GATEWAY = tr("нет кисти, силы, seed, «Описать», «EN», роликов и образцов голоса; расшифровка — без собеседников");
+const CLOUD_PROFILES = ['openai', 'openrouter', 'compatible'];   // приписка NOT_GATEWAY — им, кроме Cleaner
 const KEY_ORDER = ['refused', 'accepted', 'limited', 'unverified', 'unknown'];
 const UNVERIFIED = { state: 'unverified', code: 200,
   words: tr("сервис отдаёт список без ключа — ключ проверит первый запрос или «Пробный ответ»") };
@@ -177,11 +179,12 @@ function keyOf(routes) {
   return null;
 }
 
-function capsText(model) {
+function capsText(model, profile) {
   if (model.absent) return tr("нет у шлюза");
   const bySource = new Map();
   for (const c of model.caps) bySource.set(c.source, [...(bySource.get(c.source) || []), CAPS[c.name] || c.name]);
-  const parts = [...bySource].map(([source, names]) => `${names.join(', ')} — ${SOURCES[source] || source}`);
+  const where = (source) => (source === 'catalog' && profile === 's06' ? S06_CATALOG : SOURCES[source] || source);
+  const parts = [...bySource].map(([source, names]) => `${names.join(', ')} — ${where(source)}`);
   if (model.context_length) parts.push(tr("контекст {0}", model.context_length));
   return parts.length ? parts.join('; ') : tr("возможности не известны");
 }
@@ -218,7 +221,7 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
       if (counted) lines.push(line('passport-count', tr("Модели — {0}", counted.count)));
     } else lines.push(line('passport-reach', tr("Адрес — не проверяется: проба занимала бы карту")));
     lines.push(line('passport-profile', tr("Профиль — {0}", PROFILES[passport.profile] || passport.profile)
-      + (passport.profile === 'srvllm' ? '' : `: ${NOT_GATEWAY}`)));
+      + (CLOUD_PROFILES.includes(passport.profile) && !conn.cleaner ? `: ${NOT_GATEWAY}` : '')));
   }
   if (passport) {
     const byId = new Map(passport.models.map((m) => [m.id, m]));
@@ -228,7 +231,7 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
     }
     for (const id of shown) {
       const model = byId.get(id);
-      if (model) lines.push(line('passport-model', `${label(id)}: ${capsText(model)}`));
+      if (model) lines.push(line('passport-model', `${label(id)}: ${capsText(model, passport.profile)}`));
       const tried = (passport.probes || {})[id];
       if (tried) {
         lines.push(line(`passport-probe${tried.ok ? '' : ' error'}`, tr("{0}: пробный ответ — {1}", label(id), tried.words)

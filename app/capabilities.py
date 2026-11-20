@@ -1,6 +1,7 @@
 """Возможности моделей подключения (спека 2026-10-21-studio-connection-check-design, раздел 6).
 
-У каждой возможности — источник: `catalog` — встроенный перечень srvllm (то, что студия знает о шлюзе),
+У каждой возможности — источник: `catalog` — встроенный перечень шлюза srvllm или s06 (то, что студия знает о нём;
+страница называет его по профилю паспорта),
 `metadata` — `architecture` из ответа `/models` (OpenRouter и подобные), `name` — догадка по имени
 («по названию, не проверено»), `probe` — пробный ответ прошёл. Профиль — что за сервис за адресом.
 Имена возможностей — слова страницы (settings.js `CAPS`).
@@ -27,6 +28,13 @@ CATALOG_CAPS = {
     "gigaam": ("dictation_ru",),
     "qwen3-tts": ("voices",),
     "f5-tts": ("voices",),
+}
+#: перечень шлюза s06 (`sections.S06_CATALOG`): модель → возможности; WhisperX s06 делит по собеседникам
+S06_CAPS = {
+    "qwen-27b": ("text",),
+    "qwen-27b-fast": ("text",),
+    "whisperx": ("diarize", "dictation"),
+    "ocr-ru": ("ocr",),
 }
 #: короткое имя → id шлюза в `GET /slot/models`; модели речи там не перечисляются и не сверяются
 GATEWAY_IDS = {**images.MODELS, **videos.MODELS}
@@ -88,9 +96,13 @@ def model_entry(raw) -> "dict | None":
 
 def models(kind: str, listed: list[dict], slot_ids: "list[str] | None", limit: int) -> list[dict]:
     """Модели паспорта: из `/models` (`listed` — записи model_entry), у srvllm — ещё перечень (модель
-    картинок или ролика, чьего id нет в ответившем `/slot/models`, — `absent`) и прочие id шлюза. Предел
-    режет только список сервиса: перечень srvllm длинный ответ не вытеснит."""
+    картинок или ролика, чьего id нет в ответившем `/slot/models`, — `absent`) и прочие id шлюза, у s06 — его
+    перечень S06_CAPS. `kind` — профиль подключения (`profile`). Предел режет только список сервиса: перечень
+    шлюза длинный ответ не вытеснит."""
     out = {m["id"]: m for m in listed[:limit]}
+    if kind == "s06":
+        for name, found in S06_CAPS.items():
+            out[name] = {**out.get(name, {"id": name}), "caps": _caps(found, "catalog")}
     if kind == "srvllm":
         for name, found in CATALOG_CAPS.items():
             entry = {"id": name, "caps": _caps(found, "catalog")}
