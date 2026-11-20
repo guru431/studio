@@ -685,16 +685,19 @@ async def to_chat(tid: str, request: Request):
 
 
 @router.get("/{tid}/export")
-async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx|srt)$")):  # noqa: A002
-    """Готовая расшифровка файлом: имя — по записи («Звонок.m4a» → «Звонок.docx»)."""
+async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx|srt)$"),  # noqa: A002
+                 lang: exports.Lang = "ru"):
+    """Готовая расшифровка файлом: имя — по записи («Звонок.m4a» → «Звонок.docx»); метки «Собеседник N» —
+    на языке `lang` (exports.Lang), имена собеседников — как есть."""
     uid = request.state.user.id
     row = _done(uid, tid)
     result = await result_of(uid, row)
     segments = view(row, result)
     stem = _stem(row["name"])
     if format == "docx":
-        body = exports.docx(segments, stem)
+        body = exports.docx(segments, stem, lang)
     else:
-        body = (exports.txt(segments) if format == "txt" else exports.srt(segments, result.get("raw"))).encode("utf-8")
+        body = (exports.txt(segments, lang) if format == "txt"
+                else exports.srt(segments, result.get("raw"), lang)).encode("utf-8")
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})

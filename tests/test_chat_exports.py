@@ -396,6 +396,31 @@ def test_export_keeps_sources_error_words_and_marks_an_unfinished_answer(studio)
     assert '<div class="chat-export-plain">Ошибка: шлюз не ответил: 502</div>' in document
 
 
+def test_english_export_translates_studio_words_but_not_the_conversation(studio):
+    """FINDINGS 06:F4: the file follows the device's interface language (`lang`); messages and names stay as is."""
+    _, uid = regular(studio)
+    tools = [{'kind': 'search', 'query': 'погода', 'results': [{'title': 'Пример', 'url': 'https://example.org/a'}]}]
+    state.DB.execute("UPDATE messages SET tools=? WHERE id='chat-a'", (json.dumps(tools),))
+    state.DB.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('chat-s','chat','assistant','Половина отв','streaming','server',3)")
+    text = studio.c.post('/api/chats/chat/export', json={'format': 'md', 'lang': 'en'}).text
+    assert text.startswith('# Private title\n\n## User\n\nPrivate question') and '## Assistant' in text
+    assert '### Sources (1)\n\n- Search: “погода”' in text and 'Половина отв\n\n*(answer not finished)*' in text
+    assert not re.search('Пользователь|Помощник|Источники|Поиск|ответ не дописан', text)
+    ru = studio.c.post('/api/chats/chat/export', json={'format': 'md'}).text
+    assert '## Пользователь' in ru and '### Источники (1)' in ru
+    assert studio.c.post('/api/chats/chat/export', json={'format': 'md', 'lang': 'de'}).status_code == 422
+    snapshot, _ = chat_shares.regular_snapshot(uid, 'chat')
+    document = chat_exports.pdf_html(snapshot, 'en')
+    chat_exports._printable(document)
+    assert '<h2>User</h2>' in document and 'Пользователь' not in document
+    steps = chat_exports.markdown({'title': '', 'messages': [
+        {'role': 'assistant', 'text': '', 'steps': [{'input': 'ls', 'text': ''}], 'reasoning': 'думаю',
+         'error': 'отказ', 'attachments': [{'file': 'x'}, {'name': 'Отчёт.txt', 'file': 'y'}]}]}, 'en')
+    assert steps.startswith('# Chat\n\n## Assistant\n\n') and '### Command' in steps and '### Reasoning' in steps
+    assert 'Error: отказ' in steps and 'Attachment: File' in steps and 'Attachment: Отчёт.txt' in steps
+
+
 def test_export_refusals_say_what_happened(studio, monkeypatch):
     """FINDINGS 06:F15: a big chat is «too big for export», not «for a link»; a busy service is not «your PDF»."""
     _, uid = regular(studio)

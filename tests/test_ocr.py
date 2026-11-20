@@ -960,6 +960,10 @@ def test_export_txt_md_docx(studio):
     assert texts[:2] == ["Отчёт", "Страница 1"] and "Хлеб & соль" in texts and "[пустая страница]" in texts
     assert len(list(root.iter(f"{W}tab"))) == 2                        # ячейки таблицы — табуляцией
     assert studio.c.get(f"/api/ocr/{sid}/export?format=pdf").status_code == 422
+    # FINDINGS 05:F10: заголовки и пометки — на языке интерфейса (`lang`), распознанный текст и имя — как есть
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=md&lang=en")
+    assert r.text.startswith(f"## Page 1\n\n{TABLE}\n\n## Page 2\n\n[not recognized: ") and "## Page 3\n\n[empty page]" in r.text
+    assert quote("Отчёт.md", safe="") in r.headers["content-disposition"]
 
 
 def test_to_chat_attaches_markdown(studio, monkeypatch):

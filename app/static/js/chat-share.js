@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { language, tr } from './i18n.js';
 /* One current snapshot per chat. Every creation rotates both the link and viewer access.
  * Окно владельца: PIN, срок ссылки (1/7/30 дней или бессрочно, по умолчанию 7), у обычного чата — показывать ли
  * рассуждение модели (по умолчанию нет); у созданной — срок, открытия, последний просмотр и неверные PIN. */
@@ -47,7 +47,7 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
       controller = new AbortController();
       try {
         const format = key === 'selection' ? 'pdf' : key;
-        const response = await request('POST', current.export, { format, title: current.title,
+        const response = await request('POST', current.export, { format, title: current.title, lang: language(),
           ...(fragment ? { selection: fragment } : {}) }, { signal: controller.signal });
         const blob = await response.blob();
         if (context !== current || !trigger.isConnected) return;
