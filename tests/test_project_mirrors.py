@@ -364,6 +364,38 @@ def test_discovery_respects_pin_and_links_only_a_present_unreserved_copy(studio,
     assert [e["agent_id"] for e in opened] == [right, left] and opened[0]["device"].startswith("браузер ")
 
 
+def test_mirror_settings_sealed_with_a_former_key_can_still_be_listed_and_unlinked(studio, computers):
+    """Сменился `STUDIO_DATA_KEY`: список зеркал не падает 500 — строка с `reenter` без имени и папки; действия
+    с настройкой — 409 `reenter`; отвязать можно."""
+    from cryptography.fernet import Fernet
+    source, first, second = computers
+    make_user(studio, "owner")
+    left, _ = enroll(studio, name="Source")
+    right, _ = enroll(studio, name="Destination")
+    connect(studio, left, first)
+    connect(studio, right, second)
+    signin(studio, "owner")
+    client = studio.c
+    assert client.post(f"/api/code/agents/{left}/open", json={"pin": None}).status_code == 204
+    assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+    root = mirror.projects.list_roots(second.roots)[1]
+    url = f"/api/code/agents/{left}/projects/{pid(source.name)}/mirrors"
+    mid = client.post(url, json={"destination": right, "root": root["id"], "name": source.name}).json()["id"]
+    state.DB.execute("UPDATE project_mirrors SET location = ? WHERE id = ?",
+                     (Fernet(Fernet.generate_key()).encrypt(b'{"name":"x","folder":"y"}'), mid))
+    listing = client.get(url)
+    assert listing.status_code == 200
+    item, = listing.json()["items"]
+    assert item["reenter"] is True and item["name"] is None and item["folder"] is None
+    assert client.get(f"{url}/{mid}").json()["reenter"] is True
+    for method, suffix, body in (("POST", "/compare", None), ("PUT", "/exclude", {"exclude": []}),
+                                 ("POST", "/diff", {"path": "notes.txt"})):
+        response = client.request(method, f"{url}/{mid}{suffix}", **({"json": body} if body else {}))
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "reenter", suffix
+    assert client.delete(f"{url}/{mid}").status_code == 204
+    assert client.get(url).json() == {"items": []}
+
+
 def test_mirror_of_a_renamed_project_is_offered_and_relinked_to_the_new_project(studio, computers, monkeypatch):
     """Папка проекта переименована — новый pid. Прежняя папка копии занята зеркалом старого pid: отказ `exists`
     это называет (`elsewhere`), поиск копий показывает её с пометкой, `replace` перепривязывает одной транзакцией."""

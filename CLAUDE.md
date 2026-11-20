@@ -251,7 +251,8 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 - Запись голоса одна на студию (`mic.js`): смена раздела, шторка и блокировка зовут `cancelRecording()`.
 - Ключ VAPID — в базе шифром: смена `STUDIO_DATA_KEY` — новый VAPID, все `push_subs` стёрты; ссылки «Поделиться» —
   «недоступна»; токены подключений — ввести заново; настройки SMTP из панели — снова переменные окружения,
-  ввести заново (`account_mail.settings`, признак `reenter`).
+  ввести заново (`account_mail.settings`, признак `reenter`); зеркала проектов — «настройка недоступна», отвязать и
+  привязать заново (`project_mirrors._item`, признак `reenter`).
 - Модуль раздела — `claude_code.py`, не `code.py` (заслонил бы стандартный `code`, pytest — INTERNALERROR).
 - `ntfy` не импортирует `upstream` при загрузке (цикл main → bridge → push → ntfy); после правки цепочки импорта —
   `import main` на Python хоста (3.13).
