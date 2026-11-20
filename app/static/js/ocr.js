@@ -1,4 +1,4 @@
-import { message as serverMessage, tr } from './i18n.js';
+import { language, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
@@ -173,7 +173,7 @@ function build(view, ctx) {
 
   /* выбранный */
   function download(format) {
-    el('a', { href: `/api/ocr/${docs.current.id}/export?format=${format}`, download: '' }).click();
+    el('a', { href: `/api/ocr/${docs.current.id}/export?format=${format}&lang=${language()}`, download: '' }).click();
   }
 
   function rename(item) {

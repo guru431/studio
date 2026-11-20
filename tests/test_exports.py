@@ -1,11 +1,13 @@
 """Выгрузки расшифровки (app/exports.py): txt, srt, docx без новых зависимостей; маршрут выгрузки."""
+import ast
 import io
+import json
 import zipfile
 from urllib.parse import quote
 from xml.etree import ElementTree
 
 import exports
-from conftest import add_gateway, make_user, signin
+from conftest import APP, add_gateway, make_user, signin
 from test_transcripts import upload, wait_tr
 
 SEGMENTS = [{"speaker": "Собеседник 1", "start": 0.9, "end": 3.1, "text": "Бюро <переводов> & Co."},
@@ -195,3 +197,55 @@ def test_exports_carry_the_edits_and_the_names(studio, fake_audio):
     assert "Иван · 00:00" in texts and "Добрый вечер." in texts and "Добрый день." not in texts
     srt = studio.c.get(f"/api/transcripts/{tid}/export?format=srt").text
     assert "Иван: Здравствуйте." in srt and "Собеседник 2: Добрый вечер." in srt
+
+
+def test_english_exports_translate_speaker_labels_but_not_given_names(studio, fake_audio):
+    """FINDINGS 04:F16: `lang=en` — метка сервера «Собеседник N» по-английски, имя пользователя — как есть."""
+    add_gateway(studio)
+    tid = upload(studio).json()["id"]
+    wait_tr(studio, tid, {"done"})
+    studio.c.patch(f"/api/transcripts/{tid}", json={"names": {"Собеседник 1": "Иван"}})
+    txt = studio.c.get(f"/api/transcripts/{tid}/export?format=txt&lang=en").text
+    assert txt == "Иван · 00:00\nЗдравствуйте.\n\nSpeaker 2 · 00:03\nДобрый день.\n"
+    assert "Speaker 2: Добрый день." in studio.c.get(f"/api/transcripts/{tid}/export?format=srt&lang=en").text
+    with zipfile.ZipFile(io.BytesIO(studio.c.get(f"/api/transcripts/{tid}/export?format=docx&lang=en").content)) as z:
+        texts = [t.text for t in ElementTree.fromstring(z.read("word/document.xml")).iter(f"{W}t")]
+    assert "Иван · 00:00" in texts and "Speaker 2 · 00:03" in texts
+    assert "Собеседник 2 · 00:03" in studio.c.get(f"/api/transcripts/{tid}/export?format=txt&lang=ru").text
+    assert studio.c.get(f"/api/transcripts/{tid}/export?format=txt&lang=de").status_code == 422
+
+
+def test_english_pages_translate_headings_and_marks_not_the_text():
+    """FINDINGS 05:F10: заголовки и пометки страниц — как у «Копировать» на английском (ocr.js), текст — как есть."""
+    assert exports.pages_md(PAGES, "en") == ("## Page 1\n\n# Заголовок\n\nТекст\n\n## Page 2\n\nСлой\n\n"
+                                             "## Page 3\n\n[not recognized: на странице не найден текст]\n\n"
+                                             "## Page 4\n\n[empty page]\n")
+    assert exports.pages_txt(PAGES, "en").startswith("Page 1\n\nЗаголовок")
+    with zipfile.ZipFile(io.BytesIO(exports.pages_docx(PAGES, "Скан", "en"))) as z:
+        texts = [t.text for t in ElementTree.fromstring(z.read("word/document.xml")).iter(f"{W}t")]
+    assert texts[:2] == ["Скан", "Page 1"] and "[empty page]" in texts
+
+
+def _english_catalog() -> dict:
+    source = (APP / "static" / "en.js").read_text(encoding="utf-8")
+    return json.JSONDecoder().raw_decode(source.split("Object.freeze(")[1])[0]
+
+
+def test_export_words_match_the_page_and_every_word_call_is_translated():
+    """Скачанный файл и страница пишут одно и то же одинаково (`exports.ENGLISH` против `app/static/en.js`), а каждый
+    литерал `word("…")` в app/*.py есть в `exports.ENGLISH`: иначе английская выгрузка упала бы KeyError."""
+    page = _english_catalog()
+    for source, english in exports.ENGLISH.items():
+        key = source.replace("{}", "{0}")
+        if key in page:
+            assert page[key] == english.replace("{}", "{0}"), source
+        assert source.count("{}") == english.count("{}"), source
+    used = set()
+    for path in APP.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) == "word":
+                for arg in node.args[:1]:
+                    texts = [arg] if isinstance(arg, ast.Constant) else [arg.body, arg.orelse] if isinstance(arg, ast.IfExp) else []
+                    used |= {t.value for t in texts if isinstance(t, ast.Constant)}
+    assert used and used <= set(exports.ENGLISH), used - set(exports.ENGLISH)
+    assert set(exports.ENGLISH) - used <= {"Перевод"}           # translate.TEXT_STEM — через имя константы
