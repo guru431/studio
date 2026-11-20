@@ -199,7 +199,8 @@ if True:
             page.evaluate('(theme) => document.documentElement.dataset.theme = theme', theme)
             assert md.locator('th, td').evaluate_all(
                 "cells => cells.map(cell => getComputedStyle(cell).textAlign)") == [
-                    'left', 'center', 'left', 'right'] * 2
+                    # колонка без выравнивания — `start` (ee2fbefe, справа налево для RTL), явное :--- — left
+                    'left', 'center', 'start', 'right'] * 2
             # A range wholly inside emphasis must retain that ancestor. Selecting the second list
             # item must retain its real number, and selecting inside code must retain whitespace.
             parts = page.evaluate('''async (id) => {

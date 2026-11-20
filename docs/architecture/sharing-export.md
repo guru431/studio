@@ -107,7 +107,8 @@ read-токен живёт только в памяти страницы, не �
   (разработка) обёртки нет — браузер md2pdf выбирает сам. Процесс с повышенными правами (администратор Windows)
   печатать не может: Edge и Chrome перезапускаются без повышения через Проводник, первый процесс выходит с 0, md2pdf
   видит «printed nothing» — 503 `pdf_failed` (проверено 2026-11-20; с `--do-not-de-elevate` печать идёт, но
-  флаг — дело общего md2pdf). Сценарии PDF (`test_ui_chat_exports.py`) — из сессии без повышения.
+  флаг — дело общего md2pdf). Тесты в такой сессии сами подставляют md2pdf обёртку браузера с этим флагом
+  (`tests/conftest.py` `elevated_pdf_browser`, только Windows и только без заданного `MD2PDF_BROWSER`).
 - Конвертер — `chat_exports.converter`: `STUDIO_MD2PDF`, иначе `deploy/md2pdf.py` выкладки (его хеш сверяет `install.sh`
   с `deploy/md2pdf.sha256`), иначе `~/.claude/bin/md2pdf.py` (разработка; без сверки хеша). На хосте нужен Chromium
   (`chromium` и `fonts-dejavu-core` входят в Docker-образ, в прежней установке их ставит `install.sh`);
