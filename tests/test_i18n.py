@@ -54,6 +54,18 @@ for (const saved of [null, 'ru', 'fr', '<script>', 'EN']) {
   assert.equal(i18n.tr('Чат'), 'Чат');
 }
 assert.equal(runtime(null, true).locale(), 'ru-RU');
+// /share (data-language-default="browser"): язык браузера, пока выбор не сохранён; остальные страницы — русский
+function page(saved, browserDefault, browserLanguage) {
+  const html = { dataset: browserDefault ? { languageDefault: 'browser' } : {} };
+  const context = vm.createContext({ localStorage: { getItem: () => saved }, navigator: { language: browserLanguage },
+    document: { documentElement: html, addEventListener() {} } });
+  for (const file of ['en.js', 'i18n.js']) vm.runInContext(fs.readFileSync(root + '/' + file, 'utf8'), context);
+  return context.StudioI18n.language();
+}
+assert.equal(page(null, true, 'en-GB'), 'en');
+assert.equal(page('ru', true, 'en-US'), 'ru');
+assert.equal(page(null, true, 'de-DE'), 'ru');
+assert.equal(page(null, false, 'en-US'), 'ru');
 const en = runtime('en');
 assert.equal(en.language(), 'en');
 assert.equal(en.locale(), 'en-US');
@@ -74,6 +86,15 @@ assert.equal(en.message('Озвучка · Привет, мир…'), 'Speech ·
 assert.equal(en.message('Ответ · новый диалог'), 'Response · new conversation');
 assert.equal(en.message('Ответ · Планы'), 'Response · Планы');
 assert.equal(en.message('пишет ответ'), 'writing response');
+// Составные слова: голая подстановка — тоже слова сервера, «имя» — как есть, раздел в «» — переводом
+assert.equal(en.message('жду карту · озвучиваю 2 из 5'), 'waiting for GPU · synthesizing 2 of 5');
+assert.equal(en.message('кусок 5 из 17: модель вернула пустой ответ'), 'chunk 5 of 17: model returned an empty response');
+assert.equal(en.message('сбой службы: TimeoutError'), 'service failure: TimeoutError');
+assert.equal(en.message('выберите модель в настройках раздела «Голосовой ввод»'), 'choose a model in Settings → “Voice input”');
+assert.equal(en.message('нет связи с подключением «Голосовой ввод»'), 'no connection to “Голосовой ввод”');
+assert.equal(en.message('Ответ · Чат'), 'Response · Чат');
+assert.equal(['Чат'].map(en.message)[0], 'Chat');
+assert.equal(en.message('Имя — от 1 до 196 знаков'), 'Name must be 1–196 characters');
 assert.equal(en.tr('__proto__'), '__proto__');
 """
     result = subprocess.run([node, '-e', program, str(STATIC)], capture_output=True,

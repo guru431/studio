@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message, tr } from './i18n.js';
 import { chooseMcp } from './mcp-settings.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
@@ -100,15 +100,15 @@ const CUT_LENGTH = '\n\n[ответ обрезан пределом длины �
 const CUT_SIZE = '\n\n[ответ обрезан: слишком длинный для студии]';   // как chat.CUT_SIZE сервера
 const ANSWER_MAX = 2000000;      // как chat.ANSWER_MAX: длиннее PUT ответа не примет
 const ERROR_MAX = 400;           // как chat.ERROR_MAX: слова ошибки ответа в PUT
-const ASKS = {                   // вопрос в поле диалога из расшифровки
+const ASKS = {                   // вопрос в поле диалога из расшифровки — на языке интерфейса
   discuss: '',
-  summary: 'Составь краткие итоги этой записи: о чём говорили и к чему пришли.',
-  tasks: 'Выдели из записи принятые решения и задачи: что сделать, кто отвечает, сроки, если названы.',
+  summary: tr("Составь краткие итоги этой записи: о чём говорили и к чему пришли."),
+  tasks: tr("Выдели из записи принятые решения и задачи: что сделать, кто отвечает, сроки, если названы."),
 };
-const SCAN_ASKS = {              // вопрос в поле диалога из «Распознавания»
+const SCAN_ASKS = {              // вопрос в поле диалога из «Распознавания»; перевод — на язык интерфейса
   discuss: '',
-  summary: 'Кратко перескажи этот документ: о чём он и что в нём главное.',
-  translate: 'Переведи этот документ на русский',
+  summary: tr("Кратко перескажи этот документ: о чём он и что в нём главное."),
+  translate: tr("Переведи этот документ на русский"),
 };
 const NOT_READY_MS = 3000;       // прямое подключение: опрос скана, затем ход заново
 const SCAN_RUNNING = ['queued', 'working', 'cancelling'];   // как ocr.RUNNING
@@ -447,7 +447,7 @@ function stepNode(s) {
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
   } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
   else li.append(tr("Инструмент"));
-  if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
+  if (s.error) li.append(el('span', { class: 'error' }, ` — ${message(s.error)}`));
   return li;
 }
 
@@ -1240,7 +1240,7 @@ function build(view, ctx) {
       else text = m.ocr ? '' : tr("ответ ещё идёт…");
     } else if (m.status === 'stopped') text = tr("остановлено");
     else if (m.status === 'error') {
-      text = m.error || (m.content ? tr("ответ оборвался") : tr("ответ не получен"));
+      text = m.error ? message(m.error) : m.content ? tr("ответ оборвался") : tr("ответ не получен");
       kind = ' error';
     }
     p.meta.textContent = text;

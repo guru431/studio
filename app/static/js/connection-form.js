@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { message, tr } from './i18n.js';
 /* Подключение: форма и окно правки — общие для настроек и панели администратора.
  *
  * connectionForm(initial?, { cleaner, everywhere }) → { el, value(), sections(), showError(err) }: название, вид
@@ -43,7 +43,7 @@ export function connectionForm(initial, { cleaner = false, everywhere = null } =
     inputmode: 'url', spellcheck: 'false', autocapitalize: 'none' });
   const token = el('input', { class: 'input', name: 'token', type: 'password', maxlength: '512',
     autocomplete: 'new-password', spellcheck: 'false', autocapitalize: 'none',
-    placeholder: initial ? tr("не менять ({0})", initial.token_hint) : tr("ключ API") });
+    placeholder: initial ? tr("не менять ({0})", message(initial.token_hint)) : tr("ключ API") });
   const cleanerNote = el('p', { class: 'muted small', hidden: true }, tr("Cleaner: только чат и перевод через сервер. Нужен ключ Cleaner с доступом к подключению и моделям; адрес должен разрешить администратор."));
   const s06Note = el('p', { class: 'muted small', hidden: true }, tr("s06: чат и перевод Qwen, расшифровка WhisperX, сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет."));
   const all = el('input', { type: 'checkbox', name: 'everywhere', checked: !!everywhere });

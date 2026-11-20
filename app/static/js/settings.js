@@ -1,4 +1,4 @@
-import { language, locale, tr } from './i18n.js';
+import { language, locale, message, tr } from './i18n.js';
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
@@ -620,10 +620,7 @@ export function sizeText(bytes) {
 }
 
 export function filesText(n) {
-  const tens = n % 100;
-  const ones = n % 10;
-  const word = tens >= 11 && tens <= 14 ? tr("файлов") : ones === 1 ? tr("файл") : ones >= 2 && ones <= 4 ? tr("файла") : tr("файлов");
-  return `${n} ${word}`;
+  return `${n} ${plural(n, [tr("файл"), tr("файла"), tr("файлов")])}`;
 }
 
 export function momentText(ts) {
@@ -1071,7 +1068,7 @@ function clock(sec) {
  * больше одной; без выбора сервер берёт умолчание, а если оно не шлюз — первую модель шлюза). Blob плеера
  * освобождается при закрытии окна. */
 function probeVoice(host, voice) {
-  const phrase = el('input', { id: 'voice-probe-text', maxlength: '200', value: 'Привет! Так звучит этот голос.',
+  const phrase = el('input', { id: 'voice-probe-text', maxlength: '200', value: tr("Привет! Так звучит этот голос."),
     autocomplete: 'off' });
   const modelPick = el('select', { class: 'input', id: 'voice-probe-model' });
   const modelRow = field(tr("Модель"), modelPick, 'model');
@@ -1390,7 +1387,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('span', { class: 'link-hint' },
             conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner · очистка данных")) : null,
             el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
-            tr(" ключ {0}", conn.token_hint))),
+            tr(" ключ {0}", message(conn.token_hint)))),
         el('div', { class: 'link-buttons' }, checkButton,
           button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
       passport, actions, search,

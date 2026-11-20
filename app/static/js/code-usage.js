@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message, tr } from './i18n.js';
 /* Подписка выбранного помощника; списание сброса — только по явному подтверждению. */
 import { api, me } from './api.js';
 import { dateTime } from './time.js';
@@ -56,11 +56,11 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
     const windows = (Array.isArray(data.windows) ? data.windows : []).map((w) => {
       const remaining = w.available && Number.isFinite(w.remaining_percent) ? w.remaining_percent : null;
       const meter = el('meter', { min: '0', max: '100', value: remaining ?? 0, hidden: remaining === null,
-        'aria-label': tr("{0}: осталось {1}%", w.label, number(remaining)) });
+        'aria-label': tr("{0}: осталось {1}%", message(w.label), number(remaining)) });
       return el('div', { class: 'code-quota', 'data-window': w.id },
-        el('div', { class: 'code-quota-head' }, el('b', {}, w.label),
+        el('div', { class: 'code-quota-head' }, el('b', {}, message(w.label)),
           el('span', {}, remaining === null ? tr("Нет данных") : tr("Осталось {0}%", number(remaining)))), meter,
-        el('p', { class: 'muted small' }, remaining === null ? w.reason || tr("Провайдер не сообщает этот лимит")
+        el('p', { class: 'muted small' }, remaining === null ? message(w.reason || tr("Провайдер не сообщает этот лимит"))
           : tr("Использовано {0}% · сброс: {1}", number(w.used_percent), date(w.resets_at))));
     });
     const stats = data.statistics || {};
@@ -90,20 +90,20 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
       try { return new URL(link.url).protocol === 'https:'; } catch { return false; }
     });
     content.replaceChildren(...[
-      el('p', { class: 'muted' }, [data.plan, data.message].filter(Boolean).join(' · ')), ...windows,
+      el('p', { class: 'muted' }, [data.plan, data.message].filter(Boolean).map(message).join(' · ')), ...windows,
       el('h3', {}, tr("Статистика использования")),
-      el('p', { class: 'muted small' }, stats.source || data.source || ''),
+      el('p', { class: 'muted small' }, message(stats.source || data.source || '')),
       entries.length ? el('dl', { class: 'code-usage-summary' }, ...entries.flatMap(([key, label]) =>
         [el('dt', {}, label), el('dd', {}, Number.isFinite(summary[key]) ? number(summary[key]) : tr("Не сообщается"))])) : null,
       resetDetails,
       engine === 'codex' && summary.available_resets > 0 && !canReset
         ? el('p', { class: 'muted small' }, tr("Обновите мост на компьютере для использования сбросов.")) : null,
-      !stats.available ? el('p', { class: 'muted' }, stats.reason || tr("Провайдер не сообщает статистику подписки")) : null,
+      !stats.available ? el('p', { class: 'muted' }, message(stats.reason || tr("Провайдер не сообщает статистику подписки"))) : null,
       daily.length ? el('details', {}, el('summary', {}, tr("Использование по дням")),
         el('table', { class: 'code-usage-days' }, el('thead', {}, el('tr', {}, el('th', {}, tr("Дата")), el('th', {}, tr("Токены")))),
           el('tbody', {}, ...daily.map((d) => el('tr', {}, el('td', {}, d.date), el('td', {}, number(d.tokens))))))) : null,
       el('p', { class: 'muted small' }, tr("Обновлено: {0} · кэш {1} с", date(data.checked_at), data.cache_ttl || 60)),
-      ...links.map((link) => el('p', {}, el('a', { href: link.url, target: '_blank', rel: 'noopener noreferrer' }, link.label)))
+      ...links.map((link) => el('p', {}, el('a', { href: link.url, target: '_blank', rel: 'noopener noreferrer' }, message(link.label))))
     ].filter((node) => node !== null));
   }
   /** passive — обновление после конца задания, не по действию владельца: срок PIN компьютера не продлевает. */
