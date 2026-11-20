@@ -1891,6 +1891,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Студия обновилась": "Studio updated",
   "Связь восстановилась — обновите Студию, когда сохраните изменения": "Connection restored. Refresh Studio once your changes are saved",
   "Нет связи со Студией. Текущая страница остаётся открытой.": "Can't reach Studio. Your current page is still open.",
+  "Обновить и потерять набранное?": "Refresh and lose what you typed?",
+  "Набранный текст, запись голоса или идущая загрузка файла пропадут.": "Typed text, a voice recording or a file upload in progress will be lost.",
   "Раздел не загрузился": "Could not load section",
   "{0}. Проверьте связь и обновите страницу.": "{0}. Check your connection and refresh the page.",
   "Субтитры .srt": "Subtitles .srt",
