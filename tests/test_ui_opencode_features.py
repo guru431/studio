@@ -5,7 +5,7 @@ import pytest
 from fake_bridge import FakeMachine
 from test_ui_browser import (
     CODE_PIN, NO_OVERFLOW, READY, browser, live, code_online, code_open, code_project,
-    code_requests, code_send, problems, known_refusals, set_value, signin,
+    code_requests, problems, known_refusals, set_value, signin,
 )
 from test_ui_opencode import CATALOG
 
@@ -46,13 +46,14 @@ def test_opencode_mode_directories_commands_progress_and_fork(browser, live, wid
             ('wait', "!document.querySelector('#code-agent-mode').disabled"),
             set_value('#code-additional-directories', 'C:\\Shared'),
             ('wait', "!document.querySelector('#code-agent-mode').disabled"),
-            set_value('#code-slash-command', 'compact'),
+            # команда встаёт перед набранным текстом, не затирая его
+            set_value('#code-text', 'Проверь проект'), set_value('#code-slash-command', 'compact'),
             ('eval', 'command', "document.querySelector('#code-text').value"),
             ('eval', 'buttons', "[!document.querySelector('#code-subagents').disabled, !!document.querySelector('#code-fork-chat')]"),
             ('click', '#code-context'),
             ('eval', 'cost', "document.querySelector('#code-context-dialog').textContent"),
             ('eval', 'closeContext', "document.querySelector('#code-context-dialog').close()"),
-            *code_send('Проверь проект'), ('wait', "!!document.querySelector('.code-ask-yes')"),
+            ('click', '#code-send'), ('wait', "!!document.querySelector('.code-ask-yes')"),
             ('eval', 'waiting', "document.querySelector('#code-opencode-status').textContent"),
             ('click', '.code-ask-yes'),
             ('wait', "document.querySelector('#code-stop').hidden && document.querySelector('#code-feed').textContent.includes('Готово')"),
@@ -66,12 +67,13 @@ def test_opencode_mode_directories_commands_progress_and_fork(browser, live, wid
         sb.stop()
     assert not result.get('failed'), result
     values = result['values']
-    assert values['command'] == '/compact ' and values['buttons'] == [True, True]
+    assert values['command'] == '/compact Проверь проект' and values['buttons'] == [True, True]
     assert 'Стоимость сессии' in values['cost'] and 'Основной агент' in values['cost']
     assert 'Повторная попытка 2' in values['waiting'] and 'HTTP 429' in values['waiting'] and 'Сжимаю' in values['waiting']
     assert '· 15:00 ·' in values['waiting']  # 12:00Z — в поясе учётки (Москва), не браузера (UTC)
     assert values['completed'] == 'Контекст сжат' and values['fits']
     assert values['source'] != values['branch']
+    assert code_requests(machine, 'turn')[0]['text'] == '/compact Проверь проект'
     turn = code_requests(machine, 'turn')[-1]
     assert turn['agent_mode'] == 'plan' and turn['additional_directories'] == ['C:\\Shared']
     assert not known_refusals(problems(result), 409), problems(result)
