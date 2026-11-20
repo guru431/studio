@@ -288,7 +288,7 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `visualization` (0.16.0, `hello.visualizations`) | `project`, `source` | `{"text", "version"}` | `outside`, `invalid`, `not_found`, `too_large` (HTML до 10 МиБ с 0.23.1; ранее 2 МиБ), `binary`, `closed` |
 | `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary`, `read_only` (файл только для чтения; сервер — 409) |
 | `file_operation` (0.8.1, `hello.file_operations`) | `project`, `operation`, `path`, `destination` (путь или `null`) | `{}` | `outside`, `invalid`, `not_found`, `exists` (409), `read_only` (409), `busy` (409) |
-| `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git` |
+| `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git`; `git_unavailable` (0.42.0, сервер — 409: нет git, отказ `safe.directory`, сбой git при своём `.git`) |
 
 `visualization.source` — UTF-8 `.html` внутри выбранного проекта (относительный либо абсолютный
 путь) или абсолютный путь внутри `$CODEX_HOME/visualizations` (умолчание `~/.codex/visualizations`).
@@ -473,7 +473,7 @@ Codex читает [account RPC app-server](https://learn.chatgpt.com/docs/app-s
 от usage не скрывает доступные лимиты. Общий бюджет чтения 24 секунды, метаданные используют существующий
 app-server моста. Claude читает `GET https://api.anthropic.com/api/oauth/usage` с локальными OAuth-данными
 CLI (`CLAUDE_CONFIG_DIR`, иначе `~/.claude/.credentials.json`; явный `CLAUDE_CODE_OAUTH_TOKEN` имеет
-приоритет). Этот API недокументирован; при истечении входа или отказе сервисов возвращается объяснение.
+приоритет; на macOS без файла — запись Keychain `Claude Code-credentials`, мост 0.42.0). Этот API недокументирован; при истечении входа или отказе сервисов возвращается объяснение.
 Мост не обновляет и не переписывает credentials, не следует HTTP redirects и не отправляет токен студии.
 Статистика Claude — необязательный локальный `stats-cache.json`.
 

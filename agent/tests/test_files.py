@@ -62,6 +62,26 @@ def test_bad_paths_are_invalid_before_the_disk(tmp_path, bad, monkeypatch):
     assert e.value.code == "invalid"
 
 
+POSIX_NAMES = ["aux.c", "con", "prn.py", "nul.txt", "COM1.log", "logs/2026-11-20T10:11:12.log", "What?.md",
+               "a*b", 'say "hi"', "<x>", "a|b", "dot.", "space "]
+
+
+@pytest.mark.parametrize("name", POSIX_NAMES)
+def test_windows_only_names_are_valid_on_linux_and_macos(name, monkeypatch):
+    """Запреты NTFS — только на Windows: на POSIX это обычные имена файлов."""
+    monkeypatch.setattr(files, "WINDOWS", True)
+    with pytest.raises(errors.Refused):
+        files._parts(name)
+    monkeypatch.setattr(files, "WINDOWS", False)
+    assert files._parts(name) == name.split("/")
+
+
+@pytest.mark.parametrize("bad", ["a\\b", "a\x00b", "a\x7fb", "x\ud800y", "..", "a/./b", "a//b", "/abs", "x" * 1025])
+def test_posix_still_refuses_protocol_breaking_paths(bad, monkeypatch):
+    monkeypatch.setattr(files, "WINDOWS", False)
+    assert _code(files._parts, bad) == "invalid"
+
+
 def test_the_empty_path_is_the_project_root(tmp_path):
     assert files.resolve(tmp_path, "") == type(tmp_path)(os.path.realpath(tmp_path))
 

@@ -193,8 +193,44 @@ def test_unsuccessful_or_unconfirmed_startup_does_not_prune(releases, status):
     base, stage, plan = releases
     (stage / '_update_result').write_text(status, encoding='ascii')
     (stage / '_update_plan.json').write_text(json.dumps(plan), encoding='utf-8')
+    (stage / '_update_ready').unlink()                        # эта копия готовность не подтвердила
     assert update_helper.cleanup_started(stage) is True
     assert (base / 'release-stale').is_dir()
+
+
+def test_a_ready_copy_finishes_the_switch_the_helper_gave_up_on(releases, monkeypatch):
+    """`unconfirmed`, а новая копия всё же готова: автозапуск переключает она сама, итог становится `complete`."""
+    base, stage, plan = releases
+    (stage / '_update_result').write_text('unconfirmed', encoding='ascii')
+    (stage / '_update_plan.json').write_text(json.dumps(plan), encoding='utf-8')
+    switch = Mock()
+    monkeypatch.setattr(update_helper, '_switch', switch)
+    assert update_helper.cleanup_started(stage) is True
+    switch.assert_called_once_with(stage, plan)
+    assert (stage / '_update_result').read_text('ascii') == 'complete'
+
+
+def test_running_copy_reports_a_failed_neighbour_once(releases):
+    """Прежняя копия после отката читает итог соседнего выпуска: код один раз, свой итог и успех — не в счёт."""
+    base, stage, plan = releases
+    previous = base / 'release-previous'
+    (base / 'release-stale' / '_update_result').write_text('rolled_back', encoding='ascii')
+    assert update_helper.failed_update(previous) == 'rolled_back'
+    assert (base / 'release-stale' / '_update_reported').is_file()
+    assert update_helper.failed_update(previous) is None
+    (stage / '_update_result').write_text('unconfirmed', encoding='ascii')
+    assert update_helper.failed_update(stage) is None         # свой итог — не сосед
+    assert update_helper.failed_update(previous) == 'unconfirmed'  # после перезагрузки прежняя копия узнаёт
+    assert update_helper.failed_update(base.parent / 'elsewhere') is None   # не установленная копия — не читает
+
+
+def test_updater_reports_the_last_failure_as_failed_with_words(home):
+    update = updater.Updater(home, lambda: False, Mock())
+    update.report('rolled_back')
+    assert update.status() == {'state': 'failed', 'version': None,
+                               'message': 'Новая версия агента не запустилась — работает прежняя'}
+    update.report('unknown')
+    assert update.status()['message'] == updater.FAILED_WORDS['rolled_back']
 
 
 def test_activation_preserves_releases_when_the_registry_value_cannot_be_read(releases, monkeypatch):

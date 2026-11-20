@@ -16,6 +16,10 @@ from .errors import Refused
 
 log = logging.getLogger(__name__)
 
+# Запреты имён NTFS/Win32 (устройства, `: * ? " < > |`, точка или пробел в конце) — только на Windows: на Linux
+# и macOS `aux.c`, `What?.md` и `2026-11-20T10:11:12.log` — обычные файлы. `\` запрещён везде, как и сервером
+# (`claude_code.check_path`): разделитель частей протокола — только `/`.
+WINDOWS = os.name == "nt"
 # Имена устройств Windows — по части пути, с любым расширением. Сверх брифа: CONIN$, CONOUT$, COM¹²³ и
 # LPT¹²³ и пробелы перед точкой («NUL .txt») — Win32 считает их устройствами так же.
 DEVICE = re.compile(r"(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³]) *(?:\..*)?", re.IGNORECASE)
@@ -41,13 +45,14 @@ def _parts(path: str) -> list[str]:
         raise Refused("invalid")
     if path == "":
         return []
+    bad = BAD_CHARS if WINDOWS else "\\"
     for c in path:
         n = ord(c)
-        if n < 32 or n == 127 or 0xD800 <= n <= 0xDFFF or c in BAD_CHARS:
+        if n < 32 or n == 127 or 0xD800 <= n <= 0xDFFF or c in bad:
             raise Refused("invalid")
     parts = path.split("/")
     for p in parts:
-        if p in ("", ".", "..") or p[-1] in ". " or DEVICE.fullmatch(p):
+        if p in ("", ".", "..") or WINDOWS and (p[-1] in ". " or DEVICE.fullmatch(p)):
             raise Refused("invalid")
     return parts
 

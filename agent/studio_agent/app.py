@@ -529,6 +529,11 @@ class Controller:
             agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit, holds=self._update_holds)
         agent.on_pin_locked = self._pin_changed
         await asyncio.to_thread(update_helper.acquire_runtime_lease, updater.REPO)
+        failure = await asyncio.to_thread(update_helper.failed_update, updater.REPO)
+        if failure is not None:
+            log.warning("обновление: прошлый переход не удался — %s", failure)
+            if agent.updater is not None:
+                agent.updater.report(failure)
         log.info("Claude Code: %s", "расширение VS Code" if path is not None else cli.BUILTIN)
         self._built.set()
         prober = asyncio.create_task(self._probe_loop())

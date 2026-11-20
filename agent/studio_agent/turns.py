@@ -37,6 +37,8 @@ STOPPED = "Остановлено"
 REFUSED = "Пользователь отказал"
 NO_CLI = "Claude Code не найден на компьютере"
 NO_START = "Claude Code не запустился"
+# Сбой SDK после отправки запроса: ответ мог уже идти — это обрыв хода, а не установка.
+BROKEN = "Claude Code прервал ход — повторите задание"
 # Чтение состояния — фоновое, без действия владельца в папке: хуки её `.claude/settings*.json` (SessionStart и др.)
 # не исполняются. `--settings` сильнее настроек проекта и local; остальные настройки читаются как прежде.
 # Серверы `.mcp.json` папки SDK поднимает без одобрения — чтение идёт с `strict_mcp=True` (только конфиг владельца).
@@ -591,7 +593,7 @@ class Runner:
             failure = _words(e.errors, e.result, e.subtype)
         except Exception as e:
             log.warning("ход %s: %s", t.turn, type(e).__name__)
-            failure = NO_START
+            failure = BROKEN if sent else NO_START
         await self._finish(t, new and sent, failure, claude=sent)
         if cancelled:
             raise asyncio.CancelledError

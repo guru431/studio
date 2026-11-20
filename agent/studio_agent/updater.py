@@ -24,6 +24,13 @@ PACKAGE_MAX = 16 * 1024 * 1024
 UNPACKED_MAX = 64 * 1024 * 1024
 PIP_INSTALL_SEC = 1800
 REPO = Path(__file__).resolve().parent.parent
+# Слова для Студии об итоге прошлого перехода (`update_helper.FAILED_RESULTS`): только код, без путей.
+FAILED_WORDS = {
+    'rolled_back': 'Новая версия агента не запустилась — работает прежняя',
+    'unconfirmed': 'Новая версия агента не подтвердила запуск — работает прежняя',
+    'old_running': 'Агент не завершился вовремя — обновление не применено',
+    'failed': 'Помощник обновления завершился с ошибкой — работает прежняя версия',
+}
 
 
 async def cleanup_releases(*, repo=None, sleep=asyncio.sleep):
@@ -225,6 +232,7 @@ class Updater:
         self.prepare, self.launch, self.sleep = prepare_fn, launch_fn, sleep
         self.holds, self.discard = holds, discard_fn
         self.state, self.version = 'idle', None
+        self.reason = None  # код неудачного прошлого перехода (`FAILED_WORDS`)
         self.task = None
         self._gen = 0  # отмена меняет поколение: подготовка и ожидание прежнего запуска сами уходят
 
@@ -236,7 +244,14 @@ class Updater:
         status = {'state': self.state, 'version': self.version}
         if self.state == 'waiting' and self.holds is not None:
             status['holds'] = self.holds()
+        if self.state == 'failed' and self.reason in FAILED_WORDS:
+            status['message'] = FAILED_WORDS[self.reason]
         return status
+
+    def report(self, result: str) -> None:
+        """Итог прошлого перехода, прочитанный при запуске (`update_helper.failed_update`): `failed` со словами."""
+        if result in FAILED_WORDS and not self.busy:
+            self.state, self.version, self.reason = 'failed', None, result
 
     def cancel(self) -> dict:
         """Отмена до перезапуска: сразу `idle` (новые задания снова принимаются), подготовленная копия удаляется,
@@ -257,7 +272,7 @@ class Updater:
             return self.status()
         if tuple(map(int, version.split('.'))) <= tuple(map(int, VERSION.split('.'))):
             return {'state': 'idle', 'version': VERSION}
-        self.state, self.version = 'preparing', version
+        self.state, self.version, self.reason = 'preparing', version, None
         self._gen += 1
         self.task = asyncio.create_task(self._run({'version': version, 'sha256': digest, 'size': size}, self._gen))
         return self.status()

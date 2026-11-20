@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import subprocess
 import urllib.error
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -156,6 +157,49 @@ def test_claude_auth_failure_does_not_leak_body_or_refresh_token(tmp_path):
     data = subscription.claude_usage(1000, config=tmp_path, request=request, environ={})
     assert not data["available"] and "истёк" in data["message"]
     assert "secret" not in json.dumps(data) and path.read_bytes() == original
+
+
+def test_macos_reads_claude_login_from_keychain_when_there_is_no_file(tmp_path, monkeypatch):
+    """На macOS Claude Code хранит вход в Keychain: файла нет — читается запись `security`, секрет не в argv."""
+    calls = []
+    stored = json.dumps({"claudeAiOauth": {"accessToken": "keychain-secret", "expiresAt": 2000000,
+                                           "subscriptionType": "pro", "refreshToken": "never"}}).encode()
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stored + b"\n", b"")
+
+    monkeypatch.setattr(subscription.host, "MACOS", True)
+    monkeypatch.setattr(subscription.subprocess, "run", run)
+    request = Mock(return_value={"five_hour": {"utilization": 40}})
+    data = subscription.claude_usage(1000, config=tmp_path, request=request, environ={})
+    request.assert_called_once_with("keychain-secret")
+    assert data["available"] and data["plan"] == "pro"
+    assert calls == [["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]]
+    assert "secret" not in json.dumps(data) and "never" not in json.dumps(data)
+
+
+@pytest.mark.parametrize("code,words", [(44, "Войдите в Claude Code на компьютере для просмотра лимитов"),
+                                        (51, subscription.KEYCHAIN_FAILED), ("timeout", subscription.KEYCHAIN_FAILED),
+                                        ("junk", subscription.KEYCHAIN_FAILED)])
+def test_macos_keychain_absence_and_refusal_have_their_own_words(tmp_path, monkeypatch, code, words):
+    def run(argv, **kw):
+        if code == "timeout":
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+        return subprocess.CompletedProcess(argv, 0 if code == "junk" else code, b"not json", b"")
+
+    monkeypatch.setattr(subscription.host, "MACOS", True)
+    monkeypatch.setattr(subscription.subprocess, "run", run)
+    request = Mock(side_effect=AssertionError("network"))
+    data = subscription.claude_usage(1000, config=tmp_path, request=request, environ={})
+    assert not data["available"] and data["message"] == words and not request.called
+
+
+def test_windows_and_linux_never_ask_the_keychain(tmp_path, monkeypatch):
+    monkeypatch.setattr(subscription.host, "MACOS", False)
+    monkeypatch.setattr(subscription.subprocess, "run", Mock(side_effect=AssertionError("security")))
+    data = subscription.claude_usage(1000, config=tmp_path, request=Mock(), environ={})
+    assert data["message"] == "Войдите в Claude Code на компьютере для просмотра лимитов"
 
 
 def test_oauth_requests_never_follow_redirects():
