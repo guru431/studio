@@ -15,6 +15,7 @@ import threading
 from urllib.parse import urlsplit
 
 from . import VERSION, computer_info, enroll, host, setup, theme
+from .i18n import language, tr
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ NOTE_PASSWORD = "Пароль нужен один раз и на компьют�
 CONFIRM_OFF = ("Отключить компьютер от студии? Студия забудет этот компьютер, идущие ходы прервутся. "
                "Чаты останутся на компьютере.")
 CONFIRM_PIN_OFF = "Убрать PIN? Компьютер откроется в студии без PIN."
-CONFIRM_QUIT = "Идёт заданий: {tasks}. Выйти сейчас и прервать их?"
+CONFIRM_QUIT = "Идёт заданий: {0}. Выйти сейчас и прервать их?"
 FAILED = "ошибка моста"
 DASH = "—"
 # Состояние ядра → (слова, токен цвета палитры).
@@ -74,7 +75,8 @@ def view_of(enrolled: bool) -> str:
 
 def status_of(state: str) -> tuple[str, str]:
     """Слова и цвет карточки «Подключение»; `setup` здесь — только что привязан, канал ещё не поднят."""
-    return STATUS["connecting"] if state == "setup" else STATUS.get(state, STATUS["connecting"])
+    words, token = STATUS["connecting"] if state == "setup" else STATUS.get(state, STATUS["connecting"])
+    return tr(words), token
 
 
 def card_of(state: str) -> tuple[str, str, str, str]:
@@ -83,7 +85,7 @@ def card_of(state: str) -> tuple[str, str, str, str]:
     живёт с тем же `key.bin` и `pin.bin` — стёртый PIN открыл бы ему любую сессию без PIN."""
     words, token = status_of(state)
     if state == "replaced":
-        return words, token, REPLACED_HINT, "reconnect"
+        return words, token, tr(REPLACED_HINT), "reconnect"
     return words, token, "", "relogin" if state == "revoked" else "off"
 
 
@@ -102,21 +104,21 @@ def pin_row(status: str | None) -> tuple[str, tuple[str, ...]]:
     """Строка PIN и кнопки (`set`, `change`, `clear`, `unlock`); `None` — ещё не прочитан."""
     if status not in PIN_WORDS:
         return "", ()
-    return PIN_WORDS[status], PIN_BUTTONS[status]
+    return tr(PIN_WORDS[status]), PIN_BUTTONS[status]
 
 
 def backend_row(status: dict | None) -> tuple[str, str]:
     """Результат собственной проверки помощника; связь со студией этого статуса не определяет."""
     if not status or status.get("status") == "checking":
-        return "Проверка…", "muted"
+        return tr("Проверка…"), "muted"
     if status.get("status") == "ready":
-        return f"Доступен · моделей: {status['models']}", "ok"
-    return "Недоступен", "warn"
+        return tr("Доступен · моделей: {0}", status['models']), "ok"
+    return tr("Недоступен"), "warn"
 
 
 def pin_dialog_errors(pin: str, pin2: str) -> list[str]:
     """Окно «Задать / Изменить PIN»: пустой — не PIN."""
-    return [setup.PIN_WORDS] if not pin else setup.pin_errors(pin, pin2)
+    return [tr(setup.PIN_WORDS)] if not pin else setup.pin_errors(pin, pin2)
 
 
 def host_of(url: str) -> str:
@@ -128,18 +130,19 @@ def host_of(url: str) -> str:
 
 def memory_row(data: dict | None) -> str:
     if data is None:
-        return "Недоступно"
+        return tr("Недоступно")
     available, total = (data[key] / 1024 ** 3 for key in ("available", "total"))
-    return f"Доступно {available:.1f} из {total:.1f} ГБ".replace(".", ",")
+    comma = (lambda n: n.replace(".", ",")) if language() == "ru" else str
+    return tr("Доступно {0} из {1} ГБ", comma(f"{available:.1f}"), comma(f"{total:.1f}"))
 
 
 def permission_rows(data) -> str:
     allowed = {True: 'Разрешено', False: 'Нет доступа', None: 'Не удалось проверить'}
     session = {'ready': 'Доступен', 'locked': 'Экран заблокирован',
                'unavailable': 'Недоступен — откройте Studio Agent из «Приложений»'}
-    return (f"Запись экрана: {allowed[data['screen']]}\n"
-            f"Управление вводом: {allowed[data['input']]}\n"
-            f"Графический сеанс: {session[data['session']]}")
+    return "\n".join((tr("Запись экрана: {0}", tr(allowed[data['screen']])),
+                      tr("Управление вводом: {0}", tr(allowed[data['input']])),
+                      tr("Графический сеанс: {0}", tr(session[data['session']]))))
 
 
 def open_main(root, controller):
@@ -437,7 +440,7 @@ class MainWindow:
         box = ttk.Frame(host, style=prefix + "TFrame")
         box.grid(row=row, column=0, columnspan=span, sticky="ew", pady=(0, self.px(6)))
         box.columnconfigure(0, weight=1)
-        ttk.Label(box, text="Тема", style=prefix + "Muted.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(box, text=tr("Тема"), style=prefix + "Muted.TLabel").grid(row=0, column=0, sticky="w")
         selected = self.tk.StringVar(value="dark" if self.c["dark"] else "light")
         problem = self.tk.StringVar()
 
@@ -452,14 +455,14 @@ class MainWindow:
             def done(_, failed):
                 if failed:
                     selected.set(previous)
-                    problem.set(FAILED)
+                    problem.set(tr(FAILED))
                 else:
                     self.apply_theme(choice)
 
             self.work(lambda: self.ctrl.set_theme(choice), done)
 
         for column, (value, label) in enumerate((("light", "Светлая"), ("dark", "Тёмная")), start=1):
-            button = ttk.Radiobutton(box, text=label, value=value, variable=selected, command=change,
+            button = ttk.Radiobutton(box, text=tr(label), value=value, variable=selected, command=change,
                                     style=prefix + "TRadiobutton")
             button.grid(row=0, column=column, sticky="e", padx=(self.px(12), 0))
             self.buttons.append(button)
@@ -527,40 +530,40 @@ class MainWindow:
             entry.grid(row=r, column=1, sticky="ew", pady=(0, gap))
             return entry
 
-        field("Адрес студии", url)
+        field(tr("Адрес студии"), url)
         r += 1
-        first = field("Логин или email", login)
+        first = field(tr("Логин или email"), login)
         r += 1
-        secret = field("Пароль", password, secret=True)
-        ttk.Label(box, text=NOTE_PASSWORD, style="Card.Muted.TLabel").grid(row=r + 1, column=0, columnspan=2,
+        secret = field(tr("Пароль"), password, secret=True)
+        ttk.Label(box, text=tr(NOTE_PASSWORD), style="Card.Muted.TLabel").grid(row=r + 1, column=0, columnspan=2,
                                                                           sticky="w", pady=(0, gap))
         r += 2
-        code_entry = field("Код из письма", email_code)
+        code_entry = field(tr("Код из письма"), email_code)
         code_widgets = box.grid_slaves(row=r)
         for widget in code_widgets:
             widget.grid_remove()
         r += 1
-        field("Имя компьютера", name)
+        field(tr("Имя компьютера"), name)
         r += 1
         self.folders_control(box, row=r, folders=folders, problem=errors)
         r += 2
         pin_box = ttk.Frame(box, style="Card.TFrame")
         pin_box.grid(row=r, column=0, columnspan=2, sticky="ew", pady=(0, gap))
         for column, (label, variable) in enumerate((("PIN (по желанию)", pin), ("Ещё раз", pin2))):
-            ttk.Label(pin_box, text=label, style="Card.TLabel").grid(
+            ttk.Label(pin_box, text=tr(label), style="Card.TLabel").grid(
                 row=0, column=column * 2, sticky="w", padx=(0, gap))
             ttk.Entry(pin_box, textvariable=variable, width=8, show="•").grid(
                 row=0, column=column * 2 + 1, sticky="ew", padx=(0, gap))
             pin_box.columnconfigure(column * 2 + 1, weight=1)
         r += 1
-        ttk.Checkbutton(box, text="Запускать при входе в macOS" if host.MACOS else "Запускать при входе в Windows", variable=auto, style="Card.TCheckbutton").grid(
+        ttk.Checkbutton(box, text=tr("Запускать при входе в macOS" if host.MACOS else "Запускать при входе в Windows"), variable=auto, style="Card.TCheckbutton").grid(
             row=r, column=0, columnspan=2, sticky="w")
         foot = ttk.Frame(self.body)
         foot.grid(row=row + 1, column=0, sticky="ew")
         foot.columnconfigure(0, weight=1)
         ttk.Label(foot, textvariable=errors, style="Error.TLabel", wraplength=self.px(260), justify="left").grid(
             row=0, column=0, sticky="w")
-        go = ttk.Button(foot, text="Подключить", style="Accent.TButton")
+        go = ttk.Button(foot, text=tr("Подключить"), style="Accent.TButton")
         go.grid(row=0, column=1, sticky="ne", padx=(self.px(12), 0))
 
         def submit() -> None:
@@ -586,8 +589,8 @@ class MainWindow:
                 if failed or found:
                     if go.winfo_exists():
                         go.state(["!disabled"])
-                        errors.set("\n".join(found) if found else FAILED)
-                        if found and any(word in (enroll.EMAIL_CODE_REQUIRED, enroll.EMAIL_CODE_INVALID) for word in found):
+                        errors.set("\n".join(found) if found else tr(FAILED))
+                        if found and any(word in (tr(enroll.EMAIL_CODE_REQUIRED), tr(enroll.EMAIL_CODE_INVALID)) for word in found):
                             for widget in code_widgets:
                                 widget.grid()
                             code_entry.focus_set()
@@ -618,11 +621,11 @@ class MainWindow:
         for page, label in ((connection, "Подключение"), (self.activity_page, "Работа"),
                             (self.settings_page, "Настройки")):
             page.columnconfigure(0, weight=1)
-            self.sections.add(page, text=label)
+            self.sections.add(page, text=tr(label))
         if host.MACOS:
             self.access_page = ttk.Frame(self.sections, padding=(0, self.px(6), 0, 0))
             self.access_page.columnconfigure(0, weight=1)
-            self.sections.add(self.access_page, text="Доступ")
+            self.sections.add(self.access_page, text=tr("Доступ"))
         else:
             self.sections.bind("<<NotebookTabChanged>>", lambda e: self.viewport.yview_moveto(0))
         box = self.card(0, host=connection)
@@ -657,7 +660,7 @@ class MainWindow:
         for i, (label, value) in enumerate((("Студия", host_of(cfg.url)), ("Вход", login or DASH),
                                             ("Компьютер", cfg.name or DASH), ("Версия Studio", DASH),
                                             ("Оперативная память", DASH)), start=3):
-            ttk.Label(box, text=label, style="Card.Muted.TLabel").grid(row=i, column=0, sticky="w",
+            ttk.Label(box, text=tr(label), style="Card.Muted.TLabel").grid(row=i, column=0, sticky="w",
                                                                        padx=(0, self.px(16)), pady=self.px(1))
             shown = ttk.Label(box, text=value, style="Card.TLabel", wraplength=self.px(280), justify="left")
             shown.grid(row=i, column=1, sticky="w", pady=self.px(1))
@@ -697,9 +700,9 @@ class MainWindow:
         else:
             hint.grid_remove()
         label, style = MAIN_BUTTONS[kind]
-        main.configure(text=label, style=style, command=lambda: self.main_action(kind))
+        main.configure(text=tr(label), style=style, command=lambda: self.main_action(kind))
         version = self.ctrl.studio_version if self.state == "online" else None
-        self.studio_version_value.configure(text=version or ("Неизвестна" if self.state == "online" else "Нет связи"))
+        self.studio_version_value.configure(text=version or tr("Неизвестна" if self.state == "online" else "Нет связи"))
 
     def refresh_connection_info(self) -> None:
         """Сведения и права раз в пять секунд, пока окно открыто; без запроса разрешений."""
@@ -723,7 +726,7 @@ class MainWindow:
             self._permission_check = False
             label = self.permission_value
             if label is not None and label.winfo_exists():
-                label.configure(text=permission_rows(value) if not failed else 'Не удалось проверить разрешения macOS')
+                label.configure(text=permission_rows(value) if not failed else tr('Не удалось проверить разрешения macOS'))
                 self.schedule_fit()
         self.work(permission_status, done, hold=False)
 
@@ -747,12 +750,12 @@ class MainWindow:
         elif kind == "relogin":
             self.unenroll(ask_studio=False)
         else:
-            confirm(self, CONFIRM_OFF, "Отключить", lambda: self.unenroll(ask_studio=True))
+            confirm(self, tr(CONFIRM_OFF), tr("Отключить"), lambda: self.unenroll(ask_studio=True))
 
     def unenroll(self, *, ask_studio: bool) -> None:
         def done(result, failed) -> None:
             if failed:
-                self.card_problem.set(FAILED)
+                self.card_problem.set(tr(FAILED))
                 return
             erased, words = result
             self.notice = words  # не стёрто, а ключа уже нет — ядро даст `setup`: слова над формой входа
@@ -782,11 +785,11 @@ class MainWindow:
             def done(_, failed) -> None:
                 if failed:
                     auto.set(not on)
-                    problem.set(FAILED)
+                    problem.set(tr(FAILED))
 
             self.work(lambda: self.ctrl.set_autostart(on), done)
 
-        box_auto = ttk.Checkbutton(box, text="Запускать при входе в macOS" if host.MACOS else "Запускать при входе в Windows", variable=auto, command=toggle,
+        box_auto = ttk.Checkbutton(box, text=tr("Запускать при входе в macOS" if host.MACOS else "Запускать при входе в Windows"), variable=auto, command=toggle,
                                    style="Card.TCheckbutton")
         box_auto.grid(row=5, column=0, columnspan=2, sticky="w", pady=self.px(6))
         self.buttons.append(box_auto)
@@ -812,13 +815,13 @@ class MainWindow:
         box = self.card(0, host=self.activity_page)
         box.columnconfigure(0, weight=1)
         ttk = self.ttk
-        ttk.Label(box, text="Работа на компьютере", style="Card.Head.TLabel").grid(
+        ttk.Label(box, text=tr("Работа на компьютере"), style="Card.Head.TLabel").grid(
             row=0, column=0, sticky="w", pady=(0, self.px(8)))
         tasks = ttk.Label(box, style="Card.TLabel")
         tasks.grid(row=1, column=0, sticky="w")
         desktop = ttk.Label(box, style="Card.TLabel", wraplength=self.px(380))
         desktop.grid(row=2, column=0, sticky="w", pady=(self.px(8), self.px(4)))
-        stop = ttk.Button(box, text="Завершить этот сеанс", command=self.ctrl.stop_desktop_session)
+        stop = ttk.Button(box, text=tr("Завершить этот сеанс"), command=self.ctrl.stop_desktop_session)
         stop.grid(row=3, column=0, sticky="w", pady=(0, self.px(8)))
         bar = ttk.Frame(box, style="Card.TFrame")
         bar.grid(row=4, column=0, sticky="ew")
@@ -835,12 +838,12 @@ class MainWindow:
             return
         value = self.ctrl.activity_status()
         tasks, desktop, stop, idle, immediate = self.activity_widgets
-        tasks.configure(text=f"Заданий: {value['tasks']} · ждут ответа: {value['waiting']}")
-        desktop.configure(text="Удалённый рабочий стол подключён" if value["desktop_active"]
-                          else "Удалённый рабочий стол не подключён")
+        tasks.configure(text=tr("Заданий: {0} · ждут ответа: {1}", value['tasks'], value['waiting']))
+        desktop.configure(text=tr("Удалённый рабочий стол подключён") if value["desktop_active"]
+                          else tr("Удалённый рабочий стол не подключён"))
         stop.state(["!disabled"] if value["desktop_active"] else ["disabled"])
-        idle.configure(text="Отменить выход" if value["quit_when_idle"] else "Выйти после завершения")
-        immediate.configure(text="Выйти сейчас")
+        idle.configure(text=tr("Отменить выход" if value["quit_when_idle"] else "Выйти после завершения"))
+        immediate.configure(text=tr("Выйти сейчас"))
 
     def desktop_control(self, box, *, row: int, enabled: bool, problem) -> None:
         selected = self.tk.BooleanVar(value=enabled)
@@ -852,16 +855,16 @@ class MainWindow:
             def done(_, failed):
                 if failed:
                     selected.set(self.ctrl.config().desktop_enabled)
-                    problem.set(FAILED)
+                    problem.set(tr(FAILED))
 
             self.work(lambda: self.ctrl.set_desktop_enabled(proposed), done)
 
         area = self.ttk.Frame(box, style="Card.TFrame")
         area.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, self.px(6)))
-        button = self.ttk.Checkbutton(area, text="Разрешить удалённый рабочий стол", variable=selected,
+        button = self.ttk.Checkbutton(area, text=tr("Разрешить удалённый рабочий стол"), variable=selected,
                                      command=toggle, style="Card.TCheckbutton")
         button.grid(row=0, column=0, sticky="w")
-        self.ttk.Label(area, text="Экран, ввод и буфер. Выбор сохраняется; меняется только здесь.",
+        self.ttk.Label(area, text=tr("Экран, ввод и буфер. Выбор сохраняется; меняется только здесь."),
                        style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
             row=1, column=0, sticky="w", pady=(self.px(4), 0))
         self.buttons.append(button)
@@ -874,14 +877,14 @@ class MainWindow:
                     request_permission(kind)
                 except Exception as error:
                     log.warning('разрешения macOS: %s', type(error).__name__)
-                    problem.set('Откройте «Конфиденциальность и безопасность» в настройках macOS')
+                    problem.set(tr('Откройте «Конфиденциальность и безопасность» в настройках macOS'))
                 self.refresh_permissions()
 
-            self.ttk.Label(area, text="Подтвердите запрос macOS для Studio Agent."
-                           " После выдачи права на запись экрана macOS может попросить перезапуск.",
+            self.ttk.Label(area, text=tr("Подтвердите запрос macOS для Studio Agent."
+                                         " После выдачи права на запись экрана macOS может попросить перезапуск."),
                            style="Card.Muted.TLabel", wraplength=self.px(380), justify="left").grid(
                 row=2, column=0, sticky="w", pady=(self.px(4), 0))
-            self.permission_value = self.ttk.Label(area, text='Проверка разрешений macOS…',
+            self.permission_value = self.ttk.Label(area, text=tr('Проверка разрешений macOS…'),
                 style='Card.TLabel', justify='left', wraplength=self.px(380))
             self.permission_value.grid(row=3, column=0, sticky='w', pady=(self.px(4), 0))
             actions = self.ttk.Frame(area, style="Card.TFrame")
@@ -890,7 +893,7 @@ class MainWindow:
             if persistent_capture_build():
                 permissions.append(("remote", "Удалённый рабочий стол…"))
             for index, (kind, label) in enumerate(permissions):
-                permission = self.ttk.Button(actions, text=label, command=lambda k=kind: permit(k))
+                permission = self.ttk.Button(actions, text=tr(label), command=lambda k=kind: permit(k))
                 permission.grid(row=index // 2, column=index % 2, sticky="w", padx=(0, self.px(6)))
                 self.buttons.append(permission)
             self.refresh_permissions()
@@ -900,7 +903,7 @@ class MainWindow:
         area = ttk.Frame(box, style="Card.TFrame")
         area.grid(row=row, column=0, columnspan=2, sticky="ew")
         area.columnconfigure(0, weight=1)
-        ttk.Label(area, text="Одновременных заданий", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(area, text=tr("Одновременных заданий"), style="Card.TLabel").grid(row=0, column=0, sticky="w")
         limit = tk.StringVar(value=str(value))
         entry = ttk.Entry(area, textvariable=limit, width=5)
         entry.grid(row=0, column=1, padx=(self.px(8), self.px(8)))
@@ -912,25 +915,25 @@ class MainWindow:
                 if proposed < 1:
                     raise ValueError
             except ValueError:
-                problem.set("Число заданий — целое число больше нуля")
+                problem.set(tr("Число заданий — целое число больше нуля"))
                 return
 
             def done(_, failed) -> None:
                 if failed:
-                    problem.set(FAILED)
+                    problem.set(tr(FAILED))
                 else:
                     limit.set(str(self.ctrl.config().max_turns))
 
             self.work(lambda: self.ctrl.set_max_turns(proposed), done)
 
-        button = ttk.Button(area, text="Сохранить", command=save)
+        button = ttk.Button(area, text=tr("Сохранить"), command=save)
         button.grid(row=0, column=2, sticky="e")
         self.buttons.extend([entry, button])
 
     def folders_control(self, box, *, row: int, folders: list[str], problem, save: bool = False) -> None:
         """Список разрешённых папок и добавление/удаление; при привязке сохраняется сразу."""
         ttk = self.ttk
-        ttk.Label(box, text="Папки проектов", style="Card.Muted.TLabel").grid(
+        ttk.Label(box, text=tr("Папки проектов"), style="Card.Muted.TLabel").grid(
             row=row, column=0, columnspan=2, sticky="w")
         area = ttk.Frame(box, style="Card.TFrame")
         area.grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(self.px(3), self.px(6)))
@@ -982,7 +985,7 @@ class MainWindow:
 
             def done(found, failed) -> None:
                 if failed or found:
-                    problem.set("\n".join(found) if found else FAILED)
+                    problem.set("\n".join(found) if found else tr(FAILED))
                     return
                 folders[:] = self.ctrl.config().projects_roots
                 render()
@@ -1007,12 +1010,12 @@ class MainWindow:
             if index < 0:
                 return
             if len(folders) <= 1:
-                problem.set("Нужна хотя бы одна папка проектов")
+                problem.set(tr("Нужна хотя бы одна папка проектов"))
                 return
             apply(folders[:index] + folders[index + 1:])
 
         for index, (label, action) in enumerate((("Добавить…", add), ("Убрать", remove))):
-            button = ttk.Button(bar, text=label, command=action)
+            button = ttk.Button(bar, text=tr(label), command=action)
             button.grid(row=index, column=0, sticky="ew", pady=(0, self.px(4)))
             self.buttons.append(button)
         render()
@@ -1027,11 +1030,11 @@ class MainWindow:
         words, buttons = pin_row(self.pin)
         ttk.Label(line, text=words or "PIN…", style="Card.TLabel", wraplength=self.px(170), justify="left").grid(
             row=0, column=0, sticky="w")
-        actions = {"set": lambda: PinDialog(self, BUTTONS["set"]), "change": lambda: PinDialog(self, BUTTONS["change"]),
-                   "clear": lambda: confirm(self, CONFIRM_PIN_OFF, "Убрать", self.clear_pin),
+        actions = {"set": lambda: PinDialog(self, tr(BUTTONS["set"])), "change": lambda: PinDialog(self, tr(BUTTONS["change"])),
+                   "clear": lambda: confirm(self, tr(CONFIRM_PIN_OFF), tr("Убрать"), self.clear_pin),
                    "unlock": self.unlock_pin}
         for i, key in enumerate(buttons):
-            b = ttk.Button(line, text=BUTTONS[key], command=actions[key])
+            b = ttk.Button(line, text=tr(BUTTONS[key]), command=actions[key])
             b.grid(row=0, column=1 + i, padx=(self.px(8), 0))
             self.buttons.append(b)
         self.sync_buttons()
@@ -1047,7 +1050,7 @@ class MainWindow:
     def after_pin(self, failed: bool) -> None:
         self.refresh_pin()  # строку PIN — заново, ошибку под ней — после: перечитывание её не стирает
         if failed:
-            self.settings_problem.set(FAILED)
+            self.settings_problem.set(tr(FAILED))
 
 
 class _Dialog:
@@ -1074,7 +1077,7 @@ class _Dialog:
         bar.grid(row=row, column=0, sticky="e", pady=(self.main.px(16), 0))
         go = ttk.Button(bar, text=ok, style=style, command=command)
         go.grid(row=0, column=0)
-        ttk.Button(bar, text="Отмена", command=self.close).grid(row=0, column=1, padx=(self.main.px(8), 0))
+        ttk.Button(bar, text=tr("Отмена"), command=self.close).grid(row=0, column=1, padx=(self.main.px(8), 0))
         self.win.bind("<Return>", lambda e: command())
         return go
 
@@ -1100,7 +1103,7 @@ def ask_quit(root, controller, quit_now) -> None:
     if not tasks:
         quit_now()
         return
-    confirm(open_main(root, controller), CONFIRM_QUIT.format(tasks=tasks), "Выйти", quit_now)
+    confirm(open_main(root, controller), tr(CONFIRM_QUIT, tasks), tr("Выйти"), quit_now)
 
 
 def confirm(main: MainWindow, text: str, ok: str, on_ok) -> None:
@@ -1125,12 +1128,12 @@ class PinDialog(_Dialog):
         self.pin, self.pin2, self.errors = tk.StringVar(), tk.StringVar(), tk.StringVar()
         first = None
         for i, (label, var) in enumerate((("Новый PIN", self.pin), ("Ещё раз", self.pin2))):
-            ttk.Label(self.body, text=label).grid(row=2 * i, column=0, sticky="w")
+            ttk.Label(self.body, text=tr(label)).grid(row=2 * i, column=0, sticky="w")
             entry = ttk.Entry(self.body, textvariable=var, show="•", width=24)
             entry.grid(row=2 * i + 1, column=0, sticky="ew", pady=(main.px(3), main.px(10)))
             first = first or entry
         ttk.Label(self.body, textvariable=self.errors, style="Error.TLabel").grid(row=4, column=0, sticky="w")
-        self.go = self.buttons(5, "Сохранить", "Accent.TButton", self.save)
+        self.go = self.buttons(5, tr("Сохранить"), "Accent.TButton", self.save)
         first.focus_set()
         self.show()
 
@@ -1151,7 +1154,7 @@ class PinDialog(_Dialog):
             if failed:
                 if self.win.winfo_exists():
                     self.go.state(["!disabled"])
-                    self.errors.set(FAILED)
+                    self.errors.set(tr(FAILED))
                 return
             self.close()
             self.main.refresh_pin()

@@ -75,8 +75,9 @@ class Files:
             with target.open("xb") as stream:
                 stream.write(base64.b64decode(item["data"], validate=True))
             metadata.append({"name": original, "mime": item["mime"], "path": str(target)})
-        return text + "\n\nПрикреплённые файлы доступны на этом компьютере до завершения задания. " \
-            "Прочитай нужные файлы по указанным путям; имена ниже — метаданные файлов.\n" + \
+        # Подсказка адресована модели, а не человеку, — по-английски: задание на любом языке не получает чужого хвоста.
+        return text + "\n\nAttached files are available on this computer until the task finishes. " \
+            "Read the files you need at the given paths; the names below are file metadata.\n" + \
             json.dumps(metadata, ensure_ascii=True)
 
     def cleanup(self):

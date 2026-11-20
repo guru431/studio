@@ -10,13 +10,14 @@ import urllib.error
 import urllib.request
 
 from . import VERSION, link
+from .i18n import tr
 
 PATH = "/api/agent/enroll"
 LOGIN = "Неверный логин или пароль"
 LOCKED = "Вход на паузе после неудач — попробуйте позже"
 NAME = "Имя компьютера — от 1 до 64 знаков"
 URL = "Адрес студии — https://…"
-UNAVAILABLE = "Студия недоступна ({})"
+UNAVAILABLE = "Студия недоступна ({0})"
 KEPT = "Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → «Компьютеры»"
 EMAIL_CODE_REQUIRED = "Введите код из письма и повторите пароль"
 EMAIL_CODE_INVALID = "Код неверен или истёк. Для нового письма оставьте поле кода пустым"
@@ -42,7 +43,7 @@ def base_url(url: str) -> str:
     try:
         link.ws_url(url)
     except ValueError:
-        raise EnrollError("url", URL) from None
+        raise EnrollError("url", tr(URL)) from None
     return url.rstrip("/")
 
 
@@ -57,10 +58,10 @@ def _send(request: urllib.request.Request, timeout: float) -> tuple[int, bytes]:
         raise
     except urllib.error.URLError as e:
         reason = e.reason
-        raise EnrollError("unavailable", UNAVAILABLE.format(
-            type(reason).__name__ if isinstance(reason, BaseException) else type(e).__name__)) from None
+        raise EnrollError("unavailable", tr(
+            UNAVAILABLE, type(reason).__name__ if isinstance(reason, BaseException) else type(e).__name__)) from None
     except (OSError, ValueError, http.client.HTTPException) as e:  # срок, обрыв, неверный или усечённый ответ HTTP
-        raise EnrollError("unavailable", UNAVAILABLE.format(type(e).__name__)) from None
+        raise EnrollError("unavailable", tr(UNAVAILABLE, type(e).__name__)) from None
 
 
 def enroll(url: str, login: str, password: str, name: str, *, timeout: float = 30, code: str = "") -> tuple[int, str, str]:
@@ -82,7 +83,7 @@ def enroll(url: str, login: str, password: str, name: str, *, timeout: float = 3
     except (ValueError, TypeError, KeyError, AttributeError):
         agent_id = key = answered = None
     if status != 201 or type(agent_id) is not int or not (isinstance(key, str) and key):
-        raise EnrollError("unavailable", UNAVAILABLE.format("неверный ответ"))
+        raise EnrollError("unavailable", tr(UNAVAILABLE, tr("неверный ответ")))
     return agent_id, key, answered if isinstance(answered, str) and answered else login.strip().lower()
 
 
@@ -113,15 +114,15 @@ def _refusal(e: urllib.error.HTTPError) -> EnrollError:
     """Отказ студии `{"detail": {"code", "message"}}` → слова окна."""
     code = _code(e)
     if e.code == 428 and code == "email_code":
-        return EnrollError("email_code", EMAIL_CODE_REQUIRED)
+        return EnrollError("email_code", tr(EMAIL_CODE_REQUIRED))
     if e.code == 428 and code == "email_required":
-        return EnrollError("email_required", "Сначала подтвердите почту в браузере Студии")
+        return EnrollError("email_required", tr("Сначала подтвердите почту в браузере Студии"))
     if e.code == 400 and code == "expired":
-        return EnrollError("email_code", EMAIL_CODE_INVALID)
+        return EnrollError("email_code", tr(EMAIL_CODE_INVALID))
     if e.code == 401:
-        return EnrollError("login", LOGIN)
+        return EnrollError("login", tr(LOGIN))
     if e.code == 429:
-        return EnrollError("locked", LOCKED)
+        return EnrollError("locked", tr(LOCKED))
     if e.code == 422 and code == "name":
-        return EnrollError("name", NAME)
-    return EnrollError("unavailable", UNAVAILABLE.format(f"HTTP {e.code}"))
+        return EnrollError("name", tr(NAME))
+    return EnrollError("unavailable", tr(UNAVAILABLE, f"HTTP {e.code}"))
