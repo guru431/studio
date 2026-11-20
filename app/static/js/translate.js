@@ -11,7 +11,8 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * /api/media/<id>, под ней текст). Скрепка открывает «Файл» (#tl-file-input) / «Фото» (#tl-photo-input); под полем счётчик
  * #tl-count и «Перевести» #tl-go. Правое окно #tl-output — перевод (только чтение), над ним состояние
  * #tl-status, «Остановить» #tl-stop и «Продолжить» #tl-continue, под ним «Копировать» #tl-copy и «Скачать ▾»
- * #tl-export (.txt, .docx). «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
+ * #tl-export (.txt, .docx; у скана и файла .md — ещё .md). Готовый перевод скана — Markdown распознавания
+ * разметкой (renderMarkdown html, как «Сканы»), прочее и идущий — текстом. «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
  * строка истории цветом предупреждения, у записи скана рядом — ссылка #tl-scan «Открыть в „Сканах“».
  *
  * «Перевести»: выбран файл — XMLHttpRequest с FormData на /api/translate/files, языки и модель — заголовками
@@ -49,6 +50,7 @@ import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { photoView } from './translate-photo.js';
+import { renderMarkdown } from './markdown.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 1000;                    // опрос открытой идущей записи
@@ -61,7 +63,7 @@ const LANGUAGE_NAMES = language() === 'en' ? new Intl.DisplayNames([locale()], {
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FILE_ACCEPT = '.pdf,.docx,.txt,.md';
 const PHOTO_ACCEPT = 'image/png,image/jpeg,image/webp';
-const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx']];
+const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
 const FILE_KINDS = { pdf: 'PDF', docx: 'Word', txt: 'TXT', md: 'MD' };
 
 let screen = null;
@@ -128,6 +130,7 @@ function build(view, ctx) {
   let listed = false;          // первая страница истории пришла (до неё — не «Здесь появятся ваши переводы»)
   let pollWords = '';          // слова неудачного опроса записи: удачный опрос их уберёт
   let chipKey = '';            // что показывает плашка: та же — не пересобирается
+  let mdKey = '';              // какой перевод скана показан разметкой: тот же — не пересобирается
   let statusKey = '';          // что показывает #tl-status: то же — не перерисовывается (aria-live — только перемены)
   let rows = new Map();        // id → { sig, node } строк истории: строка с теми же данными — тот же узел
   const dayNodes = new Map();  // подпись дня → узел
@@ -346,17 +349,29 @@ function build(view, ctx) {
     status.replaceChildren(...(ring ? [el('span', { class: 'ring', 'aria-hidden': 'true' })] : []), ...(text ? [text] : []));
   }
 
-  /** Правое окно: перевод, состояние, кнопки. Перевод растёт — дописывается в конец (выделение на месте). */
+  /** Правое окно: перевод, состояние, кнопки. Перевод растёт — дописывается в конец (выделение на месте); у
+   * кончившейся записи скана — Markdown распознавания разметкой (таблицы HunyuanOCR — таблицей), как в «Сканах». */
   function paintRight() {
     paintPhoto();
     const text = rec ? translation(rec) : loose;
+    const running = !!rec && RUNNING.has(rec.state);
+    const md = !!rec && !!rec.scan_id && !running && !!text;
+    const key = md ? `${rec.id}\n${text}` : '';
+    if (key !== mdKey) {
+      mdKey = key;
+      output.classList.toggle('md', md);
+      if (md) output.replaceChildren(renderMarkdown(text, { html: true }));
+      else output.replaceChildren(outText);
+      copy.textContent = tr("Копировать");
+    }
     const was = outText.data;
-    if (text !== was) {
+    if (!md && text !== was) {
       if (was && text.startsWith(was)) outText.appendData(text.slice(was.length));
       else outText.data = text;
       copy.textContent = tr("Копировать");
     }
-    const running = !!rec && RUNNING.has(rec.state);
+    const formatMd = formats.querySelector('[data-format=md]');
+    formatMd.hidden = !(rec && (rec.scan_id || /\.md$/i.test(rec.name || '')));
     if (!rec) setStatus('', '');
     else if (running) setStatus('', serverMessage(rec.detail) || '', true);
     else if (rec.state === 'error') setStatus('error', serverMessage(rec.detail) || tr("ошибка"));
@@ -772,7 +787,7 @@ function build(view, ctx) {
   });
   copy.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(output.textContent);
+      await navigator.clipboard.writeText(rec ? translation(rec) : loose);   // перевод скана — Markdown, как .md
       copy.textContent = tr("Скопировано");
     } catch {
       error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
