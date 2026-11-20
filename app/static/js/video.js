@@ -36,6 +36,8 @@ import { viewerNavigation } from './viewer-navigation.js';
 const POLL_MS = 3000;
 const PAGE = 30;
 const PROMPT_MAX = 4000;
+const NATIVE_SECONDS = [1, 30];
+const DEFAULT_SECONDS = 5;
 const PHOTO_MAX = 20 * 1024 * 1024;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const QUALITIES = [['fast', tr("Быстро 480p")], ['standard', tr("Обычно 576p")], ['high', tr("Высоко 720p")]];
@@ -109,9 +111,10 @@ function build(view, ctx) {
     el('p', { class: 'small' }, photoCount, ' ', photoDrop));
   const prompt = el('textarea', { id: 'video-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': tr("Промпт движения"),
     placeholder: MOTION_HINT });
-  const seconds = el('input', { id: 'video-seconds', inputmode: 'numeric', maxlength: '2', value: '5',
-    'aria-label': tr("Длительность, секунд: от 1 до 30"), autocomplete: 'off' });
-  const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: tr("Длительность: 1–30 с") }, seconds,
+  const secondsWords = tr("Длительность: {0}–{1} с", ...NATIVE_SECONDS);
+  const seconds = el('input', { id: 'video-seconds', inputmode: 'numeric', maxlength: String(String(NATIVE_SECONDS[1]).length),
+    value: String(DEFAULT_SECONDS), 'aria-label': secondsWords, autocomplete: 'off' });
+  const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: secondsWords }, seconds,
     el('span', {}, tr("с")));
   const qualityName = el('span', { class: 'chip-name' });
   const chipQuality = el('button', { type: 'button', class: 'chip', id: 'chip-quality' }, qualityName, icon('down', 'ico caret'));
@@ -141,13 +144,33 @@ function build(view, ctx) {
     sourceBox.hidden = !source || pick.hidden;
     photoContext.hidden = pick.hidden || !photoPrompt.value;
     chipSmooth.hidden = isH3() || (active && !mcp.has('smooth'));
-    chipSeconds.title = isH3() ? tr("H3: 5 с, нативный размер, 24 кадра/с") : tr("Длительность: 1–30 с");
     seconds.readOnly = isH3();
     chipQuality.disabled = isH3();
     qualityPopup.close();
     if (isH3()) seconds.value = '5';
+    paintSeconds();
     paintQuality();
     paintGo();
+  }
+  /** [от, до, умолчание] целых секунд: у инструмента MCP с `seconds` — из его схемы, иначе (и при бессмысленной
+   * схеме) — свои NATIVE_SECONDS. */
+  function secondsRange() {
+    const limits = mcp.tool && mcp.has('seconds') ? mcp.limits('seconds') : null;
+    const low = limits ? Math.max(1, Math.ceil(limits.min ?? NATIVE_SECONDS[0])) : NATIVE_SECONDS[0];
+    const high = limits ? Math.floor(limits.max ?? NATIVE_SECONDS[1]) : NATIVE_SECONDS[1];
+    if (low > high) return [...NATIVE_SECONDS, DEFAULT_SECONDS];
+    const wanted = limits?.default;
+    const fallback = Number.isInteger(wanted) && wanted >= low && wanted <= high ? wanted : Math.min(Math.max(DEFAULT_SECONDS, low), high);
+    return [low, high, fallback];
+  }
+  function paintSeconds() {
+    const [low, high, fallback] = secondsRange();
+    const words = tr("Длительность: {0}–{1} с", low, high);
+    seconds.maxLength = String(high).length;
+    seconds.setAttribute('aria-label', words);
+    chipSeconds.title = isH3() ? tr("H3: 5 с, нативный размер, 24 кадра/с") : words;
+    const value = seconds.value.trim();
+    if (!isH3() && (!/^\d+$/.test(value) || Number(value) < low || Number(value) > high)) seconds.value = String(fallback);
   }
   modelPick.addEventListener('change', paintModel);
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, tr("Оживить"));
@@ -676,8 +699,9 @@ function build(view, ctx) {
     const needSource = !mcp.tool || mcp.hasFile('artifact_id');
     if (needSource && !source) throw new Error(tr("Выберите фото для ролика"));
     const sec = seconds.value.trim();
-    if ((!mcp.tool || mcp.has('seconds')) && (!/^\d+$/.test(sec) || Number(sec) < 1 || Number(sec) > 30)) {
-      throw new Error(tr("Длительность — целое число секунд от 1 до 30"));
+    const [low, high] = secondsRange();
+    if ((!mcp.tool || mcp.has('seconds')) && (!/^\d+$/.test(sec) || Number(sec) < low || Number(sec) > high)) {
+      throw new Error(tr("Длительность — целое число секунд от {0} до {1}", low, high));
     }
     if (isH3() && Number(sec) !== 5) throw new Error(tr("H3: используйте 5 секунд; короткие ролики давали артефакты"));
     if (needSource && source?.file?.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));

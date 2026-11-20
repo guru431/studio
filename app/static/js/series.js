@@ -7,6 +7,7 @@ import { tr } from './i18n.js';
  * можно ли менять силу (Lustify с исходным фото); canSeed() — получает ли модель seed (шлюз srvllm;
  * внешнему сервису серия — N независимых картинок: чип «×N» без строки «меняется», в запросе — vary
  * seed, seed сервер ему не шлёт); from() — сила «от» (ползунок раздела или поле окна);
+ * max() — сколько вариантов можно (инструмент MCP — по `n.maximum`, не больше SERIES_MAX);
  * onChange() — после каждой смены. Ответ — { panel, label(), value(), reset(), refresh() }: value() —
  * поле `series` запроса или null (×1); refresh() — перерисовать (сменились модель, фото, сила «от»).
  * Силы считаются так же, как на сервере (images.series_strengths): целыми двадцатыми. */
@@ -21,7 +22,7 @@ export function seriesStrengths(from, to, count) {
   return new Set(steps).size === count ? steps.map((n) => n / 20) : null;
 }
 
-export function seriesControl({ prefix, canStrength, canSeed = () => true, from, onChange = () => {} }) {
+export function seriesControl({ prefix, canStrength, canSeed = () => true, from, max = () => SERIES_MAX, onChange = () => {} }) {
   let count = 1;
   let vary = 'seed';
   // панель — форма, а не меню: выбор числа и того, что меняется, — группы переключателей (role=radio, стрелки)
@@ -43,6 +44,9 @@ export function seriesControl({ prefix, canStrength, canSeed = () => true, from,
   const strengthWanted = () => count > 1 && vary === 'strength' && canStrength();
 
   function paint() {
+    const top = max();
+    count = Math.min(count, top);
+    for (const b of counts) b.hidden = Number(b.dataset.count) > top;
     for (const b of counts) b.setAttribute('aria-checked', String(Number(b.dataset.count) === count));
     for (const b of [...counts, bySeed, byStrength]) b.tabIndex = -1;
     varyBox.hidden = count < 2 || !canSeed();

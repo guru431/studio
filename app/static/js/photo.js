@@ -47,7 +47,7 @@ import { sectionMcp } from './mcp-sections.js';
 import { presetChip } from './presets.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
-import { seriesControl } from './series.js';
+import { SERIES_MAX, seriesControl } from './series.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
@@ -85,6 +85,7 @@ function build(view, ctx) {
   let choice = null;             // { connection_id, model, kind } — модель из чипа; null — умолчание раздела
   let choices = [];              // варианты чипа: [ключ, подпись, выбор]
   let size = 'portrait';
+  let sizes = SIZES;             // варианты чипа размера: свои или `size.enum` инструмента MCP
   let source = null;             // { file, url } — исходное фото с устройства
   let mcp;
   let submitting = false;
@@ -145,7 +146,7 @@ function build(view, ctx) {
   const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series',
     title: tr("Серия: несколько вариантов подряд") }, seriesName);
   const series = seriesControl({ prefix: 'photo-series', canStrength: () => !mcp?.tool && isLustify() && !!source,
-    canSeed: () => !mcp?.tool && (!choice || choice.kind === 'srvllm'), from: () => strength.value, onChange: () => {
+    canSeed: () => !mcp?.tool && (!choice || choice.kind === 'srvllm'), from: () => strength.value, max: seriesMax, onChange: () => {
       seriesName.textContent = series ? series.label() : '×1';
       chipSeries.classList.toggle('on', !!(series && series.value()));
     } });
@@ -293,9 +294,27 @@ function build(view, ctx) {
     strengthLabel.hidden = active ? !mcp.has('strength') : !isLustify();
     chipModel.wrap.hidden = active && (!mcp.has('model') || !choice);
     chipSize.wrap.hidden = active && !mcp.has('size');
-    seriesWrap.hidden = active && !mcp.has('n');
+    seriesWrap.hidden = active && (!mcp.has('n') || seriesMax() < 2);
     go.textContent = describe ? tr("Описать фото") : tr("Создать");
+    paintSizes();
     series.refresh();
+  }
+
+  /** Размеры: у инструмента MCP со списком `size` — его значения (знакомые — своими подписями, прочие — как есть). */
+  function paintSizes() {
+    const limits = mcp.tool && mcp.has('size') ? mcp.limits('size') : null;
+    const list = limits?.enum?.every((value) => typeof value === 'string')
+      ? limits.enum.map((value) => SIZES.find((s) => s[2] === value) || [value, value, value]) : SIZES;
+    if (list.map((s) => s[0]).join('\n') === sizes.map((s) => s[0]).join('\n')) return;
+    sizes = list;
+    if (!sizes.some((s) => s[0] === size)) size = (sizes.find((s) => s[2] === limits?.default) || sizes[0])[0];
+    chipSize.fill(sizes.map(([value, label]) => [value, label]));
+  }
+
+  /** Серия у инструмента MCP — не больше `n.maximum` его схемы (и не больше своей SERIES_MAX). */
+  function seriesMax() {
+    const top = mcp?.tool && mcp.has('n') ? mcp.limits('n')?.max : null;
+    return Number.isFinite(top) ? Math.max(1, Math.min(SERIES_MAX, Math.floor(top))) : SERIES_MAX;
   }
 
   /* пресеты: снимок поля и чипов, применение пресета */
@@ -645,7 +664,7 @@ function build(view, ctx) {
       }
       const many = series.value();
       const raw = prompt.value;
-      mcp.run({ prompt: text || undefined, model: choice?.model, size: SIZES.find(([key]) => key === size)[2],
+      mcp.run({ prompt: text || undefined, model: choice?.model, size: (sizes.find(([key]) => key === size) || sizes[0])[2],
         strength: Number(strength.value), n: many?.count || 1 }, { files: { artifact_id: source?.file } }).then(ok => {
         if (ok) draft.sent(raw);
         if (ok && many && mcp.has('n')) series.reset();
