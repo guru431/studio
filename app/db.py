@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 55
+VERSION = 56
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -741,6 +741,28 @@ DROP TABLE temp.integration_sequences_55;
 """
 SCHEMA += SHARED_55
 
+#: группы доступа к общему (access.py): правило на общее подключение или MCP (`tool = ''`) и на инструмент MCP;
+#: правило без групп — только администраторам. Правила уходят вместе с подключением или сервером (id не повторяются).
+#: Прежний код таблицы не читает: закрытое становится общим для всех — обход в таблице отката CLAUDE.md
+ACCESS_56 = """CREATE TABLE access_groups(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+       created REAL NOT NULL);
+CREATE TABLE access_group_members(group_id INTEGER NOT NULL REFERENCES access_groups ON DELETE CASCADE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, PRIMARY KEY (group_id, user_id));
+CREATE INDEX access_group_members_user ON access_group_members(user_id);
+CREATE TABLE access_rules(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       kind TEXT NOT NULL CHECK (kind IN ('connection', 'mcp')), item_id INTEGER NOT NULL,
+       tool TEXT NOT NULL DEFAULT '', CHECK (kind = 'mcp' OR tool = ''), UNIQUE (kind, item_id, tool));
+CREATE TABLE access_rule_groups(rule_id INTEGER NOT NULL REFERENCES access_rules ON DELETE CASCADE,
+       group_id INTEGER NOT NULL REFERENCES access_groups ON DELETE CASCADE, PRIMARY KEY (rule_id, group_id));
+CREATE TRIGGER access_rules_connection_delete AFTER DELETE ON connections BEGIN
+  DELETE FROM access_rules WHERE kind = 'connection' AND item_id = old.id;
+END;
+CREATE TRIGGER access_rules_mcp_delete AFTER DELETE ON mcp_servers BEGIN
+  DELETE FROM access_rules WHERE kind = 'mcp' AND item_id = old.id;
+END;
+"""
+SCHEMA += ACCESS_56
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -855,6 +877,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     # «непрочитано» «Агентов» — у каждой учётки своё
     54: CODE_54,
     55: SHARED_55,
+    # группы доступа к общим API моделей, MCP и инструментам MCP
+    56: ACCESS_56,
 }
 
 
