@@ -146,6 +146,26 @@ def test_mcp_header_values_are_write_only_and_kept_by_null(studio):
         assert response.status_code == 422, (method, response.text)
 
 
+def test_new_mcp_address_requires_secrets_again(studio):
+    """Сохранённые токен и значения заголовков — только прежнему адресу: на новый их надо ввести заново."""
+    add_gateway(studio)
+    sid = studio.c.post('/api/mcp', json={'name': 'Tools', 'url': URL, 'token': TOKEN,
+                                          'headers': {'X-Api-Key': 'private-key'}}).json()['id']
+    other = 'http://10.77.1.15:4000/other'
+    for body in ({'name': 'Tools', 'url': other},
+                 {'name': 'Tools', 'url': other, 'token': 'new-token'},
+                 {'name': 'Tools', 'url': other, 'token': 'new-token', 'headers': {'X-Api-Key': None}}):
+        response = studio.c.put(f'/api/mcp/{sid}', json=body)
+        assert response.status_code == 422 and 'заново' in response.json()['detail']['message'], body
+    body = {'name': 'Tools', 'url': other, 'token': 'new-token', 'headers': {'X-Api-Key': 'new-key'}}
+    assert studio.c.put(f'/api/mcp/{sid}', json=body).status_code == 200
+    stored = json.loads(security.decrypt(state.DB.execute('SELECT secret_enc FROM mcp_servers WHERE id=?', (sid,)).fetchone()[0]))
+    assert stored == {'token': 'new-token', 'headers': {'X-Api-Key': 'new-key'}}
+    # Без сохранённых секретов переносить нечего — новый адрес принимается без токена.
+    plain = studio.c.post('/api/mcp', json={'name': 'Plain', 'url': URL}).json()['id']
+    assert studio.c.put(f'/api/mcp/{plain}', json={'name': 'Plain', 'url': other}).status_code == 200
+
+
 def test_model_without_tools_explains_how_to_disable_mcp(studio):
     sid = add(studio); mock(studio)
     cid = new_chat(studio)

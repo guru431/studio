@@ -70,12 +70,24 @@ def selected(uid, ids):
     return [row(uid, sid) for sid in ids]
 
 
+def _address(url):
+    """Куда на самом деле идёт запрос: схема, хост, порт (с умолчанием) и путь."""
+    url = httpx.URL(url)
+    return url.scheme, url.host, url.port or upstream.DEFAULT_PORTS.get(url.scheme), url.path
+
+
 def _values(body, old=None):
     if (not body.name.strip() or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in body.name)
             or not upstream.is_allowed(body.url) or httpx.URL(body.url).fragment):
         raise refused("Укажите имя и адрес MCP из списка разрешённых адресов администратора", "invalid", 422)
     keep = body.token is None or body.headers is None or None in body.headers.values()
     previous = secret(old) if old is not None and keep else {}
+    # Прежние токен и значения заголовков — только прежнему адресу (как connections.patch): иначе PUT без них
+    # унёс бы write-only секреты на другой адрес из списка.
+    if previous and _address(body.url) != _address(old["url"]) and (
+            (body.token is None and previous.get("token")) or (body.headers is None and previous.get("headers"))
+            or (body.headers is not None and None in body.headers.values())):
+        raise refused("Новый адрес MCP — введите токен и значения заголовков заново", "invalid", 422)
     token = body.token if body.token is not None else previous.get("token", "")
     kept = previous.get("headers", {})
     headers = kept if body.headers is None else {k: kept.get(k) if v is None else v for k, v in body.headers.items()}
