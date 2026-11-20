@@ -2,6 +2,7 @@
 хранится и в журнал не попадает."""
 import asyncio
 import logging
+import re
 
 import dictation
 import speech
@@ -73,6 +74,10 @@ def test_whisperx_frees_the_card_and_waits_for_it(studio):
     asr = paths.index("/speech/transcriptions")
     assert {"/slot/images/release", "/slot/images/descriptions/release"} <= set(paths[:asr])
     assert len(studio.gw.asr_requests) == 3 and studio.sleeps.count(dictation.RETRY_SEC) == 2
+    # release — перед каждым повтором: кончившаяся генерация картинок не держит карту арендой
+    attempts = "".join("a" if p == "/speech/transcriptions" else "r" for p in paths
+                       if p in ("/speech/transcriptions", "/slot/images/release"))
+    assert re.sub("r+", "r", attempts) == "ra" * 3
 
 
 def test_whisperx_busy_past_the_budget_is_a_word_to_retry(studio):

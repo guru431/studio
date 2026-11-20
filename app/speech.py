@@ -5,8 +5,9 @@ sections-voice-design, 6.1 и 6.3–6.5; контракт шлюза свере�
   `audio_file`; текст собирается из сегментов, `speaker` может не быть); голосовой ввод — GigaAM
   `/speech/lite/transcriptions` или WhisperX `/speech/transcriptions` (`file`); озвучка — Qwen3-TTS
   `/speech/tts-qwen` и F5-TTS `/speech/tts-f5` (`text`, `language`, `ref_text`, `ref_audio`; ответ — WAV).
-- Внешний сервис: `/audio/transcriptions` (расшифровка — `verbose_json`, без собеседников; ввод —
-  `json`) и `/audio/speech` (JSON с голосом по имени; ответ — mp3).
+- Внешний сервис: `/audio/transcriptions` (расшифровка — `verbose_json` с временем сегментов, без собеседников;
+  на 400 — повтор с `json`, текст одной репликой; ввод — `json`) и `/audio/speech` (JSON с голосом по имени;
+  ответ — mp3).
 - 503 (карта занята, `busy` Qwen) — Busy: ждать и повторять решает вызывающий; прочие отказы —
   SpeechError словами. Освобождения слотов `asr` и `tts-qwen` у шлюза нет: перед речью студия
   освобождает модели картинок и gemma-abl (`free_card`), чтобы карта досталась речи.
@@ -42,6 +43,10 @@ class SpeechError(Exception):
     """Отказ службы речи — словами для человека."""
 
 
+class BadRequest(SpeechError):
+    """400 службы: запрос не принят (у внешнего сервиса — в том числе формат ответа)."""
+
+
 @dataclass(frozen=True)
 class Segment:
     start: float
@@ -62,7 +67,7 @@ async def _post(conn, url: str, timeout: float, **kw) -> httpx.Response:
     if r.status_code == 503:
         raise Busy(upstream.message(r) or "карта занята")
     if r.status_code != 200:
-        raise SpeechError(upstream.gateway_error(r, conn.name))
+        raise (BadRequest if r.status_code == 400 else SpeechError)(upstream.gateway_error(r, conn.name))
     return r
 
 
@@ -107,9 +112,14 @@ async def transcribe(conn, model: str, audio: Path, mime: str) -> list[Segment]:
         r = await _post(conn, f"{conn.base_url}/speech/asr?{urlencode(ASR_QUERY)}", ASR_TIMEOUT_SEC,
                         files={"audio_file": ("audio.mp3", data, mime)})
     else:
-        r = await _post(conn, f"{conn.base_url}/audio/transcriptions", EXTERNAL_TIMEOUT_SEC,
-                        data={"model": model, "response_format": "verbose_json"},
-                        files={"file": ("audio.mp3", data, mime)})
+        url = f"{conn.base_url}/audio/transcriptions"
+        try:
+            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC, data={"model": model, "response_format": "verbose_json"},
+                            files={"file": ("audio.mp3", data, mime)})
+        except BadRequest:
+            # OpenAI gpt-4o-transcribe и gpt-4o-mini-transcribe понимают только json/text: текст одной репликой
+            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC, data={"model": model, "response_format": "json"},
+                            files={"file": ("audio.mp3", data, mime)})
     return _segments(upstream.json_body(r))
 
 

@@ -4,8 +4,8 @@
 
 Звук — только в памяти запроса: ни на диск, ни в историю, ни в журнал; в журнал — событие с id
 пользователя и код итога. WhisperX шлюза делит карту с картинками и gemma-abl (аренда 600 с):
-перед ним — их release (speech.free_card), на 503 — повтор раз в RETRY_SEC, пока не кончился
-бюджет, затем 504 «карта занята». GigaAM и внешний сервис занятую модель не ждут — 503 сразу: ввод
+перед ним и перед каждым повтором — их release (speech.free_card), на 503 — повтор раз в RETRY_SEC,
+пока не кончился бюджет, затем 504 «карта занята». GigaAM и внешний сервис занятую модель не ждут — 503 сразу: ввод
 — секунды, человек нажмёт ещё раз. Ответ синхронный, поэтому распознавание целиком ограничено
 BUDGET_SEC (а не таймаутами вызовов шлюза: у WhisperX там 2460 с) — дольше: 504 словами
 «повторите»; таймаут маршрута Apache больше бюджета (сверяет tests/test_deploy.py), иначе он
@@ -38,8 +38,8 @@ async def _recognize(conn, model: str, data: bytes, mime: str, name: str) -> str
     if conn.kind != "srvllm" or model == "gigaam":            # карту делит только WhisperX (как speech.dictate)
         return await speech.dictate(conn, model, data, mime, name)
     deadline = clock.NOW() + BUDGET_SEC
-    await speech.free_card(conn)
     while True:
+        await speech.free_card(conn)                          # и перед повтором: кончившуюся генерацию картинок
         try:
             return await speech.dictate(conn, model, data, mime, name)
         except speech.Busy:

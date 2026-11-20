@@ -1009,15 +1009,29 @@ function clock(sec) {
 }
 
 /** Проба голоса своей короткой фразой: POST /api/voices/<id>/probe — звук в ответе, в историю не идёт,
- * карта занята — словами сразу. Blob плеера освобождается при закрытии окна. */
+ * карта занята — словами сразу. Модель — из отмеченных моделей шлюзов srvllm «Озвучки» (выбор виден, когда их
+ * больше одной; без выбора сервер берёт умолчание, а если оно не шлюз — первую модель шлюза). Blob плеера
+ * освобождается при закрытии окна. */
 function probeVoice(host, voice) {
   const phrase = el('input', { id: 'voice-probe-text', maxlength: '200', value: 'Привет! Так звучит этот голос.',
     autocomplete: 'off' });
+  const modelPick = el('select', { class: 'input', id: 'voice-probe-model' });
+  const modelRow = field(tr("Модель"), modelPick, 'model');
+  modelRow.hidden = true;
   const fail = el('p', { class: 'error', 'aria-live': 'polite' });
   const player = el('audio', { id: 'voice-probe-audio', controls: true, hidden: true });
   const go = button(tr("Послушать"), { class: 'btn btn-accent', id: 'voice-probe-go' });
   const dialog = openDialog(host, { id: 'voice-probe-dialog', title: tr("Проба: {0}", voice.name), cancelText: tr("Закрыть"),
-    body: [field(tr("Фраза (до 200 знаков)"), phrase, 'text'), player, fail], actions: [go] });
+    body: [field(tr("Фраза (до 200 знаков)"), phrase, 'text'), modelRow, player, fail], actions: [go] });
+  api('GET', '/api/sections').then(({ sections }) => {
+    const section = sections.find((s) => s.id === 'speech');
+    const options = (section?.links || []).filter(({ connection: c }) => c.kind === 'srvllm')
+      .flatMap(({ connection: c, models }) => models.map((m) => el('option', { value: `${c.id}:${m}` }, `${modelLabel(m)} · ${c.name}`)));
+    modelPick.replaceChildren(...options);
+    const preferred = section?.default ? `${section.default.connection_id}:${section.default.model}` : '';
+    if (options.some((o) => o.value === preferred)) modelPick.value = preferred;
+    modelRow.hidden = options.length < 2;
+  }).catch(() => {});
   let url = null;
   dialog.addEventListener('close', () => {
     player.pause();
@@ -1027,7 +1041,9 @@ function probeVoice(host, voice) {
     go.disabled = true;
     fail.textContent = '';
     try {
-      const response = await api('POST', `/api/voices/${encodeURIComponent(voice.id)}/probe`, { text: phrase.value });
+      const [connId, ...rest] = modelPick.value.split(':');
+      const chosen = modelPick.value ? { connection_id: Number(connId), model: rest.join(':') } : {};
+      const response = await api('POST', `/api/voices/${encodeURIComponent(voice.id)}/probe`, { text: phrase.value, ...chosen });
       const blob = await response.blob();
       if (!dialog.open) return;
       if (url) URL.revokeObjectURL(url);
