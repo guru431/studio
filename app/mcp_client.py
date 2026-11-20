@@ -24,6 +24,7 @@ MAX_SERVERS = 16
 MAX_TOOLS = 128
 MAX_BYTES = 1024 * 1024
 TIMEOUT = 30
+DISCOVER_SEC = 60                            # срок списка инструментов одного сервера в ходе чата
 PROTOCOL = "2025-06-18"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 HEADER = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
@@ -256,19 +257,36 @@ class Tools:
         self.uid, self.chat_id = uid, chat_id
         self.ids = list(ids)
         self.sessions, self.calls, self.specs = [], {}, []
+        self.failed = []                     # (имя сервера, слова) — сервер пропущен, ход идёт без него
+
+    @staticmethod
+    async def _list(session):
+        """Инструменты сервера или слова отказа: недоступный сервер не рвёт ход."""
+        try:
+            async with asyncio.timeout(DISCOVER_SEC):
+                tools = await session.tools()
+        except HTTPException as exc:
+            return exc.detail["message"]
+        except TimeoutError:
+            return "MCP не ответил вовремя"
+        if any(not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not NAME.fullmatch(tool["name"])
+               or not isinstance(tool.get("inputSchema"), dict) for tool in tools):
+            return "MCP вернул неверное описание инструмента"
+        return tools
 
     async def discover(self):
-        for sid in self.ids:
-            item = state.DB.execute("SELECT * FROM mcp_servers WHERE id=? AND user_id=? AND enabled=1", (sid, self.uid)).fetchone()
-            if item is None:
+        """Выбранные включённые серверы опрашиваются параллельно, каждый в свой срок DISCOVER_SEC. Отказавший
+        пропускается — его имя и слова в `failed`; превышение MAX_TOOLS суммарно — отказ хода."""
+        items = [item for sid in self.ids if (item := state.DB.execute(
+            "SELECT * FROM mcp_servers WHERE id=? AND user_id=? AND enabled=1", (sid, self.uid)).fetchone()) is not None]
+        self.sessions = [Session(item) for item in items]
+        found = await asyncio.gather(*(self._list(session) for session in self.sessions))
+        for item, session, tools in zip(items, self.sessions, found):
+            if isinstance(tools, str):
+                self.failed.append((item["name"], tools))
                 continue
-            session = Session(item)
-            self.sessions.append(session)
-            for tool in await session.tools():
-                if (not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not NAME.fullmatch(tool["name"])
-                        or not isinstance(tool.get("inputSchema"), dict)):
-                    raise refused("MCP вернул неверное описание инструмента")
-                name = f"mcp_{sid}_{len(self.calls)}"
+            for tool in tools:
+                name = f"mcp_{item['id']}_{len(self.calls)}"
                 if len(self.calls) >= MAX_TOOLS:
                     raise refused("Выберите MCP с суммарно не больше 128 инструментов")
                 self.calls[name] = (session, tool["name"], item["name"])

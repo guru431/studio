@@ -107,7 +107,8 @@ const WEB_HINT = tr("Задайте ключ Exa в Настройках → В�
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
 const WEB_TITLE = tr("Интернет: поиск, страницы и субтитры YouTube");
 const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
-const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры") };   // строка хода по виду инструмента
+const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры"), mcp: 'MCP' };   // строка хода по виду инструмента
+const TOOL_MARKS = { youtube: '▶', mcp: '🧩' };   // значок идущего инструмента; прочие — интернет 🌐
 const THINK_TITLE = tr("Рассуждение: модель думает перед ответом, ход мысли виден");
 const THINK_NOTE = tr("С рассуждением модель реже ищет в интернете");   // замер 2026-10-22: 5 поисков из 10 против 10
 
@@ -255,9 +256,11 @@ async function readServer(job, response) {
       } else if (event === 'closed') {             // сессия вышла или «Чат» заперт: перечитать через вход/блокировку
         break;
       } else if (event === 'tool' && data && typeof data.kind === 'string') {
-        thinkEnd(job);                             // крутится одно: инструмент, а не «Думает…»
-        job.scan = null;
-        job.tool = data;
+        if (!data.skipped) {                       // skipped — MCP не ответил: шаг-ошибка без вызова, не крутить
+          thinkEnd(job);                           // крутится одно: инструмент, а не «Думает…»
+          job.scan = null;
+          job.tool = data;
+        }
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
         (job.message.calls ||= []).push({ kind: data.kind });   // плашка до перечитывания — без итогов шагов
         notify(job, false);
@@ -429,7 +432,7 @@ function stepNode(s) {
   else if (s.kind === 'youtube') {
     const about = [s.channel, s.duration ? duration(s.duration) : '', s.lang].filter(Boolean).join(' · ');
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
-  } else if (s.kind === 'mcp') li.append(`MCP · ${s.server} · ${s.tool}`);
+  } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
   else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
   return li;
@@ -453,8 +456,11 @@ function badgeText(steps) {
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
 }
 
+/* ссылок нет (одни вызовы MCP, ошибки) — заголовок считает вызовы, а не «Источники (0)» */
 function sourcesNode(steps) {
-  return el('details', { class: 'web-steps' }, el('summary', {}, tr("Источники ({0})", linkCount(steps))),
+  const links = linkCount(steps);
+  return el('details', { class: 'web-steps' },
+    el('summary', {}, links ? tr("Источники ({0})", links) : tr("Вызовы инструментов ({0})", steps.length)),
     el('ul', { class: 'web-list' }, ...steps.map(stepNode)));
 }
 
@@ -1057,7 +1063,7 @@ function build(view, ctx) {
     if (busy || scan) {
       p.badge.className = 'web-badge busy';
       p.badge.replaceChildren(el('span', { class: 'spin', 'aria-hidden': 'true' }), busy
-        ? `${job.tool.kind === 'youtube' ? '▶' : '🌐'} ${toolLine(job.tool)}` : scanLine(scan));
+        ? `${TOOL_MARKS[job.tool.kind] || '🌐'} ${toolLine(job.tool)}` : scanLine(scan));
     } else {
       p.badge.className = `web-badge${tools ? (tools.some((s) => s.error) ? ' bad' : ' ok') : ''}`;
       p.badge.replaceChildren(badgeText(steps));
