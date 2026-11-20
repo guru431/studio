@@ -14,6 +14,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 from .app import TITLE, WORDS
 from . import host
+from .i18n import tr
 
 GREEN, GREY, YELLOW, RED = (47, 158, 111), (143, 143, 143), (232, 168, 26), (220, 38, 38)
 COLORS = {"online": GREEN, "connecting": GREY, "setup": GREY, "offline": YELLOW, "disabled": YELLOW, "revoked": RED,
@@ -96,13 +97,13 @@ def image(state: str) -> Image.Image:
 
 def title(state: str, login: str = "") -> str:
     """«Studio Agent — на связи · ivanov»; без логина — без хвоста; не длиннее `TITLE_MAX`."""
-    text = f"{TITLE} — {WORDS.get(state, state)}" + (f" · {login}" if login else "")
+    text = f"{TITLE} — {tr(WORDS.get(state, state))}" + (f" · {login}" if login else "")
     return text if len(text) <= TITLE_MAX else text[:TITLE_MAX - 1] + "…"
 
 
 def status_line(state: str, login: str = "") -> str:
     """Первая строка меню: «● На связи — ivanov»."""
-    words = WORDS.get(state, state)
+    words = tr(WORDS.get(state, state))
     words = words[:1].upper() + words[1:]
     return f"● {words} — {login}" if login else f"● {words}"
 
@@ -110,8 +111,8 @@ def status_line(state: str, login: str = "") -> str:
 def notice(state: str, fresh: bool) -> str | None:
     """Уведомление Windows на переход в `state`: первый `online` после привязки, отзыв, замена; обрывы — без."""
     if state == "online":
-        return ONLINE_FIRST if fresh else None
-    return NOTICES.get(state)
+        return tr(ONLINE_FIRST) if fresh else None
+    return tr(NOTICES[state]) if state in NOTICES else None
 
 
 class Tray:
@@ -132,22 +133,22 @@ class Tray:
 
         menu = pystray.Menu(
             pystray.MenuItem(lambda item: status_line(self.state, self.login), None, enabled=False),
-            pystray.MenuItem(lambda item: f"Заданий: {self.activity['tasks']} · ждут ответа: {self.activity['waiting']}",
+            pystray.MenuItem(lambda item: tr("Заданий: {0} · ждут ответа: {1}", self.activity['tasks'], self.activity['waiting']),
                              None, enabled=False),
-            pystray.MenuItem(lambda item: "Удалённый рабочий стол подключён" if self.activity['desktop_active']
-                             else "Удалённый рабочий стол не подключён", None, enabled=False),
+            pystray.MenuItem(lambda item: tr("Удалённый рабочий стол подключён") if self.activity['desktop_active']
+                             else tr("Удалённый рабочий стол не подключён"), None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Открыть Studio Agent", lambda: post("open"), default=True),
-            pystray.MenuItem("Завершить этот сеанс", lambda: post("stop_desktop"),
+            pystray.MenuItem(tr("Открыть Studio Agent"), lambda: post("open"), default=True),
+            pystray.MenuItem(tr("Завершить этот сеанс"), lambda: post("stop_desktop"),
                              enabled=lambda item: self.activity['desktop_active']),
-            pystray.MenuItem("Снять блок PIN", lambda: post("reset_pin"),
+            pystray.MenuItem(tr("Снять блок PIN"), lambda: post("reset_pin"),
                              enabled=lambda item: self._pin_status if host.MACOS else pin_locked()),
-            pystray.MenuItem("Открыть журнал", lambda: post("log")),
-            pystray.MenuItem("Отменить обновление", lambda: post("cancel_update"), enabled=updating, visible=updating),
-            pystray.MenuItem(lambda item: "Отменить выход после завершения" if self.activity['quit_when_idle']
-                             else f"Выйти после завершения · заданий: {self.activity['tasks']}",
+            pystray.MenuItem(tr("Открыть журнал"), lambda: post("log")),
+            pystray.MenuItem(tr("Отменить обновление"), lambda: post("cancel_update"), enabled=updating, visible=updating),
+            pystray.MenuItem(lambda item: tr("Отменить выход после завершения") if self.activity['quit_when_idle']
+                             else tr("Выйти после завершения · заданий: {0}", self.activity['tasks']),
                              lambda: post("quit_idle")),
-            pystray.MenuItem(lambda item: f"Выход сейчас · заданий: {self.activity['tasks']}",
+            pystray.MenuItem(lambda item: tr("Выход сейчас · заданий: {0}", self.activity['tasks']),
                              lambda: post("quit_now")))  # при заданиях — подтверждение (`window.ask_quit`)
         self.icon = pystray.Icon("studio-agent", image(state), title(state, login), menu)
 
@@ -170,9 +171,9 @@ class Tray:
 
     def _title(self) -> None:
         base = title(self.state, self.login)
-        suffix = f" · заданий: {self.activity['tasks']} · ждут: {self.activity['waiting']}"
+        suffix = " · " + tr("заданий: {0} · ждут: {1}", self.activity['tasks'], self.activity['waiting'])
         if self.activity['desktop_active']:
-            suffix += " · рабочий стол"
+            suffix += " · " + tr("рабочий стол")
         self.icon.title = base[:TITLE_MAX - len(suffix)] + suffix
 
     def refresh(self) -> None:

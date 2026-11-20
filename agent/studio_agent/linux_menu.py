@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import VERSION, app, enroll, host, linux_autostart, setup, single
 from .errors import Refused
+from .i18n import EN, tr
 
 LIMIT = 64 * 1024
 UNIX_PATH_MAX = 108  # sun_path с завершающим NUL
@@ -29,7 +30,7 @@ def _address(h):
         path = Path(runtime) / f"studio-agent-{digest}" / "menu.sock"
         if len(os.fsencode(path)) < UNIX_PATH_MAX:
             return path
-    raise OSError("Путь каталога моста слишком длинный для канала меню")
+    raise OSError(tr("Путь каталога моста слишком длинный для канала меню"))
 
 
 def _private(folder):
@@ -37,14 +38,14 @@ def _private(folder):
     os.makedirs(folder, mode=0o700, exist_ok=True)
     st = os.lstat(folder)
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
-        raise PermissionError("Каталог канала меню принадлежит другой учётной записи")
+        raise PermissionError(tr("Каталог канала меню принадлежит другой учётной записи"))
     os.chmod(folder, 0o700)
 
 
 def _check_peer(sock):
     raw = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
     if struct.unpack("3i", raw)[1] != os.geteuid():
-        raise PermissionError("Другая учётная запись")
+        raise PermissionError(tr("Другая учётная запись"))
 
 
 @contextlib.contextmanager
@@ -68,7 +69,7 @@ def listener(h):
 def _receive(sock):
     raw = sock.recv(LIMIT + 1)
     if len(raw) > LIMIT:
-        raise ValueError("Слишком большой запрос")
+        raise ValueError(tr("Слишком большой запрос"))
     return json.loads(raw)
 
 
@@ -88,7 +89,7 @@ def handle_one(server, ctrl):
             reply = {"error": error.message}
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError,
                 RuntimeError, subprocess.SubprocessError):
-            reply = {"error": "Не удалось выполнить действие. Проверьте состояние агента."}
+            reply = {"error": tr("Не удалось выполнить действие. Проверьте состояние агента.")}
         with contextlib.suppress(OSError):
             conn.sendall(json.dumps(reply).encode())
 
@@ -100,7 +101,7 @@ def invoke(h, op, value=None):
         except (ConnectionRefusedError, FileNotFoundError):  # мост не запущен: сокета нет или он остался от упавшего
             mutex = single.acquire()
             if mutex is None:
-                raise RuntimeError("Мост запускается или обновляется. Повторите действие.") from None
+                raise RuntimeError(tr("Мост запускается или обновляется. Повторите действие.")) from None
             try:
                 return dispatch(app.Controller(h), op, value)
             finally:
@@ -109,7 +110,7 @@ def invoke(h, op, value=None):
         sock.settimeout(150)
         raw = json.dumps({"op": op, "value": value}).encode()
         if len(raw) > LIMIT:
-            raise ValueError("Слишком большой запрос")
+            raise ValueError(tr("Слишком большой запрос"))
         sock.sendall(raw)
         reply = _receive(sock)
         if "error" in reply:
@@ -122,7 +123,7 @@ def dispatch(ctrl, op, value):
         cfg = ctrl.config()
         from .desktop_linux import diagnostic
         return {"version": VERSION, "studio": ctrl.studio_version,
-                "state": app.WORDS.get(ctrl.state, ctrl.state) if ctrl.agent else "остановлен",
+                "state": tr(app.WORDS.get(ctrl.state, ctrl.state) if ctrl.agent else "остановлен"),
                 "url": cfg.url, "name": cfg.name, "login": cfg.login, "id": cfg.agent_id,
                 "enrolled": ctrl.enrolled, "roots": cfg.projects_roots, "pin": ctrl.pin_status(),
                 "autostart": ctrl.autostart_enabled(), "max_turns": cfg.max_turns,
@@ -135,7 +136,7 @@ def dispatch(ctrl, op, value):
         return ctrl.set_folders(value)
     if op == "pin":
         if value is not None and (not value or setup.pin_errors(value, value)):
-            raise ValueError(setup.PIN_WORDS)
+            raise ValueError(tr(setup.PIN_WORDS))
         ctrl.set_pin(value)
     elif op == "reset":
         ctrl.reset_pin()
@@ -146,7 +147,7 @@ def dispatch(ctrl, op, value):
     elif op == "desktop" and type(value) is bool:
         if value:
             if ctrl.agent is None:
-                return ["Сначала запустите мост в графическом сеансе."]
+                return [tr("Сначала запустите мост в графическом сеансе.")]
             ctrl.agent.desktop.authorize_local()
         ctrl.set_desktop_enabled(value)
     elif op == "stop-desktop":
@@ -169,30 +170,32 @@ def dispatch(ctrl, op, value):
         ctrl.cancel_update()
     elif op == "forget":
         ok, message = ctrl.unenroll()
-        return [message] if message else ([] if ok else ["Ошибка отключения"])
+        return [message] if message else ([] if ok else [tr("Ошибка отключения")])
     else:
-        raise ValueError("Неизвестное действие")
+        raise ValueError(tr("Неизвестное действие"))
     return []
 
 
 def _yes(value):
-    return "да" if value else "нет"
+    return tr("да" if value else "нет")
 
 
 def status(h):
     s = invoke(h, "status")
     activity = s["activity"]
-    print(f"Studio Agent {s['version']} — {s['state']}\nСтудия: {s['url']} (версия {s['studio'] or '—'})\n"
-          f"Учётная запись: {s['login'] or '—'}\nКомпьютер: {s['name'] or '—'} (ID {s['id'] or '—'})\n"
-          f"Папки проектов: {', '.join(s['roots']) or '—'}\nКлюч устройства: {_yes(s['enrolled'])}\n"
-          f"PIN: {dict(none='не задан', set='задан', locked='заблокирован')[s['pin']]}\n"
-          f"Автозапуск: {_yes(s['autostart'])}\nЗадания: {activity['tasks']} из {s['max_turns']}, "
-          f"ждут ответа: {activity['waiting']}\nВыход после заданий: {_yes(activity['quit_when_idle'])}\n"
-          f"Рабочий стол: {_yes(s['desktop'])}, сеанс активен: {_yes(activity['desktop_active'])}. {s['display']}")
+    print(f"Studio Agent {s['version']} — {s['state']}\n" + tr(
+        "Студия: {0} (версия {1})\nУчётная запись: {2}\nКомпьютер: {3} (ID {4})\nПапки проектов: {5}\n"
+        "Ключ устройства: {6}\nPIN: {7}\nАвтозапуск: {8}\nЗадания: {9} из {10}, ждут ответа: {11}\n"
+        "Выход после заданий: {12}\nРабочий стол: {13}, сеанс активен: {14}.",
+        s['url'], s['studio'] or '—', s['login'] or '—', s['name'] or '—', s['id'] or '—',
+        ', '.join(s['roots']) or '—', _yes(s['enrolled']),
+        tr(dict(none='не задан', set='задан', locked='заблокирован')[s['pin']]), _yes(s['autostart']),
+        activity['tasks'], s['max_turns'], activity['waiting'], _yes(activity['quit_when_idle']), _yes(s['desktop']),
+        _yes(activity['desktop_active'])) + f" {s['display']}")
     for name, found in s["cli"].items():
         backend = s["backends"][name]
-        result = {"ready": "доступен", "checking": "проверка"}.get(backend["status"], "недоступен")
-        print(f"{name}: CLI {_yes(found)}, {result}, моделей {backend['models']}")
+        result = tr({"ready": "доступен", "checking": "проверка"}.get(backend["status"], "недоступен"))
+        print(tr("{0}: CLI {1}, {2}, моделей {3}", name, _yes(found), result, backend['models']))
     return 0
 
 
@@ -201,26 +204,27 @@ def enrollment(h):
     s = invoke(h, "status")
     if not rebind_confirmed(s["enrolled"], s["login"]):
         return 1
-    form = {"url": _ask("Адрес студии", s["url"]), "login": _ask("Логин"),
-            "name": _ask("Имя компьютера", s["name"] or socket.gethostname()),
-            "projects_roots": _ask_folders(s["roots"]), "password": getpass.getpass("Пароль: "),
+    form = {"url": _ask(tr("Адрес студии"), s["url"]), "login": _ask(tr("Логин")),
+            "name": _ask(tr("Имя компьютера"), s["name"] or socket.gethostname()),
+            "projects_roots": _ask_folders(s["roots"]), "password": getpass.getpass(tr("Пароль: ")),
             "autostart": s["autostart"]}
     errors = invoke(h, "enroll", form)
-    if errors == [enroll.EMAIL_CODE_REQUIRED]:
-        form["email_code"] = input("Код из письма: ").strip()
+    # Слова считает служба на своём языке: код из письма узнаётся на обоих.
+    if len(errors) == 1 and errors[0] in (enroll.EMAIL_CODE_REQUIRED, EN[enroll.EMAIL_CODE_REQUIRED]):
+        form["email_code"] = input(tr("Код из письма: ")).strip()
         errors = invoke(h, "enroll", form)
-    print("\n".join(errors) if errors else "Компьютер привязан.")
+    print("\n".join(errors) if errors else tr("Компьютер привязан."))
     return int(bool(errors))
 
 
 def set_pin(h):
-    pin = getpass.getpass("Новый PIN (4–8 цифр): ")
-    errors = setup.pin_errors(pin, getpass.getpass("Повторите PIN: ")) if pin else [setup.PIN_WORDS]
+    pin = getpass.getpass(tr("Новый PIN (4–8 цифр): "))
+    errors = setup.pin_errors(pin, getpass.getpass(tr("Повторите PIN: "))) if pin else [tr(setup.PIN_WORDS)]
     if errors:
         print("\n".join(errors))
         return 1
     invoke(h, "pin", pin)
-    print("PIN задан.")
+    print(tr("PIN задан."))
     return 0
 
 
@@ -236,10 +240,10 @@ def command(h, cmd):
             return set_pin(h)
         if cmd == "clear-pin":
             invoke(h, "pin", None)
-            print("PIN убран.")
+            print(tr("PIN убран."))
         else:  # reset-pin
             invoke(h, "reset")
-            print("Блок PIN снят.")
+            print(tr("Блок PIN снят."))
         return 0
     except (EOFError, KeyboardInterrupt):
         print()
@@ -254,12 +258,12 @@ def command(h, cmd):
 def _number(prompt):
     value = input(prompt).strip()
     if not value.isascii() or not value.isdigit():
-        raise ValueError("Введите число")
+        raise ValueError(tr("Введите число"))
     return int(value)
 
 
 def _action(h, choice):
-    from .__main__ import _ask_folders
+    from .__main__ import _ask_folders, yes
     if choice == "1":
         status(h)
     elif choice == "2":
@@ -269,12 +273,12 @@ def _action(h, choice):
     elif choice == "4":
         set_pin(h)
     elif choice == "5":
-        if input("Убрать PIN? [да/нет] ").strip().lower() == "да":
+        if yes(input(tr("Убрать PIN? [да/нет] "))):
             return invoke(h, "pin", None)
     elif choice == "6":
         return invoke(h, "reset")
     elif choice == "7":
-        return invoke(h, "limit", _number("Одновременных заданий: "))
+        return invoke(h, "limit", _number(tr("Одновременных заданий: ")))
     elif choice == "8":
         return invoke(h, "autostart", not invoke(h, "status")["autostart"])
     elif choice == "9":
@@ -291,12 +295,12 @@ def _action(h, choice):
     elif choice == "14":
         return invoke(h, "cancel-update")
     elif choice == "15":
-        if input("Отвязать компьютер от Студии? [да/нет] ").strip().lower() == "да":
+        if yes(input(tr("Отвязать компьютер от Студии? [да/нет] "))):
             return invoke(h, "forget")
     elif choice == "16":
         return invoke(h, "reconnect")
     elif choice == "17":
-        if input("Выйти и прервать выполняемые задания? [да/нет] ").strip().lower() == "да":
+        if yes(input(tr("Выйти и прервать выполняемые задания? [да/нет] "))):
             return invoke(h, "quit")
     elif choice == "18":
         with (h / "agent.log").open("rb") as log:
@@ -308,24 +312,33 @@ def _action(h, choice):
             current = invoke(h, "terminal")
         except (ValueError, RuntimeError):
             current = linux_terminal.DEFAULT
-            print("Проверьте сохранённые параметры. Можно ввести их заново.")
-        print("Enter оставляет значение, минус очищает поле.")
+            print(tr("Проверьте сохранённые параметры. Можно ввести их заново."))
+        print(tr("Enter оставляет значение, минус очищает поле."))
         def ask(label, key):
             entry = input(f"{label} [{current[key]}]: ").strip()
             return "" if entry == "-" else entry or current[key]
-        endpoint = ask("Адрес SSH (имя или IP)", "host")
-        user = ask("Пользователь SSH", "user") if endpoint else ""
-        port = str(ask("Порт SSH", "port") or 22) if endpoint else "22"
+        endpoint = ask(tr("Адрес SSH (имя или IP)"), "host")
+        user = ask(tr("Пользователь SSH"), "user") if endpoint else ""
+        port = str(ask(tr("Порт SSH"), "port") or 22) if endpoint else "22"
         if not port.isascii() or not port.isdigit():
-            raise ValueError("Введите число")
+            raise ValueError(tr("Введите число"))
         port = int(port)
-        web = ask("HTTPS-адрес веб-консоли", "web_url")
+        web = ask(tr("HTTPS-адрес веб-консоли"), "web_url")
         data = dict(host=endpoint, user=user, port=port, web_url=web)
         linux_terminal.addresses(data)
         invoke(h, "terminal", data)
-        print("Адреса терминала сохранены.")
+        print(tr("Адреса терминала сохранены."))
     else:
-        print("Введите номер пункта.")
+        print(tr("Введите номер пункта."))
+
+
+MENU = ((1, "Состояние и проверка CLI"), (2, "Привязка к Студии"), (3, "Папки проектов"), (4, "Задать PIN"),
+        (5, "Убрать PIN"), (6, "Сбросить блокировку PIN"), (7, "Лимит заданий"), (8, "Переключить автозапуск"),
+        (9, "Запустить службу"), (10, "Запросить или отменить выход после заданий"),
+        (11, "Разрешить рабочий стол / выбрать экраны"), (12, "Выключить рабочий стол"),
+        (13, "Завершить текущий сеанс экрана"), (14, "Отменить подготовку обновления"), (15, "Отвязать компьютер"),
+        (16, "Переподключиться к Студии"), (17, "Выйти сейчас"), (18, "Журнал"), (19, "SSH и веб-консоль"),
+        (0, "Закрыть меню"))
 
 
 def menu(h):
@@ -336,13 +349,7 @@ def menu(h):
         print(str(error))
         return 1
     while True:
-        print("\nStudio Agent\n 1  Состояние и проверка CLI\n 2  Привязка к Студии\n 3  Папки проектов\n"
-              " 4  Задать PIN\n 5  Убрать PIN\n 6  Сбросить блокировку PIN\n 7  Лимит заданий\n"
-              " 8  Переключить автозапуск\n 9  Запустить службу\n10  Запросить или отменить выход после заданий\n"
-              "11  Разрешить рабочий стол / выбрать экраны\n12  Выключить рабочий стол\n"
-              "13  Завершить текущий сеанс экрана\n14  Отменить подготовку обновления\n"
-              "15  Отвязать компьютер\n16  Переподключиться к Студии\n17  Выйти сейчас\n18  Журнал\n"
-              "19  SSH и веб-консоль\n 0  Закрыть меню")
+        print("\nStudio Agent\n" + "\n".join(f"{number:>2}  {tr(label)}" for number, label in MENU))
         try:
             choice = input("> ").strip()
             if choice == "0":
