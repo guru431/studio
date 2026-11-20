@@ -313,6 +313,35 @@ def test_delete_queues_the_path_when_the_share_fails(studio, env, monkeypatch, u
     assert unlinks and not any(unlinks)
 
 
+def test_delete_on_a_stalled_share_answers_in_time(studio, env, monkeypatch, write_gate):
+    """Шара зависла (не отказала): удаление не ждёт её дольше DELETE_WAIT_SEC, путь остаётся в очереди;
+    пока зависшее удаление идёт, следующие не занимают ещё поток пула — их пути ждут проход (03:F9)."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    first = media.save(uid, png(64, 64), "image/png", "a.png", thumb=True)
+    second = media.save(uid, DATA, "video/mp4", "b.mp4")
+    monkeypatch.setattr(media, "DELETE_WAIT_SEC", 0.05)
+    hold, reached, go = write_gate
+    calls, real = [], media.remove_files
+    monkeypatch.setattr(media, "remove_files", lambda rows: (calls.append(list(rows)), hold(), real(rows))[2])
+
+    async def scenario():
+        await media.delete_async(uid, first)           # ответ — без файлов: шара висит
+        assert reached.is_set() and media.REMOVING
+        await media.delete_async(uid, second)           # второй поток на зависшую шару не идёт
+        assert len(calls) == 1
+        assert {m for m, _, _ in queued()} == {first, second}
+        go.set()
+        for _ in range(5000):
+            if not media.REMOVING:
+                break
+            await asyncio.sleep(0.001)
+        await media.purge()
+
+    studio.c.portal.call(scenario)
+    assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
+    assert files(env.media_dir) == [] and queued() == []
+
+
 def test_wipe_keeps_the_paths_the_share_refused_until_it_is_back(studio, env, monkeypatch):
     """Шара отказала посреди «Удалить всю историю»: история уходит, пути файлов ждут в очереди, ответ
     говорит, сколько их; следующее стирание доудаляет (находка аудита P1)."""
