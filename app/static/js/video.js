@@ -474,6 +474,21 @@ function build(view, ctx) {
     });
   }
 
+  /* плееры «Превью» дальше трёх экранов от видимой части ленты отдают ролик: `src` снят, `load()` освобождает буфер
+   * и декодер — число живых роликов не растёт с длиной истории; у края ленты `src` возвращается. Играющий не трогаем;
+   * карточка, заменённая опросом или сменой вида, из наблюдения уходит */
+  const players = new IntersectionObserver((changes) => {
+    for (const { target, isIntersecting } of changes) {
+      if (!target.isConnected) players.unobserve(target);
+      else if (isIntersecting) {
+        if (!target.hasAttribute('src')) target.src = target.dataset.src;
+      } else if (target.hasAttribute('src') && target.paused) {
+        target.removeAttribute('src');
+        target.load();
+      }
+    }
+  }, { root: feedBox, rootMargin: '300% 0px' });
+
   /** Вид «Превью»: плеер или ход ролика, под ним — итог, параметры, промпт и действия. */
   function previewCard(item, node) {
     const acts = el('div', { class: 'video-acts' });
@@ -481,8 +496,10 @@ function build(view, ctx) {
     if (item.state === 'done' && item.media_id) {
       // кадр-исходник уже есть постером: без него Range-запросов к шаре по каждому ролику ленты нет до нажатия
       const poster = posterOf(item);
-      node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: poster ? 'none' : 'metadata',
-        poster, src: media(item.media_id) }));
+      const player = el('video', { class: 'video-player', controls: true, playsinline: true, preload: poster ? 'none' : 'metadata',
+        poster, src: media(item.media_id), 'data-src': media(item.media_id) });
+      players.observe(player);
+      node.append(player);
       body.append(el('p', { class: 'video-line' }, `${cap(serverMessage(item.detail)) || tr("Готово")} · ${clock(item.elapsed)}`));
       acts.append(button(tr("Открыть"), { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
         button(tr("Скачать"), { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
@@ -758,6 +775,7 @@ function build(view, ctx) {
       mcp.destroy();
       sourceVersion += 1;
       selection.destroy();
+      players.disconnect();
       clearInterval(tick);
       for (const entry of running.values()) clearTimeout(entry.timer);
       running.clear();
