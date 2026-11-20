@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message, tr } from './i18n.js';
 import { chooseMcp } from './mcp-settings.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
@@ -447,7 +447,7 @@ function stepNode(s) {
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
   } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
   else li.append(tr("Инструмент"));
-  if (s.error) li.append(el('span', { class: 'error' }, ` — ${s.error}`));
+  if (s.error) li.append(el('span', { class: 'error' }, ` — ${message(s.error)}`));
   return li;
 }
 
@@ -1240,7 +1240,7 @@ function build(view, ctx) {
       else text = m.ocr ? '' : tr("ответ ещё идёт…");
     } else if (m.status === 'stopped') text = tr("остановлено");
     else if (m.status === 'error') {
-      text = m.error || (m.content ? tr("ответ оборвался") : tr("ответ не получен"));
+      text = m.error ? message(m.error) : m.content ? tr("ответ оборвался") : tr("ответ не получен");
       kind = ' error';
     }
     p.meta.textContent = text;

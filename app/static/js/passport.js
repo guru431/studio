@@ -1,4 +1,4 @@
-import { tr } from './i18n.js';
+import { message, tr } from './i18n.js';
 /* Паспорт подключения (спека 2026-10-21-studio-connection-check-design, раздел 8): «Проверить» и «Пробный
  * ответ» в карточке подключения настроек раздела.
  *
@@ -203,9 +203,9 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
   else parts.push(passport && passport.checked ? tr("Проверено {0}", stamp(passport.checked)) : tr("Не проверено"));
   if (passport && passport.checked && routes) {
     const down = routes.find((r) => !r.reach.ok);
-    parts.push(down ? tr("адрес: {0}", down.reach.words) : tr("адрес отвечает"));
+    parts.push(down ? tr("адрес: {0}", message(down.reach.words)) : tr("адрес отвечает"));
     const key = keyOf(routes);
-    if (key) parts.push(tr("ключ {0}", key.words));
+    if (key) parts.push(tr("ключ {0}", message(key.words)));
   } else if (passport && passport.checked) parts.push(tr("не проверяется: проба занимала бы карту"));
   if (passport && passport.source === 'browser') parts.push(tr("по словам браузера"));
   const lines = [];
@@ -213,10 +213,10 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
     if (routes) {
       for (const r of routes) {
         const where = routes.length > 1 ? tr("Адрес {0}", r.path) : tr("Адрес");
-        lines.push(line('passport-reach', `${where} — ${r.reach.words}${r.ms !== null ? tr(", {0} мс", r.ms) : ''}`));
+        lines.push(line('passport-reach', `${where} — ${message(r.reach.words)}${r.ms !== null ? tr(", {0} мс", r.ms) : ''}`));
       }
       const key = keyOf(routes);
-      if (key) lines.push(line('passport-key', tr("Ключ — {0}", key.words)));
+      if (key) lines.push(line('passport-key', tr("Ключ — {0}", message(key.words))));
       const counted = routes.find((r) => r.count !== null);
       if (counted) lines.push(line('passport-count', tr("Модели — {0}", counted.count)));
     } else lines.push(line('passport-reach', tr("Адрес — не проверяется: проба занимала бы карту")));
@@ -234,7 +234,7 @@ export function passportBlock({ conn, section, models, label, error = '', busy =
       if (model) lines.push(line('passport-model', `${label(id)}: ${capsText(model, passport.profile)}`));
       const tried = (passport.probes || {})[id];
       if (tried) {
-        lines.push(line(`passport-probe${tried.ok ? '' : ' error'}`, tr("{0}: пробный ответ — {1}", label(id), tried.words)
+        lines.push(line(`passport-probe${tried.ok ? '' : ' error'}`, tr("{0}: пробный ответ — {1}", label(id), message(tried.words))
           + ` (${stamp(tried.at)}${tried.source === 'browser' ? tr(", по словам браузера") : ''})`));
       }
     }

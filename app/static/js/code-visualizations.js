@@ -1,8 +1,8 @@
 import { tr } from './i18n.js';
 import { api } from './api.js';
-import { button, el, openDialog } from './ui.js';
+import { button, el, openDialog, words } from './ui.js';
 
-export function visualizationsView(host, { aid, pid, supported, images = false }) {
+export function visualizationsView(host, { aid, pid, supported, images = false, closed = null }) {
   const url = `/api/code/agents/${aid}/projects/${pid}/visualization`;
   let dialog = null;
   let pending = null;
@@ -48,8 +48,9 @@ export function visualizationsView(host, { aid, pid, supported, images = false }
       frame.hidden = false;
     } catch (error) {
       if (controller.signal.aborted || dialog !== current) return;
+      if (error.code === 'closed' && closed) { close(); closed(); return; }   // компьютер закрыт — к PIN
       status.className = 'error';
-      status.textContent = error.message;
+      status.textContent = words(error);
     }
   }
 

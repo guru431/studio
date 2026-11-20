@@ -1,4 +1,4 @@
-import { language, locale, tr } from './i18n.js';
+import { language, locale, message, tr } from './i18n.js';
 /* Раздел «Настройки» (#/settings, #/settings/<раздел>) — вариант А спеки 2026-10-20 (раздел 6.2).
  *
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
@@ -1390,7 +1390,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('span', { class: 'link-hint' },
             conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner · очистка данных")) : null,
             el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
-            tr(" ключ {0}", conn.token_hint))),
+            tr(" ключ {0}", message(conn.token_hint)))),
         el('div', { class: 'link-buttons' }, checkButton,
           button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
       passport, actions, search,
