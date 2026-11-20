@@ -79,7 +79,8 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             pw.expect(page.locator('#chat-share-pin')).to_have_value('')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
-            with focus_browser.new_context(**options) as reader_context:
+            # получатель без выбора языка видит /share на языке браузера — сценарий проверяет русский
+            with focus_browser.new_context(**options, locale='ru-RU') as reader_context:
                 reader = reader_context.new_page()
                 reader.set_default_timeout(10000)
                 requests = []
@@ -181,7 +182,7 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
             pw.expect(page.locator('#chat-share-link')).to_be_visible()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             url = page.locator('#chat-share-link').input_value()
-            with focus_browser.new_context() as reader_context:
+            with focus_browser.new_context(locale='ru-RU') as reader_context:
                 reader = reader_context.new_page()
                 reader.goto(url)
                 reader.locator('#share-pin').fill('4567')

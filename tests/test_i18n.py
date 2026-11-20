@@ -54,6 +54,18 @@ for (const saved of [null, 'ru', 'fr', '<script>', 'EN']) {
   assert.equal(i18n.tr('Чат'), 'Чат');
 }
 assert.equal(runtime(null, true).locale(), 'ru-RU');
+// /share (data-language-default="browser"): язык браузера, пока выбор не сохранён; остальные страницы — русский
+function page(saved, browserDefault, browserLanguage) {
+  const html = { dataset: browserDefault ? { languageDefault: 'browser' } : {} };
+  const context = vm.createContext({ localStorage: { getItem: () => saved }, navigator: { language: browserLanguage },
+    document: { documentElement: html, addEventListener() {} } });
+  for (const file of ['en.js', 'i18n.js']) vm.runInContext(fs.readFileSync(root + '/' + file, 'utf8'), context);
+  return context.StudioI18n.language();
+}
+assert.equal(page(null, true, 'en-GB'), 'en');
+assert.equal(page('ru', true, 'en-US'), 'ru');
+assert.equal(page(null, true, 'de-DE'), 'ru');
+assert.equal(page(null, false, 'en-US'), 'ru');
 const en = runtime('en');
 assert.equal(en.language(), 'en');
 assert.equal(en.locale(), 'en-US');

@@ -3,7 +3,11 @@
   'use strict';
   const KEY = 'studio-language';
   let language = 'ru';
-  try { if (localStorage.getItem(KEY) === 'en') language = 'en'; } catch { /* Russian without storage. */ }
+  let saved = null;
+  try { saved = localStorage.getItem(KEY); } catch { /* Russian without storage. */ }
+  // A page for people without a Studio account (/share) follows the browser language until a choice is saved.
+  const browser = globalThis.document?.documentElement?.dataset?.languageDefault === 'browser';
+  if (saved === 'en' || (saved !== 'ru' && browser && /^en\b/i.test(globalThis.navigator?.language || ''))) language = 'en';
   const english = globalThis.StudioEnglish || {};
   const locale = () => language === 'en' ? 'en-US' : 'ru-RU';
 
