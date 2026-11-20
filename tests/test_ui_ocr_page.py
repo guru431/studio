@@ -70,9 +70,9 @@ def test_engine_is_chosen_for_upload_and_for_recognizing_again(browser, live, wi
             ("click", "#ocr-retry"), ("wait", "document.querySelector('#ocr-retry-dialog')?.open"),
             ("eval", "chosen", "document.querySelector('#ocr-retry-model').selectedOptions[0].textContent"),
             ("eval", "other", "(() => { const s = document.querySelector('#ocr-retry-model'); s.selectedIndex ="
-                              " [...s.options].findIndex(o => o.textContent.includes('hunyuan-ocr')); return true; })()"),
+                              " [...s.options].findIndex(o => o.textContent.includes('HunyuanOCR')); return true; })()"),
             ("click", "#ocr-retry-confirm"),
-            ("wait", f"!document.querySelector('#ocr-retry-dialog') && {meta}?.endsWith('hunyuan-ocr')"
+            ("wait", f"!document.querySelector('#ocr-retry-dialog') && {meta}?.endsWith('HunyuanOCR')"
                      " && document.querySelectorAll('.ocr-item[data-state=done]').length === 2"),
             ("eval", "text", "document.querySelector('.ocr-text.md').textContent")],
             width=width, mobile=width == 320)
@@ -80,7 +80,7 @@ def test_engine_is_chosen_for_upload_and_for_recognizing_again(browser, live, wi
         live.gw.ocr_reply = before
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["options"] == ["Шлюз · hunyuan-ocr", "s06 · ocr-ru"] and v["fits"] is True
+    assert v["options"] == ["Шлюз · HunyuanOCR", "s06 · ocr-ru"]  # подписи — models.js and v["fits"] is True
     assert v["chosen"] == "s06 · ocr-ru" and "Текст s06" not in v["text"]
     assert [json.loads(q.content)["model"] for q in live.gw.ocr_requests[first:]] == ["ocr-ru", "tencent/HunyuanOCR"]
     assert not problems(r), problems(r)
