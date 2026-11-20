@@ -359,3 +359,6 @@ def test_discovery_respects_pin_and_links_only_a_present_unreserved_copy(studio,
     assert [item["name"] for item in discover()] == ["moved-away"]
     assert [(frame["op"], frame.get("passive")) for frame in second.requests[-2:]] == [
         ("open", True), ("mirror_candidates", True)]
+    # Открытие поиском копий — строка `open` истории подключений, как у явного входа.
+    opened = [e for e in client.get("/api/agents/events").json()["items"] if e["kind"] == "open"]
+    assert [e["agent_id"] for e in opened] == [right, left] and opened[0]["device"].startswith("браузер ")
