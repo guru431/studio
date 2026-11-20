@@ -456,6 +456,21 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not known_refusals(problems(r), 422), problems(r)
 
 
+def test_settings_offers_only_connections_the_section_accepts(browser, live):
+    """«+ Адрес для раздела» не предлагает подключение, которое раздел не примет по виду (OpenAI-совместимое в «Видео»)."""
+    live.add_user("accepts")
+    options = "[...document.querySelectorAll('#link-dialog [name=existing] option')].map(o => o.value)"
+    r = browser.drive(live.url + "/", [*signin("accepts"), ("wait", READY), add_cloud(live.cloud),
+        *go("settings/video"), ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")), ("eval", "video", options),
+        ("press", "Escape"), ("wait", f"!{is_open('#link-dialog')}"),
+        *go("settings/speech"), ("wait", "document.querySelector('.section-panel[data-section=speech] #link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")), ("eval", "speech", options)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["video"] == ["new"] and v["speech"] == [str(v["cloud"]), "new"], v
+
+
 def test_settings_adds_the_first_gateway_to_every_section(browser, live):
     live.add_user("everywhere")
     every = "document.querySelector('#link-dialog [name=everywhere]')"
