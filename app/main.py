@@ -57,6 +57,7 @@ import ocr
 import ntfy
 import presets
 import account_profile as profile
+import profiles
 import project_access
 import release
 import push
@@ -176,6 +177,7 @@ app.include_router(account.router)
 app.include_router(screenlock.router)
 app.include_router(connections.router)
 app.include_router(checks.router)
+app.include_router(profiles.router)
 app.include_router(sections.router)
 app.include_router(admin.router)
 app.include_router(media.router)

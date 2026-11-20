@@ -21,6 +21,7 @@
   переименовать и убрать из разделов, а новый раздел, кроме чата, ему — отказ `server`.
 - Паспорт (`passport`, checks.py) — итог «Проверить» JSON; смена адреса, вида или токена его обнуляет;
   `out(…, passport=False)` — зеркала панели администратора.
+- Профиль (profiles.py): `out` отдаёт подсказки (и у общих), `profile_set` — только у своих.
 - Журнал — только id: имена, адреса и токены туда не пишутся.
 """
 import json
@@ -240,6 +241,11 @@ def out(conn: Connection, passport: bool = True) -> dict:
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "accepts": sections.accepts(conn),
             "proxied": conn.proxied,
             "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner, "s06": conn.s06}
+    # profiles импортирует capabilities → images, а тот при загрузке берёт `connections.Connection`
+    import profiles
+    item["suggestions"] = profiles.suggestions_of(conn)
+    if not inherited:                            # текст и параметры общего профиля пользователю не видны
+        item["profile_set"] = profiles.is_set(conn)
     if conn.shared:
         item["shared"] = True
     if passport and not inherited:

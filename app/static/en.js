@@ -2699,6 +2699,8 @@ globalThis.StudioEnglish = Object.freeze({
   "новый адрес — введите токен заново": "new address. Enter the token again",
   "список моделей прямого подключения берёт браузер": "browser fetches models for direct connections",
   "токен подключения через сервер не выдаётся": "proxied connection tokens are not exposed",
+  "у подключения Cleaner профиля нет": "Cleaner connections have no profile",
+  "подключение не принимает параметр «{0}» — уберите его в профиле подключения": "the connection does not accept the “{0}” parameter. Remove it from the connection profile",
   "адрес через сервер — без пути": "server connection address must not include a path",
   "нет связи с подключением «{0}»": "no connection to “{0}”",
   "подключение «{0}» удалено из профиля": "connection “{0}” was removed",
