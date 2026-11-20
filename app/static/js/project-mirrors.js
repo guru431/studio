@@ -112,6 +112,17 @@ export function projectMirrors(host, trigger, aid, project) {
       await next();
     }
 
+    /* Привязка папки копии. Папка — зеркало другого проекта (прежнее имя этого, удалённый): после подтверждения
+     * та привязка снимается и папка назначается этому проекту (`replace`); отказ подтверждения — `null`. */
+    async function attachFolder(data) {
+      try { return await request('POST', url, data); }
+      catch (err) {
+        if (err.code !== 'exists' || !err.detail?.elsewhere) throw err;
+        if (!window.confirm(tr("Эта папка уже назначена зеркалом другого проекта — например, этого же проекта под прежним именем. Перепривязать её к этому проекту? Прежняя привязка будет снята, файлы останутся на компьютере."))) return null;
+        return request('POST', url, { ...data, replace: true });
+      }
+    }
+
     function paintCopies() {
       const groups = [...discovered.values()];
       const rows = groups.flatMap((device) => {
@@ -128,18 +139,20 @@ export function projectMirrors(host, trigger, aid, project) {
           error: tr("Не удалось проверить папки компьютера"), partial: tr("Проверена часть папок компьютера") };
         const note = labels[device.state === 'ready' && !device.complete ? 'partial' : device.state];
         const copies = device.items.map((candidate) => {
-          const attach = button(tr("Привязать"));
+          const attach = button(candidate.elsewhere ? tr("Перепривязать") : tr("Привязать"));
           attach.addEventListener('click', () => work(async () => {
-            const item = await request('POST', url, {
+            const item = await attachFolder({
               destination: device.id, root: candidate.root, name: candidate.name, existing: true,
             });
-            await load(item.id);
+            if (item) await load(item.id);
           }));
           return el('li', {}, el('div', {},
             el('strong', {}, `${device.computer} · ${candidate.name}`),
             el('div', { class: 'muted' }, candidate.folder),
             el('small', { class: 'muted' }, candidate.match === 'repository'
-              ? tr("Тот же Git-репозиторий") : tr("Совпадает имя папки"))), attach);
+              ? tr("Тот же Git-репозиторий") : tr("Совпадает имя папки")),
+            ...(candidate.elsewhere ? [el('br'), el('small', { class: 'muted' }, tr("Уже зеркало другого проекта"))] : [])),
+          attach);
         });
         return note ? [...copies, el('li', { class: 'muted' }, `${device.computer} · ${note}`)] : copies;
       });
@@ -392,8 +405,9 @@ export function projectMirrors(host, trigger, aid, project) {
       event.preventDefault();
       work(async () => {
         tell(tr("Сохраняю настройки зеркала…"));
-        const saved = await request('POST', url, { destination: Number(targets.value), root: roots.value, name: name.value.trim() });
-        await load(saved.id);
+        const saved = await attachFolder({ destination: Number(targets.value), root: roots.value, name: name.value.trim() });
+        if (saved) await load(saved.id);
+        else tell('');
       });
     });
     if (project.capable) work(load);
