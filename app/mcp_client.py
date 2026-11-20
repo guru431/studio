@@ -70,6 +70,17 @@ def selected(uid, ids):
     return [row(uid, sid) for sid in ids]
 
 
+def present(uid, raw):
+    """id из `chats.mcp_ids`, чьи подключения у учётки ещё есть: удалённый сервер (id не повторяются —
+    AUTOINCREMENT) не остаётся выбранным в диалоге и не мешает смене модели."""
+    ids = json.loads(raw)
+    if not ids:
+        return []
+    found = {r[0] for r in state.DB.execute(
+        f"SELECT id FROM mcp_servers WHERE user_id=? AND id IN ({','.join('?' * len(ids))})", (uid, *ids))}
+    return [sid for sid in ids if sid in found]
+
+
 def _address(url):
     """Куда на самом деле идёт запрос: схема, хост, порт (с умолчанием) и путь."""
     url = httpx.URL(url)
