@@ -60,6 +60,7 @@ export function setupMobileNavigation(me) {
     el('div', { class: 'mobile-sections-head' }, heading, close), links, edit, editor);
   document.body.append(dialog);
   let returnFocus = more;
+  let direct = false;           // редактор открыт из настроек: «Сохранить» и «Отмена» закрывают окно целиком
 
   function setActive(section) {
     active = section;
@@ -121,18 +122,25 @@ export function setupMobileNavigation(me) {
       localStorage.setItem(modeKey, mode);
     } catch { /* До закрытия окна. */ }
     paint();
-    showEditor(false);
+    leaveEditor();
     if (mode === 'all') dialog.close();
+  }
+
+  function leaveEditor() {
+    if (direct) dialog.close();
+    else showEditor(false);
   }
 
   more.addEventListener('click', () => {
     returnFocus = more;
+    direct = false;
     showEditor(false);
     dialog.showModal();
     more.setAttribute('aria-expanded', 'true');
   });
   openEditor = (from) => {      // «Настройки → Оформление»: фокус после закрытия — на открывшую кнопку
     returnFocus = from;
+    direct = true;
     dialog.showModal();
     showEditor(true);
   };
@@ -142,8 +150,10 @@ export function setupMobileNavigation(me) {
     (mode === 'all' && returnFocus === more ? document.getElementById('avatar') : returnFocus).focus();
   });
   links.addEventListener('click', event => { if (event.target.closest('a')) dialog.close(); });
+  // окно вне раздела: жест «назад» (iPhone) меняет раздел — лист не остаётся поверх нового
+  window.addEventListener('hashchange', () => { if (dialog.open) dialog.close(); });
   edit.addEventListener('click', () => showEditor(true));
-  cancel.addEventListener('click', () => showEditor(false));
+  cancel.addEventListener('click', leaveEditor);
   reset.addEventListener('click', () => store([...DEFAULT]));
   editor.addEventListener('change', updateCount);
   editor.addEventListener('submit', event => {

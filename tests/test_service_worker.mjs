@@ -73,12 +73,20 @@ assert.deepEqual(await click(), [target]);
   assert.equal(studio.url, target);
 }
 
-// A disappeared client cannot be navigated; open the same target in a new window.
+// A disappeared client can be neither navigated nor focused; open the same target in a new window.
 {
-  const stale = windowAt(`${origin}/`, { navigateFails: true });
+  const stale = windowAt(`${origin}/`, { navigateFails: true, focusFails: true });
   const studio = windowAt(target);
   assert.deepEqual(await click({ windows: [stale], opened: studio }), [target]);
   assert.equal(studio.url, target);
+}
+
+// An uncontrolled window (opened by a hard reload) refuses navigate: focus it and route by message, no second tab.
+{
+  const uncontrolled = windowAt(`${origin}/#/settings`, { navigateFails: true });
+  assert.deepEqual(await click({ windows: [uncontrolled] }), []);
+  assert.equal(uncontrolled.focused, true);
+  assert.equal(JSON.stringify(uncontrolled.messages), JSON.stringify([{ jobs: href }]));
 }
 
 // A focus error must not prevent routing to the project.
