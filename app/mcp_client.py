@@ -4,7 +4,8 @@
 Ключи — шифром в базе, запросы/ответы и заголовки никогда не пишутся в журнал.
 Общие серверы (`user_id IS NULL`) учётка видит по группам доступа (access.py): закрытый — как отсутствующий,
 закрытый инструмент — не предлагается модели и не вызывается. Каждый запрос к общему серверу несёт
-`X-Studio-User` — непрозрачный идентификатор учётки (`access.studio_user`); личным — не отправляется.
+`X-Studio-User` — непрозрачный идентификатор учётки, свой у каждого сервера (`access.studio_user`); личным — не
+отправляется.
 """
 
 import asyncio
@@ -234,7 +235,7 @@ class Session:
         if values.get("token"):
             headers["Authorization"] = f"Bearer {values['token']}"
         if self.owner_id is None and self.uid is not None:
-            headers["X-Studio-User"] = access.studio_user(self.uid)
+            headers["X-Studio-User"] = access.studio_user(self.uid, self.sid)
         if not rpc:
             return dict(headers)
         headers.update({"Accept": "application/json, text/event-stream", "Content-Type": "application/json"})

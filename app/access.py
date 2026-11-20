@@ -96,10 +96,11 @@ def shared_filter(uid: int | None, kind: str, column: str) -> tuple[str, tuple]:
     return _OPEN.format(item=column, tool="''"), (kind, kind, uid)
 
 
-def studio_user(uid: int) -> str:
-    """Постоянный непрозрачный идентификатор учётки для общего MCP (`X-Studio-User`): не логин и не id."""
+def studio_user(uid: int, sid: int) -> str:
+    """Постоянный непрозрачный идентификатор учётки для общего MCP `sid` (`X-Studio-User`): не логин и не id;
+    у каждого сервера свой — разные внешние службы не сопоставят одного человека."""
     key = hashlib.sha256(state.CFG.data_key.encode()).digest()
-    return hmac.new(key, f"studio-user:{uid}".encode(), hashlib.sha256).hexdigest()[:32]
+    return hmac.new(key, f"studio-user:{sid}:{uid}".encode(), hashlib.sha256).hexdigest()[:32]
 
 
 # ---- группы ------------------------------------------------------------------------------

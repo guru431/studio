@@ -209,9 +209,11 @@ def test_set_members_and_rules_reject_unknown_ids(studio):
 def test_studio_user_is_stable_and_opaque(studio):
     uid = make_user(studio, "someone")
     other = make_user(studio, "another")
-    value = access.studio_user(uid)
+    value = access.studio_user(uid, 7)
     assert re.fullmatch("[0-9a-f]{32}", value)
-    assert value == access.studio_user(uid) != access.studio_user(other)
+    assert value == access.studio_user(uid, 7)                         # постоянный для пары (учётка, сервер)
+    assert value != access.studio_user(other, 7)                       # разный у учёток
+    assert value != access.studio_user(uid, 8)                         # разный у серверов: службы не сопоставят
     assert "someone" not in value and str(uid) != value
 
 
@@ -475,11 +477,11 @@ def test_studio_user_header_only_for_shared(studio):
     mock(studio)
     seen = recorded(studio)
     assert studio.c.post(f"/api/admin/shared/mcp/{sid}/check").status_code == 200
-    assert set(seen) == {access.studio_user(admin)}
+    assert set(seen) == {access.studio_user(admin, sid)}
     signin(studio, "member")
     seen.clear()
     assert studio.c.get("/api/mcp-tools/video").status_code == 200
-    assert seen and set(seen) == {access.studio_user(member)}
+    assert seen and set(seen) == {access.studio_user(member, sid)}
     personal = studio.c.post("/api/mcp", json={"name": "Mine", "url": MCP_URL, "token": MCP_KEY})
     assert personal.status_code == 201, personal.text
     seen.clear()
