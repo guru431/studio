@@ -257,6 +257,11 @@ function passwordBlock() {
   const note = status('password-status');
   const save = button(tr("Сменить пароль"), { class: 'btn', id: 'password-save' });
   save.addEventListener('click', async () => {
+    if (!current.value) {                    // пустой — не на сервер: попытка пароля не тратится
+      say(note, tr("Введите пароль учётки"), 'error');
+      current.focus();
+      return;
+    }
     if (fresh.value !== repeat.value) {
       say(note, tr("Пароли не совпадают"), 'error');
       return;
@@ -358,6 +363,13 @@ function lockBlock() {
     }
     return true;
   };
+  // пустое поле пароля — не на сервер (как в аварийном выходе): иначе каждое нажатие тратило бы попытку пароля
+  const missing = (input) => {
+    if (input.value) return false;
+    say(note, tr("Введите пароль учётки"), 'error');
+    input.focus();
+    return true;
+  };
   for (const radio of [all, some]) radio.addEventListener('change', () => { selection.hidden = all.checked; });
 
   async function setLock(body) {
@@ -391,7 +403,7 @@ function lockBlock() {
     }
   });
   save.addEventListener('click', async () => {
-    if (!valid()) return;
+    if (!valid() || (!passwordBox.hidden && missing(password))) return;
     save.disabled = true;
     try {
       await setLock({ enabled: enabled.checked, sections: selected(), timeout: timer.read(), password: password.value });
@@ -404,6 +416,7 @@ function lockBlock() {
     }
   });
   off.addEventListener('click', async () => {
+    if (missing(offPassword)) return;
     off.disabled = true;
     try {
       await setLock({ enabled: false, password: offPassword.value });
@@ -448,6 +461,7 @@ function lockBlock() {
     pinPassword.focus();
   });
   pinSave.addEventListener('click', async () => {
+    if (missing(pinPassword)) return;
     if (pinNew.value !== pinRepeat.value) {
       say(note, tr("PIN и повтор не совпадают"), 'error');
       return;
@@ -528,6 +542,7 @@ function lockBlock() {
       say(note, tr("Прошло больше полутора минут — введите пароль ещё раз"));
     };
     next.addEventListener('click', async () => {
+      if (missing(password)) return;
       next.disabled = true;
       say(note, '');
       try {

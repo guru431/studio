@@ -5322,6 +5322,25 @@ def test_lock_settings_add_a_key_in_english(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_lock_settings_do_not_send_an_empty_password(browser, live):
+    """Пустое поле пароля — подсказка без запроса: попытки пароля сессии не тратятся."""
+    login = "lockempty"
+    live.add_user(login)
+    note = "document.querySelector('#screen-lock-status').textContent"
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("click", "#lock-enabled"), server_lock_is(True),
+        ("eval", "spy", "window.sent = []; const real = window.fetch; window.fetch = (u, o) => {"
+                        " window.sent.push(String(u)); return real(u, o); }; true"),
+        ("click", "#lock-save"), ("eval", "save", note),
+        ("click", "#pin-set"), ("click", "#pin-save"), ("eval", "pin", note),
+        ("eval", "sent", "window.sent.filter(u => !u.includes('/api/lock/alive'))")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["save"] == "Введите пароль учётки" and v["pin"] == "Введите пароль учётки", v
+    assert v["sent"] == [], v["sent"]
+    assert not problems(r), problems(r)
+
+
 def test_add_key_is_absent_on_a_computer(browser, live):
     login = "lockpc"
     live.add_user(login)
