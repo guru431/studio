@@ -35,6 +35,38 @@ def test_partial_context_and_empty_passport_routes_keep_truthful_status(browser,
     assert 'не проверяется: проба занимала бы карту' in status['passport']
 
 
+def test_subagent_list_polls_only_during_a_turn_or_with_the_window_open(browser, live):
+    """Опрос подзадач не идёт без хода: старые мосты считают каждый запрос действием и не закрываются."""
+    result = browser.drive(live.url + '/login', [('eval', 'counts', """(async () => {
+        const delay = window.setTimeout;
+        window.setTimeout = (fn, ms, ...args) => delay(fn, ms === 10000 || ms === 2000 ? 40 : ms, ...args);
+        let calls = 0;
+        window.fetch = async () => { calls += 1; return new Response('{"items":[]}',
+            { status: 200, headers: { 'content-type': 'application/json' } }); };
+        const { subagentView } = await import('/static/js/code-subagents.js');
+        const pause = (ms) => new Promise((r) => delay(r, ms));
+        const host = document.createElement('div'); document.body.append(host);
+        let running = false;
+        const view = subagentView(host, { endpoint: (path) => '/api/x' + path, polling: () => running });
+        const counts = {};
+        try {
+            await pause(500); counts.idle = calls;
+            running = true; view.refresh(); await pause(500); counts.running = calls - counts.idle;
+            running = false; await pause(200); const stopped = calls; await pause(500);
+            counts.after = calls - stopped;
+            view.button.click(); await pause(500); counts.dialog = calls - stopped;
+            host.querySelector('dialog').close(); await pause(200); const closed = calls; await pause(500);
+            counts.closed = calls - closed;
+            return counts;
+        } finally { view.unmount(); host.remove(); window.setTimeout = delay; }
+    })()""")])
+    assert not result.get('failed'), result
+    counts = result['values']['counts']
+    assert counts['idle'] == 1                        # только чтение при открытии чата
+    assert counts['running'] >= 3 and counts['dialog'] >= 3
+    assert counts['after'] == 0 and counts['closed'] == 0
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_suggestions_diffs_content_search_and_editable_queue(browser, live, width, tmp_path):
     login = f"workspace-tools-{width}"

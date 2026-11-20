@@ -92,3 +92,44 @@ def test_ntfy_follows_the_device_language_after_save_and_after_switching(browser
                                        ' JOIN users u ON u.id = s.user_id WHERE u.login = ?', (login,))] == ['ru']
     conn.close()
     assert not problems(result), problems(result)
+
+
+def test_ntfy_form_remembers_server_and_topic_but_not_the_token_after_a_new_sign_in(browser, live, monkeypatch):
+    """FINDINGS 06:F11: настройка ntfy уходит с сессией; после нового входа форма подставляет сервер и тему последнего
+    сохранения этого браузера (localStorage `studio-ntfy:<id>`), токен вводится заново и в браузере не хранится;
+    явный «Выйти» запомненное забывает."""
+    login = 'ntfy-again'
+    uid = live.add_user(login)
+    conn = db.connect(live.db_path)
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'", ('["psh.example.net:443"]',))
+    conn.close()
+    async def resolve(host, port):
+        return ['93.184.216.34']
+    monkeypatch.setattr(upstream, 'RESOLVE', resolve)
+    ready = "document.querySelector('#ntfy-save') && !document.querySelector('#ntfy-save').disabled"
+    form = ("[document.querySelector('#ntfy-server').value, document.querySelector('#ntfy-topic').value,"
+            " document.querySelector('#ntfy-token').value, document.querySelector('#ntfy-enabled').checked,"
+            " document.querySelector('#ntfy-test').disabled]")
+    first = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/notifications'), ('wait', ready),
+        set_value('#ntfy-server', 'https://psh.example.net'), set_value('#ntfy-topic', 'ui-again-topic'),
+        set_value('#ntfy-token', 'tk-ui-again'), ('click', '#ntfy-enabled'), ('click', '#ntfy-save'),
+        ('wait', "document.querySelector('#ntfy-status').textContent === 'Настройки ntfy сохранены на этом устройстве'"),
+        ('eval', 'stored', f"localStorage.getItem('studio-ntfy:{uid}')"),
+        ('eval', 'out', "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")], width=320, mobile=True)
+    assert not first.get('failed'), first
+    assert json.loads(first['values']['stored']) == {'server': 'https://psh.example.net', 'topic': 'ui-again-topic'}
+    assert first['values']['out'] is True
+    again = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/notifications'), ('wait', ready),
+        ('eval', 'form', form), ('eval', 'note', "document.querySelector('#ntfy-status').textContent"),
+        ('eval', 'server', "fetch('/api/me/ntfy').then(r => r.json()).then(v => v.configured)"),
+        # явный «Выйти» (форма меню) забывает сервер и тему: на общем компьютере тема не остаётся
+        ('eval', 'forgot', "(() => { document.querySelector('form[action=\"/logout\"]').dispatchEvent("
+                           f"new Event('submit', {{ bubbles: true, cancelable: true }})); return localStorage.getItem('studio-ntfy:{uid}'); }})()"),
+        ('eval', 'out', "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")], width=320, mobile=True)
+    assert not again.get('failed'), again
+    assert again['values']['form'] == ['https://psh.example.net', 'ui-again-topic', '', False, True]
+    assert again['values']['note'] == ('Сервер и тема — с прошлой настройки на этом устройстве.'
+                                       ' Токен, если он нужен, введите заново и сохраните.')
+    assert again['values']['server'] is False             # подстановка — только в форме, сервер ничего не сохранил
+    assert again['values']['forgot'] is None
+    assert not problems(first) and not problems(again), (problems(first), problems(again))

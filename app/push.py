@@ -249,6 +249,19 @@ def notify_later(user_id: int, body: str | dict[str, str], href: str, tag: str, 
     task.add_done_callback(TASKS.discard)
 
 
+def unread_scans(scan_ids) -> set:
+    """Из документов «Сканов» — те, где не прочитана ни одна страница (есть `failed`, нет `done`/`layer`, как пусто у
+    `ocr._readable`): push, ntfy и «Готово за час» (`jobs._ocr`) называют такой «готовый» документ неудачей, а не
+    готовностью. Один запрос на любое число документов — «В работе» опрашивается часто."""
+    ids = list(scan_ids)
+    if not ids:
+        return set()
+    rows = state.DB.execute(
+        f"SELECT scan_id FROM scan_pages WHERE scan_id IN ({', '.join('?' * len(ids))}) GROUP BY scan_id"
+        " HAVING SUM(state = 'failed') > 0 AND SUM(state IN ('done', 'layer')) = 0", ids).fetchall()
+    return {row[0] for row in rows}
+
+
 def job_finished(table: str, item_id: str) -> None:
     """После первого сохранения итога: только готовое/ошибка, только подписки владельца, без содержимого."""
     section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
@@ -264,7 +277,8 @@ def job_finished(table: str, item_id: str) -> None:
                             " WHERE n.user_id = j.user_id AND n.enabled = 1 AND s.expires > ?))",
                             (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
-        notify_later(row["user_id"], done if row["state"] == "done" else error,
+        ok = row["state"] == "done" and not (table == "scans" and unread_scans([item_id]))
+        notify_later(row["user_id"], done if ok else error,
                      f"{section}?id={item_id}", item_id, title=STUDIO, quiet=True)
 
 

@@ -215,7 +215,8 @@ def out(conn: Connection, passport: bool = True) -> dict:
             raise
         hint = "нужно ввести заново"
     item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
-            "sections": [s for s in sections.SECTIONS if s in conn.sections], "proxied": conn.proxied,
+            "sections": [s for s in sections.SECTIONS if s in conn.sections], "accepts": sections.accepts(conn),
+            "proxied": conn.proxied,
             "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner, "s06": conn.s06}
     if passport:
         item["passport"] = passport_of(conn)

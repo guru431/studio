@@ -21,7 +21,7 @@ _next_release = None
 def schedule_update(stage: Path) -> None:
     global _next_release
     if _handover is None or update_helper._managed_base(stage) is None:
-        raise RuntimeError("Обновление требует установленного моста")
+        raise RuntimeError("update requires the installed bridge service")   # внутреннее: журнал — только тип
     _next_release = stage
 
 

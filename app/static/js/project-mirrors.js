@@ -209,7 +209,7 @@ export function projectMirrors(host, trigger, aid, project) {
             preview.replaceChildren(el('p', { class: 'muted' }, tr("Загрузка…")));
             try {
               const delta = await request('POST', `${url}/${item.id}/diff`, { path });
-              const diff = changeView([{ path, ...delta }]);
+              const diff = changeView([{ path, ...delta, whole: true }]);
               preview.replaceChildren(...(diff ? [diff] : []));
             } catch (err) {
               if (!signal.aborted) preview.replaceChildren(el('p', { class: 'error' }, words(err)));

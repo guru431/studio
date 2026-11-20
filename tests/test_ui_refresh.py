@@ -441,3 +441,35 @@ def test_computer_off_line_does_not_reload_the_page(browser, live):
         init=QUICK_RETRY)
     assert not result.get("failed"), result
     assert result["values"]["later"] == "navigate"
+
+
+def test_browser_reload_keeps_the_window_and_a_waiting_question_offers_only_take_over(browser, live):
+    """F5 браузером (не кнопка «Обновить»): id окна тот же, запись в sessionStorage снята. Чужое окно с ходом,
+    ждущим ответа на карточку, не предлагает «Дождаться завершения» — без ответа ход не кончится."""
+    from test_ui_browser import code_permission
+    login = "reload-own-window"
+    live.add_user(login)
+    machine = RefreshMachine({"alpha": {"chats": {CODE_CHAT_A: code_session("Waiting chat")}}})
+    ask = {k: v for k, v in code_permission("r1", False).items() if k != "k"}
+    machine.running[CODE_CHAT_A] = {"turn": "elsewhere", "project": pid("alpha"), "text": "", "steps": [],
+                                    "asks": {"r1": ask}, "owner": "a" * 32, "followups": [], "engine": "claude"}
+    aid, server = code_online(live, login, machine)
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+            *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"),
+            ("wait", "document.querySelector(\".code-ask[data-request='r1']\")"
+                     " && !document.querySelector('#code-session-notice').hidden"),
+            ("eval", "notice", "document.querySelector('#code-session-notice p').textContent"),
+            ("eval", "wait", "document.querySelector('#code-wait-session').hidden"),
+            ("eval", "before", WINDOW_ID),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+            ("eval", "after", WINDOW_ID),
+            ("eval", "stored", "sessionStorage.getItem('studioWindow')")])
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert "ждёт вашего ответа" in values["notice"] and values["wait"] is True
+    assert values["after"] == values["before"] and values["stored"] is None
+    assert not code_requests(machine, "claim")

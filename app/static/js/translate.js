@@ -626,6 +626,11 @@ function build(view, ctx) {
         const shown = rec && rec.id === item.id;
         docs.forget(item.id);
         if (shown) {
+          // исходник удалённой текстовой записи — не свой текст: в поле возвращается свой черновик (или пусто)
+          if (rec.kind === 'text' && input.value === (rec.source || '')) {
+            input.value = draft.take();
+            paintCount();
+          }
           rec = null;
           clearTimeout(timer);
           paintLeft();

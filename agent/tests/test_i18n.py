@@ -85,6 +85,29 @@ def test_posix_locale_variables_decide_before_locale_module(monkeypatch):
     assert i18n._system() == "ru_RU.UTF-8"
 
 
+def test_linux_menu_status_translates_the_desktop_reason(language, monkeypatch):
+    """Строка «Рабочий стол» статуса меню Linux — причина `desktop_linux._REASONS`: в английском меню по-английски;
+    сами слова (их же получает студия отказом `Refused`) остаются русскими."""
+    from types import SimpleNamespace
+
+    from studio_agent import desktop_linux, linux_menu
+
+    assert all(reason in i18n.EN for reason in desktop_linux._REASONS.values())
+    cfg = SimpleNamespace(url="https://studio.example.com", name="pc", login="ivanov", agent_id="a1",
+                          projects_roots=[], max_turns=12, desktop_enabled=False)
+    ctrl = SimpleNamespace(config=lambda: cfg, studio_version="0.1.0", agent=None, state="offline", enrolled=True,
+                           pin_status=lambda: "none", autostart_enabled=lambda: False, activity_status=lambda: {},
+                           backend_status=lambda: {})
+    monkeypatch.setattr(linux_menu.host, "find_tool", lambda name: None)
+    monkeypatch.setattr(desktop_linux, "_probe", lambda: 2)
+    language("en")
+    assert linux_menu.dispatch(ctrl, "status", None)["display"] == \
+        "Requires an active unlocked Linux graphical session with systemd-logind"
+    assert desktop_linux.diagnostic() == desktop_linux._REASONS[2]
+    language("ru")
+    assert linux_menu.dispatch(ctrl, "status", None)["display"] == desktop_linux._REASONS[2]
+
+
 def test_english_tray_window_and_errors(language):
     from studio_agent import enroll, setup, tray, window
 

@@ -169,8 +169,9 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('wait', f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
         ('eval', 'kept', visible),
         *go('settings/appearance'), ('click', '#appearance-mobile-nav-open'),
+        # редактор из настроек: «Сохранить» закрывает окно целиком, а не показывает лист «Ещё»
         ('click', '#mobile-nav-mode-compact'), ('click', '#mobile-nav-save'),
-        ('click', '#mobile-sections-close'), ('wait', "!document.querySelector('#mobile-sections').open"),
+        ('wait', "!document.querySelector('#mobile-sections').open"),
         ('eval', 'focusBack', "document.activeElement.id"), *go('translate'),
         ('wait', "document.querySelector('#mobile-more').getAttribute('aria-current') === 'page'"),
         ('eval', 'compact', visible),
@@ -192,6 +193,18 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
     assert values['focusBack'] == 'appearance-mobile-nav-open'
     assert values['moreActive'] == 'Ещё: Перевод'
     assert all(label['hit'] for label in values['compactGeometry']['labels'])
+
+
+def test_address_change_closes_more_sheet_and_jobs_panel(browser, live):
+    """Жест «назад» на iPhone меняет адрес под открытым окном: лист «Ещё» и «В работе» закрываются."""
+    r = browser.drive(live.url + '/', [*signin(), ('wait', READY),
+        ('click', '#mobile-more'), ('wait', "document.querySelector('#mobile-sections').open"),
+        ('eval', 'back1', "location.hash = '#/photo'"),
+        ('wait', "!document.querySelector('#mobile-sections').open"),
+        ('click', '#jobs'), ('wait', "document.querySelector('#jobs-panel').open"),
+        ('eval', 'back2', "location.hash = '#/chat'"),
+        ('wait', "!document.querySelector('#jobs-panel').open")], width=320, mobile=True)
+    assert not r.get('failed'), r
 
 
 @pytest.mark.parametrize('width', [320, 1280])

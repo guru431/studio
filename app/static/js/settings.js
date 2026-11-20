@@ -38,10 +38,11 @@ import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
 import { ntfyBlock } from './ntfy-settings.js';
+import { pushFlag } from './push-sync.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
-import { editVoice } from './voice-editor.js';
+import { editVoice, holdVoiceEditor } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
@@ -56,7 +57,6 @@ export { modelLabel };     // подписи моделей — models.js; ра�
 
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
 const SEARCH_FROM = 8;
-const CLEANER_SECTIONS = ['chat', 'translate'];   // = sections.CLEANER: другие разделы Cleaner сервер не примет
 
 
 /* ---- модели прямого подключения ------------------------------------------------ */
@@ -763,10 +763,9 @@ function exaBlock() {
 }
 
 /* Push раздела «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8): подписка этого устройства —
- * строка сервера у сессии (GET/POST/DELETE /api/me/push), флаг устройства localStorage `studio-push` — только
- * '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет. Разрешение спрашивается первым
- * в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
-const PUSH_KEY = 'studio-push';
+ * строка сервера у сессии (GET/POST/DELETE /api/me/push), флаг устройства localStorage `studio-push:<id учётки>`
+ * (push-sync.js `pushFlag`) — только '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет.
+ * Разрешение спрашивается первым в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
 const DENIED = tr("Браузер запретил уведомления — разрешите их в настройках сайта");
 const NO_WORKER = tr("Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен");
 const PUSH_READY_SEC = 10;       // служебный работник не зарегистрирован — ready не разрешится никогда
@@ -784,17 +783,6 @@ function ready() {
 
 function pushSupported() {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-}
-
-function pushFlag(on) {
-  try {
-    if (on === undefined) return localStorage.getItem(PUSH_KEY) === '1';
-    if (on) localStorage.setItem(PUSH_KEY, '1');
-    else localStorage.removeItem(PUSH_KEY);
-  } catch {
-    // хранилище недоступно: флажок покажет состояние сервера при следующем открытии
-  }
-  return false;
 }
 
 function permission() {
@@ -858,6 +846,7 @@ function pushBox() {
         pushFlag(false);
         say(note, tr("Push выключен на этом устройстве"));
       }
+      document.getElementById('push-restore')?.remove();   // плашка push-sync.js: выбор уже сделан здесь
     } catch (err) {
       box.checked = !on;
       say(note, err && err.name === 'NotAllowedError' ? DENIED : words(err), 'error');
@@ -1414,8 +1403,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     try {
       const items = (await api('GET', connBase)).items;
       first = !items.length;
-      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner)
-        && (!c.cleaner || CLEANER_SECTIONS.includes(s.id)));
+      // accepts — разделы, которые подключение примет по виду (sections.accepts): s06 в «Фото», OpenAI-совместимое
+      // в «Видео» и Cleaner вне чата и перевода в выборе не предлагаются
+      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner) && c.accepts.includes(s.id));
     } catch (err) {
       say(note, words(err), 'error');
       return;
@@ -1572,6 +1562,12 @@ export function mount(view, ctx) {
 
 export function update(ctx) {
   if (screen) screen.show(ctx.id);
+}
+
+/** Роутер перед сменой адреса: открытый редактор голоса с несохранённым возвращает адрес и спрашивает (жест «назад»
+ * iOS Safari иначе размонтировал бы настройки без вопроса). true — переход задержан. */
+export function hold() {
+  return holdVoiceEditor();
 }
 
 export function unmount() {

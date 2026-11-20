@@ -116,6 +116,9 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 expect(member_page.locator('#code-project-shared')).to_be_visible()
                 assert not member_page.locator('#code-project-access').is_visible()
                 assert not member_page.locator('#code-project-mirror').is_visible()
+                # лимиты подписки — только владельцу: у участника нет кнопки с советом «обновить мост»
+                assert member_page.locator('#code-usage').count() == 1
+                assert not member_page.locator('#code-usage').is_visible()
                 popup.get_by_role('button', name=f'Отозвать доступ · {friend}').click()
                 popup.get_by_text('Доступ отозван', exact=True).wait_for()
                 expect(header_badge).to_be_hidden()

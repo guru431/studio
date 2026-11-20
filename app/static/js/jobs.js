@@ -149,7 +149,8 @@ function cancelButton(item) {
 }
 
 function row(item, fresh) {
-  const open = el('button', { type: 'button', class: 'btn btn-sm jobs-open' }, tr("Открыть"));
+  const open = el('button', { type: 'button', class: 'btn btn-sm jobs-open', 'aria-label': tr("Открыть: {0}", titleText(item)) },
+    tr("Открыть"));
   open.addEventListener('click', () => openHref(item.href));
   return el('li', { class: `jobs-row${fresh ? ' new' : ''}`, 'data-id': item.id, 'data-section': item.section,
     'data-state': item.state }, icon(item.section),
@@ -163,6 +164,7 @@ function refresh(node, item) {
   node.dataset.state = item.state;
   node.querySelector('.jobs-title').textContent = titleText(item);
   node.querySelector('.jobs-title').title = titleText(item);
+  node.querySelector('.jobs-open').setAttribute('aria-label', tr("Открыть: {0}", titleText(item)));
   const detail = node.querySelector('.jobs-detail');
   detail.textContent = detailText(item);
   detail.classList.toggle('error', item.state === 'error');
@@ -389,6 +391,8 @@ export function setupJobs({ navigate }) {
   badge.addEventListener('click', openPanel);
   document.getElementById('jobs-close').addEventListener('click', () => panel.close());
   panel.addEventListener('click', (event) => { if (event.target === panel) panel.close(); });   // мимо листа
+  // окно вне раздела: жест «назад» (iPhone) меняет раздел — панель не остаётся поверх нового
+  window.addEventListener('hashchange', () => { if (panel.open) panel.close(); });
   panel.addEventListener('close', () => {
     clearInterval(ticker);
     paint();
