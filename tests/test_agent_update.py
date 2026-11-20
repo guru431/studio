@@ -120,6 +120,13 @@ def test_cancel_and_holds_of_a_waiting_update(studio, package):
     assert 'holds' not in studio.c.get(url).json()
     assert studio.c.delete(url).json() == {'state': 'idle', 'version': None}
     assert machine.requests[-1]['op'] == 'agent_update_cancel' and machine.update_state == 'idle'
+    # Итог прошлого перехода (мост 0.42.0) — словами моста и только в `failed`.
+    machine.update_message = 'Новая версия агента не запустилась — работает прежняя'
+    assert 'message' not in studio.c.get(url).json()
+    machine.update_state = 'failed'
+    assert studio.c.get(url).json() == {'state': 'failed', 'version': None, 'message': machine.update_message}
+    machine.update_message = 'x' * 301
+    assert 'message' not in studio.c.get(url).json()
 
 
 def test_old_offline_and_missing_package_have_explicit_errors(studio, package):

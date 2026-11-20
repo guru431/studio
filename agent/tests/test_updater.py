@@ -257,6 +257,41 @@ def test_helper_never_launches_while_old_agent_is_running(tmp_path):
     start.assert_not_called()
 
 
+def test_helper_keeps_waiting_for_a_slow_old_agent_instead_of_giving_up(tmp_path, monkeypatch):
+    """Прежний мост вышел позже 120 с (поток сравнения зеркала) — хелпер всё равно запускает новую копию."""
+    waits = iter([False, False, True])
+    switch = Mock()
+    monkeypatch.setattr(update_helper, '_switch', switch)
+    (tmp_path / '_update_ready').touch()
+    plan = {'pid': 123, 'home': str(tmp_path / 'home'), 'old_repo': str(tmp_path / 'old'), 'old_python': 'py'}
+    start = Mock()
+    assert update_helper.activate(tmp_path, plan, wait=lambda pid: next(waits), start=start) == 'complete'
+    start.assert_called_once()
+    switch.assert_called_once_with(tmp_path, plan)
+
+
+def test_helper_waits_for_a_slow_but_living_new_copy_to_confirm(tmp_path, monkeypatch):
+    """Холодный диск: готовность позже прежних 60 с — переключение всё равно, пока новая копия жива."""
+    switch = Mock()
+    monkeypatch.setattr(update_helper, '_switch', switch)
+    plan = {'pid': 123, 'home': str(tmp_path / 'home'), 'old_repo': str(tmp_path / 'old'), 'old_python': 'py'}
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 300:                                # 150 с
+            (tmp_path / '_update_ready').touch()
+
+    start = Mock(return_value=SimpleNamespace(poll=lambda: None))
+    assert update_helper.activate(tmp_path, plan, wait=lambda pid: True, start=start, sleep=sleep) == 'complete'
+    assert start.call_count == 1 and switch.called
+    sleeps.clear()
+    (tmp_path / '_update_ready').unlink()
+    assert update_helper.activate(tmp_path, plan, wait=lambda pid: True, start=start,
+                                  sleep=sleeps.append) == 'unconfirmed'
+    assert len(sleeps) == update_helper.READY_POLLS
+
+
 def test_failed_new_process_restarts_untouched_previous_copy(tmp_path):
     old = tmp_path / 'old'
     plan = {'pid': 123, 'home': str(tmp_path / 'home'), 'old_repo': str(old), 'old_python': 'old-pythonw'}

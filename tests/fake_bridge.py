@@ -106,6 +106,7 @@ class FakeMachine:
         self.update_state = 'idle'
         self.update_version = None
         self.update_holds = None                 # что держит ожидание обновления (мост 0.20.0)
+        self.update_message = None               # слова об итоге прошлого перехода в `failed` (мост 0.42.0)
         self.agent_update_cancel = False         # «Отменить обновление» (мост 0.20.0)
         self.context = None
         self.project_sharing = True
@@ -249,6 +250,8 @@ class FakeMachine:
         status = {'state': self.update_state, 'version': self.update_version}
         if self.update_state == 'waiting' and self.update_holds is not None:
             status['holds'] = self.update_holds
+        if self.update_state == 'failed' and self.update_message is not None:
+            status['message'] = self.update_message
         return status
 
     def _op_agent_update_cancel(self, req, events):
