@@ -1102,6 +1102,8 @@ globalThis.StudioEnglish = Object.freeze({
   "студия": "Studio",
   "VS Code или терминал": "VS Code or terminal",
   "закрыт": "closed",
+  "Закрыть чат · {0}": "Close chat · {0}",
+  "Открыть чат снова · {0}": "Reopen chat · {0}",
   "ждёт ответа": "awaiting reply",
   "идёт ход": "turn in progress",
   "Поиск по названиям чатов": "Search chat titles",
