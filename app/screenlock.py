@@ -275,6 +275,11 @@ async def set_screen_lock(body: ScreenLock, request: Request):
     timeout = body.timeout if body.timeout is not None else current["screen_lock_timeout"]
     state.DB.execute("UPDATE users SET screen_lock = ?, screen_lock_sections = ?, screen_lock_timeout = ? WHERE id = ?",
                      (int(body.enabled), json.dumps(sections), timeout, uid))
+    if body.enabled != bool(current["screen_lock"]):
+        _journal(request, "screen_lock_on" if body.enabled else "screen_lock_off")
+    elif body.enabled and (sections != json.loads(current["screen_lock_sections"])
+                           or timeout != current["screen_lock_timeout"]):
+        _journal(request, "screen_lock_change")
     if body.enabled:
         _seen(request, clock.NOW())
     log.info("пользователь %d: блокировка %s", uid, "включена" if body.enabled else "выключена")

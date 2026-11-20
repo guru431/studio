@@ -14,8 +14,10 @@ import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const DEVICES = { phone: tr("Телефон"), computer: tr("Компьютер") };
 const EVENTS = { email_change: tr("почта изменена"), email_codes_on: tr("коды входа включены"), email_codes_off: tr("коды входа выключены"),
-  password_recovery: tr("пароль восстановлен через почту"), login: tr("вход"), login_fail: tr("неверный пароль"), logout: tr("выход"), unlock: tr("открыто"),
-  unlock_fail: tr("не открыто"), pin_exhausted: tr("PIN исчерпан"), password: tr("пароль сменён"), session_end: tr("сессия завершена"),
+  password_recovery: tr("пароль восстановлен через почту"), login: tr("вход"), login_fail: tr("неверный пароль"), logout: tr("выход"),
+  login_code_sent: tr("пароль верен, код отправлен на почту"), login_code_fail: tr("неверный код из письма"), unlock: tr("открыто"),
+  unlock_fail: tr("не открыто"), pin_exhausted: tr("PIN исчерпан"), screen_lock_on: tr("блокировка включена"),
+  screen_lock_off: tr("блокировка выключена"), screen_lock_change: tr("блокировка перенастроена"), password: tr("пароль сменён"), session_end: tr("сессия завершена"),
   emergency: tr("аварийный выход"), share_create: tr("ссылка создана"), share_revoke: tr("ссылка отозвана"),
   share_pin_fail: tr("неверный PIN ссылки"), share_locked: tr("ссылка остановлена"), pin_set: tr("PIN задан"),
   pin_delete: tr("PIN убран"), passkey_add: tr("ключ добавлен"), passkey_delete: tr("ключ удалён"),
@@ -312,7 +314,9 @@ export function securityEventsBlock() {
       const page = await api('GET', before ? `/api/me/security-events?before=${before}` : '/api/me/security-events');
       // свёрнутые повторы неудач: «×N, с <время первой>» (security_log.NOISY)
       const rows = page.items.map((e) => el('li', { 'data-kind': e.kind }, [moment(e.created),
-        [EVENTS[e.kind] || e.kind, DETAILS[e.detail] ?? '',
+        // session_end: подробность — признак завершённой сессии (`id` из «Сессий»), видно начало
+        [EVENTS[e.kind] || e.kind, e.kind === 'session_end' && e.detail ? tr("сессия {0}", e.detail.slice(0, 8))
+          : DETAILS[e.detail] ?? '',
           e.count > 1 ? tr("×{0}, с {1}", e.count, moment(e.first)) : ''].filter(Boolean).join(' '),
         e.current ? tr("это устройство") : DEVICES[e.device], e.ip].filter(Boolean).join(' · ')));
       if (before) events.append(...rows);
@@ -328,6 +332,6 @@ export function securityEventsBlock() {
 
   load(null);
   return el('section', { class: 'block security-events-block' }, el('h2', {}, tr("Журнал безопасности")),
-    el('p', { class: 'muted small' }, tr("Входы и неудачные попытки, отпирания, PIN и ключи, завершённые сессии и ссылки «Поделиться» за полгода; повторы неудач с одного адреса — одной строкой со счётчиком. «Удалить всю историю» его не стирает; он входит в выгрузку истории.")),
+    el('p', { class: 'muted small' }, tr("Входы и неудачные попытки (и коды из письма), отпирания и настройка блокировки, PIN и ключи, завершённые сессии и ссылки «Поделиться» за полгода; повторы неудач с одного адреса — одной строкой со счётчиком. «Удалить всю историю» его не стирает; он входит в выгрузку истории.")),
     events, note, el('div', { class: 'row' }, more));
 }
