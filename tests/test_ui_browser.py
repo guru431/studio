@@ -2487,6 +2487,49 @@ def test_photo_feed_survives_reload_with_a_running_job(browser, live):
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_failed_photo_repeats_from_its_tile_and_row(browser, live, width):
+    """У неудачной картинки «Повторить» — в плитке и строке таблицы: то же тело, что у «Повторить» просмотра;
+    пока задание идёт, кнопка закрыта."""
+    login = f"photoretry{width}"
+    live.add_user(login)
+    calls = []
+
+    async def flaky(request):
+        calls.append(1)
+        if len(calls) in (1, 2):                   # первая картинка и первый повтор — сбой шлюза
+            return httpx.Response(500, json={"error": {"message": "сбой"}})
+        return await live.gw.builtin(request)
+
+    failed = "#photo-feed .photo-card[data-state=error]"
+    live.gw.on["/slot/images/generations"] = flaky
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+            ("type", "#photo-prompt", "упрямый кот"), ("click", "#photo-go"),
+            ("wait", f"document.querySelector('{failed} .card-repeat') && !document.querySelector('#photo-go').disabled"),
+            ("eval", "tileFits", NO_OVERFLOW),
+            ("click", f"{failed} .card-repeat"),
+            ("eval", "busy", f"document.querySelector('{failed} .card-repeat').disabled"),
+            ("wait", f"document.querySelectorAll('{failed}').length === 2 && !document.querySelector('#photo-go').disabled"),
+            ("click", "#photo-view"), ("click", "#photo-view-table"),
+            ("wait", f"document.querySelector('#photo-feed').dataset.view === 'table' && document.querySelector('{failed} .cell-act .card-repeat')"),
+            ("eval", "rowActs", f"[...document.querySelector('{failed} .cell-act').children].map(b => b.textContent)"),
+            ("eval", "rowFits", NO_OVERFLOW),
+            ("click", f"{failed} .cell-act .card-repeat"), ("wait", done_cards(1)),
+            ("eval", "sent", "window.sentForms")], width=width, mobile=width == 320, timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/generations", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tileFits"] and v["rowFits"] and v["busy"] is True
+    assert v["rowActs"] == ["Повторить", "Удалить"]
+    first, *repeats = v["sent"]
+    assert first["form"]["prompt"] == "упрямый кот" and len(repeats) == 2
+    assert all(s["path"] == "/api/images" and s["form"]["prompt"] == "упрямый кот"
+               and s["form"]["model"] == first["form"]["model"] for s in repeats)
+    assert not problems(r), problems(r)
+
+
 def test_editor_strength_out_of_range_is_refused_in_words(browser, live):
     """B1-M9: сила перерисовки вне 0.05–1 — отказ словами в окне, запрос не уходит."""
     login = "strength"
