@@ -63,7 +63,24 @@ def test_project_folder_from_the_bridge_wins_over_the_first_root_and_label():
   assert.equal(links.projectFilePath('D:\\personal\\demo\\src\\a.py', agent, project), 'src/a.py');
   assert.equal(links.projectFilePath('C:\\work\\demo\\a.py', agent, project), null);
   assert.equal(links.projectFilePath('/home/me/demo/a.py', agent, { name: 'x', dir: '/home/me/demo' }), 'a.py');
-  // Участник совместного проекта: ни корня, ни папки — абсолютные пути не сопоставляются.
-  assert.equal(links.projectFilePath('/alpha/a.py', { projects_root: '' }, { name: 'alpha' }), null);
   assert.equal(links.projectFilePath('src/a.py', { projects_root: '' }, { name: 'alpha' }), 'src/a.py');
+""")
+
+
+def test_member_without_the_folder_matches_absolute_paths_by_the_folder_name():
+    """Участнику мост не отдаёт ни корня, ни `dir`: проект — первая папка с его именем (у одноимённых — ещё и с
+    родителем из подписи); регистр — как у ОС пути."""
+    run(r"""
+  const member = { projects_root: '', shared: true }, project = { name: 'alpha' };
+  assert.equal(links.projectFilePath('C:\\work\\projects\\alpha\\src\\a.py:12', member, project), 'src/a.py');
+  assert.equal(links.projectFilePath('file:///c:/WORK/projects/ALPHA/a.py', member, project), 'a.py');
+  // Пакет с именем проекта внутри проекта — первое вхождение и есть папка проекта.
+  assert.equal(links.projectFilePath('/home/owner/alpha/alpha/__init__.py', member, project), 'alpha/__init__.py');
+  assert.equal(links.projectFilePath('/home/owner/Alpha/a.py', member, project), null);
+  assert.equal(links.projectFilePath('/home/owner/beta/a.py', member, project), null);
+  assert.equal(links.projectFilePath('C:\\work\\alpha', member, project), null);
+  // Одноимённые папки разных корней: подпись «имя · родитель · хвост id».
+  const twin = { name: 'demo · personal · abc123' };
+  assert.equal(links.projectFilePath('D:\\personal\\demo\\src\\a.py', member, twin), 'src/a.py');
+  assert.equal(links.projectFilePath('C:\\work\\demo\\a.py', member, twin), null);
 """)

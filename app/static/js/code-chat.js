@@ -315,9 +315,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const button = el('button', { type: 'button', class: 'btn code-quick-action', title: label }, label);
     button.addEventListener('click', () => {
       if (quickActions.hidden || send.disabled) return;
-      text.value = action.text;
-      text.dispatchEvent(new Event('input', { bubbles: true }));
-      form.requestSubmit();
+      submit(action.text, false);           // как действие Git: набранный текст и вложения остаются в поле
     });
     quickActions.append(button);
   }
@@ -1296,7 +1294,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         grow(() => {
           Object.assign(t.view, renderTimeline(t.steps, { ...data, live: true }));
           t.view.progress.update(data.progress || {}, t.models, true);
-          t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map(askNode));
+          // Карточка того же запроса остаётся прежней: набранный ответ, «вместо этого» и отметки снимок не стирает.
+          const shownAsks = new Map([...feed.querySelectorAll('.code-ask')].map((card) => [card.dataset.request, card]));
+          t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map((a) => {
+            const id = String(a.request_id ?? '');
+            return (id && shownAsks.get(id)) || askNode(a);
+          }));
         });
         if (data.activity) paintActivity(data.activity.state, data.activity.tool);
         else continueActivity();
@@ -1662,11 +1665,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (!settingsReady && !resolving) loadState();
   }
 
-  async function submit(quick = null) {
+  /** quick — текст мимо поля (действие Git, git = true, или быстрое действие): поле и вложения не трогает. */
+  async function submit(quick = null, git = !!quick) {
     if (resolving || historyLoading || !settingsReady) return;
     if (queue.paused()) { showStatus(tr("Сначала завершите редактирование очереди")); return; }
     const value = quick ?? text.value;
-    if (quick && (!hasGit || running)) {
+    if (quick && ((git && !hasGit) || running)) {
       showStatus(running ? tr("Дождитесь завершения задания в чате") : tr("Git недоступен — обновите статус проекта"));
       return;
     }
@@ -1719,7 +1723,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return;
     }
     const sentImages = quick ? [] : images;
-    const requestId = quick ? null : sendId(value, sentImages);
+    const requestId = git ? null : sendId(value, sentImages);
     acted = Date.now();
     sending = true;
     updateControls();
@@ -1730,7 +1734,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const mine = messageNode({ role: 'user', text: value, images: sentImages });
     pendingInputs.set(draftKey, { value, images: sentImages, mine, quick: !!quick });
     grow(() => feed.append(mine));
-    if (!quick) text.value = ''; // Действие Git сохраняет текст и вложения черновика.
+    if (!quick) text.value = ''; // Действие Git и быстрое действие сохраняют текст и вложения черновика.
     autosize();
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;

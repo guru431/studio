@@ -3,13 +3,15 @@ import { tr } from './i18n.js';
  * сессии в порядке сервера (открытые, затем закрытые, новые первыми) — название (без него «Новый чат»), время, откуда
  * («студия» / «VS Code или терминал»), «закрыт», «идёт ход», «ждёт ответа».
  *
- * sessionList(host, { aid, pid, items, exclude, picked, created, failed }) → { unmount() }:
+ * sessionList(host, { aid, pid, items, reload, exclude, picked, created, failed }) → { unmount() }:
  * - items — сохранённый список или обещание ответа, refresh — его фоновая сверка; поиск сохраняется при обновлении;
  *   exclude — чаты, которых в списке не надо;
  * - нажатие на сессию — picked(chat); закрытая сначала открывается снова (PATCH {state: "open"});
+ * - «Закрыть» / «Открыть» строки (.code-chat-state) — PATCH {state}, строка сразу на своём месте, затем reload()
+ *   (свежий список): закрытый «Новый чат» без хода сервер не показывает — он уходит из списка;
  * - «Новый чат» (#code-new-chat) — POST …/chats, затем created(chat);
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
- * Кнопок «Закрыть» / «Открыть снова» нет: закрывают из самого чата. Текст машины — только textContent. */
+ * Текст машины — только textContent. */
 import { api, me } from './api.js';
 import { dateTime } from './time.js';
 import { ENGINE_NAMES, engineOrder } from './code-options.js';
@@ -22,7 +24,7 @@ function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, refresh = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
+export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
   let found = Array.isArray(items) ? items : null;
@@ -52,11 +54,35 @@ export function sessionList(host, { aid, pid, items, refresh = null, exclude = n
       el('span', { class: 'code-chat-title', title: chat.title || UNTITLED }, chat.title || UNTITLED),
       typeof chat.modified === 'number' && chat.modified > 0 ? el('span', { class: 'muted small code-chat-time' }, when(chat.modified)) : null,
       el('span', { class: 'code-marks' }, ...marks));
+    const url = `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`;
     link.addEventListener('click', () => busy(link, async () => {
-      if (closed) await api('PATCH', `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`, { state: 'open' });
+      if (closed) await api('PATCH', url, { state: 'open' });
       if (alive) picked(chat.chat, chat);
     }));
-    return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link);
+    const title = chat.title || UNTITLED;
+    const toggle = el('button', { type: 'button', class: 'btn btn-sm code-chat-state',
+      'aria-label': closed ? tr("Открыть чат снова · {0}", title) : tr("Закрыть чат · {0}", title) },
+    closed ? tr("Открыть") : tr("Закрыть"));
+    toggle.addEventListener('click', () => busy(toggle, async () => {
+      const next = closed ? 'open' : 'closed';
+      await api('PATCH', url, { state: next });
+      if (!alive) return;
+      const mark = (rows) => order(rows.map((c) => (c.chat === chat.chat ? { ...c, state: next } : c)));
+      found = mark(found || []);
+      paint();
+      // Закрытую запись студии без сессии на машине («Новый чат» без хода) сервер больше не показывает.
+      const fresh = await reload?.().catch(() => null);
+      if (alive && Array.isArray(fresh)) {
+        found = mark(fresh);
+        paint();
+      }
+    }));
+    return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link, toggle);
+  }
+
+  /** Порядок сервера: открытые, затем закрытые, внутри — новые сверху. */
+  function order(rows) {
+    return rows.sort((a, b) => (a.state === 'closed') - (b.state === 'closed') || (b.modified || 0) - (a.modified || 0));
   }
 
   const list = el('ul', { id: 'code-chats', class: 'code-chats' });

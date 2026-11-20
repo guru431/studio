@@ -5,8 +5,8 @@ import { refreshAfterFailure, refreshRequested } from './refresh.js';
  *
  * panelView(host, { selected, opened, chose, list, openJournal }) → { select, pin, here, refresh, agents, unmount }:
  * - компьютеры — GET /api/agents (без моста): точка «на связи» (слова — для чтения с экрана), имя, версия моста,
- *   обновление, сведения и рабочий стол; версия Claude Code — подсказкой; agents() — последний список
- *   (обещание, пока показан раздел; не прочитался — null);
+ *   обновление, сведения и рабочий стол; версия Claude Code — подсказкой; agents() — последний прочитанный список,
+ *   с опросом панели (обещание, пока показан раздел; ни разу не прочитался — null);
  * - показ компьютера (вход в раздел — selected, иначе первый; нажатие на имя): не на связи — p#code-offline, запросов
  *   нет; на связи — GET …/projects, только closed ведёт к POST …/open {pin: null}: 204 — его проекты,
  *   409 pin_needed — поле PIN (#code-pin: не <form> и не password — менеджеры паролей не предложат
@@ -202,6 +202,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   let alive = true;
   let gen = 0;             // номер показа компьютера: ответ прежнего показ не трогает
   let items = [];          // последний GET /api/agents
+  let known = false;       // items хоть раз прочитан: agents() отдаёт его, а не первый ответ (опрос его обновляет)
   const updates = new Map(); // Только память панели: версия и стадия запрошенного обновления.
   let updateTimer = null;
   let updatePolling = false;
@@ -577,6 +578,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const initial = initialAgents;
       initialAgents = null;
       items = (await (initial || api('GET', '/api/agents'))).items;
+      known = true;
       if ([...summaries.keys()].some((aid) => !items.some((agent) => agent.id === aid))) {
         document.dispatchEvent(new Event('studio-code-clear'));
       }
@@ -1029,7 +1031,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const badge = body.querySelector(`li[data-pid="${pid}"] .code-project-shared`);
       if (badge) badge.hidden = !shared;
     },
-    agents: () => loaded,
+    agents: () => loaded.then((got) => (known ? items : got)),
     unmount() {
       alive = false;
       createDialog?.close();

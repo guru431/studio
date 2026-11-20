@@ -1648,6 +1648,9 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   font-weight: 600; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
   -webkit-line-clamp: 2; }
 .code-chats li.closed .code-chat-title { color: var(--text-2); }
+.code-chats li[data-chat] { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.code-chats li[data-chat] .code-chat-link { flex: 1; width: auto; }
+.code-chat-state { flex: none; }
 .code-marks { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 /* телефон: панель выезжает слева по ☰ (как список диалогов чата), переключатели — второй строкой */
