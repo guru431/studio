@@ -47,6 +47,42 @@ function partText(value) {
   return typeof value === 'string' ? value : JSON.stringify(value ?? '', null, 2);
 }
 
+function webLink(url) {
+  try { return ['http:', 'https:'].includes(new URL(url).protocol); } catch { return false; }
+}
+
+function sourceLink(url, title) {
+  const name = typeof title === 'string' && title ? title : (typeof url === 'string' ? url : '');
+  return webLink(url) ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, name) : el('span', {}, name);
+}
+
+/* шаги «Интернета» и MCP обычного чата — как «Источники» под ответом в чате (chat.js stepNode), без текста для модели */
+function stepNode(s) {
+  const li = el('li', {});
+  if (s.kind === 'search') {
+    li.append(s.query ? tr("Поиск: «{0}»", partText(s.query)) : tr("Поиск"));
+    const results = Array.isArray(s.results) ? s.results.filter((x) => x && typeof x === 'object') : [];
+    if (results.length) {
+      li.append(el('ul', {}, ...results.map((x) => el('li', {}, sourceLink(x.url, x.title),
+        typeof x.published === 'string' && x.published ? el('span', { class: 'muted' }, ` · ${x.published}`) : null))));
+    }
+  } else if (s.kind === 'page' || s.kind === 'youtube') {
+    li.append(s.kind === 'page' ? tr("Страница: ") : tr("Ролик: "),
+      s.error ? el('span', {}, partText(s.title || s.url || '')) : sourceLink(s.url, s.title));
+  } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter((x) => typeof x === 'string' && x).join(' · '));
+  else li.append(tr("Инструмент"));
+  if (s.error) li.append(el('span', { class: 'error' }, ` — ${partText(s.error)}`));
+  return li;
+}
+
+function sourcesNode(steps) {
+  const links = steps.flatMap((s) => (s.kind === 'search' ? (Array.isArray(s.results) ? s.results : []).map((x) => x && x.url)
+    : (s.error ? [] : [s.url]))).filter(webLink).length;
+  return el('details', { class: 'shared-sources' },
+    el('summary', {}, links ? tr("Источники ({0})", links) : tr("Вызовы инструментов ({0})", steps.length)),
+    el('ul', {}, ...steps.map(stepNode)));
+}
+
 async function download(file, button) {
   const current = access;
   if (!current) return;
@@ -108,6 +144,10 @@ form.addEventListener('submit', async (event) => {
       else body.textContent = text;
       const node = el('article', { class: 'msg shared-message' },
         el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")), body);
+      if (message.status === 'streaming') node.append(el('p', { class: 'muted' }, tr("Ответ не был дописан, когда создавали ссылку")));
+      if (typeof message.error === 'string' && message.error) node.append(el('p', { class: 'error' }, serverMessage(message.error)));
+      const tools = Array.isArray(message.tools) ? message.tools.filter((s) => s && typeof s === 'object') : [];
+      if (tools.length) node.append(sourcesNode(tools));
       for (const step of message.steps || []) {
         node.append(el('details', {}, el('summary', {}, partText(step.name || step.tool || tr("Команда"))),
           el('pre', {}, partText(step.input)), el('pre', {}, partText(step.text))));
@@ -152,8 +192,16 @@ form.addEventListener('submit', async (event) => {
   } finally { open.disabled = false; }
 });
 
+/* адрес без секрета (обрезан при пересылке) — сразу, а не после ввода PIN */
+function checkAddress() {
+  const valid = /^[A-Za-z0-9_-]{43}$/.test(location.hash.slice(1));
+  open.disabled = !valid;
+  if (!valid) error.textContent = tr("Ссылка недействительна");
+}
+
 document.getElementById('share-close').addEventListener('click', () => clear());
-window.addEventListener('hashchange', () => clear());
+window.addEventListener('hashchange', () => { clear(); checkAddress(); });
+checkAddress();
 window.addEventListener('pagehide', () => clear());
 window.addEventListener('pageshow', (event) => { if (event.persisted) clear(); });
 document.addEventListener('visibilitychange', () => {

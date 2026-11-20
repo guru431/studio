@@ -30,8 +30,11 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
     cid = client.post('/api/chats', json={}).json()['id']
     conn = db.connect(live.db_path)
     text = 'Ответ для получателя **с выделением** <script>window.shareXss=1</script>'
-    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
-                 " VALUES(?,?,'assistant',?,'done','server',1)", (uuid.uuid4().hex, cid, text))
+    tools = '[{"kind":"search","query":"погода","results":[{"title":"Пример","url":"https://example.org/a"}],"text":"x"}]'
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,tools)"
+                 " VALUES(?,?,'assistant',?,'done','server',1,?)", (uuid.uuid4().hex, cid, text, tools))
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,error)"
+                 " VALUES(?,?,'assistant','','error','server',2,'шлюз не ответил')", (uuid.uuid4().hex, cid))
     conn.execute('UPDATE chats SET title=? WHERE id=?', ('Чат для друга', cid))
     conn.close()
     options = {'viewport': {'width': width, 'height': 852}, 'is_mobile': mobile, 'has_touch': mobile}
@@ -81,6 +84,9 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
                 reader.set_default_timeout(10000)
                 requests = []
                 reader.on('request', lambda req: requests.append(req.url))
+                reader.goto(url.split('#')[0])                       # адрес без секрета — сразу, до PIN
+                pw.expect(reader.locator('#share-error')).to_contain_text('Ссылка недействительна')
+                pw.expect(reader.locator('#share-open')).to_be_disabled()
                 reader.goto(url)
                 pw.expect(reader.locator('#share-unlock')).to_be_visible()
                 pw.expect(reader.locator('#shared-chat')).not_to_be_visible()
@@ -92,6 +98,9 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
                 reader.locator('#share-open').click()
                 pw.expect(reader.locator('#shared-title')).to_have_text('Чат для друга')
                 pw.expect(reader.locator('#shared-messages strong')).to_have_text('с выделением')
+                pw.expect(reader.locator('.shared-sources summary')).to_have_text('Источники (1)')
+                pw.expect(reader.locator('.shared-sources a')).to_have_attribute('href', 'https://example.org/a')
+                pw.expect(reader.locator('#shared-messages p.error')).to_have_text('шлюз не ответил')
                 assert reader.locator('textarea').count() == 0
                 assert not reader.evaluate('window.shareXss || false')
                 assert reader.evaluate('document.documentElement.scrollWidth <= innerWidth')

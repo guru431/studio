@@ -203,11 +203,12 @@ async def _store(request: Request, body: ShareIn, snapshot: dict, expected, file
             state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (current["id"],))
         state.DB.execute(
             "INSERT INTO chat_shares(id,user_id,chat_id,agent_id,project,session_id,engine,"
-            "token_hash,token_enc,pin_hash,snapshot,sealed,created,expires) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "token_hash,token_enc,pin_hash,snapshot,sealed,created,expires,label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (share_id, request.state.user.id, source.get("chat_id"), source.get("agent_id"),
              source.get("project"), source.get("session_id"), source.get("engine"), security.digest(token),
              security.encrypt(token), pin_hash, PLACEHOLDER_RAW, sealed, now,
-             None if body.days is None else now + body.days * 86400))
+             None if body.days is None else now + body.days * 86400,
+             security.encrypt(snapshot["title"]) if source.get("agent_id") else None))
         state.DB.executemany("INSERT INTO chat_share_files(share_id,media_id) VALUES(?,?)",
                              [(share_id, mid) for mid in set(files)])
         state.DB.execute("COMMIT")
@@ -235,6 +236,9 @@ def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tupl
     atts = chat._attachments(chat_id)
     files, messages = [], []
     for message in chat._messages(chat_id):
+        # what the chat page shows (chat._message_out): «Интернет»/MCP steps without text for the model, the words
+        # of an answer that failed, the text of an answer still being written
+        shown = chat._message_out(message, [])
         attachments = []
         for a in atts.get(message["id"], []):
             # Missing/deleted source files are never turned into broader media access.
@@ -242,8 +246,9 @@ def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tupl
                                 (a["media_id"], user_id)).fetchone():
                 files.append(a["media_id"])
                 attachments.append({"file": a["media_id"], "name": a["name"], "kind": a["kind"]})
-        messages.append({"role": message["role"], "text": message["content"], "attachments": attachments,
-                         "reasoning": message["reasoning"] if reasoning else None, "status": message["status"]})
+        messages.append({"role": message["role"], "text": shown["content"], "attachments": attachments,
+                         "reasoning": shown["reasoning"] if reasoning else None, "status": message["status"],
+                         "tools": shown["tools"], "error": shown["error"]})
     snapshot = {"title": row["title"] or "Чат", "messages": messages}
     _encode(snapshot)
     return snapshot, files
@@ -387,7 +392,8 @@ async def unlock(body: UnlockIn, request: Request):
     now = clock.NOW()
     _expire()
     state.DB.execute("DELETE FROM chat_share_attempts WHERE until <= ?", (now,))
-    state.DB.execute("DELETE FROM chat_share_visitors WHERE expires <= ?", (now,))
+    # истёкший просмотр помнится ещё VIEW_SEC: его страница услышит «введите PIN снова» (`_visitor`)
+    state.DB.execute("DELETE FROM chat_share_visitors WHERE expires <= ?", (now - VIEW_SEC,))
     ip_hash = security.digest(auth.client_ip(request))
     state.DB.execute("INSERT INTO chat_share_attempts VALUES(?,1,?) ON CONFLICT(ip_hash)"
                      " DO UPDATE SET attempts = attempts + 1", (ip_hash, now + LOCK_SEC))
@@ -434,6 +440,12 @@ def _visitor(access):
         " JOIN users u ON u.id = s.user_id WHERE v.digest = ? AND v.expires > ? AND u.disabled = 0"
         " AND (s.expires IS NULL OR s.expires > ?)", (security.digest(access), clock.NOW(), clock.NOW())).fetchone()
     if row is None:
+        # VIEW_SEC прошли, а ссылка жива: хватит снова ввести PIN — не «ссылка недоступна»
+        if state.DB.execute(
+                "SELECT 1 FROM chat_share_visitors v JOIN chat_shares s ON s.id = v.share_id JOIN users u ON u.id = s.user_id"
+                " WHERE v.digest = ? AND u.disabled = 0 AND (s.expires IS NULL OR s.expires > ?)",
+                (security.digest(access), clock.NOW())).fetchone():
+            raise _refuse(404, "share_view_expired", "время просмотра истекло — введите PIN снова")
         raise _refuse()
     return row
 
