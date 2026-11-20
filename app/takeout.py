@@ -75,7 +75,7 @@ README = """Выгрузка истории студии
 
 Что внутри:
 - settings.json — профиль (логин, имя, тема, виды лент), подключения (адреса без ключей), разделы
-  (подключения и отмеченные модели, умолчания) и пресеты.
+  (подключения и отмеченные модели, умолчания), пресеты и роли чата (имя, текст, порядок).
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
   найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом) и рассуждение модели (reasoning,
   reasoning_sec — секунды).
@@ -157,6 +157,9 @@ def _settings(user_id: int) -> dict | None:
         "presets": [{k: _maybe_json(r[k]) if k == "params" else r[k] for k in r.keys() if k != "user_id"}
                     for r in state.DB.execute("SELECT * FROM presets WHERE user_id = ? ORDER BY created, id",
                                               (user_id,))],
+        "roles": [{k: r[k] for k in r.keys() if k != "user_id"}
+                  for r in state.DB.execute("SELECT * FROM chat_roles WHERE user_id = ? ORDER BY position, created, id",
+                                            (user_id,))],
     }
 
 

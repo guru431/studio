@@ -19,7 +19,7 @@ import threading
 from contextlib import nullcontext
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,7 @@ import operations
 import account_profile as profile
 import profiles
 import push
+import roles
 import sections
 import security
 import security_log
@@ -701,3 +702,28 @@ async def get_shared_profile(cid: int):
 @router.put("/shared/connections/{cid}/profile")
 async def put_shared_profile(cid: int, body: profiles.ProfileIn):
     return profiles.put(None, cid, body)
+
+
+# ---- умолчания ролей диалога (roles.py): меняют только посев новых учёток и «Добавить умолчания» ----------
+
+@router.get("/roles")
+async def list_role_defaults(lang: "roles.Lang | None" = Query(None)):
+    return {"items": roles.defaults(lang)}
+
+
+@router.post("/roles", status_code=201)
+async def create_role_default(request: Request):
+    body = await roles.read(request, roles.DefaultIn)
+    return roles.create_default(body.lang, body.name, body.text)
+
+
+@router.patch("/roles/{did}")
+async def patch_role_default(did: int, request: Request):
+    body = await roles.read(request, roles.RolePatch)
+    return roles.update_default(did, body.name, body.text)
+
+
+@router.delete("/roles/{did}", status_code=204)
+async def delete_role_default(did: int):
+    roles.delete_default(did)
+    return Response(status_code=204)

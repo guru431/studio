@@ -61,6 +61,7 @@ import profiles
 import project_access
 import release
 import push
+import roles
 import screenlock
 import security
 import search
@@ -105,6 +106,7 @@ async def lifespan(_app):
     sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
     sections.retire_photo_models()
     sections.drop_cleaner_strays()               # связи Cleaner вне чата и перевода (до запрета, откат) — прочь
+    roles.seed_defaults()                        # раз на базу: встроенные роли — в умолчания администратора
     search.compose_once(state.DB)                # раз на базу: прежние тела индекса — в NFC
     chat_exports.clean_tmp()
     audio.clean_tmp()
@@ -185,6 +187,7 @@ app.include_router(presets.router)          # раньше images: /api/images/p
 app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)
+app.include_router(roles.router)
 app.include_router(mcp_client.router)
 app.include_router(mcp_sections.router)
 app.include_router(chat_exports.router)
