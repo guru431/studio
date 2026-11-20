@@ -490,6 +490,9 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
             *panel, ("click", alpha + " .code-project-ideas"),
             ("wait", "document.querySelector('#code-editor')?.value.includes('Idea document')"),
             set_value("#code-editor", "Unsaved journal draft"),
+            # тот же журнал по уже открытому адресу — тоже через защиту, без перечитывания
+            *panel, ("click", alpha + " .code-project-ideas"), ("wait", "document.querySelector('#code-unsaved')?.open"),
+            ("press", "Escape"), ("eval", "sameJournal", "document.querySelector('#code-editor').value"),
             *panel, blank('beta', 'summary'), ("wait", "document.querySelector('#code-unsaved')?.open"),
             ("press", "Escape"),
             *panel, ("click", beta + " .code-project-github"),
@@ -510,7 +513,7 @@ def test_project_counters_open_journals_and_git_with_unsaved_changes_guard(brows
     assert values["validLinks"] and values["fits"]
     assert all(values[key] for key in ('blank-beta-heading', 'blank-alpha-summary', 'blank-beta-summary'))
     assert values["findings"][0].endswith('?tab=files&journal=findings') and 'FINDINGS.md' in values["findings"][1]
-    assert values["retained"] == "Unsaved journal draft"
+    assert values["retained"] == values["sameJournal"] == "Unsaved journal draft"
     assert values["git"] == [f"#/code/{aid}/{pid('beta')}?tab=git", "beta"]
     assert [r["path"] for r in code_requests(machine, "read")] == ["FINDINGS.md", "FINDINGS.md", "IDEAS.md"]
     assert not code_requests(machine, "save") and not code_requests(machine, "turn")
