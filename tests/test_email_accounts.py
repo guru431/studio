@@ -345,8 +345,10 @@ def test_code_login_creates_session_only_after_browser_bound_one_time_code(studi
     studio.c.cookies.clear()
     assert studio.c.post("/account/code", json={"code": one_time}).status_code == 400
     studio.c.cookies.set(accounts.CHALLENGE_COOKIE, challenge)
+    # 200 с адресом, не 303: fetch страницы кода теряет фрагмент `Response.url` после перенаправления
     response = studio.c.post("/account/code", json={"code": one_time}, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"] == "/#/settings/security"
+    assert response.status_code == 200 and response.json() == {"next": "/#/settings/security"}
+    assert response.headers["cache-control"] == "no-store"
     assert studio.c.get("/api/me").json()["login"] == "owner"
     assert studio.c.post("/account/code", json={"code": one_time}).status_code == 400
 

@@ -127,7 +127,7 @@
       const code = field('code', tr("Код входа"), 'text', 'one-time-code', 6);
       code.inputMode = 'numeric';
       code.pattern = '[0-9]{6}';
-      action = () => request('/account/code', { code: code.value });
+      action = async () => location.assign((await request('/account/code', { code: code.value })).next);
     } else {
       const me = await request('/api/me');
       csrf = me.csrf;
