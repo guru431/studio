@@ -20,9 +20,10 @@ import { message as serverMessage, tr } from './i18n.js';
  * черновик `editing` переживает перерисовку того же id (опрос, повторный выбор); ответ, пришедший,
  * когда выбрана уже другая запись, вид не занимает. Пока идёт правка, «Копировать», «Скачать» и
  * «В чат» спрятаны (взяли бы сохранённый текст, «В чат» увёл бы от черновика). «Имена» — окно меток,
- * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст) или по
- * её времени (кнопка — и с клавиатуры) ставит плеер на её начало, играющая — aria-current по
- * timeupdate. «В чат ▾» → #/chat?transcript=<id>&ask=…; #/transcribe?id=<id> («Открыть» в «В работе»,
+ * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст), а в правке и вне
+ * её — по её времени (кнопка — и с клавиатуры) ставит плеер на её начало, играющая — aria-current по
+ * timeupdate. Плеер играет исходник как есть: не играет (событие error — формат браузера, файла нет) —
+ * слова `.tr-unplayable` под ним, нажатие по реплике их повторяет. «В чат ▾» → #/chat?transcript=<id>&ask=…; #/transcribe?id=<id> («Открыть» в «В работе»,
  * ссылка «к записи» из чата) выбирает запись после загрузки списка, если её не выбрали сами (нет её —
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
@@ -76,6 +77,7 @@ function build(view, ctx) {
   let uploading = false;
   let editing = null;          // { id, drafts: Map номер → текст } — черновик правки выбранной записи
   let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
+  let unplayable = null;       // слова под плеером: браузер запись не играет (событие error)
   let busy = null;             // блок «идёт» выбранной записи (feed.busyBlock): опрос меняет в нём только текст
   let picked = false;          // запись выбрали сами (список, загрузка): ?id из адреса её не перебивает
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
@@ -337,20 +339,20 @@ function build(view, ctx) {
   function turnNode(s, i) {
     const speaker = s.speaker ? `${s.speaker} · ` : '';
     const original = s.edited ? s.original : s.text;
+    // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике; в правке — тоже
+    const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': tr("Слушать с {0}", clock(s.start)) },
+      clock(s.start));
+    time.addEventListener('click', (event) => {
+      event.stopPropagation();
+      seek(s.start, true);
+    });
+    const who = el('p', { class: 'tr-who' }, speaker, time);
     if (!editing) {
-      // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике
-      const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': tr("Слушать с {0}", clock(s.start)) },
-        clock(s.start));
-      time.addEventListener('click', (event) => {
-        event.stopPropagation();
-        seek(s.start);
-      });
-      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, el('p', { class: 'tr-who' }, speaker, time),
+      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, who,
         el('p', { class: 'tr-text' }, s.text), s.edited ? el('p', { class: 'tr-mark' }, tr("изменено")) : null);
       node.addEventListener('click', () => seek(s.start));
       return node;
     }
-    const who = el('p', { class: 'tr-who' }, `${speaker}${clock(s.start)}`);
     const area = el('textarea', { class: 'tr-edit-text', rows: '1', 'aria-label': tr("Реплика {0}", i + 1) });
     area.value = editing.drafts.has(i) ? editing.drafts.get(i) : s.text;
     const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, tr("вернуть"));
@@ -370,10 +372,15 @@ function build(view, ctx) {
   }
 
   /* плеер */
-  function seek(start) {
-    if (String(getSelection() || '')) return;      // выделяют текст — не перематывать
+  /** Плеер на начало реплики; `button` — нажата кнопка времени (выделение текста не мешает). */
+  function seek(start, button = false) {
+    if (!button && String(getSelection() || '')) return;      // выделяют текст — не перематывать
+    if (audio.error) {                             // запись не играет (формат браузера, файла нет) — сказать снова
+      unplayable.hidden = false;
+      return;
+    }
     audio.currentTime = start;
-    audio.play().catch(() => {});                  // нет звука или запрет браузера — только перемотка
+    audio.play().catch(() => {});                  // запрет браузера — только перемотка
   }
 
   function playing() {
@@ -388,13 +395,18 @@ function build(view, ctx) {
     }
   }
 
+  /** Плеер исходной записи и слова под ним, если браузер её не играет: сервер принимает всё, что читает ffmpeg
+   * (ogg/opus, mov, mkv…), а `<audio>` получает исходник как есть. */
   function playerOf(item) {
     if (!audio || audio.dataset.id !== item.id) {
       audio = el('audio', { class: 'tr-audio', controls: true, preload: 'metadata', 'data-id': item.id,
         src: `/api/media/${encodeURIComponent(item.source_media_id)}` });
       audio.addEventListener('timeupdate', playing);
+      unplayable = el('p', { class: 'muted small tr-unplayable', 'aria-live': 'polite', hidden: true },
+        tr("Браузер не воспроизводит эту запись — слушать её и перематывать по репликам здесь нельзя. Текст расшифровки доступен."));
+      audio.addEventListener('error', () => { unplayable.hidden = false; });
     }
-    return audio;
+    return [audio, unplayable];
   }
 
   function chatMenu(item) {
@@ -476,7 +488,7 @@ function build(view, ctx) {
       acts.append(del);
     }
     nodes.push(acts);
-    nodes.push(playerOf(item));
+    nodes.push(...playerOf(item));
     if (item.segments) {
       nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map(turnNode)));
       if (editing) {

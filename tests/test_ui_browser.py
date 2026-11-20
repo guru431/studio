@@ -4387,28 +4387,38 @@ TR_EXITS = "['#tr-copy', '#tr-download', '#tr-chat'].map(s => !!document.querySe
 
 
 def test_transcribe_edit_hides_the_exits_seeks_by_the_time_and_a_late_save_keeps_the_pick(browser, live):
-    """Время реплики — кнопка (перемотка и с клавиатуры). Во время правки нет «Копировать», «Скачать» и
-    «В чат». «Сохранить», а пока PATCH идёт, выбрана другая запись: ответ вид не забирает, правка — на сервере."""
+    """Время реплики — кнопка (перемотка и с клавиатуры), и в правке тоже. Во время правки нет «Копировать»,
+    «Скачать» и «В чат». «Сохранить», а пока PATCH идёт, выбрана другая запись: ответ вид не забирает, правка —
+    на сервере. Запись, которую браузер не играет (здесь — без файла), — слова под плеером."""
     login = "trlate"
     other = seed_list(live, "transcribe", live.add_user(login), 1)[0]
+    player = "document.querySelector('audio.tr-audio')"
+    unplayable = "document.querySelector('.tr-unplayable')"
     r = browser.drive(live.url + "/", [*transcribed(login),
         ("eval", "seek", """(() => { const b = document.querySelector(".tr-turn[data-index='1'] .tr-seek");
           b.focus(); b.click(); return [b.tagName, b.type, document.activeElement === b, b.textContent]; })()"""),
-        ("wait", "Math.abs(document.querySelector('audio.tr-audio').currentTime - 3) < 0.3"),
+        ("wait", f"Math.abs({player}.currentTime - 3) < 0.3"),
         ("eval", "who", "document.querySelector(\".tr-turn[data-index='1'] .tr-who\").textContent"),
+        ("eval", "playable", f"{unplayable}.hidden"),
         ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
         ("eval", "editing", TR_EXITS),
+        # в правке время — та же кнопка: плеер встал на 5 с, нажатие по 00:00 — на начало
+        ("eval", "park", f"(() => {{ {player}.pause(); {player}.currentTime = 5; return true; }})()"),
+        ("wait", f"Math.abs({player}.currentTime - 5) < 0.3"),
+        ("click", ".tr-turn[data-index='0'] .tr-seek"), ("wait", f"{player}.currentTime < 2.5"),
         set_value(".tr-turn[data-index='1'] .tr-edit-text", "Добрый вечер."),
         ("eval", "spy", SLOW_PATCH), ("click", "#tr-save"),
         ("click", f".tr-item[data-id='{other}']"),
         ("wait", "document.querySelector('.split-main h1').textContent === 'Запись 0' && window.patched"),
         ("eval", "shown", TR_SHOWN),
+        ("wait", f"{unplayable} && !{unplayable}.hidden"),
         ("click", f".tr-item:not([data-id='{other}'])"),
         ("wait", "document.querySelector('.split-main h1').textContent === 'Звонок.wav'"),
         ("eval", "texts", TR_TEXTS), ("eval", "after", TR_EXITS)], timeout=20000)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["seek"] == ["BUTTON", "button", True, "00:03"] and v["who"] == "Собеседник 2 · 00:03"
+    assert v["playable"] is True
     assert v["editing"] == [False, False, False] and v["after"] == [True, True, True]
     assert v["shown"] == ["Запись 0", other]
     assert v["texts"] == ["Здравствуйте.", "Добрый вечер."]
