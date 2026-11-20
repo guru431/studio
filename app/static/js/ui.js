@@ -124,12 +124,14 @@ export function agentDownload() {
 }
 
 /** Окно поверх раздела: заголовок, содержимое, «Отмена» (`.dialog-close`) и кнопки действий.
- * Закрылось (Escape, «Отмена», close()) — убирается со страницы. */
-export function openDialog(host, { id, title, body = [], actions = [], cancelText = tr("Отмена") }) {
+ * Закрылось (Escape, «Отмена», close()) — убирается со страницы. `guard()` — false: «Отмена», Escape и «Назад»
+ * Android окно не закрывают (guard сам спрашивает); close() кода закрывает всегда. */
+export function openDialog(host, { id, title, body = [], actions = [], cancelText = tr("Отмена"), guard = null }) {
   const close = button(cancelText, { class: 'btn dialog-close' });
   const dialog = el('dialog', { class: 'dialog', id, 'aria-labelledby': `${id}-title` },
     el('h2', { id: `${id}-title` }, title), ...body, el('div', { class: 'actions' }, close, ...actions));
-  close.addEventListener('click', () => dialog.close());
+  close.addEventListener('click', () => { if (!guard || guard()) dialog.close(); });
+  if (guard) dialog.addEventListener('cancel', (event) => { if (!guard()) event.preventDefault(); });
   dialog.addEventListener('close', () => dialog.remove());
   host.append(dialog);
   dialog.showModal();

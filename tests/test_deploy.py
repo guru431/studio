@@ -217,7 +217,7 @@ def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
     import voices
     assert dictation.BUDGET_SEC < _route_timeout("/api/dictation")
     assert voices.BUDGET_SEC < _route_timeout("/api/voices")
-    assert voices.TRANSCRIBE_BUDGET_SEC < _route_timeout("/api/voices/transcribe")
+    assert voices.TRANSCRIBE_BUDGET_SEC + voices.DRAFT_SAVE_SEC < _route_timeout("/api/voices/transcribe")
     assert voices.BUDGET_SEC + media.SAVE_TIMEOUT_SEC < _route_timeout("/api/voices/prepare-sample")
     assert voices.PROBE_BUDGET_SEC < _route_timeout(f"/api/voices/{'0' * 32}/probe")
 

@@ -46,18 +46,51 @@ def test_sample_is_transcribed_before_saving_and_can_be_corrected(studio, fake_a
     studio.gw.asr_reply = {"text": "  тайный текст образца  "}
     r = studio.c.post("/api/voices/transcribe", files=SAMPLE)
     assert r.status_code == 200, r.text
-    assert r.json() == {"text": "тайный текст образца"}
+    assert r.json()["text"] == "тайный текст образца"
     assert ("to_wav", voices.SAMPLE_MAX) in fake_audio.calls
     sent = studio.gw.asr_requests[0]
     assert sent.url.path == "/speech/lite/transcriptions"
     assert b"audio/wav" in sent.content and b"sample.wav" in sent.content
     assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0
-    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+    # подготовленный WAV — черновик без ссылки, как у prepare-sample: голоса и истории нет
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 1
     assert list(state.CFG.tmp_dir.iterdir()) == []
     assert "тайный текст" not in caplog.text and "sample.m4a" not in caplog.text
     vid = create(studio, text="Исправленный текст").json()["id"]
     assert studio.c.get(f"/api/voices/{vid}").json()["text"] == "Исправленный текст"
     assert len(studio.gw.asr_requests) == 1
+
+
+def test_transcribed_sample_is_saved_without_a_second_upload(studio, fake_audio):
+    """`upload` ответа transcribe — тот же черновик WAV, что у prepare-sample: batch сохраняет голос по нему, файл
+    второй раз не уходит; не пригодившийся черновик discard-samples убирает."""
+    add_gateway(studio)
+    fake_audio.duration = 8.0
+    first = studio.c.post("/api/voices/transcribe", files=SAMPLE).json()
+    spare = studio.c.post("/api/voices/transcribe", files=SAMPLE).json()["upload"]
+    converted = sum(call[0] == "to_wav" for call in fake_audio.calls)
+    r = studio.c.put(f"/api/voices/{'a' * 32}/batch", json={"name": "Голос", "selected": 0,
+                                                             "samples": [{"upload": first["upload"], "text": first["text"]}]})
+    assert r.status_code == 200, r.text
+    assert sum(call[0] == "to_wav" for call in fake_audio.calls) == converted
+    voice = studio.c.get(f"/api/voices/{'a' * 32}").json()
+    assert voice["sample_count"] == 1 and voice["duration"] == 8.0
+    assert studio.c.post("/api/voices/discard-samples", json={"uploads": [first["upload"], spare]}).status_code == 204
+    kept = {row[0] for row in state.DB.execute("SELECT id FROM media")}
+    assert kept == {voice["samples"][0]["media_id"]}
+
+
+def test_transcribe_keeps_the_text_when_the_share_does_not_take_the_sample(studio, fake_audio, monkeypatch):
+    import media
+    add_gateway(studio)
+    fake_audio.duration = 8.0
+
+    async def down(*args, **kwargs):
+        raise media.StorageError("хранилище недоступно")
+
+    monkeypatch.setattr(media, "save_async", down)
+    r = studio.c.post("/api/voices/transcribe", files=SAMPLE)
+    assert r.status_code == 200 and r.json()["upload"] is None and r.json()["text"]
 
 
 @pytest.mark.parametrize("text", ["", "x" * (voices.TEXT_MAX + 1)])
