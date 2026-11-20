@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message, tr } from './i18n.js';
 /* Раздел «Панель» (#/admin, только администратору): пользователи, список разрешённых адресов и хранилище.
  *
  * Пользователи — таблица `#users` (логин, имя, админ, отключён, подключений) с действиями строки:
@@ -354,7 +354,7 @@ function count(n) {
 }
 
 function checkText(r) {
-  if (!r.backup) return r.problems.join('; ');
+  if (!r.backup) return r.problems.map(message).join('; ');
   const at = dateTime(r.at, { day: '2-digit', month: '2-digit', hour: '2-digit',
     minute: '2-digit' }).replace(',', '');
   const parts = [];
@@ -367,7 +367,7 @@ function checkText(r) {
   if (r.files.state === 'partial') parts.push(tr("проверено {0} из {1}", count(r.files.checked), count(r.files.total)));
   const verdict = r.ok ? tr("поднимается") : r.skipped ? tr("пропущена: база новее кода") : tr("не поднимается");
   const text = tr("Копия {0} — {1}{2}", at, verdict, parts.length ? `: ${parts.join(', ')}` : '');
-  return r.ok || r.skipped ? text : `${text}. ${r.problems.join('; ')}`;
+  return r.ok || r.skipped ? text : `${text}. ${r.problems.map(message).join('; ')}`;
 }
 
 function backupCheck() {
@@ -442,7 +442,7 @@ function storageBlock() {
     try {
       const { share, backup, pending, orphans, check, copy, stale_sec: staleSec } = await api('GET', '/api/admin/storage');
       const shareText = share.state === 'ok' ? tr("доступна, свободно {0} из {1}", sizeText(share.free), sizeText(share.total))
-        : share.message;
+        : message(share.message);
       const backupText = backup.state === 'ok'
         ? tr("{0} ({1}), копий — {2}", agoText(backup.age), momentText(backup.at), backup.copies)
         : backup.state === 'none' ? tr("копий нет") : tr("неизвестно: хранилище не прочитано");
