@@ -254,7 +254,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     messages: () => feed.querySelectorAll('.code-msg').length });
   const contextBox = context.button;
   let effectiveModel = '';
-  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage, canReset: agent?.usage_reset,
+  const usage = usageView(host, { aid, engine, supported: agent?.subscription_usage, shared: !!agent?.shared,
+    canReset: agent?.usage_reset,
     model: () => model.value || effectiveModel || catalog?.defaults?.model || '' });
   const changedFiles = changesView(host, { openFile: (path) => {
     const relative = projectFilePath(path, agent, project);
