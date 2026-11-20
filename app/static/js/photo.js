@@ -13,8 +13,11 @@ import { message as serverMessage, tr } from './i18n.js';
  * «Повторить» правки кистью идёт с её маской (mask_media_id).
  * Описание — POST /api/images/descriptions и опрос GET …/descriptions/<id>: потерянный ответ опрос
  * повторяет, а текст, вставленный в поле, подтверждается DELETE …/descriptions/<id> — сервер его
- * стирает; окно закрыли раньше — описание отменяется. Перевод — так же через …/translations: ответ
- * заменяет промпт в поле, генерация не начинается; «EN» во время перевода его отменяет.
+ * стирает; окно закрыли раньше — описание отменяется. «В поле промпта» / «Создать по описанию» — текст
+ * в поле (и генерация); свой непустой промпт — после вопроса. Перевод — так же через …/translations: ответ
+ * заменяет промпт в поле, генерация не начинается; «EN» во время перевода его отменяет, «Вернуть оригинал» —
+ * прежний промпт, пока поле не правили. Описание или перевод, начатые до перезагрузки или в другой вкладке,
+ * в ленте не видны: 409 busy с detail.kind — строка #photo-orphan с «Отменить».
  * Текст сервера — только textContent.
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm.
@@ -56,7 +59,7 @@ const THUMB_SIDE = 384;          // длинная сторона миниатю
 const PAGE = 30;
 const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
-const PHOTO_MAX = 10 * 1024 * 1024;
+const PHOTO_MAX = 20 * 1024 * 1024;  // фото с устройства — как у ролика (image_upload.VIDEO_UPLOAD)
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const SIZES = [['portrait', tr("Портрет 832×1216"), '832x1216'], ['square', tr("Квадрат 1024×1024"), '1024x1024'],
   ['landscape', tr("Альбом 1216×832"), '1216x832']];
@@ -87,7 +90,9 @@ function build(view, ctx) {
   let submitting = false;
   let describing = false;
   let translating = null;        // { id, started, timer } — идущий перевод промпта
-  let shutDescribe = null;       // уборка открытого окна «Описать»: отмена задания, часы, опрос, превью
+  let undo = null;               // { original, translated } — промпт до «EN», пока поле не правили
+  let orphan = null;             // { id, timer } — описание или перевод, начатые до перезагрузки или в другой вкладке
+  let shutDescribe = null;      // уборка открытого окна «Описать»: отмена задания, часы, опрос, превью
   const running = new Map();     // id → { item, at, timer } — идущие задания ленты
   const gated = new Set();       // кнопки открытого просмотра, начинающие задание
   let alive = true;
@@ -149,17 +154,20 @@ function build(view, ctx) {
   popupPanel(chipSeries, seriesMenu, { label: tr("Серия картинок"), side: 'above' });
   const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say });
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate', hidden: true }, 'EN');
-  const go = el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
+  const chipUndo = el('button', { type: 'button', class: 'chip', id: 'photo-translate-undo', hidden: true,
+    title: tr("Вернуть промпт, каким он был до перевода") }, tr("Вернуть оригинал"));
+  const go =el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
-  mcp = sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'model', 'strength', 'n'],
+  const orphanLine = el('p', { id: 'photo-orphan', class: 'status photo-error', 'aria-live': 'polite' });
+  mcp =sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'model', 'strength', 'n'],
     onChange: paintSource, onBusy: syncBusy });
   const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
   const seriesWrap = el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu);
   const form = el('form', { class: 'composer', id: 'photo-composer', hidden: !!ctx.hint }, sourceBox, promptBox.box, promptBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, chipModel.wrap, chipSize.wrap, chipTranslate,
-      seriesWrap, presets.wrap), go));
+      chipUndo, seriesWrap, presets.wrap), go));
   const nativeHint = ctx.hint?.('hint-bar');
-  const root = el('div', { class: 'photo' }, head, status, feedBox, error, mcp.output, nativeHint || form,
+  const root = el('div', { class: 'photo' }, head, status, feedBox, error, orphanLine, mcp.output, nativeHint || form,
     selection.bar);
   view.append(root);
   const draft = sectionDraft('photo', prompt);
@@ -349,7 +357,7 @@ function build(view, ctx) {
 
   /* занятость: одно задание за раз */
   function syncBusy() {
-    const busy = submitting || describing || !!translating || running.size > 0 || mcp.busy;
+    const busy = submitting || describing || !!translating || !!orphan || running.size > 0 || mcp.busy;
     for (const b of [go, ...gated]) {
       b.disabled = busy;
       b.title = busy ? tr("Дождитесь конца текущего задания") : '';
@@ -359,6 +367,51 @@ function build(view, ctx) {
     chipTranslate.title = translating ? tr("Отменить перевод")
       : busy ? tr("Дождитесь конца текущего задания") : tr("Перевести промпт на английский (gemma-abl)");
     chipTranslate.setAttribute('aria-label', chipTranslate.title);
+  }
+
+  /* 409 busy: задание картинки с другой вкладки или устройства — в ленте, её перечитать; описание или
+   * перевод (detail.kind) в ленте не видны — строка с «Отменить», кнопки закрыты до их конца (опрос статуса) */
+  function busyElsewhere(err) {
+    if (err?.code !== 'busy') return;
+    const { id, kind } = err.detail || {};
+    const path = { description: 'descriptions', translation: 'translations' }[kind];
+    if (!path || !id) {
+      feed.reload();
+      return;
+    }
+    if (orphan?.id === id) return;
+    clearTimeout(orphan?.timer);
+    const job = { id, timer: null };
+    orphan = job;
+    const stop = el('button', { type: 'button', class: 'btn-link', id: 'photo-orphan-cancel' }, tr("Отменить"));
+    orphanLine.replaceChildren(kind === 'description'
+      ? tr("Идёт описание фото, начатое раньше — в другой вкладке или до перезагрузки страницы.")
+      : tr("Идёт перевод промпта, начатый раньше — в другой вкладке или до перезагрузки страницы."), ' ', stop);
+    stop.addEventListener('click', () => {
+      stop.disabled = true;
+      api('POST', `/api/images/${encodeURIComponent(id)}/cancel`).then(
+        () => { stop.replaceWith(tr("Отменяется — дождитесь освобождения карты.")); },
+        (e) => { stop.disabled = false; error.textContent = words(e); });
+    });
+    const end = () => {
+      if (orphan !== job) return;
+      orphan = null;
+      orphanLine.replaceChildren();
+      error.textContent = '';                         // «предыдущее задание ещё выполняется» — уже нет
+      syncBusy();
+    };
+    const check = async () => {
+      if (!alive || orphan !== job) return;
+      try {
+        const r = await api('GET', `/api/images/${path}/${encodeURIComponent(id)}`);
+        if (['done', 'error', 'cancelled'].includes(r.state)) return end();
+      } catch (e) {
+        if (e.code === 'gone') return end();
+      }
+      job.timer = setTimeout(check, POLL_MS);
+    };
+    job.timer = setTimeout(check, POLL_MS);
+    syncBusy();
   }
 
   /* карточки ленты */
@@ -544,7 +597,7 @@ function build(view, ctx) {
       return true;
     } catch (err) {
       error.textContent = words(err);
-      if (err.code === 'busy') feed.reload();         // задание с другой вкладки или устройства
+      busyElsewhere(err);                             // задание с другой вкладки или устройства
       return false;
     } finally {
       submitting = false;
@@ -557,7 +610,7 @@ function build(view, ctx) {
     const picked = choice ? { model: choice.model, connection_id: choice.connection_id } : {};
     const many = withSource ? series.value() : null;
     if (!withSource || !source) return { prompt: text, size, ...picked, ...(many ? { series: many } : {}) };
-    if (source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 10 МиБ"));
+    if (source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
     const body = new FormData();
     for (const [k, v] of Object.entries({ prompt: text, size, ...picked })) body.append(k, String(v));
     if (isLustify()) body.append('strength', strength.value);
@@ -764,7 +817,8 @@ function build(view, ctx) {
     const counter = el('p', { id: 'describe-counter', class: 'muted small' });
     const fail = el('p', { id: 'describe-error', class: 'error', role: 'alert' });
     const make = button(tr("Создать по описанию"), { class: 'btn btn-accent', id: 'describe-create', disabled: true });
-    const dialog = openDialog(root, { id: 'describe-dialog', title: tr("Описание картинки"), actions: [make], body: [preview,
+    const toField = button(tr("В поле промпта"), { class: 'btn', id: 'describe-to-field', disabled: true });
+    const dialog = openDialog(root, { id: 'describe-dialog', title: tr("Описание картинки"), actions: [toField, make], body: [preview,
       el('p', { class: 'muted small' }, tr("gemma-abl описывает фото на карте студии. Описание на английском подготовлено как промпт для генерации; его можно править.")),
       wait, field(tr("Подробное описание"), text, 'text'), field(tr("Ваш дополнительный текст"), extra, 'extra'), counter, fail] });
     const started = Date.now();
@@ -802,17 +856,36 @@ function build(view, ctx) {
     };
     shutDescribe = shut;
     dialog.addEventListener('close', shut);
-    make.addEventListener('click', () => {
+    /* описание — в поле промпта (create — и сразу генерация); свой непустой промпт заменяется после вопроса */
+    const place = (create) => {
       const prompted = combined();
       if (!text.value.trim() || prompted.length > PROMPT_MAX) {
         fail.textContent = tr("Нужно непустое описание; вместе с дополнением — не больше {0} знаков.", PROMPT_MAX);
         return;
       }
-      prompt.value = prompted;
-      autosize();
-      dialog.close();
-      submit(false);
-    });
+      const apply = () => {
+        prompt.value = prompted;
+        autosize();
+        dialog.close();
+        if (create) submit(false);
+        else prompt.focus();
+      };
+      const own = prompt.value.trim();
+      if (!own || own === prompted) {
+        apply();
+        return;
+      }
+      const replace = button(tr("Заменить"), { class: 'btn btn-accent', id: 'describe-replace' });
+      const ask = openDialog(root, { id: 'describe-replace-dialog', title: tr("Заменить промпт описанием?"),
+        body: [el('p', { class: 'muted small' }, tr("В поле уже есть промпт — описание встанет вместо него."))],
+        actions: [replace] });
+      replace.addEventListener('click', () => {
+        ask.close();
+        apply();
+      });
+    };
+    make.addEventListener('click', () => place(true));
+    toField.addEventListener('click', () => place(false));
 
     async function poll() {
       if (!open || !alive) return;
@@ -825,6 +898,7 @@ function build(view, ctx) {
           api('DELETE', `/api/images/descriptions/${jobId}`).catch(() => {});    // получено — сервер стирает
           text.disabled = false;
           make.disabled = false;
+          toField.disabled = false;
           if (r.truncated) fail.textContent = tr("Достигнут лимит ответа модели; описание можно дополнить вручную.");
           count();
           text.focus();
@@ -861,6 +935,7 @@ function build(view, ctx) {
     }, (err) => {
       stop();
       if (open) fail.textContent = words(err);
+      busyElsewhere(err);
     });
   }
 
@@ -909,7 +984,9 @@ function build(view, ctx) {
         fails = 0;
         if (r.state === 'done') {
           if (!job.cancelled) {                           // отмена опоздала — перевод не нужен
+            const original = prompt.value;
             prompt.value = r.text;
+            undo = { original, translated: prompt.value };   // «Вернуть оригинал» — пока поле не правили
             autosize();
           }
           api('DELETE', `/api/images/translations/${job.id}`).catch(() => {});   // получен — сервер стирает
@@ -919,7 +996,10 @@ function build(view, ctx) {
         if (r.state === 'cancelled') break;
       }
     } catch (err) {
-      if (alive) error.textContent = words(err);
+      if (alive) {
+        error.textContent = words(err);
+        busyElsewhere(err);
+      }
     } finally {
       clearInterval(timer);
       translating = null;
@@ -945,7 +1025,10 @@ function build(view, ctx) {
     }
   }
 
+  /* после любой записи поля (ввод, пресет, описание — все зовут autosize): поле изменилось — «Вернуть оригинал» нет */
   function autosize() {
+    if (undo && prompt.value !== undo.translated) undo = null;
+    chipUndo.hidden = !undo;
     prompt.style.height = 'auto';
     // Пустое поле сохраняет три строки из общих стилей, непустое растёт по содержимому.
     if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
@@ -963,10 +1046,17 @@ function build(view, ctx) {
     series.refresh();                                   // сила «от» серии по силе — этот ползунок
   });
   chipTranslate.addEventListener('click', translate);
+  chipUndo.addEventListener('click', () => {
+    if (undo && prompt.value === undo.translated) prompt.value = undo.original;
+    undo = null;
+    autosize();
+    prompt.focus();
+  });
   describeFile.addEventListener('change', () => {
     const f = describeFile.files[0];
     describeFile.value = '';
-    if (f) describe({ file: f });
+    if (f && f.size > PHOTO_MAX) error.textContent = tr("Фото больше 20 МиБ");   // как у «Создать»: тело Apache не пропустит
+    else if (f) describe({ file: f });
   });
   prompt.addEventListener('input', autosize);
   enterSends(prompt, () => form.requestSubmit());
