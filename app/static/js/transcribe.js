@@ -1,4 +1,4 @@
-import { message as serverMessage, tr } from './i18n.js';
+import { language, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Расшифровка» (#/transcribe) — раскладка Б спеки 2026-10-20 (раздел 6.3).
  *
  * Слева — «+ Загрузить запись» и записи по дням (имя, длительность, состояние), справа — выбранная:
@@ -154,7 +154,7 @@ function build(view, ctx) {
 
   /* выбранная */
   function download(format) {
-    el('a', { href: `/api/transcripts/${records.current.id}/export?format=${format}`, download: '' }).click();
+    el('a', { href: `/api/transcripts/${records.current.id}/export?format=${format}&lang=${language()}`, download: '' }).click();
   }
 
   function confirmDelete(item) {

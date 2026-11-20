@@ -1136,14 +1136,15 @@ def _scan_done(user_id: int, sid: "str | None") -> bool:
 
 
 @router.get("/{tid}/export")
-async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$")):  # noqa: A002
+async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$"),  # noqa: A002
+                 lang: exports.Lang = "ru"):
     """Перевод файлом — у кончившейся записи с переведённым: «<имя без расширения>.<язык перевода>.<формат>»,
-    у текста — «Перевод.ru.txt». md — перевод как есть."""
+    у текста — «Перевод.ru.txt» (по-английски, `lang` — «Translation.ru.txt»). md — перевод как есть."""
     row = _row(request.state.user.id, tid)
     text = joined(tid) if row["state"] in TERMINAL else ""
     if not text:
         raise HTTPException(409, {"code": "running", "message": "перевода ещё нет"})
-    stem = TEXT_STEM if row["kind"] == "text" else _stem(row["name"])
+    stem = exports.word(TEXT_STEM, lang) if row["kind"] == "text" else _stem(row["name"])
     # Markdown — только у перевода распознанного скана: txt и docx — через md_plain; текст поля и документа — как есть
     markdown = row["scan_id"] is not None
     if format == "docx":

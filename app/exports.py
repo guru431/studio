@@ -11,12 +11,17 @@ docx — минимальный OOXML без новых зависимостей
 
 Распознанный документ (ocr.py) — `pages_txt`, `pages_md`, `pages_docx`: страница за страницей с
 заголовком «Страница N»; в txt и docx Markdown модели — простым текстом (`md_plain`: таблицы — строками
-с табуляцией, в docx — `<w:tab/>`), в md — как есть."""
+с табуляцией, в docx — `<w:tab/>`), в md — как есть.
+
+Язык выгрузки (`Lang`) — язык интерфейса устройства: страница передаёт его запросом (`?lang=`, у чата — поле
+`lang`), без него — русский (скрипты, прежние страницы). Переводятся только слова Studio (`ENGLISH`, `word`):
+имена собеседников, заданные пользователем, тексты, имена файлов и причины распознавания остаются как есть."""
 import html
 import io
 import math
 import re
 import zipfile
+from typing import Literal
 from xml.sax.saxutils import escape
 
 SRT_MAX_SEC = 7
@@ -38,6 +43,46 @@ RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
         'officeDocument" Target="word/document.xml"/></Relationships>')
 
+Lang = Literal["ru", "en"]
+#: слова скачиваемых файлов (расшифровка, сканы, перевод, чат) по-английски; где страница пишет то же самое
+#: (`app/static/en.js`), перевод совпадает — сверяет tests/test_exports.py
+ENGLISH = {
+    "Собеседник {}": "Speaker {}",
+    "Страница {}": "Page {}",
+    "[пустая страница]": "[empty page]",
+    "[не распознана: {}]": "[not recognized: {}]",
+    "[не распознана]": "[not recognized]",
+    "Перевод": "Translation",
+    "Чат": "Chat",
+    "Пользователь": "User",
+    "Помощник": "Assistant",
+    "(ответ не дописан)": "(answer not finished)",
+    "Ошибка: {}": "Error: {}",
+    "Поиск: «{}»": "Search: “{}”",
+    "Поиск": "Search",
+    "Страница: {}": "Page: {}",
+    "Ролик: {}": "Video: {}",
+    "Инструмент": "Tool",
+    "Источники ({})": "Sources ({})",
+    "Вызовы инструментов ({})": "Tool calls ({})",
+    "Команда": "Command",
+    "Рассуждение": "Reasoning",
+    "Вложение: {}": "Attachment: {}",
+    "Файл": "File",
+}
+_LABEL = re.compile(r"Собеседник (\d+)")       # speech.LABEL
+
+
+def word(text: str, lang: str, *values) -> str:
+    """Слова Studio в выгрузке на языке `lang`; `values` — подстановки `{}` (пользовательское — как есть)."""
+    return (ENGLISH[text] if lang == "en" else text).format(*values)
+
+
+def _speaker(seg: dict, lang: str) -> str:
+    """Имя собеседника: заданное пользователем — как есть, метка сервера (`label`, speech.LABEL) — на языке выгрузки."""
+    found = _LABEL.fullmatch(seg["speaker"]) if seg["speaker"] == seg.get("label") else None
+    return word("Собеседник {}", lang, found[1]) if found else seg["speaker"]
+
 
 def stamp(seconds: float) -> str:
     """мм:сс, с часом — ч:мм:сс."""
@@ -46,12 +91,12 @@ def stamp(seconds: float) -> str:
     return f"{h}:{rest // 60:02d}:{rest % 60:02d}" if h else f"{rest // 60:02d}:{rest % 60:02d}"
 
 
-def _head(seg: dict) -> str:
-    return f"{seg['speaker']} · {stamp(seg['start'])}" if seg.get("speaker") else stamp(seg["start"])
+def _head(seg: dict, lang: str) -> str:
+    return f"{_speaker(seg, lang)} · {stamp(seg['start'])}" if seg.get("speaker") else stamp(seg["start"])
 
 
-def txt(segments: list[dict]) -> str:
-    return "\n".join(f"{_head(s)}\n{s['text']}\n" for s in segments)
+def txt(segments: list[dict], lang: Lang = "ru") -> str:
+    return "\n".join(f"{_head(s, lang)}\n{s['text']}\n" for s in segments)
 
 
 def _line(text: str) -> str:
@@ -106,7 +151,7 @@ def _pieces(start: float, end: float, text: str) -> list[tuple[float, float, str
     return out
 
 
-def srt(segments: list[dict], raw: "list[dict] | None" = None) -> str:
+def srt(segments: list[dict], raw: "list[dict] | None" = None, lang: Lang = "ru") -> str:
     """Субтитры не длиннее SRT_MAX_SEC и SRT_MAX_CHARS. Реплика без правки текста — по своим сегментам
     распознавания (`raw`, поле `turn`), иначе — по своему тексту; имя — у первого субтитра реплики.
     Время не убывает, субтитры не перекрываются; без длительности (внешний сервис) — 1 с, но не дальше
@@ -118,7 +163,7 @@ def srt(segments: list[dict], raw: "list[dict] | None" = None) -> str:
     for n, seg in enumerate(segments):
         own = [] if seg.get("edited") else by_turn.get(n, [])
         spans = [(r["start"], r["end"], _line(r["text"])) for r in own] or [(seg["start"], seg["end"], _line(seg["text"]))]
-        prefix = f"{_line(seg['speaker'])}: " if seg.get("speaker") else ""
+        prefix = f"{_line(_speaker(seg, lang))}: " if seg.get("speaker") else ""
         for k, (start, end, text) in enumerate(spans):
             cues += _pieces(start, end, prefix + text if k == 0 else text)
     blocks, edge = [], 0.0
@@ -138,10 +183,10 @@ def _paragraph(text: str, bold: bool = False, size: "int | None" = None) -> str:
     return f'<w:p><w:r>{run_props}<w:t xml:space="preserve">{escape(CONTROL.sub(" ", text))}</w:t></w:r></w:p>'
 
 
-def docx(segments: list[dict], title: str) -> bytes:
+def docx(segments: list[dict], title: str, lang: Lang = "ru") -> bytes:
     body = [_paragraph(title, bold=True, size=32)]
     for s in segments:
-        body += [_paragraph(_head(s), bold=True), _paragraph(s["text"])]
+        body += [_paragraph(_head(s, lang), bold=True), _paragraph(s["text"])]
     return _package(body)
 
 
@@ -252,20 +297,20 @@ def md_plain(md: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip("\n ")       # табуляция — пустая первая ячейка, не пробел
 
 
-def _page_body(page: dict, convert) -> str:
+def _page_body(page: dict, convert, lang: str) -> str:
     if page["state"] in ("done", "layer"):
         return convert(page["text"] or "")
     if page["state"] == "blank":
-        return "[пустая страница]"
-    return f"[не распознана: {page['detail']}]" if page["detail"] else "[не распознана]"
+        return word("[пустая страница]", lang)
+    return word("[не распознана: {}]", lang, page["detail"]) if page["detail"] else word("[не распознана]", lang)
 
 
-def pages_txt(pages: list[dict]) -> str:
-    return "\n\n".join(f"Страница {p['n']}\n\n{_page_body(p, md_plain)}" for p in pages) + "\n"
+def pages_txt(pages: list[dict], lang: Lang = "ru") -> str:
+    return "\n\n".join(word("Страница {}", lang, p["n"]) + "\n\n" + _page_body(p, md_plain, lang) for p in pages) + "\n"
 
 
-def pages_md(pages: list[dict]) -> str:
-    return "\n\n".join(f"## Страница {p['n']}\n\n{_page_body(p, str)}" for p in pages) + "\n"
+def pages_md(pages: list[dict], lang: Lang = "ru") -> str:
+    return "\n\n".join("## " + word("Страница {}", lang, p["n"]) + "\n\n" + _page_body(p, str, lang) for p in pages) + "\n"
 
 
 def _cells(line: str, rtl: bool = False) -> str:
@@ -277,11 +322,11 @@ def _cells(line: str, rtl: bool = False) -> str:
     return f"<w:p><w:r>{runs}</w:r></w:p>"
 
 
-def pages_docx(pages: list[dict], title: str) -> bytes:
+def pages_docx(pages: list[dict], title: str, lang: Lang = "ru") -> bytes:
     body = [_paragraph(title, bold=True, size=32)]
     for p in pages:
-        body.append(_paragraph(f"Страница {p['n']}", bold=True))
-        body += [_cells(line) for line in _page_body(p, md_plain).split("\n") if line.strip()]
+        body.append(_paragraph(word("Страница {}", lang, p["n"]), bold=True))
+        body += [_cells(line) for line in _page_body(p, md_plain, lang).split("\n") if line.strip()]
     return _package(body)
 
 

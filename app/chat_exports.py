@@ -24,6 +24,8 @@ import chat_shares
 import clock
 from chat_export_selection import CSS, TAGS, selection_html
 import claude_code
+import exports
+from exports import word
 import media
 import state
 
@@ -38,6 +40,7 @@ class ExportIn(BaseModel):
     format: Literal["md", "pdf"]
     title: str = Field(default="Чат", max_length=200)
     selection: str | None = Field(default=None, min_length=1, max_length=1_000_000)
+    lang: exports.Lang = "ru"              # слова Studio в файле (exports.word); переписка и имена — как есть
 
     @model_validator(mode="after")
     def selection_format(self):
@@ -86,12 +89,12 @@ def _link(url, title) -> str:
     return words
 
 
-def _tool_line(step: dict) -> list[str]:
+def _tool_line(step: dict, lang: str) -> list[str]:
     """A step of «Интернет» or MCP the way the chat lists it under «Источники» (web.public: no text for the model)."""
     kind, error = step.get("kind"), step.get("error")
     if kind == "search":
         query = step.get("query")
-        lines = ["- " + (f"Поиск: «{_inline(query)}»" if query else "Поиск")]
+        lines = ["- " + (word("Поиск: «{}»", lang, _inline(query)) if query else word("Поиск", lang))]
         for result in step.get("results") or []:
             if isinstance(result, dict):
                 lines.append("  - " + _link(result.get("url"), result.get("title"))
@@ -99,52 +102,53 @@ def _tool_line(step: dict) -> list[str]:
     elif kind in ("page", "youtube"):
         target = _inline(step.get("title") or step.get("url") or "") if error else _link(step.get("url"), step.get("title"))
         about = [] if kind == "page" else [_inline(step[key]) for key in ("channel", "lang") if step.get(key)]
-        lines = ["- " + ("Страница: " if kind == "page" else "Ролик: ") + target + "".join(" · " + a for a in about)]
+        lines = ["- " + word("Страница: {}" if kind == "page" else "Ролик: {}", lang, target)
+                 + "".join(" · " + a for a in about)]
     elif kind == "mcp":
         lines = ["- " + " · ".join(["MCP"] + [_inline(step[key]) for key in ("server", "tool") if step.get(key)])]
     else:
-        lines = ["- Инструмент"]
+        lines = ["- " + word("Инструмент", lang)]
     if error:
         lines[0] += " — " + _inline(error)
     return lines
 
 
-def _sources(tools: list) -> str:
+def _sources(tools: list, lang: str) -> str:
     links = sum(len(step.get("results") or []) if step.get("kind") == "search" else int(bool(step.get("url")) and not step.get("error"))
                 for step in tools)
-    head = f"### Источники ({links})" if links else f"### Вызовы инструментов ({len(tools)})"
-    return head + "\n\n" + "\n".join(line for step in tools if isinstance(step, dict) for line in _tool_line(step))
+    head = word("Источники ({})", lang, links) if links else word("Вызовы инструментов ({})", lang, len(tools))
+    return "### " + head + "\n\n" + "\n".join(line for step in tools if isinstance(step, dict) for line in _tool_line(step, lang))
 
 
-def _parts(snapshot: dict) -> list[tuple[str, str]]:
+def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
     """The whole conversation as ("md", Markdown) and ("plain", text shown as is) parts: without tokens, project
-    metadata or private attachment URLs."""
-    title = " ".join(snapshot["title"].split()) or "Чат"
+    metadata or private attachment URLs. Studio's own words in `lang` (exports.word), the conversation as is."""
+    title = " ".join(snapshot["title"].split()) or word("Чат", lang)
     parts = [("md", "# " + html.escape(title))]
     for message in snapshot["messages"]:
         user = message["role"] == "user"
-        parts.append(("md", "## " + ("Пользователь" if user else "Помощник")))
+        parts.append(("md", "## " + word("Пользователь" if user else "Помощник", lang)))
         if message["text"]:
             parts.append(("plain" if user else "md", message["text"]))
         if message.get("status") == "streaming":
-            parts.append(("md", "*(ответ не дописан)*"))
+            parts.append(("md", "*" + word("(ответ не дописан)", lang) + "*"))
         if message.get("error"):
-            parts.append(("plain", "Ошибка: " + message["error"]))
+            parts.append(("plain", word("Ошибка: {}", lang, message["error"])))
         if message.get("tools"):
-            parts.append(("md", _sources(message["tools"])))
+            parts.append(("md", _sources(message["tools"], lang)))
         for step in message.get("steps", []):
-            parts.extend([("md", "### " + html.escape(_plain(step.get("name") or step.get("tool") or "Команда"))),
+            parts.extend([("md", "### " + html.escape(_plain(step.get("name") or step.get("tool") or word("Команда", lang)))),
                           ("md", _fenced(step.get("input", ""))), ("md", _fenced(step.get("text", "")))])
         if message.get("reasoning"):
-            parts.extend([("md", "### Рассуждение"), ("md", _fenced(message["reasoning"]))])
+            parts.extend([("md", "### " + word("Рассуждение", lang)), ("md", _fenced(message["reasoning"]))])
         for item in message.get("attachments", []) + message.get("images", []):
-            parts.append(("md", "Вложение: " + html.escape(_plain(item.get("name", "Файл")))))
+            parts.append(("md", word("Вложение: {}", lang, html.escape(_plain(item.get("name", word("Файл", lang)))))))
     return parts
 
 
-def markdown(snapshot: dict) -> str:
+def markdown(snapshot: dict, lang: exports.Lang = "ru") -> str:
     """The whole conversation as the .md file."""
-    return "\n\n".join(text if kind == "md" else _literal(text) for kind, text in _parts(snapshot)) + "\n"
+    return "\n\n".join(text if kind == "md" else _literal(text) for kind, text in _parts(snapshot, lang)) + "\n"
 
 
 def _render(markdown_text: str) -> str:
@@ -159,12 +163,12 @@ def _safe_html(markdown_text: str) -> str:
     return _html_block(_render(markdown_text))
 
 
-def pdf_html(snapshot: dict) -> str:
+def pdf_html(snapshot: dict, lang: exports.Lang = "ru") -> str:
     """The whole conversation for md2pdf: model text as Markdown, a user's message line by line and never as
     Markdown — the same pre-wrap block as in a selected fragment (`chat-export-plain`)."""
     body = "".join(_render(text) if kind == "md" else
                    '<div class="chat-export-plain">' + html.escape(_lines(text), quote=False).replace("\n", "&#10;") + "</div>\n"
-                   for kind, text in _parts(snapshot))
+                   for kind, text in _parts(snapshot, lang))
     return _html_block("<style>" + CSS + "</style>" + body)
 
 
@@ -300,7 +304,7 @@ async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, 
             raise HTTPException(429, {"code": "export_busy", "message": "сервер готовит другие PDF — повторите через минуту"})
         RUNNING.add(uid)
         try:
-            text = body.selection if body.selection is not None else await asyncio.to_thread(pdf_html, snapshot)
+            text = body.selection if body.selection is not None else await asyncio.to_thread(pdf_html, snapshot, body.lang)
         except BaseException:
             RUNNING.discard(uid)
             raise
@@ -316,10 +320,10 @@ async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, 
         finally:
             RUNNING.discard(uid)
     else:
-        raw = markdown(snapshot).encode("utf-8")
+        raw = markdown(snapshot, body.lang).encode("utf-8")
     await check()
     chat_shares._owner_open(request, section)
-    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", snapshot["title"]).strip(' .')[:100] or "Чат"
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", snapshot["title"]).strip(' .')[:100] or word("Чат", body.lang)
     return Response(raw, media_type="application/pdf" if body.format == "pdf" else "text/markdown; charset=utf-8",
                     headers={"Content-Disposition": media.disposition(stem + "." + body.format),
                              "Cache-Control": "no-store"})
@@ -344,7 +348,7 @@ async def export_chat(chat_id: str, body: ExportIn, request: Request):
             snapshot, _ = chat_shares.regular_snapshot(request.state.user.id, chat_id)
     else:
         row = chat._chat_row(request.state.user.id, chat_id)
-        snapshot = {"title": row["title"] or "Чат", "messages": []}
+        snapshot = {"title": row["title"] or word("Чат", body.lang), "messages": []}
 
     async def check():
         chat._chat_row(request.state.user.id, chat_id)

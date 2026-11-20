@@ -1036,14 +1036,16 @@ def _readable(user_id: int, sid: str):
 
 
 @router.get("/{sid}/export")
-async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$")):  # noqa: A002
-    """Документ с распознанным (`_readable`) файлом: имя — по документу («Договор.pdf» → «Договор.docx»)."""
+async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$"),  # noqa: A002
+                 lang: exports.Lang = "ru"):
+    """Документ с распознанным (`_readable`) файлом: имя — по документу («Договор.pdf» → «Договор.docx»);
+    заголовки страниц и пометки — на языке `lang` (exports.Lang)."""
     row = _readable(request.state.user.id, sid)
     pages, stem = _page_list(sid), _stem(row["name"])
     if format == "docx":
-        body = exports.pages_docx(pages, stem)
+        body = exports.pages_docx(pages, stem, lang)
     else:
-        body = (exports.pages_txt(pages) if format == "txt" else exports.pages_md(pages)).encode("utf-8")
+        body = (exports.pages_txt(pages, lang) if format == "txt" else exports.pages_md(pages, lang)).encode("utf-8")
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})
 

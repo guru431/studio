@@ -4656,7 +4656,7 @@ def test_transcribe_uploads_and_reads_by_speakers(browser, live, width):
     assert "собеседников: 2" in v["meta"] and v["audio"] and "Звонок.wav" in v["item"]
     assert v["group"] == "Сегодня"                     # подпись дня — dayTitle ленты (с годом, если не текущий)
     assert v["copied"].startswith("Собеседник 1 · 00:00\nЗдравствуйте.")
-    assert v["clicked"][0].endswith("/export?format=docx") and v["clicked"][1]
+    assert v["clicked"][0].endswith("/export?format=docx&lang=ru") and v["clicked"][1]
     assert not v["overflow"]
     assert not problems(r), problems(r)
 
@@ -5202,7 +5202,7 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     assert v["pager"] is False                                       # одна страница — без листалки
     assert v["copied"] == f"## Страница 1\n\n{OCR_MARKDOWN}\n"
     assert v["formats"] == ["txt", "md", "docx"]
-    assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md", True]
+    assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md&lang=ru", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"
     assert v["chat"] == ["#/chat", "Переведи этот документ на русский"]
@@ -5723,7 +5723,7 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
     assert v["transcribe"] == [False, "#/settings/transcribe", "Выберите запись в списке."]
     assert v["export"] == [200, True] and v["speech"] == [False, "#/settings/speech"]
     assert [re.sub(r"[0-9a-f]{32}", "<id>", c) for c in v["clicked"]] == [
-        "/api/media/<id>?download=1", "/api/media/<id>?download=1", "/api/transcripts/<id>/export?format=txt",
+        "/api/media/<id>?download=1", "/api/media/<id>?download=1", "/api/transcripts/<id>/export?format=txt&lang=ru",
         "/api/media/<id>?download=1"]
     assert not problems(r), problems(r)
 
@@ -7442,7 +7442,7 @@ def test_translate_file_shows_source_and_translation(browser, live, translator):
     assert "Записка.docx" in v["chosen"][0] and v["chosen"][1] is True
     assert v["left"] == ["Hello world.", True, "Записка.docx"] and v["kind"] is True
     assert v["formats"] == ["txt", "docx"]
-    assert v["clicked"] == [f"/api/translate/{v['tid']}/export?format=txt", True]
+    assert v["clicked"] == [f"/api/translate/{v['tid']}/export?format=txt&lang=ru", True]
     assert v["body"] == "Привет, мир."
     assert v["cleared"] == [True, "", ""]
     assert not problems(r), problems(r)
