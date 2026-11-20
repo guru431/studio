@@ -461,6 +461,51 @@ def test_retry_page_recognizes_only_that_page_again(studio):
     assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).json()["detail"]["code"] == "nothing"
 
 
+def test_recognize_again_with_another_engine_makes_a_new_document(studio):
+    """05:F11: «Распознать заново» с другим движком раздела (s06) — новый документ из тех же фото, все страницы
+    заново; прежний остаётся, и его удаление файлов нового не уносит. Тот же движок — повтор на месте."""
+    from fakes import TOKEN
+    gw = add_gateway(studio)
+    r = studio.c.post("/api/connections", json={"name": "s06", "kind": "openai", "s06": True,
+                                                "base_url": "http://10.77.1.15:4000", "token": TOKEN, "sections": ["ocr"]})
+    assert r.status_code == 201, r.text
+    s06 = r.json()["id"]
+    studio.gw.ocr_reply = {"markdown": "Текст s06", **answer(TEXT)}
+    sid = post_files(studio, [("a.jpg", photo()), ("b.png", photo("PNG"))]).json()["id"]
+    first = wait_ocr(studio, sid, {"done"})
+    assert (first["connection_id"], first["model"]) == (gw, "hunyuan-ocr")
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"connection_id": gw, "model": "hunyuan-ocr"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "nothing"
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 1, "connection_id": s06, "model": "ocr-ru"})
+    assert r.status_code == 422
+    r = studio.c.post(f"/api/ocr/{sid}/retry", json={"connection_id": s06, "model": "ocr-ru"})
+    assert r.status_code == 202, r.text
+    new = r.json()["id"]
+    assert new != sid and (r.json()["connection_id"], r.json()["model"], r.json()["name"]) == (s06, "ocr-ru", "a.jpg")
+    second = wait_ocr(studio, new, {"done"})
+    assert [p["text"] for p in second["pages"]] == ["Текст s06"] * 2
+    assert [p["media_id"] for p in second["pages"]] == [p["media_id"] for p in first["pages"]]
+    assert [p["text"] for p in studio.c.get(f"/api/ocr/{sid}").json()["pages"]] == [TEXT] * 2
+    assert studio.c.delete(f"/api/ocr/{sid}").status_code == 204
+    assert all(studio.c.get(f"/api/media/{p['media_id']}").status_code == 200 for p in second["pages"])
+
+
+def test_failed_pages_of_a_done_document_are_counted_and_recognized_again(studio):
+    """05:F6: «готово» с нераспознанными страницами — их число в ленте и в документе; «Распознать заново» у
+    готового повторяет все такие страницы разом."""
+    uid, conn = gateway_user(studio)
+    cut = (200, answer("Обрывок", "length"))
+    studio.gw.ocr_replies = [cut, (200, answer(TEXT)), cut]
+    sid = pdf_scan(studio, uid, conn, "ink", "ink", "ink")
+    assert wait_scan(studio, sid)["state"] == "done"
+    assert studio.c.get(f"/api/ocr/{sid}").json()["failed_pages"] == 2
+    assert studio.c.get("/api/ocr").json()["items"][0]["failed_pages"] == 2
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).status_code == 202
+    assert wait_scan(studio, sid)["state"] == "done"
+    item = studio.c.get(f"/api/ocr/{sid}").json()
+    assert item["failed_pages"] == 0 and [p["state"] for p in item["pages"]] == ["done"] * 3
+
+
 @pytest.mark.parametrize("trouble", ["missing", "unreachable"])
 def test_retry_redraws_a_missing_page_but_not_one_on_an_unreachable_share(studio, monkeypatch, trouble):
     """Ревью R8: «Повторить страницу» рисует PNG заново, только если файла нет; шара не отвечает (OSError) —
@@ -807,8 +852,8 @@ def test_upload_photos_make_one_document_in_order(studio, caplog):
     add_gateway(studio)
     r = post_files(studio, [("a.jpg", photo()), ("b.png", photo("PNG"))])
     assert r.status_code == 202 and r.json()["pages"] == 2 and r.json()["name"] == "a.jpg"
-    assert set(r.json()) == {"id", "name", "state", "detail", "model", "pages", "done_pages", "origin", "created",
-                             "finished"}
+    assert set(r.json()) == {"id", "name", "state", "detail", "connection_id", "model", "pages", "done_pages",
+                             "failed_pages", "origin", "created", "finished"}
     assert (r.json()["origin"], r.json()["model"]) == ("section", "hunyuan-ocr")
     item = wait_ocr(studio, r.json()["id"], {"done"})
     assert [p["n"] for p in item["pages"]] == [1, 2] and all(p["media_id"] for p in item["pages"])
@@ -936,6 +981,28 @@ def test_to_chat_attaches_markdown(studio, monkeypatch):
     monkeypatch.setattr(documents, "TEXT_MAX_CHARS", 10)
     r = studio.c.post(f"/api/ocr/{sid}/attachments")
     assert r.status_code == 413 and "в чат его не передать" in r.json()["detail"]["message"]
+
+
+def test_a_failed_document_gives_out_and_indexes_what_was_recognized(studio):
+    """05:F5: отказ документа на второй странице — первая распознана: выгрузка, «В чат» и поиск её отдают,
+    остальные страницы — пометкой; документ без единой страницы с текстом — 409 `empty`."""
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(200, answer("Арендатор Петров")), (500, {"error": {"message": "внутренняя ошибка"}})]
+    sid = post_files(studio, [(NAME, scan_pdf("ink", "ink", "ink"))]).json()["id"]
+    assert wait_ocr(studio, sid)["state"] == "error"
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=md")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("## Страница 1\n\nАрендатор Петров\n\n## Страница 2\n\n[не распознана]")
+    assert studio.c.get(f"/api/ocr/{sid}/export?format=docx").status_code == 200
+    assert studio.c.post(f"/api/ocr/{sid}/attachments").json()["text"].startswith("## Страница 1\n\nАрендатор Петров")
+    found = studio.c.post("/api/search", json={"q": "Петров"}).json()["items"]
+    assert [i["id"] for i in found if i.get("section") == "ocr"] == [sid], found
+
+    studio.gw.ocr_replies = [(200, answer("Обрывок", "length"))]
+    empty = post_files(studio, [("a.jpg", photo())]).json()["id"]
+    assert wait_ocr(studio, empty)["state"] == "done"
+    for r in (studio.c.get(f"/api/ocr/{empty}/export?format=txt"), studio.c.post(f"/api/ocr/{empty}/attachments")):
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "empty", r.text
 
 
 def test_rename_keeps_the_extension_for_exports_and_the_search_finds_it(studio, caplog):

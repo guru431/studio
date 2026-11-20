@@ -31,7 +31,8 @@
    с цикла событий; рендер, чтение и запись файлов — в потоке.
 8. API раздела — `router` (`/api/ocr`, вторая половина файла): загрузка, лента, документ со страницами,
    отмена, удаление, выгрузка txt/md/docx (`exports.pages_*`), «В чат» — вложение «<имя>.md», «Повторить
-   страницу» и «Распознать заново» кончившегося документа (`retry`).
+   страницу» и «Распознать заново» кончившегося документа (`retry`; другим движком раздела — новый документ из
+   тех же файлов, `again`).
 """
 import asyncio
 import base64
@@ -416,6 +417,28 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     log.info("распознавание %s: заново, %d стр.", scan_id[:8], len(numbers))
 
 
+def again(user_id: int, scan_id: str, conn, model: str) -> str:
+    """«Распознать заново» другим движком (подключение и модель раздела): новый документ раздела из тех же файлов —
+    исходного PDF (и уже нарисованных PNG страниц) или фото страниц; ждут все страницы, кроме страниц текстового
+    слоя. Прежний документ остаётся — их можно сравнить. Идёт — 409 `running`, файла нет — 404 `gone`, очередь
+    полна — 409 `busy`."""
+    row = state.DB.execute("SELECT name, state, source_media_id FROM scans WHERE id = ? AND user_id = ?",
+                           (scan_id, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "документ ещё распознаётся"})
+    pages = [{"n": p["n"], "state": "layer", "media_id": None, "text": p["text"]} if p["state"] == "layer"
+             else {"n": p["n"], "state": "waiting", "media_id": p["media_id"], "text": None}
+             for p in state.DB.execute("SELECT n, state, media_id, text FROM scan_pages WHERE scan_id = ? ORDER BY n",
+                                       (scan_id,))]
+    source = row["source_media_id"]
+    files = [source] if source else [p["media_id"] for p in pages if p["state"] == "waiting"]
+    if not all(f is not None and media.alive(user_id, f) for f in files):
+        raise HTTPException(404, media.GONE)
+    return create(user_id, conn, model, row["name"], origin="section", source_media_id=source, pages=pages)
+
+
 def kick(user_id: int) -> None:
     """Раннер пользователя, если его нет (с цикла событий)."""
     task = RUNNERS.get(user_id)
@@ -439,8 +462,18 @@ def _store(job: Job) -> None:
     state.DB.execute("UPDATE scans SET detail = ? WHERE id = ? AND state = 'working'", (job.stage, job.id))
 
 
+def _text(scan_id: str) -> str:
+    """Текст документа для поиска (`scans.text`): страницы с текстом (`done`, `layer`) подряд."""
+    texts = [p["text"] for p in state.DB.execute(
+        "SELECT text FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer') ORDER BY n", (scan_id,))]
+    return "\n\n".join(t for t in texts if t)
+
+
 def _finish(scan_id: str, state_: str, detail_: str, text: "str | None" = None) -> None:
-    """Итог документа и, у документа из чата, текст вложения."""
+    """Итог документа и, у документа из чата, текст вложения. Без `text` (ошибка, отмена) в поиск идёт то, что
+    успело распознаться: выгрузка и «В чат» его отдают (`_readable`)."""
+    if text is None:
+        text = _text(scan_id) or None
     changed = state.DB.execute("UPDATE scans SET state = ?, detail = ?, finished = ?, text = ?"
                                " WHERE id = ? AND finished IS NULL",
                                (state_, detail_, clock.NOW(), text, scan_id)).rowcount
@@ -545,9 +578,7 @@ async def _recognize_pages(job: Job, row) -> str:
         state.DB.execute("UPDATE scan_pages SET state = ?, text = ?, detail = ? WHERE scan_id = ? AND n = ?",
                          (page_state, text, why, job.id, n))
         state.DB.execute("UPDATE scans SET done_pages = done_pages + 1 WHERE id = ?", (job.id,))
-    texts = [p["text"] for p in state.DB.execute(
-        "SELECT text FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer') ORDER BY n", (job.id,))]
-    return "\n\n".join(t for t in texts if t)
+    return _text(job.id)
 
 
 async def _settle() -> None:
@@ -787,9 +818,11 @@ async def stop() -> None:
 # «item» (`_out`), у GET одного документа `pages` — список страниц, а не их число.
 
 router = APIRouter(prefix="/api/ocr")
-#: столбцы ленты и ответов — без `text` (весь текст документа нужен только поиску)
+#: столбцы ленты и ответов — без `text` (весь текст документа нужен только поиску); `failed_pages` — страниц,
+#: которые модель не прочла: «готово» их не скрывает
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, origin, attachment_id, pages, done_pages,"
-           " state, detail, created, finished")
+           " state, detail, created, finished,"
+           " (SELECT count(*) FROM scan_pages p WHERE p.scan_id = scans.id AND p.state = 'failed') AS failed_pages")
 FORMAT = "нужен один PDF или фото PNG, JPEG, WebP"
 TOO_MANY_PAGES = f"больше {ocr_render.PAGES_MAX} страниц — разделите документ"
 PHOTO_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
@@ -806,8 +839,10 @@ def _out(row) -> dict:
     job = JOBS.get(row["id"])
     return {"id": row["id"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
-            "model": row["model"], "pages": row["pages"], "done_pages": row["done_pages"], "origin": row["origin"],
-            "created": row["created"], "finished": row["finished"]}
+            "connection_id": row["connection_id"], "model": row["model"], "pages": row["pages"],
+            "done_pages": row["done_pages"],
+            "failed_pages": row["failed_pages"], "origin": row["origin"], "created": row["created"],
+            "finished": row["finished"]}
 
 
 def _page_list(sid: str) -> list[dict]:
@@ -940,12 +975,26 @@ async def cancel(sid: str, request: Request):
 
 class RetryIn(BaseModel):
     page: int | None = Field(default=None, ge=1)
+    connection_id: int | None = None
+    model: str | None = Field(default=None, max_length=200)
 
 
 @router.post("/{sid}/retry", status_code=202)
 async def retry_scan(sid: str, body: RetryIn, request: Request):
-    """«Повторить страницу» (`page`) или «Распознать заново» (без `page`) кончившегося документа — `retry`."""
+    """«Повторить страницу» (`page`) или «Распознать заново» (без `page`) кончившегося документа — `retry`. С
+    `connection_id`/`model` (`sections.resolve`) другого движка, чем у документа, — новый документ (`again`): ответ —
+    он; тот же движок — как без них. Страницу повторяют только движком документа."""
     uid = request.state.user.id
+    row = _row(uid, sid)
+    if body.connection_id is not None or body.model:
+        if body.page is not None:
+            raise HTTPException(422, {"code": "input", "message": "страницу повторяют тем же движком"})
+        conn, model = sections.resolve(uid, "ocr", body.connection_id, body.model)
+        if (conn.id, model) != (row["connection_id"], row["model"]):
+            sid = again(uid, sid, conn, model)
+            kick(uid)
+            log.info("ocr %s: заново другим движком", sid[:8])
+            return _out(_row(uid, sid))
     retry(uid, sid, body.page)
     kick(uid)
     return _out(_row(uid, sid))
@@ -974,17 +1023,22 @@ async def remove(user_id: int, row) -> None:
     log.info("ocr %s: удалён", sid[:8])
 
 
-def _done(user_id: int, sid: str):
+def _readable(user_id: int, sid: str):
+    """Кончившийся документ (и с ошибкой, и отменённый), где есть страница с текстом: выгрузка и «В чат» отдают
+    распознанное, остальные страницы — пометкой. Идёт — 409 `running`, текста нет — 409 `empty`."""
     row = _row(user_id, sid)
-    if row["state"] != "done":
+    if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "документ ещё не распознан"})
+    if state.DB.execute("SELECT 1 FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer') LIMIT 1",
+                        (sid,)).fetchone() is None:
+        raise HTTPException(409, {"code": "empty", "message": "в документе нет распознанного текста"})
     return row
 
 
 @router.get("/{sid}/export")
 async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$")):  # noqa: A002
-    """Готовый документ файлом: имя — по документу («Договор.pdf» → «Договор.docx»)."""
-    row = _done(request.state.user.id, sid)
+    """Документ с распознанным (`_readable`) файлом: имя — по документу («Договор.pdf» → «Договор.docx»)."""
+    row = _readable(request.state.user.id, sid)
     pages, stem = _page_list(sid), _stem(row["name"])
     if format == "docx":
         body = exports.pages_docx(pages, stem)
@@ -999,7 +1053,7 @@ async def to_chat(sid: str, request: Request):
     """Распознанный текст — неотправленным документом чата «<имя>.md» (свой файл): дальше это обычное
     вложение. Подтверждения для внешней модели нет (спека 6.4): документ — свой."""
     uid = request.state.user.id
-    row = _done(uid, sid)
+    row = _readable(uid, sid)
     text = exports.pages_md(_page_list(sid))
     if len(text) > documents.TEXT_MAX_CHARS:
         raise HTTPException(413, {"code": "too_big", "message": (
