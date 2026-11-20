@@ -479,8 +479,10 @@ function build(view, ctx) {
     const acts = el('div', { class: 'video-acts' });
     const body = el('div', { class: 'video-body' });
     if (item.state === 'done' && item.media_id) {
-      node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: 'metadata',
-        poster: posterOf(item), src: media(item.media_id) }));
+      // кадр-исходник уже есть постером: без него Range-запросов к шаре по каждому ролику ленты нет до нажатия
+      const poster = posterOf(item);
+      node.append(el('video', { class: 'video-player', controls: true, playsinline: true, preload: poster ? 'none' : 'metadata',
+        poster, src: media(item.media_id) }));
       body.append(el('p', { class: 'video-line' }, `${cap(serverMessage(item.detail)) || tr("Готово")} · ${clock(item.elapsed)}`));
       acts.append(button(tr("Открыть"), { class: 'btn btn-sm card-viewer' }, (event) => openViewer(item, null, event.currentTarget)),
         button(tr("Скачать"), { class: 'btn btn-sm card-download' }, () => saveMedia(item.media_id, root)),
