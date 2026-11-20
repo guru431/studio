@@ -143,7 +143,7 @@ def test_seed_from_the_gateway_answer_is_shown(studio):
 
 
 @pytest.mark.parametrize("code, body, words", [
-    (401, {"error": {"message": "Authentication Error"}}, "проверьте токен в профиле"),
+    (401, {"error": {"message": "Authentication Error"}}, "не принят (401) — замените его"),
     (403, {"error": {"message": "forbidden"}}, "закрыт"),
     (400, {"error": {"message": "unknown model", "type": "invalid_request_error"}}, "шлюз отклонил запрос: unknown model"),
     (503, {"error": "no_capacity", "detail": "x"}, "карта занята или недоступна: no_capacity"),
@@ -851,10 +851,10 @@ def test_one_job_per_user_not_per_service(studio):
     wait_for(lambda: images.JOBS[theirs.json()["id"]].state == "done")
 
 
-def test_gateway_401_points_to_the_profile_not_the_login(studio):
+def test_gateway_401_points_to_the_key_settings_not_the_login(studio):
     add_connection(studio, kind="srvllm", base_url=GW, token="revoked-key", name="srvllm")
     result = wait_state(studio, start(studio).json()["id"], {"done", "error"})
-    assert result["state"] == "error" and "«srvllm»" in result["detail"] and "профиле" in result["detail"]
+    assert result["state"] == "error" and "«srvllm»" in result["detail"] and "«Изменить»" in result["detail"]
     assert studio.c.get("/api/me").status_code == 200
 
 

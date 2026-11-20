@@ -20,7 +20,7 @@
    перезапуска опрос продолжается. Готовый mp4 (до VIDEO_CONTENT_MAX, целиком за FETCH_SEC) идёт
    потоком со шлюза на шару (`media.save_stream`) и снимается у шлюза. Шлюз или шара недоступны —
    строка не меняется до следующего прохода; шлюз не ответил по сети — его подключение ждёт
-   PAUSE_SEC и не держит ни свои остальные ролики, ни чужие; 401 — `failed` со словами о профиле,
+   PAUSE_SEC и не держит ни свои остальные ролики, ни чужие; 401 — `failed` со словами о ключе подключения,
    сессия студии жива. Остановка наблюдателя гасит и его задачи.
 3. Отмена и удаление идущего ролика сначала снимают его у шлюза. Строки меняются условием
    «ещё идёт»: отмена посреди скачивания выбрасывает скачанное.
@@ -196,13 +196,13 @@ def _unreachable(e: Exception, conn: Connection) -> HTTPException:
 
 
 def _refusal(r: httpx.Response, conn: Connection) -> HTTPException:
-    """Отказ шлюза — с его кодом и понятными словами; 401 — 502 со словами о профиле: сессия
+    """Отказ шлюза — с его кодом и понятными словами; 401 — 502 со словами о ключе подключения: сессия
     студии ни при чём, страница не должна уводить на вход."""
     code = r.status_code
     if code == 429:
         message = "очередь роликов полна — дождитесь готовых: " + (upstream.message(r) or "код 429")
     else:
-        message = upstream.gateway_error(r, conn.name)
+        message = upstream.gateway_error(r, conn)
     return HTTPException(code if code in (400, 409, 429, 503, 504) else 502, {"code": "gateway", "message": message})
 
 
@@ -223,7 +223,7 @@ async def _drop(row) -> "str | None":
         return f"шлюз недоступен: {type(e).__name__}"
     if r.is_success or r.status_code == 404:
         return None
-    return upstream.gateway_error(r, conn.name)
+    return upstream.gateway_error(r, conn)
 
 
 async def _drop_quietly(conn: Connection, gateway_id: str, video_id: str) -> None:
@@ -585,7 +585,7 @@ async def _fetch(row, conn: Connection, seed: "int | None") -> None:
                 if r.status_code == 404:
                     await _fail(row, _forgotten(row))
                 elif r.status_code in (401, 403):
-                    await _fail(row, upstream.gateway_error(r, conn.name))
+                    await _fail(row, upstream.gateway_error(r, conn))
                 else:
                     log.warning("ролик %s: mp4 не отдан — код %s", row["id"][:8], r.status_code)
                 return
@@ -673,7 +673,7 @@ async def _poll(row) -> None:
         await _fail(row, _forgotten(row))
         return
     if r.status_code in (401, 403):
-        await _fail(row, upstream.gateway_error(r, conn.name))
+        await _fail(row, upstream.gateway_error(r, conn))
         return
     if not r.is_success:
         log.warning("ролик %s: статус не получен — код %s", row["id"][:8], r.status_code)

@@ -204,10 +204,30 @@ def _reason(response: httpx.Response) -> str:
     return message(response) or f"код {response.status_code}"
 
 
-def gateway_error(response: httpx.Response, conn_name: str) -> str:
+#: где правят ключ подключения (раздела «Профиль» больше нет)
+KEY_PLACE = "«Настройки» → раздел → «⋯» у подключения → «Изменить»"
+
+
+def gateway_error(response: httpx.Response, conn) -> str:
+    """Отказ сервиса словами. Шлюз студии (srvllm, s06) — словами шлюза и карты; облако и прочие
+    OpenAI-совместимые (и Cleaner) — «сервис «имя» …»: карты у них нет."""
     code = response.status_code
     if code == 401:
-        return f"шлюз не принял ключ подключения «{conn_name}» — проверьте токен в профиле"
+        return f"ключ подключения «{conn.name}» не принят (401) — замените его: {KEY_PLACE}"
+    if code == 429:
+        return f"«{conn.name}»: слишком много запросов или исчерпан лимит (429) — {_reason(response)}"
+    if code == 402:
+        return f"«{conn.name}»: закончились средства или лимит оплаты (402) — {_reason(response)}"
+    if not (conn.kind == "srvllm" or conn.s06):
+        if code == 403:
+            return f"сервис «{conn.name}» отказал ключу в доступе (403): {_reason(response)}"
+        if code == 400:
+            return f"сервис «{conn.name}» отклонил запрос: {_reason(response)}"
+        if code == 404:
+            return f"сервис «{conn.name}» не нашёл адрес или модель (404): {_reason(response)}"
+        if code in (502, 503, 504):
+            return f"сервис «{conn.name}» временно недоступен ({code}): {_reason(response)}"
+        return f"сервис «{conn.name}» ответил {code}: {_reason(response)}"
     if code == 403:
         return "ключу закрыт этот маршрут шлюза"
     if code == 400:

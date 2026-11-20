@@ -525,14 +525,14 @@ def test_video_gateway_401_keeps_the_session(studio):
                           name="srvllm")
     r = create_video(studio)
     assert r.status_code == 502 and "«srvllm»" in r.json()["detail"]["message"]
-    assert "профиле" in r.json()["detail"]["message"] and media_rows() == 0
+    assert "«Изменить»" in r.json()["detail"]["message"] and media_rows() == 0
     assert studio.c.get("/api/me").status_code == 200
     assert studio.c.patch(f"/api/connections/{conn}", json={"token": TOKEN}).status_code == 200
     v = create_video(studio).json()
     assert studio.c.patch(f"/api/connections/{conn}", json={"token": "revoked-key"}).status_code == 200
     poll(studio)
     got = item(studio, v["id"])
-    assert got["state"] == "failed" and "«srvllm»" in got["detail"] and "профиле" in got["detail"]
+    assert got["state"] == "failed" and "«srvllm»" in got["detail"] and "«Изменить»" in got["detail"]
     assert studio.c.get("/api/me").status_code == 200
 
 

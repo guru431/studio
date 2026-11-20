@@ -634,7 +634,7 @@ async def release_card(request: Request):
             results[name] = {"state": "busy", "message": upstream.message(r) or "занята генерацией"}
         else:
             # и 401: ключ подключения не принят — слова о профиле, сессия студии жива
-            results[name] = {"state": "error", "message": upstream.gateway_error(r, conn.name)}
+            results[name] = {"state": "error", "message": upstream.gateway_error(r, conn)}
     log.info("освобождение карты кнопкой: %s", ", ".join(f"{k} {v['state']}" for k, v in results.items()))
     return {"results": results}
 
@@ -793,7 +793,7 @@ async def _generate_external(job: Job) -> "tuple[bytes, int | None, str]":
     except upstream.UpstreamRefused as e:
         raise _refused(job.conn, e) from None
     if r.status_code != 200:
-        raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn.name))
+        raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn))
     body = upstream.json_body(r)
     data = body.get("data")
     first = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
@@ -827,7 +827,7 @@ async def generate(job: Job) -> "tuple[bytes, int | None, str]":
     except upstream.UpstreamRefused as e:
         raise _refused(job.conn, e) from None
     if r.status_code != 200:
-        raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn.name))
+        raise JobError(f"http_{r.status_code}", upstream.gateway_error(r, job.conn))
     png, seed = _png(upstream.json_body(r))
     mime = await asyncio.to_thread(_picture, png)       # до слияния: битое там было бы «сбоем службы»
     if job.mask is not None:
@@ -845,7 +845,7 @@ async def describe(job: Job):
         except upstream.UpstreamRefused as e:     # и подключение удалили или сменили (ConnectionChanged)
             raise _refused(job.conn, e) from None
         if response.status_code != 200:
-            raise JobError("release", "не удалось подготовить карту: " + upstream.gateway_error(response, job.conn.name))
+            raise JobError("release", "не удалось подготовить карту: " + upstream.gateway_error(response, job.conn))
     if job.kind == "translation":
         content, max_tokens = TRANSLATION_PROMPT + job.prompt, TRANSLATION_MAX_TOKENS
     else:
@@ -864,7 +864,7 @@ async def describe(job: Job):
     except upstream.UpstreamRefused as e:
         raise _refused(job.conn, e) from None
     if response.status_code != 200:
-        raise JobError(f"http_{response.status_code}", upstream.gateway_error(response, job.conn.name))
+        raise JobError(f"http_{response.status_code}", upstream.gateway_error(response, job.conn))
     choices = upstream.json_body(response).get("choices") or []
     choice = choices[0] if choices and isinstance(choices[0], dict) else {}
     text = (choice.get("message") or {}).get("content")
@@ -898,7 +898,7 @@ async def release_after_cancel(job: Job, *, cancelled=True, wait=CANCEL_RELEASE_
             return prefix + " — карта освобождена"
         if r.status_code != 409:
             log.warning("задание %s: release ответил %s", job.id[:8], r.status_code)
-            return f"{prefix}; карту освободить не удалось — {upstream.gateway_error(r, job.conn.name)}"
+            return f"{prefix}; карту освободить не удалось — {upstream.gateway_error(r, job.conn)}"
         if clock.NOW() >= deadline:
             log.warning("задание %s: release — 409 дольше %d с", job.id[:8], wait)
             return prefix + "; карта занята другим запросом — освободится сама по окончании аренды"
