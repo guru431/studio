@@ -92,6 +92,13 @@ Apple. Он ждёт окончания заданий и сохраняет п�
 Проверка паритета 2026-11-17: проекты, файлы/Git, PIN, чаты и ходы трёх CLI, MCP, Keychain,
 строка меню, LaunchAgent и автообновление моста имеют пути macOS.
 
+Лимиты подписки Claude: Claude Code на macOS хранит вход не в `~/.claude/.credentials.json`, а в Keychain.
+Нет переменной `CLAUDE_CODE_OAUTH_TOKEN` и файла — `subscription._keychain_oauth` читает запись
+`subscription.KEYCHAIN_SERVICE` штатным `/usr/bin/security find-generic-password -w` (секрет — в stdout
+дочернего процесса, не в argv), срок `subscription.KEYCHAIN_SEC` с. Записи нет — «Войдите в Claude Code…»,
+иной отказ — `subscription.KEYCHAIN_FAILED`. На настоящем Mac не проверено (подписка остановлена): имя записи
+при заданном `CLAUDE_CONFIG_DIR` и отсутствие запроса доступа к связке — по поведению Claude Code, не по документации.
+
 Окно сведений компьютера обновляет известные установки npm, VS Code, Homebrew и нативный Claude Code.
 Когда доступен только Claude из SDK, «Установить» запускает его официальный установщик отдельного CLI
 для текущего пользователя. CLI внутри подписанного OpenCode.app обновляется вместе с приложением.

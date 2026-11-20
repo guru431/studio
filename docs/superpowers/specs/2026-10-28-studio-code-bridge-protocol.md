@@ -473,7 +473,7 @@ Codex читает [account RPC app-server](https://learn.chatgpt.com/docs/app-s
 от usage не скрывает доступные лимиты. Общий бюджет чтения 24 секунды, метаданные используют существующий
 app-server моста. Claude читает `GET https://api.anthropic.com/api/oauth/usage` с локальными OAuth-данными
 CLI (`CLAUDE_CONFIG_DIR`, иначе `~/.claude/.credentials.json`; явный `CLAUDE_CODE_OAUTH_TOKEN` имеет
-приоритет). Этот API недокументирован; при истечении входа или отказе сервисов возвращается объяснение.
+приоритет; на macOS без файла — запись Keychain `Claude Code-credentials`, мост 0.42.0). Этот API недокументирован; при истечении входа или отказе сервисов возвращается объяснение.
 Мост не обновляет и не переписывает credentials, не следует HTTP redirects и не отправляет токен студии.
 Статистика Claude — необязательный локальный `stats-cache.json`.
 
