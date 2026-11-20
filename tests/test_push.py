@@ -345,6 +345,76 @@ def test_finished_jobs_push_once_to_the_owner_without_content(studio, table, sec
     assert studio.c.get("/api/jobs").json()["push"] is False
 
 
+def test_finished_jobs_skip_a_session_whose_page_is_on_screen(studio):
+    """FINDINGS 06:F6: готовность задания не шлётся сессии, чья страница сейчас на экране (опрос /api/jobs visible=1);
+    ушла с экрана (visible=0) или отметка устарела — шлётся. Прочие уведомления (`quiet` нет) — как раньше."""
+    from test_jobs import image
+
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+
+    def finish(item_id):
+        image(uid, item_id, state_="done", finished=T0)
+        studio.c.portal.call(push.job_finished, "images", item_id)
+        settle(studio)
+
+    assert studio.c.get("/api/jobs?visible=1").status_code == 200
+    finish("seen")
+    assert studio.gw.push_requests == []
+    studio.c.portal.call(push.notify_later, uid, "Рабочий ПК: вопрос", "code", "t")   # не готовность задания
+    settle(studio)
+    assert len(studio.gw.push_requests) == 1
+    studio.clock[0] += push.SCREEN_SEC                                             # телефон заснул без visible=0
+    finish("asleep")
+    assert device.decrypt(studio.gw.push_requests[-1].content)["tag"] == "asleep"
+    assert studio.c.get("/api/jobs?visible=1").status_code == 200
+    assert studio.c.get("/api/jobs?visible=0").status_code == 200                  # страницу скрыли
+    finish("hidden")
+    assert [device.decrypt(r.content)["tag"] for r in studio.gw.push_requests] == ["t", "asleep", "hidden"]
+
+
+def test_scan_of_a_chat_attachment_does_not_push(studio):
+    """FINDINGS 06:F5: скан вложения чата — часть хода; о нём говорит ответ чата, а не «распознавание готово»."""
+    from test_jobs import scan
+
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    scan(uid, "s-chat")
+    state.DB.execute("UPDATE scans SET origin = 'chat' WHERE id = 's-chat'")
+    studio.c.portal.call(ocr._finish, "s-chat", "done", "готово")
+    settle(studio)
+    assert studio.gw.push_requests == []
+
+
+def test_server_chat_answer_pushes_and_lands_in_ready_within_the_hour(studio):
+    """FINDINGS 06:F5: ответ через сервер (рассуждение, очередь за картой) — как задание раздела: «ответ готов» в
+    диалог, строка «Готово за час»; страница на экране — без push; «стоп» — без всего."""
+    from conftest import add_gateway
+    from test_chat import new_chat, turn, sse
+
+    add_gateway(studio)
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    cid = new_chat(studio)
+    sse(turn(studio, cid))
+    settle(studio)
+    [sent] = [device.decrypt(r.content) for r in studio.gw.push_requests]
+    assert sent["title"] == "Студия" and sent["body"] == "ответ готов" and sent["href"] == f"chat/{cid}"
+    ready = studio.c.get("/api/jobs").json()["finished"]
+    assert [(i["section"], i["state"], i["href"]) for i in ready] == [("chat", "done", f"chat/{cid}")]
+    assert ready[0]["title"].startswith("Ответ · ")
+    assert studio.c.get("/api/jobs?visible=1").status_code == 200
+    sse(turn(studio, cid, "Ещё"))
+    settle(studio)
+    assert len(studio.gw.push_requests) == 1 and len(studio.c.get("/api/jobs").json()["finished"]) == 2
+    assert studio.c.delete(f"/api/chats/{cid}").status_code == 204          # удалённый диалог — без строк
+    assert studio.c.get("/api/jobs").json()["finished"] == []
+
+
 def test_cards_and_ends_push_only_without_watchers(studio):
     make_user(studio, "owner")
     aid, _ = enroll(studio)

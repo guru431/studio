@@ -67,6 +67,7 @@ import mcp_client
 import ocr
 import ocr_render
 import operations
+import push
 import sections
 import state
 import upstream
@@ -1156,8 +1157,10 @@ class StreamTask:
         self.card_wait = None
         thought = self.thought_out()
         try:
-            _finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
-                    *thought, error=error if status == "error" else None)
+            if (_finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
+                        *thought, error=error if status == "error" else None)
+                    and status != "stopped" and not self.shutdown):
+                _answered(self, status)
         except Exception as e:                       # noqa: BLE001 — ответ не должен остаться в STREAMS
             status, error = "error", f"сбой службы: {type(e).__name__}"
             log.warning("чат %s: ответ %s — итог не записан (%s)", self.chat_id[:8], self.message_id[:8],
@@ -1170,6 +1173,20 @@ class StreamTask:
 
 
 STREAMS: dict[str, StreamTask] = {}
+#: кончившиеся ответы через сервер для «Готово за час» (jobs.py): id ответа → (user_id, chat_id, время, состояние).
+#: Только память процесса: после перезапуска ответов, кончившихся до него, в панели нет (их прервал перезапуск)
+ANSWERED: dict[str, tuple[int, str, float, str]] = {}
+ANSWERED_SEC = 3600
+
+
+def _answered(st: StreamTask, status: str) -> None:
+    """Ответ готов или не получился (не «стоп» и не остановка службы): в «Готово за час» и уведомлением, как задание
+    раздела, — сессиям, чья страница не на экране (`push.chat_answered`)."""
+    now = clock.NOW()
+    for key in [key for key, item in ANSWERED.items() if now - item[2] >= ANSWERED_SEC]:
+        del ANSWERED[key]
+    ANSWERED[st.message_id] = (st.user_id, st.chat_id, now, status)
+    push.chat_answered(st.user_id, st.chat_id, st.message_id, status == "done")
 
 
 def _chat_streams(chat_id: str) -> list[StreamTask]:
