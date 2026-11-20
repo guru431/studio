@@ -4,6 +4,9 @@ import shutil
 
 import pytest
 
+import security
+import state
+from agent.studio_agent import mirror
 from fake_bridge import pid
 from test_project_mirrors import computers
 from test_ui_browser import READY, browser, code_online, go, live, signin
@@ -123,3 +126,45 @@ def test_mirror_dialog_finds_a_renamed_clone_and_preserves_a_selected_local_file
     assert "Будет изменено файлов и папок" in result["values"]["confirmation"]
     assert (clone / "notes.txt").read_bytes() == b"independent local edit"
     assert (clone / "local.env").read_bytes() == (source / "local.env").read_bytes()
+
+
+def test_mirror_dialog_relinks_the_copy_of_the_project_under_its_former_name(browser, live, computers, monkeypatch):
+    """Проект переименован: его прежнее зеркало держит папку копии. Поиск показывает её «уже зеркалом другого
+    проекта», «Перепривязать» после подтверждения снимает прежнюю привязку и назначает папку этому проекту."""
+    login = "relink-mirror"
+    live.add_user(login)
+    source, first, second = computers
+    monkeypatch.setattr(mirror, "_repositories", lambda _: {"4" * 64})
+    clone = Path(second.roots[1]) / "former"
+    clone.mkdir()
+    aid, left = code_online(live, login, first, "Source")
+    target, right = code_online(live, login, second, "Destination")
+    root = mirror.projects.list_roots(second.roots)[1]["id"]
+    state.DB.execute(
+        "INSERT INTO project_mirrors(source, project, destination, root, name_key, location) VALUES(?,?,?,?,?,?)",
+        (aid, pid("former"), target, root, security.digest("former"),
+         security.encrypt('{"folder":"former","name":"former"}')))
+    found = "#code-mirror-discovery"
+    panel = "#code-project-mirrors"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"code/{aid}/{pid(source.name)}"),
+            ("wait", "document.querySelector('#code-project-mirror')?.hidden === false"),
+            ("click", "#code-project-mirror"),
+            ("wait", f"document.querySelector('{found} button')?.textContent === 'Проверить копии'"),
+            ("click", f"{found} button"),
+            ("type", "#code-mirror-pin input", "2468"),
+            ("click", "#code-mirror-pin button"),
+            ("wait", f"document.querySelector('{found} button')?.textContent === 'Перепривязать'"),
+            ("eval", "found", f"document.querySelector('{found} li').textContent"),
+            ("eval", "accept", "void (window.confirm = (text) => { window.mirrorConfirmation = text; return true; })"),
+            ("click", f"{found} button"),
+            ("wait", f"document.querySelector('{panel} .project-mirror-state')?.textContent.includes('Синхронизировать изменения')"),
+            ("eval", "confirmation", "window.mirrorConfirmation")])
+    finally:
+        left.stop()
+        right.stop()
+    assert not result.get("failed"), result
+    assert "Уже зеркало другого проекта" in result["values"]["found"]
+    assert "Перепривязать её к этому проекту?" in result["values"]["confirmation"]
+    assert [tuple(r) for r in state.DB.execute("SELECT source, project FROM project_mirrors WHERE destination = ?",
+                                               (target,))] == [(aid, pid(source.name))]

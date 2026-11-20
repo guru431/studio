@@ -41,6 +41,8 @@ class Destination(BaseModel):
     root: str = Field(pattern=r"^[0-9a-f]{16}$")
     name: str = Field(min_length=1, max_length=120)
     existing: bool = False
+    #: папка уже назначена зеркалом другого (переименованного, удалённого) проекта — снять ту привязку
+    replace: bool = False
 
 
 class Sync(BaseModel):
@@ -273,7 +275,7 @@ def _can_discover(aid):
     return bool(link and link.hello.get("project_mirror") and link.hello.get(DISCOVERY_CAP))
 
 
-def _candidates(data, aid, reserved, shared):
+def _candidates(data, aid, reserved, shared, mine):
     raw = data.get("items")
     if not isinstance(raw, list):
         return []
@@ -287,9 +289,12 @@ def _candidates(data, aid, reserved, shared):
                 or not isinstance(folder, str) or not 1 <= len(folder) <= 4096
                 or match not in ("repository", "name")):
             continue
-        if (aid, root, security.digest(name.casefold())) in reserved or (aid, project) in shared:
+        held = reserved.get((aid, root, security.digest(name.casefold())))
+        if held == mine or (aid, project) in shared:
             continue
-        items.append({"root": root, "name": name, "folder": folder, "match": match})
+        # Зеркало другого проекта (переименованного или удалённого) — с пометкой: привязка его перепривяжет.
+        items.append({"root": root, "name": name, "folder": folder, "match": match,
+                      **({"elsewhere": True} if held is not None else {})})
     return items
 
 
@@ -313,9 +318,9 @@ async def discover(aid: int, pid: str, request: Request, destination: int | None
     if (not isinstance(name, str) or not 1 <= len(name) <= 120 or not isinstance(repositories, list)
             or len(repositories) > 16 or not all(isinstance(item, str) and SHA256.fullmatch(item) for item in repositories)):
         raise code._refuse(502, "bridge", "мост вернул неверные сведения о проекте")
-    reserved = {tuple(row) for row in state.DB.execute(
-        "SELECT m.destination, m.root, m.name_key FROM project_mirrors m JOIN agents a ON a.id=m.destination WHERE a.user_id=?",
-        (uid,))}
+    reserved = {tuple(row[:3]): tuple(row[3:]) for row in state.DB.execute(
+        "SELECT m.destination, m.root, m.name_key, m.source, m.project FROM project_mirrors m"
+        " JOIN agents a ON a.id=m.destination WHERE a.user_id=?", (uid,))}
     shared = {tuple(row) for row in state.DB.execute(
         "SELECT m.agent_id, m.project FROM project_members m JOIN agents a ON a.id=m.agent_id WHERE a.user_id=?",
         (uid,))}
@@ -339,7 +344,7 @@ async def discover(aid: int, pid: str, request: Request, destination: int | None
                          else "offline" if reason == "offline" else "error")
                 return {**result, "state": stage}
         return {**result, "state": "ready", "complete": data.get("complete") is True,
-                "items": _candidates(data, target, reserved, shared)}
+                "items": _candidates(data, target, reserved, shared, (aid, pid))}
 
     devices = await asyncio.gather(*(inspect(agent) for agent in agents))
     _owner(request, aid, pid)
@@ -464,6 +469,14 @@ async def create(aid: int, pid: str, request: Request):
     body = await _body(request, Destination)
     if body.destination == aid or "/" in body.name or body.name.startswith("."):
         raise code._refuse(422, "invalid", "выберите другой компьютер и имя папки проекта")
+    name_key = security.digest(body.name.casefold())
+    held = state.DB.execute("SELECT id, source, project FROM project_mirrors WHERE destination=? AND root=? AND name_key=?",
+                            (body.destination, body.root, name_key)).fetchone()
+    elsewhere = held is not None and (held["source"], held["project"]) != (aid, pid)
+    if held is not None and not (elsewhere and body.replace):
+        if elsewhere:
+            raise code._refuse(409, "exists", "эта папка уже назначена зеркалом другого проекта", elsewhere=True)
+        raise code._refuse(409, "exists", "эта папка уже назначена зеркалом")
     metadata_only = _can_discover(body.destination)
     flags = {"metadata_only": True} if metadata_only else {}
     target = await _ask(request, body.destination, "mirror_destination", root=body.root, name=body.name, **flags)
@@ -476,13 +489,28 @@ async def create(aid: int, pid: str, request: Request):
         raise code._refuse(404, "not_found", "найденная папка больше недоступна — обновите поиск")
     _private_destination(body.destination, project)
     await _ask(request, aid, "mirror_read", project=pid, reads=[])
+    if elsewhere and body.destination in TRANSFERS:
+        raise code._refuse(409, "busy", "дождитесь окончания передачи зеркала")
+    # Перепривязка — та же строка снимается и создаётся новая одной транзакцией: сверка начнётся без прежней
+    # базы, и все различия копии будут показаны как локальные изменения.
+    state.DB.execute("BEGIN IMMEDIATE")
     try:
+        if elsewhere:
+            state.DB.execute("DELETE FROM project_mirrors WHERE id=? AND destination=?", (held["id"], body.destination))
         mid = state.DB.execute(
             "INSERT INTO project_mirrors(source, project, destination, root, name_key, location) VALUES(?,?,?,?,?,?)",
-            (aid, pid, body.destination, body.root, security.digest(body.name.casefold()),
+            (aid, pid, body.destination, body.root, name_key,
              security.encrypt(_json({"name": body.name, "folder": folder})))).lastrowid
+        state.DB.execute("COMMIT")
     except sqlite3.IntegrityError:
+        state.DB.execute("ROLLBACK")
         raise code._refuse(409, "exists", "эта папка уже назначена зеркалом") from None
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    if elsewhere:
+        RESULTS.pop(held["id"], None)
+        log.info("зеркало %d перепривязано: %d", held["id"], mid)
     return _item(_rows(aid, pid, mid).fetchone())
 
 
