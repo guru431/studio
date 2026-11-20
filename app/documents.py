@@ -32,7 +32,7 @@ NAME_MAX = 200
 XML_MAX = 16 * 1024 * 1024
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
-UNSUPPORTED = "поддерживаются PDF, DOCX, TXT и MD"
+UNSUPPORTED = "поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"   # фото принимает chat.upload_attachment
 SCAN = "в PDF нет текстового слоя — это скан"
 BROKEN = "документ повреждён"
 TOO_LONG = "текст длиннее 2 млн знаков"

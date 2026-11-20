@@ -1195,15 +1195,108 @@ def test_chat_with_a_pdf_attachment(browser, live):
         ("type", "#chat-input", "Какой срок оплаты?"), ("click", "#send"),
         ("wait", ANSWERED),
         ("eval", "sent", "[document.querySelector('#messages .msg.user .att').textContent,"
-                         " document.querySelectorAll('#composer .att-chip').length]")])
+                         " document.querySelectorAll('#composer .att-chip').length]"),
+        # 02:F1: отправленный документ — ссылкой на скачивание своего файла
+        ("eval", "download", """(async () => { const a = document.querySelector('#messages .msg.user a.att-file');
+          const r = await fetch(a.href); return [a.hasAttribute('download'), new URL(a.href).search, r.status,
+            r.headers.get('content-disposition').includes('attachment'), (await r.arrayBuffer()).byteLength > 0]; })()""")])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["attached"] == 1 and v["chip"] == "договор.pdf"
     assert "договор.pdf" in v["sent"][0] and v["sent"][1] == 0
+    assert v["download"] == [True, "?download=1", 200, True, True]
     content = live.gw.chat_requests[-1]["messages"][-1]["content"]
     assert content.startswith('<document name="договор.pdf">') and "Payment is due" in content
     assert content.endswith("Какой срок оплаты?")
     assert not problems(r), problems(r)
+
+
+def test_chat_sent_photo_has_a_thumbnail_that_opens(browser, live):
+    """02:F1: отправленное фото — миниатюра в сообщении, нажатие — окно с ним целиком и «Скачать»."""
+    data = base64.b64encode(PNG_REAL).decode()
+    file = f"[new File([Uint8Array.from(atob({data!r}), c => c.charCodeAt(0))], 'кот.png', {{ type: 'image/png' }})]"
+    thumb = "document.querySelector('#messages .msg.user .att-thumb img')"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+        attach(file), ("wait", "document.querySelector('#composer .att-chip')"),
+        ("type", "#chat-input", "Что на фото?"), ("click", "#send"), ("wait", ANSWERED),
+        ("wait", f"{thumb}?.complete && {thumb}.naturalWidth > 0"),
+        ("eval", "thumb", f"[new URL({thumb}.src).search, document.querySelector('#messages .msg.user .att-thumb')"
+                          ".getAttribute('aria-label')]"),
+        ("click", "#messages .msg.user .att-thumb"),
+        ("wait", "document.querySelector('#att-photo-dialog[open] img.att-photo')?.naturalWidth > 0"),
+        ("eval", "full", "[document.querySelector('#att-photo-dialog h2').textContent,"
+                         " new URL(document.querySelector('#att-photo-dialog img').src).search,"
+                         " !!document.querySelector('#att-photo-save')]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["thumb"] == ["?thumb=1", "Открыть фото кот.png"]
+    assert v["full"] == ["кот.png", "", True]
+    assert not problems(r), problems(r)
+
+
+def test_chat_refuses_unfit_files_at_once_and_drops_the_empty_chat(browser, live):
+    """02:F11: GIF — слова у чипа сразу при выборе, «Отправить» диалог не создаёт; 02:F19: первый ход сорвался на
+    загрузке вложения — созданный под него диалог удалён, адрес — снова новый чат, поле и чип — на месте."""
+    gif = "[new File(['GIF89a'], 'кадр.gif', { type: 'image/gif' })]"
+    broken = "[new File(['не pdf'], 'битый.pdf', { type: 'application/pdf' })]"
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+        attach(gif), ("wait", "document.querySelector('#composer .att-chip.bad')"),
+        ("eval", "chip", "document.querySelector('#composer .att-chip .att-state').textContent"),
+        ("type", "#chat-input", "Посмотри"), ("click", "#send"),
+        ("wait", "document.querySelector('#chat-error').textContent"),
+        ("eval", "refused", "[document.querySelector('#chat-error').textContent, location.hash]"),
+        ("click", "#composer .att-remove"), ("wait", "!document.querySelector('#composer .att-chip')"),
+        ("eval", "attached2", attach(broken)[2]),
+        ("click", "#send"),
+        ("wait", "document.querySelector('#composer .att-chip.bad') && location.hash === '#/chat'"),
+        ("idle",),
+        ("eval", "after", "[document.querySelector('#composer .att-chip .att-state').textContent,"
+                          " document.querySelector('#chat-input').value, document.querySelectorAll('#messages .msg').length]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["chip"] == "Поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"
+    assert v["refused"] == ["Уберите неподходящие файлы", "#/chat"]
+    assert v["after"] == ["Документ повреждён", "Посмотри", 0]
+    created = [s for s in r["sent"] if s == "POST /api/chats"]
+    dropped = [s for s in r["sent"] if re.fullmatch(r"DELETE /api/chats/[0-9a-f]{32}", s)]
+    assert len(created) == 1 and len(dropped) == 1, r["sent"]
+    assert not known_refusals(problems(r), 422), problems(r)
+
+
+def test_chat_shows_turns_made_on_another_device(browser, live):
+    """02:F13: ход с «телефона» (тот же API) — вкладка видит его, вернувшись в фокус и по нажатию на открытый диалог в
+    списке; отправка, пока там идёт ответ, — 409 `busy`: лента перечитана, идущий ответ виден с «Остановить»."""
+    saved = live.gw.chat_hold
+    live.gw.chat_hold = lambda: "долгий" in json.dumps(live.gw.chat_requests[-1], ensure_ascii=False)
+    phone = f"""(async () => {{ const m = {API}; const id = location.hash.split('/')[2];
+      const r = await m.api('POST', '/api/chats/' + id + '/turns', {{ text: %s }}); await r.text(); return true; }})()"""
+    count = "document.querySelectorAll('#messages .msg').length"
+    try:
+        r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
+            ("type", "#chat-input", "Привет с компьютера"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "phone1", phone % "'Привет с телефона'"),
+            ("eval", "focus", "window.dispatchEvent(new Event('focus'))"),
+            ("wait", f"{count} === 4"),
+            ("eval", "phone2", phone % "'Ещё с телефона'"),
+            ("click", ".chat-item [aria-current=page]"),
+            ("wait", f"{count} === 6"),
+            ("type", "#chat-input", "А теперь?"),
+            # «телефон» начал долгий ответ — вкладка о нём не знает и отправляет своё
+            ("eval", "busy", f"""(async () => {{ const m = {API}; const id = location.hash.split('/')[2];
+              const r = await m.api('POST', '/api/chats/' + id + '/turns', {{ text: 'долгий с телефона' }});
+              window.held = r.body.getReader(); await window.held.read();
+              document.querySelector('#composer').requestSubmit(); return true; }})()"""),
+            ("wait", f"!document.querySelector('#stop').hidden && {count} === 8"
+                     " && document.querySelector('#chat-error').textContent"),
+            ("eval", "state", "[document.querySelector('#chat-error').textContent, document.querySelector('#chat-input').value,"
+                              " document.querySelector('#messages .msg.user:nth-last-child(2) .bubble').textContent]"),
+            ("click", "#stop"), ("wait", "!document.querySelector('#send').hidden")])
+    finally:
+        live.gw.chat_hold = saved
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["state"] == ["Ответ ещё идёт — дождитесь или остановите", "А теперь?", "долгий с телефона"]
+    assert not known_refusals(problems(r), 409), problems(r)
 
 
 WEB_TOGGLE = "document.querySelector('#web-toggle')"
