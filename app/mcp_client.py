@@ -150,7 +150,8 @@ async def delete(sid: int, request: Request):
 
 @router.post("/{sid}/check")
 async def check(sid: int, request: Request):
-    session = Session(row(request.state.user.id, sid))
+    """«Проверить» — и выключенный сервер: проверить его до включения."""
+    session = Session(row(request.state.user.id, sid), disabled_ok=True)
     try:
         tools = await session.tools()
         return {"tools": [t.get("name", "") for t in tools if isinstance(t, dict)]}
@@ -159,16 +160,18 @@ async def check(sid: int, request: Request):
 
 
 class Session:
-    def __init__(self, item):
+    def __init__(self, item, *, disabled_ok=False):
         self.uid, self.sid = item["user_id"], item["id"]
         self.url, self.stamp = item["url"], item["secret_enc"]
+        self.disabled_ok = disabled_ok       # только «Проверить»: ходы и разделы выключенный сервер не зовут
         self.session = None
         self.version = None
         self.seq = 0
 
     def headers(self, *, rpc=True):
         item = row(self.uid, self.sid)
-        if not item["enabled"] or item["url"] != self.url or item["secret_enc"] != self.stamp:
+        if ((not item["enabled"] and not self.disabled_ok) or item["url"] != self.url
+                or item["secret_enc"] != self.stamp):
             raise refused("Подключение MCP изменено или выключено — запустите ответ заново")
         values = secret(item)
         headers = httpx.Headers(values.get("headers", {}))
