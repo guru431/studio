@@ -36,6 +36,10 @@ SINK_NAMES = SINK_KEYS | {'stage', 'why', 'hint'}
 #: строковые константы модулей с кириллицей, которые страница не показывает: `модуль.ИМЯ` → причина
 EXEMPT_CONSTANTS = {
     'chat.WEB_NOTE': 'подсказка модели',
+    'chat_system.MCP_NOTE': 'подсказка модели',
+    'chat_system.MCP_FRAME': 'рамка правил MCP для модели',
+    'chat_system.ROLE_HEAD': 'заголовок роли для модели',
+    'chat_system.CUT': 'пометка обрезки для модели',
     'checks.PROBE_TEXT': 'проба модели',
     'web.NOTHING': 'результат инструмента для модели',
     'db.YO': 'SQL',

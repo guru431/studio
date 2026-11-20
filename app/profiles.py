@@ -126,6 +126,12 @@ def request_params(conn: connections.Connection) -> dict:
     return out
 
 
+def text_of(conn: connections.Connection) -> str:
+    """Системный текст профиля для куска 2 системного сообщения (`chat_system.base`); у Cleaner — пусто."""
+    row = None if conn.cleaner else _row(conn.id)
+    return row["system_text"] if row else ""
+
+
 def suggestions_of(conn: connections.Connection) -> list:
     row = None if conn.cleaner else _row(conn.id)
     return json.loads(row["suggestions"]) if row else []
