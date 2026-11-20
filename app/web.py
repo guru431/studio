@@ -47,6 +47,7 @@ PAGE_CUT = "\n\n[страница обрезана]"
 QUERY_MAX = 500
 URL_MAX = 2048
 NOT_KNOWN = "читаю только ссылки из переписки или найденные поиском"
+NOT_OFFERED = "модель вызвала инструмент, которого у неё нет"
 _LINK = re.compile(r"https?://[^\s<>\"'«»`]+", re.I)
 _LINK_TAIL = ".,;:!?)]}"
 _TRACKING = re.compile(r"(?:utm_[^=&]*|fbclid|gclid|yclid)(?:=[^&]*)?", re.I)   # метки рекламы в запросе адреса
@@ -484,7 +485,7 @@ async def call(name: str, arguments: str, key: "str | None", kinds: "list[str] |
     Не бросает ToolError (и сбой инструмента — тоже шаг); отмена («Стоп») идёт насквозь."""
     kind = NAMES.get(name)
     if kind is None or (kinds is not None and kind not in kinds):
-        return {"kind": "unknown", "error": "модель вызвала инструмент, которого у неё нет"}
+        return {"kind": "unknown", "error": NOT_OFFERED}
     args, param = args_of(arguments), _SPECS[kind][2]
     value = args.get(param) if args is not None else None
     if not isinstance(value, str) or not value.strip():
