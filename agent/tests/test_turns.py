@@ -220,9 +220,24 @@ async def test_missing_cli_ends_with_words_and_frees_the_chat(home, project, mar
     assert sent[-1]["e"] == {"k": "done", "status": "done"}
 
 
+async def test_failure_before_the_query_is_not_started_and_after_it_is_a_broken_turn(home, project):
+    """До запроса — «не запустился»; после текста и шага — обрыв хода, а не установка."""
+    sent = []
+    r = runner(home, FakeFactory([], fail=RuntimeError("секрет")), sent)
+    r.start(project, PID, CHAT, "Привет", None, None)
+    await settle(r)
+    assert sent[-1]["e"]["message"] == "Claude Code не запустился"
+    sent = []
+    r = runner(home, FakeFactory([assistant(text("часть ответа")), RuntimeError("обрыв")]), sent)
+    r.start(project, PID, CHAT, "Привет", None, None)
+    await settle(r)
+    assert any(s["e"].get("k") == "text" for s in sent)
+    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": "Claude Code прервал ход — повторите задание"}
+
+
 async def test_other_failures_end_with_their_words(home, project):
     cases = [
-        ([RuntimeError("секрет")], "Claude Code не запустился"),
+        ([RuntimeError("секрет")], "Claude Code прервал ход — повторите задание"),
         ([ResultError("x", {"subtype": "error_max_turns", "errors": ["слишком много ходов"]})], "слишком много ходов"),
         ([result("success", is_error=True, result="API Error: 529")], "API Error: 529"),
         ([result("error_max_budget_usd", is_error=True)], "Claude Code: error_max_budget_usd"),
