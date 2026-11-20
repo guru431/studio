@@ -3,11 +3,15 @@
 import base64
 import json
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
-from . import image_input, limits
+from . import image_input, limits, store
 from .errors import Refused
+
+FOLDER = "attachments"  # в каталоге моста: после падения посреди хода `sweep` при старте знает, что убрать
+PREFIX = "studio-attachments-"
 
 
 def name(value):
@@ -57,8 +61,10 @@ class Files:
             return text
         validate(items)
         if self._directory is None:
-            # mkdtemp создаёт приватный каталог пользователя (0700, на Windows — ACL).
-            self._directory = tempfile.TemporaryDirectory(prefix="studio-attachments-")
+            # mkdtemp создаёт приватный каталог пользователя (0700, на Windows — ACL) в каталоге моста.
+            root = store.home() / FOLDER
+            root.mkdir(mode=0o700, exist_ok=True)
+            self._directory = tempfile.TemporaryDirectory(prefix=PREFIX, dir=root)
         metadata = []
         for item in items:
             original = name(item["name"])
@@ -77,3 +83,19 @@ class Files:
         if self._directory is not None:
             self._directory.cleanup()
             self._directory = None
+
+
+def sweep(home) -> int:
+    """При старте ядра, до первого хода: вложения ходов, оборванных падением или выключением компьютера.
+
+    Только каталог моста: во временной папке системы (там их клали версии до 0.42.0) префикс мог бы совпасть с
+    каталогом идущего хода другого процесса; прежние остатки там убирает уборка временных файлов ОС."""
+    gone = 0
+    try:
+        stale = [p for p in (Path(home) / FOLDER).glob(PREFIX + "*") if p.is_dir() and not p.is_symlink()]
+    except OSError:
+        return 0
+    for path in stale:
+        shutil.rmtree(path, ignore_errors=True)
+        gone += not path.exists()
+    return gone

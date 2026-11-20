@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -128,6 +129,20 @@ class ClaudeConfig:
         if self.directory is not None:
             self.directory.cleanup()
             self.directory = None
+
+
+def sweep(home) -> int:
+    """При старте ядра, до первого хода: открытые конфиги (`runtime-*`) ходов, оборванных падением моста или
+    выключением компьютера, — заголовки и `env` MCP иначе лежали бы открытым текстом без срока."""
+    gone = 0
+    try:
+        stale = [p for p in (Path(home) / "mcp").glob("runtime-*") if p.is_dir() and not p.is_symlink()]
+    except OSError:
+        return 0
+    for path in stale:
+        shutil.rmtree(path, ignore_errors=True)
+        gone += not path.exists()
+    return gone
 
 
 async def claude_config(project):
