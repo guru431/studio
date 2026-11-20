@@ -22,7 +22,8 @@
  *                            влево и вправо, цифры 0–9 с code Digit0–Digit9, Slash); модификаторы — «Alt», «Control»,
  *                            «Meta», «Shift» через «+»;
  *   ["route", часть адреса, код, тело?] — запросы, чей адрес содержит часть, получают этот ответ (тело — JSON
- *                            строкой) вместо сети; ["unroute", часть адреса] — снова сеть;
+ *                            строкой) вместо сети, с первой подмены — в обход service worker; ["unroute", часть
+ *                            адреса] — снова сеть;
  *   ["screenshot", путь, селектор?] — снимок окна или элемента в PNG (глазами проверить вёрстку).
  * `probe` вычисляется всегда, и после отказа тоже: по нему видно, на чём
  * страница остановилась.
@@ -264,6 +265,9 @@ async function run(job) {
         } else if (kind === 'press') await press(tab, args[0], args[1]);
         else if (kind === 'route') {
           routes.set(args[0], { code: args[1], body: args[2] });
+          // запросы страницы с service worker иногда уходят в сеть мимо Fetch вкладки (подмена /health не действовала
+          // все 30 с сценария): с подменой вкладка ходит в обход работника
+          await tab.send('Network.setBypassServiceWorker', { bypass: true });
           await intercept();
         } else if (kind === 'unroute') routes.delete(args[0]);
         else if (kind === 'screenshot') {

@@ -71,7 +71,7 @@ export async function loadMe() {
   return me;
 }
 
-export async function api(method, path, body, { signal, headers: extraHeaders } = {}) {
+export async function api(method, path, body, { signal, headers: extraHeaders, keepalive = false } = {}) {
   const headers = { ...extraHeaders };
   let payload;
   const token = me ? me.csrf : csrf;
@@ -83,7 +83,7 @@ export async function api(method, path, body, { signal, headers: extraHeaders } 
   }
   let response;
   try {
-    response = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal });
+    response = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal, keepalive });
   } catch (err) {
     // обрыв и срок (AbortSignal.timeout отклоняет TimeoutError) — как есть: это не «нет связи»
     if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) throw err;
