@@ -2,7 +2,8 @@
 
 `GET /api/jobs?since=<время>` → `{now, running, finished, push}` (`push` — подписка этой сессии). Идущие — картинки `working`,
 `cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`/`queued`,
-распознавания и переводы `queued`/`working`/`cancelling`,
+распознавания (кроме сканов перевода и уже отправленного хода чата — `ocr.SERVED`) и переводы
+`queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
 не старше JOBS_RECENT_SEC, не больше FINISHED_MAX (чат сюда не попадает: ответ виден в диалоге).
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
@@ -104,8 +105,12 @@ def _transcribe(uid: int, after: float) -> list:
 
 
 def _ocr(uid: int, after: float, hidden: set) -> list:
-    # сканы закрытых чата и перевода — одним подзапросом, как у ленты «Сканов» и поиска (опрос частый)
-    going, done = _rows("scans", uid, ocr.RUNNING, after, hidden=lock_policy.hidden_scans(uid, hidden))
+    # сканы закрытых чата и перевода — одним подзапросом, как у ленты «Сканов» и поиска (опрос частый); сканы перевода
+    # и отправленного хода (`ocr.SERVED`) — тоже: строка у них одна — перевода или ответа
+    closed, args = lock_policy.hidden_scans(uid, hidden)
+    served = f"SELECT id FROM scans WHERE user_id = ? AND {ocr.SERVED}"
+    going, done = _rows("scans", uid, ocr.RUNNING, after,
+                        hidden=(f"{closed} UNION {served}" if closed else served, (*args, uid)))
     out = []
     for row in going + done:
         job = ocr.JOBS.get(row["id"])

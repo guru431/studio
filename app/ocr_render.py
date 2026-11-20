@@ -2,9 +2,9 @@
 
 - PDF рисует pypdfium2 (pypdf рисовать не умеет): 300 DPI, длинная сторона — не больше MAX_SIDE.
 - Фото — PNG, JPEG, WebP до image_upload.VIDEO_PIXELS, с поворотом по EXIF и тем же пределом.
-- Страница PDF в чате требует распознавания (`needs_ocr`), если текста слоя у pypdf нет или его меньше
-  LAYER_MIN_CHARS знаков без пробельных и на странице есть картинка; пустая — почти однотонная картинка
-  (ImageStat).
+- Страница PDF в чате и переводе требует распознавания (`pdf_scan_pages`), если текста слоя у pypdf нет или его
+  меньше LAYER_MIN_CHARS знаков без пробельных и на странице есть картинка; страница без текста и картинки — только
+  когда больше читать нечего; пустая — почти однотонная картинка (ImageStat).
 - Всё синхронно (зовётся через asyncio.to_thread). PDFium не потокобезопасен даже на разных
   документах — вызовы идут под одним замком; документ открывается и закрывается внутри вызова.
 - Отказы — ScanError со словами для человека; ни байты, ни текст в журнал не идут.
@@ -70,17 +70,17 @@ def is_scan(page, text: str) -> bool:
     return not has_layer(text) and _has_image(page.get("/Resources"))
 
 
-def needs_ocr(page, text: str) -> bool:
-    """Страница PDF в чате требует распознавания: текста слоя нет, или его меньше LAYER_MIN_CHARS знаков без
-    пробелов и на странице есть картинка (скан с водяным знаком «Scanned with CamScanner»). Короткая страница
-    без картинки (одна строка, подписи) берётся из слоя как есть."""
-    return not text or is_scan(page, text)
-
-
 def pdf_scan_pages(data: bytes) -> list[tuple[str, bool]]:
-    """(текст слоя, нужно ли распознавание) каждой страницы PDF для чата; отказы — DocumentError
-    documents.pdf_page_texts (битый файл, текст длиннее предела). Раздел «Распознавание» слой не читает."""
-    return documents.pdf_pages(data, lambda page, text: (text, needs_ocr(page, text)))
+    """(текст слоя, нужно ли распознавание) каждой страницы PDF для чата и перевода; отказы — DocumentError
+    documents.pdf_page_texts (битый файл, текст длиннее предела). Раздел «Распознавание» слой не читает.
+    Распознавать: страницу-скан (`is_scan`: слоя меньше LAYER_MIN_CHARS и есть картинка — и скан с водяным знаком
+    «Scanned with CamScanner») и страницу без текста; короткая страница без картинки (строка, подписи) — из слоя.
+    Страница без текста и без картинки (чистый оборот) требует распознавания, только если в PDF нет ни текста,
+    ни страниц-сканов (текст кривыми): иначе она пустая сразу, и текстовый PDF не становится документом «Сканов»."""
+    pages = documents.pdf_pages(data, lambda page, text: (text, is_scan(page, text)))
+    if any(text for text, _ in pages) and not any(scan for _, scan in pages):
+        return [(text, False) for text, _ in pages]
+    return [(text, not text or scan) for text, scan in pages]
 
 
 def pdf_layer_pages(data: bytes) -> list[tuple[str, bool]]:

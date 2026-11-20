@@ -170,6 +170,28 @@ def test_photo_needs_the_ocr_section(studio):
     assert r.status_code == 415 and r.json()["detail"]["code"] == "format"
 
 
+def test_photo_takes_hunyuan_when_scans_default_to_s06(studio):
+    """05:F2: умолчание «Сканов» — s06 (без координат), а HunyuanOCR шлюза srvllm связан — снимок идёт через
+    него; HunyuanOCR нет — отказ при загрузке словами, до записи на шару."""
+    gw = add_gateway(studio)
+    r = studio.c.post("/api/connections", json={"name": "s06", "kind": "openai", "s06": True, "token": "s06-key",
+                                                "base_url": "http://10.77.1.15:4000", "sections": ["ocr"]})
+    assert r.status_code == 201, r.text
+    s06 = r.json()["id"]
+    r = studio.c.put("/api/sections/ocr/default", json={"connection_id": s06, "model": "ocr-ru"})
+    assert r.status_code == 200, r.text
+    studio.gw.ocr_reply = spot_reply("Exit(93,146),(491,214)")
+    row = wait_row(studio, start_file(studio, "Снимок.png", photo("PNG", (60, 40))))
+    assert (row["state"], row["source"]) == ("done", "Exit"), row["detail"]
+    assert [sent_prompt(r) for r in studio.gw.ocr_requests] == [translate_spot.PROMPT]    # HunyuanOCR, не ocr-ru
+
+    assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204
+    files = count(studio, "media")
+    r = send_file(studio, "Снимок.png", photo("PNG", (60, 40)))
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "no_ocr", "message": translate.NO_HUNYUAN}
+    assert count(studio, "media") == files
+
+
 def test_photo_frees_and_releases_the_ocr_slot_around_spotting(studio):
     add_gateway(studio)
     studio.gw.ocr_reply = spot_reply("Exit(93,146),(491,214)")
@@ -293,6 +315,42 @@ def test_stop_user_ends_spotting_and_releases_in_the_background(studio):
     assert row_of(studio, tid)["state"] == "cancelled" and ocr.EXTERNAL == {}
     studio.gw.ocr_hold = False
     wait_until(studio, lambda: ocr_releases(studio) >= 1 and ocr.LEASED == {})
+
+
+def test_restart_while_spotting_releases_the_slot_after_start(studio):
+    """05:F3: остановка службы посреди распознавания снимка — слот ocr взят; новый процесс освобождает его после
+    старта (`ocr.stop` сохраняет `LEASED`), а после аварии — по прерванной записи (`translate.recover`)."""
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Снимок.png", photo("PNG", (60, 40)))
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+
+    async def restart(stop=True):
+        if stop:
+            await translate.stop()
+            await ocr.stop()
+        translate.JOBS.clear()
+        ocr.LEASED.clear()                               # память нового процесса
+        ocr.recover()
+        translate.recover()
+        ocr.resume_queued()
+        translate.resume_queued()
+    try:
+        on_loop(studio, restart)
+    finally:
+        studio.gw.ocr_hold = False
+    assert (row_of(studio, tid)["state"], row_of(studio, tid)["detail"]) == ("error", translate.INTERRUPTED)
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == 1
+
+    crashed = start_file(studio, "Снимок.png", photo("PNG", (60, 40)))
+    wait_row(studio, crashed)
+    on_loop(studio, lambda: state.DB.execute("UPDATE translations SET state = 'working', source = NULL, finished = NULL"
+                                             " WHERE id = ?", (crashed,)))
+    released = ocr_releases(studio)
+    on_loop(studio, lambda: restart(stop=False))
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == released + 1
 
 
 def test_repeat_of_a_photo_copies_blocks_without_ocr(studio):
