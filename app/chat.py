@@ -159,6 +159,9 @@ SOME_SCANS = "страниц-сканов в PDF — {} из {}, без расп
 SCAN_FAILED = "скан не распознан"
 NOT_READY = "скан ещё распознаётся"
 NO_PHOTO = "[фото недоступно: файла нет в хранилище]"
+REFUSED = "[вложение «{}» не передано: на это сообщение модель ответила ошибкой]"
+#: начала слов ошибки, при которой запрос до модели не дошёл: вложения хода — не причина отказа (compose)
+UNSENT = (SCAN_FAILED, STORAGE, GAVE_UP, CARD_BUSY.split("{")[0])
 DROPPED = f"[фото убрано из контекста: модели — не больше {MAX_IMAGES} картинок на запрос]"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
@@ -462,18 +465,44 @@ def _cap_images(messages: list[dict]) -> None:
         m["content"] = parts[::-1]
 
 
-def compose(chat_id: str, upto: str) -> list[dict]:
+def _refused_turns(rows, model: "str | None") -> set[str]:
+    """id сообщений пользователя, на которые модель `model` (None — любая) ответила ошибкой, не написав ни слова:
+    вероятно, она отказала самим вложениям (фото текстовой модели, документ больше её контекста). Ошибки, при которых
+    запрос до модели не дошёл (UNSENT: скан не распознан, хранилище, карта занята), — не отказ: вложения остаются."""
+    refused, asked = set(), []
+    for row in rows:
+        if row["role"] == "user":
+            asked.append(row["id"])
+            continue
+        words = row["error"] or ""
+        said = "" if row["content"] == words else row["content"]
+        if (row["status"] == "error" and not said and model in (None, row["model"])
+                and not (words or row["content"]).startswith(UNSENT)):
+            refused.update(asked)
+        asked = []
+    return refused
+
+
+def compose(chat_id: str, upto: str, model: "str | None" = None) -> list[dict]:
     """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
     пользователя подряд сливаются, картинок — не больше MAX_IMAGES на весь запрос. Найденное «Интернетом»
     (`messages.tools` ответа) — блоками web.history_block в начале сообщения пользователя перед этим ответом,
-    без ролей `tool` и `tool_calls`. Синхронно и без файлов (идёт в транзакции хода): картинки — частями с
-    id media, данные — fill_photos после COMMIT."""
+    без ролей `tool` и `tool_calls`. Вложения сообщения, на которое модель хода (`model`) ответила ошибкой без
+    единого слова (`_refused_turns`), не уходят снова — пометкой REFUSED: иначе фото, отклонённое текстовой моделью,
+    запирало бы диалог; «Ответить заново» удаляет ответ-ошибку и шлёт их, другая модель — тоже. Синхронно и без
+    файлов (идёт в транзакции хода): картинки — частями с id media, данные — fill_photos после COMMIT."""
     atts = _attachments(chat_id)
+    rows = _messages(chat_id)
+    refused = _refused_turns(rows, model) - {upto}      # сообщение этого хода (и повтора) — со своими вложениями
     out = []
-    for row in _messages(chat_id):
+    for row in rows:
         if row["status"] in ("done", "stopped"):
             if row["role"] == "user":
-                content = _content(row["content"], atts.get(row["id"], []))
+                if row["id"] in refused:
+                    marks = "".join(REFUSED.format(a["name"]) + "\n" for a in atts.get(row["id"], []))
+                    content = _content(marks + row["content"], [])
+                else:
+                    content = _content(row["content"], atts.get(row["id"], []))
                 if out and out[-1]["role"] == "user":
                     out[-1]["content"] = _merge(out[-1]["content"], content)
                 else:
@@ -1089,7 +1118,7 @@ class StreamTask:
             raise
         finally:
             self.scan_state = None
-        composed = compose(self.chat_id, self.user_message_id)
+        composed = compose(self.chat_id, self.user_message_id, self.model)
         tokens = estimate_tokens(composed)
         if self.limit is not None and tokens > self.limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", self.chat_id[:8], tokens)
@@ -1366,10 +1395,18 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
 
 
 @router.delete("/chats/{chat_id}", status_code=204)
-async def delete_chat(chat_id: str, request: Request):
-    """Диалог, его сообщения и вложения; файл, на который ссылается другая запись истории, остаётся."""
+async def delete_chat(chat_id: str, request: Request, empty: str = ""):
+    """Диалог, его сообщения и вложения; файл, на который ссылается другая запись истории, остаётся. `?empty=1` —
+    только диалог без сообщений (страница убирает созданный под первый ход, который не прошёл), иначе 409 `not_empty`."""
     uid = request.state.user.id
     _chat_row(uid, chat_id)
+    if empty == "1":                                 # проверка и удаление — без await между ними: ход не вклинится
+        if state.DB.execute("DELETE FROM chats WHERE id = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE chat_id = ?)",
+                            (chat_id, chat_id)).rowcount != 1:
+            raise HTTPException(409, {"code": "not_empty", "message": "в диалоге уже есть сообщения"})
+        cleaner.forget(uid, chat_id)
+        log.info("чат %s: удалён пустым", chat_id[:8])
+        return Response(status_code=204)
     cleaner.forget(uid, chat_id)
     await _cancel(_chat_streams(chat_id))
     media_ids = {r["media_id"] for r in state.DB.execute(
@@ -1405,9 +1442,15 @@ def _layer_text(layer: list[tuple[str, bool]], reader) -> str:
     return text
 
 
+def _is_photo(data: bytes) -> bool:
+    """PNG, JPEG или WebP по первым байтам: `.jfif`, фото без расширения или с чужим (не документа)."""
+    return data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")) or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+
+
 @router.post("/attachments", status_code=201)
 async def upload_attachment(request: Request):
-    """Картинка (PNG, JPEG, WebP — нормализуется до PNG) или документ (текст — сразу); файл — в media.
+    """Картинка (PNG, JPEG, WebP по расширению или по первым байтам — нормализуется до PNG) или документ (текст —
+    сразу); файл — в media.
     К сообщению вложение привязывает ход. PDF со страницами без текстового слоя при подключении раздела
     «Распознавание» через сервер — документ распознавания (`ocr` в ответе), текст вложения допишет он."""
     uid = request.state.user.id
@@ -1415,7 +1458,7 @@ async def upload_attachment(request: Request):
     try:
         name, data = await documents.read_upload(request)
         suffix = PurePosixPath(name.lower()).suffix
-        if suffix in IMAGE_SUFFIXES:
+        if suffix in IMAGE_SUFFIXES or (suffix not in documents.SUFFIXES and _is_photo(data)):
             if len(data) > MAX_UPLOAD:
                 raise UploadError(f"фото должно быть не больше {MAX_UPLOAD >> 20} МиБ", 413)
             kind, mime, body = "image", "image/png", await asyncio.to_thread(normalize_image, data)
@@ -1512,11 +1555,18 @@ async def rescan_attachment(att_id: str, request: Request):
 
 
 async def sweep_attachments() -> None:
-    """Неотправленные вложения старше ORPHAN_SEC (вкладку закрыли с прикреплённым файлом) — прочь."""
+    """Неотправленные вложения старше ORPHAN_SEC (вкладку закрыли с прикреплённым файлом) — прочь. Так же —
+    диалоги без сообщений и без названия старше ORPHAN_SEC: первый ход не прошёл, а страница не успела убрать
+    созданный под него диалог (вкладку закрыли, окно подтверждения отменили)."""
     rows = state.DB.execute("SELECT * FROM attachments WHERE message_id IS NULL AND created < ?",
                             (clock.NOW() - ORPHAN_SEC,)).fetchall()
     if rows and (count := await _drop_attachments(rows)):
         log.info("уборка: удалено неотправленных вложений — %d", count)
+    count = state.DB.execute("DELETE FROM chats WHERE title IS NULL AND updated < ? AND NOT EXISTS"
+                             " (SELECT 1 FROM messages m WHERE m.chat_id = chats.id)",
+                             (clock.NOW() - ORPHAN_SEC,)).rowcount
+    if count:
+        log.info("уборка: удалено пустых диалогов — %d", count)
 
 
 async def _sweep() -> None:
@@ -1605,7 +1655,7 @@ def _title(text: str) -> str | None:
     return lines[0].strip()[:TITLE_CHARS].rstrip() or None
 
 
-def _cleaner_messages(uid, chat_id, body, atts):
+def _cleaner_messages(uid, chat_id, body, atts, model):
     if _pending_scans(uid, chat_id, atts):
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
     if any(a["kind"] == "document" and a["text"] is None for a in atts):
@@ -1615,7 +1665,7 @@ def _cleaner_messages(uid, chat_id, body, atts):
                             " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
     if body.regenerate and last is None:
         raise cleaner.refused("Нечего переспрашивать")
-    messages = compose(chat_id, last["id"]) if last else []
+    messages = compose(chat_id, last["id"], model) if last else []
     if not body.regenerate:
         content = _content(body.text, atts)
         if messages and messages[-1]["role"] == "user":
@@ -1638,7 +1688,7 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     if not body.regenerate and not body.text.strip() and not atts:
         raise cleaner.refused("Пустое сообщение", 422)
-    messages = _cleaner_messages(uid, chat_id, body, atts)
+    messages = _cleaner_messages(uid, chat_id, body, atts, row["model"] or manage.DEFAULT_MODEL)
     preview, shown = await cleaner.prepare(conn, "chat", chat_id, row["model"], messages,
                                           [rule.model_dump() for rule in body.cleaner_rules], local=body.cleaner_local)
     operations.check(uid)
@@ -1725,7 +1775,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         fresh = _chat_row(uid, chat_id)
         if fresh["connection_id"] != conn.id or fresh["model"] != model:
             raise cleaner.refused("Модель диалога изменилась: проверьте запрос ещё раз")
-        messages = _cleaner_messages(uid, chat_id, body, atts)
+        messages = _cleaner_messages(uid, chat_id, body, atts, model)
         preview = cleaner.take(body.cleaner_ticket, conn, chat_id, model, messages)
         if preview.route == "local":
             model = preview.local_model
@@ -1785,7 +1835,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if scans:                                    # контекст и предел — после распознавания (_await_scans)
             messages, known = [], {}
         else:
-            messages = compose(chat_id, user_mid)
+            messages = compose(chat_id, user_mid, model)
             known = _known_links(chat_id) if kinds else {}
             tokens = estimate_tokens(messages)
             if limit is not None and tokens > limit - RESERVE_TOKENS:
