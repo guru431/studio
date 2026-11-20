@@ -5480,6 +5480,36 @@ def test_computer_locks_after_the_configured_idle_time(browser, live):
     assert not known_refusals(problems(r), 423), problems(r)
 
 
+def other_tab(kind):
+    """Сообщение «другой вкладки» той же сессии: свой BroadcastChannel страницы его не получает, второй — получает."""
+    return ("eval", f"tab-{kind}", f"(() => {{ const c = new BroadcastChannel('studio-lock');"
+                                   f" c.postMessage({{ t: '{kind}', at: Date.now() }}); c.close(); return true; }})()")
+
+
+def test_tabs_of_one_session_share_activity_and_unlocking(browser, live):
+    """Срок бездействия общий для сессии: действие в другой вкладке не даёт этой запереть сессию при возвращении,
+    а её отпирание снимает экран блокировки здесь — только если сервер подтверждает «не заперто»."""
+    login = "lk-tabs"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "on", f"(async () => {{ const api = {API}; await api.api('POST', '/api/me/screen-lock', {{ enabled: true, timeout: 60 }});"
+                        " await api.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; })()"),
+        hide(), later(50000), other_tab("activity"), later(20000), show(),
+        ("eval", "afterOtherTab", settled(LOCK_OPEN, 1000)), ("eval", "me", ME_STATUS),
+        ("eval", "lockNow", f"(async () => {{ await {API}.api('POST', '/api/lock/now'); return true; }})()"),
+        hide(), show(), ("wait", LOCK_OPEN),
+        other_tab("opened"), ("eval", "stillLocked", settled(LOCK_OPEN, 1000)),     # сервер ещё заперт
+        # отпирание «в другой вкладке»: запрос мимо экрана этой (lock.js о нём не знает)
+        ("eval", "unlock", f"(async () => {{ await {API}.api('POST', '/api/lock/password', {{ password: 'password-123' }});"
+                           " return 200; })()"),
+        other_tab("opened"), ("wait", f"!{LOCK_OPEN}"), ("eval", "opened", ME_STATUS)], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["afterOtherTab"] is False and v["me"] == 200
+    assert v["stillLocked"] is True and v["unlock"] == 200 and v["opened"] == 200
+    assert not known_refusals(problems(r), 423), problems(r)
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_pin_settings_save_sections_and_both_timers(browser, live, width, tmp_path):
     login = f"pin-policy-{width}"
