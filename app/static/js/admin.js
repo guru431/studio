@@ -32,8 +32,13 @@ function usersBlock(host) {
       const { items } = await api('GET', '/api/admin/users');
       tbody.replaceChildren(...items.map(row));
     } catch (err) {
-      note.textContent = words(err);
+      fail(words(err));
     }
+  }
+
+  function fail(text) {
+    note.className = 'status error';
+    note.textContent = text;
   }
 
   async function act(promise) {
@@ -41,7 +46,7 @@ function usersBlock(host) {
     try {
       await promise;
     } catch (err) {
-      note.textContent = words(err);
+      fail(words(err));
     }
     await reload();
   }
@@ -88,6 +93,8 @@ function usersBlock(host) {
       try {
         await api('PATCH', `/api/admin/users/${user.id}`, { password: password.value });
         dialog.close();
+        note.className = 'status ok';
+        note.textContent = tr("Пароль «{0}» сменён, все его сессии закрыты", user.login);
       } catch (err) {
         showError(form, err, {}, 'password');
       } finally {
@@ -275,17 +282,22 @@ function allowlistBlock() {
       el('code', {}, entry),
       button(tr("Удалить"), { class: 'btn btn-sm btn-danger', 'aria-label': tr("Удалить {0}", entry) }, () => {
         entries = entries.filter((e) => e !== entry);
-        say('');
+        unsaved();
         draw();
       })))
       : [el('li', { class: 'muted' }, tr("Список пуст: через сервер не идёт ни одно подключение"))]));
   }
 
+  // «Добавить» и «Удалить» меняют только страницу — до «Сохранить» об этом сказано
+  const unsaved = () => say(tr("Есть несохранённые изменения — нажмите «Сохранить»"), 'error');
+
   function add() {
     const entry = input.value.trim();
-    if (entry && !entries.includes(entry)) entries.push(entry);
+    if (entry && !entries.includes(entry)) {
+      entries.push(entry);
+      unsaved();
+    }
     input.value = '';
-    say('');
     draw();
   }
 
@@ -361,6 +373,11 @@ function checkText(r) {
 function backupCheck() {
   const result = el('p', { class: 'status', id: 'admin-backup-result', 'aria-live': 'polite' });
   const start = button(tr("Проверить копию"), { class: 'btn btn-sm', id: 'admin-backup-check' });
+  // idle — служба с перезапуска не проверяла; записанный итог (ночной или прежний) — строкой «Проверка копии» выше
+  let idle = false;
+  let recorded = false;
+  const idleText = () => recorded ? tr("С перезапуска службы не запускалась: итог последней проверки — строкой «Проверка копии» выше")
+    : tr("Ещё не проверялась: копия поднимается в стороне, рабочая база не трогается");
 
   function show(text, kind) {
     result.textContent = text;
@@ -373,11 +390,12 @@ function backupCheck() {
     try {
       const { state, result: r } = await api('GET', '/api/admin/backup-check');
       start.disabled = state === 'running';
+      idle = state === 'idle';
       if (state === 'running') {
         show(tr("Проверка идёт: копия копируется и сверяется с шарой — это минуты"));
         setTimeout(poll, CHECK_POLL_MS);
       } else if (state === 'idle') {
-        show(tr("Ещё не проверялась: копия поднимается в стороне, рабочая база не трогается"));
+        show(idleText());
       } else {
         show(checkText(r), r.ok ? 'ok' : 'error');
       }
@@ -401,14 +419,19 @@ function backupCheck() {
     poll();
   });
   return { el: el('div', { class: 'backup-check' }, el('div', { class: 'row' }, el('b', {}, tr("Проверка копии")), start),
-    result), poll };
+    result), poll,
+    /** Есть ли записанный итог (`/api/admin/storage` → check): ответы хранилища и опроса приходят в любом порядке. */
+    recorded: (value) => {
+      recorded = value;
+      if (idle) show(idleText());
+    } };
 }
 
 function storageBlock() {
   const list = el('dl', { class: 'storage', id: 'admin-storage' });
   const note = el('p', { class: 'status error', 'aria-live': 'polite' });
   const refresh = button(tr("Обновить"), { class: 'btn btn-sm', id: 'admin-storage-refresh' });
-  const check = backupCheck();
+  const checker = backupCheck();
 
   const line = (key, name, text, bad) => [el('dt', {}, name),
     el('dd', { 'data-key': key, class: bad ? 'error' : null }, text)];
@@ -424,6 +447,7 @@ function storageBlock() {
         ? tr("{0} ({1}), копий — {2}", agoText(backup.age), momentText(backup.at), backup.copies)
         : backup.state === 'none' ? tr("копий нет") : tr("неизвестно: хранилище не прочитано");
       const [queue] = queueText(pending);
+      checker.recorded(!!check);
       list.replaceChildren(...line('share', tr("Шара"), shareText, share.state !== 'ok'),
         ...line('backup', tr("Копия базы"), backupText, backup.state !== 'ok' || backup.age > staleSec),
         ...(copy?.ok === false ? line('backup-attempt', tr("Последняя попытка копирования"),
@@ -447,10 +471,10 @@ function storageBlock() {
   refresh.addEventListener('click', load);
   return {
     el: el('section', { class: 'block' }, el('div', { class: 'block-head' }, el('h2', {}, tr("Хранилище")), refresh),
-      list, note, check.el),
+      list, note, checker.el),
     load: () => {
       load();
-      check.poll();
+      checker.poll();
     },
   };
 }

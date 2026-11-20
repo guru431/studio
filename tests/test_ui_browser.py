@@ -865,8 +865,9 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("click", "#delete-confirm"), ("wait", f"!document.querySelector('{rid}')"),
         # список разрешённых адресов
         ("type", "#allow-entry", "gw:4000"), ("click", "#allow-add"),
+        ("eval", "unsaved", "document.querySelector('#allow-status').textContent"),     # до «Сохранить»
         ("click", "#allowlist-save"),
-        ("wait", "document.querySelector('#allow-status').textContent.length > 0"),
+        ("wait", "document.querySelector('#allow-status').textContent.includes('gw:4000')"),
         ("eval", "nameRefused", "document.querySelector('#allow-status').textContent"),
         ("click", "#allow-list li[data-entry='gw:4000'] button"),
         ("type", "#allow-entry", entry), ("click", "#allow-add"),
@@ -884,6 +885,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert v["conn"] == ["через сервер", ["local-gemma-abl"]] and v["noCheck"]
     assert v["toggle"] == "Включить" and v["selfDelete"] is True and v["deleteLocked"] is True
     assert v["selfReset"] is True                  # свой пароль — в «Прочем», с текущим
+    assert v["unsaved"] == "Есть несохранённые изменения — нажмите «Сохранить»", v["unsaved"]
     assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]
     assert v["saved"] == ["10.77.1.15:4000", entry]
     assert not v["overflow"]
