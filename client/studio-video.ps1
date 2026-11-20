@@ -53,7 +53,8 @@
   Длительность ролика, целые секунды от 1 до 30 (по умолчанию 5). Длиннее 5 с — склейка
   кусков по 5 с, она «уплывает».
 .PARAMETER Quality
-  fast (короткая сторона 480), standard (576, по умолчанию) или high (720).
+  fast (короткая сторона 480), standard (576, по умолчанию) или high (720); native — только для H3,
+  ставится им сам.
 .PARAMETER NoSmooth
   Без дорисовки кадров: 16 кадров/с вместо 32.
 .PARAMETER Count
@@ -66,7 +67,8 @@
 .PARAMETER KeepCard
   Не освобождать карту в конце.
 .PARAMETER Model
-  Модель видео у шлюза.
+  Модель видео у шлюза: wan (по умолчанию), h3 (5 с, нативный размер, 24 кадра/с; -Seconds 5,
+  -Quality и -NoSmooth не действуют) или полное имя.
 .PARAMETER Url
   База API шлюза.
 .PARAMETER Token
@@ -91,7 +93,7 @@ param(
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)][string]$Folder,
     [Parameter(ParameterSetName = 'Run')][string]$Prompt = '',
     [Parameter(ParameterSetName = 'Run')][ValidateRange(1, 30)][int]$Seconds = 5,
-    [Parameter(ParameterSetName = 'Run')][ValidateSet('fast', 'standard', 'high')][string]$Quality = 'standard',
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('fast', 'standard', 'high', 'native')][string]$Quality = 'standard',
     [Parameter(ParameterSetName = 'Run')][switch]$NoSmooth,
     [Parameter(ParameterSetName = 'Run')][ValidateRange(1, 20)][int]$Count = 1,
     [Parameter(ParameterSetName = 'Run')][Nullable[long]]$Seed = $null,
@@ -160,6 +162,15 @@ $Folder = (Resolve-Path -LiteralPath $Folder).ProviderPath
 $common = $Prompt.Trim()
 if ($common.Length -gt $MaxPrompt) { throw "Общий промпт длиннее $MaxPrompt символов" }
 if ($null -ne $Seed -and ($Seed -lt 0 -or $Seed + $Count - 1 -gt $MaxSeed)) { throw "Seed — от 0 до $MaxSeed" }
+# Профиль H3 — как у студии: 5 с, quality=native, без дорисовки
+$H3Model = 'minimax-h3-dr34ml4y'
+$alias = @{ wan = 'wan2.2-remix-i2v-v3'; h3 = $H3Model }
+if ($alias.ContainsKey($Model)) { $Model = $alias[$Model] }
+if ($Model -eq $H3Model) {
+    if ($Seconds -ne 5) { throw 'H3: только 5 секунд; короткие ролики давали артефакты' }
+    $Quality = 'native'
+    $NoSmooth = [switch]$true
+} elseif ($Quality -eq 'native') { throw '-Quality native — только для H3' }
 $smoothText = if ($NoSmooth) { 'false' } else { 'true' }
 
 Add-Type -AssemblyName System.Net.Http
