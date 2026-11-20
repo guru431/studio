@@ -94,6 +94,26 @@ def test_mcp_unselected_is_not_contacted_and_calls_are_not_retried(studio):
     assert messages(studio, cid)[-1]['tools'][0]['error']
 
 
+def test_unreachable_mcp_server_is_skipped_and_named_not_the_whole_turn(studio):
+    """Отмеченный, но лежащий сервер — шаг-ошибка с его именем; модель зовётся с инструментами остальных."""
+    sid = add(studio); mock(studio)
+    down = studio.c.post('/api/mcp', json={'name': 'Down', 'url': 'http://10.77.1.15:4000/down', 'token': TOKEN}).json()['id']
+
+    async def unreachable(request):
+        raise httpx.ConnectError('private failure')
+
+    studio.gw.on['/down'] = unreachable
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [down, sid]}).status_code == 200
+    studio.gw.chat_script = [['Готово']]
+    events = sse(turn(studio, cid, 'Use tool'))
+    assert events[-1] == ('done', {'status': 'done'})
+    assert ('tool', {'kind': 'mcp', 'label': 'Down', 'skipped': True}) in events
+    assert [t['function']['name'] for t in studio.gw.chat_requests[-1]['tools']] == [f'mcp_{sid}_0']
+    assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Down',
+                                                 'error': 'MCP недоступен или вернул неверный ответ'}]
+
+
 def test_mcp_account_isolation_allowlist_and_token_preservation(studio):
     sid = add(studio); cid = new_chat(studio)
     assert studio.c.put(f'/api/mcp/{sid}', json={'name': 'Edited', 'url': URL}).status_code == 200

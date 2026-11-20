@@ -942,25 +942,32 @@ class StreamTask:
                 self.put("tool", {"kind": kind, "label": web.label(kind, web.args_of(c.arguments) or {})})
                 step = self._fit(await web.call(c.name, c.arguments, self.exa_key, self.tools, self.known))
                 self.known |= web.found_links(step)
-            self.steps.append(step)
-            state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
-                             (json.dumps(self.steps, ensure_ascii=False), self.message_id))
-            log.info("чат %s: ответ %s — шаг %s: %s", self.chat_id[:8], self.message_id[:8], step["kind"],
-                     "ошибка" if "error" in step else "ok")
+            self._step(step)
             self.messages.append({"role": "tool", "tool_call_id": c.id, "content": web.for_model(step)})
         return None
 
+    def _step(self, step: dict) -> None:
+        """Шаг ответа — в `steps` и сразу в `messages.tools`; в журнал — только вид и итог."""
+        self.steps.append(step)
+        state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
+                         (json.dumps(self.steps, ensure_ascii=False), self.message_id))
+        log.info("чат %s: ответ %s — шаг %s: %s", self.chat_id[:8], self.message_id[:8], step["kind"],
+                 "ошибка" if "error" in step else "ok")
+
     async def _read(self) -> str | None:
+        """Инструменты выбранных MCP (mcp_client.Tools.discover), затем ответ модели. Сервер, что не ответил, —
+        шаг-ошибка с его именем (событие `tool` с `skipped`: страница перечитает ответ, не крутя плашку); ответ
+        идёт с остальными инструментами."""
         self.mcp = mcp_client.Tools(self.conn.user_id, self.chat_id, self.mcp_ids)
         try:
             if not self.conn.cleaner:
-                async with asyncio.timeout(60):
-                    await self.mcp.discover()
+                await self.mcp.discover()
+                for server, words in self.mcp.failed:
+                    self.put("tool", {"kind": "mcp", "label": server, "skipped": True})
+                    self._step({"kind": "mcp", "server": server, "error": words})
             return await self._read_model()
         except HTTPException as exc:
             return exc.detail["message"]
-        except TimeoutError:
-            return "MCP не ответил вовремя — проверьте подключения в настройках"
         finally:
             await self.mcp.close()
 
