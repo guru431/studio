@@ -116,9 +116,9 @@ class NativeDesktop:
         if status['session'] != 'ready':
             raise Refused('desktop_unavailable', _UNAVAILABLE)
         if status['screen'] is not True:
-            raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Запись экрана…» и разрешите доступ')
+            raise Refused('desktop_unavailable', 'В окне моста на Mac откройте «Запись экрана…» и разрешите доступ')
         if status['input'] is not True:
-            raise Refused('desktop_unavailable', 'В агенте на Mac откройте «Универсальный доступ…» и разрешите доступ')
+            raise Refused('desktop_unavailable', 'В окне моста на Mac откройте «Универсальный доступ…» и разрешите доступ')
         return q
 
     def _displays(self):
@@ -220,7 +220,7 @@ class NativeDesktop:
         if app is None:
             raise Refused('desktop_unavailable', _UNAVAILABLE)
         if app.processIdentifier() == os.getpid():
-            raise Refused('outside', 'Окном агента можно управлять только на самом компьютере')
+            raise Refused('outside', 'Окном моста можно управлять только на самом компьютере')
 
     def _guard_pointer(self, point):
         self._guard_keyboard()  # меню и захват мыши активного агента тоже недоступны
@@ -233,7 +233,7 @@ class NativeDesktop:
                 rect = window.get(q.kCGWindowBounds, {})
                 if (rect.get('X', 0) <= point[0] < rect.get('X', 0) + rect.get('Width', 0)
                         and rect.get('Y', 0) <= point[1] < rect.get('Y', 0) + rect.get('Height', 0)):
-                    raise Refused('outside', 'Окном агента можно управлять только на самом компьютере')
+                    raise Refused('outside', 'Окном моста можно управлять только на самом компьютере')
 
     def _flags(self):
         q = self.q

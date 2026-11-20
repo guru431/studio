@@ -245,7 +245,7 @@ def test_updater_reports_the_last_failure_as_failed_with_words(home):
     update = updater.Updater(home, lambda: False, Mock())
     update.report('rolled_back')
     assert update.status() == {'state': 'failed', 'version': None,
-                               'message': 'Новая версия агента не запустилась — работает прежняя'}
+                               'message': 'Новая версия моста не запустилась — работает прежняя'}
     update.report('unknown')
     assert update.status()['message'] == updater.FAILED_WORDS['rolled_back']
 

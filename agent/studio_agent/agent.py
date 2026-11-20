@@ -363,10 +363,10 @@ class Agent:
                     ("project" not in OPS[op] or frame.get("project") not in scope)):
                 raise Refused("closed")
         if self.local_exit_pending and op not in RESTART_SAFE_OPS and op not in ("mirror_chunk", "mirror_apply", "mirror_abort"):
-            raise Refused("busy", "Агент завершает работу по выбору на компьютере")
+            raise Refused("busy", "Мост завершает работу по выбору на компьютере")
         if (self.updater is not None and self.updater.state == "restarting"
                 and op not in ("agent_update_status", "agent_update_cancel")):
-            raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
+            raise Refused("busy", "Мост обновляется — дождитесь перезапуска")
         if op == "open":
             return await self._open(session, frame.get("pin"), idle_sec, passive=passive)
         if scope is None and not self.open.alive(session, idle_sec):
@@ -381,7 +381,7 @@ class Agent:
         if self.updater is not None and self.updater.busy and op in (
                 "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start",
                 "mcp_save", "usage_reset", "mirror_begin"):
-            raise Refused("busy", "Агент обновляется — дождитесь перезапуска")
+            raise Refused("busy", "Мост обновляется — дождитесь перезапуска")
         if frame.get("window") is not None and not (
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
             raise Refused("invalid")
@@ -488,7 +488,7 @@ class Agent:
         try:
             return await asyncio.to_thread(linux_terminal.read, self.pins.path.parent)
         except (OSError, ValueError, RecursionError):
-            raise Refused('invalid', 'Проверьте настройки SSH и веб-консоли в меню агента') from None
+            raise Refused('invalid', 'Проверьте настройки SSH и веб-консоли в меню моста') from None
 
     async def _op_software_versions(self, frame, after):
         return await self.software.read(frame.get('refresh', False))
