@@ -6446,10 +6446,12 @@ def test_curtain_leaves_when_the_mark_hangs(browser, live):
     MARK_SEC — как без связи, шторка убирается, а не висит без кнопок."""
     login = "lk-hang"
     live.add_user(login)
-    hang = """(() => { window.asked = []; const timeout = AbortSignal.timeout.bind(AbortSignal);
-      AbortSignal.timeout = (ms) => { window.asked.push(ms); return timeout(100); };
+    # срок записывается у самой отметки: скрытие страницы шлёт и опрос заданий со своим сроком (jobs.js)
+    hang = """(() => { window.asked = []; const terms = new WeakMap(); const timeout = AbortSignal.timeout.bind(AbortSignal);
+      AbortSignal.timeout = (ms) => { const signal = timeout(100); terms.set(signal, ms); return signal; };
       const real = window.fetch;
       window.fetch = (u, o) => u !== '/api/lock/alive' ? real(u, o) : new Promise((_, no) => {
+        window.asked.push(o && o.signal ? terms.get(o.signal) : null);
         if (o && o.signal) o.signal.addEventListener('abort', () => no(o.signal.reason)); });
       return true; })()"""
     r = browser.drive(live.url + "/", [*phone_with_key(login), ("eval", "hang", hang), hide(), ("wait", CURTAIN_OPEN),
@@ -6904,7 +6906,8 @@ def test_notification_only_when_hidden_and_without_content(browser, live):
     v = r["values"]
     assert v["disabled"] is False and v["stored"] == "1" and v["whileVisible"] == 0
     assert v["shown"] == [{"title": "Студия: картинка готова", "options": {
-        "tag": v["second"], "icon": "/static/icons/icon-192.png", "data": {"href": f"photo?id={v['second']}"}}}]
+        "tag": v["second"], "renotify": True, "icon": "/static/icons/icon-192.png",
+        "data": {"href": f"photo?id={v['second']}"}}}]
     assert "секретный" not in json.dumps(v["shown"], ensure_ascii=False)
     assert not problems(r), problems(r)
 
