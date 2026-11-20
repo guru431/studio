@@ -156,6 +156,40 @@ def test_failed_signed_update_leaves_its_result_for_the_running_copy(install_roo
     assert update_helper.failed_update(install_root / 'elsewhere.app/Contents/Resources/agent') is None
 
 
+def test_signed_app_prunes_reported_failed_releases_by_the_same_rules(install_root, monkeypatch):
+    """Подписанное приложение работает вне `releases/`: папки неудачных переходов (`_update_result`) убирает оно же
+    при запуске (`updater.cleanup_releases`) — после сообщения студии, кроме автозапуска и живых процессов."""
+    from studio_agent import update_helper
+
+    monkeypatch.setattr(Path, 'home', lambda: install_root)
+    monkeypatch.setattr(update_helper, 'MACOS', True)
+    monkeypatch.setattr(update_helper, 'LINUX', False)
+    repo = fake_app(install_root / 'Applications' / signed.NAME) / 'Contents/Resources/agent'
+    repo.mkdir(parents=True)
+    base = install_root / 'Library/Application Support/Studio Agent/app/releases'
+    for name, result in [('release-failed', 'rolled_back'), ('release-old', 'complete'),
+                         ('release-autostart', 'complete'), ('release-running', 'complete'), ('release-unknown', None)]:
+        (base / name).mkdir(parents=True)
+        if result:
+            (base / name / '_update_result').write_text(result, encoding='ascii')
+    monkeypatch.setattr(update_helper, 'running_releases', lambda found: {'release-running'})
+    autostart = str(base / 'release-autostart/.venv/bin/python').replace('\\', '/')
+    monkeypatch.setattr(update_helper, '_autostart', lambda: json.dumps([autostart]))
+    # flock моста macOS на Windows недоступен: ворота уборки — подставные
+    monkeypatch.setattr(update_helper, '_gate_lock', lambda *args: (Mock(), 0))
+    assert update_helper.cleanup_started(repo)
+    assert sorted(p.name for p in base.iterdir()) == [
+        'release-autostart', 'release-failed', 'release-running', 'release-unknown']  # провал ещё не сообщён
+    assert update_helper.failed_update(repo) == 'rolled_back'
+    assert update_helper.cleanup_started(repo)
+    assert sorted(p.name for p in base.iterdir()) == ['release-autostart', 'release-running', 'release-unknown']
+    other = install_root / 'elsewhere' / signed.NAME / 'Contents/Resources/agent'   # не управляемое место — не трогаем
+    (base / 'release-late').mkdir()
+    (base / 'release-late' / '_update_result').write_text('complete', encoding='ascii')
+    assert update_helper.cleanup_started(other)
+    assert (base / 'release-late').is_dir()
+
+
 @pytest.mark.parametrize('outcome', ['ready', 'exit', 'copy-error', 'wrong-team'])
 def test_swap_waits_for_readiness_or_preserves_the_installed_app(tmp_path, monkeypatch, outcome):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
