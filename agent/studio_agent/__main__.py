@@ -54,8 +54,19 @@ def _run_console(h) -> int:
     return 0 if ctrl.state not in STOP else 1
 
 
+def rebind_confirmed(enrolled: bool, login: str) -> bool:
+    """Компьютер уже привязан — новая привязка только с согласия: прежний компьютер будет отозван в студии."""
+    if not enrolled:
+        return True
+    answer = input(f"Компьютер уже привязан (логин {login or '—'}). Привязать заново? "
+                   "Прежний компьютер будет отозван в Студии. [да/нет] ")
+    return answer.strip().lower() == "да"
+
+
 def _enroll(h) -> int:
     cfg = store.load_config(h)
+    if not rebind_confirmed(store.load_key(h) is not None, cfg.login):
+        return 1
     form = {"url": _ask("Адрес студии", cfg.url), "login": _ask("Логин"),
             "name": _ask("Имя компьютера", cfg.name or socket.gethostname()),
             "projects_roots": _ask_folders(cfg.projects_roots), "pin": "", "pin2": "", "no_pin": False,
@@ -65,6 +76,7 @@ def _enroll(h) -> int:
     if errors:
         print("\n".join(errors))
         return 1
+    old = setup.previous(h, form)
     try:
         cfg = setup.apply(h, form)
     except enroll.EnrollError as e:
@@ -78,6 +90,8 @@ def _enroll(h) -> int:
         else:
             print(e.words)
             return 1
+    if old is not None and not setup.revoke(*old):
+        print(enroll.KEPT)
     print(f"Привязан: компьютер {cfg.agent_id}. Работающий мост подхватит ключ после перезапуска.")
     return 0
 
@@ -139,15 +153,7 @@ def main(argv: list[str]) -> int:
         if args.cmd in ("run", "_service"):
             from . import linux_service
             return linux_service.supervise(h) if args.cmd == "run" else linux_service.serve(h)
-        if args.cmd == "status":
-            return linux_menu.status(h)
-        if args.cmd == "enroll":
-            return linux_menu.enrollment(h)
-        if args.cmd == "set-pin":
-            return linux_menu.set_pin(h)
-        if args.cmd in ("clear-pin", "reset-pin"):
-            linux_menu.invoke(h, "pin" if args.cmd == "clear-pin" else "reset")
-            return 0
+        return linux_menu.command(h, args.cmd)
     if args.cmd in (None, "run"):
         if getattr(args, "console", False):
             return _run_console(h)

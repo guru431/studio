@@ -186,6 +186,28 @@ def test_windows_source_preserves_posix_executable_flags():
     assert updates == {"run": ["file", new[1], 4, 1]} and not remove and not conflicts
 
 
+def test_windows_destination_skips_links_and_names_windows_cannot_create():
+    """Проект с Linux/macOS на Windows: ссылки (`node_modules/.bin`) и имена `aux.c`, `a:b` — «пропущен», а не
+    откат всей синхронизации общим «не удалось записать зеркало»."""
+    import project_mirrors
+    from project_mirrors import _plan, _portable
+
+    code = ["file", "0" * 64, 3, 1]
+    source = {"node_modules": mirror.DIRECTORY, "node_modules/.bin": mirror.DIRECTORY,
+              "node_modules/.bin/tool": ["link", "../tool/cli.js", 0, 0], "aux.c": code, "a:b": mirror.DIRECTORY,
+              "a:b/inner.txt": code, "trailing.": code, "src": mirror.DIRECTORY, "src/main.c": code}
+    updates, remove, changes, conflicts, skipped = _plan(_portable(dict(source), "win32", "linux"), None, None,
+                                                         windows=True)
+    assert set(updates) == {"node_modules", "node_modules/.bin", "src", "src/main.c"} and not remove
+    assert skipped == 5 and {path for path, kind, *_ in changes if kind == "skipped"} == {
+        "node_modules/.bin/tool", "aux.c", "a:b", "a:b/inner.txt", "trailing."}
+    # Другая ОС назначения создаёт и ссылки, и такие имена.
+    assert _plan(_portable(dict(source), "linux", "darwin"), None, None)[4] == 0
+    # Запреты сервера — те же, что у моста на Windows (`files._parts`).
+    assert project_mirrors.WINDOWS_DEVICE.pattern == files.DEVICE.pattern
+    assert project_mirrors.WINDOWS_BAD == files.BAD_CHARS - {"\\"}
+
+
 def test_legacy_manifest_with_external_git_is_rejected():
     from fastapi import HTTPException
     from project_mirrors import _entries

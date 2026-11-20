@@ -119,7 +119,7 @@ class Agent:
     `has_pin` для `hello` — в памяти: `hello` идёт на цикле канала, а `pin.bin` — DPAPI. Читается при создании (без
     `has_pin` — сразу, ядро читает в потоке и передаёт) и `refresh_pin` — перед каждым новым каналом ядра."""
 
-    def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = time.monotonic,
+    def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = host.awake_clock(),
                  cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None, codex=None,
                  opencode=None, wall: Callable[[], float] = time.time):
         self.cfg = cfg

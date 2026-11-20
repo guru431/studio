@@ -107,6 +107,29 @@ def test_apply_refused_saves_nothing(home, form):
     assert [f.name for f in home.iterdir() if f.is_file()] == []
 
 
+@pytest.mark.parametrize("answer", ["нет", "да"])
+def test_console_rebinding_asks_and_revokes_previous_key(home, form, monkeypatch, capsys, answer):
+    setup.apply(home, form, enroll_fn=lambda *a: (3, "old-key", "owner"))
+    answers = iter([answer, "", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda *_: next(answers))
+    monkeypatch.setattr(cli_main.getpass, "getpass", lambda *_: PASSWORD)
+    monkeypatch.setattr(cli_main, "_ask", lambda prompt, default="": default or "owner")
+    monkeypatch.setattr(cli_main, "_ask_folders", lambda current: list(current))
+    apply = setup.apply
+    monkeypatch.setattr(setup, "apply", lambda h, f: apply(h, f, enroll_fn=lambda *a, **k: (7, "new-key", "owner")))
+    revoked = []
+    revoke = setup.revoke
+    monkeypatch.setattr(setup, "revoke", lambda url, key: revoke(
+        url, key, lambda *a: revoked.append(a) or (503, False)))
+    assert cli_main.main(["enroll"]) == (1 if answer == "нет" else 0)
+    if answer == "нет":
+        assert store.load_key(home) == "old-key" and revoked == []
+    else:
+        assert store.load_key(home) == "new-key" and store.load_config(home).agent_id == 7
+        assert revoked == [("https://studio.example.com", "old-key")]
+        assert enroll.KEPT in capsys.readouterr().out  # студия недоступна — владелец знает, что отозвать вручную
+
+
 def test_second_acquire_of_the_same_mutex_fails():
     name = f"Local\\StudioAgentTest-{uuid.uuid4().hex}"
     first = single.acquire(name)

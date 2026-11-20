@@ -30,7 +30,7 @@ async def test_queue_edit_keeps_attachments_and_serializes_versions(home, tmp_pa
         await r.edit_queue(PID, CHAT, item["id"], 2, "late", owner="owner")
 
 
-@pytest.mark.parametrize("finish", ["resume", "stop"])
+@pytest.mark.parametrize("finish", ["resume", "stop", "expire"])
 async def test_claude_queue_runs_only_after_current_result(home, tmp_path, monkeypatch, finish):
     monkeypatch.setattr(sessions, "exists", lambda *_: False)
     monkeypatch.setattr(sessions, "mark_studio", lambda *_: None)
@@ -58,11 +58,17 @@ async def test_claude_queue_runs_only_after_current_result(home, tmp_path, monke
     release.set()
     await until(lambda: r._turns[CHAT].pending == 0)
     assert client.queries == ["first"] and not r._turns[CHAT].finishing
+    if finish == "expire":
+        r.queue_pause_sec = 0  # правка ниже заново отсчитывает срок — он уже истёк
     await r.edit_queue(PID, CHAT, queued["id"], 1, "corrected")
     if finish == "resume":
         await r.pause_queue(PID, CHAT, False)
-    else:
+    elif finish == "stop":
         await r.stop(PID, CHAT)
     await asyncio.gather(*(t.task for t in list(r._turns.values())))
+    assert not r._turns
     assert client.queries == (["first", "corrected"] if finish == "resume" else ["first"])
     assert any(frame["e"]["k"] == "followup_sent" for frame in sent) == (finish == "resume")
+    done = next(frame["e"] for frame in sent if frame["e"]["k"] == "done")
+    if finish == "expire":
+        assert done["status"] == "done" and done["unsent"] == [{"id": queued["id"], "text": "corrected"}]

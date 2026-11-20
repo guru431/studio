@@ -34,8 +34,10 @@ GET/PUT `/api/code/agents/{aid}/projects/{pid}/mcp?engine=claude|codex|opencode`
 Файлы настроек — под DPAPI в каталоге моста, отдельно для настоящего пути проекта
 и движка. Проектные файлы и глобальные настройки CLI не меняются. Изменения вступают
 в силу на следующем ходе, работающие процессы продолжают прежний снимок. Claude SDK
-получает путь к временному конфигу вместо секретов в argv; файл убирается после
-disconnect до освобождения хода. Codex получает config в thread/start и thread/resume
+получает путь к временному конфигу (`<каталог моста>/mcp/runtime-*`) вместо секретов в argv; файл убирается после
+disconnect до освобождения хода. Вложения хода с 0.42.0 — в `<каталог моста>/attachments/studio-attachments-*`.
+Ход оборвался падением моста или выключением компьютера — оба остатка при следующем старте ядра, до первого хода,
+стирают `mcp.sweep` и `attachments.sweep`. Codex получает config в thread/start и thread/resume
 по stdin JSON-RPC, OpenCode — mcpServers в session/new, session/load и session/fork.
 
 Необязательные поля `hello` (и другие добавки v1): с какой версии мост их объявляет, где контракт. Без capability
@@ -226,7 +228,8 @@ disconnect до освобождения хода. Codex получает config
 - Установщик: `install.ps1::Assert-BridgeStopped` находит `studio_agent.pyw` и в `releases\*`.
 - Самообновление: `update_helper.prune` после подтверждённого `complete` оставляет текущий выпуск и откатный
   (`old_repo`), не трогает всё вне управляемого `releases`, ссылки, неизвестные/активные выпуски и автозапуск;
-  частичная уборка повторяется по file id. `app.Controller._main` не зовёт `cli_version` до `_built`
+  частичная уборка повторяется по file id. С 0.42.0 убираются и выпуски неудачных переходов
+  (`update_helper.FAILED_RESULTS`), но только после того, как итог сообщён (`_update_reported`, `update_helper._finished`). `app.Controller._main` не зовёт `cli_version` до `_built`
   (метка готовности самообновления); версию задаёт
   `_refresh_cli` первого канала.
 - Эталон сервера: `FakeMachine.passive_requests` в `tests/fake_bridge.py`.
@@ -450,6 +453,9 @@ GUI получает обычную команду quit. `update_helper.py` де
 `diffs.py` сохраняет предоставленные CLI фрагменты/patch; наличие только нового текста не означает создание файла.
 Очередь всех Runner остаётся в `_Turn`: режим `queue` дожидается результата, `queue_pause` удерживает доставку,
 `queue_edit` под `input_lock` проверяет владельца и версию. `_wait_queue` ждёт вне замка; Stop/close будят ожидание.
+С моста 0.42.0 пауза держит ход не дольше `limits.QUEUE_PAUSE_SEC` (1800) с от последней постановки паузы или правки:
+страницу закрыли посреди правки — ход кончается `done` с очередью в `unsent`, слот заданий, обновление и «Выйти после
+завершения» не ждут вечно.
 Claude ветвится через SDK `fork_session`, Codex — `thread/fork.lastTurnId` с проверкой отсечения и unsubscribe
 потомка в finally; исходный writer не трогается. Подзадачи только читаются и сверяются с родителем.
 `worktrees.py` создаёт worktree из HEAD в подпапке настроенного корня; не переносит правки, не удаляет папки
@@ -561,7 +567,9 @@ UUID нового чата задаёт студия, настоящий thread 
 - `journal` — логгер `studio_agent` в `agent.log` (1 МиБ × 3, UTF-8).
 - `pin` — `PinStore` (`pin.bin` под DPAPI: scrypt-хеш и счёт неверных; попытка пишется на диск до scrypt, проверки
   идут по одной — замок процесса; 5 подряд — `pin_locked` до `reset` на машине; нет файла — PIN не задан, блоб не
-  читается — `OSError`) и `OpenSessions` (открытые сессии студии в памяти, срок простоя `OPEN_IDLE_SEC`).
+  читается — `OSError`) и `OpenSessions` (открытые сессии студии в памяти, срок простоя `OPEN_IDLE_SEC`). Срок
+  простоя и аренда рабочего стола считаются по `host.awake_clock` — часам, которые идут и во сне компьютера
+  (Linux `CLOCK_BOOTTIME`, macOS `CLOCK_MONOTONIC`; `time.monotonic` там во сне стоит, на Windows — нет).
 - `projects` — `pid`, `list_projects` (подпапки разрешённых корней без `.`-имён, скрытых, системных и reparse-point), `find_project`
   (настоящий путь или `not_found`).
   `Config.projects_roots` хранит список; старый `projects_root` мигрирует в него и остаётся первой папкой для

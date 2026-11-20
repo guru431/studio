@@ -62,7 +62,7 @@ def test_mirror_dialog_selects_destination_and_shows_diff(browser, live, compute
             ("click", f"{ui} .project-mirror-exclude button"),
             ("wait", f"document.querySelector('{ui} .project-mirror-exclude summary')?.textContent === 'Постоянные исключения (1)'"),
             ("eval", "excluded", f"document.querySelector('{ui} .project-mirror-state').textContent"
-                                 ".includes('Пропущено исключений, ссылок, специальных объектов и связанных папок: 1')"),
+                                 ".includes('Пропущено исключений, ссылок, специальных объектов, недопустимых имён и связанных папок: 1')"),
             ("eval", "fits", f"document.querySelector('{ui}').scrollWidth <= document.querySelector('{ui}').clientWidth + 1")],
             width=360, touch=True)
     finally:
