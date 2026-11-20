@@ -9,7 +9,7 @@ import { chooseMcp } from './mcp-settings.js';
  * Ход: вложения — POST /api/attachments по одному, затем POST /api/chats/<id>/turns. Подключение
  * через сервер отвечает потоком SSE (turn, delta, done, error); прямое — JSON с адресом и
  * сообщениями: браузер зовёт модель сам с токеном из /api/connections/<id>/token (токен — только
- * в памяти вкладки) и кладёт итог PUT .../messages/<id>; поток без [DONE] и finish_reason — ошибка
+ * в памяти вкладки) и кладёт итог PUT .../messages/<id> (у ошибки — её слова `error`); поток без [DONE] и finish_reason — ошибка
  * с прочитанным текстом, а не готовый ответ; длиннее ANSWER_MAX — как у сервера: дальше не читается,
  * обрезан с пометкой CUT_SIZE и сохранён ошибкой. «Остановить»: через сервер — POST .../stop,
  * прямое — обрыв запроса и PUT со статусом stopped.
@@ -98,6 +98,7 @@ const COPIED_MS = 1500;
 const CUT_LENGTH = '\n\n[ответ обрезан пределом длины модели]';   // как chat.CUT_LENGTH сервера
 const CUT_SIZE = '\n\n[ответ обрезан: слишком длинный для студии]';   // как chat.CUT_SIZE сервера
 const ANSWER_MAX = 2000000;      // как chat.ANSWER_MAX: длиннее PUT ответа не примет
+const ERROR_MAX = 400;           // как chat.ERROR_MAX: слова ошибки ответа в PUT
 const ASKS = {                   // вопрос в поле диалога из расшифровки
   discuss: '',
   summary: 'Составь краткие итоги этой записи: о чём говорили и к чему пришли.',
@@ -383,7 +384,9 @@ async function readBrowser(job, turn) {
   job.message.status = status;
   job.message.content = wellFormed(job.message.content);
   // признак жизни — до конца сохранения: пока идут повторы PUT, другие вкладки не считают ответ брошенным
-  await saveAnswer(job.chatId, job.message, { content: job.message.content, status });
+  // слова ошибки сервер хранит у ответа (`messages.error`): видны и после перечитывания диалога
+  const error = status === 'error' ? clip(wellFormed(job.message.error || ''), ERROR_MAX) : '';
+  await saveAnswer(job.chatId, job.message, { content: job.message.content, status, ...(error ? { error } : {}) });
   clearInterval(beat);
   finish(job);
 }
@@ -693,10 +696,17 @@ function build(view, ctx) {
     const { connection_id: connId, model } = chosen();
     // ни подключения, ни модели (раздел без модели, подключение диалога удалено) — «по умолчанию» нечему
     const none = connId === null && !model;
-    chipName.textContent = none ? tr("модель не выбрана") : model || tr("модель по умолчанию");
-    chip.classList.toggle('off', none);
+    // подключение открытого диалога удалено (`connection_id` null, модель прежняя): ход ответит `no_connection`
+    const deleted = !!chat && connId === null && !!model;
     const link = links.find((l) => l.connection.id === connId);
-    connName.textContent = link ? link.connection.name : '';
+    // адрес подключения убран из списка администратора (`dropped`): ход ответит отказом
+    const dropped = chat ? !!chat.chat.dropped : !!link?.connection.dropped;
+    chipName.textContent = none ? tr("модель не выбрана") : deleted ? tr("подключение удалено — выберите модель")
+      : model || tr("модель по умолчанию");
+    chip.classList.toggle('off', none || deleted || dropped);
+    const name = link ? link.connection.name : '';
+    connName.textContent = !dropped ? name : name ? tr("{0}: адрес убран из списка администратора", name)
+      : tr("адрес подключения убран из списка администратора");
     paintGuard();
     paintThink();
     paintWeb();
@@ -1796,9 +1806,9 @@ function build(view, ctx) {
     scrollDown(false);
     loadList();
     // ответ кончился — диалог с сервера: источники, «Распознать заново» у вложений и сообщения, сделанные тем
-    // временем на другом устройстве. Ответ прямого подключения после ошибки не перечитывать: его слова (и «Ответ не
-    // сохранился») сервер не хранит — перечитанный показал бы «ответ идёт в другой вкладке» или пустую строку
-    if (job.message.via !== 'browser' || job.message.status !== 'error') reload();
+    // временем на другом устройстве. Несохранённый ответ прямого подключения не перечитывать: его текста и «Ответ не
+    // сохранился» сервер не знает — перечитанный показал бы «ответ идёт в другой вкладке» или пустую строку
+    if (!unsaved.has(job.message.id)) reload();
   }
 
   /* события */

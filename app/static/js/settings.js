@@ -1244,10 +1244,19 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const yes = button(tr("Удалить"), { class: 'btn btn-danger', id: 'conn-delete-confirm' });
     const fail = el('p', { class: 'error' });
     const used = sectionsText(conn.sections);
+    const chats = el('p', { class: 'muted', id: 'conn-delete-chats' });
     const dialog = openDialog(host, { id: 'conn-delete-dialog', title: tr("Удалить подключение?"), actions: [yes], body: [
       el('p', {}, `«${conn.name}» — ${conn.base_url}`),
       el('p', { class: 'muted' }, used ? tr("Подключение участвует в разделах: {0}. Оно уйдёт из всех.", used) : tr("Подключение не участвует ни в одном разделе.")),
-      fail] });
+      chats, fail] });
+    // свои диалоги на подключении (в панели администратора чужих диалогов нет): после удаления их ход попросит
+    // выбрать модель (`connections.delete` обнуляет `connection_id`)
+    if (direct) {
+      api('GET', '/api/chats').then(({ items }) => {
+        const count = items.filter((c) => c.connection_id === conn.id).length;
+        if (count) chats.textContent = tr("Диалогов на этом подключении: {0}. Они останутся, но продолжить их можно будет только с другой моделью.", count);
+      }).catch(() => {});
+    }
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {

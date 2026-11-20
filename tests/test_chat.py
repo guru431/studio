@@ -448,6 +448,36 @@ def test_repeated_direct_answer_put_is_idempotent(studio):
     assert (answer["content"], answer["status"]) == ("Здравствуйте!", "done")
 
 
+def test_direct_answer_keeps_its_error_words_after_reload(studio):
+    """Слова ошибки ответа из браузера («Сервис ответил ошибкой (401)…») хранятся, как у ответа через сервер."""
+    add_connection(studio); cid = new_chat(studio)
+    aid = turn(studio, cid, "Привет").json()["assistant_message_id"]
+    url = f"/api/chats/{cid}/messages/{aid}"
+    body = {"content": "", "status": "error", "error": "Сервис ответил ошибкой (401): bad key"}
+    assert studio.c.put(url, json=body).status_code == 200
+    assert studio.c.put(url, json=body).status_code == 200                       # повтор после обрыва — тот же итог
+    answer = messages(studio, cid)[1]
+    assert (answer["status"], answer["error"]) == ("error", "Сервис ответил ошибкой (401): bad key")
+    assert studio.c.put(url, json={**body, "error": "x" * (chat.ERROR_MAX + 1)}).status_code == 422
+    aid = turn(studio, cid, "Ещё").json()["assistant_message_id"]                # у готового ответа слов нет
+    studio.c.put(f"/api/chats/{cid}/messages/{aid}", json={"content": "Да", "status": "done", "error": "лишнее"})
+    assert messages(studio, cid)[3]["error"] is None
+
+
+def test_chat_on_a_dropped_address_refuses_before_writing_history(studio):
+    """Адрес подключения убрали из списка: ни новый диалог, ни ход не начинаются («токен не выдаётся» из браузера
+    был бы непонятен), в диалоге не остаётся сообщения с пустым ответом-ошибкой; раздел «Чат» не готов."""
+    add_gateway(studio); cid = new_chat(studio)
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
+    r = turn(studio, cid, "Привет")
+    assert r.status_code == 409 and "убран из списка" in r.json()["detail"]["message"], r.text
+    assert messages(studio, cid) == []
+    r = studio.c.post("/api/chats", json={})
+    assert r.status_code == 409 and "убран из списка" in r.json()["detail"]["message"]
+    assert studio.c.get("/api/me").json()["capabilities"]["chat"] is False
+    assert studio.c.get(f"/api/chats/{cid}").json()["chat"]["dropped"] is True
+
+
 def test_today_line_names_the_moscow_date():
     assert chat.today_line(1_800_000_000) == "Сегодня пятница, 15 января 2027 года (Москва)."
     # 2026-10-21T21:00:00Z — в Москве уже полночь следующего дня
