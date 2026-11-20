@@ -467,6 +467,19 @@ async def get_chat(cid: str, request: Request):
     return _chat_out(_chat_rows(request.state.user.id, cid), full=True)
 
 
+@router.delete("/chats/{cid}", status_code=204)
+async def delete_chat(cid: str, request: Request):
+    """Весь чат — записи и их mp3 (если на файл больше никто не ссылается); идущая или ждущая запись — 409."""
+    uid = request.state.user.id
+    rows = _chat_rows(uid, cid)
+    if any(r["state"] not in TERMINAL for r in rows):
+        raise HTTPException(409, {"code": "running", "message": "сначала отмените идущие озвучки чата"})
+    state.DB.execute("DELETE FROM speeches WHERE user_id = ? AND chat_id = ?", (uid, cid))
+    for row in rows:
+        await _drop(uid, row["media_id"])
+    return Response(status_code=204)
+
+
 @router.patch("/{sid}", status_code=202)
 async def edit(sid: str, body: SpeechIn, request: Request):
     uid = request.state.user.id

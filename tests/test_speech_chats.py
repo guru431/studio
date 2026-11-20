@@ -135,6 +135,30 @@ def test_cancelled_revoice_restores_the_record_and_waits_its_turn(studio, fake_a
     assert (interrupted['text'], interrupted['media_id']) == (old['text'], old['media_id'])
 
 
+def test_whole_chat_is_deleted_at_once_but_not_while_a_record_runs(studio, fake_audio, monkeypatch):
+    """«Удалить чат» — все записи и их mp3 одним запросом; идущая запись — 409, чужой чат — 404 (04:F11)."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    first = wait_sp(studio, studio.c.post('/api/speeches', json={'text': 'Первая.', 'voice': vid}).json()['id'], {'done'})
+    second = studio.c.post('/api/speeches', json={'text': 'Вторая.', 'voice': vid, 'chat_id': first['id']}).json()
+    second = wait_sp(studio, second['id'], {'done'})
+    other = wait_sp(studio, studio.c.post('/api/speeches', json={'text': 'Другой чат.', 'voice': vid}).json()['id'], {'done'})
+    monkeypatch.setattr(speeches, 'WAIT_MAX_SEC', 10 ** 9)
+    studio.gw.tts_replies = [(503, {'detail': 'busy'})]
+    running = studio.c.post('/api/speeches', json={'text': 'Идёт.', 'voice': vid, 'chat_id': first['id']}).json()
+    wait_sp(studio, running['id'], {'working'})
+    r = studio.c.delete(f"/api/speeches/chats/{first['id']}")
+    assert r.status_code == 409 and r.json()['detail']['code'] == 'running'
+    assert studio.c.post(f"/api/speeches/{running['id']}/cancel").json() == {'state': 'cancelled'}
+    make_user(studio, 'other')
+    signin(studio, 'other')
+    assert studio.c.delete(f"/api/speeches/chats/{first['id']}").status_code == 404
+    signin(studio, 'owner')
+    assert studio.c.delete(f"/api/speeches/chats/{first['id']}").status_code == 204
+    assert [c['id'] for c in studio.c.get('/api/speeches/chats').json()['items']] == [other['id']]
+    assert [studio.c.get(f"/api/media/{i['media_id']}").status_code for i in (first, second, other)] == [404, 404, 200]
+
+
 def test_migration_preserves_old_speeches_and_previous_writer(env):
     from contextlib import closing
     with closing(db.connect(env.db_path)) as conn:
