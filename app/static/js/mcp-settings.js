@@ -67,6 +67,92 @@ function editor(host, previous, { local = false, save }) {
   });
 }
 
+/* Доступ к общему (панель администратора, access.py): null — все пользователи, [] — только администраторам,
+ * [gid…] — участникам этих групп. Администраторам общее открыто всегда. */
+function accessSummary(groups, chosen) {
+  if (chosen === null) return tr("Все пользователи");
+  const names = groups.filter(g => chosen.includes(g.id)).map(g => g.name);
+  return names.length ? tr("Группам: {0}", names.join(', ')) : tr("Только администраторам");
+}
+
+function groupChecks(groups, chosen, onChange) {
+  const box = el('div', { class: 'access-groups' }, ...(groups.length ? groups.map(g => {
+    const control = el('input', { type: 'checkbox', class: 'access-group', value: String(g.id), checked: chosen.includes(g.id) });
+    control.addEventListener('change', onChange);
+    return el('label', { class: 'check' }, control, g.name);
+  }) : [el('p', { class: 'muted small' }, tr("Групп пока нет — создайте их в блоке «Группы»"))]));
+  return { el: box, value: () => [...box.querySelectorAll('input.access-group:checked')].map(c => Number(c.value)) };
+}
+
+/** «Все пользователи» / «Выбранные группы» для общего подключения или сервера MCP; value() — null или [gid]. */
+export function accessPicker(groups, chosen) {
+  const mode = value => el('input', { type: 'radio', name: 'access-mode', value, checked: (chosen === null) === (value === 'all') });
+  const all = mode('all'), some = mode('groups');
+  const summary = el('p', { class: 'muted small access-summary', 'aria-live': 'polite' });
+  const checks = groupChecks(groups, chosen || [], paint);
+  const value = () => all.checked ? null : checks.value();
+  function paint() { checks.el.hidden = all.checked; summary.textContent = accessSummary(groups, value()); }
+  all.addEventListener('change', paint); some.addEventListener('change', paint); paint();
+  return { value, el: el('fieldset', { class: 'access-choice' }, el('legend', {}, tr("Кому доступно")),
+    el('label', { class: 'check' }, all, tr("Все пользователи")), el('label', { class: 'check' }, some, tr("Выбранные группы")),
+    checks.el, summary) };
+}
+
+/** Строка инструмента: «Как у подключения» (правила нет) / «Выбранным группам» / «Только администраторам». */
+function toolRow(groups, name, chosen, missing) {
+  const select = el('select', { class: 'input access-tool-mode', 'aria-label': tr("Доступ к инструменту {0}", name) },
+    el('option', { value: 'inherit' }, tr("Как у подключения")), el('option', { value: 'groups' }, tr("Выбранным группам")),
+    el('option', { value: 'admins' }, tr("Только администраторам")));
+  select.value = chosen === undefined ? 'inherit' : chosen.length ? 'groups' : 'admins';
+  const summary = el('span', { class: 'muted small access-summary' });
+  const checks = groupChecks(groups, chosen || [], paint);
+  const value = () => select.value === 'inherit' ? undefined : select.value === 'admins' ? [] : checks.value();
+  function paint() {
+    checks.el.hidden = select.value !== 'groups';
+    summary.textContent = select.value === 'inherit' ? '' : accessSummary(groups, value());
+  }
+  select.addEventListener('change', paint); paint();
+  return { name, value, el: el('li', { class: 'access-tool', 'data-tool': name },
+    el('div', { class: 'access-tool-head' }, el('code', {}, name),
+      missing ? el('span', { class: 'tag access-missing' }, tr("нет у сервера")) : null),
+    select, checks.el, summary) };
+}
+
+/* «Доступ» общего MCP: сервер и правила инструментов. Список — живой ответ «Проверить» плюс имена из правил,
+ * которых у сервера сейчас нет; «Проверить» не ответил — правила всё равно показаны и сохраняются. */
+function mcpAccessDialog(host, item, note) {
+  const base = `/api/admin/shared/mcp/${item.id}`;
+  const server = el('div', {}, el('p', { class: 'muted' }, tr("Загружаю…")));
+  const status = el('p', { class: 'muted small', id: 'mcp-access-tools-status', 'aria-live': 'polite' });
+  const list = el('ul', { class: 'access-tools', id: 'mcp-access-tools' });
+  const fail = el('p', { class: 'error', id: 'mcp-access-status', 'aria-live': 'polite' });
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'mcp-access-save', disabled: true });
+  const dialog = openDialog(host, { id: 'mcp-access-dialog', title: tr("Доступ: {0}", item.name), actions: [save], body: [server,
+    el('h3', {}, tr("Инструменты")),
+    el('p', { class: 'muted small' }, tr("Инструмент без своего правила доступен всем, кому открыто подключение.")),
+    status, list, fail] });
+  let picker = null, rows = [];
+  save.addEventListener('click', async () => {
+    save.disabled = true; fail.textContent = '';
+    const tools = Object.fromEntries(rows.filter(r => r.value() !== undefined).map(r => [r.name, r.value()]));
+    try { await api('PUT', `${base}/access`, { groups: picker.value(), tools }); dialog.close(); note.textContent = tr("Доступ сохранён"); }
+    catch (err) { fail.textContent = words(err); save.disabled = false; }
+  });
+  const live = api('POST', `${base}/check`).then(({ tools }) => tools.filter(Boolean), err => {
+    status.textContent = tr("Список инструментов сервера не получен: {0}. Правила показаны, их можно сохранить.", words(err));
+    return null;
+  });
+  Promise.all([api('GET', '/api/admin/groups'), api('GET', `${base}/access`), live]).then(([{ items: groups }, rules, tools]) => {
+    if (!dialog.open) return;
+    picker = accessPicker(groups, rules.groups);
+    server.replaceChildren(picker.el);
+    const names = [...new Set([...(tools || []), ...Object.keys(rules.tools)])];
+    rows = names.map(name => toolRow(groups, name, rules.tools[name], tools !== null && !tools.includes(name)));
+    list.replaceChildren(...(rows.length ? rows.map(r => r.el) : [el('li', { class: 'muted' }, tr("Инструментов нет"))]));
+    save.disabled = false;
+  }, err => { server.replaceChildren(); fail.textContent = words(err); });
+}
+
 export function chatMcpBlock({ admin = false } = {}) {
   const base = admin ? '/api/admin/shared/mcp' : '/api/mcp';
   const list = el('div', { id: 'mcp-servers' }), note = el('p', { class: 'status', 'aria-live': 'polite' });
@@ -86,7 +172,8 @@ export function chatMcpBlock({ admin = false } = {}) {
           const control = event.currentTarget; control.disabled = true;
           try { const { tools } = await api('POST', `${base}/${item.id}/check`); note.textContent = tr("Подключено, инструментов: {0}", tools.length); }
           finally { control.disabled = false; }
-        })), button(tr("Удалить"), { class: 'btn' }, () => {
+        })), admin ? button(tr("Доступ"), { class: 'btn mcp-access' }, () => mcpAccessDialog(root, item, note)) : null,
+        button(tr("Удалить"), { class: 'btn' }, () => {
           const remove = button(tr("Удалить"), { class: 'btn btn-danger' });
           const dialog = openDialog(root, { id: 'mcp-remove', title: tr("Удалить подключение MCP?"), body: [el('p', {}, item.name)], actions: [remove] });
           remove.addEventListener('click', () => run(async () => {
