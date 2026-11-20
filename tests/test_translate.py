@@ -46,9 +46,9 @@ def row_of(s, tid):
                    and dict(r))
 
 
-def wait_row(s, tid, states=translate.TERMINAL):
+def wait_row(s, tid, states=translate.TERMINAL, limit=3000):
     wait_until(s, lambda: (r := state.DB.execute("SELECT state FROM translations WHERE id = ?", (tid,)).fetchone())
-               is not None and r["state"] in states)
+               is not None and r["state"] in states, limit)
     return row_of(s, tid)
 
 
@@ -380,7 +380,6 @@ def test_stop_keeps_done_parts_and_restart_interrupts(studio, monkeypatch):
                                                 (tid,)).fetchone()[0] == 1)
     r = studio.c.post(f"/api/translate/{tid}/cancel")
     assert r.json() == {"state": "cancelling"}
-    assert studio.c.get(f"/api/translate/{tid}").json()["detail"] == translate.CANCELLING
     held[0] = False
     row = wait_row(studio, tid)
     assert (row["state"], row["detail"], row["text"], row["done_parts"]) == ("cancelled", translate.CANCELLED, "Первый.", 1)
@@ -442,6 +441,23 @@ def test_stop_user_cancels_both_lanes(studio):
     assert [row_of(studio, t)["state"] for t in (running, waiting, filed)] == ["cancelled"] * 3
     assert translate.RUNNERS == {} and translate.JOBS == {}
     held[0] = False
+
+
+def test_stop_before_the_first_word_does_not_wait_for_the_model(studio):
+    """05:F19: «Остановить», пока модель молчит (холодный старт), обрывает запрос сразу: запись «остановлено»,
+    её можно удалить, следующий текст полосы идёт — без ожидания первой дельты; то же у определения языка."""
+    add_gateway(studio)
+    held = hold_chat(studio)
+    for source in ("en", "auto"):                    # перевод куска; определение языка
+        sent = paths(studio).count("/v1/chat/completions")
+        tid = start(studio, "Hello.", source=source)
+        wait_until(studio, lambda: paths(studio).count("/v1/chat/completions") > sent)
+        assert studio.c.post(f"/api/translate/{tid}/cancel").json()["state"] in ("cancelling", "cancelled")
+        row = wait_row(studio, tid, limit=50)
+        assert (row["state"], row["detail"]) == ("cancelled", translate.CANCELLED)
+        assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    held[0] = False
+    assert wait_row(studio, start(studio, "Next.", source="en"))["state"] == "done"
 
 
 # ---- API -------------------------------------------------------------------------------------------
@@ -654,6 +670,62 @@ def test_scanned_pdf_is_recognized_then_translated(studio, small_pages):
     model_at = sent.index("/v1/chat/completions")
     assert sent.count("/pages/ocr") == 1 and sent[:model_at].count("/pages/ocr-release") == 2
     assert ocr.RETRY_SEC in studio.sleeps
+
+
+def test_scan_of_a_translation_is_one_job_and_detection_skips_page_heads(studio, small_pages, monkeypatch):
+    """05:F8: скан, заведённый переводом, — не отдельное задание: одно уведомление (перевода) и ни одной строки
+    «Распознавание» в «В работе»; язык определяется по тексту без заголовков «Страница N»."""
+    import push
+    calls = []
+    monkeypatch.setattr(push, "job_finished", lambda table, item: calls.append(table))
+    add_gateway(studio)
+    studio.gw.chat_reply = ["en"]
+    studio.gw.ocr_reply = {"choices": [{"message": {"content": "No smoking"}, "finish_reason": "stop"}]}
+    row = wait_row(studio, start_file(studio, "Табличка.pdf", scan_pdf("ink"), source="auto"))
+    assert (row["state"], row["source"]) == ("done", "Страница 1\n\nNo smoking"), row["detail"]
+    assert calls == ["translations"]
+    jobs = studio.c.get("/api/jobs").json()
+    assert [i["section"] for i in jobs["running"] + jobs["finished"]] == ["translate"]
+    detect = [b for b in studio.gw.chat_requests if not b.get("stream")]
+    assert [b["messages"][-1]["content"] for b in detect] == ["No smoking"]
+
+
+def test_text_pdf_with_an_empty_page_is_translated_from_its_layer_with_ocr(studio):
+    """05:F8: при подключённых «Сканах» текстовый PDF с чистым оборотом (без текста и картинки) — не скан: ни
+    документа «Сканов», ни заголовков «Страница N» в исходнике."""
+    add_gateway(studio)
+    row = wait_row(studio, start_file(studio, "Договор.pdf", scan_pdf("Payment is due in 30 days", "empty",
+                                                                      "Second page")))
+    assert (row["state"], row["source"], row["scan_id"]) == ("done", "Payment is due in 30 days\n\nSecond page", None)
+    assert count(studio, "scans") == 0 and studio.gw.ocr_requests == []
+
+
+def test_unread_pages_are_counted_not_translated_and_a_repeat_takes_the_retried_scan(studio, small_pages):
+    """05:F1: страница, что HunyuanOCR не прочёл, — не пометка в исходнике (её перевела бы модель), а итог записи
+    «не распознано страниц: 1 из 2»; после «Повторить страницу» в «Сканах» повтор записи берёт текст скана заново."""
+    add_gateway(studio)
+    cut = {"choices": [{"message": {"content": "# Догов"}, "finish_reason": "length"}]}
+    studio.gw.ocr_replies = [(200, cut)]
+    tid = start_file(studio, "Договор.pdf", scan_pdf("ink", "ink"))
+    row = wait_row(studio, tid)
+    assert (row["state"], row["detail"]) == ("done", "не распознано страниц: 1 из 2")
+    assert row["source"].startswith("Страница 2\n\n") and "не распознана" not in row["source"]
+    assert all("не распознана" not in text for text in streamed(studio))
+    assert studio.c.get(f"/api/translate/{tid}").json()["notice"] == "не распознано страниц: 1 из 2"
+    assert studio.c.get("/api/translate").json()["items"][0]["notice"] == "не распознано страниц: 1 из 2"
+
+    sid = row["scan_id"]
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 1}).status_code == 202
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?", (sid,)).fetchone()[0] == "done")
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    sent = len(studio.gw.ocr_requests)
+    assert row_of(studio, tid)["detail"] == "не распознано страниц: 1 из 2"    # итог записи — её исходника
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "ru"})
+    assert r.status_code == 202, r.text
+    again = wait_row(studio, r.json()["id"])
+    assert (again["state"], again["detail"], again["scan_id"]) == ("done", translate.DONE, sid)
+    assert again["source"].startswith("Страница 1\n\n# Договор") and "Страница 2" in again["source"]
+    assert len(studio.gw.ocr_requests) == sent and studio.c.get(f"/api/translate/{again['id']}").json()["notice"] is None
 
 
 def test_scan_progress_is_the_stage_of_the_translation(studio, small_pages):

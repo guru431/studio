@@ -22,7 +22,9 @@
 5. Стирание истории, удаление и отключение учётки (`stop_user`) — ждущие отменены, идущий оборван
    сразу, затем release фоном (оборванную страницу шлюз ещё считает — 409 и повтор); остановка службы
    (`stop`) — идущий — ошибка «прервано», ждущие — их сделает ошибкой `recover` при старте, release фоном
-   гаснут.
+   гаснут, а взятые слоты (`LEASED`) остаются в settings LEASE_KEY: новый процесс освобождает их после старта
+   (`recover`, `resume_queued`); после аварии — слоты документов, оставшихся `working`. «Освободить карту»
+   администратора освобождает и слот ocr (`release_now`).
 6. У документа из чата (`attachment_id`) итог — текст вложения: страницы с пометкой «Страница N»
    (`attachment_text`) или пометка отказа (`attachment_marker`).
 7. Журнал — только id, коды и числа: имя файла, текст страниц и картинки туда не пишутся. База — только
@@ -90,6 +92,7 @@ DONE = "готово"
 INTERRUPTED = "прервано перезапуском студии"
 NO_CONNECTION = "подключения документа больше нет — загрузите документ заново"
 UNREADABLE = "страница не читается — файл повреждён"
+LEASE_KEY = "ocr_leased"         # settings: [[user_id, connection_id], …] слотов, взятых к остановке службы (`stop`)
 EMPTY = "на странице не найден текст"
 
 log = logging.getLogger("studio")
@@ -132,6 +135,11 @@ class Job:
 JOBS: dict[str, Job] = {}
 #: раннер пользователя: одно распознавание за раз
 RUNNERS: dict[int, asyncio.Task] = {}
+#: условие SQL на строку `scans`: скан служит другому заданию, и итог человек узнает оттуда — перевод PDF-скана
+#: (`translations.scan_id`) или вложение уже отправленного хода чата. Своего уведомления «распознавание готово»
+#: и строки «В работе» (`jobs._ocr`) у него нет
+SERVED = ("(EXISTS (SELECT 1 FROM translations t WHERE t.scan_id = scans.id)"
+          " OR EXISTS (SELECT 1 FROM attachments a WHERE a.id = scans.attachment_id AND a.message_id IS NOT NULL))")
 #: шлюзы, чей слот ocr взят и ещё не освобождён (адрес → снимок подключения последнего звавшего): освобождает
 #: `_settle`, когда в студии нечего распознавать, — кто бы ни кончил последним, даже не звав шлюз; запись
 #: снимает только удачный release
@@ -244,15 +252,16 @@ def attachment_marker(detail: str) -> str:
     return f"[скан не распознан: {detail}]"
 
 
-def attachment_text(scan_id: str) -> str:
-    """Текст вложения чата: страницы с итогом — «Страница N» и текст, нераспознанные — пометкой,
-    пустые пропущены. Не длиннее documents.TEXT_MAX_CHARS (спека 6.5): дальше — обрезка с пометкой, а не
-    отказ — распознанное уже стоило минут карты."""
+def attachment_text(scan_id: str, marks: bool = True) -> str:
+    """Текст вложения чата: страницы с итогом — «Страница N» и текст, нераспознанные — пометкой (`marks`; исходнику
+    перевода — нет: переводить в ней нечего, число таких страниц — итог записи), пустые пропущены. Не длиннее
+    documents.TEXT_MAX_CHARS (спека 6.5): дальше — обрезка с пометкой, а не отказ — распознанное уже стоило минут
+    карты."""
     parts = []
     for p in state.DB.execute("SELECT n, state, text, detail FROM scan_pages WHERE scan_id = ? ORDER BY n", (scan_id,)):
         if p["state"] in ("done", "layer"):
             parts.append(f"Страница {p['n']}\n\n{p['text'] or ''}")
-        elif p["state"] == "failed":
+        elif p["state"] == "failed" and marks:
             parts.append(f"[страница {p['n']} не распознана: {p['detail']}]")
     text, limit = "\n\n".join(parts), documents.TEXT_MAX_CHARS
     if len(text) > limit:
@@ -437,7 +446,8 @@ def _finish(scan_id: str, state_: str, detail_: str, text: "str | None" = None) 
                                (state_, detail_, clock.NOW(), text, scan_id)).rowcount
     if not changed:
         return
-    push.job_finished("scans", scan_id)
+    if state.DB.execute(f"SELECT 1 FROM scans WHERE id = ? AND {SERVED}", (scan_id,)).fetchone() is None:
+        push.job_finished("scans", scan_id)
     row = state.DB.execute("SELECT attachment_id FROM scans WHERE id = ?", (scan_id,)).fetchone()
     if row is not None:
         _attachment(row["attachment_id"], attachment_text(scan_id) if state_ == "done" else attachment_marker(detail_))
@@ -585,6 +595,24 @@ async def borrowed(key: str, user_id: int, conn):
                 RELEASING.pop(key, None)
 
 
+async def release_now(conn) -> dict:
+    """«Освободить карту» администратора (`images.release_card`): release слота ocr шлюза одним запросом, итог —
+    `{state, message}` как у моделей картинок. Идёт распознавание в студии — не трогать: слот его."""
+    if _scanning():
+        return {"state": "busy", "message": "идёт распознавание"}
+    try:
+        r = await upstream.request(conn, "POST", f"{conn.base_url}/pages/ocr-release", timeout=RELEASE_TIMEOUT_SEC,
+                                   json={})
+    except (httpx.HTTPError, upstream.UpstreamRefused) as e:
+        return {"state": "error", "message": f"шлюз недоступен: {type(e).__name__}"}
+    if r.status_code == 200:
+        LEASED.pop(conn.base_url, None)
+        return {"state": "released", "message": "освобождена"}
+    if r.status_code == 409:
+        return {"state": "busy", "message": upstream.message(r) or "занята распознаванием"}
+    return {"state": "error", "message": upstream.gateway_error(r, conn)}
+
+
 def settle_later() -> None:
     """`_settle` фоном — для обработчиков HTTP: ответ не ждёт шлюза (409 — до RELEASE_RETRIES повторов)."""
     task = asyncio.create_task(_settle())
@@ -595,7 +623,7 @@ def settle_later() -> None:
 async def run(job: Job) -> None:
     """Один документ. Итог — в строку последним; затем — `_settle` (release, если в студии больше нечего
     распознавать), звал этот документ шлюз или нет. Оборванный сам карту не освобождает: после stop_user —
-    release фоном, после остановки службы — никто."""
+    release фоном, после остановки службы — новый процесс после старта (`stop`, `recover`)."""
     row = state.DB.execute("SELECT * FROM scans WHERE id = ?", (job.id,)).fetchone()
     outcome = ("error", INTERRUPTED, None)
     try:
@@ -671,14 +699,33 @@ def recover() -> None:
     """После перезапуска раннеров нет: идущие — ошибка «прервано перезапуском», у документов из чата — пометка во
     вложении. Ждущие остаются в очереди — их продолжит `resume_queued`; кроме сканов вложений уже отправленного
     хода чата: его ответ `chat.recover` пометил прерванным, а ждущие сканы прерванного хода отменяются, как при
-    «Остановить»."""
+    «Остановить». Слот шлюза прерванного посреди страницы взят, а `LEASED` прежнего процесса — только в памяти:
+    его сохранила остановка (`stop`, settings LEASE_KEY), а после аварии — подключения идущих; всё это снова в
+    LEASED (`lease_lost`), release — после старта (`resume_queued`)."""
+    kept = state.DB.execute("SELECT value FROM settings WHERE key = ?", (LEASE_KEY,)).fetchone()
+    state.DB.execute("DELETE FROM settings WHERE key = ?", (LEASE_KEY,))
+    for uid, cid in json.loads(kept[0]) if kept is not None else []:
+        lease_lost(uid, cid)
     rows = state.DB.execute(
-        "SELECT id FROM scans s WHERE state IN ('working', 'cancelling') OR (state = 'queued' AND origin = 'chat'"
+        "SELECT id, user_id, connection_id, state FROM scans s WHERE state IN ('working', 'cancelling')"
+        " OR (state = 'queued' AND origin = 'chat'"
         " AND EXISTS (SELECT 1 FROM attachments a WHERE a.id = s.attachment_id AND a.message_id IS NOT NULL))").fetchall()
     for row in rows:
         _finish(row["id"], "error", INTERRUPTED)
+        if row["state"] != "queued":
+            lease_lost(row["user_id"], row["connection_id"])
     if rows:
         log.warning("распознавания: %d прервано перезапуском", len(rows))
+
+
+def lease_lost(user_id: int, connection_id: int) -> None:
+    """Распознавание прервано перезапуском (и снимок перевода, `translate.recover`): слот его шлюза, возможно,
+    взят — в LEASED, release — `_settle` после старта. Подключения нет — аренда кончится сама."""
+    try:
+        conn = connections.get(user_id, connection_id)
+    except HTTPException:
+        return
+    LEASED[conn.base_url] = conn
 
 
 def resume_queued() -> None:
@@ -700,6 +747,8 @@ def resume_queued() -> None:
         kick(uid)
     if users:
         log.info("распознавания: продолжены ждущие у %d пользователей", len(users))
+    if LEASED:                                   # слот прерванных перезапуском (`recover`): ждущих нет — release,
+        settle_later()                           # есть — `_settle` уступит им, слот освободит конец последнего
 
 
 async def stop_user(user_id: int) -> None:
@@ -720,11 +769,16 @@ async def stop_user(user_id: int) -> None:
 
 
 async def stop() -> None:
-    """Остановка службы: идущие пишут «прервано» и кончаются до закрытия базы; release фоном гаснут."""
+    """Остановка службы: идущие пишут «прервано» и кончаются до закрытия базы; release фоном гаснут. Взятые
+    слоты (`LEASED`: оборванная страница, снимок перевода, неудачный release) — в settings LEASE_KEY: их освободит
+    новый процесс после старта (`recover`, `resume_queued`), а не аренда шлюза через 900 с."""
     tasks = [t for t in (*RUNNERS.values(), *SETTLING) if not t.done()]
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    if LEASED:
+        state.DB.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (LEASE_KEY, json.dumps(sorted({(c.user_id, c.id) for c in LEASED.values()}))))
 
 
 # ---- API раздела (спека 6.4, 6.6) --------------------------------------------------

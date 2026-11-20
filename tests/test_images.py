@@ -332,7 +332,9 @@ def test_release_shows_the_busy_reason(studio):
     results = studio.c.post("/api/images/release").json()["results"]
     assert results["snofs"] == {"state": "busy", "message": "идут ролики: 2"}
     assert results["flux"]["state"] == "released"
-    assert [m for m, _ in studio.gw.releases] == [SNOFS, FLUX, "gemma4-abl"]   # видео отдельно не освобождается
+    # видео отдельно не освобождается; слот ocr (05:F3) — да: перезапуск посреди страницы его не отпустил бы
+    assert [m for m, _ in studio.gw.releases] == [SNOFS, FLUX, "gemma4-abl", None]
+    assert results["hunyuan-ocr"] == {"state": "released", "message": "освобождена"}
 
 
 def test_release_is_for_admins_only(studio):

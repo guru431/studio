@@ -11,7 +11,8 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * /api/media/<id>, под ней текст). Скрепка открывает «Файл» (#tl-file-input) / «Фото» (#tl-photo-input); под полем счётчик
  * #tl-count и «Перевести» #tl-go. Правое окно #tl-output — перевод (только чтение), над ним состояние
  * #tl-status, «Остановить» #tl-stop и «Продолжить» #tl-continue, под ним «Копировать» #tl-copy и «Скачать ▾»
- * #tl-export (.txt, .docx).
+ * #tl-export (.txt, .docx). «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
+ * строка истории цветом предупреждения, у записи скана рядом — ссылка #tl-scan «Открыть в „Сканах“».
  *
  * «Перевести»: выбран файл — XMLHttpRequest с FormData на /api/translate/files, языки и модель — заголовками
  * X-Studio-* (имя файла — в части формы, не в адресе), 423 запертой студии ждёт отпирания и шлёт тот же файл
@@ -181,6 +182,7 @@ function build(view, ctx) {
   const status = el('p', { id: 'tl-status', class: 'tl-status small', 'aria-live': 'polite' });
   const stop = el('button', { type: 'button', id: 'tl-stop', class: 'btn btn-sm', hidden: true }, tr("Остановить"));
   const cont = el('button', { type: 'button', id: 'tl-continue', class: 'btn btn-sm', hidden: true }, tr("Продолжить"));
+  const scanLink = el('a', { id: 'tl-scan', class: 'small', hidden: true }, tr("Открыть в «Сканах»"));
   const outText = document.createTextNode('');   // перевод одним текстовым узлом: растёт — дописывается
   const output = el('div', { id: 'tl-output', class: 'tl-output', 'data-placeholder': tr("Перевод") }, outText);
   const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, tr("Копировать"));
@@ -188,7 +190,7 @@ function build(view, ctx) {
     { 'data-format': key }, () => download(key)]) });
   const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, formats);
   const exportBtn = formats.querySelector('#tl-export');
-  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, stop, cont), mcp.output, output, acts);
+  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, scanLink, stop, cont), mcp.output, output, acts);
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
@@ -359,7 +361,11 @@ function build(view, ctx) {
     else if (running) setStatus('', serverMessage(rec.detail) || '', true);
     else if (rec.state === 'error') setStatus('error', serverMessage(rec.detail) || tr("ошибка"));
     else if (rec.state === 'cancelled' || !text) setStatus('muted', serverMessage(rec.detail) || '');
+    else if (rec.notice) setStatus('warn', serverMessage(rec.notice));      // «не распознано страниц: 2 из 12»
     else setStatus('', '');
+    const toScan = !!rec && rec.state === 'done' && !!rec.notice && !!rec.scan_id;
+    scanLink.hidden = !toScan;
+    if (toScan) scanLink.href = `#/ocr?id=${encodeURIComponent(rec.scan_id)}`;
     stop.hidden = !running || rec.state === 'cancelling';
     cont.hidden = !(rec && rec.can_continue) || !!ctx.hint;
     acts.hidden = running || !text;
@@ -611,14 +617,16 @@ function build(view, ctx) {
   /** Строка под парой языков: время, вид, состояние словами (у идущей — «жду карту · м:сс», каждую секунду новое). */
   function metaText(item) {
     const running = RUNNING.has(item.state);
-    const state = running ? serverMessage(item.detail) : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("остановлено") : '';
+    const state = running ? serverMessage(item.detail) : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("остановлено")
+      : item.notice ? serverMessage(item.notice) : '';
     return [timeOf(item.created), kindLabel(item), state].filter(Boolean).join(' · ');
   }
 
   function row(item) {
     const running = RUNNING.has(item.state);
     const from = item.kind === 'file' ? item.name : item.source_head || item.name;
-    const meta = el('span', { class: `tl-meta${item.state === 'error' ? ' error' : ''}` }, metaText(item));
+    const tone = item.state === 'error' ? ' error' : item.state === 'done' && item.notice ? ' warn' : '';
+    const meta = el('span', { class: `tl-meta${tone}` }, metaText(item));
     const opener = el('button', { type: 'button', class: 'tl-open' },
       el('span', { class: 'tl-row-top' }, icon(item.kind === 'text' ? 'text' : item.kind === 'photo' ? 'camera' : 'doc'),
         el('b', { class: 'tl-pair' }, pair(item)), meta),

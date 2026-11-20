@@ -147,6 +147,35 @@ def test_only_blank_scanned_pages_do_not_touch_the_card(studio):
         "SELECT state FROM scan_pages WHERE scan_id = ? ORDER BY n", (att["ocr"]["id"],)).fetchall())] == ["layer", "blank"]
 
 
+def test_scan_of_a_sent_turn_sends_no_notice_of_its_own(studio, monkeypatch):
+    """05:F8: скан вложения уже отправленного хода — итог придёт ответом: ни уведомления «распознавание готово»,
+    ни строки «В работе»; скан ещё не отправленного вложения — уведомляет, как прежде."""
+    import push
+    calls = []
+    monkeypatch.setattr(push, "job_finished", lambda table, item: calls.append(table))
+    add_gateway(studio); cid = new_chat(studio)
+    held_until_the_turn_waits(studio)
+    att = upload(studio, scan_pdf("ink"))
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1] == ("done", {"status": "done"})
+    jobs = studio.c.get("/api/jobs").json()
+    assert calls == [] and [i for i in jobs["running"] + jobs["finished"] if i["section"] == "ocr"] == []
+    studio.gw.ocr_hold = False
+    unsent = upload(studio, scan_pdf("ink"))
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?",
+                                                (unsent["ocr"]["id"],)).fetchone()[0] == "done")
+    assert calls == ["scans"]
+
+
+def test_text_pdf_with_an_empty_page_is_not_a_scan(studio):
+    """05:F8: страница без текста и без картинки (чистый оборот), когда сканов в PDF больше нет, — пустая сразу:
+    вложение из слоя, без документа «Сканов» и очереди распознавания."""
+    add_gateway(studio); cid = new_chat(studio)
+    att = upload(studio, scan_pdf(LAYER, "empty"))
+    assert "ocr" not in att and att["chars"] == len(LAYER)
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1] == ("done", {"status": "done"})
+    assert on_loop(studio, lambda: state.DB.execute("SELECT count(*) FROM scans").fetchone()[0]) == 0
+
+
 def test_without_an_ocr_connection_the_chat_works_as_before(studio):
     gw = add_gateway(studio); cid = new_chat(studio)
     assert studio.c.delete(f"/api/sections/ocr/links/{gw}").status_code == 204

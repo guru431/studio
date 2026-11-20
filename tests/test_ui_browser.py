@@ -7543,6 +7543,35 @@ def test_translate_delete_window_says_whether_the_scan_stays(browser, live, tran
     assert not problems(r), problems(r)
 
 
+def test_translate_scan_with_an_unread_page_says_so_and_links_to_scans(browser, live, translator):
+    """05:F1: перевод скана, где страница не распознана, — «готово», но над переводом и в строке истории — «не
+    распознано страниц: 1 из 2» цветом предупреждения, рядом — «Открыть в „Сканах“» на документ записи."""
+    from scans import scan_pdf
+    live.add_user("tl-unread")
+    translator.chat_script = [["Страница."]]
+    live.gw.ocr_replies = [(200, {"choices": [{"message": {"content": "# Дог"}, "finish_reason": "length"}]})]
+    try:
+        r = browser.drive(live.url + "/", [*translating("tl-unread"),
+            put_files("#tl-file-input", [("Скан.pdf", scan_pdf("ink", "ink"))], "application/pdf"),
+            ("wait", "!document.querySelector('#tl-chip').hidden"),
+            ("click", "#tl-go"),
+            ("wait", f"{TL_DONE} && !document.querySelector('#tl-scan').hidden"),
+            ("eval", "status", "[document.querySelector('#tl-status').textContent,"
+                               " document.querySelector('#tl-status').classList.contains('warn')]"),
+            ("eval", "link", "document.querySelector('#tl-scan').getAttribute('href')"),
+            ("eval", "meta", f"[{TL_DONE}.querySelector('.tl-meta').textContent,"
+                             f" {TL_DONE}.querySelector('.tl-meta').classList.contains('warn')]"),
+            ("eval", "scan", f"""(async () => (await {API}.api('GET', '/api/translate/' + {TL_DONE}.dataset.id)).scan_id)()""")])
+    finally:
+        live.gw.ocr_replies = []
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["status"] == ["не распознано страниц: 1 из 2", True]
+    assert v["link"] == f"#/ocr?id={v['scan']}"
+    assert v["meta"][0].endswith(" · не распознано страниц: 1 из 2") and v["meta"][1] is True
+    assert not problems(r), problems(r)
+
+
 def test_translate_without_model_reads_history(browser, live, translator):
     """Раздел без модели: вместо «Перевести», «Файл» и «Фото» — подсказка со ссылкой на настройки; история
     открывается в окнах и скачивается."""

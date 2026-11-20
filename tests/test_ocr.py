@@ -658,6 +658,51 @@ def test_queued_scans_survive_a_restart(studio):
     assert (row["state"], row["detail"]) == ("error", ocr.NO_CONNECTION) and len(studio.gw.ocr_requests) == sent
 
 
+def test_restart_mid_page_releases_the_slot(studio):
+    """05:F3: перезапуск посреди страницы — `LEASED` прежнего процесса потерян; `recover` берёт подключения
+    прерванных документов, а после старта release идёт фоном (`resume_queued`). Ждущий документ продолжен —
+    слот освобождает его конец, один раз."""
+    uid, conn = gateway_user(studio)
+    studio.gw.ocr_hold = True
+    pdf_scan(studio, uid, conn, "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+
+    async def restart():
+        await ocr.stop()
+        ocr.JOBS.clear()
+        ocr.LEASED.clear()                               # память нового процесса
+        ocr.recover()
+        ocr.resume_queued()
+    try:
+        on_loop(studio, restart)
+    finally:
+        studio.gw.ocr_hold = False
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == 1
+
+    studio.gw.ocr_hold = True
+    pdf_scan(studio, uid, conn, "ink")
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 2)
+    queued = pdf_scan(studio, uid, conn, "ink", kick=False)
+    try:
+        on_loop(studio, restart)
+        assert ocr_releases(studio) == 1                 # ждущий продолжен — слот его
+    finally:
+        studio.gw.ocr_hold = False
+    assert wait_scan(studio, queued)["state"] == "done"
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING and not ocr.RUNNERS)
+    assert ocr_releases(studio) == 2
+
+    crashed = pdf_scan(studio, uid, conn, "ink", kick=False)            # авария: строка осталась `working`
+    on_loop(studio, lambda: state.DB.execute("UPDATE scans SET state = 'working' WHERE id = ?", (crashed,)))
+    ocr.JOBS.clear()
+    on_loop(studio, ocr.recover)
+    assert list(ocr.LEASED) == [conn.base_url]
+    on_loop(studio, ocr.resume_queued)
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == 3
+
+
 def test_a_queued_scan_keeps_its_own_epoch_not_the_runner_one(studio):
     """Раннер, запущенный в прежней эпохе истории, сохраняет PNG страниц документа, поставленного после её
     смены, под эпохой этого документа (`operations.capture`), а не своей: без этого — «сбой службы» 409."""

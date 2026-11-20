@@ -625,7 +625,9 @@ async def translation_received(job_id: str, request: Request):
 
 @router.post("/release")
 async def release_card(request: Request):
-    """Обе модели и gemma-abl — тремя release фото-подключения администратора: итог по каждой."""
+    """Обе модели, gemma-abl и слот ocr (HunyuanOCR, `ocr.release_now`) — release фото-подключения
+    администратора: итог по каждой."""
+    import ocr                                   # ocr → speech → images: не при загрузке модуля
     conn = _srvllm_photo(auth.require_admin(request).id)
     results = {}
     for name, model in (RELEASE_MODELS | {"gemma-abl": DESCRIPTION_MODEL}).items():
@@ -642,6 +644,7 @@ async def release_card(request: Request):
         else:
             # и 401: ключ подключения не принят — слова о профиле, сессия студии жива
             results[name] = {"state": "error", "message": upstream.gateway_error(r, conn)}
+    results["hunyuan-ocr"] = await ocr.release_now(conn)
     log.info("освобождение карты кнопкой: %s", ", ".join(f"{k} {v['state']}" for k, v in results.items()))
     return {"results": results}
 

@@ -23,7 +23,8 @@ def protected(studio, monkeypatch):
     cleaner.TICKETS.clear()
     cleaner.LOCKS.clear()
     sent, deleted, prepared = [], [], []
-    remote = SimpleNamespace(sent=sent, deleted=deleted, prepared=prepared, down=False, revoked=False, local=[])
+    remote = SimpleNamespace(sent=sent, deleted=deleted, prepared=prepared, down=False, revoked=False, local=[],
+                             answer=None)
     original = studio.gw.handler
 
     def handler(request):
@@ -56,7 +57,8 @@ def protected(studio, monkeypatch):
             sent.append(json.loads(request.content))
             return httpx.Response(202, json={"item_id": "answer1"})
         if path.endswith("/events"):
-            data = {"status": "done", "text": f"Ответ {EMAIL}", "raw": "Ответ <EMAIL_1>", "error": ""}
+            data = {"status": "done", "text": f"Ответ {EMAIL}" if remote.answer is None else remote.answer,
+                    "raw": "Ответ <EMAIL_1>", "error": ""}
             return httpx.Response(200, text="event: text\ndata: {\"text\":\"Ответ \"}\n\n"
                                  + "event: done\ndata: " + json.dumps(data) + "\n\n",
                                  headers={"Content-Type": "text/event-stream"})
@@ -372,3 +374,23 @@ def test_translation_uses_checked_request_and_shared_document_context(protected)
     assert wait_row(studio, result.json()["id"])["state"] == "done"
     assert len(remote.sent) == 1 and studio.gw.chat_requests == []
     assert state.DB.execute("SELECT resource FROM cleaner_contexts").fetchone()[0] == "translate"
+
+
+def test_translation_through_cleaner_unwraps_the_fence_and_refuses_an_empty_answer(protected):
+    """05:F4: ответ Cleaner проходит те же `unwrap` и проверку пустоты, что ответ шлюза (`translate_text.chunk`)."""
+    from test_translate import wait_row
+    studio, remote = protected
+
+    def translate(text):
+        result = studio.c.post("/api/translate", json={"text": text, "source_lang": "en", "target_lang": "ru",
+                                                       "connection_id": remote.conn_id, "model": "protected-model"})
+        assert result.status_code == 202, result.text
+        return wait_row(studio, result.json()["id"])
+    remote.answer = "```\nПривет.\n```"
+    row = translate("Hello.")
+    assert (row["state"], row["text"]) == ("done", "Привет.")
+    remote.answer = "  "
+    row = translate("Hello.")
+    assert (row["state"], row["detail"], row["text"]) == ("error", "кусок 1 из 1: модель вернула пустой ответ", None)
+    part = state.DB.execute("SELECT state, text FROM translation_parts WHERE translation_id = ?", (row["id"],)).fetchone()
+    assert tuple(part) == ("failed", None)
