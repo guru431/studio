@@ -98,7 +98,7 @@ minor для возможностей, major для несовместимых �
 | Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `release` (версия Studio), `i18n_words` (слова сервера по-английски для выгрузок, как `StudioI18n.message`), `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
 | Вход и защита | `auth`, `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
-| Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities` | [connections](docs/architecture/connections.md) |
+| Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities`, `access` (группы доступа к общему) | [connections](docs/architecture/connections.md) |
 | Чат | `chat`, `web`, `documents`, `cleaner_client`, `mcp_client` (подключения MCP), `mcp_sections` (инструменты MCP разделов) | [chat](docs/architecture/chat.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports`, `chat_export_selection` | [sharing-export](docs/architecture/sharing-export.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history` | [media](docs/architecture/media.md) |
@@ -201,6 +201,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 53 | `chat_shares.label` — название чата «Агентов» у ссылки (шифром) | столбец не читает: в «Доступах и ссылках» чаты «Агентов» — «компьютер · проект» без названия; новые ссылки — без названия и после возврата вперёд | Не нужен |
 | 54 | `code_attention_seen` — «непрочитано» «Агентов» по учётке | таблицу не читает: отметка снова одна на всех (общий `code_attention.seen`, новый код его тоже ставит); стирание истории владельца уносит строки каскадом | Не нужен; после возврата вперёд просмотры, сделанные прежним кодом, учётке не засчитаны — их завершения снова «непрочитаны» |
 | 55 | Общие API моделей и MCP (`user_id IS NULL`) | видит личные подключения; диалог с общей моделью нужно переключить на личную. Если личным умолчанием была выбрана общая модель, заново выбрать умолчание в прежней версии | Не нужен; общие интеграции сохраняются до возврата вперёд |
+| 56 | Группы доступа: `access_groups`, `access_group_members`, `access_rules`, `access_rule_groups` | таблицы не читает: закрытые группами общие API, MCP и инструменты MCP открываются всем учёткам | Перед откатом — `UPDATE mcp_servers SET enabled = 0 WHERE id IN (SELECT item_id FROM access_rules WHERE kind = 'mcp'); DELETE FROM section_links WHERE user_id IS NULL AND connection_id IN (SELECT item_id FROM access_rules WHERE kind = 'connection');` после возврата вперёд — включить эти MCP и отметить модели общих API заново |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.
