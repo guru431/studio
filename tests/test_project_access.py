@@ -144,6 +144,35 @@ def test_push_of_a_member_turn_goes_to_the_member_while_access_lasts(studio, mon
     assert pushed[4:] == [] and not bridge.INITIATORS
 
 
+def test_push_skips_only_when_the_addressee_watches_not_another_user(studio, monkeypatch):
+    """Чат хода владельца открыт у участника — карточка и конец хода владельцу всё равно приходят push; смотрит
+    сам владелец — нет. Очередь наблюдателя знает свою учётку с маршрута."""
+    from fake_bridge import emit
+    from test_code import ASK
+    aid, machine, link, member, _ = share(studio)
+    owner = link.user_id
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a: pushed.append(uid))
+    queues = []
+    original = bridge.watch
+    monkeypatch.setattr(bridge, "watch", lambda *a: queues.append(original(*a)) or queues[-1])
+    signin(studio, "friend")
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    machine.script = [DONE]
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats", chat, "turn"), json={"text": "x"}).status_code == 200
+    assert queues and queues[-1].user_id == member
+    pushed.clear()
+    bridge.initiated(aid, chat, None)                                   # идёт ход владельца
+    theirs = bridge.watch(aid, chat, "member-tab", member)
+    emit(studio, link, ALPHA, chat, ASK)
+    assert pushed == [owner]
+    mine = bridge.watch(aid, chat, "owner-tab", owner)
+    emit(studio, link, ALPHA, chat, ASK, DONE)
+    assert pushed == [owner]
+    bridge.unwatch(aid, chat, mine)
+    bridge.unwatch(aid, chat, theirs)
+
+
 def test_member_visualization_by_absolute_path_needs_a_bridge_that_scopes_it(studio):
     """Мост до 0.20.0 открывает участнику и общий каталог визуализаций Codex (HTML всех проектов владельца):
     без `hello.visualization_scope` участнику — только относительный путь; владельцу — как раньше."""

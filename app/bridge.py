@@ -10,7 +10,8 @@
   сроку. События хода раздаются очередям наблюдателей чата (`WATCHERS`); канал пропал или его заменил новый —
   им `("offline", None)`; канал появился (`attach`) — `("online", None)`: поток `live`, что ждёт компьютер,
   кончается, и страница сразу открывает новый. Кадры канала, который уже не текущий (заменён, снят), никуда не идут.
-  Карточку (`ask`) или конец хода (`done`) чата без наблюдателей владельцу сообщает push (`push.notify_later`).
+  Карточку (`ask`) или конец хода (`done`) чата, который начавший ход не смотрит, ему сообщает push
+  (`push.notify_later`).
   Своего состояния хода студия не хранит: источник правды — машина (спека 6.10).
 - Признак сессии студии для моста — `tag`: не дайджест сессии и тем более не токен, а производное от
   дайджеста; мост открывает компьютер PIN-ом для этого признака. Заперлась сессия или отперлась —
@@ -128,12 +129,14 @@ class SocketLink(Link):
 
 class Watch(asyncio.Queue):
     """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("online", None) | ("closed", None); `session` — `tag`
-    сессии студии, что смотрит (её `forget` кладёт `closed`). Событий в ней — не больше `WATCH_MAX`: застрявший
+    сессии студии, что смотрит (её `forget` кладёт `closed`), `user_id` — её учётка (push хода не уходит, только пока
+    смотрит его адресат, `watching`). Событий в ней — не больше `WATCH_MAX`: застрявший
     поток SSE (TCP жив, страница не читает) получает `offline` и снимается (`_put_event`)."""
 
-    def __init__(self, session: str | None):
+    def __init__(self, session: str | None, user_id: int | None = None):
         super().__init__()
         self.session = session
+        self.user_id = user_id
 
 
 #: agent_id → канал на связи
@@ -427,14 +430,14 @@ def _addressee(link: Link, frame: dict) -> int | None:
 
 
 def _push(link: Link, frame: dict) -> None:
-    """Карточка или конец хода, которых никто не смотрит, — push начавшему ход (спека 6.8)."""
+    """Карточка или конец хода, которых начавший ход не смотрит, — push ему (спека 6.8)."""
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
     user_id = _addressee(link, frame) if text is not None else None
     if e["k"] == "done":
         INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью
-    if text is None or user_id is None or watching(link.agent_id, frame["chat"]):
+    if text is None or user_id is None or watching(link.agent_id, frame["chat"], user_id):
         return
     project_name = frame.get("project_name")
     # Имя — только один компонент пути; неизвестный/старый мост сохраняет прежний текст push.
@@ -494,8 +497,8 @@ async def call(agent_id: int, op: str, session: str, timeout: float | None = Non
 
 # ---- наблюдатели ---------------------------------------------------------------
 
-def watch(agent_id: int, chat: str, session: str | None = None) -> Watch:
-    q = Watch(session)
+def watch(agent_id: int, chat: str, session: str | None = None, user_id: int | None = None) -> Watch:
+    q = Watch(session, user_id)
     WATCHERS.setdefault((agent_id, chat), set()).add(q)
     return q
 
@@ -508,8 +511,10 @@ def unwatch(agent_id: int, chat: str, q: Watch) -> None:
             del WATCHERS[(agent_id, chat)]
 
 
-def watching(agent_id: int, chat: str) -> bool:
-    return bool(WATCHERS.get((agent_id, chat)))
+def watching(agent_id: int, chat: str, user_id: int | None = None) -> bool:
+    """Чат кто-то смотрит; с `user_id` — именно эта учётка (чужой взгляд участника не глушит push владельцу)."""
+    queues = WATCHERS.get((agent_id, chat), ())
+    return any(user_id is None or q.user_id == user_id for q in queues)
 
 
 def _put_event(agent_id: int, chat: str, q: Watch, e: dict) -> None:

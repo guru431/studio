@@ -1101,7 +1101,7 @@ async def _watched(request: Request, aid: int, chat: str, op: str, *, quiet: boo
                    **args) -> tuple[bridge.Watch, dict]:
     """Очередь наблюдателя (с признаком сессии запроса) — до просьбы: события хода идут сразу за ответом моста
     и не должны пройти мимо. Отказ — очередь прочь."""
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
     try:
         return q, await ask(request, aid, op, quiet=quiet, chat=chat, **args)
     except BaseException:
@@ -1177,7 +1177,8 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
     previous = bridge.initiated(aid, chat, member)
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest))   # до просьбы, как `_watched`
+    # до просьбы, как `_watched`
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
     try:
         data = await _first(key, op, ask(request, aid, "turn", chat=chat, project=pid, text=body.text,
                                          model=body.model, effort=body.effort,
@@ -1252,7 +1253,7 @@ async def live(aid: int, pid: str, chat: str, request: Request):
         q, data = await _watched(request, aid, chat, "watch", quiet=True, project=pid)
     except HTTPException as e:
         if e.detail["code"] == "offline":
-            q = bridge.watch(aid, chat, bridge.tag(request.state.digest))
+            q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
             if aid in bridge.LINKS:                  # вернулся, пока шёл отказ: ждать нечего
                 q.put_nowait(("online", None))
             return _Watch(aid, chat, q, request.state.digest, first=("offline", {"wait": True}), live=True, pid=pid)
