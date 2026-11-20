@@ -502,6 +502,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tr-view { width: 100%; max-width: 820px; margin: 0 auto; padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-6); }
 .tr-error { margin: var(--space-4) var(--space-7) 0; }
 .tr-error:empty { display: none; }
+.tr-sending { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); margin: var(--space-4) var(--space-7) 0; }
+.tr-sending > p { margin: 0; }
 .tr-meta { margin: 0; }
 .tr-acts { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-start; }
 .tr-audio { width: 100%; }

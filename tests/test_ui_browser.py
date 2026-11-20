@@ -4341,6 +4341,42 @@ def test_transcribe_uploads_several_files_and_renames_a_record(browser, live, wi
     assert not known_refusals(problems(r), 415), problems(r)
 
 
+#: загрузка записи «висит» на 37%: send() не уходит в сеть, а шлёт событие хода; window.held — этот XHR
+HELD_UPLOAD = """(() => { const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) { this.target = url; return open.call(this, method, url, ...rest); };
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this.target !== '/api/transcripts') return send.call(this, body);
+    window.held = this;
+    this.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: 37, total: 100 }));
+  }; return true; })()"""
+SENDING = """(() => { const p = document.querySelector('#transcribe-progress'), c = document.querySelector('#transcribe-cancel');
+  return [p.offsetWidth > 0 ? p.textContent : null, c.offsetWidth > 0, document.querySelector('#transcribe-upload').disabled]; })()"""
+
+
+def test_transcribe_upload_shows_progress_on_the_phone_and_cancels_after_coming_back(browser, live):
+    """Телефон: ход загрузки виден над видом записи (список спрятан), уход из раздела и возврат его не теряют,
+    «Отменить загрузку» обрывает её словами, кнопка снова доступна."""
+    login = "trheld"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        ("eval", "spy", HELD_UPLOAD), put_audio("#transcribe-add input", wav_of(1.0)),
+        ("wait", "document.querySelector('#transcribe-progress').textContent.includes('37%')"),
+        ("eval", "first", SENDING),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-progress')?.textContent.includes('37%')"),
+        ("eval", "back", SENDING),
+        ("click", "#transcribe-cancel"), ("wait", "document.querySelector('.tr-sending').hidden"),
+        ("eval", "error", "document.querySelector('.tr-error').textContent"),
+        ("eval", "free", "document.querySelector('#transcribe-upload').disabled")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["first"] == ["Загружаю запись · 37%", True, True] and v["back"] == v["first"]
+    assert v["error"] == "Загрузка отменена." and v["free"] is False
+    assert "POST /api/transcripts" not in r["sent"]
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
     """«Править» → текст реплики → «Сохранить»; «Имена» → «Иван»; выгрузка TXT — с ними; нажатие по
