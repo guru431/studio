@@ -5386,7 +5386,8 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["fresh"] == {"text": "", "count": "0 / 2000", "focused": "speech-text", "choices": v["choices"]}
+    # «Новый чат» не стирает набранное (04:F11): черновик остаётся в поле нового чата
+    assert v["fresh"] == {"text": "Черновик", "count": "8 / 2000", "focused": "speech-text", "choices": v["choices"]}
     assert v["rows"] == 2 and v["newVisible"] and v["fits"]
     assert not problems(r), problems(r)
 
@@ -6948,7 +6949,7 @@ def search_ready(rows):
 @pytest.mark.parametrize("width", [390, 1280])
 def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, live, width):
     """Лупа → «Поиск»; «кот» находит картинку (промпт «кот 0») и расшифровку («Кот в сапогах») с выделенным
-    словом; чип «Разговоры» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
+    словом; чип «Расшифровка» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
     картинку открывает её просмотр в «Фото»."""
     login = f"searcher{width}"
     uid = live.add_user(login)
