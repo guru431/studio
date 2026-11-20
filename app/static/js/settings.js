@@ -1172,7 +1172,7 @@ const OLD_IDS = { other: 'security', dictation: 'input' };
 const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
-  other = false, direct = false, voices = false, onChange = null, shared = false }) {
+  other = false, direct = false, voices = false, onChange = null, shared = false, access = null }) {
   const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
     security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
@@ -1411,7 +1411,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
               el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
             inherited ? null : tr(" ключ {0}", message(conn.token_hint)))),
         inherited ? null : el('div', { class: 'link-buttons' }, checkButton,
-          button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
+          button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)),
+          // общее подключение в панели администратора: кому из учёток оно доступно (группы, access.py)
+          shared && access ? button(tr("Доступ"), { class: 'btn btn-sm link-access' }, () => access(conn)) : null, menu)),
       passport, inherited ? null : actions, search,
       names.length ? box : el('p', { class: 'muted small' }, inherited ? tr("Нет доступных моделей")
         : tr("Нажмите «Обновить модели» и отметьте нужные")), manual);

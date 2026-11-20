@@ -770,6 +770,23 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .allow-list code { font-family: var(--mono); font-size:var(--fs-sm); overflow-wrap: anywhere; }
 .block .row + .row { margin-top: var(--space-6); }
 
+/* группы доступа и диалоги «Доступ» (admin.js, mcp-settings.js) */
+.group-list { list-style: none; margin: 0 0 var(--space-6); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.group-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6); background: var(--surface-0); border: 1px solid var(--line);
+  border-radius: var(--r-control); }
+.group-list li.muted { padding: var(--space-4) var(--space-6); }
+.group-main { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.group-list .acts, .access-tool-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.group-users, .access-groups { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+.access-groups { padding-left: var(--space-7); }
+.access-choice { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); margin: 0 0 var(--space-6);
+  padding: 0; border: 0; min-width: 0; }
+.access-choice legend { margin-bottom: var(--space-3); padding: 0; font-weight: 500; }
+.access-tools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.access-tool { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4) 0; border-top: 1px solid var(--line); }
+.access-tool code { font-family: var(--mono); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+
 /* ---- чат ---------------------------------------------------------------------- */
 
 .chat { flex: 1; min-height: 0; display: flex; }

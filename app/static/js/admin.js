@@ -7,7 +7,7 @@ import { locale, message, tr } from './i18n.js';
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
 import { api, loadMe, me } from './api.js';
-import { chatMcpBlock } from './mcp-settings.js';
+import { accessPicker, chatMcpBlock } from './mcp-settings.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
@@ -480,13 +480,154 @@ function storageBlock() {
   };
 }
 
+/* «Группы» (access.py): группы учёток для доступа к общим API моделей, MCP и инструментам MCP. Правила задаёт
+ * «Доступ» у общего подключения; удаление группы правило не открывает — без групп оно только администраторам. */
+function groupsBlock(host) {
+  const list = el('ul', { class: 'group-list', id: 'group-list' });
+  const note = el('p', { class: 'status error', id: 'groups-status', 'aria-live': 'polite' });
+
+  async function reload() {
+    try {
+      const { items } = await api('GET', '/api/admin/groups');
+      note.textContent = '';
+      list.replaceChildren(...(items.length ? items.map(row) : [el('li', { class: 'muted' }, tr("Групп пока нет"))]));
+    } catch (err) {
+      note.textContent = words(err);
+    }
+  }
+
+  function edit(group = null) {
+    const input = el('input', { class: 'input', id: 'group-name', name: 'name', maxlength: '60', autocomplete: 'off',
+      required: true, value: group ? group.name : '' });
+    const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'group-save', type: 'submit', form: 'group-form' });
+    const form = el('form', { id: 'group-form' }, field(tr("Название группы"), input, 'name'));
+    const dialog = openDialog(host, { id: 'group-dialog', title: group ? tr("Переименовать группу") : tr("Новая группа"),
+      body: [form], actions: [save] });
+    input.focus();
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (save.disabled) return;
+      save.disabled = true;
+      try {
+        if (group) await api('PATCH', `/api/admin/groups/${group.id}`, { name: input.value.trim() });
+        else await api('POST', '/api/admin/groups', { name: input.value.trim() });
+        dialog.close();
+        await reload();
+      } catch (err) {
+        showError(form, err, {}, 'name');
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
+
+  function members(group) {
+    const box = el('div', { class: 'group-users' }, el('p', { class: 'muted' }, tr("Загружаю…")));
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'group-members-save', disabled: true });
+    const dialog = openDialog(host, { id: 'group-members-dialog', title: tr("Участники: {0}", group.name), body: [box, fail],
+      actions: [save] });
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        const ids = [...box.querySelectorAll('input.group-user:checked')].map((c) => Number(c.value));
+        await api('PUT', `/api/admin/groups/${group.id}/members`, { user_ids: ids });
+        dialog.close();
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        save.disabled = false;
+      }
+    });
+    api('GET', '/api/admin/users').then(({ items }) => {
+      if (!dialog.open) return;
+      box.replaceChildren(...items.map((user) => el('label', { class: 'check' },
+        el('input', { type: 'checkbox', class: 'group-user', value: String(user.id), 'data-login': user.login,
+          checked: group.members.includes(user.id) }),
+        user.name && user.name !== user.login ? `${user.login} · ${user.name}` : user.login)));
+      save.disabled = false;
+    }, (err) => {
+      box.replaceChildren();
+      fail.textContent = words(err);
+    });
+  }
+
+  function remove(group) {
+    const yes = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'group-delete-confirm' });
+    const fail = el('p', { class: 'error' });
+    const dialog = openDialog(host, { id: 'group-delete-dialog', title: tr("Удалить группу?"), actions: [yes], body: [
+      el('p', {}, tr("Группа «{0}» уйдёт из всех правил доступа. Правило, в котором не останется групп, откроет общее только администраторам.", group.name)),
+      fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `/api/admin/groups/${group.id}`);
+        dialog.close();
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  function row(group) {
+    return el('li', { 'data-group-id': String(group.id) },
+      el('span', { class: 'group-main' }, el('b', { class: 'group-name' }, group.name),
+        el('span', { class: 'muted small group-count' }, tr("Участников: {0}", group.members.length))),
+      el('div', { class: 'acts' },
+        button(tr("Участники"), { class: 'btn btn-sm group-members' }, () => members(group)),
+        button(tr("Переименовать"), { class: 'btn btn-sm group-rename' }, () => edit(group)),
+        button(tr("Удалить"), { class: 'btn btn-sm btn-danger group-delete' }, () => remove(group))));
+  }
+
+  return {
+    el: el('section', { class: 'block', id: 'admin-groups' }, el('div', { class: 'block-head' }, el('h2', {}, tr("Группы")),
+      button(tr("Создать группу"), { class: 'btn', id: 'group-add' }, () => edit())),
+      el('p', { class: 'muted small' }, tr("Группы ограничивают общие API моделей, общие MCP и отдельные инструменты MCP: кнопка «Доступ» у общего подключения. Администраторам общее доступно всегда.")),
+      list, note),
+    reload,
+  };
+}
+
+/** «Доступ» общего API моделей: все пользователи или выбранные группы (без групп — только администраторам). */
+function connectionAccess(host, conn) {
+  const url = `/api/admin/shared/connections/${conn.id}/access`;
+  const box = el('div', {}, el('p', { class: 'muted' }, tr("Загружаю…")));
+  const fail = el('p', { class: 'error', id: 'access-status', 'aria-live': 'polite' });
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'access-save', disabled: true });
+  const dialog = openDialog(host, { id: 'access-dialog', title: tr("Доступ: {0}", conn.name), body: [box, fail], actions: [save] });
+  let picker = null;
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    fail.textContent = '';
+    try {
+      await api('PUT', url, { groups: picker.value() });
+      dialog.close();
+    } catch (err) {
+      fail.textContent = words(err);
+      save.disabled = false;
+    }
+  });
+  Promise.all([api('GET', '/api/admin/groups'), api('GET', url)]).then(([{ items }, { groups }]) => {
+    if (!dialog.open) return;
+    picker = accessPicker(items, groups);
+    box.replaceChildren(picker.el);
+    save.disabled = false;
+  }, (err) => {
+    box.replaceChildren();
+    fail.textContent = words(err);
+  });
+}
+
 function sharedModelsBlock(host) {
   const title = tr("Общие API моделей");
   const manage = button(tr("Настроить общие модели"), { class: 'btn', id: 'admin-shared-models' }, () => {
     const box = el('div', {});
     const dialog = openDialog(host, { id: 'shared-models-dialog', title, body: [box], cancelText: tr("Закрыть") });
     const view = settingsView(dialog, { sections: '/api/admin/shared/sections', connections: '/api/admin/shared/connections',
-      section: 'chat', shared: true, onChange: () => loadMe().catch(() => null) });
+      section: 'chat', shared: true, onChange: () => loadMe().catch(() => null),
+      access: (conn) => connectionAccess(dialog, conn) });
     box.append(view.el);
     view.reload();
   });
@@ -504,9 +645,11 @@ export function mount(view, ctx) {
   const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
   const storage = storageBlock();
-  root.append(invitations.el, users.el, allow.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }), storage.el);
+  const groups = groupsBlock(root);
+  root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
+  groups.reload();
   invitations.reload();
   allow.load();
   storage.load();
