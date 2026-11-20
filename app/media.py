@@ -6,9 +6,10 @@
 - Путь без строки `media` не теряется: очередь удаления `purge` (без ссылки на учётку) держит пути
   файлов, которые не удалились (шара отказала), и файлов, которые пишутся сейчас (save_async,
   save_stream: отмена или остановка службы посреди записи оставили бы их без строки) — вставка
-  строки снимает путь с очереди той же транзакцией. Очередь проходит purge(): при старте службы и
-  раз в PURGE_SEC (start_purger), при каждом удалении и при стирании истории. Строка не встала —
-  файлы удаляются тем же проходом по одному пути (в потоке).
+  строки снимает путь с очереди той же транзакцией. Очередь проходит purge(): при старте службы,
+  раз в PURGE_SEC (start_purger) и при стирании истории; удаление записи (delete_async) убирает
+  только свои пути и ждёт их не дольше DELETE_WAIT_SEC. Строка не встала — файлы удаляются тем же
+  проходом по одному пути (в потоке).
 - Поток записи не остановить: отмена ожидания (и срок SAVE_TIMEOUT_SEC — тогда StorageError «не
   отвечает») его не бросает — путь остаётся в SAVING, пока поток не кончит, и проход очереди
   уберёт записанное после.
@@ -60,6 +61,8 @@ PURGE_SEC = 300
 #: оставляют ~60 с на чтение тела и разбор фото. Сверяет test_deploy.
 SAVE_TIMEOUT_SEC = 45
 STALLED = "не удалось сохранить файл: хранилище не отвечает"
+#: Сколько «Удалить» ждёт удаления своих файлов: строки уже нет, путь в очереди — дальше ответ не ждёт шару.
+DELETE_WAIT_SEC = 5
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 UNSATISFIABLE = "unsatisfiable"     # byte_range: одиночный диапазон вне файла — 416
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -553,11 +556,17 @@ def _record_orphans(found: "int | None") -> None:
                      (json.dumps({"at": clock.NOW(), "found": found}),))
 
 
+#: удаления файлов, которых delete_async не дождался за DELETE_WAIT_SEC (шара зависла): пока такое идёт,
+#: следующие удаления не занимают ещё поток пула to_thread — их пути ждут проход очереди
+REMOVING: set[asyncio.Task] = set()
+
+
 async def delete_async(user_id: int, media_id: str) -> None:
     """Строка уходит сразу, её путь — в очередь удаления (одной транзакцией, до всякого await):
-    новое задание исходником файл уже не возьмёт (alive), а путь не потеряется. Файлы — в потоке
-    (зависшая шара не останавливает службу); не удалились — доудалит проход очереди, не ошибка.
-    Нет файла или строки — тоже не ошибка."""
+    новое задание исходником файл уже не возьмёт (alive), а путь не потеряется. Файлы своей строки —
+    в потоке, ответ ждёт их не дольше DELETE_WAIT_SEC; не удалились или не дождались — доудалит
+    проход очереди, не ошибка. Прежние отказы очереди этот вызов не трогает. Нет файла или строки —
+    тоже не ошибка."""
     row = state.DB.execute("SELECT id, rel_path FROM media WHERE id = ? AND user_id = ?",
                            (media_id, user_id)).fetchone()
     if row is None:
@@ -571,7 +580,15 @@ async def delete_async(user_id: int, media_id: str) -> None:
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    await _purge(rows)
+    if REMOVING:                    # шара висит на прежнем удалении: путь ждёт проход очереди
+        return
+    task = asyncio.ensure_future(_purge(rows))
+    try:
+        await asyncio.wait_for(asyncio.shield(task), DELETE_WAIT_SEC)
+    except TimeoutError:
+        REMOVING.add(task)
+        task.add_done_callback(REMOVING.discard)
+        log.warning("удаление файлов: хранилище не ответило за %d с — доудалит очередь", DELETE_WAIT_SEC)
 
 
 def byte_range(header: str, size: int) -> "tuple[int, int] | str | None":
