@@ -11076,7 +11076,9 @@ def test_code_tab_close_picks_the_right_neighbour(browser, live):
     wait_for(lambda: code_workspace_rows(live, uid) == [])
     conn = db.connect(live.db_path)
     try:
-        assert conn.execute("SELECT count(*) FROM code_chats WHERE state = 'closed'").fetchone()[0] == 0
+        # живая служба общая для файла: «закрытые» других сценариев сюда не относятся
+        assert conn.execute("SELECT count(*) FROM code_chats WHERE state = 'closed' AND user_id = ?",
+                            (uid,)).fetchone()[0] == 0
     finally:
         conn.close()
     assert set(machine.projects["alpha"]["chats"]) == {CODE_CHAT_A, CODE_CHAT_B, CODE_CHAT_C}
