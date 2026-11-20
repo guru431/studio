@@ -392,7 +392,7 @@ def test_scan_of_a_chat_attachment_does_not_push(studio):
 
 def test_done_scan_without_a_readable_page_is_announced_as_failed(studio, monkeypatch):
     """«Готовый» документ, где все страницы не распознаны (`ocr._readable` — 409 empty): push и ntfy говорят
-    «не получилось», ссылка — та же; документ, где прочитана хоть одна страница, — «готово»."""
+    «не получилось», ссылка — та же, «Готово за час» — ошибка; документ, где прочитана хоть одна страница, — «готово»."""
     from test_jobs import scan
 
     uid = make_user(studio, "owner")
@@ -414,6 +414,9 @@ def test_done_scan_without_a_readable_page_is_announced_as_failed(studio, monkey
     assert [(device.decrypt(r.content)["body"], device.decrypt(r.content)["href"]) for r in studio.gw.push_requests] == [
         (failed["ru"], "ocr?id=s-none"), (ready["ru"], "ocr?id=s-some")]
     assert sent == [(failed, "ocr?id=s-none"), (ready, "ocr?id=s-some")]
+    # «Готово за час» (jobs._ocr) называет его так же: неудача со словами push, а не «готово»
+    rows = {j["id"]: (j["state"], j["detail"]) for j in studio.c.get("/api/jobs").json()["finished"]}
+    assert rows["s-none"] == ("error", failed["ru"]) and rows["s-some"][0] == "done"
 
 
 def test_server_chat_answer_pushes_and_lands_in_ready_within_the_hour(studio):

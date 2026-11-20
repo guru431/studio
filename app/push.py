@@ -249,6 +249,15 @@ def notify_later(user_id: int, body: str | dict[str, str], href: str, tag: str, 
     task.add_done_callback(TASKS.discard)
 
 
+def scan_unread(scan_id: str) -> bool:
+    """«Готовый» документ «Сканов», где не прочитана ни одна страница (есть `failed`, нет `done`/`layer`, как пусто у
+    `ocr._readable`): push, ntfy и «Готово за час» (`jobs._ocr`) называют его неудачей, а не готовностью."""
+    return bool(state.DB.execute(
+        "SELECT EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = ? AND state = 'failed')"
+        " AND NOT EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer'))",
+        (scan_id, scan_id)).fetchone()[0])
+
+
 def job_finished(table: str, item_id: str) -> None:
     """После первого сохранения итога: только готовое/ошибка, только подписки владельца, без содержимого."""
     section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
@@ -264,11 +273,7 @@ def job_finished(table: str, item_id: str) -> None:
                             " WHERE n.user_id = j.user_id AND n.enabled = 1 AND s.expires > ?))",
                             (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
-        ok = row["state"] == "done"
-        if ok and table == "scans":            # «готовый» документ, где не прочитана ни одна страница, — не готов
-            ok = state.DB.execute("SELECT NOT EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = ? AND state = 'failed')"
-                                  " OR EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer'))",
-                                  (item_id, item_id)).fetchone()[0]
+        ok = row["state"] == "done" and not (table == "scans" and scan_unread(item_id))
         notify_later(row["user_id"], done if ok else error,
                      f"{section}?id={item_id}", item_id, title=STUDIO, quiet=True)
 
