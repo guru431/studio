@@ -34,8 +34,10 @@ GET/PUT `/api/code/agents/{aid}/projects/{pid}/mcp?engine=claude|codex|opencode`
 Файлы настроек — под DPAPI в каталоге моста, отдельно для настоящего пути проекта
 и движка. Проектные файлы и глобальные настройки CLI не меняются. Изменения вступают
 в силу на следующем ходе, работающие процессы продолжают прежний снимок. Claude SDK
-получает путь к временному конфигу вместо секретов в argv; файл убирается после
-disconnect до освобождения хода. Codex получает config в thread/start и thread/resume
+получает путь к временному конфигу (`<каталог моста>/mcp/runtime-*`) вместо секретов в argv; файл убирается после
+disconnect до освобождения хода. Вложения хода с 0.42.0 — в `<каталог моста>/attachments/studio-attachments-*`.
+Ход оборвался падением моста или выключением компьютера — оба остатка при следующем старте ядра, до первого хода,
+стирают `mcp.sweep` и `attachments.sweep`. Codex получает config в thread/start и thread/resume
 по stdin JSON-RPC, OpenCode — mcpServers в session/new, session/load и session/fork.
 
 Необязательные поля `hello` (и другие добавки v1): с какой версии мост их объявляет, где контракт. Без capability

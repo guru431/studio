@@ -11,7 +11,7 @@ import re
 import threading
 from pathlib import Path
 
-from . import autostart, cli, enroll, host, setup, store, theme, update_helper, updater
+from . import attachments, autostart, cli, enroll, host, mcp, setup, store, theme, update_helper, updater
 from .claude_sdk import ClaudeSDKClient
 from .codex import CodexRunner
 from .opencode import OpenCodeRunner
@@ -507,6 +507,9 @@ class Controller:
     async def _main(self) -> None:
         # Версию `claude --version` (до 30 с при первом запуске) спросит первый канал (`_refresh_cli`) — до своего
         # `hello`: готовность ядра (`_built`, метка самообновления) её не ждёт.
+        stale = await asyncio.to_thread(lambda: mcp.sweep(self.h) + attachments.sweep(self.h))  # до первого хода
+        if stale:
+            log.info("уборка после прошлого запуска: %d", stale)
         path = await asyncio.to_thread(self._find_cli)
         self._versioned = _UNKNOWN
         version = ""
