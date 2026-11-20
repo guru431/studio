@@ -48,6 +48,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -99,6 +100,8 @@ NAME_CHARS = 60                 # имя текстовой записи — н�
 HEAD_CHARS = 200                 # начало исходника и перевода в ленте
 #: полоса → виды записей в ней
 LANES = {"text": ("text",), "file": ("file", "photo")}
+#: заголовок страницы исходника скана (`ocr.attachment_text`): определению языка — не текст документа
+_PAGE_HEAD = re.compile(r"^Страница \d+\n\n", re.M)
 
 log = logging.getLogger("studio")
 
@@ -339,8 +342,9 @@ async def _languages(job: Job, row) -> tuple[str, str]:
         if origin is None and row["result_lang"] is None:
             # Cleaner receives every model-bound text through its checked request API, including language detection.
             # The translation prompt already supports AUTO; do not send a separate unreviewed request.
+            sample = row["source"] if row["scan_id"] is None else _PAGE_HEAD.sub("", row["source"])
             origin = (None if job.conn.cleaner
-                      else await _abortable(job, translate_text.detect(job.conn, job.model, row["source"])))
+                      else await _abortable(job, translate_text.detect(job.conn, job.model, sample)))
             state.DB.execute("UPDATE translations SET detected_lang = ? WHERE id = ?", (origin, job.id))
         origin = origin or translate_text.AUTO
     lang = row["result_lang"]

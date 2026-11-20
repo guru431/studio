@@ -135,6 +135,11 @@ class Job:
 JOBS: dict[str, Job] = {}
 #: раннер пользователя: одно распознавание за раз
 RUNNERS: dict[int, asyncio.Task] = {}
+#: условие SQL на строку `scans`: скан служит другому заданию, и итог человек узнает оттуда — перевод PDF-скана
+#: (`translations.scan_id`) или вложение уже отправленного хода чата. Своего уведомления «распознавание готово»
+#: и строки «В работе» (`jobs._ocr`) у него нет
+SERVED = ("(EXISTS (SELECT 1 FROM translations t WHERE t.scan_id = scans.id)"
+          " OR EXISTS (SELECT 1 FROM attachments a WHERE a.id = scans.attachment_id AND a.message_id IS NOT NULL))")
 #: шлюзы, чей слот ocr взят и ещё не освобождён (адрес → снимок подключения последнего звавшего): освобождает
 #: `_settle`, когда в студии нечего распознавать, — кто бы ни кончил последним, даже не звав шлюз; запись
 #: снимает только удачный release
@@ -440,7 +445,8 @@ def _finish(scan_id: str, state_: str, detail_: str, text: "str | None" = None) 
                                (state_, detail_, clock.NOW(), text, scan_id)).rowcount
     if not changed:
         return
-    push.job_finished("scans", scan_id)
+    if state.DB.execute(f"SELECT 1 FROM scans WHERE id = ? AND {SERVED}", (scan_id,)).fetchone() is None:
+        push.job_finished("scans", scan_id)
     row = state.DB.execute("SELECT attachment_id FROM scans WHERE id = ?", (scan_id,)).fetchone()
     if row is not None:
         _attachment(row["attachment_id"], attachment_text(scan_id) if state_ == "done" else attachment_marker(detail_))
