@@ -39,6 +39,26 @@ def test_refresh_keeps_the_open_screen_when_studio_is_unreachable(desktop_browse
         assert page.evaluate("location.hash") == "#/settings/appearance"
 
 
+def test_refresh_button_asks_before_losing_unsaved_input(browser, live):
+    """Несохранённое (вето `studio-before-auto-refresh`: черновик, запись, загрузка) — кнопка «Обновить» сначала
+    спрашивает: «Отмена» оставляет страницу, «Обновить» в окне перезагружает."""
+    dialog = "document.querySelector('#refresh-confirm')?.open === true"
+    r = browser.drive(live.url + "/#/settings", [*signin(), ("wait", READY),
+        ("eval", "veto", "window.before = true; document.addEventListener('studio-before-auto-refresh',"
+                         " (event) => event.preventDefault())"),
+        ("click", "#refresh-app"), ("wait", dialog),
+        ("eval", "title", "document.querySelector('#refresh-confirm h2').textContent"),
+        ("click", "#refresh-confirm .dialog-close"), ("wait", "!document.querySelector('#refresh-confirm')"),
+        ("eval", "kept", "window.before === true"),
+        ("click", "#refresh-app"), ("wait", dialog), ("click", "#refresh-confirm-yes"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("eval", "after", "[window.before === undefined, location.hash]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["title"] == "Обновить и потерять набранное?" and v["kept"] is True
+    assert v["after"] == [True, "#/settings"]
+
+
 @pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
 def test_refresh_opens_chat_when_the_optional_catalog_request_fails(desktop_browser, live):
     login = "refresh-catalog-fallback"
