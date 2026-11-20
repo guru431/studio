@@ -2679,10 +2679,13 @@ def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["cols"] == 6 and v["caption"] == "SNOFS Krea 2"
-    assert v["released"] == "SNOFS Krea 2 — освобождена; FLUX — освобождена; gemma-abl — освобождена"
-    # две картинки ленты и повтор (SNOFS Krea 2) — release FLUX до запроса; кнопка — три модели
+    # слот ocr отпускается той же кнопкой (ocr.release_now), когда распознавание не идёт
+    assert v["released"] == ("SNOFS Krea 2 — освобождена; FLUX — освобождена; gemma-abl — освобождена;"
+                             " hunyuan-ocr — освобождена")
+    # две картинки ленты и повтор (SNOFS Krea 2) — release FLUX до запроса; кнопка — три модели и слот ocr
     snofs, flux = MODEL_IDS["snofs"], MODEL_IDS["flux"]
-    assert [m for m, _ in live.gw.releases[rel0:]] == [flux, flux, snofs, flux, "gemma4-abl", flux]
+    # None — release слота ocr (`/pages/ocr-release` без модели)
+    assert [m for m, _ in live.gw.releases[rel0:]] == [flux, flux, snofs, flux, "gemma4-abl", None, flux]
     newest = v["items"][0]
     assert [i[:3] for i in v["items"]] == [["кот 1", 101, "1024x1024"], ["кот 0", 100, "832x1216"]]
     assert v["download"][0].endswith("?download=1") and v["download"][1] and "seed 101" in v["meta"]
