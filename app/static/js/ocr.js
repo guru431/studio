@@ -37,6 +37,8 @@ const POLL_MS = 3000;
 const PAGE = 60;
 const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю загрузку
 const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
+const PHOTO_SIDE = 2200;                 // ocr_render.MAX_SIDE: длиннее фото уменьшает до отправки shrink
+const PHOTO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
@@ -46,6 +48,35 @@ let screen = null;
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Фото длиннее PHOTO_SIDE — JPEG с этой стороной до отправки: сервер всё равно ужимает до неё
+ * (ocr_render.photo_png), а снимок телефона в 3–8 МБ съел бы предел UPLOAD_MAX за несколько страниц. Рисует <img>:
+ * браузер сам поворачивает по EXIF (image-orientation: from-image), в JPEG метаданных нет. Не вышло меньше
+ * исходного, не PNG/JPEG/WebP или не декодируется — исходный файл (откажет и объяснит сервер). */
+async function shrink(file) {
+  if (!PHOTO_TYPES.has(file.type)) return file;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const side = Math.max(img.naturalWidth, img.naturalHeight);
+    if (side <= PHOTO_SIDE) return file;
+    const canvas = el('canvas', { width: Math.round(img.naturalWidth * PHOTO_SIDE / side),
+      height: Math.round(img.naturalHeight * PHOTO_SIDE / side) });
+    const g = canvas.getContext('2d');
+    g.fillStyle = '#fff';                        // прозрачное PNG — на белом, а не на чёрном
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((done) => { canvas.toBlob(done, 'image/jpeg', 0.9); });
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], `${file.name.replace(/\.[^.]*$/, '') || file.name}.jpg`, { type: 'image/jpeg' });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /** Текст узла — только если сменился: опрос не сбрасывает выделение в нём. */
@@ -467,18 +498,26 @@ function build(view, ctx) {
     input.disabled = upload.disabled = uploading || mcp.busy;
   }
 
-  function send(files) {
-    if (files.length > FILES_MAX) {
+  async function send(chosen) {
+    if (chosen.length > FILES_MAX) {
       error.textContent = tr("Больше {0} файлов за раз", FILES_MAX);
-      return;
-    }
-    if (files.reduce((sum, f) => sum + f.size, 0) > UPLOAD_MAX) {
-      error.textContent = tr("Файлы вместе больше 20 МиБ");
       return;
     }
     error.textContent = '';
     uploading = true;
     paintBusy();
+    const files = [];
+    for (const file of chosen) {                 // по одному: 50 декодированных снимков разом телефону не по силам
+      if (file.type !== 'application/pdf') progress.textContent = tr("Уменьшаю фото · {0} из {1}", files.length + 1, chosen.length);
+      files.push(await shrink(file));
+    }
+    progress.textContent = '';
+    if (files.reduce((sum, f) => sum + f.size, 0) > UPLOAD_MAX) {
+      uploading = false;
+      paintBusy();
+      error.textContent = files.length === 1 ? tr("Файл больше 20 МиБ") : tr("Файлы вместе больше 20 МиБ");
+      return;
+    }
     const form = new FormData();
     for (const file of files) form.append('file', file, file.name);
     const xhr = new XMLHttpRequest();

@@ -1394,6 +1394,7 @@ globalThis.StudioEnglish = Object.freeze({
   "В чат ▾": "To chat ▾",
   "Больше {0} файлов за раз": "More than {0} files at once",
   "Файлы вместе больше 20 МиБ": "Files exceed 20 MiB in total",
+  "Уменьшаю фото · {0} из {1}": "Shrinking photos · {0} of {1}",
   "Загружаю · {0}%": "Uploading · {0}%",
   "нет ответа: сервис недоступен или не разрешает запросы из браузера (CORS)": "no response: service unavailable or browser requests blocked (CORS)",
   "Отправит одно короткое сообщение; у платного сервиса это расход.": "Sends one short message. Paid services will charge for it.",

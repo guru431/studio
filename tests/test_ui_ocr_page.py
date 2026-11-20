@@ -86,6 +86,42 @@ def test_engine_is_chosen_for_upload_and_for_recognizing_again(browser, live, wi
     assert not problems(r), problems(r)
 
 
+def test_big_photos_are_shrunk_and_turned_before_the_upload(browser, live):
+    """05:F15: фото длиннее 2200 точек уходит JPEG с длинной стороной 2200, уже повёрнутым по EXIF (тег 6 —
+    поворот на 90°) и без метаданных; фото не длиннее — как есть."""
+    import io
+
+    from PIL import Image
+
+    import media
+    import state
+    from scans import photo
+    noise = Image.effect_noise((4400, 1000), 64).convert("RGB")
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    out = io.BytesIO()
+    noise.save(out, "JPEG", quality=95, exif=exif)
+    big = out.getvalue()
+    live.add_user("ocrshrink")
+    r = browser.drive(live.url + "/", [*signin("ocrshrink"), ("wait", READY), add_gateway(),
+        *go("ocr"), ("wait", "document.querySelector('#ocr-add input')"),
+        put_files("#ocr-add input", [("IMG_1.jpg", big)], mime="image/jpeg"),
+        ("wait", "document.querySelector('.ocr-item[data-state=done]')"),
+        put_files("#ocr-add input", [("Лист.png", photo("PNG"))]),
+        ("wait", "document.querySelectorAll('.ocr-item[data-state=done]').length === 2")])
+    assert not r.get("failed"), r
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'ocrshrink'").fetchone()[0]
+    rows = state.DB.execute("SELECT s.name, p.media_id, m.mime FROM scans s JOIN scan_pages p ON p.scan_id = s.id"
+                            " JOIN media m ON m.id = p.media_id WHERE s.user_id = ? ORDER BY s.created", (uid,)).fetchall()
+    assert [(row["name"], row["mime"]) for row in rows] == [("IMG_1.jpg", "image/jpeg"), ("Лист.png", "image/png")]
+    shrunk = media.path(uid, rows[0]["media_id"]).read_bytes()
+    with Image.open(io.BytesIO(shrunk)) as image:
+        assert image.size == (500, 2200) and image.getexif().get(0x0112) is None
+    assert len(shrunk) < len(big)
+    assert media.path(uid, rows[1]["media_id"]).read_bytes() == photo("PNG")
+    assert not problems(r), problems(r)
+
+
 def test_a_failed_document_offers_what_was_recognized(browser, live):
     from scans import photo
     live.add_user("ocrhalf")
