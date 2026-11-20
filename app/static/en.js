@@ -1850,6 +1850,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Скачать вложение": "Download attachment",
   "Не удалось прочитать вложение": "Could not read attachment",
   "В этом чате пока нет сообщений": "No messages in this chat yet",
+  "Ответ не был дописан, когда создавали ссылку": "The answer was still being written when the link was created",
   "Озвучки": "Speech recordings",
   "Текст для озвучки": "Text to speak",
   "Текст, который нужно озвучить": "Text to synthesize",

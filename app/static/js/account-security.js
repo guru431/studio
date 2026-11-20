@@ -192,7 +192,8 @@ export function accessBlock(host) {
   }
 
   function shareRow(s) {
-    const title = s.kind === 'chat' ? s.title || tr("Чат") : `${s.computer} · ${project(s)}`;
+    const place = `${s.computer} · ${project(s)}`;
+    const title = s.kind === 'chat' ? s.title || tr("Чат") : (s.title ? `${s.title} · ${place}` : place);
     const facts = [sectionName(s.kind), s.expires ? tr("до {0}", moment(s.expires)) : tr("бессрочная"),
       tr("открыта {0} {1}", s.views || 0, plural(s.views || 0, [tr("раз"), tr("раза"), tr("раз")])),
       s.fails ? tr("неверных PIN: {0}", s.fails) : null].filter(Boolean).join(' · ');

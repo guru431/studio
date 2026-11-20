@@ -381,14 +381,18 @@ def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(stud
     owner_id = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()[0]
     state.DB.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c1',?,'Мой чат',0,0)", (owner_id,))
     assert studio.c.post("/api/chats/c1/share", json={"pin": "0123", "days": None}).status_code == 201
-    assert studio.c.post(url(aid, "projects", ALPHA, "chats", A, "share"), json={"pin": "0123"}).status_code == 201
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats", A, "share"),
+                         json={"pin": "0123", "title": "Чат агента"}).status_code == 201
+    # название чата «Агентов» — только шифром (шаг 53)
+    label = state.DB.execute("SELECT label FROM chat_shares WHERE agent_id IS NOT NULL").fetchone()[0]
+    assert label and "Чат агента".encode() not in label
     del machine.projects["beta"]                                     # папку удалили или переименовали
     data = studio.c.get("/api/me/access").json()
     assert [(m["project"], m["name"], m["missing"], m["login"]) for m in data["members"]] == sorted(
         [(ALPHA, "alpha", False, "friend"), (BETA, None, True, "friend")])
     shares = {s["kind"]: s for s in data["shares"]}
     assert (shares["chat"]["title"], shares["chat"]["expires"], "name" in shares["chat"]) == ("Мой чат", None, False)
-    assert (shares["code"]["title"], shares["code"]["name"], shares["code"]["project"]) == (None, "alpha", ALPHA)
+    assert (shares["code"]["title"], shares["code"]["name"], shares["code"]["project"]) == ("Чат агента", "alpha", ALPHA)
     machine.open_sessions.clear()                                    # PIN закрыт — имён нет, id остаются
     closed = studio.c.get("/api/me/access").json()["members"]
     assert {(m["project"], m["name"], m["missing"]) for m in closed} == {(ALPHA, None, None), (BETA, None, None)}
