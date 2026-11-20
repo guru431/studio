@@ -42,16 +42,36 @@ def pytest_make_collect_report(collector):
     return strict_skip((yield), DELIBERATE_SKIPS)       # importorskip на уровне модуля
 
 
+def elevated_pdf_browser(root: Path) -> None:
+    """Сессия администратора Windows: Edge и Chrome снимают повышение и перезапускаются, md2pdf печатает пусто
+    (503 `pdf_failed`, docs/architecture/sharing-export.md). Только для тестов — обёртка браузера md2pdf
+    с `--do-not-de-elevate`; служба и общий md2pdf не меняются, заданный `MD2PDF_BROWSER` не трогается."""
+    if os.name != "nt" or os.environ.get("MD2PDF_BROWSER"):
+        return
+    import ctypes
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        return
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+        for rel in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"):
+            exe = Path(base) / rel if base else None
+            if exe is not None and exe.is_file() and str(exe).isascii():
+                root.mkdir(parents=True, exist_ok=True)
+                wrapper = root / f"md2pdf-browser-{os.getpid()}.cmd"      # свой у каждого процесса xdist
+                wrapper.write_bytes(f'@echo off\r\n"{exe}" --do-not-de-elevate %*\r\n'.encode("ascii"))
+                os.environ["MD2PDF_BROWSER"] = str(wrapper)
+                return
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     """Каталоги/очистка pytest Studio не пересекаются с остальными проектами; дети процесса (браузеры,
     драйверы) не переживают его аварийное завершение (`bind_children`)."""
     bind_children()
-    if config.option.basetemp is not None or os.environ.get("PYTEST_DEBUG_TEMPROOT"):
-        return
-    root = ROOT / ".tmp" / ".pytest_cache" / "main"
-    root.mkdir(parents=True, exist_ok=True)
-    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(root)
+    if config.option.basetemp is None and not os.environ.get("PYTEST_DEBUG_TEMPROOT"):
+        root = ROOT / ".tmp" / ".pytest_cache" / "main"
+        root.mkdir(parents=True, exist_ok=True)
+        os.environ["PYTEST_DEBUG_TEMPROOT"] = str(root)
+    elevated_pdf_browser(Path(os.environ.get("PYTEST_DEBUG_TEMPROOT") or ROOT / ".tmp"))
 
 
 @pytest.fixture
