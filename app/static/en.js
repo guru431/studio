@@ -720,6 +720,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Дождаться освобождения": "Wait until available",
   "Жду завершения задания в другом окне. Результат появится здесь.": "Waiting for the task in another window to finish. The result will appear here.",
   "Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.": "This task is running in another window or browser. Wait for the result or take control here.",
+  "Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить.": "This task is waiting for your answer, but another window or browser has control. Take control here to answer.",
   "Связь прервалась — проверяю, принято ли задание…": "Connection lost. Checking whether the task was accepted…",
   "Связь прервалась. Задание возвращено в поле — повторная отправка не запустит его второй раз": "Connection lost. The task is back in the input field. Resending will not start it twice",
   "Связь прервалась": "Connection lost",

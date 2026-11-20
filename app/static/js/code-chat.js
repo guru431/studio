@@ -359,6 +359,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function paintAskPin() {
     const cards = feed.querySelectorAll('.code-ask');
     const card = cards[0];
+    paintSessionNotice();
     askPin.hidden = !card;
     if (!card) return;
     const yes = card.querySelector('.code-ask-yes');
@@ -913,7 +914,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     send.querySelector('.code-go-label').textContent = label;
     text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
     for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
+    paintSessionNotice();
+  }
+
+  /** Плашка чужого окна. Ход, ждущий ответа на карточку, сам не завершится: «Дождаться» тогда не предлагается. */
+  function paintSessionNotice() {
     sessionNotice.hidden = !foreign && !external;
+    const asking = foreign && !!feed.querySelector('.code-ask');
+    waitSession.hidden = asking;
     if (external) {
       sessionText.textContent = waitingForRelease
         ? tr("Жду освобождения сессии в Codex Desktop или другом приложении. Текст и вложения сохранены.")
@@ -921,7 +929,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       takeSession.textContent = tr("Продолжить копией");
       waitSession.textContent = tr("Дождаться освобождения");
     } else if (foreign) {
-      sessionText.textContent = waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
+      sessionText.textContent = asking ? tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить.")
+        : waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
         : tr("Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.");
       takeSession.textContent = tr("Продолжить здесь");
       waitSession.textContent = tr("Дождаться завершения");
