@@ -221,6 +221,8 @@ async def _say(job: Job, text: str, voice, label: str) -> tuple[bytes, str]:
             job.stage = f"жду карту · {label}"
             _store(job)
             await clock.SLEEP(RETRY_SEC)
+            if job.model == "qwen3-tts":             # кончившуюся генерацию картинок снять, не ждать конца аренды
+                await speech.free_card(job.conn)
             job.stage = label
             _store(job)
 

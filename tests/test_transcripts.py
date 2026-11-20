@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import pathlib
+import re
 import threading
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -142,6 +143,10 @@ def test_card_busy_waits_and_says_so(studio, fake_audio, monkeypatch):
     assert item["state"] == "done" and len(studio.gw.asr_requests) == 4
     assert details and all(d.startswith("жду карту · ") for d in details)
     assert studio.sleeps.count(transcripts.RETRY_SEC) == 3
+    # Release перед каждым повтором: кончившаяся генерация картинок не держит карту арендой до конца ожидания.
+    paths = [q.url.path for q in studio.gw.requests if q.url.path in ("/speech/asr", "/slot/images/release")]
+    attempts = "".join("a" if p == "/speech/asr" else "r" for p in paths)
+    assert re.sub("r+", "r", attempts) == "ra" * 4
 
 
 def test_card_busy_too_long_is_an_error_in_words(studio, fake_audio, monkeypatch):

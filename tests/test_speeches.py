@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 
 import httpx
 
@@ -99,6 +100,9 @@ def test_busy_phrase_is_retried(studio, fake_audio):
     sid = studio.c.post("/api/speeches", json={"text": f"{LONG_A} {LONG_B}", "voice": vid}).json()["id"]
     assert wait_sp(studio, sid, {"done", "error"})["state"] == "done"
     assert len(studio.gw.tts_requests) == 3 and studio.sleeps.count(speeches.RETRY_SEC) == 1
+    # Повтор после 503 — снова с release: кончившаяся генерация картинок не держит карту арендой.
+    paths = [q.url.path for q in studio.gw.requests if q.url.path in ("/speech/tts-qwen", "/slot/images/release")]
+    assert re.sub("r+", "r", "".join("t" if p == "/speech/tts-qwen" else "r" for p in paths)) == "rttrt"
 
 
 def test_cancel_while_waiting_leaves_no_temp_files(studio, env, fake_audio, monkeypatch):
