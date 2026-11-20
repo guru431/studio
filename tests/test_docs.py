@@ -314,6 +314,34 @@ def test_bridge_hosts_are_listed_in_both_claude_md_and_cover_the_code():
     assert literal - hosts - LINK_ONLY == set()
 
 
+#: Поля `hello` базы v1 — до таблицы «capability → версия»
+HELLO_BASE = {"t", "v", "cc_version", "projects_root", "has_pin", "models", "efforts"}
+
+
+def _hello_keys() -> set:
+    """Ключи `Agent.hello`: словарь-литерал и присваивания `hello["…"]` (AST, без импорта)."""
+    tree = ast.parse((AGENT / "agent.py").read_text(encoding="utf-8"))
+    method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "hello")
+    keys = set()
+    for node in ast.walk(method):
+        if isinstance(node, ast.Dict) and any(isinstance(k, ast.Constant) and k.value == "t" for k in node.keys):
+            keys.update(k.value for k in node.keys)
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store) \
+                and isinstance(node.slice, ast.Constant):
+            keys.add(node.slice.value)
+    return keys
+
+
+def test_capability_table_names_every_hello_field():
+    """Каждое необязательное поле `hello` моста — в таблице «Capability и версии моста» `agent-bridge.md`."""
+    text = _text(ARCH / "agent-bridge.md")
+    start = text.index("\n## Capability и версии моста")
+    table = "\n".join(line for line in text[start:text.index("\n## ", start + 1)].splitlines()
+                      if line.startswith("|"))
+    listed = set(re.findall(r"`(?:hello\.)?([a-z_]+)", table))
+    assert sorted(_hello_keys() - HELLO_BASE - listed) == []
+
+
 def _claude_section(title: str) -> str:
     text = _text(ROOT / "CLAUDE.md")
     start = text.index(f"\n## {title}")

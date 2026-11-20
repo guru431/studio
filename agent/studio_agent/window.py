@@ -24,6 +24,7 @@ NOTE_PASSWORD = "Пароль нужен один раз и на компьют�
 CONFIRM_OFF = ("Отключить компьютер от студии? Студия забудет этот компьютер, идущие ходы прервутся. "
                "Чаты останутся на компьютере.")
 CONFIRM_PIN_OFF = "Убрать PIN? Компьютер откроется в студии без PIN."
+CONFIRM_QUIT = "Идёт заданий: {tasks}. Выйти сейчас и прервать их?"
 FAILED = "ошибка моста"
 DASH = "—"
 # Состояние ядра → (слова, токен цвета палитры).
@@ -569,6 +570,12 @@ class MainWindow:
                     "email_code": email_code.get(),
                     "projects_roots": list(folders), "pin": pin.get(), "pin2": pin2.get(), "no_pin": False,
                     "autostart": auto.get()}
+            # Сначала проверка без сети: при опечатке пароль и PIN остаются в полях. Пара логин/пароль — мягко
+            # (`enrolled=True`): привязан ли компьютер к этому адресу, знает ядро (`apply_setup`), окно DPAPI не читает.
+            found = setup.validate(form, enrolled=True)
+            if found:
+                errors.set("\n".join(found))
+                return
             password.set("")
             pin.set("")
             pin2.set("")
@@ -818,7 +825,7 @@ class MainWindow:
         idle = ttk.Button(bar, command=lambda: self.ctrl.set_quit_when_idle(
             not self.ctrl.activity_status()["quit_when_idle"]))
         idle.grid(row=0, column=0, sticky="w", padx=(0, self.px(6)))
-        immediate = ttk.Button(bar, command=self.ctrl.request_quit)
+        immediate = ttk.Button(bar, command=lambda: ask_quit(self.root, self.ctrl, self.ctrl.request_quit))
         immediate.grid(row=0, column=1, sticky="w")
         self.activity_widgets = tasks, desktop, stop, idle, immediate
         self.show_activity()
@@ -1085,6 +1092,15 @@ class _Dialog:
             self.win.grab_release()
             self.win.destroy()
             self.main.release()
+
+
+def ask_quit(root, controller, quit_now) -> None:
+    """«Выйти сейчас» окна и «Выход сейчас» трея: идут задания — сначала подтверждение в окне моста."""
+    tasks = controller.activity_status()["tasks"]
+    if not tasks:
+        quit_now()
+        return
+    confirm(open_main(root, controller), CONFIRM_QUIT.format(tasks=tasks), "Выйти", quit_now)
 
 
 def confirm(main: MainWindow, text: str, ok: str, on_ok) -> None:

@@ -82,7 +82,8 @@ def test_local_activity_menu_routes_desktop_and_exit_actions_without_private_det
     stop.action()
     next(entry for entry in items if text(entry).startswith('Выйти после')).action()
     next(entry for entry in items if text(entry).startswith('Выход сейчас')).action()
-    assert commands == ['stop_desktop', 'quit_idle', 'quit']
+    # «Выход сейчас» — не прямой `quit` (его шлют и самовыходы), а просьба с подтверждением при заданиях
+    assert commands == ['stop_desktop', 'quit_idle', 'quit_now']
     cancel = next(entry for entry in items if text(entry) == 'Отменить обновление')
     assert not cancel.visible(cancel) and not cancel.enabled(cancel)
     icon.show_activity({'tasks': 0, 'waiting': 0, 'desktop_active': False, 'quit_when_idle': True, 'updating': True})

@@ -96,3 +96,23 @@ def test_texts_are_the_spec_words():
     assert window.NOTE_PASSWORD == "Пароль нужен один раз и на компьютере не хранится"
     assert window.CONFIRM_OFF == ("Отключить компьютер от студии? Студия забудет этот компьютер, идущие ходы "
                                   "прервутся. Чаты останутся на компьютере.")
+
+
+def test_quit_now_asks_only_while_tasks_run(monkeypatch):
+    """«Выйти сейчас» окна и «Выход сейчас» трея: идут задания — сначала подтверждение, иначе выход сразу."""
+    from types import SimpleNamespace
+
+    status = {"tasks": 0}
+    asked, quits = [], []
+    ctrl = SimpleNamespace(activity_status=lambda: dict(status))
+    monkeypatch.setattr(window, "open_main", lambda root, controller: "main")
+    monkeypatch.setattr(window, "confirm", lambda main, text, ok, on_ok: asked.append((main, text, ok, on_ok)))
+    window.ask_quit("root", ctrl, lambda: quits.append(1))
+    assert quits == [1] and asked == []
+    status["tasks"] = 3
+    window.ask_quit("root", ctrl, lambda: quits.append(2))
+    assert quits == [1]
+    (main, text, ok, on_ok), = asked
+    assert main == "main" and "3" in text and ok == "Выйти"
+    on_ok()
+    assert quits == [1, 2]
