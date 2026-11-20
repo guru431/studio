@@ -42,7 +42,7 @@ import { pushFlag } from './push-sync.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
-import { editVoice } from './voice-editor.js';
+import { editVoice, holdVoiceEditor } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
@@ -57,7 +57,6 @@ export { modelLabel };     // подписи моделей — models.js; ра�
 
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
 const SEARCH_FROM = 8;
-const CLEANER_SECTIONS = ['chat', 'translate'];   // = sections.CLEANER: другие разделы Cleaner сервер не примет
 
 
 /* ---- модели прямого подключения ------------------------------------------------ */
@@ -1404,8 +1403,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     try {
       const items = (await api('GET', connBase)).items;
       first = !items.length;
-      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner)
-        && (!c.cleaner || CLEANER_SECTIONS.includes(s.id)));
+      // accepts — разделы, которые подключение примет по виду (sections.accepts): s06 в «Фото», OpenAI-совместимое
+      // в «Видео» и Cleaner вне чата и перевода в выборе не предлагаются
+      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner) && c.accepts.includes(s.id));
     } catch (err) {
       say(note, words(err), 'error');
       return;
@@ -1562,6 +1562,12 @@ export function mount(view, ctx) {
 
 export function update(ctx) {
   if (screen) screen.show(ctx.id);
+}
+
+/** Роутер перед сменой адреса: открытый редактор голоса с несохранённым возвращает адрес и спрашивает (жест «назад»
+ * iOS Safari иначе размонтировал бы настройки без вопроса). true — переход задержан. */
+export function hold() {
+  return holdVoiceEditor();
 }
 
 export function unmount() {

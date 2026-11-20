@@ -289,6 +289,20 @@ def test_closing_with_unsaved_samples_asks_first(page):
     page.locator("#voice-dialog").wait_for(state="detached")
 
 
+def test_back_gesture_with_unsaved_samples_asks_first(page):
+    """«Назад» (жест iOS Safari) с несохранённым образцом не размонтирует настройки молча: адрес возвращается,
+    окно спрашивает; «Не сохранять» уходит туда, куда шли."""
+    upload(page)
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    page.evaluate("history.back()")
+    page.locator("#voice-unsaved[open]").wait_for()
+    assert page.evaluate("location.hash") == "#/settings/speech"
+    assert page.locator("#voice-dialog[open]").count() == 1 and page.locator(".voice-sample").count() == 1
+    activate(page, "#voice-unsaved-drop")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    page.wait_for_function("() => location.hash === '#/settings'")
+
+
 def test_preview_sources_are_released_when_replaced_removed_or_closed(page):
     page.evaluate("""() => {
       const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);

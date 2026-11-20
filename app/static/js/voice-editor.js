@@ -2,7 +2,8 @@
  * Recognition (`POST /api/voices/transcribe`) also returns `upload`, the prepared WAV token: saving reuses it while it
  * is fresh, so a file is uploaded once; only a sample without a fresh token goes to `prepare-sample`. Tokens that were
  * not saved are discarded when the dialog closes (the server keeps referenced ones). Closing with unsaved changes
- * («Отмена», Escape, Android back) asks first (`#voice-unsaved`). */
+ * («Отмена», Escape, Android back) asks first (`#voice-unsaved`); so does any address change (the iOS back swipe,
+ * a section tab, «Открыть» in «В работе»): settings.js `hold()` asks `holdVoiceEditor()`. */
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { cancelRecording, recordingName, startRecording } from './mic.js';
@@ -12,6 +13,25 @@ const MAX_SAMPLES = 10;
 const MAX_SECONDS = 60;
 const TEXT_MAX = 2000;
 const DRAFT_MS = 10 * 60 * 1000;   // token of a recognized sample: voices.DRAFT_SEC (900) with a margin
+
+let shown = null;   // the open editor: { dialog, home, entry, dirty, ask } — address and history mark it was opened at
+
+/** Router (app.js, through settings.js `hold`) before any address change, like transcribe.js `hold`: unsaved editor —
+ * the address goes back and «Изменения не сохранены» asks; «Не сохранять» goes on to where the user was heading.
+ * A history move (an entry with a mark) leaves that entry alone: the editor's address is pushed anew, leaving goes
+ * back to it. true — the change is held. */
+export function holdVoiceEditor() {
+  if (!shown || !shown.dialog.isConnected || !shown.dirty() || location.hash === shown.home) return false;
+  const target = location.hash;
+  if (history.state && history.state.entry) {
+    history.pushState({ entry: shown.entry }, '', shown.home);
+    shown.ask(() => history.back());
+  } else {
+    history.replaceState({ entry: shown.entry }, '', shown.home);
+    shown.ask(() => location.replace(target));
+  }
+  return true;
+}
 
 function clock(sec) {
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
@@ -71,8 +91,9 @@ export async function editVoice(host, voice, onSaved) {
     return initial !== null && snapshot() !== initial;
   }
 
-  /** «Изменения не сохранены»: «Не сохранять» closes the editor, «Остаться» keeps it. Always false (stay for now). */
-  function askClose() {
+  /** «Изменения не сохранены»: «Не сохранять» closes the editor (then `leave`, if given), «Остаться» keeps it.
+   * Always false (stay for now). */
+  function askClose(leave = null) {
     if (host.querySelector('#voice-unsaved')) return false;
     const drop = button(tr("Не сохранять"), { class: 'btn btn-danger', id: 'voice-unsaved-drop' });
     const ask = openDialog(host, { id: 'voice-unsaved', title: tr("Изменения не сохранены"), actions: [drop],
@@ -80,6 +101,8 @@ export async function editVoice(host, voice, onSaved) {
     drop.addEventListener('click', () => {
       ask.close();
       dialog.close();
+      shown = null;          // the dialog's close event comes as a later task: the router must not hold again
+      if (leave) leave();
     });
     return false;
   }
@@ -299,7 +322,10 @@ export async function editVoice(host, voice, onSaved) {
       if (uploads.length) discard(uploads);
     }
   });
+  const mine = { dialog, home: location.hash, entry: history.state?.entry ?? null, dirty, ask: askClose };
+  shown = mine;
   dialog.addEventListener('close', () => {
+    if (shown === mine) shown = null;
     for (const entry of entries) {
       entry.controller?.abort();
       stopPreview(entry);

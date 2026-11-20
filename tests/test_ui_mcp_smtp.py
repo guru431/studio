@@ -105,6 +105,34 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
     assert not problems(result), result.get('log')
 
 
+def test_scan_model_choice_hides_while_an_mcp_tool_is_chosen(browser, live):
+    """Два движка «Сканов» — выбор модели виден; выбран инструмент MCP — скрыт (на него не влияет), «Студия» — снова виден."""
+    from fakes import TOKEN as GW_TOKEN
+    login = 'mcp-ocr-model'
+    live.add_user(login)
+    service(live.gw, uploads=True)
+    shown = "!document.querySelector('#ocr-model').hidden"
+    pick = lambda value: ('eval', 'pick', "(() => { const s = document.querySelector('#section-mcp-tool');"
+                          f"s.value = {value}; s.dispatchEvent(new Event('change', {{ bubbles: true }})); }})()")
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), add_gateway(),
+        ('eval', 's06', f"""(async () => {{ const m = {API};
+          await m.api('POST', '/api/connections', {{ name: 's06', kind: 'openai', s06: true,
+            base_url: 'http://10.77.1.15:4000', token: {GW_TOKEN!r}, sections: ['ocr'] }}); return true; }})()"""),
+        ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
+        ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
+        ('type', '#mcp-token', TOKEN), ('click', '#mcp-save'),
+        ('wait', "!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers [data-mcp-id]')"),
+        ('eval', 'ocr', "location.hash='#/ocr'"),
+        ('wait', "document.querySelector('#ocr-model option:nth-child(2)')"
+                 " && document.querySelector('#section-mcp-tool option[value$=\":document_read\"]')"),
+        ('eval', 'native', shown),
+        pick("[...s.options].find(o => o.value.endsWith(':document_read')).value"), ('eval', 'mcp', shown),
+        pick("''"), ('eval', 'back', shown)], width=1280)
+    assert not result.get('failed'), result
+    assert result['values']['native'] is True and result['values']['mcp'] is False and result['values']['back'] is True
+    assert not problems(result), result.get('log')
+
+
 def test_unreachable_mcp_server_is_named_in_the_chat_answer_and_in_sections(browser, live):
     """Лежащий MCP-сервер: ответ чата идёт без него — под ответом «Вызовы инструментов (1)» с его именем, а не
     «Источники (0)»; раздел «Фото» говорит, что MCP недоступен, со ссылкой на настройки."""

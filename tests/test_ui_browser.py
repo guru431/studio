@@ -456,6 +456,21 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not known_refusals(problems(r), 422), problems(r)
 
 
+def test_settings_offers_only_connections_the_section_accepts(browser, live):
+    """«+ Адрес для раздела» не предлагает подключение, которое раздел не примет по виду (OpenAI-совместимое в «Видео»)."""
+    live.add_user("accepts")
+    options = "[...document.querySelectorAll('#link-dialog [name=existing] option')].map(o => o.value)"
+    r = browser.drive(live.url + "/", [*signin("accepts"), ("wait", READY), add_cloud(live.cloud),
+        *go("settings/video"), ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")), ("eval", "video", options),
+        ("press", "Escape"), ("wait", f"!{is_open('#link-dialog')}"),
+        *go("settings/speech"), ("wait", "document.querySelector('.section-panel[data-section=speech] #link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")), ("eval", "speech", options)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["video"] == ["new"] and v["speech"] == [str(v["cloud"]), "new"], v
+
+
 def test_settings_adds_the_first_gateway_to_every_section(browser, live):
     live.add_user("everywhere")
     every = "document.querySelector('#link-dialog [name=everywhere]')"
@@ -5459,7 +5474,11 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
         ("click", "#sp-new"),
         ("wait", "!document.querySelector('.sp-text') && !document.querySelector('.sp-item[aria-current]')"),
         ("eval", "fresh", "({text: document.querySelector('#speech-text').value, count: document.querySelector('#speech-count').textContent, focused: document.activeElement.id, choices: [document.querySelector('#chip-model').value, document.querySelector('#chip-voice').value]})"),
-        ("type", "#speech-text", "Новая озвучка"), ("click", "#speech-go"),
+        # «Новый чат» с пустым полем не снимает с поля защиту от автоперезагрузки: набранное после — вето
+        set_value("#speech-text", ""), ("click", "#sp-new"),
+        ("type", "#speech-text", "Новая озвучка"),
+        ("eval", "veto", "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))"),
+        ("click", "#speech-go"),
         ("wait", "document.querySelector('.sp-item[data-state=done][aria-current=true]')"),
         ("eval", "rows", "document.querySelectorAll('.sp-item').length"),
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
@@ -5467,6 +5486,7 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
     v = r["values"]
     # «Новый чат» не стирает набранное (04:F11): черновик остаётся в поле нового чата
     assert v["fresh"] == {"text": "Черновик", "count": "8 / 2000", "focused": "speech-text", "choices": v["choices"]}
+    assert v["veto"] is True
     assert v["rows"] == 2 and v["newVisible"] and v["fits"]
     assert not problems(r), problems(r)
 
@@ -6745,6 +6765,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
         ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-finished")),
         ("eval", "running", "document.querySelector('#jobs-running').textContent"),
         ("eval", "dotOpen", "document.querySelector('#jobs').dataset.new || ''"),
+        ("eval", "openName", "document.querySelector('#jobs-finished .jobs-row .jobs-open').getAttribute('aria-label')"),
         ("click", "#jobs-finished .jobs-row .jobs-open"),
         ("wait", is_open("#viewer")),
         ("eval", "hash", "location.hash"), ("eval", "panel", is_open("#jobs-panel")),
@@ -6754,6 +6775,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
     v = r["values"]
     assert v["dot"] is True and v["rows"] == [["photo", "Картинка · SNOFS Krea 2", True, "done"]]
     assert v["running"] == "Сейчас ничего не идёт" and v["dotOpen"] == ""
+    assert v["openName"] == "Открыть: Картинка · SNOFS Krea 2"
     assert v["hash"] == "#/photo" and v["panel"] is False and v["dotAfter"] == ""
     assert not problems(r), problems(r)
 
@@ -7649,12 +7671,19 @@ def test_translate_keeps_typed_text_while_a_record_is_open(browser, live, transl
         ("click", "#tl-new"),
         ("eval", "fresh", f"[{field}, {TL_OUTPUT}, {REFRESH_VETO}]"),
         ("click", "#tl-new"),
-        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]")])
+        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]"),
+        # удалённая открытая запись: её исходник уходит из поля, возвращается свой черновик
+        set_value("#tl-input", "Ещё черновик"), *open_row,
+        ("click", ".tl-row[data-state=done] .tl-delete"), ("wait", "document.querySelector('#tl-delete-dialog')?.open"),
+        ("click", "#tl-delete-confirm"),
+        ("wait", "!document.querySelector('.tl-row') && !document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "deleted", f"[{field}, {REFRESH_VETO}]")])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["opened"] == ["Привет", True]
     assert v["fresh"] == ["Мой черновик", "", True]
     assert v["cleared"] == ["", False]
+    assert v["deleted"] == ["Ещё черновик", True]
     assert not problems(r), problems(r)
 
 
