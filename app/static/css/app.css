@@ -994,6 +994,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .card-busy p, .card-note p { margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5;
   -webkit-box-orient: vertical; overflow: hidden; }
 .card-note.error p { color: var(--danger); }
+.card-note-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2) var(--space-6); }
 .card-time { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 .ring { width: 24px; height: 24px; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--text-1);
   animation: spin 1s linear infinite; }
@@ -1274,7 +1275,8 @@ label.chip { cursor: pointer; }
 /* в режиме нажатие — отметка: слой поверх карточки, кнопки карточки скрыты */
 [data-selecting] .card[data-pickable] { cursor: pointer; }
 [data-selecting] .card[data-pickable]::after { content: ''; position: absolute; inset: 0; z-index: 5; }
-[data-selecting] :is(.card-save, .card-delete, .card-cancel, .card-chain, .card-download) { visibility: hidden; }
+[data-selecting] :is(.card-save, .card-delete, .card-cancel, .card-chain, .card-download, .card-repeat, .card-variants,
+  .card-viewer) { visibility: hidden; }
 [data-selecting] .card[data-selected="true"] { outline: 3px solid var(--accent); outline-offset: -3px; }
 [data-view="table"] .card-pick { top: 8px; left: 6px; width: 20px; height: 20px; }
 [data-view="table"] .card-pick svg.ico { width: 12px; height: 12px; }

@@ -452,6 +452,11 @@ function build(view, ctx) {
     });
   }
 
+  /** Миниатюра шага-картинки в цепочке ролика — эта картинка в «Фото» (#/photo?id=…). */
+  function openStep(id) {
+    ctx.navigate(`photo?id=${encodeURIComponent(id)}`);
+  }
+
   /** «Промпты»: цепочки в записи ленты нет — она из GET /api/videos/<id>. */
   function chainButton(item) {
     return button(tr("Промпты"), { class: 'btn btn-sm card-chain' }, async (event) => {
@@ -460,7 +465,7 @@ function build(view, ctx) {
       try {
         const full = await api('GET', `/api/videos/${encodeURIComponent(item.id)}`);
         if (alive) openDialog(root, { id: 'chain-dialog', title: tr("Как получен ролик"), cancelText: tr("Закрыть"),
-          body: [chainList(full.chain, { current: null, onOpen: () => ctx.navigate('photo') })] });
+          body: [chainList(full.chain, { current: null, onOpen: openStep })] });
       } catch (err) {
         error.textContent = words(err);
       } finally {
@@ -509,7 +514,7 @@ function build(view, ctx) {
     return node;
   }
 
-  /** Вид «Таблица»: постер, промпт, параметры, seed, время или ход, действие. */
+  /** Вид «Таблица»: постер, промпт, параметры, seed, время или ход, действия (у готового — «Повторить» и «Скачать»). */
   function row(item, node) {
     const done = item.state === 'done' && item.media_id;
     const busy = RUNNING.has(item.state);
@@ -524,7 +529,7 @@ function build(view, ctx) {
     el('p', { class: 'cell-prompt', title: item.prompt || '' }, item.prompt || SOURCES[item.prompt_source] || ''),
     el('span', { class: 'cell-meta' }, el('span', {}, clipParams(item)), el('span', {}, seedText(item)),
       el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, ...(done ? [save] : busy ? [cancelButton(item, 'btn-link')]
+    el('span', { class: 'cell-act' }, ...(done ? [repeatButton(item, 'btn-link'), save] : busy ? [cancelButton(item, 'btn-link')]
       : [repeatButton(item, 'btn-link'), deleteButton(item, 'btn-link')])));
     return node;
   }
@@ -560,9 +565,9 @@ function build(view, ctx) {
     });
     api('GET', `/api/videos/${encodeURIComponent(item.id)}`).then((full) => {
       if (!dialog.open) return;
-      const next = chainList(full.chain, { current: null, onOpen: () => {
+      const next = chainList(full.chain, { current: null, onOpen: (id) => {
         dialog.close();
-        ctx.navigate('photo');
+        openStep(id);
       } });
       chain.replaceWith(next);
       chain = next;
