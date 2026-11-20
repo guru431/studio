@@ -2039,6 +2039,9 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-file-bar #code-save { margin-left: auto; }
 .code-file-status { flex: none; margin: 0; }
 .code-file-status:empty { display: none; }
+.code-conflict { flex: none; display: grid; gap: var(--space-3); max-height: 50%; overflow: auto; }
+.code-conflict p { margin: 0; }
+.code-conflict-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .code-editor { flex: 1; min-height: 120px; resize: none; font-family: var(--mono); font-size:var(--fs-sm); line-height: 1.5;
   white-space: pre; overflow: auto; tab-size: 4; }
 .code-editor[hidden], .code-md[hidden] { display: none; }

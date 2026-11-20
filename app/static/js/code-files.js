@@ -9,7 +9,8 @@ import { locale, tr } from './i18n.js';
  *   дерево и содержимое файла прокручиваются независимо в пределах рабочей области;
  * - текстовый — #code-editor и «Сохранить» (#code-save): PUT …/file с version открытого — файл изменился на
  *   машине (его мог поправить Claude) — 409 conflict и слова в #code-file-status, на машине ничего не
- *   затирается; textarea приводит концы строк к \n — у файла с \r\n они возвращаются при сохранении;
+ *   затирается; файл читается заново, #code-conflict сравнивает версии и даёт взять версию компьютера, сохранить
+ *   свою поверх (с прочитанным version) или скопировать свою; textarea приводит концы строк к \n — у файла с \r\n они возвращаются при сохранении;
  *   .md — «Разметка» / «Исходный» (#code-md-view, markdown.js), сначала разметка; binary и too_large — слова, файл не открывается;
  * - .pdf — страница картинкой (#code-pdf img из POST …/pdf, число страниц — X-Studio-Pages), «‹» «›» и
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
@@ -32,12 +33,13 @@ import { api } from './api.js';
 import { icon as svgIcon } from './icons.js';
 import { dateTime } from './time.js';
 import { fileMark } from './code-git.js';
+import { changeView } from './code-diff.js';
 import { restoreEndings } from './line-endings.js';
 import { renderMarkdown } from './markdown.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const SAVED = tr("Сохранено");
-const CONFLICT = tr("Файл изменился на компьютере — откройте его заново, чтобы не затереть правки");
+const CONFLICT = tr("Файл изменился на компьютере — сравните версии и выберите, какую оставить");
 const TOO_LARGE = tr("Файл больше 2 МиБ — не открывается");
 const BINARY = tr("Двоичный файл — не открывается");
 const NO_CHANGES = tr("Изменений нет");
@@ -607,6 +609,8 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         ({ version } = await api('PUT', `${url}/file`, { path, text, version }));
         mark.base = sent;
         original = text;
+        conflict?.remove();
+        conflict = null;
         clearStats();
         if (alive && mine === fileGen) say(status, SAVED, false);
         if (alive) {
@@ -615,7 +619,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         }
       } catch (err) {
         if (!alive || mine !== fileGen) return;
-        if (err.code === 'conflict') say(status, CONFLICT, true);
+        if (err.code === 'conflict') await showConflict();
         else if (err.code === 'closed') {
           edits.set(key, { text: editor.value, version });
           refuse(err, status, path);
@@ -627,6 +631,56 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         save.disabled = false;
       }
     });
+    /* 409 conflict: версия на компьютере читается заново и сравнивается с правкой (#code-conflict); выбор —
+     * взять версию компьютера, сохранить свою поверх неё (с её version) или скопировать свою. */
+    let conflict = null;
+    async function showConflict() {
+      say(status, CONFLICT, true);
+      let theirs;
+      try {
+        theirs = await api('POST', `${url}/read`, { path });
+      } catch (err) {
+        if (!alive || mine !== fileGen) return;
+        say(status, '', true);
+        refuse(err, status, path);
+        return;
+      }
+      if (!alive || mine !== fileGen) return;
+      const current = theirs.text.replace(/\r\n?/g, '\n');
+      const take = el('button', { type: 'button', id: 'code-conflict-take', class: 'btn btn-sm' }, tr("Взять версию компьютера"));
+      const overwrite = el('button', { type: 'button', id: 'code-conflict-overwrite', class: 'btn btn-sm' }, tr("Сохранить мою поверх"));
+      const copy = el('button', { type: 'button', id: 'code-conflict-copy', class: 'btn btn-sm' }, tr("Скопировать мою"));
+      conflict?.remove();
+      const box = conflict = el('section', { id: 'code-conflict', class: 'code-conflict', 'aria-label': tr("Конфликт сохранения") },
+        el('p', { class: 'muted small' }, tr("Слева — версия на компьютере, справа — ваша")),
+        changeView([{ path: nameOf(path), before: current, after: editor.value }]),
+        el('div', { class: 'code-conflict-actions' }, take, overwrite, copy));
+      status.after(box);
+      const close = () => { box.remove(); if (conflict === box) conflict = null; };
+      take.addEventListener('click', () => {
+        editor.value = mark.base = current;
+        original = theirs.text;
+        version = theirs.version;
+        edits.delete(key);
+        close();
+        if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
+        say(status, tr("Открыта версия компьютера"), false);
+      });
+      overwrite.addEventListener('click', () => {
+        original = theirs.text;
+        version = theirs.version;
+        close();
+        save.click();
+      });
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(editor.value);
+          say(status, tr("Ваша версия скопирована"), false);
+        } catch {
+          say(status, tr("Не удалось скопировать — выделите текст в поле"), true);
+        }
+      });
+    }
     file.append(editor);
     if (/\.md$/i.test(path)) {
       editor.hidden = true;
