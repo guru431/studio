@@ -225,6 +225,11 @@ def _managed_base(stage):
     base = _managed_location(stage)
     if base is None:
         return None
+    return _checked_base(base, stage)
+
+
+def _checked_base(base, stage=None):
+    """`releases/` и его родители — настоящие каталоги, без ссылок; `stage` (если есть) — прямо в нём."""
     try:
         if LINUX:
             parents = (stage, base, base.parent, base.parent.parent)
@@ -233,12 +238,22 @@ def _managed_base(stage):
             parents = (local, local / 'Library', local / 'Library/Application Support', base.parent.parent,
                        base.parent, base, stage) if MACOS else (local, local / 'Programs', base.parent, base, stage)
         for path in parents:
+            if path is None:
+                continue
             info = path.lstat()
             if _reparse(info) or not stat.S_ISDIR(info.st_mode):
                 return None
-        return base.resolve() if stage.resolve().parent == base.resolve() else None
+        return base.resolve() if stage is None or stage.resolve().parent == base.resolve() else None
     except OSError:
         return None
+
+
+def _cleanup_base(stage):
+    """`releases/` для уборки: `stage` — выпуск в нём или подписанное приложение macOS (`_signed_repo`), которое
+    работает вне `releases/`, но оставляет там папки своих переходов (`macos_signed._finish`)."""
+    if _signed_repo(stage):
+        return _checked_base(install_home() / 'releases')
+    return _managed_base(stage)
 
 
 def _identity(path):
@@ -360,7 +375,7 @@ foreach ($processInfo in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
 
 def _candidates(stage: Path, plan: dict, autostart: str | None = '', *, active=None):
     """План без удаления: только подтверждённые или ранее помеченные для повторной уборки выпуски."""
-    base = _managed_base(stage)
+    base = _cleanup_base(stage)
     if (base is None or autostart is None or not isinstance(plan, dict)
             or not isinstance(plan.get('old_repo'), str) or not Path(plan['old_repo']).is_absolute()):
         return []
@@ -395,7 +410,7 @@ def prune_candidates(stage: Path, plan: dict, autostart: str | None = '', *, act
 
 def prune(stage: Path, plan: dict, autostart: str | None = '', *, processes=None) -> list[Path]:
     """Текущий выпуск, old_repo, автозапуск и живые процессы сохраняем; частичная ошибка допускает повтор."""
-    base = _managed_base(stage)
+    base = _cleanup_base(stage)
     if base is None or autostart is None:
         return []
     processes = processes or running_releases
@@ -412,7 +427,7 @@ def prune(stage: Path, plan: dict, autostart: str | None = '', *, processes=None
             if active is None:
                 break
             identity = _identity(item)
-            if (item.name.casefold() in active or identity != expected_identity or _managed_base(stage) != base
+            if (item.name.casefold() in active or identity != expected_identity or _cleanup_base(stage) != base
                     or item.resolve().parent != base or not _safe_tree(item)):
                 continue
             intent = _intent(base, item, identity)
@@ -482,6 +497,14 @@ def _autostart():
 
 def cleanup_started(stage: Path) -> bool:
     """Новая версия повторяет уборку после подтверждения старого helper; False — подтверждение ещё ожидается."""
+    if _signed_repo(stage):
+        # Подписанное приложение: удачный переход `macos_signed` убирает свою папку сам, неудачный оставляет
+        # `_update_result` — те же правила уборки, сохраняемых выпусков в `releases/` у него нет.
+        try:
+            prune(stage, {'old_repo': str(stage)}, _autostart())
+        except (OSError, ValueError):
+            pass
+        return True
     if _managed_base(stage) is None:
         return True
     try:
