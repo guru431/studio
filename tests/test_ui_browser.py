@@ -10416,7 +10416,7 @@ def test_code_file_conflict_is_said_in_words(browser, live, choice):
 
     def read_then_change(req, events):
         out = read(req, events)
-        machine.projects["alpha"]["files"]["src/app.py"] = b"print('claude')\n"
+        machine.projects["alpha"]["files"]["src/app.py"] = b"x = 1\ny = 2\nprint('claude')\n"
         return out
 
     machine._op_read = read_then_change
@@ -10426,12 +10426,14 @@ def test_code_file_conflict_is_said_in_words(browser, live, choice):
             code_root_names(5), ("click", code_item("src")),
             ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
             ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
-            set_value("#code-editor", "print('мой')\n"), ("click", "#code-save"),
+            set_value("#code-editor", "x = 1\ny = 2\nprint('мой')\n"), ("click", "#code-save"),
             ("wait", f"{CODE_FILE_STATUS} !== ''"), ("eval", "status", CODE_FILE_STATUS),
             ("eval", "error", "document.querySelector('#code-file-status').classList.contains('error')"),
             ("eval", "text", "document.querySelector('#code-editor').value"),
             ("wait", "document.querySelector('#code-conflict')"),
             ("eval", "diff", "document.querySelector('#code-conflict .code-diff-unified').textContent"),
+            ("eval", "rows", "[...document.querySelectorAll('#code-conflict .code-diff-unified .code-change-line')].map((n) =>"
+                     " [n.classList[1], n.querySelector('.code-change-number').textContent, n.lastChild.textContent])"),
             ("eval", "fits", NO_OVERFLOW), ("click", f"#code-conflict-{choice}"),
             ("wait", "!document.querySelector('#code-conflict')"),
             ("wait", f"![{json.dumps(CODE_CONFLICT)}, ''].includes({CODE_FILE_STATUS})"),
@@ -10442,16 +10444,19 @@ def test_code_file_conflict_is_said_in_words(browser, live, choice):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["status"] == CODE_CONFLICT and v["error"] is True and v["fits"] is True
-    assert v["text"] == "print('мой')\n"
+    assert v["text"] == "x = 1\ny = 2\nprint('мой')\n"
     assert "print('claude')" in v["diff"] and "print('мой')" in v["diff"]
+    # неизменённые строки целого файла — контекст с номерами строк, а не заголовки
+    assert v["rows"] == [["context", "1", "x = 1"], ["context", "2", "y = 2"],
+                         ["removed", "3", "print('claude')"], ["added", "3", "print('мой')"]]
     saves = code_requests(machine, "save")
     if choice == "take":
-        assert v["after"] == "print('claude')\n" and v["final"] == "Открыта версия компьютера"
-        assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
+        assert v["after"] == "x = 1\ny = 2\nprint('claude')\n" and v["final"] == "Открыта версия компьютера"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == b"x = 1\ny = 2\nprint('claude')\n"
         assert len(saves) == 1
     else:
-        assert v["after"] == "print('мой')\n" and v["final"] == "Сохранено"
-        assert machine.projects["alpha"]["files"]["src/app.py"] == "print('мой')\n".encode()
+        assert v["after"] == "x = 1\ny = 2\nprint('мой')\n" and v["final"] == "Сохранено"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == "x = 1\ny = 2\nprint('мой')\n".encode()
         assert len(saves) == 2 and saves[1]["version"] != saves[0]["version"]
     assert not known_refusals(problems(r), 409), problems(r)
 

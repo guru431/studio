@@ -32,14 +32,18 @@ function codeCell(text, path) {
   return cell;
 }
 
-function numbered(rows) {
-  let left = null, right = null;
+/** Номера строк и заголовки. Заголовки и номера из `@@` — только у patch; строки сравнения и нового содержимого —
+ * сами строки файла (без ведущего пробела), их номера идут с `start` (null — фрагмент правки, место в файле неизвестно). */
+function numbered(rows, patch, start = null) {
+  let left = start, right = start;
   return rows.map(([kind, text]) => {
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
-    if (hunk) { left = Number(hunk[1]); right = Number(hunk[2]); return { kind: 'header', text }; }
-    if (/^(diff --git |index |\\ No newline)/.test(text)
-      || (left === null && /^(--- |\+\+\+ )/.test(text))) return { kind: 'header', text };
-    if (kind === 'context' && !text.startsWith(' ')) return { kind: 'header', text };
+    if (patch) {
+      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+      if (hunk) { left = Number(hunk[1]); right = Number(hunk[2]); return { kind: 'header', text }; }
+      if (/^(diff --git |index |\\ No newline)/.test(text)
+        || (left === null && /^(--- |\+\+\+ )/.test(text))) return { kind: 'header', text };
+      if (kind === 'context' && !text.startsWith(' ')) return { kind: 'header', text };
+    }
     const row = { kind, text, left: kind !== 'added' ? left : null, right: kind !== 'removed' ? right : null };
     if (left !== null && kind !== 'added') left++;
     if (right !== null && kind !== 'removed') right++;
@@ -91,11 +95,12 @@ function comparison(before, after) {
     // Большие фрагменты показываем целиком заменёнными; квадратичную таблицу не строим.
     middle = [...old.map((text) => ['removed', text]), ...next.map((text) => ['added', text])];
   }
-  return [
-    ...left.slice(Math.max(0, head - 3), head).map((text) => ['context', text]),
+  const start = Math.max(0, head - 3);
+  return { start: start + 1, rows: [
+    ...left.slice(start, head).map((text) => ['context', text]),
     ...middle,
     ...right.slice(right.length - tail, right.length - tail + 3).map((text) => ['context', text]),
-  ];
+  ] };
 }
 
 export function changeView(changes) {
@@ -103,7 +108,7 @@ export function changeView(changes) {
   const blocks = [];
   for (const change of changes.slice(0, 8)) {
     if (!change || typeof change.path !== 'string') continue;
-    let rows, caption;
+    let rows, caption, start = null;
     if (typeof change.patch === 'string') {
       let inHunk = false;
       rows = linesOf(change.patch).flatMap((text) => {
@@ -114,18 +119,22 @@ export function changeView(changes) {
       });
       caption = tr("Изменения");
     } else if (typeof change.before === 'string' && typeof change.after === 'string') {
-      rows = comparison(change.before, change.after);
+      // `whole` — до и после целиком (конфликт сохранения, зеркало): номера строк файла; правка CLI — фрагмент без номеров
+      const compared = comparison(change.before, change.after);
+      rows = compared.rows;
+      if (change.whole) start = compared.start;
       caption = tr("Изменённый фрагмент");
     } else if (typeof change.after === 'string') {
       rows = linesOf(change.after).map((text) => ['context', text]);
+      start = 1;
       caption = tr("Новое содержимое");
     } else continue;
     const added = rows.filter(([kind]) => kind === 'added').length;
     const removed = rows.filter(([kind]) => kind === 'removed').length;
     const counts = added || removed ? ` · +${added} −${removed}` : '';
     const partial = change.truncated || rows.length > MAX_LINES;
-    const shown = numbered(rows.slice(0, MAX_LINES));
     const patch = typeof change.patch === 'string';
+    const shown = numbered(rows.slice(0, MAX_LINES), patch, start);
     const content = (row) => row ? row.kind === 'header' ? el('span', { class: 'code-change-code' }, row.text)
       : codeCell(patch ? row.text.slice(1) : row.text, change.path) : el('span', {});
     blocks.push(el('div', { class: 'code-change' },
