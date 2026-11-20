@@ -209,8 +209,8 @@ class Runner:
                 t.queue_meta[message_id] = {"suffix": prompt[len(text):], "version": 1,
                                            "text": text, "images": len(images), "attachments": len(attachments or [])}
             # В снимке нет повторных мегабайт картинок; оригиналы уже принял CLI.
-            item = {"id": message_id, "text": text + (f"\n[Изображений: {len(images)}]" if images else "") +
-                    (f"\n[Вложений: {len(attachments)}]" if attachments else ""),
+            item = {"id": message_id, "text": text + (f"\n[Images: {len(images)}]" if images else "") +
+                    (f"\n[Attachments: {len(attachments)}]" if attachments else ""),
                     "mode": mode}
             if images:
                 image_message = f"followup:{message_id}"
@@ -304,8 +304,8 @@ class Runner:
                 meta["version"] += 1
                 meta["text"] = text
                 t.queue_meta[message_id] = meta
-                item["text"] = text + (f"\n[Изображений: {meta['images']}]" if meta.get("images") else "") + (
-                    f"\n[Вложений: {meta['attachments']}]" if meta.get("attachments") else "")
+                item["text"] = text + (f"\n[Images: {meta['images']}]" if meta.get("images") else "") + (
+                    f"\n[Attachments: {meta['attachments']}]" if meta.get("attachments") else "")
             t.queue_wake.set()  # правка — заново отсчитать срок паузы
             current = self._queue_state(t)
             self._send(t, {"k": "queue", "items": current, "paused": t.queue_paused})
