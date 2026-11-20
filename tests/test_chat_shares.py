@@ -215,7 +215,13 @@ def test_visitor_expires_and_disabling_account_blocks_existing_viewer(studio):
     assert studio.c.post('/share/check', json={'access': access}).status_code == 404
     state.DB.execute('UPDATE users SET disabled=0 WHERE id=?', (uid,))
     studio.clock[0] += chat_shares.VIEW_SEC + 1
-    assert studio.c.post('/share/check', json={'access': access}).status_code == 404
+    # the link is alive: the reader hears «enter the PIN again», not «link unavailable»
+    expired = studio.c.post('/share/check', json={'access': access})
+    assert expired.status_code == 404 and expired.json()['detail']['code'] == 'share_view_expired'
+    unlock(studio, token, pin='9999')                                # another visitor's attempt keeps the row
+    assert studio.c.post('/share/check', json={'access': access}).json()['detail']['code'] == 'share_view_expired'
+    state.DB.execute('DELETE FROM chat_shares')
+    assert studio.c.post('/share/check', json={'access': access}).json()['detail']['code'] == 'share_gone'
 
 
 @pytest.mark.parametrize('action', ['history', 'logout', 'lock'])

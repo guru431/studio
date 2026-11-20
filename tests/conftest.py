@@ -274,8 +274,11 @@ def clear_bridge() -> None:
 
 def clear_push() -> None:
     """Ключ VAPID и фоновые отправки push — модульные (как у моста)."""
+    import chat
     import push
     push.KEY = None
+    push.ON_SCREEN.clear()
+    chat.ANSWERED.clear()
     for task in list(push.TASKS):
         if not task.done():
             try:

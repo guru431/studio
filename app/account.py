@@ -28,6 +28,7 @@ import logging
 import re
 import unicodedata
 
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, StrictBool, field_validator
@@ -37,6 +38,7 @@ import bridge
 import clock
 import project_access
 import screenlock
+import security
 import security_log
 import state
 
@@ -181,6 +183,16 @@ def _place(names: dict, aid, pid) -> dict:
     return {"name": None if known is None else known.get(pid), "missing": None if known is None else pid not in known}
 
 
+def _label(blob) -> "str | None":
+    """Название чата «Агентов» у ссылки (`chat_shares.label`, шаг 53); до шага или после смены ключа — нет."""
+    if blob is None:
+        return None
+    try:
+        return security.decrypt(blob)
+    except InvalidToken:
+        return None
+
+
 @router.get("/access")
 async def access(request: Request):
     """Все выданные доступы к проектам компьютеров учётки (и к исчезнувшим папкам) и все её ссылки «Поделиться»."""
@@ -190,8 +202,8 @@ async def access(request: Request):
         " FROM project_members m JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = m.user_id"
         " WHERE a.user_id = ? ORDER BY a.name, m.project, u.login", (uid,)).fetchall()
     shares = state.DB.execute(
-        "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, c.title, s.created, s.expires, s.views,"
-        " s.viewed, s.fails FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
+        "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, c.title, s.label, s.created, s.expires,"
+        " s.views, s.viewed, s.fails FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
         " LEFT JOIN agents a ON a.id = s.agent_id WHERE s.user_id = ? AND (s.expires IS NULL OR s.expires > ?)"
         " ORDER BY s.created DESC", (uid, clock.NOW())).fetchall()
     aids = sorted({r["agent_id"] for r in members} | {r["agent_id"] for r in shares if r["agent_id"] is not None})
@@ -200,7 +212,8 @@ async def access(request: Request):
                          **_place(names, r["agent_id"], r["project"]), "user_id": r["user_id"], "login": r["login"],
                          "disabled": bool(r["disabled"]), "created": r["created"]} for r in members],
             "shares": [{"id": r["id"], "kind": "code" if r["agent_id"] else "chat",
-                        "title": r["title"] if r["chat_id"] else None, "computer": r["computer"], "project": r["project"],
+                        "title": r["title"] if r["chat_id"] else _label(r["label"]),
+                        "computer": r["computer"], "project": r["project"],
                         **(_place(names, r["agent_id"], r["project"]) if r["agent_id"] else {}),
                         "created": r["created"], "expires": r["expires"], "views": r["views"], "viewed": r["viewed"],
                         "fails": r["fails"]} for r in shares]}

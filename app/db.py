@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 52
+VERSION = 53
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -682,6 +682,12 @@ UPDATE search_docs SET model = (SELECT s.model FROM speeches s WHERE s.id = sear
 """
 SCHEMA += SPEECH_52
 
+#: название чата «Агентов» у ссылки «Поделиться» — шифром STUDIO_DATA_KEY, для списка «Доступы и ссылки» владельца
+#: (account.access): название обычного чата берётся из `chats`, а чат «Агентов» в базе студии не хранится.
+#: Прежний код столбец не читает и не пишет; ссылки до шага — без названия
+SHARES_53 = "ALTER TABLE chat_shares ADD COLUMN label BLOB;\n"
+SCHEMA += SHARES_53
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -791,6 +797,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     51: NOTIFY_LANG_51,
     # озвучка: время постановки в очередь, прежний звук на время повторной озвучки, модель в поиске
     52: SPEECH_52,
+    # название чата «Агентов» у ссылки «Поделиться» (шифром)
+    53: SHARES_53,
 }
 
 

@@ -65,6 +65,16 @@ JOB_NOTICES = {
                  {"ru": "озвучка не получилась", "en": "speech failed"}),
 }
 
+#: ответ чата через сервер (chat.StreamTask): «готово» и «не получилось» на языках подписки (те же слова — jobs.js)
+CHAT_NOTICES = ({"ru": "ответ готов", "en": "answer ready"}, {"ru": "ответ не получился", "en": "answer failed"})
+
+#: сессии, чья страница студии сейчас на экране: digest → время, когда опрос `/api/jobs?visible=1` это сказал
+#: (`screen`). Готовность заданий (`quiet`) им не шлётся ни push, ни ntfy — она видна в самой студии, как у «Агентов»
+#: `bridge.watching`. Видимая страница с идущим заданием опрашивает раз в 5 с (jobs.js JOBS_POLL_MS), скрываясь —
+#: шлёт `visible=0`; отметка без подтверждения старше SCREEN_SEC не действует (заснувший телефон)
+ON_SCREEN: dict[str, float] = {}
+SCREEN_SEC = 15
+
 #: ключ VAPID процесса (тесты очищают)
 KEY: ec.EllipticCurvePrivateKey | None = None
 #: фоновые отправки (`notify_later`): ссылка держит задачу до конца, `stop` их отменяет
@@ -169,16 +179,35 @@ def vapid_header(endpoint: str) -> str:
 
 # ---- отправка ------------------------------------------------------------------
 
+def screen(digest: str, visible: bool) -> None:
+    """Страница сессии на экране (`visible`) или ушла с него; заодно — прочь отметки старше SCREEN_SEC."""
+    now = clock.NOW()
+    for key in [key for key, seen in ON_SCREEN.items() if now - seen >= SCREEN_SEC]:
+        del ON_SCREEN[key]
+    if visible:
+        ON_SCREEN[digest] = now
+    else:
+        ON_SCREEN.pop(digest, None)
+
+
+def on_screen() -> frozenset[str]:
+    """Сессии, чья страница сейчас на экране."""
+    now = clock.NOW()
+    return frozenset(key for key, seen in ON_SCREEN.items() if now - seen < SCREEN_SEC)
+
+
 async def notify(user_id: int, body: str | dict[str, str], href: str, tag: str, *,
-                 title: str | dict[str, str] = TITLES) -> None:
+                 title: str | dict[str, str] = TITLES, skip: frozenset[str] = frozenset()) -> None:
     """Уведомление живым сессиям активной учётки; 404 и 410 — подписки больше нет. `body` и `title` — строка или
-    {язык: текст}: каждой подписке — на её `lang`."""
+    {язык: текст}: каждой подписке — на её `lang`. `skip` — сессии, которым не слать (на экране)."""
     rows = state.DB.execute(
         "SELECT p.endpoint, p.p256dh, p.auth, p.digest, p.lang FROM push_subs p"
         " JOIN sessions s ON s.digest = p.digest AND s.user_id = p.user_id"
         " JOIN users u ON u.id = p.user_id"
         " WHERE p.user_id = ? AND s.expires > ? AND u.disabled = 0", (user_id, clock.NOW())).fetchall()
     for row in rows:
+        if row["digest"] in skip:
+            continue
         endpoint = row["endpoint"]
         payload = json.dumps({"title": ntfy.pick(title, row["lang"]), "body": ntfy.pick(body, row["lang"]),
                               "href": href, "tag": tag}, ensure_ascii=False).encode()
@@ -204,11 +233,14 @@ async def notify(user_id: int, body: str | dict[str, str], href: str, tag: str, 
 
 
 def notify_later(user_id: int, body: str | dict[str, str], href: str, tag: str, *,
-                 title: str | dict[str, str] = TITLES) -> None:
-    """`notify` фоном: завершение задания и событие моста не ждут службу push."""
+                 title: str | dict[str, str] = TITLES, quiet: bool = False) -> None:
+    """`notify` фоном: завершение задания и событие моста не ждут службу push. `quiet` — готовность задания: сессиям,
+    чья страница на экране (`on_screen`), не слать."""
+    skip = on_screen() if quiet else frozenset()
+
     async def run():
-        results = await asyncio.gather(notify(user_id, body, href, tag, title=title),
-                                       ntfy.notify(user_id, body, href, title=title), return_exceptions=True)
+        results = await asyncio.gather(notify(user_id, body, href, tag, title=title, skip=skip),
+                                       ntfy.notify(user_id, body, href, title=title, skip=skip), return_exceptions=True)
         for channel, result in zip(("push", "ntfy"), results):
             if isinstance(result, Exception):  # сбой одного канала не мешает другому, без текста/адреса в журнале
                 log.warning("%s: сбой (%s)", channel, type(result).__name__)
@@ -220,6 +252,9 @@ def notify_later(user_id: int, body: str | dict[str, str], href: str, tag: str, 
 def job_finished(table: str, item_id: str) -> None:
     """После первого сохранения итога: только готовое/ошибка, только подписки владельца, без содержимого."""
     section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
+    if table == "scans" and state.DB.execute("SELECT 1 FROM scans WHERE id = ? AND origin = 'chat'",
+                                             (item_id,)).fetchone():
+        return                                 # скан вложения: о нём скажет ответ чата (`chat_answered`)
     row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ?"
                             " AND j.finished IS NOT NULL AND j.state IN ('done', 'error', 'failed')"
                             " AND EXISTS (SELECT 1 FROM users u WHERE u.id = j.user_id AND u.disabled = 0)"
@@ -230,7 +265,12 @@ def job_finished(table: str, item_id: str) -> None:
                             (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
         notify_later(row["user_id"], done if row["state"] == "done" else error,
-                     f"{section}?id={item_id}", item_id, title=STUDIO)
+                     f"{section}?id={item_id}", item_id, title=STUDIO, quiet=True)
+
+
+def chat_answered(user_id: int, chat_id: str, message_id: str, ok: bool) -> None:
+    """Ответ чата через сервер кончился (готов или ошибка): как задание раздела — без содержимого, в диалог."""
+    notify_later(user_id, CHAT_NOTICES[0 if ok else 1], f"chat/{chat_id}", message_id, title=STUDIO, quiet=True)
 
 
 async def stop() -> None:

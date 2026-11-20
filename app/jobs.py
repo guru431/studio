@@ -5,7 +5,8 @@
 распознавания (кроме сканов перевода и уже отправленного хода чата — `ocr.SERVED`) и переводы
 `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
-не старше JOBS_RECENT_SEC, не больше FINISHED_MAX (чат сюда не попадает: ответ виден в диалоге).
+не старше JOBS_RECENT_SEC, не больше FINISHED_MAX; ответ чата через сервер — из памяти `chat.ANSWERED` (ответ с
+рассуждением или в очереди за картой бывает долгим — как задание раздела).
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
 в тот же миг, не теряется, повтор страница отсекает по id. У идущих — `cancel`: адрес отмены своего раздела
 (чат — остановка ответа), им пользуется «Отменить» панели; блокировка раздела закрывает его, как любой запрос.
@@ -21,6 +22,7 @@ import clock
 import lock_policy
 import images
 import ocr
+import push
 import speeches
 import state
 import transcripts
@@ -146,6 +148,20 @@ def _speech(uid: int, after: float) -> list:
     return out
 
 
+def _chat_done(uid: int, after: float) -> list:
+    """Кончившиеся после `after` ответы через сервер (`chat.ANSWERED`), чьи диалог и сообщение ещё есть."""
+    mine = {mid: item for mid, item in chat.ANSWERED.items() if item[0] == uid and item[2] >= after}
+    if not mine:
+        return []
+    marks = ", ".join("?" * len(mine))
+    rows = state.DB.execute(f"SELECT m.id, m.created, c.title FROM messages m JOIN chats c ON c.id = m.chat_id"
+                            f" WHERE c.user_id = ? AND m.id IN ({marks})", (uid, *mine)).fetchall()
+    return [{"section": "chat", "id": row["id"], "state": mine[row["id"]][3],
+             "title": f"Ответ · {row['title'] or 'новый диалог'}", "detail": "",
+             "started": row["created"], "finished": mine[row["id"]][2], "href": f"chat/{mine[row['id']][1]}"}
+            for row in rows]
+
+
 def _chat(uid: int) -> list:
     """Идущие ответы через сервер своих диалогов (частичный индекс `messages_streaming`)."""
     rows = state.DB.execute("SELECT m.id, m.chat_id, m.created, c.title FROM messages m JOIN chats c ON c.id = m.chat_id"
@@ -163,12 +179,16 @@ def _chat(uid: int) -> list:
 
 
 @router.get("")
-async def list_jobs(request: Request, since: "float | None" = None):
+async def list_jobs(request: Request, since: "float | None" = None, visible: "bool | None" = None):
+    """`visible` — страница сессии на экране (1) или ушла с него (0): готовность заданий push и ntfy ей не шлют
+    (`push.screen`); прежняя страница его не шлёт — уведомления как раньше."""
     uid, now = request.state.user.id, clock.NOW()
+    if visible is not None:
+        push.screen(request.state.digest, visible)
     after = now - JOBS_RECENT_SEC if since is None else max(since, now - JOBS_RECENT_SEC)
     hidden = lock_policy.hidden(request.state.digest)
     items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after, hidden)
-             + _translate(uid, after) + _speech(uid, after))
+             + _translate(uid, after) + _speech(uid, after) + ([] if "chat" in hidden else _chat_done(uid, after)))
     items = [i for i in items if i["section"] not in hidden]
     running = sorted([i for i in items if i["finished"] is None] + ([] if "chat" in hidden else _chat(uid)), key=lambda i: i["started"], reverse=True)
     finished = sorted((i for i in items if i["finished"] is not None), key=lambda i: i["finished"], reverse=True)

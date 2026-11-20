@@ -1,7 +1,9 @@
 """Whole-chat exports preserve owner/PIN access through asynchronous PDF rendering."""
 from html.parser import HTMLParser
 import io
+import json
 from pathlib import Path
+import re
 import subprocess
 
 from pypdf import PdfReader
@@ -9,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 import chat_exports
+import chat_shares
 from chat_export_selection import selection_html
 import state
 from conftest import make_user, signin
@@ -202,7 +205,8 @@ def test_pdf_timeout_cleans_work_and_never_passes_data_key(studio, monkeypatch, 
 
     monkeypatch.setattr(chat_exports.subprocess, 'run', timeout)
     response = studio.c.post('/api/chats/chat/export', json={'format': 'pdf'})
-    assert response.status_code == 503 and response.json()['detail']['code'] == 'pdf_failed'
+    # a chat md2pdf cannot print within its budget: a retry would not help
+    assert response.status_code == 503 and response.json()['detail']['code'] == 'pdf_timeout'
     assert not list(state.CFG.tmp_dir.glob('chat-export-*'))
     assert not chat_exports.RUNNING
 
@@ -240,13 +244,14 @@ def test_md2pdf_second_parse_keeps_the_safe_html_as_one_block():
     import re
 
     code = 'line1\n\n![x](http://10.77.1.15:4000/slot)\n# comment\n\n  \ndef f(*args, **kw): *x*\n\n'
-    text = chat_exports.markdown({'title': 'Чат', 'messages': [
-        {'role': 'user', 'text': f'```\n{code}```\n\n> цитата\n>\n> ```\n> a\n>\n> ![q](http://evil.invalid/q)\n> ```\n\n'
-                                 '| A | B |\n|---|---|\n| `x` | ![t](http://t.invalid/t) |\n\n'
-                                 '- один\n\n- два\n\n      отступ\n\n      ![i](http://i.invalid/i)\n'},
-        {'role': 'assistant', 'text': 'ok', 'reasoning': 'шаг\n\n![r](http://r.invalid/r)\n# заголовок\n',
+    first = chat_exports.pdf_html({'title': 'Чат', 'messages': [
+        {'role': 'user', 'text': 'вопрос\n\n![u](http://u.invalid/u)\n\n# не заголовок'},
+        {'role': 'assistant', 'text': f'```\n{code}```\n\n> цитата\n>\n> ```\n> a\n>\n> ![q](http://evil.invalid/q)\n> ```\n\n'
+                                      '| A | B |\n|---|---|\n| `x` | ![t](http://t.invalid/t) |\n\n'
+                                      '- один\n\n- два\n\n      отступ\n\n      ![i](http://i.invalid/i)\n',
+         'reasoning': 'шаг\n\n![r](http://r.invalid/r)\n# заголовок\n',
          'steps': [{'tool': 'Bash', 'input': {'command': 'echo'}, 'text': 'out\n\n![s](https://s.invalid/s)\n*курсив*'}]}]})
-    first = chat_exports._safe_html(text)
+    chat_exports._printable(first)
     parser = MarkdownIt('commonmark', {'html': True, 'typographer': False}).enable('table').enable('strikethrough')
     second = parser.render(first)
     assert second == first
@@ -329,6 +334,104 @@ def test_server_chromium_gets_no_network(studio, monkeypatch, tmp_path, platform
     monkeypatch.setattr(chat_exports.sys, 'platform', platform)
     assert chat_exports.render_pdf('<p>x</p>', selection=True).startswith(b'%PDF-')
     assert seen == [str(chat_exports.OFFLINE_BROWSER) if platform == 'linux' else None]
+
+
+USER_TEXT = 'Адрес:\nул. Ленина, 1\r\nкв. 5\n# не заголовок\n1. не список\n## Помощник\n<b>не html</b> *не курсив*'
+
+
+def test_user_message_keeps_its_lines_and_never_becomes_markdown():
+    """FINDINGS 06:F1: the chat shows a user's message line by line (pre-wrap); PDF and .md must too."""
+    snapshot = {'title': 'Чат', 'messages': [{'role': 'user', 'text': USER_TEXT},
+                                            {'role': 'assistant', 'text': '# Ответ\n\n*курсив*'}]}
+    document = chat_exports.pdf_html(snapshot)
+    chat_exports._printable(document)
+    assert md2pdf_render(document) == document
+    plain = re.search(r'<div class="chat-export-plain">(.*?)</div>', document)[1]
+    assert plain == ('Адрес:&#10;ул. Ленина, 1&#10;кв. 5&#10;# не заголовок&#10;1. не список&#10;## Помощник&#10;'
+                     '&lt;b&gt;не html&lt;/b&gt; *не курсив*')
+    assert document.count('<h2>') == 2 and '<ol>' not in document and '<b>' not in document
+    assert '<h1>Ответ</h1>' in document and '<em>курсив</em>' in document     # the model's Markdown stays Markdown
+    text = chat_exports.markdown(snapshot)
+    assert ('Адрес:  \nул. Ленина, 1  \nкв. 5  \n\\# не заголовок  \n1\\. не список  \n\\## Помощник  \n'
+            '\\<b>не html</b> *не курсив*\n\n## Помощник\n\n# Ответ') in text
+    assert text.count('\n## Помощник\n') == 1
+
+
+def test_export_keeps_sources_error_words_and_marks_an_unfinished_answer(studio):
+    """FINDINGS 06:F9: what the chat page shows under an answer reaches the snapshot, the link and the files."""
+    _, uid = regular(studio)
+    tools = [{'kind': 'search', 'query': 'погода [x]', 'results': [{'title': 'Пример *1*', 'url': 'https://example.org/a',
+                                                                   'published': '2026-11-01'}], 'text': 'PRIVATE-MODEL-TEXT'},
+             {'kind': 'page', 'url': 'https://bad.example/p', 'error': 'адрес не из переписки'},
+             {'kind': 'mcp', 'server': 'files', 'tool': 'read', 'text': 'PRIVATE-TOOL-TEXT'}]
+    state.DB.execute("UPDATE messages SET tools=? WHERE id='chat-a'", (json.dumps(tools),))
+    state.DB.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,error)"
+                     " VALUES('chat-e','chat','assistant','','error','server',2,'шлюз не ответил: 502')")
+    state.DB.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('chat-s','chat','assistant','Половина отв','streaming','server',3)")
+    snapshot, _ = chat_shares.regular_snapshot(uid, 'chat')
+    assert [m.get('error') for m in snapshot['messages']] == [None, None, 'шлюз не ответил: 502', None]
+    assert 'PRIVATE' not in json.dumps(snapshot, ensure_ascii=False)
+    text = studio.c.post('/api/chats/chat/export', json={'format': 'md'}).text
+    assert 'PRIVATE' not in text
+    assert ('### Источники (1)\n\n- Поиск: «погода \\[x\\]»\n  - [Пример \\*1\\*](<https://example.org/a>) · 2026-11-01\n'
+            '- Страница: https://bad.example/p — адрес не из переписки\n- MCP · files · read') in text
+    assert 'Ошибка: шлюз не ответил: 502' in text
+    assert 'Половина отв\n\n*(ответ не дописан)*' in text
+    document = chat_exports.pdf_html(snapshot)
+    chat_exports._printable(document)
+    assert '<a href="https://example.org/a">' in document and 'bad.example/p</a>' not in document
+    assert '<div class="chat-export-plain">Ошибка: шлюз не ответил: 502</div>' in document
+
+
+def test_export_refusals_say_what_happened(studio, monkeypatch):
+    """FINDINGS 06:F15: a big chat is «too big for export», not «for a link»; a busy service is not «your PDF»."""
+    _, uid = regular(studio)
+    monkeypatch.setattr(chat_shares, 'MAX_SNAPSHOT', 10)
+    big = studio.c.post('/api/chats/chat/export', json={'format': 'md'})
+    assert big.status_code == 413 and big.json()['detail']['code'] == 'export_size'
+    assert 'экспорта' in big.json()['detail']['message']
+    monkeypatch.setattr(chat_shares, 'MAX_SNAPSHOT', 16 * 1024 * 1024)
+    monkeypatch.setattr(chat_exports, 'RUNNING', {uid + 100, uid + 101})
+    busy = studio.c.post('/api/chats/chat/export', json={'format': 'pdf'})
+    assert busy.status_code == 429 and 'другие PDF' in busy.json()['detail']['message']
+    monkeypatch.setattr(chat_exports, 'RUNNING', {uid})
+    assert 'уже готовится' in studio.c.post('/api/chats/chat/export', json={'format': 'pdf'}).json()['detail']['message']
+
+
+@pytest.mark.parametrize('locked', [2, 99])
+def test_locked_work_directory_never_fails_a_finished_pdf(studio, monkeypatch, tmp_path, locked):
+    """A browser outliving md2pdf holds its profile lockfile (WinError 32): retry, then leave it for clean_tmp."""
+    tool = tmp_path / 'converter.py'
+    tool.write_text('# converter fixture\n', encoding='utf-8')
+    monkeypatch.setattr(chat_exports, 'converter', lambda: tool)
+
+    def run(argv, **kwargs):
+        Path(argv[3]).write_bytes(b'%PDF-' + b'x' * 2048)
+        return subprocess.CompletedProcess(argv, 0)
+
+    real, calls, pauses = chat_exports.shutil.rmtree, [], []
+
+    def rmtree(path, ignore_errors=False):
+        calls.append(path)
+        if len(calls) <= locked:
+            if ignore_errors:
+                return
+            raise PermissionError(32, 'The process cannot access the file')
+        real(path)
+
+    monkeypatch.setattr(chat_exports.subprocess, 'run', run)
+    monkeypatch.setattr(chat_exports.shutil, 'rmtree', rmtree)
+    monkeypatch.setattr(chat_exports, 'PAUSE', pauses.append)
+    assert chat_exports.render_pdf('<p>x</p>', selection=True).startswith(b'%PDF-')
+    left = list(state.CFG.tmp_dir.glob('chat-export-*'))
+    if locked == 2:
+        assert not left and pauses == list(chat_exports.CLEANUP_PAUSES[:2])
+    else:
+        assert len(left) == 1 and pauses == list(chat_exports.CLEANUP_PAUSES)
+        monkeypatch.setattr(chat_exports.shutil, 'rmtree', real)
+        chat_exports.clean_tmp()
+        assert not list(state.CFG.tmp_dir.glob('chat-export-*'))
 
 
 def test_markdown_tool_fences_preserve_nested_code_and_attachment_names():
