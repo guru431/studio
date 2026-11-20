@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import access
 import auth
 import account_mail
 import bridge
@@ -78,7 +79,9 @@ async def check_smtp_settings():
 
 
 USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
-             " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections FROM users u")
+             " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections,"
+             " (SELECT json_group_array(group_id) FROM (SELECT m.group_id FROM access_group_members m"
+             "   WHERE m.user_id = u.id ORDER BY m.group_id)) AS access_groups FROM users u")
 
 
 def _user_out(uid: int) -> dict:
@@ -91,7 +94,8 @@ def _user_out(uid: int) -> dict:
 def _user_doc(row) -> dict:
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "email": row["email"],
-            "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"]}
+            "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"],
+            "groups": json.loads(row["access_groups"])}
 
 
 def _login(text: str) -> str:
@@ -601,3 +605,84 @@ async def delete_shared_mcp(sid: int):
 @router.post("/shared/mcp/{sid}/check")
 async def check_shared_mcp(sid: int, admin: auth.User = Depends(auth.require_admin)):
     return await mcp_client.check_for(None, sid, actor=admin.id)
+
+
+# ---- группы доступа к общему (access.py): журнал — только id и числа --------------------
+
+class GroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+class MembersIn(BaseModel):
+    user_ids: list[int] = Field(max_length=1000)
+
+
+class AccessIn(BaseModel):
+    groups: list[int] | None = Field(max_length=1000)      # null — все пользователи; [] — только администраторам
+
+
+class McpAccessIn(AccessIn):
+    tools: dict[str, list[int]] = Field(max_length=256)    # полный набор правил инструментов
+
+
+@router.get("/groups")
+async def list_groups():
+    return {"items": access.groups()}
+
+
+@router.post("/groups", status_code=201)
+async def create_group(body: GroupIn):
+    return access.create_group(body.name)
+
+
+@router.patch("/groups/{gid}")
+async def rename_group(gid: int, body: GroupIn):
+    return access.rename_group(gid, body.name)
+
+
+@router.delete("/groups/{gid}", status_code=204)
+async def delete_group(gid: int):
+    access.delete_group(gid)
+    return Response(status_code=204)
+
+
+@router.put("/groups/{gid}/members")
+async def put_group_members(gid: int, body: MembersIn):
+    return access.set_members(gid, body.user_ids)
+
+
+def _connection_access(cid: int) -> dict:
+    return {"groups": access.rule("connection", cid)}
+
+
+def _mcp_access(sid: int) -> dict:
+    return {"groups": access.rule("mcp", sid), "tools": access.tool_rules(sid)}
+
+
+@router.get("/shared/connections/{cid}/access")
+async def get_connection_access(cid: int):
+    connections.get(None, cid, own=True)
+    return _connection_access(cid)
+
+
+@router.put("/shared/connections/{cid}/access")
+async def put_connection_access(cid: int, body: AccessIn):
+    access.set_rule("connection", cid, body.groups)
+    return _connection_access(cid)
+
+
+@router.get("/shared/mcp/{sid}/access")
+async def get_mcp_access(sid: int):
+    mcp_client.row(None, sid, own=True)
+    return _mcp_access(sid)
+
+
+@router.put("/shared/mcp/{sid}/access")
+async def put_mcp_access(sid: int, body: McpAccessIn):
+    # имя инструмента — как у MCP; неизвестное серверу сейчас допускается: инструмент мог временно пропасть
+    if any(not mcp_client.NAME.fullmatch(tool) for tool in body.tools):
+        raise HTTPException(422, {"code": "tool", "message": "неверное имя инструмента MCP"})
+    with sections.transaction():                                   # доступ к серверу и инструментам — вместе
+        access.set_rule("mcp", sid, body.groups)
+        access.set_tool_rules(sid, body.tools)
+    return _mcp_access(sid)
