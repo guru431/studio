@@ -22,6 +22,36 @@ import state
 
 KINDS = {"connection": "connections", "mcp": "mcp_servers"}
 
+#: Перед откатом на код схемы 55 (правил он не читает — закрытое стало бы общим для всех), служба остановлена:
+#: общее подключение с правилом теряет ключ (прежний код отвечает «токен не расшифрован» и в фоновых путях, где
+#: подключение взято из строки истории), общий MCP с правилом сервера или инструмента выключается. Прежние значения —
+#: в `access_rollback`; повторный запуск их не затирает.
+ROLLBACK_56 = """BEGIN;
+INSERT OR IGNORE INTO access_rollback(kind, item_id, token_enc)
+  SELECT 'connection', id, token_enc FROM connections WHERE user_id IS NULL
+     AND EXISTS (SELECT 1 FROM access_rules r WHERE r.kind = 'connection' AND r.item_id = connections.id);
+UPDATE connections SET token_enc = X'00'
+ WHERE id IN (SELECT item_id FROM access_rollback WHERE kind = 'connection');
+INSERT OR IGNORE INTO access_rollback(kind, item_id, enabled)
+  SELECT 'mcp', id, enabled FROM mcp_servers WHERE user_id IS NULL
+     AND EXISTS (SELECT 1 FROM access_rules r WHERE r.kind = 'mcp' AND r.item_id = mcp_servers.id);
+UPDATE mcp_servers SET enabled = 0 WHERE id IN (SELECT item_id FROM access_rollback WHERE kind = 'mcp');
+COMMIT;
+"""
+
+#: После возврата вперёд (служба остановлена): ключи и включённость из `access_rollback`. Ключ, введённый заново,
+#: и сервер, включённый прежним кодом, не трогаются.
+FORWARD_56 = """BEGIN;
+UPDATE connections SET token_enc = (SELECT b.token_enc FROM access_rollback b
+       WHERE b.kind = 'connection' AND b.item_id = connections.id)
+ WHERE token_enc = X'00' AND id IN (SELECT item_id FROM access_rollback WHERE kind = 'connection');
+UPDATE mcp_servers SET enabled = (SELECT b.enabled FROM access_rollback b
+       WHERE b.kind = 'mcp' AND b.item_id = mcp_servers.id)
+ WHERE enabled = 0 AND id IN (SELECT item_id FROM access_rollback WHERE kind = 'mcp');
+DELETE FROM access_rollback;
+COMMIT;
+"""
+
 log = logging.getLogger("studio")
 
 

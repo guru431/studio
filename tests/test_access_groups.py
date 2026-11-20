@@ -31,7 +31,7 @@ def test_schema_56_migrates_from_55(env):
         db.migrate(conn)
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 56
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')")}
-        assert {"access_groups", "access_group_members", "access_rules", "access_rule_groups",
+        assert {"access_groups", "access_group_members", "access_rules", "access_rule_groups", "access_rollback",
                 "access_rules_connection_delete", "access_rules_mcp_delete"} <= tables
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -125,6 +125,72 @@ def test_group_names_unique_casefold_cyrillic(studio):
     with pytest.raises(HTTPException) as e:
         access.rename_group(9999, "x")
     assert e.value.status_code == 404
+
+
+def rollback_items(studio) -> dict:
+    """Общие подключения и MCP с правилом и без, личное подключение; ключи — настоящим шифром."""
+    import security
+    uid = make_user(studio, "member")
+
+    def conn(owner, key):
+        return state.DB.execute(
+            "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
+            " VALUES (?, 'models', 'openai', 'http://10.77.1.15:4000/v1', ?, '[]', 0, 1)",
+            (owner, security.encrypt(key))).lastrowid
+
+    def server(enabled):
+        return state.DB.execute("INSERT INTO mcp_servers(user_id, name, url, secret_enc, enabled)"
+                                " VALUES (NULL, 'tools', 'http://10.77.1.15:4000/mcp', 'x', ?)", (enabled,)).lastrowid
+
+    items = {"uid": uid, "closed": conn(None, "key-closed"), "open": conn(None, "key-open"),
+             "own": conn(uid, "key-own"), "mcp": server(1), "mcp_tool": server(1), "mcp_off": server(0),
+             "mcp_open": server(1)}
+    access.set_rule("connection", items["closed"], [access.create_group("Media")["id"]])
+    access.set_rule("mcp", items["mcp"], [])
+    access.set_tool_rules(items["mcp_tool"], {"draw": []})
+    access.set_rule("mcp", items["mcp_off"], [])
+    return items
+
+
+def keys(items) -> list:
+    import connections
+    import upstream
+    out = []
+    for name, uid in (("closed", None), ("open", None), ("own", items["uid"])):
+        try:
+            out.append(connections.token(connections.get(uid, items[name], gate=False)))
+        except upstream.UpstreamRefused as e:
+            out.append(e.reason)
+    return out
+
+
+def enabled(items) -> list[int]:
+    return [state.DB.execute("SELECT enabled FROM mcp_servers WHERE id = ?", (items[k],)).fetchone()[0]
+            for k in ("mcp", "mcp_tool", "mcp_off", "mcp_open")]
+
+
+def test_rollback_blocks_restricted_items(studio):
+    items = rollback_items(studio)
+    state.DB.executescript(access.ROLLBACK_56)
+    assert keys(items) == ["token", "key-open", "key-own"]
+    assert enabled(items) == [0, 0, 0, 1]
+    state.DB.executescript(access.ROLLBACK_56)                         # повтор не затирает сохранённый ключ
+    state.DB.executescript(access.FORWARD_56)
+    assert keys(items) == ["key-closed", "key-open", "key-own"]
+    assert enabled(items) == [1, 1, 0, 1]                              # выключенный до отката — выключен
+
+
+def test_forward_restores_rollback(studio):
+    items = rollback_items(studio)
+    state.DB.executescript(access.ROLLBACK_56)
+    assert [tuple(r) for r in state.DB.execute("SELECT kind, count(*) FROM access_rollback GROUP BY kind")] == [
+        ("connection", 1), ("mcp", 3)]
+    state.DB.executescript(access.FORWARD_56)
+    assert keys(items) == ["key-closed", "key-open", "key-own"]
+    assert enabled(items) == [1, 1, 0, 1]
+    assert state.DB.execute("SELECT count(*) FROM access_rollback").fetchone()[0] == 0
+    state.DB.executescript(access.FORWARD_56)                          # повтор без строк ничего не меняет
+    assert keys(items) == ["key-closed", "key-open", "key-own"]
 
 
 def test_set_members_and_rules_reject_unknown_ids(studio):
