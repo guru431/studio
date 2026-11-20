@@ -887,7 +887,8 @@ function notifyBlock() {
 
 /* «Компьютеры (Claude Code)»: установщик находится наверху корня настроек (ui.js agentDownload).
  * Мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
- * DELETE /api/agents/<id> (мост на связи отключается). История подключений (GET /api/agents/events) — только
+ * DELETE /api/agents/<id> (мост на связи отключается). Чужой компьютер участника (`shared`) — метка «Совместные»
+ * и «Покинуть»: DELETE /api/me/access/shared/<id> снимает его выдачи. История подключений (GET /api/agents/events) — только
  * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
 const AGENT_EVENTS = { enroll: tr("привязан"), revoke: tr("отозван"), online: tr("на связи"), offline: tr("связь потеряна"),
   open: tr("открыт"), pin_ok: tr("открыт PIN"), pin_fail: tr("неверный PIN"), session_start: tr("новый чат"),
@@ -928,6 +929,26 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
     });
   }
 
+  /** Чужой компьютер участника: отозвать его нельзя, можно покинуть выданные проекты (сервер снимает выдачи). */
+  function leave(agent) {
+    const yes = button(tr("Покинуть"), { class: 'btn btn-danger', id: 'agent-leave-confirm' });
+    const fail = el('p', { class: 'error' });
+    const dialog = openDialog(host, { id: 'agent-leave-dialog', title: tr("Покинуть совместные проекты?"), actions: [yes], body: [
+      el('p', {}, tr("Проекты этого компьютера пропадут из «Агентов», ваши вкладки в них закроются. Вернуть доступ может только владелец компьютера.")),
+      el('p', { class: 'muted' }, `«${agent.name}»`), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `/api/me/access/shared/${agent.id}`);
+        dialog.close();
+        reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
   async function loadAgents() {
     try {
       const { items } = await agents();
@@ -935,7 +956,9 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
         el('b', { class: 'agent-name' }, a.name),
         el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? tr("на связи") : tr("не на связи")),
         a.has_pin ? el('span', { class: 'tag agent-pin' }, 'PIN') : null,
-        button(tr("Отозвать"), { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
+        a.shared ? el('span', { class: 'tag agent-shared' }, tr("Совместные")) : null,
+        a.shared ? button(tr("Покинуть"), { class: 'btn btn-sm btn-danger agent-leave' }, () => leave(a))
+          : button(tr("Отозвать"), { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
         : [el('li', { class: 'muted small' }, tr("Компьютеров пока нет."))]));
     } catch (err) {
       say(note, words(err), 'error');

@@ -144,6 +144,31 @@ def revoke_all(request: Request) -> int:
     return len(grants)
 
 
+def leave(request: Request, aid: int) -> int:
+    """Участник сам покидает совместные проекты чужого компьютера: снимаются его выдачи (и к исчезнувшим папкам).
+    След — в журнале безопасности участника и в истории подключений владельца (`claude_code.MEMBER`, без id и
+    адреса участника, как новый чат участника). Свой компьютер так не «покинуть» — 404."""
+    import claude_code
+    uid = request.state.user.id
+    state.DB.execute("BEGIN IMMEDIATE")
+    try:
+        row = state.DB.execute("SELECT id, user_id, name FROM agents WHERE id = ? AND user_id != ?", (aid, uid)).fetchone()
+        grants = [] if row is None else [(aid, r[0], uid) for r in state.DB.execute(
+            "SELECT project FROM project_members WHERE agent_id = ? AND user_id = ?", (aid, uid))]
+        drop(grants)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    if not grants:
+        raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера", "computer": True})
+    wake(grants)
+    security_log.record(uid, "project_leave", digest=request.state.digest, ip=auth.client_ip(request))
+    bridge.record(row["user_id"], aid, row["name"], "member_remove", device=claude_code.MEMBER)
+    log.info("пользователь %d: покинул совместные проекты компьютера %d — %d", uid, aid, len(grants))
+    return len(grants)
+
+
 @router.post("", status_code=201)
 async def add_member(aid: int, pid: str, body: Member, request: Request):
     await _check(request, aid, pid)
