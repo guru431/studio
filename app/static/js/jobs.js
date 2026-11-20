@@ -283,10 +283,12 @@ async function poll(full = false) {
   let out = null;
   try {
     // срок: iOS после сна держит fetch минуту и дольше, а inflight держал бы все следующие опросы
-    // visible: страница на экране — сервер не шлёт ей push и ntfy о готовом (push.screen)
+    // visible: страница на экране — сервер не шлёт ей push и ntfy о готовом (push.screen). Скрытие бывает и уходом
+    // со страницы (закрытие, перезагрузка): keepalive доносит visible=0, навигация запрос не обрывает
+    // (WebKit назвал бы оборванный ошибкой страницы)
     const visible = document.visibilityState === 'visible' ? 1 : 0;
     out = await api('GET', `/api/jobs?visible=${visible}${whole ? '' : `&since=${since}`}`, undefined,
-      { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
+      { signal: AbortSignal.timeout(POLL_TIMEOUT_MS), keepalive: !visible });
   } catch {
     // нет связи или срок вышел — следующий опрос по расписанию
   }
