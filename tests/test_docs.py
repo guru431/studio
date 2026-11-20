@@ -392,10 +392,21 @@ def test_guide_batch_script_models_are_accepted_by_both_scripts():
 
 
 def _model_labels() -> dict:
-    """Подписи моделей в настройках разделов — `LABELS` из settings.js."""
-    body = re.search(r"const LABELS = \{(.*?)\};", (APP / "static" / "js" / "settings.js").read_text(encoding="utf-8"),
+    """Подписи моделей страницы — `LABELS` из models.js (одна таблица на настройки, разделы и «Поиск»)."""
+    body = re.search(r"const LABELS = \{(.*?)\};", (APP / "static" / "js" / "models.js").read_text(encoding="utf-8"),
                      re.S).group(1)
     return {key or bare: label for key, bare, label in re.findall(r"(?:'([^']+)'|([\w-]+))\s*:\s*'([^']+)'", body)}
+
+
+def test_server_model_names_copy_the_page_labels():
+    """«В работе» (`jobs.MODEL_NAMES`) называет картинки так же, как разделы и «Поиск», — каждую модель фото шлюза
+    (`sections.CATALOG` и снятые `sections.RETIRED_PHOTO_MODELS`)."""
+    names = ast.literal_eval(_module(APP, "jobs")[2]["MODEL_NAMES"])
+    labels = _model_labels()
+    tree = _module(APP, "sections")[2]
+    photo = set(ast.literal_eval(tree["CATALOG"])["photo"]) | ast.literal_eval(tree["RETIRED_PHOTO_MODELS"])
+    assert set(names) == photo
+    assert {model: labels.get(model) for model in names} == names
 
 
 def test_guide_names_every_srvllm_catalog_model():

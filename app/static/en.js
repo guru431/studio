@@ -1621,6 +1621,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Все модели": "All models",
   "Введите слова или выберите раздел, модель или период": "Enter words or choose a section, model or date range",
   "Ничего не нашлось": "No results",
+  "Найдено: {0}": "Found: {0}",
+  "Найдено: {0}, есть ещё": "Found: {0}, more available",
   "Чтобы писать в чат, выберите модель в настройках раздела «Чат»": "To chat, choose a model in Settings → Chat",
   "Чтобы генерировать фото, выберите модель в настройках раздела «Фото»": "To generate photos, choose a model in Settings → Photos",
   "Видео": "Video",
