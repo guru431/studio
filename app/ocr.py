@@ -31,7 +31,8 @@
    с цикла событий; рендер, чтение и запись файлов — в потоке.
 8. API раздела — `router` (`/api/ocr`, вторая половина файла): загрузка, лента, документ со страницами,
    отмена, удаление, выгрузка txt/md/docx (`exports.pages_*`), «В чат» — вложение «<имя>.md», «Повторить
-   страницу» и «Распознать заново» кончившегося документа (`retry`).
+   страницу» и «Распознать заново» кончившегося документа (`retry`; другим движком раздела — новый документ из
+   тех же файлов, `again`).
 """
 import asyncio
 import base64
@@ -414,6 +415,28 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, stage_at=clock.NOW(),
                         epoch=operations.capture(user_id))
     log.info("распознавание %s: заново, %d стр.", scan_id[:8], len(numbers))
+
+
+def again(user_id: int, scan_id: str, conn, model: str) -> str:
+    """«Распознать заново» другим движком (подключение и модель раздела): новый документ раздела из тех же файлов —
+    исходного PDF (и уже нарисованных PNG страниц) или фото страниц; ждут все страницы, кроме страниц текстового
+    слоя. Прежний документ остаётся — их можно сравнить. Идёт — 409 `running`, файла нет — 404 `gone`, очередь
+    полна — 409 `busy`."""
+    row = state.DB.execute("SELECT name, state, source_media_id FROM scans WHERE id = ? AND user_id = ?",
+                           (scan_id, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "документ ещё распознаётся"})
+    pages = [{"n": p["n"], "state": "layer", "media_id": None, "text": p["text"]} if p["state"] == "layer"
+             else {"n": p["n"], "state": "waiting", "media_id": p["media_id"], "text": None}
+             for p in state.DB.execute("SELECT n, state, media_id, text FROM scan_pages WHERE scan_id = ? ORDER BY n",
+                                       (scan_id,))]
+    source = row["source_media_id"]
+    files = [source] if source else [p["media_id"] for p in pages if p["state"] == "waiting"]
+    if not all(f is not None and media.alive(user_id, f) for f in files):
+        raise HTTPException(404, media.GONE)
+    return create(user_id, conn, model, row["name"], origin="section", source_media_id=source, pages=pages)
 
 
 def kick(user_id: int) -> None:
@@ -816,7 +839,8 @@ def _out(row) -> dict:
     job = JOBS.get(row["id"])
     return {"id": row["id"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
-            "model": row["model"], "pages": row["pages"], "done_pages": row["done_pages"],
+            "connection_id": row["connection_id"], "model": row["model"], "pages": row["pages"],
+            "done_pages": row["done_pages"],
             "failed_pages": row["failed_pages"], "origin": row["origin"], "created": row["created"],
             "finished": row["finished"]}
 
@@ -951,12 +975,26 @@ async def cancel(sid: str, request: Request):
 
 class RetryIn(BaseModel):
     page: int | None = Field(default=None, ge=1)
+    connection_id: int | None = None
+    model: str | None = Field(default=None, max_length=200)
 
 
 @router.post("/{sid}/retry", status_code=202)
 async def retry_scan(sid: str, body: RetryIn, request: Request):
-    """«Повторить страницу» (`page`) или «Распознать заново» (без `page`) кончившегося документа — `retry`."""
+    """«Повторить страницу» (`page`) или «Распознать заново» (без `page`) кончившегося документа — `retry`. С
+    `connection_id`/`model` (`sections.resolve`) другого движка, чем у документа, — новый документ (`again`): ответ —
+    он; тот же движок — как без них. Страницу повторяют только движком документа."""
     uid = request.state.user.id
+    row = _row(uid, sid)
+    if body.connection_id is not None or body.model:
+        if body.page is not None:
+            raise HTTPException(422, {"code": "input", "message": "страницу повторяют тем же движком"})
+        conn, model = sections.resolve(uid, "ocr", body.connection_id, body.model)
+        if (conn.id, model) != (row["connection_id"], row["model"]):
+            sid = again(uid, sid, conn, model)
+            kick(uid)
+            log.info("ocr %s: заново другим движком", sid[:8])
+            return _out(_row(uid, sid))
     retry(uid, sid, body.page)
     kick(uid)
     return _out(_row(uid, sid))
