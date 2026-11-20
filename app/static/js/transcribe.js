@@ -75,9 +75,14 @@ function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Собеседник реплики: имя пользователя — как есть, метка сервера «Собеседник N» — на языке интерфейса. */
+function speakerName(s) {
+  return s.speaker && s.speaker === s.label ? serverMessage(s.label) : s.speaker;
+}
+
 /** Текст расшифровки — как выгрузка .txt. */
 export function asText(segments) {
-  return segments.map((s) => `${s.speaker ? `${s.speaker} · ` : ''}${clock(s.start)}\n${s.text}\n`).join('\n');
+  return segments.map((s) => `${s.speaker ? `${speakerName(s)} · ` : ''}${clock(s.start)}\n${s.text}\n`).join('\n');
 }
 
 function build(view, ctx) {
@@ -256,11 +261,11 @@ function build(view, ctx) {
   function namesDialog(item) {
     const labels = [...new Set(item.segments.map((s) => s.label).filter(Boolean))];
     const inputs = labels.map((label) => el('input', { class: 'input', 'data-label': label, maxlength: '60',
-      placeholder: label, 'aria-label': tr("Имя: {0}", label), value: item.names[label] || '' }));
+      placeholder: serverMessage(label), 'aria-label': tr("Имя: {0}", serverMessage(label)), value: item.names[label] || '' }));
     const fail = el('p', { class: 'error' });
     const save = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-names-save' }, tr("Сохранить"));
     const dialog = openDialog(root, { id: 'tr-names-dialog', title: tr("Имена собеседников"), actions: [save],
-      body: [...labels.map((label, i) => el('label', { class: 'tr-name-row' }, el('span', {}, `${label} →`), inputs[i])), fail] });
+      body: [...labels.map((label, i) => el('label', { class: 'tr-name-row' }, el('span', {}, `${serverMessage(label)} →`), inputs[i])), fail] });
     save.addEventListener('click', async () => {
       save.disabled = true;
       const names = Object.fromEntries(inputs.map((input) => [input.dataset.label, input.value.trim() || null]));
@@ -347,7 +352,7 @@ function build(view, ctx) {
   }
 
   function turnNode(s, i) {
-    const speaker = s.speaker ? `${s.speaker} · ` : '';
+    const speaker = s.speaker ? `${speakerName(s)} · ` : '';
     const original = s.edited ? s.original : s.text;
     // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике; в правке — тоже
     const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': tr("Слушать с {0}", clock(s.start)) },

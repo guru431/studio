@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-language-default="browser">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -26,6 +26,7 @@
            minlength="4" maxlength="4" autocomplete="off" required>
     <p id="share-error" class="error" role="alert"></p>
     <button id="share-open" class="btn btn-accent" type="submit" data-i18n>Открыть чат</button>
+    <div data-language-picker="share-language"></div>
   </form>
   <section id="shared-chat" hidden aria-labelledby="shared-title">
     <header class="shared-head"><h1 id="shared-title"></h1><p class="muted" data-i18n>Только чтение · снимок переписки</p>
