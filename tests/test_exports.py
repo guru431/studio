@@ -2,6 +2,7 @@
 import ast
 import io
 import json
+import re
 import zipfile
 from urllib.parse import quote
 from xml.etree import ElementTree
@@ -242,7 +243,10 @@ def test_export_words_match_the_page_and_every_word_call_is_translated():
         assert source.count("{}") == english.count("{}"), source
     used = set()
     for path in APP.glob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        source = path.read_text(encoding="utf-8")
+        if not re.search(r"\bword\(", source):           # разбор всех модулей шёл дольше секунды
+            continue
+        for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) == "word":
                 for arg in node.args[:1]:
                     texts = [arg] if isinstance(arg, ast.Constant) else [arg.body, arg.orelse] if isinstance(arg, ast.IfExp) else []
