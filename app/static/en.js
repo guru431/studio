@@ -143,6 +143,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Запись 5–60 секунд чистой речи. Можно выбрать несколько файлов, до 10 образцов на голос.": "Record 5–60 seconds of clear speech. Select multiple files, up to 10 samples per voice.",
   "Изменить голос": "Edit voice",
   "Нужен хотя бы один образец голоса": "At least one voice sample is required",
+  "Образцы, тексты и имя голоса не сохранятся.": "The voice samples, their text and the voice name will not be saved.",
   "У голоса не больше 10 образцов": "A voice can have up to 10 samples",
   "Удалить образец": "Delete sample",
   "Удалить голос?": "Delete voice?",
