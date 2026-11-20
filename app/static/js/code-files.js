@@ -660,7 +660,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       conflict?.remove();
       const box = conflict = el('section', { id: 'code-conflict', class: 'code-conflict', 'aria-label': tr("Конфликт сохранения") },
         el('p', { class: 'muted small' }, tr("Слева — версия на компьютере, справа — ваша")),
-        changeView([{ path: nameOf(path), before: current, after: editor.value }]),
+        changeView([{ path: nameOf(path), before: current, after: editor.value, whole: true }]),
         el('div', { class: 'code-conflict-actions' }, take, overwrite, copy));
       status.after(box);
       const close = () => { box.remove(); if (conflict === box) conflict = null; };

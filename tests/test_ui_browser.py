@@ -8227,9 +8227,9 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         *go("settings"), ("eval", "returned", AGENTS_DOWNLOAD)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
     assert v["nested"] and v["other"]
-    assert v["notice"] == "Установите агент на компьютер, который хотите подключить к Студии."
+    assert v["notice"] == "Установите мост на компьютер, который хотите подключить к Студии."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -8239,7 +8239,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         ("eval", "link", AGENTS_DOWNLOAD), ("eval", "fits", NO_OVERFLOW),
         ("screenshot", str(tmp_path / "installer-settings-1280.png"))], width=1280)
     assert not r.get("failed"), r
-    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
     assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
@@ -8528,12 +8528,12 @@ def test_code_empty_offers_agent_download(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
+    assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows (.exe)", 1]
     assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
-    assert v["texts"] == ["Установите агент на компьютер, который хотите подключить к Студии.",
+    assert v["texts"] == ["Установите мост на компьютер, который хотите подключить к Студии.",
                           "Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
-                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню агента."]
+                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста."]
     assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
@@ -10479,7 +10479,7 @@ def test_code_file_conflict_is_said_in_words(browser, live, choice):
 
     def read_then_change(req, events):
         out = read(req, events)
-        machine.projects["alpha"]["files"]["src/app.py"] = b"print('claude')\n"
+        machine.projects["alpha"]["files"]["src/app.py"] = b"x = 1\ny = 2\nprint('claude')\n"
         return out
 
     machine._op_read = read_then_change
@@ -10489,12 +10489,14 @@ def test_code_file_conflict_is_said_in_words(browser, live, choice):
             code_root_names(5), ("click", code_item("src")),
             ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
             ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
-            set_value("#code-editor", "print('мой')\n"), ("click", "#code-save"),
+            set_value("#code-editor", "x = 1\ny = 2\nprint('мой')\n"), ("click", "#code-save"),
             ("wait", f"{CODE_FILE_STATUS} !== ''"), ("eval", "status", CODE_FILE_STATUS),
             ("eval", "error", "document.querySelector('#code-file-status').classList.contains('error')"),
             ("eval", "text", "document.querySelector('#code-editor').value"),
             ("wait", "document.querySelector('#code-conflict')"),
             ("eval", "diff", "document.querySelector('#code-conflict .code-diff-unified').textContent"),
+            ("eval", "rows", "[...document.querySelectorAll('#code-conflict .code-diff-unified .code-change-line')].map((n) =>"
+                     " [n.classList[1], n.querySelector('.code-change-number').textContent, n.lastChild.textContent])"),
             ("eval", "fits", NO_OVERFLOW), ("click", f"#code-conflict-{choice}"),
             ("wait", "!document.querySelector('#code-conflict')"),
             ("wait", f"![{json.dumps(CODE_CONFLICT)}, ''].includes({CODE_FILE_STATUS})"),
@@ -10505,16 +10507,19 @@ def test_code_file_conflict_is_said_in_words(browser, live, choice):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["status"] == CODE_CONFLICT and v["error"] is True and v["fits"] is True
-    assert v["text"] == "print('мой')\n"
+    assert v["text"] == "x = 1\ny = 2\nprint('мой')\n"
     assert "print('claude')" in v["diff"] and "print('мой')" in v["diff"]
+    # неизменённые строки целого файла — контекст с номерами строк, а не заголовки
+    assert v["rows"] == [["context", "1", "x = 1"], ["context", "2", "y = 2"],
+                         ["removed", "3", "print('claude')"], ["added", "3", "print('мой')"]]
     saves = code_requests(machine, "save")
     if choice == "take":
-        assert v["after"] == "print('claude')\n" and v["final"] == "Открыта версия компьютера"
-        assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
+        assert v["after"] == "x = 1\ny = 2\nprint('claude')\n" and v["final"] == "Открыта версия компьютера"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == b"x = 1\ny = 2\nprint('claude')\n"
         assert len(saves) == 1
     else:
-        assert v["after"] == "print('мой')\n" and v["final"] == "Сохранено"
-        assert machine.projects["alpha"]["files"]["src/app.py"] == "print('мой')\n".encode()
+        assert v["after"] == "x = 1\ny = 2\nprint('мой')\n" and v["final"] == "Сохранено"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == "x = 1\ny = 2\nprint('мой')\n".encode()
         assert len(saves) == 2 and saves[1]["version"] != saves[0]["version"]
     assert not known_refusals(problems(r), 409), problems(r)
 

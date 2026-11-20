@@ -76,7 +76,7 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
         server.stop()
     assert not result.get('failed'), result
     assert result['values'] == {'go': '#/code', 'before': '0.10.0', 'geometry': True, 'disabled': True,
-                                'available': 'Обновить агент до 0.10.1', 'noNote': True,
+                                'available': 'Обновить мост до 0.10.1', 'noNote': True,
                                 'complete': True, 'installer': 'studio-agent-setup.exe'}
     assert [req['op'] for req in machine.requests].count('agent_update') == 1
     assert not problems(result), problems(result)

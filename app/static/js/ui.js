@@ -111,15 +111,15 @@ export function agentDownload() {
   });
   return el('div', { class: 'agent-download' },
     el('p', { class: 'agent-install-note', role: 'note' },
-      tr("Установите агент на компьютер, который хотите подключить к Студии.")),
+      tr("Установите мост на компьютер, который хотите подключить к Студии.")),
     el('a', { id: 'agent-download', class: 'btn btn-accent', href: agentInstallers.win32.href, download: agentInstallers.win32.file },
-      tr("Скачать агент для Windows (.exe)")),
+      tr("Скачать мост для Windows (.exe)")),
     el('a', { id: 'agent-download-macos', class: 'btn', href: agentInstallers.darwin.href, download: agentInstallers.darwin.file },
-      tr("Скачать агент для macOS (.pkg)")),
+      tr("Скачать мост для macOS (.pkg)")),
     el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
-      tr("Скачать агент для Linux (.sh)")),
+      tr("Скачать мост для Linux (.sh)")),
     el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
-    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню агента.")),
+    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста.")),
     getCommand, el('p', { class: 'agent-install-command' }, command), copy);
 }
 
