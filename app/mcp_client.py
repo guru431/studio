@@ -2,6 +2,9 @@
 
 Адреса проходят ту же SSRF-проверку и закрепление DNS, что подключения моделей.
 Ключи — шифром в базе, запросы/ответы и заголовки никогда не пишутся в журнал.
+Общие серверы (`user_id IS NULL`) учётка видит по группам доступа (access.py): закрытый — как отсутствующий,
+закрытый инструмент — не предлагается модели и не вызывается. Каждый запрос к общему серверу несёт
+`X-Studio-User` — непрозрачный идентификатор учётки (`access.studio_user`); личным — не отправляется.
 """
 
 import asyncio
@@ -14,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 import httpx
 
+import access
 import security
 import state
 import connections  # Загрузить Connection до upstream: его аннотации участвуют в цикле импорта.
@@ -29,7 +33,7 @@ PROTOCOL = "2025-06-18"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 HEADER = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 FORBIDDEN = {"host", "cookie", "content-length", "transfer-encoding", "connection", "content-type", "accept",
-             "mcp-session-id", "mcp-protocol-version"}
+             "mcp-session-id", "mcp-protocol-version", "x-studio-user"}
 
 
 def refused(message, code="mcp", status=409):
@@ -45,9 +49,18 @@ class ServerIn(BaseModel):
     enabled: bool = True
 
 
+def _gate(uid):
+    """Общий сервер, закрытый учётке группами доступа, — как отсутствующий; `uid None` — управление общим."""
+    if uid is None:
+        return "", ()
+    clause, args = access.shared_filter(uid, "mcp", "mcp_servers.id")
+    return f" AND {clause}", args
+
+
 def row(uid, sid, *, own=False):
     scope = "user_id IS ?" if own else "(user_id IS ? OR user_id IS NULL)"
-    found = state.DB.execute(f"SELECT * FROM mcp_servers WHERE id=? AND {scope}", (sid, uid)).fetchone()
+    clause, args = ("", ()) if own else _gate(uid)
+    found = state.DB.execute(f"SELECT * FROM mcp_servers WHERE id=? AND {scope}{clause}", (sid, uid, *args)).fetchone()
     if found is None:
         raise refused("Подключение MCP не найдено", "not_found", 404)
     return found
@@ -71,8 +84,9 @@ def public(item, uid=None):
 
 def servers(uid, *, enabled_only=False):
     enabled = " AND enabled=1" if enabled_only else ""
-    return state.DB.execute(f"SELECT * FROM mcp_servers WHERE (user_id IS ? OR user_id IS NULL){enabled}"
-                            " ORDER BY user_id IS NULL, id", (uid,)).fetchall()
+    clause, args = _gate(uid)
+    return state.DB.execute(f"SELECT * FROM mcp_servers WHERE (user_id IS ? OR user_id IS NULL){enabled}{clause}"
+                            " ORDER BY user_id IS NULL, id", (uid, *args)).fetchall()
 
 
 def selected(uid, ids):
@@ -83,14 +97,15 @@ def selected(uid, ids):
 
 
 def present(uid, raw):
-    """id из `chats.mcp_ids`, чьи подключения у учётки ещё есть: удалённый сервер (id не повторяются —
-    AUTOINCREMENT) не остаётся выбранным в диалоге и не мешает смене модели."""
+    """id из `chats.mcp_ids`, чьи подключения у учётки ещё есть: удалённый или закрытый группами доступа сервер
+    (id не повторяются — AUTOINCREMENT) не остаётся выбранным в диалоге и не мешает смене модели."""
     ids = json.loads(raw)
     if not ids:
         return []
+    clause, args = _gate(uid)
     found = {r[0] for r in state.DB.execute(
-        f"SELECT id FROM mcp_servers WHERE (user_id IS ? OR user_id IS NULL) AND id IN ({','.join('?' * len(ids))})",
-        (uid, *ids))}
+        f"SELECT id FROM mcp_servers WHERE (user_id IS ? OR user_id IS NULL){clause}"
+        f" AND id IN ({','.join('?' * len(ids))})", (uid, *args, *ids))}
     return [sid for sid in ids if sid in found]
 
 
@@ -158,9 +173,10 @@ def delete_for(uid, sid):
     state.DB.execute("DELETE FROM mcp_servers WHERE id=? AND user_id IS ?", (sid, uid))
 
 
-async def check_for(uid, sid):
-    """«Проверить» — и выключенный сервер: проверить его до включения."""
-    session = Session(row(uid, sid, own=True), uid=uid, disabled_ok=True)
+async def check_for(uid, sid, *, actor=None):
+    """«Проверить» — и выключенный сервер: проверить его до включения. `uid` — владелец (None — общий),
+    `actor` — учётка, от чьего имени идёт запрос к общему серверу (`X-Studio-User`; администратор панели)."""
+    session = Session(row(uid, sid, own=True), uid=uid if actor is None else actor, disabled_ok=True)
     try:
         tools = await session.tools()
         return {"tools": [t.get("name", "") for t in tools if isinstance(t, dict)]}
@@ -217,6 +233,8 @@ class Session:
         headers = httpx.Headers(values.get("headers", {}))
         if values.get("token"):
             headers["Authorization"] = f"Bearer {values['token']}"
+        if self.owner_id is None and self.uid is not None:
+            headers["X-Studio-User"] = access.studio_user(self.uid)
         if not rpc:
             return dict(headers)
         headers.update({"Accept": "application/json, text/event-stream", "Content-Type": "application/json"})
@@ -352,6 +370,8 @@ class Tools:
                 self.failed.append((item["name"], tools))
                 continue
             for tool in tools:
+                if not access.tool_allowed(self.uid, item["id"], tool["name"]):
+                    continue                 # закрыт группами доступа — модели не предлагается
                 name = f"mcp_{item['id']}_{len(self.calls)}"
                 if len(self.calls) >= MAX_TOOLS:
                     raise refused("Выберите MCP с суммарно не больше 128 инструментов")
@@ -367,6 +387,8 @@ class Tools:
             selected_row = state.DB.execute("SELECT mcp_ids FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
             if selected_row is None or session.sid not in json.loads(selected_row[0]):
                 raise refused("MCP выключен в этом диалоге")
+            if not access.tool_allowed(self.uid, session.sid, tool):   # правило могли сменить посреди хода
+                raise refused("Нет доступа к инструменту MCP")
             args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""
             if not isinstance(args, dict):
                 raise refused("Неверные аргументы инструмента MCP")

@@ -1,4 +1,9 @@
-"""Run MCP tools directly from the corresponding Studio sections."""
+"""Run MCP tools directly from the corresponding Studio sections.
+
+Section tools closed to the account by access groups (access.py) are neither listed nor run. Service calls Studio
+makes itself (`artifact_upload`, `job_status`, `job_result`) only need access to the server: tool rules never block
+uploading a source or collecting the result of a permitted tool.
+"""
 
 import asyncio
 import base64
@@ -13,6 +18,7 @@ from fastapi.responses import Response, StreamingResponse
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
+import access
 import clock
 import forms
 import images
@@ -57,12 +63,15 @@ def clean_text(value, limit=60_000):
     return value[:limit].encode("utf-8", "replace").decode() if isinstance(value, str) else ""
 
 
-def supported(section, tools):
+def supported(section, tools, *, uid=None, sid=None):
+    """Section tools of one server; with `sid` — only those the account may call (`access.tool_allowed`)."""
     by_name = {t["name"]: t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)}
     has_upload = "artifact_upload" in by_name
     for name, tool in by_name.items():
         schema = tool.get("inputSchema")
         if name not in TOOLS[section] or not isinstance(schema, dict) or schema.get("type") != "object":
+            continue
+        if sid is not None and not access.tool_allowed(uid, sid, name):
             continue
         properties, required = schema.get("properties", {}), schema.get("required", [])
         if (not isinstance(properties, dict) or len(properties) > 128
@@ -88,7 +97,7 @@ async def catalog(section: str, request: Request):
         session = mcp.Session(item, uid=uid)
         try:
             async with asyncio.timeout(DISCOVERY_TIMEOUT):
-                tools = list(supported(section, await session.tools()))
+                tools = list(supported(section, await session.tools(), uid=uid, sid=session.sid))
             # Keep broad or malformed schemas from breaking discovery for other servers.
             encoded = json.dumps(tools, ensure_ascii=False, allow_nan=False).encode("utf-8", "replace")
             return {"id": session.sid, "name": item["name"], "tools": json.loads(encoded)}
@@ -267,11 +276,11 @@ async def run(section: str, sid: int, request: Request):
         arguments = json.dumps(body.arguments, allow_nan=False)
     except (ValidationError, ValueError, RecursionError):
         raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422) from None
-    if body.tool not in names or len(arguments) > PARAMS_MAX:
+    if body.tool not in names or len(arguments) > PARAMS_MAX or not access.tool_allowed(uid, sid, body.tool):
         raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
     try:
         async with asyncio.timeout(DISCOVERY_TIMEOUT):
-            tools = list(supported(section, await session.tools()))
+            tools = list(supported(section, await session.tools(), uid=uid, sid=sid))
         tool = next((item for item in tools if item["name"] == body.tool), None)
         if tool is None:
             raise mcp.refused("Инструмент недоступен в этом разделе MCP")
