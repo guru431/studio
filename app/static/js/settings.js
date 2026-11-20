@@ -45,6 +45,7 @@ import { editVoice } from './voice-editor.js';
 import { check, passportBlock, probe, PROBE_WARNING } from './passport.js';
 import { agentDownload, button, el, field, openDialog, plural, showError, words } from './ui.js';
 import { icon } from './icons.js';
+import { pageVersion } from './stale.js';
 import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { smtpSettings } from './smtp-settings.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
@@ -1200,7 +1201,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
   }
 
-  if (other && me?.studio_version) nav.append(el('p', { class: 'muted small', id: 'studio-version' }, `Studio ${me.studio_version}`));
+  if (other && pageVersion) nav.append(el('p', { class: 'muted small', id: 'studio-version' }, `Studio ${pageVersion}`));
 
   async function changed() {
     await reload();

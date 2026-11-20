@@ -37,7 +37,7 @@ import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
-import { lazy } from './stale.js';
+import { lazy, pageVersion, watchDeploys } from './stale.js';
 import { cancelRefresh, claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
 import './code-drafts.js';
 
@@ -279,8 +279,8 @@ function sectionKey(event) {
 function openMenu(open) {
   if (open) {
     const version = document.getElementById('menu-version');
-    version.textContent = me.studio_version ? `Studio ${me.studio_version}` : '';
-    version.hidden = !me.studio_version;
+    version.textContent = pageVersion ? `Studio ${pageVersion}` : '';   // версия страницы, не перечитанного профиля
+    version.hidden = !pageVersion;
   }
   menu.hidden = !open;
   avatar.setAttribute('aria-expanded', String(open));
@@ -380,6 +380,7 @@ function retryLater(first, worker) {
 /** Профиль есть: тема, меню, раздел по адресу. */
 async function enter(worker) {
   setupAppearance();
+  watchDeploys();            // выкладка при возвращении на экран — плашка «Студия обновилась»
   setupMenu();
   setupJobs({ navigate });
   mobileNavigation = setupMobileNavigation(me);

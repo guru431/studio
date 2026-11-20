@@ -68,6 +68,20 @@ def test_section_of_an_older_deployment_offers_a_reload(browser, live, width):
     assert not problems(r, "photo.js"), problems(r, "photo.js")
 
 
+def test_return_to_screen_finds_a_deployment_without_a_missing_module(browser, live):
+    """Разделы уже загружены — 404 модуля не будет; выкладку находит сверка `/health` при возвращении на экран:
+    плашка «Студия обновилась», в меню — версия, с которой открыта страница."""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
+        ("eval", "before", "document.querySelector('#avatar').click(), document.querySelector('#menu-version').textContent"),
+        ("route", "/health", 200, NEWER),
+        ("eval", "back", "document.dispatchEvent(new Event('visibilitychange'))"),
+        ("wait", "document.querySelector('#studio-updated')"),
+        ("eval", "after", "document.querySelector('#menu-version').textContent")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"].startswith("Studio ") and v["after"] == v["before"]
+
+
 HASH = "location.hash"
 
 
