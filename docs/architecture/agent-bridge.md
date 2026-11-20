@@ -87,12 +87,17 @@ disconnect до освобождения хода. Вложения хода с 
 | 0.19.1 | `followup.images`, `followup.image_message_id`; ожидание фоновых Claude Workflow | §2.2, §4 |
 | 0.20.0 | `hello.completions` + `welcome.completions` — кадр `completions`; `hello.visualization_scope`; `hello.agent_update_cancel` (`agent_update_cancel`), `agent_update_status.holds` | §18, §17, §2 |
 | 0.22.0 | `hello.visualization_images` — PNG/JPEG/WebP/GIF проекта и `CODEX_HOME/generated_images` владельца через `visualization` | §4 |
+| 0.22.1 | `hello.large_attachments` — вложения хода до 10 МиБ на файл и 30 МиБ всего (без него — 5/8 МиБ) | §2.2 |
 | 0.24.0 | `hello.project_create` — `project_roots`, `project_create`, создание пустой папки в выбранном корне | §19 |
 | 0.25.0 | `hello.opencode_usage` — окна Go; `usage.model` выбирает провайдера текущей модели | §9 |
 | 0.26.0 | `hello.opencode_features` — режим основного агента, дополнительные каталоги, ветки и история подагентов OpenCode | §20 |
+| 0.28.0 | `hello.mcp` — `mcp_get`, `mcp_save`: MCP агентов по проекту и движку (выше) | — |
+| 0.29.0 | `hello.platform` — `win32`, `darwin` или `linux`; сервер помнит последнюю ОС ([agent-macos](agent-macos.md)) | — |
 | 0.31.0 | `hello.usage_reset` — подтверждённый сброс лимитов Codex с ключом идемпотентности | §9 |
+| 0.33.3 | `hello.opencode_models` (`models`, `engine: opencode`) — обновление каталога OpenCode без смены канала | §22 |
 | 0.34.0 | `project_summary` по флагу `code_size` возвращает размер исходников в байтах | §10.1 |
 | 0.36.0 | Сводка сообщает `code_size_version: 2`, список проектов возвращает последний успешный размер | §10.1 |
+| 0.38.0 | `hello.terminal` (только Linux) — `terminal_info`, команда SSH и веб-консоль ([ниже](#терминал-linux)) | — |
 
 ## OpenCode 2.x (0.26.0)
 
