@@ -185,8 +185,12 @@ function mailFailure(target, err) {
 function invitationsBlock(host) {
   const list = el('tbody', { id: 'invitations' });
   const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
-  const statuses = { pending: tr("Ожидает регистрации"), accepted: tr("Зарегистрирован"), expired: tr("Срок истёк"),
+  const statuses = { accepted: tr("Зарегистрирован"), deleted: tr("Учётка удалена"), expired: tr("Срок истёк"),
     revoked: tr("Отозвано"), failed: tr("Письмо не отправлено") };
+  const statusText = (invite) => invite.status === 'pending'
+    ? tr("Ожидает регистрации до {0}", dateTime(invite.expires, { day: '2-digit', month: '2-digit', hour: '2-digit',
+      minute: '2-digit' }).replace(',', ''))
+    : statuses[invite.status];
   async function act(action) {
     note.textContent = '';
     try { await action(); }
@@ -222,21 +226,28 @@ function invitationsBlock(host) {
   async function reload() {
     try {
       const { items } = await api('GET', '/api/admin/invitations');
-      list.replaceChildren(...items.map(invite => el('tr', { 'data-email': invite.email },
-        el('td', { 'data-label': 'Email' }, invite.email), el('td', { 'data-label': tr("Комментарий") }, invite.comment),
-        el('td', { 'data-label': tr("Статус") }, statuses[invite.status]),
+      // DELETE: ожидающее — отзыв (строка остаётся «Отозвано»), прочие без живой учётки — удаление строки
+      list.replaceChildren(...(items.length ? items.map(invite => el('tr', { 'data-email': invite.email },
+        el('td', { 'data-label': 'Email' }, invite.email,
+          invite.is_admin ? el('span', { class: 'muted small invite-admin' }, ` · ${tr("администратор")}`) : null),
+        el('td', { 'data-label': tr("Комментарий") }, invite.comment),
+        el('td', { 'data-label': tr("Статус") }, statusText(invite)),
         el('td', { class: 'actions' }, el('div', { class: 'acts' },
           button(tr("Комментарий"), { class: 'btn btn-sm invite-edit' }, () => edit(invite)),
           ...(invite.status !== 'accepted' ? [
-            button(tr("Отправить снова"), { class: 'btn btn-sm invite-resend' }, event => {
-              const button = event.currentTarget;
-              button.disabled = true;
-              act(() => api('POST', '/api/admin/invitations', {
-                email: invite.email, comment: invite.comment, is_admin: invite.is_admin }));
-            }),
-            button(tr("Отозвать"), { class: 'btn btn-sm invite-revoke' }, () =>
-              act(() => api('DELETE', `/api/admin/invitations/${invite.id}`))),
-          ] : []))))));
+            button(invite.status === 'deleted' ? tr("Пригласить снова") : tr("Отправить снова"),
+              { class: 'btn btn-sm invite-resend' }, event => {
+                const button = event.currentTarget;
+                button.disabled = true;
+                act(() => api('POST', '/api/admin/invitations', {
+                  email: invite.email, comment: invite.comment, is_admin: invite.is_admin }));
+              }),
+            invite.status === 'pending'
+              ? button(tr("Отозвать"), { class: 'btn btn-sm invite-revoke' }, () =>
+                act(() => api('DELETE', `/api/admin/invitations/${invite.id}`)))
+              : button(tr("Удалить"), { class: 'btn btn-sm btn-danger invite-delete' }, () =>
+                act(() => api('DELETE', `/api/admin/invitations/${invite.id}`))),
+          ] : []))))) : [el('tr', {}, el('td', { colspan: '4', class: 'muted' }, tr("Приглашений нет")))]));
     } catch (err) { note.textContent = words(err); }
   }
   return { reload, el: el('section', { class: 'block' }, el('div', { class: 'block-head' },
