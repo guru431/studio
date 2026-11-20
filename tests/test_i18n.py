@@ -82,6 +82,7 @@ assert.equal(en.message('выберите модель в настройках �
 assert.equal(en.message('нет связи с подключением «Голосовой ввод»'), 'no connection to “Голосовой ввод”');
 assert.equal(en.message('Ответ · Чат'), 'Response · Чат');
 assert.equal(['Чат'].map(en.message)[0], 'Chat');
+assert.equal(en.message('Имя — от 1 до 196 знаков'), 'Name must be 1–196 characters');
 assert.equal(en.tr('__proto__'), '__proto__');
 """
     result = subprocess.run([node, '-e', program, str(STATIC)], capture_output=True,

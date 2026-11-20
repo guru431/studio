@@ -59,7 +59,8 @@
         values[index] = named ? part : quoted ? `“${message(quoted[1], depth + 1)}”` : message(part, depth + 1);
       });
       let auto = 0;
-      return format(english[key].replace(/\{\}/g, () => '{' + auto++ + '}'), values);
+      const out = format(english[key].replace(/\{\}/g, () => '{' + auto++ + '}'), values);
+      return /^\p{Lu}/u.test(source) ? out.charAt(0).toUpperCase() + out.slice(1) : out;
     }
     return source;
   }
