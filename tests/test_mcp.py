@@ -146,6 +146,18 @@ def test_mcp_header_values_are_write_only_and_kept_by_null(studio):
         assert response.status_code == 422, (method, response.text)
 
 
+def test_disabled_mcp_server_can_be_checked_but_not_used(studio):
+    sid = add(studio); calls = mock(studio)
+    assert studio.c.put(f'/api/mcp/{sid}', json={'name': 'Tools', 'url': URL, 'enabled': False}).status_code == 200
+    response = studio.c.post(f'/api/mcp/{sid}/check')
+    assert response.status_code == 200 and response.json() == {'tools': ['lookup']}
+    calls.clear()
+    cid = new_chat(studio)
+    state.DB.execute('UPDATE chats SET mcp_ids=? WHERE id=?', (json.dumps([sid]), cid))
+    sse(turn(studio, cid, 'Hello'))
+    assert calls == [] and 'tools' not in studio.gw.chat_requests[-1]
+
+
 def test_new_mcp_address_requires_secrets_again(studio):
     """Сохранённые токен и значения заголовков — только прежнему адресу: на новый их надо ввести заново."""
     add_gateway(studio)
