@@ -863,6 +863,8 @@ def main(argv: list[str]) -> int:
                 ctrl.set_quit_when_idle(not ctrl.activity_status()["quit_when_idle"])
             elif cmd == "cancel_update":
                 ctrl.cancel_update()
+            elif cmd == "quit_now":  # «Выход сейчас» трея; самовыходы шлют `quit` без вопроса
+                window.ask_quit(root, ctrl, lambda: commands.put("quit"))
             elif cmd == "quit":
                 icon.stop()
                 ctrl.quit()

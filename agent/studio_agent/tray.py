@@ -115,7 +115,8 @@ def notice(state: str, fresh: bool) -> str | None:
 
 
 class Tray:
-    """`post(команда)` — в очередь главного потока: `open`, `reset_pin`, `log`, `cancel_update`, `quit`."""
+    """`post(команда)` — в очередь главного потока: `open`, `reset_pin`, `log`, `cancel_update`, `quit_idle`,
+    `quit_now`."""
 
     def __init__(self, state: str, post: Callable[[str], None], pin_locked: Callable[[], bool], login: str = ""):
         import pystray
@@ -146,7 +147,8 @@ class Tray:
             pystray.MenuItem(lambda item: "Отменить выход после завершения" if self.activity['quit_when_idle']
                              else f"Выйти после завершения · заданий: {self.activity['tasks']}",
                              lambda: post("quit_idle")),
-            pystray.MenuItem(lambda item: f"Выход сейчас · заданий: {self.activity['tasks']}", lambda: post("quit")))
+            pystray.MenuItem(lambda item: f"Выход сейчас · заданий: {self.activity['tasks']}",
+                             lambda: post("quit_now")))  # при заданиях — подтверждение (`window.ask_quit`)
         self.icon = pystray.Icon("studio-agent", image(state), title(state, login), menu)
 
     def start(self) -> None:
