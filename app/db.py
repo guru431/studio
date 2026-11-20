@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 51
+VERSION = 52
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -667,6 +667,21 @@ ALTER TABLE ntfy_devices ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru' CHECK (lang 
 """
 SCHEMA += NOTIFY_LANG_51
 
+#: озвучка (speeches.py): время постановки в очередь — очередь и «В работе» по нему, место в чате — по `created`;
+#: прежние поля и звук записи на время повторной озвучки — отказ и отмена их возвращают; поиск видит смену модели
+SPEECH_52 = f"""ALTER TABLE speeches ADD COLUMN queued REAL;
+ALTER TABLE speeches ADD COLUMN previous TEXT;
+ALTER TABLE speeches ADD COLUMN previous_media_id TEXT;
+DROP TRIGGER search_speeches_au;
+CREATE TRIGGER search_speeches_au AFTER UPDATE OF text, model ON speeches
+  WHEN old.text IS NOT new.text OR old.model IS NOT new.model BEGIN
+  DELETE FROM search_docs WHERE section = 'speech' AND item = old.id;
+  {_DOC} ('speech', new.id, '', new.user_id, new.model, new.created, new.text); END;
+UPDATE search_docs SET model = (SELECT s.model FROM speeches s WHERE s.id = search_docs.item)
+ WHERE section = 'speech' AND EXISTS (SELECT 1 FROM speeches s WHERE s.id = search_docs.item);
+"""
+SCHEMA += SPEECH_52
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -774,6 +789,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     50: SEARCH_VIDEOS_50,
     # язык уведомлений push и ntfy устройства
     51: NOTIFY_LANG_51,
+    # озвучка: время постановки в очередь, прежний звук на время повторной озвучки, модель в поиске
+    52: SPEECH_52,
 }
 
 

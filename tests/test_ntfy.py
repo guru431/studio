@@ -241,7 +241,7 @@ def test_ntfy_speaks_the_interface_language_saved_with_the_device_settings(ntfy_
 
 def test_schema_51_keeps_existing_devices_in_russian_and_old_code_inserts_still_work(env):
     conn = db.connect(env.db_path)
-    conn.executescript(db.SCHEMA.removesuffix(db.NOTIFY_LANG_51) + '\nPRAGMA user_version = 50;')
+    conn.executescript(db.SCHEMA.split(db.NOTIFY_LANG_51, 1)[0] + '\nPRAGMA user_version = 50;')
     conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES (1,'u','U','h',0)")
     conn.execute("INSERT INTO sessions(digest,user_id,csrf,expires,renewed) VALUES ('d',1,'c',1,0)")
     conn.execute("INSERT INTO push_subs(endpoint,user_id,digest,p256dh,auth,created) VALUES ('e1',1,'d','k','a',0)")

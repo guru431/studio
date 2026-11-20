@@ -13,8 +13,13 @@
 3. Журнал — только id и коды: текст и звук туда не пишутся.
 4. JOBS — только идущие задания, как у transcripts.py: кончившееся уходит из него, убрав временные
    файлы, вместе с записью итога; долговечное — строка `speeches`.
+5. «Озвучить заново» (PATCH) записи со звуком прежнее не стирает: поля KEPT — в `previous` (JSON), звук — в
+   `previous_media_id`. Готово — прежний mp3 удаляется (если на него больше никто не ссылается); отмена — запись
+   как была; отказ или перезапуск — прежние текст и звук с ошибкой словами (`KEPT_NOTE`). Очередь и «В работе»
+   идут по времени постановки `queued` (у строк прежнего кода его нет — `created`), место в чате — по `created`.
 """
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -48,6 +53,11 @@ TERMINAL = {"done", "error", "cancelled"}
 INTERRUPTED = "прервано перезапуском студии"
 QUEUE_MAX = 5
 QUEUED = "в очереди"
+#: поля записи, которые повторная озвучка заменяет, а отказ и отмена возвращают (п. 5 шапки)
+KEPT = ("text", "connection_id", "model", "voice", "voice_name", "duration", "state", "detail", "finished")
+KEPT_NOTE = "прежняя озвучка сохранена"
+#: порядок очереди: время постановки, у строк прежнего кода — создания
+QUEUE_KEY = "COALESCE(queued, created)"
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/speeches")
@@ -131,10 +141,16 @@ def _row(user_id: int, sid: str):
 
 def waiting(row) -> str:
     """Слова ждущей озвучки: место в очереди пользователя."""
-    ahead = state.DB.execute("SELECT COUNT(*) FROM speeches WHERE user_id = ? AND state = 'queued'"
-                             " AND (created < ? OR (created = ? AND id < ?))",
-                             (row["user_id"], row["created"], row["created"], row["id"])).fetchone()[0]
+    key = queued_at(row)
+    ahead = state.DB.execute(f"SELECT COUNT(*) FROM speeches WHERE user_id = ? AND state = 'queued'"
+                             f" AND ({QUEUE_KEY} < ? OR ({QUEUE_KEY} = ? AND id < ?))",
+                             (row["user_id"], key, key, row["id"])).fetchone()[0]
     return f"{QUEUED} · {ahead + 1}"
+
+
+def queued_at(row) -> float:
+    """Время постановки в очередь (повторная озвучка — заново); строка прежнего кода — время создания."""
+    return row["created"] if row["queued"] is None else row["queued"]
 
 
 def _out(row) -> dict:
@@ -152,14 +168,40 @@ def _store(job: Job) -> None:
     state.DB.execute("UPDATE speeches SET detail = ? WHERE id = ? AND state = 'working'", (job.stage, job.id))
 
 
-def _finish(sid: str, state_: str, detail: str, **extra) -> None:
-    cols = "".join(f", {k} = ?" for k in extra)                  # имена — из кода, не из запроса
-    changed = state.DB.execute(f"UPDATE speeches SET state = ?, detail = ?, finished = ?{cols}"
-                               " WHERE id = ? AND finished IS NULL",
-                               (state_, detail, clock.NOW(), *extra.values(), sid)).rowcount
+def _settle(sid: str, state_: str, detail: str, extra: dict) -> "tuple[bool, str | None]":
+    """Итог в строку, если она ещё не кончилась; повторная озвучка с прежним звуком — по п. 5 шапки.
+    Возвращает, записан ли итог, и id прежнего mp3, который больше не нужен."""
+    now = clock.NOW()
+    cols, dropped = {"state": state_, "detail": detail, "finished": now, **extra}, None
+    row = state.DB.execute("SELECT previous, previous_media_id FROM speeches WHERE id = ?", (sid,)).fetchone()
+    if row is not None and row["previous"] is not None:
+        if state_ == "done":
+            dropped = row["previous_media_id"]
+        else:
+            cols = json.loads(row["previous"]) | {"media_id": row["previous_media_id"]}
+            if state_ == "error":
+                cols |= {"state": "error", "detail": f"{detail} — {KEPT_NOTE}", "finished": now}
+        cols |= {"previous": None, "previous_media_id": None}
+    sets = ", ".join(f"{k} = ?" for k in cols)                    # имена — из кода, не из запроса
+    changed = state.DB.execute(f"UPDATE speeches SET {sets} WHERE id = ? AND finished IS NULL",
+                               (*cols.values(), sid)).rowcount
+    return bool(changed), dropped if changed else None
+
+
+def _finish(sid: str, state_: str, detail: str, **extra) -> "str | None":
+    """Итог задания; уведомление — о готовом и об ошибке (отмена молчит, даже вернув прежнее «готово»).
+    Возвращает id прежнего mp3, который зовущий удаляет (`_drop`)."""
+    changed, dropped = _settle(sid, state_, detail, extra)
     EPOCHS.pop(sid, None)
-    if changed:
+    if changed and state_ != "cancelled":
         push.job_finished("speeches", sid)
+    return dropped
+
+
+async def _drop(user_id: int, media_id: "str | None") -> None:
+    """Прежний mp3 повторно озвученной записи — если на него больше никто не ссылается."""
+    if media_id and not media.referenced(user_id, media_id):
+        await media.delete_async(user_id, media_id)
 
 
 def _full_queue(user_id: int) -> bool:
@@ -181,8 +223,8 @@ async def _runner(user_id: int) -> None:
     берёт и новые озвучки."""
     lock_policy.RESTRICTED.set(frozenset())          # закрытые разделы запроса, создавшего раннер, ему чужие
     while True:
-        row = state.DB.execute("SELECT * FROM speeches WHERE user_id = ? AND state = 'queued' ORDER BY created, id"
-                               " LIMIT 1", (user_id,)).fetchone()
+        row = state.DB.execute(f"SELECT * FROM speeches WHERE user_id = ? AND state = 'queued'"
+                               f" ORDER BY {QUEUE_KEY}, id LIMIT 1", (user_id,)).fetchone()
         if row is None:
             return
         epoch = EPOCHS.pop(row["id"], None) or operations.snapshot(user_id)
@@ -283,15 +325,17 @@ async def run(job: Job) -> None:
             pass
         finally:
             state_, detail, extra = outcome
-            _finish(job.id, state_, detail, **extra)
+            dropped = _finish(job.id, state_, detail, **extra)
             JOBS.pop(job.id, None)
+            await _drop(job.user_id, dropped)        # отмена посреди удаления файл не теряет: путь уже в очереди удаления
 
 
 def recover() -> None:
-    """Идущие — «прервано перезапуском»; ждущие остаются в очереди — их продолжит `resume`."""
-    count = state.DB.execute("UPDATE speeches SET state = 'error', detail = ?, finished = ?"
-                             " WHERE state NOT IN ('done', 'error', 'cancelled', 'queued')",
-                             (INTERRUPTED, clock.NOW())).rowcount
+    """Идущие — «прервано перезапуском» (повторная озвучка — с прежним звуком); ждущие остаются в очереди —
+    их продолжит `resume`."""
+    rows = state.DB.execute("SELECT id FROM speeches WHERE state NOT IN ('done', 'error', 'cancelled', 'queued')"
+                            " AND finished IS NULL").fetchall()
+    count = sum(_settle(row["id"], "error", INTERRUPTED, {})[0] for row in rows)
     if count:
         log.warning("озвучки: %d прервано перезапуском", count)
 
@@ -388,8 +432,8 @@ async def create(body: SpeechIn, request: Request):
     text, conn, model, voice, name = _input(uid, body)
     sid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, voice_name, text, state, detail,"
-                     " created, chat_id, chat_created) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
-                     (sid, uid, conn.id, model, voice, name, text, QUEUED, now,
+                     " created, queued, chat_id, chat_created) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+                     (sid, uid, conn.id, model, voice, name, text, QUEUED, now, now,
                       chat["chat_id"] if chat else sid, chat["chat_created"] if chat else now))
     EPOCHS[sid] = operations.capture(uid)
     kick(uid)
@@ -423,6 +467,19 @@ async def get_chat(cid: str, request: Request):
     return _chat_out(_chat_rows(request.state.user.id, cid), full=True)
 
 
+@router.delete("/chats/{cid}", status_code=204)
+async def delete_chat(cid: str, request: Request):
+    """Весь чат — записи и их mp3 (если на файл больше никто не ссылается); идущая или ждущая запись — 409."""
+    uid = request.state.user.id
+    rows = _chat_rows(uid, cid)
+    if any(r["state"] not in TERMINAL for r in rows):
+        raise HTTPException(409, {"code": "running", "message": "сначала отмените идущие озвучки чата"})
+    state.DB.execute("DELETE FROM speeches WHERE user_id = ? AND chat_id = ?", (uid, cid))
+    for row in rows:
+        await _drop(uid, row["media_id"])
+    return Response(status_code=204)
+
+
 @router.patch("/{sid}", status_code=202)
 async def edit(sid: str, body: SpeechIn, request: Request):
     uid = request.state.user.id
@@ -433,13 +490,14 @@ async def edit(sid: str, body: SpeechIn, request: Request):
     if body.chat_id is not None and body.chat_id != row["chat_id"]:
         raise HTTPException(422, {"code": "chat", "message": "нельзя перенести запись в другой чат"})
     text, conn, model, voice, name = _input(uid, body)
+    # прежние поля и звук — до итога новой озвучки (п. 5 шапки); записи без звука возвращать нечего
+    previous = json.dumps({k: row[k] for k in KEPT}, ensure_ascii=False) if row["media_id"] else None
     state.DB.execute("UPDATE speeches SET text = ?, connection_id = ?, model = ?, voice = ?, voice_name = ?,"
-                     " state = 'queued', detail = ?, media_id = NULL, duration = NULL, finished = NULL WHERE id = ?",
-                     (text, conn.id, model, voice, name, QUEUED, sid))
+                     " state = 'queued', detail = ?, media_id = NULL, duration = NULL, finished = NULL, queued = ?,"
+                     " previous = ?, previous_media_id = ? WHERE id = ?",
+                     (text, conn.id, model, voice, name, QUEUED, clock.NOW(), previous, row["media_id"], sid))
     EPOCHS[sid] = operations.capture(uid)
     kick(uid)
-    if row["media_id"] and not media.referenced(uid, row["media_id"]):
-        await media.delete_async(uid, row["media_id"])
     return _out(_row(uid, sid))
 
 
@@ -451,7 +509,9 @@ async def get_speech(sid: str, request: Request):
 @router.get("/{sid}/parts/{n}")
 async def get_part(sid: str, n: int, request: Request):
     """Готовая часть идущей озвучки (n с 0) — слушать до склейки; итоговый mp3 от этого не меняется. Части
-    живут во временных файлах задания: кончилось (склейка, уборка) — 404, дальше слушают готовую озвучку."""
+    живут во временных файлах задания: кончилось (склейка, уборка) — 404, дальше слушают готовую озвучку.
+    Диапазоны — как у `/api/media` (`media.byte_range`: Safari на iPhone без 206 звук не играет); часть —
+    одна фраза, читается целиком: файл не держится открытым, пока задание его убирает."""
     _row(request.state.user.id, sid)
     job = JOBS.get(sid)
     if job is None or not 0 <= n < job.ready:
@@ -461,8 +521,17 @@ async def get_part(sid: str, n: int, request: Request):
         data = await asyncio.to_thread(part.read_bytes)
     except FileNotFoundError:
         raise HTTPException(404, {"code": "gone", "message": "этой части нет — слушайте готовую озвучку"}) from None
-    return Response(data, media_type="audio/wav" if part.suffix == ".wav" else "audio/mpeg",
-                    headers={"Cache-Control": "no-store"})
+    mime = "audio/wav" if part.suffix == ".wav" else "audio/mpeg"
+    headers = {"Cache-Control": "no-store", "Accept-Ranges": "bytes"}
+    spec = request.headers.get("range")
+    span = None if spec is None else media.byte_range(spec, len(data))
+    if span is None:
+        return Response(data, media_type=mime, headers=headers)
+    if span == media.UNSATISFIABLE:
+        return Response(status_code=416, headers=headers | {"Content-Range": f"bytes */{len(data)}"})
+    start, end = span
+    return Response(data[start:end + 1], status_code=206, media_type=mime,
+                    headers=headers | {"Content-Range": f"bytes {start}-{end}/{len(data)}"})
 
 
 @router.post("/{sid}/cancel")

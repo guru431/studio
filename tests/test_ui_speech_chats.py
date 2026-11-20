@@ -1,7 +1,8 @@
 """Озвучка: несколько записей, голоса, правка и устойчивый плеер на телефоне и компьютере."""
 import pytest
 
-from test_ui_browser import (API, NO_OVERFLOW, READY, add_gateway, add_voice, browser, go, live,  # noqa: F401
+from fakes import WAV_FAKE
+from test_ui_browser import (API, NO_OVERFLOW, READY, add_gateway, add_voice, browser, go, is_open, live,  # noqa: F401
                              problems, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -46,3 +47,52 @@ def test_continue_and_edit_speech_chat(browser, live, width):
     assert v['edited']['voices'] == ['Голос: Другой голос'] * 2
     assert v['edited']['src'] != v['first'] and v['edited']['draft'] == 'Мой черновик'
     assert v['fits'] and not problems(r), problems(r)
+
+
+FILL = "(() => {{ const t = document.querySelector('#speech-text'); t.value = {0!r}; t.dispatchEvent(new Event('input', {{bubbles:true}})); return true; }})()"
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_failed_revoice_long_text_new_chat_and_whole_chat_delete(browser, live, width):
+    """Отказ «Озвучить заново» — прежний плеер со словами ошибки, «ошибка» в списке; длинный текст не режется,
+    а закрывает «Озвучить»; «Новый чат» набранное не стирает; «Удалить чат» — весь чат одним окном (04:F4, F11, F12)."""
+    login = f'speech-tidy-{width}'
+    live.add_user(login)
+    gw = live.gw
+    gw.tts_replies = [(200, WAV_FAKE)] * (len(gw.tts_requests) + 1) + [(500, {'detail': 'сбой'})]
+    try:
+        r = browser.drive(live.url + '/', [*signin(login), ('wait', READY), add_gateway(), add_voice(),
+            *go('settings'), ('wait', "document.querySelector('.settings-nav')"),
+            *go('speech'), ('wait', "document.querySelector('#chip-voice option')"),
+            ('type', '#speech-text', 'Первая запись.'), ('click', '#speech-go'),
+            ('wait', "document.querySelector('.sp-record audio[src^=\"/api/media/\"]') && !document.querySelector('#speech-go').disabled"),
+            ('eval', 'first', "document.querySelector('.sp-record audio').src"),
+            ('click', '.sp-record .sp-edit'), ('wait', "!document.querySelector('#speech-edit-cancel').hidden"),
+            ('eval', 'replace', FILL.format('Правка записи.')), ('click', '#speech-go'),
+            ('wait', "document.querySelector('.sp-record p.error') && document.querySelector('.sp-item[data-state=error]')"),
+            ('eval', 'failed', "({text: document.querySelector('.sp-text').textContent, src: document.querySelector('.sp-record audio')?.src,"
+                               " state: document.querySelector('.sp-item .tr-state').textContent.includes(' · ')})"),
+            ('eval', 'long', FILL.format('я' * 2100)),
+            ('eval', 'over', "({length: document.querySelector('#speech-text').value.length, go: document.querySelector('#speech-go').disabled,"
+                             " words: !document.querySelector('#speech-over').hidden,"
+                             " red: document.querySelector('#speech-count').classList.contains('error')})"),
+            ('eval', 'short', FILL.format('Набранное')),
+            ('click', '#sp-new'), ('wait', "!document.querySelector('.sp-record')"),
+            ('eval', 'kept', "[document.querySelector('#speech-text').value, document.querySelector('#sp-delete-chat').hidden]"),
+            *([('click', '.split-toggle')] if width == 320 else []), ('click', '.sp-item'),
+            ('wait', "document.querySelector('.sp-record') && !document.querySelector('#sp-delete-chat').hidden"),
+            ('eval', 'fits', NO_OVERFLOW),
+            ('click', '#sp-delete-chat'), ('wait', is_open('#sp-delete-chat-dialog')),
+            ('click', '#sp-delete-chat-confirm'),
+            ('wait', "!document.querySelector('.sp-item') && !document.querySelector('.sp-record')"
+                     " && document.querySelector('#sp-delete-chat').hidden")],
+            width=width, height=900, mobile=width == 320)
+    finally:
+        gw.tts_replies = [(200, WAV_FAKE)]
+    assert not r.get('failed'), r
+    v = r['values']
+    assert v['failed'] == {'text': 'Первая запись.', 'src': v['first'], 'state': True}
+    assert v['over'] == {'length': 2100, 'go': True, 'words': True, 'red': True}
+    assert v['kept'] == ['Набранное', True] and v['fits']
+    assert any(s.startswith('DELETE /api/speeches/chats/') for s in r['sent'])
+    assert not problems(r), problems(r)
