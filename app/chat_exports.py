@@ -25,7 +25,7 @@ import clock
 from chat_export_selection import CSS, TAGS, selection_html
 import claude_code
 import exports
-from exports import word
+from exports import server_word, word
 import media
 import state
 
@@ -109,7 +109,7 @@ def _tool_line(step: dict, lang: str) -> list[str]:
     else:
         lines = ["- " + word("Инструмент", lang)]
     if error:
-        lines[0] += " — " + _inline(error)
+        lines[0] += " — " + _inline(server_word(error, lang) if isinstance(error, str) else error)
     return lines
 
 
@@ -133,11 +133,13 @@ def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
         if message.get("status") == "streaming":
             parts.append(("md", "*" + word("(ответ не дописан)", lang) + "*"))
         if message.get("error"):
-            parts.append(("plain", word("Ошибка: {}", lang, message["error"])))
+            parts.append(("plain", word("Ошибка: {}", lang, server_word(message["error"], lang))))
         if message.get("tools"):
             parts.append(("md", _sources(message["tools"], lang)))
         for step in message.get("steps", []):
-            parts.extend([("md", "### " + html.escape(_plain(step.get("name") or step.get("tool") or word("Команда", lang)))),
+            tool = step.get("tool")
+            tool = server_word(tool, lang) if isinstance(tool, str) else tool      # как страница: message(s.tool)
+            parts.extend([("md", "### " + html.escape(_plain(step.get("name") or tool or word("Команда", lang)))),
                           ("md", _fenced(step.get("input", ""))), ("md", _fenced(step.get("text", "")))])
         if message.get("reasoning"):
             parts.extend([("md", "### " + word("Рассуждение", lang)), ("md", _fenced(message["reasoning"]))])
