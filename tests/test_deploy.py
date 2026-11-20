@@ -204,7 +204,7 @@ def test_bridge_link_and_code_stream_routes():
     """Канал моста — апгрейд WebSocket с пределом 300 с (тишину рвут пинги службы каждые 20 с); поток хода
     Claude Code — как поток чата, дольше просьбы к мосту (спека claude-code 6.9)."""
     assert _route_timeout("/api/agent/link") == 300
-    assert _route_timeout("/api/code/agents/1/projects/a/chats/b/turn") == 600 > bridge.CALL_SEC
+    assert _route_timeout("/api/code/agents/1/projects/a/chats/b/turn") == 600 > bridge.SEND_SEC + bridge.CALL_SEC
     upgrades = [s.strip() for s in uncommented(VHOST).splitlines() if "upgrade=websocket" in s]
     assert len(upgrades) == 1 and upgrades[0].startswith("ProxyPass /api/agent/link ")
 

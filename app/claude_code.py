@@ -405,13 +405,13 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         if link is None:
             raise bridge.Offline()  # без знакомства поддержку таймера не проверить: ждать возвращения моста
         if scope is not None and not link.hello.get("project_sharing"):
-            raise _refuse(409, "unsupported", "владелец должен обновить агент для совместной работы")
+            raise _refuse(409, "unsupported", "владелец должен обновить мост на компьютере до 0.19.0 для совместной работы")
         timeout = state.DB.execute("SELECT computer_pin_timeout FROM users WHERE id = ?",
                                    (request.state.user.id,)).fetchone()[0]
         if link.hello.get("pin_timeout"):
             args["idle_sec"] = timeout
         elif timeout != lock_policy.COMPUTER_TIMEOUT:
-            raise _refuse(409, "unsupported", "обновите агент на компьютере для настройки таймера PIN")
+            raise _refuse(409, "unsupported", "обновите мост на компьютере до 0.9.0 для настройки таймера PIN")
         if passive and link.hello.get("passive_requests"):
             args["passive"] = True
         data = await bridge.call(aid, op, bridge.tag(request.state.digest),
@@ -664,7 +664,7 @@ async def terminal_info(aid: int, request: Request):
     try:
         links = clean(data)
     except ValueError:
-        raise _refuse(502, 'invalid', 'Проверьте адреса терминала в локальном меню агента') from None
+        raise _refuse(502, 'invalid', 'Проверьте адреса терминала в локальном меню моста') from None
     return _BridgeJSON(links, headers={'Cache-Control': 'no-store'})
 
 
@@ -711,7 +711,7 @@ async def update_agent(aid: int, request: Request):
     require_capability(aid, "agent_update")
     release = await asyncio.to_thread(agent_release.release, agents.AGENT_ZIP)
     if release is None:
-        raise _refuse(409, "no_agent", "архива агента нет на сервере — требуется выкладка")
+        raise _refuse(409, "no_agent", "архива моста нет на сервере — требуется выкладка")
     return await ask(request, aid, "agent_update", **release)
 
 

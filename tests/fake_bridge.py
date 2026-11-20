@@ -208,7 +208,7 @@ class FakeMachine:
 
     def _op_desktop_start(self, req, events):
         if not self.desktop_enabled:
-            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в агенте на компьютере')
+            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в окне моста на компьютере')
         if self.desktop_active:
             raise Refused('busy', 'Рабочий стол уже открыт')
         self.desktop_active = uuid.uuid4().hex
@@ -218,7 +218,7 @@ class FakeMachine:
 
     def _desktop_check(self, req):
         if not self.desktop_enabled:
-            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в агенте на компьютере')
+            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в окне моста на компьютере')
         if not self.desktop_active or req.get('control') != self.desktop_active or req['session'] != self.desktop_owner:
             raise Refused('owned', 'Сеанс принадлежит другому окну')
 

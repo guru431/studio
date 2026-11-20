@@ -174,7 +174,7 @@ async def add_member(aid: int, pid: str, body: Member, request: Request):
     await _check(request, aid, pid)
     link = bridge.LINKS.get(aid)
     if link is None or not link.hello.get("project_sharing"):
-        raise HTTPException(409, {"code": "unsupported", "message": "обновите агент для совместной работы"})
+        raise HTTPException(409, {"code": "unsupported", "message": "обновите мост на компьютере до 0.19.0 для совместной работы"})
     identity = body.login.strip().lower()
     user = state.DB.execute("SELECT id FROM users WHERE (login = ? OR email = ?) AND disabled = 0",
                             (identity, identity)).fetchone()
