@@ -26,6 +26,8 @@
   (отмечена, пока у учётки нет подключений; так же в зеркале панели): POST подключения с разделами вида
   `GATEWAY_SECTIONS` (`connection-form.js`; = `connections.KINDS` srvllm и ключи `sections.S06_CATALOG`, сверяет
   `tests/test_connections.py`). API и проверки `sections.check_link` прежние: недоступный раздел — отказ всей формы.
+  Cleaner — только разделы `sections.CLEANER`: `check_link` отказывает и связи уже заведённого Cleaner
+  с другим разделом (`POST /api/sections/{раздел}/links`), страница такой в выборе не предлагает.
 - Проверка подключения — `checks.py` (спека 2026-10-21-studio-connection-check-design): паспорт —
   `connections.passport` (JSON: строки `routes` по запросам, модели с возможностями и источником —
   `capabilities.py`, пробы), обнуляется сменой адреса, вида или токена; зеркала панели его убирают.

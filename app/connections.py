@@ -303,7 +303,7 @@ def _address(base_url: str) -> tuple:
 
 
 def _check_cleaner(kind: str, base_url: str, wanted: list[str]) -> None:
-    if kind != "openai" or set(wanted) - {"chat", "translate"}:
+    if kind != "openai" or set(wanted) - set(sections.CLEANER):
         raise _bad("cleaner", "Cleaner поддерживает чат и перевод")
     if not upstream.is_allowed(base_url):
         raise _bad("cleaner", "адрес Cleaner должен быть в списке администратора; запросы идут только через сервер")

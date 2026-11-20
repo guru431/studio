@@ -38,6 +38,7 @@ CATALOG = {"photo": ["snofs", "flux", "fineview", "jib-moss"], "video": ["wan", 
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
 S06_CATALOG = {"chat": ["qwen-27b", "qwen-27b-fast"], "translate": ["qwen-27b", "qwen-27b-fast"],
                "transcribe": ["whisperx"], "ocr": ["ocr-ru"], "dictation": ["whisperx"]}
+CLEANER = ("chat", "translate")               # разделы подключения Cleaner
 LOCAL_PREFIX = "local-"                       # роли шлюза srvllm, что работают на его карте (is_local)
 MODEL_MAX = 200
 MODELS_MAX = 200
@@ -167,7 +168,10 @@ def _link_row(user_id: int, section: str, conn_id: int):
 
 
 def check_link(conn: "connections.Connection", section: str) -> None:
-    """Может ли подключение участвовать в разделе: вид и, для раздела только через сервер, список."""
+    """Может ли подключение участвовать в разделе: вид (Cleaner — только CLEANER) и, для раздела только
+    через сервер, список."""
+    if conn.cleaner and section not in CLEANER:
+        raise _bad("kind", "Cleaner поддерживает чат и перевод")
     if section not in (S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]):
         if conn.s06:
             raise _bad("kind", "шлюз s06 поддерживает чат, перевод, разговоры, сканы и голосовой ввод")
