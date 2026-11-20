@@ -448,21 +448,35 @@ async def create_export(body: ExportIn, request: Request):
     return {"id": token, "files": len(rows), "bytes": sum(r["size"] for r in rows)}
 
 
-@router.get("/me/export/{token}")
-async def get_export(token: str, request: Request):
-    uid = request.state.user.id
+async def _export_ready(uid: int, token: str) -> tuple:
+    """Проверки загрузки по токену: свой и живой (404), шара (503), нет другой выгрузки (409, последней —
+    без await после неё: возврат из сопрограммы цикл не уступает). Ответ — (разделы, строки файлов)."""
     held = EXPORTS.get(token)
     if held is None or held[0] != uid or clock.NOW() - held[2] > EXPORT_TTL_SEC:
         raise HTTPException(404, media.GONE)
     rows = _media_rows(uid, held[1])
     if rows:
         await _share_ready()
-    # проверка и метка — без await между ними: две загрузки разом не проскочат обе
     if uid in RUNNING:
         raise HTTPException(409, BUSY)
+    return held[1], rows
+
+
+@router.get("/me/export/{token}/check", status_code=204)
+async def check_export(token: str, request: Request):
+    """Те же проверки, что у загрузки, без неё: ссылка `<a download>` отказ JSON не покажет — страница
+    спрашивает до перехода и говорит словами в окне."""
+    await _export_ready(request.state.user.id, token)
+
+
+@router.get("/me/export/{token}")
+async def get_export(token: str, request: Request):
+    uid = request.state.user.id
+    # проверка и метка — без await между ними: две загрузки разом не проскочат обе
+    sections, rows = await _export_ready(uid, token)
     mark = object()
     RUNNING[uid] = mark
-    body = _stream(uid, held[1], rows, mark, session_digest=request.state.digest)
+    body = _stream(uid, sections, rows, mark, session_digest=request.state.digest)
     weakref.finalize(body, _release, uid, mark)            # ответ так и не начался — метку снимет уход из памяти
     log.info("export: %d файлов", len(rows))
     day = datetime.fromtimestamp(clock.NOW(), media.user_zone(uid)).strftime("%Y-%m-%d")

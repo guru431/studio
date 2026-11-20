@@ -1742,6 +1742,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Один ZIP: чаты, промпты, цепочки, расшифровки и файлы, с описанием и списком сумм sha256. Ключей подключений и пароля в нём нет. Ссылка живёт час.": "One ZIP with chats, prompts, chains, transcripts and files, a description and SHA256 checksums. Connection keys and passwords are excluded. The link expires in one hour.",
   "Отметьте хотя бы один раздел": "Select at least one section",
   "Скачать: {0}, {1}": "Download: {0}, {1}",
+  "Ссылка устарела — нажмите «Подготовить» ещё раз": "The link has expired — press “Prepare” again",
   "Всего": "Total",
   " Контекстов Cleaner в очереди удаления: {0}.": " Cleaner contexts queued for deletion: {0}.",
   " Отложено после неудачи ({0}): {1}.": " Deferred after failure ({0}): {1}.",

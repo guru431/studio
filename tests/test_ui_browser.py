@@ -1025,7 +1025,21 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "zip", """(async () => { const r = await fetch(document.querySelector('#export-download').href);
           const head = new Uint8Array(await r.arrayBuffer()).slice(0, 2);
           return [r.status, r.headers.get('content-type'), String.fromCharCode(...head)]; })()"""),
-        ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
+        ("eval", "fits", NO_OVERFLOW),
+        # нажатие сначала спрашивает …/check: готово — загрузка по ссылке, отказ — словами в окне
+        ("eval", "spy", CLICKS), ("click", "#export-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "went", "window.clicked[0]"),
+        ("eval", "busy", """(() => { const real = window.fetch; window.fetch = (url, opts) => /\\/check$/.test(String(url))
+          ? Promise.resolve(new Response(JSON.stringify({ detail: window.refusal }), { status: window.refusal.status,
+              headers: { 'content-type': 'application/json' } })) : real(url, opts);
+          window.refusal = { status: 409, code: 'busy', message: 'выгрузка уже идёт — дождитесь, пока она скачается' };
+          return true; })()"""),
+        ("click", "#export-download"), ("wait", "document.querySelector('#export-error').textContent"),
+        ("eval", "busyText", "[document.querySelector('#export-error').textContent, window.clicked.length]"),
+        ("eval", "expire", "(window.refusal = { status: 404, code: 'gone', message: 'файла нет' }, true)"),
+        ("click", "#export-download"), ("wait", "document.querySelector('#export-ready').hidden"),
+        ("eval", "goneText", "[document.querySelector('#export-error').textContent, window.clicked.length]")],
+        width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
@@ -1034,6 +1048,9 @@ def test_export_dialog_prepares_a_download_link(browser, live):
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
+    assert v["went"][0].startswith("/api/me/export/") and v["went"][1] is True
+    assert v["busyText"] == ["Выгрузка уже идёт — дождитесь, пока она скачается", 1]
+    assert v["goneText"] == ["Ссылка устарела — нажмите «Подготовить» ещё раз", 1]
     assert not problems(r), problems(r)
 
 
