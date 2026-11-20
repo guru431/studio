@@ -341,6 +341,27 @@ def test_service_calls_ignore_tool_rules(studio):
     assert [name for name, _ in calls] == ["artifact_upload", "video_create", "job_status", "job_status", "job_result"]
 
 
+def test_section_run_rechecks_access_after_upload(studio, monkeypatch):
+    import mcp_sections
+    from test_mcp_sections import service
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    calls = service(studio.gw)
+    upload = mcp_sections.upload
+
+    async def closing_upload(*args):                  # правило ставят, пока идёт загрузка файла
+        aid = await upload(*args)
+        access.set_rule("mcp", sid, [])
+        return aid
+
+    monkeypatch.setattr(mcp_sections, "upload", closing_upload)
+    signin(studio, "member")
+    run = studio.c.post(f"/api/mcp-tools/video/servers/{sid}/run", json={"tool": "video_create", "files": png_file()})
+    assert run.status_code == 422, run.text
+    assert [name for name, _ in calls] == ["artifact_upload"]
+
+
 def test_closed_mcp_dropped_from_chat_selection(studio):
     from test_chat import new_chat, sse, turn
     from test_mcp import mock
