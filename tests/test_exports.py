@@ -113,7 +113,23 @@ def test_md_plain_keeps_comparisons_formulas_and_generics_but_drops_real_tags():
     assert exports.md_plain(md) == (
         "Возраст пациента <18 лет — педиатрия.\n\nДавление >140 — гипертония.\n\n"
         "Формула $x<5$ и $y>3$, a < b > c, x<y и z>w.\n\nТип List<int> и Map<String, Integer>.\n\n"
-        "Абзац жирно2 H2O \nзаметка")
+        "Абзац жирно² H₂O \nзаметка")
+
+
+def test_md_plain_keeps_merged_cells_in_place_and_reads_pipe_tables():
+    """Аудит 05:F9: `rowspan`/`colspan` сдвигали ячейки, `caption` и индексы терялись, таблица Markdown
+    оставалась с палочками."""
+    md = ("<table><caption>Цены</caption><tr><th rowspan=\"2\">Товар</th><th colspan=\"2\">Цена</th></tr>"
+          "<tr><th>опт</th><th>розница</th></tr><tr><td>Хлеб<br>белый</td><td>40</td><td>50</td></tr></table>"
+          "Площадь 12 m<sup>2</sup>, x<sup>a+b</sup>, CO<sub>2</sub>, a<sub>ij</sub>.\n\n"
+          "| Товар | Цена |\n|:---|---:|\n| Хлеб \\| батон | 50 |\n\nКонец | не таблица")
+    assert exports.md_plain(md) == (
+        "Цены\nТовар\tЦена\n\tопт\tрозница\nХлеб белый\t40\t50\n"
+        "Площадь 12 m², x^(a+b), CO₂, a_(ij).\n\nТовар\tЦена\nХлеб | батон\t50\n\nКонец | не таблица")
+    rows = exports.md_plain('<table><tr><td rowspan="3">A</td><td>1</td></tr><tr><td>2</td></tr>'
+                            '<tr><td>3</td></tr><tr><td colspan="99999">x</td><td>y</td></tr></table>')
+    assert rows.split("\n")[:3] == ["A\t1", "\t2", "\t3"]
+    assert rows.split("\n")[3] == "x" + "\t" * exports.SPAN_MAX + "y"
 
 
 PAGES = [{"n": 1, "state": "done", "text": "# Заголовок\n\nТекст", "detail": None},
