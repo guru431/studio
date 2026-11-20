@@ -1285,6 +1285,8 @@ globalThis.StudioEnglish = Object.freeze({
   "перевод не получился": "translation failed",
   "озвучка готова": "speech ready",
   "озвучка не получилась": "speech failed",
+  "ответ готов": "answer ready",
+  "ответ не получился": "answer failed",
   "Отменить: {0}": "Cancel: {0}",
   "Картинка · {0}": "Image · {0}",
   "Правка · {0}": "Edit · {0}",

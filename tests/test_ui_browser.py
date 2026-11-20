@@ -6619,7 +6619,45 @@ def test_jobs_push_replaces_local_notifications_and_leaves_a_fallback(browser, l
     assert not r.get("failed"), r
     assert r["values"]["withPush"] == 0
     assert r["values"]["shown"] == [{"title": "Студия: озвучка готова", "options": {
-        "tag": "local-done", "icon": "/static/icons/icon-192.png", "data": {"href": "speech?id=local-done"}}}]
+        "tag": "local-done", "renotify": True, "icon": "/static/icons/icon-192.png", "data": {"href": "speech?id=local-done"}}}]
+    assert not problems(r), problems(r)
+
+
+def test_jobs_ready_takes_a_retried_record_and_drops_a_deleted_one(browser, live):
+    """FINDINGS 06:F2: повторённое задание (тот же id: «Повторить» скана, «Озвучить заново») уходит из «Готово за
+    час», пока идёт, и возвращается с новым итогом и уведомлением; открытие панели берёт готовое целиком — запись,
+    удалённая в разделе, уходит."""
+    login = "jobs-retry"
+    live.add_user(login)
+    rows = """[...document.querySelectorAll('#jobs-finished .jobs-row')].map((n) => [n.dataset.id, n.dataset.state])"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", JOBS_POLLED),
+        ("eval", "stub", JOBS_STUB),
+        ("eval", "notify", "localStorage.setItem('studio-notify', '1')"),
+        ("eval", "failed", f"""(async () => {{ window.jobsOut = {{ running: [],
+          finished: [job('ocr', 'sc', 'error', Date.now() / 1000 - 60), job('speech', 'sp', 'done', Date.now() / 1000 - 90)] }};
+          {KICK}; return true; }})()"""),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("wait", "document.querySelectorAll('#jobs-finished .jobs-row').length === 2"), hide(),
+        ("eval", "retry", f"""(async () => {{ window.jobsOut = {{ running: [job('ocr', 'sc', 'running', null)], finished: [] }};
+          {KICK}; return true; }})()"""),
+        ("wait", "document.querySelector('#jobs-running .jobs-row[data-id=sc]')"),
+        ("eval", "whileRunning", rows),
+        ("eval", "done", f"""(async () => {{ window.jobsOut = {{ running: [], finished: [job('ocr', 'sc', 'done', Date.now() / 1000)] }};
+          {KICK}; return true; }})()"""),
+        ("wait", "document.querySelector('#jobs-finished .jobs-row[data-id=sc][data-state=done]')"),
+        ("wait", "window.shown.length === 1"), ("eval", "shown", "window.shown.map((n) => n.title)"),
+        ("eval", "afterDone", rows), show(),
+        ("press", "Escape"), ("wait", "!" + is_open("#jobs-panel")),
+        # «sp» удалили в разделе: сервер его больше не отдаёт, а опрос с since о нём молчит
+        ("eval", "deleted", "window.jobsOut = { running: [], finished: [job('ocr', 'sc', 'done', Date.now() / 1000 - 5)] }"),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("wait", "document.querySelectorAll('#jobs-finished .jobs-row').length === 1"),
+        ("eval", "reopened", rows)], init=NOTIFY_INIT)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["whileRunning"] == [["sp", "done"]]
+    assert v["afterDone"] == [["sc", "done"], ["sp", "done"]] and v["shown"] == ["Студия: распознавание готово"]
+    assert v["reopened"] == [["sc", "done"]]
     assert not problems(r), problems(r)
 
 

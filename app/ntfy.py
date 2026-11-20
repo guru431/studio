@@ -139,8 +139,9 @@ async def _send(row, body: str | dict[str, str], href: str, title: str | dict[st
 
 
 async def notify(user_id: int, body: str | dict[str, str], href: str, *, title: str | dict[str, str], test: bool = False,
-                 digest: str | None = None) -> None:
-    """`body` и `title` — строка или {язык: текст}: каждому устройству — на его `lang`."""
+                 digest: str | None = None, skip: frozenset[str] = frozenset()) -> None:
+    """`body` и `title` — строка или {язык: текст}: каждому устройству — на его `lang`. `skip` — сессии, которым не
+    слать (страница на экране, `push.on_screen`)."""
     sql = ("SELECT n.* FROM ntfy_devices n JOIN sessions s ON s.digest = n.digest AND s.user_id = n.user_id"
            " JOIN users u ON u.id = n.user_id WHERE n.user_id = ? AND u.disabled = 0 AND s.expires > ?")
     params = [user_id, clock.NOW()]
@@ -152,7 +153,7 @@ async def notify(user_id: int, body: str | dict[str, str], href: str, *, title: 
     rows = state.DB.execute(sql, params).fetchall()
     if test and not rows:
         raise HTTPException(409, {"code": "ntfy_settings", "message": "сначала сохраните настройки ntfy на этом устройстве"})
-    targets = {(row["server"], row["topic"]): row for row in rows}
+    targets = {(row["server"], row["topic"]): row for row in rows if row["digest"] not in skip}
     results = await asyncio.gather(*(_send(row, body, href, title) for row in targets.values()), return_exceptions=True)
     for result in results:
         if isinstance(result, Exception):
