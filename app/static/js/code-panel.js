@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message as serverMessage, tr } from './i18n.js';
 import { refreshAfterFailure, refreshRequested } from './refresh.js';
 /* Панель раздела «Claude Code» (спека 2026-10-29-studio-code-workspace-design, 6.1–6.3): компьютеры учётки строками,
  * под ними — проекты выбранного компьютера, поле PIN или «не на связи». Блок компьютеров не прокручивается, низ — да.
@@ -624,7 +624,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const platform = agentInstallers[agent.platform];
       const installer = platform || agentInstallers.win32;
       const row = el('button', { type: 'button', class: 'code-agent', 'aria-current': agent.id === selected ? 'true' : null,
-        title: agent.online && agent.cc_version ? `Claude Code ${agent.cc_version}` : null },
+        title: agent.online && agent.cc_version ? `Claude Code ${serverMessage(agent.cc_version)}` : null },
       el('span', { class: `code-agent-state${agent.online ? ' on' : ''}` },
         el('span', { class: 'sr' }, agent.online ? tr("на связи") : tr("не на связи"))),
       platform ? el('span', { class: 'code-agent-platform', role: 'img', 'aria-label': platform.name,
@@ -657,8 +657,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       cancel?.addEventListener('click', () => { cancel.disabled = true; cancelUpdate(agent); });
       const note = update && update.state !== 'complete'
         ? el('span', { class: `code-agent-update-status${update.state === 'failed' ? ' error' : ''}` },
-          el('span', { role: 'status' }, update.message
-            || (update.state === 'waiting' ? waitingWords(update.holds) : UPDATE_WORDS[update.state]) || ''),
+          el('span', { role: 'status' }, (update.message && serverMessage(update.message))
+            ||(update.state === 'waiting' ? waitingWords(update.holds) : UPDATE_WORDS[update.state]) || ''),
           cancel ? ' ' : null, cancel) : null;
       const remote = el('button', { type: 'button', class: 'btn code-agent-desktop',
         title: tr("Подключиться к рабочему столу"), 'aria-label': tr("Подключиться к рабочему столу · {0}", agent.name),
