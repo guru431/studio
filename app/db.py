@@ -768,8 +768,10 @@ CREATE TABLE access_rollback(kind TEXT NOT NULL CHECK (kind IN ('connection', 'm
 SCHEMA += ACCESS_56
 
 #: возможности источников: профиль подключения (системный текст, параметры, подсказки), роли диалога (умолчания
-#: администратора и библиотека учётки), состояние MCP диалога (выключенные общие и инструменты), загрузки вложений
-#: на MCP (`stamp` — `security.digest(secret_enc)`). К `connections` и `mcp_servers` — только триггеры: таблицы
+#: администратора и библиотека учётки), состояние MCP диалога (выключенные общие и инструменты, согласие на передачу
+#: файлов `{sid: stamp}`), загрузки вложений и медиа диалога (`chat_media`: звук и видео) на MCP (`stamp` —
+#: `security.digest(secret_enc)`), политика инструментов общего MCP (`open_world`, `confirm`; NULL — как у
+#: сервера). К `connections` и `mcp_servers` — только триггеры: таблицы
 #: пересобирались на шаге 55. Прежний код новые таблицы и столбцы не читает; его вставки получают умолчания.
 CAPABILITIES_57 = """CREATE TABLE connection_profiles(connection_id INTEGER PRIMARY KEY,
        system_text TEXT NOT NULL DEFAULT '', params TEXT NOT NULL DEFAULT '{}',
@@ -795,6 +797,22 @@ CREATE TABLE mcp_uploads(attachment_id TEXT NOT NULL REFERENCES attachments ON D
        created REAL NOT NULL, PRIMARY KEY (attachment_id, server_id));
 CREATE TRIGGER mcp_uploads_server_delete AFTER DELETE ON mcp_servers BEGIN
   DELETE FROM mcp_uploads WHERE server_id = old.id;
+END;
+ALTER TABLE chats ADD COLUMN mcp_file_consent TEXT NOT NULL DEFAULT '{}';
+CREATE TABLE mcp_tool_policy(server_id INTEGER NOT NULL, tool TEXT NOT NULL,
+       open_world INTEGER CHECK (open_world IN (0,1)), confirm TEXT, PRIMARY KEY (server_id, tool));
+CREATE TRIGGER mcp_tool_policy_server_delete AFTER DELETE ON mcp_servers BEGIN
+  DELETE FROM mcp_tool_policy WHERE server_id = old.id;
+END;
+CREATE TABLE chat_media(id TEXT PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES chats ON DELETE CASCADE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, name TEXT NOT NULL, mime TEXT NOT NULL,
+       size INTEGER NOT NULL, media_id TEXT NOT NULL, created REAL NOT NULL);
+CREATE INDEX chat_media_chat ON chat_media(chat_id);
+CREATE TABLE mcp_media_uploads(chat_media_id TEXT NOT NULL REFERENCES chat_media ON DELETE CASCADE,
+       server_id INTEGER NOT NULL, artifact_id TEXT NOT NULL, path TEXT NOT NULL, stamp TEXT NOT NULL,
+       created REAL NOT NULL, PRIMARY KEY (chat_media_id, server_id));
+CREATE TRIGGER mcp_media_uploads_server_delete AFTER DELETE ON mcp_servers BEGIN
+  DELETE FROM mcp_media_uploads WHERE server_id = old.id;
 END;
 """
 SCHEMA += CAPABILITIES_57
