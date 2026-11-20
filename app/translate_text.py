@@ -340,7 +340,7 @@ async def chunk(conn, model: str, text: str, source: str, target: str, on_delta,
                 await r.aread()
                 if r.status_code == 503:
                     raise Busy(upstream.message(r) or "карта занята")
-                raise TranslateError(upstream.gateway_error(r, conn.name))
+                raise TranslateError(upstream.gateway_error(r, conn))
             async for line in r.aiter_lines():
                 if not line.startswith("data:"):
                     continue

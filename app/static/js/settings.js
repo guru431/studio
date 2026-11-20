@@ -55,6 +55,7 @@ const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'Whispe
   fineview: 'FineView QW21', h3: 'H3 · DR34ML4Y', muse: 'Muse 3.5 Krea 2',
   'jib-moss': 'Jib Mix Moss V2', fineporn: 'FinePorn v5', 'moody-krea': 'Moody Krea v8' };
 const SEARCH_FROM = 8;
+const CLEANER_SECTIONS = ['chat', 'translate'];   // = sections.CLEANER: другие разделы Cleaner сервер не примет
 
 /** Подпись модели: короткие имена шлюза — словами, прочие — как есть. */
 export function modelLabel(id) {
@@ -1259,10 +1260,19 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const yes = button(tr("Удалить"), { class: 'btn btn-danger', id: 'conn-delete-confirm' });
     const fail = el('p', { class: 'error' });
     const used = sectionsText(conn.sections);
+    const chats = el('p', { class: 'muted', id: 'conn-delete-chats' });
     const dialog = openDialog(host, { id: 'conn-delete-dialog', title: tr("Удалить подключение?"), actions: [yes], body: [
       el('p', {}, `«${conn.name}» — ${conn.base_url}`),
       el('p', { class: 'muted' }, used ? tr("Подключение участвует в разделах: {0}. Оно уйдёт из всех.", used) : tr("Подключение не участвует ни в одном разделе.")),
-      fail] });
+      chats, fail] });
+    // свои диалоги на подключении (в панели администратора чужих диалогов нет): после удаления их ход попросит
+    // выбрать модель (`connections.delete` обнуляет `connection_id`)
+    if (direct) {
+      api('GET', '/api/chats').then(({ items }) => {
+        const count = items.filter((c) => c.connection_id === conn.id).length;
+        if (count) chats.textContent = tr("Диалогов на этом подключении: {0}. Они останутся, но продолжить их можно будет только с другой моделью.", count);
+      }).catch(() => {});
+    }
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
@@ -1352,7 +1362,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     try {
       const items = (await api('GET', connBase)).items;
       first = !items.length;
-      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner));
+      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner)
+        && (!c.cleaner || CLEANER_SECTIONS.includes(s.id)));
     } catch (err) {
       say(note, words(err), 'error');
       return;

@@ -84,6 +84,19 @@ def test_removed_address_stays_server_only_and_can_be_renamed(studio, s06):
         asyncio.run(upstream.request(connections.get(1, s06.id), "GET", BASE + "/v1/models"))
 
 
+def test_passport_names_the_s06_catalog(studio, s06):
+    """Паспорт s06: WhisperX делит по собеседникам, чат и перевод, сканы — из перечня шлюза, а не «не известны»."""
+    studio.gw.reply = lambda q: httpx.Response(200, json={"data": [{"id": "qwen-27b", "context_length": 32768}]})
+    r = studio.c.post(f"/api/connections/{s06.id}/check")
+    assert r.status_code == 200, r.text
+    passport = r.json()["passport"]
+    caps = {m["id"]: [(c["name"], c["source"]) for c in m["caps"]] for m in passport["models"]}
+    assert passport["profile"] == "s06"
+    assert caps["whisperx"] == [("diarize", "catalog"), ("dictation", "catalog")]
+    assert caps["qwen-27b"] == caps["qwen-27b-fast"] == [("text", "catalog")] and caps["ocr-ru"] == [("ocr", "catalog")]
+    assert next(m for m in passport["models"] if m["id"] == "qwen-27b")["context_length"] == 32768
+
+
 def test_asr_preserves_speakers_and_dictation_disables_diarization(studio, s06, tmp_path):
     studio.gw.asr_reply = {"text": "Hello", "segments": [
         {"start": 0, "end": 1, "speaker": "SPEAKER_01", "text": "Hello"}]}

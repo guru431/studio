@@ -67,7 +67,7 @@ async def _post(conn, url: str, timeout: float, **kw) -> httpx.Response:
     if r.status_code == 503:
         raise Busy(upstream.message(r) or "карта занята")
     if r.status_code != 200:
-        raise (BadRequest if r.status_code == 400 else SpeechError)(upstream.gateway_error(r, conn.name))
+        raise (BadRequest if r.status_code == 400 else SpeechError)(upstream.gateway_error(r, conn))
     return r
 
 

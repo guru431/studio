@@ -38,6 +38,7 @@ CATALOG = {"photo": ["snofs", "flux", "fineview", "jib-moss"], "video": ["wan", 
 CHAT_INITIAL = ["local-gemma-abl"]            # = manage.DEFAULT_MODEL
 S06_CATALOG = {"chat": ["qwen-27b", "qwen-27b-fast"], "translate": ["qwen-27b", "qwen-27b-fast"],
                "transcribe": ["whisperx"], "ocr": ["ocr-ru"], "dictation": ["whisperx"]}
+CLEANER = ("chat", "translate")               # разделы подключения Cleaner
 LOCAL_PREFIX = "local-"                       # роли шлюза srvllm, что работают на его карте (is_local)
 MODEL_MAX = 200
 MODELS_MAX = 200
@@ -118,11 +119,13 @@ def is_local(conn: "connections.Connection", model: str) -> bool:
 
 
 def capabilities(user_id: int) -> dict[str, bool]:
-    """Раздел готов: есть умолчание, а у раздела только через сервер — его адрес в списке."""
+    """Раздел готов: есть умолчание, а у раздела только через сервер — его адрес в списке; у чата — адрес не
+    убран из списка (`connections.dropped`: ни сервер, ни браузер туда не пойдут)."""
     out = {}
     for section in SECTIONS:
         chosen = default(user_id, section)
-        out[section] = chosen is not None and (section not in SERVER_ONLY or chosen[0].proxied)
+        out[section] = chosen is not None and (chosen[0].proxied if section in SERVER_ONLY
+                                               else not connections.dropped(chosen[0]))
     return out
 
 
@@ -149,7 +152,7 @@ def resolve(user_id: int, section: str, connection_id: "int | None",
         if link is None:
             raise _bad("model", "этой модели нет среди отмеченных в настройках раздела")
         conn = link.connection
-    if section in SERVER_ONLY and not conn.proxied:
+    if (section in SERVER_ONLY and not conn.proxied) or connections.dropped(conn):
         raise _bad("server", unlisted(conn), 409)
     return conn, model
 
@@ -167,7 +170,10 @@ def _link_row(user_id: int, section: str, conn_id: int):
 
 
 def check_link(conn: "connections.Connection", section: str) -> None:
-    """Может ли подключение участвовать в разделе: вид и, для раздела только через сервер, список."""
+    """Может ли подключение участвовать в разделе: вид (Cleaner — только CLEANER) и, для раздела только
+    через сервер, список."""
+    if conn.cleaner and section not in CLEANER:
+        raise _bad("kind", "Cleaner поддерживает чат и перевод")
     if section not in (S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]):
         if conn.s06:
             raise _bad("kind", "шлюз s06 поддерживает чат, перевод, разговоры, сканы и голосовой ввод")
