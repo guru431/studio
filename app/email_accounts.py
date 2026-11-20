@@ -92,6 +92,18 @@ def throttle(scope: str, value: str, maximum: int, seconds: int) -> None:
         state.DB.execute("UPDATE email_limits SET count=count+1 WHERE key = ?", (key,))
 
 
+def refund(scope: str, value: str) -> None:
+    """Вернуть попытку `throttle`: письмо не ушло (отказ SMTP) — пауза не копится, пока почта лежит."""
+    state.DB.execute("UPDATE email_limits SET count=count-1 WHERE key = ? AND count > 0",
+                     (security.digest(scope + ":" + value),))
+
+
+def mail_ready() -> None:
+    """Ненастроенная почта — отказ до пауз (как у приглашений): попытка не тратится. Слова — общие, как у `send`."""
+    if not account_mail.configured(account_mail.settings()):
+        raise HTTPException(503, {"code": "smtp_unset", "message": account_mail.FAILED_MESSAGE})
+
+
 def new_token(uid: int, kind: str, email: str, seconds: int, *, code: str | None = None, next_: str = "") -> str:
     now = clock.NOW()
     state.DB.execute("DELETE FROM email_tokens WHERE expires <= ?", (now,))
@@ -148,14 +160,21 @@ def link(kind: str, token: str) -> str:
 
 async def login_code(uid: int, request: Request, next_: str, kind: str = "login") -> str:
     row = state.DB.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    mail_ready()
+    ip = auth.client_ip(request)
     throttle("code-user", str(uid), 5, 900)
-    throttle("code-ip", auth.client_ip(request), 20, 900)
+    throttle("code-ip", ip, 20, 900)
     code = f"{secrets.randbelow(1000000):06d}"
     token = new_token(uid, kind, row["email"], CODE_SEC, code=code, next_=next_)
     try:
-        await account_mail.send(row["email"], "Студия: код входа / Studio: sign-in code",
-                                "Код входа действует 10 минут. Никому его не сообщайте.\n"
-                                "The sign-in code is valid for 10 minutes. Do not share it with anyone.\n\n" + code)
+        try:
+            await account_mail.send(row["email"], "Студия: код входа / Studio: sign-in code",
+                                    "Код входа действует 10 минут. Никому его не сообщайте.\n"
+                                    "The sign-in code is valid for 10 minutes. Do not share it with anyone.\n\n" + code)
+        except HTTPException:            # письмо не ушло — попытки вернуть
+            refund("code-user", str(uid))
+            refund("code-ip", ip)
+            raise
         token_row(token, kind)  # за время SMTP могли изменить пароль, почту или отключить учётку
     except BaseException:
         delete_token(token)
@@ -393,6 +412,7 @@ async def complete_login(request: Request):
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
     await auth.confirm_password(uid, body.password, "подтверждение почты", digest=request.state.digest)
+    mail_ready()
     throttle("email-user", str(uid), 3, 900)        # до проверки занятости: 409 не даёт перебирать чужие адреса
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Эта почта уже используется"})
@@ -403,6 +423,10 @@ async def request_email(body: EmailIn, request: Request):
                                 " откройте её в браузере, где вошли в Студию.\n"
                                 "Confirm the email address of your account. The link is valid for 30 minutes;"
                                 " open it in the browser where you are signed in to Studio.\n\n" + link("verify", token))
+    except HTTPException:                # письмо не ушло — попытку вернуть (адрес свободен: 409 не возвращается)
+        delete_token(token)
+        refund("email-user", str(uid))
+        raise
     except BaseException:
         delete_token(token)
         raise
