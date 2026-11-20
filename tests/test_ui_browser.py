@@ -4532,6 +4532,30 @@ def test_transcript_to_chat_with_the_local_model_and_back(browser, live, width):
     assert not problems(r), problems(r)
 
 
+def test_transcript_to_chat_keeps_the_unsent_chat_draft(browser, live):
+    """Набранный и не отправленный текст чата не пропадает от «В чат ▾»: «Составить итоги» дописывает вопрос
+    после него, «Обсудить в чате» поле не трогает."""
+    login = "trdraft"
+    live.add_user(login)
+    field = "document.querySelector('#chat-input')"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("chat"), ("wait", field), set_value("#chat-input", "Мой черновик"),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        put_audio("#transcribe-add input", wav_of(1.0)),
+        ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=summary]"),
+        ("wait", CHAT_CHIP), ("eval", "summary", f"{field}.value"),
+        *go("transcribe"), ("wait", "document.querySelector('.tr-item')"), ("click", ".tr-item"),
+        ("wait", "document.querySelector('#tr-chat')"),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=discuss]"),
+        ("wait", CHAT_CHIP), ("eval", "discuss", f"{field}.value")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["summary"] == "Мой черновик\n\nСоставь краткие итоги этой записи: о чём говорили и к чему пришли."
+    assert v["discuss"] == v["summary"]
+    assert not problems(r), problems(r)
+
+
 def test_transcript_to_chat_without_a_local_model_asks_first(browser, live):
     """В чате отмечена только облачная роль шлюза: модель не выбрана и «Отправить» закрыто; после
     явного выбора — окно «уйдёт во внешний сервис», и только «Отправить» в нём шлёт ход."""
