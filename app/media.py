@@ -457,7 +457,7 @@ REFERENCES = {
     "transcripts": ("source_media_id", "result_media_id"),
     "voices": ("media_id",),
     "voice_samples": ("media_id",),
-    "speeches": ("media_id",),
+    "speeches": ("media_id", "previous_media_id"),
     "scans": ("source_media_id",),
     "scan_pages": ("media_id",),
     "translations": ("source_media_id",),

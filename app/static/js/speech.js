@@ -309,17 +309,19 @@ function build(view, ctx) {
     if (card.busy) {
       nodes.push(card.busy.box);
       if (item.parts > 0) nodes.push(liveAudio(item));
-    } else if (item.state === 'done') {
-      nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
-        src: `/api/media/${encodeURIComponent(item.media_id)}` }));
-      const save = el('button', { type: 'button', class: 'btn btn-sm', id: index ? `sp-download-${item.id}` : 'sp-download' },
-        tr("Скачать mp3"));
-      save.addEventListener('click', () => {
-        el('a', { href: `/api/media/${encodeURIComponent(item.media_id)}?download=1`, download: '' }).click();
-      });
-      acts.append(save);
     } else {
-      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
+      // отказ повторной озвучки оставляет прежний звук: слова ошибки и плеер вместе
+      if (item.state !== 'done') nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
+      if (item.media_id) {
+        nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
+          src: `/api/media/${encodeURIComponent(item.media_id)}` }));
+        const save = el('button', { type: 'button', class: 'btn btn-sm', id: index ? `sp-download-${item.id}` : 'sp-download' },
+          tr("Скачать mp3"));
+        save.addEventListener('click', () => {
+          el('a', { href: `/api/media/${encodeURIComponent(item.media_id)}?download=1`, download: '' }).click();
+        });
+        acts.append(save);
+      }
     }
     if (!RUNNING.has(item.state)) {
       if (!ctx.hint) {
