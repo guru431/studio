@@ -8624,6 +8624,36 @@ def test_code_restore_with_an_offline_computer(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_code_computer_back_online_opens_the_right_part(browser, live):
+    """Компьютер был не на связи при входе в раздел и вернулся: опрос панели (возвращение вкладки) зеленит точку,
+    нажатие на компьютер открывает и правую часть — не прежнее «не на связи» первого списка."""
+    from fake_bridge import pid
+    login = "code-back"
+    live.add_user(login)
+    aid, sb = code_online(live, login, code_free_machine())
+    # Первые ответы /api/agents — «не на связи» (компьютер спал), потом — как есть.
+    asleep = """(() => { window.asleep = true; const real = window.fetch;
+      window.fetch = (u, o) => !window.asleep || !/^\\/api\\/agents(\\?|$)/.test(String(u)) ? real(u, o)
+        : real(u, o).then((r) => r.json()).then((j) => new Response(JSON.stringify({ ...j,
+          items: j.items.map((a) => ({ ...a, online: false })) }), { headers: { 'content-type': 'application/json' } }));
+      return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "asleep", asleep),
+            *go(f"code/{aid}/{pid('alpha')}"),
+            ("wait", "!!document.querySelector('#code-panel #code-offline')"
+                     " && document.querySelector('#code-status')?.textContent !== ''"),
+            ("eval", "woke", "(window.asleep = false, document.dispatchEvent(new Event('visibilitychange')), true)"),
+            ("wait", f"!!document.querySelector(\"#code-agents li[data-id='{aid}'] .code-agent-state.on\")"),
+            ("click", f"#code-agents li[data-id='{aid}'] .code-agent"),
+            ("wait", "!!document.querySelector('#code-chats')"),
+            ("eval", "status", "document.querySelector('#code-status').textContent")], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["status"] == ""
+    assert not problems(r), problems(r)
+
+
 def test_code_phone_panel_slides_and_hides_after_a_project(browser, live):
     """Телефон: проекта нет — панель открыта сама; выбор компьютера её не закрывает, выбор проекта — закрывает; ☰ —
     открыта; нажатие на фон и Escape — закрыта."""
