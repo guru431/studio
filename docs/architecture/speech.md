@@ -14,6 +14,7 @@ WAV образца, склейка), `dictation` (голосовой ввод), 
   `RUNNERS`, `kick`, `waiting()` → «в очереди · N»; `recover` не трогает `queued`; `resume()` — в lifespan после
   `state.HTTP`; отмена ждущей — сразу `cancelled`; `stop_user` снимает и ждущие; `_finish(id, …)`.
 - `GET /api/speeches/{id}/parts/{n}` — готовые части идущей озвучки (`Job.ready`, `parts` в ответе, `no-store`);
+  отвечает на `Range` 206/416, как `/api/media` (`media.byte_range`; Safari на iPhone без него звук не играет);
   страница проигрывает их по очереди в `#sp-live`; итоговый mp3 прежний.
 - `POST /api/voices/{id}/probe {text, connection_id?, model?}` — до `voices.PROBE_MAX` (200) знаков, только srvllm,
   ничего не сохраняется. Модель — выбранная в окне пробы (отмеченные модели шлюзов «Озвучки», выбор виден при двух и
