@@ -8,7 +8,7 @@
   после прошлого продления отодвигает его, а ответ API ставит cookie заново. Отключённая учётка
   и истёкший срок стирают сессию: включение учётки старую сессию не оживляет.
 - CSRF: каждый не-GET запрос `/api/*` несёт заголовок `x-studio-csrf` с токеном сессии (страница
-  берёт его из `GET /api/me`); вход и выход сверяют Origin, если он есть, с CFG.origin.
+  берёт его из `GET /api/me`); вход и выход сверяют Origin, если он есть, с адресом этой установки.
 - Пауза: 5 неудач за 15 минут на пару «логин + адрес» или на адрес целиком — 15 минут отказа
   и с верным паролем. Адрес петли из дома (CFG.hairpin_ip) считается только парой. Логин
   целиком не запирается: после пятой неудачи за 15 минут со всех адресов ответ на неверный
@@ -376,9 +376,19 @@ def _login_page(error: str = "", status: int = 200, login: str = "") -> HTMLResp
     return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
 
 
+def request_origin(request: Request) -> str | None:
+    """В профиле с двумя адресами Apache передаёт исходный Host вместе с портом."""
+    primary = state.CFG.origin.rstrip("/")
+    alternate = state.CFG.alternate_origin
+    if not alternate:
+        return primary
+    target = "https://" + request.headers.get("host", "").lower()
+    return next((origin for origin in (primary, alternate) if origin.lower() == target), None)
+
+
 def foreign_origin(request: Request) -> bool:
     origin = request.headers.get("origin")
-    return origin is not None and origin != state.CFG.origin.rstrip("/")
+    return origin is not None and origin != request_origin(request)
 
 
 async def small_body(request: Request, limit: int) -> bytes | None:

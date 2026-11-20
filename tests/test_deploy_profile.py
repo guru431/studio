@@ -77,6 +77,37 @@ def test_profile_rejects_values_unsafe_for_commands_or_configuration(name, value
         PROFILE.settings({name: value})
 
 
+def test_docker_profile_renders_the_alternate_https_origin():
+    source, destination = io.BytesIO(), io.BytesIO()
+    root = Path(__file__).parents[1]
+    names = ["deploy/docker/host.conf", "deploy/apache-vhost.conf"]
+    with tarfile.open(fileobj=source, mode="w") as archive:
+        for name in names:
+            archive.add(root / name, arcname=name)
+    source.seek(0)
+    PROFILE.render(source, destination, {
+        "STUDIO_RUNTIME": "docker", "STUDIO_URL": "https://192.0.2.14:8443",
+        "STUDIO_ALTERNATE_ORIGIN": "https://192.0.2.101:8443/",
+    })
+    destination.seek(0)
+    with tarfile.open(fileobj=destination) as archive:
+        host = archive.extractfile(names[0]).read().decode()
+        apache = archive.extractfile(names[1]).read().decode()
+    assert "STUDIO_URL=https://192.0.2.14:8443\n" in host
+    assert "STUDIO_ALTERNATE_ORIGIN=https://192.0.2.101:8443\n" in host
+    assert "ServerName 192.0.2.14\n    ServerAlias 192.0.2.101\n    ProxyPreserveHost On\n" in apache
+
+
+@pytest.mark.parametrize("alternate", [
+    "http://192.0.2.101:8443", "https://192.0.2.101:8443/path",
+    "https://192.0.2.101:65536", "https://192.0.2.101:8443\nListen 443",
+    "https://studio.example.com:443/", "https://192.0.2.101:8443?",
+])
+def test_docker_profile_rejects_invalid_or_duplicate_alternate_origin(alternate):
+    with pytest.raises(ValueError):
+        PROFILE.settings({"STUDIO_RUNTIME": "docker", "STUDIO_ALTERNATE_ORIGIN": alternate})
+
+
 @pytest.mark.parametrize("media_fstype,build_network", [("cifs", "default"), ("ext4", "host")])
 def test_docker_profile_preserves_trusted_proxy_and_storage_boundaries(media_fstype, build_network):
     source, destination = io.BytesIO(), io.BytesIO()
