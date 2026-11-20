@@ -119,6 +119,43 @@ def test_signed_handoff_runs_the_helper_from_the_installed_bundle(install_root, 
     assert stage.is_dir()
 
 
+@pytest.mark.parametrize('error, result', [(signed.RolledBack('exit'), 'rolled_back'), (ValueError('team'), 'failed'),
+                                           (None, 'old_running'), (signed.NotReady('slow'), None)])
+def test_failed_signed_update_leaves_its_result_for_the_running_copy(install_root, monkeypatch, error, result):
+    """Подписанный переход macOS: провал доходит до студии (`update_helper.failed_update`), как у хелпера ZIP."""
+    from studio_agent import update_helper
+
+    monkeypatch.setattr(Path, 'home', lambda: install_root)
+    app = fake_app(install_root / 'Applications' / signed.NAME)
+    stage = install_root / 'Library/Application Support/Studio Agent/app/releases/release-qa'
+    new = fake_app(signed.candidate(stage), version='2.0')
+    executable = signed.interpreter(new)
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    monkeypatch.setattr(signed.sys, 'executable', str(executable))
+    monkeypatch.setattr(signed.sys, 'argv', ['macos_signed.py', '--update', str(stage), '1', '2.0'])
+    monkeypatch.setattr(signed, 'sealed_app', lambda repo: app)
+    monkeypatch.setattr(signed.runpy, 'run_path', lambda path: {'wait_exit': lambda pid: error is not None})
+    reopen = Mock()
+    monkeypatch.setattr(signed.subprocess, 'run', reopen)
+
+    def replace(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(signed, 'replace_app', replace)
+    with pytest.raises(BlockingIOError if error is None else type(error)):
+        signed.main()
+    monkeypatch.setattr(update_helper, 'MACOS', True)
+    monkeypatch.setattr(update_helper, 'LINUX', False)
+    if result is None:  # новая копия на месте и может подняться — неудачей не считаем
+        assert not stage.exists()
+        assert update_helper.failed_update(app / 'Contents/Resources/agent') is None
+        return
+    assert [path.name for path in stage.iterdir()] == ['_update_result']
+    assert update_helper.failed_update(app / 'Contents/Resources/agent') == result
+    assert update_helper.failed_update(install_root / 'elsewhere.app/Contents/Resources/agent') is None
+
+
 @pytest.mark.parametrize('outcome', ['ready', 'exit', 'copy-error', 'wrong-team'])
 def test_swap_waits_for_readiness_or_preserves_the_installed_app(tmp_path, monkeypatch, outcome):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
