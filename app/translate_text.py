@@ -81,6 +81,7 @@ DETECT_CHARS = 1000
 MAX_TOKENS = 8192                # кусок в 3000 знаков — до ~2000 токенов перевода, запас на многословные языки
 READ_SEC = 420                   # кусок на локальной модели с холодным стартом
 DETECT_SEC = 120                 # определение языка — восемь токенов; дольше — переводим без него
+EMPTY = "модель вернула пустой ответ"
 
 PROMPT = (
     "You are a professional translator. Translate the user's message {source} into {target}.\n"
@@ -382,5 +383,5 @@ async def chunk(conn, model: str, text: str, source: str, target: str, on_delta,
         raise TranslateError(f"модель прервала ответ: {ending[:60]}")
     result = _without_echo(unicodedata.normalize("NFC", unwrap(answer, text).strip()), context)
     if not result:
-        raise TranslateError("модель вернула пустой ответ")
+        raise TranslateError(EMPTY)
     return result

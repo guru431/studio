@@ -130,7 +130,8 @@ release моделей картинок заново перед переводо
   продолжать»; теги рамки внутри контекста вырезаются; ответ, начинающийся полным повтором контекста, — повтор
   снимается; кусок-«припев» (`repeats`), Cleaner и блоки снимка контекста не получают; «Продолжить» берёт контекст из
   готового куска в базе. Глоссария нет.
-- NFC: `translate_text.normalize`, итог `translate_text.chunk`, путь Cleaner `translate._attempt`.
+- NFC: `translate_text.normalize`, итог `translate_text.chunk`, путь Cleaner `translate._attempt`. Ответ Cleaner
+  проходит те же `translate_text.unwrap` и проверку пустоты (`translate_text.EMPTY` — кусок `failed`), что ответ шлюза.
 
 ## Ловушки
 
