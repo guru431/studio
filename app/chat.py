@@ -869,7 +869,7 @@ class StreamTask:
                         r"|(?:does not|doesn't|cannot) support (?:tools?|function calling)"
                         r"|(?:not supported|unsupported).{0,20}(?:tools?|tool[_ ]choice)", r.text.lower())
                     words = NO_MCP if self.mcp and self.mcp.specs else NO_TOOLS
-                    return words if no_tools else upstream.gateway_error(r, self.conn.name), None, [], text
+                    return words if no_tools else upstream.gateway_error(r, self.conn), None, [], text
                 self._card_free()
                 async for line in r.aiter_lines():
                     if clock.NOW() > self.deadline:

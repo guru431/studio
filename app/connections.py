@@ -430,7 +430,7 @@ async def fetch_models(conn: Connection) -> list[dict]:
     except httpx.HTTPError:
         raise HTTPException(502, {"code": "upstream", "message": f"нет связи с подключением «{conn.name}»"}) from None
     if not r.is_success:
-        raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn.name)})
+        raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn)})
     data = upstream.json_body(r).get("data")
     items = []
     for m in data if isinstance(data, list) else []:
