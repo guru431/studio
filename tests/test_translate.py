@@ -700,6 +700,34 @@ def test_text_pdf_with_an_empty_page_is_translated_from_its_layer_with_ocr(studi
     assert count(studio, "scans") == 0 and studio.gw.ocr_requests == []
 
 
+def test_unread_pages_are_counted_not_translated_and_a_repeat_takes_the_retried_scan(studio, small_pages):
+    """05:F1: страница, что HunyuanOCR не прочёл, — не пометка в исходнике (её перевела бы модель), а итог записи
+    «не распознано страниц: 1 из 2»; после «Повторить страницу» в «Сканах» повтор записи берёт текст скана заново."""
+    add_gateway(studio)
+    cut = {"choices": [{"message": {"content": "# Догов"}, "finish_reason": "length"}]}
+    studio.gw.ocr_replies = [(200, cut)]
+    tid = start_file(studio, "Договор.pdf", scan_pdf("ink", "ink"))
+    row = wait_row(studio, tid)
+    assert (row["state"], row["detail"]) == ("done", "не распознано страниц: 1 из 2")
+    assert row["source"].startswith("Страница 2\n\n") and "не распознана" not in row["source"]
+    assert all("не распознана" not in text for text in streamed(studio))
+    assert studio.c.get(f"/api/translate/{tid}").json()["notice"] == "не распознано страниц: 1 из 2"
+    assert studio.c.get("/api/translate").json()["items"][0]["notice"] == "не распознано страниц: 1 из 2"
+
+    sid = row["scan_id"]
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={"page": 1}).status_code == 202
+    wait_until(studio, lambda: state.DB.execute("SELECT state FROM scans WHERE id = ?", (sid,)).fetchone()[0] == "done")
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    sent = len(studio.gw.ocr_requests)
+    assert row_of(studio, tid)["detail"] == "не распознано страниц: 1 из 2"    # итог записи — её исходника
+    r = studio.c.post(f"/api/translate/{tid}/repeat", json={"source_lang": "en", "target_lang": "ru"})
+    assert r.status_code == 202, r.text
+    again = wait_row(studio, r.json()["id"])
+    assert (again["state"], again["detail"], again["scan_id"]) == ("done", translate.DONE, sid)
+    assert again["source"].startswith("Страница 1\n\n# Договор") and "Страница 2" in again["source"]
+    assert len(studio.gw.ocr_requests) == sent and studio.c.get(f"/api/translate/{again['id']}").json()["notice"] is None
+
+
 def test_scan_progress_is_the_stage_of_the_translation(studio, small_pages):
     add_gateway(studio)
     studio.gw.ocr_hold = True

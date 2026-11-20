@@ -252,15 +252,16 @@ def attachment_marker(detail: str) -> str:
     return f"[скан не распознан: {detail}]"
 
 
-def attachment_text(scan_id: str) -> str:
-    """Текст вложения чата: страницы с итогом — «Страница N» и текст, нераспознанные — пометкой,
-    пустые пропущены. Не длиннее documents.TEXT_MAX_CHARS (спека 6.5): дальше — обрезка с пометкой, а не
-    отказ — распознанное уже стоило минут карты."""
+def attachment_text(scan_id: str, marks: bool = True) -> str:
+    """Текст вложения чата: страницы с итогом — «Страница N» и текст, нераспознанные — пометкой (`marks`; исходнику
+    перевода — нет: переводить в ней нечего, число таких страниц — итог записи), пустые пропущены. Не длиннее
+    documents.TEXT_MAX_CHARS (спека 6.5): дальше — обрезка с пометкой, а не отказ — распознанное уже стоило минут
+    карты."""
     parts = []
     for p in state.DB.execute("SELECT n, state, text, detail FROM scan_pages WHERE scan_id = ? ORDER BY n", (scan_id,)):
         if p["state"] in ("done", "layer"):
             parts.append(f"Страница {p['n']}\n\n{p['text'] or ''}")
-        elif p["state"] == "failed":
+        elif p["state"] == "failed" and marks:
             parts.append(f"[страница {p['n']} не распознана: {p['detail']}]")
     text, limit = "\n\n".join(parts), documents.TEXT_MAX_CHARS
     if len(text) > limit:
