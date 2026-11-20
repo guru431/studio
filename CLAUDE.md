@@ -64,7 +64,8 @@ minor для возможностей, major для несовместимых �
 - **Список разрешённых адресов** (панель администратора): только к ним ходит сервер (с учётом перенаправлений и
   разрешения имён; имя — только https и только публичные адреса). Исключения — только адреса, зашитые в `web.py`
   (`api.exa.ai`, YouTube через yt-dlp — правила в [chat.md](docs/architecture/chat.md))
-  и в `push.py` (`push.HOSTS`). Ключ Exa — свой у учётки, шифром.
+  и в `push.py` (`push.HOSTS`). Ключ Exa — свой у учётки, шифром. Почта учётки — на сервер SMTP, заданный
+  администратором в панели или переменными окружения (в том числе частный адрес `connect_ip`, [email-accounts](docs/architecture/email-accounts.md)).
 - **Мост ходит сам** (кроме студии) только на фиксированные HTTPS-адреса `agent/studio_agent/limits.py::HOSTS` (сверяет
   `tests/test_docs.py`): `api64.ipify.org` (внешний IP, без данных); `registry.npmjs.org`, `marketplace.visualstudio.com`,
   `formulae.brew.sh`, `downloads.claude.ai` (версии программ, `software.py`: имя пакета); `api.anthropic.com` (лимиты
