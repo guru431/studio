@@ -104,7 +104,7 @@ class Desktop:
             backend.authorize_local()
             with self._guard:
                 if self._closed or generation != self._generation or self._control is not None:
-                    raise Refused("gone", "Состояние агента изменилось")
+                    raise Refused("gone", "Состояние моста изменилось")
                 old, self._native = self._native, backend
                 self._generation += 1
                 self.capable = True
@@ -165,7 +165,7 @@ class Desktop:
     def _check(self, session, control, generation):
         self.expire()
         if not self._enabled or self._closed:
-            raise Refused("desktop_disabled", "Рабочий стол выключен. Включите его в агенте на компьютере")
+            raise Refused("desktop_disabled", "Рабочий стол выключен. Включите его в окне моста на компьютере")
         if generation != self._generation:
             raise Refused("gone", "Сеанс рабочего стола завершён")
         if control is not None and (self._owner != session or self._control is None

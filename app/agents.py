@@ -269,7 +269,7 @@ async def update_package(request: Request):
         raise HTTPException(422, {"code": "platform", "message": "неизвестный формат обновления"})
     package = AGENT_MACOS if platform == "macos" else AGENT_ZIP
     if not package.is_file():
-        raise HTTPException(404, {"code": "no_agent", "message": "архива агента нет на сервере"})
+        raise HTTPException(404, {"code": "no_agent", "message": "архива моста нет на сервере"})
     return FileResponse(package, media_type="application/octet-stream" if platform == "macos" else "application/zip",
                         headers={"Cache-Control": "no-store"})
 
