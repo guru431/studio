@@ -1864,6 +1864,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Команда": "Command",
   "Скачать вложение": "Download attachment",
   "Не удалось прочитать вложение": "Could not read attachment",
+  "Изображение «{0}» в ссылку не вошло": "Image “{0}” is not included in the link",
+  "Изображение в ссылку не вошло": "An image is not included in the link",
   "В этом чате пока нет сообщений": "No messages in this chat yet",
   "Озвучки": "Speech recordings",
   "Текст для озвучки": "Text to speak",
