@@ -669,6 +669,8 @@ class FakeMachine:
         _, project = self._project(req)
         if project.get("git") is None:
             raise Refused("not_git", "не репозиторий git")
+        if isinstance(project["git"], Refused):  # нет git, чужой владелец — `git_unavailable` моста
+            raise project["git"]
         return dict(project["git"])
 
     # ---- ход ---------------------------------------------------------------------
