@@ -6,7 +6,11 @@ import { tr } from './i18n.js';
  * POST /api/dictation (модель раздела «Голосовой ввод»), текст встаёт на место курсора (с пробелом,
  * если нужен) и не отправляется. Курсор — на момент нажатия, а если поле за время записи правили, —
  * нынешнее выделение поля. Звук живёт только в памяти этой записи — после ответа его нет ни
- * здесь, ни на сервере. Нет микрофона, нет разрешения, нет модели — слова в `p.mic-error` (в host).
+ * здесь, ни на сервере. Нет микрофона, нет разрешения, нет модели — слова в `p.mic-error` (в host);
+ * модель смотрится до записи (`me.capabilities.dictation`, false — профиль перечитывается: её могли выбрать в
+ * другой вкладке), слова — со ссылкой на #/settings/input. Пока идут запись или распознавание, за микрофоном
+ * «×» `.mic-cancel` (и Escape на них): запись отменяется без распознавания, распознавание — обрывом запроса
+ * (AbortController; WhisperX на сервере дослушает запись, текст не вставится).
  * Пока браузер спрашивает разрешение, повторные нажатия не считаются.
  *
  * startRecording(maxSec, onTick, owner) → { stop(), done: Promise<Blob | null> } или null — общий
@@ -14,8 +18,8 @@ import { tr } from './i18n.js';
  * гасит прежнюю. cancelRecording() — отменить её (смена раздела — app.js, шторка и блокировка —
  * lock.js): микрофон отпущен, done — null, звук никуда не уходит. Кнопка `owner` ушла со страницы
  * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null. */
-import { api } from './api.js';
-import { svg } from './icons.js';
+import { api, loadMe, me } from './api.js';
+import { icon, svg } from './icons.js';
 import { el, words } from './ui.js';
 
 export const MAX_SEC = 120;
@@ -107,13 +111,21 @@ function insertAt(field, text, [start, end]) {
   field.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+/** Модель голосового ввода выбрана (`me.capabilities.dictation`); профиля нет — пусть ответит сервер. */
+function dictationReady() {
+  return me?.capabilities?.dictation !== false;
+}
+
 export function attachMic(field, host) {
   const button = el('button', { type: 'button', class: 'icon-btn mic', 'aria-label': tr("Голосовой ввод"), title: tr("Голосовой ввод") });
+  // «×» рядом с идущей записью или распознаванием: отменить без распознавания (встаёт за микрофоном при первом показе)
+  const cancel = el('button', { type: 'button', class: 'icon-btn mic-cancel', hidden: true }, icon('x'));
   const error = el('p', { class: 'mic-error error small', 'aria-live': 'polite' });
   host.append(error);
   let recording = null;
   let starting = false;    // браузер спрашивает разрешение
   let sending = false;
+  let controller = null;   // идущее распознавание: «×» обрывает запрос
 
   function paint(sec) {
     button.classList.toggle('on', !!recording);
@@ -121,6 +133,36 @@ export function attachMic(field, host) {
     button.setAttribute('aria-label', recording ? tr("Остановить запись") : tr("Голосовой ввод"));
     button.innerHTML = ICON;                           // константа выше
     if (recording) button.append(el('span', { class: 'mic-time' }, clock(sec || 0)));
+    const busy = !!recording || sending;
+    if (busy && !cancel.isConnected && button.isConnected) button.after(cancel);
+    cancel.hidden = !busy;
+    const label = recording ? tr("Отменить запись") : tr("Отменить распознавание");
+    cancel.setAttribute('aria-label', label);
+    cancel.title = label;
+  }
+
+  /** «×» или Escape: запись — отменить (звук никуда не уходит), распознавание — оборвать запрос. */
+  function drop() {
+    const focused = document.activeElement === cancel;
+    if (recording) cancelRecording();
+    else if (controller) controller.abort();
+    else return;
+    if (focused) button.focus();                       // «×» сейчас спрячется — фокус остаётся у поля значков
+  }
+  cancel.addEventListener('click', drop);
+  for (const node of [button, cancel]) {
+    node.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !(recording || sending)) return;
+      event.preventDefault();                          // окно, где стоит поле, не закрывается
+      event.stopPropagation();
+      drop();
+    });
+  }
+
+  /** Нет модели голосового ввода — слова со ссылкой на настройки, а не две минуты записи впустую. */
+  function noModel() {
+    error.replaceChildren(tr("Модель голосового ввода не выбрана — "),
+      el('a', { href: '#/settings/input' }, tr("открыть настройки")));
   }
 
   button.addEventListener('click', async () => {
@@ -134,6 +176,19 @@ export function attachMic(field, host) {
     const value = field.value;                       // поле правили во время записи — курсор уже другой
     starting = true;
     paint();
+    if (!dictationReady()) {
+      try {
+        await loadMe();                              // модель могли выбрать в другой вкладке
+      } catch {
+        // нет связи — профиль прежний
+      }
+      if (!dictationReady()) {
+        starting = false;
+        paint();
+        noModel();
+        return;
+      }
+    }
     try {
       recording = await startRecording(MAX_SEC, paint, button);
     } catch (err) {
@@ -150,20 +205,26 @@ export function attachMic(field, host) {
     paint();
     if (!blob || !button.isConnected) return;          // отменена: звук не уходит
     sending = true;
+    controller = new AbortController();
+    const { signal } = controller;
     paint();
     try {
       const body = new FormData();
       body.append('audio', blob, recordingName(blob));
-      const { text } = await api('POST', '/api/dictation', body);
+      const { text } = await api('POST', '/api/dictation', body, { signal });
       if (!button.isConnected) return;                 // поле уже убрали
       const at = field.value === value ? caret
         : [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
       if (text) insertAt(field, text, at);
       else error.textContent = tr("Ничего не распознано — скажите ещё раз");
     } catch (err) {
-      error.textContent = words(err);
+      if (!signal.aborted) {
+        if (err?.code === 'no_model') noModel();
+        else error.textContent = words(err);
+      }
     } finally {
       sending = false;
+      controller = null;
       paint();
     }
   });

@@ -4007,6 +4007,53 @@ def test_mic_without_permission_says_so(browser, live):
     assert "разрешения на микрофон" in r["values"]["words"]
 
 
+#: распознавание «висит», пока его не оборвут: window.aborted — обрыв дошёл до запроса
+HELD_DICTATION = """(() => { window.aborted = false; const real = window.fetch;
+  window.fetch = (url, opts = {}) => String(url) !== '/api/dictation' ? real(url, opts) : new Promise((_, reject) => {
+    opts.signal.addEventListener('abort', () => { window.aborted = true; reject(new DOMException('aborted', 'AbortError')); });
+  }); return true; })()"""
+
+
+def test_mic_cancels_recording_and_recognition_and_says_there_is_no_model_before_recording(browser, live):
+    """«×» за микрофоном и Escape отменяют запись без распознавания; «×» во время распознавания обрывает запрос, текст
+    не встаёт и слов ошибки нет. Без модели голосового ввода запись не начинается: слова со ссылкой на настройки."""
+    login = "miccancel"
+    live.add_user(login)
+    mic, x = "#photo-composer .mic", "#photo-composer .mic-cancel"
+    prompt = "document.querySelector('#photo-prompt')"
+    state = f"""[!!document.querySelector('{mic}.on'), !document.querySelector('{x}').hidden,
+      document.querySelector('{x}').getAttribute('aria-label'), {prompt}.value,
+      document.querySelector('#photo-composer .mic-error').textContent]"""
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "mic", COUNTED_MIC), set_value("#photo-prompt", "кот"),
+        ("click", mic), ("wait", f"document.querySelector('{mic}.on')"), ("eval", "recording", state),
+        ("click", x), ("wait", f"!document.querySelector('{mic}.on') && window.stopped === 1"),
+        ("eval", "dropped", state),
+        ("click", mic), ("wait", f"document.querySelector('{mic}.on')"), ("press", "Escape"),
+        ("wait", f"!document.querySelector('{mic}.on') && window.stopped === 2"),
+        ("eval", "held", HELD_DICTATION),
+        ("click", mic), ("wait", f"document.querySelector('{mic}.on')"), ("click", mic),
+        ("wait", f"document.querySelector('{mic}.busy')"), ("eval", "sending", state),
+        ("click", x), ("wait", f"window.aborted && !document.querySelector('{mic}.busy')"),
+        ("eval", "aborted", state),
+        # без модели голосового ввода: раздел снят в настройках — запись не начинается
+        ("eval", "off", f"""(async () => {{ const m = {API}; const s = await m.api('GET', '/api/sections');
+          for (const link of s.sections.find(x => x.id === 'dictation').links)
+            await m.api('DELETE', '/api/sections/dictation/links/' + link.connection.id);
+          await m.loadMe(); return m.me.capabilities.dictation; }})()"""),
+        ("click", mic), ("wait", "document.querySelector('#photo-composer .mic-error a')"),
+        ("eval", "nomodel", "[document.querySelector('#photo-composer .mic-error').textContent,"
+                            " document.querySelector('#photo-composer .mic-error a').getAttribute('href'), window.mics]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["recording"] == [True, True, "Отменить запись", "кот", ""]
+    assert v["dropped"] == [False, False, "Отменить распознавание", "кот", ""]
+    assert v["sending"] == [False, True, "Отменить распознавание", "кот", ""]
+    assert v["aborted"] == [False, False, "Отменить распознавание", "кот", ""]
+    assert v["nomodel"] == ["Модель голосового ввода не выбрана — открыть настройки", "#/settings/input", 3]
+    assert "POST /api/dictation" not in r["sent"]
+    assert not problems(r), problems(r)
+
+
 # ---- поле со значками и строка под полем (спека 2026-10-27-studio-ui-tidy, 4.4–4.5) ----
 
 def field_state(field):
