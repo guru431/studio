@@ -217,3 +217,181 @@ def test_admin_views_user_with_users_access(studio):
     cid, _ = closed_models(studio, member)
     assert cid in chat_links(studio, f"/api/admin/users/{member}/sections")
     assert cid not in chat_links(studio, f"/api/admin/users/{other}/sections")
+
+
+# ---- Task 3: общие MCP и их инструменты --------------------------------------------------
+
+def shared_tools(studio) -> int:
+    """Общий API моделей (для хода чата) и общий MCP «Shared tools»; вход — администратором."""
+    from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
+    from test_shared_integrations import add_models
+    signin(studio, "admin")
+    add_models(studio)
+    response = studio.c.post("/api/admin/shared/mcp", json={"name": "Shared tools", "url": MCP_URL, "token": MCP_KEY})
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def recorded(studio, path="/mcp") -> list:
+    """Значения X-Studio-User запросов к MCP (None — заголовка нет) поверх уже поставленного мока."""
+    seen, inner = [], studio.gw.on[path]
+
+    async def handler(request):
+        seen.append(request.headers.get("x-studio-user"))
+        return await inner(request)
+
+    studio.gw.on[path] = handler
+    return seen
+
+
+def video_tools(studio, sid) -> "list[str] | None":
+    item = next((s for s in studio.c.get("/api/mcp-tools/video").json()["items"] if s["id"] == sid), None)
+    return None if item is None else [t["name"] for t in item["tools"]]
+
+
+def png_file() -> dict:
+    import base64
+    from fakes import PNG_REAL
+    return {"artifact_id": {"data": base64.b64encode(PNG_REAL).decode(), "mime_type": "image/png"}}
+
+
+def test_closed_mcp_hidden(studio):
+    from test_chat import new_chat
+    from test_mcp_sections import service
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    service(studio.gw)
+    access.set_rule("mcp", sid, [])
+    assert [i["id"] for i in studio.c.get("/api/mcp").json()["items"]] == [sid]
+    assert video_tools(studio, sid)
+    signin(studio, "member")
+    assert studio.c.get("/api/mcp").json()["items"] == []
+    assert video_tools(studio, sid) is None
+    chat_id = new_chat(studio)
+    assert studio.c.patch(f"/api/chats/{chat_id}", json={"mcp_ids": [sid]}).status_code == 404
+    run = studio.c.post(f"/api/mcp-tools/video/servers/{sid}/run", json={"tool": "video_estimate", "files": png_file()})
+    assert run.status_code == 404
+
+
+def test_tool_rule_hides_tool_in_chat_and_sections(studio):
+    from test_chat import new_chat, sse, turn
+    from test_mcp_sections import service
+    make_user(studio, "admin", is_admin=True)
+    member = make_user(studio, "member")
+    sid = shared_tools(studio)
+    calls = service(studio.gw)
+    group = access.create_group("Video")["id"]
+    access.set_tool_rules(sid, {"video_create": [group]})
+    signin(studio, "member")
+    assert video_tools(studio, sid) == ["video_estimate"]
+    run = studio.c.post(f"/api/mcp-tools/video/servers/{sid}/run", json={"tool": "video_create", "files": png_file()})
+    assert run.status_code == 422 and calls == []
+    chat_id = new_chat(studio)
+    assert studio.c.patch(f"/api/chats/{chat_id}", json={"mcp_ids": [sid]}).status_code == 200
+    studio.gw.chat_script = [["Done"]]
+    assert sse(turn(studio, chat_id))[-1] == ("done", {"status": "done"})
+    described = [t["function"]["description"] for t in studio.gw.chat_requests[-1]["tools"]]
+    assert described and not any("video_create" in d for d in described)
+    assert any("video_estimate" in d for d in described)
+    access.set_members(group, [member])
+    assert "video_create" in video_tools(studio, sid)
+
+
+def test_tool_rule_rechecked_on_call(studio):
+    from test_chat import messages, new_chat, sse, turn
+    from test_chat_web import call
+    from test_mcp import mock
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    calls = mock(studio)
+    signin(studio, "member")
+    chat_id = new_chat(studio)
+    assert studio.c.patch(f"/api/chats/{chat_id}", json={"mcp_ids": [sid]}).status_code == 200
+    model = studio.gw.builtin
+
+    async def closing_model(request):                 # правило ставят после discover, до вызова инструмента
+        access.set_tool_rules(sid, {"lookup": []})
+        return await model(request)
+
+    studio.gw.on["/v1/chat/completions"] = closing_model
+    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_0")]}, ["Done"]]
+    assert sse(turn(studio, chat_id, "Call the tool"))[-1] == ("done", {"status": "done"})
+    assert "tools/call" not in [method for method, _ in calls]
+    step = messages(studio, chat_id)[1]["tools"][0]
+    assert step["kind"] == "mcp" and step["tool"] == "lookup" and step["error"]
+
+
+def test_service_calls_ignore_tool_rules(studio):
+    from test_mcp_sections import service
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    calls = service(studio.gw)
+    access.set_tool_rules(sid, {"artifact_upload": [], "job_status": [], "job_result": []})
+    signin(studio, "member")
+    base = "/api/mcp-tools/video"
+    result = studio.c.post(f"{base}/servers/{sid}/run", json={"tool": "video_create", "files": png_file()})
+    assert result.status_code == 200, result.text
+    ticket = {"ticket": result.json()["job"]}
+    assert studio.c.post(f"{base}/status", json=ticket).json()["status"] == "running"
+    done = studio.c.post(f"{base}/status", json=ticket).json()
+    assert done["files"][0]["mime"] == "video/mp4"
+    assert [name for name, _ in calls] == ["artifact_upload", "video_create", "job_status", "job_status", "job_result"]
+
+
+def test_closed_mcp_dropped_from_chat_selection(studio):
+    from test_chat import new_chat, sse, turn
+    from test_mcp import mock
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    calls = mock(studio)
+    signin(studio, "member")
+    chat_id = new_chat(studio)
+    assert studio.c.patch(f"/api/chats/{chat_id}", json={"mcp_ids": [sid]}).status_code == 200
+    access.set_rule("mcp", sid, [])
+    assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["mcp_ids"] == []
+    studio.gw.chat_script = [["Done"]]
+    assert sse(turn(studio, chat_id))[-1] == ("done", {"status": "done"})
+    assert calls == [] and "tools" not in studio.gw.chat_requests[-1]
+
+
+def test_ticket_rechecks_server_access(studio):
+    from test_mcp_sections import service
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    service(studio.gw)
+    signin(studio, "member")
+    base = "/api/mcp-tools/video"
+    ticket = {"ticket": studio.c.post(f"{base}/servers/{sid}/run",
+                                      json={"tool": "video_create", "files": png_file()}).json()["job"]}
+    assert studio.c.post(f"{base}/status", json=ticket).json()["status"] == "running"
+    url = studio.c.post(f"{base}/status", json=ticket).json()["files"][0]["url"]
+    access.set_rule("mcp", sid, [])
+    assert studio.c.post(f"{base}/status", json=ticket).status_code == 404
+    assert studio.c.get(url, headers={"Range": "bytes=0-9"}).status_code == 404
+
+
+def test_studio_user_header_only_for_shared(studio):
+    from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL, mock
+    admin = make_user(studio, "admin", is_admin=True)
+    member = make_user(studio, "member")
+    sid = shared_tools(studio)
+    mock(studio)
+    seen = recorded(studio)
+    assert studio.c.post(f"/api/admin/shared/mcp/{sid}/check").status_code == 200
+    assert set(seen) == {access.studio_user(admin)}
+    signin(studio, "member")
+    seen.clear()
+    assert studio.c.get("/api/mcp-tools/video").status_code == 200
+    assert seen and set(seen) == {access.studio_user(member)}
+    personal = studio.c.post("/api/mcp", json={"name": "Mine", "url": MCP_URL, "token": MCP_KEY})
+    assert personal.status_code == 201, personal.text
+    seen.clear()
+    assert studio.c.post(f"/api/mcp/{personal.json()['id']}/check").status_code == 200
+    assert seen and set(seen) == {None}
+    forged = studio.c.post("/api/mcp", json={"name": "Forged", "url": MCP_URL, "headers": {"X-Studio-User": "0" * 32}})
+    assert forged.status_code == 422

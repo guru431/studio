@@ -599,5 +599,5 @@ async def delete_shared_mcp(sid: int):
 
 
 @router.post("/shared/mcp/{sid}/check")
-async def check_shared_mcp(sid: int):
-    return await mcp_client.check_for(None, sid)
+async def check_shared_mcp(sid: int, admin: auth.User = Depends(auth.require_admin)):
+    return await mcp_client.check_for(None, sid, actor=admin.id)
