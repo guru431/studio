@@ -6,11 +6,10 @@ import json
 import os
 import re
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 
-from . import dpapi
+from . import dpapi, host
 from .limits import OPEN_IDLE_SEC, PIN_TRIES
 from .store import write_atomic
 
@@ -94,7 +93,7 @@ class PinStore:
 class OpenSessions:
     """Сессии студии, открытые PIN: только в памяти; таймер запроса или OPEN_IDLE_SEC по умолчанию."""
 
-    def __init__(self, now: Callable[[], float] = time.monotonic):
+    def __init__(self, now: Callable[[], float] = host.awake_clock()):
         self._now = now
         self._seen: dict[str, float] = {}
 

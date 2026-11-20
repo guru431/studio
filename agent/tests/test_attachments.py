@@ -98,7 +98,7 @@ async def test_combined_size_is_checked_before_start_or_followup(agent, monkeypa
     assert reply["code"] == "too_large" and not agent.runner.live()
 
 
-def test_original_name_never_controls_disk_path_and_empty_files_are_allowed():
+def test_original_name_never_controls_disk_path_and_empty_files_are_allowed(home):
     files = attachments.Files()
     try:
         prompt = files.prompt("Read", [{**FILE, "name": "../../private\\report\n.pdf", "data": ""}])
@@ -106,9 +106,28 @@ def test_original_name_never_controls_disk_path_and_empty_files_are_allowed():
         path = Path(item["path"])
         assert item["name"] == "report.pdf" and path.name == "file-1.pdf"
         assert path.read_bytes() == b"" and path.parent.name.startswith("studio-attachments-")
+        assert path.parent.parent == home / attachments.FOLDER
     finally:
         files.cleanup()
     assert not path.parent.exists()
+
+
+def test_startup_sweep_removes_files_left_by_a_crashed_turn(home):
+    """Мост упал посреди хода: вложения и открытый конфиг MCP с токенами не лежат на диске без срока."""
+    from studio_agent import mcp
+
+    left = home / attachments.FOLDER / (attachments.PREFIX + "crashed") / "file-1.txt"
+    left.parent.mkdir(parents=True)
+    left.write_bytes(b"secret")
+    runtime = home / "mcp" / "runtime-crashed"
+    runtime.mkdir(parents=True)
+    (runtime / "config.json").write_text('{"mcpServers": {"x": {"headers": {"Authorization": "Bearer t"}}}}')
+    kept = [home / "mcp" / "claude-settings.bin", home / attachments.FOLDER / "other"]
+    for path in kept:
+        path.write_bytes(b"x")
+    assert mcp.sweep(home) + attachments.sweep(home) == 2
+    assert not left.parent.exists() and not runtime.exists()
+    assert all(path.exists() for path in kept)
 
 
 async def test_cancel_during_disk_write_waits_for_write_before_cleanup(agent, monkeypatch):

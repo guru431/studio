@@ -11,7 +11,7 @@ import pytest
 from claude_agent_sdk import PermissionResultDeny
 
 from fake_sdk import FakeFactory, result_ok
-from studio_agent import app, autostart, enroll, projects, sessions, store, turns, updater
+from studio_agent import app, autostart, enroll, projects, sessions, setup, store, turns, updater
 from studio_agent.agent import Agent
 from studio_agent.link import Link
 from studio_agent.pin import PinStore
@@ -570,6 +570,33 @@ def test_setup_enrolls_sets_autostart_and_links(make, home, root):
     until(lambda: ctrl.state == "online")
     assert ctrl.links[0].key == "k" and ctrl.enrolled
     assert store.load_config(home).agent_id == 7
+
+
+def test_rebinding_revokes_the_previous_computer(make, configured, home, root):
+    """Меню Linux: новая привязка поверх ключа отзывает прежний — второй компьютер в студии не остаётся."""
+    ctrl = make()
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.apply_setup(form(root, login="owner", password="x")) == []
+    assert ctrl.unenrolls == [("https://studio.example.com", "k0")]
+    until(lambda: ctrl.state == "online" and ctrl.links[-1].key == "k")
+    assert store.load_config(home).agent_id == 7
+
+
+def test_failed_rebinding_keeps_the_previous_computer(home, root):
+    store.save_key(home, "k0")
+    store.save_config(home, store.Config(agent_id=3, name="Рабочий", projects_root=str(root)))
+
+    def refused(*_):
+        raise enroll.EnrollError("login", "Неверный логин или пароль")
+
+    form_ = form(root, login="owner", password="x")
+    old = setup.previous(home, form_)
+    with pytest.raises(enroll.EnrollError):
+        setup.apply(home, form_, enroll_fn=refused)
+    assert old == ("https://studio.example.com", "k0")
+    assert store.load_key(home) == "k0" and store.load_config(home).agent_id == 3
+    assert setup.previous(home, form(root)) is None  # без логина ключ не меняется
 
 
 def test_enrolled_but_new_address_needs_login(make, configured, root):

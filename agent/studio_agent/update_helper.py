@@ -285,6 +285,12 @@ def _confirmed(item):
         return False
 
 
+def _finished(item):
+    """Выпуск можно убирать: переход подтверждён (`complete`) или неудачный (`FAILED_RESULTS`) и уже сообщён студии
+    (`_update_reported`, `failed_update`) — иначе папки откатов и неудач копились бы в `releases/` без срока."""
+    return _confirmed(item) or (_result(item) in FAILED_RESULTS and _empty_regular(item / '_update_reported'))
+
+
 def _safe_tree(root):
     """Не удаляем даже саму ссылку/junction внутри выпуска; нечитаемое дерево также сохраняем."""
     pending = [root]
@@ -369,7 +375,7 @@ def _candidates(stage: Path, plan: dict, autostart: str | None = '', *, active=N
             identity = _identity(item) if RELEASE_NAME.fullmatch(item.name) else None
             if (identity is None or os.path.normcase(os.path.realpath(item)) in keep
                     or item.name.casefold() in active or os.path.normcase(str(item)) + os.sep in command
-                    or not (_confirmed(item) or _empty_regular(_intent(base, item, identity)))
+                    or not (_finished(item) or _empty_regular(_intent(base, item, identity)))
                     or not _safe_tree(item)):
                 continue
             intent = _intent(base, item, identity)
@@ -517,13 +523,24 @@ def _result(item):
         return None
 
 
+def _signed_repo(repo):
+    """Подписанное приложение macOS (`Studio Agent.app/Contents/Resources/agent` в /Applications или ~/Applications)
+    — тоже установленная копия: итог своего перехода `macos_signed.py --update` оставляет в общем `releases/`."""
+    repo = Path(repo)
+    if not MACOS or repo.parts[-3:] != ('Contents', 'Resources', 'agent'):
+        return False
+    app = repo.parents[2]
+    return app.name == 'Studio Agent.app' and app.parent in (Path('/Applications'), Path.home() / 'Applications')
+
+
 def failed_update(repo: Path):
     """Неудачный переход к соседнему выпуску, о котором ещё не сообщали (`FAILED_RESULTS`), — код итога или None.
     Читает работающая копия (прежняя после отката или после перезагрузки); каждый итог сообщается один раз
-    (`_update_reported`). Только для установленной копии: корень установки или её `releases/release-*`."""
+    (`_update_reported`). Только для установленной копии: корень установки, её `releases/release-*` или
+    подписанное приложение macOS (`_signed_repo`)."""
     home = install_home()
     if (os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(home))
-            and _managed_location(repo) is None):
+            and _managed_location(repo) is None and not _signed_repo(repo)):
         return None
     base = home / 'releases'
     own = os.path.normcase(os.path.realpath(repo))

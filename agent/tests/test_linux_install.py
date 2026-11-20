@@ -78,6 +78,33 @@ def test_local_desktop_consent_failure_keeps_desktop_disabled():
         linux_menu.dispatch(ctrl, "desktop", True)
 
 
+@pytest.mark.parametrize("cmd", ["status", "enroll", "set-pin", "clear-pin", "reset-pin"])
+def test_console_command_reports_busy_bridge_without_traceback(tmp_path, monkeypatch, capsys, cmd):
+    def busy(*_):
+        raise RuntimeError("Мост запускается или обновляется. Повторите действие.")
+
+    monkeypatch.setattr(linux_menu, "invoke", busy)
+    monkeypatch.setattr(linux_menu.getpass, "getpass", lambda *_: "2468")
+    assert linux_menu.command(tmp_path, cmd) == 1
+    assert capsys.readouterr().out.strip() == "Мост запускается или обновляется. Повторите действие."
+
+
+@pytest.mark.parametrize("cmd, op, words", [("clear-pin", ("pin", None), "PIN убран."),
+                                            ("reset-pin", ("reset",), "Блок PIN снят.")])
+def test_console_pin_commands_confirm_success(tmp_path, monkeypatch, capsys, cmd, op, words):
+    calls = []
+    monkeypatch.setattr(linux_menu, "invoke", lambda h, *a: calls.append(a) or [])
+    assert linux_menu.command(tmp_path, cmd) == 0
+    assert calls == [op] and capsys.readouterr().out.strip() == words
+
+
+def test_menu_number_prompts_refuse_non_digits_in_russian(tmp_path, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda *_: "много")
+    monkeypatch.setattr(linux_menu, "invoke", lambda *a: pytest.fail("invoke with a bad number"))
+    with pytest.raises(ValueError, match="Введите число"):
+        linux_menu._action(tmp_path, "7")
+
+
 def test_menu_socket_is_a_file_in_the_bridge_home_not_an_abstract_name():
     # Абстрактное имя без прав файловой системы мог занять другой пользователь — мост не стартовал бы.
     home = Path(Path.cwd().anchor) / "home" / "studio-agent"   # адрес только вычисляется, каталог не создаётся

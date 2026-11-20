@@ -116,3 +116,17 @@ def test_parallel_attempts_cannot_skip_the_count(home, monkeypatch):
         t.join()
     assert sorted(results) == [("pin", 1), ("pin", 2), ("pin", 3), ("pin", 4)] + [("pin_locked", 0)] * 6
     assert pin.PinStore(home).fails == 5
+
+
+@pytest.mark.parametrize("platform_name, clock", [("linux", "boottime"), ("darwin", "monotonic"),
+                                                  ("win32", "time.monotonic")])
+def test_idle_clock_keeps_running_while_the_computer_sleeps(monkeypatch, platform_name, clock):
+    """Срок простоя PIN-сессии и аренды рабочего стола: на Linux и macOS `time.monotonic` во сне стоит."""
+    from types import SimpleNamespace
+
+    from studio_agent import host
+
+    fake = SimpleNamespace(CLOCK_BOOTTIME=7, CLOCK_MONOTONIC=1, monotonic=lambda: "time.monotonic",
+                           clock_gettime=lambda which: {7: "boottime", 1: "monotonic"}[which])
+    monkeypatch.setattr(host, "time", fake)
+    assert host.awake_clock(platform_name)() == clock

@@ -9,7 +9,6 @@ import math
 import re
 import secrets
 import threading
-import time
 
 from .errors import Refused
 from . import host
@@ -76,7 +75,7 @@ def validate_events(events) -> list[dict]:
 
 
 class Desktop:
-    def __init__(self, enabled=False, *, factory=None, now=time.monotonic):
+    def __init__(self, enabled=False, *, factory=None, now=host.awake_clock()):
         self._enabled = enabled is True
         self.capable = host.MACOS or not host.LINUX
         self._factory = factory
