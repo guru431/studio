@@ -255,9 +255,16 @@ def scan(root: Path, exclude=()) -> dict:
                 for child in children:
                     path = Path(child.path)
                     relative = path.relative_to(root).as_posix()
-                    files._parts(relative)
+                    try:
+                        files._parts(relative)
+                        skip = relative in exclude
+                    except Refused:
+                        if len(relative) > files.limits.PATH_MAX:
+                            raise
+                        # Имя, которого протокол на этой ОС не принимает, — «пропущен», а не отказ всего обхода.
+                        skip = True
                     # DirEntry.stat на Windows может не заполнять inode и номер тома.
-                    entry = SKIPPED if relative in exclude else _entry(root, path, path.lstat())
+                    entry = SKIPPED if skip else _entry(root, path, path.lstat())
                     entries[relative] = entry
                     if entry == DIRECTORY:
                         folders.append(path)
