@@ -451,7 +451,9 @@ async def get_speech(sid: str, request: Request):
 @router.get("/{sid}/parts/{n}")
 async def get_part(sid: str, n: int, request: Request):
     """Готовая часть идущей озвучки (n с 0) — слушать до склейки; итоговый mp3 от этого не меняется. Части
-    живут во временных файлах задания: кончилось (склейка, уборка) — 404, дальше слушают готовую озвучку."""
+    живут во временных файлах задания: кончилось (склейка, уборка) — 404, дальше слушают готовую озвучку.
+    Диапазоны — как у `/api/media` (`media.byte_range`: Safari на iPhone без 206 звук не играет); часть —
+    одна фраза, читается целиком: файл не держится открытым, пока задание его убирает."""
     _row(request.state.user.id, sid)
     job = JOBS.get(sid)
     if job is None or not 0 <= n < job.ready:
@@ -461,8 +463,17 @@ async def get_part(sid: str, n: int, request: Request):
         data = await asyncio.to_thread(part.read_bytes)
     except FileNotFoundError:
         raise HTTPException(404, {"code": "gone", "message": "этой части нет — слушайте готовую озвучку"}) from None
-    return Response(data, media_type="audio/wav" if part.suffix == ".wav" else "audio/mpeg",
-                    headers={"Cache-Control": "no-store"})
+    mime = "audio/wav" if part.suffix == ".wav" else "audio/mpeg"
+    headers = {"Cache-Control": "no-store", "Accept-Ranges": "bytes"}
+    spec = request.headers.get("range")
+    span = None if spec is None else media.byte_range(spec, len(data))
+    if span is None:
+        return Response(data, media_type=mime, headers=headers)
+    if span == media.UNSATISFIABLE:
+        return Response(status_code=416, headers=headers | {"Content-Range": f"bytes */{len(data)}"})
+    start, end = span
+    return Response(data[start:end + 1], status_code=206, media_type=mime,
+                    headers=headers | {"Content-Range": f"bytes {start}-{end}/{len(data)}"})
 
 
 @router.post("/{sid}/cancel")

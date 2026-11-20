@@ -198,6 +198,13 @@ def test_ready_parts_can_be_heard_before_the_mp3_is_glued(studio, fake_audio, mo
     assert part.status_code == 200 and part.content == WAV_FAKE and part.headers["content-type"] == "audio/wav"
     assert part.headers["cache-control"] == "no-store"
     assert studio.c.get(f"/api/speeches/{sid}/parts/1").status_code == 404
+    # Safari на iPhone играет звук только с ответом на Range — как /api/media
+    piece = studio.c.get(f"/api/speeches/{sid}/parts/0", headers={"Range": "bytes=0-1"})
+    assert piece.status_code == 206 and piece.content == WAV_FAKE[:2]
+    assert piece.headers["content-range"] == f"bytes 0-1/{len(WAV_FAKE)}" and piece.headers["accept-ranges"] == "bytes"
+    assert part.headers["accept-ranges"] == "bytes"
+    beyond = studio.c.get(f"/api/speeches/{sid}/parts/0", headers={"Range": f"bytes={len(WAV_FAKE)}-"})
+    assert beyond.status_code == 416 and beyond.headers["content-range"] == f"bytes */{len(WAV_FAKE)}"
     studio.gw.tts_replies = [(200, WAV_FAKE)]
     done = wait_sp(studio, sid, {"done", "error"})
     assert done["state"] == "done" and done["parts"] == 0 and ("mp3_of", 2) in fake_audio.calls
