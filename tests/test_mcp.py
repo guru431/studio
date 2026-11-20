@@ -166,6 +166,19 @@ def test_new_mcp_address_requires_secrets_again(studio):
     assert studio.c.put(f'/api/mcp/{plain}', json={'name': 'Plain', 'url': other}).status_code == 200
 
 
+def test_deleted_mcp_server_is_no_longer_selected_in_chats(studio):
+    """Удалённый в настройках сервер не числится в диалоге и не мешает перейти на прямое подключение."""
+    from conftest import add_connection
+    sid = add(studio)
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).json()['mcp_ids'] == [sid]
+    assert studio.c.delete(f'/api/mcp/{sid}').status_code == 204
+    assert studio.c.get(f'/api/chats/{cid}').json()['chat']['mcp_ids'] == []
+    cloud = add_connection(studio, name='cloud')
+    moved = studio.c.patch(f'/api/chats/{cid}', json={'connection_id': cloud, 'model': 'local-gemma-abl'})
+    assert moved.status_code == 200, moved.text
+
+
 def test_model_without_tools_explains_how_to_disable_mcp(studio):
     sid = add(studio); mock(studio)
     cid = new_chat(studio)

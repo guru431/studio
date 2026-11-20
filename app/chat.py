@@ -285,7 +285,7 @@ def _chat_view(user_id: int, row) -> dict:
         row["id"], row["web_consent"])
     out["thinking"] = bool(row["thinking"])
     out["thinking_ok"] = out["local"]
-    out["mcp_ids"] = json.loads(row["mcp_ids"])
+    out["mcp_ids"] = mcp_client.present(user_id, row["mcp_ids"])
     out["mcp_ok"] = out["proxied"] and not out["cleaner"]
     if out["mcp_ids"] and out["mcp_ok"] and _needs_web_consent(row["id"], row["web_consent"]):
         out["external_web"] = True
@@ -1352,7 +1352,7 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
             changes["web_consent"] = None
     if "mcp_ids" in changes or "connection_id" in changes:
         row = _chat_row(uid, chat_id)
-        ids = body.mcp_ids if body.mcp_ids is not None else json.loads(row["mcp_ids"])
+        ids = body.mcp_ids if body.mcp_ids is not None else mcp_client.present(uid, row["mcp_ids"])
         cid = changes.get("connection_id", row["connection_id"])
         conn = connections.get(uid, cid) if cid is not None else None
         if ids and (conn is None or not conn.proxied or conn.cleaner):
@@ -1631,7 +1631,7 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     if row["connection_id"] is None:
         raise cleaner.refused("Выберите подключение Cleaner")
     conn = connections.get(uid, row["connection_id"])
-    if json.loads(row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
+    if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     if not body.regenerate and not body.text.strip() and not atts:
@@ -1706,7 +1706,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if row["connection_id"] is None:
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
     conn = connections.get(uid, row["connection_id"])
-    if json.loads(row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
+    if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     model = row["model"] or manage.DEFAULT_MODEL
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
@@ -1744,6 +1744,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if fresh is None:
             raise _gone()
         kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] and not conn.cleaner else []
+        mcp_ids = mcp_client.present(uid, fresh["mcp_ids"])
         try:
             exa_key = web.exa_key(uid) if "search" in kinds else None
         except web.ToolError:
@@ -1771,13 +1772,13 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                                       "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
         # Exa получает запросы, составленные моделью из всей истории (6.10): расшифровка новее подтверждения —
         # только с `web_ok`; подтверждение — `now`, им покрыта и расшифровка этого хода (created = now)
-        if "search" in kinds or json.loads(fresh["mcp_ids"]):
+        if "search" in kinds or mcp_ids:
             if body.web_ok:
                 state.DB.execute("UPDATE chats SET web_consent = ? WHERE id = ?", (now, chat_id))
             elif _needs_web_consent(chat_id, state.DB.execute(
                     "SELECT web_consent FROM chats WHERE id = ?", (chat_id,)).fetchone()[0]):
                 raise HTTPException(409, {"code": "external_web", "message": (
-                    "Запросы из расшифровки могут уйти на MCP-серверы — подтвердите" if json.loads(fresh["mcp_ids"])
+                    "Запросы из расшифровки могут уйти на MCP-серверы — подтвердите" if mcp_ids
                     else "Запросы, составленные из расшифровки, могут уйти в Exa — подтвердите")})
         if scans:                                    # контекст и предел — после распознавания (_await_scans)
             messages, known = [], {}
@@ -1832,7 +1833,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
                 "url": connections.chat_url(conn), "model": model, "messages": messages}
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
-                    tools=kinds, exa_key=exa_key, limit=limit, known=known, mcp_ids=json.loads(fresh["mcp_ids"]),
+                    tools=kinds, exa_key=exa_key, limit=limit, known=known, mcp_ids=mcp_ids,
                     thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
                     scans=scans, user_message_id=user_mid, cleaner_preview=preview)
     STREAMS[answer_id] = st
