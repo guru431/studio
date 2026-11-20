@@ -192,17 +192,47 @@ export function accessBlock(host) {
   }
 
   function shareRow(s) {
-    const place = `${s.computer} · ${project(s)}`;
+    const place = s.kind === 'chat' ? '' : `${s.computer} · ${project(s)}`;   // у обычного чата проекта нет
     const title = s.kind === 'chat' ? s.title || tr("Чат") : (s.title ? `${s.title} · ${place}` : place);
     const facts = [sectionName(s.kind), s.expires ? tr("до {0}", moment(s.expires)) : tr("бессрочная"),
       tr("открыта {0} {1}", s.views || 0, plural(s.views || 0, [tr("раз"), tr("раза"), tr("раз")])),
       s.fails ? tr("неверных PIN: {0}", s.fails) : null].filter(Boolean).join(' · ');
-    return el('li', { class: 'agent session access-share', 'data-id': s.id },
-      el('div', { class: 'session-info' }, el('b', {}, title), el('p', { class: 'muted small' }, facts),
-        el('p', { class: 'muted small' }, tr("Создана {0}", moment(s.created)))),
-      el('div', { class: 'session-actions' }, button(tr("Отключить"), { class: 'btn btn-sm btn-danger access-revoke',
-        'aria-label': tr("Отключить ссылку: {0}", title) }, () => act(() => api('DELETE',
-        `/api/me/access/shares/${encodeURIComponent(s.id)}`), tr("Ссылка отключена")))));
+    const href = s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
+      : s.session_id ? `#/code/${s.computer_id}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session_id)}` : null;
+    const info = el('div', { class: 'session-info' }, el('b', {}, title), el('p', { class: 'muted small' }, facts),
+      el('p', { class: 'muted small' }, tr("Создана {0}", moment(s.created))));
+    return el('li', { class: 'agent session access-share', 'data-id': s.id }, info,
+      el('div', { class: 'session-actions' },
+        href ? el('a', { class: 'btn btn-sm access-open', href, 'aria-label': tr("Открыть чат: {0}", title) }, tr("Открыть чат")) : null,
+        button(tr("Копировать ссылку"), { class: 'btn btn-sm access-copy', 'aria-label': tr("Копировать ссылку: {0}", title) },
+          () => copyLink(s, info)),
+        button(tr("Отключить"), { class: 'btn btn-sm btn-danger access-revoke',
+          'aria-label': tr("Отключить ссылку: {0}", title) }, () => act(() => api('DELETE',
+          `/api/me/access/shares/${encodeURIComponent(s.id)}`), tr("Ссылка отключена")))));
+  }
+
+  /** Адрес ссылки — только по нажатию (GET …/link, no-store). Safari теряет право записи в буфер после await, поэтому
+   * обещание адреса уходит в ClipboardItem сразу; не вышло — поле с выделенным адресом для ручного копирования. */
+  async function copyLink(s, info) {
+    say(note, '');
+    const url = api('GET', `/api/me/access/shares/${encodeURIComponent(s.id)}/link`).then((data) => data.url);
+    try {
+      if (typeof ClipboardItem === 'function' && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain': url.then((text) => new Blob([text], { type: 'text/plain' })) })]);
+      } else await navigator.clipboard.writeText(await url);
+      say(note, tr("Ссылка скопирована"), 'ok');
+    } catch {
+      let address;
+      try { address = await url; } catch (err) { say(note, words(err), 'error'); return; }
+      info.querySelector('.access-link')?.remove();
+      const box = el('input', { class: 'input access-link', readonly: true, value: address,
+        'aria-label': tr("Ссылка «Поделиться»") });
+      info.append(box);
+      box.focus();
+      box.select();
+      say(note, tr("Скопируйте выделенную ссылку"), 'error');
+    }
   }
 
   function revokeAll() {

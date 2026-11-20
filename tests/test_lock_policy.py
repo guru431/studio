@@ -367,6 +367,7 @@ ROUTES = {
         ("GET", "/api/admin/invitations"), ("POST", "/api/admin/invitations"),
         ("PATCH", "/api/admin/invitations/{iid}"), ("DELETE", "/api/admin/invitations/{iid}"),
         ("GET", "/api/me/access"), ("DELETE", "/api/me/access"), ("DELETE", "/api/me/access/shares/{share_id}"),
+        ("GET", "/api/me/access/shares/{share_id}/link"),
         ("DELETE", "/api/me/access/members/{aid}/{pid}/{member}"),
         ("DELETE", "/api/me/access/shared/{aid}"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
