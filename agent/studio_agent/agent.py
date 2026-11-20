@@ -178,6 +178,7 @@ class Agent:
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
+                 "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
                  "project_mirror_discovery": True, "mirror_exclude": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
                  "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,

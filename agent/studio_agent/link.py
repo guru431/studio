@@ -8,7 +8,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from websockets.asyncio.client import connect as ws_connect
@@ -26,6 +26,7 @@ FLUSH_SEC = 2  # stop(): дослать очередь (`done` ходов) не 
 CLOSE_PROTOCOL = 4400
 CLOSE_REVOKED = 4401
 CLOSE_REPLACED = 4409
+CLOSE_DISABLED = 4403  # учётка отключена в студии: не отзыв — ходы прочь, переподключение с паузами `limits.BACKOFF`
 
 
 def ws_url(url: str) -> str:
@@ -66,12 +67,14 @@ class Link:
     """Канал моста: подключается, знакомится, отвечает на просьбы и переподключается до отзыва, замены или `stop()`."""
 
     def __init__(self, url: str, key: str, agent: Agent, on_state: Callable[[str], None] = lambda s: None, *,
-                 on_welcome: Callable[[dict], None] | None = None, connect=ws_connect, sleep=asyncio.sleep):
+                 on_welcome: Callable[[dict], None] | None = None,
+                 on_disabled: Callable[[], Awaitable[None]] | None = None, connect=ws_connect, sleep=asyncio.sleep):
         self.uri = ws_url(url)
         self.key = key
         self.agent = agent
         self.on_state = on_state
         self.on_welcome = on_welcome  # кадр `welcome` наружу (логин и имя компьютера — ядру); зовётся в цикле
+        self.on_disabled = on_disabled  # 4403: ядро гасит ходы и открытые сессии; канал переподключается дальше
         self._connect = connect
         self._sleep = sleep
         self._queue: asyncio.Queue | None = None  # очередь отправки текущего канала
@@ -130,7 +133,15 @@ class Link:
                 return "replaced"
             if welcomed:
                 fails = 0
-            self.on_state("offline")
+            if code == CLOSE_DISABLED:
+                if self.on_disabled is not None:
+                    try:
+                        await self.on_disabled()
+                    except Exception as e:
+                        log.warning("канал: учётка отключена: %s", type(e).__name__)
+                self.on_state("disabled")
+            else:
+                self.on_state("offline")
             if code == CLOSE_PROTOCOL:
                 pause = limits.PROTOCOL_PAUSE_SEC
             else:

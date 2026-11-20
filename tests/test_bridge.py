@@ -71,6 +71,7 @@ def test_link_needs_a_known_key(studio):
             assert closed_with(ws) == bridge.CLOSE_AUTH
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
     with link_ws(studio, key) as ws:
+        ws.send_json(HELLO)          # код отключённой учётке выбирается по `hello` (`bridge.disabled_code`)
         assert closed_with(ws) == bridge.CLOSE_AUTH
     assert kinds() == ["enroll"] and not bridge.LINKS
 
@@ -339,6 +340,30 @@ def test_revoke_and_disable_drop_the_link(studio):
         assert closed_with(ws) == bridge.CLOSE_AUTH
         assert not bridge.LINKS
     with link_ws(studio, key2) as ws:
+        ws.send_json(HELLO)
+        assert closed_with(ws) == bridge.CLOSE_AUTH
+
+
+def test_disabled_account_closes_4403_and_enable_brings_computers_back(studio):
+    """Отключение — не отзыв: мост с `hello.account_disabled` получает 4403 и на канале, и на каждом новом
+    рукопожатии, пока учётка отключена; ключ цел — после «Включить» тот же ключ снова на связи. Удаление — 4401."""
+    uid = make_user(studio, "owner")
+    make_user(studio, "admin", is_admin=True)
+    aid, key = enroll(studio)
+    hello = {**HELLO, "account_disabled": True}
+    signin(studio, "admin")
+    with online(studio, key, hello) as ws:
+        assert studio.c.patch(f"/api/admin/users/{uid}", json={"disabled": True}).status_code == 200
+        assert closed_with(ws) == bridge.CLOSE_DISABLED and not bridge.LINKS
+    with link_ws(studio, key) as ws:
+        ws.send_json(hello)
+        assert closed_with(ws) == bridge.CLOSE_DISABLED
+    assert "revoke" not in kinds() and state.DB.execute("SELECT 1 FROM agents WHERE id = ?", (aid,)).fetchone()
+    assert studio.c.patch(f"/api/admin/users/{uid}", json={"disabled": False}).status_code == 200
+    with online(studio, key, hello):
+        assert aid in bridge.LINKS
+        assert studio.c.delete(f"/api/admin/users/{uid}").status_code == 200
+    with link_ws(studio, key) as ws:
         assert closed_with(ws) == bridge.CLOSE_AUTH
 
 
@@ -490,6 +515,11 @@ def test_stop_and_drop_user_close_links(studio):
     studio.c.portal.call(bridge.drop_user, owner)
     settle(studio)
     assert (mine.closed_with, theirs.closed_with) == (bridge.CLOSE_AUTH, None)
+    mine = connect(studio, enroll(studio)[0], FakeMachine())
+    mine.hello["account_disabled"] = True
+    studio.c.portal.call(lambda: bridge.drop_user(owner, disabled=True))
+    settle(studio)
+    assert mine.closed_with == bridge.CLOSE_DISABLED
     studio.c.portal.call(bridge.stop)
     assert theirs.closed_with == bridge.CLOSE_RESTART and not bridge.LINKS
 

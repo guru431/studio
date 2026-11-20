@@ -297,6 +297,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Пароль: {0}": "Password: {0}",
   "Удалить": "Delete",
   "Удалить пользователя?": "Delete user?",
+  "Отключить пользователя?": "Disable user?",
+  "«{0}» выйдет из всех сессий; его генерации, ответы чата и ходы на компьютерах остановятся. История и привязка компьютеров сохранятся: после «Включить» мосты 0.42.0 и новее подключатся сами, прежние придётся привязать заново.": "“{0}” will be signed out of all sessions; their generations, chat replies and computer runs will stop. History and linked computers are kept: after “Enable”, bridges 0.42.0 and newer reconnect on their own, older ones must be linked again.",
   "Удалятся учётка «{0}», её подключения и вся история. Отменить нельзя.": "Account “{0}”, its connections and all history will be deleted. This cannot be undone.",
   "Для подтверждения введите логин": "Enter the login to confirm",
   "«{0}» удалён, но файлов на хранилище ещё {1}: удалятся, когда оно станет доступно": "“{0}” deleted, but {1} files remain in storage. They will be deleted when it becomes available",
