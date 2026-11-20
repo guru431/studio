@@ -9180,6 +9180,49 @@ def test_code_question_own_answer(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
+def test_code_ask_cards_keep_typed_answers_across_a_snapshot(browser, live):
+    """Набранный «Свой ответ», отметки и «Что сделать вместо этого» переживают снимок хода (вкладка ушла с экрана и
+    вернулась — live заново): карточка того же запроса остаётся той же, ответ уходит с набранным."""
+    login = "code-ask-keep"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат A")})
+    machine.script = [{"k": "ask", "request_id": "q1", "kind": "question", "questions": [
+        {"question": "Что проверить?", "header": "Проверки", "multi": True,
+         "options": [{"label": "Тесты", "description": ""}, {"label": "Линтер", "description": ""}]},
+        {"question": "Какую базу взять?", "header": "База", "multi": False,
+         "options": [{"label": "SQLite", "description": ""}]}]},
+        code_permission("r1", False), {"k": "done", "status": "done"}]
+    aid, sb = code_online(live, login, machine)
+    lives = "window.codeCalls.filter((c) => c[1].endsWith('/live')).length"
+    snapshot = [("eval", "before", f"window.livesBefore = {lives}"), hide(), show(),
+                ("wait", f"{lives} > window.livesBefore"), ("eval", "settled", settled("true", 800))]
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "spy", CODE_SPY), *code_send("Настрой базу"),
+            ("wait", "document.querySelector(\".code-ask[data-request='q1']\")"),
+            ("click", ".code-ask input[value='Тесты']"),
+            ("type", ".code-ask-question:last-of-type .code-ask-own", "DuckDB"), *snapshot,
+            ("eval", "question", """(() => { const c = document.querySelector(".code-ask[data-request='q1']");
+              return [c.querySelector("input[value='Тесты']").checked,
+                c.querySelector('.code-ask-question:last-of-type .code-ask-own').value]; })()"""),
+            ("click", ".code-ask-answer"),
+            ("wait", "document.querySelector(\".code-ask[data-request='r1']\")"),
+            ("type", ".code-ask-instead", "Сначала покажи план"), *snapshot,
+            ("eval", "instead", "document.querySelector(\".code-ask[data-request='r1'] .code-ask-instead\").value"),
+            ("eval", "cards", "document.querySelectorAll('.code-ask').length"),
+            ("click", ".code-ask-no"), ("wait", CODE_IDLE_AFTER.format(n=1))], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["question"] == [True, "DuckDB"]
+    assert v["instead"] == "Сначала покажи план" and v["cards"] == 1
+    first, second = code_requests(machine, "answer")
+    assert first["answers"] == {"Что проверить?": "Тесты", "Какую базу взять?": "DuckDB"}
+    assert (second["decision"], second["message"]) == ("deny", "Сначала покажи план")
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
 def test_code_turn_error_without_message_says_error(browser, live):
     """Конец хода с ошибкой без слов — «Ошибка», без висящего двоеточия; со словами — «Ошибка: <слова>»."""
     from fake_bridge import pid

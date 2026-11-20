@@ -1296,7 +1296,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         grow(() => {
           Object.assign(t.view, renderTimeline(t.steps, { ...data, live: true }));
           t.view.progress.update(data.progress || {}, t.models, true);
-          t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map(askNode));
+          // Карточка того же запроса остаётся прежней: набранный ответ, «вместо этого» и отметки снимок не стирает.
+          const shownAsks = new Map([...feed.querySelectorAll('.code-ask')].map((card) => [card.dataset.request, card]));
+          t.asks.replaceChildren(...(Array.isArray(data.asks) ? data.asks : []).map((a) => {
+            const id = String(a.request_id ?? '');
+            return (id && shownAsks.get(id)) || askNode(a);
+          }));
         });
         if (data.activity) paintActivity(data.activity.state, data.activity.tool);
         else continueActivity();
