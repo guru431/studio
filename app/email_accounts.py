@@ -37,6 +37,13 @@ EMAIL_PATHS = frozenset({"/api/me", "/api/me/email", "/api/me/email/confirm"})
 EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}")  # после lower(); re.I сопоставил бы «ſ» и «ı» с s и i
 
 
+class BadEmail(ValueError):
+    """Отказ `email_address`: main.invalid_request отдаёт его слова (свои, без присланного), а не общие."""
+
+
+BAD_EMAIL = "Укажите корректный адрес электронной почты"
+
+
 def email_address(value: str) -> str:
     value = value.strip().lower()
     if (len(value) > 254 or not EMAIL_RE.fullmatch(value) or ".." in value
@@ -44,7 +51,7 @@ def email_address(value: str) -> str:
             or len(value.split("@")[0]) > 64
             or any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
                    for label in value.split("@")[-1].split("."))):
-        raise ValueError("Укажите корректный адрес электронной почты")
+        raise BadEmail(BAD_EMAIL)
     return value
 
 
@@ -188,6 +195,9 @@ def check_code(token: str, code: str, kind: str = "login", *, ip: str | None = N
     state.DB.execute("UPDATE email_tokens SET attempts=attempts+1 WHERE digest=?", (row["digest"],))
     if not hmac.compare_digest(security.digest(token + ":" + code), row["secret_hash"]):
         security_log.record(row["user_id"], "login_code_fail", detail=kind, ip=ip)
+        left = CODE_ATTEMPTS - row["attempts"] - 1
+        if left > 0:            # код ещё жив: набрать снова, а не начинать вход заново
+            raise HTTPException(400, {"code": "wrong_code", "message": "Неверный код", "left": left})
         raise invalid_token()
     delete_token(token)
     return row
@@ -386,6 +396,15 @@ async def forgot(request: Request, tasks: BackgroundTasks):
     return {"message": "Если учётная запись найдена, на её почту отправлена ссылка восстановления."}
 
 
+@router.post("/account/reset/check")
+async def check_reset(request: Request):
+    """Ссылка восстановления жива? — до того, как человек дважды наберёт новый пароль (как `check_invite`)."""
+    data = await public_data(request)
+    throttle("reset-ip", auth.client_ip(request), 20, 900)
+    token_row(data.get("token", ""), "reset")
+    return {"ok": True}
+
+
 @router.post("/account/reset")
 async def reset(request: Request):
     data = await public_data(request)
@@ -419,9 +438,32 @@ async def complete_login(request: Request):
     return response
 
 
+def challenge_cookie(response: Response, token: str) -> None:
+    response.set_cookie(CHALLENGE_COOKIE, token, max_age=CODE_SEC, path="/", secure=True, httponly=True, samesite="lax")
+
+
+@router.post("/account/code/resend")
+async def resend_code(request: Request):
+    """«Отправить код ещё раз»: письмо не пришло. Cookie вызова — доказательство верного пароля этого браузера; новый
+    код заменяет прежний (тот гаснет), паузы — те же, что у входа (`login_code`). Вызов истёк или исчерпан — 400
+    `expired`: начать вход заново."""
+    await public_data(request)
+    throttle("verify-code-ip", auth.client_ip(request), 30, 900)
+    old = request.cookies.get(CHALLENGE_COOKIE, "")
+    row = token_row(old, "login")
+    token = await login_code(row["user_id"], request, row["next"][1:])
+    delete_token(old)
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    challenge_cookie(response, token)
+    return response
+
+
 @router.post("/api/me/email")
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
+    if state.DB.execute("SELECT 1 FROM users WHERE id=? AND email=?", (uid, body.email)).fetchone():
+        # своя же почта (поле заполнено ею) — не «уже используется» и без траты попытки из трёх
+        raise HTTPException(409, {"code": "same", "message": "Это и есть почта вашей учётки"})
     await auth.confirm_password(uid, body.password, "подтверждение почты", digest=request.state.digest)
     mail_ready()
     throttle("email-user", str(uid), 3, 900)        # до проверки занятости: 409 не даёт перебирать чужие адреса

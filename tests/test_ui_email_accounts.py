@@ -98,6 +98,8 @@ def test_invite_accept_recovery_and_email_settings(browser, live, mail, width):
         page.locator("#login").wait_for()
         assert page.evaluate("location.hash") == ""
         assert "Private comment" not in page.locator("body").inner_text()
+        page.locator("#login").fill("no spaces")              # pattern с флагом v компилируется — проверка в браузере
+        assert page.locator("#login").evaluate("input => input.validity.patternMismatch")
         page.locator("#login").fill(login)
         page.locator("#password").fill("friend1")
         page.locator("#repeat").fill("friend1")
@@ -128,6 +130,10 @@ def test_invite_accept_recovery_and_email_settings(browser, live, mail, width):
         page.locator("#repeat").fill("new-pass")
         page.locator("#repeat").press("Enter")
         pw.expect(page.locator("#account-status")).to_contain_text("Пароль сохранён")
+        page.goto("about:blank")                                 # смена одного фрагмента скрипт бы не перезапустила
+        page.goto(live.url + "/account/reset#spent-link")       # ссылка проверяется до набора пароля
+        pw.expect(page.locator("#account-status")).to_contain_text("недействительны")
+        assert page.locator("#password").count() == 0
         assert not errors
 
     signed = httpx.post(live.url + "/login", data={"login": email, "password": "new-pass"}, verify=False)
@@ -150,6 +156,11 @@ def test_invite_accept_recovery_and_email_settings(browser, live, mail, width):
         fits(page)
         page.screenshot(path=str(ROOT / ".tmp" / "email-accounts" / f"settings-{engine}-{width}.png"), full_page=True)
         page.goto(live.url + "/account/email")
+        pw.expect(page.locator("#account-back")).to_have_text("Назад в Студию")
+        pw.expect(page.locator("#account-logout button")).to_be_visible()
+        page.locator("#password").fill("new-pass")
+        page.locator("#account-form button").click()             # поле заполнено своей же почтой
+        pw.expect(page.locator("#account-status")).to_contain_text("Это и есть почта вашей учётки")
         page.locator("#email").fill("changed-" + email)
         page.locator("#password").fill("new-pass")
         page.locator("#account-form button").click()
@@ -242,6 +253,35 @@ def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser
         connection.close()
 
 
+def test_account_without_email_can_sign_out_and_verify_link_asks_to_sign_in(browser, live):
+    """Учётка до шага 40: «Укажите почту» — без «К входу» по кругу, с «Выйти»; ссылка подтверждения без сессии
+    объясняет, что делать (секрет из адреса уже стёрт)."""
+    instance, engine = browser
+    login = "nomail-page-" + engine
+    uid = live.add_user(login)
+    connection = db.connect(live.db_path)
+    try:
+        connection.execute("UPDATE users SET email=NULL WHERE id=?", (uid,))
+    finally:
+        connection.close()
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"}, verify=False)
+    assert signed.status_code == 303 and signed.headers["location"] == "/account/email"
+    with instance.new_context(viewport={"width": 390, "height": 900}, has_touch=True, ignore_https_errors=True,
+                              service_workers="block") as context:
+        context.add_cookies([{"name": key, "value": value, "url": live.url, "secure": True, "httpOnly": True,
+                              "sameSite": "Lax"} for key, value in signed.cookies.items()])
+        page = context.new_page()
+        page.goto(live.url + "/account/email")
+        pw.expect(page.locator("#title")).to_have_text("Укажите почту")
+        pw.expect(page.locator("#account-back")).to_be_hidden()
+        page.locator("#account-logout button").click()
+        page.wait_for_url("**/login")
+        assert httpx.get(live.url + "/api/me", verify=False, cookies=signed.cookies).status_code == 401
+        page.goto(live.url + "/account/verify#some-token")
+        pw.expect(page.locator("#account-status")).to_contain_text("Войдите в Студию в этом браузере")
+        pw.expect(page.locator("#account-back")).to_have_text("К входу")
+
+
 def test_email_code_form_finishes_login_only_after_correct_code(browser, live, mail):
     instance, engine = browser
     login = "code-" + engine
@@ -262,8 +302,11 @@ def test_email_code_form_finishes_login_only_after_correct_code(browser, live, m
             page.goto(live.url + "/account/code")
             page.locator("#code").fill(wrong)
             page.locator("#code").press("Enter")
-            pw.expect(page.locator("#account-status")).to_contain_text("недействительны")
+            pw.expect(page.locator("#account-status")).to_have_text("Неверный код — осталось попыток: 4")
             assert connection.execute("SELECT count(*) FROM sessions WHERE user_id=?", (uid,)).fetchone()[0] == 0
+            page.locator("#account-resend").click()                 # письмо «не пришло»: новый код, прежний гаснет
+            pw.expect(page.locator("#account-status")).to_contain_text("Новый код отправлен")
+            correct = re.search(r"\b[0-9]{6}\b", mail[-1][2])[0]
             page.locator("#code").fill(correct)
             page.locator("#code").press("Enter")
             page.locator("#rail").wait_for()

@@ -370,8 +370,10 @@ def login_target(value: str) -> str:
     return "/" + value if len(value) <= NEXT_MAX and NEXT_RE.fullmatch(value) else "/"
 
 
-def _login_page(error: str = "", status: int = 200) -> HTMLResponse:
-    return HTMLResponse(page("login.html", error), status_code=status, headers={"Cache-Control": "no-store"})
+def _login_page(error: str = "", status: int = 200, login: str = "") -> HTMLResponse:
+    """`login` — набранное в поле логина: после отказа его не набирать заново (пароль — заново)."""
+    body = page("login.html", error).replace("{{login}}", html.escape(login[:254], quote=True))
+    return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
 
 
 def foreign_origin(request: Request) -> bool:
@@ -409,11 +411,12 @@ async def login(request: Request):
         log.warning("вход с %s: тело длиннее %d байт", ip, LOGIN_BODY_MAX)
         return _login_page("Слишком длинный запрос", 413)
     form = parse_qs(body.decode("utf-8", "replace"))
-    name = identity_name((form.get("login") or [""])[0].strip().lower())
+    typed = (form.get("login") or [""])[0].strip()
+    name = identity_name(typed.lower())
     password = (form.get("password") or [""])[0]
     if locked(name, ip):
         log.warning("вход с %s: пауза", ip)
-        return _login_page("Слишком много попыток — подождите 15 минут", 429)
+        return _login_page("Слишком много попыток — подождите 15 минут", 429, typed)
     uid = await check_password(name, password, ip)
     if uid is not None:               # сессия — без await после сверки
         import email_accounts
@@ -423,15 +426,14 @@ async def login(request: Request):
             try:
                 token = await email_accounts.login_code(uid, request, next_)
             except HTTPException as err:
-                return _login_page(err.detail["message"], err.status_code)
+                return _login_page(err.detail["message"], err.status_code, typed)
             response = RedirectResponse("/account/code", status_code=303)
-            response.set_cookie(email_accounts.CHALLENGE_COOKIE, token, max_age=email_accounts.CODE_SEC,
-                                path="/", secure=True, httponly=True, samesite="lax")
+            email_accounts.challenge_cookie(response, token)
             response.headers["Cache-Control"] = "no-store"
             return response
         return finish_login(uid, request, next_)
     log.warning("вход с %s: неверно", ip)
-    return _login_page("Неверный логин или пароль", 401)
+    return _login_page("Неверный логин или пароль", 401, typed)
 
 
 def identity_name(value: str) -> str:
