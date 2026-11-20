@@ -42,7 +42,10 @@
   `#edit-mode-tip` называет выбранную модель, а вид подсказки (сила или референс) — по `images.STRENGTH_MODELS`.
 - Фото из истории в формах — до `forms.HISTORY_MAX`/`forms.HISTORY_PIXELS` (= `images.RESULT_MAX`/`RESULT_PIXELS`,
   сверяет тест); `forms._fit_history` уменьшает до рамки `normalize_image`; `forms.history_file(…, limit)`. Фото с
-  устройства — в прежних пределах. `image_upload.py` — копия модуля переводчика (CLAUDE.md), не меняется.
+  устройства в «Фото» и «Описать» — в пределах картинки ролика (`image_upload.VIDEO_UPLOAD`, `image_upload.VIDEO_PIXELS`:
+  снимок телефона 24–48 Мп) передаются параметрами: шлюз получает фото уже уменьшенным до ≤2 Мп. Тело — прежнее
+  `MAX_BODY + MAX_UPLOAD` (предел Apache): маску страница шлёт только с фото истории; файл больше 20 МиБ страница
+  отклоняет до отправки. `image_upload.py` — копия модуля переводчика (CLAUDE.md), не меняется.
 - Бомбы распаковки: `images._picture` и `claude_code._image_bytes` принимают `DecompressionBombWarning` за превышение
   (`too_big` / 413 `too_large`); фильтр предупреждений процесса не меняется (`ocr_render` без `warnings.catch_warnings`).
 - Видео с seed студии: `videos._send` ставит строку `queued` без `gateway_id` (`detail = videos.SENDING`) **до**
@@ -152,3 +155,6 @@
   одно задание за раз, release моделей картинок до запроса и gemma-abl после, так что следующий
   Lustify не ждёт карту под арендой gemma-abl. Обрезанный ответ (`finish_reason: length`) —
   ошибка, а не половина промпта в поле.
+- Описания и переводы живут только в памяти (`images.JOBS`) и в ленте не видны. 409 `busy` `images.ensure_idle`
+  несёт `id` и `kind` идущего задания: при `description`/`translation` страница показывает строку `#photo-orphan`
+  с «Отменить» (`POST /api/images/<id>/cancel`) и опрашивает его статус до конца, иначе перечитывает ленту.
