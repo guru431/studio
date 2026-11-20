@@ -1541,7 +1541,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Локальных изменений в зеркале: {0}. Заменить их состоянием проекта?": "The mirror contains {0} local changes. Overwrite them with the source project's state?",
   "Из зеркала будет удалено файлов и папок: {0}. Синхронизировать?": "Sync will delete {0} files and folders from the mirror. Continue?",
   "Локальных изменений в зеркале: {0}": "Local changes in the mirror: {0}",
-  "Пропущено исключений, ссылок, специальных объектов и связанных папок: {0}": "Skipped exclusions, links, special objects and related folders: {0}",
+  "Пропущено исключений, ссылок, специальных объектов, недопустимых имён и связанных папок: {0}": "Skipped exclusions, links, special objects, invalid names and related folders: {0}",
   "Постоянные исключения ({0})": "Permanent exclusions ({0})",
   "Исключения зеркала": "Mirror exclusions",
   "Относительные пути папок и файлов проекта, по одному на строку, без шаблонов. Они не копируются, а в копии не удаляются. Каталог .git переносится целиком.": "Relative project folder and file paths, one per line, no patterns. They are not copied and are not deleted in the copy. The .git folder is always copied in full.",

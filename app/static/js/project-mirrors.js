@@ -307,7 +307,7 @@ export function projectMirrors(host, trigger, aid, project) {
         await watch(item);
       }));
       state.replaceChildren(title, summary, ...(updated ? [el('p', { class: 'muted' }, updated)] : []), warning,
-        ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено исключений, ссылок, специальных объектов и связанных папок: {0}", data.skipped))] : []),
+        ...(data.skipped ? [el('p', { class: 'muted' }, tr("Пропущено исключений, ссылок, специальных объектов, недопустимых имён и связанных папок: {0}", data.skipped))] : []),
         ...(data.changes.length ? [difference(item, data, keep, omits, changed)] : []),
         exclusions(item),
         el('div', { class: 'actions' }, check, remove, sync));

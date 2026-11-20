@@ -31,6 +31,9 @@ EXCLUDE_MAX = 64
 SKIP = ["skip", "", 0, 0]
 DIR = ["dir", "", 0, 0]
 SHA256 = re.compile(r"[0-9a-f]{64}")
+# Как `files.DEVICE` и `files.BAD_CHARS` моста (без `\`: его протокол не пропускает ни на одной ОС).
+WINDOWS_DEVICE = re.compile(r"(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³]) *(?:\..*)?", re.IGNORECASE)
+WINDOWS_BAD = set(':*?"<>|')
 EXTERNAL_GIT = "Папка использует внешний каталог Git. Выберите основной репозиторий или отдельный клон."
 TRANSFERS = {}
 RESULTS = {}
@@ -216,10 +219,23 @@ def _plan(source, destination, baseline, *, windows=False):
     return updates, remove, changes, conflicts, skipped
 
 
+def _windows_name(path):
+    """Путь, который Windows может создать: без `: * ? " < > |`, имён устройств и точки или пробела в конце части."""
+    return not WINDOWS_BAD.intersection(path) and not any(
+        part[-1:] in (".", " ") or WINDOWS_DEVICE.fullmatch(part) for part in path.split("/"))
+
+
 def _portable(entries, platform, source_platform):
     if platform == "win32":
+        # Windows без режима разработчика не создаёт символических ссылок (`node_modules/.bin`, `.venv/bin`), а
+        # имён вроде `aux.c` или `a:b` не создаёт вовсе: такие пути — «пропущен», а не откат всей синхронизации.
+        for path, item in entries.items():
+            if item[0] == "link" or not _windows_name(path):
+                entries[path] = SKIP
         folded = set()
-        for path in entries:
+        for path, item in entries.items():
+            if item == SKIP:
+                continue
             key = path.casefold()
             if key in folded:
                 raise code._refuse(409, "conflict", "в проекте есть пути, различающиеся только регистром")
