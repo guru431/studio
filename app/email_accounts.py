@@ -382,7 +382,7 @@ async def complete_login(request: Request):
     throttle("verify-code-ip", auth.client_ip(request), 30, 900)
     token = request.cookies.get(CHALLENGE_COOKIE, "")
     row = check_code(token, data.get("code", ""))
-    response = auth.finish_login(row["user_id"], request, row["next"][1:])
+    response = auth.finish_login(row["user_id"], request, row["next"][1:], as_json=True)
     response.delete_cookie(CHALLENGE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response
 

@@ -437,7 +437,9 @@ def identity_name(value: str) -> str:
     return row[0] if row else value
 
 
-def finish_login(uid: int, request: Request, next_: str = "") -> Response:
+def finish_login(uid: int, request: Request, next_: str = "", *, as_json: bool = False) -> Response:
+    """Сессия и 303 на `login_target`. `as_json` — ответ `{"next": адрес}` для входа через fetch: `Response.url`
+    после перенаправления по стандарту Fetch приходит без фрагмента, и страница потеряла бы `#/…`."""
     import email_accounts
     ip = client_ip(request)
     replaced = request.cookies.get(COOKIE)
@@ -448,7 +450,8 @@ def finish_login(uid: int, request: Request, next_: str = "") -> Response:
     security_log.record(uid, "login", digest=security.digest(value), ip=ip)
     log.info("вход с %s: успешно", ip)
     target = login_target(next_) if email_accounts.has_email(uid) else "/account/email"
-    response = RedirectResponse(target, status_code=303, headers={"Cache-Control": "no-store"})
+    response = (JSONResponse({"next": target}, headers={"Cache-Control": "no-store"}) if as_json
+                else RedirectResponse(target, status_code=303, headers={"Cache-Control": "no-store"}))
     _set_cookie(response, value)
     return response
 
