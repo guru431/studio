@@ -3,6 +3,7 @@
 Поля формы: `url`, `login`, `password`, `name`, `projects_roots` (раньше `projects_root`), `pin`, `pin2`, `no_pin`, `autostart`.
 Пароль студии уходит только в привязку и нигде не сохраняется."""
 
+import logging
 import unicodedata
 from pathlib import Path
 
@@ -13,6 +14,8 @@ NAME_MAX = 64
 NO_FOLDER = "Папки нет"
 PIN_WORDS = "PIN — от 4 до 8 цифр"
 PIN_MISMATCH = "PIN не совпадает"
+
+log = logging.getLogger("studio_agent")
 
 
 def _text(form: dict, name: str) -> str:
@@ -88,3 +91,23 @@ def apply(h: Path, form: dict, *, enroll_fn=enroll.enroll) -> store.Config:
     elif _text(form, "pin"):
         pins.set_pin(_text(form, "pin"))
     return cfg
+
+
+def previous(h: Path, form: dict) -> tuple[str, str] | None:
+    """До `apply`: форма с логином заменит ключ — (адрес, прежний ключ) для `revoke`; иначе `None`.
+
+    Повторная привязка (меню Linux, консольный `enroll`) после записи нового ключа отзывает прежний: иначе в
+    «Компьютерах» студии оставался бы второй компьютер «не на связи» со старыми вкладками, доступами и зеркалами."""
+    key = store.load_key(h) if _text(form, "login").strip() else None
+    return (store.load_config(h).url, key) if key is not None else None
+
+
+def revoke(url: str, key: str, unenroll_fn=enroll.unenroll) -> bool:
+    """`DELETE` прежнего ключа (блокирует) → забыла ли студия прежний компьютер; любой сбой — не забыла."""
+    try:
+        status, forgotten = unenroll_fn(url, key)
+    except Exception as e:
+        log.info("прежняя привязка: %s", type(e).__name__)
+        return False
+    log.info("прежняя привязка: %d", status)
+    return forgotten
