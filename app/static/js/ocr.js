@@ -6,7 +6,8 @@ import { message as serverMessage, tr } from './i18n.js';
  * расширение сохраняет сервер), «Удалить»; идущий — состояние
  * и «Отменить». Ниже — листалка «‹ страница N из M ›» и две колонки: картинка страницы (нажатие — окно
  * просмотра #ocr-viewer) и её текст. На телефоне (≤ 760 px) картинка над текстом, список выезжает сбоку,
- * как у «Расшифровки». Готовые страницы идущего документа уже листаются.
+ * как у «Расшифровки». Готовые страницы идущего документа уже листаются; опрос вид не пересобирает — картинка,
+ * текст страницы и кнопки остаются теми же узлами, пока их данные те же (feed.keep).
  *
  * Загрузка — один PDF или несколько фото одним выбором (один документ, страницы в порядке выбора):
  * XMLHttpRequest с FormData (части `file`, ход в процентах), 423 запертой студии (XHR идёт мимо api.js)
@@ -46,6 +47,12 @@ function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Текст узла — только если сменился: опрос не сбрасывает выделение в нём. */
+function put(node, value) {
+  const shown = value ?? '';
+  if (node.textContent !== shown) node.textContent = shown;
+}
+
 function media(id) {
   return `/api/media/${encodeURIComponent(id)}`;
 }
@@ -74,6 +81,9 @@ function build(view, ctx) {
   let shownId = null;          // документ, чья страница сейчас в листалке
   let at = 0;                  // номер показанной страницы (с 0)
   let busy = null;             // блок «идёт» выбранного документа (feed.busyBlock): опрос меняет в нём только текст
+  // вид выбранного переживает опрос (05:F14): узлы — по ключу своих данных, иначе меняются только тексты
+  let acts = null;             // { key, box } — кнопки документа
+  let two = null;              // { key, box, scan, text } — показанная страница: картинка и текст
   const docs = createPicker({ url: '/api/ocr', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
     show() {
@@ -239,6 +249,30 @@ function build(view, ctx) {
     return el('p', { class: 'ocr-text muted' }, RUNNING.has(item.state) ? tr("ждёт распознавания") : tr("не распознана"));
   }
 
+  const prev = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-prev', 'aria-label': tr("Предыдущая страница") }, '‹');
+  const next = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-next', 'aria-label': tr("Следующая страница") }, '›');
+  const pageNo = el('span', { id: 'ocr-page', 'aria-live': 'polite' });
+  const pager = el('div', { class: 'ocr-pager' }, prev, pageNo, next);
+  prev.addEventListener('click', () => turn(-1));
+  next.addEventListener('click', () => turn(1));
+  const note = el('p', {});                                    // слова кончившегося не «готово» документа
+  const meta = el('p', { class: 'ocr-meta muted small' });
+
+  /** Картинка и текст страницы: та же страница с теми же данными — те же узлы (выделение, декодированная
+   * картинка и фокус переживают опрос); картинка меняется только со своим файлом. */
+  function pageNode(item, page) {
+    // идёт ли документ, видно только у нераспознанной страницы («ждёт распознавания», «Повторить страницу»)
+    const running = ['waiting', 'failed'].includes(page.state) && RUNNING.has(item.state);
+    const key = `${item.id}:${page.n}`;
+    const scanKey = JSON.stringify([page.media_id, page.state === 'layer']);
+    const textKey = JSON.stringify([page.state, page.text, page.detail, running]);
+    if (!two || two.key !== key) two = { key, box: el('div', { class: 'ocr-two', 'data-n': String(page.n) }) };
+    if (two.scanKey !== scanKey) Object.assign(two, { scanKey, scan: scanNode(page) });
+    if (two.textKey !== textKey) Object.assign(two, { textKey, text: textNode(page, item) });
+    keep(two.box, [two.scan, two.text]);
+    return two.box;
+  }
+
   function pageView(item) {
     const pages = item.pages;
     if (!pages.length) return [];
@@ -247,35 +281,66 @@ function build(view, ctx) {
       at = 0;
     }
     at = Math.min(at, pages.length - 1);
-    const page = pages[at];
     const nodes = [];
     if (pages.length > 1) {
-      const prev = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-prev', 'aria-label': tr("Предыдущая страница"),
-        disabled: at === 0 }, '‹');
-      const next = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-next', 'aria-label': tr("Следующая страница"),
-        disabled: at === pages.length - 1 }, '›');
-      prev.addEventListener('click', () => turn(-1));
-      next.addEventListener('click', () => turn(1));
-      nodes.push(el('div', { class: 'ocr-pager' }, prev,
-        el('span', { id: 'ocr-page', 'aria-live': 'polite' }, tr("страница {0} из {1}", at + 1, pages.length)), next));
+      prev.disabled = at === 0;
+      next.disabled = at === pages.length - 1;
+      put(pageNo, tr("страница {0} из {1}", at + 1, pages.length));
+      nodes.push(pager);
     }
-    nodes.push(el('div', { class: 'ocr-two', 'data-n': String(page.n) }, scanNode(page), textNode(page, item)));
+    nodes.push(pageNode(item, pages[at]));
     return nodes;
   }
 
   function turn(step) {
     at += step;
     paintView();
-    const focus = body.querySelector(step < 0 ? '#ocr-prev' : '#ocr-next');
-    if (focus && !focus.disabled) focus.focus();
+    const focus = step < 0 ? prev : next;
+    if (focus.isConnected && !focus.disabled) focus.focus();
+  }
+
+  /** Кнопки документа — заново только при смене того, что в них видно; нажатие берёт документ на момент
+   * нажатия (docs.current: опрос его заменяет). */
+  function actions(item) {
+    const running = RUNNING.has(item.state);
+    const again = !running && item.state !== 'done' && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed');
+    const key = JSON.stringify([item.id, readable(item), again, running]);
+    if (acts && acts.key === key) return acts.box;
+    const box = el('div', { class: 'tr-acts' });
+    if (readable(item)) {
+      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, tr("Копировать"));
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(asMarkdown(docs.current.pages));
+          copy.textContent = tr("Скопировано");
+        } catch {
+          error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
+        }
+      });
+      box.append(copy,
+        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
+        menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
+          () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
+    }
+    if (again) box.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // ошибка или отмена документа
+    const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-rename' }, tr("Переименовать"));
+    ren.addEventListener('click', () => rename(docs.current));
+    box.append(ren);
+    if (!running) {
+      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, tr("Удалить"));
+      del.addEventListener('click', () => confirmDelete(docs.current));
+      box.append(del);
+    }
+    acts = { key, box };
+    return box;
   }
 
   function paintView() {
     const item = docs.current;
-    title.textContent = item ? item.name : NAMES.ocr;
+    put(title, item ? item.name : NAMES.ocr);
     if (!item) {
       shownId = null;
-      busy = null;
+      busy = acts = two = null;
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? tr("Выберите документ в списке.")
         : tr("Загрузите PDF-скан или фото страниц — студия распознает текст.")));
       return;
@@ -286,41 +351,13 @@ function build(view, ctx) {
     if (busy) {
       nodes.push(busy.box);
     } else if (item.state !== 'done') {
-      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
+      note.className = item.state === 'error' ? 'error' : 'muted';
+      put(note, serverMessage(item.detail));
+      nodes.push(note);
     }
     const n = item.pages.length;
-    nodes.push(el('p', { class: 'ocr-meta muted small' },
-      `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)}`));
-    const acts = el('div', { class: 'tr-acts' });
-    if (readable(item)) {
-      const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, tr("Копировать"));
-      copy.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(asMarkdown(item.pages));
-          copy.textContent = tr("Скопировано");
-        } catch {
-          error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
-        }
-      });
-      acts.append(copy,
-        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
-        menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
-          () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
-    }
-    if (item.state !== 'done' && !RUNNING.has(item.state)
-        && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed')) {
-      acts.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // ошибка или отмена документа
-    }
-    const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-rename' }, tr("Переименовать"));
-    ren.addEventListener('click', () => rename(item));
-    acts.append(ren);
-    if (!RUNNING.has(item.state)) {
-      const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'ocr-delete' }, tr("Удалить"));
-      del.addEventListener('click', () => confirmDelete(item));
-      acts.append(del);
-    }
-    if (acts.children.length) nodes.push(acts);
-    nodes.push(...pageView(item));
+    put(meta, `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)}`);
+    nodes.push(meta, actions(item), ...pageView(item));
     keep(body, nodes);
   }
 
