@@ -1147,7 +1147,8 @@ async def export(tid: str, request: Request, format: str = Query(..., pattern="^
     # Markdown — только у перевода распознанного скана: txt и docx — через md_plain; текст поля и документа — как есть
     markdown = row["scan_id"] is not None
     if format == "docx":
-        body = exports.text_docx(text, stem, markdown=markdown)
+        body = exports.text_docx(text, stem, markdown=markdown,
+                                 rtl=(row["result_lang"] or row["target_lang"]) in translate_text.RTL)
     else:
         body = (exports.md_plain(text) if markdown and format == "txt" else text).encode("utf-8")
     name = f"{stem}.{row['result_lang'] or row['target_lang']}.{format}"

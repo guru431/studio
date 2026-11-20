@@ -15,7 +15,9 @@ document.addEventListener('studio-before-auto-refresh', (event) => {
 
 /** Черновик поля раздела `key`: пустое поле при сборке получает его. `sent(value)` — текст ушёл (успешная
  * отправка) и черновиком не станет; `save(keep)` — при уходе из раздела: непустое, не отправленное и `keep` —
- * в черновик, иначе черновика нет. `own()` — текст поля набран человеком (у «Перевода» — не исходник открытой записи). */
+ * в черновик, иначе черновика нет. `own()` — текст поля набран человеком (у «Перевода» — не исходник открытой записи).
+ * `stash()` — поле сейчас займёт другое (запись истории «Перевода»): непустой неотправленный текст — в черновик, поле
+ * остаётся на экране; `take()` — черновик (или '') и его больше нет. */
 export function sectionDraft(key, field, own = () => true) {
   const saved = texts.get(key);
   if (saved && !field.value) field.value = saved;
@@ -32,6 +34,15 @@ export function sectionDraft(key, field, own = () => true) {
       const value = field.value;
       if (keep && value.trim() && value !== sent) texts.set(key, value);
       else texts.delete(key);
+    },
+    stash() {
+      const value = field.value;
+      if (value.trim() && value !== sent) texts.set(key, value);
+    },
+    take() {
+      const value = texts.get(key) || '';
+      texts.delete(key);
+      return value;
     },
   };
 }

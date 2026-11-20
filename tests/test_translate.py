@@ -985,9 +985,19 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
         "Договор", "Первая строка.", "Вторая строка."]
     assert studio.c.get(f"/api/translate/{tid}/export?format=pdf").status_code == 422
 
+    assert "bidi" not in ElementTree.tostring(root, encoding="unicode")
+
     text = wait_row(studio, start(studio, "Hello."))["id"]
     r = studio.c.get(f"/api/translate/{text}/export?format=txt")
     assert r.headers["content-disposition"] == media.disposition("Перевод.ru.txt")
+
+    # аудит 05:F13: перевод на арабский — абзацы текста справа налево, заголовок-имя — как есть
+    studio.gw.chat_script = [["مرحبا."]]
+    arabic = wait_row(studio, start(studio, "Hello.", target="ar"))["id"]
+    r = studio.c.get(f"/api/translate/{arabic}/export?format=docx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        paragraphs = list(ElementTree.fromstring(z.read("word/document.xml")).iter(f"{w}p"))
+    assert [p.find(f"{w}pPr/{w}bidi") is not None for p in paragraphs] == [False, True]
     held = hold_chat(studio)
     running = start(studio, "Hello again.")
     r = studio.c.get(f"/api/translate/{running}/export?format=txt")

@@ -7618,6 +7618,76 @@ def test_translate_delete_from_history(browser, live, translator):
     assert not [p for p in problems(r) if not p.endswith(own)], problems(r)
 
 
+REFRESH_VETO = "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))"
+
+
+def test_translate_keeps_typed_text_while_a_record_is_open(browser, live, translator):
+    """05:F12: набранный и не отправленный текст не пропадает, когда открыли запись истории: он — черновик
+    (переживает смену раздела и запрещает автоперезагрузку), «Новый перевод» возвращает его в поле и защиту не
+    снимает; второй «Новый перевод» — пустое поле, защиты нет."""
+    live.add_user("tl-typed")
+    translator.chat_script = [["Bonjour"]]
+    field = "document.querySelector('#tl-input').value"
+    open_row = [("click", ".tl-row[data-state=done] .tl-open"), ("wait", f"{TL_OUTPUT} === 'Bonjour'")]
+    r = browser.drive(live.url + "/", [*signin("tl-typed"), ("wait", READY), add_translator(), finished_record(),
+        *go("translate"), ("wait", TL_DONE),
+        set_value("#tl-input", "Мой черновик"),
+        *open_row,
+        ("eval", "opened", f"[{field}, {REFRESH_VETO}]"),
+        *go("chat"), ("wait", "document.querySelector('#chat-input')"),
+        *go("translate"), ("wait", f"{TL_DONE} && {field} === 'Мой черновик'"),
+        *open_row,
+        ("click", "#tl-new"),
+        ("eval", "fresh", f"[{field}, {TL_OUTPUT}, {REFRESH_VETO}]"),
+        ("click", "#tl-new"),
+        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["opened"] == ["Привет", True]
+    assert v["fresh"] == ["Мой черновик", "", True]
+    assert v["cleared"] == ["", False]
+    assert not problems(r), problems(r)
+
+
+def test_translate_redirect_keeps_the_chosen_target(browser, live, translator):
+    """05:F17: цель — русский, текст — русский: перевод ушёл на английский. Правый выбор остаётся «русский» (следующий
+    текст уйдёт на русский), о перенаправлении говорит состояние, строка истории — «RU → EN»."""
+    live.add_user("tl-redirect")
+    translator.chat_reply, translator.chat_script = ["ru"], [["Hello"]]
+    r = browser.drive(live.url + "/", [*translating("tl-redirect"),
+        set_value("#tl-input", "Привет"), ("click", "#tl-go"),
+        ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Hello'"),
+        ("eval", "after", f"[...{TL_LANGS}, document.querySelector('#tl-status').textContent,"
+                          f" {TL_DONE}.querySelector('.tl-pair').textContent]"),
+        ("click", "#tl-swap"),                         # ⇄ — языки перевода на деле: английский → русский
+        ("eval", "swapped", f"[...{TL_LANGS}, document.querySelector('#tl-input').value, {TL_OUTPUT}]")])
+    assert not r.get("failed"), r
+    assert r["values"]["after"] == ["auto", "ru", "Исходник уже на языке перевода — переведено на английский", "RU → EN"]
+    assert r["values"]["swapped"] == ["en", "ru", "Hello", "Привет"]
+    assert not problems(r), problems(r)
+
+
+def test_translate_into_arabic_reads_right_to_left(browser, live, translator):
+    """05:F13: перевод на арабский — окно перевода справа налево (и при начале латиницей), поле и строки истории —
+    `dir="auto"`: арабский текст в поле тоже справа налево."""
+    live.add_user("tl-rtl")
+    translator.chat_script = [["PDF مرحبا بالعالم."]]
+    r = browser.drive(live.url + "/", [*signin("tl-rtl"), ("wait", READY), add_translator(),
+        finished_record("Привет, мир.", "ar"),
+        *go("translate"), ("wait", TL_DONE),
+        ("click", ".tl-row[data-state=done] .tl-open"), ("wait", f"{TL_OUTPUT} === 'PDF مرحبا بالعالم.'"),
+        ("eval", "output", "getComputedStyle(document.querySelector('#tl-output')).direction"),
+        ("eval", "row", f"{TL_DONE}.querySelector('.tl-to').getAttribute('dir')"),
+        ("click", "#tl-new"), set_value("#tl-input", "سلام دنیا"),
+        ("eval", "input", "[document.querySelector('#tl-input').matches(':dir(rtl)'),"
+                          " getComputedStyle(document.querySelector('#tl-output')).direction]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["output"] == "rtl" and v["row"] == "auto"
+    assert v["input"] == [True, "ltr"]                 # без записи окно перевода — по своему тексту (пусто — ltr)
+    assert not problems(r), problems(r)
+
+
 def test_translate_delete_window_says_whether_the_scan_stays(browser, live, translator):
     """Ревью: перевод скана и его повтор держат один документ «Сканов» — окно удаления первой записи говорит, что
     скан останется; удалили её — окно оставшейся говорит, что скан удалится вместе с переводом."""
