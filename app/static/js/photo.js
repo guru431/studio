@@ -356,9 +356,14 @@ function build(view, ctx) {
   }
 
   /* занятость: одно задание за раз */
+  function isBusy() {
+    return submitting || describing || !!translating || !!orphan || running.size > 0 || mcp.busy;
+  }
+
   function syncBusy() {
-    const busy = submitting || describing || !!translating || !!orphan || running.size > 0 || mcp.busy;
-    for (const b of [go, ...gated]) {
+    const busy = isBusy();
+    // «Повторить» неудачной и отменённой — в ленте: карточки перерисовываются, их кнопки ищутся на месте
+    for (const b of [go, ...gated, ...feedBox.querySelectorAll('.card-repeat')]) {
       b.disabled = busy;
       b.title = busy ? tr("Дождитесь конца текущего задания") : '';
     }
@@ -516,6 +521,14 @@ function build(view, ctx) {
     return button(tr("Удалить"), { class: 'btn-link card-delete' }, () => remove(item).catch((err) => say(words(err), true)));
   }
 
+  /** «Повторить» неудачной и отменённой: то же тело, что у «Повторить» просмотра (repeatBody); без модели раздела — нет. */
+  function repeatButton(item) {
+    if (ctx.hint) return null;
+    const busy = isBusy();
+    return button(tr("Повторить"), { class: 'btn-link card-repeat', disabled: busy,
+      title: busy ? tr("Дождитесь конца текущего задания") : null }, () => create(repeatBody(item)));
+  }
+
   function noteText(item) {
     return item.state === 'cancelled' ? cap(serverMessage(item.detail)) || tr("Отменено") : tr("Ошибка: {0}", serverMessage(item.detail) || tr("картинка не получена"));
   }
@@ -537,8 +550,8 @@ function build(view, ctx) {
       : el('span', { class: 'row-thumb' }, busy ? el('span', { class: 'ring', 'aria-hidden': 'true' }) : null),
     el('p', { class: 'cell-prompt', title: item.prompt }, item.prompt),
     el('span', { class: 'cell-meta' }, ...params(item).map((p) => el('span', {}, p)), el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, done ? saveButton(item) : busy ? (CANCELLABLE.has(item.state) ? cancelButton(item) : null)
-      : deleteButton(item)));
+    el('span', { class: 'cell-act' }, ...(done ? [saveButton(item)] : busy ? [CANCELLABLE.has(item.state) ? cancelButton(item) : null]
+      : [repeatButton(item), deleteButton(item)])));
     return node;
   }
 
@@ -556,7 +569,7 @@ function build(view, ctx) {
         CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(serverMessage(item.detail)))));
     } else {
       node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
-        deleteButton(item)));
+        el('span', { class: 'card-note-acts' }, repeatButton(item), deleteButton(item))));
     }
     if (layout.value === 'preview') {
       const [w, h] = String(item.size).split('x').map(Number);
