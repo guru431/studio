@@ -7063,7 +7063,7 @@ def search_ready(rows):
 @pytest.mark.parametrize("width", [390, 1280])
 def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, live, width):
     """Лупа → «Поиск»; «кот» находит картинку (промпт «кот 0») и расшифровку («Кот в сапогах») с выделенным
-    словом; чип «Расшифровка» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
+    словом, моделями под именами разделов и числом найденного; чип «Расшифровка» сужает выдачу; слова — не в адресе; вернувшись, поиск на месте; нажатие на
     картинку открывает её просмотр в «Фото»."""
     login = f"searcher{width}"
     uid = live.add_user(login)
@@ -7077,6 +7077,10 @@ def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, li
         ("eval", "idle", "document.querySelector('#search-status').textContent"),
         ("type", "#search-q", "кот"), ("wait", search_ready(2)),
         ("eval", "rows", SEARCH_ROWS), ("eval", "hash", "location.hash"),
+        ("wait", "document.querySelectorAll('#search-model option').length === 3"),
+        ("eval", "labels", "[[...document.querySelectorAll('#search-results .search-meta')].map((m) => m.textContent.split(' · ')[0]),"
+                           " [...document.querySelectorAll('#search-model option')].map((o) => [o.value, o.textContent]),"
+                           " document.querySelector('#search-status').textContent]"),
         ("click", "#view .search-chips .chip[data-section=transcribe]"), ("wait", search_ready(1)),
         ("eval", "narrowed", SEARCH_ROWS),
         ("type", "#search-q", "ы"), ("wait", "document.querySelector('#search-status').textContent === 'Ничего не нашлось'"),
@@ -7096,6 +7100,8 @@ def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, li
     assert v["idle"] == "Введите слова или выберите раздел, модель или период"
     assert v["rows"] == [["photo", "кот 0", ["кот"]], ["transcribe", "Кот в сапогах.m4a", ["Кот"]]]
     assert v["hash"] == "#/search" and v["narrowed"] == [["transcribe", "Кот в сапогах.m4a", ["Кот"]]]
+    assert v["labels"] == [["SNOFS Krea 2", "WhisperX"],
+                           [["", "Все модели"], ["snofs", "SNOFS Krea 2"], ["whisperx", "WhisperX"]], "Найдено: 2"]
     assert v["kept"] == ["коты", "transcribe"] and not v["overflow"]
     assert v["opened"] == "#/photo"
     assert not problems(r), problems(r)

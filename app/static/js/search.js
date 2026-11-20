@@ -10,11 +10,11 @@ import { tr } from './i18n.js';
  * Выдача — новые сверху, по дням (как ленты), «Показать ещё» — курсором последней строки, если запрос
  * тот же, что у выдачи (иначе — новый поиск: ввод ещё ждал паузы). Строка —
  * значок раздела, заголовок, кусок текста с найденным (маркеры \u0002…\u0003 → <mark> узлами, не
- * HTML), модель и время; у найденного в документе диалога — имя документа своей строкой (`attachment`); нажатие —
+ * HTML), модель (подпись — models.js, как в разделах) и время; у найденного в документе диалога — имя документа своей строкой (`attachment`); нажатие —
  * ctx.navigate(href) (адрес проверяет HREF jobs.js или MESSAGE_HREF: строка диалога — `chat/<id>?m=<сообщение>`,
  * chat.js прокручивает к нему и подсвечивает). Номер запроса:
  * запоздалый ответ прежнего не ляжет. Состояние выдачи — #search-results[data-state]: idle | loading |
- * ready | error (по нему ждут тесты). */
+ * ready | error (по нему ждут тесты); #search-status (aria-live) называет число найденного. */
 import { api } from './api.js';
 import { timeOnly } from './time.js';
 import { dayKey, dayTitle } from './feed.js';
@@ -23,6 +23,7 @@ import { HREF } from './jobs.js';
 import { svg } from './icons.js';
 import { NAMES, sectionPairs } from './sections-meta.js';
 import { el, words } from './ui.js';
+import { modelLabel } from './models.js';
 
 export const SEARCH_PAUSE_MS = 300;
 const LIMIT = 30;
@@ -72,7 +73,8 @@ function row(item, go) {
   // найдено в документе диалога — его имя своей строкой, отдельно от куска текста
   const doc = item.attachment ? el('span', { class: 'search-doc', title: item.attachment }, `📄 ${item.attachment}`) : null;
   const snippet = !same && item.snippet ? el('span', { class: 'search-snippet' }, ...marked(item.snippet)) : null;
-  const meta = el('span', { class: 'search-meta' }, [item.model, when(item.created)].filter(Boolean).join(' · '));
+  const meta = el('span', { class: 'search-meta' }, [item.model && modelLabel(item.model), when(item.created)]
+    .filter(Boolean).join(' · '));
   const node = el('button', { type: 'button', class: 'search-row', 'data-section': item.section, 'data-id': item.id,
     'data-part': item.part },
     icon(item.section), el('span', { class: 'search-text' }, title, doc, snippet, meta));
@@ -119,7 +121,7 @@ function mountScreen(view, ctx) {
       if (models) memory.model = '';
       else names = [memory.model];
     }
-    model.replaceChildren(el('option', { value: '' }, tr("Все модели")), ...names.map((n) => el('option', { value: n }, n)));
+    model.replaceChildren(el('option', { value: '' }, tr("Все модели")), ...names.map((n) => el('option', { value: n }, modelLabel(n))));
     model.value = memory.model;
     model.hidden = !names.length;
   }
@@ -195,7 +197,9 @@ function mountScreen(view, ctx) {
           : restore.scroll;
         node?.focus({ preventScroll: true });
       }
-      status.textContent = items.length ? '' : tr("Ничего не нашлось");
+      // число — и диктору (aria-live), а не только пустая выдача
+      status.textContent = !items.length ? tr("Ничего не нашлось")
+        : more ? tr("Найдено: {0}, есть ещё", items.length) : tr("Найдено: {0}", items.length);
       results.dataset.state = 'ready';
     } catch (err) {
       if (mine !== asked) return;
