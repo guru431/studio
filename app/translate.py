@@ -676,10 +676,17 @@ async def resume(user_id: int, tid: str) -> None:
 
 def recover() -> None:
     """После перезапуска раннеров нет: идущие — ошибка «прервано» (готовые куски — в тексте); ждущие остаются в
-    очереди — их продолжит `resume_queued`."""
-    rows = state.DB.execute("SELECT id FROM translations WHERE state IN ('working', 'cancelling')").fetchall()
+    очереди — их продолжит `resume_queued`. Снимок, прерванный аварией до исходника, мог держать слот ocr — его
+    шлюз (`_photo_reader`) — в `ocr.lease_lost` (остановку службы сохраняет `ocr.stop`)."""
+    rows = state.DB.execute("SELECT id, user_id, kind = 'photo' AND source IS NULL AS spotting FROM translations"
+                            " WHERE state IN ('working', 'cancelling')").fetchall()
     for row in rows:
         _finish(row["id"], "error", INTERRUPTED)
+        if row["spotting"]:
+            try:
+                ocr.lease_lost(row["user_id"], _photo_reader(row["user_id"])[0].id)
+            except HTTPException:
+                pass
     if rows:
         log.warning("переводы: %d прервано перезапуском", len(rows))
 
