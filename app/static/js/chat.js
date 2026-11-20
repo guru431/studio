@@ -25,7 +25,8 @@ import { chooseMcp } from './mcp-settings.js';
  *
  * Из расшифровки (#/chat?transcript=<id>&ask=…, спека 2026-10-21-studio-transcript-edit-chat-design,
  * раздел 9): новый диалог, POST /api/transcripts/<id>/attachments — вложение встаёт в поле уже
- * загруженным (`meta` без файла), в поле — вопрос по `ask`; адрес — сразу #/chat без записи в историю.
+ * загруженным (`meta` без файла), в поле — вопрос по `ask` (набранный текст остаётся, вопрос — после него);
+ * адрес — сразу #/chat без записи в историю.
  * Модель — локальная (`local_models` ссылки раздела): умолчание, иначе первая отмеченная, иначе не
  * выбрана, и «Отправить» закрыто до явного выбора. Ход и «Ответить заново», что унесут расшифровку
  * (вложением хода или из истории диалога — признак `external` сервера) нелокальной модели (у открытого
@@ -867,12 +868,19 @@ function build(view, ctx) {
     });
   }
 
+  /** Готовый вопрос из расшифровки или скана — в поле: набранный и не отправленный текст (черновик раздела) не
+   * стирается, вопрос встаёт после него через пустую строку; «Обсудить» (вопроса нет) поле не трогает. */
+  function putAsk(question) {
+    if (!input.value.trim()) input.value = question;
+    else if (question) input.value = `${input.value.trimEnd()}\n\n${question}`;
+  }
+
   async function fromTranscript(tid, ask) {
     history.replaceState(history.state, '', '#/chat');      // перезагрузка не сделает второе вложение
     open(null);
     if (ctx.hint) return;                           // без модели чата новый диалог не начать
     notice.textContent = '';
-    input.value = ASKS[ask] || '';
+    putAsk(ASKS[ask] || '');
     autosize();
     await sectionsReady;
     draft = localPair();
@@ -900,7 +908,7 @@ function build(view, ctx) {
     open(null);
     if (ctx.hint) return;
     notice.textContent = '';
-    input.value = SCAN_ASKS[ask] || '';
+    putAsk(SCAN_ASKS[ask] || '');
     autosize();
     let meta;
     try {
