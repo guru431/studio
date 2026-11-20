@@ -15,6 +15,10 @@ from pathlib import Path
 MACOS = sys.platform == 'darwin'
 LINUX = sys.platform == 'linux'
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+OLD_WAIT_ROUNDS = 720  # по 120 с `wait_old` — до суток ожидания выхода прежнего моста
+READY_POLLS = 1800  # по 0,5 с — до 15 минут на готовность новой копии, пока она жива
+# Итоги перехода, о которых сообщает уже работающая копия (`failed_update`).
+FAILED_RESULTS = ('rolled_back', 'unconfirmed', 'old_running', 'failed')
 
 
 def install_home():
@@ -477,22 +481,120 @@ def cleanup_started(stage: Path) -> bool:
     try:
         if not (stage / '_update_result').exists():
             return False
-        if not _confirmed(stage):
+        unconfirmed = (not LINUX and _result(stage) == 'unconfirmed' and (stage / '_update_ready').is_file())
+        if not unconfirmed and not _confirmed(stage):
             return True
         path = stage / '_update_plan.json'
         info = path.lstat()
         if _reparse(info) or not stat.S_ISREG(info.st_mode) or info.st_size > 8192:
             return True
         plan = json.loads(path.read_text(encoding='utf-8'))
-        if isinstance(plan, dict):
+        if not isinstance(plan, dict):
+            return True
+        if unconfirmed:
+            # Хелпер не дождался готовности, но эта копия работает: переключение довершает она сама —
+            # иначе после перезагрузки автозапуск молча вернул бы прежнюю версию.
+            if not isinstance(plan.get('old_repo'), str):
+                return True
+            _switch(stage, plan)
+            (stage / '_update_result').write_text('complete', encoding='ascii')
+        else:
             prune(stage, plan, _autostart())
     except (OSError, ValueError):
         pass
     return True
 
 
-def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, sleep=time.sleep) -> str:
-    if not wait(plan['pid']):
+def _result(item):
+    """Итог хелпера `_update_result` (до 32 байт, обычный файл) или None."""
+    marker = item / '_update_result'
+    try:
+        info = marker.lstat()
+        if _reparse(info) or not stat.S_ISREG(info.st_mode) or info.st_size > 32:
+            return None
+        return marker.read_text(encoding='ascii').strip()
+    except (OSError, ValueError):
+        return None
+
+
+def failed_update(repo: Path):
+    """Неудачный переход к соседнему выпуску, о котором ещё не сообщали (`FAILED_RESULTS`), — код итога или None.
+    Читает работающая копия (прежняя после отката или после перезагрузки); каждый итог сообщается один раз
+    (`_update_reported`). Только для установленной копии: корень установки или её `releases/release-*`."""
+    home = install_home()
+    if (os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(home))
+            and _managed_location(repo) is None):
+        return None
+    base = home / 'releases'
+    own = os.path.normcase(os.path.realpath(repo))
+    found = []
+    try:
+        items = sorted(base.iterdir())
+    except OSError:
+        return None
+    for item in items:
+        try:
+            if (not RELEASE_NAME.fullmatch(item.name) or _identity(item) is None
+                    or os.path.normcase(os.path.realpath(item)) == own or (item / '_update_reported').exists()):
+                continue
+            result = _result(item)
+            if result in FAILED_RESULTS:
+                found.append(((item / '_update_result').lstat().st_mtime, result, item))
+        except OSError:
+            continue
+    for _, _, item in found:
+        try:
+            with (item / '_update_reported').open('xb'):
+                pass
+        except OSError:
+            pass
+    return max(found)[1] if found else None
+
+
+def _switch_windows(stage: Path, old: Path):
+    """Автозапуск прежней копии → новая; чужое значение не перезаписываем. Итог — значение автозапуска для prune:
+    `''` — его нет, None — неизвестно (prune откажется от удаления)."""
+    import winreg
+    key = r'Software\Microsoft\Windows\CurrentVersion\Run'
+    autostart = None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
+            value, _ = winreg.QueryValueEx(k, 'StudioAgent')
+            autostart = value if isinstance(value, str) else None
+            expected = f'"{old / ".venv/Scripts/pythonw.exe"}" "{old / "studio_agent.pyw"}"'
+            if isinstance(value, str) and os.path.normcase(value.strip()) == os.path.normcase(expected):
+                command = f'"{stage / ".venv/Scripts/pythonw.exe"}" "{stage / "studio_agent.pyw"}"'
+                winreg.SetValueEx(k, 'StudioAgent', 0, winreg.REG_SZ, command)
+                autostart = command
+    except FileNotFoundError:
+        autostart = ''
+    except OSError:
+        pass
+    return autostart
+
+
+def _switch(stage: Path, plan: dict) -> None:
+    """Новая копия подтвердила запуск: автозапуск и `current` — на неё, затем уборка прежних выпусков."""
+    if MACOS:
+        switch_macos(stage, Path(plan['old_repo']))
+        prune(stage, plan, _autostart())
+        return
+    autostart = _switch_windows(stage, Path(plan['old_repo']))
+    try:
+        prune(stage, plan, autostart)
+    except OSError:
+        pass  # уборка не мешает подтверждённому обновлению
+
+
+def wait_exit(pid: int, wait=wait_old, rounds: int = OLD_WAIT_ROUNDS) -> bool:
+    """Прежний процесс может выходить дольше 120 с (интерпретатор ждёт поток сравнения зеркала): не сдаёмся, а
+    ждём дальше — иначе, когда он всё же выйдет, не будет запущена ни одна копия."""
+    return any(wait(pid) for _ in range(rounds))
+
+
+def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, sleep=time.sleep,
+             rounds: int = OLD_WAIT_ROUNDS) -> str:
+    if not wait_exit(plan['pid'], wait, rounds):
         return 'old_running'
     env = os.environ.copy()
     env['STUDIO_AGENT_HOME'] = plan['home']
@@ -512,39 +614,15 @@ def activate(stage: Path, plan: dict, *, wait=wait_old, start=subprocess.Popen, 
                     stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except OSError:
         return rollback()
-    for _ in range(120):
+    # Пока новая копия жива, ждём её готовности до READY_POLLS × 0,5 с (холодный диск, антивирус); упала — откат.
+    for _ in range(READY_POLLS):
         if (stage / '_update_ready').is_file():
-            if MACOS:
-                switch_macos(stage, Path(plan['old_repo']))
-                prune(stage, plan, _autostart())
-                return 'complete'
-            # Сохраняем прежний выбор автозапуска; чужое значение не перезаписываем.
-            import winreg
-            key = r'Software\Microsoft\Windows\CurrentVersion\Run'
-            autostart = None
-            try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
-                    value, _ = winreg.QueryValueEx(k, 'StudioAgent')
-                    autostart = value if isinstance(value, str) else None
-                    old = Path(plan['old_repo'])
-                    expected = f'"{old / ".venv/Scripts/pythonw.exe"}" "{old / "studio_agent.pyw"}"'
-                    if isinstance(value, str) and os.path.normcase(value.strip()) == os.path.normcase(expected):
-                        command = f'"{stage / ".venv/Scripts/pythonw.exe"}" "{stage / "studio_agent.pyw"}"'
-                        winreg.SetValueEx(k, 'StudioAgent', 0, winreg.REG_SZ, command)
-                        autostart = command
-            except FileNotFoundError:
-                autostart = ''
-            except OSError:
-                pass  # значение автозапуска неизвестно — prune откажется от удаления
-            try:
-                prune(stage, plan, autostart)
-            except OSError:
-                pass  # уборка не мешает подтверждённому обновлению
+            _switch(stage, plan)
             return 'complete'
         if new.poll() is not None:
             return rollback()
         sleep(0.5)
-    return 'unconfirmed'
+    return 'unconfirmed'  # новая копия сама довершит переключение, когда будет готова (`cleanup_started`)
 
 
 def switch_macos(stage, old):

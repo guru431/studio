@@ -716,10 +716,15 @@ async def cancel_agent_update(aid: int, request: Request):
 
 
 def _update_status(data: dict) -> dict:
-    """Стадия обновления; `holds` (мост ≥ 0.20.0, только в `waiting`) — что держит ожидание: числа и признак."""
+    """Стадия обновления; `holds` (мост ≥ 0.20.0, только в `waiting`) — что держит ожидание: числа и признак;
+    `message` (мост ≥ 0.42.0, только в `failed`) — слова моста об итоге прошлого перехода (откат, неподтверждённый
+    запуск, прежний мост не вышел)."""
     result = {"state": data.get("state") if data.get("state") in
               ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
               "version": data.get("version") if isinstance(data.get("version"), str) else None}
+    message = data.get("message")
+    if result["state"] == "failed" and isinstance(message, str) and 0 < len(message) <= 300:
+        result["message"] = message
     holds = data.get("holds")
     if result["state"] == "waiting" and isinstance(holds, dict):
         counts = {key: holds.get(key) for key in ("tasks", "asking", "requests")}

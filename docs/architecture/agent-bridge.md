@@ -44,7 +44,7 @@ disconnect до освобождения хода. Codex получает config
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
-| 0.42.0 | отказ `git` — `git_unavailable` (нет git, `safe.directory`, сбой при своём `.git`; без capability) | §4 |
+| 0.42.0 | отказ `git` — `git_unavailable` (нет git, `safe.directory`, сбой при своём `.git`; без capability); `agent_update_status.message` в `failed` — итог прошлого перехода | §4 |
 | 0.41.0 | `projects.items[].dir` — настоящая папка проекта владельцу (без capability); `hello.mirror_exclude` — постоянные исключения зеркала | §5, §23.2 |
 | 0.40.0 | `hello.project_mirror_discovery` — поиск существующих копий | §23.1 |
 | 0.39.0 | `hello.project_mirror` и `hello.software_update_all` | §23, §21 |
@@ -407,6 +407,14 @@ GUI получает обычную команду quit. `update_helper.py` де
 ожидания старого процесса, запускает новую копию после его выхода, подтверждает готовность ядра и
 переключает уже включённый Run; ранний сбой запуска возвращает прежнюю копию. Предыдущие версии сохраняются.
 Никакого Stop-Process/TerminateProcess. Первая установка до 0.10.0 остаётся ручной. Тесты — `test_updater.py`.
+С 0.42.0 (действует для переходов, которые ведёт хелпер 0.42.0 и новее — он берётся из прежней копии): прежний
+процесс хелпер ждёт до `update_helper.OLD_WAIT_ROUNDS` раз по 120 с (`update_helper.wait_exit`, и в подписанном
+переходе macOS) — поток сравнения зеркала может задержать выход; готовности живой новой копии — до
+`update_helper.READY_POLLS` × 0,5 с. Если хелпер всё же записал `unconfirmed`, а копия готова,
+`update_helper.cleanup_started` сама переключает автозапуск и `current` и пишет `complete`. Работающая копия
+при запуске читает итоги соседних выпусков (`update_helper.failed_update`: `update_helper.FAILED_RESULTS`,
+каждый — один раз, метка `_update_reported`), пишет в журнал код итога и отдаёт `agent_update_status`
+`failed` со словами `updater.FAILED_WORDS` в `message`; сервер передаёт `message` только в `failed`, до 300 знаков.
 
 Окно Tk размещает основной вид в Canvas с вертикальной прокруткой; после подключения карточки разделены
 на вкладки «Подключение», «Работа», «Настройки» (Ctrl+Tab / Ctrl+Shift+Tab). Высота ограничена рабочей областью
