@@ -102,7 +102,9 @@
   `ocr.attachment_text` и зовёт модель после `ocr.idle`; скан удалён, отменён или без текста — «скан не
   распознан: …». Без такого подключения PDF со страницами `ocr_render.is_scan` (слоя мало и есть картинка;
   `pdf_layer_pages`) — 422 `scan`, и когда сканы — часть страниц; пустая страница без картинки — не скан,
-  пропускается. Снимок (PNG, JPEG, WebP; только с `ocr` через сервер, иначе 409 `no_ocr`) — на шару PNG
+  пропускается. Снимок (PNG, JPEG, WebP; только с `ocr` через сервер, иначе 409 `no_ocr`; умолчание `ocr` — s06 —
+  первая связь `ocr` не s06, через сервер — первой, `translate._photo_reader`; такой нет — 409 `no_ocr`
+  `translate.NO_HUNYUAN` до записи на шару) — на шару PNG
   `ocr_render.photo_png` (EXIF, ≤ 2200), те же байты распознаются и показываются: один `/pages/ocr` с
   `translate_spot.PROMPT` под `ocr.borrowed` (`free_card` до, `_settle` после, учёт в `ocr.EXTERNAL`, на время
 `_settle` — `ocr.RELEASING`: пока он стоит, `ocr.idle` ложна; распознавание дольше `FREED_FRESH_SEC` (15 с) —
