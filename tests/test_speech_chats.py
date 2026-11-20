@@ -1,7 +1,9 @@
 """Чаты озвучки: продолжение, снимок голоса и повторная генерация выбранной записи."""
 import db
+import speeches
 import state
 from conftest import make_user, signin
+from fakes import WAV_FAKE
 from test_speeches import add_gateway, busy_speech, voice, wait_sp
 
 
@@ -79,6 +81,58 @@ def test_failed_edit_preserves_audio_and_shared_audio_survives_replacement(studi
     assert studio.c.patch(f"/api/speeches/{old['id']}", json={'text': 'Правка.', 'voice': vid}).status_code == 202
     assert wait_sp(studio, old['id'], {'done'})['media_id'] != old['media_id']
     assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 200
+
+
+def search_doc(sid):
+    return state.DB.execute("SELECT body, model FROM search_docs WHERE section='speech' AND item=?", (sid,)).fetchone()[:]
+
+
+def test_failed_revoice_keeps_the_previous_text_and_audio(studio, fake_audio):
+    """Шлюз отказал новой озвучке: прежние текст и mp3 на месте, ошибка — словами (находка 04:F4)."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    old = wait_sp(studio, studio.c.post('/api/speeches', json={'text': 'Оригинал.', 'voice': vid}).json()['id'], {'done'})
+    studio.gw.tts_replies = [(500, {'detail': 'сбой'})]
+    assert studio.c.patch(f"/api/speeches/{old['id']}", json={'text': 'Правка.', 'voice': vid}).status_code == 202
+    failed = wait_sp(studio, old['id'], {'done', 'error'})
+    assert failed['state'] == 'error' and failed['detail'].endswith(speeches.KEPT_NOTE)
+    assert (failed['text'], failed['media_id'], failed['duration']) == (old['text'], old['media_id'], old['duration'])
+    assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 200
+    assert search_doc(old['id']) == ('Оригинал.', 'qwen3-tts')
+    assert state.DB.execute("SELECT previous, previous_media_id FROM speeches").fetchone()[:] == (None, None)
+    studio.gw.tts_replies = [(200, WAV_FAKE)]
+    assert studio.c.patch(f"/api/speeches/{old['id']}", json={'text': 'Правка.', 'voice': vid}).status_code == 202
+    done = wait_sp(studio, old['id'], {'done', 'error'})
+    assert done['state'] == 'done' and done['media_id'] != old['media_id']
+    assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 404
+
+
+def test_cancelled_revoice_restores_the_record_and_waits_its_turn(studio, fake_audio, monkeypatch):
+    """«Отменить» повторной озвучки — запись как была; ждёт она после поставленных раньше, «В работе» считает
+    время с постановки, поиск видит новую модель; перезапуск — прежний звук с ошибкой (04:F4, 04:F10)."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    old = wait_sp(studio, studio.c.post('/api/speeches', json={'text': 'Оригинал.', 'voice': vid}).json()['id'], {'done'})
+    wait_sp(studio, busy_speech(studio, fake_audio, monkeypatch), {'working'})
+    studio.clock[0] += 100
+    waiting = studio.c.post('/api/speeches', json={'text': 'Ждёт.', 'voice': vid}).json()
+    studio.clock[0] += 100
+    body = {'text': 'Правка.', 'voice': vid, 'model': 'f5-tts'}
+    edited = studio.c.patch(f"/api/speeches/{old['id']}", json=body).json()
+    assert (waiting['detail'], edited['detail']) == ('в очереди · 1', 'в очереди · 2')
+    started = {i['id']: i['started'] for i in studio.c.get('/api/jobs').json()['running']}
+    assert started[old['id']] - started[waiting['id']] >= 100          # часы двигает и ждущая карту озвучка
+    assert search_doc(old['id']) == ('Правка.', 'f5-tts')
+    assert studio.c.post(f"/api/speeches/{old['id']}/cancel").json() == {'state': 'done'}
+    assert studio.c.get(f"/api/speeches/{old['id']}").json() == old
+    assert search_doc(old['id']) == ('Оригинал.', 'qwen3-tts')
+    assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 200
+    studio.c.patch(f"/api/speeches/{old['id']}", json=body)
+    state.DB.execute("UPDATE speeches SET state = 'working' WHERE id = ?", (old['id'],))
+    speeches.recover()
+    interrupted = studio.c.get(f"/api/speeches/{old['id']}").json()
+    assert interrupted['state'] == 'error' and interrupted['detail'] == f'{speeches.INTERRUPTED} — {speeches.KEPT_NOTE}'
+    assert (interrupted['text'], interrupted['media_id']) == (old['text'], old['media_id'])
 
 
 def test_migration_preserves_old_speeches_and_previous_writer(env):

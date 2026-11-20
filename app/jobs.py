@@ -135,7 +135,9 @@ def _speech(uid: int, after: float) -> list:
                   else speeches.waiting(row) if row["state"] == "queued" else row["detail"])
         text = row["text"]
         head = text if len(text) <= SPEECH_TITLE else text[:SPEECH_TITLE].rstrip() + "…"
-        out.append(_item("speech", row, f"Озвучка · {head}", detail, f"speech?id={row['id']}"))
+        item = _item("speech", row, f"Озвучка · {head}", detail, f"speech?id={row['id']}")
+        item["started"] = speeches.queued_at(row)    # повторная озвучка — с новой постановки, не с создания
+        out.append(item)
     return out
 
 

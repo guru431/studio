@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 51
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 52
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
