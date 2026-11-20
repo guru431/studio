@@ -87,7 +87,7 @@ MEDIA_SOURCES = {
     "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
     "video": (("videos", ("media_id", "source_media_id")),),
     "transcribe": (("transcripts", ("source_media_id", "result_media_id")),),
-    "speech": (("voices", ("media_id",)), ("voice_samples", ("media_id",)), ("speeches", ("media_id",))),
+    "speech": (("voices", ("media_id",)), ("voice_samples", ("media_id",)), ("speeches", ("media_id", "previous_media_id"))),
     "translate": (("translations", ("source_media_id",)),),
 }
 

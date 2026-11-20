@@ -1,8 +1,9 @@
 import { message as serverMessage, tr } from './i18n.js';
 /* Раздел «Озвучка» (#/speech) — раскладка как у «Разговоров» (спека 2026-10-20, раздел 6.4).
  *
- * Слева — чаты по дням и времени начала, справа — их записи: текст, голос, плеер, «Изменить», «Скачать», «Удалить»; идущая —
- * состояние словами и «Отменить». Внизу — поле текста (до TEXT_MAX знаков; field.js: «очистить», микрофон)
+ * Слева — чаты по дням и времени начала (идущий, ошибка, отмена — словами), справа — их записи: текст, голос, плеер,
+ * «Изменить», «Скачать», «Удалить»; идущая — состояние словами и «Отменить»; «Удалить чат» — весь чат разом.
+ * Внизу — поле текста (до TEXT_MAX знаков, сверх — отказ словами; field.js: «очистить», микрофон)
  * и строка под ним: «модель» (отмеченные модели раздела), «голос», счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их
  * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
  * Озвучка — POST /api/speeches, задание на сервере (очередь пользователя: «в очереди · N»); идущие
@@ -61,14 +62,19 @@ function build(view, ctx) {
   const toggle = el('button', { type: 'button', class: 'icon-btn split-toggle', 'aria-label': tr("Озвучки"),
     'aria-controls': 'sp-aside', 'aria-expanded': 'false' }, icon('list'));
   const fresh = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-new' }, icon('plus'), tr("Новый чат"));
+  const dropChat = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'sp-delete-chat', hidden: true },
+    tr("Удалить чат"));
   const head = el('header', { class: 'head' }, el('h1', {}, NAMES.speech));
-  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh);
+  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, dropChat);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
-  const text = el('textarea', { id: 'speech-text', rows: '1', maxlength: String(TEXT_MAX), 'aria-label': tr("Текст для озвучки"),
+  // без maxlength: вставка длинного текста не режется молча — сверх TEXT_MAX счётчик красный, «Озвучить» закрыта словами
+  const text = el('textarea', { id: 'speech-text', rows: '1', 'aria-label': tr("Текст для озвучки"),
     placeholder: tr("Текст, который нужно озвучить") });
   const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${TEXT_MAX}`);
+  const over = el('p', { class: 'error small', id: 'speech-over', 'aria-live': 'polite', hidden: true },
+    tr("Текст длиннее {0} знаков — сократите его или разделите на несколько записей чата.", TEXT_MAX));
   const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': tr("Модель") });
   const mcpModelPick = el('select', { class: 'chip', id: 'chip-mcp-model', 'aria-label': tr("Модель"), hidden: true });
   const voiceBox = el('span', { class: 'sp-voice' });
@@ -80,14 +86,14 @@ function build(view, ctx) {
   const mcp = sectionMcp('speech', { native: !ctx.hint, fields: ['text', 'voice', 'model', 'engine', 'reference_text'],
     onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
-  const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, hint,
+  const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, over, hint,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, mcpModelPick, voiceBox, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const main = el('section', { class: 'split-main' }, head, toolbar, error, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
   const draft = sectionDraft('speech', text);
-  count.textContent = `${text.value.length} / ${TEXT_MAX}`;
+  paintCount();
 
   function panel(open) {
     root.classList.toggle('panel-open', open);
@@ -152,7 +158,17 @@ function build(view, ctx) {
   }
 
   function paintBusy() {
-    go.disabled = fresh.disabled = cancelEdit.disabled = sending || mcp.busy;
+    fresh.disabled = cancelEdit.disabled = sending || mcp.busy;
+    go.disabled = fresh.disabled || text.value.length > TEXT_MAX;
+  }
+
+  function paintCount() {
+    const long = text.value.length > TEXT_MAX;
+    count.textContent = `${text.value.length} / ${TEXT_MAX}`;
+    count.classList.toggle('muted', !long);
+    count.classList.toggle('error', long);
+    over.hidden = !long;
+    paintBusy();
   }
 
   async function loadChoices() {
@@ -174,7 +190,9 @@ function build(view, ctx) {
   /* список и выбранная */
   const paintRows = pickerList(list, { cls: 'sp-item', moreId: 'sp-more', empty: tr("Здесь появятся ваши озвучки"),
     name: (item) => item.text.slice(0, 80),
-    state: (item) => timeOnly(item.created),
+    // время начала и, пока чат не «готово», — его состояние словами (как у «Расшифровки»)
+    state: (item) => [timeOnly(item.created), RUNNING.has(item.state) ? serverMessage(item.detail)
+      : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("отменено") : ''].filter(Boolean).join(' · '),
     pick(id) {
       panel(false);
       select(id);
@@ -203,6 +221,33 @@ function build(view, ctx) {
         await records.load();
         if (selected && following === navigation && remaining) await select(cid);
         else if (selected && following === navigation) {
+          paintList();
+          paintView();
+        }
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  /* Весь чат — одним подтверждением; идущие записи сервер не удаляет (409 словами в окне). */
+  function confirmDeleteChat(chat) {
+    const fail = el('p', { class: 'error' });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'sp-delete-chat-confirm' }, tr("Удалить"));
+    const dialog = openDialog(root, { id: 'sp-delete-chat-dialog', title: tr("Удалить чат озвучки?"), actions: [yes],
+      body: [el('p', {}, tr("Удалятся все записи чата: тексты и звук ({0}).", chat.items.length)), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      const navigation = following;
+      try {
+        await api('DELETE', `/api/speeches/chats/${encodeURIComponent(chat.id)}`);
+        dialog.close();
+        if (editing && chat.items.some((i) => i.id === editing.id)) endEdit();
+        const selected = records.current?.id === chat.id && following === navigation;
+        if (selected) records.forget(chat.id);
+        await records.load();
+        if (selected && following === navigation) {
           paintList();
           paintView();
         }
@@ -267,7 +312,7 @@ function build(view, ctx) {
 
   async function startEdit(item) {
     await choicesReady;
-    if (!alive || ctx.hint || records.current?.id !== item.chat_id || go.disabled || !voiceBox.querySelector('#chip-voice')) return;
+    if (!alive || ctx.hint || records.current?.id !== item.chat_id || fresh.disabled || !voiceBox.querySelector('#chip-voice')) return;
     mcp.useNative();
     if (!editing) editing = { draft: text.value, model: modelPick.value,
       voice: voiceBox.querySelector('#chip-voice').value };
@@ -309,17 +354,19 @@ function build(view, ctx) {
     if (card.busy) {
       nodes.push(card.busy.box);
       if (item.parts > 0) nodes.push(liveAudio(item));
-    } else if (item.state === 'done') {
-      nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
-        src: `/api/media/${encodeURIComponent(item.media_id)}` }));
-      const save = el('button', { type: 'button', class: 'btn btn-sm', id: index ? `sp-download-${item.id}` : 'sp-download' },
-        tr("Скачать mp3"));
-      save.addEventListener('click', () => {
-        el('a', { href: `/api/media/${encodeURIComponent(item.media_id)}?download=1`, download: '' }).click();
-      });
-      acts.append(save);
     } else {
-      nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
+      // отказ повторной озвучки оставляет прежний звук: слова ошибки и плеер вместе
+      if (item.state !== 'done') nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
+      if (item.media_id) {
+        nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
+          src: `/api/media/${encodeURIComponent(item.media_id)}` }));
+        const save = el('button', { type: 'button', class: 'btn btn-sm', id: index ? `sp-download-${item.id}` : 'sp-download' },
+          tr("Скачать mp3"));
+        save.addEventListener('click', () => {
+          el('a', { href: `/api/media/${encodeURIComponent(item.media_id)}?download=1`, download: '' }).click();
+        });
+        acts.append(save);
+      }
     }
     if (!RUNNING.has(item.state)) {
       if (!ctx.hint) {
@@ -343,6 +390,7 @@ function build(view, ctx) {
       endEdit();
       shownChat = chat?.id;
     }
+    dropChat.hidden = !chat;
     const items = chat?.items || [];
     if (live && !items.some((i) => i.id === live.id && RUNNING.has(i.state))) {
       live.audio.pause();
@@ -361,21 +409,20 @@ function build(view, ctx) {
     keep(body, items.map(paintItem));
   }
 
-  /* озвучить */
+  /* озвучить; «Новый чат» набранное не стирает (правка записи — возвращает свой черновик) */
   fresh.addEventListener('click', () => {
     following += 1;
-    endEdit(false);
+    endEdit();
     records.deselect();
     panel(false);
     error.textContent = '';
-    text.value = '';
-    text.dispatchEvent(new Event('input', { bubbles: true }));
     draft.save();
     paintList();
     paintView();
     text.focus();
   });
-  text.addEventListener('input', () => { count.textContent = `${text.value.length} / ${TEXT_MAX}`; });
+  dropChat.addEventListener('click', () => { if (records.current) confirmDeleteChat(records.current); });
+  text.addEventListener('input', paintCount);
   modelPick.addEventListener('change', paintVoice);
   cancelEdit.addEventListener('click', () => endEdit());
   form.addEventListener('submit', async (event) => {
