@@ -662,6 +662,22 @@ def _bash():
     return None
 
 
+@pytest.mark.parametrize("configured,mounted,success", [
+    ("", "cifs", True), ("", "ext4", False),
+    ("ext4", "ext4", True), ("ext4", "cifs", False),
+])
+def test_docker_entrypoint_requires_the_configured_media_filesystem(configured, mounted, success):
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    script = ('findmnt() { if [ "$5" = /media ]; then printf "%s\\n" "$MOUNTED"; else echo ext4; fi; }; '
+              'entrypoint=$1; set -- true; . "$entrypoint"')
+    env = {**os.environ, "STUDIO_MEDIA_DIR": "/media", "STUDIO_MEDIA_FSTYPE": configured, "MOUNTED": mounted}
+    path = (DEPLOY / "docker/entrypoint.sh").as_posix()
+    result = subprocess.run([bash, "-c", script, "entrypoint-test", path], env=env, capture_output=True, timeout=20)
+    assert (result.returncode == 0) == success, result.stderr
+
+
 @pytest.mark.integration  # Launches Git and Bash to check the deployed wrapper.
 def test_pdf_chromium_wrapper_reaches_the_image_and_adds_the_offline_flags(tmp_path):
     """chat_exports.OFFLINE_BROWSER: in the image, executable, LF, and every md2pdf argument passed through."""

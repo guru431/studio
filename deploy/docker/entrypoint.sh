@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 umask 0007
-# Refuse a local directory hidden under an unavailable network mount, including at boot.
-[ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = cifs ] || {
-    echo 'studio: media must be mounted from CIFS' >&2
+# Refuse an unexpected filesystem, including a local directory under a missing CIFS mount.
+[ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = "${STUDIO_MEDIA_FSTYPE:-cifs}" ] || {
+    echo 'studio: media filesystem does not match the deployment profile' >&2
     exit 1
 }
 case "$(findmnt -n -o FSTYPE -T /var/lib/studio)" in
