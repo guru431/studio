@@ -76,6 +76,25 @@ def test_background_open_of_a_computer_without_pin_is_recorded_once_in_connectio
     assert len(opens()) == 1
 
 
+def test_activity_summary_never_opens_a_computer_of_a_shared_project(studio, monkeypatch):
+    """Чужой компьютер участника открывает только владелец: на `closed` опрос значка `open` не шлёт."""
+    import claude_code
+    aid, machine, link = setup(studio)
+    link.hello["project_activity"] = True
+    make_user(studio, "friend")
+    assert studio.c.post(f"/api/code/agents/{aid}/projects/{ALPHA}/members", json={"login": "friend"}).status_code == 201
+    signin(studio, "friend")
+    machine.handle = lambda req: ({"t": "res", "id": req.get("id"), "ok": False, "code": "closed",
+                                   "message": "x"}, [])
+    ops = []
+    original = claude_code.ask
+    monkeypatch.setattr(claude_code, "ask", lambda request, computer, op, **kw: ops.append(op) or original(
+        request, computer, op, **kw))
+    assert studio.c.get("/api/code/activity").json() == {"items": [{"aid": aid, "items": []}]}
+    assert "open" not in ops
+    assert not [e for e in studio.c.get("/api/agents/events").json()["items"] if e["kind"] == "open"]
+
+
 def test_activity_summary_keeps_pin_closed_and_drops_offline_or_unsupported(studio, caplog):
     aid, machine, link = setup(studio, pin="2468", opened=False)
     link.hello["project_activity"] = True
