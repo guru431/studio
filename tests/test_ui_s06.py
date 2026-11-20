@@ -31,10 +31,16 @@ def test_s06_settings(browser, live, width):
         ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
         ("eval", "models", "[...document.querySelectorAll('.model-check')].map(e => e.value)"),
         ("eval", "connection", "fetch('/api/connections').then(r => r.json()).then(r => ({s06:r.items[0].s06, token:r.items[0].token}))"),
+        # паспорт: свой перечень s06, без приписки облака «расшифровка — без собеседников»
+        ("click", ".link-check"), ("wait", "document.querySelector('.passport-profile')"),
+        ("eval", "profile", "document.querySelector('.passport-profile').textContent"),
+        ("eval", "caps", "[...document.querySelectorAll('.passport-model')].map(e => e.textContent)"),
     ], width=width, mobile=width == 320)
     assert not result.get("failed"), result
     values = result["values"]
     assert values["kind"] == "s06" and values["secretHidden"] and values["fits"]
     assert values["models"] == ["qwen-27b", "qwen-27b-fast"]
     assert values["connection"] == {"s06": True}
+    assert values["profile"] == "Профиль — шлюз s06"
+    assert "qwen-27b: чат и перевод — встроенный перечень s06" in values["caps"][0], values["caps"]
     assert not problems(result), problems(result)
