@@ -35,6 +35,7 @@ import { choose, current as look, deviceSizeControls, follow, paintSave, retrySa
 import { setupMobileNavigation } from './mobile-navigation.js';
 import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
+import { timezoneOffer } from './timezone-offer.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy, pageVersion, watchDeploys } from './stale.js';
@@ -397,6 +398,8 @@ async function enter(worker) {
       refreshAfterFailure(undefined, { claim: true });
     }
   }
+  const offer = timezoneOffer();   // пояс устройства не совпал с учёткой — предложить свой
+  if (offer) view.prepend(offer);
   setupCodeActivity();
   await worker;
   setupPushSync();           // подписка push, которую служебный работник не смог отправить запертым (sw.js)

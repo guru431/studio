@@ -47,6 +47,7 @@ import { agentDownload, button, el, field, openDialog, plural, showError, words 
 import { icon } from './icons.js';
 import { pageVersion } from './stale.js';
 import { modelLabel } from './models.js';
+import { deviceZone, offsetOf } from './timezone-offer.js';
 import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { smtpSettings } from './smtp-settings.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
@@ -220,10 +221,18 @@ function mobileNavBlock() {
 }
 
 function timezoneBlock(refreshTimes) {
-  const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone,
+  // пояс этого устройства — первым, у каждого — смещение сейчас: искать среди четырёхсот имён IANA вслепую не нужно
+  const device = deviceZone();
+  const zones = [...new Set([DEFAULT_TIMEZONE, 'UTC', me.timezone, device,
     ...(Intl.supportedValuesOf?.('timeZone') || [])].filter(Boolean))].sort();
+  if (device) zones.unshift(...zones.splice(zones.indexOf(device), 1));
+  const label = (zone) => {
+    const name = zone === DEFAULT_TIMEZONE ? tr("Москва (Europe/Moscow)") : zone;
+    const offset = offsetOf(zone);
+    return `${offset ? `${offset} · ` : ''}${name}${zone === device ? tr(" — это устройство") : ''}`;
+  };
   const select = el('select', { class: 'input', id: 'timezone' }, ...zones.map((zone) =>
-    el('option', { value: zone }, zone === DEFAULT_TIMEZONE ? tr("Москва (Europe/Moscow)") : zone)));
+    el('option', { value: zone }, label(zone))));
   select.value = me.timezone || DEFAULT_TIMEZONE;
   const note = status('timezone-status');
   const save = button(tr("Сохранить"), { class: 'btn', id: 'timezone-save' }, async () => {
