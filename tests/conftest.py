@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.pytest_support import new_event_loop, strict_skip
+from tools.pytest_support import bind_children, new_event_loop, strict_skip
 
 APP = ROOT / "app"
 CLIENT = ROOT / "client"
@@ -44,7 +44,9 @@ def pytest_make_collect_report(collector):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
-    """Каталоги/очистка pytest Studio не пересекаются с остальными проектами."""
+    """Каталоги/очистка pytest Studio не пересекаются с остальными проектами; дети процесса (браузеры,
+    драйверы) не переживают его аварийное завершение (`bind_children`)."""
+    bind_children()
     if config.option.basetemp is not None or os.environ.get("PYTEST_DEBUG_TEMPROOT"):
         return
     root = ROOT / ".tmp" / ".pytest_cache" / "main"
