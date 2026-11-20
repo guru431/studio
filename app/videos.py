@@ -176,7 +176,8 @@ def _text(value, default):
 
 def _connection(row) -> "Connection | None":
     try:
-        return connections.get(row["user_id"], row["connection_id"])
+        # ролик принят до смены правил доступа — наблюдатель доводит его и без доступа к общему подключению
+        return connections.get(row["user_id"], row["connection_id"], gate=False)
     except HTTPException:                         # подключение удалили из профиля
         return None
 

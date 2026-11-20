@@ -8,7 +8,7 @@ from fastapi import HTTPException
 import access
 import db
 import state
-from conftest import make_user
+from conftest import add_connection, make_user, signin
 from historical_schema import install_schema
 
 
@@ -142,3 +142,78 @@ def test_studio_user_is_stable_and_opaque(studio):
     assert re.fullmatch("[0-9a-f]{32}", value)
     assert value == access.studio_user(uid) != access.studio_user(other)
     assert "someone" not in value and str(uid) != value
+
+
+# ---- Task 2: общие API моделей ---------------------------------------------------------
+
+def closed_models(studio, *members) -> tuple[int, int]:
+    """Общий API моделей «Shared models» (чат, модель MODEL), закрытый группой из `members`; вход — администратором."""
+    from test_shared_integrations import add_models
+    signin(studio, "admin")
+    cid = add_models(studio)
+    group = access.create_group("Models")["id"]
+    access.set_members(group, list(members))
+    access.set_rule("connection", cid, [group])
+    return cid, group
+
+
+def chat_links(studio, path="/api/sections") -> list[int]:
+    return [link["connection"]["id"] for link in studio.c.get(path).json()["sections"][0]["links"]]
+
+
+def test_closed_shared_model_hidden_from_sections(studio):
+    from test_shared_integrations import MODEL
+    make_user(studio, "admin", is_admin=True)
+    member, other = make_user(studio, "member"), make_user(studio, "other")
+    cid, _ = closed_models(studio, member)
+    assert cid in chat_links(studio)                                  # администратор видит всё
+    signin(studio, "member")
+    assert cid in chat_links(studio)
+    assert cid in [c["id"] for c in studio.c.get("/api/connections").json()["items"]]
+    assert studio.c.put("/api/sections/chat/default", json={"connection_id": cid, "model": MODEL}).status_code == 200
+    signin(studio, "other")
+    assert cid not in chat_links(studio)
+    assert cid not in [c["id"] for c in studio.c.get("/api/connections").json()["items"]]
+    assert studio.c.put("/api/sections/chat/default", json={"connection_id": cid, "model": MODEL}).status_code == 404
+    assert studio.c.get("/api/me").json()["default_connection_id"] is None
+
+
+def test_closed_shared_model_in_existing_chat(studio):
+    from test_chat import new_chat, sse, turn
+    from test_shared_integrations import MODEL
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "existing")
+    signin(studio, "existing")
+    personal = add_connection(studio)
+    cid, group = closed_models(studio)
+    access.set_rule("connection", cid, None)                          # пока — всем
+    signin(studio, "existing")
+    assert studio.c.put("/api/sections/chat/default", json={"connection_id": cid, "model": MODEL}).status_code == 200
+    chat_id = new_chat(studio)
+    assert sse(turn(studio, chat_id))[-1] == ("done", {"status": "done"})
+    access.set_rule("connection", cid, [group])                       # группа без этой учётки
+    opened = studio.c.get(f"/api/chats/{chat_id}")
+    assert opened.status_code == 200 and opened.json()["chat"]["connection_id"] == cid
+    refused = turn(studio, chat_id)
+    assert refused.status_code == 404 and refused.json()["detail"]["code"] == "gone"
+    assert studio.c.get("/api/me").json()["default_connection_id"] == personal
+
+
+def test_background_paths_ignore_rules(studio):
+    import ocr
+    import videos
+    make_user(studio, "admin", is_admin=True)
+    other = make_user(studio, "other")
+    cid, _ = closed_models(studio)
+    assert videos._connection({"user_id": other, "connection_id": cid}).id == cid
+    ocr.LEASED.clear()
+    ocr.lease_lost(other, cid)
+    assert ocr.LEASED.pop("http://10.77.1.15:4000/v1").id == cid
+
+
+def test_admin_views_user_with_users_access(studio):
+    make_user(studio, "admin", is_admin=True)
+    member, other = make_user(studio, "member"), make_user(studio, "other")
+    cid, _ = closed_models(studio, member)
+    assert cid in chat_links(studio, f"/api/admin/users/{member}/sections")
+    assert cid not in chat_links(studio, f"/api/admin/users/{other}/sections")

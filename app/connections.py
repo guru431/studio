@@ -34,6 +34,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
+import access
 import clock
 import sections
 import security
@@ -119,16 +120,27 @@ _COLS = ("id, user_id, name, kind, base_url, server_only, cleaner, s06,"
          " (SELECT json_group_array(l.section) FROM section_links l WHERE l.connection_id = connections.id) AS linked")
 
 
-def list_for(user_id: int | None) -> list[Connection]:
-    rows = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE user_id IS ? OR user_id IS NULL"
-                            " ORDER BY user_id IS NULL, id", (user_id,))
+def _gate(user_id: int | None, gate: bool) -> tuple[str, tuple]:
+    """Общее подключение, закрытое учётке группами доступа (access.py), — как отсутствующее. Без фильтра
+    (`gate=False`) — только фоновые пути работы, принятой до смены правил (снимок задания, release карты)."""
+    if user_id is None or not gate:
+        return "", ()
+    clause, args = access.shared_filter(user_id, "connection", "connections.id")
+    return f" AND {clause}", args
+
+
+def list_for(user_id: int | None, *, gate: bool = True) -> list[Connection]:
+    clause, args = _gate(user_id, gate)
+    rows = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE (user_id IS ? OR user_id IS NULL){clause}"
+                            " ORDER BY user_id IS NULL, id", (user_id, *args))
     return [_from_row(r, user_id) for r in rows]
 
 
-def get(user_id: int | None, conn_id: int, *, own: bool = False) -> Connection:
+def get(user_id: int | None, conn_id: int, *, own: bool = False, gate: bool = True) -> Connection:
     scope = "user_id IS ?" if own else "(user_id IS ? OR user_id IS NULL)"
-    row = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE id = ? AND {scope}",
-                           (conn_id, user_id)).fetchone()
+    clause, args = _gate(user_id, gate)
+    row = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE id = ? AND {scope}{clause}",
+                           (conn_id, user_id, *args)).fetchone()
     if row is None:
         raise _gone()
     return _from_row(row, user_id)

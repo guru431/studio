@@ -753,7 +753,7 @@ def lease_lost(user_id: int, connection_id: int) -> None:
     """Распознавание прервано перезапуском (и снимок перевода, `translate.recover`): слот его шлюза, возможно,
     взят — в LEASED, release — `_settle` после старта. Подключения нет — аренда кончится сама."""
     try:
-        conn = connections.get(user_id, connection_id)
+        conn = connections.get(user_id, connection_id, gate=False)     # release карты — и без доступа к общему
     except HTTPException:
         return
     LEASED[conn.base_url] = conn
@@ -767,7 +767,8 @@ def resume_queued() -> None:
                             " ORDER BY created, rowid").fetchall()
     for row in rows:
         try:
-            conn = connections.get(row["user_id"], row["connection_id"])
+            # документ принят до смены правил доступа — доделывается и без доступа к общему подключению
+            conn = connections.get(row["user_id"], row["connection_id"], gate=False)
         except HTTPException:
             _finish(row["id"], "error", NO_CONNECTION)
             continue

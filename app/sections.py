@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import access
 import clock
 import connections
 import state
@@ -84,8 +85,10 @@ def transaction():
 
 def _rows(user_id: int | None, section: str, *, include_shared: bool = True):
     scope = "(user_id IS ? OR user_id IS NULL)" if include_shared else "user_id IS ?"
+    clause, args = ("1", ()) if user_id is None else access.shared_filter(user_id, "connection", "connection_id")
     return state.DB.execute(f"SELECT connection_id, models FROM section_links WHERE {scope} AND section = ?"
-                            " ORDER BY user_id IS NULL, created, rowid", (user_id, section)).fetchall()
+                            f" AND {clause} ORDER BY user_id IS NULL, created, rowid",
+                            (user_id, section, *args)).fetchall()
 
 
 def links(user_id: int | None, section: str) -> list[Link]:

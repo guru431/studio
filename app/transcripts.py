@@ -224,7 +224,8 @@ async def _runner(user_id: int) -> None:
                                 " WHERE id = ? AND state = 'queued'", (row["id"],)).rowcount:
             continue
         try:
-            conn = connections.get(user_id, row["connection_id"])
+            # принята до смены правил доступа — доделывается и без доступа к общему подключению
+            conn = connections.get(user_id, row["connection_id"], gate=False)
         except HTTPException:                        # подключение удалили, пока запись ждала
             conn = None
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"],
