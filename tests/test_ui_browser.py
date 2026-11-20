@@ -6446,10 +6446,12 @@ def test_curtain_leaves_when_the_mark_hangs(browser, live):
     MARK_SEC — как без связи, шторка убирается, а не висит без кнопок."""
     login = "lk-hang"
     live.add_user(login)
-    hang = """(() => { window.asked = []; const timeout = AbortSignal.timeout.bind(AbortSignal);
-      AbortSignal.timeout = (ms) => { window.asked.push(ms); return timeout(100); };
+    # срок записывается у самой отметки: скрытие страницы шлёт и опрос заданий со своим сроком (jobs.js)
+    hang = """(() => { window.asked = []; const terms = new WeakMap(); const timeout = AbortSignal.timeout.bind(AbortSignal);
+      AbortSignal.timeout = (ms) => { const signal = timeout(100); terms.set(signal, ms); return signal; };
       const real = window.fetch;
       window.fetch = (u, o) => u !== '/api/lock/alive' ? real(u, o) : new Promise((_, no) => {
+        window.asked.push(o && o.signal ? terms.get(o.signal) : null);
         if (o && o.signal) o.signal.addEventListener('abort', () => no(o.signal.reason)); });
       return true; })()"""
     r = browser.drive(live.url + "/", [*phone_with_key(login), ("eval", "hang", hang), hide(), ("wait", CURTAIN_OPEN),
@@ -6904,7 +6906,8 @@ def test_notification_only_when_hidden_and_without_content(browser, live):
     v = r["values"]
     assert v["disabled"] is False and v["stored"] == "1" and v["whileVisible"] == 0
     assert v["shown"] == [{"title": "Студия: картинка готова", "options": {
-        "tag": v["second"], "icon": "/static/icons/icon-192.png", "data": {"href": f"photo?id={v['second']}"}}}]
+        "tag": v["second"], "renotify": True, "icon": "/static/icons/icon-192.png",
+        "data": {"href": f"photo?id={v['second']}"}}}]
     assert "секретный" not in json.dumps(v["shown"], ensure_ascii=False)
     assert not problems(r), problems(r)
 
@@ -9705,14 +9708,19 @@ def test_code_return_to_tab_keeps_running_turn_text(browser, live):
         .observe(feed, { childList: true, subtree: true, characterData: true });
       return true; })()"""
     frames = "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))"
+    # снимок live строит ленту хода заново (renderTimeline), а карточку того же запроса оставляет прежней (9d7ec88f)
+    timeline = "document.querySelectorAll('#code-feed .code-steps > *')"
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             *code_send("Задача"), ("wait", f"{card} && document.querySelector('#code-feed').textContent.includes('Пишу ответ')"),
-            ("eval", "marked", f"{card}.dataset.old = '1'; window.livesBefore = window.liveOpened; true"),
+            ("eval", "marked", f"{card}.dataset.old = '1'; {timeline}.forEach((n) => {{ n.dataset.old = '1'; }});"
+                               " window.livesBefore = window.liveOpened; true"),
             ("eval", "watching", watch),
             controlled_visibility(True), controlled_visibility(False),
-            # снимок live заменил карточку новой
-            ("wait", f"window.liveOpened > window.livesBefore && {card} && !{card}.dataset.old"),
+            # снимок live пришёл: текст хода — в новых узлах
+            ("wait", f"window.liveOpened > window.livesBefore && [...{timeline}]"
+                     ".some((n) => !n.dataset.old && n.textContent.includes('Пишу ответ'))"),
+            ("eval", "sameCard", f"{card}?.dataset.old === '1'"),
             ("eval", "frames", frames),
             ("eval", "gaps", "window.feedGaps"),
             ("eval", "running", CODE_MSGS),
@@ -9729,6 +9737,7 @@ def test_code_return_to_tab_keeps_running_turn_text(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["gaps"] == 0, v
+    assert v["sameCard"] is True, v
     assert v["running"] == [["user", "Задача"], ["assistant", "Пишу ответ"]]
     assert v["final"] == [["user", "Задача"], ["assistant", "Пишу ответ и дописал"]]
     assert not known_refusals(problems(r), 409), problems(r)
@@ -11067,7 +11076,9 @@ def test_code_tab_close_picks_the_right_neighbour(browser, live):
     wait_for(lambda: code_workspace_rows(live, uid) == [])
     conn = db.connect(live.db_path)
     try:
-        assert conn.execute("SELECT count(*) FROM code_chats WHERE state = 'closed'").fetchone()[0] == 0
+        # живая служба общая для файла: «закрытые» других сценариев сюда не относятся
+        assert conn.execute("SELECT count(*) FROM code_chats WHERE state = 'closed' AND user_id = ?",
+                            (uid,)).fetchone()[0] == 0
     finally:
         conn.close()
     assert set(machine.projects["alpha"]["chats"]) == {CODE_CHAT_A, CODE_CHAT_B, CODE_CHAT_C}
