@@ -21,9 +21,12 @@ export function opencodeView(form, text, { enabled, shared, changed }) {
   directories.addEventListener('change', () => { touchedDirectories = true; changed(); });
   command.addEventListener('change', () => {
     if (!command.value) return;
-    text.value = `/${command.value} `;
+    // Команда — перед набранным текстом (прежняя команда в начале поля заменяется), набранное остаётся.
+    const prefix = `/${command.value} `;
+    text.value = prefix + text.value.replace(/^\/\S+[ \t]*/, '');
     text.dispatchEvent(new Event('input', { bubbles: true }));
     text.focus();
+    text.setSelectionRange(prefix.length, prefix.length);
     command.value = '';
   });
   return {

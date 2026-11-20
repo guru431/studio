@@ -44,14 +44,26 @@ export function projectFilePath(href, agent, project) {
     const folder = typeof project.dir === 'string' ? project.dir
       : typeof agent.projects_root === 'string' && agent.projects_root
         ? `${agent.projects_root.replace(/[\\/]+$/, '')}/${project.name}` : null;
-    if (!folder) return null;
-    const root = `/${folder.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')}/`;
     let decoded;
     try { decoded = decodeURIComponent(local); } catch { return null; }
     // Регистр не различают только пути Windows; на macOS/Linux `Alpha` и `alpha` — разные папки.
-    const fold = drive(root) ? (text) => text.toLowerCase() : (text) => text;
-    if (!fold(decoded).startsWith(fold(root))) return null;
-    path = decoded.slice(root.length);
+    const fold = drive(folder === null ? decoded : `/${folder.replaceAll('\\', '/')}`)
+      ? (text) => text.toLowerCase() : (text) => text;
+    if (folder === null) {
+      // Участнику мост не отдаёт ни корня, ни папки, а путь в шаге он видит: проект — `<корень>/<папка>/…`, папка —
+      // первая с его именем (у одноимённых подпись «имя · родитель · хвост id» — ещё и с родителем). Чужой файл
+      // проекта так не откроется: путь проверяет мост в пределах проекта.
+      const [base, parent] = String(project.name).split(' · ');
+      const parts = decoded.split('/');
+      const at = parts.findIndex((part, i) => i > 0 && fold(part) === fold(base)
+        && (parent === undefined || fold(parts[i - 1]) === fold(parent)));
+      if (at < 0) return null;
+      path = parts.slice(at + 1).join('/');
+    } else {
+      const root = `/${folder.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')}/`;
+      if (!fold(decoded).startsWith(fold(root))) return null;
+      path = decoded.slice(root.length);
+    }
   } else {
     if (/^(?:[\/#?]|[a-z][a-z\d+.-]*:)/i.test(href)) return null;
     try { path = decodeURIComponent(href.split('#')[0]); } catch { return null; }

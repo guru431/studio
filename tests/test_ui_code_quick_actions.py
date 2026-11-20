@@ -112,7 +112,9 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
     assert not problems(result), problems(result)
 
 
-def test_quick_action_rejected_before_start_restores_text_and_can_be_retried(browser, live):
+def test_quick_action_keeps_the_typed_draft_and_can_be_retried(browser, live):
+    """Быстрое действие уходит мимо поля: набранный черновик остаётся и при отказе, и после хода; отказ до начала —
+    кнопка снова доступна, повтор отправляет то же действие."""
     login = "quick-action-retry"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Новый чат")})
@@ -133,7 +135,7 @@ def test_quick_action_rejected_before_start_restores_text_and_can_be_retried(bro
     })()"""
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("eval", "reject", reject), ("click", ".code-quick-action"),
+            ("eval", "reject", reject), set_value("#code-text", "Мой черновик"), ("click", ".code-quick-action"),
             ("wait", "!!window.rejectTurn"),
             ("eval", "pendingHidden", "document.querySelector('#code-quick-actions').hidden"),
             ("eval", "release", "window.rejectTurn(); true"),
@@ -142,6 +144,7 @@ def test_quick_action_rejected_before_start_restores_text_and_can_be_retried(bro
             ("click", ".code-quick-action"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '0' && document.querySelector('.code-msg.assistant .md')?.textContent.includes('Готово')"),
             ("eval", "hidden", "document.querySelector('#code-quick-actions').hidden"),
+            ("eval", "kept", "document.querySelector('#code-text').value"),
             *go("settings/code"), ("wait", "document.querySelectorAll('.code-quick-action-row').length === 3"),
             ("click", ".code-quick-action-row [aria-label='Удалить действие']"),
             ("click", ".code-quick-action-row [aria-label='Удалить действие']"),
@@ -154,7 +157,7 @@ def test_quick_action_rejected_before_start_restores_text_and_can_be_retried(bro
     finally:
         server.stop()
     assert not result.get("failed"), result
-    assert result["values"]["restored"] == code_actions.DEFAULTS[0]["text"]
+    assert result["values"]["restored"] == result["values"]["kept"] == "Мой черновик"
     assert result["values"]["pendingHidden"] and result["values"]["hidden"] and result["values"]["disabled"]
     turns = [r for r in machine.requests if r["op"] == "turn"]
     assert len(turns) == 1 and turns[0]["text"] == code_actions.DEFAULTS[0]["text"]
