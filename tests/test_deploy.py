@@ -224,7 +224,10 @@ def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
 
 def test_voice_editor_uploads_fit_through_the_proxy():
     import voices
-    paths = ["/api/voices/transcribe", "/api/voices/prepare-sample"]
+    voice, sample = "0" * 32, "1" * 32
+    # редактор шлёт transcribe и prepare-sample; прямые маршруты API принимают тот же voices.AUDIO_MAX
+    paths = ["/api/voices/transcribe", "/api/voices/prepare-sample", "/api/voices",
+             f"/api/voices/{voice}/samples", f"/api/voices/{voice}/samples/{sample}"]
     limits = re.findall(r'<LocationMatch "([^"]+)">\s*LimitRequestBody (\d+)', uncommented(VHOST))
     for path in paths:
         assert any(re.fullmatch(pattern, path) and int(limit) >= voices.AUDIO_MAX + 64 * 1024 for pattern, limit in limits)
