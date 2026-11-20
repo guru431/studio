@@ -6,9 +6,11 @@ import { message as serverMessage, tr } from './i18n.js';
  * плеер исходной записи и реплики «Собеседник N · мм:сс». Идущая — состояние словами и «Отменить».
  * На телефоне список выезжает сбоку, как диалоги чата.
  *
- * Загрузка — XMLHttpRequest (ход в процентах): тело — сама запись, имя — заголовком X-Studio-Name
+ * Загрузка — XMLHttpRequest (ход в процентах над видом записи, `.tr-sending`, и «Отменить загрузку» — xhr.abort()):
+ * тело — сама запись, имя — заголовком X-Studio-Name
  * (encodeURIComponent; строка запроса попала бы в журнал Apache); 423 запертой студии (XHR идёт
- * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Несколько файлов — по одному (sendAll), пока
+ * мимо api.js) ждёт отпирания и шлёт ту же запись заново. Состояние загрузки — модуля (transfer): уход из
+ * раздела её не обрывает, новый экран показывает ход и отмену. Несколько файлов — по одному (sendAll), пока
  * очередь принимает; «Переименовать» — PATCH `name` (расширение сохраняет сервер). Идущие записи опрашиваются
  * раз в POLL_MS. Список — страницами по PAGE (курсор — created и id последней, feed.js), старше —
  * «Показать ещё»; опрос обновляет первую страницу, подгруженные остаются. Выбор — по номеру:
@@ -20,9 +22,10 @@ import { message as serverMessage, tr } from './i18n.js';
  * черновик `editing` переживает перерисовку того же id (опрос, повторный выбор); ответ, пришедший,
  * когда выбрана уже другая запись, вид не занимает. Пока идёт правка, «Копировать», «Скачать» и
  * «В чат» спрятаны (взяли бы сохранённый текст, «В чат» увёл бы от черновика). «Имена» — окно меток,
- * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст) или по
- * её времени (кнопка — и с клавиатуры) ставит плеер на её начало, играющая — aria-current по
- * timeupdate. «В чат ▾» → #/chat?transcript=<id>&ask=…; #/transcribe?id=<id> («Открыть» в «В работе»,
+ * «Сбросить правки» — DELETE …/edits. Вне правки нажатие по реплике (если не выделен текст), а в правке и вне
+ * её — по её времени (кнопка — и с клавиатуры) ставит плеер на её начало, играющая — aria-current по
+ * timeupdate. Плеер играет исходник как есть: не играет (событие error — формат браузера, файла нет) —
+ * слова `.tr-unplayable` под ним, нажатие по реплике их повторяет. «В чат ▾» → #/chat?transcript=<id>&ask=…; #/transcribe?id=<id> («Открыть» в «В работе»,
  * ссылка «к записи» из чата) выбирает запись после загрузки списка, если её не выбрали сами (нет её —
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
  * textContent. */
@@ -43,16 +46,21 @@ const PAGE = 60;
 const UPLOAD_MAX = 200 * 1024 * 1024;
 const ACCEPT = 'audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.webm,.flac,.aac';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
+const CANCELLED = tr("Загрузка отменена.");
 const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx'], ['srt', tr("Субтитры .srt")]];
 const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Составить итоги")], ['tasks', tr("Выделить решения и задачи")]];
 
 let screen = null;
 let shownEntry = null;     // метка записи истории раздела ({ entry: n } — роутер app.js): сюда возвращает hold()
 const HOME = '#/transcribe';
+/* Загрузка записей — состояние модуля, а не экрана: уход из раздела XHR не обрывает, новый экран раздела
+ * подхватывает ход, «Отменить загрузку» и итог. busy — идёт пачка, text — ход словами, abort — отменить идущий
+ * файл (null — отменять нечего), note — отказ, случившийся без экрана раздела: его покажет следующий. */
+const transfer = { busy: false, text: '', abort: null, note: '' };
 // перезагрузка стёрла бы несохранённую правку или оборвала пачку загрузок (между файлами holdRefresh не держит) —
 // автоматическую (refresh.js) они запрещают
 document.addEventListener('studio-before-auto-refresh', (event) => {
-  if (screen?.dirty() || screen?.sending()) event.preventDefault();
+  if (screen?.dirty() || transfer.busy) event.preventDefault();
 });
 
 function clock(sec) {
@@ -73,9 +81,9 @@ export function asText(segments) {
 }
 
 function build(view, ctx) {
-  let uploading = false;
-  let editing = null;          // { id, drafts: Map номер → текст } — черновик правки выбранной записи
+  let editing = null;         // { id, drafts: Map номер → текст } — черновик правки выбранной записи
   let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
+  let unplayable = null;       // слова под плеером: браузер запись не играет (событие error)
   let busy = null;             // блок «идёт» выбранной записи (feed.busyBlock): опрос меняет в нём только текст
   let picked = false;          // запись выбрали сами (список, загрузка): ?id из адреса её не перебивает
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
@@ -92,10 +100,14 @@ function build(view, ctx) {
 
   const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"), input);
+  // ход загрузки и её отмена — над видом записи, а не в списке: на телефоне список спрятан
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });
+  const stop = el('button', { type: 'button', class: 'btn btn-sm', id: 'transcribe-cancel' }, tr("Отменить загрузку"));
+  stop.addEventListener('click', () => transfer.abort?.());
+  const sending = el('div', { class: 'tr-sending', hidden: true }, progress, stop);
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Записи") });
   // без модели — не загрузить: вместо кнопки подсказка над видом записи (на телефоне список спрятан)
-  const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add, progress]), list);
+  const aside = el('aside', { class: 'split-aside', id: 'tr-aside' }, ...(ctx.hint ? [] : [add]), list);
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Записи"),
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
@@ -108,7 +120,7 @@ function build(view, ctx) {
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
   const nativeHint = ctx.hint?.('hint-bar');
-  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, mcp.output, body);
+  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, sending, mcp.output, body);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
 
@@ -337,20 +349,20 @@ function build(view, ctx) {
   function turnNode(s, i) {
     const speaker = s.speaker ? `${s.speaker} · ` : '';
     const original = s.edited ? s.original : s.text;
+    // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике; в правке — тоже
+    const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': tr("Слушать с {0}", clock(s.start)) },
+      clock(s.start));
+    time.addEventListener('click', (event) => {
+      event.stopPropagation();
+      seek(s.start, true);
+    });
+    const who = el('p', { class: 'tr-who' }, speaker, time);
     if (!editing) {
-      // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике
-      const time = el('button', { type: 'button', class: 'tr-seek', 'aria-label': tr("Слушать с {0}", clock(s.start)) },
-        clock(s.start));
-      time.addEventListener('click', (event) => {
-        event.stopPropagation();
-        seek(s.start);
-      });
-      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, el('p', { class: 'tr-who' }, speaker, time),
+      const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, who,
         el('p', { class: 'tr-text' }, s.text), s.edited ? el('p', { class: 'tr-mark' }, tr("изменено")) : null);
       node.addEventListener('click', () => seek(s.start));
       return node;
     }
-    const who = el('p', { class: 'tr-who' }, `${speaker}${clock(s.start)}`);
     const area = el('textarea', { class: 'tr-edit-text', rows: '1', 'aria-label': tr("Реплика {0}", i + 1) });
     area.value = editing.drafts.has(i) ? editing.drafts.get(i) : s.text;
     const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, tr("вернуть"));
@@ -370,10 +382,15 @@ function build(view, ctx) {
   }
 
   /* плеер */
-  function seek(start) {
-    if (String(getSelection() || '')) return;      // выделяют текст — не перематывать
+  /** Плеер на начало реплики; `button` — нажата кнопка времени (выделение текста не мешает). */
+  function seek(start, button = false) {
+    if (!button && String(getSelection() || '')) return;      // выделяют текст — не перематывать
+    if (audio.error) {                             // запись не играет (формат браузера, файла нет) — сказать снова
+      unplayable.hidden = false;
+      return;
+    }
     audio.currentTime = start;
-    audio.play().catch(() => {});                  // нет звука или запрет браузера — только перемотка
+    audio.play().catch(() => {});                  // запрет браузера — только перемотка
   }
 
   function playing() {
@@ -388,13 +405,18 @@ function build(view, ctx) {
     }
   }
 
+  /** Плеер исходной записи и слова под ним, если браузер её не играет: сервер принимает всё, что читает ffmpeg
+   * (ogg/opus, mov, mkv…), а `<audio>` получает исходник как есть. */
   function playerOf(item) {
     if (!audio || audio.dataset.id !== item.id) {
       audio = el('audio', { class: 'tr-audio', controls: true, preload: 'metadata', 'data-id': item.id,
         src: `/api/media/${encodeURIComponent(item.source_media_id)}` });
       audio.addEventListener('timeupdate', playing);
+      unplayable = el('p', { class: 'muted small tr-unplayable', 'aria-live': 'polite', hidden: true },
+        tr("Браузер не воспроизводит эту запись — слушать её и перематывать по репликам здесь нельзя. Текст расшифровки доступен."));
+      audio.addEventListener('error', () => { unplayable.hidden = false; });
     }
-    return audio;
+    return [audio, unplayable];
   }
 
   function chatMenu(item) {
@@ -476,7 +498,7 @@ function build(view, ctx) {
       acts.append(del);
     }
     nodes.push(acts);
-    nodes.push(playerOf(item));
+    nodes.push(...playerOf(item));
     if (item.segments) {
       nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map(turnNode)));
       if (editing) {
@@ -502,7 +524,7 @@ function build(view, ctx) {
     if (nativeHint && mcp.tool) {
       nativeHint.hidden = true;
       if (!upload.parentNode) {
-        aside.prepend(add, progress);
+        aside.prepend(add);
         toolbar.append(upload);
       }
     }
@@ -510,71 +532,19 @@ function build(view, ctx) {
   }
 
   function paintBusy() {
-    input.disabled = upload.disabled = uploading || mcp.busy;
+    input.disabled = upload.disabled = transfer.busy || mcp.busy;
   }
 
-  /** Одна запись; true — принята, false — отказ (словами в error). `label` — «запись N из M» пачки. */
-  function send(file, label) {
-    if (file.size > UPLOAD_MAX) {
-      error.textContent = tr("Запись больше 200 МиБ");
-      return Promise.resolve(false);
-    }
-    error.textContent = '';
-    return new Promise((resolve) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/transcripts');
-      holdRefresh(xhr);              // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
-      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-      xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
-      xhr.setRequestHeader('x-studio-csrf', me.csrf);
-      xhr.upload.addEventListener('progress', (event) => {
-        if (!event.lengthComputable) return;
-        const percent = Math.round(event.loaded * 100 / event.total);
-        progress.textContent = label ? tr("Загружаю запись {0} · {1}%", label, percent) : tr("Загружаю запись · {0}%", percent);
-      });
-      xhr.addEventListener('loadend', async () => {
-        progress.textContent = '';
-        let answer = null;
-        try {
-          answer = JSON.parse(xhr.responseText);
-        } catch {
-          // не JSON — ниже словами по коду
-        }
-        if (xhr.status === 202 && answer) {
-          kick();
-          picked = true;
-          await records.load();
-          if (!dirty()) await select(answer.id);   // несохранённая правка открытой записи остаётся на экране
-          resolve(true);
-          return;
-        }
-        if (xhr.status === 401) toLogin();
-        const detail = answer && answer.detail;
-        if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
-          await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания
-          resolve(await send(file, label));
-          return;
-        }
-        error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
-        resolve(false);
-      });
-      xhr.send(file);
-    });
-  }
-
-  /** Несколько записей — по одной, пока сервер принимает (очередь transcripts.QUEUE_MAX); первая неудача
-   * останавливает пачку, не отправленные называются словами. */
-  async function sendAll(files) {
-    uploading = true;
+  /** Ход загрузки модуля (transfer) — в вид: строка хода, «Отменить загрузку», занятая кнопка; отказ без экрана. */
+  function paintUpload() {
+    sending.hidden = !transfer.busy;
+    progress.textContent = transfer.text;
+    stop.hidden = !transfer.abort;
     paintBusy();
-    for (const [i, file] of files.entries()) {
-      if (await send(file, files.length > 1 ? tr("{0} из {1}", i + 1, files.length) : '')) continue;
-      const left = files.slice(i).map((f) => f.name);
-      if (files.length > 1) error.textContent += ` ${tr("Не отправлены: {0}", left.join(', '))}`;
-      break;
+    if (transfer.note) {
+      error.textContent = transfer.note;
+      transfer.note = '';
     }
-    uploading = false;
-    paintBusy();
   }
 
   input.addEventListener('change', () => {
@@ -598,6 +568,7 @@ function build(view, ctx) {
     records.load().then(() => { if (wanted && !picked) select(wanted, true); });
   }
   paintView();
+  paintUpload();
   follow(ctx.query && ctx.query.get('id'));
 
   /** Закрытие вкладки и ручная перезагрузка с несохранённой правкой — вопрос браузера. */
@@ -611,14 +582,106 @@ function build(view, ctx) {
   return {
     follow,
     dirty,
-    sending: () => uploading,
     leave,
+    paintUpload,
+    say(text) { error.textContent = text; },
+    /** Запись принята: список, и она выбрана, если несохранённая правка не держит открытую. */
+    async accepted(id) {
+      picked = true;
+      await records.load();
+      if (!dirty()) await select(id);
+    },
+    load: () => records.load(),
     destroy() {
       window.removeEventListener('beforeunload', unload);
       mcp.destroy();
       records.stop();
     },
   };
+}
+
+/** Отказ загрузки — словами в виде раздела; раздел закрыт — его покажет следующий экран. */
+function say(text) {
+  if (screen) screen.say(text);
+  else transfer.note = text;
+}
+
+/** Одна запись; null — принята, строка — отказ словами («Отменить загрузку» — тоже). `label` — «N из M» пачки. */
+function send(file, label) {
+  if (file.size > UPLOAD_MAX) return Promise.resolve(tr("Запись больше 200 МиБ"));
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+    const show = (percent) => {
+      transfer.text = label ? tr("Загружаю запись {0} · {1}%", label, percent) : tr("Загружаю запись · {0}%", percent);
+      screen?.paintUpload();
+    };
+    const finish = (fail) => {
+      if (settled) return;
+      settled = true;
+      transfer.abort = null;
+      screen?.paintUpload();
+      resolve(fail);
+    };
+    xhr.open('POST', '/api/transcripts');
+    holdRefresh(xhr);              // автоматическая перезагрузка загрузку не оборвёт (refresh.js)
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
+    xhr.setRequestHeader('x-studio-csrf', me.csrf);
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) show(Math.round(event.loaded * 100 / event.total));
+    });
+    xhr.addEventListener('loadend', async () => {
+      if (settled) return;           // отменили: ответ уже дан
+      transfer.abort = null;
+      screen?.paintUpload();
+      let answer = null;
+      try {
+        answer = JSON.parse(xhr.responseText);
+      } catch {
+        // не JSON — ниже словами по коду
+      }
+      if (xhr.status === 202 && answer) {
+        kick();
+        await screen?.accepted(answer.id);
+        finish(null);
+        return;
+      }
+      if (xhr.status === 401) toLogin();
+      const detail = answer && answer.detail;
+      if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
+        settled = true;
+        await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания
+        resolve(await send(file, label));
+        return;
+      }
+      finish(words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером"))));
+    });
+    transfer.abort = () => {
+      finish(CANCELLED);           // до abort(): его loadend (синхронный) видит, что ответ уже дан
+      xhr.abort();
+    };
+    show(0);
+    xhr.send(file);
+  });
+}
+
+/** Несколько записей — по одной, пока сервер принимает (очередь transcripts.QUEUE_MAX); первая неудача или
+ * «Отменить загрузку» останавливает пачку, не отправленные называются словами. */
+async function sendAll(files) {
+  transfer.busy = true;
+  transfer.note = '';
+  for (const [i, file] of files.entries()) {
+    const fail = await send(file, files.length > 1 ? tr("{0} из {1}", i + 1, files.length) : '');
+    if (fail === null) continue;
+    const left = files.slice(i).map((f) => f.name);
+    say(files.length > 1 ? `${fail} ${tr("Не отправлены: {0}", left.join(', '))}` : fail);
+    if (fail === CANCELLED) screen?.load();        // сервер мог успеть принять запись целиком — список покажет её
+    break;
+  }
+  transfer.busy = false;
+  transfer.text = '';
+  screen?.paintUpload();
 }
 
 export function mount(view, ctx) {

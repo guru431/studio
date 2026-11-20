@@ -36,6 +36,7 @@ NAME_MAX = 64
 TEXT_MAX = 2000
 BUDGET_SEC = 60                 # WAV и длительность образца — ffmpeg за секунды
 TRANSCRIBE_BUDGET_SEC = 120      # вся подготовка образца и ASR — раньше таймаута Apache
+DRAFT_SAVE_SEC = 20             # WAV распознанного образца на шару: дольше — текст без upload (вместе — раньше Apache)
 PROBE_MAX = 200                 # проба голоса — одна короткая фраза (speeches.PHRASE_MAX — 220)
 PROBE_BUDGET_SEC = 120          # вся проба — раньше таймаута Apache (шлюз может держать запрос, пока карта занята)
 DRAFT_SEC = 900                 # подготовленные WAV без ссылки убирает обычная чистка сирот
@@ -107,16 +108,18 @@ async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
 
 @router.post("/transcribe")
 async def transcribe(request: Request):
-    """Текст будущего образца до сохранения: только временный WAV, без истории и media."""
+    """Текст будущего образца до сохранения и `upload` — его подготовленный WAV, как у prepare-sample: редактор
+    сохраняет образец по нему, не загружая файл второй раз. Без текста — ни истории, ни media; хранилище
+    недоступно — текст без `upload` (сохранение подготовит образец само)."""
     uid = request.state.user.id
 
     async def run():
         _fields, data, mime = await _form(request)
-        wav, _duration = await _sample(uid, data, mime)
-        return await dictation.recognize(uid, wav, "audio/wav", "sample.wav")
+        wav, duration = await _sample(uid, data, mime)
+        return await dictation.recognize(uid, wav, "audio/wav", "sample.wav"), wav, duration
 
     try:
-        text = await asyncio.wait_for(run(), TRANSCRIBE_BUDGET_SEC)
+        text, wav, duration = await asyncio.wait_for(run(), TRANSCRIBE_BUDGET_SEC)
     except TimeoutError:
         raise HTTPException(504, {"code": "timeout", "message": "не успел распознать образец — попробуйте ещё раз "
                                   "или введите текст вручную"}) from None
@@ -124,7 +127,11 @@ async def transcribe(request: Request):
         raise _bad("text", "в образце не удалось распознать речь — запишите ещё раз или введите текст вручную")
     if len(text) > TEXT_MAX:
         raise _bad("text", f"распознанный текст длиннее {TEXT_MAX} знаков — выберите запись покороче")
-    return {"text": text}
+    try:
+        upload = await asyncio.wait_for(_draft_of(uid, wav, duration), DRAFT_SAVE_SEC)
+    except (media.StorageError, TimeoutError):
+        upload = None
+    return {"text": text, "upload": upload}
 
 
 @router.post("", status_code=201)
@@ -242,11 +249,15 @@ async def prepare_sample(request: Request):
     _, data, mime = await _form(request)
     wav, duration = await _sample(uid, data, mime)
     try:
-        mid = await media.save_async(uid, wav, "audio/wav", "voice-sample.wav")
+        return {"upload": await _draft_of(uid, wav, duration)}
     except media.StorageError as e:
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
-    upload = security.encrypt(json.dumps(["voice-draft", uid, mid, duration, clock.NOW() + DRAFT_SEC]))
-    return {"upload": upload.decode("ascii")}
+
+
+async def _draft_of(uid: int, wav: bytes, duration: float) -> str:
+    """WAV образца — в media без ссылки; токен на DRAFT_SEC для batch. media.StorageError — как есть."""
+    mid = await media.save_async(uid, wav, "audio/wav", "voice-sample.wav")
+    return security.encrypt(json.dumps(["voice-draft", uid, mid, duration, clock.NOW() + DRAFT_SEC])).decode("ascii")
 
 
 def _draft(uid: int, token: str):

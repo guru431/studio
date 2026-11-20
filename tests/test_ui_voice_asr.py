@@ -116,6 +116,8 @@ def test_wav_samples_play_before_and_after_saving(page):
 
 
 def test_file_is_transcribed_corrected_and_saved(page, live):
+    urls = []
+    page.on("request", lambda request: urls.append(request.url))
     page.locator("#voice-dialog [name=name]").fill("Голос с ASR")
     upload(page, seconds=20.0)
     assert_audio_controls(page, 1)
@@ -131,6 +133,9 @@ def test_file_is_transcribed_corrected_and_saved(page, live):
       return (await fetch('/api/voices/' + items[0].id)).json();
     }""")
     assert saved["name"] == "Голос с ASR" and saved["text"] == "Исправленный текст"
+    # файл ушёл один раз — на распознавание; сохранение взяло подготовленный им WAV
+    assert sum(url.endswith("/api/voices/transcribe") for url in urls) == 1
+    assert not any(url.endswith("/api/voices/prepare-sample") for url in urls)
     sent = live.gw.asr_requests[-1]
     message = BytesParser(policy=policy.default).parsebytes(
         f"Content-Type: {sent.headers['content-type']}\r\n\r\n".encode() + sent.content)
@@ -164,6 +169,7 @@ def test_replacing_sample_and_closing_ignore_late_answers(page):
     assert page.locator("#voice-dialog [name=text]").input_value() == "Моя правка"
     activate(page, "#voice-transcribe")
     page.keyboard.press("Escape")
+    activate(page, "#voice-unsaved-drop")                  # образец не сохранён — окно спрашивает
     page.locator("#voice-dialog").wait_for(state="detached")
     assert page.evaluate("window.asr[2].signal.aborted")
     page.evaluate("window.asr[2].resolve('Закрытый образец')")
@@ -251,24 +257,36 @@ def test_batch_failure_can_be_retried_without_partial_voice(page):
         {"name": "first.wav", "mimeType": "audio/wav", "buffer": wav_of(6)},
         {"name": "second.wav", "mimeType": "audio/wav", "buffer": wav_of(6)}])
     page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
-    prepared = []
-
-    def fail_second(route):
-        prepared.append(route.request.url)
-        if len(prepared) == 1:
-            route.continue_()
-        else:
-            route.fulfill(status=503, content_type="application/json",
-                          body='{"detail":{"code":"busy","message":"Try again"}}')
-
-    page.route("**/api/voices/prepare-sample", fail_second)
+    # образцы подготовило распознавание; первый batch — отказ, повтор сохраняет те же подготовленные WAV
+    page.route("**/api/voices/*/batch", lambda route: route.fulfill(status=503, content_type="application/json",
+               body='{"detail":{"code":"busy","message":"Try again"}}'))
     activate(page, "#voice-save")
     page.wait_for_function("() => document.querySelector('#voice-dialog [data-for=form]').textContent === 'Try again'")
     assert page.evaluate("async () => (await (await fetch('/api/voices')).json()).items.length") == 0
-    page.unroute("**/api/voices/prepare-sample")
+    page.unroute("**/api/voices/*/batch")
     activate(page, "#voice-save")
     page.locator("#voice-dialog").wait_for(state="detached")
     assert read_voice(page)["sample_count"] == 2
+
+
+def test_closing_with_unsaved_samples_asks_first(page):
+    """Escape и «Отмена» с несохранённым образцом не закрывают окно молча: «Остаться» оставляет всё как было,
+    «Не сохранять» закрывает. Без изменений окно закрывается сразу."""
+    page.keyboard.press("Escape")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    activate(page, "#voice-add")
+    page.locator("#voice-dialog[open]").wait_for()
+    upload(page)
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    page.keyboard.press("Escape")
+    page.locator("#voice-unsaved[open]").wait_for()
+    activate(page, "#voice-unsaved .dialog-close")
+    page.locator("#voice-unsaved").wait_for(state="detached")
+    assert page.locator("#voice-dialog[open]").count() == 1 and page.locator(".voice-sample").count() == 1
+    activate(page, "#voice-dialog .dialog-close")
+    page.locator("#voice-unsaved[open]").wait_for()
+    activate(page, "#voice-unsaved-drop")
+    page.locator("#voice-dialog").wait_for(state="detached")
 
 
 def test_preview_sources_are_released_when_replaced_removed_or_closed(page):
@@ -293,6 +311,7 @@ def test_preview_sources_are_released_when_replaced_removed_or_closed(page):
     page.locator(".voice-sample .btn-danger").last.click()
     assert page.evaluate("window.previewUrls.size") == 1
     page.keyboard.press("Escape")
+    activate(page, "#voice-unsaved-drop")
     page.locator("#voice-dialog").wait_for(state="detached")
     assert page.evaluate("window.previewUrls.size") == 0
 

@@ -4222,6 +4222,53 @@ def test_mic_without_permission_says_so(browser, live):
     assert "разрешения на микрофон" in r["values"]["words"]
 
 
+#: распознавание «висит», пока его не оборвут: window.aborted — обрыв дошёл до запроса
+HELD_DICTATION = """(() => { window.aborted = false; const real = window.fetch;
+  window.fetch = (url, opts = {}) => String(url) !== '/api/dictation' ? real(url, opts) : new Promise((_, reject) => {
+    opts.signal.addEventListener('abort', () => { window.aborted = true; reject(new DOMException('aborted', 'AbortError')); });
+  }); return true; })()"""
+
+
+def test_mic_cancels_recording_and_recognition_and_says_there_is_no_model_before_recording(browser, live):
+    """«×» за микрофоном и Escape отменяют запись без распознавания; «×» во время распознавания обрывает запрос, текст
+    не встаёт и слов ошибки нет. Без модели голосового ввода запись не начинается: слова со ссылкой на настройки."""
+    login = "miccancel"
+    live.add_user(login)
+    mic, x = "#photo-composer .mic", "#photo-composer .mic-cancel"
+    prompt = "document.querySelector('#photo-prompt')"
+    state = f"""[!!document.querySelector('{mic}.on'), !document.querySelector('{x}').hidden,
+      document.querySelector('{x}').getAttribute('aria-label'), {prompt}.value,
+      document.querySelector('#photo-composer .mic-error').textContent]"""
+    r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "mic", COUNTED_MIC), set_value("#photo-prompt", "кот"),
+        ("click", mic), ("wait", f"document.querySelector('{mic}.on')"), ("eval", "recording", state),
+        ("click", x), ("wait", f"!document.querySelector('{mic}.on') && window.stopped === 1"),
+        ("eval", "dropped", state),
+        ("click", mic), ("wait", f"document.querySelector('{mic}.on')"), ("press", "Escape"),
+        ("wait", f"!document.querySelector('{mic}.on') && window.stopped === 2"),
+        ("eval", "held", HELD_DICTATION),
+        ("click", mic), ("wait", f"document.querySelector('{mic}.on')"), ("click", mic),
+        ("wait", f"document.querySelector('{mic}.busy')"), ("eval", "sending", state),
+        ("click", x), ("wait", f"window.aborted && !document.querySelector('{mic}.busy')"),
+        ("eval", "aborted", state),
+        # без модели голосового ввода: раздел снят в настройках — запись не начинается
+        ("eval", "off", f"""(async () => {{ const m = {API}; const s = await m.api('GET', '/api/sections');
+          for (const link of s.sections.find(x => x.id === 'dictation').links)
+            await m.api('DELETE', '/api/sections/dictation/links/' + link.connection.id);
+          await m.loadMe(); return m.me.capabilities.dictation; }})()"""),
+        ("click", mic), ("wait", "document.querySelector('#photo-composer .mic-error a')"),
+        ("eval", "nomodel", "[document.querySelector('#photo-composer .mic-error').textContent,"
+                            " document.querySelector('#photo-composer .mic-error a').getAttribute('href'), window.mics]")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["recording"] == [True, True, "Отменить запись", "кот", ""]
+    assert v["dropped"] == [False, False, "Отменить распознавание", "кот", ""]
+    assert v["sending"] == [False, True, "Отменить распознавание", "кот", ""]
+    assert v["aborted"] == [False, False, "Отменить распознавание", "кот", ""]
+    assert v["nomodel"] == ["Модель голосового ввода не выбрана — открыть настройки", "#/settings/input", 3]
+    assert "POST /api/dictation" not in r["sent"]
+    assert not problems(r), problems(r)
+
+
 # ---- поле со значками и строка под полем (спека 2026-10-27-studio-ui-tidy, 4.4–4.5) ----
 
 def field_state(field):
@@ -4556,6 +4603,42 @@ def test_transcribe_uploads_several_files_and_renames_a_record(browser, live, wi
     assert not known_refusals(problems(r), 415), problems(r)
 
 
+#: загрузка записи «висит» на 37%: send() не уходит в сеть, а шлёт событие хода; window.held — этот XHR
+HELD_UPLOAD = """(() => { const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) { this.target = url; return open.call(this, method, url, ...rest); };
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this.target !== '/api/transcripts') return send.call(this, body);
+    window.held = this;
+    this.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: 37, total: 100 }));
+  }; return true; })()"""
+SENDING = """(() => { const p = document.querySelector('#transcribe-progress'), c = document.querySelector('#transcribe-cancel');
+  return [p.offsetWidth > 0 ? p.textContent : null, c.offsetWidth > 0, document.querySelector('#transcribe-upload').disabled]; })()"""
+
+
+def test_transcribe_upload_shows_progress_on_the_phone_and_cancels_after_coming_back(browser, live):
+    """Телефон: ход загрузки виден над видом записи (список спрятан), уход из раздела и возврат его не теряют,
+    «Отменить загрузку» обрывает её словами, кнопка снова доступна."""
+    login = "trheld"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        ("eval", "spy", HELD_UPLOAD), put_audio("#transcribe-add input", wav_of(1.0)),
+        ("wait", "document.querySelector('#transcribe-progress').textContent.includes('37%')"),
+        ("eval", "first", SENDING),
+        *go("settings"), ("wait", "document.querySelector('.settings-nav')"),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-progress')?.textContent.includes('37%')"),
+        ("eval", "back", SENDING),
+        ("click", "#transcribe-cancel"), ("wait", "document.querySelector('.tr-sending').hidden"),
+        ("eval", "error", "document.querySelector('.tr-error').textContent"),
+        ("eval", "free", "document.querySelector('#transcribe-upload').disabled")], width=390, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["first"] == ["Загружаю запись · 37%", True, True] and v["back"] == v["first"]
+    assert v["error"] == "Загрузка отменена." and v["free"] is False
+    assert "POST /api/transcripts" not in r["sent"]
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("width", [390, 1280])
 def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
     """«Править» → текст реплики → «Сохранить»; «Имена» → «Иван»; выгрузка TXT — с ними; нажатие по
@@ -4602,28 +4685,38 @@ TR_EXITS = "['#tr-copy', '#tr-download', '#tr-chat'].map(s => !!document.querySe
 
 
 def test_transcribe_edit_hides_the_exits_seeks_by_the_time_and_a_late_save_keeps_the_pick(browser, live):
-    """Время реплики — кнопка (перемотка и с клавиатуры). Во время правки нет «Копировать», «Скачать» и
-    «В чат». «Сохранить», а пока PATCH идёт, выбрана другая запись: ответ вид не забирает, правка — на сервере."""
+    """Время реплики — кнопка (перемотка и с клавиатуры), и в правке тоже. Во время правки нет «Копировать»,
+    «Скачать» и «В чат». «Сохранить», а пока PATCH идёт, выбрана другая запись: ответ вид не забирает, правка —
+    на сервере. Запись, которую браузер не играет (здесь — без файла), — слова под плеером."""
     login = "trlate"
     other = seed_list(live, "transcribe", live.add_user(login), 1)[0]
+    player = "document.querySelector('audio.tr-audio')"
+    unplayable = "document.querySelector('.tr-unplayable')"
     r = browser.drive(live.url + "/", [*transcribed(login),
         ("eval", "seek", """(() => { const b = document.querySelector(".tr-turn[data-index='1'] .tr-seek");
           b.focus(); b.click(); return [b.tagName, b.type, document.activeElement === b, b.textContent]; })()"""),
-        ("wait", "Math.abs(document.querySelector('audio.tr-audio').currentTime - 3) < 0.3"),
+        ("wait", f"Math.abs({player}.currentTime - 3) < 0.3"),
         ("eval", "who", "document.querySelector(\".tr-turn[data-index='1'] .tr-who\").textContent"),
+        ("eval", "playable", f"{unplayable}.hidden"),
         ("click", "#tr-edit"), ("wait", "document.querySelectorAll('.tr-edit-text').length === 2"),
         ("eval", "editing", TR_EXITS),
+        # в правке время — та же кнопка: плеер встал на 5 с, нажатие по 00:00 — на начало
+        ("eval", "park", f"(() => {{ {player}.pause(); {player}.currentTime = 5; return true; }})()"),
+        ("wait", f"Math.abs({player}.currentTime - 5) < 0.3"),
+        ("click", ".tr-turn[data-index='0'] .tr-seek"), ("wait", f"{player}.currentTime < 2.5"),
         set_value(".tr-turn[data-index='1'] .tr-edit-text", "Добрый вечер."),
         ("eval", "spy", SLOW_PATCH), ("click", "#tr-save"),
         ("click", f".tr-item[data-id='{other}']"),
         ("wait", "document.querySelector('.split-main h1').textContent === 'Запись 0' && window.patched"),
         ("eval", "shown", TR_SHOWN),
+        ("wait", f"{unplayable} && !{unplayable}.hidden"),
         ("click", f".tr-item:not([data-id='{other}'])"),
         ("wait", "document.querySelector('.split-main h1').textContent === 'Звонок.wav'"),
         ("eval", "texts", TR_TEXTS), ("eval", "after", TR_EXITS)], timeout=20000)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["seek"] == ["BUTTON", "button", True, "00:03"] and v["who"] == "Собеседник 2 · 00:03"
+    assert v["playable"] is True
     assert v["editing"] == [False, False, False] and v["after"] == [True, True, True]
     assert v["shown"] == ["Запись 0", other]
     assert v["texts"] == ["Здравствуйте.", "Добрый вечер."]
@@ -4698,6 +4791,30 @@ def test_transcript_to_chat_with_the_local_model_and_back(browser, live, width):
     assert live.gw.chat_requests[-1]["model"] == "local-gemma-abl"
     assert content.startswith('<document name="Звонок.txt">\nРасшифровка «Звонок.wav»') and content.endswith(v["question"])
     assert v["back"] == [v["tid"], "Звонок.wav"]          # ?id выбрал запись и ушёл из адреса (как «Открыть» в «В работе»)
+    assert not problems(r), problems(r)
+
+
+def test_transcript_to_chat_keeps_the_unsent_chat_draft(browser, live):
+    """Набранный и не отправленный текст чата не пропадает от «В чат ▾»: «Составить итоги» дописывает вопрос
+    после него, «Обсудить в чате» поле не трогает."""
+    login = "trdraft"
+    live.add_user(login)
+    field = "document.querySelector('#chat-input')"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(),
+        *go("chat"), ("wait", field), set_value("#chat-input", "Мой черновик"),
+        *go("transcribe"), ("wait", "document.querySelector('#transcribe-add input')"),
+        put_audio("#transcribe-add input", wav_of(1.0)),
+        ("wait", "document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=summary]"),
+        ("wait", CHAT_CHIP), ("eval", "summary", f"{field}.value"),
+        *go("transcribe"), ("wait", "document.querySelector('.tr-item')"), ("click", ".tr-item"),
+        ("wait", "document.querySelector('#tr-chat')"),
+        ("click", "#tr-chat"), ("click", ".tr-chat-menu [data-ask=discuss]"),
+        ("wait", CHAT_CHIP), ("eval", "discuss", f"{field}.value")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["summary"] == "Мой черновик\n\nСоставь краткие итоги этой записи: о чём говорили и к чему пришли."
+    assert v["discuss"] == v["summary"]
     assert not problems(r), problems(r)
 
 
