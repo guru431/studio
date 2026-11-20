@@ -4,7 +4,7 @@ import { api } from './api.js';
 import { icon } from './icons.js';
 import { el, words } from './ui.js';
 
-const LOCAL = tr("Рабочий стол отключён. Человек за компьютером должен включить его в настройках агента.");
+const LOCAL = tr("Рабочий стол отключён. Человек за компьютером должен включить его в настройках моста.");
 const FRAME_MS = 250;
 const button = (id, label) => el('button', { id: `code-desktop-${id}`, type: 'button', class: 'btn' }, label);
 
@@ -302,8 +302,8 @@ export function desktopView(host, { locked }) {
     const target = agent;
     const mine = generation;
     if (!target.online || !target.desktop) {
-      say(!target.online ? tr("Компьютер не на связи — включите его и запустите агент.")
-        : tr("Обновите агент на компьютере для управления рабочим столом."));
+      say(!target.online ? tr("Компьютер не на связи — включите его и запустите мост.")
+        : tr("Обновите мост на компьютере для управления рабочим столом."));
       buttons();
       return;
     }
@@ -343,7 +343,7 @@ export function desktopView(host, { locked }) {
         && data.monitors.every((item) => Number.isInteger(item.id) && Number.isInteger(item.width)
           && Number.isInteger(item.height) && item.width > 0 && item.height > 0)
         && data.monitors.some((item) => item.id === data.monitor);
-      if (!valid) throw new Error(tr("Агент вернул неверные параметры рабочего стола"));
+      if (!valid) throw new Error(tr("Мост вернул неверные параметры рабочего стола"));
       if (mine !== generation || !dialog.open || disposed || background()) {
         await api('POST', path(target, '/stop'), { control: data.control }, { signal: AbortSignal.timeout(3000) });
         return;

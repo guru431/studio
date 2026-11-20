@@ -308,7 +308,7 @@ export function emergencyBlock(host) {
   return el('section', { class: 'block emergency-block' }, el('h2', {}, tr("Аварийный выход")),
     el('p', { class: 'muted small' }, tr("Если телефон или пароль могли попасть в чужие руки: завершает все сессии, отключает ссылки «Поделиться», почтовые ссылки и коды, доступ участников к проектам, push и ntfy. История и настройки остаются. Затем смените пароль.")),
     field(tr("Пароль учётки"), password, 'emergency-password'),
-    el('label', { class: 'check' }, agents, tr("Отозвать и ключи компьютеров (агенты)")),
+    el('label', { class: 'check' }, agents, tr("Отозвать и ключи компьютеров (мосты)")),
     el('div', { class: 'row' }, start, note));
 }
 

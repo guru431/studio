@@ -8164,9 +8164,9 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         *go("settings"), ("eval", "returned", AGENTS_DOWNLOAD)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
     assert v["nested"] and v["other"]
-    assert v["notice"] == "Установите агент на компьютер, который хотите подключить к Студии."
+    assert v["notice"] == "Установите мост на компьютер, который хотите подключить к Студии."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -8176,7 +8176,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         ("eval", "link", AGENTS_DOWNLOAD), ("eval", "fits", NO_OVERFLOW),
         ("screenshot", str(tmp_path / "installer-settings-1280.png"))], width=1280)
     assert not r.get("failed"), r
-    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
     assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
@@ -8465,12 +8465,12 @@ def test_code_empty_offers_agent_download(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
+    assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows (.exe)", 1]
     assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
-    assert v["texts"] == ["Установите агент на компьютер, который хотите подключить к Студии.",
+    assert v["texts"] == ["Установите мост на компьютер, который хотите подключить к Студии.",
                           "Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
-                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню агента."]
+                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста."]
     assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)

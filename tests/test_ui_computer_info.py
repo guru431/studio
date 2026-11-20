@@ -283,7 +283,7 @@ def test_old_and_offline_computers_explain_why_snapshot_is_unavailable(browser, 
     finally:
         server.stop()
     assert not result.get('failed'), result
-    assert 'Обновите агент' in result['values']['old'] and result['values']['disabled']
+    assert 'Обновите мост' in result['values']['old'] and result['values']['disabled']
     assert 'Компьютер не на связи' in result['values']['offline']
     assert not any(req['op'] == 'computer_info' for req in machine.requests)
     assert not problems(result), problems(result)

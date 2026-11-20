@@ -68,7 +68,7 @@ export function computerView(host, { locked }) {
     if (!target.online || !target.computer_info) {
       content.replaceChildren(el('p', { class: 'muted' }, !target.online
         ? tr("Компьютер не на связи — включите его и запустите мост для просмотра сведений.")
-        : tr("Обновите агент на компьютере для просмотра сведений.")));
+        : tr("Обновите мост на компьютере для просмотра сведений.")));
       return;
     }
     controller = new AbortController();
