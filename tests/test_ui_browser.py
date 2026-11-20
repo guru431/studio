@@ -6745,6 +6745,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
         ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-finished")),
         ("eval", "running", "document.querySelector('#jobs-running').textContent"),
         ("eval", "dotOpen", "document.querySelector('#jobs').dataset.new || ''"),
+        ("eval", "openName", "document.querySelector('#jobs-finished .jobs-row .jobs-open').getAttribute('aria-label')"),
         ("click", "#jobs-finished .jobs-row .jobs-open"),
         ("wait", is_open("#viewer")),
         ("eval", "hash", "location.hash"), ("eval", "panel", is_open("#jobs-panel")),
@@ -6754,6 +6755,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
     v = r["values"]
     assert v["dot"] is True and v["rows"] == [["photo", "Картинка · SNOFS Krea 2", True, "done"]]
     assert v["running"] == "Сейчас ничего не идёт" and v["dotOpen"] == ""
+    assert v["openName"] == "Открыть: Картинка · SNOFS Krea 2"
     assert v["hash"] == "#/photo" and v["panel"] is False and v["dotAfter"] == ""
     assert not problems(r), problems(r)
 
