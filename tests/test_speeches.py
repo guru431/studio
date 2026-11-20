@@ -7,13 +7,16 @@ import re
 
 import httpx
 
+import speech
 import speeches
 import state
 import upstream
+import voices
 from conftest import add_connection, add_gateway, make_user, signin
 from fakes import WAV_FAKE
 from http_checks import on_http
 from test_transcripts import hold_temp_unlink
+from test_voices import expire_budget_at_event
 
 LONG_A = "А" * 150 + "."
 LONG_B = "Б" * 150 + "."
@@ -217,6 +220,56 @@ def test_voice_probe_says_one_short_phrase_and_keeps_nothing(studio, fake_audio,
     studio.gw.tts_replies = [(503, {"detail": "busy"})]
     r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет"})
     assert r.status_code == 503 and studio.sleeps.count(speeches.RETRY_SEC) == 0     # без ожидания карты
+
+
+def test_voice_probe_held_by_the_gateway_ends_in_words_before_the_proxy(studio, fake_audio, monkeypatch):
+    """Шлюз держит пробу (карта занята идущей генерацией): служба отвечает 504 словами раньше таймаута
+    Apache (сверяет test_deploy), а не 502 прокси, и следующая проба не получает «проба уже идёт»."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    reached = expire_budget_at_event(monkeypatch, voices.PROBE_BUDGET_SEC)
+    real = speech.say
+
+    async def held(*args, **kwargs):
+        reached.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(speech, "say", held)
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет"})
+    assert r.status_code == 504 and r.json()["detail"]["code"] == "timeout"
+    assert voices.PROBING == set()
+    monkeypatch.setattr(speech, "say", real)
+    monkeypatch.setattr(voices, "asyncio", asyncio)
+    assert studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет"}).status_code == 200
+
+
+def external_speech(s, monkeypatch) -> int:
+    """Внешний сервис в «Озвучке» с отмеченной tts-1 (адрес имени подменён публичным)."""
+    state.DB.execute("UPDATE settings SET value = '[\"10.77.1.15:4000\", \"voice.cloud.test:443\"]' WHERE key = 'allowlist'")
+    async def resolve(host, port): return ["93.184.216.34"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    cid = add_connection(s, base_url="https://voice.cloud.test/v1", token="k-1", sections=["speech"])
+    assert s.c.put(f"/api/sections/speech/links/{cid}", json={"models": ["tts-1"]}).status_code == 200
+    return cid
+
+
+def test_voice_probe_picks_the_gateway_model_even_when_the_default_is_a_service(studio, fake_audio, monkeypatch):
+    """Умолчание «Озвучки» — внешний сервис: проба без выбора берёт первую отмеченную модель шлюза; выбранная
+    модель шлюза (F5-TTS) звучит своей, а внешний сервис голосом по образцу не говорит — 409 словами."""
+    gateway = add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    cloud = external_speech(studio, monkeypatch)
+    assert studio.c.put("/api/sections/speech/default", json={"connection_id": cloud, "model": "tts-1"}).status_code == 200
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет"})
+    assert r.status_code == 200, r.text
+    assert [q.url.path for q in studio.gw.tts_requests] == ["/speech/tts-qwen"]
+    studio.gw.releases.clear()
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет", "connection_id": gateway, "model": "f5-tts"})
+    assert r.status_code == 200 and studio.gw.tts_requests[-1].url.path == "/speech/tts-f5" and not studio.gw.releases
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет", "connection_id": cloud, "model": "tts-1"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "voice"
+    r = studio.c.post(f"/api/voices/{vid}/probe", json={"text": "Привет", "connection_id": gateway, "model": "whisperx"})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "model"
 
 
 def test_queued_speeches_run_in_turn_and_survive_a_restart(studio, fake_audio):
