@@ -1,9 +1,10 @@
 """Скопированный проект с чужим `.git/config`: фоновые чтения Git моста не исполняют его команды.
 
-Маркер-команда (`touch`) в ключах, которые git исполняет при `status`/`log`: `core.fsmonitor`, драйверы фильтров
-(`clean`, `process`, в том числе через `include` и в конфиге подмодуля), `gpg.program` при `log.showSignature`,
-`uploadpack` promisor-remote при дозагрузке частичного клона."""
+При `status` маркер-команда (`touch`) проверяет `core.fsmonitor`, драйверы фильтров (`clean`, `process`, в том числе
+через `include` и в конфиге подмодуля) и `uploadpack` promisor-remote при дозагрузке частичного клона.
+При `log` попытку запуска проверяющей программы фиксирует Trace2."""
 
+import json
 import os
 import subprocess
 
@@ -129,19 +130,32 @@ def test_lazy_fetch_of_a_promisor_remote_is_not_run(repo, tmp_path):
     assert not hit.exists()
 
 
-def test_signature_program_of_the_repository_is_not_run(repo, tmp_path):
-    hit = marker(tmp_path, "gpg")
-    program = tmp_path / "fake-gpg.sh"
-    program.write_text(f"#!/bin/sh\ntouch {hit.as_posix()}\nexit 1\n")
-    poison(repo, f'[log]\n  showSignature = true\n[gpg]\n  program = "{program.as_posix()}"\n')
+def test_signature_program_of_the_repository_is_not_run(repo, tmp_path, monkeypatch):
+    # Trace2 фиксирует попытку запуска ещё до поиска файла, поэтому подставной исполняемый файл не нужен.
+    verifier = (tmp_path / "missing-gpg").as_posix()
+    git(repo, "config", "log.showSignature", "true")
+    git(repo, "config", "gpg.program", verifier)
     head = git(repo, "cat-file", "commit", "HEAD").decode()
     header, _, message = head.partition("\n\n")
     signature = "gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQ==\n -----END PGP SIGNATURE-----"
     signed = git(repo, "hash-object", "-t", "commit", "-w", "--stdin",
                  data=f"{header}\n{signature}\n\n{message}".encode()).decode().strip()
     git(repo, "update-ref", "HEAD", signed)
-    subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%ct"], capture_output=True)
-    assert hit.exists()
-    hit.unlink()
-    assert project_summary.read(repo, local=True)["modified"] is not None
-    assert not hit.exists()
+
+    trace = tmp_path / "git-trace.jsonl"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", trace.as_posix())
+
+    def verifier_requested():
+        with trace.open(encoding="utf-8") as stream:
+            events = map(json.loads, stream)
+            return any(event["event"] == "child_start" and event["argv"][0] == verifier for event in events)
+
+    control = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%ct"],
+                             capture_output=True, timeout=20)
+    diagnostic = control.stderr.decode("utf-8", "replace")
+    assert control.returncode == 0, diagnostic
+    assert verifier_requested(), diagnostic
+    trace.unlink()
+
+    assert project_summary.read(repo, local=True)["modified"] == int(control.stdout)
+    assert not verifier_requested()
