@@ -159,6 +159,21 @@ def test_whole_chat_is_deleted_at_once_but_not_while_a_record_runs(studio, fake_
     assert [studio.c.get(f"/api/media/{i['media_id']}").status_code for i in (first, second, other)] == [404, 404, 200]
 
 
+def test_schema_52_refreshes_the_search_model_and_keeps_old_rows_queueable(env):
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        conn.executescript(db.SCHEMA.split(db.SPEECH_52, 1)[0] + '\nPRAGMA user_version=51;')
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'u','U','h',0)")
+        conn.execute("INSERT INTO speeches(id,user_id,model,voice,text,state,detail,created)"
+                     " VALUES('s',1,'qwen3-tts','v','Привет','done','готово',123)")
+        conn.execute("UPDATE speeches SET model = 'f5-tts'")              # прежний триггер смену модели не видел
+        db.migrate(conn)
+        assert conn.execute("SELECT model FROM search_docs WHERE item='s'").fetchone()[0] == 'f5-tts'
+        assert conn.execute("SELECT queued, previous, previous_media_id FROM speeches").fetchone()[:] == (None, None, None)
+        conn.execute("UPDATE speeches SET model = 'qwen3-tts'")           # прежний код после отката — тоже
+        assert conn.execute("SELECT model FROM search_docs WHERE item='s'").fetchone()[0] == 'qwen3-tts'
+
+
 def test_migration_preserves_old_speeches_and_previous_writer(env):
     from contextlib import closing
     with closing(db.connect(env.db_path)) as conn:
