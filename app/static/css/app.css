@@ -576,6 +576,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tl-source-text, .tl-output { flex: 1; min-height: 94px; max-height: calc(25 * var(--dvh)); overflow: auto; white-space: pre-wrap;
   overflow-wrap: anywhere; line-height: 1.45; }
 .tl-output:empty::before { content: attr(data-placeholder); color: var(--text-2); }
+.tl-output.md { white-space: normal; }
 .tl-state { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 .tl-state:has(.tl-status:empty):not(:has(.btn:not([hidden]))) { display: none; }
 .tl-status { display: inline-flex; align-items: center; gap: var(--space-4); margin: 0; overflow-wrap: anywhere; }

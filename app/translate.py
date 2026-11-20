@@ -40,7 +40,7 @@
    вернулись не все — каждый блок пачки отдельно.
 8. Повтор (спека 6.2) — новая запись из прежней: скан записи готов — его текст сейчас; иначе исходник известен —
    он же (у снимка — блоки с рамками), без нового распознавания; иначе файл с шары проходит путь загрузки заново.
-   Выгрузка — txt и docx перевода (docx через `md_plain` — только у перевода скана: прочее — не Markdown).
+   Выгрузка — txt, md и docx перевода (txt и docx через `md_plain` — только у перевода скана: прочее — не Markdown).
 9. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
    событий.
 10. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста и файла, лента,
@@ -1136,17 +1136,20 @@ def _scan_done(user_id: int, sid: "str | None") -> bool:
 
 
 @router.get("/{tid}/export")
-async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|docx)$")):  # noqa: A002
+async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$")):  # noqa: A002
     """Перевод файлом — у кончившейся записи с переведённым: «<имя без расширения>.<язык перевода>.<формат>»,
-    у текста — «Перевод.ru.txt»."""
+    у текста — «Перевод.ru.txt». md — перевод как есть."""
     row = _row(request.state.user.id, tid)
     text = joined(tid) if row["state"] in TERMINAL else ""
     if not text:
         raise HTTPException(409, {"code": "running", "message": "перевода ещё нет"})
     stem = TEXT_STEM if row["kind"] == "text" else _stem(row["name"])
-    # Markdown — только у перевода распознанного скана; текст поля и документа — как есть
-    body = (exports.text_docx(text, stem, markdown=row["scan_id"] is not None) if format == "docx"
-            else text.encode("utf-8"))
+    # Markdown — только у перевода распознанного скана: txt и docx — через md_plain; текст поля и документа — как есть
+    markdown = row["scan_id"] is not None
+    if format == "docx":
+        body = exports.text_docx(text, stem, markdown=markdown)
+    else:
+        body = (exports.md_plain(text) if markdown and format == "txt" else text).encode("utf-8")
     name = f"{stem}.{row['result_lang'] or row['target_lang']}.{format}"
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(name), "Cache-Control": "no-store"})

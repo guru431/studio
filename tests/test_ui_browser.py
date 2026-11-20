@@ -7365,7 +7365,7 @@ def test_translate_file_shows_source_and_translation(browser, live, translator):
                          " document.querySelector('#tl-chip a').textContent]"),
         ("eval", "kind", f"{TL_DONE}.querySelector('.tl-meta').textContent.includes('Word')"),
         ("eval", "spy", CLICKS), ("click", "#tl-export"),
-        ("eval", "formats", "[...document.querySelectorAll('.tl-formats [data-format]')].map(b => b.dataset.format)"),
+        ("eval", "formats", "[...document.querySelectorAll('.tl-formats [data-format]:not([hidden])')].map(b => b.dataset.format)"),
         ("click", ".tl-formats [data-format=txt]"),
         ("wait", "window.clicked.length === 1"), ("eval", "clicked", "window.clicked[0]"),
         ("eval", "body", f"fetch('/api/translate/' + {TL_DONE}.dataset.id + '/export?format=txt').then(r => r.text())"),
@@ -7683,6 +7683,37 @@ def test_translate_scan_with_an_unread_page_says_so_and_links_to_scans(browser, 
     assert v["status"] == ["не распознано страниц: 1 из 2", True]
     assert v["link"] == f"#/ocr?id={v['scan']}"
     assert v["meta"][0].endswith(" · не распознано страниц: 1 из 2") and v["meta"][1] is True
+    assert not problems(r), problems(r)
+
+
+def test_translate_scan_shows_markdown_as_a_table(browser, live, translator):
+    """05:F7: готовый перевод скана справа — разметкой, как в «Сканах»: таблица HTML — таблицей, `sup` — индексом,
+    скрипт — нет; «Скачать ▾» — ещё и .md, а .txt — ячейками через табуляцию; «Копировать» — Markdown."""
+    from scans import scan_pdf
+    live.add_user("tl-scanmd")
+    reply = "# Счёт\n\n<table><tr><td>Площадь</td><td>12 m<sup>2</sup></td></tr></table>\n\n<script>window.pwned = 1</script>"
+    translator.chat_script = [[reply]]
+    r = browser.drive(live.url + "/", [*translating("tl-scanmd"),
+        put_files("#tl-file-input", [("Скан.pdf", scan_pdf("ink"))], "application/pdf"),
+        ("wait", "!document.querySelector('#tl-chip').hidden"),
+        ("click", "#tl-go"),
+        ("wait", f"{TL_DONE} && document.querySelector('#tl-output td')"),
+        ("eval", "shown", "[[...document.querySelectorAll('#tl-output td')].map(e => e.textContent),"
+                          " document.querySelector('#tl-output h1')?.textContent,"
+                          " !!document.querySelector('#tl-output sup'), document.querySelectorAll('#tl-output script').length,"
+                          " window.pwned || 0]"),
+        ("eval", "formats", "[...document.querySelectorAll('.tl-formats [data-format]:not([hidden])')].map(b => b.dataset.format)"),
+        ("eval", "txt", f"fetch('/api/translate/' + {TL_DONE}.dataset.id + '/export?format=txt').then(r => r.text())"),
+        ("eval", "clip", "navigator.clipboard.writeText = (t) => { window.copied = t; return Promise.resolve(); }"),
+        ("click", "#tl-copy"), ("wait", "window.copied !== undefined"),
+        ("eval", "copied", "window.copied"),
+        ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["shown"] == [["Площадь", "12 m2"], "Счёт", True, 0, 0]
+    assert v["formats"] == ["txt", "md", "docx"]
+    assert v["txt"].startswith("Счёт\n\nПлощадь\t12 m²\n")
+    assert v["copied"] == reply and v["fits"] is True
     assert not problems(r), problems(r)
 
 
