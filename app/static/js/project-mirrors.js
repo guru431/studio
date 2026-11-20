@@ -362,7 +362,12 @@ export function projectMirrors(host, trigger, aid, project) {
       pinSlot.replaceChildren();
       const item = items.find((row) => String(row.id) === choices.value);
       targetForm.hidden = !!item;
-      if (item?.job?.state === 'running') await watch(item);
+      if (item?.reenter) {
+        state.replaceChildren(el('p', { class: 'error' },
+          tr("Настройка зеркала недоступна после смены ключа Студии — отвяжите зеркало и привяжите папку заново.")),
+        el('div', { class: 'actions' }, controls(item).remove));
+        tell('');
+      } else if (item?.job?.state === 'running') await watch(item);
       else if (item) await inspect(item);
       else { state.replaceChildren(); tell(''); }
     }
@@ -373,7 +378,8 @@ export function projectMirrors(host, trigger, aid, project) {
       items = saved.items;
       devices = agents.items.filter((agent) => agent.id !== Number(aid) && !agent.shared);
       selectField(choices, tr("Новое зеркало"),
-        items.map((item) => option(item.id, `${item.computer} · ${item.name} · ${item.folder}`)));
+        items.map((item) => option(item.id, item.reenter ? `${item.computer} · ${tr("настройка недоступна")}`
+          : `${item.computer} · ${item.name} · ${item.folder}`)));
       mirrorPicker.hidden = !items.length;
       choices.value = String(prefer ?? items[0]?.id ?? '');
       selectField(targets, tr("Выберите компьютер"), devices.map((agent) =>

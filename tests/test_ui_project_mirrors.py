@@ -128,6 +128,36 @@ def test_mirror_dialog_finds_a_renamed_clone_and_preserves_a_selected_local_file
     assert (clone / "local.env").read_bytes() == (source / "local.env").read_bytes()
 
 
+def test_mirror_dialog_unlinks_a_mirror_sealed_with_a_former_key(browser, live, computers):
+    """Настройку зеркала не расшифровать (сменился ключ Студии): окно открывается, объясняет и отвязывает."""
+    from cryptography.fernet import Fernet
+    login = "sealed-mirror"
+    live.add_user(login)
+    source, first, second = computers
+    aid, left = code_online(live, login, first, "Source")
+    target, right = code_online(live, login, second, "Destination")
+    root = mirror.projects.list_roots(second.roots)[1]["id"]
+    state.DB.execute(
+        "INSERT INTO project_mirrors(source, project, destination, root, name_key, location) VALUES(?,?,?,?,?,?)",
+        (aid, pid(source.name), target, root, security.digest(source.name),
+         Fernet(Fernet.generate_key()).encrypt(b"{}")))
+    panel = "#code-project-mirrors"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"code/{aid}/{pid(source.name)}"),
+            ("wait", "document.querySelector('#code-project-mirror')?.hidden === false"),
+            ("click", "#code-project-mirror"),
+            ("wait", f"document.querySelector('{panel} .project-mirror-state')?.textContent.includes('после смены ключа')"),
+            ("eval", "option", f"document.querySelector('{panel} select').selectedOptions[0].textContent"),
+            ("click", f"{panel} .project-mirror-state .actions button"),
+            ("wait", f"document.querySelector('{panel} .status')?.textContent.includes('Зеркало отвязано')")])
+    finally:
+        left.stop()
+        right.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["option"] == "Destination · настройка недоступна"
+    assert state.DB.execute("SELECT 1 FROM project_mirrors WHERE destination = ?", (target,)).fetchone() is None
+
+
 def test_mirror_dialog_relinks_the_copy_of_the_project_under_its_former_name(browser, live, computers, monkeypatch):
     """Проект переименован: его прежнее зеркало держит папку копии. Поиск показывает её «уже зеркалом другого
     проекта», «Перепривязать» после подтверждения снимает прежнюю привязку и назначает папку этому проекту."""

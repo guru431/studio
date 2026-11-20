@@ -34,6 +34,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 EXTERNAL_GIT = "Папка использует внешний каталог Git. Выберите основной репозиторий или отдельный клон."
 TRANSFERS = {}
 RESULTS = {}
+REENTER = "настройка зеркала недоступна после смены ключа — отвяжите зеркало и привяжите заново"
 
 
 class Destination(BaseModel):
@@ -100,14 +101,23 @@ def _row(request, aid, pid, mid):
 
 
 def _item(row):
+    """Строка списка. Настройку не расшифровать (сменился `STUDIO_DATA_KEY`) — без имени и папки, с `reenter`:
+    список грузится, и зеркало можно отвязать."""
     aid = row["destination"]
+    try:
+        location = _location(row)
+    except HTTPException:
+        location = {"name": None, "folder": None, "reenter": True}
     return {"id": row["id"], "destination": aid, "computer": row["computer"], "online": aid in bridge.LINKS,
-            **_location(row), "synced": row["synced"],
+            **location, "synced": row["synced"],
             "job": RESULTS.get(row["id"])}
 
 
 def _location(row):
-    return json.loads(security.decrypt(row["location"]))
+    try:
+        return json.loads(security.decrypt(row["location"]))
+    except InvalidToken:
+        raise code._refuse(409, "reenter", REENTER) from None
 
 
 def _exclude(row):
