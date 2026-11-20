@@ -248,6 +248,9 @@ async def _recognize(job: Job, path) -> list:
     job.stage, job.stage_at = "распознаю", clock.NOW()
     _store(job)
     while True:
+        # release перед каждой попыткой: идущую генерацию картинок он не оборвёт (409), но кончившуюся
+        # модель снимет сразу, не дожидаясь конца её аренды
+        await speech.free_card(job.conn)
         try:
             return await speech.transcribe(job.conn, job.model, path, "audio/mpeg")
         except speech.Busy:
@@ -280,7 +283,6 @@ async def run(job: Job) -> None:
             if duration > DURATION_MAX:
                 raise JobError(f"запись длиннее {DURATION_MAX // 60} минут — разделите её")
             await audio.compress(source, tmp)
-            await speech.free_card(job.conn)
             replicas, raw = speech.turns(await _recognize(job, tmp))
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
