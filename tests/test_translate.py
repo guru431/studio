@@ -672,6 +672,34 @@ def test_scanned_pdf_is_recognized_then_translated(studio, small_pages):
     assert ocr.RETRY_SEC in studio.sleeps
 
 
+def test_scan_of_a_translation_is_one_job_and_detection_skips_page_heads(studio, small_pages, monkeypatch):
+    """05:F8: скан, заведённый переводом, — не отдельное задание: одно уведомление (перевода) и ни одной строки
+    «Распознавание» в «В работе»; язык определяется по тексту без заголовков «Страница N»."""
+    import push
+    calls = []
+    monkeypatch.setattr(push, "job_finished", lambda table, item: calls.append(table))
+    add_gateway(studio)
+    studio.gw.chat_reply = ["en"]
+    studio.gw.ocr_reply = {"choices": [{"message": {"content": "No smoking"}, "finish_reason": "stop"}]}
+    row = wait_row(studio, start_file(studio, "Табличка.pdf", scan_pdf("ink"), source="auto"))
+    assert (row["state"], row["source"]) == ("done", "Страница 1\n\nNo smoking"), row["detail"]
+    assert calls == ["translations"]
+    jobs = studio.c.get("/api/jobs").json()
+    assert [i["section"] for i in jobs["running"] + jobs["finished"]] == ["translate"]
+    detect = [b for b in studio.gw.chat_requests if not b.get("stream")]
+    assert [b["messages"][-1]["content"] for b in detect] == ["No smoking"]
+
+
+def test_text_pdf_with_an_empty_page_is_translated_from_its_layer_with_ocr(studio):
+    """05:F8: при подключённых «Сканах» текстовый PDF с чистым оборотом (без текста и картинки) — не скан: ни
+    документа «Сканов», ни заголовков «Страница N» в исходнике."""
+    add_gateway(studio)
+    row = wait_row(studio, start_file(studio, "Договор.pdf", scan_pdf("Payment is due in 30 days", "empty",
+                                                                      "Second page")))
+    assert (row["state"], row["source"], row["scan_id"]) == ("done", "Payment is due in 30 days\n\nSecond page", None)
+    assert count(studio, "scans") == 0 and studio.gw.ocr_requests == []
+
+
 def test_scan_progress_is_the_stage_of_the_translation(studio, small_pages):
     add_gateway(studio)
     studio.gw.ocr_hold = True

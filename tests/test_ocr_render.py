@@ -76,13 +76,17 @@ def test_chat_recognizes_pages_without_text_or_short_text_over_an_image():
                                               f"ink+{long}", long)) == [
         ("Signed: J. Smith", False), ("", True), ("", True), ("Scanned with CamScanner", True),
         (long, False), (long, False)]
+    # чистый оборот (без текста и картинки) — распознавать, только когда в PDF больше читать нечего (05:F8)
+    assert ocr_render.pdf_scan_pages(scan_pdf(long, "empty")) == [(long, False), ("", False)]
+    assert ocr_render.pdf_scan_pages(scan_pdf("ink", "empty")) == [("", True), ("", True)]
+    assert ocr_render.pdf_scan_pages(scan_pdf("empty")) == [("", True)]
 
 
 def test_unreadable_resources_count_as_an_image():
     from pypdf.generic import DictionaryObject, NameObject, NumberObject
     page = DictionaryObject({NameObject("/Resources"): DictionaryObject({NameObject("/XObject"): NumberObject(5)})})
-    assert ocr_render.needs_ocr(page, "Page 2")
-    assert not ocr_render.needs_ocr(DictionaryObject(), "Page 2")                  # ресурсов нет — картинки нет
+    assert ocr_render.is_scan(page, "Page 2")
+    assert not ocr_render.is_scan(DictionaryObject(), "Page 2")                    # ресурсов нет — картинки нет
     with pytest.raises(documents.DocumentError):
         ocr_render.pdf_scan_pages(b"%PDF-1.4 junk")
 
