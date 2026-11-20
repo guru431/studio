@@ -259,6 +259,14 @@ EN = {
         "Studio: {0} (version {1})\nAccount: {2}\nComputer: {3} (ID {4})\nProject folders: {5}\n"
         "Device key: {6}\nPIN: {7}\nAutostart: {8}\nTasks: {9} of {10}, awaiting reply: {11}\n"
         "Quit after tasks: {12}\nDesktop: {13}, session active: {14}.",
+    # строка «Рабочий стол» статуса: `desktop_linux._REASONS` (те же слова уходят в студию отказом — без перевода)
+    "Доступен системный выбор экранов и устройств ввода": "System screen and input device chooser is available",
+    "Нужен активный разблокированный графический сеанс Linux с systemd-logind":
+        "Requires an active unlocked Linux graphical session with systemd-logind",
+    "Нужны системные Python GI, libportal, GStreamer и модуль PipeWire":
+        "Requires system Python GI, libportal, GStreamer and the PipeWire module",
+    "Графическая оболочка должна поддерживать порталы RemoteDesktop и ScreenCast":
+        "The desktop environment must support the RemoteDesktop and ScreenCast portals",
     "доступен": "available",
     "проверка": "checking",
     "недоступен": "unavailable",
