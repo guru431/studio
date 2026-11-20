@@ -216,7 +216,9 @@ SQL — как у шага 16 ниже.
   Так же `ProxyPass /api/videos` (330 с): создание ролика отвечает после шлюза — исходник на шару,
   задание, поиск потерянного ответа и снятие у шлюза подряд дольше общих 150 с.
 - `LimitRequestBody` vhost не меньше пределов службы (документ и картинка ролика — 20 МиБ, фото
-  с маской 2×10 МиБ) — сверяет `test_apache_lets_through_the_largest_body_the_studio_accepts`.
+  с маской 2×10 МиБ) — сверяет `test_apache_lets_through_the_largest_body_the_studio_accepts`; образец голоса
+  (`voices.AUDIO_MAX`, 32 МиБ) — свой `LocationMatch` на все маршруты, что его принимают (редактор и прямые
+  `POST /api/voices`, `/api/voices/{id}/samples[/{sample_id}]`), сверяет `test_voice_editor_uploads_fit_through_the_proxy`.
 - SQLite — только на локальном диске: на CIFS он портится. Копия базы на шару — готовым файлом
   (`journal_mode=DELETE`), а не живой базой.
 - `studio-backup.service` — с теми же `User`/`Group`/`StateDirectory`, что у службы: другой
