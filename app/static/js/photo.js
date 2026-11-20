@@ -304,14 +304,17 @@ function build(view, ctx) {
       strength: Number(strength.value), prompt: prompt.value.trim() || null };
   }
 
-  /** Модель — если пара есть среди отмеченных моделей раздела; формат и сила — всегда; промпт — в пустое
+  /** Модель — если пара есть среди отмеченных моделей раздела (пары нет — единственная связь с этой моделью);
+   * формат и сила — всегда; промпт — в пустое
    * поле, в непустое — после вопроса («Оставить свой» ставит всё, кроме промпта). Seed пресета прежнего
    * кода не ставится: поля seed нет. */
   function applyPreset(p) {
     const rest = () => {
       if (p.model) {
-        const found = choices.find(([, , c]) => c.model === p.model
-          && (p.connection_id === null || p.connection_id === undefined || c.connection_id === p.connection_id));
+        const same = choices.filter(([, , c]) => c.model === p.model);
+        // подключение пресета пересоздали (новый id) — единственная связь раздела с этой моделью
+        const found = same.find(([, , c]) => p.connection_id === null || p.connection_id === undefined
+          || c.connection_id === p.connection_id) || (same.length === 1 ? same[0] : null);
         if (found) {
           choice = found[2];
           chipModel.paint();
