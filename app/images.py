@@ -531,9 +531,14 @@ async def create_job(request: Request):
 
 @router.get("")
 async def list_images(request: Request, before: "float | None" = None,
-                      before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
-    """Лента: новые сверху, вместе с идущими; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "images", request.state.user.id, before, before_id, limit)
+                      before_id: "str | None" = Query(None, max_length=64), after: "float | None" = None,
+                      after_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
+    """Лента: новые сверху, вместе с идущими; следующая страница — before=<created>&before_id=<id> последней;
+    after=<created>&after_id=<id> записи — ближайшие более новые (просмотр записи вне загруженной ленты)."""
+    if (after is None) != (after_id is None):
+        raise HTTPException(422, {"code": "after", "message": "after и after_id — только вместе"})
+    rows = db.page(state.DB, "images", request.state.user.id, before, before_id, limit,
+                   after=None if after is None else (after, after_id))
     return {"items": [_out(r, with_chain=False) for r in rows]}
 
 

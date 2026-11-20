@@ -31,7 +31,11 @@ def gallery(page, section, count=4):
             if calls['fail']:
                 route.fulfill(status=503, json={'detail': {'code': 'offline', 'message': 'Проверка связи'}})
                 return
-            before = query.get('before_id', [None])[0]
+            before, after = query.get('before_id', [None])[0], query.get('after_id', [None])[0]
+            if after:                                  # ближайшие более новые — в порядке ленты
+                at = next(i for i, row in enumerate(rows) if row['id'] == after)
+                route.fulfill(json={'items': rows[max(0, at - 30):at]})
+                return
             at = next((i + 1 for i, row in enumerate(rows) if row['id'] == before), 0)
             route.fulfill(json={'items': rows[at:at + 30]})
         elif tail.endswith('/variants'):
@@ -255,3 +259,31 @@ def test_pagination_retries_and_late_page_cannot_reopen_closed_viewer(media_page
     pw.expect(page.locator('.viewer-prev')).to_be_enabled()
     page.locator('.viewer-prev').click()
     current(page, rows[-2])
+
+
+@pytest.mark.parametrize('media_page', [('photo', 1280), ('video', 320)], indirect=True)
+def test_an_old_record_opens_a_window_without_reading_the_feed_up_to_it(media_page, live):
+    """Запись из поиска или цепочки далеко за загруженной лентой: просмотр берёт по странице новее и старше
+    неё, а не все страницы от начала; у верхнего края окна «предыдущий» догружает новее (03:F12)."""
+    page, section, _ = media_page
+    rows, calls = gallery(page, section, count=120)
+    page.goto(live.url + '/#/' + section)
+    page.locator('html[data-ready="1"]').wait_for(state='attached')
+    n = len(calls['pages'])
+    target = rows[33]
+    page.evaluate('hash=>location.hash=hash', f'#/{section}?id={target["id"]}')
+    current(page, target)
+    pw.expect(page.locator('.viewer-prev')).to_be_enabled()
+    pw.expect(page.locator('.viewer-position')).to_have_text('…')
+    asked = [(q.get('before_id', [None])[0], q.get('after_id', [None])[0]) for q in calls['pages'][n:]]
+    assert sorted(asked, key=str) == sorted([(target['id'], None), (None, target['id'])], key=str), asked
+    for row in reversed(rows[3:33]):
+        page.keyboard.press('ArrowLeft')
+        pw.expect(page.locator('.viewer[open]')).to_have_attribute('data-item', row['id'])
+    page.keyboard.press('ArrowLeft')                   # край окна: страница новее, failed rows[1] пропущен
+    current(page, rows[2])
+    pw.expect(page.locator('.viewer-position')).to_have_text('2 / 63+')
+    assert calls['pages'][-1].get('after_id') == [rows[3]['id']]
+    page.keyboard.press('ArrowLeft')
+    current(page, rows[0])
+    pw.expect(page.locator('.viewer-prev')).to_be_disabled()

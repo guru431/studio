@@ -483,10 +483,15 @@ async def repeat_video(video_id: str, request: Request):
 
 @router.get("")
 async def list_videos(request: Request, before: "float | None" = None,
-                      before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
-    """Лента: новые сверху, вместе с идущими; следующая страница — before=<created>&before_id=<id> последней."""
+                      before_id: "str | None" = Query(None, max_length=64), after: "float | None" = None,
+                      after_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
+    """Лента: новые сверху, вместе с идущими; следующая страница — before=<created>&before_id=<id> последней;
+    after=<created>&after_id=<id> записи — ближайшие более новые (просмотр записи вне загруженной ленты)."""
+    if (after is None) != (after_id is None):
+        raise HTTPException(422, {"code": "after", "message": "after и after_id — только вместе"})
     uid = request.state.user.id
-    rows = db.page(state.DB, "videos", uid, before, before_id, limit).fetchall()
+    rows = db.page(state.DB, "videos", uid, before, before_id, limit,
+                   after=None if after is None else (after, after_id)).fetchall()
     steps = chains.video_counts(uid, rows)
     return {"items": [_out(r, with_chain=False, steps=steps[r["id"]]) for r in rows]}
 
