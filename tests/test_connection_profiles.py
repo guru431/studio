@@ -152,3 +152,22 @@ def test_probe_sends_profile_params_and_tells_a_refused_one(studio):
     studio.gw.on["/v1/chat/completions"] = picky
     probe = studio.c.post(f"/api/connections/{cid}/probe", json={"model": CLOUD_ROLE}).json()["probe"]
     assert not probe["ok"] and probe["words"] == profiles.REFUSED.format("top_k")
+
+
+SENT = {"temperature": 0.3, "top_k": 40, "max_tokens": 5000}
+
+
+def test_refusal_needs_a_rejection_marker_next_to_the_name():
+    # vLLM: переполнение контекста называет max_tokens, но параметр принят — это не отказ параметра
+    too_large = ("'max_tokens' or 'max_completion_tokens' is too large: 5000. This model's maximum context length "
+                 "is 8192 tokens and your request has 4000 input tokens (5000 > 8192 - 4000).")
+    context = ("This model's maximum context length is 8192 tokens. However, you requested 9000 tokens "
+               "(4000 in the messages, 5000 in the completion). Please reduce the length of the messages or "
+               "completion (max_tokens).")
+    assert profiles.refusal(too_large, SENT) is None
+    assert profiles.refusal(context, SENT) is None
+    openai = '{"error": {"message": "Unrecognized request argument supplied: top_k", "type": "invalid_request_error"}}'
+    assert profiles.refusal(openai, SENT) == profiles.REFUSED.format("top_k")
+    extra = '{"detail": [{"type": "extra_forbidden", "loc": ["body", "top_k"], "msg": "Extra inputs are not permitted"}]}'
+    assert profiles.refusal(extra, SENT) == profiles.REFUSED.format("top_k")
+    assert profiles.refusal("Unrecognized request argument supplied: top_k", {"temperature": 0.3}) is None
