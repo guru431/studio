@@ -96,25 +96,41 @@ form.addEventListener('submit', async (event) => {
     pin.value = '';
     const snapshot = await response.json();
     if (version !== generation) return;
-    let markdown = null;
+    let markdown = null, changeView = null;
     try { markdown = await import('./markdown.js'); } catch { /* safely show plain text if libraries are unavailable */ }
+    try { ({ changeView } = await import('./code-diff.js')); } catch { /* без диффа — сырой ввод шага */ }
     if (version !== generation) return;
     access = snapshot.access;
     document.getElementById('shared-title').textContent = snapshot.title || tr("Чат");
     for (const message of snapshot.messages) {
-      const body = el('div', { class: message.role === 'user' ? 'shared-user' : 'md shared-body' });
+      const textNode = (text) => {
+        const body = el('div', { class: message.role === 'user' ? 'shared-user' : 'md shared-body' });
+        if (markdown && message.role === 'assistant') body.append(markdown.renderMarkdown(text));
+        else body.textContent = text;
+        return body;
+      };
+      // Правка файла — тем же диффом, что в «Агентах»; без неё — сырой ввод инструмента.
+      const stepNode = (step) => {
+        const diff = changeView?.(step.changes);
+        return el('details', {}, el('summary', {}, partText(step.name || step.tool || tr("Команда"))),
+          diff || el('pre', {}, partText(step.input)), el('pre', {}, partText(step.text)));
+      };
       const text = typeof message.text === 'string' ? message.text : '';
-      if (markdown && message.role === 'assistant') body.append(markdown.renderMarkdown(text));
-      else body.textContent = text;
+      const steps = Array.isArray(message.steps) ? message.steps : [];
       const node = el('article', { class: 'msg shared-message' },
-        el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")), body);
-      for (const step of message.steps || []) {
-        node.append(el('details', {}, el('summary', {}, partText(step.name || step.tool || tr("Команда"))),
-          el('pre', {}, partText(step.input)), el('pre', {}, partText(step.text))));
-      }
+        el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")));
+      // `parts` — порядок текста и шагов ответа (сервер собрал его из timeline моста); иначе текст, затем шаги.
+      const ordered = Array.isArray(message.parts) && message.parts.every((part) => typeof part?.text === 'string'
+        || (Number.isInteger(part?.step) && part.step >= 0 && part.step < steps.length));
+      if (ordered) {
+        for (const part of message.parts) node.append(typeof part.text === 'string' ? textNode(part.text) : stepNode(steps[part.step]));
+      } else node.append(textNode(text), ...steps.map(stepNode));
       if (message.reasoning) node.append(el('details', {}, el('summary', {}, tr("Рассуждение")), el('pre', {}, message.reasoning)));
       for (const image of message.images || []) {
-        if (['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(image.mime)
+        if (image.missing) {
+          node.append(el('p', { class: 'muted small' }, typeof image.name === 'string' && image.name
+            ? tr("Изображение «{0}» в ссылку не вошло", image.name) : tr("Изображение в ссылку не вошло")));
+        } else if (['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(image.mime)
             && typeof image.data === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(image.data)) {
           node.append(el('img', { class: 'shared-image', src: `data:${image.mime};base64,${image.data}`, alt: image.name || tr("Вложение") }));
         } else if (typeof image.data === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(image.data)) {
