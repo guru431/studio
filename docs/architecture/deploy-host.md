@@ -33,8 +33,12 @@
   студии под это не меняется. Проверка маршрута: с debian `curl -s -X POST https://api.exa.ai/search -H
   'Content-Type: application/json' -d '{}'` — JSON 402 `X402_PAYMENT_REQUIRED`, а не HTML.
 - Секрет — `/etc/studio/studio.env` (0600 root: строка `STUDIO_DATA_KEY=` (vault
-  `STUDIO_DATA_KEY`) и необязательная `STUDIO_CLEANER_CA=/путь` — сертификат Cleaner, docs/cleaner-integration.md): его читает systemd, а не служба. Смена ключа делает прежние токены
-  подключений нерасшифровываемыми — их вводят заново.
+  `STUDIO_DATA_KEY`) и необязательная `STUDIO_CLEANER_CA=/путь` — сертификат Cleaner, docs/cleaner-integration.md): его читает systemd, а не служба. Смена ключа делает
+  нерасшифровываемым всё, что лежит в базе шифром (полный список — «Ловушки» [CLAUDE.md](../../CLAUDE.md#ловушки)):
+  ключ VAPID создаётся новый, все `push_subs` стёрты — уведомления включают на устройствах заново; ссылки
+  «Поделиться» — «недоступна»; токены подключений вводят заново; настройки SMTP из панели — снова переменные
+  окружения, их вводят заново (признак `reenter`); зеркала проектов — «настройка недоступна» (`reenter`), их
+  отвязывают и привязывают заново.
 - Копия базы — `studio-backup.timer` (04:30, `Persistent=true`) → `studio-backup.service` →
   `manage.py backup`, после удачной копии — `manage.py verify-backup` (раздельные итоги в `settings`, провалы —
   push администраторам; [deploy-docker](deploy-docker.md#данные-и-запуск-после-перезагрузки)): `sqlite3` backup во временный файл рядом с базой, затем на шару

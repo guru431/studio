@@ -54,7 +54,7 @@ def load(home):
         raise ValueError('Файл настроек терминала слишком большой')
     data = json.loads(raw)
     if not isinstance(data, dict) or set(data) != set(DEFAULT):
-        raise ValueError('Проверьте настройки терминала в меню агента')
+        raise ValueError('Проверьте настройки терминала в меню моста')
     addresses(data)
     return data
 

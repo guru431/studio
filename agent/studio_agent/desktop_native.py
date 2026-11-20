@@ -26,7 +26,7 @@ MAX_EVENTS = 128
 ES_DISPLAY_REQUIRED = 0x00000002
 
 _UNAVAILABLE = "рабочий стол недоступен: нужен открытый сеанс Windows"
-_OWN_WINDOW = "окном агента можно управлять только на самом компьютере"
+_OWN_WINDOW = "окном моста можно управлять только на самом компьютере"
 
 DWORD = ctypes.c_uint32
 LONG = ctypes.c_int32
