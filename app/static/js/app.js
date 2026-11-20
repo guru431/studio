@@ -26,7 +26,7 @@ import { tr } from './i18n.js';
  * ленты — в учётке: вернувшись на экран, студия перечитывает профиль (их могли сменить на другом устройстве) —
  * тема меняется сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
-import { loadMe, me } from './api.js';
+import { loadMe, me, watchSession } from './api.js';
 import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
@@ -35,9 +35,10 @@ import { choose, current as look, deviceSizeControls, follow, paintSave, retrySa
 import { setupMobileNavigation } from './mobile-navigation.js';
 import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
+import { timezoneOffer } from './timezone-offer.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
-import { lazy } from './stale.js';
+import { lazy, pageVersion, watchDeploys } from './stale.js';
 import { cancelRefresh, claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
 import './code-drafts.js';
 
@@ -279,8 +280,8 @@ function sectionKey(event) {
 function openMenu(open) {
   if (open) {
     const version = document.getElementById('menu-version');
-    version.textContent = me.studio_version ? `Studio ${me.studio_version}` : '';
-    version.hidden = !me.studio_version;
+    version.textContent = pageVersion ? `Studio ${pageVersion}` : '';   // версия страницы, не перечитанного профиля
+    version.hidden = !pageVersion;
   }
   menu.hidden = !open;
   avatar.setAttribute('aria-expanded', String(open));
@@ -333,6 +334,7 @@ async function start() {
   const worker = 'serviceWorker' in navigator
     ? navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => null) : null;
   installLock();             // до профиля: запертая студия покажет экран блокировки раньше раздела
+  watchSession();            // выход в другой вкладке этого браузера — на вход сразу
   try {
     await loadMe();
   } catch (err) {
@@ -379,6 +381,7 @@ function retryLater(first, worker) {
 /** Профиль есть: тема, меню, раздел по адресу. */
 async function enter(worker) {
   setupAppearance();
+  watchDeploys();            // выкладка при возвращении на экран — плашка «Студия обновилась»
   setupMenu();
   setupJobs({ navigate });
   mobileNavigation = setupMobileNavigation(me);
@@ -395,6 +398,8 @@ async function enter(worker) {
       refreshAfterFailure(undefined, { claim: true });
     }
   }
+  const offer = timezoneOffer();   // пояс устройства не совпал с учёткой — предложить свой
+  if (offer) view.prepend(offer);
   setupCodeActivity();
   await worker;
   setupPushSync();           // подписка push, которую служебный работник не смог отправить запертым (sw.js)

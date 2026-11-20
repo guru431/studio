@@ -392,10 +392,21 @@ def test_guide_batch_script_models_are_accepted_by_both_scripts():
 
 
 def _model_labels() -> dict:
-    """Подписи моделей в настройках разделов — `LABELS` из settings.js."""
-    body = re.search(r"const LABELS = \{(.*?)\};", (APP / "static" / "js" / "settings.js").read_text(encoding="utf-8"),
+    """Подписи моделей страницы — `LABELS` из models.js (одна таблица на настройки, разделы и «Поиск»)."""
+    body = re.search(r"const LABELS = \{(.*?)\};", (APP / "static" / "js" / "models.js").read_text(encoding="utf-8"),
                      re.S).group(1)
     return {key or bare: label for key, bare, label in re.findall(r"(?:'([^']+)'|([\w-]+))\s*:\s*'([^']+)'", body)}
+
+
+def test_server_model_names_copy_the_page_labels():
+    """«В работе» (`jobs.MODEL_NAMES`) называет картинки так же, как разделы и «Поиск», — каждую модель фото шлюза
+    (`sections.CATALOG` и снятые `sections.RETIRED_PHOTO_MODELS`)."""
+    names = ast.literal_eval(_module(APP, "jobs")[2]["MODEL_NAMES"])
+    labels = _model_labels()
+    tree = _module(APP, "sections")[2]
+    photo = set(ast.literal_eval(tree["CATALOG"])["photo"]) | ast.literal_eval(tree["RETIRED_PHOTO_MODELS"])
+    assert set(names) == photo
+    assert {model: labels.get(model) for model in names} == names
 
 
 def test_guide_names_every_srvllm_catalog_model():
@@ -426,3 +437,18 @@ def test_guide_shows_where_every_account_settings_section_is():
 def test_constant_lookup_preserves_python_identifier_normalization(tmp_path):
     (tmp_path / "sample.py").write_text("ＦＡＩＬＳ_MAX = 3\n", encoding="utf-8")
     assert _values_anywhere(tmp_path, "FAILS_MAX") == {3}
+
+
+def test_guide_and_architecture_do_not_use_retired_section_names():
+    """Прежние имена разделов из глоссария («Речь» (стало «Озвучка») …) не пишутся ни в руководстве, ни в
+    docs/architecture: ни в кавычках, ни заголовком главы. «Распознавание «…»» — имя действия, не раздела."""
+    glossary = (ROOT / "docs" / "glossary.md").read_text(encoding="utf-8")
+    retired = re.findall(r"«([^«»]+)»(?: как имя раздела)? \(стало", glossary)
+    assert {"Речь", "Разговоры", "Распознавание"} <= set(retired)
+    found = []
+    for path in [GUIDE, *sorted((ROOT / "docs" / "architecture").glob("*.md"))]:
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for name in retired:
+                if re.search(rf"«{name}»|^#+ {name}\s*$", line):
+                    found.append(f"{path.name}:{number}: {name}")
+    assert found == []

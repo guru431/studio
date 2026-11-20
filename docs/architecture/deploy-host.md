@@ -179,7 +179,7 @@ SQL — как у шага 16 ниже.
   код читает умолчание только по своим разделам).
 - Поиск, в выдачу которого попал распознанный документ, отвечает 500 (прежний `search._title` не знает
   `ocr`). Обход: `DELETE FROM search_docs WHERE section = 'ocr';` (FTS чистит триггер `search_docs_ad`);
-  до возврата вперёд документов «Распознавания» в поиске нет. Вернувшись вперёд — вернуть их: `INSERT OR
+  до возврата вперёд документов «Сканов» в поиске нет. Вернувшись вперёд — вернуть их: `INSERT OR
   IGNORE INTO search_docs(section, item, part, user_id, model, created, body) SELECT 'ocr', id, '', user_id,
   model, created, name || ' ' || substr(COALESCE(text, ''), 1, 200000) FROM scans;` — тело как у триггера
   `search_scans_ai`, в FTS кладёт `search_docs_ai` (с заменой «ё»); `OR IGNORE` пропускает документы, что

@@ -33,8 +33,10 @@ router = APIRouter(prefix="/api/jobs")
 JOBS_RECENT_SEC = 3600
 FINISHED_MAX = 50
 SPEECH_TITLE = 40
-MODEL_NAMES = {"lustify": "Lustify", "flux": "FLUX", "snofs": "SNOFS Krea 2",
-               "jib-moss": "Jib Mix Moss V2", "fineview": "FineView QW21"}
+#: подписи моделей картинок — копия общей таблицы страницы (static/js/models.js), сверяет tests/test_docs.py
+MODEL_NAMES = {"lustify": "Lustify", "flux": "FLUX", "snofs": "SNOFS Krea 2", "big-love": "Big Love Eryn1",
+               "fineview": "FineView QW21", "muse": "Muse 3.5 Krea 2", "jib-moss": "Jib Mix Moss V2",
+               "fineporn": "FinePorn v5", "moody-krea": "Moody Krea v8"}
 STATES = {"done": "done", "error": "error", "failed": "error", "cancelled": "cancelled"}
 TERMINAL = tuple(STATES)
 

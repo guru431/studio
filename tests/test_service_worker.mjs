@@ -134,3 +134,37 @@ async function resubscribe(status) {
   assert.deepEqual(foreign.navigations, []);
   assert.deepEqual(login.navigations, []);
 }
+
+// Navigation: the proxy answers 502/503/504 while the service restarts — the offline shell with "restarting" words
+// at the same address; a refusal of an API address (a file opened in a new tab) and other answers pass as they are;
+// no network — the plain offline shell.
+async function navigate(path, answer) {
+  const handlers = new Map();
+  const offline = '<html><body class="solo"><p>offline</p></body></html>';
+  const caches = { async match(key) {
+    return key === '/offline.html' ? new Response(offline, { status: 200, headers: { 'content-type': 'text/html' } }) : undefined;
+  } };
+  const fetch = async () => {
+    if (answer === 'network') throw new TypeError('Failed to fetch');
+    return new Response('proxy', { status: answer });
+  };
+  vm.runInNewContext(source, {
+    VERSION: 'test', URL, Response, fetch, caches,
+    self: { location: { origin }, addEventListener: (name, fn) => handlers.set(name, fn) },
+  });
+  let response;
+  handlers.get('fetch')({ request: { method: 'GET', mode: 'navigate', url: `${origin}${path}` },
+    respondWith(promise) { response = promise; } });
+  const got = await response;
+  return [got.status, await got.text()];
+}
+
+{
+  const restarting = [200, '<html><body class="solo" data-reason="restart"><p>offline</p></body></html>'];
+  assert.deepEqual(await navigate('/', 503), restarting);
+  assert.deepEqual(await navigate('/share', 502), restarting);
+  assert.deepEqual(await navigate('/login', 504), restarting);
+  assert.deepEqual(await navigate('/api/media/1', 503), [503, 'proxy']);
+  assert.deepEqual(await navigate('/', 500), [500, 'proxy']);
+  assert.deepEqual(await navigate('/', 'network'), [200, '<html><body class="solo"><p>offline</p></body></html>']);
+}

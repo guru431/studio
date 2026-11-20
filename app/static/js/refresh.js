@@ -6,10 +6,12 @@
  * Компьютер не на связи (409 `offline`) — не сбой страницы: перезагрузка его не вернёт, поток live ждёт `online` сам.
  * Несохранённое молча не теряется: идущая загрузка файла (holdRefresh) или вето события `studio-before-auto-refresh`
  * (черновики полей, запись голоса, ответ, который читает вкладка, правка файла или расшифровки) — вместо перезагрузки
- * плашка #studio-refresh-offer с «Обновить», автоматических попыток для этого адреса больше нет. */
+ * плашка #studio-refresh-offer с «Обновить», автоматических попыток для этого адреса больше нет. Кнопка «Обновить»
+ * при том же несохранённом спрашивает окном #refresh-confirm. */
 import { api } from './api.js';
 import { WINDOW } from './code-window.js';
 import { tr } from './i18n.js';
+import { button, el, openDialog } from './ui.js';
 
 const KEY = 'studioRefresh';
 const RETRIES = 'studioRefreshRetries';
@@ -74,7 +76,23 @@ async function requestReload(automatic) {
   }
 }
 
-export function reloadStudio() { return requestReload(false); }
+/** Кнопка «Обновить». Несохранённое (то же, что бережёт автоматическая перезагрузка) — сначала вопрос: промах
+ * пальцем по соседнему значку не стоит набранного текста. */
+export async function reloadStudio() {
+  if (!allowed() && !await confirmLoss()) return;
+  return requestReload(false);
+}
+
+function confirmLoss() {
+  return new Promise((resolve) => {
+    const yes = button(tr("Обновить"), { class: 'btn btn-danger solid', id: 'refresh-confirm-yes' });
+    const dialog = openDialog(document.body, { id: 'refresh-confirm', title: tr("Обновить и потерять набранное?"),
+      body: [el('p', {}, tr("Набранный текст, запись голоса или идущая загрузка файла пропадут."))], actions: [yes] });
+    let answer = false;
+    yes.addEventListener('click', () => { answer = true; dialog.close(); });
+    dialog.addEventListener('close', () => resolve(answer));
+  });
+}
 
 /** Сбой связи, срока, сервера или модуля — перезагрузка с паузами. `claim` — повтор кнопки «Обновить» (app.js: не все
  * сессии перенеслись): он и перенесёт оставшиеся. */
