@@ -55,7 +55,7 @@ router = APIRouter(prefix="/api/connections")
 @dataclass(frozen=True)
 class Connection:
     id: int
-    user_id: int
+    user_id: int | None
     name: str
     kind: str
     base_url: str
@@ -64,6 +64,11 @@ class Connection:
     server_only: bool = False
     cleaner: bool = False
     s06: bool = False
+    shared: bool = False
+
+    @property
+    def owner_id(self) -> int | None:
+        return None if self.shared else self.user_id
 
 
 def _few_sections(wanted: list[str] | None) -> list[str] | None:
@@ -100,31 +105,33 @@ def _gone() -> HTTPException:
     return HTTPException(404, {"code": "gone", "message": "такого подключения нет"})
 
 
-def _from_row(row) -> Connection:
+def _from_row(row, user_id: int | None) -> Connection:
     # раздел новее этого кода (откат после шага схемы с новым разделом) — не виден: PATCH без `sections`
     # иначе отказал бы 422 «разделы — …», а set_sections такие строки не трогает
     linked = frozenset(json.loads(row["linked"])) & frozenset(sections.SECTIONS)
-    return Connection(id=row["id"], user_id=row["user_id"], name=row["name"], kind=row["kind"],
+    return Connection(id=row["id"], user_id=user_id, name=row["name"], kind=row["kind"],
                       base_url=row["base_url"], sections=linked,
                       proxied=upstream.is_allowed(row["base_url"]), server_only=bool(row["server_only"]),
-                      cleaner=bool(row["cleaner"]), s06=bool(row["s06"]))
+                      cleaner=bool(row["cleaner"]), s06=bool(row["s06"]), shared=row["user_id"] is None)
 
 
 _COLS = ("id, user_id, name, kind, base_url, server_only, cleaner, s06,"
          " (SELECT json_group_array(l.section) FROM section_links l WHERE l.connection_id = connections.id) AS linked")
 
 
-def list_for(user_id: int) -> list[Connection]:
-    rows = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE user_id = ? ORDER BY id", (user_id,))
-    return [_from_row(r) for r in rows]
+def list_for(user_id: int | None) -> list[Connection]:
+    rows = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE user_id IS ? OR user_id IS NULL"
+                            " ORDER BY user_id IS NULL, id", (user_id,))
+    return [_from_row(r, user_id) for r in rows]
 
 
-def get(user_id: int, conn_id: int) -> Connection:
-    row = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE id = ? AND user_id = ?",
+def get(user_id: int | None, conn_id: int, *, own: bool = False) -> Connection:
+    scope = "user_id IS ?" if own else "(user_id IS ? OR user_id IS NULL)"
+    row = state.DB.execute(f"SELECT {_COLS} FROM connections WHERE id = ? AND {scope}",
                            (conn_id, user_id)).fetchone()
     if row is None:
         raise _gone()
-    return _from_row(row)
+    return _from_row(row, user_id)
 
 
 def token(conn: Connection) -> str:
@@ -133,7 +140,7 @@ def token(conn: Connection) -> str:
     ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно."""
     row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner, s06 FROM connections WHERE id = ?",
                            (conn.id,)).fetchone()
-    if row is None or row["user_id"] != conn.user_id:
+    if row is None or row["user_id"] != conn.owner_id:
         raise upstream.ConnectionChanged(conn, deleted=True)
     if (row["kind"] != conn.kind or bool(row["cleaner"]) != conn.cleaner or bool(row["s06"]) != conn.s06
             or _address(row["base_url"]) != _address(conn.base_url)):
@@ -175,21 +182,21 @@ def dropped(conn: Connection) -> bool:
 
 
 def passport_of(conn: Connection) -> dict | None:
-    row = state.DB.execute("SELECT passport FROM connections WHERE id = ? AND user_id = ?",
-                           (conn.id, conn.user_id)).fetchone()
+    row = state.DB.execute("SELECT passport FROM connections WHERE id = ? AND user_id IS ?",
+                           (conn.id, conn.owner_id)).fetchone()
     return json.loads(row["passport"]) if row is not None and row["passport"] else None
 
 
 #: строка подключения, какой её видела проверка: id, владелец, вид, адрес и ключ (шифром)
-_SAME = "id = ? AND user_id = ? AND kind = ? AND base_url = ? AND token_enc IS ? AND cleaner = ? AND s06 = ?"
+_SAME = "id = ? AND user_id IS ? AND kind = ? AND base_url = ? AND token_enc IS ? AND cleaner = ? AND s06 = ?"
 
 
 def snapshot(conn: Connection) -> tuple:
     """Снимок для паспорта: проверка ждёт ответа до десятков секунд, а за это время токен могли сменить
     (паспорт обнулён), подключение — удалить, а его id — отдать новому подключению другого пользователя."""
-    row = state.DB.execute("SELECT token_enc FROM connections WHERE id = ? AND user_id = ?",
-                           (conn.id, conn.user_id)).fetchone()
-    return (conn.id, conn.user_id, conn.kind, conn.base_url, row["token_enc"] if row is not None else None,
+    row = state.DB.execute("SELECT token_enc FROM connections WHERE id = ? AND user_id IS ?",
+                           (conn.id, conn.owner_id)).fetchone()
+    return (conn.id, conn.owner_id, conn.kind, conn.base_url, row["token_enc"] if row is not None else None,
             int(conn.cleaner), int(conn.s06))
 
 
@@ -207,18 +214,23 @@ def save_passport(snap: tuple, passport: dict) -> bool:
 
 def out(conn: Connection, passport: bool = True) -> dict:
     """passport=False — зеркала панели администратора: паспорт чужого подключения туда не идёт."""
-    try:
-        secret = token(conn)
-        hint = "…" + secret[-4:] if len(secret) > 8 else "…"   # короткий токен по хвосту угадывается целиком
-    except upstream.UpstreamRefused as e:
-        if e.reason != "token":
-            raise
-        hint = "нужно ввести заново"
-    item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": conn.base_url,
+    inherited = conn.shared and conn.user_id is not None
+    hint = ""
+    if not inherited:
+        try:
+            secret = token(conn)
+            hint = "…" + secret[-4:] if len(secret) > 8 else "…"
+        except upstream.UpstreamRefused as e:
+            if e.reason != "token":
+                raise
+            hint = "нужно ввести заново"
+    item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": "" if inherited else conn.base_url,
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "accepts": sections.accepts(conn),
             "proxied": conn.proxied,
             "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner, "s06": conn.s06}
-    if passport:
+    if conn.shared:
+        item["shared"] = True
+    if passport and not inherited:
         item["passport"] = passport_of(conn)
     return item
 
@@ -278,10 +290,16 @@ def check_sections(kind: str, wanted: list[str], s06: bool = False) -> list[str]
 
 # ---- общие действия (профиль и панель администратора) ------------------------
 
-def create(user_id: int, body: ConnIn) -> dict:
+def _check_shared(user_id: int | None, base_url: str, cleaner: bool) -> None:
+    if user_id is None and (cleaner or not upstream.is_allowed(base_url)):
+        raise _bad("server", "общий API моделей — через сервер по адресу из списка разрешённых, кроме Cleaner")
+
+
+def create(user_id: int | None, body: ConnIn) -> dict:
     name, secret = check_name(body.name), check_token(body.token)
     wanted = check_sections(body.kind, body.sections, body.s06)
     base_url = check_base_url(body.kind, body.base_url)
+    _check_shared(user_id, base_url, body.cleaner)
     if body.s06:
         _check_s06(body.kind, base_url, body.cleaner)
     if body.cleaner:
@@ -293,7 +311,7 @@ def create(user_id: int, body: ConnIn) -> dict:
             (user_id, name, body.kind, base_url, security.encrypt(secret), clock.NOW(),
              int(upstream.is_allowed(base_url)), int(body.cleaner), int(body.s06))).lastrowid
         sections.set_sections(user_id, cid, wanted)
-    log.info("пользователь %d: подключение %d создано", user_id, cid)
+    log.info("владелец %s: подключение %d создано", user_id, cid)
     return out(get(user_id, cid))
 
 
@@ -321,8 +339,8 @@ def _check_s06(kind: str, base_url: str, cleaner: bool) -> None:
         raise _bad("path", "адрес шлюза s06 — без пути /v1")
 
 
-def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
-    conn = get(user_id, conn_id)
+def patch(user_id: int | None, conn_id: int, body: ConnPatch) -> dict:
+    conn = get(user_id, conn_id, own=True)
     sent = body.model_fields_set
     changes = {}
     if "name" in sent and body.name is not None:
@@ -347,6 +365,8 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
     changes["base_url"] = conn.base_url if kept else check_base_url(kind, base_url)
     changes["kind"] = kind
     proxied = upstream.is_allowed(changes["base_url"])
+    if not kept or cleaner or body.token is not None:
+        _check_shared(user_id, changes["base_url"], cleaner)
     if not proxied and (set(chosen) - (conn.sections if kept else set())) & sections.SERVER_ONLY:
         raise _bad("server", "адрес вне списка разрешённых — уберите подключение из разделов, кроме чата,"
                              " или попросите администратора внести адрес")
@@ -362,22 +382,23 @@ def patch(user_id: int, conn_id: int, body: ConnPatch) -> dict:
         changes["passport"] = None               # проверяли другой адрес, вид или ключ
     cols = ", ".join(f"{k} = ?" for k in changes)                    # имена — из кода выше, не из запроса
     with sections.transaction():
-        state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id = ?",
+        state.DB.execute(f"UPDATE connections SET {cols} WHERE id = ? AND user_id IS ?",
                          (*changes.values(), conn_id, user_id))
         sections.set_sections(user_id, conn_id, chosen)
-    log.info("пользователь %d: подключение %d изменено", user_id, conn_id)
+    log.info("владелец %s: подключение %d изменено", user_id, conn_id)
     return out(get(user_id, conn_id))
 
 
-def delete(user_id: int, conn_id: int) -> None:
-    get(user_id, conn_id)
+def delete(user_id: int | None, conn_id: int) -> None:
+    get(user_id, conn_id, own=True)
     with sections.transaction():               # связи и умолчания — каскадом, затем порядок в разделах
-        state.DB.execute("DELETE FROM connections WHERE id = ? AND user_id = ?", (conn_id, user_id))
+        state.DB.execute("DELETE FROM connections WHERE id = ? AND user_id IS ?", (conn_id, user_id))
         # диалог без подключения просит выбрать новое; ждущие задания разделов отказывают сами (id не повторяется)
-        state.DB.execute("UPDATE chats SET connection_id = NULL WHERE user_id = ? AND connection_id = ?",
-                         (user_id, conn_id))
-        sections.settle_all(user_id)
-    log.info("пользователь %d: подключение %d удалено", user_id, conn_id)
+        state.DB.execute("UPDATE chats SET connection_id = NULL WHERE connection_id = ? AND (? IS NULL OR user_id = ?)",
+                         (conn_id, user_id, user_id))
+        if user_id is not None:
+            sections.settle_all(user_id)
+    log.info("владелец %s: подключение %d удалено", user_id, conn_id)
 
 
 # ---- API профиля -------------------------------------------------------------
@@ -445,7 +466,7 @@ async def fetch_models(conn: Connection) -> list[dict]:
 
 @router.get("/{conn_id}/models")
 async def models(conn_id: int, request: Request):
-    return {"items": await fetch_models(get(_uid(request), conn_id))}
+    return {"items": await fetch_models(get(_uid(request), conn_id, own=True))}
 
 
 @router.get("/{conn_id}/token")
@@ -453,7 +474,7 @@ async def get_token(conn_id: int, request: Request):
     conn = get(_uid(request), conn_id)
     # server_only, srvllm и адрес, который браузер сам не откроет, — тоже отказ: такое подключение
     # было через сервер, пока адрес не убрали из списка, и его токен браузеру не предназначался
-    if conn.server_only or conn.proxied or conn.kind == "srvllm" or conn.s06 or not _direct_ok(conn.base_url):
+    if conn.shared or conn.server_only or conn.proxied or conn.kind == "srvllm" or conn.s06 or not _direct_ok(conn.base_url):
         raise HTTPException(403, {"code": "proxied", "message": "токен подключения через сервер не выдаётся"})
     # адреса — вместе с токеном: браузер несёт его только туда, а не по списку, который мог устареть
     try:

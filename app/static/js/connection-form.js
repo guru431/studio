@@ -34,10 +34,10 @@ export function sectionsText(sections) {
   return Object.keys(SECTION_NAMES).filter((s) => sections.includes(s)).map((s) => SECTION_NAMES[s]).join(', ');
 }
 
-export function connectionForm(initial, { cleaner = false, everywhere = null } = {}) {
+export function connectionForm(initial, { cleaner = false, everywhere = null, shared = false } = {}) {
   const name = el('input', { class: 'input', name: 'name', maxlength: '64', autocomplete: 'off', required: true });
   const kind = el('select', { class: 'input', name: 'kind' },
-    ...Object.entries(KINDS).filter(([value]) => !cleaner || value === 'cleaner')
+    ...Object.entries(KINDS).filter(([value]) => cleaner ? value === 'cleaner' : !shared || value !== 'cleaner')
       .map(([value, k]) => el('option', { value }, k.label)));
   const url = el('input', { class: 'input', name: 'base_url', maxlength: '2048', autocomplete: 'off',
     inputmode: 'url', spellcheck: 'false', autocapitalize: 'none' });
@@ -51,7 +51,8 @@ export function connectionForm(initial, { cleaner = false, everywhere = null } =
   const box = el('form', { class: 'conn-form', novalidate: true },
     field(tr("Название"), name, 'name'), field(tr("Вид"), kind, 'kind'),
     field(tr("Адрес"), url, 'base_url'),
-    el('p', { class: 'muted small' }, tr("Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.")),
+    el('p', { class: 'muted small' }, shared ? tr("Укажите адрес из списка разрешённых. Studio использует ключ на сервере.")
+      : tr("Адреса из списка администратора студия зовёт сама, остальные — ваш браузер. Фото, видео и речь — только через студию.")),
     field(tr("Токен"), token, 'token'), cleanerNote, s06Note, everywhere === null ? null : allBox);
   box.addEventListener('submit', (event) => event.preventDefault());
 
@@ -85,7 +86,7 @@ export function connectionForm(initial, { cleaner = false, everywhere = null } =
 
 /** Окно правки: «Сохранить» (`#conn-save`) шлёт POST или PATCH, отказ — в форму, успех — onSaved(conn). */
 export function editConnection(host, base, initial, onSaved) {
-  const form = connectionForm(initial);
+  const form = connectionForm(initial, { shared: initial?.shared });
   const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'conn-save' });
   const dialog = openDialog(host, { id: 'conn-dialog', title: initial ? tr("Подключение") : tr("Новое подключение"),
     body: [form.el], actions: [save] });

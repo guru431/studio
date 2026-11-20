@@ -7,14 +7,49 @@ import httpx
 import security
 import state
 from fake_bridge import FakeMachine
-from fakes import PNG_REAL, WAV_FAKE
+from fakes import PNG_REAL, TOKEN as MODEL_KEY, WAV_FAKE
 from test_mcp import TOKEN, URL
 from test_mcp_sections import service
 from test_ui_browser import (browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value,
                              code_online, code_requests, add_voice, add_gateway, open_new_chat, API, ANSWERED,
-                             LAST_ANSWER, BADGE)
+                             LAST_ANSWER, BADGE, go, is_open)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_admin_can_add_shared_models_and_mcp_for_an_ordinary_user(browser, live, width):
+    login = f"shared-user-{width}"
+    model, mcp_name = f"shared-model-{width}", f"Shared tools {width}"
+    live.add_user(login)
+    service(live.gw)
+    panel = "#shared-models-dialog"
+    card = f"{panel} .link:last-child"
+    result = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("admin"),
+        ("click", "#admin-shared-models"), ("wait", f"document.querySelector('{panel} #link-add')"),
+        ("click", f"{panel} #link-add"), ("wait", is_open("#link-dialog")),
+        ("type", "#link-dialog [name=name]", f"Shared API {width}"),
+        ("type", "#link-dialog [name=base_url]", "http://10.77.1.15:4000/v1"),
+        ("type", "#link-dialog [name=token]", MODEL_KEY), ("click", "#link-save"),
+        ("wait", f"!{is_open('#link-dialog')} && document.querySelector('{card} [name=model]')"),
+        ("click", f"{card} .link-refresh"),
+        ("wait", f"document.querySelector('{card} input.model-check[value=gemma4-abl]')"),
+        ("type", f"{card} [name=model]", model), ("click", f"{card} form button"),
+        ("wait", f"document.querySelector('{card} input.model-check[value={model}]')?.checked"),
+        ("eval", "dialogFits", f"document.querySelector('{panel}').scrollWidth <= innerWidth"),
+        ("click", f"{panel} .dialog-close"), ("click", "#admin-shared-mcp #mcp-add"),
+        ("type", "#mcp-name", mcp_name), ("type", "#mcp-url", URL), ("type", "#mcp-token", TOKEN),
+        ("click", "#mcp-save"),
+        ("wait", f"!document.querySelector('#mcp-editor') && document.querySelector('#mcp-servers').textContent.includes('{mcp_name}')"),
+        ("click", "#avatar"), ("click", "#menu-logout"), ("wait", "location.pathname === '/login'"),
+        *signin(login), ("wait", READY), *go("settings/chat"),
+        ("wait", f"document.querySelector('input.model-default[value={model}]') && "
+                 f"document.querySelector('#mcp-servers')?.textContent.includes('{mcp_name}')"),
+        ("eval", "readOnly", "!document.querySelector('.link-menu, .link-url, .model-check, #mcp-servers button')"),
+        ("eval", "settingsFit", NO_OVERFLOW)], width=width, mobile=width == 320)
+    assert not result.get("failed"), result
+    assert all(result["values"].values()), result["values"]
+    assert not problems(result), result["log"]
 
 
 @pytest.mark.parametrize('width', [320, 1280])

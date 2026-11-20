@@ -6,7 +6,8 @@ import { locale, message, tr } from './i18n.js';
  * «Подключения» (те же разделы, что в настройках пользователя), «Сбросить пароль», «Отключить» / «Включить»,
  * «Удалить» (окно с вводом логина). Себя отключить и удалить нельзя — эти кнопки у своей строки
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
-import { api, me } from './api.js';
+import { api, loadMe, me } from './api.js';
+import { chatMcpBlock } from './mcp-settings.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
@@ -479,6 +480,20 @@ function storageBlock() {
   };
 }
 
+function sharedModelsBlock(host) {
+  const title = tr("Общие API моделей");
+  const manage = button(tr("Настроить общие модели"), { class: 'btn', id: 'admin-shared-models' }, () => {
+    const box = el('div', {});
+    const dialog = openDialog(host, { id: 'shared-models-dialog', title, body: [box], cancelText: tr("Закрыть") });
+    const view = settingsView(dialog, { sections: '/api/admin/shared/sections', connections: '/api/admin/shared/connections',
+      section: 'chat', shared: true, onChange: () => loadMe().catch(() => null) });
+    box.append(view.el);
+    view.reload();
+  });
+  return el('section', { class: 'block' }, el('h2', {}, title),
+    el('p', { class: 'muted' }, tr("Добавьте адрес API в нужный раздел и выберите модели, которые будут доступны всем пользователям.")), manage);
+}
+
 export function mount(view, ctx) {
   if (!me.is_admin) {
     ctx.navigate('chat');
@@ -489,7 +504,7 @@ export function mount(view, ctx) {
   const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
   const storage = storageBlock();
-  root.append(invitations.el, users.el, allow.el, storage.el);
+  root.append(invitations.el, users.el, allow.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
   invitations.reload();

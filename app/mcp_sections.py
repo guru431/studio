@@ -19,7 +19,6 @@ import images
 import mcp_client as mcp
 import media
 import security
-import state
 import upstream
 import voices
 
@@ -82,11 +81,11 @@ def supported(section, tools):
 @router.get("/{section}")
 async def catalog(section: str, request: Request):
     section_tools(section)
-    rows = state.DB.execute("SELECT * FROM mcp_servers WHERE user_id=? AND enabled=1 ORDER BY id",
-                            (request.state.user.id,)).fetchall()
+    uid = request.state.user.id
+    rows = mcp.servers(uid, enabled_only=True)
 
     async def discover(item):
-        session = mcp.Session(item)
+        session = mcp.Session(item, uid=uid)
         try:
             async with asyncio.timeout(DISCOVERY_TIMEOUT):
                 tools = list(supported(section, await session.tools()))
@@ -135,7 +134,7 @@ def redeem(request, section, encoded, kind):
             raise ValueError
     except (InvalidToken, TypeError, ValueError):
         raise mcp.refused("Результат MCP недоступен", "not_found", 404) from None
-    return mcp.Session(item), payload
+    return mcp.Session(item, uid=uid), payload
 
 
 async def call(session, name, args):
@@ -261,7 +260,8 @@ async def voice_arguments(session, section, tool, voice_id, files):
 @router.post("/{section}/servers/{sid}/run")
 async def run(section: str, sid: int, request: Request):
     names = section_tools(section)
-    session = mcp.Session(mcp.row(request.state.user.id, sid))
+    uid = request.state.user.id
+    session = mcp.Session(mcp.row(uid, sid), uid=uid)
     try:
         body = RunIn.model_validate_json(await forms.read_body(request, UPLOAD_MAX * 4 // 3 + PARAMS_MAX))
         arguments = json.dumps(body.arguments, allow_nan=False)

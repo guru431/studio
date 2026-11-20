@@ -33,6 +33,7 @@ import email_accounts
 import history
 import images
 import manage
+import mcp_client
 import media
 import operations
 import account_profile as profile
@@ -519,3 +520,84 @@ async def put_user_default(uid: int, section: str, body: sections.DefaultIn, adm
 async def get_user_found(uid: int, section: str, conn_id: int):
     _user_out(uid)
     return await sections.found(uid, section, conn_id)
+
+
+# NULL owner is the shared scope. All routes inherit the admin dependency above.
+@router.get("/shared/connections")
+async def list_shared_connections():
+    return {"items": [connections.out(conn, passport=False) for conn in connections.list_for(None)]}
+
+
+@router.post("/shared/connections", status_code=201)
+async def create_shared_connection(body: connections.ConnIn):
+    return _bare(connections.create(None, body))
+
+
+@router.patch("/shared/connections/{conn_id}")
+async def patch_shared_connection(conn_id: int, body: connections.ConnPatch):
+    return _bare(connections.patch(None, conn_id, body))
+
+
+@router.delete("/shared/connections/{conn_id}", status_code=204)
+async def delete_shared_connection(conn_id: int):
+    connections.delete(None, conn_id)
+    return Response(status_code=204)
+
+
+@router.get("/shared/sections")
+async def shared_sections():
+    return sections.all_out(None, passport=False)
+
+
+@router.post("/shared/sections/{section}/links")
+async def add_shared_link(section: str, body: sections.LinkIn):
+    sections.link(None, section, body.connection_id)
+    return sections.section_out(None, section, passport=False)
+
+
+@router.delete("/shared/sections/{section}/links/{conn_id}", status_code=204)
+async def remove_shared_link(section: str, conn_id: int):
+    sections.unlink(None, section, conn_id)
+    return Response(status_code=204)
+
+
+@router.put("/shared/sections/{section}/links/{conn_id}")
+async def put_shared_models(section: str, conn_id: int, body: sections.ModelsIn):
+    sections.set_models(None, section, conn_id, body.models)
+    return sections.section_out(None, section, passport=False)
+
+
+@router.get("/shared/sections/{section}/links/{conn_id}/found")
+async def get_shared_found(section: str, conn_id: int):
+    return await sections.found(None, section, conn_id)
+
+
+@router.get("/shared/mcp")
+async def list_shared_mcp():
+    return mcp_client.list_for(None)
+
+
+@router.post("/shared/mcp", status_code=201)
+async def create_shared_mcp(body: mcp_client.ServerIn):
+    return mcp_client.create_for(None, body)
+
+
+@router.get("/shared/mcp/{sid}")
+async def get_shared_mcp(sid: int):
+    return mcp_client.detail_for(None, sid)
+
+
+@router.put("/shared/mcp/{sid}")
+async def put_shared_mcp(sid: int, body: mcp_client.ServerIn):
+    return mcp_client.update_for(None, sid, body)
+
+
+@router.delete("/shared/mcp/{sid}", status_code=204)
+async def delete_shared_mcp(sid: int):
+    mcp_client.delete_for(None, sid)
+    return Response(status_code=204)
+
+
+@router.post("/shared/mcp/{sid}/check")
+async def check_shared_mcp(sid: int):
+    return await mcp_client.check_for(None, sid)

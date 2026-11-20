@@ -31,9 +31,37 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 54
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 55
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_shared_integration_migration_preserves_personal_rows_and_sequences(env):
+    from contextlib import closing
+
+    with closing(db.connect(env.db_path)) as conn:
+        conn.executescript(db.SCHEMA.removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        model = ("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created,server_only)"
+                 " VALUES(?,?,'models','openai','https://x.test/v1',x'00','[]',0,1)")
+        mcp = "INSERT INTO mcp_servers(id,user_id,name,url,secret_enc) VALUES(?,?,'tools','https://x.test/mcp',x'00')"
+        conn.executemany(model, [(1, 1), (7, 1)])
+        conn.executemany(mcp, [(1, 1), (9, 1)])
+        conn.execute("INSERT INTO section_links VALUES(1,'chat',1,'[\"m\"]',0)")
+        conn.execute("INSERT INTO section_defaults VALUES(1,'chat',1,'m')")
+        conn.execute("DELETE FROM connections WHERE id=7")
+        conn.execute("DELETE FROM mcp_servers WHERE id=9")
+
+        db.migrate(conn)
+
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert tuple(conn.execute("SELECT * FROM section_links").fetchone()) == (1, 'chat', 1, '["m"]', 0)
+        assert tuple(conn.execute("SELECT * FROM section_defaults").fetchone()) == (1, 'chat', 1, 'm')
+        assert conn.execute(model, (None, None)).lastrowid == 8
+        assert conn.execute(mcp, (None, None)).lastrowid == 10
+        conn.execute("DELETE FROM users WHERE id=1")
+        assert [tuple(row) for row in conn.execute("SELECT id,user_id FROM connections")] == [(8, None)]
+        assert [tuple(row) for row in conn.execute("SELECT id,user_id FROM mcp_servers")] == [(10, None)]
 
 
 def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):

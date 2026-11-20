@@ -1172,7 +1172,7 @@ const OLD_IDS = { other: 'security', dictation: 'input' };
 const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
-  other = false, direct = false, voices = false, onChange = null }) {
+  other = false, direct = false, voices = false, onChange = null, shared = false }) {
   const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
     security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
@@ -1227,8 +1227,12 @@ export function settingsView(host, { sections: base, connections: connBase, sect
 
   async function saveModels(s, conn, names, box) {
     const checked = names.filter((m) => box.querySelector(`input.model-check[value="${CSS.escape(m)}"]`).checked);
+    await putModels(s, conn, checked);
+  }
+
+  async function putModels(s, conn, models) {
     try {
-      await api('PUT', `${base}/${s.id}/links/${conn.id}`, { models: checked });
+      await api('PUT', `${base}/${s.id}/links/${conn.id}`, { models });
       say(note, '');
     } catch (err) {
       say(note, words(err), 'error');
@@ -1326,6 +1330,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
 
   function linkCard(s, link) {
     const conn = link.connection;
+    const inherited = conn.shared && !shared;
     const known = found.get(`${s.id}:${conn.id}`);
     const offer = known || link.catalog || [];
     const names = [...link.models, ...offer.filter((m) => !link.models.includes(m))];
@@ -1334,17 +1339,18 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       const checked = link.models.includes(m);
       const check = el('input', { type: 'checkbox', class: 'model-check', value: m, checked });
       const radio = el('input', { type: 'radio', class: 'model-default', name: `default-${s.id}`, value: m,
-        'data-conn': String(conn.id), 'aria-label': tr("По умолчанию: {0}", modelLabel(m)), disabled: !checked,
+        'data-conn': String(conn.id), 'aria-label': tr("По умолчанию: {0}", modelLabel(m)), disabled: !checked || (inherited && conn.dropped),
         checked: !!s.default && s.default.connection_id === conn.id && s.default.model === m });
       check.addEventListener('change', () => saveModels(s, conn, names, box));
       radio.addEventListener('change', () => saveDefault(s, conn, m));
       // Cleaner отправляет пробу через предпросмотр чата; srvllm занял бы карту.
-      const tryable = direct && checked && s.id === 'chat' && conn.kind !== 'srvllm' && !conn.cleaner;
+      const tryable = direct && !inherited && checked && s.id === 'chat' && conn.kind !== 'srvllm' && !conn.cleaner;
       box.append(el('li', { class: 'model', 'data-model': m },
-        el('label', { class: 'check model-name' }, check, modelLabel(m)),
+        inherited ? el('span', { class: 'model-name' }, modelLabel(m)) : el('label', { class: 'check model-name' }, check, modelLabel(m)),
         known && checked && !known.includes(m) ? el('span', { class: 'tag model-missing' }, tr("не найдена")) : null,
         tryable ? button(tr("Пробный ответ"), { class: 'btn btn-sm model-probe' }, () => tryModel(s, conn, m)) : null,
-        el('label', { class: 'model-default-label', title: tr("По умолчанию") }, radio, el('span', { class: 'small muted' }, tr("по умолчанию")))));
+        shared ? null : el('label', { class: 'model-default-label', title: tr("По умолчанию") }, radio,
+          el('span', { class: 'small muted' }, tr("по умолчанию")))));
     }
     let search = null;
     if (names.length > SEARCH_FROM) {
@@ -1377,21 +1383,38 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       ? passportBlock({ conn, section: s.id, models: link.catalog || link.models, label: modelLabel,
         error: checkErrors.get(conn.id), busy, open: opened.has(key),
         onToggle: (open) => (open ? opened.add(key) : opened.delete(key)) }) : null;
-    const checkButton = direct ? button(tr("Проверить"), { class: 'btn btn-sm link-check', disabled: busy },
+    const checkButton = direct && !inherited ? button(tr("Проверить"), { class: 'btn btn-sm link-check', disabled: busy },
       () => runCheck(s, conn)) : null;
+    let manual = null;
+    if (shared && !link.catalog) {
+      const model = el('input', { class: 'input', name: 'model', maxlength: '200', autocomplete: 'off', required: true,
+        placeholder: tr("ID модели"), 'aria-label': tr("ID модели") });
+      manual = el('form', { class: 'row' }, model, button(tr("Добавить модель"), { class: 'btn btn-sm', type: 'submit' }));
+      manual.addEventListener('submit', async event => {
+        event.preventDefault();
+        const id = model.value.trim();
+        if (!id || link.models.includes(id)) return;
+        const submit = manual.querySelector('button');
+        submit.disabled = true;
+        try { await putModels(s, conn, [...link.models, id]); }
+        finally { submit.disabled = false; }
+      });
+    }
     return el('li', { class: 'link', 'data-conn': String(conn.id) },
       el('div', { class: 'link-head' },
         el('div', { class: 'link-main' },
           el('b', { class: 'link-name' }, conn.name),
-          el('span', { class: 'link-url' }, conn.base_url),
+          inherited ? null : el('span', { class: 'link-url' }, conn.base_url),
           el('span', { class: 'link-hint' },
             conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner · очистка данных")) : null,
-            el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
-            tr(" ключ {0}", message(conn.token_hint)))),
-        el('div', { class: 'link-buttons' }, checkButton,
+            inherited ? el('span', { class: 'tag server' }, tr("Общее подключение")) :
+              el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
+            inherited ? null : tr(" ключ {0}", message(conn.token_hint)))),
+        inherited ? null : el('div', { class: 'link-buttons' }, checkButton,
           button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)), menu)),
-      passport, actions, search,
-      names.length ? box : el('p', { class: 'muted small' }, tr("Нажмите «Обновить модели» и отметьте нужные")));
+      passport, inherited ? null : actions, search,
+      names.length ? box : el('p', { class: 'muted small' }, inherited ? tr("Нет доступных моделей")
+        : tr("Нажмите «Обновить модели» и отметьте нужные")), manual);
   }
 
   async function addLink(s, cleaner = false) {
@@ -1402,7 +1425,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       first = !items.length;
       // accepts — разделы, которые подключение примет по виду (sections.accepts): s06 в «Фото», OpenAI-совместимое
       // в «Видео» и Cleaner вне чата и перевода в выборе не предлагаются
-      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner) && c.accepts.includes(s.id));
+      conns = items.filter((c) => (!c.shared || shared) && !c.sections.includes(s.id) && (!cleaner || c.cleaner) && c.accepts.includes(s.id));
     } catch (err) {
       say(note, words(err), 'error');
       return;
@@ -1411,7 +1434,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       ...conns.map((c) => el('option', { value: String(c.id) }, `${c.name} — ${c.base_url}`)),
       el('option', { value: 'new' }, tr("Новый адрес…")));
     select.value = conns.length ? String(conns[0].id) : 'new';
-    const form = connectionForm(null, { cleaner, everywhere: cleaner ? null : first });
+    const form = connectionForm(null, { cleaner, everywhere: cleaner ? null : first, shared });
     form.el.hidden = select.value !== 'new';
     select.addEventListener('change', () => { form.el.hidden = select.value !== 'new'; });
     const box = el('div', {}, field(tr("Подключение"), select, 'existing'), form.el);

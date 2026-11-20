@@ -212,6 +212,8 @@ def gateway_error(response: httpx.Response, conn) -> str:
     """Отказ сервиса словами. Шлюз студии (srvllm, s06) — словами шлюза и карты; облако и прочие
     OpenAI-совместимые (и Cleaner) — «сервис «имя» …»: карты у них нет."""
     code = response.status_code
+    if conn.shared and conn.user_id is not None:
+        return f"общее подключение «{conn.name}» ответило HTTP {code} — обратитесь к администратору"
     if code == 401:
         return f"ключ подключения «{conn.name}» не принят (401) — замените его: {KEY_PLACE}"
     if code == 429:
