@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from conftest import APP, ROOT
+import i18n_words
 
 CYRILLIC = re.compile('[А-Яа-яЁё]')
 
@@ -348,58 +349,6 @@ class Collector:
         return self.found
 
 
-def _catalog():
-    source = (APP / 'static' / 'en.js').read_text(encoding='utf-8')
-    english, patterns, verbatim = (json.JSONDecoder().raw_decode(part)[0]
-                                   for part in source.split('Object.freeze(')[1:4])
-    return english, patterns, set(verbatim)
-
-
-@functools.cache
-def translator():
-    """`StudioI18n.message` (`app/static/i18n.js`) на Python: целиком, с малой буквы или шаблоном; голая
-    подстановка шаблона — тоже слова сервера, подстановка в «» и шаблоны `StudioEnglishVerbatim` — как есть."""
-    english, keys, verbatim = _catalog()
-    compiled = []
-    for key in keys:
-        slots, auto, parts = [], 0, []
-        pieces = re.split(r'(\{\d*\})', key)
-        for at, part in enumerate(pieces):
-            if re.fullmatch(r'\{\d*\}', part):
-                named = key in verbatim or (pieces[at - 1].endswith(('«', '“')) and pieces[at + 1].startswith(('»', '”')))
-                slots.append((auto if part == '{}' else int(part[1:-1]), named))
-                auto += part == '{}'
-                parts.append(r'([\s\S]*?)')
-            else:
-                parts.append(re.escape(part))
-        compiled.append((re.compile('^' + ''.join(parts) + '$', re.I), key, slots))
-
-    def message(source: str, depth: int = 0) -> str:
-        if source in english:
-            return english[source]
-        lower = source[:1].lower() + source[1:]
-        if lower in english:
-            out = english[lower]
-            return out if source == lower else out[:1].upper() + out[1:]
-        if len(source) > 4096 or depth > 3:
-            return source
-        for pattern, key, slots in compiled:
-            match = pattern.match(source)
-            if match:
-                values = {}
-                for n, (index, named) in enumerate(slots):
-                    part = match.group(n + 1)
-                    quoted = not named and re.fullmatch('«([^«»]*)»', part)
-                    values[index] = (part if named else f'“{message(quoted[1], depth + 1)}”' if quoted
-                                     else message(part, depth + 1))
-                counter = itertools.count()
-                text = re.sub(r'\{\}', lambda _: '{%d}' % next(counter), english[key])
-                out = re.sub(r'\{(\d+)\}', lambda m: values.get(int(m.group(1)), m.group(0)), text)
-                return out[:1].upper() + out[1:] if source[:1].isupper() else out
-        return source
-    return message
-
-
 @functools.cache
 def collected(root: str, module: str) -> dict[str, set[str]]:
     return Collector(root).collect(module)
@@ -415,10 +364,9 @@ def every(root: str | None = None) -> dict[str, set[str]]:
 
 
 def untranslated(root: str | None = None, module: str | None = None) -> dict[str, set[str]]:
-    message = translator()
     exempt = ROOTS[root].exempt if root else EXEMPT | AGENT_EXEMPT
     return {text: places for text, places in (collected(root, module) if module else every(root)).items()
-            if text not in exempt and CYRILLIC.search(message(text))}
+            if text not in exempt and CYRILLIC.search(i18n_words.message(text))}
 
 
 @pytest.mark.parametrize('module', MODULES)
@@ -456,7 +404,7 @@ def test_bridge_refusals_and_turn_failures_are_collected():
 
 
 def test_page_runtime_translates_the_same_server_words():
-    """Сторож переводит слова Python-копией `message()`; настоящий `i18n.js` должен дать то же."""
+    """Сторож и английские выгрузки переводят слова `i18n_words.message`; настоящий `i18n.js` должен дать то же."""
     node = shutil.which('node')
     if not node:
         pytest.skip('node unavailable')
@@ -472,5 +420,4 @@ process.stdout.write(JSON.stringify(texts.map((text) => context.StudioI18n.messa
     result = subprocess.run([node, '-e', program, str(APP / 'static')], input=json.dumps(texts),
                             capture_output=True, encoding='utf-8', timeout=20)
     assert result.returncode == 0, result.stderr
-    message = translator()
-    assert [message(text) for text in texts] == json.loads(result.stdout)
+    assert [i18n_words.message(text) for text in texts] == json.loads(result.stdout)
