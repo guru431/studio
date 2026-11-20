@@ -3594,8 +3594,9 @@ def test_photo_preset_saves_and_applies(browser, live):
     prompt = "document.querySelector('#photo-prompt').value"
     chips = "[document.querySelector('#chip-model').textContent, document.querySelector('#chip-size').textContent," \
             " document.querySelector('#photo-strength').value]"
-    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'snofs',
-      connection_id: null, size: 'square', seed: 42, strength: 0.25, prompt: 'старый кот' }} }}); return true; }})()"""
+    # подключение пресета удалено (id не повторяются) — модель берётся из единственной связи раздела с ней
+    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'flux',
+      connection_id: 987654, size: 'square', seed: 42, strength: 0.25, prompt: 'старый кот' }} }}); return true; }})()"""
     r = browser.drive(live.url + "/", [*photo_screen(login),
         ("type", "#photo-prompt", "портрет у окна"),
         ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=landscape]"),
@@ -3636,7 +3637,9 @@ def test_photo_preset_saves_and_applies(browser, live):
         ("eval", "old", old), *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
         *go("photo"), ("wait", FEED_READY), ("eval", "spy", SPY),
         ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu .preset-apply')"),
-        ("click", "#chip-preset-menu .preset-apply"), ("click", "#photo-go"), ("wait", done_cards(1)),
+        ("click", "#chip-preset-menu .preset-apply"),
+        ("eval", "oldStatus", "document.querySelector('.photo-status').textContent"),
+        ("click", "#photo-go"), ("wait", done_cards(1)),
         ("eval", "forms", "window.sentForms")], width=1280, height=900)
     assert not r.get("failed"), r
     v = r["values"]
@@ -3652,6 +3655,7 @@ def test_photo_preset_saves_and_applies(browser, live):
     assert v["gone"] == "Пресетов пока нет"
     (sent,) = (f["form"] for f in v["forms"])
     assert sent["prompt"] == "старый кот" and sent["size"] == "square" and "seed" not in sent
+    assert sent["model"] == "flux" and sent["connection_id"] != 987654 and v["oldStatus"] == ""
     assert not problems(r), problems(r)
 
 
