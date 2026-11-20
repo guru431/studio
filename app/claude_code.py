@@ -369,14 +369,14 @@ def _warn(request: Request, aid: int, op: str, error: HTTPException) -> None:
 
 
 async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passive: bool = False,
-              reply_timeout: float | None = None, **args) -> dict:
+              reply_timeout: float | None = None, while_locked: bool = False, **args) -> dict:
     """Просьба мосту от сессии запроса; отказы — HTTPException с кодом моста или своим, в журнал — `_warn`
     (`quiet` — отказ пишет сам зовущий: `not_found` нового чата — норма). Строка с одиноким суррогатом (из JSON
     запроса) в кадр UTF-8 не ляжет — 422 до моста, а не «не на связи».
 
     Фоновая просьба (`passive` или заголовок страницы `X-Studio-Passive: 1` у опросов по таймеру) мосту с
     `hello.passive_requests` идёт с `passive: true`: он проверяет срок PIN компьютера, не продлевая его.
-    Заголовок может только ужесточить доступ, поэтому ему можно верить."""
+    Заголовок может только ужесточить доступ, поэтому ему можно верить. `while_locked` — см. `_session_open`."""
     passive = passive or request.headers.get("x-studio-passive") == "1"
     pid = args.get("project") or request.path_params.get("pid")
     agent = project_access.agent(request.state.user.id, aid, pid, shared=op in ("projects", "activity"))
@@ -418,7 +418,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
                                  **({"timeout": reply_timeout} if reply_timeout is not None else {}), **args)
         # The computer may finish its work after logout, expiry, disable or a screen lock.
         # Keeping that result on the computer does not authorize delivery to this request.
-        if not _session_open(request.state.digest):
+        if not _session_open(request.state.digest, while_locked):
             raise _refuse(409, "closed", "Сеанс Студии закрыт")
         if scope is not None:
             project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
@@ -436,7 +436,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         status = STATUS.get(e.code)
         error = (_refuse(502, "bridge", "мост ответил непонятно") if status is None
                  else _refuse(status, e.code, e.message, **e.extra))
-    if not _session_open(request.state.digest):
+    if not _session_open(request.state.digest, while_locked):
         raise _refuse(409, "closed", "Сеанс Студии закрыт")
     if scope is not None:
         project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
@@ -1020,13 +1020,15 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True, allow_nan=False)}\n\n"
 
 
-def _session_open(digest: str) -> bool:
-    """Сессия студии жива и не заперта — как её видит `auth.guard` (без продления)."""
+def _session_open(digest: str, while_locked: bool = False) -> bool:
+    """Сессия студии жива и не заперта — как её видит `auth.guard` (без продления). `while_locked` — фоновое
+    задание, начатое незапертой сессией (передача зеркала): блокировка экрана его не обрывает, выход, истёкшая
+    сессия и отключённая учётка — обрывают."""
     row = state.DB.execute("SELECT u.disabled, s.expires FROM sessions s"
                            " JOIN users u ON u.id = s.user_id WHERE s.digest = ?", (digest,)).fetchone()
     now = clock.NOW()
     return (row is not None and not row["disabled"] and row["expires"] > now
-            and not lock_policy.locked(digest, "code"))
+            and (while_locked or not lock_policy.locked(digest, "code")))
 
 
 def _stream_open(digest: str, access: tuple[int, str] | None) -> bool:
