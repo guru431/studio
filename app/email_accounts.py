@@ -213,9 +213,11 @@ async def account_page(screen: str):
 
 
 def invitation(row) -> dict:
+    """Статус: принятое без учётки (`user_id` обнулило её удаление) — `deleted`, адрес можно пригласить снова."""
     return {"id": row["id"], "email": row["email"], "comment": row["comment"], "is_admin": bool(row["is_admin"]),
             "created": row["created"], "expires": row["expires"], "user_id": row["user_id"],
-            "status": ("accepted" if row["accepted"] is not None else "revoked" if row["revoked"] is not None else "failed" if not row["sent"]
+            "status": (("accepted" if row["user_id"] is not None else "deleted") if row["accepted"] is not None
+                       else "revoked" if row["revoked"] is not None else "failed" if not row["sent"]
                        else "expired" if row["expires"] <= clock.NOW() else "pending")}
 
 
@@ -286,8 +288,14 @@ async def comment(iid: str, body: CommentIn):
 
 @router.delete("/api/admin/invitations/{iid}", dependencies=[Depends(auth.require_admin)], status_code=204)
 async def revoke(iid: str):
-    if not state.DB.execute("UPDATE invitations SET revoked=?,token_hash=NULL WHERE id=? AND accepted IS NULL",
-                            (clock.NOW(), iid)).rowcount:
+    """Ожидающее приглашение отзывается (ссылка гаснет, строка — «Отозвано»); отозванное, просроченное,
+    неотправленное и принятое удалённой учёткой — удаляется вместе с адресом и комментарием. Живой учётки — 409."""
+    now = clock.NOW()
+    if state.DB.execute("UPDATE invitations SET revoked=?,token_hash=NULL WHERE id=? AND accepted IS NULL"
+                        " AND revoked IS NULL AND sent=1 AND expires>?", (now, iid, now)).rowcount:
+        return Response(status_code=204)
+    if not state.DB.execute("DELETE FROM invitations WHERE id=? AND (accepted IS NULL OR user_id IS NULL)",
+                            (iid,)).rowcount:
         raise HTTPException(409, {"code": "accepted", "message": "Приглашение уже принято или удалено"})
     return Response(status_code=204)
 

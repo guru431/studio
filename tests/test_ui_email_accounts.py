@@ -180,9 +180,11 @@ def test_admin_invitation_list_and_comment_survive_reload(browser, live, mail, w
         page.locator("#user-add").click()
         page.locator("#invite-email").fill(email)
         page.locator("#invite-comment").fill("Comment <script>text</script>")
+        page.locator("#invite-admin").check()
         page.locator("#invite-save").click()
         row = page.locator(f'#invitations tr[data-email="{email}"]')
-        pw.expect(row).to_contain_text("Ожидает регистрации")
+        pw.expect(row).to_contain_text("Ожидает регистрации до ")
+        pw.expect(row.locator(".invite-admin")).to_contain_text("администратор")
         pw.expect(row).to_contain_text("Comment <script>text</script>")
         row.locator(".invite-edit").click()
         page.locator("#invite-comment").fill("Saved comment")
@@ -193,6 +195,8 @@ def test_admin_invitation_list_and_comment_survive_reload(browser, live, mail, w
         fits(page)
         row.locator(".invite-revoke").click()
         pw.expect(row).to_contain_text("Отозвано")
+        row.locator(".invite-delete").click()
+        pw.expect(row).to_have_count(0)
         assert not errors
 
 

@@ -166,6 +166,26 @@ def test_resend_rotates_link_comment_persists_and_revoke_is_final(studio, mail):
     assert listed[0]["status"] == "revoked" and listed[0]["comment"] == "Changed"
 
 
+def test_invitation_of_a_deleted_account_says_so_and_rows_can_be_removed(studio, mail):
+    """Принятое удалённой учёткой — `deleted`, не «Зарегистрирован»; строку без живой учётки можно удалить,
+    ожидающую — только отозвать (первое нажатие), принятую живой учёткой — нельзя."""
+    admin(studio)
+    invitation, secret = invite(studio, mail, is_admin=True, comment="About a person")
+    pending, _ = invite(studio, mail, email="pending@example.com")
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "friend", "password": PASSWORD}).status_code == 201
+    uid = state.DB.execute("SELECT id FROM users WHERE login='friend'").fetchone()[0]
+    assert studio.c.delete(f"/api/admin/invitations/{invitation['id']}").status_code == 409
+    assert studio.c.delete(f"/api/admin/users/{uid}").status_code == 200
+    listed = {x["id"]: x for x in studio.c.get("/api/admin/invitations").json()["items"]}
+    assert listed[invitation["id"]]["status"] == "deleted" and listed[invitation["id"]]["is_admin"] is True
+    assert studio.c.delete(f"/api/admin/invitations/{invitation['id']}").status_code == 204
+    assert studio.c.delete(f"/api/admin/invitations/{pending['id']}").status_code == 204
+    assert [x["status"] for x in studio.c.get("/api/admin/invitations").json()["items"]] == ["revoked"]
+    assert studio.c.delete(f"/api/admin/invitations/{pending['id']}").status_code == 204
+    assert studio.c.get("/api/admin/invitations").json()["items"] == []
+    assert studio.c.delete(f"/api/admin/invitations/{pending['id']}").status_code == 409
+
+
 @pytest.mark.parametrize("gone", ["deleted", "email_changed"])
 def test_accepted_invitation_of_a_gone_address_can_be_sent_again(studio, mail, gone):
     admin(studio)
