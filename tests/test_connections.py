@@ -233,13 +233,26 @@ def test_deleted_connection_gives_no_token_and_its_id_to_nobody(studio):
     assert studio.gw.requests == []
 
 
-def test_gateway_401_words_point_to_the_profile():
-    text = upstream.gateway_error(httpx.Response(401), "srvllm")
-    assert "srvllm" in text and "профиле" in text
+def test_gateway_words_fit_the_kind_of_service():
+    """Шлюз студии — словами шлюза и карты; облако — «сервис «имя» …» без карты; 401 — где менять ключ."""
+    gw = connections.Connection(1, 1, "srvllm", "srvllm", GW, frozenset(), True)
+    s06 = connections.Connection(1, 1, "s06", "openai", GW, frozenset(), True, s06=True)
+    cloud = connections.Connection(1, 1, "Облако", "openai", "https://api.example.test/v1", frozenset(), True)
+    text = upstream.gateway_error(httpx.Response(401), gw)
+    assert "«srvllm»" in text and "«Изменить»" in text and "профил" not in text
     busy = httpx.Response(409, json={"detail": {"message": "идут ролики: 2"}})
-    assert upstream.gateway_error(busy, "srvllm") == "идут ролики: 2"
+    assert upstream.gateway_error(busy, gw) == "идут ролики: 2"
     assert upstream.message(httpx.Response(400, json={"error": {"message": "плохо"}})) == "плохо"
-    assert upstream.gateway_error(httpx.Response(418, text="не json"), "x") == "шлюз ответил 418: код 418"
+    assert upstream.gateway_error(httpx.Response(418, text="не json"), gw) == "шлюз ответил 418: код 418"
+    assert upstream.gateway_error(httpx.Response(503, json={"error": "x"}), s06).startswith("карта занята")
+    overloaded = httpx.Response(503, json={"error": {"message": "overloaded"}})
+    assert upstream.gateway_error(overloaded, cloud) == "сервис «Облако» временно недоступен (503): overloaded"
+    limit = upstream.gateway_error(httpx.Response(429, json={"error": {"message": "rate"}}), cloud)
+    assert limit == "«Облако»: слишком много запросов или исчерпан лимит (429) — rate"
+    assert "средства" in upstream.gateway_error(httpx.Response(402), cloud)
+    assert "не нашёл адрес или модель" in upstream.gateway_error(httpx.Response(404), cloud)
+    for code in (400, 403, 418):
+        assert upstream.gateway_error(httpx.Response(code), cloud).startswith("сервис «Облако»"), code
 
 
 # ---- подключения профиля -------------------------------------------------------
@@ -428,8 +441,11 @@ def test_capabilities_follow_connections(studio):
     assert caps() == none
     cid = add_connection(studio, kind="srvllm", base_url=GW, sections=["chat", "photo"])
     assert caps() == none | {"chat": True, "photo": True}
-    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")   # не через сервер — не фото
-    assert caps() == none | {"chat": True}
+    # адрес убран из списка: srvllm прямым не станет (`dropped`) — ни фото, ни чата
+    state.DB.execute("UPDATE settings SET value = '[]' WHERE key = 'allowlist'")
+    assert caps() == none
+    sections.set_default(1, "chat", add_connection(studio, sections=["chat"]), "local-gemma-abl")
+    assert caps() == none | {"chat": True}                          # прямое https-подключение — чат из браузера
 
 
 def test_urls_of_each_kind():

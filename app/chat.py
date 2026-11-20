@@ -104,6 +104,7 @@ ORPHAN_SEC = 86400               # неотправленное вложение
 SWEEP_SEC = 3600
 TEXT_MAX = 200_000
 ANSWER_MAX = 2_000_000
+ERROR_MAX = 400                  # слова ошибки ответа из браузера: подробность сервиса до 300 знаков и начало страницы
 MODEL_MAX = 200
 INTERRUPTED = "\n\n[прервано перезапуском студии]"
 # пометки обрезанного ответа: он — ошибка, в контекст следующих ходов не идёт (compose)
@@ -210,6 +211,7 @@ class AnswerIn(BaseModel):
     # как у ответа через сервер: до ANSWER_MAX знаков и пометка обрезки (длиннейшая — CUT_SIZE)
     content: str = Field(max_length=ANSWER_MAX + len(CUT_SIZE))
     status: Literal["done", "stopped", "error"]
+    error: str | None = Field(None, max_length=ERROR_MAX)    # слова ошибки (`status` error), как `messages.error`
 
 
 class CleanerCopyIn(BaseModel):
@@ -269,7 +271,8 @@ def _chat_view(user_id: int, row) -> dict:
     диалога через сервер (страница: нет — кнопки нет, есть без ключа — кнопка выключена с подсказкой);
     `external_web` — следующий ход даст модели Exa при расшифровке в истории без подтверждения (сервер ответил
     бы 409 `external_web`); `thinking` — кнопка «Рассуждение» и `thinking_ok` — действует ли она у модели диалога
-    (та же `local`: параметр уходит только ролям `local-*` srvllm через сервер)."""
+    (та же `local`: параметр уходит только ролям `local-*` srvllm через сервер); `dropped` — адрес подключения
+    убран из списка (`connections.dropped`: ход ответит 409 `server`)."""
     out, conn = _chat_out(row), None
     if row["connection_id"] is not None:
         try:
@@ -278,6 +281,7 @@ def _chat_view(user_id: int, row) -> dict:
             pass
     model = row["model"] or manage.DEFAULT_MODEL
     out["local"] = conn is not None and sections.is_local(conn, model)
+    out["dropped"] = conn is not None and connections.dropped(conn)
     out["cleaner"] = conn is not None and conn.cleaner
     out["external"] = conn is not None and not conn.cleaner and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
@@ -865,7 +869,7 @@ class StreamTask:
                         r"|(?:does not|doesn't|cannot) support (?:tools?|function calling)"
                         r"|(?:not supported|unsupported).{0,20}(?:tools?|tool[_ ]choice)", r.text.lower())
                     words = NO_MCP if self.mcp and self.mcp.specs else NO_TOOLS
-                    return words if no_tools else upstream.gateway_error(r, self.conn.name), None, [], text
+                    return words if no_tools else upstream.gateway_error(r, self.conn), None, [], text
                 self._card_free()
                 async for line in r.aiter_lines():
                     if clock.NOW() > self.deadline:
@@ -1758,6 +1762,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if row["connection_id"] is None:
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
     conn = connections.get(uid, row["connection_id"])
+    if connections.dropped(conn):                    # ни сервер, ни браузер туда не пойдут — до записи хода
+        raise HTTPException(409, {"code": "server", "message": sections.unlisted(conn)})
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     model = row["model"] or manage.DEFAULT_MODEL
@@ -1896,7 +1902,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
 @router.put("/chats/{chat_id}/messages/{message_id}")
 async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Request):
     """Ответ прямого подключения: браузер прочитал модель сам и кладёт итог (один раз). Тот же итог повторно —
-    200, как в первый раз: ответ на первый PUT мог не дойти, и страница повторяет его после обрыва связи."""
+    200, как в первый раз: ответ на первый PUT мог не дойти, и страница повторяет его после обрыва связи.
+    `error` — слова ошибки страницы («Сервис ответил ошибкой (401)…»): хранятся у ответа со статусом `error`."""
     _chat_row(request.state.user.id, chat_id)
     row = state.DB.execute("SELECT role, status, via, content FROM messages WHERE id = ? AND chat_id = ?",
                            (message_id, chat_id)).fetchone()
@@ -1904,8 +1911,9 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
         raise _gone("такого сообщения нет")
     if (row["role"], row["via"], row["status"], row["content"]) == ("assistant", "browser", body.status, body.content):
         return {"id": message_id, "status": body.status}
+    error = (body.error or "").strip() or None if body.status == "error" else None
     if (row["role"], row["status"], row["via"]) != ("assistant", "streaming", "browser") \
-            or not _finish(message_id, chat_id, body.content, body.status):
+            or not _finish(message_id, chat_id, body.content, body.status, error=error):
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже сохранён"})
     log.info("чат %s: ответ %s от браузера — %s", chat_id[:8], message_id[:8], body.status)
     return {"id": message_id, "status": body.status}

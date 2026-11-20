@@ -189,7 +189,7 @@ async def recognize(conn, png: bytes, prompt: str = PROMPT) -> str:
     if r.status_code == 503:
         raise Busy(upstream.message(r) or "карта занята")
     if r.status_code != 200:
-        raise OcrError(upstream.gateway_error(r, conn.name))
+        raise OcrError(upstream.gateway_error(r, conn))
     if conn.s06:
         content = upstream.json_body(r).get("markdown")
         if not isinstance(content, str) or not content.strip():

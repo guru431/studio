@@ -189,7 +189,7 @@ async def check(conn) -> dict:
         for url in urls[1:]:
             routes.append((await _route(conn, url))[0])
     ids = None if listed is None else [m["id"] for m in listed]
-    models = capabilities.models(conn.kind, listed or [], slot_ids, MODELS_MAX)
+    models = capabilities.models(capabilities.profile(conn), listed or [], slot_ids, MODELS_MAX)
     return _save(conn, snap, passport(conn, "server", routes, models, _probes(snap)),
                  found_of(conn, ids, slot_ids, ids))
 
@@ -352,7 +352,7 @@ def put_passport(conn, body: PassportIn) -> dict:
         probes = {**_probes(snap), **fresh}
         listed = [capabilities.model_entry(m.model_dump(exclude_none=True)) for m in body.models or []]
         built = passport(conn, "browser", [r.model_dump() for r in body.routes or []],
-                         capabilities.models(conn.kind, listed, None, MODELS_MAX), probes)
+                         capabilities.models(capabilities.profile(conn), listed, None, MODELS_MAX), probes)
         if body.models is not None:
             ids = [m["id"] for m in listed]
             found = found_of(conn, ids, None, ids)

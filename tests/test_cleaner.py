@@ -340,6 +340,15 @@ def test_connection_requires_server_route_and_cannot_expose_browser_token(protec
     assert studio.c.get(f"/api/connections/{remote.conn_id}/token").status_code == 403
 
 
+def test_existing_cleaner_cannot_join_sections_beyond_chat_and_translate(protected):
+    """«+ Адрес для раздела» с уже заведённым Cleaner: связь вне чата и перевода — отказ, как при создании."""
+    studio, remote = protected
+    for section in ("photo", "transcribe", "speech", "dictation"):
+        response = studio.c.post(f"/api/sections/{section}/links", json={"connection_id": remote.conn_id})
+        assert response.status_code == 422 and "Cleaner" in response.json()["detail"]["message"], section
+    assert studio.c.get("/api/connections").json()["items"][0]["sections"] == ["chat", "translate"]
+
+
 def test_translation_through_cleaner_sends_no_context_of_the_previous_chunk(protected, monkeypatch):
     """Конец перевода предыдущего куска — восстановленный Cleaner текст: в указание следующего куска он не идёт."""
     import translate_text

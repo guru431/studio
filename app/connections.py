@@ -303,7 +303,7 @@ def _address(base_url: str) -> tuple:
 
 
 def _check_cleaner(kind: str, base_url: str, wanted: list[str]) -> None:
-    if kind != "openai" or set(wanted) - {"chat", "translate"}:
+    if kind != "openai" or set(wanted) - set(sections.CLEANER):
         raise _bad("cleaner", "Cleaner поддерживает чат и перевод")
     if not upstream.is_allowed(base_url):
         raise _bad("cleaner", "адрес Cleaner должен быть в списке администратора; запросы идут только через сервер")
@@ -430,7 +430,7 @@ async def fetch_models(conn: Connection) -> list[dict]:
     except httpx.HTTPError:
         raise HTTPException(502, {"code": "upstream", "message": f"нет связи с подключением «{conn.name}»"}) from None
     if not r.is_success:
-        raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn.name)})
+        raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn)})
     data = upstream.json_body(r).get("data")
     items = []
     for m in data if isinstance(data, list) else []:

@@ -1756,6 +1756,44 @@ def test_direct_cloud_chat_saves_the_answer(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_direct_error_words_survive_reopening_and_deleted_connection_is_named(browser, live):
+    """Ответ из браузера с ошибкой сервиса (401) хранит её слова: в другом диалоге и обратно они те же. Удаление
+    подключения называет его диалоги, а чип диалога потом — «подключение удалено — выберите модель»."""
+    live.add_user("errwords")
+    panel = ".section-panel[data-section=chat]"
+    meta = f"{LAST_ANSWER}?.querySelector('.msg-meta.error')?.textContent || ''"
+    cloud = add_cloud(live.cloud, "Облако")           # подключение — с прежним ключом
+    live.cloud.TOKEN = "rotated-key"                  # а сервис его больше не принимает
+    try:
+        r = browser.drive(live.url + "/", [*signin("errwords"), ("wait", READY), cloud,
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("click", "#model-chip"), ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+            ("click", ".model-option[data-model=\"cloud-chat\"]"),
+            ("type", "#chat-input", "Ты здесь?"), ("press", "Enter"),
+            ("wait", f"({meta}).includes('401')"),
+            ("eval", "cid", "sessionStorage.cid = location.hash.split('/')[2]"),
+            *open_new_chat(), ("eval", "back", "location.hash = '#/chat/' + sessionStorage.cid"),
+            ("wait", f"({meta}).includes('401')"),
+            ("eval", "words", meta),
+            *go("settings/chat"), ("wait", f"document.querySelector('{panel} .link-menu')"),
+            ("click", f"{panel} .link-menu"), ("click", f"{panel} .link-delete"), ("wait", is_open("#conn-delete-dialog")),
+            ("wait", "document.querySelector('#conn-delete-chats').textContent"),
+            ("eval", "chats", "document.querySelector('#conn-delete-chats').textContent"),
+            ("click", "#conn-delete-confirm"), ("wait", f"!{is_open('#conn-delete-dialog')}"),
+            ("eval", "again", "location.hash = '#/chat/' + sessionStorage.cid"),
+            ("wait", "document.querySelector('#model-chip .chip-name').textContent.includes('удалено')"),
+            ("eval", "chip", "document.querySelector('#model-chip .chip-name').textContent"),
+            ("eval", "off", "document.querySelector('#model-chip').classList.contains('off')")])
+    finally:
+        del live.cloud.TOKEN
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["words"].startswith("Сервис ответил ошибкой (401): Incorrect API key"), v
+    assert v["chats"].startswith("Диалогов на этом подключении: 1."), v
+    assert v["chip"] == "подключение удалено — выберите модель" and v["off"] is True
+    assert not known_refusals(problems(r), 401), problems(r)
+
+
 #: где токен прямого подключения мог бы остаться на странице
 TOKEN_TRACES = """(names) => { const where = { local: JSON.stringify({ ...localStorage }),
   session: JSON.stringify({ ...sessionStorage }), dom: document.documentElement.outerHTML, cookie: document.cookie };

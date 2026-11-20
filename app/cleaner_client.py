@@ -60,7 +60,7 @@ async def call(conn, method, path, **kwargs):
         raise refused("Cleaner недоступен: данные не отправлены облачной модели", 502) from None
     if not response.is_success:
         # Authentication errors use our words; no credential or provider response is echoed.
-        message = upstream.gateway_error(response, conn.name) if response.status_code in (401, 403) else upstream.message(response)
+        message = upstream.gateway_error(response, conn) if response.status_code in (401, 403) else upstream.message(response)
         raise refused(message or "Cleaner отказал: запрос не отправлен", 502 if response.status_code >= 500 else 409)
     return upstream.json_body(response) if response.status_code != 204 else {}
 
