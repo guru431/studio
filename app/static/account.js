@@ -191,7 +191,7 @@
         if (me.email && email.value.trim().toLowerCase() === me.email) throw new Error(tr("Это и есть почта вашей учётки — укажите новую."));
         const result = await request('/api/me/email', { email: email.value, password: password.value });
         password.value = '';
-        note.className = 'ok'; note.textContent = result.message;
+        note.className = 'ok'; note.textContent = translateMessage(result.message);
       };
     }
     submit = document.createElement('button');

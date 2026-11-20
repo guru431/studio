@@ -168,7 +168,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const workspace = document.getElementById('view');
   const scroller = el('div', { id: 'code-chat-scroll', class: 'code-chat-scroll', tabindex: '0',
     role: 'region', 'aria-label': tr("Лента чата") });
-  const visualizations = visualizationsView(host, { aid, pid, supported: agent.visualizations, images: agent.visualization_images });
+  const visualizations = visualizationsView(host, { aid, pid, supported: agent.visualizations, images: agent.visualization_images,
+    closed });
   const fileLinks = { resolve: (href) => projectFilePath(href, agent, project), open: openFile,
     visualization: visualizations.open };
   let alive = true;
