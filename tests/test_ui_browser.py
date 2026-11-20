@@ -3825,7 +3825,10 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
         # ролик из фото истории — «Промпты»: цепочка фото и промпт ролика последним
         ("click", f"{CLIP} .card-chain"), ("wait", is_open("#chain-dialog")),
-        ("eval", "chain", "[...document.querySelectorAll('#chain-dialog .chain-step .chain-prompt')].map(p => p.textContent)")],
+        ("eval", "chain", "[...document.querySelectorAll('#chain-dialog .chain-step .chain-prompt')].map(p => p.textContent)"),
+        # миниатюра шага-фото открывает эту картинку в «Фото», а не только раздел
+        ("click", "#chain-dialog .chain-step:first-child .chain-open"), ("wait", is_open("#viewer")),
+        ("eval", "stepImage", "document.querySelector('#viewer .viewer-stage img').getAttribute('src')")],
         width=width, height=900, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
@@ -3846,6 +3849,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
         assert words in v["card"], words
     assert re.search(r"\d+:\d\d", v["card"]) and not v["overflow"]
     assert v["chain"] == ["кот 0", combined]
+    assert v["stepImage"] == f"/api/media/{v['source']}"
     assert not problems(r), problems(r)
 
 
