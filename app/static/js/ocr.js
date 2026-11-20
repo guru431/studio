@@ -124,7 +124,8 @@ function build(view, ctx) {
   /* список */
   const paintRows = pickerList(list, { cls: 'ocr-item', moreId: 'ocr-more', empty: tr("Здесь появятся ваши документы"),
     name: (item) => item.name,
-    state: (item) => [tr("{0} стр.", item.pages), serverMessage(item.detail)].filter(Boolean).join(' · '),
+    state: (item) => [tr("{0} стр.", item.pages), serverMessage(item.detail),
+      item.failed_pages ? tr("не распознано: {0}", item.failed_pages) : ''].filter(Boolean).join(' · '),
     pick(id) {
       panel(false);
       picked = true;
@@ -257,6 +258,17 @@ function build(view, ctx) {
   next.addEventListener('click', () => turn(1));
   const note = el('p', {});                                    // слова кончившегося не «готово» документа
   const meta = el('p', { class: 'ocr-meta muted small' });
+  // «не распознано страниц: 3 из 50» и переход к следующей такой странице листалки
+  const failedNo = el('span', {});
+  const toFailed = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-next-failed' }, tr("К нераспознанной"));
+  const failed = el('p', { class: 'ocr-failed small' }, failedNo, toFailed);
+  toFailed.addEventListener('click', () => {
+    const pages = docs.current.pages;
+    const later = [...pages.slice(at + 1), ...pages.slice(0, at + 1)].find((p) => p.state === 'failed');
+    if (!later) return;
+    at = pages.indexOf(later);
+    paintView();
+  });
 
   /** Картинка и текст страницы: та же страница с теми же данными — те же узлы (выделение, декодированная
    * картинка и фокус переживают опрос); картинка меняется только со своим файлом. */
@@ -303,7 +315,7 @@ function build(view, ctx) {
    * нажатия (docs.current: опрос его заменяет). */
   function actions(item) {
     const running = RUNNING.has(item.state);
-    const again = !running && item.state !== 'done' && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed');
+    const again = !running && item.pages.some((p) => p.state === 'waiting' || p.state === 'failed');
     const key = JSON.stringify([item.id, readable(item), again, running]);
     if (acts && acts.key === key) return acts.box;
     const box = el('div', { class: 'tr-acts' });
@@ -322,7 +334,7 @@ function build(view, ctx) {
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
     }
-    if (again) box.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // ошибка или отмена документа
+    if (again) box.append(retryButton(item, 'ocr-retry', tr("Распознать заново")));     // все нераспознанные разом
     const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-rename' }, tr("Переименовать"));
     ren.addEventListener('click', () => rename(docs.current));
     box.append(ren);
@@ -357,7 +369,14 @@ function build(view, ctx) {
     }
     const n = item.pages.length;
     put(meta, `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)}`);
-    nodes.push(meta, actions(item), ...pageView(item));
+    nodes.push(meta);
+    const missed = item.pages.filter((p) => p.state === 'failed').length;
+    if (missed) {
+      put(failedNo, tr("не распознано страниц: {0} из {1}", missed, n));
+      toFailed.hidden = n < 2;
+      nodes.push(failed);
+    }
+    nodes.push(actions(item), ...pageView(item));
     keep(body, nodes);
   }
 

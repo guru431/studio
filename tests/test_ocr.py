@@ -461,6 +461,22 @@ def test_retry_page_recognizes_only_that_page_again(studio):
     assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).json()["detail"]["code"] == "nothing"
 
 
+def test_failed_pages_of_a_done_document_are_counted_and_recognized_again(studio):
+    """05:F6: «готово» с нераспознанными страницами — их число в ленте и в документе; «Распознать заново» у
+    готового повторяет все такие страницы разом."""
+    uid, conn = gateway_user(studio)
+    cut = (200, answer("Обрывок", "length"))
+    studio.gw.ocr_replies = [cut, (200, answer(TEXT)), cut]
+    sid = pdf_scan(studio, uid, conn, "ink", "ink", "ink")
+    assert wait_scan(studio, sid)["state"] == "done"
+    assert studio.c.get(f"/api/ocr/{sid}").json()["failed_pages"] == 2
+    assert studio.c.get("/api/ocr").json()["items"][0]["failed_pages"] == 2
+    assert studio.c.post(f"/api/ocr/{sid}/retry", json={}).status_code == 202
+    assert wait_scan(studio, sid)["state"] == "done"
+    item = studio.c.get(f"/api/ocr/{sid}").json()
+    assert item["failed_pages"] == 0 and [p["state"] for p in item["pages"]] == ["done"] * 3
+
+
 @pytest.mark.parametrize("trouble", ["missing", "unreachable"])
 def test_retry_redraws_a_missing_page_but_not_one_on_an_unreachable_share(studio, monkeypatch, trouble):
     """Ревью R8: «Повторить страницу» рисует PNG заново, только если файла нет; шара не отвечает (OSError) —
@@ -807,8 +823,8 @@ def test_upload_photos_make_one_document_in_order(studio, caplog):
     add_gateway(studio)
     r = post_files(studio, [("a.jpg", photo()), ("b.png", photo("PNG"))])
     assert r.status_code == 202 and r.json()["pages"] == 2 and r.json()["name"] == "a.jpg"
-    assert set(r.json()) == {"id", "name", "state", "detail", "model", "pages", "done_pages", "origin", "created",
-                             "finished"}
+    assert set(r.json()) == {"id", "name", "state", "detail", "model", "pages", "done_pages", "failed_pages", "origin",
+                             "created", "finished"}
     assert (r.json()["origin"], r.json()["model"]) == ("section", "hunyuan-ocr")
     item = wait_ocr(studio, r.json()["id"], {"done"})
     assert [p["n"] for p in item["pages"]] == [1, 2] and all(p["media_id"] for p in item["pages"])

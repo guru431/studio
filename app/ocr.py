@@ -795,9 +795,11 @@ async def stop() -> None:
 # «item» (`_out`), у GET одного документа `pages` — список страниц, а не их число.
 
 router = APIRouter(prefix="/api/ocr")
-#: столбцы ленты и ответов — без `text` (весь текст документа нужен только поиску)
+#: столбцы ленты и ответов — без `text` (весь текст документа нужен только поиску); `failed_pages` — страниц,
+#: которые модель не прочла: «готово» их не скрывает
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, origin, attachment_id, pages, done_pages,"
-           " state, detail, created, finished")
+           " state, detail, created, finished,"
+           " (SELECT count(*) FROM scan_pages p WHERE p.scan_id = scans.id AND p.state = 'failed') AS failed_pages")
 FORMAT = "нужен один PDF или фото PNG, JPEG, WebP"
 TOO_MANY_PAGES = f"больше {ocr_render.PAGES_MAX} страниц — разделите документ"
 PHOTO_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
@@ -814,8 +816,9 @@ def _out(row) -> dict:
     job = JOBS.get(row["id"])
     return {"id": row["id"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
-            "model": row["model"], "pages": row["pages"], "done_pages": row["done_pages"], "origin": row["origin"],
-            "created": row["created"], "finished": row["finished"]}
+            "model": row["model"], "pages": row["pages"], "done_pages": row["done_pages"],
+            "failed_pages": row["failed_pages"], "origin": row["origin"], "created": row["created"],
+            "finished": row["finished"]}
 
 
 def _page_list(sid: str) -> list[dict]:
