@@ -218,8 +218,9 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
   пишутся только с модулем — тест их сверяет; без модуля — только имя.
 - Без реального времени: часы — `clock.NOW`, паузы — `clock.SLEEP`; шлюз — `httpx.MockTransport` (`tests/fakes.py`);
   мост — `tests/fake_bridge.py` (`FakeMachine`, `InProcessBridge`, `SocketBridge`). Тест дольше 1 с — `integration`;
-  `integration`/`manual` — группой `serial`, одним процессом. Обычные тесты назначаются процессу целыми файлами;
-  явные группы имеют приоритет. Срок теста `timeout = 30` (метод `thread`),
+  `manual` — группой `serial`, одним процессом; файл `integration` — группой `lane:<файл>`, целиком в одном
+  процессе, такие файлы — не больше чем в трёх процессах сразу (`LANES` в `tests/conftest.py`). Обычные тесты
+  назначаются процессу целыми файлами; явные группы имеют приоритет. Срок теста `timeout = 30` (метод `thread`),
   `faulthandler_timeout = 20`; `--durations=0 --durations-min=1` в `addopts` — каждый прогон называет тесты дольше 1 с.
 - Браузер — 320 и 1280 px; WebKit — `tests/test_ui_webkit.py` (`playwright install webkit`; с `page.route` —
   `service_workers="block"`).

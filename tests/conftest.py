@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.pytest_support import new_event_loop, strict_skip
+from tools.pytest_support import bind_children, new_event_loop, strict_skip
 
 APP = ROOT / "app"
 CLIENT = ROOT / "client"
@@ -44,7 +44,9 @@ def pytest_make_collect_report(collector):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
-    """Каталоги/очистка pytest Studio не пересекаются с остальными проектами."""
+    """Каталоги/очистка pytest Studio не пересекаются с остальными проектами; дети процесса (браузеры,
+    драйверы) не переживают его аварийное завершение (`bind_children`)."""
+    bind_children()
     if config.option.basetemp is not None or os.environ.get("PYTEST_DEBUG_TEMPROOT"):
         return
     root = ROOT / ".tmp" / ".pytest_cache" / "main"
@@ -100,14 +102,38 @@ def browser(cdp_process):
         yield context
 
 
-@pytest.hookimpl(tryfirst=True)
+#: Сколько процессов xdist одновременно ведут файлы integration (браузер, живая служба, PowerShell).
+LANES = 3
+#: Группа integration-файла: `lane:<имя файла>` — файл целиком в одном процессе, файлы — только на дорожках.
+LANE = "lane:"
+
+
+def _lane_scope(scope: str) -> bool:
+    return scope == "serial" or scope.startswith(LANE)
+
+
+@pytest.hookimpl(wrapper=True)
 def pytest_collection_modifyitems(config, items):
-    """Браузерные, PowerShell и живая приёмка — одной группой xdist: один процесс, по очереди
-    (контекст браузера на тест и карта прода не делятся). Раньше хука xdist: он дописывает группу к id теста
-    в своём хуке того же имени, и метка, поставленная после, до раскладки не доходит."""
+    """Группы xdist: живая приёмка (`manual`) — `serial`, один процесс по очереди (карта прода не делится);
+    файл integration — своя группа `lane:<файл>`: модульные браузер и живая служба остаются в одном процессе,
+    а планировщик ведёт такие файлы не больше чем в `LANES` процессах сразу. Метка ставится до хука xdist:
+    он дописывает группу к id теста. pytest 9.2 хранит id в `_id`, и запись xdist в `_nodeid` теряется —
+    тогда суффикс дописывается здесь же, после всех хуков, тем же форматом `@группа`."""
     for item in items:
-        if item.get_closest_marker("integration") or item.get_closest_marker("manual"):
+        if item.get_closest_marker("manual"):
             item.add_marker(pytest.mark.xdist_group("serial"))
+        elif item.get_closest_marker("integration") and not item.get_closest_marker("xdist_group"):
+            item.add_marker(pytest.mark.xdist_group(LANE + item.path.name))
+    result = yield
+    if getattr(config.option, "loadgroup", False):
+        for item in items:
+            groups = sorted({str(m.args[0] if m.args else m.kwargs.get("name", "default"))
+                             for m in item.iter_markers("xdist_group")})
+            suffix = "@" + "_".join(groups)
+            if groups and not item.nodeid.endswith(suffix):
+                from _pytest.nodeid import NodeId
+                item._id = NodeId.parse(item.nodeid + suffix)
+    return result
 
 
 def pytest_xdist_make_scheduler(config, log):
@@ -116,23 +142,50 @@ def pytest_xdist_make_scheduler(config, log):
     «crashed while running»). Штатный LoadScopeScheduling.remove_node возвращает в очередь и сам упавший тест: он
     валит процесс снова и снова до предела перезапусков (4 × число процессов), по 30 с каждый, — так быстрый набор
     шёл дольше 15 минут и «не прерывался» сроком (опыт 2026-10-29: четыре зависших теста — 18 падений и 46 с
-    против четырёх и 5 с). Здесь упавший — один раз, прочие недоделанные — снова в очередь, как у xdist."""
+    против четырёх и 5 с). Здесь упавший — один раз, прочие недоделанные — снова в очередь, как у xdist.
+    Группы `serial` и `lane:<файл>` берут только дорожки — не больше `LANES` процессов; остальные процессы
+    ведут быстрые файлы и, когда подходящей им работы не осталось, завершаются."""
     if config.getoption("dist") != "loadgroup":
         return None
     from xdist.scheduler import LoadGroupScheduling
 
     class Once(LoadGroupScheduling):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.lanes = set()
+
         def _split_scope(self, nodeid):
             scope = super()._split_scope(nodeid)
-            # Keep explicit groups (serial/docs); batch the other tests by file.
+            # Keep explicit groups (serial/docs/lane); batch the other tests by file.
             return nodeid.split("::", 1)[0] if scope == nodeid else scope
+
+        def _suitable(self, node):
+            # Дорожка сперва берёт integration-файлы: они держат срок прогона; быстрые — остальным процессам.
+            lane = node in self.lanes or len(self.lanes) < LANES
+            ordered = sorted(self.workqueue, key=lambda scope: not _lane_scope(scope)) if lane else self.workqueue
+            return next((scope for scope in ordered if lane or not _lane_scope(scope)), None)
+
+        def _assign_work_unit(self, node):
+            scope = self._suitable(node)
+            if scope is None:
+                return
+            if _lane_scope(scope):
+                self.lanes.add(node)
+            self.workqueue.move_to_end(scope, last=False)
+            super()._assign_work_unit(node)
 
         def _reschedule(self, node):
             # Замена уже есть в assigned_work, но её коллекция может прийти после других событий.
-            if node in self.registered_collections:
-                super()._reschedule(node)
+            if node not in self.registered_collections or node.shutting_down:
+                return
+            if self.workqueue and self._suitable(node) is None:
+                if not self._pending_of(self.assigned_work[node]):
+                    node.shutdown()
+                return
+            super()._reschedule(node)
 
         def remove_node(self, node):
+            self.lanes.discard(node)
             workload = self.assigned_work.pop(node)
             pending = [(scope, nid) for scope, unit in workload.items() for nid, done in unit.items() if not done]
             if not pending:
