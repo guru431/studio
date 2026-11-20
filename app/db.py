@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 52
+VERSION = 53
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -682,6 +682,21 @@ UPDATE search_docs SET model = (SELECT s.model FROM speeches s WHERE s.id = sear
 """
 SCHEMA += SPEECH_52
 
+#: «непрочитано» «Агентов» — у каждой учётки своё (code_attention.py): просмотренная ревизия завершения по
+#: пользователю; общий `code_attention.seen` переходит владельцу и участникам проекта и дальше пишется для отката
+CODE_53 = """CREATE TABLE code_attention_seen(
+       agent_id INTEGER NOT NULL, chat TEXT NOT NULL,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       revision TEXT NOT NULL, PRIMARY KEY(agent_id, chat, user_id),
+       FOREIGN KEY(agent_id, chat) REFERENCES code_attention(agent_id, chat) ON DELETE CASCADE);
+INSERT INTO code_attention_seen(agent_id, chat, user_id, revision)
+SELECT c.agent_id, c.chat, a.user_id, c.revision FROM code_attention c JOIN agents a ON a.id = c.agent_id
+ WHERE c.seen = 1
+UNION SELECT c.agent_id, c.chat, m.user_id, c.revision FROM code_attention c
+  JOIN project_members m ON m.agent_id = c.agent_id AND m.project = c.project WHERE c.seen = 1;
+"""
+SCHEMA += CODE_53
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -791,6 +806,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     51: NOTIFY_LANG_51,
     # озвучка: время постановки в очередь, прежний звук на время повторной озвучки, модель в поиске
     52: SPEECH_52,
+    # «непрочитано» «Агентов» — у каждой учётки своё
+    53: CODE_53,
 }
 
 
