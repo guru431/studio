@@ -101,8 +101,8 @@ Linux или macOS сохраняется. Если файлы существу�
 `hello.attachments` — произвольные `{name,mime,data}` через `Turn.attachments`, 8 файлов вместе с images,
 10 МиБ/файл и 30 МиБ суммарно с `hello.large_attachments` (мост 0.22.1+); без него — 5/8 МиБ.
 Файлы живут в приватном temp машины до disconnect CLI.
-`hello.project_activity` — `GET …/agents/<aid>/activity` → op `activity`, только project/chat/engine/running/asking
-всех трёх Runner, без истории. `hello.subscription_usage` — `GET …/agents/<aid>/usage?engine=…&refresh=…`,
+`hello.project_activity` — op `activity`, только project/chat/engine/running/asking всех трёх Runner, без
+истории; шлёт её только сводка `GET /api/code/activity` (маршрута на один компьютер нет). `hello.subscription_usage` — `GET …/agents/<aid>/usage?engine=…&refresh=…`,
 `code_usage.py` фильтрует ответ, `subscription.py` кэширует 60 с и объединяет одновременные проверки.
 `GET /api/code/activity` добавляет названия из `chats` моста и непрочитанные завершения. В «В работе»
 и панели проектов — работающие сессии, требующие действия и завершённые непрочитанные, с названиями

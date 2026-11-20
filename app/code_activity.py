@@ -7,7 +7,7 @@ import bridge
 import code_attention
 import state
 import project_access
-from claude_code import _refuse, ask, open_without_pin, own_agent
+from claude_code import ask, open_without_pin
 
 router = APIRouter(prefix="/api/code")
 SUMMARY_TIMEOUT = 5
@@ -84,12 +84,3 @@ async def all_activity(request: Request):
             return {"aid": aid, "items": []}
 
     return {"items": await asyncio.gather(*(read(agent) for agent in agents))}
-
-
-@router.get("/agents/{aid}/activity")
-async def activity(request: Request, aid: int):
-    own_agent(request, aid, shared=True)
-    link = bridge.LINKS.get(aid)
-    if link is not None and not link.hello.get("project_activity"):
-        raise _refuse(409, "unsupported", "обновите мост для статусов проектов")
-    return await ask(request, aid, "activity")
