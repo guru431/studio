@@ -171,7 +171,9 @@ Studio (он публикуется), на хосте Spark в своём кат
 - разделы (ревью Codex: страница прячет инструмент с обязательным полем, которого нет в форме раздела, —
   `mcp-sections.js`): инструменты aitools не переопределяются, обёртка добавляет свои с полями форм Studio —
   «Фото» — `image_generate(prompt, size, n, seed)` без `model` (модель — выбор администратора на панели Spark),
-  «Видео» — `video_create(artifact_id, prompt, seconds, seed)` (aitools `animate_image`), «Сканы» — `ocr_image(artifact_id)`:
+  «Видео» — `video_create(artifact_id, prompt, seconds, seed)` (aitools `animate_image`), «Расшифровка» —
+  `audio_transcribe(artifact_id, language, speakers)` (aitools `transcribe`; текст результата — первый `.txt`/`.md`
+  задания, рядом `.txt` и `.srt` файлами; добавлено 2026-11-21 по просьбе владельца), «Сканы» — `ocr_image(artifact_id)`:
   Studio передаёт MCP одну картинку (PNG), документы через разделы не идут — только в чате инструментами aitools
   по пути; остальные инструменты aitools — для чата как есть;
 - граница папки учётки — в обёртке, не только `AITOOLS_WORKSPACE`: аргументы-пути (`path`, `paths`, `video`,
