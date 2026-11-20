@@ -955,7 +955,7 @@ export function mount(node, context) {
     const first = [pinFor, pid ? null : aid, ws.panel, aid, ws.place && ws.place.aid].map(Number)
       .find((n) => Number.isInteger(n) && n > 0);
     panel = panelView(ui.root, { selected: first ?? null, opened, initialAgents,
-      chose: () => panelOpen(false), list: projectsOf, openJournal: (path) => proj?.files?.open(path) });
+      chose: () => panelOpen(false), list: projectsOf, openJournal: (path) => { const files = proj?.files; files?.leave(() => files.open(path)); } });
     ui.root.prepend(ui.root.querySelector('#code-panel'));
     const shown = panel;
     panel.agents().then((items) => {
