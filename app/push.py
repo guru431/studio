@@ -264,7 +264,12 @@ def job_finished(table: str, item_id: str) -> None:
                             " WHERE n.user_id = j.user_id AND n.enabled = 1 AND s.expires > ?))",
                             (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
-        notify_later(row["user_id"], done if row["state"] == "done" else error,
+        ok = row["state"] == "done"
+        if ok and table == "scans":            # «готовый» документ, где не прочитана ни одна страница, — не готов
+            ok = state.DB.execute("SELECT NOT EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = ? AND state = 'failed')"
+                                  " OR EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer'))",
+                                  (item_id, item_id)).fetchone()[0]
+        notify_later(row["user_id"], done if ok else error,
                      f"{section}?id={item_id}", item_id, title=STUDIO, quiet=True)
 
 

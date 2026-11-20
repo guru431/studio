@@ -3956,6 +3956,40 @@ def test_new_media_models_are_selectable_and_h3_controls_match_its_graph(browser
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [390, 1280])
+def test_video_preview_drops_far_clips_and_restores_them(browser, live, width):
+    """03:F13: длинная история в «Превью» — у карточек дальше нескольких экранов плеер без `src` (буфер и декодер
+    отданы), у видимых `src` есть; при возврате наверх `src` прежний снова на месте."""
+    login = f"vfar{width}"
+    uid = live.add_user(login)
+    now = time.time()
+    for n in range(30):
+        live_sql(live, "INSERT INTO videos(id, user_id, connection_id, source_media_id, media_id, prompt, seconds,"
+                       " quality, smooth, state, progress, detail, created, finished) VALUES (?, ?, 1, 'nope', ?, '',"
+                       " 5, 'standard', 1, 'done', 100, '', ?, ?)", (f"vd-far{width}-{n:02}", uid, f"m-far{n:02}",
+                                                                    now - 600 + n, now - 500 + n))
+    first, last = f"{CLIP}[data-id=vd-far{width}-29] video", f"{CLIP}[data-id=vd-far{width}-00] video"
+    scroll = "(() => {{ const f = document.querySelector('#video-feed'); f.scrollTop = {0}; return true; }})()"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("video"), ("wait", VIDEO_FEED_READY),
+        ("wait", f"document.querySelectorAll('{CLIP} video').length === 30"),
+        ("wait", f"document.querySelector('{first}').hasAttribute('src')"),
+        ("eval", "src", f"document.querySelector('{first}').getAttribute('src')"),
+        ("eval", "farAtStart", f"!document.querySelector('{last}').hasAttribute('src')"),
+        ("eval", "down", scroll.format("f.scrollHeight")),
+        ("wait", f"!document.querySelector('{first}').hasAttribute('src')"),
+        ("wait", f"document.querySelector('{last}').hasAttribute('src')"),
+        ("eval", "up", scroll.format("0")),
+        ("wait", f"document.querySelector('{first}').hasAttribute('src')"),
+        ("eval", "back", f"document.querySelector('{first}').getAttribute('src')"),
+        ("eval", "poster", f"document.querySelector('{first}').getAttribute('poster')")], width=width, height=900,
+        mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["src"] == v["back"] == "/api/media/m-far29" and v["poster"] == "/api/media/nope?thumb=1"
+    assert v["farAtStart"] is True
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
 def test_video_feed_shows_progress_and_survives_reload(browser, live, ready_clips):
     login = "vreload"
     live.add_user(login)
