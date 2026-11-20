@@ -28,6 +28,7 @@ import account_mail
 import bridge
 import clock
 import connections
+import db
 import email_accounts
 import history
 import images
@@ -197,6 +198,7 @@ async def _delete_user(uid: int, admin: auth.User):
     if not await images.settle_user(uid):
         log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)
     pending = media.pending(uid)          # после ожидания: и файлы заданий, отменённых в это время
+    db.retire_user_id(state.DB, uid)      # id не достанется следующей учётке вместе с хвостами этой
     state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))   # сессии и подключения — каскадом
     log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
              admin.id, uid, pending)

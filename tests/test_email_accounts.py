@@ -73,6 +73,31 @@ def test_invitation_registers_verified_email_and_self_selected_credentials(studi
         assert private not in caplog.text
 
 
+def accept(studio, mail, email, name):
+    studio.c.cookies.clear()
+    secret = token(mail)
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": name, "password": PASSWORD}).status_code == 201
+    signin(studio, "owner")
+    return state.DB.execute("SELECT id FROM users WHERE login=?", (name,)).fetchone()[0]
+
+
+def test_deleted_account_id_is_never_given_to_the_next_account(studio, mail):
+    """users.id без AUTOINCREMENT: удалённая последней учётка отдала бы свой id новой — с хвостами (очереди
+    удаления, Cleaner, паузы почты, каталог u<id>/). Новый id — после всех бывших, и после хвостов прежних удалений."""
+    admin(studio)
+    invite(studio, mail, email="bob@example.com")
+    bob = accept(studio, mail, "bob@example.com", "bob")
+    state.DB.execute("INSERT INTO cleaner_deletions(id,user_id,remote_id,base_url,token_enc,queued)"
+                     " VALUES ('c1',?,'r','https://cleaner.bob.example',x'00',0)", (bob,))
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    state.DB.execute("DELETE FROM cleaner_deletions")              # хвоста нет — счёт держит settings
+    invite(studio, mail, email="carol@example.com")
+    carol = accept(studio, mail, "carol@example.com", "carol")
+    assert carol == bob + 1
+    state.DB.execute("INSERT INTO purge(media_id,user_id,rel_path,queued) VALUES ('m1',?,'u/x',0)", (carol + 5,))
+    assert db.next_user_id(state.DB) == carol + 6                    # хвост удаления, сделанного до учёта
+
+
 def test_account_letters_are_bilingual_russian_and_english(studio, mail):
     """Язык интерфейса сервер не знает: каждое письмо учётки — по-русски и по-английски, ссылка или код — один раз."""
     uid = admin(studio)
