@@ -775,3 +775,22 @@ def test_feed_page_keeps_rows_of_the_same_time_at_its_edge(studio, table):
     rest = studio.c.get(f"{url}&before={last['created']}&before_id={last['id']}").json()["items"]
     assert [x["id"] for x in rest] == [a, old]
     assert [x["id"] for x in studio.c.get(f"{url}&before={last['created']}").json()["items"]] == [old]
+
+
+@pytest.mark.parametrize("table", ["images", "videos"])
+def test_feed_page_after_a_record_gives_its_newer_neighbours(studio, table):
+    """Просмотр записи вне загруженной ленты (поиск, цепочка) листает от неё: after=<created>&after_id=<id> —
+    ближайшие более новые, в порядке ленты, без чтения всей ленты до неё (03:F12)."""
+    from conftest import T0, make_user, signin
+    uid = make_user(studio, "owner")
+    other = make_user(studio, "bob")
+    signin(studio, "owner")
+    a, b, c, d, new = "a" * 32, "b" * 32, "c" * 32, "d" * 32, "e" * 32
+    for row_id, created in ((a, T0 - 2), (b, T0), (c, T0), (d, T0), (new, T0 + 1)):
+        state.DB.execute(FEED_ROWS[table], (row_id, uid, created))
+    state.DB.execute(FEED_ROWS[table], ("f" * 32, other, T0 + 1))
+    url = f"/api/{table}?limit=2&after={T0}&after_id={b}"
+    assert [x["id"] for x in studio.c.get(url).json()["items"]] == [d, c]
+    url = f"/api/{table}?limit=5&after={T0}&after_id={b}"
+    assert [x["id"] for x in studio.c.get(url).json()["items"]] == [new, d, c]
+    assert studio.c.get(f"/api/{table}?after={T0}").status_code == 422          # курсор — только парой
