@@ -49,9 +49,14 @@ def test_ready_part_plays_while_the_speech_runs(browser, live, width):
 def test_voice_probe_plays_a_short_phrase(browser, live, width):
     login = f"probe{width}"
     live.add_user(login)
+    before = len(live.gw.tts_requests)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), add_voice(),
         *go("settings/speech"), ("wait", "document.querySelector('.voice .voice-probe')"),
         ("click", ".voice .voice-probe"), ("wait", is_open("#voice-probe-dialog")),
+        ("wait", "document.querySelector('#voice-probe-model option')"),
+        ("eval", "pick", "(() => { const s = document.querySelector('#voice-probe-model');"
+                         " s.value = [...s.options].find(o => o.value.endsWith(':f5-tts')).value;"
+                         " return !s.closest('.field').hidden; })()"),
         ("click", "#voice-probe-go"),
         ("wait", "!document.querySelector('#voice-probe-audio').hidden"),
         ("eval", "src", "document.querySelector('#voice-probe-audio').src.slice(0, 5)"),
@@ -59,8 +64,9 @@ def test_voice_probe_plays_a_short_phrase(browser, live, width):
         ("click", "#voice-probe-dialog .dialog-close"), ("wait", f"!{is_open('#voice-probe-dialog')}")],
         width=width, height=900, mobile=width == 320)
     assert not r.get("failed"), r
-    assert r["values"]["src"] == "blob:" and r["values"]["fits"]
+    assert r["values"]["src"] == "blob:" and r["values"]["fits"] and r["values"]["pick"]
     assert any(s.startswith("POST /api/voices/") and s.endswith("/probe") for s in r["sent"])
+    assert [q.url.path for q in live.gw.tts_requests[before:]] == ["/speech/tts-f5"]      # выбранная модель шлюза
     assert not problems(r), problems(r)
 
 

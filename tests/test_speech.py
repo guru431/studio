@@ -163,6 +163,37 @@ def test_external_service_speaks_openai(studio, monkeypatch, tmp_path):
     assert studio.gw.releases == []                         # карты студии у внешнего сервиса нет
 
 
+def test_external_transcription_falls_back_to_json_for_models_without_segments(studio, monkeypatch, tmp_path):
+    """gpt-4o-transcribe и gpt-4o-mini-transcribe не принимают `verbose_json` (400): запись расшифровывается
+    повтором с `json` — одной репликой без времени; другой отказ после повтора — словами сервиса."""
+    add_gateway(studio)
+    conn = conn_of(cloud(studio, monkeypatch))
+    seen = []
+
+    async def transcriptions(q):
+        seen.append(q)
+        if b"verbose_json" in q.content:
+            return httpx.Response(400, json={"error": {"message": "response_format 'verbose_json' is not compatible",
+                                                       "param": "response_format"}})
+        return httpx.Response(200, json={"text": " целиком "})
+    studio.gw.on["/v1/audio/transcriptions"] = transcriptions
+    f = tmp_path / "a.mp3"
+    f.write_bytes(b"ID3fake")
+    segs = asyncio.run(speech.transcribe(conn, "gpt-4o-transcribe", f, "audio/mpeg"))
+    assert [(s.speaker, s.text, s.start) for s in segs] == [(None, "целиком", 0.0)]
+    assert [b"verbose_json" in q.content for q in seen] == [True, False]
+    assert b"\r\n\r\njson\r\n" in seen[1].content
+
+    async def refused(q):
+        seen.append(q)
+        return httpx.Response(400, json={"error": {"message": "плохой файл"}})
+    studio.gw.on["/v1/audio/transcriptions"] = refused
+    seen.clear()
+    with pytest.raises(speech.SpeechError) as e:
+        asyncio.run(speech.transcribe(conn, "whisper-1", f, "audio/mpeg"))
+    assert "плохой файл" in str(e.value) and len(seen) == 2
+
+
 def test_ffmpeg_gets_no_environment_of_the_service(monkeypatch):
     """ffmpeg разбирает загруженные записи: окружения службы (STUDIO_DATA_KEY) он не видит, как yt-dlp и md2pdf."""
     import audio
