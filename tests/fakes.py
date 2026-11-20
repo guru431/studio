@@ -385,6 +385,7 @@ class FakeCloud:
         self.models_auth = []            # заголовки авторизации /v1/models
         self.chunk_pause = 0.05          # пауза между кусками: браузер видит поток, а не готовый ответ
         self.chat_ending = "stop"        # finish_reason конца потока; None — поток рвётся без него и без [DONE]
+        self.chat_error = None           # (код, тело) вместо ответа /v1/chat/completions
         cloud = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -429,6 +430,8 @@ class FakeCloud:
                 if not self._authorized():
                     return
                 cloud.chat_requests.append(body)
+                if cloud.chat_error is not None:
+                    return self._json(*cloud.chat_error)
                 if not body.get("stream"):
                     return self._json(200, {"choices": [{"message": {"role": "assistant",
                                                                      "content": "".join(cloud.chat_reply)},

@@ -312,10 +312,20 @@ async function tokenFor(connId, url) {
   return fresh.token;
 }
 
-async function serviceRefusal(response) {
+/* 400 с именем отправленного параметра профиля подключения — слова profiles.REFUSED, как у хода через сервер */
+async function serviceRefusal(response, params) {
+  let text = '';
+  try {
+    text = await response.text();
+  } catch {
+    // тело не прочиталось — без подробностей
+  }
+  const lowered = text.toLowerCase();
+  const refused = response.status === 400 && Object.keys(params || {}).find((name) => lowered.includes(name));
+  if (refused) return tr("подключение не принимает параметр «{0}» — уберите его в профиле подключения", refused);
   let detail = '';
   try {
-    const error = (await response.json()).error;
+    const error = JSON.parse(text).error;
     detail = String((error && error.message) || error || '').slice(0, 300);
   } catch {
     // не JSON — без подробностей
@@ -339,13 +349,13 @@ async function readBrowser(job, turn) {
     try {
       response = await fetch(turn.url, { method: 'POST', signal: job.controller.signal,
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: turn.model, messages: turn.messages, stream: true }),
+        body: JSON.stringify({ ...(turn.params || {}), model: turn.model, messages: turn.messages, stream: true }),
         credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
     } catch (err) {
       throw err instanceof TypeError ? new Error(CORS) : err;
     }
     if (response.status === 401 || response.status === 403) tokens.delete(job.connId);
-    if (!response.ok) throw new Error(await serviceRefusal(response));
+    if (!response.ok) throw new Error(await serviceRefusal(response, turn.params));
     // конец ответа — [DONE] или finish_reason; поток без них (обрыв, HTML вместо потока, пустой
     // ответ) — ошибка, а не готовый ответ; `length` — обрезан пределом длины модели
     let ending = null;
