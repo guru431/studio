@@ -579,6 +579,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tl-status { display: inline-flex; align-items: center; gap: var(--space-4); margin: 0; overflow-wrap: anywhere; }
 .tl-status:empty { display: none; }
 .tl-status .ring { width: 16px; height: 16px; border-width: 2px; flex: none; }
+.tl-status.warn, .tl-meta.warn { color: var(--warn); }
 .tl-error { margin: 0; }
 .tl-error:empty { display: none; }
 .tl-past h2 { margin: var(--space-2) 0 var(--space-3); font-size:var(--fs-base); font-weight: 600; }

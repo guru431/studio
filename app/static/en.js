@@ -1945,6 +1945,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Удалятся исходник и перевод, а исходный файл — если его не использует повтор этого перевода.": "Source and translation will be deleted, along with the original file if it is not used by a repeat translation.",
   "Распознанный документ останется в «Сканах»: его использует повтор этого перевода.": "The recognized document will remain in Scans: a repeat translation uses it.",
   "Распознанный документ в «Сканах» удалится вместе с переводом.": "The recognized document in Scans will be deleted with the translation.",
+  "Открыть в «Сканах»": "Open in Scans",
   "Удалить перевод": "Delete translation",
   "Не получилось": "Could not complete",
   "Установите агент на компьютер, который хотите подключить к Студии.": "Install the agent on the computer you want to connect to Studio.",

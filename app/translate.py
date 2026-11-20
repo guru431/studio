@@ -24,7 +24,8 @@
 6. Файл (спека 6.4) — PDF, DOCX, TXT, MD: текст `documents.extract`, файл — в `media`. PDF со страницами без слоя
    при подключении «Сканов» через сервер (`ocr.plan_pages`) — обычный документ «Сканов» (`origin` section, тот же
    файл) в очереди распознавания пользователя, запись — без исходника, со `scan_id`. Её задание (`_await_scan`)
-   ждёт скан раз в POLL_SEC (этап — страницы), берёт его текст (`ocr.attachment_text`) в исходник и куски и
+   ждёт скан раз в POLL_SEC (этап — страницы), берёт его текст (`_scan_source`: без пометок нераспознанных —
+   их число итогом записи «не распознано страниц: k из n», `_missing`) в исходник и куски и
    зовёт модель только после `ocr.idle`: карту освобождает раннер «Сканов» (`free_card`, `_settle`), и модель
    перевода иначе ждала бы её под арендой слота ocr. Скан удалён, с ошибкой, отменён или без единой страницы с
    текстом — ошибка записи «скан не распознан: …»; «Остановить» во время ожидания отменяет и скан. PDF со
@@ -37,8 +38,8 @@
    координат — ошибка NO_BOXES (повтор может помочь). Модель — после
    `ocr.idle`. Блоки переводятся пачками соседних до CHUNK_CHARS одним нумерованным запросом (`_blocks`); номера
    вернулись не все — каждый блок пачки отдельно.
-8. Повтор (спека 6.2) — новая запись из прежней: исходник известен — он же (у снимка — блоки с рамками), без
-   нового распознавания; нет, но скан готов — его текст; иначе файл с шары проходит путь загрузки заново.
+8. Повтор (спека 6.2) — новая запись из прежней: скан записи готов — его текст сейчас; иначе исходник известен —
+   он же (у снимка — блоки с рамками), без нового распознавания; иначе файл с шары проходит путь загрузки заново.
    Выгрузка — txt и docx перевода (docx через `md_plain` — только у перевода скана: прочее — не Markdown).
 9. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
    событий.
@@ -100,8 +101,10 @@ NAME_CHARS = 60                 # имя текстовой записи — н�
 HEAD_CHARS = 200                 # начало исходника и перевода в ленте
 #: полоса → виды записей в ней
 LANES = {"text": ("text",), "file": ("file", "photo")}
-#: заголовок страницы исходника скана (`ocr.attachment_text`): определению языка — не текст документа
-_PAGE_HEAD = re.compile(r"^Страница \d+\n\n", re.M)
+#: заголовок страницы исходника скана (`ocr.attachment_text`): определению языка — не текст документа; его номер —
+#: какие страницы скана в исходнике есть (`_missing`)
+_PAGE_HEAD = re.compile(r"^Страница (\d+)\n\n", re.M)
+UNREAD = "не распознано страниц: {} из {}"
 
 log = logging.getLogger("studio")
 
@@ -387,13 +390,33 @@ async def _await_scan(job: Job, row):
     unread = _unread(sid)
     if unread is not None:
         raise translate_text.TranslateError(f"{SCAN_FAILED}: {unread}")
-    source = translate_text.normalize(ocr.attachment_text(sid))
+    source = _scan_source(sid)
     if len(source) > translate_text.TEXT_MAX:
         raise translate_text.TranslateError(TOO_LONG)
     rows = _chunks(source)
     _set_source(job, source, rows)
     log.info("перевод %s: скан готов, %d знаков, %d кусков", job.id[:8], len(source), len(rows))
     return await _await_idle(job)
+
+
+def _scan_source(sid: str) -> str:
+    """Исходник из готового скана: страницы с текстом под «Страница N», без пометок нераспознанных (`_missing`)."""
+    return translate_text.normalize(ocr.attachment_text(sid, marks=False))
+
+
+def _missing(row) -> "str | None":
+    """Итог записи скана словами UNREAD: страницы скана с текстом или отказом, которых нет в её исходнике (по
+    заголовкам `_PAGE_HEAD`) — не распознаны или дораспознаны после («Повторить страницу»: их возьмёт повтор
+    записи). Всё на месте, скан удалён — None (итог DONE)."""
+    if row["scan_id"] is None or row["source"] is None:
+        return None
+    scan = state.DB.execute("SELECT pages FROM scans WHERE id = ?", (row["scan_id"],)).fetchone()
+    if scan is None:
+        return None
+    present = {int(n) for n in _PAGE_HEAD.findall(row["source"])}
+    missing = sum(p["n"] not in present for p in state.DB.execute(
+        "SELECT n FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer', 'failed')", (row["scan_id"],)))
+    return UNREAD.format(missing, scan["pages"]) if missing else None
 
 
 def _unread(sid: str) -> "str | None":
@@ -561,7 +584,7 @@ async def _blocks(job: Job, waiting: list, parts: int, origin: str, lang: str) -
 
 async def _translate(job: Job, row) -> "str | None":
     """Куски `waiting` по порядку; отказ куска — ошибка записи с его номером. Итог — слова «готово» иные, чем
-    DONE (снимок без текста), или None."""
+    DONE (снимок без текста, нераспознанные страницы скана — `_missing`), или None."""
     if row["source"] is None:
         row = await (_await_scan(job, row) if row["scan_id"] is not None else _spot(job, row))
         if row is None:
@@ -579,7 +602,7 @@ async def _translate(job: Job, row) -> "str | None":
     for part in waiting:                         # у снимка контекста нет: блоки — отдельные надписи
         await _part(job, part["n"], part["source"], row["parts"], origin, lang,
                     _context(job, part["n"], part["source"]))
-    return None
+    return _missing(row)
 
 
 async def run(job: Job) -> None:
@@ -821,7 +844,9 @@ def _out(row) -> dict:
             "detected_lang": row["detected_lang"], "result_lang": row["result_lang"], "parts": row["parts"],
             "done_parts": row["done_parts"], "created": row["created"], "finished": row["finished"],
             "source_head": heads[0], "text_head": heads[1], "can_continue": _can_continue(row),
-            "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"])}
+            "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"]),
+            # «готово», но не всё: нераспознанные страницы скана (UNREAD), снимок без текста (NO_TEXT)
+            "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None}
 
 
 def _name(text: str) -> str:
@@ -1060,29 +1085,31 @@ async def continue_(tid: str, request: Request):
 
 @router.post("/{tid}/repeat", status_code=202)
 async def repeat(tid: str, body: RepeatIn, request: Request):
-    """Новая запись из прежней — тот же вид, имя и файл, свои языки и модель; прежняя не меняется. Исходник
-    известен — он же (у снимка — блоки с рамками), без нового распознавания; нет, но скан записи готов — его
-    текст, тоже без распознавания; иначе (скан не распознан) — файл с шары проходит путь загрузки, скан — новым
-    документом «Сканов». Файла нет — 409 gone."""
+    """Новая запись из прежней — тот же вид, имя и файл, свои языки и модель; прежняя не меняется. Скан записи
+    готов — его текст сейчас (страницы могли дораспознать), без распознавания; нет — известный исходник (у снимка —
+    блоки с рамками); иначе (скан не распознан) — файл с шары проходит путь загрузки, скан — новым документом
+    «Сканов». Файла нет — 409 gone."""
     uid = request.state.user.id
     row = _row(uid, tid)
     _langs(body.source_lang, body.target_lang)
     conn, model = sections.resolve(uid, "translate", body.connection_id, body.model)
     langs = {"source_lang": body.source_lang, "target_lang": body.target_lang}
     media_id = row["source_media_id"]
-    if row["has_source"]:
+    if _scan_done(uid, row["scan_id"]):
+        # скан готов — его текст сейчас, без распознавания: страницы могли дораспознать («Повторить страницу»), а
+        # перевод — не дойти до кусков
+        source = _scan_source(row["scan_id"])
+        if len(source) > translate_text.TEXT_MAX:
+            raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
+        new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
+                     scan_id=row["scan_id"], **langs)
+        kick(uid, lane_of(row["kind"]))
+    elif row["has_source"]:
         source = state.DB.execute("SELECT source FROM translations WHERE id = ?", (tid,)).fetchone()[0]
         blocks = [{"source": p["source"], "box": json.loads(p["box"])} for p in state.DB.execute(
             "SELECT source, box FROM translation_parts WHERE translation_id = ? AND box IS NOT NULL ORDER BY n", (tid,))]
         new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
                      scan_id=row["scan_id"], blocks=blocks or None, **langs)
-        kick(uid, lane_of(row["kind"]))
-    elif _scan_done(uid, row["scan_id"]):            # скан распознан, перевод не дошёл до кусков — без нового
-        source = translate_text.normalize(ocr.attachment_text(row["scan_id"]))
-        if len(source) > translate_text.TEXT_MAX:
-            raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
-        new = create(uid, conn, model, kind=row["kind"], name=row["name"], source=source, source_media_id=media_id,
-                     scan_id=row["scan_id"], **langs)
         kick(uid, lane_of(row["kind"]))
     else:
         if media_id is None or not media.alive(uid, media_id):
