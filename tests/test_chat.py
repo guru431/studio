@@ -6,6 +6,7 @@ import io
 import json
 import logging
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -378,6 +379,21 @@ def test_images_go_as_image_url_parts_up_to_four(studio):
     assert est == 4 + 4000                                                       # ceil(12 / 3) + 1000 × 4
 
 
+def test_photo_is_recognized_by_content_and_refusals_name_photos(studio):
+    """02:F11: JPEG с расширением `.jfif` и PNG без расширения — фото; GIF и HEIC — отказ, называющий и фото."""
+    add_gateway(studio)
+    jpeg = io.BytesIO()
+    Image.new("RGB", (8, 8), "blue").save(jpeg, "JPEG")
+    for name, data in (("scan.jfif", jpeg.getvalue()), ("снимок", png())):
+        out = attach(studio, name, data)
+        assert out["kind"] == "image" and out["name"] == name
+    gif = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(gif, "GIF")
+    for name, data in (("photo.gif", gif.getvalue()), ("IMG_0001.HEIC", b"\0\0\0\x18ftypheic")):
+        r = studio.c.post("/api/attachments", files={"file": (name, data, "image/heic")})
+        assert r.status_code == 422 and r.json()["detail"]["message"] == "поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"
+
+
 @pytest.mark.integration  # восемь файлов и два полных хода: > 1 с под нагрузкой набора
 def test_images_are_capped_across_the_whole_request(studio):
     """Два хода по четыре фото с ответом между ними: предел MAX_IMAGES — на весь запрос, а не на
@@ -686,6 +702,39 @@ def test_compose_merges_user_messages_left_without_an_answer(studio):
     assert {p["text"] for p in last[1:3]} == {chat.DROPPED}
 
 
+def test_photo_refused_by_the_model_does_not_lock_the_dialog(studio):
+    """02:F4: фото ушло модели без зрения — шлюз 400, ответ-ошибка без слова. Следующий ход той же модели фото не
+    несёт (пометка REFUSED), «Ответить заново» — несёт, другая модель — тоже."""
+    add_gateway(studio); cid = new_chat(studio)
+
+    async def blind(request):
+        body = json.loads(request.content)
+        if any(isinstance(m["content"], list) and any(p["type"] == "image_url" for p in m["content"])
+               for m in body["messages"]):
+            studio.gw.chat_requests.append(body)
+            return httpx.Response(400, json={"error": {"message": "model does not support image input"}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/chat/completions"] = blind
+    pic = attach(studio, "кот.jpg", png(), "image/jpeg")
+    events = sse(turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]))
+    assert events[-1][0] == "error"
+    sse(turn(studio, cid, "Тогда просто привет"))
+    sent = studio.gw.chat_requests[-1]["messages"][1:]
+    assert sent == [{"role": "user", "content": chat.REFUSED.format("кот.jpg") + "\nЧто на фото?\n\nТогда просто привет"}]
+    assert [m["status"] for m in messages(studio, cid)] == ["done", "error", "done", "done"]
+    # ход, чьё фото отклонено, переспрошен: «Ответить заново» снова несёт его фото
+    other = new_chat(studio)
+    pic = attach(studio, "пёс.jpg", png(), "image/jpeg")
+    sse(turn(studio, other, "А тут?", attachment_ids=[pic["id"]]))
+    sse(turn(studio, other, "", regenerate=True))
+    assert [p["type"] for p in studio.gw.chat_requests[-1]["messages"][-1]["content"]] == ["text", "image_url"]
+    # другой модели — фото снова: отказала только та, что ответила ошибкой
+    last_user = messages(studio, cid)[-2]["id"]
+    assert [p["type"] for p in chat.compose(cid, last_user, "other-model")[-1]["content"]] == ["text", "image_url"]
+    assert chat.compose(cid, last_user, "local-gemma-abl") == sent
+
+
 def test_new_turn_ends_a_browser_answer_nobody_saves(studio):
     """Вкладка с прямым ответом закрылась (признака жизни нет дольше ALIVE_SEC): следующий ход
     помечает его ошибкой, а не вечной загрузкой (ревью A2-M11); `via` в сообщении отличает ответ
@@ -782,6 +831,25 @@ def test_sweep_drops_attachments_left_unsent_for_a_day(studio, env):
     left = {r["id"] for r in state.DB.execute("SELECT id FROM attachments")}
     assert left == {sent["id"], fresh["id"]} and _media_count() == 2
     assert studio.c.get(f"/api/media/{old['media_id']}").status_code == 404
+
+
+def test_sweep_drops_empty_untitled_chats_older_than_a_day(studio):
+    """02:F19: диалог, под который первый ход так и не прошёл, уходит уборкой; названный человеком, с сообщениями и
+    свежий — остаются."""
+    add_gateway(studio)
+    empty, named, talked = new_chat(studio), new_chat(studio), new_chat(studio)
+    assert studio.c.patch(f"/api/chats/{named}", json={"title": "Мой план"}).status_code == 200
+    sse(turn(studio, talked))
+    studio.clock[0] += chat.ORPHAN_SEC + 1
+    fresh = new_chat(studio)
+    studio.c.portal.call(chat.sweep_attachments)
+    assert {i["id"] for i in studio.c.get("/api/chats").json()["items"]} == {named, talked, fresh}
+    assert empty not in {r[0] for r in state.DB.execute("SELECT id FROM chats")}
+    # страница убирает пустой сразу (`?empty=1`), а диалог с сообщениями так не удалить
+    assert studio.c.delete(f"/api/chats/{fresh}?empty=1").status_code == 204
+    r = studio.c.delete(f"/api/chats/{talked}?empty=1")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "not_empty"
+    assert len(messages(studio, talked)) == 2
 
 
 def test_history_wipe_stops_the_users_streams(studio):

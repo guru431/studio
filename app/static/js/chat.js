@@ -19,7 +19,10 @@ import { chooseMcp } from './mcp-settings.js';
  * BEAT_MS шлёт признак жизни (POST .../alive): сервер отдаёт такой ответ с `live` — другая вкладка
  * показывает его идущим и опрашивает диалог, как ответ сервера, который идёт без нас. Ответ
  * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано».
- * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>).
+ * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>); неподходящий тип и размер
+ * чип называет при выборе файла. Отправленное фото — миниатюра (окно с ним), документ — ссылка на скачивание.
+ * Первый ход нового диалога не прошёл — созданный под него диалог удаляется (`dropEmpty`). Открытый диалог
+ * перечитывается после ответа, при возвращении вкладки, нажатии на него в списке и на 409 `busy`.
  * Раздел без модели (ctx.hint): диалоги читаются, переименовываются и удаляются; новый диалог —
  * подсказка вместо поля ввода, в прежнем поле ввода есть (ход его пару не перепроверяет).
  *
@@ -72,12 +75,18 @@ import { sectionDraft } from './drafts.js';
 import { keep } from './feed.js';
 import { kick } from './jobs.js';
 import { renderMarkdown, renderMarkdownInto } from './markdown.js';
+import { saveMedia } from './save.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
+const DOC_EXT = ['.pdf', '.docx', '.txt', '.md'];               // как documents.SUFFIXES
+const PHOTO_EXT = ['.png', '.jpg', '.jpeg', '.jfif', '.webp'];    // фото сервер узнаёт и по первым байтам (chat._is_photo)
+const PHOTO_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const DOC_MAX = 20 * 1024 * 1024;   // как documents.DOC_MAX
+const PHOTO_MAX = 10 * 1024 * 1024; // как image_upload.MAX_UPLOAD
 const RENDER_MS = 100;           // markdown идущего ответа — не чаще
 const THINK_TAIL = 600;          // знаков свёрнутого бегущего рассуждения: в три строки помещается меньше
 const POLL_MS = 2000;
@@ -595,7 +604,11 @@ function build(view, ctx) {
       item.title || tr("Новый диалог"));
     const more = iconButton('more', tr("Действия с диалогом"), { class: 'icon-btn chat-more' });
     const li = el('div', { class: 'chat-item', 'data-id': item.id }, link, more);
-    link.addEventListener('click', () => panel(false));
+    link.addEventListener('click', () => {
+      panel(false);
+      // уже открытый диалог адрес не меняет — нажатие перечитывает его (ход могли сделать с другого устройства)
+      if (item.id === chatId && !sending && !jobs.has(chatId)) reload();
+    });
     // меню строки — общий компонент menu.js; пункты собираются при открытии (название могло смениться)
     const menu = el('div', { class: 'chat-menu', role: 'menu', 'aria-label': tr("Действия с диалогом") });
     li.append(menu);
@@ -978,8 +991,26 @@ function build(view, ctx) {
     return null;
   }
 
+  /* отправленное фото целиком — в окне студии (её сессией: PWA на iPhone не делит cookie с Safari), «Скачать» — saveMedia */
+  function showPhoto(a) {
+    const save = button(tr("Скачать"), { class: 'btn btn-accent', id: 'att-photo-save' }, () => saveMedia(a.media_id, root));
+    openDialog(root, { id: 'att-photo-dialog', title: a.name, cancelText: tr("Закрыть"), actions: [save],
+      body: [el('img', { class: 'att-photo', src: `/api/media/${encodeURIComponent(a.media_id)}`, alt: a.name })] });
+  }
+
+  /* вложение отправленного сообщения: фото — миниатюра, нажатие — окно с ним; документ — имя ссылкой на скачивание */
   function attLabel(a) {
-    return el('span', { class: 'att' }, icon(a.kind === 'image' ? 'photo' : 'doc'), el('b', {}, a.name),
+    const file = `/api/media/${encodeURIComponent(a.media_id)}`;
+    let name = el('b', {}, a.name);
+    let mark = icon(a.kind === 'image' ? 'photo' : 'doc');
+    if (a.media_id && a.kind === 'image') {
+      mark = el('button', { type: 'button', class: 'att-thumb', 'aria-label': tr("Открыть фото {0}", a.name) },
+        el('img', { src: `${file}?thumb=1`, alt: '', loading: 'lazy', decoding: 'async' }));
+      mark.addEventListener('click', () => showPhoto(a));
+    } else if (a.media_id) {
+      name = el('a', { class: 'att-file', href: `${file}?download=1`, download: '', title: tr("Скачать") }, name);
+    }
+    return el('span', { class: 'att' }, mark, name,
       // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
       a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, tr("{0} зн.", Number(a.chars || 0).toLocaleString(locale()))) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
@@ -998,11 +1029,35 @@ function build(view, ctx) {
       }) : null);
   }
 
+  /* «Очищенная копия» диалога с Cleaner: текст сообщения с его документами (у ответа — восстановленный текст) после
+     замен Cleaner — без обращения к модели */
+  function cleanerCopy(m) {
+    return button(tr("Очищенная копия"), { class: 'btn btn-sm msg-cleaner-copy' }, async () => {
+      try {
+        const result = await api('POST', `/api/chats/${chatId}/cleaner-copy`, { message_id: m.id });
+        const area = el('textarea', { class: 'input cleaner-copy-text', readonly: true, rows: '12' });
+        area.value = result.text;
+        const copy = button(tr("Копировать"), { class: 'btn btn-accent' }, async () => {
+          try {
+            await navigator.clipboard.writeText(result.text);
+            copy.textContent = tr("Скопировано");
+          } catch { copy.textContent = tr("Не вышло"); }
+        });
+        openDialog(root, { id: 'cleaner-copy-dialog', title: tr("Очищенная копия"), body: [area,
+          el('p', { class: 'muted small' }, tr("Проверьте текст: распознавание может пропустить чувствительные данные."))],
+        actions: [copy], cancelText: tr("Закрыть") });
+      } catch (err) { notice.textContent = words(err); }
+    });
+  }
+
   function messageNode(m, last) {
     if (m.role === 'user') {
       const box = el('div', { class: 'msg user', 'data-id': m.id });
       if (m.attachments && m.attachments.length) box.append(el('div', { class: 'atts' }, ...m.attachments.map(attLabel)));
       if (m.content) box.append(el('div', { class: 'bubble' }, m.content));
+      if (chat?.chat.cleaner && m.id && (m.content || (m.attachments || []).some((a) => a.kind === 'document'))) {
+        box.append(el('div', { class: 'msg-actions' }, cleanerCopy(m)));
+      }
       return box;
     }
     const md = el('div', { class: 'md' });
@@ -1157,8 +1212,12 @@ function build(view, ctx) {
     p.nowait.hidden = !waiting;
     if (waiting) text = tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000));
     else if (m.status === 'streaming') {
-      // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке
-      if (job) text = job.tool || job.scan || job.first || job.thinkFrom ? '' : tr("загружаю модель · {0}", elapsed(job.started));
+      // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке.
+      // Грузит модель только локальная (`local` диалога), облачная — просто ещё молчит
+      if (job) {
+        text = job.tool || job.scan || job.first || job.thinkFrom ? ''
+          : (chat?.chat.local ? tr("загружаю модель · {0}", elapsed(job.started)) : tr("жду ответа · {0}", elapsed(job.started)));
+      }
       else if (m.via === 'browser') text = m.live ? tr("ответ идёт в другой вкладке…") : tr("прервано");
       else text = m.ocr ? '' : tr("ответ ещё идёт…");
     } else if (m.status === 'stopped') text = tr("остановлено");
@@ -1194,23 +1253,7 @@ function build(view, ctx) {
     }
     if (m.cleaner_raw != null) p.actions.append(button(m.cleaner_show_raw ? tr("Восстановленный ответ") : tr("Ответ модели"),
       { class: 'btn btn-sm msg-cleaner-view' }, () => { m.cleaner_show_raw = !m.cleaner_show_raw; paint(m); }));
-    if (chat?.chat.cleaner && m.content) p.actions.append(button(tr("Очищенная копия"),
-      { class: 'btn btn-sm msg-cleaner-copy' }, async () => {
-        try {
-          const result = await api('POST', `/api/chats/${chatId}/cleaner-copy`, { message_id: m.id });
-          const area = el('textarea', { class: 'input cleaner-copy-text', readonly: true, rows: '12' });
-          area.value = result.text;
-          const copy = button(tr("Копировать"), { class: 'btn btn-accent' }, async () => {
-            try {
-              await navigator.clipboard.writeText(result.text);
-              copy.textContent = tr("Скопировано");
-            } catch { copy.textContent = tr("Не вышло"); }
-          });
-          openDialog(root, { id: 'cleaner-copy-dialog', title: tr("Очищенная копия"), body: [area,
-            el('p', { class: 'muted small' }, tr("Проверьте текст: распознавание может пропустить чувствительные данные."))],
-          actions: [copy], cancelText: tr("Закрыть") });
-        } catch (err) { notice.textContent = words(err); }
-      }));
+    if (chat?.chat.cleaner && m.content) p.actions.append(cleanerCopy(m));
     if (p.last) p.actions.append(button(tr("Ответить заново"), { class: 'btn btn-sm msg-retry' }, () => submit(true)));
   }
 
@@ -1439,6 +1482,18 @@ function build(view, ctx) {
     if (input.value) input.style.height = `${input.scrollHeight}px`;
   }
 
+  /* файл не подойдёт — слова сразу при выборе, а не после «Отправить»: тип по расширению и типу файла, размер —
+     пределом сервера (фото больше 16 Мп и битый файл скажет сервер). Не узнать (ни типа, ни расширения) — решит сервер */
+  function unfit(f) {
+    const ext = /\.[^.]*$/.exec(f.name.toLowerCase())?.[0] || '';
+    const doc = DOC_EXT.includes(ext);
+    const photo = !doc && (PHOTO_TYPES.includes(f.type) || PHOTO_EXT.includes(ext));
+    if (!doc && !photo && (ext || f.type)) return tr("поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP");
+    if (photo && f.size > PHOTO_MAX) return tr("фото больше {0} МиБ", PHOTO_MAX >> 20);
+    if (f.size > DOC_MAX) return tr("файл больше {0} МиБ", DOC_MAX >> 20);
+    return '';
+  }
+
   async function upload(a) {
     if (a.meta) return true;
     a.busy = true;
@@ -1503,6 +1558,10 @@ function build(view, ctx) {
     const text = input.value;
     if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length)) return;
     if (!regenerate && blocked()) return;
+    if (!regenerate && atts.some((a) => a.unfit)) {   // слова — у чипа с выбора файла; диалог не создаётся
+      notice.textContent = tr("Уберите неподходящие файлы");
+      return;
+    }
     if (!externalOk && needsConsent(regenerate)) {
       askExternal(regenerate, webOk);
       return;
@@ -1515,28 +1574,61 @@ function build(view, ctx) {
     notice.textContent = '';
     syncBusy();
     paintAtts();
+    const made = {};                               // диалог, созданный этим ходом (`id`)
+    let again = false;                             // ход повторится сам (окно подтверждения, скан): диалог нужен
     try {
-      await turn(regenerate, text, externalOk, webOk);
+      await turn(regenerate, text, externalOk, webOk, made);
     } catch (err) {
+      again = ['external', 'external_web', 'not_ready'].includes(err.code);
       // вкладка не знала (другая вкладка сменила модель, включила «Интернет», ключ Exa появился)
       if (err.code === 'external') askExternal(regenerate, webOk);
       else if (err.code === 'external_web') askWeb(regenerate, externalOk);
       else if (err.code === 'not_ready') {        // прямое подключение: скан ждёт страница
         notice.textContent = NOT_READY;
         waitScans([regenerate, externalOk, webOk]);
+      } else if (err.code === 'busy') {           // ход начат на другом устройстве или вкладке — показать его
+        await reload();                            // идущий ответ — в ленте, у сервера — с «Остановить»
+        notice.textContent = words(err);
       } else if (!noKey(err)) notice.textContent = words(err);
     } finally {
       sending = false;
       syncBusy();
       paintAtts();
     }
+    if (made.id && !again) dropEmpty(made.id);
   }
 
-  async function turn(regenerate, text, externalOk, webOk) {
+  /* первый ход нового диалога не прошёл (отказ, отмена окна Cleaner, сбой загрузки вложения): созданный под него
+     диалог без сообщений убирается — в списке не остаётся пустой «Новый диалог»; модель и кнопки диалога снова
+     черновик нового, поле и вложения — как были. Ход принят или исход неясен (связь) — диалог остаётся; сервер
+     удаляет только пустой (`?empty=1`), чего не убрали — уберёт его уборка через сутки */
+  function dropEmpty(id) {
+    if (jobs.has(id) || (pendingTurn?.id === id && pendingTurn.uncertain)) return;
+    if (chatId === id) {
+      if (!chat || chat.messages.length) return;
+      const was = chat.chat;
+      ++opened;
+      chatId = null;
+      chat = null;
+      draft = { connection_id: was.connection_id, model: was.model };
+      draftWeb = !!was.web;
+      draftMcp = was.mcp_ids || [];
+      draftThink = !!was.thinking;
+      if (location.hash === `#/chat/${id}`) history.replaceState(history.state, '', '#/chat');
+      shareContext();
+      feed.replaceChildren(emptyNote());
+      syncBusy();
+      paintChip();
+    }
+    api('DELETE', `/api/chats/${encodeURIComponent(id)}?empty=1`).catch(() => {}).then(loadList);
+  }
+
+  async function turn(regenerate, text, externalOk, webOk, made) {
     if (!chatId) {
       const created = await api('POST', '/api/chats', draft || {});
       ++opened;
       chatId = created.id;
+      made.id = created.id;
       chat = { chat: created, messages: [] };
       shareContext();
       draft = null;
@@ -1703,10 +1795,10 @@ function build(view, ctx) {
     syncBusy();
     scrollDown(false);
     loadList();
-    // источники ответа и после ошибки — «Распознать заново» у вложений: с сервера. Ответ прямого подключения
-    // после ошибки не перечитывать: его слова (и «Ответ не сохранился») сервер не хранит — перечитанный показал бы
-    // «ответ идёт в другой вкладке» или пустую строку
-    if (job.lost || job.tooled || (job.message.status === 'error' && job.message.via === 'server')) reload();
+    // ответ кончился — диалог с сервера: источники, «Распознать заново» у вложений и сообщения, сделанные тем
+    // временем на другом устройстве. Ответ прямого подключения после ошибки не перечитывать: его слова (и «Ответ не
+    // сохранился») сервер не хранит — перечитанный показал бы «ответ идёт в другой вкладке» или пустую строку
+    if (job.message.via !== 'browser' || job.message.status !== 'error') reload();
   }
 
   /* события */
@@ -1717,15 +1809,18 @@ function build(view, ctx) {
   };
   document.addEventListener('keydown', onKey);
   document.addEventListener('studio-me', paintWeb);     // профиль перечитан: ключ Exa могли задать или убрать
+  /* вкладка снова на виду или в фокусе, связь вернулась: диалог могли продолжить на другом устройстве — перечитать;
+     ход, который отправляет или читает сама вкладка, перечитывание не трогает */
   const resume = () => {
     if (!alive || document.visibilityState === 'hidden') { clearTimeout(poll); return; }
-    if (needsReload || remoteStream() || otherTab()) { failures = 0; reload(); }
+    if (needsReload || remoteStream() || otherTab() || (!sending && !jobs.has(chatId))) { failures = 0; reload(); }
   };
   window.addEventListener('online', resume);
+  window.addEventListener('focus', resume);
   document.addEventListener('visibilitychange', resume);
   const tick = setInterval(() => {
     const job = jobs.get(chatId);
-    if (job && (!job.first || job.thinking)) paint(job.message);   // счётчики «загружаю модель» и «Думает…»
+    if (job && (!job.first || job.thinking)) paint(job.message);   // счётчики «загружаю модель» / «жду ответа» и «Думает…»
   }, 1000);
 
   fresh.addEventListener('click', newChat);
@@ -1749,7 +1844,10 @@ function build(view, ctx) {
     submit(false);
   });
   file.addEventListener('change', () => {
-    for (const f of file.files) atts.push({ file: f, meta: null, error: '', busy: false });
+    for (const f of file.files) {
+      const error = unfit(f);
+      atts.push({ file: f, meta: null, error: error && words(error), busy: false, unfit: !!error });   // как отказ сервера
+    }
     file.value = '';
     dropWaiting();
     paintAtts();
@@ -1796,6 +1894,7 @@ function build(view, ctx) {
       alive = false;
       historyRead?.controller.abort();
       window.removeEventListener('online', resume);
+      window.removeEventListener('focus', resume);
       document.removeEventListener('visibilitychange', resume);
       document.removeEventListener('keydown', onKey);
       models.close();
