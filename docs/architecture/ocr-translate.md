@@ -5,13 +5,14 @@
 - Распознавание (спека 2026-10-27-studio-ocr-design, шаг схемы 16 `db.OCR_16`): раздел `ocr`
   «Распознавание», вкладка рельса «Сканы» (`ocr.js`, `#/ocr`). Документ — `scans` (`queued`, `working`,
   `cancelling`, `done`, `error`, `cancelled`; `origin` — `section`/`chat`, `attachment_id` без FK; `text` —
-  весь текст по готовности, для поиска триггерами `search_scans_*`), страницы — `scan_pages` (n с 1, свой
+  распознанные страницы по итогу — и при ошибке и отмене (`ocr._text`), для поиска триггерами `search_scans_*`), страницы — `scan_pages` (n с 1, свой
   `user_id` — для `media.referenced`; `waiting`, `done`, `failed`, `layer`, `blank`). Шаг 16 связал каждое
   подключение srvllm с `ocr` (`hunyuan-ocr`, умолчание — наименьшее). API `/api/ocr` (`ocr.router`):
   загрузка — один PDF (все страницы, слой не читается) или 1…`PAGES_MAX` (50) фото PNG, JPEG, WebP одним
   документом, до `documents.DOC_MAX` на всё; лента, документ (`pages` — список страниц, в ленте и с
   `?brief=1` — число),
-  `cancel`, `DELETE`, `export?format=txt|md|docx`, `attachments` — «<имя>.md» в чат, `PATCH {name}` —
+  `cancel`, `DELETE`, `export?format=txt|md|docx`, `attachments` — «<имя>.md» в чат (оба — у кончившегося
+  документа со страницей с текстом, и с ошибкой или отменённого: `ocr._readable`, иначе 409 `running`/`empty`), `PATCH {name}` —
   переименование в любом состоянии (`documents.rename`: одной строкой, NFC, расширение прежнего имени остаётся —
   по нему выгрузка и вложение берут основу; поиск — триггер `search_scans_au`). Очередь — один раннер
   на пользователя (`ocr.RUNNERS`, `kick`), ждущих до `QUEUE_MAX` (5, дальше 409 `busy`). Страница —

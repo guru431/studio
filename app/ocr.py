@@ -439,8 +439,18 @@ def _store(job: Job) -> None:
     state.DB.execute("UPDATE scans SET detail = ? WHERE id = ? AND state = 'working'", (job.stage, job.id))
 
 
+def _text(scan_id: str) -> str:
+    """Текст документа для поиска (`scans.text`): страницы с текстом (`done`, `layer`) подряд."""
+    texts = [p["text"] for p in state.DB.execute(
+        "SELECT text FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer') ORDER BY n", (scan_id,))]
+    return "\n\n".join(t for t in texts if t)
+
+
 def _finish(scan_id: str, state_: str, detail_: str, text: "str | None" = None) -> None:
-    """Итог документа и, у документа из чата, текст вложения."""
+    """Итог документа и, у документа из чата, текст вложения. Без `text` (ошибка, отмена) в поиск идёт то, что
+    успело распознаться: выгрузка и «В чат» его отдают (`_readable`)."""
+    if text is None:
+        text = _text(scan_id) or None
     changed = state.DB.execute("UPDATE scans SET state = ?, detail = ?, finished = ?, text = ?"
                                " WHERE id = ? AND finished IS NULL",
                                (state_, detail_, clock.NOW(), text, scan_id)).rowcount
@@ -545,9 +555,7 @@ async def _recognize_pages(job: Job, row) -> str:
         state.DB.execute("UPDATE scan_pages SET state = ?, text = ?, detail = ? WHERE scan_id = ? AND n = ?",
                          (page_state, text, why, job.id, n))
         state.DB.execute("UPDATE scans SET done_pages = done_pages + 1 WHERE id = ?", (job.id,))
-    texts = [p["text"] for p in state.DB.execute(
-        "SELECT text FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer') ORDER BY n", (job.id,))]
-    return "\n\n".join(t for t in texts if t)
+    return _text(job.id)
 
 
 async def _settle() -> None:
@@ -974,17 +982,22 @@ async def remove(user_id: int, row) -> None:
     log.info("ocr %s: удалён", sid[:8])
 
 
-def _done(user_id: int, sid: str):
+def _readable(user_id: int, sid: str):
+    """Кончившийся документ (и с ошибкой, и отменённый), где есть страница с текстом: выгрузка и «В чат» отдают
+    распознанное, остальные страницы — пометкой. Идёт — 409 `running`, текста нет — 409 `empty`."""
     row = _row(user_id, sid)
-    if row["state"] != "done":
+    if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "документ ещё не распознан"})
+    if state.DB.execute("SELECT 1 FROM scan_pages WHERE scan_id = ? AND state IN ('done', 'layer') LIMIT 1",
+                        (sid,)).fetchone() is None:
+        raise HTTPException(409, {"code": "empty", "message": "в документе нет распознанного текста"})
     return row
 
 
 @router.get("/{sid}/export")
 async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$")):  # noqa: A002
-    """Готовый документ файлом: имя — по документу («Договор.pdf» → «Договор.docx»)."""
-    row = _done(request.state.user.id, sid)
+    """Документ с распознанным (`_readable`) файлом: имя — по документу («Договор.pdf» → «Договор.docx»)."""
+    row = _readable(request.state.user.id, sid)
     pages, stem = _page_list(sid), _stem(row["name"])
     if format == "docx":
         body = exports.pages_docx(pages, stem)
@@ -999,7 +1012,7 @@ async def to_chat(sid: str, request: Request):
     """Распознанный текст — неотправленным документом чата «<имя>.md» (свой файл): дальше это обычное
     вложение. Подтверждения для внешней модели нет (спека 6.4): документ — свой."""
     uid = request.state.user.id
-    row = _done(uid, sid)
+    row = _readable(uid, sid)
     text = exports.pages_md(_page_list(sid))
     if len(text) > documents.TEXT_MAX_CHARS:
         raise HTTPException(413, {"code": "too_big", "message": (

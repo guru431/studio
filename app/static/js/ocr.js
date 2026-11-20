@@ -57,6 +57,12 @@ function pageBody(p) {
   return serverMessage(p.detail) ? tr("[не распознана: {0}]", serverMessage(p.detail)) : tr("[не распознана]");
 }
 
+/** Кончившийся документ (и ошибка, и отмена) со страницей с текстом — «Копировать», «Скачать», «В чат»
+ * (ocr._readable). */
+function readable(item) {
+  return !RUNNING.has(item.state) && item.pages.some((p) => p.state === 'done' || p.state === 'layer');
+}
+
 /** Весь документ — как выгрузка .md (exports.pages_md). */
 export function asMarkdown(pages) {
   return `${pages.map((p) => tr("## Страница {0}\n\n{1}", p.n, pageBody(p))).join('\n\n')}\n`;
@@ -286,7 +292,7 @@ function build(view, ctx) {
     nodes.push(el('p', { class: 'ocr-meta muted small' },
       `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)}`));
     const acts = el('div', { class: 'tr-acts' });
-    if (item.state === 'done') {
+    if (readable(item)) {
       const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, tr("Копировать"));
       copy.addEventListener('click', async () => {
         try {
