@@ -158,7 +158,7 @@ export function chatMcpBlock({ admin = false } = {}) {
   const list = el('div', { id: 'mcp-servers' }), note = el('p', { class: 'status', 'aria-live': 'polite' });
   const root = el('section', { class: 'block', id: admin ? 'admin-shared-mcp' : 'chat-mcp-settings' },
     el('h2', {}, admin ? tr("Общие подключения MCP") : 'MCP'), el('p', { class: 'muted' }, admin
-      ? tr("Все пользователи смогут вызывать инструменты с правами этого подключения. Адрес должен быть в списке разрешённых.")
+      ? tr("Пользователи вызывают инструменты с правами этого подключения; кому доступны сервер и его инструменты — кнопка «Доступ». Адрес должен быть в списке разрешённых.")
       : tr("Подключения для чата и других разделов Studio. Поддерживаемые инструменты появятся в своих разделах. Адрес должен разрешить администратор Studio.")), list, note);
   async function run(action) { try { await action(); } catch (err) { note.textContent = words(err); } }
   async function reload() {
