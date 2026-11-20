@@ -74,6 +74,14 @@ assert.equal(en.message('Озвучка · Привет, мир…'), 'Speech ·
 assert.equal(en.message('Ответ · новый диалог'), 'Response · new conversation');
 assert.equal(en.message('Ответ · Планы'), 'Response · Планы');
 assert.equal(en.message('пишет ответ'), 'writing response');
+// Составные слова: голая подстановка — тоже слова сервера, «имя» — как есть, раздел в «» — переводом
+assert.equal(en.message('жду карту · озвучиваю 2 из 5'), 'waiting for GPU · synthesizing 2 of 5');
+assert.equal(en.message('кусок 5 из 17: модель вернула пустой ответ'), 'chunk 5 of 17: model returned an empty response');
+assert.equal(en.message('сбой службы: TimeoutError'), 'service failure: TimeoutError');
+assert.equal(en.message('выберите модель в настройках раздела «Голосовой ввод»'), 'choose a model in Settings → “Voice input”');
+assert.equal(en.message('нет связи с подключением «Голосовой ввод»'), 'no connection to “Голосовой ввод”');
+assert.equal(en.message('Ответ · Чат'), 'Response · Чат');
+assert.equal(['Чат'].map(en.message)[0], 'Chat');
 assert.equal(en.tr('__proto__'), '__proto__');
 """
     result = subprocess.run([node, '-e', program, str(STATIC)], capture_output=True,

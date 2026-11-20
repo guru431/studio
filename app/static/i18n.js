@@ -17,8 +17,11 @@
     return format(pattern, values);
   }
 
+  /* Server words: whole string, or a StudioEnglishMessages pattern. A pattern slot in «» is a name and stays as is;
+   * a bare slot is itself server words (a reason, a stage) and is translated in turn — «X» there is a fixed name
+   * such as a section and becomes “X” translated. Patterns in StudioEnglishVerbatim carry user text in bare slots. */
   let patterns;
-  function message(value) {
+  function message(value, depth = 0) {
     const source = String(value ?? '');
     if (language !== 'en') return source;
     if (Object.hasOwn(english, source)) return english[source];
@@ -28,24 +31,33 @@
       const out = english[lower];
       return source === lower ? out : out.charAt(0).toUpperCase() + out.slice(1);
     }
-    if (source.length > 4096) return source;
-    patterns ||= (globalThis.StudioEnglishMessages || []).map((key) => {
-      const slots = [];
-      let next = 0;
-      const parts = key.split(/(\{\d*\})/g).map((part) => {
-        if (/^\{\d*\}$/.test(part)) {
-          slots.push(part === '{}' ? next++ : Number(part.slice(1, -1)));
-          return '([\\s\\S]*?)';
-        }
-        return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (source.length > 4096 || depth > 3) return source;
+    if (!patterns) {
+      const verbatim = new Set(globalThis.StudioEnglishVerbatim || []);
+      patterns = (globalThis.StudioEnglishMessages || []).map((key) => {
+        const slots = [];
+        let next = 0;
+        const pieces = key.split(/(\{\d*\})/g);
+        const parts = pieces.map((part, at) => {
+          if (/^\{\d*\}$/.test(part)) {
+            const named = verbatim.has(key) || (/[«“]$/.test(pieces[at - 1]) && /^[»”]/.test(pieces[at + 1]));
+            slots.push({ index: part === '{}' ? next++ : Number(part.slice(1, -1)), named });
+            return '([\\s\\S]*?)';
+          }
+          return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        });
+        return { pattern: new RegExp('^' + parts.join('') + '$', 'iu'), key, slots };
       });
-      return { pattern: new RegExp('^' + parts.join('') + '$', 'iu'), key, slots };
-    });
+    }
     for (const { pattern, key, slots } of patterns) {
       const match = pattern.exec(source);
       if (!match) continue;
       const values = [];
-      slots.forEach((index, capture) => { values[index] = match[capture + 1]; });
+      slots.forEach(({ index, named }, capture) => {
+        const part = match[capture + 1];
+        const quoted = !named && /^«([^«»]*)»$/.exec(part);
+        values[index] = named ? part : quoted ? `“${message(quoted[1], depth + 1)}”` : message(part, depth + 1);
+      });
       let auto = 0;
       return format(english[key].replace(/\{\}/g, () => '{' + auto++ + '}'), values);
     }
@@ -92,7 +104,7 @@
     return box;
   }
 
-  globalThis.StudioI18n = Object.freeze({ tr, message, locale, language: () => language, languagePicker });
+  globalThis.StudioI18n = Object.freeze({ tr, message: (value) => message(value), locale, language: () => language, languagePicker });
   if (typeof document === 'undefined') return;
   document.documentElement.lang = language;
   document.addEventListener('DOMContentLoaded', () => {
