@@ -12,6 +12,28 @@ const imageNames = {
   image_describe: tr("Описать фото"), describe_image: tr("Описать фото"),
 };
 
+const LIMIT_MAX = 1e6;
+const ENUM_MAX = 64;
+const ENUM_TEXT = 80;
+
+/** Пределы поля схемы, которым форма может верить: {type, min, max, enum, default} или null — бессмысленная схема
+ * (не числа, min > max, больше LIMIT_MAX, огромный enum) оставляет разделу его собственные пределы. Те же правила —
+ * у сервера (mcp_sections.field_limits): форма не пропустит то, что откажет run, и наоборот. */
+export function schemaLimits(prop) {
+  if (!prop || typeof prop !== 'object') return null;
+  const number = value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= LIMIT_MAX;
+  const min = prop.minimum ?? null;
+  const max = prop.maximum ?? null;
+  if ((min !== null && !number(min)) || (max !== null && !number(max)) || (min !== null && max !== null && min > max)) return null;
+  const choices = prop.enum ?? null;
+  if (choices !== null && (!Array.isArray(choices) || !choices.length || choices.length > ENUM_MAX
+    || !choices.every(value => (typeof value === 'string' && value.length <= ENUM_TEXT) || number(value)))) return null;
+  const value = prop.default;
+  const inRange = typeof value === 'number' ? (min === null || value >= min) && (max === null || value <= max) : min === null && max === null;
+  const fits = value !== undefined && value !== null && inRange && (!choices || choices.includes(value));
+  return { type: typeof prop.type === 'string' ? prop.type : null, min, max, enum: choices, default: fits ? value : null };
+}
+
 function fileData(file, limit) {
   if (!(file instanceof File)) return { media_id: file.mediaId };
   if (!file.size || file.size > limit) {
@@ -191,6 +213,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   queueMicrotask(() => { paint(); load(); });
   return { control, output, has, hasFile, run, clear,
     argument(key) { return picked()?.tool.schema.properties?.[key]; },
+    limits(key) { return schemaLimits(picked()?.tool.schema.properties?.[key]); },
     canClone() {
       const engines = picked()?.tool.schema.properties?.engine?.enum;
       return hasFile('reference_artifact_id') && has('reference_text') && Array.isArray(engines) && engines.includes('clone');

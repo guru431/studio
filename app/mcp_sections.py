@@ -9,6 +9,7 @@ import asyncio
 import base64
 from contextlib import AsyncExitStack
 import json
+import math
 import re
 from types import SimpleNamespace
 
@@ -266,6 +267,57 @@ async def voice_arguments(session, section, tool, voice_id, files):
     return {"engine": "clone", "reference_artifact_id": aid, "reference_text": text}
 
 
+LIMIT_MAX = 10**6
+ENUM_MAX = 64
+ENUM_TEXT = 80
+
+
+def _number(value):
+    """Число предела: конечное и не больше LIMIT_MAX по модулю (bool — не число)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return (isinstance(value, int) or math.isfinite(value)) and abs(value) <= LIMIT_MAX
+
+
+def field_limits(prop) -> dict | None:
+    """Пределы поля схемы по тем же правилам, что `limits(key)` страницы (mcp-sections.js): {min, max, enum} или None —
+    поле с бессмысленными пределами (не числа, min > max, больше LIMIT_MAX, enum длиннее ENUM_MAX или со значением
+    длиннее ENUM_TEXT) не проверяет ни страница, ни сервер: решает сам инструмент."""
+    if not isinstance(prop, dict):
+        return None
+    low, high = prop.get("minimum"), prop.get("maximum")
+    if (low is not None and not _number(low)) or (high is not None and not _number(high)) or (
+            low is not None and high is not None and low > high):
+        return None
+    choices = prop.get("enum")
+    if choices is not None and (not isinstance(choices, list) or not 0 < len(choices) <= ENUM_MAX or not all(
+            (isinstance(item, str) and len(item) <= ENUM_TEXT) or _number(item) for item in choices)):
+        return None
+    return {"min": low, "max": high, "enum": choices}
+
+
+def check_bounds(tool: dict, args: dict) -> None:
+    """Refuse values outside the limits the tool schema declares (`minimum`/`maximum`, `enum`) — the same limits the
+    page form enforces (`field_limits`); a field with nonsense limits is left to the tool."""
+    properties = tool["schema"].get("properties", {})
+    for key, value in args.items():
+        limits = field_limits(properties.get(key))
+        if limits is None:
+            continue
+        low, high = limits["min"], limits["max"]
+        number = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if (low is not None or high is not None) and (
+                not number or (low is not None and value < low) or (high is not None and value > high)):
+            name = clean_text(key, 80)
+            lo, hi = (int(bound) if isinstance(bound, float) and bound.is_integer() else bound for bound in (low, high))
+            words = (f"Значение «{name}» — от {lo} до {hi}" if lo is not None and hi is not None
+                     else f"Значение «{name}» — не меньше {lo}" if hi is None else f"Значение «{name}» — не больше {hi}")
+            raise mcp.refused(words, "invalid", 422)
+        choices = limits["enum"]
+        if choices is not None and (isinstance(value, bool) or value not in choices):
+            raise mcp.refused(f"Значение «{clean_text(key, 80)}» — не из списка инструмента", "invalid", 422)
+
+
 @router.post("/{section}/servers/{sid}/run")
 async def run(section: str, sid: int, request: Request):
     names = section_tools(section)
@@ -295,6 +347,7 @@ async def run(section: str, sid: int, request: Request):
                 args[key] = await upload(session, tool["files"][key], file)
         if body.tool in {"image_generate", "image_edit"} and isinstance(args.get("model"), str):
             args["model"] = images.MODELS.get(args["model"], args["model"])
+        check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
         result = await call(session, body.tool, args)
