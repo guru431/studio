@@ -210,7 +210,7 @@ def test_bridge_link_and_code_stream_routes():
 
 
 def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
-    """Голосовой ввод и образец голоса отвечают в том же запросе: вся операция службы (а не один
+    """Голосовой ввод, образец и проба голоса отвечают в том же запросе: вся операция службы (а не один
     вызов шлюза — у WhisperX там 2460 с) уложена в бюджет меньше таймаута маршрута, иначе Apache
     оборвал бы запрос раньше службы и текст диктовки пропал бы."""
     import dictation
@@ -219,6 +219,7 @@ def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
     assert voices.BUDGET_SEC < _route_timeout("/api/voices")
     assert voices.TRANSCRIBE_BUDGET_SEC < _route_timeout("/api/voices/transcribe")
     assert voices.BUDGET_SEC + media.SAVE_TIMEOUT_SEC < _route_timeout("/api/voices/prepare-sample")
+    assert voices.PROBE_BUDGET_SEC < _route_timeout(f"/api/voices/{'0' * 32}/probe")
 
 
 def test_voice_editor_uploads_fit_through_the_proxy():

@@ -37,6 +37,7 @@ TEXT_MAX = 2000
 BUDGET_SEC = 60                 # WAV и длительность образца — ffmpeg за секунды
 TRANSCRIBE_BUDGET_SEC = 120      # вся подготовка образца и ASR — раньше таймаута Apache
 PROBE_MAX = 200                 # проба голоса — одна короткая фраза (speeches.PHRASE_MAX — 220)
+PROBE_BUDGET_SEC = 120          # вся проба — раньше таймаута Apache (шлюз может держать запрос, пока карта занята)
 DRAFT_SEC = 900                 # подготовленные WAV без ссылки убирает обычная чистка сирот
 #: пользователи, чья проба голоса идёт сейчас (одна за раз)
 PROBING: set = set()
@@ -441,29 +442,53 @@ async def delete_sample(voice_id: str, sample_id: str, request: Request):
 
 class ProbeIn(BaseModel):
     text: str = Field(max_length=PROBE_MAX * 2)
+    connection_id: int | None = None
+    model: str | None = Field(default=None, max_length=sections.MODEL_MAX)
+
+
+def _probe_model(uid: int, body: ProbeIn):
+    """Выбранные подключение и модель «Озвучки»; без выбора — умолчание раздела, а если оно не шлюз srvllm —
+    первая отмеченная модель шлюза (голос по образцу есть только у него)."""
+    if body.connection_id is not None or body.model:
+        return sections.resolve(uid, "speech", body.connection_id, body.model)
+    chosen = sections.default(uid, "speech")
+    if chosen is None or chosen[0].kind != "srvllm":
+        gateway = next((l for l in sections.links(uid, "speech") if l.connection.kind == "srvllm" and l.models), None)
+        if gateway is not None:
+            return sections.resolve(uid, "speech", gateway.connection.id, gateway.models[0])
+    return sections.resolve(uid, "speech", None, None)
 
 
 @router.post("/{voice_id}/probe")
 async def probe(voice_id: str, body: ProbeIn, request: Request):
-    """Проба голоса короткой фразой пользователя (до PROBE_MAX знаков, одна фраза Qwen3-TTS `/clone`
-    подключения раздела «Озвучка»). Не задание очереди и не история: звук — в ответе (`no-store`), ничего не
-    сохраняется. Карта занята — сразу 503 словами, без ожидания (очередь озвучек её дождётся сама); одна проба
+    """Проба голоса короткой фразой пользователя (до PROBE_MAX знаков, одна фраза модели шлюза srvllm
+    из «Озвучки»: выбранной или `_probe_model`). Не задание очереди и не история: звук — в ответе (`no-store`),
+    ничего не сохраняется. Карта занята — сразу 503 словами, без ожидания (очередь озвучек её дождётся сама);
+    шлюз держит запрос дольше PROBE_BUDGET_SEC — 504 словами раньше таймаута Apache; одна проба
     пользователя за раз — иначе 409."""
     uid = request.state.user.id
     text = " ".join(documents.nfc(body.text).split())
     if not 1 <= len(text) <= PROBE_MAX:
         raise _bad("text", f"фраза пробы — от 1 до {PROBE_MAX} знаков")
-    conn, model = sections.resolve(uid, "speech", None, None)
+    conn, model = _probe_model(uid, body)
     if conn.kind != "srvllm":
         raise HTTPException(409, {"code": "voice", "message": "голос по образцу — у озвучки шлюза srvllm"})
     reference_ = await reference(uid, voice_id)
     if uid in PROBING:
         raise HTTPException(409, {"code": "busy", "message": "проба уже идёт — дождитесь её"})
     PROBING.add(uid)
-    try:
+
+    async def run():
         if model == "qwen3-tts":
             await speech.free_card(conn)
-        data, mime = await speech.say(conn, model, text, reference_)
+        return await speech.say(conn, model, text, reference_)
+
+    try:
+        data, mime = await asyncio.wait_for(run(), PROBE_BUDGET_SEC)
+    except TimeoutError:
+        log.info("пользователь %d: проба голоса — дольше %d с", uid, PROBE_BUDGET_SEC)
+        raise HTTPException(504, {"code": "timeout", "message": f"служба озвучки не ответила за {PROBE_BUDGET_SEC} с — "
+                                  "возможно, карта занята; попробуйте пробу позже"}) from None
     except speech.Busy:
         raise HTTPException(503, {"code": "busy", "message": "карта занята — попробуйте пробу позже"}) from None
     except speech.SpeechError as e:
