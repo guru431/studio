@@ -457,8 +457,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function acceptSettings(data) {
     paintSettings(data);
+    // Claude Code returns a concrete version after accepting an alias from its catalog.
+    const alias = engine === 'claude' && typeof data.model === 'string'
+      ? /^claude-(opus|sonnet|haiku)-\d/.exec(data.model)?.[1] : null;
+    const modelMatches = savedDefaults.model === data.model
+      || (savedDefaults.model === model.value && savedDefaults.model === alias);
     defaultsNotice.hidden = !usingDefaults || touched
-      || !((savedDefaults.model && savedDefaults.model !== data.model)
+      || !((savedDefaults.model && !modelMatches)
         || (savedDefaults.effort && savedDefaults.effort !== data.effort));
     settingsReady = true;
     if (stateError && status.textContent === stateError) showStatus('');

@@ -6,7 +6,8 @@ export function smtpSettings() {
   const fields = {}, labels = { host: tr("Сервер SMTP"), port: tr("Порт"), tls: tr("Шифрование"), username: tr("Логин SMTP"),
     password: tr("Пароль SMTP"), sender: tr("Отправитель"), connect_ip: tr("IP для подключения (необязательно)") };
   for (const key of Object.keys(labels)) fields[key] = key === 'tls'
-    ? el('select', { id: `smtp-${key}`, class: 'input' }, el('option', { value: 'starttls' }, 'STARTTLS'), el('option', { value: 'ssl' }, 'TLS / SSL'))
+    ? el('select', { id: `smtp-${key}`, class: 'input' }, el('option', { value: 'starttls' }, 'STARTTLS'),
+      el('option', { value: 'ssl' }, 'TLS / SSL'), el('option', { value: 'plain' }, tr("Без шифрования")))
     : el('input', { id: `smtp-${key}`, class: 'input', type: key === 'password' ? 'password' : key === 'port' ? 'number' : 'text', autocomplete: 'off' });
   fields.port.min = '1'; fields.port.max = '65535'; fields.host.required = fields.port.required = fields.sender.required = true;
   fields.password.placeholder = tr("Оставьте пустым, чтобы сохранить пароль");

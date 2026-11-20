@@ -41,6 +41,45 @@ def test_smtp_uses_verified_tls_before_login_and_sends_only_to_recipient(monkeyp
                       ("recipient@example.com", "studio@example.com", "Secret link\n")]
 
 
+@pytest.mark.parametrize("source", ["environment", "admin"])
+def test_plain_smtp_checks_and_sends_on_port_25(studio, monkeypatch, source):
+    from conftest import make_user, signin
+
+    make_user(studio, "owner", is_admin=True)
+    signin(studio, "owner")
+    host, sender = "smtp.example.com", "studio@example.com"
+    calls = []
+
+    class SMTP:
+        def __init__(self, host, port, *, timeout):
+            calls.append((host, port, timeout))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def send_message(self, message):
+            calls.append((message["From"], message["To"], message.get_content()))
+
+    monkeypatch.setattr(account_mail.smtplib, "SMTP", SMTP)
+    if source == "admin":
+        response = studio.c.put("/api/admin/smtp", json={"host": host, "port": 25, "tls": "plain", "sender": sender})
+        assert response.status_code == 200, response.text
+    else:
+        for name in ("STUDIO_SMTP_PORT", "STUDIO_SMTP_USER", "STUDIO_SMTP_PASSWORD", "STUDIO_SMTP_CONNECT_IP"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in {"STUDIO_SMTP_HOST": host, "STUDIO_SMTP_TLS": "plain", "STUDIO_MAIL_FROM": sender}.items():
+            monkeypatch.setenv(name, value)
+
+    config = studio.c.get("/api/admin/smtp").json()
+    assert (config["tls"], config["port"]) == ("plain", 25)
+    assert studio.c.post("/api/admin/smtp/check").json() == {"ok": True}
+    studio.c.portal.call(account_mail.send, "recipient@example.com", "Subject", "Body")
+    assert calls == [(host, 25, 10), (host, 25, 10), (sender, "recipient@example.com", "Body\n")]
+
+
 def test_delivery_failure_never_discloses_smtp_exception_or_message(monkeypatch, caplog):
     def failed(*args):
         raise OSError("recipient@example.com secret-link password")
