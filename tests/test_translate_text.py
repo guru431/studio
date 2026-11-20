@@ -89,6 +89,21 @@ def test_split_prefers_sentence_ends_then_spaces_then_a_hard_cut():
     assert parts == [("出口在右边。", ""), ("售票处在左边。", "")]
 
 
+def test_split_cuts_tables_between_rows_not_inside_cells():
+    """Аудит 05:F9: таблица HunyuanOCR — одной строкой HTML; Markdown-таблица и список — строками. Кусок кончается
+    концом строки таблицы, а не посреди ячейки по пробелу."""
+    rows = "".join(f"<tr><td>Товар {i}</td><td>Цена 1 250,00 руб.</td></tr>" for i in range(150))
+    text = f"<table>{rows}</table>"
+    parts = translate_text.split(text)
+    assert "".join(c + s for c, s in parts) == text and len(parts) > 1
+    assert all(c.endswith("</tr>") for c, _ in parts[:-1]) and parts[-1][0].endswith("</table>")
+    assert all(len(c) <= translate_text.CHUNK_CHARS for c, _ in parts)
+    md = "| Товар | Цена |\n|---|---|\n" + "\n".join(f"| Товар номер {i} | 1 250,00 руб. |" for i in range(200))
+    parts = translate_text.split(md)
+    assert "".join(c + s for c, s in parts) == md and len(parts) > 1
+    assert all(c.endswith("|") and s == "\n" for c, s in parts[:-1])
+
+
 def test_split_is_linear_on_long_whitespace_runs():
     """Ревью M9: `\\s*\\n\\s*\\n\\s*` перебирал пробельный пробег с каждой позиции — 100 000 пробелов за 11 с."""
     run = " " * 100_000
