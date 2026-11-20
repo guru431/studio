@@ -1161,6 +1161,17 @@ label.chip { cursor: pointer; }
 #edit-strength-label { max-width: 220px; }
 .dialog textarea.input { resize: vertical; line-height: 1.45; }
 .dialog .check { margin-bottom: var(--space-4); }
+/* профиль подключения (connection-profile.js) */
+#conn-profile-dialog { width: min(640px, calc(100 * var(--vw) - 32px)); }
+#conn-profile-dialog .profile-head { margin: var(--space-7) 0 var(--space-3); font-size: var(--fs-md); }
+#conn-profile-dialog .profile-count { margin-top: calc(-1 * var(--space-4)); text-align: end; }
+.profile-params { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 0 var(--space-6); }
+.profile-params .field { min-width: 0; }
+#conn-profile-dialog .profile-hint { margin: var(--space-2) 0 0; }
+.profile-suggestions { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.profile-suggestion { display: flex; gap: var(--space-3); align-items: flex-start; min-width: 0; }
+.profile-suggestion-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.profile-suggestion-tools { display: flex; flex-direction: column; }
 .edit-tools { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
 .edit-brush { display: flex; align-items: center; gap: var(--space-5); }
 #describe-photo { display: block; max-width: 100%; max-height: calc(24 * var(--vh)); margin: 0 auto var(--space-6); border-radius: var(--r-control); }

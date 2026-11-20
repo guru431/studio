@@ -626,7 +626,7 @@ function sharedModelsBlock(host) {
     const box = el('div', {});
     const dialog = openDialog(host, { id: 'shared-models-dialog', title, body: [box], cancelText: tr("Закрыть") });
     const view = settingsView(dialog, { sections: '/api/admin/shared/sections', connections: '/api/admin/shared/connections',
-      section: 'chat', shared: true, onChange: () => loadMe().catch(() => null),
+      section: 'chat', shared: true, profiles: true, onChange: () => loadMe().catch(() => null),
       access: (conn) => connectionAccess(dialog, conn) });
     box.append(view.el);
     view.reload();
