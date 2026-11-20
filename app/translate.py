@@ -16,8 +16,9 @@
    кроме Cleaner и блоков снимка. 503 — ждать и повторять раз в RETRY_SEC до WAIT_MAX_SEC («жду карту · м:сс»);
    обрезанный ответ — кусок пополам, половинки по очереди (их обрезка — ошибка); прочий отказ — кусок `failed`,
    запись — ошибка «кусок n из N: …», дальше не идёт.
-4. «Остановить» (`request_cancel`): ждущий — сразу «остановлено»; идущий — `cancelling`: поток куска бросается
-   на следующей дельте (обрыв шлюз дальше не передаёт, карту он не держит — модель дочитает сама), готовые
+4. «Остановить» (`request_cancel`): ждущий — сразу «остановлено»; идущий — `cancelling`: запрос к модели шлюза
+   (кусок, определение языка) и пауза ожидания карты обрываются сразу (`_abortable`, и до первой дельты: обрыв
+   шлюз дальше не передаёт, карту он не держит — модель дочитает сама); путь Cleaner — на следующем тексте; готовые
    куски остаются. Перезапуск службы — недоделанное и ждущее становится ошибкой «прервано» (`recover`).
 5. «Продолжить» (`resume`) — та же модель и тот же язык, только непереведённые куски: `failed` снова `waiting`.
 6. Файл (спека 6.4) — PDF, DOCX, TXT, MD: текст `documents.extract`, файл — в `media`. PDF со страницами без слоя
@@ -119,6 +120,7 @@ class Job:
     cancel: bool = False          # «Остановить»: бросить идущий кусок, готовые оставить
     stopped: bool = False         # stop_user: раннер оборван, итог — «остановлено»
     freed: bool = False           # модели картинок отпущены перед локальной моделью
+    request: "asyncio.Task | None" = None   # идущий запрос к модели шлюза — его обрывает «Остановить» (`_abortable`)
 
 
 #: записи в очереди и в работе (снимок подключения — для раннера); кончившееся уходит
@@ -229,6 +231,26 @@ def _check(job: Job) -> None:
         raise _Cancelled
 
 
+async def _abortable(job: Job, coro):
+    """Запрос к модели шлюза и пауза ожидания карты — дочерней задачей: «Остановить» (`request_cancel`) её
+    отменяет сразу, не дожидаясь первой дельты (холодный старт локальной модели — минуты). Карту под чат шлюз не
+    держит, ждать незачем; у распознавания так нельзя — шлюз досчитывает страницу. Обрыв остановкой — _Cancelled;
+    обрыв самого раннера (`stop`, `stop_user`) — CancelledError дальше."""
+    if job.cancel:
+        coro.close()
+        raise _Cancelled
+    task = asyncio.ensure_future(coro)
+    job.request = task
+    try:
+        return await task
+    except asyncio.CancelledError:
+        if job.cancel and task.cancelled() and not asyncio.current_task().cancelling():
+            raise _Cancelled from None
+        raise
+    finally:
+        job.request = None
+
+
 # ---- задание ---------------------------------------------------------------------
 
 async def _busy(job: Job, waited: "tuple[float, float] | None") -> tuple[float, float]:
@@ -245,7 +267,7 @@ async def _busy(job: Job, waited: "tuple[float, float] | None") -> tuple[float, 
     stage = job.stage
     job.stage, job.stage_at = "жду карту", shown
     _store(job)
-    await clock.SLEEP(RETRY_SEC)
+    await _abortable(job, clock.SLEEP(RETRY_SEC))
     _check(job)
     job.stage = stage
     _store(job)
@@ -286,8 +308,8 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
                 if not answer:
                     raise translate_text.TranslateError(translate_text.EMPTY)
                 return answer
-            return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks,
-                                              context=context)
+            return await _abortable(job, translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta,
+                                                              blocks=blocks, context=context))
         except translate_text.Busy:
             waited = await _busy(job, waited)
 
@@ -317,7 +339,8 @@ async def _languages(job: Job, row) -> tuple[str, str]:
         if origin is None and row["result_lang"] is None:
             # Cleaner receives every model-bound text through its checked request API, including language detection.
             # The translation prompt already supports AUTO; do not send a separate unreviewed request.
-            origin = (None if job.conn.cleaner else await translate_text.detect(job.conn, job.model, row["source"]))
+            origin = (None if job.conn.cleaner
+                      else await _abortable(job, translate_text.detect(job.conn, job.model, row["source"])))
             state.DB.execute("UPDATE translations SET detected_lang = ? WHERE id = ?", (origin, job.id))
         origin = origin or translate_text.AUTO
     lang = row["result_lang"]
@@ -614,6 +637,8 @@ async def request_cancel(user_id: int, tid: str) -> str:
     if row["state"] == "working" and job is not None:
         job.cancel = True
         state.DB.execute("UPDATE translations SET state = 'cancelling', detail = ? WHERE id = ?", (CANCELLING, tid))
+        if job.request is not None:              # запрос к модели — оборвать сразу (`_abortable`)
+            job.request.cancel()
         return "cancelling"
     return row["state"]
 

@@ -46,9 +46,9 @@ def row_of(s, tid):
                    and dict(r))
 
 
-def wait_row(s, tid, states=translate.TERMINAL):
+def wait_row(s, tid, states=translate.TERMINAL, limit=3000):
     wait_until(s, lambda: (r := state.DB.execute("SELECT state FROM translations WHERE id = ?", (tid,)).fetchone())
-               is not None and r["state"] in states)
+               is not None and r["state"] in states, limit)
     return row_of(s, tid)
 
 
@@ -380,7 +380,6 @@ def test_stop_keeps_done_parts_and_restart_interrupts(studio, monkeypatch):
                                                 (tid,)).fetchone()[0] == 1)
     r = studio.c.post(f"/api/translate/{tid}/cancel")
     assert r.json() == {"state": "cancelling"}
-    assert studio.c.get(f"/api/translate/{tid}").json()["detail"] == translate.CANCELLING
     held[0] = False
     row = wait_row(studio, tid)
     assert (row["state"], row["detail"], row["text"], row["done_parts"]) == ("cancelled", translate.CANCELLED, "Первый.", 1)
@@ -442,6 +441,23 @@ def test_stop_user_cancels_both_lanes(studio):
     assert [row_of(studio, t)["state"] for t in (running, waiting, filed)] == ["cancelled"] * 3
     assert translate.RUNNERS == {} and translate.JOBS == {}
     held[0] = False
+
+
+def test_stop_before_the_first_word_does_not_wait_for_the_model(studio):
+    """05:F19: «Остановить», пока модель молчит (холодный старт), обрывает запрос сразу: запись «остановлено»,
+    её можно удалить, следующий текст полосы идёт — без ожидания первой дельты; то же у определения языка."""
+    add_gateway(studio)
+    held = hold_chat(studio)
+    for source in ("en", "auto"):                    # перевод куска; определение языка
+        sent = paths(studio).count("/v1/chat/completions")
+        tid = start(studio, "Hello.", source=source)
+        wait_until(studio, lambda: paths(studio).count("/v1/chat/completions") > sent)
+        assert studio.c.post(f"/api/translate/{tid}/cancel").json()["state"] in ("cancelling", "cancelled")
+        row = wait_row(studio, tid, limit=50)
+        assert (row["state"], row["detail"]) == ("cancelled", translate.CANCELLED)
+        assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    held[0] = False
+    assert wait_row(studio, start(studio, "Next.", source="en"))["state"] == "done"
 
 
 # ---- API -------------------------------------------------------------------------------------------
