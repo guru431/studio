@@ -1871,6 +1871,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Имя: {0}": "Name: {0}",
   "Имена собеседников": "Speaker names",
   "Слушать с {0}": "Listen from {0}",
+  "Браузер не воспроизводит эту запись — слушать её и перематывать по репликам здесь нельзя. Текст расшифровки доступен.": "This browser cannot play the recording, so you cannot listen to it or jump to utterances here. The transcript is still available.",
   "изменено": "edited",
   "Реплика {0}": "Utterance {0}",
   "вернуть": "restore",
