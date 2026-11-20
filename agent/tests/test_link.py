@@ -237,6 +237,25 @@ async def test_revoked_stops_and_replaced_stops(fake_studio, agent):
     assert fake_studio.attempts == 2
 
 
+async def test_disabled_account_reconnects_with_pauses_after_on_disabled(fake_studio, agent):
+    """4403 — учётку отключили, ключ цел: ядро гасит ходы (`on_disabled`), канал — `disabled` и снова с паузами
+    `limits.BACKOFF`, пока студия не примет (после «Включить»)."""
+    pauses, disabled = Pauses(), []
+
+    async def on_disabled():
+        disabled.append(len(fake_studio.hellos))
+
+    lk, states, task = start(fake_studio, agent, sleep=pauses, on_disabled=on_disabled)
+    await fake_studio.connected()
+    await fake_studio.close(link.CLOSE_DISABLED)
+    await fake_studio.connected(2)
+    assert disabled == [1] and pauses.list == [1]
+    await until(lambda: states[-1] == "online")
+    assert states == ["connecting", "online", "disabled", "connecting", "online"]
+    await lk.stop()
+    assert await task == "stopped"
+
+
 async def test_unknown_key_is_revoked_without_pauses(fake_studio, agent):
     pauses = Pauses()
     lk, states, task = start(fake_studio, agent, key="other-key", sleep=pauses)

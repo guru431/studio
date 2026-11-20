@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 TITLE = "Studio Agent"
 ALREADY = "Мост уже запущен"
 WORDS = {"setup": "не настроен", "connecting": "подключается…", "online": "на связи", "offline": "нет связи",
-         "revoked": "компьютер отозван", "replaced": "ключ используется другим мостом"}
+         "revoked": "компьютер отозван", "replaced": "ключ используется другим мостом",
+         "disabled": "учётка отключена в студии"}
 PROBE_EVERY_SEC = 3600  # модели Claude Code — не чаще раза в час (решение плана 6)
 ACTIVITY_SEC = 0.25  # локальная индикация и штатный выход после завершения работы
 _UNKNOWN = object()  # версия `claude.exe` ещё не спрошена (`_main` её не ждёт)
@@ -53,9 +54,11 @@ def _same_url(a: str, b: str) -> bool:
 
 
 class Controller:
-    """Состояние (`state`) — `setup`, `connecting`, `online`, `offline`, `revoked`, `replaced`; слова — `WORDS`.
+    """Состояние (`state`) — `setup`, `connecting`, `online`, `offline`, `disabled`, `revoked`, `replaced`; слова —
+    `WORDS`.
 
-    `revoked` и `replaced` — канал не поднимается до новой настройки (`restart_link`)."""
+    `revoked` и `replaced` — канал не поднимается до новой настройки (`restart_link`); `disabled` (учётку отключили
+    в студии) — ходы прерваны, канал переподключается сам, как `offline`."""
 
     def __init__(self, h: Path, *, link_factory=Link, sdk_factory=ClaudeSDKClient, find_cli=cli.find_cli,
                  cli_version=cli.cli_version, probe=cli.probe, enroll_fn=enroll.enroll, unenroll_fn=enroll.unenroll,
@@ -639,7 +642,8 @@ class Controller:
                     backend.reopen()
             gen = self._gen
             self._link = self._link_factory(cfg.url, key, self.agent, lambda s: self._on_link(gen, s),
-                                            on_welcome=lambda f: self._on_welcome(gen, f))
+                                            on_welcome=lambda f: self._on_welcome(gen, f),
+                                            on_disabled=lambda: self._on_disabled(gen))
             self._link_task = asyncio.create_task(self._run_link(self._link, gen))
 
     def _on_link(self, gen: int, state: str) -> None:
@@ -659,6 +663,15 @@ class Controller:
         if state in ("revoked", "replaced") and gen == self._gen:
             await self.agent.software.close()
             await self._close_runners(hold=True)  # и после: просьба turn в пути хода не начнёт — до нового канала
+            self.agent.open.clear()
+
+    async def _on_disabled(self, gen: int) -> None:
+        """4403 — учётку отключили в студии: идущие ходы прерываются, открытые сессии прочь, как при отзыве, но ключ
+        цел и канал переподключается сам: после «Включить» компьютер вернётся без новой привязки. Ходы не держатся
+        (`hold`): пока учётка отключена, канала и просьб нет."""
+        if gen == self._gen:
+            await self.agent.software.close()
+            await self._close_runners()
             self.agent.open.clear()
 
     async def _close_runners(self, **kwargs):
@@ -736,7 +749,7 @@ class Controller:
             await self._sleep(PROBE_EVERY_SEC)
             if self.agent.cfg.projects_root:
                 await self._refresh_cli()
-                if await self._refresh_models() and self.state in ("connecting", "online", "offline"):
+                if await self._refresh_models() and self.state in ("connecting", "online", "offline", "disabled"):
                     log.info("модели Claude Code сменились: %d — канал заново", len(self.agent.models))
                     await self._relink_task()
 

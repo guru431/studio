@@ -851,7 +851,8 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("click", f"{rid} .user-reset"), ("wait", is_open("#reset-dialog")),
         ("type", "#reset-dialog [name=password]", "brand-new-pass"), ("click", "#reset-save"),
         ("wait", "!" + is_open("#reset-dialog")),
-        ("click", f"{rid} .user-toggle"),
+        ("click", f"{rid} .user-toggle"), ("wait", is_open("#disable-dialog")),   # отключение — с подтверждением
+        ("click", "#disable-confirm"), ("wait", "!" + is_open("#disable-dialog")),
         ("wait", f"document.querySelector('{rid} td[data-col=disabled]').textContent === 'да'"),
         ("eval", "toggle", f"document.querySelector('{rid} .user-toggle').textContent"),
         ("eval", "selfDelete", "document.querySelector('#users tr[data-login=owner] .user-delete').disabled"),
