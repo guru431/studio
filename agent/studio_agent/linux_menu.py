@@ -127,7 +127,7 @@ def dispatch(ctrl, op, value):
                 "url": cfg.url, "name": cfg.name, "login": cfg.login, "id": cfg.agent_id,
                 "enrolled": ctrl.enrolled, "roots": cfg.projects_roots, "pin": ctrl.pin_status(),
                 "autostart": ctrl.autostart_enabled(), "max_turns": cfg.max_turns,
-                "desktop": cfg.desktop_enabled, "display": diagnostic(), "activity": ctrl.activity_status(),
+                "desktop": cfg.desktop_enabled, "display": tr(diagnostic()), "activity": ctrl.activity_status(),
                 "backends": ctrl.backend_status(), "cli": {name: bool(host.find_tool(name))
                     for name in ("claude", "codex", "opencode")}}
     if op == "enroll":
