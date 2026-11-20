@@ -331,7 +331,7 @@ def test_scan_made_by_a_protected_section_is_closed_everywhere(studio, closed):
 
 
 #: голова пути /api/<голова>/… → раздел: всё под ней закрывает защита этого раздела
-SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "images": "photo", "presets": "photo", "videos": "video",
+SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "images": "photo", "presets": "photo", "videos": "video",
                  "transcripts": "transcribe", "transcribe": "transcribe", "voices": "speech", "speeches": "speech",
                  "speech": "speech", "ocr": "ocr", "translate": "translate", "code": "code", "agents": "code"}
 #: прочие маршруты /api/* — явно. "closed" — закрыт любой частичной защитой (управление защитой, уведомлениями,
@@ -368,6 +368,8 @@ ROUTES = {
         ("DELETE", "/api/admin/groups/{gid}"), ("PUT", "/api/admin/groups/{gid}/members"),
         ("GET", "/api/admin/shared/connections/{cid}/access"), ("PUT", "/api/admin/shared/connections/{cid}/access"),
         ("GET", "/api/admin/shared/mcp/{sid}/access"), ("PUT", "/api/admin/shared/mcp/{sid}/access"),
+        ("GET", "/api/admin/roles"), ("POST", "/api/admin/roles"), ("PATCH", "/api/admin/roles/{did}"),
+        ("DELETE", "/api/admin/roles/{did}"),
         ("DELETE", "/api/history"), ("PATCH", "/api/me"), ("DELETE", "/api/me/exa-key"), ("PUT", "/api/me/exa-key"),
         ("POST", "/api/me/export"), ("GET", "/api/me/export/{token}"), ("GET", "/api/me/export/{token}/check"),
         ("DELETE", "/api/me/ntfy"),
