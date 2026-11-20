@@ -96,7 +96,8 @@ def test_ntfy_follows_the_device_language_after_save_and_after_switching(browser
 
 def test_ntfy_form_remembers_server_and_topic_but_not_the_token_after_a_new_sign_in(browser, live, monkeypatch):
     """FINDINGS 06:F11: настройка ntfy уходит с сессией; после нового входа форма подставляет сервер и тему последнего
-    сохранения этого браузера (localStorage `studio-ntfy:<id>`), токен вводится заново и в браузере не хранится."""
+    сохранения этого браузера (localStorage `studio-ntfy:<id>`), токен вводится заново и в браузере не хранится;
+    явный «Выйти» запомненное забывает."""
     login = 'ntfy-again'
     uid = live.add_user(login)
     conn = db.connect(live.db_path)
@@ -121,10 +122,14 @@ def test_ntfy_form_remembers_server_and_topic_but_not_the_token_after_a_new_sign
     again = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/notifications'), ('wait', ready),
         ('eval', 'form', form), ('eval', 'note', "document.querySelector('#ntfy-status').textContent"),
         ('eval', 'server', "fetch('/api/me/ntfy').then(r => r.json()).then(v => v.configured)"),
+        # явный «Выйти» (форма меню) забывает сервер и тему: на общем компьютере тема не остаётся
+        ('eval', 'forgot', "(() => { document.querySelector('form[action=\"/logout\"]').dispatchEvent("
+                           f"new Event('submit', {{ bubbles: true, cancelable: true }})); return localStorage.getItem('studio-ntfy:{uid}'); }})()"),
         ('eval', 'out', "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")], width=320, mobile=True)
     assert not again.get('failed'), again
     assert again['values']['form'] == ['https://psh.example.net', 'ui-again-topic', '', False, True]
     assert again['values']['note'] == ('Сервер и тема — с прошлой настройки на этом устройстве.'
                                        ' Токен, если он нужен, введите заново и сохраните.')
     assert again['values']['server'] is False             # подстановка — только в форме, сервер ничего не сохранил
+    assert again['values']['forgot'] is None
     assert not problems(first) and not problems(again), (problems(first), problems(again))
