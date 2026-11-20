@@ -475,7 +475,7 @@ function build(view, ctx) {
 
   function download(format) {
     if (!rec) return;
-    el('a', { href: `/api/translate/${encodeURIComponent(rec.id)}/export?format=${format}`, download: '' }).click();
+    el('a', { href: `/api/translate/${encodeURIComponent(rec.id)}/export?format=${format}&lang=${language()}`, download: '' }).click();
   }
 
   /* перевод */

@@ -990,6 +990,13 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
     text = wait_row(studio, start(studio, "Hello."))["id"]
     r = studio.c.get(f"/api/translate/{text}/export?format=txt")
     assert r.headers["content-disposition"] == media.disposition("Перевод.ru.txt")
+    # FINDINGS 05:F10: имя выгрузки текста — на языке интерфейса (`lang`), имя файла пользователя — как есть
+    r = studio.c.get(f"/api/translate/{text}/export?format=docx&lang=en")
+    assert r.headers["content-disposition"] == media.disposition("Translation.ru.docx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        assert next(ElementTree.fromstring(z.read("word/document.xml")).iter(f"{w}t")).text == "Translation"
+    r = studio.c.get(f"/api/translate/{tid}/export?format=txt&lang=en")
+    assert r.headers["content-disposition"] == media.disposition("Договор.ru.txt")
 
     # аудит 05:F13: перевод на арабский — абзацы текста справа налево, заголовок-имя — как есть
     studio.gw.chat_script = [["مرحبا."]]

@@ -1,6 +1,7 @@
 """Language selection across pages, sections, devices and browser engines."""
 import json
 from pathlib import Path
+import uuid
 
 import httpx
 import pytest
@@ -8,9 +9,10 @@ import pytest
 from browser import run_playwright
 
 import code_actions
+import db
 
-from test_ui_browser import (CODE_CHAT_A, READY, browser, code_chat, code_free_machine,
-                             code_online, code_session, go, live, problems, set_value, signin)
+from test_ui_browser import (CLICKS, CODE_CHAT_A, READY, add_gateway, browser, code_chat, code_free_machine,
+                             code_online, code_session, go, live, problems, put_audio, set_value, signin, wav_of)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -22,9 +24,11 @@ def test_language_choice_persists_across_login_sections_and_reload(browser, live
     steps = [
         ('wait', "document.querySelector('#login-language')"),
         ('eval', 'default', 'document.documentElement.lang'),
+        ('eval', 'manifestRu', "document.querySelector('link[rel=manifest]').getAttribute('href')"),
         set_value('#login-language', 'en'),
         ('wait', "document.documentElement.lang === 'en' && document.querySelector('#login-language')?.value === 'en'"),
         ('eval', 'login', "[document.title, document.querySelector('#submit').textContent]"),
+        ('eval', 'manifestEn', "fetch(document.querySelector('link[rel=manifest]').href).then(r => r.json()).then(m => m.name)"),
         *signin(login, 'incorrect-password')[1:],
         ('wait', "document.querySelector('p.error')?.textContent === 'Incorrect login or password'"),
         set_value('#login', login), set_value('#password', 'password-123'), ('click', '#submit'), ('wait', READY),
@@ -64,6 +68,7 @@ def test_language_choice_persists_across_login_sections_and_reload(browser, live
     values = result['values']
     assert values['default'] == 'ru'
     assert values['login'] == ['Studio — sign in', 'Sign in']
+    assert values['manifestRu'] == '/manifest.webmanifest' and values['manifestEn'] == 'Studio'
     assert values['choice'] == 'en'
     assert 'English' in values['languages'] and 'Russian' in values['languages']
     assert values['contracts'] == ['Чат', 'Name device: Чат', ['file', 'files', 'files', 'files'], 'January 1, 2026']
@@ -114,13 +119,55 @@ def test_english_touch_settings_errors_and_public_pages_in_other_engines(live, e
                     assert page.title() == title
                     assert page.evaluate('document.documentElement.lang') == 'en'
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                # an address without the secret is refused at once: the button stays disabled (share-view.js checkAddress)
+                assert page.locator('#share-open').is_disabled()
+                assert page.locator('#share-error').inner_text() == 'Invalid link'
+                page.goto(live.url + '/share#' + 'A' * 43)
                 page.locator('#share-pin').fill('1234')
                 page.locator('#share-open').tap()
-                assert page.locator('#share-error').inner_text() == 'Invalid link'
+                page.wait_for_function("() => document.querySelector('#share-error').textContent !== ''")
+                assert page.locator('#share-error').inner_text() == 'link unavailable or disabled'
                 page.goto(live.url + '/#/settings/appearance')
                 page.locator('#interface-language').select_option('ru')
                 page.wait_for_function("() => document.documentElement.lang === 'ru'")
                 assert not errors, errors
+
+
+def test_english_downloads_ask_for_english_files(browser, live):
+    """FINDINGS 04:F16, 06:F4: the page passes the device language to downloads — `lang=en` in a file link and in
+    the chat export body; the server writes Studio's words in English, the recording's text stays as is."""
+    login = 'english-downloads'
+    live.add_user(login)
+    conn = db.connect(live.db_path)
+    uid = conn.execute('SELECT id FROM users WHERE login = ?', (login,)).fetchone()[0]
+    cid = uuid.uuid4().hex
+    conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES(?,?,'Мой чат',0,0)", (cid, uid))
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created) VALUES(?,?,'user','Вопрос','done','server',0)",
+                 (uuid.uuid4().hex, cid))
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                 " VALUES(?,?,'assistant','Ответ','done','server',1)", (uuid.uuid4().hex, cid))
+    conn.close()
+    spy = """(() => { window.bodies = []; const real = window.fetch;
+      window.fetch = (url, options) => { if (String(url).includes('/export')) window.bodies.push(options.body);
+        return real(url, options); }; return true; })()"""
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), add_gateway(),
+        *go('transcribe'), ('wait', "document.querySelector('#transcribe-add input')"),
+        put_audio('#transcribe-add input', wav_of(1.0)),
+        ('wait', "document.querySelectorAll('.tr-view .tr-turn').length === 2"),
+        ('eval', 'spy', CLICKS), ('click', '#tr-download'), ('click', '.tr-formats [data-format=txt]'),
+        ('wait', 'window.clicked.length === 1'), ('eval', 'link', 'window.clicked[0][0]'),
+        ('eval', 'file', 'fetch(window.clicked[0][0]).then(r => r.text())'),
+        ('eval', 'fetchSpy', spy), *go('chat/' + cid),
+        ('wait', "document.querySelector('#chat-share') && !document.querySelector('#chat-share').disabled"),
+        ('click', '#chat-share'), ('click', '#chat-share-menu [data-action="md"]'),
+        ('wait', 'window.bodies.length === 1'), ('eval', 'body', 'JSON.parse(window.bodies[0])')],
+        init="localStorage.setItem('studio-language', 'en')")
+    assert not result.get('failed'), result
+    values = result['values']
+    assert values['link'].endswith('/export?format=txt&lang=en')
+    assert values['file'].startswith('Speaker 1 · 00:00\nЗдравствуйте.')
+    assert values['body'] == {'format': 'md', 'title': 'Мой чат', 'lang': 'en'}
+    assert not problems(result), problems(result)
 
 
 def test_english_default_action_labels_keep_prompts_and_custom_titles(browser, live):

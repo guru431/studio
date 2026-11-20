@@ -58,7 +58,7 @@ assert.equal(runtime(null, true).locale(), 'ru-RU');
 function page(saved, browserDefault, browserLanguage) {
   const html = { dataset: browserDefault ? { languageDefault: 'browser' } : {} };
   const context = vm.createContext({ localStorage: { getItem: () => saved }, navigator: { language: browserLanguage },
-    document: { documentElement: html, addEventListener() {} } });
+    document: { documentElement: html, addEventListener() {}, querySelector: () => null } });
   for (const file of ['en.js', 'i18n.js']) vm.runInContext(fs.readFileSync(root + '/' + file, 'utf8'), context);
   return context.StudioI18n.language();
 }

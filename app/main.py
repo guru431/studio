@@ -2,7 +2,7 @@
 
 Служба слушает только unix-сокет за Apache. Анонимны `/health`, `/login` (страница и вход),
 `/logout`, `/robots.txt` (роботам — ничего), PIN-вход `/share` и оболочка PWA: `/static/*`, `/manifest.webmanifest`,
-`/sw.js`, `/offline.html`, значки из корня (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`,
+`/manifest.en.webmanifest`, `/sw.js`, `/offline.html`, значки из корня (`/apple-touch-icon.png`, `/apple-touch-icon-precomposed.png`,
 `/favicon.ico`); `/` без живой сессии уводит на вход, всё `/api/*` стережёт `auth.guard`.
 Почтовые `/account/*` имеют собственные проверки Origin, тела, токенов и пауз (`email_accounts`).
 Публичные `/share/unlock`, `/share/check`, `/share/file` проверяют отдельные PIN/read-токены;
@@ -251,8 +251,10 @@ async def service_worker():
 
 
 @app.api_route("/manifest.webmanifest", methods=PAGE)
-async def manifest():
-    return FileResponse(auth.STATIC / "manifest.webmanifest", media_type="application/manifest+json",
+@app.api_route("/manifest.en.webmanifest", methods=PAGE)
+async def manifest(request: Request):
+    """Английский — для английского интерфейса: ранний static/i18n.js меняет `<link rel="manifest">` до установки."""
+    return FileResponse(auth.STATIC / request.url.path.removeprefix("/"), media_type="application/manifest+json",
                         headers={"Cache-Control": "no-cache"})
 
 
