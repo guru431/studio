@@ -546,6 +546,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 /* «Сканы» (ocr.js): листалка и две колонки — картинка страницы и её текст; на телефоне — одна */
 .ocr-view { width: 100%; max-width: 1400px; margin: 0 auto; padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-6); }
 .ocr-meta { margin: 0; }
+.ocr-failed { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); margin: 0; color: var(--warn); }
 .ocr-pager { display: flex; align-items: center; gap: var(--space-5); }
 .ocr-pager .btn { min-width: var(--h-md); padding: var(--space-3) var(--space-5); font-size:var(--fs-xl); line-height: 1; }
 .ocr-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-7); align-items: start; }
