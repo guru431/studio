@@ -2,6 +2,7 @@
 import logging
 import re
 import sqlite3
+from dataclasses import replace
 
 import pytest
 from fastapi import HTTPException
@@ -71,6 +72,45 @@ def test_invitation_registers_verified_email_and_self_selected_credentials(studi
     assert studio.c.get("/api/admin/invitations").status_code == 403
     for private in (secret, PASSWORD, "friend1", "friend12", "friend@example.com", "Private admin note"):
         assert private not in caplog.text
+
+
+def test_invitation_can_be_redeemed_on_the_configured_second_address(studio, mail, monkeypatch):
+    alternate = "https://192.0.2.101:8443"
+    host = {"Host": "192.0.2.101:8443"}
+    admin(studio)
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, alternate_origin=alternate))
+    _, secret = invite(studio, mail)
+    assert alternate + "/account/invite#" + secret in mail[-1][2]
+
+    path, body = "/account/invite/check", {"token": secret}
+    assert studio.c.post(path, json=body, headers={**host, "Origin": alternate}).status_code == 200
+    assert studio.c.post(path, json=body, headers={"Origin": alternate}).status_code == 403
+    assert studio.c.post(path, json=body, headers={**host, "Origin": "https://testserver"}).status_code == 403
+    assert studio.c.post(path, json=body, headers={**host, "Origin": "https://foreign.example"}).status_code == 403
+
+    response = studio.c.post("/account/invite/accept", headers={**host, "Origin": alternate},
+                             json={"token": secret, "login": "friend", "password": PASSWORD})
+    assert response.status_code == 201
+    assert studio.c.post(path, json=body).status_code == 400
+    studio.c.cookies.clear()
+    response = studio.c.post("/login", data={"login": "friend", "password": PASSWORD},
+                             headers={**host, "Origin": alternate}, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_account_links_that_follow_a_request_use_its_configured_address(studio, mail, monkeypatch):
+    alternate = "https://192.0.2.101:8443"
+    same_origin = {"Host": "192.0.2.101:8443", "Origin": alternate}
+    admin(studio)
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, alternate_origin=alternate))
+    response = studio.c.post("/api/me/email", headers=same_origin,
+                             json={"email": "new@example.com", "password": PASSWORD})
+    assert response.status_code == 200
+    assert alternate + "/account/verify#" in mail[-1][2]
+
+    response = studio.c.post("/account/forgot", headers=same_origin, json={"login": "owner"})
+    assert response.status_code == 200
+    assert alternate + "/account/reset#" in mail[-1][2]
 
 
 def accept(studio, mail, email, name):

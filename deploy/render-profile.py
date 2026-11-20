@@ -7,7 +7,7 @@ import re
 import sys
 import tarfile
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 import zipfile
 
 
@@ -15,6 +15,16 @@ TEMPLATES = {"deploy/install.sh", "deploy/studio-web.service",
              "deploy/studio-backup.service", "deploy/apache-vhost.conf",
              "deploy/docker/host.conf", "deploy/docker/nginx.conf",
              "deploy/docker/studio-docker.service", "deploy/docker/studio-backup.service"}
+
+
+def https_origin(value: str, name: str) -> SplitResult:
+    parsed = urlsplit(value)
+    base = f"https://{parsed.netloc}"
+    if (value not in {base, base + "/"} or not parsed.hostname
+            or not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", parsed.netloc)
+            or parsed.port == 0):
+        raise ValueError(f"Invalid {name}")
+    return parsed
 
 
 def settings(environ):
@@ -40,16 +50,19 @@ def settings(environ):
             raise ValueError(f"Invalid {name}")
         replacements.append((default, str(path)))
     origin = environ.get("STUDIO_URL", "https://studio.example.com")
-    parsed = urlsplit(origin)
-    parsed.port  # Validate the port before including the origin in configuration.
-    if (any(character.isspace() for character in origin)
-            or parsed.scheme != "https" or not parsed.hostname or parsed.username
-            or parsed.password or parsed.path not in {"", "/"}
-            or parsed.query or parsed.fragment
-            or not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", parsed.netloc)):
-        raise ValueError("Invalid STUDIO_URL")
+    parsed = https_origin(origin, "STUDIO_URL")
     replacements.append(("https://studio.example.com", origin.rstrip("/")))
     replacements.append(("studio.example.com", parsed.hostname))
+    alternate = environ.get("STUDIO_ALTERNATE_ORIGIN")
+    if alternate:
+        secondary = https_origin(alternate, "STUDIO_ALTERNATE_ORIGIN")
+        if (environ.get("STUDIO_RUNTIME") != "docker"
+                or (secondary.hostname, secondary.port or 443) == (parsed.hostname, parsed.port or 443)):
+            raise ValueError("STUDIO_ALTERNATE_ORIGIN needs Docker and a different HTTPS origin")
+        port = f":{secondary.port}" if secondary.port not in {None, 443} else ""
+        replacements.append(("STUDIO_ALTERNATE_ORIGIN=", f"STUDIO_ALTERNATE_ORIGIN=https://{secondary.hostname}{port}"))
+        replacements.append(("# Preserve Host when a second origin is configured.",
+                             "ServerAlias " + secondary.hostname + "\n    ProxyPreserveHost On"))
     apache_port = environ.get("STUDIO_APACHE_PORT", "8443")
     if not apache_port.isascii() or not apache_port.isdecimal() or not 1 <= int(apache_port) <= 65535:
         raise ValueError("Invalid STUDIO_APACHE_PORT")

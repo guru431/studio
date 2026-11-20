@@ -16,6 +16,7 @@ class Config:
     origin: str
     hairpin_ip: str = "10.77.1.1"
     cleaner_ca: Path | None = None
+    alternate_origin: str = ""
 
     @property
     def tmp_dir(self) -> Path:
@@ -34,4 +35,5 @@ def load() -> Config:
     return Config(data_key=os.environ["STUDIO_DATA_KEY"], db_path=Path(os.environ["STUDIO_DB"]),
                   media_dir=Path(os.environ["STUDIO_MEDIA_DIR"]), origin=os.environ["STUDIO_ORIGIN"],
                   hairpin_ip=os.environ.get("STUDIO_HAIRPIN_IP", Config.hairpin_ip),
-                  cleaner_ca=Path(os.environ["STUDIO_CLEANER_CA"]) if os.environ.get("STUDIO_CLEANER_CA") else None)
+                  cleaner_ca=Path(os.environ["STUDIO_CLEANER_CA"]) if os.environ.get("STUDIO_CLEANER_CA") else None,
+                  alternate_origin=os.environ.get("STUDIO_ALTERNATE_ORIGIN", "").rstrip("/"))

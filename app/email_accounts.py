@@ -161,8 +161,8 @@ async def public_data(request: Request) -> dict:
     return data
 
 
-def link(kind: str, token: str) -> str:
-    return state.CFG.origin.rstrip("/") + "/account/" + kind + "#" + token
+def link(kind: str, token: str, origin: str | None = None) -> str:
+    return (origin or state.CFG.origin.rstrip("/")) + "/account/" + kind + "#" + token
 
 
 async def login_code(uid: int, request: Request, next_: str, kind: str = "login") -> str:
@@ -259,10 +259,13 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if not old:
         state.DB.execute("INSERT INTO invitations(id,email,comment,is_admin,invited_by,created,expires) VALUES (?,?,?,?,?,?,?)",
                          (iid, body.email, body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC))
+    links = link("invite", token)
+    if state.CFG.alternate_origin:
+        links += "\n\nДругой адрес / Alternate address\n" + link("invite", token, state.CFG.alternate_origin)
     await account_mail.send_admin(body.email, "Приглашение в Студию / Invitation to Studio",
                                   "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
                                   "You are invited to Studio. Choose a login and password with this one-time link,"
-                                  " valid for 48 hours.\n\n" + link("invite", token))
+                                  " valid for 48 hours.\n\n" + links)
     # После SMTP снова проверить права пригласившего и состояние приглашения.
     inviter = state.DB.execute("SELECT is_admin,disabled FROM users WHERE id=?", (admin.id,)).fetchone()
     if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
@@ -365,13 +368,13 @@ async def accept_invite(request: Request):
     return {"ok": True}
 
 
-async def recovery_mail(token: str, email: str) -> None:
+async def recovery_mail(token: str, email: str, origin: str | None) -> None:
     try:
         await account_mail.send(email, "Студия: восстановление пароля / Studio: password recovery",
                                 "Чтобы задать новый пароль, откройте одноразовую ссылку, она действует 30 минут."
                                 " Если вы не запрашивали её, проигнорируйте письмо.\n"
                                 "To set a new password, open this one-time link, valid for 30 minutes."
-                                " If you did not request it, ignore this email.\n\n" + link("reset", token))
+                                " If you did not request it, ignore this email.\n\n" + link("reset", token, origin))
     except HTTPException:
         delete_token(token)
 
@@ -392,7 +395,7 @@ async def forgot(request: Request, tasks: BackgroundTasks):
             pass
         else:
             token = new_token(row["id"], "reset", row["email"], RESET_SEC)
-            tasks.add_task(recovery_mail, token, row["email"])
+            tasks.add_task(recovery_mail, token, row["email"], auth.request_origin(request))
     return {"message": "Если учётная запись найдена, на её почту отправлена ссылка восстановления."}
 
 
@@ -475,7 +478,8 @@ async def request_email(body: EmailIn, request: Request):
                                 "Подтвердите адрес почты для своей учётной записи. Ссылка действует 30 минут;"
                                 " откройте её в браузере, где вошли в Студию.\n"
                                 "Confirm the email address of your account. The link is valid for 30 minutes;"
-                                " open it in the browser where you are signed in to Studio.\n\n" + link("verify", token))
+                                " open it in the browser where you are signed in to Studio.\n\n"
+                                + link("verify", token, auth.request_origin(request)))
     except HTTPException:                # письмо не ушло — попытку вернуть (адрес свободен: 409 не возвращается)
         delete_token(token)
         refund("email-user", str(uid))
