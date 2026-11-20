@@ -253,6 +253,7 @@ function passwordBlock() {
   const input = (id, autocomplete) => el('input', { class: 'input', id, type: 'password', autocomplete, maxlength: '1024' });
   const current = input('pw-current', 'current-password');
   const fresh = input('pw-new', 'new-password');
+  fresh.placeholder = tr("не короче 8 знаков");       // минимум — до отказа сервера, как в панели
   const repeat = input('pw-repeat', 'new-password');
   const note = status('password-status');
   const save = button(tr("Сменить пароль"), { class: 'btn', id: 'password-save' });
