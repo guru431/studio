@@ -83,7 +83,7 @@ def hidden_scans(uid: int, closed) -> tuple[str, tuple]:
 #: раздел → таблицы и столбцы файлов его истории; сканы и снимки «Поделиться» — отдельными запросами
 #: `media_sections`. Вместе — все ссылки `media.REFERENCES` (сверяет tests/test_lock_policy.py).
 MEDIA_SOURCES = {
-    "chat": (("attachments", ("media_id",)),),
+    "chat": (("attachments", ("media_id",)), ("chat_media", ("media_id",))),
     "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
     "video": (("videos", ("media_id", "source_media_id")),),
     "transcribe": (("transcripts", ("source_media_id", "result_media_id")),),

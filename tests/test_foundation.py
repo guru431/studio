@@ -66,8 +66,10 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
 
 
 def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(env):
-    """Шаг 57: профили подключений, роли, состояние MCP диалога, загрузки на MCP; прежний код пишет `chats` своим
-    списком столбцов; профиль уходит с подключением, роль — из диалога, загрузки — с сервером и вложением."""
+    """Шаг 57: профили подключений, роли, состояние MCP диалога (и согласие на передачу файлов), политика
+    инструментов, медиа диалога, загрузки на MCP; прежний код пишет `chats` своим списком столбцов; профиль уходит
+    с подключением, роль — из диалога, политика и загрузки — с сервером, загрузки — с вложением или медиа, медиа —
+    с диалогом и учёткой."""
     from contextlib import closing
     import sqlite3
     with closing(db.connect(env.db_path)) as conn:
@@ -122,9 +124,54 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         conn.execute("DELETE FROM mcp_servers WHERE id = ?", (sid,))
         assert conn.execute("SELECT count(*) FROM mcp_uploads").fetchone()[0] == 0
 
+        # согласие на передачу файлов, политика инструментов, медиа диалога и их загрузки на MCP
+        assert columns("mcp_tool_policy") == {"server_id", "tool", "open_world", "confirm"}
+        assert columns("chat_media") == {"id", "chat_id", "user_id", "name", "mime", "size", "media_id", "created"}
+        assert columns("mcp_media_uploads") == {"chat_media_id", "server_id", "artifact_id", "path", "stamp", "created"}
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index')")}
+        assert {"mcp_tool_policy_server_delete", "mcp_media_uploads_server_delete", "chat_media_chat"} <= names
+        assert {r[0] for r in conn.execute("SELECT mcp_file_consent FROM chats")} == {"{}"}   # прежние и прежний код
+        sid, other = (conn.execute("INSERT INTO mcp_servers(user_id,name,url,secret_enc)"
+                                   " VALUES(NULL,'tools','https://x.test/mcp','s')").lastrowid for _ in range(2))
+        policy = "INSERT INTO mcp_tool_policy VALUES(?, ?, ?, ?)"
+        conn.execute(policy, (sid, "search", 1, "always"))
+        conn.execute(policy, (sid, "read", None, None))
+        conn.execute(policy, (other, "search", 0, "never"))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(policy, (sid, "bad", 2, None))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(policy, (sid, "search", 0, None))
+        media = "INSERT INTO chat_media VALUES(?, ?, 1, 'a.mp4', 'video/mp4', 1, 'm1', 0)"
+        for mid, chat in (("cm1", "before"), ("cm2", "before"), ("cm3", "previous")):
+            conn.execute(media, (mid, chat))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(media, ("cm4", "missing"))
+        assert "chat_media_chat" in " ".join(
+            r[-1] for r in conn.execute("EXPLAIN QUERY PLAN SELECT * FROM chat_media WHERE chat_id = 'before'"))
+        media_upload = "INSERT INTO mcp_media_uploads VALUES(?, ?, 'art_1', '/in/a.mp4', 'stamp', 1)"
+        for mid in ("cm1", "cm2", "cm3"):
+            conn.execute(media_upload, (mid, sid))
+            conn.execute(media_upload, (mid, other))
+        conn.execute("DELETE FROM chat_media WHERE id = 'cm1'")                 # загрузки — с медиа
+        assert {r[0] for r in conn.execute("SELECT chat_media_id FROM mcp_media_uploads")} == {"cm2", "cm3"}
+        conn.execute("DELETE FROM mcp_servers WHERE id = ?", (sid,))           # политика и загрузки — с сервером
+        assert [tuple(r) for r in conn.execute("SELECT server_id, tool FROM mcp_tool_policy")] == [(other, "search")]
+        assert {r[0] for r in conn.execute("SELECT server_id FROM mcp_media_uploads")} == {other}
+        conn.execute("DELETE FROM chats WHERE id = 'previous'")                 # медиа — с диалогом, загрузки — с медиа
+        assert [r[0] for r in conn.execute("SELECT id FROM chat_media")] == ["cm2"]
+        assert [r[0] for r in conn.execute("SELECT chat_media_id FROM mcp_media_uploads")] == ["cm2"]
+        conn.execute("DELETE FROM mcp_servers WHERE id = ?", (other,))
+        assert conn.execute("SELECT count(*) FROM mcp_tool_policy").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM mcp_media_uploads").fetchone()[0] == 0
+        conn.execute(media_upload, ("cm2", other))                              # загрузка уходит с учёткой
+
         conn.execute("INSERT INTO chat_roles(id,user_id,name,text,position) VALUES('r2',1,'x','t',0)")
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('third',1,'T',0,0)")
+        conn.execute(media, ("cm5", "third"))
         conn.execute("DELETE FROM users WHERE id = 1")
         assert conn.execute("SELECT count(*) FROM chat_roles").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM chat_media").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM mcp_media_uploads").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

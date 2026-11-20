@@ -457,6 +457,7 @@ REFERENCES = {
     "images": ("media_id", "source_media_id", "mask_media_id"),
     "videos": ("media_id", "source_media_id"),
     "attachments": ("media_id",),
+    "chat_media": ("media_id",),                # звук и видео диалога для MCP
     "transcripts": ("source_media_id", "result_media_id"),
     "voices": ("media_id",),
     "voice_samples": ("media_id",),
@@ -466,8 +467,9 @@ REFERENCES = {
     "translations": ("source_media_id",),
     "chat_share_files": ("media_id",),          # своего user_id нет — владелец у chat_shares
 }
-#: `*media_id`, которые не ссылки: очередь удаления держит путь файла, чьей строки уже нет
-NOT_REFERENCES = {("purge", "media_id")}
+#: `*media_id`, которые не ссылки: очередь удаления держит путь файла, чьей строки уже нет; загрузка на MCP
+#: ссылается на строку `chat_media`, а не на файл
+NOT_REFERENCES = {("purge", "media_id"), ("mcp_media_uploads", "chat_media_id")}
 
 
 def _owned(table: str, columns: tuple) -> str:
@@ -482,7 +484,7 @@ _REFERENCED = " UNION ALL ".join(_owned(t, c) for t, c in REFERENCES.items()) + 
 
 
 def referenced(user_id: int, media_id: str) -> bool:
-    """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик, вложение чата,
+    """На файл ссылается запись истории — картинка (итог, исходник, маска), ролик, вложение или медиа чата,
     расшифровка (запись, итог), голос, озвучка, документ распознавания (исходник) или его страница,
     перевод (исходный файл или снимок), снимок «Поделиться» (REFERENCES): удаление другой записи его не трогает."""
     return state.DB.execute(_REFERENCED, (user_id, media_id) * len(REFERENCES)).fetchone() is not None
