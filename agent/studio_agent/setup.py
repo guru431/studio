@@ -8,6 +8,7 @@ import unicodedata
 from pathlib import Path
 
 from . import enroll, store
+from .i18n import tr
 from .pin import PIN_RE, PinStore
 
 NAME_MAX = 64
@@ -39,7 +40,7 @@ def folders(form: dict) -> list[str]:
 
 
 def folder_errors(roots: list[str]) -> list[str]:
-    return [] if roots and all(root and Path(root).is_dir() for root in roots) else [NO_FOLDER]
+    return [] if roots and all(root and Path(root).is_dir() for root in roots) else [tr(NO_FOLDER)]
 
 
 def validate(form: dict, *, enrolled: bool) -> list[str]:
@@ -51,9 +52,9 @@ def validate(form: dict, *, enrolled: bool) -> list[str]:
         errors.append(e.words)
     login, password = _text(form, "login").strip(), _text(form, "password")
     if (login or password or not enrolled) and not (login and password):
-        errors.append(enroll.LOGIN)
+        errors.append(tr(enroll.LOGIN))
     if not name_ok(_text(form, "name")):
-        errors.append(enroll.NAME)
+        errors.append(tr(enroll.NAME))
     errors += folder_errors(folders(form))
     if not form.get("no_pin"):
         errors += pin_errors(_text(form, "pin"), _text(form, "pin2"))
@@ -63,9 +64,9 @@ def validate(form: dict, *, enrolled: bool) -> list[str]:
 def pin_errors(pin: str, pin2: str) -> list[str]:
     """Пусто (не трогать) или 4–8 цифр ASCII; повтор совпадает."""
     if pin and not (pin.isascii() and PIN_RE.fullmatch(pin)):
-        return [PIN_WORDS]
+        return [tr(PIN_WORDS)]
     if pin != pin2:
-        return [PIN_MISMATCH]
+        return [tr(PIN_MISMATCH)]
     return []
 
 

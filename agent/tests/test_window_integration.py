@@ -31,7 +31,13 @@ def tk_root(tk_app):
 @pytest.mark.integration
 @pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
 @pytest.mark.parametrize("state", ["setup", "online", "offline", "revoked", "replaced"])
-def test_short_screen_keeps_all_controls_reachable(monkeypatch, scale, state, tk_root):
+@pytest.mark.parametrize("lang", ["ru", "en"])
+def test_short_screen_keeps_all_controls_reachable(monkeypatch, request, scale, state, lang, tk_root):
+    from studio_agent import i18n
+
+    monkeypatch.setenv("STUDIO_AGENT_LANG", lang)  # английские подписи другой длины — окно тоже должно уложиться
+    i18n.language.cache_clear()
+    request.addfinalizer(i18n.language.cache_clear)
     root = tk_root
     assert all(value > 0 for value in window._work_area(root)[2:])
     root.tk.call("tk", "scaling", scale * 96 / 72)

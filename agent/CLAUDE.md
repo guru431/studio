@@ -34,7 +34,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `desktop`, `desktop_native` (Windows), `desktop_macos` (macOS) |
 | Обновление | `updater`, `update_helper` (stdlib-хелпер), `install.ps1`, `install.cmd` |
-| Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `__main__` (консольные команды), `studio_agent.pyw` |
+| Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `i18n` (язык окна, трея и консоли), `__main__` (консольные команды), `studio_agent.pyw` |
 
 ## Правила
 
@@ -86,6 +86,8 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
   macOS — `~/Library/LaunchAgents/com.studio.agent.plist`, без принудительного перезапуска.
 - Кодировки: `.py` — UTF-8 без BOM, LF; `.ps1` — UTF-8 **с BOM**, CRLF (`.gitattributes`).
 - Комментарии, докстринги и тексты — по-русски, как в студии; слова отказов и интерфейса — дословно из «Тексты» плана.
+  Подписи окна, трея, меню и консоли показываются через `i18n.tr` с английским переводом в `i18n.EN` (язык системы,
+  `STUDIO_AGENT_LANG`; сторож — `tests/test_i18n.py`); отказы `Refused` и журнал не переводятся.
 - Коммит — сообщение через файл (`git commit -F <файл>`), в конце `Co-Authored-By: Claude Opus 5.5
   <noreply@anthropic.com>`.
 
