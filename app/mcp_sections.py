@@ -295,6 +295,8 @@ async def run(section: str, sid: int, request: Request):
                 args[key] = await upload(session, tool["files"][key], file)
         if body.tool in {"image_generate", "image_edit"} and isinstance(args.get("model"), str):
             args["model"] = images.MODELS.get(args["model"], args["model"])
+        if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
+            raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
         result = await call(session, body.tool, args)
         data = result.get("structuredContent")
         jid = data.get("id") if isinstance(data, dict) else None
