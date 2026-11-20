@@ -268,10 +268,12 @@ def pages_md(pages: list[dict]) -> str:
     return "\n\n".join(f"## Страница {p['n']}\n\n{_page_body(p, str)}" for p in pages) + "\n"
 
 
-def _cells(line: str) -> str:
-    """Абзац DOCX: ячейки строки таблицы — через `<w:tab/>`."""
+def _cells(line: str, rtl: bool = False) -> str:
+    """Абзац DOCX: ячейки строки таблицы — через `<w:tab/>`; `rtl` — абзац справа налево (`w:bidi`, `w:rtl`)."""
     runs = "<w:tab/>".join(f'<w:t xml:space="preserve">{escape(CONTROL.sub(" ", cell))}</w:t>'
                            for cell in line.split("\t"))
+    if rtl:
+        return f"<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr>{runs}</w:r></w:p>"
     return f"<w:p><w:r>{runs}</w:r></w:p>"
 
 
@@ -283,12 +285,13 @@ def pages_docx(pages: list[dict], title: str) -> bytes:
     return _package(body)
 
 
-def text_docx(text: str, title: str, markdown: bool = True) -> bytes:
+def text_docx(text: str, title: str, markdown: bool = True, rtl: bool = False) -> bytes:
     """Перевод (спека 2026-10-28-studio-translator-design, 6.2): заголовок, затем абзац на строку — как
     pages_docx без страниц. Markdown распознавания (`markdown`) — через `md_plain` (строки таблиц — ячейки через
-    табуляцию); простой текст — как есть: `List<int>` и обратные кавычки остаются."""
+    табуляцию); простой текст — как есть: `List<int>` и обратные кавычки остаются. `rtl` — перевод на язык
+    письма справа налево (`translate_text.RTL`): абзацы текста — справа налево."""
     body = [_paragraph(title, bold=True, size=32)]
-    body += [_cells(line) for line in (md_plain(text) if markdown else text).split("\n") if line.strip()]
+    body += [_cells(line, rtl) for line in (md_plain(text) if markdown else text).split("\n") if line.strip()]
     return _package(body)
 
 

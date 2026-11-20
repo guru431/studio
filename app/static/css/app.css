@@ -956,7 +956,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .hljs .hljs-addition { color: var(--code-addition); background-color: color-mix(in srgb, var(--success) 12%, transparent); }
 .hljs .hljs-deletion { color: var(--code-deletion); background-color: color-mix(in srgb, var(--danger) 12%, transparent); }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; }
-.md th, .md td { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); text-align: left; }
+.md th, .md td { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); text-align: start; }
 .md :is(th, td)[align="center"] { text-align: center; }
 .md :is(th, td)[align="right"] { text-align: right; }
 .md img { max-width: 100%; border-radius: var(--r-control); }

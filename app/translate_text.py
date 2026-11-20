@@ -75,7 +75,8 @@ LANGS: dict[str, tuple[str, str]] = {
     "fi": ("финский", "Finnish"),
     "sv": ("шведский", "Swedish"),
 }
-TEXT_MAX = 300_000               # знаков текста поля и документа — около 100 страниц
+RTL = frozenset({"ar", "he", "fa"})   # письмо справа налево: страница — dir, docx — w:bidi (translate-photo.js RTL)
+TEXT_MAX = 300_000              # знаков текста поля и документа — около 100 страниц
 CHUNK_CHARS = 3000
 DETECT_CHARS = 1000
 MAX_TOKENS = 8192                # кусок в 3000 знаков — до ~2000 токенов перевода, запас на многословные языки
