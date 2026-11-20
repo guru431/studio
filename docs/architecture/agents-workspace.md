@@ -102,6 +102,7 @@ Linux или macOS сохраняется. Если файлы существу�
 Раздел называется «Агенты» (адреса `#/code` и `/api/code/*` прежние). studio-agent 0.7.0:
 `hello.attachments` — произвольные `{name,mime,data}` через `Turn.attachments`, 8 файлов вместе с images,
 10 МиБ/файл и 30 МиБ суммарно с `hello.large_attachments` (мост 0.22.1+); без него — 5/8 МиБ.
+`/api/agents` отдаёт `large_attachments`, и страница (`code-chat.js`) проверяет те же пределы до чтения файлов.
 Файлы живут в приватном temp машины до disconnect CLI.
 `hello.project_activity` — `GET …/agents/<aid>/activity` → op `activity`, только project/chat/engine/running/asking
 всех трёх Runner, без истории. `hello.subscription_usage` — `GET …/agents/<aid>/usage?engine=…&refresh=…`,

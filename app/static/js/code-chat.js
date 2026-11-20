@@ -79,8 +79,10 @@ const STICK_PX = 80;             // лента у низа — новое её �
 const PREVIEW_MAX = 80;          // начало ввода шага в его заголовке
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-const IMAGE_MAX = 10 * 1024 * 1024;
-const IMAGES_MAX = 30 * 1024 * 1024;
+// Пределы вложений, МиБ: мост с hello.large_attachments (0.22.1+) — 10 на файл и 30 на сообщение, старый — 5 и 8
+// (сервер, claude_code.py, отказал бы уже после загрузки всего сообщения).
+const attachLimits = (agent) => agent?.large_attachments ? { file: 10, total: 30 } : { file: 5, total: 8 };
+const MIB = 1024 * 1024;
 const IMAGE_COUNT = 8;
 
 /** Черновики чатов (`${aid}/${chat}`). Смена «есть черновик / нет» — событие
@@ -325,7 +327,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const picker = el('input', { type: 'file', id: 'code-image-input',
     multiple: true, hidden: true, 'aria-label': tr("Вложения") });
   const attach = el('button', { type: 'button', id: 'code-attach', class: 'icon-btn', 'aria-label': tr("Добавить вложение"),
-    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до 8 файлов, 10 МиБ на файл, 30 МиБ на сообщение")
+    title: agent?.attachments ? tr("Прикрепить файлы любого типа · до 8 файлов, {0} МиБ на файл, {1} МиБ на сообщение",
+      attachLimits(agent).file, attachLimits(agent).total)
       : tr("Изображения · обновите мост для файлов любого типа"), disabled: !agent?.images && !agent?.attachments });
   attach.append(icon('clip'));
   field.box.querySelector('.field-tools').insertBefore(attach, field.box.querySelector('.mic'));
@@ -529,12 +532,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!agent?.attachments && files.some((f) => !IMAGE_TYPES.has(f.type))) {
         throw new Error(tr("Обновите мост на компьютере для отправки файлов любого типа"));
       }
-      if (files.some((f) => f.size > IMAGE_MAX)) throw new Error(tr("Размер файла — до 10 МиБ"));
+      const limits = attachLimits(agent);
+      if (files.some((f) => f.size > limits.file * MIB)) throw new Error(tr("Размер файла — до {0} МиБ", limits.file));
       if ([...images, ...files].filter((f) => IMAGE_TYPES.has(f.mime || f.type)).length > 4) {
         throw new Error(tr("Можно прикрепить до 4 изображений к сообщению"));
       }
-      if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > IMAGES_MAX) {
-        throw new Error(tr("Общий размер вложений — до 30 МиБ"));
+      if ([...images, ...files].reduce((sum, f) => sum + f.size, 0) > limits.total * MIB) {
+        throw new Error(tr("Общий размер вложений — до {0} МиБ", limits.total));
       }
       const selected = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
         const reader = new FileReader();
