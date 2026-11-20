@@ -424,6 +424,23 @@ def test_english_export_translates_studio_words_but_not_the_conversation(studio)
     assert studio.c.post('/api/chats/chat/export', json={'format': 'md', 'lang': 'en'}).text.startswith('# Chat\n')
 
 
+def test_english_export_translates_stored_server_words_like_the_page():
+    """Слова сервера, сохранённые русскими (ошибка ответа, отказ шага, имя шага моста), страница переводит
+    `StudioI18n.message`; английский файл — тем же словарём (`exports.server_word`). Текст переписки — как есть."""
+    snapshot = {'title': 'Мой чат', 'messages': [
+        {'role': 'user', 'text': 'Интернет выключен'},
+        {'role': 'assistant', 'text': 'Ответ', 'error': 'скан не распознан: на странице не найден текст',
+         'tools': [{'kind': 'search', 'query': 'погода', 'error': 'Интернет выключен'}],
+         'steps': [{'tool': 'Рассуждения', 'input': '', 'text': ''}]}]}
+    en = chat_exports.markdown(snapshot, 'en')
+    assert 'Error: scan not recognized: no text found on page' in en
+    assert '- Search: “погода” — Internet disabled' in en and '### Reasoning' in en
+    assert en.startswith('# Мой чат\n\n## User\n\nИнтернет выключен\n') and 'Ответ' in en
+    ru = chat_exports.markdown(snapshot)
+    assert 'Ошибка: скан не распознан: на странице не найден текст' in ru and '— Интернет выключен' in ru
+    assert '### Рассуждения' in ru
+
+
 def test_export_refusals_say_what_happened(studio, monkeypatch):
     """FINDINGS 06:F15: a big chat is «too big for export», not «for a link»; a busy service is not «your PDF»."""
     _, uid = regular(studio)

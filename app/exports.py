@@ -14,8 +14,10 @@ docx — минимальный OOXML без новых зависимостей
 с табуляцией, в docx — `<w:tab/>`), в md — как есть.
 
 Язык выгрузки (`Lang`) — язык интерфейса устройства: страница передаёт его запросом (`?lang=`, у чата — поле
-`lang`), без него — русский (скрипты, прежние страницы). Переводятся только слова Studio (`ENGLISH`, `word`):
-имена собеседников, заданные пользователем, тексты, имена файлов и причины распознавания остаются как есть."""
+`lang`), без него — русский (скрипты, прежние страницы). Переводятся только слова Studio: подписи выгрузки
+(`ENGLISH`, `word`) и сохранённые в базе слова сервера — причина нераспознанной страницы, ошибка ответа и шага чата,
+имя шага моста (`server_word`, как страница — `i18n_words.message`); имена собеседников, заданные пользователем,
+тексты и имена файлов остаются как есть."""
 import html
 import io
 import math
@@ -23,6 +25,8 @@ import re
 import zipfile
 from typing import Literal
 from xml.sax.saxutils import escape
+
+import i18n_words
 
 SRT_MAX_SEC = 7
 SRT_MAX_CHARS = 84               # две строки по 42
@@ -76,6 +80,11 @@ _LABEL = re.compile(r"Собеседник (\d+)")       # speech.LABEL
 def word(text: str, lang: str, *values) -> str:
     """Слова Studio в выгрузке на языке `lang`; `values` — подстановки `{}` (пользовательское — как есть)."""
     return (ENGLISH[text] if lang == "en" else text).format(*values)
+
+
+def server_word(text: str, lang: str) -> str:
+    """Слова сервера или моста из базы (отказ, причина) на языке `lang` — так же, как их переводит страница."""
+    return i18n_words.message(text) if lang == "en" else text
 
 
 def _speaker(seg: dict, lang: str) -> str:
@@ -302,7 +311,8 @@ def _page_body(page: dict, convert, lang: str) -> str:
         return convert(page["text"] or "")
     if page["state"] == "blank":
         return word("[пустая страница]", lang)
-    return word("[не распознана: {}]", lang, page["detail"]) if page["detail"] else word("[не распознана]", lang)
+    return (word("[не распознана: {}]", lang, server_word(page["detail"], lang)) if page["detail"]
+            else word("[не распознана]", lang))
 
 
 def pages_txt(pages: list[dict], lang: Lang = "ru") -> str:
