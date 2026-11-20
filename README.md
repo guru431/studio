@@ -74,11 +74,12 @@ The server runs on infrastructure you control. Connect local models through the 
 - Preview reference voices, listen to completed phrases while synthesis continues and download the final MP3.
 - Dictate into chat, media prompts, translation and search. Recognized text is inserted at the cursor for review before sending.
 - Voice input audio is processed without being saved as a recording in Studio history.
+- Gateway speech models speak and recognize **Russian only** (the language is fixed in the request). For other languages, use a compatible external service, which takes the language from the text or the recording.
 
 ### Transcription
 
 - Upload common audio formats or video with audio, up to **200 MiB / 60 minutes**.
-- Speaker separation with gateway WhisperX; compatible external transcription endpoints are also supported.
+- Speaker separation with gateway WhisperX (Russian recordings); compatible external transcription endpoints are also supported, including for other languages.
 - Timestamped utterances linked to the original player; click a line to play that moment.
 - Correct text, rename speakers and reset edits without rerunning recognition.
 - Export **TXT, DOCX or SRT**, or send the result to Chat to discuss, summarize or extract decisions.
