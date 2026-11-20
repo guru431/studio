@@ -400,7 +400,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }
-  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && (engine !== 'opencode' || agent?.opencode_features) });
+  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && (engine !== 'opencode' || agent?.opencode_features),
+    polling: () => running && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000 });
   const children = subtaskControl.button.disabled ? null : subtaskControl;
   const commands = commandsView(host, { stepNode, repaint: node => stepPaint.get(node)?.() });
   statusFixed.prepend(subtaskControl.button, commands.button, changedFiles.button);
