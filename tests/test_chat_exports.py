@@ -331,6 +331,41 @@ def test_server_chromium_gets_no_network(studio, monkeypatch, tmp_path, platform
     assert seen == [str(chat_exports.OFFLINE_BROWSER) if platform == 'linux' else None]
 
 
+@pytest.mark.parametrize('locked', [2, 99])
+def test_locked_work_directory_never_fails_a_finished_pdf(studio, monkeypatch, tmp_path, locked):
+    """A browser outliving md2pdf holds its profile lockfile (WinError 32): retry, then leave it for clean_tmp."""
+    tool = tmp_path / 'converter.py'
+    tool.write_text('# converter fixture\n', encoding='utf-8')
+    monkeypatch.setattr(chat_exports, 'converter', lambda: tool)
+
+    def run(argv, **kwargs):
+        Path(argv[3]).write_bytes(b'%PDF-' + b'x' * 2048)
+        return subprocess.CompletedProcess(argv, 0)
+
+    real, calls, pauses = chat_exports.shutil.rmtree, [], []
+
+    def rmtree(path, ignore_errors=False):
+        calls.append(path)
+        if len(calls) <= locked:
+            if ignore_errors:
+                return
+            raise PermissionError(32, 'The process cannot access the file')
+        real(path)
+
+    monkeypatch.setattr(chat_exports.subprocess, 'run', run)
+    monkeypatch.setattr(chat_exports.shutil, 'rmtree', rmtree)
+    monkeypatch.setattr(chat_exports, 'PAUSE', pauses.append)
+    assert chat_exports.render_pdf('<p>x</p>', selection=True).startswith(b'%PDF-')
+    left = list(state.CFG.tmp_dir.glob('chat-export-*'))
+    if locked == 2:
+        assert not left and pauses == list(chat_exports.CLEANUP_PAUSES[:2])
+    else:
+        assert len(left) == 1 and pauses == list(chat_exports.CLEANUP_PAUSES)
+        monkeypatch.setattr(chat_exports.shutil, 'rmtree', real)
+        chat_exports.clean_tmp()
+        assert not list(state.CFG.tmp_dir.glob('chat-export-*'))
+
+
 def test_markdown_tool_fences_preserve_nested_code_and_attachment_names():
     result = chat_exports.markdown({'title': 'Чат', 'messages': [
         {'role': 'assistant', 'text': '**Ответ**', 'steps': [

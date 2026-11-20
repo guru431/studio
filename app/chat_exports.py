@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -135,15 +136,34 @@ def clean_tmp() -> None:
     """Only export work directories, before audio.clean_tmp handles the remaining flat files."""
     for path in state.CFG.tmp_dir.glob("chat-export-*"):
         if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
+            shutil.rmtree(path, ignore_errors=True)
+
+
+# A browser process can outlive md2pdf for a moment and hold its profile lockfile (Windows: WinError 32);
+# measured up to ~2 s when an elevated Chromium relaunches itself de-elevated. The work directory is retried
+# for a bounded time; what is still locked stays for clean_tmp at the next start and never fails the export.
+CLEANUP_PAUSES = (0.1, 0.2, 0.4, 0.8, 1.5)
+PAUSE = time.sleep
+
+
+def _remove(root: Path) -> None:
+    for pause in CLEANUP_PAUSES:
+        try:
+            shutil.rmtree(root)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            PAUSE(pause)
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def render_pdf(text: str, *, selection: bool = False) -> bytes:
     tool = converter()
     if not tool.is_file():
         raise HTTPException(503, {"code": "pdf_unavailable", "message": "экспорт PDF ещё не настроен"})
-    with tempfile.TemporaryDirectory(prefix="chat-export-", dir=state.CFG.tmp_dir) as folder:
-        root = Path(folder)
+    root = Path(tempfile.mkdtemp(prefix="chat-export-", dir=state.CFG.tmp_dir))
+    try:
         source, target = root / "chat.md", root / "chat.pdf"
         document = _html_block(selection_html(text)) if selection else _safe_html(text)
         env = os.environ.copy()
@@ -174,6 +194,8 @@ def render_pdf(text: str, *, selection: bool = False) -> bytes:
             return raw
         except (OSError, ValueError, subprocess.TimeoutExpired):
             raise HTTPException(503, {"code": "pdf_failed", "message": "не удалось подготовить PDF — повторите позже"}) from None
+    finally:
+        _remove(root)
 
 
 async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, check):
