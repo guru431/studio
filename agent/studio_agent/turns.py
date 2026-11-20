@@ -114,6 +114,7 @@ class _Turn:
     queued: list = field(default_factory=list)
     queue_meta: dict = field(default_factory=dict)
     queue_paused: bool = False
+    queue_expired: bool = False  # пауза дольше `limits.QUEUE_PAUSE_SEC`: очередь не отправляется, ход кончается
     queue_wake: asyncio.Event = field(default_factory=asyncio.Event)
     attachments: list = field(default_factory=list)
     files: attachment_input.Files = field(default_factory=attachment_input.Files)
@@ -146,6 +147,7 @@ class Runner:
         self.max_turns = max_turns
         self.find_cli = find_cli
         self.now = now
+        self.queue_pause_sec = limits.QUEUE_PAUSE_SEC
         self._turns: dict[str, _Turn] = {}
         self._closing = False  # close() идёт (или прошёл с `final` или `hold`): новых ходов нет
         self._final = False  # close(final=True): выход моста — `reopen` ходы не возвращает
@@ -255,16 +257,22 @@ class Runner:
             if not t.queued or t.stopped or t.closing or t.finishing:
                 raise Refused("gone", "Очередь уже выполнена")
             t.queue_paused = paused
-            if not paused:
-                t.queue_wake.set()
+            t.queue_wake.set()  # снятие — продолжить, постановка — заново отсчитать срок паузы
             result = {"items": self._queue_state(t), "paused": paused}
             self._send(t, {"k": "queue", **result})
             return result
 
     async def _wait_queue(self, t):
+        """Пауза очереди держит ход не дольше `queue_pause_sec` от последней правки: страницу закрыли посреди
+        правки — ход кончается, очередь уходит в `done.unsent`, слот заданий и обновление не держатся."""
         while t.queue_paused and t.queued and not (t.stopped or t.closing):
             t.queue_wake.clear()
-            await t.queue_wake.wait()
+            try:
+                await asyncio.wait_for(t.queue_wake.wait(), self.queue_pause_sec)
+            except asyncio.TimeoutError:
+                t.queue_expired = True
+                log.info("ход %s: пауза очереди истекла", t.turn)
+                return
 
     async def edit_queue(self, pid, chat, message_id, version, text, *, owner=None):
         t = self._turn(pid, chat)
@@ -298,6 +306,7 @@ class Runner:
                 t.queue_meta[message_id] = meta
                 item["text"] = text + (f"\n[Изображений: {meta['images']}]" if meta.get("images") else "") + (
                     f"\n[Вложений: {meta['attachments']}]" if meta.get("attachments") else "")
+            t.queue_wake.set()  # правка — заново отсчитать срок паузы
             current = self._queue_state(t)
             self._send(t, {"k": "queue", "items": current, "paused": t.queue_paused})
             return {"items": current, "paused": t.queue_paused}
@@ -569,7 +578,8 @@ class Runner:
                             if not t.waiting and failure is None:
                                 await self._wait_queue(t)
                             async with t.input_lock:
-                                if not t.waiting and t.queued and failure is None and not (t.stopped or t.closing):
+                                if (not t.waiting and t.queued and failure is None
+                                        and not (t.stopped or t.closing or t.queue_expired)):
                                     message_id, extra_text, extra_images = t.queued[0]
                                     await self._steer_input(t, extra_text, extra_images, message_id)
                                     self._queued_sent(t, message_id)

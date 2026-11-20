@@ -853,7 +853,7 @@ class CodexRunner(Runner):
                             failure = "Codex: " + events.clip((result.get("error") or {}).get("message", "ошибка хода"), 280)
                         elif status != "completed":
                             failure = "Codex: неизвестное состояние завершения хода"
-                        if t.queued and result.get("status") == "completed" and not (t.stopped or t.closing):
+                        if t.queued and result.get("status") == "completed" and not (t.stopped or t.closing or t.queue_expired):
                             message_id, extra_text, extra_images = t.queued[0]
                             content = [{"type": "text", "text": extra_text}] if extra_text.strip() else []
                             content += [{"type": "image", "url": f"data:{i['mime']};base64,{i['data']}"} for i in extra_images]
