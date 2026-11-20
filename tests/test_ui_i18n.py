@@ -114,9 +114,14 @@ def test_english_touch_settings_errors_and_public_pages_in_other_engines(live, e
                     assert page.title() == title
                     assert page.evaluate('document.documentElement.lang') == 'en'
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                # an address without the secret is refused at once: the button stays disabled (share-view.js checkAddress)
+                assert page.locator('#share-open').is_disabled()
+                assert page.locator('#share-error').inner_text() == 'Invalid link'
+                page.goto(live.url + '/share#' + 'A' * 43)
                 page.locator('#share-pin').fill('1234')
                 page.locator('#share-open').tap()
-                assert page.locator('#share-error').inner_text() == 'Invalid link'
+                page.wait_for_function("() => document.querySelector('#share-error').textContent !== ''")
+                assert page.locator('#share-error').inner_text() == 'link unavailable or disabled'
                 page.goto(live.url + '/#/settings/appearance')
                 page.locator('#interface-language').select_option('ru')
                 page.wait_for_function("() => document.documentElement.lang === 'ru'")
