@@ -5,15 +5,20 @@ import copy
 import json
 import math
 import os
+import subprocess
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from . import limits
+from . import host, limits
 
 TTL = 60
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+KEYCHAIN_SEC = 5
+KEYCHAIN_NOT_FOUND = 44  # `security`: «The specified item could not be found in the keychain»
+KEYCHAIN_FAILED = "Лимиты Claude недоступны: мост не смог прочитать вход Claude Code из Keychain macOS"
 WINDOWS = (("five_hour", "5 часов", 300), ("seven_day", "Неделя", 10080),
            ("monthly", "Месяц", None))
 LINKS = {
@@ -180,6 +185,30 @@ def _claude_stats(config):
             "summary": summary, "daily": daily}
 
 
+def _keychain_oauth():
+    """macOS: Claude Code хранит вход не в файле, а в Keychain — запись `KEYCHAIN_SERVICE` с тем же JSON, что
+    `.credentials.json`. Читает штатный `/usr/bin/security`: им Claude Code запись и создаёт, поэтому доступ не
+    спрашивается. Секрет — только в stdout дочернего процесса, не в argv. Записи нет — `LookupError`, иной
+    отказ (запрет доступа, заблокированная связка, срок) — `OSError`."""
+    try:
+        result = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                                capture_output=True, timeout=KEYCHAIN_SEC)
+    except subprocess.TimeoutExpired:
+        raise OSError("keychain timeout") from None
+    if result.returncode == KEYCHAIN_NOT_FOUND:
+        raise LookupError()
+    if result.returncode != 0 or len(result.stdout) > 512 * 1024:
+        raise OSError("keychain refused")
+    try:
+        value = json.loads(result.stdout)
+    except ValueError:
+        raise OSError("keychain value") from None
+    oauth = value.get("claudeAiOauth") if isinstance(value, dict) else None
+    if not isinstance(oauth, dict):
+        raise OSError("keychain value")
+    return oauth
+
+
 def claude_usage(now, *, config=None, request=_claude_request, environ=None):
     env = os.environ if environ is None else environ
     config = Path(config) if config is not None else Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
@@ -195,6 +224,15 @@ def claude_usage(now, *, config=None, request=_claude_request, environ=None):
             token = oauth.get("accessToken")
         except (OSError, ValueError, AttributeError):
             oauth = {}
+    if not token and host.MACOS:
+        try:
+            oauth = _keychain_oauth()
+            token = oauth.get("accessToken")
+        except LookupError:
+            pass
+        except OSError:
+            data["message"] = KEYCHAIN_FAILED
+            return data
     if isinstance(oauth.get("subscriptionType"), str):
         data["plan"] = oauth["subscriptionType"][:64]
     if not isinstance(token, str) or not token or len(token) > 16384:
