@@ -1,15 +1,18 @@
 import { tr } from './i18n.js';
 /* Фото и видео: переходы по готовым файлам в порядке ленты, старые страницы — по требованию.
- * Снимок галереи передаётся следующему просмотру; действия и цепочка принадлежат его записи. */
+ * Снимок галереи передаётся следующему просмотру; действия и цепочка принадлежат его записи.
+ * Запись вне загруженной ленты (поиск, цепочка, «Варианты») — своё окно вокруг неё: страница старше и
+ * страница новее (after=), дальше — по краям окна; ленту до неё не читаем. top — окно дошло до новейшей. */
 import { api } from './api.js';
 import { pageQuery } from './feed.js';
 import { iconButton } from './icons.js';
 import { el, words } from './ui.js';
 
 const ready = (item) => !!item.media_id && item.state === 'done';
+const PAGE = 30;
 
 export function viewerNavigation(dialog, { item, items, section, open, done, opener, gallery = null }) {
-  const state = gallery || { items: items.slice(), done, opener };
+  const state = gallery || { items: items.slice(), done, top: true, opener };
   const previous = iconButton('prev', tr("Предыдущий файл"), { class: 'icon-btn viewer-prev' });
   const next = iconButton('next', tr("Следующий файл"), { class: 'icon-btn viewer-next' });
   const position = el('span', { class: 'viewer-position', 'aria-live': 'polite', 'aria-atomic': 'true' });
@@ -26,21 +29,35 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
     const list = files();
     const at = list.findIndex((row) => row.id === item.id);
     const focused = document.activeElement;
-    previous.disabled = busy || at === 0;
+    previous.disabled = busy || (at === 0 && state.top);
     next.disabled = busy || (state.done && at === list.length - 1);
     if ((focused === previous && previous.disabled) || (focused === next && next.disabled)) {
       dialog.querySelector('.viewer-close').focus({ preventScroll: true });
     }
-    position.textContent = busy ? tr("Загружаю…") : `${at < 0 ? '…' : at + 1} / ${list.length}${state.done ? '' : '+'}`;
+    // в окне вне ленты номер от начала истории неизвестен
+    position.textContent = busy ? tr("Загружаю…")
+      : state.top ? `${at < 0 ? '…' : at + 1} / ${list.length}${state.done ? '' : '+'}` : '…';
   }
 
-  async function more() {
-    const rows = (await api('GET', `/api/${section}?limit=30${pageQuery(state.items.at(-1))}`)).items;
-    if (!active()) return;
+  const newerQuery = (row) => `&after=${row.created}&after_id=${encodeURIComponent(row.id)}`;
+  const fresh = (rows) => {
     const ids = new Set(state.items.map((row) => row.id));
-    const added = rows.filter((row) => !ids.has(row.id));
+    return rows.filter((row) => !ids.has(row.id));
+  };
+
+  async function more() {
+    const rows = (await api('GET', `/api/${section}?limit=${PAGE}${pageQuery(state.items.at(-1))}`)).items;
+    if (!active()) return;
+    const added = fresh(rows);
     state.items.push(...added);
     state.done = !added.length;
+  }
+
+  async function newer() {
+    const rows = (await api('GET', `/api/${section}?limit=${PAGE}${newerQuery(state.items[0])}`)).items;
+    if (!active()) return;
+    state.items.unshift(...fresh(rows));
+    state.top = rows.length < PAGE;
   }
 
   async function move(direction) {
@@ -55,6 +72,12 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
       let at = list.findIndex((row) => row.id === item.id);
       while (direction > 0 && at === list.length - 1 && !state.done) {
         await more();
+        if (!active()) return;
+        list = files();
+        at = list.findIndex((row) => row.id === item.id);
+      }
+      while (direction < 0 && at === 0 && !state.top) {
+        await newer();
         if (!active()) return;
         list = files();
         at = list.findIndex((row) => row.id === item.id);
@@ -132,17 +155,21 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
     event.stopImmediatePropagation();
   }, true);
 
-  // Ссылка из заданий/цепочки может вести за пределы уже загруженной ленты.
-  // Сначала достраиваем промежуток, чтобы «предыдущий» не перескакивал через него.
+  // Ссылка из поиска, заданий или цепочки может вести за пределы загруженной ленты: вместо чтения
+  // ленты до записи — окно вокруг неё (по странице старше и новее), «предыдущий» не перескакивает.
   async function locate() {
-    while (!state.done && !state.items.some((row) => row.id === item.id)) {
-      await more();
-      if (!active()) return;
-    }
-    if (!state.items.some((row) => row.id === item.id)) {
+    if (state.items.some((row) => row.id === item.id)) return;
+    if (state.done) {
       state.items.push(item);
       state.items.sort((a, b) => b.created - a.created || b.id.localeCompare(a.id));
+      return;
     }
+    const [above, below] = await Promise.all([newerQuery(item), pageQuery(item)].map((query) =>
+      api('GET', `/api/${section}?limit=${PAGE}${query}`).then((page) => page.items)));
+    if (!active()) return;
+    state.items = [...above, item, ...below.filter((row) => row.id !== item.id)];
+    state.top = above.length < PAGE;
+    state.done = below.length < PAGE;
   }
   async function initialize() {
     busy = true;

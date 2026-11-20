@@ -27,6 +27,7 @@ from conftest import CLIENT, ROOT
 SCRIPT = CLIENT / "studio-video.ps1"
 REPO = ROOT
 MODEL = "wan2.2-remix-i2v-v3"
+H3 = "minimax-h3-dr34ml4y"
 
 
 def test_script_is_utf8_with_bom():
@@ -46,6 +47,14 @@ def test_paths_and_key_match_the_gateway_contract():
     assert "'/images/release'" in text and "'input_reference'" in text
     assert "'GATEWAY_KEY_OWNER_IMAGES'" in text and "'studio-video.local.ps1'" in text
     assert "'video-manifest.tsv'" in text
+
+
+def test_script_models_match_the_server():
+    import videos
+    for path in (SCRIPT, SCRIPT.with_suffix(".py")):
+        text = path.read_text(encoding="utf-8-sig")
+        for model in videos.MODELS.values():
+            assert f"'{model}'" in text or f'"{model}"' in text, (path.name, model)
 
 
 def test_local_copy_is_gitignored():
@@ -420,6 +429,26 @@ def test_variants_use_consecutive_seeds_and_options(runner, service, tmp_path):
     assert [(r["variant"], r["seed"], r["smooth"], r["prompt_source"]) for r in rows] == [
         ("1", "10", "false", "common"), ("2", "11", "false", "common")]
     assert "auto.txt" not in out
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_h3_model_gets_the_page_profile(runner, service, tmp_path):
+    # Профиль H3 — как у страницы и сервера (app/videos.py): 5 с, quality=native, без дорисовки
+    fake = service()
+    (tmp_path / "x.png").write_bytes(b"img-x")
+
+    run_script(runner, fake, tmp_path, "-Model", "h3", "-Quality", "high", "-Seed", "4", "-KeepCard")
+
+    assert [(p["model"], p["seconds"], p["quality"], p["smooth"]) for p in fake.posts] == [
+        (H3.encode(), b"5", b"native", b"false")]
+    key = fingerprint(b"img-x", seed=4, quality="native", smooth="false", model=H3)
+    assert [(r["video"], r["model"], r["quality"], r["smooth"]) for r in manifest_rows(tmp_path)] == [
+        (f"x_5s_s4_{key[:8]}.mp4", H3, "native", "false")]
+
+    out = run_script(runner, fake, tmp_path, "-Model", "h3", "-Seconds", "8", code=1 if runner == "ps" else 2)
+    assert "H3: только 5 секунд" in out and len(fake.posts) == 1
+    out = run_script(runner, fake, tmp_path, "-Quality", "native", code=1 if runner == "ps" else 2)
+    assert "native — только для H3" in out and len(fake.posts) == 1
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

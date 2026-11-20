@@ -828,11 +828,19 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def page(conn: sqlite3.Connection, table: str, user_id: int, before: "float | None", before_id: "str | None",
-         limit: int, columns: str = "*", extra: str = "", extra_args: tuple = ()) -> sqlite3.Cursor:
+         limit: int, columns: str = "*", extra: str = "", extra_args: tuple = (), *,
+         after: "tuple[float, str] | None" = None) -> sqlite3.Cursor:
     """Страница ленты истории (images, videos, transcripts, speeches): новые сверху — created, затем id по
     убыванию. Курсор — created и id последней записи прежней страницы: у записей бывает одно время.
     Без before_id (вкладка до выкладки составного курсора) — только created, записи того же времени
-    пропадают. table, columns и extra (« AND …» с extra_args) — из кода, не из запроса."""
+    пропадают. after — (created, id) записи: limit ближайших более новых, в том же порядке ленты
+    (просмотр листает от записи вне загруженной ленты). table, columns и extra (« AND …» с extra_args) —
+    из кода, не из запроса."""
+    if after is not None:
+        return conn.execute(f"SELECT * FROM (SELECT {columns} FROM {table} WHERE user_id = ?{extra}"
+                            " AND (created > ? OR (created = ? AND id > ?)) ORDER BY created, id LIMIT ?)"
+                            " ORDER BY created DESC, id DESC",
+                            (user_id, *extra_args, after[0], after[0], after[1], limit))
     if before is None:
         where, args = "", ()
     elif before_id is None:

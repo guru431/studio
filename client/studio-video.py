@@ -77,6 +77,8 @@ VAULT_KEY = "GATEWAY_KEY_OWNER_IMAGES"
 VAULT_PATH = r"C:\work\projects\local-config\secrets\vault.env"
 URL = "http://10.77.1.15:4000/slot"
 MODEL = "wan2.2-remix-i2v-v3"
+H3_MODEL = "minimax-h3-dr34ml4y"       # профиль H3 — как у студии: 5 с, quality=native, без дорисовки
+MODELS = {"wan": MODEL, "h3": H3_MODEL}
 TIMEOUT = 300                          # один запрос к шлюзу: загрузка картинки или выдача mp4 (маршрут шлюза — 180 с)
 POLL = 5                               # опрос заданий и пауза перед повтором отправки после 503, с
 SEND_TRIES = 3                         # попыток отправки задания, на которые служба отвечает 503
@@ -125,8 +127,9 @@ def parse_args(argv):
     p.add_argument("--seconds", type=bounded(1, 30), default=5,
                    help="длительность ролика, целые секунды от 1 до 30 (по умолчанию 5); длиннее 5 с — "
                         "склейка кусков по 5 с, она «уплывает»")
-    p.add_argument("--quality", choices=["fast", "standard", "high"], default="standard",
-                   help="fast (короткая сторона 480), standard (576, по умолчанию) или high (720)")
+    p.add_argument("--quality", choices=["fast", "standard", "high", "native"], default="standard",
+                   help="fast (короткая сторона 480), standard (576, по умолчанию) или high (720); "
+                        "native — только для H3, ставится им сам")
     p.add_argument("--no-smooth", action="store_true", help="без дорисовки кадров: 16 кадров/с вместо 32")
     p.add_argument("--count", type=bounded(1, 20), default=1, help="сколько вариантов на каждую картинку (1–20)")
     p.add_argument("--seed", type=int, default=None,
@@ -134,7 +137,9 @@ def parse_args(argv):
                         "для --count вариантов одной картинки")
     p.add_argument("--redo", action="store_true", help="делать заново и то, что уже есть в журнале")
     p.add_argument("--keep-card", action="store_true", help="не освобождать карту в конце")
-    p.add_argument("--model", default=MODEL, help="модель видео у шлюза")
+    p.add_argument("--model", default=MODEL,
+                   help="модель видео у шлюза: wan (по умолчанию), h3 (5 с, нативный размер, 24 кадра/с; "
+                        "--seconds 5, --quality и --no-smooth не действуют) или полное имя")
     p.add_argument("--url", default=URL, help="база API шлюза")
     p.add_argument("--token", default="", help="ключ шлюза; по умолчанию — вписанный командой --make-local")
     p.add_argument("--make-local", action="store_true",
@@ -148,6 +153,13 @@ def parse_args(argv):
         p.error("нужен --folder (или --make-local)")
     if args.gateway_url and not args.make_local:
         p.error("--gateway-url — только с --make-local (на один запуск — --url)")
+    args.model = MODELS.get(args.model.lower(), args.model)
+    if args.model == H3_MODEL:
+        if args.seconds != 5:
+            p.error("H3: только 5 секунд; короткие ролики давали артефакты")
+        args.quality, args.no_smooth = "native", True
+    elif args.quality == "native":
+        p.error("--quality native — только для H3")
     return args
 
 
