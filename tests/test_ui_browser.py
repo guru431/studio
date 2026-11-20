@@ -8124,7 +8124,7 @@ PUSH_READY = "document.querySelector('#push-enabled') && !document.querySelector
 
 def test_settings_push_toggle_subscribes_this_device(browser, live):
     """«Уведомления» → «Push от Claude Code на этом устройстве»: включение — подписка с ключом VAPID сервера и
-    строка push_subs у сессии, флаг устройства studio-push; новая вкладка видит флажок отмеченным; выключение —
+    строка push_subs у сессии, флаг устройства studio-push:<id>; новая вкладка видит флажок отмеченным; выключение —
     unsubscribe, строки нет, флага нет."""
     login = "pusher"
     uid = live.add_user(login)
@@ -8135,7 +8135,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
         ("eval", "hint", "document.querySelector('#push-hint').textContent"),
         ("eval", "before", "document.querySelector('#push-enabled').checked"),
         ("click", "#push-enabled"),
-        ("wait", "localStorage.getItem('studio-push') === '1'"),
+        ("wait", f"localStorage.getItem('studio-push:{uid}') === '1'"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
         ("eval", "calls", "window.pushCalls"),
         ("eval", "server", f"(async () => (await {API}.api('GET', '/api/me/push')))()"),
@@ -8156,7 +8156,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     r = browser.drive(live.url + "/#/settings/notifications", [("wait", READY), ("wait", PUSH_READY),
         ("eval", "checked", "document.querySelector('#push-enabled').checked"),
         ("click", "#push-enabled"),
-        ("wait", "localStorage.getItem('studio-push') === null"),
+        ("wait", f"localStorage.getItem('studio-push:{uid}') === null"),
         ("wait", "document.querySelector('#push-status').textContent !== ''"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
         ("eval", "calls", "window.pushCalls"),
@@ -8167,6 +8167,41 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     assert v["checked"] is True and v["status"] == "Push выключен на этом устройстве"
     assert v["calls"] == [["unsubscribe"]] and v["server"] is False
     assert push_rows(live, uid) == []
+    assert not problems(r), problems(r)
+
+
+def test_push_offers_to_come_back_after_a_new_sign_in(browser, live):
+    """FINDINGS 06:F11: выход уносит подписку сессии, а флаг устройства, разрешение и подписка браузера живы — после
+    нового входа плашка «Push выключился после выхода»: «Включить» отправляет ту же подписку новой сессии без
+    новой подписки браузера; «Не нужно» снимает флаг, и плашки больше нет."""
+    login = "push-again"
+    uid = live.add_user(login)
+    keys = push_keys()
+    init = push_init(keys)
+    flag = f"localStorage.getItem('studio-push:{uid}')"
+    bar = "document.querySelector('#push-restore')"
+    out = ("eval", "out", "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/notifications"), ("wait", PUSH_READY),
+        ("click", "#push-enabled"), ("wait", f"{flag} === '1'"), out], width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    assert push_rows(live, uid) == []                    # сессия ушла — с ней и подписка на сервере
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", bar),
+        ("eval", "text", f"{bar}.textContent"), ("eval", "fits", NO_OVERFLOW),
+        ("click", "#push-restore-yes"), ("wait", f"!{bar}"),
+        ("eval", "server", f"(async () => (await {API}.api('GET', '/api/me/push')).subscribed)()"),
+        ("eval", "calls", "window.pushCalls"), out], width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["text"] == "Push на этом устройстве выключился после выхода из учёткиВключитьНе нужно" and v["fits"] is True
+    assert v["server"] is True and v["calls"] == []      # та же подписка браузера, без subscribe
+    assert not problems(r), problems(r)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", bar),
+        ("click", "#push-restore-no"), ("wait", f"!{bar} && {flag} === null"),
+        ("eval", "reload", "location.reload(); true"), ("wait", READY),
+        ("eval", "after", f"new Promise((done) => setTimeout(() => done(!!{bar}), 500))")],
+        width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    assert r["values"]["after"] is False and push_rows(live, uid) == []
     assert not problems(r), problems(r)
 
 
@@ -8189,7 +8224,7 @@ def test_push_checkbox_gives_up_without_service_worker(browser, live):
         ("wait", "document.querySelector('#push-status').textContent !== ''"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
         ("eval", "box", "(b => [b.checked, b.disabled])(document.querySelector('#push-enabled'))"),
-        ("eval", "flag", "localStorage.getItem('studio-push')")], width=320, mobile=True, init=PUSH_NO_WORKER)
+        ("eval", "flag", f"localStorage.getItem('studio-push:{uid}')")], width=320, mobile=True, init=PUSH_NO_WORKER)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["status"] == "Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен"

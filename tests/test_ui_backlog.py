@@ -46,7 +46,7 @@ def test_submit_missing_chat_closes_its_tab(browser, live):
 @pytest.mark.parametrize("payload", [{}, None])
 def test_invalid_push_status_preserves_device_flag_and_reports_error(browser, live, payload):
     login = "push-invalid-" + ("object" if payload == {} else "null")
-    live.add_user(login)
+    uid = live.add_user(login)
     init = push_init(push_keys()) + """(() => {
       localStorage.setItem('studio-push', '1');
       const original = window.fetch;
@@ -58,7 +58,7 @@ def test_invalid_push_status_preserves_device_flag_and_reports_error(browser, li
         ("wait", "document.querySelector('#push-enabled') && (!document.querySelector('#push-enabled').disabled"
                  " || document.querySelector('#push-status').textContent)"),
         ("eval", "push", "[document.querySelector('#push-enabled').disabled, document.querySelector('#push-status').textContent,"
-                         " localStorage.getItem('studio-push'), window.pushCalls]")], init=init)
+                         f" localStorage.getItem('studio-push:{uid}'), window.pushCalls]")], init=init)   # общий флаг перешёл учётке
     assert not result.get("failed"), result
     disabled, message, flag, calls = result["values"]["push"]
     assert disabled and "подписки push" in message and flag == "1" and calls == []
