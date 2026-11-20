@@ -3906,7 +3906,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
     assert picture(image) == picture(PNG_REAL)                  # фото истории, а не файл с устройства
     item = v["items"][0]
     assert item["state"] == "done" and item["source_media_id"] == v["source"] and v["smooth"] == "false"
-    assert v["player"] == [f"/api/media/{item['media_id']}", f"/api/media/{v['source']}?thumb=1", True, True, "metadata"]
+    assert v["player"] == [f"/api/media/{item['media_id']}", f"/api/media/{v['source']}?thumb=1", True, True, "none"]
     assert v["range"] == [206, "video/mp4"]
     assert v["download"] == [f"/api/media/{item['media_id']}?download=1", "Скачать"]
     for words in ("Готово", "7 с", "720p", "16 к/с", "придуман по фото", f"seed {seed}", "Удалить"):
