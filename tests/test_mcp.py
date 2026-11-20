@@ -94,6 +94,26 @@ def test_mcp_unselected_is_not_contacted_and_calls_are_not_retried(studio):
     assert messages(studio, cid)[-1]['tools'][0]['error']
 
 
+def test_unreachable_mcp_server_is_skipped_and_named_not_the_whole_turn(studio):
+    """Отмеченный, но лежащий сервер — шаг-ошибка с его именем; модель зовётся с инструментами остальных."""
+    sid = add(studio); mock(studio)
+    down = studio.c.post('/api/mcp', json={'name': 'Down', 'url': 'http://10.77.1.15:4000/down', 'token': TOKEN}).json()['id']
+
+    async def unreachable(request):
+        raise httpx.ConnectError('private failure')
+
+    studio.gw.on['/down'] = unreachable
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [down, sid]}).status_code == 200
+    studio.gw.chat_script = [['Готово']]
+    events = sse(turn(studio, cid, 'Use tool'))
+    assert events[-1] == ('done', {'status': 'done'})
+    assert ('tool', {'kind': 'mcp', 'label': 'Down', 'skipped': True}) in events
+    assert [t['function']['name'] for t in studio.gw.chat_requests[-1]['tools']] == [f'mcp_{sid}_0']
+    assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Down',
+                                                 'error': 'MCP недоступен или вернул неверный ответ'}]
+
+
 def test_mcp_account_isolation_allowlist_and_token_preservation(studio):
     sid = add(studio); cid = new_chat(studio)
     assert studio.c.put(f'/api/mcp/{sid}', json={'name': 'Edited', 'url': URL}).status_code == 200
@@ -124,6 +144,64 @@ def test_mcp_header_values_are_write_only_and_kept_by_null(studio):
     for method, path in (('PUT', f'/api/mcp/{sid}'), ('POST', '/api/mcp')):
         response = studio.c.request(method, path, json={'name': 'Tools', 'url': URL, 'headers': {'X-Other': None}})
         assert response.status_code == 422, (method, response.text)
+
+
+def test_mcp_only_chat_names_a_made_up_tool_and_calls_a_tool_without_arguments(studio):
+    """Только MCP, без «Интернета»: чужое имя — «инструмента нет», а не «Интернет выключен»; пустая строка
+    аргументов — вызов с {}."""
+    sid = add(studio); calls = mock(studio)
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).status_code == 200
+    studio.gw.chat_script = [{'tool_calls': [('made_up_tool', '{}'), (f'mcp_{sid}_0', '')]}, ['Готово']]
+    assert sse(turn(studio, cid, 'Use tool'))[-1] == ('done', {'status': 'done'})
+    assert ('tools/call', {'name': 'lookup', 'arguments': {}}) in calls
+    assert messages(studio, cid)[1]['tools'] == [{'kind': 'unknown', 'error': 'модель вызвала инструмент, которого у неё нет'},
+                                                {'kind': 'mcp', 'server': 'Tools', 'tool': 'lookup'}]
+
+
+def test_disabled_mcp_server_can_be_checked_but_not_used(studio):
+    sid = add(studio); calls = mock(studio)
+    assert studio.c.put(f'/api/mcp/{sid}', json={'name': 'Tools', 'url': URL, 'enabled': False}).status_code == 200
+    response = studio.c.post(f'/api/mcp/{sid}/check')
+    assert response.status_code == 200 and response.json() == {'tools': ['lookup']}
+    calls.clear()
+    cid = new_chat(studio)
+    state.DB.execute('UPDATE chats SET mcp_ids=? WHERE id=?', (json.dumps([sid]), cid))
+    sse(turn(studio, cid, 'Hello'))
+    assert calls == [] and 'tools' not in studio.gw.chat_requests[-1]
+
+
+def test_new_mcp_address_requires_secrets_again(studio):
+    """Сохранённые токен и значения заголовков — только прежнему адресу: на новый их надо ввести заново."""
+    add_gateway(studio)
+    sid = studio.c.post('/api/mcp', json={'name': 'Tools', 'url': URL, 'token': TOKEN,
+                                          'headers': {'X-Api-Key': 'private-key'}}).json()['id']
+    other = 'http://10.77.1.15:4000/other'
+    for body in ({'name': 'Tools', 'url': other},
+                 {'name': 'Tools', 'url': other, 'token': 'new-token'},
+                 {'name': 'Tools', 'url': other, 'token': 'new-token', 'headers': {'X-Api-Key': None}}):
+        response = studio.c.put(f'/api/mcp/{sid}', json=body)
+        assert response.status_code == 422 and 'заново' in response.json()['detail']['message'], body
+    body = {'name': 'Tools', 'url': other, 'token': 'new-token', 'headers': {'X-Api-Key': 'new-key'}}
+    assert studio.c.put(f'/api/mcp/{sid}', json=body).status_code == 200
+    stored = json.loads(security.decrypt(state.DB.execute('SELECT secret_enc FROM mcp_servers WHERE id=?', (sid,)).fetchone()[0]))
+    assert stored == {'token': 'new-token', 'headers': {'X-Api-Key': 'new-key'}}
+    # Без сохранённых секретов переносить нечего — новый адрес принимается без токена.
+    plain = studio.c.post('/api/mcp', json={'name': 'Plain', 'url': URL}).json()['id']
+    assert studio.c.put(f'/api/mcp/{plain}', json={'name': 'Plain', 'url': other}).status_code == 200
+
+
+def test_deleted_mcp_server_is_no_longer_selected_in_chats(studio):
+    """Удалённый в настройках сервер не числится в диалоге и не мешает перейти на прямое подключение."""
+    from conftest import add_connection
+    sid = add(studio)
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).json()['mcp_ids'] == [sid]
+    assert studio.c.delete(f'/api/mcp/{sid}').status_code == 204
+    assert studio.c.get(f'/api/chats/{cid}').json()['chat']['mcp_ids'] == []
+    cloud = add_connection(studio, name='cloud')
+    moved = studio.c.patch(f'/api/chats/{cid}', json={'connection_id': cloud, 'model': 'local-gemma-abl'})
+    assert moved.status_code == 200, moved.text
 
 
 def test_model_without_tools_explains_how_to_disable_mcp(studio):

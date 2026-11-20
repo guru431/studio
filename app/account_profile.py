@@ -225,6 +225,9 @@ async def put_exa_key(body: ExaKey, request: Request):
     key = body.key.strip()
     if not 1 <= len(key) <= EXA_KEY_MAX:
         raise HTTPException(422, {"code": "exa_key", "message": f"ключ Exa — от 1 до {EXA_KEY_MAX} знаков"})
+    if not re.fullmatch(r"[\x20-\x7e]+", key):     # заголовок x-api-key — только ASCII: иначе каждый поиск — сбой
+        raise HTTPException(422, {"code": "exa_key", "message": "ключ Exa — только латиница, цифры и знаки ASCII: "
+                                                                "проверьте, не попали ли кириллица или особый пробел"})
     state.DB.execute("UPDATE users SET exa_key = ? WHERE id = ?", (security.encrypt(key), uid))
     log.info("пользователь %d: ключ Exa сохранён", uid)
     return Response(status_code=204)

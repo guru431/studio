@@ -11,7 +11,8 @@ from fakes import PNG_REAL, WAV_FAKE
 from test_mcp import TOKEN, URL
 from test_mcp_sections import service
 from test_ui_browser import (browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value,
-                             code_online, code_requests, add_voice)
+                             code_online, code_requests, add_voice, add_gateway, open_new_chat, API, ANSWERED,
+                             LAST_ANSWER, BADGE)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -101,6 +102,51 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
     assert calls[2][0] == 'speech_synthesize' and calls[2][1]['model'] == 'f5-tts' and calls[2][1]['engine'] == 'clone'
     assert [name for name, _ in calls[3:]] == ['artifact_upload', 'audio_transcribe', 'artifact_upload', 'document_read']
     assert [calls[i][1]['mime_type'] for i in [3, 5]] == ['audio/wav', 'image/png']
+    assert not problems(result), result.get('log')
+
+
+def test_unreachable_mcp_server_is_named_in_the_chat_answer_and_in_sections(browser, live):
+    """Лежащий MCP-сервер: ответ чата идёт без него — под ответом «Вызовы инструментов (1)» с его именем, а не
+    «Источники (0)»; раздел «Фото» говорит, что MCP недоступен, со ссылкой на настройки."""
+    login = 'mcp-down'
+    live.add_user(login)
+
+    async def unreachable(request):
+        raise httpx.ConnectError('down')
+
+    live.gw.on['/down'] = unreachable
+    live.gw.chat_script = [['Готово']]
+    add_down = ('eval', 'mcp', f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/mcp', {{ name: 'Down', url: 'http://10.77.1.15:4000/down' }}); return true; }})()""")
+    toggle = "document.querySelector('#mcp-toggle')"
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), add_gateway(), add_down,
+            ('eval', 'nav', "location.hash='#/settings'"), ('wait', "document.querySelector('.settings-nav')"),
+            *open_new_chat(), ('wait', "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
+            ('wait', f"{toggle} && !{toggle}.hidden"), ('click', '#mcp-toggle'),
+            ('wait', "document.querySelector('#chat-mcp-dialog input[type=checkbox]')"),
+            ('eval', 'pick', "document.querySelector('#chat-mcp-dialog input[type=checkbox]').click()"),
+            ('click', '#chat-mcp-save'), ('wait', f"{toggle}.textContent === 'MCP (1)'"),
+            ('type', '#chat-input', 'Привет'), ('press', 'Enter'),
+            ('wait', f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.web-steps')"),
+            ('eval', 'answer', f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
+            ('eval', 'badge', f"[{BADGE}.textContent, {BADGE}.className]"),
+            ('eval', 'summary', f"{LAST_ANSWER}.querySelector('details.web-steps summary').textContent"),
+            ('eval', 'step', f"{LAST_ANSWER}.querySelector('details.web-steps li').textContent"),
+            ('eval', 'photo', "location.hash='#/photo'"),
+            ('wait', "document.querySelector('#section-mcp-notice:not([hidden])')?.offsetParent"),
+            ('eval', 'notice', "[document.querySelector('#section-mcp-notice').textContent,"
+                               " document.querySelector('#section-mcp-notice a').getAttribute('href')]")])
+    finally:
+        live.gw.chat_script = []
+        live.gw.on.pop('/down', None)
+    assert not result.get('failed'), result
+    values = result['values']
+    assert values['answer'] == 'Готово'
+    assert values['badge'] == ['MCP: 1 — 1 ошибка', 'web-badge bad']
+    assert values['summary'] == 'Вызовы инструментов (1)'
+    assert values['step'] == 'MCP · Down — MCP недоступен или вернул неверный ответ'
+    assert values['notice'] == ['MCP недоступен: «Down» Настроить подключения MCP', '#/settings/chat']
     assert not problems(result), result.get('log')
 
 

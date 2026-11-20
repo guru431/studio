@@ -487,6 +487,7 @@ globalThis.StudioEnglish = Object.freeze({
   "ошибки": "errors",
   "ошибок": "errors",
   "Источники ({0})": "Sources ({0})",
+  "Вызовы инструментов ({0})": "Tool calls ({0})",
   "Диалоги": "Conversations",
   "Новый чат": "New chat",
   "Голос: {0}": "Voice: {0}",

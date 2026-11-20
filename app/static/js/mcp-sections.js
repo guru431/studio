@@ -61,7 +61,9 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     poll();
   });
   const dismiss = button(tr("Закрыть"), { class: 'btn btn-sm', hidden: true }, clear);
-  const output = el('div', { class: 'mcp-run', hidden: true }, status, result, retry, dismiss);
+  // сервер не ответил на список инструментов или каталог не загрузился — сказать, а не молча убрать выбор
+  const notice = el('p', { class: 'muted', id: 'section-mcp-notice', hidden: true });
+  const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss);
   const record = () => records.get(section);
   const picked = () => options.get(control.value);
   const busy = () => !!(record()?.starting || record()?.job);
@@ -75,7 +77,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     control.disabled = active;
     retry.hidden = !current?.retry;
     dismiss.hidden = active || !(current?.output || current?.error);
-    output.hidden = !active && !(current?.error || current?.output);
+    output.hidden = notice.hidden && !active && !(current?.error || current?.output);
     status.classList.toggle('error', !!current?.error);
     status.textContent = current?.error || (active ? tr("В работе") : current?.output ? tr("Готово") : '');
     if (rendered !== current?.output) {
@@ -147,11 +149,23 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     }
   }
 
+  function warn(text) {
+    notice.replaceChildren(tr("MCP недоступен: {0}", text), ' ',
+      el('a', { href: '#/settings/chat' }, tr("Настроить подключения MCP")));
+    notice.hidden = false;
+    paint();
+  }
+
   async function load() {
     let catalog;
     try { catalog = await api('GET', base, undefined, { signal: controller.signal }); }
-    catch { return; }
+    catch (err) {
+      if (!controller.signal.aborted) warn(words(err));
+      return;
+    }
     if (controller.signal.aborted) return;
+    const down = catalog.items.filter(server => server.unavailable).map(server => `«${server.name}»`);
+    if (down.length) warn(down.join(', '));
     limit = catalog.max_upload_bytes;
     const allowed = new Set(fields);
     for (const server of catalog.items) for (const tool of server.tools || []) {
