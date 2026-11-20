@@ -36,7 +36,7 @@ export function visualizationsView(host, { aid, pid, supported, images = false }
       if (dialog === current) dialog = null;
     }, { once: true });
     if (!supported || /\.(?:png|jpe?g|webp|gif)$/i.test(reference.path) && !images) {
-      status.textContent = tr("Обновите агент на компьютере, чтобы открывать визуализации");
+      status.textContent = tr("Обновите мост на компьютере, чтобы открывать визуализации");
       return;
     }
     try {

@@ -43,8 +43,8 @@ document.addEventListener('studio-code-clear', () => {
   for (const scope of snapshots.values()) { scope.summaries.clear(); scope.checked.clear(); }
 });
 const UPDATE_WORDS = { preparing: tr("Скачивание и установка…"), waiting: tr("Ждём завершения заданий…"),
-  restarting: tr("Перезапуск агента…"), pin: tr("Введите PIN для обновления агента"),
-  failed: tr("Не удалось обновить агент. Повторите попытку.") };
+  restarting: tr("Перезапуск моста…"), pin: tr("Введите PIN для обновления моста"),
+  failed: tr("Не удалось обновить мост. Повторите попытку.") };
 // Мост ≥ 0.20.0 называет, что держит ожидание обновления: только числа и признак рабочего стола.
 function waitingWords(holds) {
   const parts = [];
@@ -229,7 +229,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         if (!agent?.online) {
           update.offlineSince ||= Date.now();
           update.state = Date.now() - update.offlineSince > 120000 ? 'failed' : 'restarting';
-          if (update.state === 'failed') update.message = tr("Агент не подключился после обновления — проверьте компьютер");
+          if (update.state === 'failed') update.message = tr("Мост не подключился после обновления — проверьте компьютер");
           continue;
         }
         delete update.offlineSince;
@@ -632,7 +632,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       el('span', { class: 'code-agent-name' }, agent.name),
       agent.has_pin ? el('span', { class: 'sr' }, tr("защищён PIN")) : null,
       el('span', { class: 'code-agent-version', title: agent.agent_version
-        ? `Studio Agent ${agent.agent_version}` : tr("Этот агент ещё не сообщает свою версию") }, agent.agent_version || '—'));
+        ? `Studio Agent ${agent.agent_version}` : tr("Этот мост ещё не сообщает свою версию") }, agent.agent_version || '—'));
       row.addEventListener('click', () => { infoIntent = null; select(agent.id); });
       const info = el('button', { type: 'button', class: 'btn code-agent-info',
         title: tr("Сведения о компьютере"), 'aria-label': tr("Сведения о компьютере · {0}", agent.name), 'aria-haspopup': 'dialog' },
@@ -643,11 +643,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       const busy = updating(update) || update?.state === 'pin';
       const automatic = agent.online && agent.agent_update && available;
       const button = automatic || busy
-        ? el('button', { type: 'button', class: 'btn code-agent-update', title: tr("Обновить агент до {0}", agent.latest_version),
-          'aria-label': tr("Обновить агент · {0}", agent.name), disabled: busy })
+        ? el('button', { type: 'button', class: 'btn code-agent-update', title: tr("Обновить мост до {0}", agent.latest_version),
+          'aria-label': tr("Обновить мост · {0}", agent.name), disabled: busy })
         : el('a', { class: 'btn code-agent-update', href: installer.href, download: installer.file,
           title: tr("Скачать установщик Studio Agent{0} для {1}", agent.latest_version ? ' ' + agent.latest_version : '', installer.name),
-          'aria-label': tr("Скачать установщик агента · {0}", agent.name) });
+          'aria-label': tr("Скачать установщик моста · {0}", agent.name) });
       button.append(icon('sync'));
       if (available) button.classList.add('has-update');
       if (automatic || busy) button.addEventListener('click', () => updateAgent(agent));
