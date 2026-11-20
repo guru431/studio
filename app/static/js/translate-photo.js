@@ -14,6 +14,7 @@ import { tr } from './i18n.js';
  * savePng(record, parts) — PNG в натуральном размере на canvas: картинка, подложки и переводы, перенос по
  * словам; кегль каждого блока подгоняется заново на canvas под рамку в натуральном размере (fitCanvas), а не
  * берётся с экрана: на телефоне рамки на экране мельче MIN_PX, и экранный кегль обрезал бы перевод на PNG.
+ * Блок — `dir="auto"`; на canvas перевод на язык из RTL (арабский, иврит, персидский) — от правого края рамки.
  * Текст сервера — только textContent и canvas. */
 import { saveFile } from './save.js';
 import { el, words } from './ui.js';
@@ -25,6 +26,12 @@ const PAD_Y = 0.06;
 const BACKING = 'rgba(255, 255, 255, .92)';
 const INK = '#111';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
+/** Языки письма справа налево — translate_text.RTL. */
+export const RTL = new Set(['ar', 'he', 'fa']);
+
+function rtl(record) {
+  return RTL.has(record.result_lang || record.target_lang);
+}
 
 /** Переведённые блоки с рамкой. */
 function shown(parts) {
@@ -89,7 +96,7 @@ export function photoView(record, parts, { mode = 'overlay', onMode = () => {} }
       key = next;
       layer.replaceChildren(...done.map((p) => {
         const [x1, y1, x2, y2] = p.box;
-        const b = el('div', { class: 'tl-block', 'data-n': String(p.n) });
+        const b = el('div', { class: 'tl-block', 'data-n': String(p.n), dir: 'auto' });
         b.style.left = `${x1 / 10}%`;
         b.style.top = `${y1 / 10}%`;
         b.style.width = `${(x2 - x1) / 10}%`;
@@ -213,7 +220,10 @@ export async function savePng(record, parts) {
   ctx.drawImage(picture, 0, 0);
   picture.close();
   const family = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  const right = rtl(record);             // арабский, иврит, персидский — строки от правого края рамки
   ctx.textBaseline = 'top';
+  ctx.direction = right ? 'rtl' : 'ltr';
+  ctx.textAlign = right ? 'right' : 'left';
   for (const p of shown(parts)) {
     const [x1, y1, x2, y2] = p.box;
     const x = x1 * canvas.width / 1000;
@@ -230,7 +240,8 @@ export async function savePng(record, parts) {
     ctx.clip();
     ctx.fillStyle = INK;
     wrap(ctx, p.text, w - 2 * PAD_X * size).forEach((line, i) => {
-      ctx.fillText(line, x + PAD_X * size, y + PAD_Y * size + i * size * LINE + (LINE - 1) * size / 2);
+      ctx.fillText(line, right ? x + w - PAD_X * size : x + PAD_X * size,
+        y + PAD_Y * size + i * size * LINE + (LINE - 1) * size / 2);
     });
     ctx.restore();
   }

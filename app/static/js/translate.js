@@ -11,7 +11,8 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * /api/media/<id>, под ней текст). Скрепка открывает «Файл» (#tl-file-input) / «Фото» (#tl-photo-input); под полем счётчик
  * #tl-count и «Перевести» #tl-go. Правое окно #tl-output — перевод (только чтение), над ним состояние
  * #tl-status, «Остановить» #tl-stop и «Продолжить» #tl-continue, под ним «Копировать» #tl-copy и «Скачать ▾»
- * #tl-export (.txt, .docx). «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
+ * #tl-export (.txt, .docx; у скана и файла .md — ещё .md). Готовый перевод скана — Markdown распознавания
+ * разметкой (renderMarkdown html, как «Сканы»), прочее и идущий — текстом. «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
  * строка истории цветом предупреждения, у записи скана рядом — ссылка #tl-scan «Открыть в „Сканах“».
  *
  * «Перевести»: выбран файл — XMLHttpRequest с FormData на /api/translate/files, языки и модель — заголовками
@@ -24,8 +25,9 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * же; aria-live — только у состояния, не у перевода. «Перевести» закрыта, пока принятая запись не открыта.
  *
  * Языки при входе — пара последней записи истории, без истории — «Определить язык» → умолчание сервера.
- * Открытая запись ставит свои: исходник — выбранный, справа — куда переведено на деле (`result_lang`);
- * определённый язык виден в «Определить язык · английский». ⇄ при «Определить язык» берёт определённый
+ * Открытая запись ставит свои: исходник и цель — выбранные; ушёл перевод на другой язык (`result_lang`: исходник
+ * уже на языке цели) — это говорит #tl-status, а правый выбор остаётся выбором человека (иначе следующий текст
+ * ушёл бы туда же); определённый язык виден в «Определить язык · английский». ⇄ при «Определить язык» берёт определённый
  * язык показанной записи (нет — кнопка закрыта); у готовой текстовой записи окна меняются текстом (запись
  * отпущена), следующий ⇄ меняет тексты обратно вместе с языками. × и ⇄ сильнее перечитывания в пути (deselect).
  *
@@ -48,7 +50,8 @@ import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
-import { photoView } from './translate-photo.js';
+import { photoView, RTL } from './translate-photo.js';
+import { renderMarkdown } from './markdown.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 1000;                    // опрос открытой идущей записи
@@ -61,7 +64,7 @@ const LANGUAGE_NAMES = language() === 'en' ? new Intl.DisplayNames([locale()], {
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FILE_ACCEPT = '.pdf,.docx,.txt,.md';
 const PHOTO_ACCEPT = 'image/png,image/jpeg,image/webp';
-const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx']];
+const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
 const FILE_KINDS = { pdf: 'PDF', docx: 'Word', txt: 'TXT', md: 'MD' };
 
 let screen = null;
@@ -122,12 +125,14 @@ function build(view, ctx) {
   let touched = false;         // языки выбрал человек: пара из истории их не перебьёт
   let picked = false;          // запись выбрали сами: ?id из адреса её не перебьёт
   let sending = false;
+  let sentText = null;         // текст поля, ушедший «Перевести»: пока его не правили — не черновик
   let timer = null;
   let photo = null;            // вид открытой записи-снимка: { id, node, setMode, update, destroy }
   let photoMode = 'overlay';   // 'overlay' | 'text'
   let listed = false;          // первая страница истории пришла (до неё — не «Здесь появятся ваши переводы»)
   let pollWords = '';          // слова неудачного опроса записи: удачный опрос их уберёт
   let chipKey = '';            // что показывает плашка: та же — не пересобирается
+  let mdKey = '';              // какой перевод скана показан разметкой: тот же — не пересобирается
   let statusKey = '';          // что показывает #tl-status: то же — не перерисовывается (aria-live — только перемены)
   let rows = new Map();        // id → { sig, node } строк истории: строка с теми же данными — тот же узел
   const dayNodes = new Map();  // подпись дня → узел
@@ -154,10 +159,11 @@ function build(view, ctx) {
   const langRow = el('div', { class: 'tl-langs' }, source, swap, target);
 
   /* левое окно */
-  const input = el('textarea', { id: 'tl-input', rows: '1', 'aria-label': tr("Текст для перевода"),
+  // dir="auto": арабский, иврит, персидский — справа налево по первому сильному знаку
+  const input = el('textarea', { id: 'tl-input', rows: '1', dir: 'auto', 'aria-label': tr("Текст для перевода"),
     placeholder: tr("Введите или вставьте текст") });
   const chip = el('div', { id: 'tl-chip', class: 'att-chip tl-chip', hidden: true });
-  const sourceText = el('div', { class: 'tl-source-text', hidden: true });
+  const sourceText = el('div', { class: 'tl-source-text', dir: 'auto', hidden: true });
   const fileInput = el('input', { type: 'file', id: 'tl-file-input', class: 'sr', accept: FILE_ACCEPT });
   const photoInput = el('input', { type: 'file', id: 'tl-photo-input', class: 'sr', accept: PHOTO_ACCEPT });
   const attach = el('button', { type: 'button', class: 'icon-btn attach', id: 'tl-attach',
@@ -184,7 +190,7 @@ function build(view, ctx) {
   const cont = el('button', { type: 'button', id: 'tl-continue', class: 'btn btn-sm', hidden: true }, tr("Продолжить"));
   const scanLink = el('a', { id: 'tl-scan', class: 'small', hidden: true }, tr("Открыть в «Сканах»"));
   const outText = document.createTextNode('');   // перевод одним текстовым узлом: растёт — дописывается
-  const output = el('div', { id: 'tl-output', class: 'tl-output', 'data-placeholder': tr("Перевод") }, outText);
+  const output = el('div', { id: 'tl-output', class: 'tl-output', dir: 'auto', 'data-placeholder': tr("Перевод") }, outText);
   const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, tr("Копировать"));
   const formats = actionMenu(tr("Скачать ▾"), { id: 'tl-export', cls: 'tl-formats', entries: FORMATS.map(([key, label]) => [label,
     { 'data-format': key }, () => download(key)]) });
@@ -346,23 +352,40 @@ function build(view, ctx) {
     status.replaceChildren(...(ring ? [el('span', { class: 'ring', 'aria-hidden': 'true' })] : []), ...(text ? [text] : []));
   }
 
-  /** Правое окно: перевод, состояние, кнопки. Перевод растёт — дописывается в конец (выделение на месте). */
+  /** Правое окно: перевод, состояние, кнопки. Перевод растёт — дописывается в конец (выделение на месте); у
+   * кончившейся записи скана — Markdown распознавания разметкой (таблицы HunyuanOCR — таблицей), как в «Сканах». */
   function paintRight() {
     paintPhoto();
     const text = rec ? translation(rec) : loose;
+    const running = !!rec && RUNNING.has(rec.state);
+    const md = !!rec && !!rec.scan_id && !running && !!text;
+    const key = md ? `${rec.id}\n${text}` : '';
+    if (key !== mdKey) {
+      mdKey = key;
+      output.classList.toggle('md', md);
+      if (md) output.replaceChildren(renderMarkdown(text, { html: true }));
+      else output.replaceChildren(outText);
+      copy.textContent = tr("Копировать");
+    }
     const was = outText.data;
-    if (text !== was) {
+    if (!md && text !== was) {
       if (was && text.startsWith(was)) outText.appendData(text.slice(was.length));
       else outText.data = text;
       copy.textContent = tr("Копировать");
     }
-    const running = !!rec && RUNNING.has(rec.state);
+    // язык перевода справа налево — окно целиком так, даже если перевод начат числом или латиницей
+    const dir = rec && RTL.has(rec.result_lang || rec.target_lang) ? 'rtl' : 'auto';
+    if (output.dir !== dir) output.dir = dir;
+    const formatMd = formats.querySelector('[data-format=md]');
+    formatMd.hidden = !(rec && (rec.scan_id || /\.md$/i.test(rec.name || '')));
     if (!rec) setStatus('', '');
     else if (running) setStatus('', serverMessage(rec.detail) || '', true);
     else if (rec.state === 'error') setStatus('error', serverMessage(rec.detail) || tr("ошибка"));
     else if (rec.state === 'cancelled' || !text) setStatus('muted', serverMessage(rec.detail) || '');
     else if (rec.notice) setStatus('warn', serverMessage(rec.notice));      // «не распознано страниц: 2 из 12»
-    else setStatus('', '');
+    else if (rec.result_lang && rec.result_lang !== rec.target_lang) {      // redirect: выбор справа не трогаем
+      setStatus('muted', tr("Исходник уже на языке перевода — переведено на {0}", langName(rec.result_lang)));
+    } else setStatus('', '');
     const toScan = !!rec && rec.state === 'done' && !!rec.notice && !!rec.scan_id;
     scanLink.hidden = !toScan;
     if (toScan) scanLink.href = `#/ocr?id=${encodeURIComponent(rec.scan_id)}`;
@@ -385,8 +408,10 @@ function build(view, ctx) {
     docs.current = record;
     loose = '';
     if (!same) {
+      // набранный и не отправленный текст запись не сотрёт: он — в черновик, «Новый перевод» и × его вернут
+      if (input.value.trim() && input.value !== sentText && !(before && input.value === (before.source || ''))) draft.stash();
       pending = null;
-      setLangs(record.source_lang, record.result_lang || record.target_lang);
+      setLangs(record.source_lang, record.target_lang);   // выбор человека; куда переведено на деле — в состоянии
       if (record.kind === 'text') {
         input.value = record.source || '';
         paintCount();
@@ -397,9 +422,6 @@ function build(view, ctx) {
     } else {
       if (pollWords && error.textContent === pollWords) error.textContent = '';   // свежая копия — связь есть
       pollWords = '';
-      if (!before.result_lang && record.result_lang) {
-        setLangs(source.value, record.result_lang);        // перевод ушёл не на выбранный язык — правый выбор скажет
-      }
     }
     paintLeft();
     paintAuto();
@@ -435,10 +457,12 @@ function build(view, ctx) {
     if (pending) {
       pending = null;
     } else {
+      const shown = !!rec;
       rec = null;
       docs.deselect();                   // перечитывание в пути запись не вернёт
       loose = '';
-      input.value = '';
+      const kept = draft.take();         // набранное до открытия записи
+      input.value = shown ? kept : '';
       paintCount();
       paintRight();
       paintAuto();
@@ -565,6 +589,8 @@ function build(view, ctx) {
       error.textContent = tr("Введите текст");
       input.focus();
     } else {
+      sentText = input.value;            // ушедший текст открытая следом запись в черновик не положит
+      if (!rec) draft.take();            // черновик — прежняя копия этого же поля
       send('POST', '/api/translate', { text: input.value, ...langs, ...pick });
     }
   }
@@ -630,8 +656,8 @@ function build(view, ctx) {
     const opener = el('button', { type: 'button', class: 'tl-open' },
       el('span', { class: 'tl-row-top' }, icon(item.kind === 'text' ? 'text' : item.kind === 'photo' ? 'camera' : 'doc'),
         el('b', { class: 'tl-pair' }, pair(item)), meta),
-      el('span', { class: 'tl-from' }, from || ''),
-      item.text_head ? el('span', { class: 'tl-to muted' }, item.text_head) : null);
+      el('span', { class: 'tl-from', dir: 'auto' }, from || ''),
+      item.text_head ? el('span', { class: 'tl-to muted', dir: 'auto' }, item.text_head) : null);
     opener.addEventListener('click', () => {
       picked = true;
       langsReady.then(() => docs.select(item.id));
@@ -700,9 +726,9 @@ function build(view, ctx) {
     error.textContent = '';
     clearLeft();
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    draft.save();
   });
   input.addEventListener('input', () => {
+    sentText = null;
     paintCount();
     paintGo();
   });
@@ -724,7 +750,8 @@ function build(view, ctx) {
   swap.addEventListener('click', () => {
     const from = source.value === AUTO ? rec && rec.detected_lang : source.value;
     if (!from) return;
-    const to = target.value;
+    // перевод ушёл не на выбранный язык, а выбор не меняли — меняются местами исходник и язык перевода на деле
+    const to = rec && rec.result_lang && target.value === rec.target_lang ? rec.result_lang : target.value;
     touched = true;
     setLangs(to, from);
     if (rec && rec.kind === 'text' && rec.state === 'done') {   // окна — текстом: перевод влево, исходник вправо
@@ -772,7 +799,7 @@ function build(view, ctx) {
   });
   copy.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(output.textContent);
+      await navigator.clipboard.writeText(rec ? translation(rec) : loose);   // перевод скана — Markdown, как .md
       copy.textContent = tr("Скопировано");
     } catch {
       error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
@@ -806,8 +833,10 @@ function build(view, ctx) {
   return {
     follow,
     destroy() {
-      // черновик — только текст без записи: исходник открытой (отправленной) записи им не становится
-      draft.save(!rec || input.value !== (rec.source || ''));
+      // черновик — только текст без записи: исходник открытой (отправленной) записи им не становится, а набранное
+      // до её открытия — становится
+      if (rec && input.value === (rec.source || '')) input.value = draft.take();
+      draft.save();
       alive = false;
       mcp.destroy();
       clearTimeout(timer);
