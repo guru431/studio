@@ -632,7 +632,7 @@ function sharedModelsBlock(host) {
     view.reload();
   });
   return el('section', { class: 'block' }, el('h2', {}, title),
-    el('p', { class: 'muted' }, tr("Добавьте адрес API в нужный раздел и выберите модели, которые будут доступны всем пользователям.")), manage);
+    el('p', { class: 'muted' }, tr("Добавьте адрес API в нужный раздел и выберите модели. По умолчанию они доступны всем пользователям; ограничить группами — кнопка «Доступ».")), manage);
 }
 
 export function mount(view, ctx) {
