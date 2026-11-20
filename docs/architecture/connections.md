@@ -27,7 +27,11 @@
   `GATEWAY_SECTIONS` (`connection-form.js`; = `connections.KINDS` srvllm и ключи `sections.S06_CATALOG`, сверяет
   `tests/test_connections.py`). API и проверки `sections.check_link` прежние: недоступный раздел — отказ всей формы.
   Cleaner — только разделы `sections.CLEANER`: `check_link` отказывает и связи уже заведённого Cleaner
-  с другим разделом (`POST /api/sections/{раздел}/links`), страница такой в выборе не предлагает.
+  с другим разделом (`POST /api/sections/{раздел}/links`). Какие разделы подключение примет по виду (Cleaner, s06,
+  `connections.KINDS`), считает один `sections.accepts`: `check_link` отказывает по нему, а `connections.out` отдаёт его
+  полем `accepts` — выбор уже заведённых в «+ Адрес для раздела» показывает только подходящие разделу. Связи Cleaner,
+  успевшие появиться до запрета (или созданные прежним кодом после отката), убирает при каждом запуске
+  `sections.drop_cleaner_strays()` — с `_settle` умолчаний и прежним столбцом `connections.sections`.
 - Проверка подключения — `checks.py` (спека 2026-10-21-studio-connection-check-design): паспорт —
   `connections.passport` (JSON: строки `routes` по запросам, модели с возможностями и источником —
   `capabilities.py`, пробы), обнуляется сменой адреса, вида или токена; зеркала панели его убирают.

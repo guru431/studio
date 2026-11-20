@@ -257,7 +257,7 @@ function build(view, ctx) {
       const chosen = section && section.default;
       engine.selectedIndex = Math.max(0, engines.findIndex((e) => chosen && e.connection_id === chosen.connection_id
         && e.model === chosen.model));
-      engine.hidden = engines.length < 2;
+      paintEngine();
     } catch (err) {
       error.textContent = words(err);
     }
@@ -478,10 +478,17 @@ function build(view, ctx) {
     keep(body, nodes);
   }
 
+  /** Выбор модели — только когда есть из чего выбрать и скан идёт своим распознаванием: при инструменте MCP он
+   * ни на что не влияет. */
+  function paintEngine() {
+    engine.hidden = engines.length < 2 || !!mcp.tool;
+  }
+
   /* загрузка */
   function paintMcp() {
     add.hidden = !mcp.control.hidden || !!ctx.hint;
     const active = !!mcp.tool;
+    paintEngine();
     upload.hidden = !!ctx.hint && !active;
     if (nativeHint && active) {
       nativeHint.hidden = true;

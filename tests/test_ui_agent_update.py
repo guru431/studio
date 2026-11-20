@@ -76,9 +76,38 @@ def test_update_shows_running_version_waits_and_observes_new_version(browser, li
         server.stop()
     assert not result.get('failed'), result
     assert result['values'] == {'go': '#/code', 'before': '0.10.0', 'geometry': True, 'disabled': True,
-                                'available': 'Обновить агент до 0.10.1', 'noNote': True,
+                                'available': 'Обновить мост до 0.10.1', 'noNote': True,
                                 'complete': True, 'installer': 'studio-agent-setup.exe'}
     assert [req['op'] for req in machine.requests].count('agent_update') == 1
+    assert not problems(result), problems(result)
+
+
+#: опрос списка компьютеров (code-panel.js: 30 с) — коротко; window.agentReads — сколько раз прочитан список
+FAST_AGENT_POLL = """(() => { const delay = window.setTimeout; window.agentReads = 0;
+  window.setTimeout = (fn, ms, ...args) => delay(fn, ms === 30000 ? 150 : ms, ...args);
+  const real = window.fetch;
+  window.fetch = (u, o) => { if (String(u).split('?')[0].endsWith('/api/agents')) window.agentReads++; return real(u, o); };
+})();"""
+
+
+def test_computer_list_poll_keeps_keyboard_focus(browser, live, update_zip):
+    """Опрос раз в 30 с не перестраивает неизменный список: фокус на «Сведениях» остаётся на том же узле."""
+    login = 'agent-list-focus'
+    live.add_user(login)
+    aid, server = code_online(live, login, machine_for_update())
+    info = f'#code-agents li[data-id="{aid}"] .code-agent-info'
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', "!!document.querySelector('#code-projects li')"),
+            ('eval', 'focus', f"window.focused = document.querySelector('{info}'); window.focused.focus();"
+                              " window.reads = window.agentReads; true"),
+            ('wait', 'window.agentReads >= window.reads + 3'),
+            ('eval', 'kept', "document.activeElement === window.focused && window.focused.isConnected")],
+            init=FAST_AGENT_POLL)
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    assert result['values']['kept'] is True, result['values']
     assert not problems(result), problems(result)
 
 

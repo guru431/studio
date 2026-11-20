@@ -116,11 +116,15 @@ def _ocr(uid: int, after: float, hidden: set) -> list:
     going, done = _rows("scans", uid, ocr.RUNNING, after,
                         hidden=(f"{closed} UNION {served}" if closed else served, (*args, uid)))
     out = []
+    unread = push.unread_scans(row["id"] for row in done if row["state"] == "done")
     for row in going + done:
         job = ocr.JOBS.get(row["id"])
         # этап идущего — без своего времени (как у расшифровки); ждущий и отменяемый — слова строки
         detail = job.stage if job is not None and row["state"] == "working" else row["detail"]
-        out.append(_item("ocr", row, f"Распознавание «{row['name']}»", detail, f"ocr?id={row['id']}"))
+        item = _item("ocr", row, f"Распознавание «{row['name']}»", detail, f"ocr?id={row['id']}")
+        if item["state"] == "done" and row["id"] in unread:     # ни одной прочитанной страницы — как push
+            item.update(state="error", detail=push.JOB_NOTICES["scans"][2]["ru"])
+        out.append(item)
     return out
 
 

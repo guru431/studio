@@ -1,7 +1,33 @@
 import { language, tr } from './i18n.js';
-/* Прямая доставка ntfy — отдельная настройка сессии устройства, по умолчанию выключена. */
-import { api } from './api.js';
+/* Прямая доставка ntfy — отдельная настройка сессии устройства, по умолчанию выключена.
+ * Настройка уходит вместе с сессией (выход, конец срока): сервер и тему последнего сохранения браузер помнит в
+ * localStorage `studio-ntfy:<id учётки>` и подставляет в форму, пока у новой сессии настройки нет. Токен не
+ * запоминается — его вводят заново. «Сбросить» забывает и запомненное. */
+import { api, me } from './api.js';
 import { el, field, words } from './ui.js';
+
+const NTFY_KEY = 'studio-ntfy';
+const RESTORED = tr("Сервер и тема — с прошлой настройки на этом устройстве. Токен, если он нужен, введите заново и сохраните.");
+
+/** Запомненные `{server, topic}` этого браузера для учётки: прочесть, записать или забыть (`null`). */
+function remembered(value) {
+  const key = `${NTFY_KEY}:${me.id}`;
+  try {
+    if (value === undefined) {
+      const saved = JSON.parse(localStorage.getItem(key));
+      return saved && typeof saved.server === 'string' && typeof saved.topic === 'string' ? saved : null;
+    }
+    if (value) localStorage.setItem(key, JSON.stringify({ server: value.server, topic: value.topic }));
+    else localStorage.removeItem(key);
+  } catch { /* Закрытое или повреждённое хранилище — без подсказки. */ }
+  return null;
+}
+
+/** Забыть сервер и тему этого браузера для учётки — явный «Выйти» (push-sync.js): тема ntfy на общем сервере
+ * почти пароль, на чужом компьютере после выхода её не оставлять. */
+export function forgetRemembered() {
+  if (me?.id) remembered(null);
+}
 
 export function ntfyBlock() {
   const enabled = el('input', { type: 'checkbox', id: 'ntfy-enabled' });
@@ -47,7 +73,9 @@ export function ntfyBlock() {
     const value = { server: server.value.trim(), topic: topic.value.trim(), enabled: enabled.checked, lang: language() };
     if (clearToken.checked) value.token = '';
     else if (token.value) value.token = token.value;
-    paint(await api('PUT', '/api/me/ntfy', value));
+    const answer = await api('PUT', '/api/me/ntfy', value);
+    paint(answer);
+    remembered(answer);
     note.textContent = tr("Настройки ntfy сохранены на этом устройстве");
   }));
   test.addEventListener('click', () => action(async () => {
@@ -56,6 +84,7 @@ export function ntfyBlock() {
   }));
   remove.addEventListener('click', () => action(async () => {
     await api('DELETE', '/api/me/ntfy');
+    remembered(null);
     paint(await api('GET', '/api/me/ntfy'));
     note.textContent = tr("Настройки ntfy сброшены");
   }));
@@ -68,6 +97,11 @@ export function ntfyBlock() {
     el('p', { class: 'muted small' }, tr("Токен хранится зашифрованным. Сервер ntfy получает только уведомление и ссылку, без переписки. «Проверить» отправляет уведомление с сохранёнными настройками.")),
     el('div', { class: 'row' }, save, test, remove), note);
   busy(true);
-  api('GET', '/api/me/ntfy').then(paint).catch((err) => { note.textContent = words(err); }).finally(() => busy(false));
+  api('GET', '/api/me/ntfy').then((value) => {
+    const last = value.configured ? null : remembered();
+    // прежний общий токен сервер сохранит только для своего сервера (ntfy.save)
+    paint(last ? { ...value, ...last, has_token: value.has_token && last.server === value.server } : value);
+    if (last) note.textContent = RESTORED;
+  }).catch((err) => { note.textContent = words(err); }).finally(() => busy(false));
   return block;
 }

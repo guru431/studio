@@ -114,3 +114,40 @@ def test_large_attachment_limits_and_delivery(desktop_browser, live):
             assert all(len(item["data"]) == (10 * 1024 * 1024 + 2) // 3 * 4 for item in request["attachments"])
     finally:
         channel.stop()
+
+
+def test_old_bridge_attachment_limits_are_checked_before_reading(desktop_browser, live):
+    """Мост без hello.large_attachments (до 0.22.1): подсказка и проверка — 5 МиБ на файл и 8 МиБ на сообщение,
+    до чтения файлов; сервер иначе отказал бы уже после загрузки всего сообщения."""
+    login = f"attachment-old-{desktop_browser.browser_type.name}"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Вложения")})
+    machine.attachments = True
+    aid, channel = code_online(live, login, machine)
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+    cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+    try:
+        with desktop_browser.new_context(extra_http_headers={"Cookie": cookie}) as context:
+            if desktop_browser.browser_type.name == "firefox":
+                context.add_cookies([{"name": name, "value": value, "url": live.url, "secure": True,
+                                     "httpOnly": True, "sameSite": "Lax"} for name, value in signed.cookies.items()])
+            page = context.new_page()
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_A}")
+            pw.expect(page.locator("#code-chat")).to_have_attribute("data-loaded", "1")
+            assert "5 МиБ на файл, 8 МиБ на сообщение" in page.locator("#code-attach").get_attribute("title")
+
+            def pick(sizes):
+                page.evaluate("""sizes => {
+                    const dt = new DataTransfer();
+                    sizes.forEach((size, i) => dt.items.add(new File([new Uint8Array(size)], `file-${i}.bin`)));
+                    const input = document.querySelector('#code-image-input'); input.files = dt.files;
+                    input.dispatchEvent(new Event('change'));
+                }""", sizes)
+
+            pick([5 * 1024 * 1024 + 1])
+            pw.expect(page.locator("#code-status")).to_contain_text("до 5 МиБ")
+            pick([4 * 1024 * 1024] * 2 + [1])
+            pw.expect(page.locator("#code-status")).to_contain_text("до 8 МиБ")
+            pw.expect(page.locator("#code-images .code-file")).to_have_count(0)
+    finally:
+        channel.stop()

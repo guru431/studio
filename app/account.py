@@ -13,8 +13,9 @@
   из настроек: `agent_events` `revoke`, канал — 4401). Ответ стирает cookie и HTTP-кэш.
 - `GET /api/me/access` — все выдачи проектов компьютеров учётки (участник, компьютер, проект — имя от моста, если
   он на связи и открыт, иначе id; `missing` — папки уже нет) и все её ссылки «Поделиться» (срок, открытия, неверные
-  PIN). `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` и `DELETE /api/me/access/shares/<id>` —
-  отозвать одну, без моста; `DELETE /api/me/access` — «Отозвать всё». `DELETE /api/me/access/shared/<компьютер>` —
+  PIN; куда перейти — `chat_id` или `computer_id`/`project`/`session_id`). `GET /api/me/access/shares/<id>/link` —
+  адрес своей ссылки для «Копировать ссылку» (`no-store`). `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>`
+  и `DELETE /api/me/access/shares/<id>` — отозвать одну, без моста; `DELETE /api/me/access` — «Отозвать всё». `DELETE /api/me/access/shared/<компьютер>` —
   участник сам покидает совместные проекты чужого компьютера (`project_access.leave`).
 - `GET /api/me/security-events?before=<id>` — журнал безопасности страницами, новые сверху; свёрнутые повторы
   неудач — `count` и время первой `first` (security_log.NOISY).
@@ -31,7 +32,7 @@ import unicodedata
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import auth
@@ -203,7 +204,8 @@ async def access(request: Request):
         " FROM project_members m JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = m.user_id"
         " WHERE a.user_id = ? ORDER BY a.name, m.project, u.login", (uid,)).fetchall()
     shares = state.DB.execute(
-        "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, c.title, s.label, s.created, s.expires,"
+        "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, s.session_id, c.title, s.label, s.created,"
+        " s.expires,"
         " s.views, s.viewed, s.fails FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
         " LEFT JOIN agents a ON a.id = s.agent_id WHERE s.user_id = ? AND (s.expires IS NULL OR s.expires > ?)"
         " ORDER BY s.created DESC", (uid, clock.NOW())).fetchall()
@@ -214,6 +216,7 @@ async def access(request: Request):
                          "disabled": bool(r["disabled"]), "created": r["created"]} for r in members],
             "shares": [{"id": r["id"], "kind": "code" if r["agent_id"] else "chat",
                         "title": r["title"] if r["chat_id"] else _label(r["label"]),
+                        "chat_id": r["chat_id"], "computer_id": r["agent_id"], "session_id": r["session_id"],
                         "computer": r["computer"], "project": r["project"],
                         **(_place(names, r["agent_id"], r["project"]) if r["agent_id"] else {}),
                         "created": r["created"], "expires": r["expires"], "views": r["views"], "viewed": r["viewed"],
@@ -234,6 +237,21 @@ async def leave_shared(aid: int, request: Request):
     """Участник покидает совместные проекты чужого компьютера («Настройки → Агенты → Компьютеры»), без моста."""
     project_access.leave(request, aid)
     return Response(status_code=204)
+
+
+@router.get("/access/shares/{share_id}/link")
+async def share_link(share_id: str, request: Request):
+    """«Копировать ссылку» из общего списка: адрес расшифровывается только владельцу живой ссылки; ответ — `no-store`,
+    в журнал — ничего. Сменили `STUDIO_DATA_KEY` — адреса не восстановить (409 `share_key`), создать новую."""
+    row = state.DB.execute("SELECT token_enc FROM chat_shares WHERE id = ? AND user_id = ?"
+                           " AND (expires IS NULL OR expires > ?)", (share_id, request.state.user.id, clock.NOW())).fetchone()
+    if row is None:
+        raise HTTPException(404, {"code": "not_found", "message": "такой ссылки нет — она отключена или истекла"})
+    try:
+        token = security.decrypt(row["token_enc"])
+    except InvalidToken:
+        raise HTTPException(409, {"code": "share_key", "message": "адрес этой ссылки не восстановить — создайте новую"}) from None
+    return JSONResponse({"url": state.CFG.origin.rstrip("/") + "/share#" + token}, headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/access/shares/{share_id}", status_code=204)

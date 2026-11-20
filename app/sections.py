@@ -169,12 +169,18 @@ def _link_row(user_id: int, section: str, conn_id: int):
                             (user_id, section, conn_id)).fetchone()
 
 
+def accepts(conn: "connections.Connection") -> list[str]:
+    """Разделы, которые подключение принимает по виду (Cleaner — только CLEANER, s06 — S06_CATALOG, иначе
+    `connections.KINDS`); список разрешённых — отдельно (SERVER_ONLY). Страница по нему строит выбор «+ Адрес для раздела»."""
+    kinds = S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]
+    return [s for s in SECTIONS if s in kinds and (not conn.cleaner or s in CLEANER)]
+
+
 def check_link(conn: "connections.Connection", section: str) -> None:
-    """Может ли подключение участвовать в разделе: вид (Cleaner — только CLEANER) и, для раздела только
-    через сервер, список."""
-    if conn.cleaner and section not in CLEANER:
-        raise _bad("kind", "Cleaner поддерживает чат и перевод")
-    if section not in (S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]):
+    """Может ли подключение участвовать в разделе: вид (`accepts`) и, для раздела только через сервер, список."""
+    if section not in accepts(conn):
+        if conn.cleaner:
+            raise _bad("kind", "Cleaner поддерживает чат и перевод")
         if conn.s06:
             raise _bad("kind", "шлюз s06 поддерживает чат, перевод, расшифровку, сканы и голосовой ввод")
         raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")
@@ -297,6 +303,27 @@ def retire_photo_models() -> None:
         for uid in affected:
             _settle(uid, "photo")
             _sync_legacy(uid)
+
+
+def drop_cleaner_strays() -> None:
+    """При запуске: связи Cleaner с разделами вне CLEANER (успели появиться до запрета в `check_link`) — прочь,
+    умолчания и прежние столбцы — в порядок. Такие связи нерабочие: Cleaner обслуживает только чат и перевод.
+    Прежний код после отката без этих строк просто не видит связи; созданные им снова уберёт следующий запуск."""
+    affected = set()
+    with transaction():
+        rows = state.DB.execute(
+            "SELECT l.user_id, l.section, l.connection_id FROM section_links l"
+            " JOIN connections c ON c.id = l.connection_id AND c.user_id = l.user_id"
+            f" WHERE c.cleaner = 1 AND l.section NOT IN ({', '.join('?' * len(CLEANER))})", CLEANER).fetchall()
+        for row in rows:
+            state.DB.execute("DELETE FROM section_links WHERE user_id = ? AND section = ? AND connection_id = ?",
+                             (row["user_id"], row["section"], row["connection_id"]))
+            _settle(row["user_id"], row["section"])
+            affected.add(row["user_id"])
+        for uid in affected:
+            _sync_legacy(uid)
+    if rows:
+        log.info("связи Cleaner вне чата и перевода убраны: %d", len(rows))
 
 
 def adopt(section: str, source: str) -> None:

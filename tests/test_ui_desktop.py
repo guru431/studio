@@ -40,7 +40,7 @@ def desktop(enabled=True):
 
     def start(req, events):
         if not state['enabled']:
-            raise Refused('desktop_disabled', 'Рабочий стол отключён в агенте на компьютере')
+            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в окне моста на компьютере')
         state['starts'] += 1
         state['control'] = f"{state['starts']:032x}"
         return {'control': state['control'], 'monitors': [
@@ -49,7 +49,7 @@ def desktop(enabled=True):
 
     def check(req):
         if not state['enabled']:
-            raise Refused('desktop_disabled', 'Рабочий стол отключён в агенте на компьютере')
+            raise Refused('desktop_disabled', 'Рабочий стол выключен. Включите его в окне моста на компьютере')
         if req.get('control') != state['control']:
             raise Refused('desktop_closed', 'Соединение закрыто')
 
@@ -359,7 +359,7 @@ def test_desktop_old_and_offline_agents_do_not_request_screen(browser, live):
     finally:
         server.stop()
     assert not result.get('failed'), result
-    assert 'Обновите агент' in result['values']['old']
+    assert 'Обновите мост' in result['values']['old']
     assert 'Компьютер не на связи' in result['values']['offline'] and result['values']['disabled']
     assert not desktop_requests(machine)
     assert not problems(result), problems(result)

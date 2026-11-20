@@ -390,6 +390,35 @@ def test_scan_of_a_chat_attachment_does_not_push(studio):
     assert studio.gw.push_requests == []
 
 
+def test_done_scan_without_a_readable_page_is_announced_as_failed(studio, monkeypatch):
+    """«Готовый» документ, где все страницы не распознаны (`ocr._readable` — 409 empty): push и ntfy говорят
+    «не получилось», ссылка — та же, «Готово за час» — ошибка; документ, где прочитана хоть одна страница, — «готово»."""
+    from test_jobs import scan
+
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    sent = []
+
+    async def fake_ntfy(user_id, body, href, **kwargs):
+        sent.append((body, href))
+    monkeypatch.setattr(push.ntfy, "notify", fake_ntfy)
+    for sid, pages in (("s-none", ("failed", "failed")), ("s-some", ("failed", "done"))):
+        scan(uid, sid)
+        state.DB.executemany("INSERT INTO scan_pages(scan_id, user_id, n, state) VALUES (?, ?, ?, ?)",
+                             [(sid, uid, n, page) for n, page in enumerate(pages)])
+        studio.c.portal.call(ocr._finish, sid, "done", "готово")
+    settle(studio)
+    failed, ready = push.JOB_NOTICES["scans"][2], push.JOB_NOTICES["scans"][1]
+    assert [(device.decrypt(r.content)["body"], device.decrypt(r.content)["href"]) for r in studio.gw.push_requests] == [
+        (failed["ru"], "ocr?id=s-none"), (ready["ru"], "ocr?id=s-some")]
+    assert sent == [(failed, "ocr?id=s-none"), (ready, "ocr?id=s-some")]
+    # «Готово за час» (jobs._ocr) называет его так же: неудача со словами push, а не «готово»
+    rows = {j["id"]: (j["state"], j["detail"]) for j in studio.c.get("/api/jobs").json()["finished"]}
+    assert rows["s-none"] == ("error", failed["ru"]) and rows["s-some"][0] == "done"
+
+
 def test_server_chat_answer_pushes_and_lands_in_ready_within_the_hour(studio):
     """FINDINGS 06:F5: ответ через сервер (рассуждение, очередь за картой) — как задание раздела: «ответ готов» в
     диалог, строка «Готово за час»; страница на экране — без push; «стоп» — без всего."""

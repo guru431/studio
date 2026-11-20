@@ -456,6 +456,21 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not known_refusals(problems(r), 422), problems(r)
 
 
+def test_settings_offers_only_connections_the_section_accepts(browser, live):
+    """«+ Адрес для раздела» не предлагает подключение, которое раздел не примет по виду (OpenAI-совместимое в «Видео»)."""
+    live.add_user("accepts")
+    options = "[...document.querySelectorAll('#link-dialog [name=existing] option')].map(o => o.value)"
+    r = browser.drive(live.url + "/", [*signin("accepts"), ("wait", READY), add_cloud(live.cloud),
+        *go("settings/video"), ("wait", "document.querySelector('#link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")), ("eval", "video", options),
+        ("press", "Escape"), ("wait", f"!{is_open('#link-dialog')}"),
+        *go("settings/speech"), ("wait", "document.querySelector('.section-panel[data-section=speech] #link-add')"),
+        ("click", "#link-add"), ("wait", is_open("#link-dialog")), ("eval", "speech", options)])
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["video"] == ["new"] and v["speech"] == [str(v["cloud"]), "new"], v
+
+
 def test_settings_adds_the_first_gateway_to_every_section(browser, live):
     live.add_user("everywhere")
     every = "document.querySelector('#link-dialog [name=everywhere]')"
@@ -3941,6 +3956,40 @@ def test_new_media_models_are_selectable_and_h3_controls_match_its_graph(browser
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [390, 1280])
+def test_video_preview_drops_far_clips_and_restores_them(browser, live, width):
+    """03:F13: длинная история в «Превью» — у карточек дальше нескольких экранов плеер без `src` (буфер и декодер
+    отданы), у видимых `src` есть; при возврате наверх `src` прежний снова на месте."""
+    login = f"vfar{width}"
+    uid = live.add_user(login)
+    now = time.time()
+    for n in range(30):
+        live_sql(live, "INSERT INTO videos(id, user_id, connection_id, source_media_id, media_id, prompt, seconds,"
+                       " quality, smooth, state, progress, detail, created, finished) VALUES (?, ?, 1, 'nope', ?, '',"
+                       " 5, 'standard', 1, 'done', 100, '', ?, ?)", (f"vd-far{width}-{n:02}", uid, f"m-far{n:02}",
+                                                                    now - 600 + n, now - 500 + n))
+    first, last = f"{CLIP}[data-id=vd-far{width}-29] video", f"{CLIP}[data-id=vd-far{width}-00] video"
+    scroll = "(() => {{ const f = document.querySelector('#video-feed'); f.scrollTop = {0}; return true; }})()"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("video"), ("wait", VIDEO_FEED_READY),
+        ("wait", f"document.querySelectorAll('{CLIP} video').length === 30"),
+        ("wait", f"document.querySelector('{first}').hasAttribute('src')"),
+        ("eval", "src", f"document.querySelector('{first}').getAttribute('src')"),
+        ("eval", "farAtStart", f"!document.querySelector('{last}').hasAttribute('src')"),
+        ("eval", "down", scroll.format("f.scrollHeight")),
+        ("wait", f"!document.querySelector('{first}').hasAttribute('src')"),
+        ("wait", f"document.querySelector('{last}').hasAttribute('src')"),
+        ("eval", "up", scroll.format("0")),
+        ("wait", f"document.querySelector('{first}').hasAttribute('src')"),
+        ("eval", "back", f"document.querySelector('{first}').getAttribute('src')"),
+        ("eval", "poster", f"document.querySelector('{first}').getAttribute('poster')")], width=width, height=900,
+        mobile=width == 390)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["src"] == v["back"] == "/api/media/m-far29" and v["poster"] == "/api/media/nope?thumb=1"
+    assert v["farAtStart"] is True
+    assert not known_refusals(problems(r), 404), problems(r)
+
+
 def test_video_feed_shows_progress_and_survives_reload(browser, live, ready_clips):
     login = "vreload"
     live.add_user(login)
@@ -5459,7 +5508,11 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
         ("click", "#sp-new"),
         ("wait", "!document.querySelector('.sp-text') && !document.querySelector('.sp-item[aria-current]')"),
         ("eval", "fresh", "({text: document.querySelector('#speech-text').value, count: document.querySelector('#speech-count').textContent, focused: document.activeElement.id, choices: [document.querySelector('#chip-model').value, document.querySelector('#chip-voice').value]})"),
-        ("type", "#speech-text", "Новая озвучка"), ("click", "#speech-go"),
+        # «Новый чат» с пустым полем не снимает с поля защиту от автоперезагрузки: набранное после — вето
+        set_value("#speech-text", ""), ("click", "#sp-new"),
+        ("type", "#speech-text", "Новая озвучка"),
+        ("eval", "veto", "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))"),
+        ("click", "#speech-go"),
         ("wait", "document.querySelector('.sp-item[data-state=done][aria-current=true]')"),
         ("eval", "rows", "document.querySelectorAll('.sp-item').length"),
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
@@ -5467,6 +5520,7 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
     v = r["values"]
     # «Новый чат» не стирает набранное (04:F11): черновик остаётся в поле нового чата
     assert v["fresh"] == {"text": "Черновик", "count": "8 / 2000", "focused": "speech-text", "choices": v["choices"]}
+    assert v["veto"] is True
     assert v["rows"] == 2 and v["newVisible"] and v["fits"]
     assert not problems(r), problems(r)
 
@@ -6745,6 +6799,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
         ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-finished")),
         ("eval", "running", "document.querySelector('#jobs-running').textContent"),
         ("eval", "dotOpen", "document.querySelector('#jobs').dataset.new || ''"),
+        ("eval", "openName", "document.querySelector('#jobs-finished .jobs-row .jobs-open').getAttribute('aria-label')"),
         ("click", "#jobs-finished .jobs-row .jobs-open"),
         ("wait", is_open("#viewer")),
         ("eval", "hash", "location.hash"), ("eval", "panel", is_open("#jobs-panel")),
@@ -6754,6 +6809,7 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
     v = r["values"]
     assert v["dot"] is True and v["rows"] == [["photo", "Картинка · SNOFS Krea 2", True, "done"]]
     assert v["running"] == "Сейчас ничего не идёт" and v["dotOpen"] == ""
+    assert v["openName"] == "Открыть: Картинка · SNOFS Krea 2"
     assert v["hash"] == "#/photo" and v["panel"] is False and v["dotAfter"] == ""
     assert not problems(r), problems(r)
 
@@ -7649,12 +7705,19 @@ def test_translate_keeps_typed_text_while_a_record_is_open(browser, live, transl
         ("click", "#tl-new"),
         ("eval", "fresh", f"[{field}, {TL_OUTPUT}, {REFRESH_VETO}]"),
         ("click", "#tl-new"),
-        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]")])
+        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]"),
+        # удалённая открытая запись: её исходник уходит из поля, возвращается свой черновик
+        set_value("#tl-input", "Ещё черновик"), *open_row,
+        ("click", ".tl-row[data-state=done] .tl-delete"), ("wait", "document.querySelector('#tl-delete-dialog')?.open"),
+        ("click", "#tl-delete-confirm"),
+        ("wait", "!document.querySelector('.tl-row') && !document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "deleted", f"[{field}, {REFRESH_VETO}]")])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["opened"] == ["Привет", True]
     assert v["fresh"] == ["Мой черновик", "", True]
     assert v["cleared"] == ["", False]
+    assert v["deleted"] == ["Ещё черновик", True]
     assert not problems(r), problems(r)
 
 
@@ -8164,9 +8227,9 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         *go("settings"), ("eval", "returned", AGENTS_DOWNLOAD)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
     assert v["nested"] and v["other"]
-    assert v["notice"] == "Установите агент на компьютер, который хотите подключить к Студии."
+    assert v["notice"] == "Установите мост на компьютер, который хотите подключить к Студии."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True
     assert not problems(r), problems(r)
 
@@ -8176,7 +8239,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
         ("eval", "link", AGENTS_DOWNLOAD), ("eval", "fits", NO_OVERFLOW),
         ("screenshot", str(tmp_path / "installer-settings-1280.png"))], width=1280)
     assert not r.get("failed"), r
-    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать агент для Windows (.exe)", 1]
+    assert r["values"]["link"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
     assert r["values"]["fits"]
     assert not problems(r), problems(r)
 
@@ -8234,7 +8297,7 @@ PUSH_READY = "document.querySelector('#push-enabled') && !document.querySelector
 
 def test_settings_push_toggle_subscribes_this_device(browser, live):
     """«Уведомления» → «Push от Claude Code на этом устройстве»: включение — подписка с ключом VAPID сервера и
-    строка push_subs у сессии, флаг устройства studio-push; новая вкладка видит флажок отмеченным; выключение —
+    строка push_subs у сессии, флаг устройства studio-push:<id>; новая вкладка видит флажок отмеченным; выключение —
     unsubscribe, строки нет, флага нет."""
     login = "pusher"
     uid = live.add_user(login)
@@ -8245,7 +8308,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
         ("eval", "hint", "document.querySelector('#push-hint').textContent"),
         ("eval", "before", "document.querySelector('#push-enabled').checked"),
         ("click", "#push-enabled"),
-        ("wait", "localStorage.getItem('studio-push') === '1'"),
+        ("wait", f"localStorage.getItem('studio-push:{uid}') === '1'"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
         ("eval", "calls", "window.pushCalls"),
         ("eval", "server", f"(async () => (await {API}.api('GET', '/api/me/push')))()"),
@@ -8266,7 +8329,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     r = browser.drive(live.url + "/#/settings/notifications", [("wait", READY), ("wait", PUSH_READY),
         ("eval", "checked", "document.querySelector('#push-enabled').checked"),
         ("click", "#push-enabled"),
-        ("wait", "localStorage.getItem('studio-push') === null"),
+        ("wait", f"localStorage.getItem('studio-push:{uid}') === null"),
         ("wait", "document.querySelector('#push-status').textContent !== ''"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
         ("eval", "calls", "window.pushCalls"),
@@ -8277,6 +8340,41 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     assert v["checked"] is True and v["status"] == "Push выключен на этом устройстве"
     assert v["calls"] == [["unsubscribe"]] and v["server"] is False
     assert push_rows(live, uid) == []
+    assert not problems(r), problems(r)
+
+
+def test_push_offers_to_come_back_after_a_new_sign_in(browser, live):
+    """FINDINGS 06:F11: выход уносит подписку сессии, а флаг устройства, разрешение и подписка браузера живы — после
+    нового входа плашка «Push выключился после выхода»: «Включить» отправляет ту же подписку новой сессии без
+    новой подписки браузера; «Не нужно» снимает флаг, и плашки больше нет."""
+    login = "push-again"
+    uid = live.add_user(login)
+    keys = push_keys()
+    init = push_init(keys)
+    flag = f"localStorage.getItem('studio-push:{uid}')"
+    bar = "document.querySelector('#push-restore')"
+    out = ("eval", "out", "fetch('/logout', { method: 'POST' }).then((r) => r.ok)")
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/notifications"), ("wait", PUSH_READY),
+        ("click", "#push-enabled"), ("wait", f"{flag} === '1'"), out], width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    assert push_rows(live, uid) == []                    # сессия ушла — с ней и подписка на сервере
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", bar),
+        ("eval", "text", f"{bar}.textContent"), ("eval", "fits", NO_OVERFLOW),
+        ("click", "#push-restore-yes"), ("wait", f"!{bar}"),
+        ("eval", "server", f"(async () => (await {API}.api('GET', '/api/me/push')).subscribed)()"),
+        ("eval", "calls", "window.pushCalls"), out], width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["text"] == "Push на этом устройстве выключился после выхода из учёткиВключитьНе нужно" and v["fits"] is True
+    assert v["server"] is True and v["calls"] == []      # та же подписка браузера, без subscribe
+    assert not problems(r), problems(r)
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", bar),
+        ("click", "#push-restore-no"), ("wait", f"!{bar} && {flag} === null"),
+        ("eval", "reload", "location.reload(); true"), ("wait", READY),
+        ("eval", "after", f"new Promise((done) => setTimeout(() => done(!!{bar}), 500))")],
+        width=320, mobile=True, init=init)
+    assert not r.get("failed"), r
+    assert r["values"]["after"] is False and push_rows(live, uid) == []
     assert not problems(r), problems(r)
 
 
@@ -8299,7 +8397,7 @@ def test_push_checkbox_gives_up_without_service_worker(browser, live):
         ("wait", "document.querySelector('#push-status').textContent !== ''"),
         ("eval", "status", "document.querySelector('#push-status').textContent"),
         ("eval", "box", "(b => [b.checked, b.disabled])(document.querySelector('#push-enabled'))"),
-        ("eval", "flag", "localStorage.getItem('studio-push')")], width=320, mobile=True, init=PUSH_NO_WORKER)
+        ("eval", "flag", f"localStorage.getItem('studio-push:{uid}')")], width=320, mobile=True, init=PUSH_NO_WORKER)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["status"] == "Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен"
@@ -8430,12 +8528,12 @@ def test_code_empty_offers_agent_download(browser, live):
         ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["link"] == ["A", "/api/agent/download", True, "Скачать агент для Windows (.exe)", 1]
+    assert v["link"] == ["A", "/api/agent/download", True, "Скачать мост для Windows (.exe)", 1]
     assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
-    assert v["texts"] == ["Установите агент на компьютер, который хотите подключить к Студии.",
+    assert v["texts"] == ["Установите мост на компьютер, который хотите подключить к Студии.",
                           "Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
-                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню агента."]
+                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста."]
     assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
@@ -10136,7 +10234,7 @@ def test_code_draft_goes_once_the_turn_is_accepted_even_after_leaving(browser, l
 # файлы и git проекта (code-files.js): список, правка, просмотр .md и .pdf, статус git, ссылка из шага чата
 
 CODE_APP = b"print(1)\r\nprint(2)\r\n"
-CODE_CONFLICT = "Файл изменился на компьютере — откройте его заново, чтобы не затереть правки"
+CODE_CONFLICT = "Файл изменился на компьютере — сравните версии и выберите, какую оставить"
 CODE_FILE_NAMES = "[...document.querySelectorAll('#code-files li[data-name]')].map((li) => li.dataset.name)"
 #: части пути файлов (без разделителей «›»)
 CODE_PATH = "[...document.querySelectorAll('#code-path > :not([aria-hidden])')].map((e) => e.textContent)"
@@ -10369,17 +10467,19 @@ def test_code_files_open_edit_and_save(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_code_file_conflict_is_said_in_words(browser, live):
+@pytest.mark.parametrize("choice", ["take", "overwrite"])
+def test_code_file_conflict_is_said_in_words(browser, live, choice):
     """Файл открыт, а машина его меняет (его поправил Claude): «Сохранить» — 409 conflict, слова из «Текстов»;
-    на машине — её правка, в редакторе — своя."""
-    login = "code-conflict"
+    на машине — её правка, в редакторе — своя; сравнение двух версий и выбор: взять версию компьютера (правка не
+    сохраняется, файл не правлен) или сохранить свою поверх (второй save с version прочитанной заново)."""
+    login = f"code-conflict-{choice}"
     live.add_user(login)
     machine = code_files_machine()
     read = machine._op_read
 
     def read_then_change(req, events):
         out = read(req, events)
-        machine.projects["alpha"]["files"]["src/app.py"] = b"print('claude')\n"
+        machine.projects["alpha"]["files"]["src/app.py"] = b"x = 1\ny = 2\nprint('claude')\n"
         return out
 
     machine._op_read = read_then_change
@@ -10389,19 +10489,38 @@ def test_code_file_conflict_is_said_in_words(browser, live):
             code_root_names(5), ("click", code_item("src")),
             ("wait", "document.querySelector(\"#code-files li[data-name='app.py']\")"),
             ("click", code_item("app.py")), ("wait", "document.querySelector('#code-editor')"),
-            set_value("#code-editor", "print('мой')\n"), ("click", "#code-save"),
+            set_value("#code-editor", "x = 1\ny = 2\nprint('мой')\n"), ("click", "#code-save"),
             ("wait", f"{CODE_FILE_STATUS} !== ''"), ("eval", "status", CODE_FILE_STATUS),
             ("eval", "error", "document.querySelector('#code-file-status').classList.contains('error')"),
             ("eval", "text", "document.querySelector('#code-editor').value"),
-            ("eval", "fits", NO_OVERFLOW)], width=320, mobile=True)
+            ("wait", "document.querySelector('#code-conflict')"),
+            ("eval", "diff", "document.querySelector('#code-conflict .code-diff-unified').textContent"),
+            ("eval", "rows", "[...document.querySelectorAll('#code-conflict .code-diff-unified .code-change-line')].map((n) =>"
+                     " [n.classList[1], n.querySelector('.code-change-number').textContent, n.lastChild.textContent])"),
+            ("eval", "fits", NO_OVERFLOW), ("click", f"#code-conflict-{choice}"),
+            ("wait", "!document.querySelector('#code-conflict')"),
+            ("wait", f"![{json.dumps(CODE_CONFLICT)}, ''].includes({CODE_FILE_STATUS})"),
+            ("eval", "after", "document.querySelector('#code-editor').value"),
+            ("eval", "final", CODE_FILE_STATUS)], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
     assert v["status"] == CODE_CONFLICT and v["error"] is True and v["fits"] is True
-    assert v["text"] == "print('мой')\n"
-    assert machine.projects["alpha"]["files"]["src/app.py"] == b"print('claude')\n"
-    assert len(code_requests(machine, "save")) == 1
+    assert v["text"] == "x = 1\ny = 2\nprint('мой')\n"
+    assert "print('claude')" in v["diff"] and "print('мой')" in v["diff"]
+    # неизменённые строки целого файла — контекст с номерами строк, а не заголовки
+    assert v["rows"] == [["context", "1", "x = 1"], ["context", "2", "y = 2"],
+                         ["removed", "3", "print('claude')"], ["added", "3", "print('мой')"]]
+    saves = code_requests(machine, "save")
+    if choice == "take":
+        assert v["after"] == "x = 1\ny = 2\nprint('claude')\n" and v["final"] == "Открыта версия компьютера"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == b"x = 1\ny = 2\nprint('claude')\n"
+        assert len(saves) == 1
+    else:
+        assert v["after"] == "x = 1\ny = 2\nprint('мой')\n" and v["final"] == "Сохранено"
+        assert machine.projects["alpha"]["files"]["src/app.py"] == "x = 1\ny = 2\nprint('мой')\n".encode()
+        assert len(saves) == 2 and saves[1]["version"] != saves[0]["version"]
     assert not known_refusals(problems(r), 409), problems(r)
 
 
