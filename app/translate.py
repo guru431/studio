@@ -277,11 +277,15 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
                         job.live = head + value
 
                 try:
-                    return documents.nfc(await cleaner.translate(job.conn, job.id, job.model,          # в поиск
-                                                                 translate_text.system_prompt(origin, lang, blocks),
-                                                                 text, on_text))
+                    answer = await cleaner.translate(job.conn, job.id, job.model,
+                                                     translate_text.system_prompt(origin, lang, blocks), text, on_text)
                 except HTTPException as exc:
                     raise translate_text.TranslateError(exc.detail["message"]) from None
+                # как у шлюза (`translate_text.chunk`): без ограды, в NFC (в поиск), пустой — не перевод
+                answer = documents.nfc(translate_text.unwrap(answer, text).strip())
+                if not answer:
+                    raise translate_text.TranslateError(translate_text.EMPTY)
+                return answer
             return await translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta, blocks=blocks,
                                               context=context)
         except translate_text.Busy:
