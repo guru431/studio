@@ -809,7 +809,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'photo-delete-confirm' });
     const dialog = openDialog(root, { id: 'photo-delete-dialog', title: tr("Удалить картинку?"),
-      body: [el('p', {}, tr("Картинка удалится из истории вместе с файлом.")), fail], actions: [confirm] });
+      body: [el('p', {}, tr("Картинка удалится из истории вместе с файлом. Если из неё сделаны другие картинки или ролики, файл останется у них исходником.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {

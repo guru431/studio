@@ -1490,7 +1490,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Из того же исходника": "From the same original",
   "Сделаны из этой": "Created from this",
   "Удалить картинку?": "Delete image?",
-  "Картинка удалится из истории вместе с файлом.": "The image and its file will be deleted from history.",
+  "Картинка удалится из истории вместе с файлом. Если из неё сделаны другие картинки или ролики, файл останется у них исходником.": "The image and its file will be deleted from history. If other images or videos were made from it, the file stays as their source.",
   "Фото для описания": "Photo to describe",
   "gemma-abl описывает фото · 0:00": "gemma-abl describing photo · 0:00",
   "Например: другое освещение, цвет одежды или дополнительные детали": "For example: different lighting, clothing color or additional details",
