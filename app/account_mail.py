@@ -6,14 +6,14 @@ import logging
 import os
 import smtplib
 import ssl
+from contextlib import contextmanager
 from email.message import EmailMessage
 from email.utils import parseaddr
-from contextlib import contextmanager
+from enum import StrEnum
 
 from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from typing import Literal
 
 import security
 import state
@@ -21,10 +21,19 @@ import state
 log = logging.getLogger("studio")
 
 
+class SMTPMode(StrEnum):
+    STARTTLS = "starttls"
+    SSL = "ssl"
+    PLAIN = "plain"
+
+
+DEFAULT_PORTS = {SMTPMode.STARTTLS: 587, SMTPMode.SSL: 465, SMTPMode.PLAIN: 25}
+
+
 class Settings(BaseModel):
     host: str = Field(max_length=253)
     port: int = Field(ge=1, le=65535)
-    tls: Literal["starttls", "ssl"] = "starttls"
+    tls: SMTPMode = SMTPMode.STARTTLS
     username: str = Field(default="", max_length=320)
     password: str | None = Field(default=None, max_length=8192)
     sender: str = Field(max_length=320)
@@ -32,9 +41,10 @@ class Settings(BaseModel):
 
 
 def _environment():
-    mode = os.environ.get("STUDIO_SMTP_TLS", "starttls")
+    mode = os.environ.get("STUDIO_SMTP_TLS", SMTPMode.STARTTLS)
+    default_port = DEFAULT_PORTS.get(mode, DEFAULT_PORTS[SMTPMode.STARTTLS])
     return {"host": os.environ.get("STUDIO_SMTP_HOST", ""), "sender": os.environ.get("STUDIO_MAIL_FROM", ""),
-            "tls": mode, "port": int(os.environ.get("STUDIO_SMTP_PORT", "465" if mode == "ssl" else "587")),
+            "tls": mode, "port": int(os.environ.get("STUDIO_SMTP_PORT", str(default_port))),
             "username": os.environ.get("STUDIO_SMTP_USER", ""), "password": os.environ.get("STUDIO_SMTP_PASSWORD", ""),
             "connect_ip": os.environ.get("STUDIO_SMTP_CONNECT_IP", "").strip()}
 
@@ -86,11 +96,10 @@ def save_settings(body):
 @contextmanager
 def _connection(config):
     host, mode = config["host"], config["tls"]
-    if not host or mode not in ("starttls", "ssl"):
+    if not host or mode not in SMTPMode:
         raise ValueError("mail configuration")
-    context = ssl.create_default_context()
     port = config["port"]
-    transport = smtplib.SMTP_SSL if mode == "ssl" else smtplib.SMTP
+    transport = smtplib.SMTP_SSL if mode == SMTPMode.SSL else smtplib.SMTP
     connect_ip = config.get("connect_ip", "")
     if connect_ip:
         connect_ip = str(ipaddress.ip_address(connect_ip))
@@ -100,10 +109,10 @@ def _connection(config):
                 return super()._get_socket(connect_ip, port, timeout)
 
         transport = RoutedSMTP
-    options = {"context": context} if mode == "ssl" else {}
+    options = {"context": ssl.create_default_context()} if mode == SMTPMode.SSL else {}
     with transport(host, port, timeout=10, **options) as smtp:
-        if mode == "starttls":
-            smtp.starttls(context=context)
+        if mode == SMTPMode.STARTTLS:
+            smtp.starttls(context=ssl.create_default_context())
         if config.get("username"):
             smtp.login(config["username"], config.get("password", ""))
         yield smtp
@@ -111,12 +120,10 @@ def _connection(config):
 
 def _send(recipient: str, subject: str, body: str, config=None) -> None:
     config = config if config is not None else _environment()
-    sender = config["sender"]
-    host, mode = config["host"], config["tls"]
-    if not host or not sender or mode not in ("starttls", "ssl"):
+    if not configured(config):
         raise ValueError("mail configuration")
     message = EmailMessage()
-    message["From"], message["To"], message["Subject"] = sender, recipient, subject
+    message["From"], message["To"], message["Subject"] = config["sender"], recipient, subject
     message.set_content(body)
     with _connection(config) as smtp:
         smtp.send_message(message)
@@ -127,7 +134,7 @@ UNSET_MESSAGE = "Почта не настроена — Настройки → S
 
 
 def configured(config) -> bool:
-    return bool(config.get("host") and config.get("sender")) and config.get("tls") in ("starttls", "ssl")
+    return bool(config.get("host") and config.get("sender")) and config.get("tls") in SMTPMode
 
 
 def unset() -> HTTPException:

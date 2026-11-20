@@ -119,6 +119,46 @@ def test_codex_defaults_warning_uses_resolved_settings(desktop_browser, live, sa
         channel.stop()
 
 
+@pytest.mark.parametrize("desktop_browser", ["chromium"], indirect=True)
+@pytest.mark.parametrize("resolved_model,effort,warning", [
+    ("claude-opus-5-5", "xhigh", False),
+    ("claude-sonnet-5", "xhigh", True),
+    ("claude-opus-5-5", "high", True),
+])
+def test_claude_defaults_warning_recognizes_the_selected_model_alias(desktop_browser, live, resolved_model, effort, warning):
+    class Machine(FakeMachine):
+        @property
+        def hello(self):
+            return {**super().hello, "efforts": [effort]}
+
+        def _op_state(self, req, events):
+            result = super()._op_state(req, events)
+            result["settings"].update(model=resolved_model, effort=effort)
+            return result
+
+    login = f"defaults-{resolved_model.removeprefix('claude-')}-{effort}"
+    live.add_user(login)
+    live_sql(live, "UPDATE users SET code_defaults = ? WHERE login = ?",
+             (json.dumps({"claude": {"model": "opus", "effort": "xhigh"}}), login))
+    machine = Machine({"alpha": {"chats": {CODE_CHAT_B: code_session("Claude")}}})
+    aid, channel = code_online(live, login, machine)
+    try:
+        with desktop_browser.new_context(service_workers="block") as context:
+            signed = context.request.post(live.url + "/login", form={"login": login, "password": "password-123"},
+                                          max_redirects=0)
+            assert signed.status == 303
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(live.url + f"/#/code/{aid}/{pid('alpha')}/{CODE_CHAT_B}")
+            page.locator('#code-chat[data-loaded="1"]').wait_for()
+            assert page.locator("#code-model").input_value() == "opus"
+            assert page.locator("#code-model-pick").inner_text() == resolved_model
+            assert page.locator("#code-send").is_enabled()
+            assert page.locator("#code-defaults-notice").is_visible() == warning
+    finally:
+        channel.stop()
+
+
 def test_refresh_updates_the_codex_picker_without_replacing_the_bridge(desktop_browser, live):
     import bridge
 

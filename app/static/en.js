@@ -141,6 +141,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Запросы из расшифровки могут уйти на выбранные MCP-серверы — отправить?": "Queries based on the transcript may be sent to the selected MCP servers. Send?",
   "Сервер SMTP": "SMTP server",
   "Шифрование": "Encryption",
+  "Без шифрования": "No encryption",
   "Логин SMTP": "SMTP username",
   "Пароль SMTP": "SMTP password",
   "Отправитель": "Sender",

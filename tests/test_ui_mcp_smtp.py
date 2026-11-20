@@ -233,12 +233,19 @@ def test_mcp_and_smtp_settings_forms_save_without_showing_password(browser, live
         set_value('#smtp-sender', 'studio@example.com'), ('click', '#smtp-save'),
         ('wait', "document.querySelector('#smtp-status')?.textContent === 'Настройки SMTP сохранены'"),
         ('eval', 'passwordCleared', "document.querySelector('#smtp-password').value === ''"),
+        ('eval', 'plainLabel', "document.querySelector('#smtp-tls option[value=plain]')?.textContent"),
+        set_value('#smtp-tls', 'plain'), set_value('#smtp-port', '25'), set_value('#smtp-username', ''),
+        ('click', '#smtp-clear-password'), ('click', '#smtp-save'),
+        ('wait', "document.querySelector('#smtp-status')?.textContent === 'Настройки SMTP сохранены'"
+                 " && !document.querySelector('#smtp-clear-password').checked"),
+        ('eval', 'plain', "[document.querySelector('#smtp-tls').value, document.querySelector('#smtp-port').value]"),
         ('eval', 'smtpFits', NO_OVERFLOW),
         ('eval', 'nav', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-servers [data-mcp-id]')"),
         ('eval', 'savedName', "document.querySelector('#mcp-servers b').textContent")]
     result = browser.drive(live.url + '/', steps, width=width, mobile=width == 320)
     assert not result.get('failed'), result
     assert result['values']['mcpFits'] and result['values']['smtpFits'] and result['values']['passwordCleared']
+    assert result['values']['plainLabel'] == 'Без шифрования' and result['values']['plain'] == ['plain', '25']
     assert result['values']['savedName'] == 'Tools'
     assert result['values']['headers'] == 'X-Api-Key=••••••'
     owner = state.DB.execute('SELECT id FROM users WHERE login = ?', (login,)).fetchone()[0]
