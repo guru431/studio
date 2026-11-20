@@ -9,7 +9,8 @@
   `user_id` — для `media.referenced`; `waiting`, `done`, `failed`, `layer`, `blank`). Шаг 16 связал каждое
   подключение srvllm с `ocr` (`hunyuan-ocr`, умолчание — наименьшее). API `/api/ocr` (`ocr.router`):
   загрузка — один PDF (все страницы, слой не читается) или 1…`PAGES_MAX` (50) фото PNG, JPEG, WebP одним
-  документом, до `documents.DOC_MAX` на всё; лента, документ (`pages` — список страниц, в ленте и с
+  документом, до `documents.DOC_MAX` на всё (фото длиннее `ocr_render.MAX_SIDE` (2200) страница до отправки
+  рисует JPEG этой стороны с поворотом по EXIF — `ocr.js` `shrink`, только если вышло меньше); лента, документ (`pages` — список страниц, в ленте и с
   `?brief=1` — число; `failed_pages` — сколько страниц `failed`, страница пишет его и у «готово»),
   `cancel`, `DELETE`, `export?format=txt|md|docx`, `attachments` — «<имя>.md» в чат (оба — у кончившегося
   документа со страницей с текстом, и с ошибкой или отменённого: `ocr._readable`, иначе 409 `running`/`empty`), `PATCH {name}` —
