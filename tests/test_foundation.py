@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 55
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 56
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,7 +40,7 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
+        conn.executescript(db.SCHEMA.removesuffix(db.ACCESS_56).removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         model = ("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created,server_only)"
                  " VALUES(?,?,'models','openai','https://x.test/v1',x'00','[]',0,1)")
