@@ -107,6 +107,18 @@ def test_selected_agent_pdf_checks_pin_without_loading_the_entire_history(studio
     assert history and all(r['limit'] == 1 for r in history)
 
 
+@pytest.mark.parametrize('selection', [None, '<p>Фрагмент</p>'])
+def test_agent_export_refuses_bad_project_and_chat_before_the_bridge(studio, selection):
+    """FINDINGS 07:F5: `pid` не 16 hex и `chat` не UUID — 422 до моста и с выделением, как без него."""
+    aid, machine, _ = setup(studio)
+    machine.requests.clear()
+    body = {'format': 'pdf', **({'selection': selection} if selection else {})}
+    for pid, chat, code in (('NOT-HEX', A, 'project'), (ALPHA, 'not-a-uuid', 'chat')):
+        response = studio.c.post(f'/api/code/agents/{aid}/projects/{pid}/chats/{chat}/export', json=body)
+        assert response.status_code == 422 and response.json()['detail']['code'] == code
+    assert machine.requests == []
+
+
 def test_selection_html_keeps_formatting_but_cannot_load_resources_or_run_code():
     from markdown_it import MarkdownIt
     source = '''<h2>Заголовок</h2><p><strong>Жирный</strong> <em>Курсив</em> <del>Удалено</del></p>
