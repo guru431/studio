@@ -514,7 +514,7 @@ function build(view, ctx) {
     return node;
   }
 
-  /** Вид «Таблица»: постер, промпт, параметры, seed, время или ход, действие. */
+  /** Вид «Таблица»: постер, промпт, параметры, seed, время или ход, действия (у готового — «Повторить» и «Скачать»). */
   function row(item, node) {
     const done = item.state === 'done' && item.media_id;
     const busy = RUNNING.has(item.state);
@@ -529,7 +529,7 @@ function build(view, ctx) {
     el('p', { class: 'cell-prompt', title: item.prompt || '' }, item.prompt || SOURCES[item.prompt_source] || ''),
     el('span', { class: 'cell-meta' }, el('span', {}, clipParams(item)), el('span', {}, seedText(item)),
       el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, ...(done ? [save] : busy ? [cancelButton(item, 'btn-link')]
+    el('span', { class: 'cell-act' }, ...(done ? [repeatButton(item, 'btn-link'), save] : busy ? [cancelButton(item, 'btn-link')]
       : [repeatButton(item, 'btn-link'), deleteButton(item, 'btn-link')])));
     return node;
   }
