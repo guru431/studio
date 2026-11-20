@@ -93,7 +93,7 @@ def test_old_bridge_and_oversized_or_revoked_results_are_rejected(studio, monkey
 
     def revoke(req, events):
         result = original(req, events)
-        monkeypatch.setattr(claude_code, '_session_open', lambda digest: False)
+        monkeypatch.setattr(claude_code, '_session_open', lambda *a: False)
         return result
 
     monkeypatch.setattr(machine, '_op_visualization', revoke)
