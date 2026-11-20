@@ -395,3 +395,109 @@ def test_studio_user_header_only_for_shared(studio):
     assert seen and set(seen) == {None}
     forged = studio.c.post("/api/mcp", json={"name": "Forged", "url": MCP_URL, "headers": {"X-Studio-User": "0" * 32}})
     assert forged.status_code == 422
+
+
+# ---- Task 4: API администратора ----------------------------------------------------------
+
+ADMIN = "/api/admin"
+
+
+def test_groups_api_roundtrip(studio):
+    admin = make_user(studio, "admin", is_admin=True)
+    member, other = make_user(studio, "member"), make_user(studio, "other")
+    signin(studio, "admin")
+    created = studio.c.post(f"{ADMIN}/groups", json={"name": " Медиа "})
+    assert created.status_code == 201 and created.json()["name"] == "Медиа"
+    gid = created.json()["id"]
+    assert studio.c.post(f"{ADMIN}/groups", json={"name": "медиа"}).status_code == 409
+    assert studio.c.post(f"{ADMIN}/groups", json={"name": ""}).status_code == 422
+    assert studio.c.patch(f"{ADMIN}/groups/{gid}", json={"name": "Media"}).json()["name"] == "Media"
+    put = studio.c.put(f"{ADMIN}/groups/{gid}/members", json={"user_ids": [other, member, member]})
+    assert put.status_code == 200 and put.json()["members"] == sorted([member, other])
+    assert studio.c.get(f"{ADMIN}/groups").json() == {"items": [{"id": gid, "name": "Media", "members": sorted([member, other])}]}
+    users = {u["id"]: u["groups"] for u in studio.c.get(f"{ADMIN}/users").json()["items"]}
+    assert users[member] == [gid] and users[other] == [gid] and users[admin] == []
+    assert studio.c.delete(f"{ADMIN}/groups/{gid}").status_code == 204
+    assert studio.c.get(f"{ADMIN}/groups").json() == {"items": []}
+    for method, path, body in (("PATCH", f"{ADMIN}/groups/{gid}", {"name": "x"}), ("DELETE", f"{ADMIN}/groups/{gid}", None),
+                               ("PUT", f"{ADMIN}/groups/{gid}/members", {"user_ids": []})):
+        assert studio.c.request(method, path, json=body).status_code == 404
+
+
+def test_access_api_roundtrip_connection_and_mcp(studio):
+    make_user(studio, "admin", is_admin=True)
+    sid = shared_tools(studio)
+    cid = state.DB.execute("SELECT id FROM connections WHERE user_id IS NULL").fetchone()[0]
+    gid = studio.c.post(f"{ADMIN}/groups", json={"name": "Media"}).json()["id"]
+    path = f"{ADMIN}/shared/connections/{cid}/access"
+    assert studio.c.get(path).json() == {"groups": None}
+    assert studio.c.put(path, json={"groups": [gid]}).json() == {"groups": [gid]}
+    assert studio.c.get(path).json() == {"groups": [gid]}
+    assert studio.c.put(path, json={"groups": []}).json() == {"groups": []}
+    assert studio.c.put(path, json={"groups": None}).json() == {"groups": None}
+    path = f"{ADMIN}/shared/mcp/{sid}/access"
+    assert studio.c.get(path).json() == {"groups": None, "tools": {}}
+    body = {"groups": [gid], "tools": {"video_create": [gid], "internal_action": []}}
+    assert studio.c.put(path, json=body).json() == body
+    assert studio.c.get(path).json() == body
+    body = {"groups": None, "tools": {"internal_action": []}}
+    assert studio.c.put(path, json=body).json() == body
+    assert access.tool_rules(sid) == {"internal_action": []}
+
+
+def test_access_api_rejects_unknown_ids(studio):
+    make_user(studio, "admin", is_admin=True)
+    signin(studio, "admin")
+    personal = add_connection(studio)
+    personal_mcp = studio.c.post("/api/mcp", json={"name": "Mine", "url": "http://10.77.1.15:4000/mcp"}).json()["id"]
+    sid = shared_tools(studio)
+    cid = state.DB.execute("SELECT id FROM connections WHERE user_id IS NULL").fetchone()[0]
+    gid = studio.c.post(f"{ADMIN}/groups", json={"name": "Media"}).json()["id"]
+    assert studio.c.put(f"{ADMIN}/groups/{gid}/members", json={"user_ids": [9999]}).status_code == 422
+    assert studio.c.put(f"{ADMIN}/shared/connections/{cid}/access", json={"groups": [9999]}).status_code == 422
+    for path in (f"{ADMIN}/shared/connections/{personal}/access", f"{ADMIN}/shared/connections/9999/access"):
+        assert studio.c.get(path).status_code == 404
+        assert studio.c.put(path, json={"groups": None}).status_code == 404
+    for path in (f"{ADMIN}/shared/mcp/{personal_mcp}/access", f"{ADMIN}/shared/mcp/9999/access"):
+        assert studio.c.get(path).status_code == 404
+        assert studio.c.put(path, json={"groups": None, "tools": {}}).status_code == 404
+    path = f"{ADMIN}/shared/mcp/{sid}/access"
+    assert studio.c.put(path, json={"groups": None, "tools": {"bad name": []}}).status_code == 422
+    assert studio.c.put(path, json={"groups": None, "tools": {"draw": [9999]}}).status_code == 422
+    assert studio.c.put(path, json={"groups": None, "tools": {f"t{i}": [] for i in range(257)}}).status_code == 422
+    assert access.tool_rules(sid) == {} and access.rule("mcp", sid) is None
+
+
+def test_access_api_admin_only(studio):
+    make_user(studio, "admin", is_admin=True)
+    make_user(studio, "member")
+    sid = shared_tools(studio)
+    cid = state.DB.execute("SELECT id FROM connections WHERE user_id IS NULL").fetchone()[0]
+    gid = access.create_group("Media")["id"]
+    signin(studio, "member")
+    for method, path, body in (
+            ("GET", f"{ADMIN}/groups", None), ("POST", f"{ADMIN}/groups", {"name": "x"}),
+            ("PATCH", f"{ADMIN}/groups/{gid}", {"name": "x"}), ("DELETE", f"{ADMIN}/groups/{gid}", None),
+            ("PUT", f"{ADMIN}/groups/{gid}/members", {"user_ids": []}),
+            ("GET", f"{ADMIN}/shared/connections/{cid}/access", None),
+            ("PUT", f"{ADMIN}/shared/connections/{cid}/access", {"groups": None}),
+            ("GET", f"{ADMIN}/shared/mcp/{sid}/access", None),
+            ("PUT", f"{ADMIN}/shared/mcp/{sid}/access", {"groups": None, "tools": {}})):
+        assert studio.c.request(method, path, json=body).status_code == 403, (method, path)
+    assert access.groups() == [{"id": gid, "name": "Media", "members": []}]
+
+
+def test_admin_access_log_has_no_names(studio, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="studio")
+    make_user(studio, "admin", is_admin=True)
+    member = make_user(studio, "member")
+    sid = shared_tools(studio)
+    gid = studio.c.post(f"{ADMIN}/groups", json={"name": "Secret-group-name"}).json()["id"]
+    studio.c.patch(f"{ADMIN}/groups/{gid}", json={"name": "Renamed-secret-group"})
+    studio.c.put(f"{ADMIN}/groups/{gid}/members", json={"user_ids": [member]})
+    studio.c.put(f"{ADMIN}/shared/mcp/{sid}/access", json={"groups": [gid], "tools": {"secret_tool_name": [gid]}})
+    studio.c.delete(f"{ADMIN}/groups/{gid}")
+    assert "группа доступа" in caplog.text
+    for secret in ("Secret-group-name", "Renamed-secret-group", "secret_tool_name", "member@example.com"):
+        assert secret not in caplog.text
