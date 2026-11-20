@@ -299,6 +299,27 @@ def retire_photo_models() -> None:
             _sync_legacy(uid)
 
 
+def drop_cleaner_strays() -> None:
+    """При запуске: связи Cleaner с разделами вне CLEANER (успели появиться до запрета в `check_link`) — прочь,
+    умолчания и прежние столбцы — в порядок. Такие связи нерабочие: Cleaner обслуживает только чат и перевод.
+    Прежний код после отката без этих строк просто не видит связи; созданные им снова уберёт следующий запуск."""
+    affected = set()
+    with transaction():
+        rows = state.DB.execute(
+            "SELECT l.user_id, l.section, l.connection_id FROM section_links l"
+            " JOIN connections c ON c.id = l.connection_id AND c.user_id = l.user_id"
+            f" WHERE c.cleaner = 1 AND l.section NOT IN ({', '.join('?' * len(CLEANER))})", CLEANER).fetchall()
+        for row in rows:
+            state.DB.execute("DELETE FROM section_links WHERE user_id = ? AND section = ? AND connection_id = ?",
+                             (row["user_id"], row["section"], row["connection_id"]))
+            _settle(row["user_id"], row["section"])
+            affected.add(row["user_id"])
+        for uid in affected:
+            _sync_legacy(uid)
+    if rows:
+        log.info("связи Cleaner вне чата и перевода убраны: %d", len(rows))
+
+
 def adopt(section: str, source: str) -> None:
     """Один раз на базу (флаг `settings` `adopted:<section>`, при старте службы): каждому пользователю — связи
     раздела `source`, чьё подключение идёт через сервер и вид которого допускает `section`, с теми же
