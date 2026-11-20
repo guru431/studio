@@ -48,8 +48,26 @@ export function toLogin() {
   location.href = '/login' + location.hash;
 }
 
+/** Вкладки студии одного браузера делят cookie сессии. Страница входа (login.js) открывается только без сессии и
+ * сообщает об этом каналом `studio-session`: остальные вкладки уходят на вход сразу, а не при следующем опросе —
+ * иначе после выхода и чужого входа фоновая вкладка показывала бы данные прежней учётки, а спрашивала новую. */
+export function watchSession() {
+  if (!('BroadcastChannel' in globalThis)) return;
+  new BroadcastChannel('studio-session').addEventListener('message', (event) => {
+    if (event.data === 'signed-out') toLogin();
+  });
+}
+
+/** Профиль заново. В браузере за это время вошла другая учётка (канал не дошёл: вкладка спала) — страница прежней
+ * скрывается и перезагружается, профиль не подменяется. */
 export async function loadMe() {
-  me = await api('GET', '/api/me');
+  const fresh = await api('GET', '/api/me');
+  if (me && fresh.id !== me.id) {
+    document.documentElement.classList.add('shrouded');
+    location.reload();
+    return new Promise(() => {});
+  }
+  me = fresh;
   return me;
 }
 

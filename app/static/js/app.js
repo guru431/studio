@@ -26,7 +26,7 @@ import { tr } from './i18n.js';
  * ленты — в учётке: вернувшись на экран, студия перечитывает профиль (их могли сменить на другом устройстве) —
  * тема меняется сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
-import { loadMe, me } from './api.js';
+import { loadMe, me, watchSession } from './api.js';
 import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
@@ -333,6 +333,7 @@ async function start() {
   const worker = 'serviceWorker' in navigator
     ? navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => null) : null;
   installLock();             // до профиля: запертая студия покажет экран блокировки раньше раздела
+  watchSession();            // выход в другой вкладке этого браузера — на вход сразу
   try {
     await loadMe();
   } catch (err) {

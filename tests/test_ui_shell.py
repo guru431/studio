@@ -130,6 +130,42 @@ def test_login_returns_to_the_address_it_came_from(browser, live, width):
     assert not problems(r, "status of 401"), problems(r, "status of 401")
 
 
+#: выход и вход другой учётки в этом же браузере — запросами, как сделала бы соседняя вкладка
+SWAP = ("fetch('/logout', { method: 'POST' }).then(() => fetch('/login', { method: 'POST',"
+        " headers: { 'content-type': 'application/x-www-form-urlencoded' },"
+        " body: 'login={0}&password=password-123' })).then((r) => r.ok)")
+
+
+def test_sign_out_in_another_tab_sends_this_one_to_login(browser, live):
+    """Две вкладки одного браузера: в одной выход (её страница входа шлёт `studio-session`) — вторая уходит на вход
+    сразу, со своим адресом, а не при следующем опросе (опросы API здесь отвечают успехом — увести может только канал)."""
+    live.add_user("tabs-a")
+    r = browser.drive(live.url + "/#/settings", [*signin("tabs-a"), ("wait", READY),
+        ("eval", "out", "fetch('/logout', { method: 'POST' }).then((r) => r.ok)"),
+        ("route", "/api/", 200, "{}"),
+        ("eval", "button", "(() => { const b = document.createElement('button'); b.id = 'other-tab';"
+                           " b.onclick = () => { window.open('/login', '_blank'); }; document.body.append(b); })()"),
+        ("click", "#other-tab"),
+        ("wait", "location.pathname === '/login'"),
+        ("eval", "after", "location.hash")])
+    assert not r.get("failed"), r
+    assert r["values"]["out"] is True and r["values"]["after"] == "#/settings"
+
+
+def test_profile_of_another_account_reloads_the_tab(browser, live):
+    """Вкладка проспала выход и чужой вход: перечитанный при возвращении профиль другой учётки не подменяет прежний —
+    страница перезагружается и открывается уже как новая учётка."""
+    live.add_user("swap-a")
+    live.add_user("swap-b")
+    r = browser.drive(live.url + "/", [*signin("swap-a"), ("wait", READY),
+        ("eval", "swapped", SWAP.replace("{0}", "swap-b")),
+        ("eval", "back", "document.dispatchEvent(new Event('visibilitychange'))"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("eval", "who", "document.querySelector('#menu-login').textContent")])
+    assert not r.get("failed"), r
+    assert r["values"]["swapped"] is True and r["values"]["who"] == "swap-b"
+
+
 @pytest.mark.parametrize("engine", ["webkit", "firefox"])
 def test_login_keeps_the_address_in_webkit_and_firefox(live, engine):
     """Перенос фрагмента через 303 `/` → `/login` и через POST формы зависит от движка: WebKit и Firefox ведут себя
