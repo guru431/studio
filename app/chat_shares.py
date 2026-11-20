@@ -251,7 +251,8 @@ def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tupl
         messages.append({"role": message["role"], "text": shown["content"], "attachments": attachments,
                          "reasoning": shown["reasoning"] if reasoning else None, "status": message["status"],
                          "tools": shown["tools"], "error": shown["error"]})
-    snapshot = {"title": row["title"] or "Чат", "messages": messages}
+    # без названия — пусто: подпись «Чат» на языке читателя ставят страница ссылки (`tr`) и экспорт (`exports.word`)
+    snapshot = {"title": row["title"] or "", "messages": messages}
     _encode(snapshot)
     return snapshot, files
 

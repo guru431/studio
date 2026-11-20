@@ -419,6 +419,9 @@ def test_english_export_translates_studio_words_but_not_the_conversation(studio)
          'error': 'отказ', 'attachments': [{'file': 'x'}, {'name': 'Отчёт.txt', 'file': 'y'}]}]}, 'en')
     assert steps.startswith('# Chat\n\n## Assistant\n\n') and '### Command' in steps and '### Reasoning' in steps
     assert 'Error: отказ' in steps and 'Attachment: File' in steps and 'Attachment: Отчёт.txt' in steps
+    # чат без названия: снимок не подставляет русское «Чат» — заголовок на языке файла
+    state.DB.execute("UPDATE chats SET title='' WHERE id='chat'")
+    assert studio.c.post('/api/chats/chat/export', json={'format': 'md', 'lang': 'en'}).text.startswith('# Chat\n')
 
 
 def test_export_refusals_say_what_happened(studio, monkeypatch):

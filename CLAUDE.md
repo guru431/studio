@@ -42,7 +42,7 @@ minor для возможностей, major для несовместимых �
   журнал — события с id, кодами и числами). Сторожат тесты журналов разделов. Тексты агентских чатов в базе бывают
   только в снимке ссылки «Поделиться» и только шифром `STUDIO_DATA_KEY` ([sharing-export](docs/architecture/sharing-export.md)).
 - **Анонимны только**: `/health`, `/login` (страница и вход), `/logout`, `/robots.txt`, оболочка PWA (`/static/*`,
-  `/manifest.webmanifest`, `/sw.js`, `/offline.html`, значки из корня `/apple-touch-icon.png`,
+  `/manifest.webmanifest` (и английский `/manifest.en.webmanifest`), `/sw.js`, `/offline.html`, значки из корня `/apple-touch-icon.png`,
   `/apple-touch-icon-precomposed.png`, `/favicon.ico`) и три класса входов **со своей защитой**:
   - ссылка «Поделиться»: `/share` (оболочка) и `/share/unlock|check|file` (`chat_shares.py`): секреты — только телом
     JSON до 4096 байт (`chat_shares.public_guard`), чужой `Origin` — 403, PIN ссылки с паузами (5 на ссылку, 30 на IP
