@@ -3991,6 +3991,9 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
                   ("eval", f"{view}Picked", picked("#video-feed")),
                   ("eval", f"{view}Viewer", "!!document.querySelector('#video-viewer')"),
                   ("eval", f"{view}Paused", f"[...document.querySelectorAll('{CLIP} video')].every(v => v.paused)"),
+                  # кнопки карточки в режиме скрыты: нажатие по ним только отмечает
+                  ("eval", f"{view}Shown", f"[...document.querySelectorAll('{CLIP} :is(.video-acts, .cell-act, .video-over) button')]"
+                                           ".filter(b => getComputedStyle(b).visibility !== 'hidden').map(b => b.className)"),
                   ("eval", f"{view}Fits", NO_OVERFLOW)]
     steps += [("eval", "bar", "getComputedStyle(document.querySelector('.video .select-bar')).display !== 'none'"),
               ("eval", "label", text_of("#video-select-download"))]
@@ -4000,6 +4003,7 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
     for n, view in enumerate(("preview", "tiles", "table"), 1):
         assert len(v[f"{view}Picked"]) == n, view
         assert v[f"{view}Viewer"] is False and v[f"{view}Paused"] and v[f"{view}Fits"], view
+        assert v[f"{view}Shown"] == [], (view, v[f"{view}Shown"])
     assert set(v["previewPicked"]) < set(v["tilesPicked"]) < set(v["tablePicked"])
     assert v["bar"] is (width < 760) and v["label"] == "Скачать"
     assert not problems(r), problems(r)
@@ -4066,10 +4070,13 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
         ("eval", "row", f"[...document.querySelectorAll('{CLIP} .cell-meta > span')].map(s => s.textContent)"),
         ("eval", "tableFits", f"{NO_OVERFLOW} && document.querySelector('#video-feed').scrollWidth"
                               " <= document.querySelector('#video-feed').clientWidth"),
+        ("eval", "tableActs", f"[...document.querySelectorAll('{CLIP} .cell-act button')]"
+                              ".map(b => b.getAttribute('aria-label') || b.textContent)"),
+        ("click", f"{CLIP} .cell-act .card-repeat"), ("wait", clips("done", 2)),
         ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
         ("click", "#video-viewer .act-delete"), ("wait", is_open("#video-delete-dialog")),
         ("click", "#video-delete-confirm"),
-        ("wait", f"!document.querySelector('#video-viewer') && !document.querySelector('{CLIP}')"),
+        ("wait", f"!document.querySelector('#video-viewer') && document.querySelectorAll('{CLIP}').length === 1"),
         ("eval", "kept", "fetch('/api/me').then(r => r.json()).then(m => m.views.video)")], width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
@@ -4081,6 +4088,7 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
     params, seed, when = v["row"]
     assert params == "Wan · 5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
     assert v["tableFits"] and v["kept"] == "table"
+    assert v["tableActs"] == ["Повторить", "Скачать"]
     assert any(s.startswith("DELETE /api/videos/") for s in r["sent"])
     assert not problems(r), problems(r)
 
