@@ -79,7 +79,11 @@
       await unlock();
       return request(path, body);
     }
-    if (!response.ok) throw new Error(translateMessage(result.detail?.message || tr("Не удалось выполнить запрос. Попробуйте позже.")));
+    if (!response.ok) {
+      const error = new Error(translateMessage(result.detail?.message || tr("Не удалось выполнить запрос. Попробуйте позже.")));
+      Object.assign(error, { status: response.status, code: result.detail?.code, left: result.detail?.left });
+      throw error;
+    }
     return result;
   }
 
@@ -91,12 +95,13 @@
 
   try {
     let action;
+    let extra = null;
     if (screen === 'invite') {
       title.textContent = tr("Приглашение в Студию");
       const invite = await request('/account/invite/check', { token });
       description.textContent = tr("Почта: {0}. Придумайте логин и пароль.", invite.email);
       const login = field('login', tr("Логин"), 'text', 'username', 32);
-      login.pattern = '[a-zA-Z0-9._-]{2,32}';
+      login.pattern = '[a-zA-Z0-9._\\-]{2,32}';      // pattern компилируется с флагом v: дефис в классе — только с \
       const password = field('password', tr("Пароль (не короче 8 знаков)"), 'password', 'new-password');
       password.minLength = 8;
       const repeat = field('repeat', tr("Повтор пароля"), 'password', 'new-password');
@@ -112,6 +117,7 @@
       action = async () => done((await request('/account/forgot', { login: login.value })).message);
     } else if (screen === 'reset') {
       title.textContent = tr("Новый пароль");
+      await request('/account/reset/check', { token });       // истекшая ссылка — до набора пароля
       description.textContent = tr("После сохранения все прежние сеансы Студии закроются.");
       const password = field('password', tr("Пароль (не короче 8 знаков)"), 'password', 'new-password');
       password.minLength = 8;
@@ -123,20 +129,57 @@
       };
     } else if (screen === 'code') {
       title.textContent = tr("Код из письма");
-      description.textContent = tr("Введите шестизначный код. Он действует 10 минут. Чтобы получить новый, начните вход заново.");
+      description.textContent = tr("Введите шестизначный код. Он действует 10 минут.");
       const code = field('code', tr("Код входа"), 'text', 'one-time-code', 6);
       code.inputMode = 'numeric';
       code.pattern = '[0-9]{6}';
-      action = async () => location.assign((await request('/account/code', { code: code.value })).next);
+      // неверный код — сколько попыток осталось; код погас (срок, попытки) — только вход заново
+      const failed = (err) => new Error(err.code === 'wrong_code' ? tr("Неверный код — осталось попыток: {0}", err.left)
+        : err.code === 'expired' ? tr("Код больше не действует. Начните вход заново.") : err.message);
+      action = async () => {
+        try { location.assign((await request('/account/code', { code: code.value })).next); }
+        catch (err) { throw failed(err); }
+      };
+      const resend = document.createElement('button');
+      resend.type = 'button'; resend.className = 'btn'; resend.id = 'account-resend'; resend.textContent = tr("Отправить код ещё раз");
+      resend.addEventListener('click', async () => {
+        resend.disabled = true; note.textContent = '';
+        try {
+          await request('/account/code/resend', {});
+          code.value = '';
+          note.className = 'ok'; note.textContent = tr("Новый код отправлен. Прежний больше не действует.");
+        } catch (err) { note.className = 'error'; note.textContent = failed(err).message; }
+        finally { resend.disabled = false; }
+      });
+      extra = resend;
     } else {
-      const me = await request('/api/me');
+      if (screen === 'verify') title.textContent = tr("Подтверждение почты");
+      let me;
+      try { me = await request('/api/me'); }
+      catch (err) {
+        // без сессии: секрет ссылки уже стёрт из адреса — после входа её надо открыть снова
+        if (screen === 'verify' && err.status === 401) throw new Error(tr("Войдите в Студию в этом браузере, затем снова откройте ссылку из письма."));
+        throw err;
+      }
       csrf = me.csrf;
+      // вошедшему «К входу» вело бы по кругу (/login → / → /account/email): выход и, если почта есть, назад
+      const back = document.getElementById('account-back');
+      const logout = document.getElementById('account-logout');
+      logout.hidden = false;
+      // через fetch: у страницы Referrer-Policy no-referrer, и обычная форма ушла бы с Origin: null — 403 «чужой сайт»
+      logout.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try { await fetch('/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* сеть — всё равно ко входу */ }
+        location.assign('/login');
+      });
+      back.href = '/';
+      back.textContent = tr("Назад в Студию");
+      back.hidden = !me.email && screen === 'email';
       if (screen === 'verify') {
-        title.textContent = tr("Подтверждение почты");
+        back.textContent = tr("Открыть Студию");
         await request('/api/me/email/confirm', { token });
         done(tr("Почта подтверждена."));
-        const back = document.getElementById('account-back');
-        back.href = '/'; back.textContent = tr("Открыть Студию");
+        back.hidden = false;
         return;
       }
       title.textContent = me.email ? tr("Изменить почту") : tr("Укажите почту");
@@ -145,6 +188,7 @@
       email.value = me.email || '';
       const password = field('password', tr("Текущий пароль"), 'password', 'current-password');
       action = async () => {
+        if (me.email && email.value.trim().toLowerCase() === me.email) throw new Error(tr("Это и есть почта вашей учётки — укажите новую."));
         const result = await request('/api/me/email', { email: email.value, password: password.value });
         password.value = '';
         note.className = 'ok'; note.textContent = result.message;
@@ -155,6 +199,7 @@
     submit.textContent = ({ invite: tr("Создать учётную запись"), forgot: tr("Отправить ссылку"), reset: tr("Сохранить пароль"),
       code: tr("Войти"), email: tr("Подтвердить почту") })[screen];
     form.append(submit);
+    if (extra) form.append(extra);
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (submit.disabled) return;

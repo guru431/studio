@@ -70,8 +70,14 @@ def test_wrong_password_and_unknown_login_read_the_same(studio):
     make_user(studio, "owner")
     wrong, unknown = login(studio, "owner", "nope"), login(studio, "ghost", "nope", ip="10.77.48.6")
     assert wrong.status_code == unknown.status_code == 401
-    assert wrong.text == unknown.text and "Неверный логин или пароль" in wrong.text
+    # набранный логин возвращается в поле (не набирать заново) — других различий нет
+    assert 'value="owner"' in wrong.text and 'value="ghost"' in unknown.text
+    assert wrong.text.replace('value="owner"', '') == unknown.text.replace('value="ghost"', '')
+    assert "Неверный логин или пароль" in wrong.text
     assert auth.COOKIE not in studio.c.cookies
+    typed = login(studio, '"><script>x</script>', "nope")
+    assert 'value="&quot;&gt;&lt;script&gt;x&lt;/script&gt;"' in typed.text and "<script>x" not in typed.text
+    assert 'value=""' in studio.c.get("/login").text
 
 
 def racing_verify(monkeypatch, change) -> None:
@@ -329,7 +335,8 @@ def test_api_answers_are_not_cached(studio):
 ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanifest", "/offline.html", "/robots.txt",
              "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico", "/api/agent/enroll",
              "/share", "/share/unlock", "/share/check", "/share/file"}
-ANONYMOUS |= {"/account/{screen}", "/account/invite/check", "/account/invite/accept", "/account/forgot", "/account/reset", "/account/code"}
+ANONYMOUS |= {"/account/{screen}", "/account/invite/check", "/account/invite/accept", "/account/forgot", "/account/reset", "/account/code",
+              "/account/reset/check", "/account/code/resend"}
 
 
 def test_pages_answer_head_and_robots_are_turned_away(studio):
