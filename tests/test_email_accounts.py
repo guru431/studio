@@ -252,6 +252,7 @@ def test_disable_during_smtp_does_not_issue_a_login_challenge(studio, monkeypatc
         state.DB.execute("UPDATE users SET disabled=1 WHERE id=?", (uid,))
 
     monkeypatch.setattr(account_mail, "send", disable_during_send)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)
     response = login(studio, "owner", PASSWORD)
     assert response.status_code == 400 and accounts.CHALLENGE_COOKIE not in studio.c.cookies
     assert state.DB.execute("SELECT count(*) FROM email_tokens").fetchone()[0] == 0
@@ -346,6 +347,35 @@ def test_probing_whose_email_is_registered_shares_the_email_change_pause(studio,
     assert studio.c.post("/api/me/email", json={"email": "friend@example.com", "password": PASSWORD}).status_code == 429
     assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 429
     assert not mail
+
+
+def test_unset_or_failing_mail_spends_no_code_or_email_change_attempt(studio, monkeypatch):
+    """Как у приглашений: ненастроенная почта — отказ до пауз; отказ SMTP попытку возвращает. Иначе пять входов
+    с верным паролем, пока почта лежит, запирали коды входа на 15 минут и после починки (и три — смену почты)."""
+    uid = admin(studio)
+    sent, failing = [], [True]
+
+    async def send(email, subject, body):
+        if failing[0]:
+            raise HTTPException(503, {"code": "mail", "message": account_mail.FAILED_MESSAGE})
+        sent.append(email)
+    monkeypatch.setattr(account_mail, "send", send)
+    for configured in (False, True):                     # не настроена, затем настроена, но SMTP отказывает
+        monkeypatch.setattr(account_mail, "configured", lambda config, on=configured: on)
+        for _ in range(6):
+            assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 503
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    for configured in (False, True):
+        monkeypatch.setattr(account_mail, "configured", lambda config, on=configured: on)
+        for _ in range(6):
+            assert login(studio, "owner", PASSWORD).status_code == 503
+    failing[0] = False
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/account/code"
+    state.DB.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
+    signin(studio, "owner")
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 200
+    assert sent == ["owner@example.com", "new@example.com"]
 
 
 def test_codes_are_off_by_default_and_changing_option_requires_password(studio, mail):
