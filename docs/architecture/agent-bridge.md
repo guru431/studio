@@ -44,6 +44,7 @@ disconnect до освобождения хода. Codex получает config
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.42.0 | отказ `git` — `git_unavailable` (нет git, `safe.directory`, сбой при своём `.git`; без capability) | §4 |
 | 0.41.0 | `projects.items[].dir` — настоящая папка проекта владельцу (без capability); `hello.mirror_exclude` — постоянные исключения зеркала | §5, §23.2 |
 | 0.40.0 | `hello.project_mirror_discovery` — поиск существующих копий | §23.1 |
 | 0.39.0 | `hello.project_mirror` и `hello.software_update_all` | §23, §21 |
@@ -213,10 +214,10 @@ disconnect до освобождения хода. Codex получает config
   `worktrees._git`; `gitinfo._filters` выключает драйверы фильтров clean/smudge/process из конфига самого репозитория
   (local/worktree, include; через `git config --show-scope`), системные и пользовательские (git-lfs) остаются;
   `status` — всегда с `--ignore-submodules=dirty` (правки внутри подмодуля не видны, сдвиг его коммита виден); без
-  проверяемого конфига (git < 2.26, имя драйвера не выражается через `-c`) статус — `not_git`/`error`. Хуки не
+  проверяемого конфига (git < 2.26, имя драйвера не выражается через `-c`) статус — `git_unavailable`/`error`. Хуки не
   запускаются (`GIT_OPTIONAL_LOCKS=0`, индекс не пишется). Частичный клон не дозагружает объекты с promisor-remote
   (иначе исполнился бы `remote.<имя>.uploadpack` конфига): `gitinfo.OFFLINE` — `GIT_NO_LAZY_FETCH=1` и пустой
-  `GIT_ALLOW_PROTOCOL` для git старше 2.45; недостающий объект — `not_git`/`error`. `worktree add` — действие
+  `GIT_ALLOW_PROTOCOL` для git старше 2.45; недостающий объект — `git_unavailable`/`error`. `worktree add` — действие
   владельца: фильтры, хуки и дозагрузка работают как у его git. Тест — `tests/test_git_untrusted_config.py` (integration).
 - Хуки Claude Code папки: фоновое чтение состояния `turns.Runner.state` подключает клиента SDK с `turns.NO_HOOKS`
   (`--settings {"disableAllHooks": true}` сильнее project/local), ход — без него. Живьём не проверено.
@@ -573,7 +574,10 @@ UUID нового чата задаёт студия, настоящий thread 
   `Runner._frame` добавляет имя папки проекта `project_name` только к `ask`/`done` для push, без пути и текста чата.
 - `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с;
   `GIT_CEILING_DIRECTORIES` — родитель настоящего пути проекта: проект без своего `.git` внутри чужого репозитория —
-  `not_git`; код ≠ 0 или нет git — `not_git`, срок вышел — `TimeoutExpired` наружу).
+  `not_git`; код ≠ 0 без своего `.git` — `not_git`; с ним — `git_unavailable` (409) «git не смог прочитать
+  репозиторий», при отказе `safe.directory` — `gitinfo.UNSAFE` (признак в stderr, сам stderr наружу не идёт); нет
+  git на компьютере — `git_unavailable` `gitinfo.NO_GIT`; срок вышел — `TimeoutExpired` наружу). Страница
+  показывает `not_git` как «Без Git», `git_unavailable` — «Git недоступен» и слова моста.
 - `cli` — `find_cli` (`claude.exe` новейшего расширения VS Code, версии числами; нет — CLI, встроенный в SDK),
   `current(path, find)` (прежний путь, пока файл есть, иначе `find()` заново — как `worker.py::_claude_bin`),
   `drop_session_env` (из окружения моста прочь `SESSION_ENV`, `SESSION_PREFIXES`, `TERM_PROGRAM=vscode` и

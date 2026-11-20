@@ -98,17 +98,35 @@ def test_status_is_not_read_when_the_filter_config_cannot_be_checked(monkeypatch
         gitinfo.status(tmp_path)
 
 
-@pytest.mark.parametrize("outcome", ["fail", "missing"])
-def test_status_is_not_git_on_exit_code_or_no_git(monkeypatch, tmp_path, outcome):
+DUBIOUS = (b"fatal: detected dubious ownership in repository at 'X:/p'\nTo add an exception for this directory,"
+           b" call:\n\n\tgit config --global --add safe.directory X:/p\n")
+
+
+@pytest.mark.parametrize("outcome,dot_git,words", [
+    ("fail", False, ("not_git", "не репозиторий git")),
+    ("missing", False, ("git_unavailable", "git не найден на компьютере")),
+    ("missing", True, ("git_unavailable", "git не найден на компьютере")),
+    ("dubious", True, ("git_unavailable", gitinfo.UNSAFE)),
+    ("fail", True, ("git_unavailable", "git не смог прочитать репозиторий")),
+])
+def test_status_names_no_git_dubious_owner_and_failure_apart_from_not_a_repository(monkeypatch, tmp_path, outcome,
+                                                                                   dot_git, words):
+    if dot_git:
+        (tmp_path / ".git").mkdir()
+
     def run(args, **kw):
         if outcome == "missing":
             raise FileNotFoundError(2, "нет git")
-        return subprocess.CompletedProcess(args, 128, b"", b"fatal")
+        if args[-2:] == ["--get-regexp", gitinfo.FILTER_KEYS]:
+            # `git config` настраивается мягко: при чужом владельце — без конфига репозитория, но без отказа.
+            return subprocess.CompletedProcess(args, 1, b"", b"")
+        return subprocess.CompletedProcess(args, 128, b"", DUBIOUS if outcome == "dubious" else b"fatal")
 
     monkeypatch.setattr(subprocess, "run", run)
     with pytest.raises(errors.Refused) as e:
         gitinfo.status(tmp_path)
-    assert (e.value.code, e.value.message) == ("not_git", "не репозиторий git")
+    assert (e.value.code, e.value.message) == words
+    assert "X:/p" not in e.value.message                          # stderr наружу не идёт
 
 
 @pytest.mark.integration
