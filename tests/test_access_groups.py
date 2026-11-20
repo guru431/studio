@@ -193,6 +193,22 @@ def test_forward_restores_rollback(studio):
     assert keys(items) == ["key-closed", "key-open", "key-own"]
 
 
+def test_startup_returns_forward_after_rollback(studio, caplog):
+    """`access.forward` (lifespan сразу после `db.migrate`): строки отката есть — ключи и MCP вернулись, таблица пуста."""
+    import logging
+    caplog.set_level(logging.INFO, logger="studio")
+    items = rollback_items(studio)
+    access.forward()                                                   # строк нет — ничего не делает и не пишет
+    assert "после отката" not in caplog.text
+    state.DB.executescript(access.ROLLBACK_56)
+    assert state.DB.execute("SELECT token_enc FROM connections WHERE id = ?", (items["closed"],)).fetchone()[0] == b"\x00"
+    access.forward()
+    assert keys(items) == ["key-closed", "key-open", "key-own"]
+    assert enabled(items) == [1, 1, 0, 1]
+    assert state.DB.execute("SELECT count(*) FROM access_rollback").fetchone()[0] == 0
+    assert "после отката возвращено строк 4" in caplog.text
+
+
 def test_set_members_and_rules_reject_unknown_ids(studio):
     group = access.create_group("Media")["id"]
     with pytest.raises(HTTPException) as e:

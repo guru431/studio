@@ -39,8 +39,8 @@ UPDATE mcp_servers SET enabled = 0 WHERE id IN (SELECT item_id FROM access_rollb
 COMMIT;
 """
 
-#: После возврата вперёд (служба остановлена): ключи и включённость из `access_rollback`. Ключ, введённый заново,
-#: и сервер, включённый прежним кодом, не трогаются.
+#: После возврата вперёд (выполняет `forward` при старте службы): ключи и включённость из `access_rollback`. Ключ,
+#: введённый заново, и сервер, включённый прежним кодом, не трогаются.
 FORWARD_56 = """BEGIN;
 UPDATE connections SET token_enc = (SELECT b.token_enc FROM access_rollback b
        WHERE b.kind = 'connection' AND b.item_id = connections.id)
@@ -53,6 +53,14 @@ COMMIT;
 """
 
 log = logging.getLogger("studio")
+
+
+def forward() -> None:
+    """При старте службы: работает новый код — значит, мы снова впереди отката; `FORWARD_56`, если есть что вернуть."""
+    count = state.DB.execute("SELECT count(*) FROM access_rollback").fetchone()[0]
+    if count:
+        state.DB.executescript(FORWARD_56)
+        log.info("доступ: после отката возвращено строк %d", count)
 
 
 def _bad(code: str, message: str, status: int = 422) -> HTTPException:
