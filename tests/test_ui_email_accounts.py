@@ -245,7 +245,8 @@ def test_email_code_form_finishes_login_only_after_correct_code(browser, live, m
     connection = db.connect(live.db_path)
     try:
         connection.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
-        response = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"}, verify=False)
+        response = httpx.post(live.url + "/login", data={"login": login, "password": "password-123",
+                                                         "next": "#/settings/security"}, verify=False)
         assert response.status_code == 303 and response.headers["location"] == "/account/code"
         correct = re.search(r"\b[0-9]{6}\b", mail[-1][2])[0]
         wrong = "000000" if correct != "000000" else "111111"
@@ -262,6 +263,7 @@ def test_email_code_form_finishes_login_only_after_correct_code(browser, live, m
             page.locator("#code").fill(correct)
             page.locator("#code").press("Enter")
             page.locator("#rail").wait_for()
+            assert page.url.endswith("/#/settings/security")      # адрес, с которого пришли, не теряется
             assert connection.execute("SELECT count(*) FROM sessions WHERE user_id=?", (uid,)).fetchone()[0] == 1
     finally:
         connection.close()

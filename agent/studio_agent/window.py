@@ -29,6 +29,7 @@ DASH = "—"
 # Состояние ядра → (слова, токен цвета палитры).
 STATUS = {"online": ("На связи", "ok"), "connecting": ("Подключается…", "muted"),
           "offline": ("Нет связи — переподключаюсь", "warn"), "revoked": ("Компьютер отозван в студии", "danger"),
+          "disabled": ("Учётка отключена в студии — подключусь после включения", "warn"),
           "replaced": ("Ключ используется другим мостом", "danger"), "setup": (NOT_LINKED, "muted")}
 PIN_WORDS = {"none": "PIN не задан", "set": "PIN задан", "locked": "PIN заблокирован после 5 ошибок"}
 PIN_BUTTONS = {"none": ("set",), "set": ("change", "clear"), "locked": ("unlock", "change")}

@@ -73,6 +73,31 @@ def test_invitation_registers_verified_email_and_self_selected_credentials(studi
         assert private not in caplog.text
 
 
+def accept(studio, mail, email, name):
+    studio.c.cookies.clear()
+    secret = token(mail)
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": name, "password": PASSWORD}).status_code == 201
+    signin(studio, "owner")
+    return state.DB.execute("SELECT id FROM users WHERE login=?", (name,)).fetchone()[0]
+
+
+def test_deleted_account_id_is_never_given_to_the_next_account(studio, mail):
+    """users.id без AUTOINCREMENT: удалённая последней учётка отдала бы свой id новой — с хвостами (очереди
+    удаления, Cleaner, паузы почты, каталог u<id>/). Новый id — после всех бывших, и после хвостов прежних удалений."""
+    admin(studio)
+    invite(studio, mail, email="bob@example.com")
+    bob = accept(studio, mail, "bob@example.com", "bob")
+    state.DB.execute("INSERT INTO cleaner_deletions(id,user_id,remote_id,base_url,token_enc,queued)"
+                     " VALUES ('c1',?,'r','https://cleaner.bob.example',x'00',0)", (bob,))
+    assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
+    state.DB.execute("DELETE FROM cleaner_deletions")              # хвоста нет — счёт держит settings
+    invite(studio, mail, email="carol@example.com")
+    carol = accept(studio, mail, "carol@example.com", "carol")
+    assert carol == bob + 1
+    state.DB.execute("INSERT INTO purge(media_id,user_id,rel_path,queued) VALUES ('m1',?,'u/x',0)", (carol + 5,))
+    assert db.next_user_id(state.DB) == carol + 6                    # хвост удаления, сделанного до учёта
+
+
 def test_account_letters_are_bilingual_russian_and_english(studio, mail):
     """Язык интерфейса сервер не знает: каждое письмо учётки — по-русски и по-английски, ссылка или код — один раз."""
     uid = admin(studio)
@@ -227,6 +252,7 @@ def test_disable_during_smtp_does_not_issue_a_login_challenge(studio, monkeypatc
         state.DB.execute("UPDATE users SET disabled=1 WHERE id=?", (uid,))
 
     monkeypatch.setattr(account_mail, "send", disable_during_send)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)
     response = login(studio, "owner", PASSWORD)
     assert response.status_code == 400 and accounts.CHALLENGE_COOKIE not in studio.c.cookies
     assert state.DB.execute("SELECT count(*) FROM email_tokens").fetchone()[0] == 0
@@ -323,6 +349,35 @@ def test_probing_whose_email_is_registered_shares_the_email_change_pause(studio,
     assert not mail
 
 
+def test_unset_or_failing_mail_spends_no_code_or_email_change_attempt(studio, monkeypatch):
+    """Как у приглашений: ненастроенная почта — отказ до пауз; отказ SMTP попытку возвращает. Иначе пять входов
+    с верным паролем, пока почта лежит, запирали коды входа на 15 минут и после починки (и три — смену почты)."""
+    uid = admin(studio)
+    sent, failing = [], [True]
+
+    async def send(email, subject, body):
+        if failing[0]:
+            raise HTTPException(503, {"code": "mail", "message": account_mail.FAILED_MESSAGE})
+        sent.append(email)
+    monkeypatch.setattr(account_mail, "send", send)
+    for configured in (False, True):                     # не настроена, затем настроена, но SMTP отказывает
+        monkeypatch.setattr(account_mail, "configured", lambda config, on=configured: on)
+        for _ in range(6):
+            assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 503
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    for configured in (False, True):
+        monkeypatch.setattr(account_mail, "configured", lambda config, on=configured: on)
+        for _ in range(6):
+            assert login(studio, "owner", PASSWORD).status_code == 503
+    failing[0] = False
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/account/code"
+    state.DB.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
+    signin(studio, "owner")
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 200
+    assert sent == ["owner@example.com", "new@example.com"]
+
+
 def test_codes_are_off_by_default_and_changing_option_requires_password(studio, mail):
     admin(studio)
     assert not studio.c.get("/api/me").json()["email_codes"]
@@ -345,8 +400,10 @@ def test_code_login_creates_session_only_after_browser_bound_one_time_code(studi
     studio.c.cookies.clear()
     assert studio.c.post("/account/code", json={"code": one_time}).status_code == 400
     studio.c.cookies.set(accounts.CHALLENGE_COOKIE, challenge)
+    # 200 с адресом, не 303: fetch страницы кода теряет фрагмент `Response.url` после перенаправления
     response = studio.c.post("/account/code", json={"code": one_time}, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"] == "/#/settings/security"
+    assert response.status_code == 200 and response.json() == {"next": "/#/settings/security"}
+    assert response.headers["cache-control"] == "no-store"
     assert studio.c.get("/api/me").json()["login"] == "owner"
     assert studio.c.post("/account/code", json={"code": one_time}).status_code == 400
 

@@ -802,6 +802,28 @@ def page(conn: sqlite3.Connection, table: str, user_id: int, before: "float | No
                         " ORDER BY created DESC, id DESC LIMIT ?", (user_id, *extra_args, *args, limit))
 
 
+#: наибольший id удалённой учётки (settings): `users.id` без AUTOINCREMENT, а SQLite выдал бы max(id) + 1 — и новой
+#: учётке достались бы хвосты прежней (очереди удаления `purge`, `cleaner_deletions`, паузы почты, каталог `u<id>/`)
+USER_SEQ = "user_seq"
+
+
+def next_user_id(conn: sqlite3.Connection) -> int:
+    """id новой учётки — после всех бывших: живых, удалённых (`USER_SEQ`) и тех, чьи хвосты остались в очередях
+    удаления с прежних удалений до учёта. Без шага схемы: прежний код настройку не читает и хуже не делает."""
+    return conn.execute(
+        "SELECT max(coalesce((SELECT max(id) FROM users), 0),"
+        " coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key = ?), 0),"
+        " coalesce((SELECT max(user_id) FROM purge), 0),"
+        " coalesce((SELECT max(user_id) FROM cleaner_deletions), 0)) + 1", (USER_SEQ,)).fetchone()[0]
+
+
+def retire_user_id(conn: sqlite3.Connection, uid: int) -> None:
+    """Перед удалением учётки: её id больше не выдаётся (`next_user_id`)."""
+    conn.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key)"
+                 " DO UPDATE SET value = max(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))",
+                 (USER_SEQ, str(uid)))
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current >= VERSION:
