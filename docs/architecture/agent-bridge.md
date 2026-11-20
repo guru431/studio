@@ -566,7 +566,9 @@ UUID нового чата задаёт студия, настоящий thread 
 - `journal` — логгер `studio_agent` в `agent.log` (1 МиБ × 3, UTF-8).
 - `pin` — `PinStore` (`pin.bin` под DPAPI: scrypt-хеш и счёт неверных; попытка пишется на диск до scrypt, проверки
   идут по одной — замок процесса; 5 подряд — `pin_locked` до `reset` на машине; нет файла — PIN не задан, блоб не
-  читается — `OSError`) и `OpenSessions` (открытые сессии студии в памяти, срок простоя `OPEN_IDLE_SEC`).
+  читается — `OSError`) и `OpenSessions` (открытые сессии студии в памяти, срок простоя `OPEN_IDLE_SEC`). Срок
+  простоя и аренда рабочего стола считаются по `host.awake_clock` — часам, которые идут и во сне компьютера
+  (Linux `CLOCK_BOOTTIME`, macOS `CLOCK_MONOTONIC`; `time.monotonic` там во сне стоит, на Windows — нет).
 - `projects` — `pid`, `list_projects` (подпапки разрешённых корней без `.`-имён, скрытых, системных и reparse-point), `find_project`
   (настоящий путь или `not_found`).
   `Config.projects_roots` хранит список; старый `projects_root` мигрирует в него и остаётся первой папкой для

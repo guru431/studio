@@ -6,11 +6,26 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 MACOS = sys.platform == "darwin"
 LINUX = sys.platform == "linux"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def awake_clock(platform_name: str = sys.platform):
+    """Монотонные часы, которые идут и во сне компьютера, — для сроков простоя (PIN-сессия, аренда рабочего стола).
+
+    `time.monotonic` на Linux (`CLOCK_MONOTONIC`) и macOS (`mach_absolute_time`) во сне стоит: сессия, оставленная
+    перед закрытием крышки, утром была бы ещё открыта. Linux — `CLOCK_BOOTTIME`, macOS — `CLOCK_MONOTONIC`
+    (по `clock_gettime(3)` macOS идёт и во сне); Windows — `time.monotonic`, он сон уже учитывает. Перевод
+    настенных часов на все три не действует."""
+    if platform_name == "linux" and hasattr(time, "CLOCK_BOOTTIME"):
+        return lambda: time.clock_gettime(time.CLOCK_BOOTTIME)
+    if platform_name == "darwin" and hasattr(time, "CLOCK_MONOTONIC"):
+        return lambda: time.clock_gettime(time.CLOCK_MONOTONIC)
+    return time.monotonic
 
 
 def platform_id() -> str:
