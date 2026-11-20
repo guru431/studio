@@ -179,19 +179,21 @@ async def login_code(uid: int, request: Request, next_: str, kind: str = "login"
     except BaseException:
         delete_token(token)
         raise
+    security_log.record(uid, "login_code_sent", detail=kind, ip=ip)     # пароль верен: знает ли его владелец — видно
     return token
 
 
-def check_code(token: str, code: str, kind: str = "login"):
+def check_code(token: str, code: str, kind: str = "login", *, ip: str | None = None):
     row = token_row(token, kind)
     state.DB.execute("UPDATE email_tokens SET attempts=attempts+1 WHERE digest=?", (row["digest"],))
     if not hmac.compare_digest(security.digest(token + ":" + code), row["secret_hash"]):
+        security_log.record(row["user_id"], "login_code_fail", detail=kind, ip=ip)
         raise invalid_token()
     delete_token(token)
     return row
 
 
-def bridge_code(uid: int, code: str) -> None:
+def bridge_code(uid: int, code: str, *, ip: str | None = None) -> None:
     row = state.DB.execute("SELECT t.*,u.pw_hash,u.email AS current_email FROM email_tokens t JOIN users u ON u.id=t.user_id"
                            " WHERE t.user_id=? AND t.kind='bridge' AND u.disabled=0 ORDER BY t.created DESC,t.rowid DESC LIMIT 1",
                            (uid,)).fetchone()
@@ -201,6 +203,7 @@ def bridge_code(uid: int, code: str) -> None:
     state.DB.execute("UPDATE email_tokens SET attempts=attempts+1 WHERE digest=?", (row["digest"],))
     supplied = hmac.digest(state.CFG.data_key.encode(), (row["digest"] + ":" + code).encode(), "sha256").hex()
     if not hmac.compare_digest(supplied, row["secret_hash"]):
+        security_log.record(uid, "login_code_fail", detail="bridge", ip=ip)
         raise invalid_token()
     state.DB.execute("DELETE FROM email_tokens WHERE user_id=? AND kind='bridge'", (uid,))
 
@@ -410,7 +413,7 @@ async def complete_login(request: Request):
     data = await public_data(request)
     throttle("verify-code-ip", auth.client_ip(request), 30, 900)
     token = request.cookies.get(CHALLENGE_COOKIE, "")
-    row = check_code(token, data.get("code", ""))
+    row = check_code(token, data.get("code", ""), ip=auth.client_ip(request))
     response = auth.finish_login(row["user_id"], request, row["next"][1:], as_json=True)
     response.delete_cookie(CHALLENGE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response
@@ -485,5 +488,6 @@ async def email_codes(body: CodesIn, request: Request):
         raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
     state.DB.execute("UPDATE users SET email_codes=? WHERE id=?", (int(body.enabled), uid))
     state.DB.execute("DELETE FROM email_tokens WHERE user_id=? AND kind IN ('login','bridge')", (uid,))
-    security_log.record(uid, "email_codes_on" if body.enabled else "email_codes_off", digest=request.state.digest)
+    security_log.record(uid, "email_codes_on" if body.enabled else "email_codes_off", digest=request.state.digest,
+                        ip=auth.client_ip(request))
     return {"enabled": body.enabled}

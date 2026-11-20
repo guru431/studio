@@ -491,6 +491,28 @@ def test_bridge_enrollment_also_requires_email_code(studio, mail):
     assert studio.c.post("/api/agent/enroll", json={**body, "code": one_time}).status_code == 400
 
 
+def test_security_log_sees_sent_and_wrong_codes_with_address(studio, mail):
+    """Знающий пароль подбирает код: в журнале учётки — «код отправлен» и свёрнутые неверные коды, с адресом."""
+    uid = make_user(studio, "owner")
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/account/code"
+    wrong = "000000" if code(mail) != "000000" else "111111"
+    for _ in range(3):
+        assert studio.c.post("/account/code", json={"code": wrong}).status_code == 400
+    body = {"login": "owner", "password": PASSWORD, "name": "Computer"}
+    assert studio.c.post("/api/agent/enroll", json=body).status_code == 428
+    assert studio.c.post("/api/agent/enroll", json={**body, "code": wrong}).status_code == 400
+    rows = [tuple(r) for r in state.DB.execute("SELECT kind,detail,count,ip IS NOT NULL FROM security_events"
+                                               " WHERE user_id=? ORDER BY id", (uid,))]
+    assert rows == [("login_code_sent", "login", 1, 1), ("login_code_fail", "login", 3, 1),
+                    ("login_code_sent", "bridge", 1, 1), ("login_code_fail", "bridge", 1, 1)]
+    state.DB.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
+    signin(studio, "owner")
+    assert studio.c.put("/api/me/email-codes", json={"enabled": True, "password": PASSWORD}).status_code == 200
+    assert state.DB.execute("SELECT kind, ip IS NOT NULL FROM security_events ORDER BY id DESC LIMIT 1").fetchone()[:] \
+        == ("email_codes_on", 1)
+
+
 @pytest.mark.parametrize("path,body", [("/account/forgot", {"login": "owner"}), ("/account/code", {"code": "123456"}),
                                        ("/account/invite/accept", {"token": "secret"}), ("/account/reset", {"token": "secret"})])
 def test_public_account_posts_reject_foreign_origin_and_large_body(studio, path, body):

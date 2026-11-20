@@ -167,8 +167,8 @@ def test_security_journal_records_logins_unlocks_and_links_without_secrets(studi
     state.DB.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES ('c', ?, 't', 0, 0)", (uid,))
     assert studio.c.post("/api/chats/c/share", json={"pin": "0123"}).status_code == 201
     assert studio.c.delete("/api/chats/c/share").status_code == 204
-    assert kinds(uid) == ["login_fail", "login", "pin_set", "unlock_fail", "unlock", "unlock_fail", "share_create",
-                          "share_revoke"]
+    assert kinds(uid) == ["login_fail", "login", "pin_set", "screen_lock_on", "unlock_fail", "unlock", "unlock_fail",
+                          "share_create", "share_revoke"]
     page = studio.c.get("/api/me/security-events").json()
     assert [i["kind"] for i in page["items"]][:2] == ["share_revoke", "share_create"] and page["next"] is None
     first = page["items"][-1]

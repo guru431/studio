@@ -77,6 +77,19 @@ def test_all_eight_is_distinct_from_whole_app_and_changes_need_password(studio):
     assert studio.c.get("/api/me").status_code == 423
 
 
+def test_security_log_records_turning_the_lock_on_off_and_reconfiguring_it(studio):
+    uid = owner(studio)
+    enable(studio, ["chat"])
+    password = {"password": "password-123"}
+    same = {"enabled": True, "sections": ["chat"], "timeout": 300, **password}       # без изменений — без строки
+    assert studio.c.post("/api/me/screen-lock", json=same).status_code == 200
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "timeout": 900, **password}).status_code == 200
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": False, **password}).status_code == 200
+    rows = [tuple(r) for r in state.DB.execute("SELECT kind, ip IS NOT NULL, session IS NOT NULL FROM security_events"
+                                               " WHERE user_id = ? AND kind LIKE 'screen_lock%' ORDER BY id", (uid,))]
+    assert rows == [("screen_lock_on", 1, 1), ("screen_lock_change", 1, 1), ("screen_lock_off", 1, 1)]
+
+
 @pytest.mark.parametrize("extra", [{"sections": []}, {"sections": ["*", "chat"]}, {"sections": ["dictation"]},
                                    {"sections": ["unknown"]}, {"timeout": -1}, {"timeout": 86401},
                                    {"timeout": True}, {"timeout": "60"}, {"timeout": None}])
