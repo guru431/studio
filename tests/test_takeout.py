@@ -611,6 +611,32 @@ def test_export_runs_one_at_a_time_per_user(studio):
     assert zipfile.ZipFile(io.BytesIO(b"".join(drain(uid, token)))).testzip() is None
 
 
+def test_export_check_answers_like_the_download_without_starting_it(studio, env, monkeypatch):
+    """GET …/check — те же отказы, что у загрузки (её `<a download>` JSON не покажет): 409 занято, 503 шара,
+    404 чужой или истёкший токен; готово — 204, и метка выгрузки не ставится."""
+    uid = make_user(studio, "owner"); make_user(studio, "bob"); signin(studio, "owner")
+    history(uid, "mine")
+    token = prepare(studio).json()["id"]
+    check = f"/api/me/export/{token}/check"
+    r = studio.c.get(check)
+    assert r.status_code == 204 and not takeout.RUNNING
+    monkeypatch.setitem(takeout.RUNNING, uid, object())
+    r = studio.c.get(check)
+    assert r.status_code == 409 and r.json()["detail"] == takeout.BUSY
+    monkeypatch.delitem(takeout.RUNNING, uid)
+    mounted = state.CFG
+    monkeypatch.setattr(state, "CFG", dataclasses.replace(mounted, media_dir=env.media_dir / "not-mounted"))
+    r = studio.c.get(check)
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "storage"
+    monkeypatch.setattr(state, "CFG", mounted)
+    signin(studio, "bob")
+    assert studio.c.get(check).status_code == 404
+    signin(studio, "owner")
+    studio.clock[0] += takeout.EXPORT_TTL_SEC + 1
+    r = studio.c.get(check)
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
+
+
 def test_export_keeps_a_file_that_vanishes_after_it_was_opened(studio, monkeypatch):
     """Файл открывается один раз: суммы и данные — с одного дескриптора (на Linux удалённый открытый файл
     читается). Второе открытие пропавшего файла рвало бы всю выгрузку."""

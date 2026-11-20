@@ -632,8 +632,9 @@ export function queueText(pending) {
 }
 
 /* «Выгрузить мою историю»: окно с галочками разделов (все отмечены) → «Подготовить» (POST /api/me/export,
- * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download>: её
- * нажатие — жест человека, и на iPhone загрузка уйдёт в «Файлы». Отказ — словами в окне. */
+ * токен на час) → ссылка «Скачать: N файлов, X» на ZIP по токену. Ссылка — настоящая <a download> (на iPhone
+ * загрузка уйдёт в «Файлы»); нажатие сначала спрашивает GET …/check, затем идёт по ней, как save.js `link`.
+ * Отказ — словами в окне. */
 const EXPORT_SECTIONS = [...sectionPairs(['chat', 'photo', 'video', 'transcribe', 'speech']), ['voices', tr("Голоса озвучки")],
   ...sectionPairs(['ocr', 'translate']), ['code', tr("{0}: чаты", NAMES.code)], ['agents', tr("{0}: подключения", NAMES.code)],
   ['security', tr("Журнал безопасности")]];
@@ -658,8 +659,10 @@ function exportDialog(host) {
     try {
       const { id, files, bytes } = await api('POST', '/api/me/export', { sections });
       const count = `${files.toLocaleString(locale())} ${plural(files, [tr("файл"), tr("файла"), tr("файлов")])}`;
-      ready.replaceChildren(el('a', { class: 'btn btn-accent', id: 'export-download', download: '',
-        href: `/api/me/export/${encodeURIComponent(id)}` }, tr("Скачать: {0}, {1}", count, sizeText(bytes))));
+      const link = el('a', { class: 'btn btn-accent', id: 'export-download', download: '',
+        href: `/api/me/export/${encodeURIComponent(id)}` }, tr("Скачать: {0}, {1}", count, sizeText(bytes)));
+      link.addEventListener('click', (event) => checkExport(event, id, link));
+      ready.replaceChildren(link);
       ready.hidden = false;
     } catch (err) {
       fail.textContent = words(err);
@@ -667,6 +670,27 @@ function exportDialog(host) {
       prepare.disabled = false;
     }
   });
+
+  /* отказ загрузки (другая выгрузка идёт, ссылка истекла или служба перезапускалась, шара пропала) пришёл бы
+   * телом JSON в загрузку файла — браузер показал бы сбой; сначала те же проверки сервера, отказ — словами */
+  let checked = false;
+  async function checkExport(event, id, link) {
+    if (checked) return;                             // проверено — этот щелчок (link.click ниже) идёт по ссылке
+    event.preventDefault();
+    fail.textContent = '';
+    try {
+      await api('GET', `/api/me/export/${encodeURIComponent(id)}/check`);
+    } catch (err) {
+      if (err.code === 'gone') {
+        ready.hidden = true;
+        fail.textContent = tr("Ссылка устарела — нажмите «Подготовить» ещё раз");
+      } else fail.textContent = words(err);
+      return;
+    }
+    checked = true;                                  // click() вызывает обработчик синхронно
+    link.click();
+    checked = false;
+  }
 }
 
 function storageBlock(host) {

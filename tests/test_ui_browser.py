@@ -1025,7 +1025,21 @@ def test_export_dialog_prepares_a_download_link(browser, live):
         ("eval", "zip", """(async () => { const r = await fetch(document.querySelector('#export-download').href);
           const head = new Uint8Array(await r.arrayBuffer()).slice(0, 2);
           return [r.status, r.headers.get('content-type'), String.fromCharCode(...head)]; })()"""),
-        ("eval", "fits", NO_OVERFLOW)], width=390, mobile=True)
+        ("eval", "fits", NO_OVERFLOW),
+        # нажатие сначала спрашивает …/check: готово — загрузка по ссылке, отказ — словами в окне
+        ("eval", "spy", CLICKS), ("click", "#export-download"), ("wait", "window.clicked.length === 1"),
+        ("eval", "went", "window.clicked[0]"),
+        ("eval", "busy", """(() => { const real = window.fetch; window.fetch = (url, opts) => /\\/check$/.test(String(url))
+          ? Promise.resolve(new Response(JSON.stringify({ detail: window.refusal }), { status: window.refusal.status,
+              headers: { 'content-type': 'application/json' } })) : real(url, opts);
+          window.refusal = { status: 409, code: 'busy', message: 'выгрузка уже идёт — дождитесь, пока она скачается' };
+          return true; })()"""),
+        ("click", "#export-download"), ("wait", "document.querySelector('#export-error').textContent"),
+        ("eval", "busyText", "[document.querySelector('#export-error').textContent, window.clicked.length]"),
+        ("eval", "expire", "(window.refusal = { status: 404, code: 'gone', message: 'файла нет' }, true)"),
+        ("click", "#export-download"), ("wait", "document.querySelector('#export-ready').hidden"),
+        ("eval", "goneText", "[document.querySelector('#export-error').textContent, window.clicked.length]")],
+        width=390, mobile=True)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["boxes"] == [[k, True] for k in ("chat", "photo", "video", "speech", "transcribe", "voices", "ocr",
@@ -1034,6 +1048,9 @@ def test_export_dialog_prepares_a_download_link(browser, live):
     assert v["empty"] == "Отметьте хотя бы один раздел"
     assert v["link"] == "Скачать: 0 файлов, 0 Б" and v["zip"] == [200, "application/zip", "PK"]
     assert v["fits"] is True
+    assert v["went"][0].startswith("/api/me/export/") and v["went"][1] is True
+    assert v["busyText"] == ["Выгрузка уже идёт — дождитесь, пока она скачается", 1]
+    assert v["goneText"] == ["Ссылка устарела — нажмите «Подготовить» ещё раз", 1]
     assert not problems(r), problems(r)
 
 
@@ -2487,6 +2504,49 @@ def test_photo_feed_survives_reload_with_a_running_job(browser, live):
     assert not problems(r), problems(r)
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_failed_photo_repeats_from_its_tile_and_row(browser, live, width):
+    """У неудачной картинки «Повторить» — в плитке и строке таблицы: то же тело, что у «Повторить» просмотра;
+    пока задание идёт, кнопка закрыта."""
+    login = f"photoretry{width}"
+    live.add_user(login)
+    calls = []
+
+    async def flaky(request):
+        calls.append(1)
+        if len(calls) in (1, 2):                   # первая картинка и первый повтор — сбой шлюза
+            return httpx.Response(500, json={"error": {"message": "сбой"}})
+        return await live.gw.builtin(request)
+
+    failed = "#photo-feed .photo-card[data-state=error]"
+    live.gw.on["/slot/images/generations"] = flaky
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+            ("type", "#photo-prompt", "упрямый кот"), ("click", "#photo-go"),
+            ("wait", f"document.querySelector('{failed} .card-repeat') && !document.querySelector('#photo-go').disabled"),
+            ("eval", "tileFits", NO_OVERFLOW),
+            ("click", f"{failed} .card-repeat"),
+            ("eval", "busy", f"document.querySelector('{failed} .card-repeat').disabled"),
+            ("wait", f"document.querySelectorAll('{failed}').length === 2 && !document.querySelector('#photo-go').disabled"),
+            ("click", "#photo-view"), ("click", "#photo-view-table"),
+            ("wait", f"document.querySelector('#photo-feed').dataset.view === 'table' && document.querySelector('{failed} .cell-act .card-repeat')"),
+            ("eval", "rowActs", f"[...document.querySelector('{failed} .cell-act').children].map(b => b.textContent)"),
+            ("eval", "rowFits", NO_OVERFLOW),
+            ("click", f"{failed} .cell-act .card-repeat"), ("wait", done_cards(1)),
+            ("eval", "sent", "window.sentForms")], width=width, mobile=width == 320, timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/generations", None)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tileFits"] and v["rowFits"] and v["busy"] is True
+    assert v["rowActs"] == ["Повторить", "Удалить"]
+    first, *repeats = v["sent"]
+    assert first["form"]["prompt"] == "упрямый кот" and len(repeats) == 2
+    assert all(s["path"] == "/api/images" and s["form"]["prompt"] == "упрямый кот"
+               and s["form"]["model"] == first["form"]["model"] for s in repeats)
+    assert not problems(r), problems(r)
+
+
 def test_editor_strength_out_of_range_is_refused_in_words(browser, live):
     """B1-M9: сила перерисовки вне 0.05–1 — отказ словами в окне, запрос не уходит."""
     login = "strength"
@@ -3551,8 +3611,9 @@ def test_photo_preset_saves_and_applies(browser, live):
     prompt = "document.querySelector('#photo-prompt').value"
     chips = "[document.querySelector('#chip-model').textContent, document.querySelector('#chip-size').textContent," \
             " document.querySelector('#photo-strength').value]"
-    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'snofs',
-      connection_id: null, size: 'square', seed: 42, strength: 0.25, prompt: 'старый кот' }} }}); return true; }})()"""
+    # подключение пресета удалено (id не повторяются) — модель берётся из единственной связи раздела с ней
+    old = f"""(async () => {{ await {API}.api('POST', '/api/images/presets', {{ name: 'Старый', params: {{ model: 'flux',
+      connection_id: 987654, size: 'square', seed: 42, strength: 0.25, prompt: 'старый кот' }} }}); return true; }})()"""
     r = browser.drive(live.url + "/", [*photo_screen(login),
         ("type", "#photo-prompt", "портрет у окна"),
         ("click", "#chip-size"), ("click", "#chip-size-menu [data-value=landscape]"),
@@ -3593,7 +3654,9 @@ def test_photo_preset_saves_and_applies(browser, live):
         ("eval", "old", old), *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
         *go("photo"), ("wait", FEED_READY), ("eval", "spy", SPY),
         ("click", "#chip-preset"), ("wait", "document.querySelector('#chip-preset-menu .preset-apply')"),
-        ("click", "#chip-preset-menu .preset-apply"), ("click", "#photo-go"), ("wait", done_cards(1)),
+        ("click", "#chip-preset-menu .preset-apply"),
+        ("eval", "oldStatus", "document.querySelector('.photo-status').textContent"),
+        ("click", "#photo-go"), ("wait", done_cards(1)),
         ("eval", "forms", "window.sentForms")], width=1280, height=900)
     assert not r.get("failed"), r
     v = r["values"]
@@ -3609,6 +3672,7 @@ def test_photo_preset_saves_and_applies(browser, live):
     assert v["gone"] == "Пресетов пока нет"
     (sent,) = (f["form"] for f in v["forms"])
     assert sent["prompt"] == "старый кот" and sent["size"] == "square" and "seed" not in sent
+    assert sent["model"] == "flux" and sent["connection_id"] != 987654 and v["oldStatus"] == ""
     assert not problems(r), problems(r)
 
 
@@ -3825,7 +3889,10 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
         ("eval", "overflow", f"!({NO_OVERFLOW})"),
         # ролик из фото истории — «Промпты»: цепочка фото и промпт ролика последним
         ("click", f"{CLIP} .card-chain"), ("wait", is_open("#chain-dialog")),
-        ("eval", "chain", "[...document.querySelectorAll('#chain-dialog .chain-step .chain-prompt')].map(p => p.textContent)")],
+        ("eval", "chain", "[...document.querySelectorAll('#chain-dialog .chain-step .chain-prompt')].map(p => p.textContent)"),
+        # миниатюра шага-фото открывает эту картинку в «Фото», а не только раздел
+        ("click", "#chain-dialog .chain-step:first-child .chain-open"), ("wait", is_open("#viewer")),
+        ("eval", "stepImage", "document.querySelector('#viewer .viewer-stage img').getAttribute('src')")],
         width=width, height=900, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
@@ -3846,6 +3913,7 @@ def test_video_animates_a_photo_and_the_clip_plays(browser, live, ready_clips, w
         assert words in v["card"], words
     assert re.search(r"\d+:\d\d", v["card"]) and not v["overflow"]
     assert v["chain"] == ["кот 0", combined]
+    assert v["stepImage"] == f"/api/media/{v['source']}"
     assert not problems(r), problems(r)
 
 
@@ -3987,6 +4055,9 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
                   ("eval", f"{view}Picked", picked("#video-feed")),
                   ("eval", f"{view}Viewer", "!!document.querySelector('#video-viewer')"),
                   ("eval", f"{view}Paused", f"[...document.querySelectorAll('{CLIP} video')].every(v => v.paused)"),
+                  # кнопки карточки в режиме скрыты: нажатие по ним только отмечает
+                  ("eval", f"{view}Shown", f"[...document.querySelectorAll('{CLIP} :is(.video-acts, .cell-act, .video-over) button')]"
+                                           ".filter(b => getComputedStyle(b).visibility !== 'hidden').map(b => b.className)"),
                   ("eval", f"{view}Fits", NO_OVERFLOW)]
     steps += [("eval", "bar", "getComputedStyle(document.querySelector('.video .select-bar')).display !== 'none'"),
               ("eval", "label", text_of("#video-select-download"))]
@@ -3996,6 +4067,7 @@ def test_video_selection_in_every_view(browser, live, ready_clips, width):
     for n, view in enumerate(("preview", "tiles", "table"), 1):
         assert len(v[f"{view}Picked"]) == n, view
         assert v[f"{view}Viewer"] is False and v[f"{view}Paused"] and v[f"{view}Fits"], view
+        assert v[f"{view}Shown"] == [], (view, v[f"{view}Shown"])
     assert set(v["previewPicked"]) < set(v["tilesPicked"]) < set(v["tablePicked"])
     assert v["bar"] is (width < 760) and v["label"] == "Скачать"
     assert not problems(r), problems(r)
@@ -4062,10 +4134,13 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
         ("eval", "row", f"[...document.querySelectorAll('{CLIP} .cell-meta > span')].map(s => s.textContent)"),
         ("eval", "tableFits", f"{NO_OVERFLOW} && document.querySelector('#video-feed').scrollWidth"
                               " <= document.querySelector('#video-feed').clientWidth"),
+        ("eval", "tableActs", f"[...document.querySelectorAll('{CLIP} .cell-act button')]"
+                              ".map(b => b.getAttribute('aria-label') || b.textContent)"),
+        ("click", f"{CLIP} .cell-act .card-repeat"), ("wait", clips("done", 2)),
         ("click", f"{CLIP} .video-open"), ("wait", is_open("#video-viewer")),
         ("click", "#video-viewer .act-delete"), ("wait", is_open("#video-delete-dialog")),
         ("click", "#video-delete-confirm"),
-        ("wait", f"!document.querySelector('#video-viewer') && !document.querySelector('{CLIP}')"),
+        ("wait", f"!document.querySelector('#video-viewer') && document.querySelectorAll('{CLIP}').length === 1"),
         ("eval", "kept", "fetch('/api/me').then(r => r.json()).then(m => m.views.video)")], width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
@@ -4077,6 +4152,7 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
     params, seed, when = v["row"]
     assert params == "Wan · 5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
     assert v["tableFits"] and v["kept"] == "table"
+    assert v["tableActs"] == ["Повторить", "Скачать"]
     assert any(s.startswith("DELETE /api/videos/") for s in r["sent"])
     assert not problems(r), problems(r)
 

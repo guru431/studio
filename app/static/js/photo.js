@@ -304,14 +304,17 @@ function build(view, ctx) {
       strength: Number(strength.value), prompt: prompt.value.trim() || null };
   }
 
-  /** Модель — если пара есть среди отмеченных моделей раздела; формат и сила — всегда; промпт — в пустое
+  /** Модель — если пара есть среди отмеченных моделей раздела (пары нет — единственная связь с этой моделью);
+   * формат и сила — всегда; промпт — в пустое
    * поле, в непустое — после вопроса («Оставить свой» ставит всё, кроме промпта). Seed пресета прежнего
    * кода не ставится: поля seed нет. */
   function applyPreset(p) {
     const rest = () => {
       if (p.model) {
-        const found = choices.find(([, , c]) => c.model === p.model
-          && (p.connection_id === null || p.connection_id === undefined || c.connection_id === p.connection_id));
+        const same = choices.filter(([, , c]) => c.model === p.model);
+        // подключение пресета пересоздали (новый id) — единственная связь раздела с этой моделью
+        const found = same.find(([, , c]) => p.connection_id === null || p.connection_id === undefined
+          || c.connection_id === p.connection_id) || (same.length === 1 ? same[0] : null);
         if (found) {
           choice = found[2];
           chipModel.paint();
@@ -356,9 +359,14 @@ function build(view, ctx) {
   }
 
   /* занятость: одно задание за раз */
+  function isBusy() {
+    return submitting || describing || !!translating || !!orphan || running.size > 0 || mcp.busy;
+  }
+
   function syncBusy() {
-    const busy = submitting || describing || !!translating || !!orphan || running.size > 0 || mcp.busy;
-    for (const b of [go, ...gated]) {
+    const busy = isBusy();
+    // «Повторить» неудачной и отменённой — в ленте: карточки перерисовываются, их кнопки ищутся на месте
+    for (const b of [go, ...gated, ...feedBox.querySelectorAll('.card-repeat')]) {
       b.disabled = busy;
       b.title = busy ? tr("Дождитесь конца текущего задания") : '';
     }
@@ -516,6 +524,14 @@ function build(view, ctx) {
     return button(tr("Удалить"), { class: 'btn-link card-delete' }, () => remove(item).catch((err) => say(words(err), true)));
   }
 
+  /** «Повторить» неудачной и отменённой: то же тело, что у «Повторить» просмотра (repeatBody); без модели раздела — нет. */
+  function repeatButton(item) {
+    if (ctx.hint) return null;
+    const busy = isBusy();
+    return button(tr("Повторить"), { class: 'btn-link card-repeat', disabled: busy,
+      title: busy ? tr("Дождитесь конца текущего задания") : null }, () => create(repeatBody(item)));
+  }
+
   function noteText(item) {
     return item.state === 'cancelled' ? cap(serverMessage(item.detail)) || tr("Отменено") : tr("Ошибка: {0}", serverMessage(item.detail) || tr("картинка не получена"));
   }
@@ -537,8 +553,8 @@ function build(view, ctx) {
       : el('span', { class: 'row-thumb' }, busy ? el('span', { class: 'ring', 'aria-hidden': 'true' }) : null),
     el('p', { class: 'cell-prompt', title: item.prompt }, item.prompt),
     el('span', { class: 'cell-meta' }, ...params(item).map((p) => el('span', {}, p)), el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, done ? saveButton(item) : busy ? (CANCELLABLE.has(item.state) ? cancelButton(item) : null)
-      : deleteButton(item)));
+    el('span', { class: 'cell-act' }, ...(done ? [saveButton(item)] : busy ? [CANCELLABLE.has(item.state) ? cancelButton(item) : null]
+      : [repeatButton(item), deleteButton(item)])));
     return node;
   }
 
@@ -556,7 +572,7 @@ function build(view, ctx) {
         CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(serverMessage(item.detail)))));
     } else {
       node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
-        deleteButton(item)));
+        el('span', { class: 'card-note-acts' }, repeatButton(item), deleteButton(item))));
     }
     if (layout.value === 'preview') {
       const [w, h] = String(item.size).split('x').map(Number);

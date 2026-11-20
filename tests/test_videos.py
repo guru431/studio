@@ -962,6 +962,22 @@ def test_repeat_and_more_variants_send_the_same_clip_with_new_seeds(studio, monk
     assert len(studio.gw.video_forms) == 8
 
 
+def test_repeat_survives_a_recreated_connection(studio):
+    """Подключение ролика удалили (id не повторяются, шаг 49): повтор идёт связью раздела с моделью
+    ролика, как у фото; связи с моделью нет — отказ про настройки раздела, а не «такого подключения нет»."""
+    old = add_gateway(studio)
+    first = create_video(studio, prompt=PROMPT).json()
+    assert studio.c.delete(f"/api/connections/{old}").status_code == 204
+    r = studio.c.post(f"/api/videos/{first['id']}/repeat", json={})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "model", r.text
+    new = add_gateway(studio)
+    r = studio.c.post(f"/api/videos/{first['id']}/repeat", json={"count": 2})
+    assert r.status_code == 201, r.text
+    made = [state.DB.execute("SELECT connection_id FROM videos WHERE id = ?", (v["id"],)).fetchone()[0]
+            for v in r.json()["items"]]
+    assert made == [new, new] and new != old
+
+
 def test_more_variants_stop_at_the_first_refusal_and_keep_what_was_accepted(studio):
     add_gateway(studio)
     first = create_video(studio).json()
