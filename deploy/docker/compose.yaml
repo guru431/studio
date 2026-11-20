@@ -33,6 +33,7 @@ services:
     environment:
       STUDIO_DB: /var/lib/studio/studio.db
       STUDIO_MEDIA_DIR: /media
+      STUDIO_MEDIA_FSTYPE: ${STUDIO_MEDIA_FSTYPE:-cifs}
       STUDIO_ORIGIN: ${STUDIO_URL:?Set STUDIO_URL}
       STUDIO_HAIRPIN_IP: ${STUDIO_HAIRPIN_IP:?Set STUDIO_HAIRPIN_IP}
     mem_limit: 2g

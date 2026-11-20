@@ -29,9 +29,10 @@ flock -n 9 || { echo 'studio: deployment already running' >&2; exit 1; }
 # This file contains validated nonsecret values rendered by render-profile.py. Compose reads them only
 # through --env-file: exported values would win over the previous release's file during rollback.
 STUDIO_MEDIA_DIR=$(sed -n 's/^STUDIO_MEDIA_DIR=//p' "$NEW/deploy/docker/host.conf")
+STUDIO_MEDIA_FSTYPE=$(sed -n 's/^STUDIO_MEDIA_FSTYPE=//p' "$NEW/deploy/docker/host.conf")
 [ -n "$STUDIO_MEDIA_DIR" ] || { echo 'studio: STUDIO_MEDIA_DIR missing in host.conf' >&2; exit 1; }
-[ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = cifs ] || {
-    echo 'studio: media is not mounted from CIFS' >&2; exit 1;
+[ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = "${STUDIO_MEDIA_FSTYPE:-cifs}" ] || {
+    echo 'studio: media filesystem does not match the deployment profile' >&2; exit 1;
 }
 case "$(findmnt -n -o FSTYPE -T /var/lib)" in
     cifs|nfs|nfs4) echo 'studio: SQLite requires local storage' >&2; exit 1 ;;
