@@ -82,7 +82,7 @@ router = APIRouter(prefix="/api/code", default_response_class=_BridgeJSON)
 PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
-          "not_git": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409, "exists": 409,
+          "not_git": 409, "git_unavailable": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409, "exists": 409,
           "desktop_disabled": 409, "desktop_unavailable": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
@@ -731,10 +731,15 @@ async def cancel_agent_update(aid: int, request: Request):
 
 
 def _update_status(data: dict) -> dict:
-    """Стадия обновления; `holds` (мост ≥ 0.20.0, только в `waiting`) — что держит ожидание: числа и признак."""
+    """Стадия обновления; `holds` (мост ≥ 0.20.0, только в `waiting`) — что держит ожидание: числа и признак;
+    `message` (мост ≥ 0.42.0, только в `failed`) — слова моста об итоге прошлого перехода (откат, неподтверждённый
+    запуск, прежний мост не вышел)."""
     result = {"state": data.get("state") if data.get("state") in
               ("idle", "preparing", "waiting", "restarting", "failed") else "failed",
               "version": data.get("version") if isinstance(data.get("version"), str) else None}
+    message = data.get("message")
+    if result["state"] == "failed" and isinstance(message, str) and 0 < len(message) <= 300:
+        result["message"] = message
     holds = data.get("holds")
     if result["state"] == "waiting" and isinstance(holds, dict):
         counts = {key: holds.get(key) for key in ("tasks", "asking", "requests")}

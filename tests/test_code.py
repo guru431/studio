@@ -1337,6 +1337,9 @@ def test_git_status_passes_through_and_not_git_is_409(studio):
     aid, m, _ = with_files(studio)
     r = studio.c.get(project_url(aid, "git"))
     assert (r.status_code, detail(r)["code"]) == (409, "not_git")
+    m.projects["alpha"]["git"] = Refused("git_unavailable", "git не найден на компьютере")
+    r = studio.c.get(project_url(aid, "git"))
+    assert (r.status_code, detail(r)) == (409, {"code": "git_unavailable", "message": "git не найден на компьютере"})
     status = {"branch": "main", "upstream": "origin/main", "ahead": 2, "behind": 0,
               "files": [{"path": "src/app.py", "status": "M"}]}
     m.projects["alpha"]["git"] = status

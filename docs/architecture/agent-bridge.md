@@ -44,6 +44,7 @@ disconnect до освобождения хода. Codex получает config
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.42.0 | отказ `git` — `git_unavailable` (нет git, `safe.directory`, сбой при своём `.git`; без capability); `agent_update_status.message` в `failed` — итог прошлого перехода | §4 |
 | 0.41.0 | `projects.items[].dir` — настоящая папка проекта владельцу (без capability); `hello.mirror_exclude` — постоянные исключения зеркала | §5, §23.2 |
 | 0.40.0 | `hello.project_mirror_discovery` — поиск существующих копий | §23.1 |
 | 0.39.0 | `hello.project_mirror` и `hello.software_update_all` | §23, §21 |
@@ -213,10 +214,10 @@ disconnect до освобождения хода. Codex получает config
   `worktrees._git`; `gitinfo._filters` выключает драйверы фильтров clean/smudge/process из конфига самого репозитория
   (local/worktree, include; через `git config --show-scope`), системные и пользовательские (git-lfs) остаются;
   `status` — всегда с `--ignore-submodules=dirty` (правки внутри подмодуля не видны, сдвиг его коммита виден); без
-  проверяемого конфига (git < 2.26, имя драйвера не выражается через `-c`) статус — `not_git`/`error`. Хуки не
+  проверяемого конфига (git < 2.26, имя драйвера не выражается через `-c`) статус — `git_unavailable`/`error`. Хуки не
   запускаются (`GIT_OPTIONAL_LOCKS=0`, индекс не пишется). Частичный клон не дозагружает объекты с promisor-remote
   (иначе исполнился бы `remote.<имя>.uploadpack` конфига): `gitinfo.OFFLINE` — `GIT_NO_LAZY_FETCH=1` и пустой
-  `GIT_ALLOW_PROTOCOL` для git старше 2.45; недостающий объект — `not_git`/`error`. `worktree add` — действие
+  `GIT_ALLOW_PROTOCOL` для git старше 2.45; недостающий объект — `git_unavailable`/`error`. `worktree add` — действие
   владельца: фильтры, хуки и дозагрузка работают как у его git. Тест — `tests/test_git_untrusted_config.py` (integration).
 - Хуки Claude Code папки: фоновое чтение состояния `turns.Runner.state` подключает клиента SDK с `turns.NO_HOOKS`
   (`--settings {"disableAllHooks": true}` сильнее project/local), ход — без него. Живьём не проверено.
@@ -406,6 +407,14 @@ GUI получает обычную команду quit. `update_helper.py` де
 ожидания старого процесса, запускает новую копию после его выхода, подтверждает готовность ядра и
 переключает уже включённый Run; ранний сбой запуска возвращает прежнюю копию. Предыдущие версии сохраняются.
 Никакого Stop-Process/TerminateProcess. Первая установка до 0.10.0 остаётся ручной. Тесты — `test_updater.py`.
+С 0.42.0 (действует для переходов, которые ведёт хелпер 0.42.0 и новее — он берётся из прежней копии): прежний
+процесс хелпер ждёт до `update_helper.OLD_WAIT_ROUNDS` раз по 120 с (`update_helper.wait_exit`, и в подписанном
+переходе macOS) — поток сравнения зеркала может задержать выход; готовности живой новой копии — до
+`update_helper.READY_POLLS` × 0,5 с. Если хелпер всё же записал `unconfirmed`, а копия готова,
+`update_helper.cleanup_started` сама переключает автозапуск и `current` и пишет `complete`. Работающая копия
+при запуске читает итоги соседних выпусков (`update_helper.failed_update`: `update_helper.FAILED_RESULTS`,
+каждый — один раз, метка `_update_reported`), пишет в журнал код итога и отдаёт `agent_update_status`
+`failed` со словами `updater.FAILED_WORDS` в `message`; сервер передаёт `message` только в `failed`, до 300 знаков.
 
 Окно Tk размещает основной вид в Canvas с вертикальной прокруткой; после подключения карточки разделены
 на вкладки «Подключение», «Работа», «Настройки» (Ctrl+Tab / Ctrl+Shift+Tab). Высота ограничена рабочей областью
@@ -430,6 +439,10 @@ GUI получает обычную команду quit. `update_helper.py` де
 не обходятся. Операции и `save` под общим async-замком и в `to_thread`. Полные пути и системные тексты
 исключений наружу/в журнал не попадают. `tests/test_file_operations.py` проверяет настоящий junction,
 границы, сохранность назначения и PIN; сервер и интерфейс требуют capability старого моста.
+Вид пути проверяет `files._parts` до диска: везде — без пустых частей, `.`, `..`, `\`, управляющих знаков и
+одиноких суррогатов; имена устройств (`CON`, `aux.c`), `: * ? " < > |` и точка или пробел в конце запрещены
+только на Windows (`files.WINDOWS`) — на Linux и macOS такие файлы открываются и правятся. Зеркало не отказывает
+из-за файла с непринятым на своей ОС именем: `mirror.scan` отдаёт его «пропущенным».
 
 (мост ≥ 0.8.0) необязательные `hello.file_suggestions/chat_search/queue_edit/chat_fork/subagents/worktrees`
 объявляют инструменты рабочего места; контракт — §11 спецификации протокола. `discovery.py` читает
@@ -569,7 +582,10 @@ UUID нового чата задаёт студия, настоящий thread 
   `Runner._frame` добавляет имя папки проекта `project_name` только к `ask`/`done` для push, без пути и текста чата.
 - `gitinfo` — `parse` (porcelain v2 `-z`), `status` (`git -C`, без окна и необязательных замков, 25 с;
   `GIT_CEILING_DIRECTORIES` — родитель настоящего пути проекта: проект без своего `.git` внутри чужого репозитория —
-  `not_git`; код ≠ 0 или нет git — `not_git`, срок вышел — `TimeoutExpired` наружу).
+  `not_git`; код ≠ 0 без своего `.git` — `not_git`; с ним — `git_unavailable` (409) «git не смог прочитать
+  репозиторий», при отказе `safe.directory` — `gitinfo.UNSAFE` (признак в stderr, сам stderr наружу не идёт); нет
+  git на компьютере — `git_unavailable` `gitinfo.NO_GIT`; срок вышел — `TimeoutExpired` наружу). Страница
+  показывает `not_git` как «Без Git», `git_unavailable` — «Git недоступен» и слова моста.
 - `cli` — `find_cli` (`claude.exe` новейшего расширения VS Code, версии числами; нет — CLI, встроенный в SDK),
   `current(path, find)` (прежний путь, пока файл есть, иначе `find()` заново — как `worker.py::_claude_bin`),
   `drop_session_env` (из окружения моста прочь `SESSION_ENV`, `SESSION_PREFIXES`, `TERM_PROGRAM=vscode` и

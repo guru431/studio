@@ -8,6 +8,9 @@ from . import limits
 from .errors import Refused
 
 GIT_SEC = 25
+NO_GIT = "git не найден на компьютере"
+UNSAFE = "git отказал: владелец папки другой — проверьте safe.directory для этой папки"
+GIT_FAILED = "git не смог прочитать репозиторий"
 
 
 def _path(raw: bytes) -> str:
@@ -105,7 +108,9 @@ def run(project: Path, args: list[str], *, timeout: float = GIT_SEC) -> subproce
 
 
 def status(project: Path) -> dict:
-    """`git -C <проект> status` без окна и без необязательных замков; код ≠ 0 или нет git — `not_git`.
+    """`git -C <проект> status` без окна и без необязательных замков. Нет git на компьютере — `git_unavailable`
+    «git не найден»; код ≠ 0 при своём `.git` — `git_unavailable` (отказ `safe.directory` — своими словами,
+    stderr наружу не идёт); код ≠ 0 без своего `.git` — `not_git`.
 
     Выше проекта git не ищет (`GIT_CEILING_DIRECTORIES` — родитель настоящего пути): проект без своего `.git` внутри
     чужого репозитория — `not_git`, ветка и пути внешнего не уходят в студию.
@@ -113,9 +118,12 @@ def status(project: Path) -> dict:
     try:
         r = run(project, ["status", "--porcelain=v2", "--branch", "-z"])
     except FileNotFoundError:
-        raise Refused("not_git") from None
+        raise Refused("git_unavailable", NO_GIT) from None
     if r.returncode != 0:
-        raise Refused("not_git")
+        if not os.path.lexists(os.path.join(project, ".git")):
+            raise Refused("not_git")
+        # Подсказка `git config --global --add safe.directory …` не переводится в локализованном git.
+        raise Refused("git_unavailable", UNSAFE if b"safe.directory" in (r.stderr or b"") else GIT_FAILED)
     state = parse(r.stdout)
     if not state["upstream"]:
         state["unpushed"] = None

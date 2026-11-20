@@ -148,6 +148,32 @@ def test_excluded_paths_are_skipped_without_reading_or_walking(tmp_path, monkeyp
                        "web/app.js": entries["web/app.js"]} and entries["web/app.js"][0] == "file"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="имя с точкой в конце создаётся только путём \\\\?\\ Windows")
+def test_a_name_the_platform_refuses_is_skipped_not_fatal(tmp_path):
+    """Файл с именем, которого протокол не принимает, не роняет сравнение: запись «пропущен», без обхода."""
+    project = tmp_path / "project"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "ok.py").write_bytes(b"x")
+    odd = "\\\\?\\" + str(project / "trailing.")
+    os.mkdir(odd)
+    with open(odd + "\\inside.txt", "wb") as stream:
+        stream.write(b"y")
+    try:
+        entries = mirror.scan(project)["entries"]
+        assert entries["trailing."] == mirror.SKIPPED
+        assert set(entries) == {"src", "src/ok.py", "trailing."}
+    finally:
+        os.remove(odd + "\\inside.txt")
+        os.rmdir(odd)
+
+
+def test_posix_exclusions_accept_names_windows_forbids(monkeypatch):
+    monkeypatch.setattr(mirror.files, "WINDOWS", False)
+    assert mirror.valid_exclude(["logs/2026-11-20T10:11:12.log", "aux.c"]) is True
+    monkeypatch.setattr(mirror.files, "WINDOWS", True)
+    assert mirror.valid_exclude(["logs/2026-11-20T10:11:12.log"]) is False
+
+
 @pytest.mark.parametrize("value,ok", [
     ([".venv", "web/node_modules"], True), ([], True), ([".git"], False), ([".git/objects"], False),
     (["../x"], False), (["/abs"], False), (["a//b"], False), ([""], False), ("x", False), ([1], False),

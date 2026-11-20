@@ -16,6 +16,7 @@ import time
 NAME = 'Studio Agent.app'
 ID = 'com.studio.agent'
 MAX_PKG = 2 << 30
+READY_POLLS = 1800  # по 0,5 с — до 15 минут, как `update_helper.READY_POLLS`
 
 
 def info(app):
@@ -137,7 +138,7 @@ def _replace_app(source, target, team, version, lock, wait_ready):
         except OSError:
             restore_after_exit()
             raise
-        for _ in range(120):
+        for _ in range(READY_POLLS):  # пока новая копия жива — холодный диск и проверка подписи бывают долгими
             if marker.is_file():
                 keep_backup = False
                 return
@@ -174,9 +175,10 @@ def main():
         target = sealed_app(Path(__file__).resolve().parents[1])
         if target is None or not managed_app(target):
             raise ValueError('Неизвестный путь приложения')
-        wait_old = runpy.run_path(str(Path(__file__).with_name('update_helper.py')))['wait_old']
+        # Не сдаваться через 120 с: прежний агент может выходить дольше, а после него не запустился бы никто.
+        wait_exit = runpy.run_path(str(Path(__file__).with_name('update_helper.py')))['wait_exit']
         try:
-            if not wait_old(int(sys.argv[3])):
+            if not wait_exit(int(sys.argv[3])):
                 raise BlockingIOError('Предыдущий агент продолжает работу')
             replace_app(candidate(stage), target, info(target)['StudioSigningTeam'], sys.argv[4], wait_ready=stage)
         except BlockingIOError:
