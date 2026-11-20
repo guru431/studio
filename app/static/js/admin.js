@@ -14,7 +14,7 @@ import { momentText, queueText, settingsView, sizeText } from './settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 const COLUMNS = [['login', tr("Логин")], ['email', 'Email'], ['name', tr("Имя")], ['admin', tr("Админ")], ['disabled', tr("Отключён")],
-  ['connections', tr("Подключений")]];
+  ['connections', tr("Подключений")], ['groups', tr("Группы")]];
 const USER_ERRORS = { login: 'login', taken: 'login', name: 'name', short: 'password' };
 
 function yesNo(value) {
@@ -162,7 +162,7 @@ function usersBlock(host) {
   function row(user) {
     const self = user.id === me.id;
     const values = { login: user.login, email: user.email || tr("Требует подтверждения"), name: user.name, admin: yesNo(user.is_admin), disabled: yesNo(user.disabled),
-      connections: String(user.connections) };
+      connections: String(user.connections), groups: (user.group_names || []).join(', ') || '—' };
     return el('tr', { 'data-login': user.login, class: user.disabled ? 'off' : null },
       ...COLUMNS.map(([key, title]) => el('td', { 'data-col': key, 'data-label': title }, values[key])),
       el('td', { class: 'actions' }, el('div', { class: 'acts' },
@@ -482,7 +482,7 @@ function storageBlock() {
 
 /* «Группы» (access.py): группы учёток для доступа к общим API моделей, MCP и инструментам MCP. Правила задаёт
  * «Доступ» у общего подключения; удаление группы правило не открывает — без групп оно только администраторам. */
-function groupsBlock(host) {
+function groupsBlock(host, reloadUsers) {
   const list = el('ul', { class: 'group-list', id: 'group-list' });
   const note = el('p', { class: 'status error', id: 'groups-status', 'aria-live': 'polite' });
 
@@ -512,7 +512,7 @@ function groupsBlock(host) {
         if (group) await api('PATCH', `/api/admin/groups/${group.id}`, { name: input.value.trim() });
         else await api('POST', '/api/admin/groups', { name: input.value.trim() });
         dialog.close();
-        await reload();
+        await Promise.all([reload(), reloadUsers()]);
       } catch (err) {
         showError(form, err, {}, 'name');
       } finally {
@@ -533,7 +533,7 @@ function groupsBlock(host) {
         const ids = [...box.querySelectorAll('input.group-user:checked')].map((c) => Number(c.value));
         await api('PUT', `/api/admin/groups/${group.id}/members`, { user_ids: ids });
         dialog.close();
-        await reload();
+        await Promise.all([reload(), reloadUsers()]);
       } catch (err) {
         fail.textContent = words(err);
         save.disabled = false;
@@ -563,7 +563,7 @@ function groupsBlock(host) {
       try {
         await api('DELETE', `/api/admin/groups/${group.id}`);
         dialog.close();
-        await reload();
+        await Promise.all([reload(), reloadUsers()]);
       } catch (err) {
         fail.textContent = words(err);
         yes.disabled = false;
@@ -645,7 +645,7 @@ export function mount(view, ctx) {
   const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
   const storage = storageBlock();
-  const groups = groupsBlock(root);
+  const groups = groupsBlock(root, users.reload);
   root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();

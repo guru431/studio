@@ -174,10 +174,10 @@ def _text(value, default):
     return value if isinstance(value, str) and value.strip() else default
 
 
-def _connection(row) -> "Connection | None":
+def _connection(row, *, gate: bool = False) -> "Connection | None":
     try:
         # ролик принят до смены правил доступа — наблюдатель доводит его и без доступа к общему подключению
-        return connections.get(row["user_id"], row["connection_id"], gate=False)
+        return connections.get(row["user_id"], row["connection_id"], gate=gate)
     except HTTPException:                         # подключение удалили из профиля
         return None
 
@@ -458,8 +458,8 @@ async def repeat_video(video_id: str, request: Request):
         body = RepeatIn.model_validate_json(await forms.read_body(request, 1024) or b"{}")
     except ValidationError:
         raise HTTPException(422, {"code": "input", "message": f"вариантов — от 1 до {REPEAT_MAX}"}) from None
-    # подключение ролика удалили (id не повторяются) — связь раздела с моделью ролика, как у фото
-    conn_id = row["connection_id"] if _connection(row) is not None else None
+    # Если прежнее подключение недоступно, берём доступную связь раздела с моделью ролика.
+    conn_id = row["connection_id"] if _connection(row, gate=True) is not None else None
     conn = _video_connection(uid, conn_id, row["model"])
     try:
         image = await forms.photo(uid, None, row["source_media_id"], VIDEO_PIXELS)

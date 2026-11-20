@@ -44,6 +44,7 @@ def test_admin_sets_groups_and_tool_access(browser, live, width):
     mcp_row, card = row("#admin-shared-mcp [data-mcp-id]", mcp), row("#shared-models-dialog .link", models)
     group_row = row("#group-list li", group)
     member = f'#group-members-dialog input[data-login="{login}"]'
+    user_groups = f'#users tr[data-login="{login}"] [data-col=groups]'
     open_mcp = [("wait", mcp_row), ("eval", "openMcp", f"{mcp_row}.querySelector('.mcp-access').click()"),
                 ("wait", f"document.querySelector('{tool}') && !document.querySelector('#mcp-access-save').disabled")]
     open_models = [("click", "#admin-shared-models"), ("wait", f"{card}?.querySelector('.link-access')"),
@@ -65,6 +66,7 @@ def test_admin_sets_groups_and_tool_access(browser, live, width):
         ("eval", "member", f"document.querySelector({member!r}).click()"),
         ("click", "#group-members-save"),
         ("wait", f"!{is_open('#group-members-dialog')} && {group_row}.querySelector('.group-count').textContent.endsWith(': 1')"),
+        ("wait", f"document.querySelector({user_groups!r})?.textContent === {group!r}"),
         ("eval", "pageFits", NO_OVERFLOW),
         # общий MCP: инструмент — группе, другой — только администраторам
         *open_mcp,

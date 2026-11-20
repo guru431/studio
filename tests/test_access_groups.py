@@ -1,4 +1,5 @@
 """Группы доступа к общим API моделей, MCP и инструментам MCP (access.py, шаг схемы 56)."""
+import json
 import re
 from contextlib import closing
 
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 
 import access
 import db
+import security
 import state
 from conftest import add_connection, make_user, signin
 from historical_schema import install_schema
@@ -292,9 +294,13 @@ def test_closed_shared_model_in_existing_chat(studio):
     refused = turn(studio, chat_id)
     assert refused.status_code == 409 and refused.json()["detail"]["code"] == "no_connection"
     assert studio.c.get("/api/me").json()["default_connection_id"] == personal
+    updated = studio.c.put(f"/api/sections/chat/links/{personal}", json={"models": [MODEL]})
+    assert updated.status_code == 200, updated.text
+    assert studio.c.get("/api/me").json()["default_connection_id"] == personal
     assert state.DB.execute("SELECT connection_id FROM chats WHERE id = ?", (chat_id,)).fetchone()[0] == cid
     access.set_rule("connection", cid, None)                          # доступ вернули — диалог снова на общей модели
     assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["connection_id"] == cid
+    assert studio.c.get("/api/me").json()["default_connection_id"] == cid
 
 
 def test_background_paths_ignore_rules(studio):
@@ -509,8 +515,12 @@ def test_studio_user_header_only_for_shared(studio):
     assert seen and set(seen) == {access.studio_user(member, sid)}
     personal = studio.c.post("/api/mcp", json={"name": "Mine", "url": MCP_URL, "token": MCP_KEY})
     assert personal.status_code == 201, personal.text
+    personal_id = personal.json()["id"]
+    state.DB.execute("UPDATE mcp_servers SET secret_enc = ? WHERE id = ?",
+                     (security.encrypt(json.dumps({"token": MCP_KEY, "headers": {"X-Studio-User": "0" * 32}})),
+                      personal_id))
     seen.clear()
-    assert studio.c.post(f"/api/mcp/{personal.json()['id']}/check").status_code == 200
+    assert studio.c.post(f"/api/mcp/{personal_id}/check").status_code == 200
     assert seen and set(seen) == {None}
     forged = studio.c.post("/api/mcp", json={"name": "Forged", "url": MCP_URL, "headers": {"X-Studio-User": "0" * 32}})
     assert forged.status_code == 422

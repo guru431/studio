@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 import httpx
 import pytest
 
+import access
 import clock
 import documents
 import exports
@@ -429,6 +430,36 @@ def test_queued_translations_survive_a_restart(studio):
     row = row_of(studio, orphan)
     assert (row["state"], row["detail"]) == ("error", translate.NO_CONNECTION)
     assert len(studio.gw.chat_requests) == sent and translate.JOBS == {}
+
+
+def test_startup_resumes_queued_shared_translation_and_releases_interrupted_scan(studio):
+    make_user(studio, "admin", is_admin=True)
+    uid = make_user(studio, "member")
+    signin(studio, "admin")
+    response = studio.c.post("/api/admin/shared/connections", json={
+        "name": "Shared gateway", "kind": "srvllm", "base_url": "http://10.77.1.15:4000",
+        "token": FakeGateway.TOKEN, "sections": ["translate", "ocr"]})
+    assert response.status_code == 201, response.text
+    cid = response.json()["id"]
+    signin(studio, "member")
+    conn = on_loop(studio, lambda: sections.resolve(uid, "translate", cid, MODEL)[0])
+    queued = file_job(studio, uid, conn, kick=False)
+    interrupted = file_job(studio, uid, conn, kick=False)
+    on_loop(studio, lambda: state.DB.execute(
+        "UPDATE translations SET state = 'working', kind = 'photo', source = NULL WHERE id = ?", (interrupted,)))
+
+    def restart():
+        translate.JOBS.clear()
+        ocr.LEASED.clear()
+        access.set_rule("connection", cid, [])
+        translate.recover()
+        assert any(item.id == cid for item in ocr.LEASED.values())
+        translate.resume_queued()
+
+    on_loop(studio, restart)
+    assert wait_row(studio, queued)["state"] == "done"
+    assert row_of(studio, interrupted)["detail"] == translate.INTERRUPTED
+    assert post(studio, "New translation.").status_code == 409
 
 
 def test_stop_user_cancels_both_lanes(studio):

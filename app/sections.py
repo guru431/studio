@@ -83,19 +83,20 @@ def transaction():
 
 # ---- чтение ------------------------------------------------------------------------
 
-def _rows(user_id: int | None, section: str, *, include_shared: bool = True):
+def _rows(user_id: int | None, section: str, *, include_shared: bool = True, gate: bool = True):
     scope = "(user_id IS ? OR user_id IS NULL)" if include_shared else "user_id IS ?"
-    clause, args = ("1", ()) if user_id is None else access.shared_filter(user_id, "connection", "connection_id")
+    clause, args = (access.shared_filter(user_id, "connection", "connection_id")
+                    if user_id is not None and gate and include_shared else ("1", ()))
     return state.DB.execute(f"SELECT connection_id, models FROM section_links WHERE {scope} AND section = ?"
                             f" AND {clause} ORDER BY user_id IS NULL, created, rowid",
                             (user_id, section, *args)).fetchall()
 
 
-def links(user_id: int | None, section: str) -> list[Link]:
-    rows = _rows(user_id, section)
+def links(user_id: int | None, section: str, *, gate: bool = True) -> list[Link]:
+    rows = _rows(user_id, section, gate=gate)
     if not rows:
         return []
-    by_id = {c.id: c for c in connections.list_for(user_id)}
+    by_id = {c.id: c for c in connections.list_for(user_id, gate=gate)}
     return [Link(section, by_id[r["connection_id"]], tuple(json.loads(r["models"])))
             for r in rows if r["connection_id"] in by_id]
 
@@ -146,14 +147,14 @@ def capabilities(user_id: int) -> dict[str, bool]:
 
 
 def resolve(user_id: int, section: str, connection_id: "int | None",
-            model: "str | None") -> "tuple[connections.Connection, str]":
+            model: "str | None", *, gate: bool = True) -> "tuple[connections.Connection, str]":
     """Подключение и модель запроса раздела: ничего не задано — умолчание; только модель — первая
     связь (связь умолчания — первой), где она отмечена; только подключение — его умолчание или
     первая отмеченная; пара — связь с отмеченной моделью."""
     check_section(section)
     if connection_id is not None:
-        connections.get(user_id, connection_id)              # чужое и неизвестное — 404 gone
-    available = links(user_id, section)
+        connections.get(user_id, connection_id, gate=gate)    # чужое и неизвестное — 404 gone
+    available = links(user_id, section, gate=gate)
     chosen = default(user_id, section, available)
     if connection_id is None and not model:
         if chosen is None:
@@ -385,7 +386,7 @@ def _settle(user_id: int | None, section: str) -> None:
     row = _default_row(user_id, section)
     if row is not None:
         if any(r["connection_id"] == row["connection_id"] and row["model"] in json.loads(r["models"])
-               for r in _rows(user_id, section)):
+               for r in _rows(user_id, section, gate=False)):
             return
     state.DB.execute("DELETE FROM section_defaults WHERE user_id = ? AND section = ?", (user_id, section))
     for r in _rows(user_id, section, include_shared=False):

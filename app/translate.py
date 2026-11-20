@@ -711,7 +711,7 @@ def recover() -> None:
         _finish(row["id"], "error", INTERRUPTED)
         if row["spotting"]:
             try:
-                ocr.lease_lost(row["user_id"], _photo_reader(row["user_id"])[0].id)
+                ocr.lease_lost(row["user_id"], _photo_reader(row["user_id"], gate=False)[0].id)
             except HTTPException:
                 pass
     if rows:
@@ -729,11 +729,11 @@ def resume_queued() -> None:
         uid = row["user_id"]
         try:
             try:
-                connections.get(uid, row["connection_id"])
+                connections.get(uid, row["connection_id"], gate=False)
             except HTTPException:
                 raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
-            conn, model = sections.resolve(uid, "translate", row["connection_id"], row["model"])
-            reader = _photo_reader(uid)[0] if row["kind"] == "photo" and not row["has_source"] else None
+            conn, model = sections.resolve(uid, "translate", row["connection_id"], row["model"], gate=False)
+            reader = _photo_reader(uid, gate=False)[0] if row["kind"] == "photo" and not row["has_source"] else None
         except HTTPException as e:
             _finish(row["id"], "error", e.detail["message"])
             continue
@@ -943,13 +943,14 @@ def _is_photo(data: bytes) -> bool:
     return True
 
 
-def _photo_reader(user_id: int):
+def _photo_reader(user_id: int, *, gate: bool = True):
     """(подключение, модель) «Сканов» для снимка: умолчание раздела, а если оно s06 (координат не даёт) — первая
     связь «Сканов» с HunyuanOCR (не s06; через сервер — первой); такой нет — 409 no_ocr NO_HUNYUAN. Только через
     сервер, иначе 409 no_ocr словами."""
-    reader = sections.default(user_id, "ocr")
+    links = sections.links(user_id, "ocr", gate=gate)
+    reader = sections.default(user_id, "ocr", links)
     if reader is not None and reader[0].s06:
-        found = sorted(((l.connection, l.models[0]) for l in sections.links(user_id, "ocr")
+        found = sorted(((l.connection, l.models[0]) for l in links
                         if not l.connection.s06 and l.models), key=lambda r: not r[0].proxied)
         if not found:
             raise HTTPException(409, {"code": "no_ocr", "message": NO_HUNYUAN})
