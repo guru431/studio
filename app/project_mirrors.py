@@ -78,10 +78,10 @@ async def _body(request, model, limit=4096):
         raise code._refuse(422, "invalid", "неверные настройки зеркала") from None
 
 
-def _owner(request, aid, pid):
+def _owner(request, aid, pid, background=False):
     project_access.owner(request, aid)
     code.check_pid(pid)
-    if not code._session_open(request.state.digest):
+    if not code._session_open(request.state.digest, background):
         raise code._refuse(409, "closed", "Сеанс Студии закрыт")
 
 
@@ -131,13 +131,15 @@ def _exclude(row):
     return {}
 
 
-async def _ask(request, aid, op, *, timeout=180, **args):
+async def _ask(request, aid, op, *, timeout=180, background=False, **args):
     # В обоих направлениях доступ должен оставаться доступом владельца, включая каждый блок данных.
+    # `background` — передача (`_sync`): её разрешение проверено при запуске незапертой сессией, блокировка экрана
+    # по таймеру её не обрывает; выход, гашение сессии, отключение учётки и отзыв компьютера — обрывают.
     project_access.owner(request, aid)
-    if not code._session_open(request.state.digest):
+    if not code._session_open(request.state.digest, background):
         raise code._refuse(409, "closed", "Сеанс Студии закрыт")
     code.require_capability(aid, "project_mirror")
-    return await code.ask(request, aid, op, quiet=True, reply_timeout=timeout, **args)
+    return await code.ask(request, aid, op, quiet=True, reply_timeout=timeout, while_locked=background, **args)
 
 
 def _entries(data, *, missing=False):
@@ -361,12 +363,13 @@ async def discover(aid: int, pid: str, request: Request, destination: int | None
     return {"available": True, "devices": devices}
 
 
-async def _compare(request, row):
+async def _compare(request, row, background=False):
     aid, pid, destination = row["source"], row["project"], row["destination"]
     to = {"root": row["root"], "name": _location(row)["name"]}
     exclude = _exclude(row)
-    source, target = await asyncio.gather(_ask(request, aid, "mirror_scan", project=pid, **exclude),
-                                          _ask(request, destination, "mirror_destination", **to, **exclude))
+    source, target = await asyncio.gather(
+        _ask(request, aid, "mirror_scan", project=pid, background=background, **exclude),
+        _ask(request, destination, "mirror_destination", background=background, **to, **exclude))
     if target.get("pid") is None or not code.PID_RE.fullmatch(str(target["pid"])):
         raise code._refuse(502, "bridge", "мост вернул неверное назначение зеркала")
     _private_destination(destination, target["pid"])
@@ -391,7 +394,7 @@ async def _compare(request, row):
         return result, to, entries, current, updates, remove, platform, source_platform, baseline
 
     result = await asyncio.to_thread(compare_trees)
-    _owner(request, aid, pid)
+    _owner(request, aid, pid, background)
     return result
 
 
@@ -421,33 +424,34 @@ async def _sync(request, row, selected, progress):
     ticket = secrets.token_hex(16)
     started = False
     try:
-        plan, to, source, current, updates, remove, platform, source_platform, baseline = await _compare(request, row)
+        plan, to, source, current, updates, remove, platform, source_platform, baseline = await _compare(
+            request, row, background=True)
         if plan["plan"] != selected.plan:
             raise code._refuse(409, "conflict", "проект или зеркало изменились — обновите сравнение")
         updates, remove = await asyncio.to_thread(_selection, plan, selected, updates, remove)
         progress.update(bytes=0, total=sum(info[2] for info in updates.values()))
         if updates or remove or current is None:
             started = True
-            await _ask(request, destination, "mirror_begin", ticket=ticket, **to)
+            await _ask(request, destination, "mirror_begin", ticket=ticket, background=True, **to)
             for reads in _batches(updates):
-                data = await _ask(request, aid, "mirror_read", project=pid, reads=reads)
+                data = await _ask(request, aid, "mirror_read", project=pid, reads=reads, background=True)
                 chunks = data.get("chunks")
                 if (not isinstance(chunks, list) or len(chunks) != len(reads) or
                         any(not isinstance(chunk, list) or len(chunk) != 3 or chunk[:2] != read[:2]
                             or not isinstance(chunk[2], str) or len(chunk[2]) != ((read[2] + 2) // 3) * 4
                             for chunk, read in zip(chunks, reads))):
                     raise code._refuse(502, "bridge", "мост вернул неверный блок файла")
-                await _ask(request, destination, "mirror_chunk", ticket=ticket, chunks=chunks)
+                await _ask(request, destination, "mirror_chunk", ticket=ticket, chunks=chunks, background=True)
                 progress["bytes"] += sum(read[2] for read in reads)
             exclude = _exclude(row)
-            latest = await _ask(request, aid, "mirror_scan", project=pid, **exclude)
+            latest = await _ask(request, aid, "mirror_scan", project=pid, background=True, **exclude)
             fresh = await asyncio.to_thread(lambda: _portable(_entries(latest), platform, source_platform))
             if fresh != source:
                 raise code._refuse(409, "conflict", "исходный проект изменился во время передачи — обновите сравнение")
             expected = await asyncio.to_thread(_digest, current)
             _private_destination(destination, plan["project"])
             await _ask(request, destination, "mirror_apply", ticket=ticket, expected=expected,
-                       updates=updates, remove=remove, **to, **exclude)
+                       updates=updates, remove=remove, background=True, **to, **exclude)
             started = False
         sealed = await asyncio.to_thread(_next_baseline, source, current, baseline, updates, remove)
         state.DB.execute("UPDATE project_mirrors SET baseline=?, synced=? WHERE id=?", (sealed, clock.NOW(), mid))
@@ -460,7 +464,7 @@ async def _sync(request, row, selected, progress):
     finally:
         try:
             if started:
-                await _ask(request, destination, "mirror_abort", ticket=ticket, timeout=5)
+                await _ask(request, destination, "mirror_abort", ticket=ticket, timeout=5, background=True)
         except HTTPException:
             pass
         finally:
