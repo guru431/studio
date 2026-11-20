@@ -74,6 +74,23 @@ def test_prune_preserves_current_rollback_autostart_active_and_unconfirmed_folde
     assert {path.name for path in base.iterdir()} == {*preserved, 'release-current', 'release-previous'}
 
 
+@pytest.mark.parametrize('status', ['rolled_back', 'failed', 'unconfirmed', 'old_running'])
+def test_failed_releases_are_pruned_once_their_failure_was_reported(releases, status):
+    """Выпуск неудачного перехода копится в `releases/`, пока работающая копия не сообщила о нём студии."""
+    base, stage, plan = releases
+    failed = base / 'release-failed'
+    failed.mkdir()
+    (failed / '_update_result').write_text(status, encoding='ascii')
+    for keep in (stage, base / 'release-previous'):          # текущий и откатный — даже с неудачным итогом
+        (keep / '_update_result').write_text(status, encoding='ascii')
+        (keep / '_update_reported').touch()
+    assert update_helper.prune(stage, plan) == [base / 'release-stale']
+    assert failed.is_dir()                                    # итог ещё не сообщён
+    assert update_helper.failed_update(base / 'release-previous') == status
+    assert update_helper.prune(stage, plan) == [failed]
+    assert {path.name for path in base.iterdir()} == {'release-current', 'release-previous'}
+
+
 def test_unknown_process_state_or_autostart_forbids_all_deletion(releases, monkeypatch):
     base, stage, plan = releases
     scan = Mock(return_value=None)
