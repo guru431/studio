@@ -325,7 +325,8 @@ def translator():
                                      else message(part, depth + 1))
                 counter = itertools.count()
                 text = re.sub(r'\{\}', lambda _: '{%d}' % next(counter), english[key])
-                return re.sub(r'\{(\d+)\}', lambda m: values.get(int(m.group(1)), m.group(0)), text)
+                out = re.sub(r'\{(\d+)\}', lambda m: values.get(int(m.group(1)), m.group(0)), text)
+                return out[:1].upper() + out[1:] if source[:1].isupper() else out
         return source
     return message
 

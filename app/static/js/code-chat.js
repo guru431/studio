@@ -1,4 +1,4 @@
-import { locale, tr } from './i18n.js';
+import { locale, message, tr } from './i18n.js';
 import { opencodeView } from './code-opencode.js';
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
@@ -1248,7 +1248,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
       if (data.status === 'stopped') end = STOPPED;
-      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", data.message) : tr("Ошибка");
+      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", message(data.message)) : tr("Ошибка");
       if (end) {
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
