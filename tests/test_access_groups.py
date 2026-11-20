@@ -31,7 +31,7 @@ def test_schema_56_migrates_from_55(env):
     with closing(db.connect(env.db_path)) as conn:
         install_schema(conn, 55)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 56
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')")}
         assert {"access_groups", "access_group_members", "access_rules", "access_rule_groups", "access_rollback",
                 "access_rules_connection_delete", "access_rules_mcp_delete"} <= tables

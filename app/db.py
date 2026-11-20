@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 56
+VERSION = 57
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -767,6 +767,38 @@ CREATE TABLE access_rollback(kind TEXT NOT NULL CHECK (kind IN ('connection', 'm
 """
 SCHEMA += ACCESS_56
 
+#: возможности источников: профиль подключения (системный текст, параметры, подсказки), роли диалога (умолчания
+#: администратора и библиотека учётки), состояние MCP диалога (выключенные общие и инструменты), загрузки вложений
+#: на MCP (`stamp` — `security.digest(secret_enc)`). К `connections` и `mcp_servers` — только триггеры: таблицы
+#: пересобирались на шаге 55. Прежний код новые таблицы и столбцы не читает; его вставки получают умолчания.
+CAPABILITIES_57 = """CREATE TABLE connection_profiles(connection_id INTEGER PRIMARY KEY,
+       system_text TEXT NOT NULL DEFAULT '', params TEXT NOT NULL DEFAULT '{}',
+       suggestions TEXT NOT NULL DEFAULT '[]', updated REAL NOT NULL);
+CREATE TRIGGER connection_profiles_delete AFTER DELETE ON connections BEGIN
+  DELETE FROM connection_profiles WHERE connection_id = old.id;
+END;
+CREATE TABLE role_defaults(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       lang TEXT NOT NULL DEFAULT 'ru' CHECK (lang IN ('ru','en')), name TEXT NOT NULL, text TEXT NOT NULL,
+       position INTEGER NOT NULL, builtin TEXT, created REAL, updated REAL);
+CREATE TABLE chat_roles(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, text TEXT NOT NULL, position INTEGER NOT NULL, origin INTEGER, created REAL, updated REAL);
+CREATE INDEX chat_roles_user ON chat_roles(user_id, position);
+ALTER TABLE users ADD COLUMN roles_seeded REAL;
+ALTER TABLE chats ADD COLUMN role_id TEXT;
+ALTER TABLE chats ADD COLUMN mcp_off TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE chats ADD COLUMN mcp_tools_off TEXT NOT NULL DEFAULT '{}';
+CREATE TRIGGER chat_roles_delete AFTER DELETE ON chat_roles BEGIN
+  UPDATE chats SET role_id = NULL WHERE role_id = old.id;
+END;
+CREATE TABLE mcp_uploads(attachment_id TEXT NOT NULL REFERENCES attachments ON DELETE CASCADE,
+       server_id INTEGER NOT NULL, artifact_id TEXT NOT NULL, path TEXT NOT NULL, stamp TEXT NOT NULL,
+       created REAL NOT NULL, PRIMARY KEY (attachment_id, server_id));
+CREATE TRIGGER mcp_uploads_server_delete AFTER DELETE ON mcp_servers BEGIN
+  DELETE FROM mcp_uploads WHERE server_id = old.id;
+END;
+"""
+SCHEMA += CAPABILITIES_57
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -883,6 +915,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     55: SHARED_55,
     # группы доступа к общим API моделей, MCP и инструментам MCP
     56: ACCESS_56,
+    # профили подключений, роли диалога, состояние MCP диалога, загрузки вложений на MCP
+    57: CAPABILITIES_57,
 }
 
 

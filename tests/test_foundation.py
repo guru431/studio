@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 56
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 57
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,7 +40,8 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.ACCESS_56).removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
+        conn.executescript(db.SCHEMA.removesuffix(db.CAPABILITIES_57).removesuffix(db.ACCESS_56)
+                           .removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         model = ("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created,server_only)"
                  " VALUES(?,?,'models','openai','https://x.test/v1',x'00','[]',0,1)")
@@ -62,6 +63,69 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
         conn.execute("DELETE FROM users WHERE id=1")
         assert [tuple(row) for row in conn.execute("SELECT id,user_id FROM connections")] == [(8, None)]
         assert [tuple(row) for row in conn.execute("SELECT id,user_id FROM mcp_servers")] == [(10, None)]
+
+
+def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(env):
+    """Шаг 57: профили подключений, роли, состояние MCP диалога, загрузки на MCP; прежний код пишет `chats` своим
+    списком столбцов; профиль уходит с подключением, роль — из диалога, загрузки — с сервером и вложением."""
+    from contextlib import closing
+    import sqlite3
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 56)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 57
+
+        def columns(table):
+            return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert columns("connection_profiles") == {"connection_id", "system_text", "params", "suggestions", "updated"}
+        assert columns("role_defaults") == {"id", "lang", "name", "text", "position", "builtin", "created", "updated"}
+        assert columns("chat_roles") == {"id", "user_id", "name", "text", "position", "origin", "created", "updated"}
+        assert columns("mcp_uploads") == {"attachment_id", "server_id", "artifact_id", "path", "stamp", "created"}
+        assert {"role_id", "mcp_off", "mcp_tools_off"} <= columns("chats") and "roles_seeded" in columns("users")
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index')")}
+        assert {"connection_profiles_delete", "chat_roles_delete", "mcp_uploads_server_delete",
+                "chat_roles_user"} <= names
+        assert conn.execute("SELECT role_id, mcp_off, mcp_tools_off FROM chats").fetchone()[:] == (None, "[]", "{}")
+        # прежний код: вставка диалога своим списком столбцов
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('previous',1,'Old',0,0)")
+        assert conn.execute("SELECT mcp_off, mcp_tools_off FROM chats WHERE id='previous'").fetchone()[:] == ("[]", "{}")
+
+        cid = conn.execute("INSERT INTO connections(user_id,name,kind,base_url,token_enc,sections,created)"
+                           " VALUES(1,'m','openai','https://x.test/v1',x'00','[]',0)").lastrowid
+        conn.execute("INSERT INTO connection_profiles(connection_id, system_text, updated) VALUES(?, 'p', 1)", (cid,))
+        assert conn.execute("SELECT params, suggestions FROM connection_profiles").fetchone()[:] == ("{}", "[]")
+        conn.execute("DELETE FROM connections WHERE id = ?", (cid,))
+        assert conn.execute("SELECT count(*) FROM connection_profiles").fetchone()[0] == 0
+
+        conn.execute("INSERT INTO chat_roles(id,user_id,name,text,position) VALUES('r1',1,'Юрист','t',0)")
+        conn.execute("UPDATE chats SET role_id = 'r1'")
+        conn.execute("DELETE FROM chat_roles WHERE id = 'r1'")
+        assert {r[0] for r in conn.execute("SELECT role_id FROM chats")} == {None}
+        conn.execute("INSERT INTO role_defaults(name, text, position) VALUES('Юрист', 't', 0)")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO role_defaults(lang, name, text, position) VALUES('de', 'x', 't', 1)")
+
+        sid = conn.execute("INSERT INTO mcp_servers(user_id,name,url,secret_enc)"
+                           " VALUES(NULL,'tools','https://x.test/mcp','s')").lastrowid
+        conn.execute("INSERT INTO media(id,user_id,rel_path,mime,size,has_thumb,download_name,created)"
+                     " VALUES('m1',1,'u1/a','text/plain',1,0,'a',0)")
+        upload = "INSERT INTO mcp_uploads VALUES(?, ?, 'art_1', '/in/a', 'stamp', 1)"
+        for aid in ("a1", "a2"):
+            conn.execute("INSERT INTO attachments(id,user_id,kind,name,media_id,created)"
+                         " VALUES(?,1,'document','a','m1',0)", (aid,))
+            conn.execute(upload, (aid, sid))
+        conn.execute("DELETE FROM attachments WHERE id = 'a1'")
+        assert [r[0] for r in conn.execute("SELECT attachment_id FROM mcp_uploads")] == ["a2"]
+        conn.execute("DELETE FROM mcp_servers WHERE id = ?", (sid,))
+        assert conn.execute("SELECT count(*) FROM mcp_uploads").fetchone()[0] == 0
+
+        conn.execute("INSERT INTO chat_roles(id,user_id,name,text,position) VALUES('r2',1,'x','t',0)")
+        conn.execute("DELETE FROM users WHERE id = 1")
+        assert conn.execute("SELECT count(*) FROM chat_roles").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):
