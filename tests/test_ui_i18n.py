@@ -24,9 +24,11 @@ def test_language_choice_persists_across_login_sections_and_reload(browser, live
     steps = [
         ('wait', "document.querySelector('#login-language')"),
         ('eval', 'default', 'document.documentElement.lang'),
+        ('eval', 'manifestRu', "document.querySelector('link[rel=manifest]').getAttribute('href')"),
         set_value('#login-language', 'en'),
         ('wait', "document.documentElement.lang === 'en' && document.querySelector('#login-language')?.value === 'en'"),
         ('eval', 'login', "[document.title, document.querySelector('#submit').textContent]"),
+        ('eval', 'manifestEn', "fetch(document.querySelector('link[rel=manifest]').href).then(r => r.json()).then(m => m.name)"),
         *signin(login, 'incorrect-password')[1:],
         ('wait', "document.querySelector('p.error')?.textContent === 'Incorrect login or password'"),
         set_value('#login', login), set_value('#password', 'password-123'), ('click', '#submit'), ('wait', READY),
@@ -66,6 +68,7 @@ def test_language_choice_persists_across_login_sections_and_reload(browser, live
     values = result['values']
     assert values['default'] == 'ru'
     assert values['login'] == ['Studio — sign in', 'Sign in']
+    assert values['manifestRu'] == '/manifest.webmanifest' and values['manifestEn'] == 'Studio'
     assert values['choice'] == 'en'
     assert 'English' in values['languages'] and 'Russian' in values['languages']
     assert values['contracts'] == ['Чат', 'Name device: Чат', ['file', 'files', 'files', 'files'], 'January 1, 2026']

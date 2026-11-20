@@ -112,6 +112,8 @@
   globalThis.StudioI18n = Object.freeze({ tr, message: (value) => message(value), locale, language: () => language, languagePicker });
   if (typeof document === 'undefined') return;
   document.documentElement.lang = language;
+  // The installed app is named in the language chosen before installation; the link precedes this script.
+  if (language === 'en') document.querySelector('link[rel="manifest"]')?.setAttribute('href', '/manifest.en.webmanifest');
   document.addEventListener('DOMContentLoaded', () => {
     for (const node of document.querySelectorAll('[data-i18n]')) node.textContent = tr(node.textContent);
     for (const node of document.querySelectorAll('[data-i18n-error]')) node.textContent = message(node.textContent);

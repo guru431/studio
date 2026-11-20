@@ -50,6 +50,22 @@ def test_manifest_makes_an_installable_app():
         assert (STATIC / icon["src"].removeprefix("/static/")).is_file(), icon["src"]
 
 
+def test_english_manifest_is_the_same_app_named_in_english():
+    """FINDINGS 06:F4: английский интерфейс ставит «Studio» — то же приложение (`id`, адреса, значки, цвета)."""
+    ru = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
+    en = json.loads((STATIC / "manifest.en.webmanifest").read_text(encoding="utf-8"))
+    names = ("name", "short_name", "description", "lang")
+    assert {k: v for k, v in en.items() if k not in names} == {k: v for k, v in ru.items() if k not in names}
+    assert en["name"] == en["short_name"] == "Studio" and en["lang"] == "en"
+    english = json.JSONDecoder().raw_decode((STATIC / "en.js").read_text(encoding="utf-8").split("Object.freeze(")[1])[0]
+    assert en["description"] == english[ru["description"]]
+    early = (STATIC / "i18n.js").read_text(encoding="utf-8")
+    assert "setAttribute('href', '/manifest.en.webmanifest')" in early
+    for page in ("index.html", "login.html"):         # ссылка — до раннего скрипта, иначе он её не найдёт
+        html = (STATIC / page).read_text(encoding="utf-8")
+        assert -1 < html.index('rel="manifest"') < html.index("/static/i18n.js"), page
+
+
 def test_manifest_icons_are_png_only():
     """SVG `sizes: any` iOS берёт первой и не читает — рисует букву на theme_color."""
     m = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
@@ -221,10 +237,11 @@ def test_pages_carry_the_static_version(studio):
 
 
 def test_shell_files_are_public_and_api_is_not(studio):
-    for path in ("/sw.js", "/manifest.webmanifest", "/offline.html", "/static/css/app.css",
+    for path in ("/sw.js", "/manifest.webmanifest", "/manifest.en.webmanifest", "/offline.html", "/static/css/app.css",
                  "/static/js/app.js", "/static/icons/icon-192.png", "/static/vendor/marked.min.js"):
         assert studio.c.get(path).status_code == 200, path
-    assert studio.c.get("/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
+    for path in ("/manifest.webmanifest", "/manifest.en.webmanifest"):
+        assert studio.c.get(path).headers["content-type"].startswith("application/manifest+json"), path
     assert studio.c.get("/static/js/app.js").headers["content-type"].startswith(("text/javascript",
                                                                                  "application/javascript"))
     assert studio.c.get("/api/me").status_code == 401
