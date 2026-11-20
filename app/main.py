@@ -101,6 +101,7 @@ async def lifespan(_app):
     chat_shares.disown()                         # ссылки участников на чужие компьютеры (прежний код, откат) — прочь
     sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
     sections.retire_photo_models()
+    sections.drop_cleaner_strays()               # связи Cleaner вне чата и перевода (до запрета, откат) — прочь
     search.compose_once(state.DB)                # раз на базу: прежние тела индекса — в NFC
     chat_exports.clean_tmp()
     audio.clean_tmp()

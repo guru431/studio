@@ -36,6 +36,30 @@ def test_retired_photo_choices_are_pruned_without_deleting_history(studio):
     assert state.DB.total_changes == before
 
 
+def test_cleaner_links_outside_chat_and_translate_are_dropped_at_start(studio):
+    """База прода со связью Cleaner с «Фото» и «Расшифровкой» (созданы до запрета `check_link`): запуск их
+    убирает, умолчание «Фото» возвращается к шлюзу, прежний столбец `connections.sections` — без photo."""
+    gw = add_gateway(studio)
+    cl = add_connection(studio, base_url="http://10.77.1.15:4000/v1", name="Cleaner",
+                        sections=["chat", "photo", "transcribe"])
+    uid = uid_of_owner()
+    sections.set_models(uid, "photo", cl, ["protected-model"])
+    sections.set_default(uid, "photo", cl, "protected-model")
+    state.DB.execute("UPDATE connections SET cleaner = 1 WHERE id = ?", (cl,))
+    assert sections.sections_of(uid, cl) == ["chat", "photo", "transcribe"]
+    assert sections.default(uid, "photo")[0].id == cl
+    sections.drop_cleaner_strays()
+    assert sections.sections_of(uid, cl) == ["chat"]
+    assert sections.sections_of(uid, gw) == list(sections.SECTIONS)
+    assert sections.default(uid, "photo")[0].id == gw
+    assert json.loads(state.DB.execute("SELECT sections FROM connections WHERE id = ?", (cl,)).fetchone()[0]) == ["chat"]
+    photo = next(s for s in studio.c.get("/api/sections").json()["sections"] if s["id"] == "photo")
+    assert [l["connection"]["id"] for l in photo["links"]] == [gw]
+    before = state.DB.total_changes
+    sections.drop_cleaner_strays()
+    assert state.DB.total_changes == before
+
+
 def test_gateway_joins_every_section_with_its_catalog(studio):
     cid = add_gateway(studio)
     uid = uid_of_owner()
