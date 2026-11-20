@@ -317,6 +317,42 @@ def test_stop_user_ends_spotting_and_releases_in_the_background(studio):
     wait_until(studio, lambda: ocr_releases(studio) >= 1 and ocr.LEASED == {})
 
 
+def test_restart_while_spotting_releases_the_slot_after_start(studio):
+    """05:F3: остановка службы посреди распознавания снимка — слот ocr взят; новый процесс освобождает его после
+    старта (`ocr.stop` сохраняет `LEASED`), а после аварии — по прерванной записи (`translate.recover`)."""
+    add_gateway(studio)
+    studio.gw.ocr_hold = True
+    tid = start_file(studio, "Снимок.png", photo("PNG", (60, 40)))
+    wait_until(studio, lambda: len(studio.gw.ocr_requests) == 1)
+
+    async def restart(stop=True):
+        if stop:
+            await translate.stop()
+            await ocr.stop()
+        translate.JOBS.clear()
+        ocr.LEASED.clear()                               # память нового процесса
+        ocr.recover()
+        translate.recover()
+        ocr.resume_queued()
+        translate.resume_queued()
+    try:
+        on_loop(studio, restart)
+    finally:
+        studio.gw.ocr_hold = False
+    assert (row_of(studio, tid)["state"], row_of(studio, tid)["detail"]) == ("error", translate.INTERRUPTED)
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == 1
+
+    crashed = start_file(studio, "Снимок.png", photo("PNG", (60, 40)))
+    wait_row(studio, crashed)
+    on_loop(studio, lambda: state.DB.execute("UPDATE translations SET state = 'working', source = NULL, finished = NULL"
+                                             " WHERE id = ?", (crashed,)))
+    released = ocr_releases(studio)
+    on_loop(studio, lambda: restart(stop=False))
+    wait_until(studio, lambda: ocr.LEASED == {} and not ocr.SETTLING)
+    assert ocr_releases(studio) == released + 1
+
+
 def test_repeat_of_a_photo_copies_blocks_without_ocr(studio):
     add_gateway(studio)
     studio.gw.ocr_reply = spot_reply(SPOTTED)
