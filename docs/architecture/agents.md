@@ -14,7 +14,8 @@
   `409 closed` без приватного результата. PDF повторяет проверку после рендера.
 - Фоновые просьбы: заголовок страницы `X-Studio-Passive: 1` → `claude_code.ask(passive=True)` → `req.passive: true`
   (только мосту с `hello.passive_requests`; заголовок может лишь отказаться от продления PIN). `code_activity.all_activity`
-  всегда фоновый. Фоновые — опрос меток вкладок и Git в `code.js`, повторы `live` по таймеру и `#code-reload` в
+  всегда фоновый; компьютер без PIN он и поиск копий зеркала открывают сами (`claude_code.open_without_pin`) —
+  со строкой `open` истории подключений, как `POST …/open`. Фоновые — опрос меток вкладок и Git в `code.js`, повторы `live` по таймеру и `#code-reload` в
   `code-chat.js`, Git/сводка/лимиты после `done`.
 - Компьютер без канала — `409 offline` раньше проверки поддержки нестандартного таймера PIN.
 - `claude_code.live` без канала моста — не 409 `offline`, а SSE ожидания: `offline {wait: true}`, пинги, затем

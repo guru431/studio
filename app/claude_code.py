@@ -491,6 +491,21 @@ async def open_agent(aid: int, body: Open, request: Request):
     return Response(status_code=204)
 
 
+async def open_without_pin(request: Request, agent, call):
+    """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` —
+    открыть его для сессии и повторить. Открытие пишет ту же строку `open` истории подключений, что `open_agent`:
+    след новой сессии не зависит от того, кто открыл компьютер первым. `agent` — строка с `id`, `name`,
+    `user_id`, `has_pin`."""
+    try:
+        return await call()
+    except HTTPException as error:
+        if error.detail.get("code") != "closed" or agent["has_pin"]:
+            raise
+    await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, pin=None)
+    _event(request, agent, "open")
+    return await call()
+
+
 @router.get("/agents/{aid}/projects")
 async def projects(aid: int, request: Request):
     owner = own_agent(request, aid, shared=True)["user_id"] == request.state.user.id

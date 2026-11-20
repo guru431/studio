@@ -304,7 +304,7 @@ async def discover(aid: int, pid: str, request: Request, destination: int | None
         return {"available": False, "devices": []}
     uid = request.state.user.id
     agents = list(state.DB.execute(
-        "SELECT id, name, has_pin FROM agents WHERE user_id=? AND id<>? AND (? IS NULL OR id=?) ORDER BY id",
+        "SELECT id, name, user_id, has_pin FROM agents WHERE user_id=? AND id<>? AND (? IS NULL OR id=?) ORDER BY id",
         (uid, aid, destination, destination)))
     if not agents:
         return {"available": True, "devices": []}
@@ -330,10 +330,9 @@ async def discover(aid: int, pid: str, request: Request, destination: int | None
             return {**result, "state": "unsupported"}
         async with parallel:
             try:
-                if not agent["has_pin"]:
-                    await _ask(request, target, "open", pin=None, passive=True, timeout=5)
-                data = await _ask(request, target, "mirror_candidates", name=name, repositories=repositories,
-                                  passive=True, timeout=25)
+                data = await code.open_without_pin(request, agent, lambda: _ask(
+                    request, target, "mirror_candidates", name=name, repositories=repositories,
+                    passive=True, timeout=25))
             except HTTPException as error:
                 reason = error.detail.get("code")
                 stage = ("locked" if reason in ("closed", "pin_needed", "pin_locked")

@@ -57,6 +57,25 @@ def test_activity_summary_combines_own_computers_and_engines_without_history(stu
     assert before == (len(machine.requests), len(other.requests))
 
 
+def test_background_open_of_a_computer_without_pin_is_recorded_once_in_connection_history(studio):
+    """Опрос значка открывает компьютер без PIN для новой сессии — в неудаляемой истории та же строка `open`
+    с устройством и адресом, что у явного входа; уже открытый компьютер новой строки не даёт."""
+    aid, machine, link = setup(studio, opened=False)
+    link.hello["project_activity"] = True
+
+    def opens():
+        return [e for e in studio.c.get("/api/agents/events").json()["items"] if e["kind"] == "open"]
+
+    assert opens() == []
+    assert studio.c.get("/api/code/activity").status_code == 200
+    rows = opens()
+    assert len(rows) == 1 and rows[0]["agent_id"] == aid and rows[0]["device"].startswith("браузер ")
+    assert "ip" in rows[0]
+    assert [req["op"] for req in machine.requests][-3:] == ["activity", "open", "activity"]
+    assert studio.c.get("/api/code/activity").status_code == 200
+    assert len(opens()) == 1
+
+
 def test_activity_summary_keeps_pin_closed_and_drops_offline_or_unsupported(studio, caplog):
     aid, machine, link = setup(studio, pin="2468", opened=False)
     link.hello["project_activity"] = True
