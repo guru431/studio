@@ -11,7 +11,8 @@ import { locale, tr } from './i18n.js';
  *   машине (его мог поправить Claude) — 409 conflict и слова в #code-file-status, на машине ничего не
  *   затирается; файл читается заново, #code-conflict сравнивает версии и даёт взять версию компьютера, сохранить
  *   свою поверх (с прочитанным version) или скопировать свою; textarea приводит концы строк к \n — у файла с \r\n они возвращаются при сохранении;
- *   .md — «Разметка» / «Исходный» (#code-md-view, markdown.js), сначала разметка; binary и too_large — слова, файл не открывается;
+ *   .md — «Разметка» / «Исходный» (#code-md-view, markdown.js), сначала разметка
+ *   (renderMarkdownInto, как в чате: свыше 8000 знаков — Worker и кадры по 6 мс); binary и too_large — слова, файл не открывается;
  * - .pdf — страница картинкой (#code-pdf img из POST …/pdf, число страниц — X-Studio-Pages), «‹» «›» и
  *   «Страница N из M»; прежний blob URL освобождается при смене страницы, файла и уходе;
  * - open(path) — папка файла и сам файл (ссылка «Открыть файл» шага чата); { dir } — только папка после PIN;
@@ -35,7 +36,7 @@ import { dateTime } from './time.js';
 import { fileMark } from './code-git.js';
 import { changeView } from './code-diff.js';
 import { restoreEndings } from './line-endings.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdownInto } from './markdown.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
 const SAVED = tr("Сохранено");
@@ -591,10 +592,16 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       version = kept.version;                           // правка Claude за это время — conflict, а не затирание
     }
     let shown = null;                                   // разметка .md
+    // Разметка — как в чате: свыше 8000 знаков разбор в Worker, построение кадрами по 6 мс (файл до 2 МиБ).
+    const paintMarkdown = () => {
+      if (!shown || shown.hidden) return;
+      const target = shown;
+      renderMarkdownInto(target, editor.value, { valid: () => alive && mine === fileGen && !target.hidden && target.isConnected });
+    };
     const mark = { editor, base, keep() { edits.set(key, { text: editor.value, version }); }, reset() {
       edits.delete(key);
       editor.value = mark.base;
-      if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
+      paintMarkdown();
     } };
     editing = mark;
     const save = el('button', { type: 'button', id: 'code-save', class: 'btn btn-accent btn-sm' }, tr("Сохранить"));
@@ -663,7 +670,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
         version = theirs.version;
         edits.delete(key);
         close();
-        if (shown && !shown.hidden) shown.replaceChildren(renderMarkdown(editor.value));
+        paintMarkdown();
         say(status, tr("Открыта версия компьютера"), false);
       });
       overwrite.addEventListener('click', () => {
@@ -684,7 +691,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     file.append(editor);
     if (/\.md$/i.test(path)) {
       editor.hidden = true;
-      shown = el('div', { id: 'code-md', class: 'md code-md' }, renderMarkdown(editor.value));
+      shown = el('div', { id: 'code-md', class: 'md code-md' });
       const modes = el('div', { id: 'code-md-view', class: 'code-md-view', role: 'group', 'aria-label': tr("Показ") });
       for (const [mode, text] of [['view', tr("Разметка")], ['text', tr("Исходный")]]) {
         const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === 'view') }, text);
@@ -692,12 +699,14 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
           for (const other of modes.children) other.setAttribute('aria-pressed', String(other === b));
           editor.hidden = mode === 'view';
           shown.hidden = mode !== 'view';
-          shown.replaceChildren(...(mode === 'view' ? [renderMarkdown(editor.value)] : []));
+          if (mode === 'view') paintMarkdown();
+          else shown.replaceChildren();
         });
         modes.append(b);
       }
       bar.append(modes);
       file.append(shown);
+      paintMarkdown();
     }
     bar.append(save);
   }
