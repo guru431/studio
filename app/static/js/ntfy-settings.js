@@ -23,6 +23,12 @@ function remembered(value) {
   return null;
 }
 
+/** Забыть сервер и тему этого браузера для учётки — явный «Выйти» (push-sync.js): тема ntfy на общем сервере
+ * почти пароль, на чужом компьютере после выхода её не оставлять. */
+export function forgetRemembered() {
+  if (me?.id) remembered(null);
+}
+
 export function ntfyBlock() {
   const enabled = el('input', { type: 'checkbox', id: 'ntfy-enabled' });
   const server = el('input', { type: 'url', id: 'ntfy-server', autocomplete: 'off', maxlength: 512 });

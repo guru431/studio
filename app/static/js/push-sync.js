@@ -17,6 +17,7 @@
 import { api, me } from './api.js';
 import { language, tr } from './i18n.js';
 import { el, words } from './ui.js';
+import { forgetRemembered } from './ntfy-settings.js';
 
 const PUSH_KEY = 'studio-push';
 let running = null;
@@ -100,6 +101,12 @@ function syncLanguage() {
     .then((answer) => { if (answer && me) me.notify_langs = answer.notify_langs; })
     .catch(() => null);
 }
+
+// Явный «Выйти» забывает сервер и тему ntfy этого браузера; конец срока, «Завершить» с другого устройства и
+// аварийный выход запомненное не трогают — после нового входа форма их подставит.
+document.addEventListener('submit', (event) => {
+  if (event.target.matches('form[action="/logout"]')) forgetRemembered();
+});
 
 export function setupPushSync() {
   syncLanguage();
