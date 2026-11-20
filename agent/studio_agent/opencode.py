@@ -493,7 +493,7 @@ class OpenCodeRunner(Runner):
                     if not t.stopped:
                         await self._wait_queue(t)
                     async with t.input_lock:
-                        if not t.queued or t.stopped or t.closing:
+                        if not t.queued or t.stopped or t.closing or t.queue_expired:
                             t.finishing = True
                             break
                         message_id, extra_text, extra_images = t.queued[0]
