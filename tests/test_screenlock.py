@@ -232,7 +232,8 @@ def test_lock_is_enabled_freely_and_disabled_only_with_the_password(studio):
     assert studio.c.get("/api/me").json()["screen_lock"] is True
     for body in ({"enabled": False}, {"enabled": False, "password": ""}, {"enabled": False, "password": "wrong-pw"}):
         r = studio.c.post("/api/me/screen-lock", json=body)
-        assert r.status_code == 403 and code(r) == "password", body
+        # пустой — 422 до счёта попыток (auth.confirm_password), неверный — 403
+        assert r.status_code == (403 if body.get("password") else 422) and code(r) == "password", body
     assert studio.c.get("/api/me").json()["screen_lock"] is True
     r = studio.c.post("/api/me/screen-lock", json={"enabled": False, "password": "password-123"})
     assert r.status_code == 200 and r.json() == {"screen_lock": False, "screen_lock_sections": ["*"], "screen_lock_timeout": 60}
@@ -328,7 +329,7 @@ def test_adding_a_key_needs_the_password(studio):
     uid = owner(studio)
     for body in ({}, {"password": "wrong-pw"}):
         r = studio.c.post("/api/passkeys/options", json=body)
-        assert r.status_code == 403 and code(r) == "password", body
+        assert r.status_code == (403 if body else 422) and code(r) == "password", body
     r = studio.c.post("/api/passkeys/options", json={"password": "password-123"})
     assert r.status_code == 200
     options = r.json()
@@ -508,7 +509,7 @@ def test_pin_is_set_only_with_the_password_and_removed_without(studio):
     uid = owner(studio)
     for body in ({"pin": "0007"}, {"password": "wrong-pw", "pin": "0007"}):
         r = studio.c.put("/api/me/pin", json=body)
-        assert r.status_code == 403 and code(r) == "password", body
+        assert r.status_code == (403 if "password" in body else 422) and code(r) == "password", body
     assert studio.c.get("/api/me").json()["pin"] is False
     r = studio.c.put("/api/me/pin", json={"password": "password-123", "pin": "0007"})
     assert r.status_code == 200 and r.json() == {"pin": True}
