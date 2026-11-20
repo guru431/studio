@@ -170,7 +170,7 @@ def check_link(conn: "connections.Connection", section: str) -> None:
     """Может ли подключение участвовать в разделе: вид и, для раздела только через сервер, список."""
     if section not in (S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]):
         if conn.s06:
-            raise _bad("kind", "шлюз s06 поддерживает чат, перевод, разговоры, сканы и голосовой ввод")
+            raise _bad("kind", "шлюз s06 поддерживает чат, перевод, расшифровку, сканы и голосовой ввод")
         raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")
     if section in SERVER_ONLY and not conn.proxied:
         raise _bad("server", f"раздел «{NAMES[section]}» — только через сервер: попросите администратора"

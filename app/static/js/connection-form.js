@@ -45,7 +45,7 @@ export function connectionForm(initial, { cleaner = false, everywhere = null } =
     autocomplete: 'new-password', spellcheck: 'false', autocapitalize: 'none',
     placeholder: initial ? tr("не менять ({0})", initial.token_hint) : tr("ключ API") });
   const cleanerNote = el('p', { class: 'muted small', hidden: true }, tr("Cleaner: только чат и перевод через сервер. Нужен ключ Cleaner с доступом к подключению и моделям; адрес должен разрешить администратор."));
-  const s06Note = el('p', { class: 'muted small', hidden: true }, tr("s06: чат и перевод Qwen, разговоры WhisperX, сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет."));
+  const s06Note = el('p', { class: 'muted small', hidden: true }, tr("s06: чат и перевод Qwen, расшифровка WhisperX, сканы PaddleOCR и голосовой ввод. Озвучки и координат текста для перевода снимка у этого шлюза нет."));
   const all = el('input', { type: 'checkbox', name: 'everywhere', checked: !!everywhere });
   const allBox = el('label', { class: 'check', hidden: true }, all, tr("Добавить во все разделы этого шлюза"));
   const box = el('form', { class: 'conn-form', novalidate: true },
