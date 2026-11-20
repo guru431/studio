@@ -9708,14 +9708,19 @@ def test_code_return_to_tab_keeps_running_turn_text(browser, live):
         .observe(feed, { childList: true, subtree: true, characterData: true });
       return true; })()"""
     frames = "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))"
+    # снимок live строит ленту хода заново (renderTimeline), а карточку того же запроса оставляет прежней (9d7ec88f)
+    timeline = "document.querySelectorAll('#code-feed .code-steps > *')"
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             *code_send("Задача"), ("wait", f"{card} && document.querySelector('#code-feed').textContent.includes('Пишу ответ')"),
-            ("eval", "marked", f"{card}.dataset.old = '1'; window.livesBefore = window.liveOpened; true"),
+            ("eval", "marked", f"{card}.dataset.old = '1'; {timeline}.forEach((n) => {{ n.dataset.old = '1'; }});"
+                               " window.livesBefore = window.liveOpened; true"),
             ("eval", "watching", watch),
             controlled_visibility(True), controlled_visibility(False),
-            # снимок live заменил карточку новой
-            ("wait", f"window.liveOpened > window.livesBefore && {card} && !{card}.dataset.old"),
+            # снимок live пришёл: текст хода — в новых узлах
+            ("wait", f"window.liveOpened > window.livesBefore && [...{timeline}]"
+                     ".some((n) => !n.dataset.old && n.textContent.includes('Пишу ответ'))"),
+            ("eval", "sameCard", f"{card}?.dataset.old === '1'"),
             ("eval", "frames", frames),
             ("eval", "gaps", "window.feedGaps"),
             ("eval", "running", CODE_MSGS),
@@ -9732,6 +9737,7 @@ def test_code_return_to_tab_keeps_running_turn_text(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["gaps"] == 0, v
+    assert v["sameCard"] is True, v
     assert v["running"] == [["user", "Задача"], ["assistant", "Пишу ответ"]]
     assert v["final"] == [["user", "Задача"], ["assistant", "Пишу ответ и дописал"]]
     assert not known_refusals(problems(r), 409), problems(r)
