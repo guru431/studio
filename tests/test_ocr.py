@@ -938,6 +938,28 @@ def test_to_chat_attaches_markdown(studio, monkeypatch):
     assert r.status_code == 413 and "в чат его не передать" in r.json()["detail"]["message"]
 
 
+def test_a_failed_document_gives_out_and_indexes_what_was_recognized(studio):
+    """05:F5: отказ документа на второй странице — первая распознана: выгрузка, «В чат» и поиск её отдают,
+    остальные страницы — пометкой; документ без единой страницы с текстом — 409 `empty`."""
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(200, answer("Арендатор Петров")), (500, {"error": {"message": "внутренняя ошибка"}})]
+    sid = post_files(studio, [(NAME, scan_pdf("ink", "ink", "ink"))]).json()["id"]
+    assert wait_ocr(studio, sid)["state"] == "error"
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=md")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("## Страница 1\n\nАрендатор Петров\n\n## Страница 2\n\n[не распознана]")
+    assert studio.c.get(f"/api/ocr/{sid}/export?format=docx").status_code == 200
+    assert studio.c.post(f"/api/ocr/{sid}/attachments").json()["text"].startswith("## Страница 1\n\nАрендатор Петров")
+    found = studio.c.post("/api/search", json={"q": "Петров"}).json()["items"]
+    assert [i["id"] for i in found if i.get("section") == "ocr"] == [sid], found
+
+    studio.gw.ocr_replies = [(200, answer("Обрывок", "length"))]
+    empty = post_files(studio, [("a.jpg", photo())]).json()["id"]
+    assert wait_ocr(studio, empty)["state"] == "done"
+    for r in (studio.c.get(f"/api/ocr/{empty}/export?format=txt"), studio.c.post(f"/api/ocr/{empty}/attachments")):
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "empty", r.text
+
+
 def test_rename_keeps_the_extension_for_exports_and_the_search_finds_it(studio, caplog):
     caplog.set_level(logging.DEBUG)
     add_gateway(studio)
