@@ -86,6 +86,20 @@ def test_cp1251_text_is_decoded():
     assert documents.extract("старый.txt", "Счёт на оплату №5".encode("cp1251")) == "Счёт на оплату №5"
 
 
+def test_utf16_text_is_decoded_or_refused():
+    """05:F18: «Юникод» Блокнота (UTF-16 со знаком порядка байтов или без) — не cp1251-кракозябры."""
+    text = "Привет, мир\nHello"
+    assert documents.extract("a.txt", text.encode("utf-16")) == text                 # со знаком порядка байтов
+    assert documents.extract("a.txt", b"\xfe\xff" + text.encode("utf-16-be")) == text
+    assert documents.extract("a.txt", text.encode("utf-16-le")) == text
+    assert documents.extract("a.txt", text.encode("utf-16-be")) == text
+    assert documents.extract("a.md", "Plain ASCII words".encode("utf-16-le")) == "Plain ASCII words"
+    assert documents.extract("a.txt", "Только кириллица".encode("utf-16-le")) == "Только кириллица"
+    assert refusal("a.txt", b"\xff\xfe" + "Привет".encode("utf-16-le") + b"\x00") == documents.UNREADABLE_TEXT
+    assert refusal("a.txt", b"A\x00B\x00C") == documents.UNREADABLE_TEXT           # нули, но не UTF-16
+    assert refusal("a.txt", bytes(16)) == documents.UNREADABLE_TEXT
+
+
 def test_scanned_pdf_is_explained():
     assert refusal("скан.pdf", pdf()) == "в PDF нет текстового слоя — это скан"
 

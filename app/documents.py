@@ -2,12 +2,14 @@
 
 - PDF — текстовый слой pypdf (страницы через пустую строку); без слоя — отказ «это скан».
 - DOCX — `word/document.xml` из zip: абзацы `w:p`, текст `w:t`.
-- TXT и MD — UTF-8 (BOM снимается), иначе cp1251.
+- TXT и MD — UTF-16 со знаком порядка байтов или по доле нулевых байтов (`_utf16`; не декодируется — отказ),
+  иначе UTF-8 (BOM снимается), иначе cp1251.
 - Имя и текст (и текст слоя каждой страницы PDF) — в NFC (`nfc`): иначе поиск не находит их по составным буквам.
 - Отказы — DocumentError со словами для человека; текст, имя файла и байты в журнал не идут:
   журнал pypdf (он пишет начало битого файла) приглушён.
 """
 import asyncio
+import codecs
 import io
 import logging
 import re
@@ -36,6 +38,8 @@ UNSUPPORTED = "поддерживаются PDF, DOCX, TXT, MD и фото PNG, 
 SCAN = "в PDF нет текстового слоя — это скан"
 BROKEN = "документ повреждён"
 TOO_LONG = "текст длиннее 2 млн знаков"
+UNREADABLE_TEXT = "текст файла не читается — сохраните его в кодировке UTF-8"
+UTF16_ZEROS = 0.3               # доля нулевых байтов в одной из позиций пары — признак UTF-16 без BOM
 
 logging.getLogger("pypdf").setLevel(logging.CRITICAL + 1)
 
@@ -185,7 +189,32 @@ def _docx(data: bytes) -> str:
     return "\n".join(paragraphs)
 
 
+def _utf16(data: bytes) -> "str | None":
+    """UTF-16 «Юникода» Блокнота: со знаком порядка байтов — по нему; без знака — если старших байтов пар
+    латиницы и кириллицы (00 и 04) в чётных или нечётных позициях больше доли UTF16_ZEROS (в UTF-8 и cp1251 их
+    нет). Не похоже — None; похоже, но не декодируется или с нулями внутри — отказ UNREADABLE_TEXT."""
+    if data[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+        codec = "utf-16"
+    else:
+        pairs = len(data) // 2 or 1
+        high, low = (sum(data[start::2].count(b) for b in (0, 4)) / pairs for start in (1, 0))
+        if max(high, low) < UTF16_ZEROS:
+            return None
+        codec = "utf-16-le" if high >= low else "utf-16-be"
+    try:
+        text = data.decode(codec)
+    except UnicodeDecodeError:
+        raise DocumentError(UNREADABLE_TEXT) from None
+    if "\x00" in text:
+        raise DocumentError(UNREADABLE_TEXT)
+    return text
+
+
 def _plain(data: bytes) -> str:
+    """UTF-16 (`_utf16`), иначе UTF-8 (BOM снимается), иначе cp1251."""
+    text = _utf16(data)
+    if text is not None:
+        return text
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
