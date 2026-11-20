@@ -80,7 +80,9 @@
   `auth.confirm_password(…, digest=…)`: пауза после `auth.LOCK_FAILS` неудач за 15 минут — по ключу
   `("pw", uid, digest сессии)`, а всех сессий учётки вместе — после `auth.PASSWORD_ACCOUNT_FAILS`. Чужая сессия (в том
   числе запертая: `/api/lock/password`) своими ошибками запирает только себя — владелец со своего устройства
-  подтверждает аварийный выход и смену пароля.
+  подтверждает аварийный выход и смену пароля. Пустой пароль — 422 `password` до счёта: забытое поле попытку не
+  тратит (иначе пять нажатий «Сохранить» запирали бы и отпирание верным паролем); страница с пустым полем запрос
+  не шлёт вовсе («Введите пароль учётки»).
 - Страница: шторка, экран блокировки, отметки и помощники passkey — `lock.js` (ставит `api.js` `hooks.locked`: 423
   ждёт отпирания и повторяется; цифровая панель PIN — по `pin`/`pin_left` `GET /api/lock`, набранные цифры только в
   памяти модуля; ответ не пришёл — перечитывает возвращение, таймер и «Открыть»). Вкладки одной сессии
@@ -125,14 +127,17 @@
   ссылки, `share_revoke` с `detail` all). Чужие строки не видны и не отзываются (404 / 204 без изменений).
 - `GET /api/me/security-events?before=` — журнал `security_events` (шаг 34; `kind` без CHECK, каскад от учётки).
   `security_log.record(user_id, kind, *, detail, digest, device, ip)`, виды — `security_log.KINDS`: вход, неверный
-  пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, отпирание и неудача
-  (password|pin|passkey), `pin_exhausted`, смена пароля, `session_end`, `emergency`, `pin_set`, `pin_delete`,
+  пароль известной учётки (`detail` login|bridge через `auth.check_password(source=)`), выход, при кодах входа —
+  `login_code_sent` (пароль верен, письмо ушло) и `login_code_fail` (неверный код; оба с `detail` login|bridge и
+  адресом), отпирание и неудача (password|pin|passkey), `pin_exhausted`, `screen_lock_on`, `screen_lock_off`,
+  `screen_lock_change` (область или таймер включённой блокировки изменились), смена пароля, `session_end` (`detail` —
+  признак завершённой сессии, страница показывает его начало), `emergency`, `pin_set`, `pin_delete`,
   `passkey_add`, `passkey_delete`, `password_reset`, `admin_grant`, `admin_revoke`, `share_create`, `share_revoke`, `share_pin_fail`,
   `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest),
   `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
   подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
   `agent_events.ip`. Хранение — `security_log.KEEP_SEC` (180 дней), `security_log.KEEP_MAX` (1000) строк на учётку.
-- Шумные неудачи `security_log.NOISY` (`login_fail`, `share_pin_fail`) сворачиваются в пределах
+- Шумные неудачи `security_log.NOISY` (`login_fail`, `login_code_fail`, `share_pin_fail`) сворачиваются в пределах
   `security_log.COLLAPSE_SEC` (3600) по виду, адресу, подробности и сессии: `count`, `first` (шаг 36), `created` —
   время последней; строка меняется на месте, id прежний (страницы `before=<id>` повтор не теряют); своя квота
   `security_log.NOISY_MAX` (200). `unlock_fail` не сворачивается. API и выгрузка

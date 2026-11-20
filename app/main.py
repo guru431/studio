@@ -207,8 +207,11 @@ app.include_router(ntfy.router)
 
 
 @app.exception_handler(RequestValidationError)
-async def invalid_request(_request: Request, _exc: RequestValidationError):
-    """Отказ в общем формате и без разбора полей: разбор FastAPI повторяет присланное, в том числе пароль."""
+async def invalid_request(_request: Request, exc: RequestValidationError):
+    """Отказ в общем формате и без разбора полей: разбор FastAPI повторяет присланное, в том числе пароль.
+    Исключение — неверный адрес почты (`email_accounts.BadEmail`): его слова свои, присланного в них нет."""
+    if any(isinstance((e.get("ctx") or {}).get("error"), email_accounts.BadEmail) for e in exc.errors()):
+        return JSONResponse({"detail": {"code": "email", "message": email_accounts.BAD_EMAIL}}, status_code=422)
     return JSONResponse({"detail": {"code": "invalid", "message": "неверные данные запроса"}}, status_code=422)
 
 

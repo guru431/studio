@@ -865,8 +865,9 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("click", "#delete-confirm"), ("wait", f"!document.querySelector('{rid}')"),
         # список разрешённых адресов
         ("type", "#allow-entry", "gw:4000"), ("click", "#allow-add"),
+        ("eval", "unsaved", "document.querySelector('#allow-status').textContent"),     # до «Сохранить»
         ("click", "#allowlist-save"),
-        ("wait", "document.querySelector('#allow-status').textContent.length > 0"),
+        ("wait", "document.querySelector('#allow-status').textContent.includes('gw:4000')"),
         ("eval", "nameRefused", "document.querySelector('#allow-status').textContent"),
         ("click", "#allow-list li[data-entry='gw:4000'] button"),
         ("type", "#allow-entry", entry), ("click", "#allow-add"),
@@ -884,6 +885,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert v["conn"] == ["через сервер", ["local-gemma-abl"]] and v["noCheck"]
     assert v["toggle"] == "Включить" and v["selfDelete"] is True and v["deleteLocked"] is True
     assert v["selfReset"] is True                  # свой пароль — в «Прочем», с текущим
+    assert v["unsaved"] == "Есть несохранённые изменения — нажмите «Сохранить»", v["unsaved"]
     assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]
     assert v["saved"] == ["10.77.1.15:4000", entry]
     assert not v["overflow"]
@@ -5396,6 +5398,41 @@ def test_lock_settings_add_list_and_remove_a_key(browser, live):
     v = r["values"]
     assert v["before"] is False and v["after"] is False
     assert any(name in v["row"] for name in KEY_NAMES) and "ещё не открывал" in v["row"], v["row"]
+    assert not problems(r), problems(r)
+
+
+def test_lock_settings_add_a_key_in_english(browser, live):
+    """Название ключа — код screenlock.NAMES: по-английски сенсорный не-телефон шлёт «Устройство», показ — «Device»."""
+    login = "lockeng"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("click", "#lock-enabled"), server_lock_is(True),
+        ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"),
+        ("wait", "document.querySelector('#passkey-add') && !document.querySelector('#passkey-add').hidden"),
+        ("click", "#passkey-add"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 1"),
+        ("eval", "name", "document.querySelector('#passkeys .passkey b').textContent")],
+        init="localStorage.setItem('studio-language', 'en')", **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["name"] in ("iPhone", "iPad", "Android", "Device"), r["values"]
+    assert not problems(r), problems(r)
+
+
+def test_lock_settings_do_not_send_an_empty_password(browser, live):
+    """Пустое поле пароля — подсказка без запроса: попытки пароля сессии не тратятся."""
+    login = "lockempty"
+    live.add_user(login)
+    note = "document.querySelector('#screen-lock-status').textContent"
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("click", "#lock-enabled"), server_lock_is(True),
+        ("eval", "spy", "window.sent = []; const real = window.fetch; window.fetch = (u, o) => {"
+                        " window.sent.push(String(u)); return real(u, o); }; true"),
+        ("click", "#lock-save"), ("eval", "save", note),
+        ("click", "#pin-set"), ("click", "#pin-save"), ("eval", "pin", note),
+        ("eval", "sent", "window.sent.filter(u => !u.includes('/api/lock/alive'))")], width=1280)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["save"] == "Введите пароль учётки" and v["pin"] == "Введите пароль учётки", v
+    assert v["sent"] == [], v["sent"]
     assert not problems(r), problems(r)
 
 

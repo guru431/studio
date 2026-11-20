@@ -88,7 +88,7 @@ async def enroll(request: Request):
         if not code:
             await email_accounts.login_code(uid, request, "", "bridge")
             raise HTTPException(428, {"code": "email_code", "message": "Введите код из письма и повторите пароль"})
-        email_accounts.bridge_code(uid, code)
+        email_accounts.bridge_code(uid, code, ip=ip)
     # без await после сверки учётки: ключ получает проверенная живая учётка
     key = security.new_token()
     agent_id = state.DB.execute("INSERT INTO agents(user_id, name, key_hash, created) VALUES (?, ?, ?, ?)",

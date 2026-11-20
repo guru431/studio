@@ -37,6 +37,13 @@ EMAIL_PATHS = frozenset({"/api/me", "/api/me/email", "/api/me/email/confirm"})
 EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}")  # после lower(); re.I сопоставил бы «ſ» и «ı» с s и i
 
 
+class BadEmail(ValueError):
+    """Отказ `email_address`: main.invalid_request отдаёт его слова (свои, без присланного), а не общие."""
+
+
+BAD_EMAIL = "Укажите корректный адрес электронной почты"
+
+
 def email_address(value: str) -> str:
     value = value.strip().lower()
     if (len(value) > 254 or not EMAIL_RE.fullmatch(value) or ".." in value
@@ -44,7 +51,7 @@ def email_address(value: str) -> str:
             or len(value.split("@")[0]) > 64
             or any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
                    for label in value.split("@")[-1].split("."))):
-        raise ValueError("Укажите корректный адрес электронной почты")
+        raise BadEmail(BAD_EMAIL)
     return value
 
 
@@ -179,19 +186,24 @@ async def login_code(uid: int, request: Request, next_: str, kind: str = "login"
     except BaseException:
         delete_token(token)
         raise
+    security_log.record(uid, "login_code_sent", detail=kind, ip=ip)     # пароль верен: знает ли его владелец — видно
     return token
 
 
-def check_code(token: str, code: str, kind: str = "login"):
+def check_code(token: str, code: str, kind: str = "login", *, ip: str | None = None):
     row = token_row(token, kind)
     state.DB.execute("UPDATE email_tokens SET attempts=attempts+1 WHERE digest=?", (row["digest"],))
     if not hmac.compare_digest(security.digest(token + ":" + code), row["secret_hash"]):
+        security_log.record(row["user_id"], "login_code_fail", detail=kind, ip=ip)
+        left = CODE_ATTEMPTS - row["attempts"] - 1
+        if left > 0:            # код ещё жив: набрать снова, а не начинать вход заново
+            raise HTTPException(400, {"code": "wrong_code", "message": "Неверный код", "left": left})
         raise invalid_token()
     delete_token(token)
     return row
 
 
-def bridge_code(uid: int, code: str) -> None:
+def bridge_code(uid: int, code: str, *, ip: str | None = None) -> None:
     row = state.DB.execute("SELECT t.*,u.pw_hash,u.email AS current_email FROM email_tokens t JOIN users u ON u.id=t.user_id"
                            " WHERE t.user_id=? AND t.kind='bridge' AND u.disabled=0 ORDER BY t.created DESC,t.rowid DESC LIMIT 1",
                            (uid,)).fetchone()
@@ -201,6 +213,7 @@ def bridge_code(uid: int, code: str) -> None:
     state.DB.execute("UPDATE email_tokens SET attempts=attempts+1 WHERE digest=?", (row["digest"],))
     supplied = hmac.digest(state.CFG.data_key.encode(), (row["digest"] + ":" + code).encode(), "sha256").hex()
     if not hmac.compare_digest(supplied, row["secret_hash"]):
+        security_log.record(uid, "login_code_fail", detail="bridge", ip=ip)
         raise invalid_token()
     state.DB.execute("DELETE FROM email_tokens WHERE user_id=? AND kind='bridge'", (uid,))
 
@@ -213,9 +226,11 @@ async def account_page(screen: str):
 
 
 def invitation(row) -> dict:
+    """Статус: принятое без учётки (`user_id` обнулило её удаление) — `deleted`, адрес можно пригласить снова."""
     return {"id": row["id"], "email": row["email"], "comment": row["comment"], "is_admin": bool(row["is_admin"]),
             "created": row["created"], "expires": row["expires"], "user_id": row["user_id"],
-            "status": ("accepted" if row["accepted"] is not None else "revoked" if row["revoked"] is not None else "failed" if not row["sent"]
+            "status": (("accepted" if row["user_id"] is not None else "deleted") if row["accepted"] is not None
+                       else "revoked" if row["revoked"] is not None else "failed" if not row["sent"]
                        else "expired" if row["expires"] <= clock.NOW() else "pending")}
 
 
@@ -286,8 +301,14 @@ async def comment(iid: str, body: CommentIn):
 
 @router.delete("/api/admin/invitations/{iid}", dependencies=[Depends(auth.require_admin)], status_code=204)
 async def revoke(iid: str):
-    if not state.DB.execute("UPDATE invitations SET revoked=?,token_hash=NULL WHERE id=? AND accepted IS NULL",
-                            (clock.NOW(), iid)).rowcount:
+    """Ожидающее приглашение отзывается (ссылка гаснет, строка — «Отозвано»); отозванное, просроченное,
+    неотправленное и принятое удалённой учёткой — удаляется вместе с адресом и комментарием. Живой учётки — 409."""
+    now = clock.NOW()
+    if state.DB.execute("UPDATE invitations SET revoked=?,token_hash=NULL WHERE id=? AND accepted IS NULL"
+                        " AND revoked IS NULL AND sent=1 AND expires>?", (now, iid, now)).rowcount:
+        return Response(status_code=204)
+    if not state.DB.execute("DELETE FROM invitations WHERE id=? AND (accepted IS NULL OR user_id IS NULL)",
+                            (iid,)).rowcount:
         raise HTTPException(409, {"code": "accepted", "message": "Приглашение уже принято или удалено"})
     return Response(status_code=204)
 
@@ -375,6 +396,15 @@ async def forgot(request: Request, tasks: BackgroundTasks):
     return {"message": "Если учётная запись найдена, на её почту отправлена ссылка восстановления."}
 
 
+@router.post("/account/reset/check")
+async def check_reset(request: Request):
+    """Ссылка восстановления жива? — до того, как человек дважды наберёт новый пароль (как `check_invite`)."""
+    data = await public_data(request)
+    throttle("reset-ip", auth.client_ip(request), 20, 900)
+    token_row(data.get("token", ""), "reset")
+    return {"ok": True}
+
+
 @router.post("/account/reset")
 async def reset(request: Request):
     data = await public_data(request)
@@ -402,15 +432,38 @@ async def complete_login(request: Request):
     data = await public_data(request)
     throttle("verify-code-ip", auth.client_ip(request), 30, 900)
     token = request.cookies.get(CHALLENGE_COOKIE, "")
-    row = check_code(token, data.get("code", ""))
+    row = check_code(token, data.get("code", ""), ip=auth.client_ip(request))
     response = auth.finish_login(row["user_id"], request, row["next"][1:], as_json=True)
     response.delete_cookie(CHALLENGE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
+
+
+def challenge_cookie(response: Response, token: str) -> None:
+    response.set_cookie(CHALLENGE_COOKIE, token, max_age=CODE_SEC, path="/", secure=True, httponly=True, samesite="lax")
+
+
+@router.post("/account/code/resend")
+async def resend_code(request: Request):
+    """«Отправить код ещё раз»: письмо не пришло. Cookie вызова — доказательство верного пароля этого браузера; новый
+    код заменяет прежний (тот гаснет), паузы — те же, что у входа (`login_code`). Вызов истёк или исчерпан — 400
+    `expired`: начать вход заново."""
+    await public_data(request)
+    throttle("verify-code-ip", auth.client_ip(request), 30, 900)
+    old = request.cookies.get(CHALLENGE_COOKIE, "")
+    row = token_row(old, "login")
+    token = await login_code(row["user_id"], request, row["next"][1:])
+    delete_token(old)
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    challenge_cookie(response, token)
     return response
 
 
 @router.post("/api/me/email")
 async def request_email(body: EmailIn, request: Request):
     uid = request.state.user.id
+    if state.DB.execute("SELECT 1 FROM users WHERE id=? AND email=?", (uid, body.email)).fetchone():
+        # своя же почта (поле заполнено ею) — не «уже используется» и без траты попытки из трёх
+        raise HTTPException(409, {"code": "same", "message": "Это и есть почта вашей учётки"})
     await auth.confirm_password(uid, body.password, "подтверждение почты", digest=request.state.digest)
     mail_ready()
     throttle("email-user", str(uid), 3, 900)        # до проверки занятости: 409 не даёт перебирать чужие адреса
@@ -477,5 +530,6 @@ async def email_codes(body: CodesIn, request: Request):
         raise HTTPException(409, {"code": "email", "message": "Сначала подтвердите почту"})
     state.DB.execute("UPDATE users SET email_codes=? WHERE id=?", (int(body.enabled), uid))
     state.DB.execute("DELETE FROM email_tokens WHERE user_id=? AND kind IN ('login','bridge')", (uid,))
-    security_log.record(uid, "email_codes_on" if body.enabled else "email_codes_off", digest=request.state.digest)
+    security_log.record(uid, "email_codes_on" if body.enabled else "email_codes_off", digest=request.state.digest,
+                        ip=auth.client_ip(request))
     return {"enabled": body.enabled}

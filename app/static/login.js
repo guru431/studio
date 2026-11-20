@@ -5,7 +5,8 @@
  * ни пришли — выход, аварийный выход, сессия кончилась или завершена с другого устройства. */
 (function () {
   try { sessionStorage.removeItem('studio-agent-drafts'); } catch (e) { /* хранилище закрыто — черновиков нет */ }
-  if (matchMedia('(hover: hover) and (pointer: fine)').matches) document.getElementById('login')?.focus();
+  var login = document.getElementById('login');     // после отказа логин уже набран (auth._login_page) — к паролю
+  if (matchMedia('(hover: hover) and (pointer: fine)').matches) (login && login.value ? document.getElementById('password') : login)?.focus();
   var next = document.getElementById('next');
   if (!next || !/^#\//.test(location.hash)) return;
   next.value = location.hash;

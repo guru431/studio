@@ -9,8 +9,18 @@ import re
 import state
 
 
+#: версии, замороженные браузерами в User-Agent: любой Mac — «Mac OS X 10_15_7» (Firefox — 10.15), iOS и iPadOS 26
+#: и новее — «OS 18_6». Число ничего не говорит — показывается только имя ОС.
+FROZEN = {"macOS": {"10.15", "10.15.7"}, "iOS": {"18.6"}, "iPadOS": {"18.6"}}
+
+
 def _version(value: str) -> str:
     return re.sub(r"(?:\.0)+$", "", value.replace("_", "."))
+
+
+def _os(name: str, match) -> str:
+    version = _version(match[1])[:32] if match else ""
+    return f"{name} {version}" if version and version not in FROZEN.get(name, ()) else name
 
 
 def describe(user_agent: str | None) -> tuple[str | None, str | None, str | None]:
@@ -34,7 +44,7 @@ def describe(user_agent: str | None) -> tuple[str | None, str | None, str | None
     if "iPhone" in ua or "iPad" in ua or "iPod" in ua or ("Macintosh" in ua and "Mobile/" in ua):
         model = "iPad" if "iPad" in ua or "Macintosh" in ua else "iPod" if "iPod" in ua else "iPhone"
         match = re.search(r"(?:CPU(?: iPhone)? OS|iPhone OS) ([\d_]+)", ua)
-        os = ("iPadOS" if model == "iPad" else "iOS") + (f" {_version(match[1])[:32]}" if match else "")
+        os = _os("iPadOS" if model == "iPad" else "iOS", match)
     elif "Android" in ua:
         match = re.search(r"Android[ /]([\d.]+)", ua)
         # Chromium с сокращённым UA сообщает фиксированные Android 10 и модель K.
@@ -55,7 +65,7 @@ def describe(user_agent: str | None) -> tuple[str | None, str | None, str | None
         os = "ChromeOS"
     elif "Macintosh" in ua or "Mac OS X" in ua:
         match = re.search(r"Mac OS X ([\d_]+)", ua)
-        os = "macOS" + (f" {_version(match[1])[:32]}" if match else "")
+        os = _os("macOS", match)
     elif "Linux" in ua:
         os = "Linux"
     return browser, os, model

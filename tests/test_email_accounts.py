@@ -166,6 +166,26 @@ def test_resend_rotates_link_comment_persists_and_revoke_is_final(studio, mail):
     assert listed[0]["status"] == "revoked" and listed[0]["comment"] == "Changed"
 
 
+def test_invitation_of_a_deleted_account_says_so_and_rows_can_be_removed(studio, mail):
+    """Принятое удалённой учёткой — `deleted`, не «Зарегистрирован»; строку без живой учётки можно удалить,
+    ожидающую — только отозвать (первое нажатие), принятую живой учёткой — нельзя."""
+    admin(studio)
+    invitation, secret = invite(studio, mail, is_admin=True, comment="About a person")
+    pending, _ = invite(studio, mail, email="pending@example.com")
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "friend", "password": PASSWORD}).status_code == 201
+    uid = state.DB.execute("SELECT id FROM users WHERE login='friend'").fetchone()[0]
+    assert studio.c.delete(f"/api/admin/invitations/{invitation['id']}").status_code == 409
+    assert studio.c.delete(f"/api/admin/users/{uid}").status_code == 200
+    listed = {x["id"]: x for x in studio.c.get("/api/admin/invitations").json()["items"]}
+    assert listed[invitation["id"]]["status"] == "deleted" and listed[invitation["id"]]["is_admin"] is True
+    assert studio.c.delete(f"/api/admin/invitations/{invitation['id']}").status_code == 204
+    assert studio.c.delete(f"/api/admin/invitations/{pending['id']}").status_code == 204
+    assert [x["status"] for x in studio.c.get("/api/admin/invitations").json()["items"]] == ["revoked"]
+    assert studio.c.delete(f"/api/admin/invitations/{pending['id']}").status_code == 204
+    assert studio.c.get("/api/admin/invitations").json()["items"] == []
+    assert studio.c.delete(f"/api/admin/invitations/{pending['id']}").status_code == 409
+
+
 @pytest.mark.parametrize("gone", ["deleted", "email_changed"])
 def test_accepted_invitation_of_a_gone_address_can_be_sent_again(studio, mail, gone):
     admin(studio)
@@ -471,8 +491,74 @@ def test_bridge_enrollment_also_requires_email_code(studio, mail):
     assert studio.c.post("/api/agent/enroll", json={**body, "code": one_time}).status_code == 400
 
 
+def test_security_log_sees_sent_and_wrong_codes_with_address(studio, mail):
+    """Знающий пароль подбирает код: в журнале учётки — «код отправлен» и свёрнутые неверные коды, с адресом."""
+    uid = make_user(studio, "owner")
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/account/code"
+    wrong = "000000" if code(mail) != "000000" else "111111"
+    for _ in range(3):
+        assert studio.c.post("/account/code", json={"code": wrong}).status_code == 400
+    body = {"login": "owner", "password": PASSWORD, "name": "Computer"}
+    assert studio.c.post("/api/agent/enroll", json=body).status_code == 428
+    assert studio.c.post("/api/agent/enroll", json={**body, "code": wrong}).status_code == 400
+    rows = [tuple(r) for r in state.DB.execute("SELECT kind,detail,count,ip IS NOT NULL FROM security_events"
+                                               " WHERE user_id=? ORDER BY id", (uid,))]
+    assert rows == [("login_code_sent", "login", 1, 1), ("login_code_fail", "login", 3, 1),
+                    ("login_code_sent", "bridge", 1, 1), ("login_code_fail", "bridge", 1, 1)]
+    state.DB.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
+    signin(studio, "owner")
+    assert studio.c.put("/api/me/email-codes", json={"enabled": True, "password": PASSWORD}).status_code == 200
+    assert state.DB.execute("SELECT kind, ip IS NOT NULL FROM security_events ORDER BY id DESC LIMIT 1").fetchone()[:] \
+        == ("email_codes_on", 1)
+
+
+def test_wrong_code_tells_attempts_left_and_resend_replaces_the_code(studio, mail):
+    uid = make_user(studio, "owner")
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    response = studio.c.post("/login", data={"login": "owner", "password": PASSWORD, "next": "#/settings"},
+                             follow_redirects=False)
+    assert response.headers["location"] == "/account/code"
+    first = code(mail)
+    wrong = "000000" if first != "000000" else "111111"
+    response = studio.c.post("/account/code", json={"code": wrong})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    assert response.json()["detail"]["left"] == accounts.CODE_ATTEMPTS - 1
+    assert studio.c.post("/account/code/resend", json={}).status_code == 204
+    again = code(mail)
+    assert len(mail) == 2
+    if again != first:
+        assert studio.c.post("/account/code", json={"code": first}).status_code == 400
+    response = studio.c.post("/account/code", json={"code": again})
+    assert response.status_code == 200 and response.json() == {"next": "/#/settings"}
+    studio.c.cookies.clear()
+    assert studio.c.post("/account/code/resend", json={}).status_code == 400        # без вызова — заново вход
+
+
+def test_reset_link_is_checked_before_the_new_password_is_typed(studio, mail):
+    make_user(studio, "owner")
+    assert studio.c.post("/account/reset/check", json={"token": "missing"}).status_code == 400
+    studio.c.post("/account/forgot", json={"login": "owner"})
+    secret = token(mail)
+    assert studio.c.post("/account/reset/check", json={"token": secret}).json() == {"ok": True}
+    studio.clock[0] += accounts.RESET_SEC
+    assert studio.c.post("/account/reset/check", json={"token": secret}).json()["detail"]["code"] == "expired"
+
+
+def test_bad_or_own_email_get_their_own_words_and_spend_no_attempt(studio, mail):
+    admin(studio)
+    response = studio.c.post("/api/me/email", json={"email": "user@localhost", "password": PASSWORD})
+    assert response.status_code == 422 and response.json()["detail"] == {"code": "email", "message": accounts.BAD_EMAIL}
+    for _ in range(4):
+        response = studio.c.post("/api/me/email", json={"email": "Owner@Example.com", "password": PASSWORD})
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "same"
+    assert studio.c.post("/api/me/email", json={"email": "new@example.com", "password": PASSWORD}).status_code == 200
+    assert studio.c.post("/api/admin/invitations", json={"email": "x@y"}).json()["detail"]["code"] == "email"
+
+
 @pytest.mark.parametrize("path,body", [("/account/forgot", {"login": "owner"}), ("/account/code", {"code": "123456"}),
-                                       ("/account/invite/accept", {"token": "secret"}), ("/account/reset", {"token": "secret"})])
+                                       ("/account/invite/accept", {"token": "secret"}), ("/account/reset", {"token": "secret"}),
+                                       ("/account/reset/check", {"token": "secret"}), ("/account/code/resend", {})])
 def test_public_account_posts_reject_foreign_origin_and_large_body(studio, path, body):
     assert studio.c.post(path, json=body, headers={"Origin": "https://foreign.example"}).status_code == 403
     assert studio.c.post(path, content=b"x" * (auth.LOGIN_BODY_MAX + 1)).status_code == 413
