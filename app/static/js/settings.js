@@ -55,6 +55,7 @@ const LABELS = { lustify: 'Lustify', flux: 'FLUX', wan: 'Wan', whisperx: 'Whispe
   fineview: 'FineView QW21', h3: 'H3 · DR34ML4Y', muse: 'Muse 3.5 Krea 2',
   'jib-moss': 'Jib Mix Moss V2', fineporn: 'FinePorn v5', 'moody-krea': 'Moody Krea v8' };
 const SEARCH_FROM = 8;
+const CLEANER_SECTIONS = ['chat', 'translate'];   // = sections.CLEANER: другие разделы Cleaner сервер не примет
 
 /** Подпись модели: короткие имена шлюза — словами, прочие — как есть. */
 export function modelLabel(id) {
@@ -1336,7 +1337,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     try {
       const items = (await api('GET', connBase)).items;
       first = !items.length;
-      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner));
+      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner)
+        && (!c.cleaner || CLEANER_SECTIONS.includes(s.id)));
     } catch (err) {
       say(note, words(err), 'error');
       return;
