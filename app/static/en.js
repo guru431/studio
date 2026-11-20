@@ -1305,6 +1305,7 @@ globalThis.StudioEnglish = Object.freeze({
   "ответ готов": "answer ready",
   "ответ не получился": "answer failed",
   "Отменить: {0}": "Cancel: {0}",
+  "Открыть: {0}": "Open: {0}",
   "Картинка · {0}": "Image · {0}",
   "Правка · {0}": "Edit · {0}",
   "Ролик · {0} с": "Video · {0} s",

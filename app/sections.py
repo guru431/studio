@@ -169,12 +169,18 @@ def _link_row(user_id: int, section: str, conn_id: int):
                             (user_id, section, conn_id)).fetchone()
 
 
+def accepts(conn: "connections.Connection") -> list[str]:
+    """Разделы, которые подключение принимает по виду (Cleaner — только CLEANER, s06 — S06_CATALOG, иначе
+    `connections.KINDS`); список разрешённых — отдельно (SERVER_ONLY). Страница по нему строит выбор «+ Адрес для раздела»."""
+    kinds = S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]
+    return [s for s in SECTIONS if s in kinds and (not conn.cleaner or s in CLEANER)]
+
+
 def check_link(conn: "connections.Connection", section: str) -> None:
-    """Может ли подключение участвовать в разделе: вид (Cleaner — только CLEANER) и, для раздела только
-    через сервер, список."""
-    if conn.cleaner and section not in CLEANER:
-        raise _bad("kind", "Cleaner поддерживает чат и перевод")
-    if section not in (S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]):
+    """Может ли подключение участвовать в разделе: вид (`accepts`) и, для раздела только через сервер, список."""
+    if section not in accepts(conn):
+        if conn.cleaner:
+            raise _bad("kind", "Cleaner поддерживает чат и перевод")
         if conn.s06:
             raise _bad("kind", "шлюз s06 поддерживает чат, перевод, расшифровку, сканы и голосовой ввод")
         raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")

@@ -48,7 +48,16 @@ self.addEventListener('notificationclick', (event) => {
       const url = new URL(w.url);
       return url.origin === self.location.origin && url.pathname === '/';
     });
-    if (studio) studio = await studio.navigate(target).catch(() => null);
+    if (studio) {
+      const moved = await studio.navigate(target).catch(() => null);
+      // окно без контроля работника (открыто жёсткой перезагрузкой) navigate отклоняет: не вторая вкладка, а фокус
+      // и адрес сообщением (jobs.js); новое окно — только если и фокус не удался (окна уже нет)
+      if (!moved && await studio.focus().then(() => true, () => false)) {
+        studio.postMessage({ jobs: href });
+        return;
+      }
+      studio = moved;
+    }
     if (!studio) {
       studio = await self.clients.openWindow(target);
       if (studio && studio.url !== target) studio = await studio.navigate(target).catch(() => studio);

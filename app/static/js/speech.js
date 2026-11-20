@@ -409,14 +409,14 @@ function build(view, ctx) {
     keep(body, items.map(paintItem));
   }
 
-  /* озвучить; «Новый чат» набранное не стирает (правка записи — возвращает свой черновик) */
+  /* озвучить; «Новый чат» набранное не стирает (правка записи — возвращает свой черновик) и черновик не трогает:
+   * поле остаётся на экране и под защитой от автоперезагрузки (draft.save — только при уходе из раздела) */
   fresh.addEventListener('click', () => {
     following += 1;
     endEdit();
     records.deselect();
     panel(false);
     error.textContent = '';
-    draft.save();
     paintList();
     paintView();
     text.focus();
