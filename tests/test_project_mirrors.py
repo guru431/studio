@@ -359,3 +359,133 @@ def test_discovery_respects_pin_and_links_only_a_present_unreserved_copy(studio,
     assert [item["name"] for item in discover()] == ["moved-away"]
     assert [(frame["op"], frame.get("passive")) for frame in second.requests[-2:]] == [
         ("open", True), ("mirror_candidates", True)]
+    # Открытие поиском копий — строка `open` истории подключений, как у явного входа.
+    opened = [e for e in client.get("/api/agents/events").json()["items"] if e["kind"] == "open"]
+    assert [e["agent_id"] for e in opened] == [right, left] and opened[0]["device"].startswith("браузер ")
+
+
+def test_transfer_survives_screen_lock_but_stops_on_logout_and_aborts_the_destination(studio, computers, monkeypatch):
+    """Передача начата незапертой сессией: блокировка экрана по таймеру (страница ушла с экрана) её не рвёт;
+    выход рвёт, копия остаётся прежней."""
+    import project_mirrors
+    source, first, second = computers
+    monkeypatch.setattr(project_mirrors, "CHUNK", 12)
+    make_user(studio, "owner")
+    left, _ = enroll(studio, name="Source")
+    right, _ = enroll(studio, name="Destination")
+    connect(studio, left, first)
+    connect(studio, right, second)
+    signin(studio, "owner")
+    client = studio.c
+    assert client.post(f"/api/code/agents/{left}/open", json={"pin": None}).status_code == 204
+    assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+    root = mirror.projects.list_roots(second.roots)[1]
+    url = f"/api/code/agents/{left}/projects/{pid(source.name)}/mirrors"
+    mid = client.post(url, json={"destination": right, "root": root["id"], "name": source.name}).json()["id"]
+    original = first._op_mirror_read
+    reads = []
+
+    def lock_on_first_read(req, events):
+        reads.append(req)
+        if len(reads) == 1:          # студия заперлась по таймеру посреди передачи
+            state.DB.execute("UPDATE users SET screen_lock = 1, screen_lock_sections = '[\"code\"]'")
+            state.DB.execute("UPDATE sessions SET seen = 0")
+        return original(req, events)
+    first._op_mirror_read = lock_on_first_read
+
+    def run():
+        plan = client.post(f"{url}/{mid}/compare").json()
+        assert client.post(f"{url}/{mid}/sync", json={"plan": plan["plan"]}).status_code == 202
+        async def finish():
+            if (task := project_mirrors.TRANSFERS.get(right)) is not None:
+                await task
+        client.portal.call(finish)
+        return project_mirrors.RESULTS[mid]
+
+    job = run()
+    assert len(reads) > 1 and job["state"] == "done", job
+    assert (Path(root["path"]) / source.name / "notes.txt").read_bytes() == b"original\n"
+    assert client.get(url).status_code == 423                         # страница по-прежнему заперта
+    state.DB.execute("UPDATE users SET screen_lock = 0")
+    (source / "notes.txt").write_bytes(b"changed after the first copy\n")
+    reads.clear()
+
+    def logout_on_first_read(req, events):
+        reads.append(req)
+        if len(reads) == 1:
+            state.DB.execute("DELETE FROM sessions")
+        return original(req, events)
+    first._op_mirror_read = logout_on_first_read
+    job = run()
+    assert job["state"] == "failed" and job["error"]["code"] == "closed", job
+    assert (Path(root["path"]) / source.name / "notes.txt").read_bytes() == b"original\n"
+
+
+def test_mirror_settings_sealed_with_a_former_key_can_still_be_listed_and_unlinked(studio, computers):
+    """Сменился `STUDIO_DATA_KEY`: список зеркал не падает 500 — строка с `reenter` без имени и папки; действия
+    с настройкой — 409 `reenter`; отвязать можно."""
+    from cryptography.fernet import Fernet
+    source, first, second = computers
+    make_user(studio, "owner")
+    left, _ = enroll(studio, name="Source")
+    right, _ = enroll(studio, name="Destination")
+    connect(studio, left, first)
+    connect(studio, right, second)
+    signin(studio, "owner")
+    client = studio.c
+    assert client.post(f"/api/code/agents/{left}/open", json={"pin": None}).status_code == 204
+    assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+    root = mirror.projects.list_roots(second.roots)[1]
+    url = f"/api/code/agents/{left}/projects/{pid(source.name)}/mirrors"
+    mid = client.post(url, json={"destination": right, "root": root["id"], "name": source.name}).json()["id"]
+    state.DB.execute("UPDATE project_mirrors SET location = ? WHERE id = ?",
+                     (Fernet(Fernet.generate_key()).encrypt(b'{"name":"x","folder":"y"}'), mid))
+    listing = client.get(url)
+    assert listing.status_code == 200
+    item, = listing.json()["items"]
+    assert item["reenter"] is True and item["name"] is None and item["folder"] is None
+    assert client.get(f"{url}/{mid}").json()["reenter"] is True
+    for method, suffix, body in (("POST", "/compare", None), ("PUT", "/exclude", {"exclude": []}),
+                                 ("POST", "/diff", {"path": "notes.txt"})):
+        response = client.request(method, f"{url}/{mid}{suffix}", **({"json": body} if body else {}))
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "reenter", suffix
+    assert client.delete(f"{url}/{mid}").status_code == 204
+    assert client.get(url).json() == {"items": []}
+
+
+def test_mirror_of_a_renamed_project_is_offered_and_relinked_to_the_new_project(studio, computers, monkeypatch):
+    """Папка проекта переименована — новый pid. Прежняя папка копии занята зеркалом старого pid: отказ `exists`
+    это называет (`elsewhere`), поиск копий показывает её с пометкой, `replace` перепривязывает одной транзакцией."""
+    source, first, second = computers
+    monkeypatch.setattr(mirror, "_repositories", lambda _: {"3" * 64})
+    make_user(studio, "owner")
+    left, _ = enroll(studio, name="Source")
+    right, _ = enroll(studio, name="Destination")
+    connect(studio, left, first)
+    connect(studio, right, second)
+    signin(studio, "owner")
+    client = studio.c
+    assert client.post(f"/api/code/agents/{left}/open", json={"pin": None}).status_code == 204
+    assert client.post(f"/api/code/agents/{right}/open", json={"pin": "2468"}).status_code == 204
+    root = mirror.projects.list_roots(second.roots)[1]
+    settings = {"destination": right, "root": root["id"], "name": source.name}
+    old_url = f"/api/code/agents/{left}/projects/{pid(source.name)}/mirrors"
+    old = client.post(old_url, json=settings)
+    assert old.status_code == 201, old.text
+    (Path(root["path"]) / source.name).mkdir()
+    moved = source.with_name("project-v2")
+    source.rename(moved)
+    first.source = moved
+    url = f"/api/code/agents/{left}/projects/{pid(moved.name)}/mirrors"
+    refused = client.post(url, json=settings)
+    assert refused.status_code == 409 and refused.json()["detail"]["elsewhere"] is True
+    assert client.get(url).json() == {"items": []}
+    found, = client.post(url + f"/discover?destination={right}").json()["devices"][0]["items"]
+    assert found["name"] == source.name and found["elsewhere"] is True
+    relinked = client.post(url, json={**settings, "existing": True, "replace": True})
+    assert relinked.status_code == 201, relinked.text
+    assert client.get(old_url).json() == {"items": []}
+    assert [item["id"] for item in client.get(url).json()["items"]] == [relinked.json()["id"]]
+    assert client.post(url + f"/discover?destination={right}").json()["devices"][0]["items"] == []
+    again = client.post(url, json={**settings, "replace": True})
+    assert again.status_code == 409 and "elsewhere" not in again.json()["detail"]

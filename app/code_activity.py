@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 import bridge
 import state
 import project_access
-from claude_code import _refuse, ask, own_agent
+from claude_code import _refuse, ask, open_without_pin, own_agent
 
 router = APIRouter(prefix="/api/code")
 SUMMARY_TIMEOUT = 5
@@ -61,9 +61,10 @@ async def session_activity(request: Request, aid: int, data: dict, *, passive: b
 
 @router.get("/activity")
 async def all_activity(request: Request):
-    """Сводка для значка раздела: только свои доступные компьютеры, PIN не открываем. Значок опрашивает её
-    из любого раздела — все просьбы фоновые и срок PIN компьютера не продлевают."""
-    agents = [dict(row) for row in state.DB.execute("SELECT id, has_pin FROM agents WHERE user_id = ? OR id IN"
+    """Сводка для значка раздела: только свои доступные компьютеры, PIN не открываем (компьютер без PIN
+    открывается со строкой `open` в истории подключений). Значок опрашивает её из любого раздела — все просьбы
+    фоновые и срок PIN компьютера не продлевают."""
+    agents = [dict(row) for row in state.DB.execute("SELECT id, name, user_id, has_pin FROM agents WHERE user_id = ? OR id IN"
         " (SELECT m.agent_id FROM project_members m JOIN agents a ON a.id = m.agent_id"
         " JOIN users u ON u.id = a.user_id WHERE m.user_id = ? AND u.disabled = 0) ORDER BY id",
         (request.state.user.id, request.state.user.id))
@@ -73,13 +74,8 @@ async def all_activity(request: Request):
         aid = agent["id"]
         try:
             async with asyncio.timeout(SUMMARY_TIMEOUT):
-                try:
-                    data = await ask(request, aid, "activity", quiet=True, passive=True)
-                except HTTPException as error:
-                    if error.detail.get("code") != "closed" or agent["has_pin"]:
-                        raise
-                    await ask(request, aid, "open", quiet=True, passive=True, pin=None)
-                    data = await ask(request, aid, "activity", quiet=True, passive=True)
+                data = await open_without_pin(
+                    request, agent, lambda: ask(request, aid, "activity", quiet=True, passive=True))
                 items = await session_activity(request, aid, data, passive=True)
             return {"aid": aid, "items": items}
         except (HTTPException, TimeoutError):

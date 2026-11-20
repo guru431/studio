@@ -14,7 +14,8 @@
   `409 closed` без приватного результата. PDF повторяет проверку после рендера.
 - Фоновые просьбы: заголовок страницы `X-Studio-Passive: 1` → `claude_code.ask(passive=True)` → `req.passive: true`
   (только мосту с `hello.passive_requests`; заголовок может лишь отказаться от продления PIN). `code_activity.all_activity`
-  всегда фоновый. Фоновые — опрос меток вкладок и Git в `code.js`, повторы `live` по таймеру и `#code-reload` в
+  всегда фоновый; компьютер без PIN он и поиск копий зеркала открывают сами (`claude_code.open_without_pin`) —
+  со строкой `open` истории подключений, как `POST …/open`. Фоновые — опрос меток вкладок и Git в `code.js`, повторы `live` по таймеру и `#code-reload` в
   `code-chat.js`, Git/сводка/лимиты после `done`.
 - Компьютер без канала — `409 offline` раньше проверки поддержки нестандартного таймера PIN.
 - `claude_code.live` без канала моста — не 409 `offline`, а SSE ожидания: `offline {wait: true}`, пинги, затем
@@ -130,7 +131,7 @@
   Push (спека 6.8): ключ VAPID (P-256) в `settings` `vapid` шифром `STUDIO_DATA_KEY` (`vapid_key`), тело — RFC
   8291 aes128gcm одной записью, подпись — JWT ES256, всё на `cryptography`; `GET/POST/DELETE /api/me/push`, флаг
   устройства `studio-push` (`settings.js`); адреса — только `push.HOSTS` («Правила»). Повод — `bridge._push`:
-  `ask` и `done`, только если чат никто не смотрит (`bridge.watching`); адресат — начавший ход: ход участника
+  `ask` и `done`, только если чат не смотрит сам адресат (`bridge.watching` по учётке очереди): адресат — начавший ход: ход участника
   совместного проекта (`bridge.initiated` до просьбы `turn`, в памяти) — ему, пока проект ему выдан (отозван —
   никому), иначе владельцу компьютера; страница снимает поток на
   `visibilitychange: hidden` и открывает `live` на `visible`; текст — «<имя компьютера> · <имя проекта>: <повод>»
