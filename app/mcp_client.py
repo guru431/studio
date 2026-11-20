@@ -327,7 +327,7 @@ class Tools:
             selected_row = state.DB.execute("SELECT mcp_ids FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
             if selected_row is None or session.sid not in json.loads(selected_row[0]):
                 raise refused("MCP выключен в этом диалоге")
-            args = json.loads(arguments)
+            args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""
             if not isinstance(args, dict):
                 raise refused("Неверные аргументы инструмента MCP")
             result = await session.rpc("tools/call", {"name": tool, "arguments": args})

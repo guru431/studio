@@ -146,6 +146,19 @@ def test_mcp_header_values_are_write_only_and_kept_by_null(studio):
         assert response.status_code == 422, (method, response.text)
 
 
+def test_mcp_only_chat_names_a_made_up_tool_and_calls_a_tool_without_arguments(studio):
+    """Только MCP, без «Интернета»: чужое имя — «инструмента нет», а не «Интернет выключен»; пустая строка
+    аргументов — вызов с {}."""
+    sid = add(studio); calls = mock(studio)
+    cid = new_chat(studio)
+    assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).status_code == 200
+    studio.gw.chat_script = [{'tool_calls': [('made_up_tool', '{}'), (f'mcp_{sid}_0', '')]}, ['Готово']]
+    assert sse(turn(studio, cid, 'Use tool'))[-1] == ('done', {'status': 'done'})
+    assert ('tools/call', {'name': 'lookup', 'arguments': {}}) in calls
+    assert messages(studio, cid)[1]['tools'] == [{'kind': 'unknown', 'error': 'модель вызвала инструмент, которого у неё нет'},
+                                                {'kind': 'mcp', 'server': 'Tools', 'tool': 'lookup'}]
+
+
 def test_disabled_mcp_server_can_be_checked_but_not_used(studio):
     sid = add(studio); calls = mock(studio)
     assert studio.c.put(f'/api/mcp/{sid}', json={'name': 'Tools', 'url': URL, 'enabled': False}).status_code == 200

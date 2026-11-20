@@ -935,6 +935,8 @@ class StreamTask:
                         if n >= CALLS_PER_ROUND else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
             elif n >= CALLS_PER_ROUND:
                 step = {"kind": kind, **web.asked(kind, c.arguments), "error": TOO_MANY}
+            elif kind == "unknown":                  # не инструмент «Интернета» и не MCP — не «Интернет выключен»
+                step = {"kind": kind, "error": web.NOT_OFFERED}
             elif not self.tools or not self._web_on():
                 self.tools = []
                 step = {"kind": kind, **web.asked(kind, c.arguments), "error": WEB_OFF}
