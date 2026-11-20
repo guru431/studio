@@ -7,7 +7,8 @@
 - У Cleaner профиля нет: 422 `cleaner`.
 - Параметры (`request_params`): `temperature`, `top_p`, `presence_penalty` — как есть; `max_tokens` — как
   `max_completion_tokens` у профиля `openai`; `top_k` нестандартен — у `openai` отбрасывается, у прочих — только
-  явно заданный. Отказ сервиса с именем отправленного параметра — слова `REFUSED` (`refusal`).
+  явно заданный. Отказ сервиса с именем отправленного параметра и признаком отказа (`REJECTED`) — слова
+  `REFUSED` (`refusal`).
 - Журнал — только id: ни текста, ни параметров, ни подсказок.
 """
 import json
@@ -27,6 +28,9 @@ TITLE_MAX = 80
 SUGGESTION_TEXT_MAX = 2000
 #: слова отказа сервиса по параметру профиля: {0} — имя отправленного параметра
 REFUSED = "подключение не принимает параметр «{0}» — уберите его в профиле подключения"
+#: признаки отказа по параметру в ответе 400 (в нижнем регистре): OpenAI, vLLM/pydantic, LiteLLM
+REJECTED = ("unknown", "unsupported", "unrecognized", "not supported", "extra fields not permitted",
+            "extra inputs are not permitted", "unexpected keyword")
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/connections")
@@ -138,8 +142,11 @@ def suggestions_of(conn: connections.Connection) -> list:
 
 
 def refusal(text: str, params: dict) -> "str | None":
-    """Слова отказа, если ответ 400 называет отправленный параметр профиля; иначе None."""
+    """Слова отказа, если ответ 400 называет отправленный параметр профиля вместе с признаком отказа
+    (`REJECTED`); иначе None. Одного имени мало: ошибка длины контекста vLLM называет `max_tokens`."""
     lowered = text.lower()
+    if not any(marker in lowered for marker in REJECTED):
+        return None
     return next((REFUSED.format(name) for name in params if name in lowered), None)
 
 
