@@ -19,6 +19,16 @@ TEMPLATES = {"deploy/install.sh", "deploy/studio-web.service",
 
 def settings(environ):
     replacements = []
+    media_fstype = environ.get("STUDIO_MEDIA_FSTYPE", "cifs")
+    if media_fstype not in {"cifs", "ext4", "xfs", "btrfs"}:
+        raise ValueError("Invalid STUDIO_MEDIA_FSTYPE")
+    if media_fstype != "cifs" and environ.get("STUDIO_RUNTIME") != "docker":
+        raise ValueError("Local media requires Docker")
+    replacements.append(("STUDIO_MEDIA_FSTYPE=cifs", "STUDIO_MEDIA_FSTYPE=" + media_fstype))
+    build_network = environ.get("STUDIO_BUILD_NETWORK", "default")
+    if build_network not in {"default", "host"}:
+        raise ValueError("Invalid STUDIO_BUILD_NETWORK")
+    replacements.append(("STUDIO_BUILD_NETWORK=default", "STUDIO_BUILD_NETWORK=" + build_network))
     for name, default in [("STUDIO_REMOTE_ROOT", "/opt/services/studio"),
                           ("STUDIO_MEDIA_DIR", "/mnt/storage/SharedData/studio"),
                           ("STUDIO_CERT_DIR", "/etc/letsencrypt/live/example.net")]:

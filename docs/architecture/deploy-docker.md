@@ -39,6 +39,9 @@ core dumps, ограничениями памяти и процессов. `web`
   CIFS монтируется с `soft,echo_interval=60` и правами uid/gid 10001. Его mount unit и SMB credentials
   — локальные настройки хоста. Новый пустой каталог вместо шары запрещён: entrypoint проверяет тип
   файловой системы до запуска приложения, installer проверяет ещё настоящую запись от uid 10001.
+- Для независимого экземпляра задайте `STUDIO_MEDIA_DIR` на локальный каталог с владельцем 10001:10001
+  и `STUDIO_MEDIA_FSTYPE=ext4` (или `xfs` / `btrfs` по типу его диска). Docker проверяет выбранный тип
+  при выкладке и при каждом запуске. Резервные копии в `backup/` тогда лежат на том же диске, что и медиа.
 - Секрет: `/etc/studio/studio.env`, `0600 root:root`; Docker читает `env_file`. При переносе копируется
   **прежний** `STUDIO_DATA_KEY` через защищённый поток. Смена ключа не является частью переноса.
   Необязательный сертификат Cleaner остаётся в `/usr/local/share/studio/`, только для чтения в контейнере.
@@ -86,6 +89,10 @@ STUDIO_PROXY_VHOST=/opt/services/studio/deploy/apache-vhost.conf
 STUDIO_CERT_DIR=/etc/letsencrypt/live/example.net
 STUDIO_APACHE_PORT=8443
 ```
+
+Если хост позволяет скачивать зависимости только через свою сеть, для сборки задайте
+`STUDIO_BUILD_NETWORK=host`. Настройка применяется к `docker build` и не меняет сеть
+запущенных контейнеров.
 
 `bash deploy/deploy.sh --prepare-only` доставляет HEAD, собирает образ и проверяет Compose без запуска
 приложения и переключения Apache. Обычный `bash deploy/deploy.sh` собирает образ до смены релиза,

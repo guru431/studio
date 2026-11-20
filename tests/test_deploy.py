@@ -662,6 +662,22 @@ def _bash():
     return None
 
 
+@pytest.mark.parametrize("configured,mounted,success", [
+    ("", "cifs", True), ("", "ext4", False),
+    ("ext4", "ext4", True), ("ext4", "cifs", False),
+])
+def test_docker_entrypoint_requires_the_configured_media_filesystem(configured, mounted, success):
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    script = ('findmnt() { if [ "$5" = /media ]; then printf "%s\\n" "$MOUNTED"; else echo ext4; fi; }; '
+              'entrypoint=$1; set -- true; . "$entrypoint"')
+    env = {**os.environ, "STUDIO_MEDIA_DIR": "/media", "STUDIO_MEDIA_FSTYPE": configured, "MOUNTED": mounted}
+    path = (DEPLOY / "docker/entrypoint.sh").as_posix()
+    result = subprocess.run([bash, "-c", script, "entrypoint-test", path], env=env, capture_output=True, timeout=20)
+    assert (result.returncode == 0) == success, result.stderr
+
+
 @pytest.mark.integration  # Launches Git and Bash to check the deployed wrapper.
 def test_pdf_chromium_wrapper_reaches_the_image_and_adds_the_offline_flags(tmp_path):
     """chat_exports.OFFLINE_BROWSER: in the image, executable, LF, and every md2pdf argument passed through."""
@@ -1019,6 +1035,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
            "STUDIO_URL": "https://studio.example.net",
            "STUDIO_PYTHON": Path(sys.executable).as_posix()}
     env.pop('STUDIO_MD2PDF_SOURCE', None)
+    env.pop('STUDIO_TLS_CERT', None)
     env['STUDIO_MACOS_SIGNING_IDENTITY'] = '0' * 40 if signed_pkg else ''
     wrapper = ('ssh() { printf "called\\n" >> "$PROBE/ssh-calls"; '
                'case "${*: -1}" in *"cat > "*"studio-agent.zip"*) cat > "$PROBE/bridge.zip" ;; '
@@ -1027,7 +1044,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
                '*"cat > "*"studio-agent-setup.sh"*) cat > "$PROBE/setup.sh" ;; '
                '*"tar -xf - -C "*) cat > "$PROBE/release.tar" ;; '
                '*) cat >/dev/null ;; esac; }; '
-               'curl() { printf 200; }; source "$0"')
+               'curl() { printf "%s\\n" "$@" > "$PROBE/curl-args"; printf 200; }; source "$0"')
 
     def deploy():
         # errors="replace": powershell.exe сборки EXE пишет в кодовой странице консоли, не UTF-8
@@ -1046,9 +1063,19 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     assert r.returncode == 1 and "незакоммиченные изменения" in r.stderr, r
     assert not (tmp_path / "ssh-calls").exists()
     subprocess.run([*git, "restore", "agent/studio_agent/limits.py"], check=True, timeout=20)
+    if signed_pkg:
+        certificate = tmp_path / "private CA.pem"
+        env["STUDIO_TLS_CERT"] = certificate.as_posix()
+        r = deploy()
+        assert r.returncode == 1 and "STUDIO_TLS_CERT" in r.stderr and not (tmp_path / "ssh-calls").exists()
+        certificate.write_text("CA fixture", encoding="ascii")
     r = deploy()
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "ssh-calls").is_file()
+    curl_args = (tmp_path / "curl-args").read_text(encoding="utf-8").splitlines()
+    expected_tls_args = ["--cacert", env["STUDIO_TLS_CERT"]] if signed_pkg else []
+    assert curl_args == [*expected_tls_args, "-sS", "-o", "/dev/null", "-m", "15", "-w", "%{http_code}",
+                         "https://studio.example.net/health"]
     assert (tmp_path / "setup.exe").read_bytes().startswith(b"MZ")
     assert (tmp_path / "setup.pkg").read_bytes() == b"xar!fixture"
     assert (tmp_path / "setup.sh").read_bytes().startswith(b"#!/")

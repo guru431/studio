@@ -42,6 +42,12 @@ if [ "$RUNTIME" = docker ]; then PARTS+=(.dockerignore); fi
 SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 -p "$PORT" "$HOST")
 
 die() { echo "deploy: $*" >&2; exit 1; }
+curl_tls=()
+if [ -n "${STUDIO_TLS_CERT:-}" ]; then
+    [ -f "$STUDIO_TLS_CERT" ] && [ -r "$STUDIO_TLS_CERT" ] && [ -s "$STUDIO_TLS_CERT" ] \
+        || die 'STUDIO_TLS_CERT must point to a readable CA file'
+    curl_tls+=(--cacert "$STUDIO_TLS_CERT")
+fi
 NEW_SECRET=0
 CREATE_ADMIN=0
 PREPARE=0
@@ -195,6 +201,7 @@ if [ "$RUNTIME" = docker ]; then
 fi
 
 echo "==> снаружи через Apache: $URL/health"
-code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$URL/health" || true)
+code=$(curl "${curl_tls[@]}" -sS -o /dev/null -m 15 -w '%{http_code}' "$URL/health") \
+    || die "не удалось проверить $URL/health"
 [ "$code" = 200 ] || die "$URL/health ответил ${code:-нет ответа}: vhost не подключён в apache2.conf или нет reload Apache"
 echo "==> готово: $URL/"

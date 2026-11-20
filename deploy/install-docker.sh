@@ -29,9 +29,10 @@ flock -n 9 || { echo 'studio: deployment already running' >&2; exit 1; }
 # This file contains validated nonsecret values rendered by render-profile.py. Compose reads them only
 # through --env-file: exported values would win over the previous release's file during rollback.
 STUDIO_MEDIA_DIR=$(sed -n 's/^STUDIO_MEDIA_DIR=//p' "$NEW/deploy/docker/host.conf")
+STUDIO_MEDIA_FSTYPE=$(sed -n 's/^STUDIO_MEDIA_FSTYPE=//p' "$NEW/deploy/docker/host.conf")
 [ -n "$STUDIO_MEDIA_DIR" ] || { echo 'studio: STUDIO_MEDIA_DIR missing in host.conf' >&2; exit 1; }
-[ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = cifs ] || {
-    echo 'studio: media is not mounted from CIFS' >&2; exit 1;
+[ "$(findmnt -n -o FSTYPE -T "$STUDIO_MEDIA_DIR")" = "${STUDIO_MEDIA_FSTYPE:-cifs}" ] || {
+    echo 'studio: media filesystem does not match the deployment profile' >&2; exit 1;
 }
 case "$(findmnt -n -o FSTYPE -T /var/lib)" in
     cifs|nfs|nfs4) echo 'studio: SQLite requires local storage' >&2; exit 1 ;;
@@ -67,6 +68,12 @@ image="studio:$version-$REVISION"
 # --pull: a newer base image (Debian and Python patches) replaces the cached one. REFRESH: the
 # first build of each ISO week reinstalls apt packages. --refresh-base: rebuild every layer now.
 build=(docker build --pull --build-arg "STUDIO_VERSION=$version" --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
+build_network=$(sed -n 's/^STUDIO_BUILD_NETWORK=//p' "$NEW/deploy/docker/host.conf")
+case "$build_network" in
+    ''|default) ;;
+    host) build+=(--network host) ;;
+    *) echo 'studio: invalid Docker build network' >&2; exit 1 ;;
+esac
 if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi
 "${build[@]}" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
 printf '\nSTUDIO_IMAGE=%s\n' "$image" >> "$NEW/deploy/docker/host.conf"
