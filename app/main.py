@@ -26,6 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import access
 import account
 import admin
 import agents
@@ -97,7 +98,8 @@ async def lifespan(_app):
     state.CFG = config.load()
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
-    chat_shares.seal()                           # снимки ссылок открытым текстом (до шага 37, откат) — шифром
+    access.forward()                             # ключи и включённость общего после отката на шаг 55 — обратно
+    chat_shares.seal()                          # снимки ссылок открытым текстом (до шага 37, откат) — шифром
     chat_shares.disown()                         # ссылки участников на чужие компьютеры (прежний код, откат) — прочь
     sections.adopt("translate", "chat")          # раз на базу: модели чата через сервер — в переводчик
     sections.retire_photo_models()
