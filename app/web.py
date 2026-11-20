@@ -137,7 +137,7 @@ def _exa_error(r: httpx.Response) -> str:
     if tag == "ROBOTS_FILTER_FAILED":
         return "сайт запрещает чтение (robots.txt)"
     if r.status_code == 401:
-        return "ключ Exa не подходит — проверьте в Настройках"
+        return BAD_KEY
     if r.status_code == 402:                         # NO_MORE_CREDITS
         return "Exa: баланс исчерпан (бесплатный обновится 1-го числа)"
     if r.status_code == 429:
@@ -146,6 +146,8 @@ def _exa_error(r: httpx.Response) -> str:
 
 
 async def _exa(key: str, path: str, body: dict) -> dict:
+    if not re.fullmatch(r"[\x20-\x7e]+", key):     # сохранён до проверки при записи: заголовок его не примет
+        raise ToolError(BAD_KEY)
     try:
         r = await state.HTTP.post(f"{EXA_URL}{path}", json=body, headers={"x-api-key": key},
                                   timeout=EXA_TIMEOUT_SEC)
@@ -373,6 +375,7 @@ async def youtube(url: str) -> dict:
 
 LABEL_MAX = 200
 NO_KEY = "ключ Exa не читается — введите его заново в Настройках"
+BAD_KEY = "ключ Exa не подходит — проверьте в Настройках"
 # к ошибке шага для модели: без него gemma-abl после «Exa недоступен» писала курс доллара «из интернета» в 12
 # прогонах из 12, с ним — 0 из 12 (проба 2026-10-22)
 NOTHING = ("Из интернета ничего не получено — не выдумывай данные и не пиши, что нашёл их; скажи пользователю, "
