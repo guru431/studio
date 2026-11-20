@@ -99,7 +99,7 @@ minor для возможностей, major для несовместимых �
 | Вход и защита | `auth`, `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities`, `access` (группы доступа к общему) | [connections](docs/architecture/connections.md) |
-| Чат | `chat`, `web`, `documents`, `cleaner_client`, `mcp_client` (подключения MCP), `mcp_sections` (инструменты MCP разделов) | [chat](docs/architecture/chat.md) |
+| Чат | `chat`, `web`, `documents`, `cleaner_client`, `mcp_client` (подключения MCP), `mcp_sources` (кэш каталогов MCP, пометки инструментов), `mcp_sections` (инструменты MCP разделов) | [chat](docs/architecture/chat.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports`, `chat_export_selection` | [sharing-export](docs/architecture/sharing-export.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history` | [media](docs/architecture/media.md) |
 | Речь (раздел «Озвучка», «Расшифровка», голосовой ввод) | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |

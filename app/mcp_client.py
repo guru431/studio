@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import httpx
 
 import access
+import mcp_sources
 import security
 import state
 import connections  # Загрузить Connection до upstream: его аннотации участвуют в цикле импорта.
@@ -30,6 +31,11 @@ MAX_TOOLS = 128
 MAX_BYTES = 1024 * 1024
 TIMEOUT = 30
 DISCOVER_SEC = 60                            # срок списка инструментов одного сервера в ходе чата
+PROMPTS_MAX = 32                             # подсказок сервера в каталоге
+PROMPT_TITLE_MAX = 120
+PROMPT_DESCRIPTION_MAX = 300
+PROMPT_ARGUMENTS_MAX = 16
+PROMPT_TEXT_MAX = 20_000                     # текст сообщений `user` из prompts/get
 PROTOCOL = "2025-06-18"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 HEADER = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
@@ -166,18 +172,21 @@ def detail_for(uid, sid):
 def update_for(uid, sid, body):
     values = _save_values(uid, body, row(uid, sid, own=True))
     state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=? WHERE id=? AND user_id IS ?", (*values, sid, uid))
+    mcp_sources.forget(sid)
     return public(row(uid, sid, own=True), uid)
 
 
 def delete_for(uid, sid):
     row(uid, sid, own=True)
     state.DB.execute("DELETE FROM mcp_servers WHERE id=? AND user_id IS ?", (sid, uid))
+    mcp_sources.forget(sid)
 
 
 async def check_for(uid, sid, *, actor=None):
     """«Проверить» — и выключенный сервер: проверить его до включения. `uid` — владелец (None — общий),
     `actor` — учётка, от чьего имени идёт запрос к общему серверу (`X-Studio-User`; администратор панели)."""
     session = Session(row(uid, sid, own=True), uid=uid if actor is None else actor, disabled_ok=True)
+    mcp_sources.forget(sid)
     try:
         tools = await session.tools()
         return {"tools": [t.get("name", "") for t in tools if isinstance(t, dict)]}
@@ -223,6 +232,8 @@ class Session:
         self.disabled_ok = disabled_ok       # только «Проверить»: ходы и разделы выключенный сервер не зовут
         self.session = None
         self.version = None
+        self.instructions = None             # правила сервера из initialize — как прислал, режет chat_system
+        self.capabilities = {}
         self.seq = 0
 
     def headers(self, *, rpc=True):
@@ -303,13 +314,27 @@ class Session:
     async def initialize(self):
         result = await self.rpc("initialize", {"protocolVersion": PROTOCOL, "capabilities": {},
                                                 "clientInfo": {"name": "Studio", "version": "1"}})
-        self.version = result.get("protocolVersion")
-        if self.version not in ("2024-11-05", "2025-03-26", PROTOCOL):
+        version = result.get("protocolVersion")
+        if version not in ("2024-11-05", "2025-03-26", PROTOCOL):
             raise refused("Версия протокола MCP не поддерживается")
-        await self.rpc("notifications/initialized", notification=True)
+        self.version = version
+        instructions = result.get("instructions")
+        self.instructions = instructions if isinstance(instructions, str) and instructions.strip() else None
+        capabilities = result.get("capabilities")
+        self.capabilities = capabilities if isinstance(capabilities, dict) else {}
+        try:
+            await self.rpc("notifications/initialized", notification=True)
+        except HTTPException:
+            self.version = None              # знакомство не завершено: `ensure` повторит его
+            raise
+
+    async def ensure(self):
+        """Знакомство один раз на сессию: при каталоге из кэша сессию знакомит первый вызов инструмента."""
+        if self.version is None:
+            await self.initialize()
 
     async def tools(self):
-        await self.initialize()
+        await self.ensure()
         tools, cursor, seen = [], None, set()
         while True:
             result = await self.rpc("tools/list", {"cursor": cursor} if cursor else {})
@@ -326,6 +351,43 @@ class Session:
                 raise refused("MCP вернул неверную страницу инструментов")
             seen.add(cursor)
 
+    async def prompts(self):
+        """Подсказки сервера (`prompts/list` с листанием): не больше PROMPTS_MAX, неверные пропускаются, длинные
+        подписи обрезаются."""
+        await self.ensure()
+        prompts, cursor, seen = [], None, set()
+        while True:
+            result = await self.rpc("prompts/list", {"cursor": cursor} if cursor else {})
+            batch = result.get("prompts")
+            if not isinstance(batch, list):
+                raise refused("MCP вернул неверный список подсказок")
+            prompts.extend(item for item in map(_prompt, batch) if item is not None)
+            cursor = result.get("nextCursor")
+            if len(prompts) >= PROMPTS_MAX or not cursor:
+                return prompts[:PROMPTS_MAX]
+            if not isinstance(cursor, str) or len(cursor) > 8192 or cursor in seen or not batch:
+                raise refused("MCP вернул неверную страницу подсказок")
+            seen.add(cursor)
+
+    async def prompt(self, name, args):
+        """Текст сообщений `user` подсказки (`prompts/get`), не длиннее PROMPT_TEXT_MAX."""
+        if (not isinstance(name, str) or not NAME.fullmatch(name) or not isinstance(args, dict)
+                or len(args) > PROMPT_ARGUMENTS_MAX
+                or any(not isinstance(k, str) or not NAME.fullmatch(k) or not isinstance(v, str)
+                       or len(v) > PROMPT_TEXT_MAX for k, v in args.items())):
+            raise refused("Неверные параметры подсказки MCP", "invalid", 422)
+        await self.ensure()
+        result = await self.rpc("prompts/get", {"name": name, "arguments": args})
+        messages = result.get("messages")
+        texts = [message["content"]["text"] for message in messages if isinstance(message, dict)
+                 and message.get("role") == "user" and isinstance(message.get("content"), dict)
+                 and message["content"].get("type") == "text" and isinstance(message["content"].get("text"), str)
+                 ] if isinstance(messages, list) else []
+        text = "\n\n".join(texts)[:PROMPT_TEXT_MAX]
+        if not text.strip():
+            raise refused("MCP вернул подсказку без текста")
+        return text
+
     async def close(self):
         if not self.session:
             return
@@ -336,6 +398,24 @@ class Session:
                     pass
         except (HTTPException, httpx.HTTPError, upstream.UpstreamRefused, TimeoutError, ValueError):
             pass
+
+
+def _text(value, limit):
+    return value.strip()[:limit] if isinstance(value, str) else ""
+
+
+def _prompt(item):
+    """Подсказка `prompts/list` в виде для каталога или None — неверное имя."""
+    if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not NAME.fullmatch(item["name"]):
+        return None
+    arguments = item.get("arguments")
+    arguments = [{"name": arg["name"], "description": _text(arg.get("description"), PROMPT_DESCRIPTION_MAX),
+                  "required": arg.get("required") is True}
+                 for arg in (arguments if isinstance(arguments, list) else [])
+                 if isinstance(arg, dict) and isinstance(arg.get("name"), str) and NAME.fullmatch(arg["name"])]
+    return {"name": item["name"], "title": _text(item.get("title"), PROMPT_TITLE_MAX),
+            "description": _text(item.get("description"), PROMPT_DESCRIPTION_MAX),
+            "arguments": arguments[:PROMPT_ARGUMENTS_MAX]}
 
 
 class Tools:
