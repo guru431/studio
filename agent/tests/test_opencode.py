@@ -59,10 +59,10 @@ class FakeRpc:
                 self.update(update, params["sessionId"])
             return self.config
         if method == "session/list":
-            return {"sessions": [
+            own = [] if self.factory.missing else [
                 {"sessionId": SESSION, "cwd": str(self.factory.project), "title": "Внешняя сессия",
-                 "updatedAt": "2026-01-01T12:00:00Z"},
-                {"sessionId": "ses_other", "cwd": str(self.factory.project / "other")}]}
+                 "updatedAt": self.factory.updated}]
+            return {"sessions": [*own, {"sessionId": "ses_other", "cwd": str(self.factory.project / "other")}]}
         if method == "session/prompt":
             self.update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Ответ"}})
             self.update({"sessionUpdate": "tool_call", "toolCallId": "step1", "title": "Shell",
@@ -88,6 +88,7 @@ class Factory:
         self.project = project
         self.calls, self.replies, self.clients, self.deleted, self.history = [], [], [], [], []
         self.missing = False
+        self.updated = "2026-01-01T12:00:00Z"
         self.prompted = asyncio.Event()
         self.ask = {"id": 91, "method": "session/request_permission", "params": {"sessionId": SESSION,
             "toolCall": {"title": "Shell", "rawInput": {"command": "git status"}}, "options": [
@@ -150,6 +151,32 @@ async def test_history_images_load_from_the_same_owned_session_and_release_the_r
     assert await runner.history_image(runner.project, CHAT, message["id"], 0) == PNG
     with pytest.raises(Refused, match="not_found"):
         await runner.history_image(runner.project, CHAT, "foreign", 0)
+    # открытым остаётся только общий процесс каталога (ревизии сессий), процессы чтения закрыты
+    assert all(client.closed for client in runner.fake.clients if client is not runner._catalog_rpc)
+
+
+async def test_history_pages_reuse_one_replay_until_the_session_revision_changes(runner):
+    """Страницы истории и поиск: один `opencode acp` и replay на ревизию сессии (`updatedAt`), не на каждую страницу."""
+    runner.aliases.put(runner.project, CHAT, SESSION)
+    runner.fake.history = [
+        {"sessionUpdate": "user_message_chunk", "messageId": f"u{n}", "content": {"type": "text", "text": f"вопрос {n}"}}
+        for n in range(5)]
+
+    def loads():
+        return sum(method == "session/load" for method, _ in runner.fake.calls)
+
+    first = await runner.history(runner.project, CHAT, None, 2)
+    second = await runner.history(runner.project, CHAT, first["start"], 2)
+    assert [m["text"] for m in second["items"]] == ["вопрос 1", "вопрос 2"] and second["total"] == 5
+    assert loads() == 1 and len(runner.fake.clients) == 2        # процесс каталога + один процесс чтения
+    runner.fake.history.append({"sessionUpdate": "user_message_chunk", "messageId": "u5",
+                                "content": {"type": "text", "text": "вопрос 5"}})
+    runner.fake.updated = "2026-01-01T12:05:00Z"                  # сессия изменилась — снова replay
+    assert (await runner.history(runner.project, CHAT, None, 2))["total"] == 6 and loads() == 2
+    runner.fake.missing = True                                    # сессию удалили — кэш не отвечает за неё
+    with pytest.raises(Refused, match="not_found"):
+        await runner.history(runner.project, CHAT, None, 2)
+    await runner.close()
     assert all(client.closed for client in runner.fake.clients)
 
 

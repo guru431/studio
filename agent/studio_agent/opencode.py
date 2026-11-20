@@ -11,7 +11,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import diffs, events, history_images, limits, mcp, opencode_events, opencode_rpc, sessions, store, timeline
+from . import (diffs, events, history_images, limits, mcp, metadata, opencode_events, opencode_rpc, sessions, store,
+               timeline)
 from .codex import same_project
 from .errors import Refused
 from .turns import Runner, _Ask
@@ -195,6 +196,7 @@ class OpenCodeRunner(Runner):
         self._catalog_rpc = None
         self._catalog_lock = asyncio.Lock()
         self._probe_lock = asyncio.Lock()
+        self._histories = metadata.HistoryIndex()  # replay сессии по ревизии `updatedAt`: страницы и поиск
 
     async def _connect(self, project):
         path = await asyncio.to_thread(self.find_opencode)
@@ -301,10 +303,51 @@ class OpenCodeRunner(Runner):
 
     async def close(self, final=False, hold=False):
         await super().close(final=final, hold=hold)
+        self._histories.clear()
         async with self._catalog_lock:
             if self._catalog_rpc is not None:
                 await self._catalog_rpc.disconnect()
                 self._catalog_rpc = None
+
+    @staticmethod
+    def _directories(row):
+        directories = row.get('additionalDirectories', [])
+        if not isinstance(directories, list) or not all(isinstance(p, str) and Path(p).is_absolute() for p in directories):
+            raise Refused('invalid')
+        return directories
+
+    @staticmethod
+    def _revision(row):
+        value = row.get('updatedAt') if row is not None else None
+        return value if isinstance(value, (str, int)) and not isinstance(value, bool) else None
+
+    async def _row(self, project, target):
+        """Строка `session/list` сессии через общий процесс каталога (как `chats`): ревизия `updatedAt` и каталоги
+        без запуска `opencode acp` на каждое чтение; не нашлась или сбой — None (чтение идёт прежним путём)."""
+        async with self._catalog_lock:
+            try:
+                if self._catalog_rpc is None:
+                    self._catalog_rpc = await self._connect(project)
+                cursor, seen = None, set()
+                for _ in range(100):
+                    page = await self._catalog_rpc.request(
+                        'session/list', {'cwd': str(project), **({'cursor': cursor} if cursor else {})})
+                    row = next((row for row in page.get('sessions', []) if row.get('sessionId') == target
+                                and same_project(row.get('cwd'), project)), None)
+                    if row is not None:
+                        return row
+                    cursor = page.get('nextCursor')
+                    if not cursor or cursor in seen:
+                        return None
+                    seen.add(cursor)
+            except BaseException as e:
+                if not (isinstance(e, opencode_rpc.RpcError) and not e.transport) and self._catalog_rpc is not None:
+                    await self._catalog_rpc.disconnect()
+                    self._catalog_rpc = None
+                if not isinstance(e, Exception):
+                    raise
+                log.info("OpenCode: ревизия истории: %s", type(e).__name__)
+        return None
 
     async def _load(self, rpc, project, target, directories=None):
         try:
@@ -315,9 +358,7 @@ class OpenCodeRunner(Runner):
                     row = next((row for row in page.get('sessions', []) if row.get('sessionId') == target
                                 and same_project(row.get('cwd'), project)), None)
                     if row is not None:
-                        directories = row.get('additionalDirectories', [])
-                        if not isinstance(directories, list) or not all(isinstance(p, str) and Path(p).is_absolute() for p in directories):
-                            raise Refused('invalid')
+                        directories = self._directories(row)
                         break
                     cursor = page.get('nextCursor')
                     if not cursor or cursor in seen:
@@ -352,12 +393,21 @@ class OpenCodeRunner(Runner):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
         if target is None:
             raise Refused("not_found", "нет такого чата")
-        rpc = await self._connect(project)
-        try:
-            await self._load(rpc, project, target)
-            items = await asyncio.to_thread(normalize, self._updates(rpc, target))
-        finally:
-            await rpc.disconnect()
+        # Replay всей сессии — отдельный процесс; его итог живёт до смены `updatedAt` (`metadata.HistoryIndex`), так что
+        # «более ранние» страницы и поиск по чатам не запускают `opencode acp` заново. Идущий здесь ход — без кэша.
+        key = (str(Path(project).resolve()), target)
+        row = await self._row(project, target)
+        before_revision = None if chat in self.live() else self._revision(row)
+        items = self._histories.get(key, before_revision)
+        if items is None:
+            rpc = await self._connect(project)
+            try:
+                await self._load(rpc, project, target, self._directories(row) if row is not None else None)
+                items = await asyncio.to_thread(normalize, self._updates(rpc, target))
+            finally:
+                await rpc.disconnect()
+            if before_revision is not None:
+                self._histories.put(key, before_revision, self._revision(await self._row(project, target)), items)
         total = len(items)
         end = min(before, total) if before is not None else total
         page = await asyncio.to_thread(sessions.fit, items[max(0, end - limit):end], budget=512 * 1024)
