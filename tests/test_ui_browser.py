@@ -5474,7 +5474,11 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
         ("click", "#sp-new"),
         ("wait", "!document.querySelector('.sp-text') && !document.querySelector('.sp-item[aria-current]')"),
         ("eval", "fresh", "({text: document.querySelector('#speech-text').value, count: document.querySelector('#speech-count').textContent, focused: document.activeElement.id, choices: [document.querySelector('#chip-model').value, document.querySelector('#chip-voice').value]})"),
-        ("type", "#speech-text", "Новая озвучка"), ("click", "#speech-go"),
+        # «Новый чат» с пустым полем не снимает с поля защиту от автоперезагрузки: набранное после — вето
+        set_value("#speech-text", ""), ("click", "#sp-new"),
+        ("type", "#speech-text", "Новая озвучка"),
+        ("eval", "veto", "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))"),
+        ("click", "#speech-go"),
         ("wait", "document.querySelector('.sp-item[data-state=done][aria-current=true]')"),
         ("eval", "rows", "document.querySelectorAll('.sp-item').length"),
         ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width < 760)
@@ -5482,6 +5486,7 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
     v = r["values"]
     # «Новый чат» не стирает набранное (04:F11): черновик остаётся в поле нового чата
     assert v["fresh"] == {"text": "Черновик", "count": "8 / 2000", "focused": "speech-text", "choices": v["choices"]}
+    assert v["veto"] is True
     assert v["rows"] == 2 and v["newVisible"] and v["fits"]
     assert not problems(r), problems(r)
 
