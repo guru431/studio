@@ -38,6 +38,7 @@ import mcp_client
 import media
 import operations
 import account_profile as profile
+import profiles
 import push
 import sections
 import security
@@ -688,3 +689,15 @@ async def put_mcp_access(sid: int, body: McpAccessIn):
         access.set_rule("mcp", sid, body.groups)
         access.set_tool_rules(sid, body.tools)
     return _mcp_access(sid)
+
+
+# ---- профиль общего подключения (profiles.py): текст и параметры видит только администратор ----
+
+@router.get("/shared/connections/{cid}/profile")
+async def get_shared_profile(cid: int):
+    return profiles.get(None, cid)
+
+
+@router.put("/shared/connections/{cid}/profile")
+async def put_shared_profile(cid: int, body: profiles.ProfileIn):
+    return profiles.put(None, cid, body)

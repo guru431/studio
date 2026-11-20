@@ -14,7 +14,8 @@
 - Прямое подключение проверяет браузер и присылает итог `PUT …/passport`: сервер проверяет форму
   (пределы), ставит своё время, `source: browser` и сам выводит возможности.
 - «Пробный ответ» (`POST …/probe`, браузером — полем `probes` того же PUT) — единственная тратящая проба:
-  одно короткое сообщение отмеченной модели чата не-srvllm подключения.
+  одно короткое сообщение отмеченной модели чата не-srvllm подключения, с параметрами профиля (profiles.py)
+  без его предела ответа; отказ 400 с именем параметра — слова `profiles.REFUSED`.
 - Журнал — только id и итог одним словом: ни адреса, ни моделей, ни слов сервиса.
 """
 import logging
@@ -28,6 +29,7 @@ from pydantic import BaseModel, Field
 import capabilities
 import clock
 import connections
+import profiles
 import sections
 import upstream
 
@@ -249,8 +251,10 @@ async def probe(conn, model: str) -> dict:
         raise HTTPException(409, {"code": "srvllm", "message": "у роли local-* пробного ответа нет: он занял бы карту srvllm"})
     _checked_model(conn, model)
     snap = connections.snapshot(conn)
-    body = {"model": model, "messages": [{"role": "user", "content": PROBE_TEXT}], "max_tokens": PROBE_TOKENS,
-            "stream": False}
+    # параметры профиля — кроме предела ответа: проба короткая всегда
+    params = {k: v for k, v in profiles.request_params(conn).items() if k not in ("max_tokens", "max_completion_tokens")}
+    body = {"model": model, "messages": [{"role": "user", "content": PROBE_TEXT}], **params,
+            "max_tokens": PROBE_TOKENS, "stream": False}
     start = clock.NOW()
     try:
         r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
@@ -270,8 +274,9 @@ async def probe(conn, model: str) -> dict:
         result = {"ok": False, "ms": None, "words": _down(e, PROBE_TIMEOUT_SEC).replace("не отвечает", "не ответила")}
     else:
         ms = _ms(start)
+        refused = profiles.refusal(r.text, params) if r.status_code == 400 else None
         result = {"ok": r.status_code == 200, "ms": ms,
-                  "words": f"ответила за {ms} мс" if r.status_code == 200 else _refusal(r)[:WORDS_MAX]}
+                  "words": f"ответила за {ms} мс" if r.status_code == 200 else (refused or _refusal(r))[:WORDS_MAX]}
     result |= {"at": clock.NOW(), "source": "server"}
     built = _with_probes(conn, snap, "server", {model: result})
     if not connections.save_passport(snap, built):

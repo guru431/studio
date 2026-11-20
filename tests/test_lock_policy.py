@@ -389,11 +389,14 @@ ROUTES = {
         # адрес, ключ и разделы подключения: правка увела бы переписку закрытого раздела на чужой сервер
         ("POST", "/api/connections"), ("DELETE", "/api/connections/{conn_id}"),
         ("PATCH", "/api/connections/{conn_id}"), ("POST", "/api/connections/{conn_id}/check"),
-        ("PUT", "/api/connections/{conn_id}/passport"), ("POST", "/api/connections/{conn_id}/probe")]},
+        ("PUT", "/api/connections/{conn_id}/passport"), ("POST", "/api/connections/{conn_id}/probe"),
+        ("PUT", "/api/connections/{conn_id}/profile"),
+        ("GET", "/api/admin/shared/connections/{cid}/profile"), ("PUT", "/api/admin/shared/connections/{cid}/profile")]},
     **{(m, p): "open" for m, p in [
         ("GET", "/api/agent/download"), ("DELETE", "/api/agent/enroll"), ("POST", "/api/agent/enroll"),
         ("WS", "/api/agent/link"), ("GET", "/api/agent/package"), ("GET", "/api/agent/linux-installer"),
         ("GET", "/api/connections"), ("GET", "/api/connections/{conn_id}/models"),
+        ("GET", "/api/connections/{conn_id}/profile"),
         ("POST", "/api/dictation"), ("GET", "/api/jobs"),
         ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/storage"),
         ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections")]},
