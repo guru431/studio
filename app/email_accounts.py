@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 import account_mail
 import auth
 import clock
+import db
 import account_profile as profile
 import security
 import security_log
@@ -309,8 +310,9 @@ async def accept_invite(request: Request):
     state.DB.execute("BEGIN")
     try:
         row = invite_row(token)
-        uid = state.DB.execute("INSERT INTO users(login,name,pw_hash,is_admin,created,email) VALUES (?,?,?,?,?,?)",
-                               (login, login, hashed, row["is_admin"], clock.NOW(), row["email"])).lastrowid
+        uid = state.DB.execute("INSERT INTO users(id,login,name,pw_hash,is_admin,created,email) VALUES (?,?,?,?,?,?,?)",
+                               (db.next_user_id(state.DB), login, login, hashed, row["is_admin"], clock.NOW(),
+                                row["email"])).lastrowid
         state.DB.execute("UPDATE invitations SET accepted=?,user_id=?,token_hash=NULL WHERE id=?",
                          (clock.NOW(), uid, row["id"]))
         state.DB.execute("COMMIT")
