@@ -56,7 +56,6 @@ export { modelLabel };     // подписи моделей — models.js; ра�
 
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
 const SEARCH_FROM = 8;
-const CLEANER_SECTIONS = ['chat', 'translate'];   // = sections.CLEANER: другие разделы Cleaner сервер не примет
 
 
 /* ---- модели прямого подключения ------------------------------------------------ */
@@ -1414,8 +1413,9 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     try {
       const items = (await api('GET', connBase)).items;
       first = !items.length;
-      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner)
-        && (!c.cleaner || CLEANER_SECTIONS.includes(s.id)));
+      // accepts — разделы, которые подключение примет по виду (sections.accepts): s06 в «Фото», OpenAI-совместимое
+      // в «Видео» и Cleaner вне чата и перевода в выборе не предлагаются
+      conns = items.filter((c) => !c.sections.includes(s.id) && (!cleaner || c.cleaner) && c.accepts.includes(s.id));
     } catch (err) {
       say(note, words(err), 'error');
       return;
