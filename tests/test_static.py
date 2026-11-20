@@ -160,9 +160,12 @@ def test_service_worker_shows_a_push_and_opens_it_like_a_job():
     # тот же tag (чат) — снова звук; без tag renotify бросил бы TypeError — только условно
     assert "...(tag ? { renotify: true } : {})" in sw and sw.count("renotify: true") == 1
     settings = (STATIC / "js" / "settings.js").read_text(encoding="utf-8")
-    # в localStorage — только флаг устройства, ни ключей, ни адреса подписки
-    assert re.findall(r"localStorage\.setItem\(([^,]+),", settings) == ["PUSH_KEY"]
-    assert "const PUSH_KEY = 'studio-push';" in settings and "userVisibleOnly: true" in settings
+    sync = (STATIC / "js" / "push-sync.js").read_text(encoding="utf-8")
+    # в localStorage — только флаг устройства по учётке ('1'), ни ключей, ни адреса подписки
+    assert "localStorage.setItem" not in settings and "import { pushFlag } from './push-sync.js';" in settings
+    assert re.findall(r"localStorage\.setItem\(([^)]+)\)", sync) == ["key, '1'", "key, '1'"]
+    assert "const PUSH_KEY = 'studio-push';" in sync and "const key = `${PUSH_KEY}:${me.id}`;" in sync
+    assert "userVisibleOnly: true" in settings
 
 
 def test_service_worker_resubscribes_when_the_browser_changes_the_push_subscription():

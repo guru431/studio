@@ -125,7 +125,10 @@
   `bridge.record('revoke')`, `bridge.drop`).
 - `GET /api/me/access` — «Доступы и ссылки»: выдачи проектов компьютеров учётки (участник, компьютер, проект; имя
   проекта — фоновой просьбой `projects` к мосту не дольше `account.ACCESS_NAMES_SEC`, иначе null; `missing` — папки
-  нет) и её ссылки «Поделиться» (срок, открытия, неверные PIN, без адреса ссылки). Отзыв одной —
+  нет) и её ссылки «Поделиться» (срок, открытия, неверные PIN, куда перейти — `chat_id` или `computer_id`/`project`/
+  `session_id`; без адреса ссылки). Адрес — только по «Копировать ссылку»: `GET /api/me/access/shares/<id>/link`
+  (`account.share_link`) расшифровывает `token_enc` лишь владельцу живой ссылки (чужая или истёкшая — 404, сменили
+  ключ данных — 409 `share_key`), ответ `no-store`, в журнал ничего. Отзыв одной —
   `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` (`project_access.revoke`, без моста) и
   `DELETE /api/me/access/shares/<id>`; `DELETE /api/me/access` — «Отозвать всё» (`project_access.revoke_all` и все
   ссылки, `share_revoke` с `detail` all). Чужие строки не видны и не отзываются (404 / 204 без изменений).

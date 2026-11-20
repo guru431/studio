@@ -38,6 +38,7 @@ import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
 import { ntfyBlock } from './ntfy-settings.js';
+import { pushFlag } from './push-sync.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { notifyEnabled, notifySupported, setNotify } from './jobs.js';
 import { addPasskey, FRESH_SEC, isTouch, passkeyOptions } from './lock.js';
@@ -763,10 +764,9 @@ function exaBlock() {
 }
 
 /* Push раздела «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8): подписка этого устройства —
- * строка сервера у сессии (GET/POST/DELETE /api/me/push), флаг устройства localStorage `studio-push` — только
- * '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет. Разрешение спрашивается первым
- * в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
-const PUSH_KEY = 'studio-push';
+ * строка сервера у сессии (GET/POST/DELETE /api/me/push), флаг устройства localStorage `studio-push:<id учётки>`
+ * (push-sync.js `pushFlag`) — только '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет.
+ * Разрешение спрашивается первым в обработчике нажатия (Safari без нажатия его не покажет), подписка — после него. */
 const DENIED = tr("Браузер запретил уведомления — разрешите их в настройках сайта");
 const NO_WORKER = tr("Фоновая служба студии в этом браузере не запустилась (частный режим?) — push здесь недоступен");
 const PUSH_READY_SEC = 10;       // служебный работник не зарегистрирован — ready не разрешится никогда
@@ -784,17 +784,6 @@ function ready() {
 
 function pushSupported() {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-}
-
-function pushFlag(on) {
-  try {
-    if (on === undefined) return localStorage.getItem(PUSH_KEY) === '1';
-    if (on) localStorage.setItem(PUSH_KEY, '1');
-    else localStorage.removeItem(PUSH_KEY);
-  } catch {
-    // хранилище недоступно: флажок покажет состояние сервера при следующем открытии
-  }
-  return false;
 }
 
 function permission() {
@@ -858,6 +847,7 @@ function pushBox() {
         pushFlag(false);
         say(note, tr("Push выключен на этом устройстве"));
       }
+      document.getElementById('push-restore')?.remove();   // плашка push-sync.js: выбор уже сделан здесь
     } catch (err) {
       box.checked = !on;
       say(note, err && err.name === 'NotAllowedError' ? DENIED : words(err), 'error');
