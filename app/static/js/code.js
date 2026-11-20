@@ -641,7 +641,7 @@ function sessions(mine, p, status) {
   p.chatBox.replaceChildren(picker);
   const listing = chatsOf(p, true);
   view = sessionList(picker, { aid: p.aid, pid: p.pid, items: p.loaded ? p.items : listing,
-    refresh: p.loaded ? listing : null, exclude: new Set(tabsOf(p.aid, p.pid).tabs),
+    refresh: p.loaded ? listing : null, reload: () => chatsOf(p, true), exclude: new Set(tabsOf(p.aid, p.pid).tabs),
     picked: (chat, row) => { if (row) p.info.set(chat, row); toChat(p, chat); },
     contentSearch: !!p.chatSearch,
     worktrees: !!p.worktrees,

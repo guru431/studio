@@ -8761,8 +8761,8 @@ def test_codex_new_chat_uses_its_catalog_and_permission_cards(browser, live):
 
 def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
     """Проект: «Новый чат» первой строкой, затем сессии в порядке сервера (открытые, затем закрытые) — название (без
-    него «Новый чат»), время, откуда сессия, «закрыт», «идёт ход», «ждёт ответа»; кнопок «Закрыть» нет. Нажатие на
-    закрытую — PATCH open, затем её чат."""
+    него «Новый чат»), время, откуда сессия, «закрыт», «идёт ход», «ждёт ответа»; у строки — «Закрыть» / «Открыть».
+    Нажатие на закрытую — PATCH open, затем её чат."""
     from fake_bridge import T0, pid
     login = "code-chats"
     live.add_user(login)
@@ -8785,7 +8785,7 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
             ("eval", "first", "!!document.querySelector('.code-session-picker .code-new-chat')"),
             ("eval", "views", "['#code-tab-chat', '#code-tab-files', '#code-tab-git'].map((s) => document.querySelector(s).textContent)"),
             ("eval", "rows", CODE_CHATS), ("eval", "fits", NO_OVERFLOW),
-            ("eval", "buttons", "document.querySelectorAll('#code-chats .code-chat-close, #code-chats .code-chat-reopen').length"),
+            ("eval", "buttons", "[...document.querySelectorAll('#code-chats .code-chat-state')].map((b) => b.textContent)"),
             ("click", f'#code-chats li[data-chat="{mine}"] .code-chat-link'),
             ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}/{mine}'"
                      f" && document.querySelector('#code-chat')?.dataset.chat === '{mine}'"),
@@ -8797,12 +8797,53 @@ def test_code_project_lists_sessions_and_reopens_a_closed_one(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["hash"] == f"#/code/{aid}/{pid('alpha')}" and v["fits"] is True
-    assert v["first"] is True and v["views"] == ["Чат", "Файлы", "Git"] and v["buttons"] == 0
+    assert v["first"] is True and v["views"] == ["Чат", "Файлы", "Git"]
+    assert v["buttons"] == ["Закрыть", "Закрыть", "Закрыть", "Открыть"]
     assert v["rows"] == [[other, "Новый чат", True, ["Claude Code", "VS Code или терминал"]],
                          [busy, "Сборка", True, ["Claude Code", "студия", "идёт ход"]],
                          [asking, "Тесты", True, ["Claude Code", "VS Code или терминал", "ждёт ответа"]],
                          [mine, "Починить вход", True, ["Claude Code", "студия", "закрыт"]]]
     assert v["tab"] == mine and v["reopened"] == "open"
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_session_rows_close_and_reopen(browser, live):
+    """Экран «+»: «Закрыть» у пустого «Нового чата» (записи студии без хода) убирает его из списка; у сессии машины —
+    переносит её вниз с «закрыт» и «Открыть»; «Открыть» возвращает её наверх, чат не открывая."""
+    from fake_bridge import T0, pid
+    login = "code-chat-close"
+    live.add_user(login)
+    old, recent = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+    machine = code_free_machine({
+        # раньше настоящих часов студии: пустая запись (её время — сейчас) — первой
+        recent: {"title": "Свежая", "created": T0 - 10**8, "modified": T0 - 10**8 + 40, "tag": "studio", "messages": []},
+        old: {"title": "Старая", "created": T0 - 10**8, "modified": T0 - 10**8 + 10, "tag": "studio", "messages": []}})
+    aid, sb = code_online(live, login, machine)
+    empty = f"(async () => (await {API}.api('POST', '/api/code/agents/{aid}/projects/{pid('alpha')}/chats')).chat)()"
+    rows = "[...document.querySelectorAll('#code-chats li[data-chat]')].map((li) => [li.querySelector('.code-chat-title')" \
+           ".textContent, li.classList.contains('closed'), li.querySelector('.code-chat-state').textContent])"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelector('#code-projects li[data-pid]')"), ("eval", "empty", empty),
+            *code_project(aid, "alpha"),
+            ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 3"),
+            ("eval", "before", rows),
+            ("click", "#code-chats li[data-chat]:first-child .code-chat-state"),
+            ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 2"),
+            ("click", f'#code-chats li[data-chat="{recent}"] .code-chat-state'),
+            ("wait", f"document.querySelector('#code-chats li[data-chat=\"{recent}\"]')?.classList.contains('closed')"),
+            ("eval", "closed", rows), ("eval", "fits", NO_OVERFLOW),
+            ("click", f'#code-chats li[data-chat="{recent}"] .code-chat-state'),
+            ("wait", f"!document.querySelector('#code-chats li[data-chat=\"{recent}\"]').classList.contains('closed')"),
+            ("eval", "reopened", rows), ("eval", "hash", "location.hash")], width=320, mobile=True)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == [["Новый чат", False, "Закрыть"], ["Свежая", False, "Закрыть"], ["Старая", False, "Закрыть"]]
+    assert v["closed"] == [["Старая", False, "Закрыть"], ["Свежая", True, "Открыть"]] and v["fits"] is True
+    assert v["reopened"] == [["Свежая", False, "Закрыть"], ["Старая", False, "Закрыть"]]
+    assert v["hash"] == f"#/code/{aid}/{pid('alpha')}"
     assert not known_refusals(problems(r), 409), problems(r)
 
 
