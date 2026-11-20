@@ -95,7 +95,7 @@ minor для возможностей, major для несовместимых �
 
 | Область | Модули | Подробно |
 |---|---|---|
-| Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `release` (версия Studio), `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
+| Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `release` (версия Studio), `i18n_words` (слова сервера по-английски для выгрузок, как `StudioI18n.message`), `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
 | Вход и защита | `auth`, `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities` | [connections](docs/architecture/connections.md) |

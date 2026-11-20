@@ -217,9 +217,10 @@ def test_english_exports_translate_speaker_labels_but_not_given_names(studio, fa
 
 
 def test_english_pages_translate_headings_and_marks_not_the_text():
-    """FINDINGS 05:F10: заголовки и пометки страниц — как у «Копировать» на английском (ocr.js), текст — как есть."""
+    """FINDINGS 05:F10: заголовки и пометки страниц — как у «Копировать» на английском (ocr.js), текст — как есть;
+    причина нераспознанной страницы — слова сервера, по-английски тем же словарём, что на странице."""
     assert exports.pages_md(PAGES, "en") == ("## Page 1\n\n# Заголовок\n\nТекст\n\n## Page 2\n\nСлой\n\n"
-                                             "## Page 3\n\n[not recognized: на странице не найден текст]\n\n"
+                                             "## Page 3\n\n[not recognized: no text found on page]\n\n"
                                              "## Page 4\n\n[empty page]\n")
     assert exports.pages_txt(PAGES, "en").startswith("Page 1\n\nЗаголовок")
     with zipfile.ZipFile(io.BytesIO(exports.pages_docx(PAGES, "Скан", "en"))) as z:
