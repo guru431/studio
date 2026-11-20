@@ -5306,6 +5306,22 @@ def test_lock_settings_add_list_and_remove_a_key(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_lock_settings_add_a_key_in_english(browser, live):
+    """Название ключа — код screenlock.NAMES: по-английски сенсорный не-телефон шлёт «Устройство», показ — «Device»."""
+    login = "lockeng"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*lock_settings(login),
+        ("click", "#lock-enabled"), server_lock_is(True),
+        ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"),
+        ("wait", "document.querySelector('#passkey-add') && !document.querySelector('#passkey-add').hidden"),
+        ("click", "#passkey-add"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 1"),
+        ("eval", "name", "document.querySelector('#passkeys .passkey b').textContent")],
+        init="localStorage.setItem('studio-language', 'en')", **PHONE)
+    assert not r.get("failed"), r
+    assert r["values"]["name"] in ("iPhone", "iPad", "Android", "Device"), r["values"]
+    assert not problems(r), problems(r)
+
+
 def test_add_key_is_absent_on_a_computer(browser, live):
     login = "lockpc"
     live.add_user(login)

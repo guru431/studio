@@ -496,7 +496,7 @@ function lockBlock() {
           }
           reload();
         });
-        return el('li', { class: 'passkey', 'data-id': k.id }, el('b', {}, k.name), el('span', { class: 'muted small' },
+        return el('li', { class: 'passkey', 'data-id': k.id }, el('b', {}, tr(k.name)), el('span', { class: 'muted small' },
           tr(" добавлен {0} · {1}", day(k.created), k.used ? tr("открывал {0}", day(k.used)) : tr("ещё не открывал"))), del);
       }) : [el('li', { class: 'muted small' }, tr("Ключей нет: запертую студию откроет пароль учётки"))]));
     } catch (err) {
