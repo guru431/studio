@@ -42,7 +42,9 @@
   `videos._connection`, `ocr.resume_queued`, release карты `ocr.lease_lost`, раннеры очередей озвучки и расшифровки;
   задания держат свой снимок подключения. Известное отступление: очередь перевода при перезапуске
   (`translate.resume_queued`) идёт через фильтр — ждущий перевод на закрытой модели после рестарта получает отказ
-  `translate.NO_CONNECTION`. API — `/api/admin/groups` и `/api/admin/shared/{connections,mcp}/{id}/access`; журнал —
+  `translate.NO_CONNECTION`. Второе: release карты после аварии снимка перевода (`translate.recover` →
+  `ocr.lease_lost(_photo_reader(...))`) ищет подключение «Сканов» через фильтрованное `sections.default` — если
+  его закрыли учётке, release не делается и слот ocr держится до срока аренды шлюза. API — `/api/admin/groups` и `/api/admin/shared/{connections,mcp}/{id}/access`; журнал —
   только id и числа, без имён групп и инструментов. Общие MCP и их инструменты — [chat](chat.md#mcp).
 - «+ Адрес для раздела» у видов «Шлюз srvllm» и «s06» — галочка «Добавить во все разделы этого шлюза»
   (отмечена, пока у учётки нет подключений; так же в зеркале панели): POST подключения с разделами вида
