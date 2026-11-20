@@ -285,6 +285,12 @@ def _confirmed(item):
         return False
 
 
+def _finished(item):
+    """Выпуск можно убирать: переход подтверждён (`complete`) или неудачный (`FAILED_RESULTS`) и уже сообщён студии
+    (`_update_reported`, `failed_update`) — иначе папки откатов и неудач копились бы в `releases/` без срока."""
+    return _confirmed(item) or (_result(item) in FAILED_RESULTS and _empty_regular(item / '_update_reported'))
+
+
 def _safe_tree(root):
     """Не удаляем даже саму ссылку/junction внутри выпуска; нечитаемое дерево также сохраняем."""
     pending = [root]
@@ -369,7 +375,7 @@ def _candidates(stage: Path, plan: dict, autostart: str | None = '', *, active=N
             identity = _identity(item) if RELEASE_NAME.fullmatch(item.name) else None
             if (identity is None or os.path.normcase(os.path.realpath(item)) in keep
                     or item.name.casefold() in active or os.path.normcase(str(item)) + os.sep in command
-                    or not (_confirmed(item) or _empty_regular(_intent(base, item, identity)))
+                    or not (_finished(item) or _empty_regular(_intent(base, item, identity)))
                     or not _safe_tree(item)):
                 continue
             intent = _intent(base, item, identity)

@@ -228,7 +228,8 @@ disconnect до освобождения хода. Вложения хода с 
 - Установщик: `install.ps1::Assert-BridgeStopped` находит `studio_agent.pyw` и в `releases\*`.
 - Самообновление: `update_helper.prune` после подтверждённого `complete` оставляет текущий выпуск и откатный
   (`old_repo`), не трогает всё вне управляемого `releases`, ссылки, неизвестные/активные выпуски и автозапуск;
-  частичная уборка повторяется по file id. `app.Controller._main` не зовёт `cli_version` до `_built`
+  частичная уборка повторяется по file id. С 0.42.0 убираются и выпуски неудачных переходов
+  (`update_helper.FAILED_RESULTS`), но только после того, как итог сообщён (`_update_reported`, `update_helper._finished`). `app.Controller._main` не зовёт `cli_version` до `_built`
   (метка готовности самообновления); версию задаёт
   `_refresh_cli` первого канала.
 - Эталон сервера: `FakeMachine.passive_requests` в `tests/fake_bridge.py`.
