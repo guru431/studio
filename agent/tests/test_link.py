@@ -157,6 +157,64 @@ async def test_turns_finished_without_link_are_sent_after_welcome_once(fake_stud
     await task
 
 
+def _ask(chat, request_id="r1", kind="permission"):
+    return {"t": "ev", "project": "0123456789abcdef", "chat": chat, "turn": "t1", "project_name": "demo",
+            "e": {"k": "ask", "request_id": request_id, "kind": kind, "tool": "Bash", "input": {}}}
+
+
+async def test_asks_opened_without_link_are_sent_after_welcome_only_to_a_studio_that_takes_them(fake_studio, agent):
+    """FINDINGS 07:F12: карточка, возникшая без канала, — в кадре `completions` со статусом вида карточки, только
+    если `welcome.pending_asks`; закрытая (`asked`) или сменённая концом хода — не досылается; прежней студии —
+    отбрасывается, конец хода — как раньше."""
+    clock = [100.0]
+    agent._now = lambda: clock[0]
+    other = "1b1e2c3d-4f50-4617-8899-aabbccddeeff"
+    third = "2b1e2c3d-4f50-4617-8899-aabbccddeeff"
+    agent.emit(_ask(CHAT))
+    agent.emit(_ask(other, "q1", "question"))
+    agent.emit({**_ask(other, "q1"), "e": {"k": "asked", "request_id": "q1"}})     # ответили до обрыва — закрыта
+    agent.emit(_ask(third))
+    agent.emit(_done(third))                                                      # ход кончился — только конец
+    clock[0] += 4
+    fake_studio.completions = True
+    lk, _, task = start(fake_studio, agent)                                       # без pending_asks
+    await fake_studio.connected()
+    await until(lambda: fake_studio.frames)
+    assert fake_studio.frames[0][1] == {"t": "completions", "items": [
+        {"project": "0123456789abcdef", "chat": third, "status": "done", "project_name": "demo", "ago": 4}]}
+    assert not agent._asks
+    await lk.stop()
+    await task
+    agent.emit(_ask(CHAT, "r2", "question"))
+    clock[0] += 2
+    fake_studio.pending_asks = True
+    lk, _, task = start(fake_studio, agent)
+    await fake_studio.connected(2)
+    await until(lambda: any(n == 1 for n, _ in fake_studio.frames))
+    assert next(f for n, f in fake_studio.frames if n == 1) == {"t": "completions", "items": [
+        {"project": "0123456789abcdef", "chat": CHAT, "status": "question", "project_name": "demo", "ago": 2}]}
+    assert not agent._asks
+    await lk.stop()
+    await task
+
+
+def test_unsent_asks_return_unless_the_chat_moved_on(agent):
+    clock = [50.0]
+    agent._now = lambda: clock[0]
+    other = "1b1e2c3d-4f50-4617-8899-aabbccddeeff"
+    agent.emit(_ask(CHAT))
+    agent.emit(_ask(other))
+    frame = agent.completions(asks=True)
+    assert [i["status"] for i in frame["items"]] == ["permission", "permission"]
+    agent.emit(_done(other))                                            # пока кадр не ушёл, ход кончился
+    clock[0] += 5
+    agent.missed(frame)
+    again = agent.completions(asks=True)["items"]
+    assert again == [{"project": "0123456789abcdef", "chat": other, "status": "done", "project_name": "demo", "ago": 5},
+                     {"project": "0123456789abcdef", "chat": CHAT, "status": "permission", "project_name": "demo",
+                      "ago": 5}]
+
+
 async def test_completions_survive_two_failed_writes(fake_studio, agent):
     attempts = []
 

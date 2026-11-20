@@ -354,6 +354,10 @@ async def export_chat(chat_id: str, body: ExportIn, request: Request):
 
 @router.post("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/export")
 async def export_agent_chat(aid: int, pid: str, session_id: str, body: ExportIn, request: Request):
+    claude_code.own_agent(request, aid)
+    claude_code.check_pid(pid)
+    claude_code.check_chat(session_id)
+
     async def check():
         claude_code.own_agent(request, aid)
         await claude_code.ask(request, aid, "history", project=pid, chat=session_id, before=None, limit=1)

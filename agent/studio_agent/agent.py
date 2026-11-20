@@ -23,6 +23,7 @@ SESSION = re.compile(r"[0-9a-f]{32}")
 VERSION = re.compile(r"[0-9a-f]{64}")
 TURN_TEXT_MAX = 100_000
 PIN_FIELD_MAX = 64
+ASK_KINDS = ("permission", "question")  # виды карточек, досылаемых после обрыва (протокол §18)
 
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
@@ -159,6 +160,8 @@ class Agent:
         self._now = now
         self._missed: dict[str, dict] = {}  # chat → конец хода, не ушедший в канал (протокол §18); только память
         self._sending: dict[str, dict] = {}  # последний кадр досылки: вернётся в `_missed`, если не уйдёт
+        self._asks: dict[str, dict] = {}  # chat → открытая карточка, возникшая без канала (§18, `welcome.pending_asks`)
+        self._sending_asks: dict[str, dict] = {}  # карточки последнего кадра досылки
 
     def set_max_turns(self, value: int) -> None:
         """Общий предел и пределы помощников меняются вместе, уже идущие задания продолжаются."""
@@ -228,30 +231,56 @@ class Agent:
 
     def missed(self, frame) -> None:
         """Кадр не ушёл в канал: конец хода запоминается для досылки после `welcome` (`completions`), по одному на
-        чат, не больше `limits.COMPLETIONS_MAX`; прочие кадры пропадают, как раньше."""
+        чат, не больше `limits.COMPLETIONS_MAX`; так же — открытая карточка (`ask`): последняя на чат, пока её не
+        закрыл `asked` или конец хода. Прочие кадры пропадают, как раньше."""
         if isinstance(frame, dict) and frame.get("t") == "completions":
-            # Кадр досылки не ушёл: его завершения (с прежним временем) — старше запомненных после него.
+            # Кадр досылки не ушёл: его завершения (с прежним временем) — старше запомненных после него; карточки —
+            # если чат с тех пор не дал новой карточки или конца хода.
+            done = [i for i in frame["items"] if i["status"] not in ASK_KINDS]
             older = {i["chat"]: self._sending.get(i["chat"], {**i, "at": self._now() - i["ago"]})
-                     for i in frame["items"] if i["chat"] not in self._missed}
+                     for i in done if i["chat"] not in self._missed}
             self._missed = {**older, **self._missed}
+            asks = {i["chat"]: self._sending_asks.get(i["chat"], {**i, "at": self._now() - i["ago"]})
+                    for i in frame["items"] if i["status"] in ASK_KINDS
+                    and i["chat"] not in self._missed and i["chat"] not in self._asks}
+            self._asks = {**asks, **self._asks}
         else:
             e = frame.get("e") if isinstance(frame, dict) and frame.get("t") == "ev" else None
-            if not isinstance(e, dict) or e.get("k") != "done" or e.get("status") not in ("done", "stopped", "error"):
+            if not isinstance(e, dict) or e.get("k") not in ("ask", "asked", "done"):
                 return
-            self._missed.pop(frame["chat"], None)
-            self._missed[frame["chat"]] = {
-                "project": frame["project"], "chat": frame["chat"], "status": e["status"],
-                **({"project_name": frame["project_name"]} if "project_name" in frame else {}), "at": self._now()}
+            chat = frame["chat"]
+            if e.get("k") == "asked":
+                if self._asks.get(chat, {}).get("request_id") == e.get("request_id"):
+                    del self._asks[chat]
+                return
+            place = {"project": frame["project"], "chat": chat,
+                     **({"project_name": frame["project_name"]} if "project_name" in frame else {}), "at": self._now()}
+            if e.get("k") == "ask" and e.get("kind") in ASK_KINDS:
+                self._asks.pop(chat, None)
+                self._asks[chat] = {**place, "status": e["kind"], "request_id": e.get("request_id")}
+                while len(self._asks) > limits.COMPLETIONS_MAX:
+                    self._asks.pop(next(iter(self._asks)))
+                return
+            if e.get("k") != "done" or e.get("status") not in ("done", "stopped", "error"):
+                return
+            self._asks.pop(chat, None)
+            self._missed.pop(chat, None)
+            self._missed[chat] = {"project": frame["project"], "chat": chat, "status": e["status"],
+                                  **({"project_name": frame["project_name"]} if "project_name" in frame else {}),
+                                  "at": place["at"]}
         while len(self._missed) > limits.COMPLETIONS_MAX:
             self._missed.pop(next(iter(self._missed)))
 
-    def completions(self) -> dict | None:
-        """Кадр досылки завершений (и забыть их) или `None`, если досылать нечего."""
-        if not self._missed:
+    def completions(self, *, asks: bool = False) -> dict | None:
+        """Кадр досылки завершений (и забыть их) или `None`, если досылать нечего. `asks` — студия принимает и
+        открытые карточки (`welcome.pending_asks`); иначе они отбрасываются: прежняя студия отбила бы весь кадр."""
+        pending = self._asks if asks else {}
+        self._sending_asks, self._asks = pending, {}
+        if not self._missed and not pending:
             return None
         now = self._now()
-        items = [{**{k: v for k, v in item.items() if k != "at"}, "ago": max(0, int(now - item["at"]))}
-                 for item in self._missed.values()]
+        items = [{**{k: v for k, v in item.items() if k not in ("at", "request_id")}, "ago": max(0, int(now - item["at"]))}
+                 for item in (*self._missed.values(), *pending.values())]
         self._sending, self._missed = self._missed, {}
         return {"t": "completions", "items": items}
 

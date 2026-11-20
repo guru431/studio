@@ -36,6 +36,14 @@ read-токен живёт только в памяти страницы, не �
   `expires`, `views`, `viewed`, `fails`; окно владельца показывает срок, открытия, последнее открытие, неверные PIN.
 - Рассуждение модели в ссылку по умолчанию не входит: `ShareIn.reasoning` (строгий bool, false);
   `chat_shares.regular_snapshot(uid, chat_id, reasoning=True)`. Агентский снимок рассуждения не содержит.
+- Агентский снимок (`chat_shares.agent_snapshot`): у шагов — имя, инструмент, ввод, вывод, ошибка и правки
+  (`changes`: путь и тексты правки, `chat_shares._changes`) — страница ссылки показывает их тем же диффом
+  `code-diff.js`, что «Агенты»; без id шагов. Порядок текста и шагов — `parts` из `timeline` моста
+  (`chat_shares._parts`, правила `code-chat.js` renderTimeline; неверный timeline — прежний показ «текст, затем
+  шаги»). Картинки истории мост отдаёт ссылкой `{index, name}`: ссылка «Поделиться» дочитывает их байты просьбой
+  `history_image` (`chat_shares._history_images`, мост с `hello.history_images`; не больше
+  `chat_shares.SHARE_IMAGES_MAX` (50), пока снимок не больше `chat_shares.MAX_SNAPSHOT`), не вошедшие — `{name,
+  missing: true}`, получатель видит «Изображение «…» в ссылку не вошло». Экспорт картинки у моста не читает.
 - Предел PIN: каждый неверный — журнал `share_pin_fail` (с адресом посетителя); начало 15-минутной паузы —
   `share_locked`/`pause`; после `chat_shares.FAILS_MAX` (50) неверных в сумме ссылка удаляется — `share_locked`/`revoked`,
   владельцу push и ntfy «Ссылка «Поделиться» отключена: 50 неверных PIN» (без содержимого). Число 50 дублировано в

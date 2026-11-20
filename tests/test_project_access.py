@@ -420,6 +420,35 @@ def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(stud
     assert studio.c.get("/api/agents").json() == {"items": []}
 
 
+def test_member_leaves_shared_projects_of_a_foreign_computer_without_the_bridge(studio):
+    """FINDINGS 07:F3: участник не может отозвать чужой компьютер, но сам покидает выданные проекты — все выдачи
+    этого компьютера, вкладки и место; след — в его журнале и в истории подключений владельца без его данных."""
+    aid, machine, _, member, base = share(studio)
+    owner_id = state.DB.execute("SELECT user_id FROM agents WHERE id = ?", (aid,)).fetchone()[0]
+    assert studio.c.post(url(aid, "projects", BETA, "members"), json={"login": "friend"}).status_code == 201
+    signin(studio, "friend")
+    assert studio.c.delete(f"/api/agents/{aid}").status_code == 404           # отозвать чужой — нельзя, как прежде
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    assert studio.c.patch("/api/code/workspace", json={"op": "open", "aid": aid, "pid": ALPHA, "chat": chat}).status_code == 200
+    before = len(machine.requests)
+    assert studio.c.delete(f"/api/me/access/shared/{aid}").status_code == 204
+    assert len(machine.requests) == before
+    for table in ("project_members", "code_member_tabs"):
+        assert state.DB.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
+    assert studio.c.get("/api/agents").json() == {"items": []}
+    assert studio.c.delete(f"/api/me/access/shared/{aid}").status_code == 404   # уже не участник
+    assert [r[0] for r in state.DB.execute("SELECT kind FROM security_events WHERE user_id = ?"
+                                           " AND kind LIKE 'project%'", (member,))] == ["project_leave"]
+    row = state.DB.execute("SELECT device, ip FROM agent_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                           (owner_id,)).fetchone()
+    assert tuple(row) == (claude_code.MEMBER, None)
+    assert state.DB.execute("SELECT kind FROM agent_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                            (owner_id,)).fetchone()[0] == "member_remove"
+    signin(studio, "owner")
+    assert studio.c.delete(f"/api/me/access/shared/{aid}").status_code == 404   # свой компьютер не «покинуть»
+    assert state.DB.execute("SELECT count(*) FROM agents").fetchone()[0] == 1
+
+
 def test_image_decode_rechecks_membership_before_sending_bytes(studio, monkeypatch):
     aid, machine, _, member, _ = share(studio)
     machine.projects["alpha"]["files"]["a.png"] = PNG_REAL

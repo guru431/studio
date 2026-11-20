@@ -494,12 +494,13 @@ async def open_agent(aid: int, body: Open, request: Request):
 async def open_without_pin(request: Request, agent, call):
     """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` —
     открыть его для сессии и повторить. Открытие пишет ту же строку `open` истории подключений, что `open_agent`:
-    след новой сессии не зависит от того, кто открыл компьютер первым. `agent` — строка с `id`, `name`,
-    `user_id`, `has_pin`."""
+    след новой сессии не зависит от того, кто открыл компьютер первым. Чужой компьютер участника совместного
+    проекта не открывается: `open` — только владельцу. `agent` — строка с `id`, `name`, `user_id`, `has_pin`."""
     try:
         return await call()
     except HTTPException as error:
-        if error.detail.get("code") != "closed" or agent["has_pin"]:
+        if (error.detail.get("code") != "closed" or agent["has_pin"]
+                or agent["user_id"] != request.state.user.id):
             raise
     await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, pin=None)
     _event(request, agent, "open")
@@ -973,18 +974,18 @@ async def chat_seen(aid: int, pid: str, chat: str, body: ChatSeen, request: Requ
     check_pid(pid)
     check_chat(chat)
     await agent_access(aid, request)
-    code_attention.seen(aid, pid, chat, body.attention)
+    code_attention.seen(aid, pid, chat, body.attention, request.state.user.id)
     return Response(status_code=204)
 
 
 @router.post("/agents/{aid}/projects/{pid}/seen", status_code=204)
 async def project_seen(aid: int, pid: str, body: ProjectSeen, request: Request):
-    """Как `chat_seen`, пачкой для одного проекта: свой компьютер, открытый PIN, CSRF (guard)."""
+    """Как `chat_seen`, пачкой для одного проекта: свой компьютер или выданный проект, открытый PIN, CSRF (guard)."""
     own_agent(request, aid)
     check_pid(pid)
     await agent_access(aid, request)
     for item in body.items:
-        code_attention.seen(aid, pid, item.chat, item.attention)
+        code_attention.seen(aid, pid, item.chat, item.attention, request.state.user.id)
     return Response(status_code=204)
 
 
