@@ -112,6 +112,17 @@ def test_original_name_never_controls_disk_path_and_empty_files_are_allowed(home
     assert not path.parent.exists()
 
 
+def test_model_hint_is_english_and_does_not_mix_languages_into_the_task(home):
+    """Подсказка адресована модели: английское задание не получает русского хвоста (аудит 09:F15)."""
+    files = attachments.Files()
+    try:
+        prompt = files.prompt("Summarize the attached file", [FILE])
+    finally:
+        files.cleanup()
+    assert prompt.startswith("Summarize the attached file\n\nAttached files are available on this computer")
+    assert not any("а" <= c.lower() <= "я" or c in "ёЁ" for c in prompt)
+
+
 def test_startup_sweep_removes_files_left_by_a_crashed_turn(home):
     """Мост упал посреди хода: вложения и открытый конфиг MCP с токенами не лежат на диске без срока."""
     from studio_agent import mcp
@@ -186,7 +197,7 @@ async def test_opencode_queued_attachment_lives_until_stop_and_unsent_has_no_loc
     await r.stop(r.pid, ENGINE_CHAT)
     await t.task
     assert not first.parent.exists() and not second.exists()
-    assert r.sent[-1]["e"]["unsent"] == [{"id": reply["id"], "text": "Следом\n[Вложений: 1]"}]
+    assert r.sent[-1]["e"]["unsent"] == [{"id": reply["id"], "text": "Следом\n[Attachments: 1]"}]
 
 
 async def test_other_window_cannot_write_steer_attachments(codex_runner, monkeypatch):
