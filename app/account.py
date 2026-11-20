@@ -133,7 +133,8 @@ async def emergency(body: Emergency, request: Request):
         # выдачи проектов её компьютеров — всегда: украденная сессия могла выдать доступ своей учётке
         grants = project_access.granted(uid)
         project_access.drop(grants)
-        for table in ("chat_shares", "push_subs", "ntfy_devices", "ntfy_settings", "sessions"):
+        # и почтовые ссылки и коды (смена почты, восстановление, код входа): чужой, знающий пароль, мог их запросить
+        for table in ("chat_shares", "push_subs", "ntfy_devices", "ntfy_settings", "email_tokens", "sessions"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))   # имена — из кода
         state.DB.execute("DELETE FROM chat_shares WHERE agent_id IN (SELECT id FROM agents WHERE user_id = ?)", (uid,))
         state.DB.execute("UPDATE users SET password_reset = NULL WHERE id = ?", (uid,))  # совет сброса исполнен

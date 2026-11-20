@@ -96,6 +96,25 @@ function usersBlock(host) {
     });
   }
 
+  function disable(user) {
+    const yes = button(tr("Отключить"), { class: 'btn btn-danger solid', id: 'disable-confirm' });
+    const fail = el('p', { class: 'error' });
+    const dialog = openDialog(host, { id: 'disable-dialog', title: tr("Отключить пользователя?"), actions: [yes], body: [
+      el('p', {}, tr("«{0}» выйдет из всех сессий; его генерации, ответы чата и ходы на компьютерах остановятся. История и привязка компьютеров сохранятся: после «Включить» мосты 0.42.0 и новее подключатся сами, прежние придётся привязать заново.", user.login)),
+      fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('PATCH', `/api/admin/users/${user.id}`, { disabled: true });
+        dialog.close();
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
   function remove(user) {
     const confirm = el('input', { class: 'input', name: 'confirm', autocomplete: 'off', autocapitalize: 'none',
       spellcheck: 'false' });
@@ -145,7 +164,7 @@ function usersBlock(host) {
           title: self ? tr("свой пароль — в «Настройках» → «Защита»") : null }, () => resetPassword(user)),
         button(user.disabled ? tr("Включить") : tr("Отключить"), { class: 'btn btn-sm user-toggle', disabled: self,
           title: self ? tr("себя отключить нельзя") : null },
-        () => act(api('PATCH', `/api/admin/users/${user.id}`, { disabled: !user.disabled }))),
+        () => user.disabled ? act(api('PATCH', `/api/admin/users/${user.id}`, { disabled: false })) : disable(user)),
         button(tr("Удалить"), { class: 'btn btn-sm btn-danger user-delete', disabled: self,
           title: self ? tr("себя удалить нельзя") : null }, () => remove(user)))));
   }

@@ -47,6 +47,9 @@ CLOSE_PROTOCOL = 4400
 CLOSE_AUTH = 4401
 CLOSE_REPLACED = 4409
 CLOSE_RESTART = 1012
+#: учётка отключена (не отзыв): мост с `hello.account_disabled` гасит ходы и переподключается с паузами — после
+#: «Включить» компьютер вернётся сам; прежнему мосту отключение — 4401, как прежде
+CLOSE_DISABLED = 4403
 EVENT_KINDS = frozenset({"text", "step", "result", "ask", "asked", "snapshot", "done", "settings", "context", "activity",
                          "input_accepted", "followup", "followup_sent", "followup_removed", "queue", "ownership",
                          "step_update", "progress"})
@@ -227,7 +230,7 @@ def parse_hello(frame: dict) -> dict:
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
-                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models"):
+                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -274,8 +277,8 @@ def parse_hello(frame: dict) -> dict:
 
 async def attach(link: Link) -> None:
     """Канал на связи: прежний канал компьютера закрывается 4409 (фоном — `welcome` новому сразу). Компьютер
-    отозвали или учётку отключили, пока шло знакомство, — 4401 и в `LINKS` его нет. `welcome` несёт логин
-    учётки компьютера — мост показывает, под кем он на связи."""
+    отозвали, пока шло знакомство, — 4401 и в `LINKS` его нет; учётка отключена (и до рукопожатия) —
+    `disabled_code`. `welcome` несёт логин учётки компьютера — мост показывает, под кем он на связи."""
     hello = link.hello
     row = state.DB.execute(
         "UPDATE agents SET has_pin = ?, cc_version = ?, projects_root = ?, last_seen = ?, platform = COALESCE(?, platform)"
@@ -284,8 +287,10 @@ async def attach(link: Link) -> None:
         (int(hello["has_pin"]), hello["cc_version"], hello["projects_root"], clock.NOW(),
          hello.get("platform"), link.agent_id)).fetchone()
     if row is None:
-        log.warning("агент %d: отозван до знакомства", link.agent_id)
-        await link.close(CLOSE_AUTH)
+        disabled = state.DB.execute("SELECT 1 FROM agents a JOIN users u ON u.id = a.user_id"
+                                    " WHERE a.id = ? AND u.disabled = 1", (link.agent_id,)).fetchone()
+        log.warning("агент %d: %s до знакомства", link.agent_id, "учётка отключена" if disabled else "отозван")
+        await link.close(disabled_code(link) if disabled else CLOSE_AUTH)
         return
     link.name = row["name"]
     old = LINKS.get(link.agent_id)
@@ -563,9 +568,16 @@ async def drop(agent_id: int, code: int = CLOSE_AUTH) -> None:
         _close_later(link, code)
 
 
-async def drop_user(user_id: int) -> None:
-    for agent_id in [x.agent_id for x in LINKS.values() if x.user_id == user_id]:
-        await drop(agent_id)
+def disabled_code(link: Link) -> int:
+    """Закрытие канала отключённой учётки: 4403, если мост его понимает (`hello.account_disabled`), иначе 4401 —
+    прежний мост на любом другом коде переподключался бы, не прервав ходов."""
+    return CLOSE_DISABLED if link.hello.get("account_disabled") else CLOSE_AUTH
+
+
+async def drop_user(user_id: int, *, disabled: bool = False) -> None:
+    """Каналы учётки — закрыть: удаление — 4401; отключение (`disabled`) — `disabled_code`."""
+    for link in [x for x in LINKS.values() if x.user_id == user_id]:
+        await drop(link.agent_id, disabled_code(link) if disabled else CLOSE_AUTH)
 
 
 async def stop() -> None:
@@ -614,8 +626,8 @@ async def link_socket(ws: WebSocket):
     header = ws.headers.get("authorization", "")
     row = None
     if header.startswith("Bearer ") and len(header) > len("Bearer "):
-        row = state.DB.execute("SELECT a.id, a.user_id, a.name FROM agents a JOIN users u ON u.id = a.user_id"
-                               " WHERE a.key_hash = ? AND u.disabled = 0",
+        # и отключённой учётки: код закрытия ей выбирает `attach` по `hello` (`disabled_code`)
+        row = state.DB.execute("SELECT a.id, a.user_id, a.name FROM agents a WHERE a.key_hash = ?",
                                (security.digest(header[len("Bearer "):]),)).fetchone()
     await ws.accept()
     if row is None:

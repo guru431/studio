@@ -16,7 +16,8 @@ from .app import TITLE, WORDS
 from . import host
 
 GREEN, GREY, YELLOW, RED = (47, 158, 111), (143, 143, 143), (232, 168, 26), (220, 38, 38)
-COLORS = {"online": GREEN, "connecting": GREY, "setup": GREY, "offline": YELLOW, "revoked": RED, "replaced": RED}
+COLORS = {"online": GREEN, "connecting": GREY, "setup": GREY, "offline": YELLOW, "disabled": YELLOW, "revoked": RED,
+          "replaced": RED}  # `disabled` без уведомления: повторяется на каждом переподключении, как `offline`
 SIZE = 64
 CANVAS = 512  # рисунок — в единицах viewBox студии
 DOT_R, DOT_RIM = 104, 26  # точка состояния и её белая обводка — в единицах CANVAS

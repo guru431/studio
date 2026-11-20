@@ -20,6 +20,11 @@ import { tr } from './i18n.js';
  * получившие 423 мимо api.js, грузятся заново. CSRF до профиля — из GET /api/lock; не пришёл
  * (холодный старт без связи) — отметка, подготовка входа и пароль берут его заново.
  *
+ * Вкладки одного браузера — одна сессия (cookie общая), а срок бездействия каждая считает сама: действие
+ * (не чаще раза в SHARE_MS) и отпирание идут остальным вкладкам через BroadcastChannel CHANNEL. Действие в
+ * одной продлевает локальный срок остальных — соседняя вкладка не запрёт сессию, в которой работают;
+ * «открыто» в другой вкладке снимает экран блокировки только после GET /api/lock «не заперто» (сервер решает).
+ *
  * iOS 16+: без PublicKeyCredential.parse*FromJSON и toJSON (они с iOS 18.4) — свои base64url.
  * navigator.credentials.* зовётся прямо в обработчике нажатия, без ожидания сети перед ним: Safari
  * иначе теряет «нажатие» и Face ID не показывает. Поэтому варианты (options) готовят заранее и
@@ -46,6 +51,8 @@ export const FRESH_SEC = 100;
 const PIN_MIN = 4;
 const PIN_MAX = 8;
 const PIN_WARN = 5;                    // с этого остатка подпись называет число попыток
+const CHANNEL = 'studio-lock';
+const SHARE_MS = 1000;
 const EXHAUSTED = tr("PIN не принимается после 10 ошибок — откройте паролем учётки");     // = screenlock pin_exhausted
 
 /** «осталась 1 попытка», «осталось 3 попытки», «осталось 5 попыток». */
@@ -156,6 +163,9 @@ let markedAt = 0;
 let checkedAt = Date.now();
 let idleTimer = null;
 let forgotten = false;   // данные защищённых разделов уже забыты за это истечение (forgetGuarded)
+let channel = null;      // BroadcastChannel вкладок этой сессии (нет — вкладка считает сама, как прежде)
+let sharedAt = 0;        // когда действие этой вкладки ушло остальным
+let adopting = false;    // идёт проверка «открыто в другой вкладке»
 let elsewhere;
 
 function visibleSection() {
@@ -289,7 +299,35 @@ function activity(event) {
     return;
   }
   activityAt = Date.now();
+  if (activityAt - sharedAt >= SHARE_MS) {
+    sharedAt = activityAt;
+    channel?.postMessage({ t: 'activity', at: activityAt });
+  }
   armIdle();
+}
+
+/** Сообщение другой вкладки: её действие продлевает и этот локальный срок; её отпирание открывает эту, если
+ * сервер подтверждает, что сессия не заперта (своё запирание в пути — `checking` — не перебивается). */
+async function onShared({ data }) {
+  if (!data || typeof data.at !== 'number') return;
+  if (!waiting) {
+    const at = Math.min(data.at, Date.now());
+    if (at > activityAt) {
+      activityAt = at;
+      armIdle();
+    }
+    return;
+  }
+  if (data.t !== 'opened' || checking || adopting) return;
+  adopting = true;
+  try {
+    const state = await lockState();
+    if (waiting && !checking && !state.locked) await opened(true);
+  } catch {
+    // нет связи — экран остаётся, отпирание обычным путём
+  } finally {
+    adopting = false;
+  }
 }
 
 /** До mount/update: защищённый раздел, включая сохранённые в памяти узлы, ждёт проверки сервера. */
@@ -523,11 +561,13 @@ function reloadMedia() {
   }
 }
 
-async function opened() {
+/** Отперто; `shared` — отпирание пришло из другой вкладки (`onShared`), остальным его не пересылать. */
+async function opened(shared = false) {
   const done = waiting;
   waiting = null;                      // до loadMe: его 423 начнёт новое ожидание, а не будет ждать это
   checkedAt = activityAt = Date.now();  // успешное отпирание — явное действие владельца
   markedAt = activityAt;
+  if (!shared) channel?.postMessage({ t: 'opened', at: activityAt });
   try {
     await loadMe();
   } catch {
@@ -751,6 +791,10 @@ export function installLock() {
   document.addEventListener('keydown', onKey);
   for (const event of ['pointerdown', 'pointermove', 'keydown', 'input', 'wheel']) document.addEventListener(event, activity, { passive: true, capture: true });
   document.addEventListener('visibilitychange', onVisibility);
+  if ('BroadcastChannel' in globalThis) {
+    channel = new BroadcastChannel(CHANNEL);
+    channel.addEventListener('message', onShared);
+  }
   document.addEventListener('play', stayQuiet, true);          // play не всплывает — ловим при погружении
   document.addEventListener('studio-me', () => {
     if (!guarded() && !waiting?.forced) {

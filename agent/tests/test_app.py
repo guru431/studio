@@ -104,9 +104,10 @@ def make(home):
               order=None, codex_factory=None, opencode_factory=None):
         links, probes, probe_paths, unenrolls = [], [], [], []
 
-        def link_factory(url, key, agent, on_state, on_welcome=None):
+        def link_factory(url, key, agent, on_state, on_welcome=None, on_disabled=None):
             welcome = welcomes[min(len(links), len(welcomes) - 1)] if welcomes else WELCOME
             links.append(FakeLink(url, key, agent, on_state, result, on_welcome, welcome, order))
+            links[-1].on_disabled = on_disabled
             return links[-1]
 
         def fake_unenroll(url, key):
@@ -637,6 +638,30 @@ def test_revoked_or_replaced_link_stops_running_turns(make, configured, root, mo
     assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
     until(lambda: not ctrl.agent.open._seen)                    # открытые сессии прочь
     assert len(ctrl.links) == 1
+
+
+def test_disabled_account_stops_running_turns_but_keeps_the_link(make, configured, root, monkeypatch):
+    """4403 (учётку отключили): ход прерван, открытые сессии прочь, как при отзыве, — но канал тот же и
+    переподключается сам, а новые ходы не держатся: после «Включить» компьютер работает без новой привязки."""
+    monkeypatch.setattr(sessions, "exists", lambda project, chat: False)
+    monkeypatch.setattr(sessions, "last_model", lambda project, chat: None)
+    monkeypatch.setattr(sessions, "mark_studio", lambda project, chat: None)
+    (root / "demo").mkdir()
+    chat, session = "0b1e2c3d-4f50-4617-8899-aabbccddeeff", "3b1e" * 8
+    sdk = FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()])
+    ctrl = make(sdk=sdk)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    sent = []
+    ctrl.agent.send = sent.append
+    ctrl._loop.call_soon_threadsafe(ctrl.agent.open.open, session)
+    ctrl._loop.call_soon_threadsafe(ctrl.runner.start, root / "demo", projects.pid("demo"), chat, "x", None, None)
+    until(lambda: dict(ctrl.runner.live()).get(chat))
+    asyncio.run_coroutine_threadsafe(ctrl.links[0].on_disabled(), ctrl._loop).result(15)
+    assert not ctrl.runner._turns and not ctrl.agent.open._seen and not ctrl.runner._closing
+    until(lambda: sent and sent[-1]["e"]["k"] == "done")
+    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
+    assert len(ctrl.links) == 1 and not ctrl.links[0].stopped
 
 
 def test_a_broken_config_starts_as_not_configured(make, home, caplog):

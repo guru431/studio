@@ -28,6 +28,7 @@ import account_mail
 import bridge
 import clock
 import connections
+import db
 import email_accounts
 import history
 import images
@@ -177,8 +178,9 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
     log.info("администратор %d: пользователь %d изменён (%s)", admin.id, uid,
              ", ".join(sorted(k if k != "pw_hash" else "password" for k in changes if k != "password_reset")) or "ничего")
     if body.disabled:
-        # мосты Claude Code — 4401; смена пароля их не рвёт: ключ устройства самостоятелен (спека 6.2)
-        await bridge.drop_user(uid)
+        # мосты — 4403 (вернутся после «Включить»; прежние — 4401); смена пароля их не рвёт: ключ устройства
+        # самостоятелен (спека 6.2)
+        await bridge.drop_user(uid, disabled=True)
         await history.stop_user(uid)          # отключённая учётка не держит карту и очередь шлюза
     return _user_out(uid)
 
@@ -196,6 +198,7 @@ async def _delete_user(uid: int, admin: auth.User):
     if not await images.settle_user(uid):
         log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)
     pending = media.pending(uid)          # после ожидания: и файлы заданий, отменённых в это время
+    db.retire_user_id(state.DB, uid)      # id не достанется следующей учётке вместе с хвостами этой
     state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))   # сессии и подключения — каскадом
     log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
              admin.id, uid, pending)
