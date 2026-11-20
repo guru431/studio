@@ -155,10 +155,94 @@ HTML_TAG = re.compile(
     r"span|strike|strong|sub|sup|table|tbody|td|tfoot|th|thead|tr|tt|u|ul|var|wbr)"
     r"(?:\s[^<>\n]*)?/?>", re.I)
 
+_SUP = str.maketrans("0123456789+-=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ")
+_SUB = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
+_SCRIPT = re.compile(r"<(sup|sub)\b[^<>\n]*>([^<>\n]*)</\1\s*>", re.I)
+_TABLE = re.compile(r"<table\b[^>]*>(.*?)</table\s*>", re.I | re.S)
+_CAPTION = re.compile(r"<caption\b[^>]*>(.*?)</caption\s*>", re.I | re.S)
+_TR = re.compile(r"<tr\b[^>]*>(.*?)</tr\s*>", re.I | re.S)
+_CELL = re.compile(r"<t[dh]\b([^>]*)>(.*?)</t[dh]\s*>", re.I | re.S)
+SPAN_MAX = 50                    # colspan/rowspan больше — разметка сломана или чужая: не раздувать текст
+_PIPE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$|^\s*\|\s*:?-{3,}:?\s*\|\s*$")
+_PIPE = re.compile(r"(?<!\\)\|")
+
+
+def _script(m: "re.Match") -> str:
+    """`m<sup>2</sup>` → «m²», `H<sub>2</sub>O` → «H₂O»; знаков индекса нет — `^(…)` / `_(…)`."""
+    table, mark = (_SUP, "^") if m.group(1).lower() == "sup" else (_SUB, "_")
+    inner = m.group(2).strip()
+    if inner and all(ord(c) in table for c in inner):
+        return inner.translate(table)
+    return f"{mark}{inner}" if len(inner) <= 1 else f"{mark}({inner})"
+
+
+def _span(attrs: str, name: str) -> int:
+    found = re.search(rf"\b{name}\s*=\s*[\"']?(\d+)", attrs, re.I)
+    return max(1, min(SPAN_MAX, int(found.group(1)))) if found else 1
+
+
+def _flat(cell: str) -> str:
+    """Ячейка одной строкой: перенос внутри — пробел, иначе строка таблицы распалась бы."""
+    return " ".join(re.sub(r"<br\s*/?>", " ", cell, flags=re.I).split())
+
+
+def _table(m: "re.Match") -> str:
+    """Таблица HTML — строки ячеек через табуляцию; объединённые ячейки (`colspan`, `rowspan`) — пустые места
+    по сетке, чтобы ячейки ниже и правее не съезжали; подпись (`caption`) — строкой над таблицей."""
+    body = m.group(1)
+    lines = [_flat(c.group(1)) for c in _CAPTION.finditer(body)]
+    below: dict[int, int] = {}       # столбец → сколько ещё строк его занимает ячейка сверху (rowspan)
+    for row in _TR.finditer(body):
+        out: list[str] = []
+
+        def fill_spanned() -> None:
+            while below.get(len(out), 0) > 0:
+                below[len(out)] -= 1
+                out.append("")
+
+        for cell in _CELL.finditer(row.group(1)):
+            fill_spanned()
+            cols, rows = _span(cell.group(1), "colspan"), _span(cell.group(1), "rowspan")
+            for k in range(cols):
+                if rows > 1:
+                    below[len(out)] = rows - 1
+                out.append(_flat(cell.group(2)) if k == 0 else "")
+        while any(n > 0 for c, n in below.items() if c >= len(out)):
+            if below.get(len(out), 0) > 0:
+                fill_spanned()
+            else:
+                out.append("")
+        lines.append("\t".join(out).rstrip("\t"))
+    return "\n" + "\n".join(lines) + "\n"
+
+
+def _pipes(text: str) -> str:
+    """Таблица Markdown (`| a | b |` и строка `|---|---|` под заголовком) — ячейки через табуляцию."""
+    lines = text.split("\n")
+    table = [False] * len(lines)
+    for i, line in enumerate(lines):
+        if i and _PIPE_RULE.match(line) and "|" in lines[i - 1]:
+            table[i - 1] = table[i] = True
+            j = i + 1
+            while j < len(lines) and "|" in lines[j] and lines[j].strip():
+                table[j] = True
+                j += 1
+    out = []
+    for line, inside in zip(lines, table):
+        if not inside:
+            out.append(line)
+        elif not _PIPE_RULE.match(line):
+            cells = _PIPE.split(line.strip().removeprefix("|").removesuffix("|"))
+            out.append("\t".join(c.strip().replace("\\|", "|") for c in cells).rstrip("\t"))
+    return "\n".join(out)
+
+
 def md_plain(md: str) -> str:
-    """Markdown модели — простым текстом: строка таблицы HTML — ячейки через табуляцию, прочие теги
-    убраны (`<br>` — перенос), сущности раскрыты; знаки заголовков, `**`, `__` и `` ` `` сняты."""
-    text = re.sub(r"<(?:table|thead|tbody|tfoot|tr|t[dh])\b[^>]*>\s*", "", md, flags=re.I)
+    """Markdown модели — простым текстом: таблица HTML и Markdown — строки ячеек через табуляцию (объединённые
+    ячейки — пустыми местами, `_table`), индексы `sup`/`sub` — знаками индекса, прочие теги убраны (`<br>` —
+    перенос), сущности раскрыты; знаки заголовков, `**`, `__` и `` ` `` сняты."""
+    text = _pipes(_TABLE.sub(_table, _SCRIPT.sub(_script, md)))
+    text = re.sub(r"<(?:table|thead|tbody|tfoot|tr|t[dh])\b[^>]*>\s*", "", text, flags=re.I)
     text = re.sub(r"\s*</t[dh]\s*>\s*", "\t", text, flags=re.I)
     text = re.sub(r"\t*</tr\s*>\s*", "\n", text, flags=re.I)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
@@ -184,10 +268,12 @@ def pages_md(pages: list[dict]) -> str:
     return "\n\n".join(f"## Страница {p['n']}\n\n{_page_body(p, str)}" for p in pages) + "\n"
 
 
-def _cells(line: str) -> str:
-    """Абзац DOCX: ячейки строки таблицы — через `<w:tab/>`."""
+def _cells(line: str, rtl: bool = False) -> str:
+    """Абзац DOCX: ячейки строки таблицы — через `<w:tab/>`; `rtl` — абзац справа налево (`w:bidi`, `w:rtl`)."""
     runs = "<w:tab/>".join(f'<w:t xml:space="preserve">{escape(CONTROL.sub(" ", cell))}</w:t>'
                            for cell in line.split("\t"))
+    if rtl:
+        return f"<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr>{runs}</w:r></w:p>"
     return f"<w:p><w:r>{runs}</w:r></w:p>"
 
 
@@ -199,12 +285,13 @@ def pages_docx(pages: list[dict], title: str) -> bytes:
     return _package(body)
 
 
-def text_docx(text: str, title: str, markdown: bool = True) -> bytes:
+def text_docx(text: str, title: str, markdown: bool = True, rtl: bool = False) -> bytes:
     """Перевод (спека 2026-10-28-studio-translator-design, 6.2): заголовок, затем абзац на строку — как
     pages_docx без страниц. Markdown распознавания (`markdown`) — через `md_plain` (строки таблиц — ячейки через
-    табуляцию); простой текст — как есть: `List<int>` и обратные кавычки остаются."""
+    табуляцию); простой текст — как есть: `List<int>` и обратные кавычки остаются. `rtl` — перевод на язык
+    письма справа налево (`translate_text.RTL`): абзацы текста — справа налево."""
     body = [_paragraph(title, bold=True, size=32)]
-    body += [_cells(line) for line in (md_plain(text) if markdown else text).split("\n") if line.strip()]
+    body += [_cells(line, rtl) for line in (md_plain(text) if markdown else text).split("\n") if line.strip()]
     return _package(body)
 
 

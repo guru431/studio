@@ -13,6 +13,7 @@ import pytest
 
 import clock
 import documents
+import exports
 import images
 import media
 import ocr
@@ -959,6 +960,12 @@ def test_docx_export_keeps_plain_text_and_strips_markdown_only_of_scans(studio):
     assert docx_lines(plain) == ["Тип `List<int>`, a < b > c, **жирно**"]
     scanned = wait_row(studio, file_job(studio, uid, conn, text="Type `List<int>`, **bold**", scan_id="0" * 32))["id"]
     assert docx_lines(scanned) == ["Тип List<int>, жирно"]    # `<int>` — не тег HTML: остаётся
+    # аудит 05:F7: txt перевода скана — тоже простым текстом (как txt того же скана в «Сканах»), md — как есть
+    assert studio.c.get(f"/api/translate/{plain}/export?format=txt").text == "Тип `List<int>`, a < b > c, **жирно**"
+    assert studio.c.get(f"/api/translate/{scanned}/export?format=txt").text == "Тип List<int>, жирно"
+    r = studio.c.get(f"/api/translate/{scanned}/export?format=md")
+    assert r.text == "Тип `List<int>`, **жирно**" and r.headers["content-type"] == exports.TYPES["md"]
+    assert r.headers["content-disposition"] == media.disposition("Договор.ru.md")
 
 
 def test_export_gives_txt_and_docx_named_by_language(studio):
@@ -978,9 +985,19 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
         "Договор", "Первая строка.", "Вторая строка."]
     assert studio.c.get(f"/api/translate/{tid}/export?format=pdf").status_code == 422
 
+    assert "bidi" not in ElementTree.tostring(root, encoding="unicode")
+
     text = wait_row(studio, start(studio, "Hello."))["id"]
     r = studio.c.get(f"/api/translate/{text}/export?format=txt")
     assert r.headers["content-disposition"] == media.disposition("Перевод.ru.txt")
+
+    # аудит 05:F13: перевод на арабский — абзацы текста справа налево, заголовок-имя — как есть
+    studio.gw.chat_script = [["مرحبا."]]
+    arabic = wait_row(studio, start(studio, "Hello.", target="ar"))["id"]
+    r = studio.c.get(f"/api/translate/{arabic}/export?format=docx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        paragraphs = list(ElementTree.fromstring(z.read("word/document.xml")).iter(f"{w}p"))
+    assert [p.find(f"{w}pPr/{w}bidi") is not None for p in paragraphs] == [False, True]
     held = hold_chat(studio)
     running = start(studio, "Hello again.")
     r = studio.c.get(f"/api/translate/{running}/export?format=txt")

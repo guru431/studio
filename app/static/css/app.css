@@ -577,6 +577,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tl-source-text, .tl-output { flex: 1; min-height: 94px; max-height: calc(25 * var(--dvh)); overflow: auto; white-space: pre-wrap;
   overflow-wrap: anywhere; line-height: 1.45; }
 .tl-output:empty::before { content: attr(data-placeholder); color: var(--text-2); }
+.tl-output.md { white-space: normal; }
 .tl-state { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 .tl-state:has(.tl-status:empty):not(:has(.btn:not([hidden]))) { display: none; }
 .tl-status { display: inline-flex; align-items: center; gap: var(--space-4); margin: 0; overflow-wrap: anywhere; }
@@ -955,7 +956,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .hljs .hljs-addition { color: var(--code-addition); background-color: color-mix(in srgb, var(--success) 12%, transparent); }
 .hljs .hljs-deletion { color: var(--code-deletion); background-color: color-mix(in srgb, var(--danger) 12%, transparent); }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; }
-.md th, .md td { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); text-align: left; }
+.md th, .md td { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); text-align: start; }
 .md :is(th, td)[align="center"] { text-align: center; }
 .md :is(th, td)[align="right"] { text-align: right; }
 .md img { max-width: 100%; border-radius: var(--r-control); }

@@ -38,8 +38,9 @@ await Promise.all([['marked', 'marked.min.js'], ['DOMPurify', 'purify.min.js'], 
   }));
 
 const COPIED_MS = 1500;
+// sup, sub, caption, b, i, u — из HTML распознавания (m², H₂O, подпись таблицы); marked их сам не пишет
 const TAGS = ['a', 'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre',
-  'blockquote', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img'];
+  'blockquote', 'ul', 'ol', 'li', 'table', 'caption', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'sup', 'sub', 'b', 'i', 'u'];
 const ATTRS = ['href', 'title', 'alt', 'src', 'class', 'start', 'align'];
 const LANG = /^language-[\w+#-]+$/;
 const BR = /^<br\s*\/?>$/i;     // единственный тег из ответа модели, что остаётся тегом

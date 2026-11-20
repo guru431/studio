@@ -1969,6 +1969,7 @@ globalThis.StudioEnglish = Object.freeze({
   " · облако": " · cloud",
   "Определить язык": "Detect language",
   "Определить язык · {0}": "Detect language · {0}",
+  "Исходник уже на языке перевода — переведено на {0}": "The source is already in the target language, so it was translated into {0}",
   "исходник ещё готовится…": "source is being prepared…",
   "Имя модели нельзя передать заголовком — выберите другую": "Model name cannot be sent in a header. Choose another model",
   "Введите текст": "Enter text",
