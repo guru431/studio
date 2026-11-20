@@ -7671,12 +7671,19 @@ def test_translate_keeps_typed_text_while_a_record_is_open(browser, live, transl
         ("click", "#tl-new"),
         ("eval", "fresh", f"[{field}, {TL_OUTPUT}, {REFRESH_VETO}]"),
         ("click", "#tl-new"),
-        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]")])
+        ("eval", "cleared", f"[{field}, {REFRESH_VETO}]"),
+        # удалённая открытая запись: её исходник уходит из поля, возвращается свой черновик
+        set_value("#tl-input", "Ещё черновик"), *open_row,
+        ("click", ".tl-row[data-state=done] .tl-delete"), ("wait", "document.querySelector('#tl-delete-dialog')?.open"),
+        ("click", "#tl-delete-confirm"),
+        ("wait", "!document.querySelector('.tl-row') && !document.querySelector('#tl-delete-dialog')?.open"),
+        ("eval", "deleted", f"[{field}, {REFRESH_VETO}]")])
     assert not r.get("failed"), r
     v = r["values"]
     assert v["opened"] == ["Привет", True]
     assert v["fresh"] == ["Мой черновик", "", True]
     assert v["cleared"] == ["", False]
+    assert v["deleted"] == ["Ещё черновик", True]
     assert not problems(r), problems(r)
 
 
