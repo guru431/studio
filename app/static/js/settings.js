@@ -54,6 +54,7 @@ import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { rolesBlock } from './roles.js';
 import { knowledgeBlock } from './knowledge.js';
 import { smtpSettings } from './smtp-settings.js';
+import { SPEECH_LANGUAGES, dictationLanguage, setDictationLanguage } from './mic.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionName, sectionPairs } from './sections-meta.js';
 
 export { modelLabel };     // подписи моделей — models.js; разделы берут их отсюда
@@ -774,6 +775,16 @@ function storageBlock(host) {
     el('p', { class: 'muted small' }, tr("Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).")),
     el('div', { class: 'row' }, button(tr("Выгрузить мою историю"), { class: 'btn', id: 'export-open' },
       () => exportDialog(host)))) };
+}
+
+/* Язык голосового ввода — выбор этого устройства (mic.js `dictationLanguage`): «Авто» — поле не шлётся. */
+function dictationLanguageBlock() {
+  const select = el('select', { class: 'input', id: 'dictation-language' },
+    ...SPEECH_LANGUAGES.map(([id, label]) => el('option', { value: id }, label)));
+  select.value = dictationLanguage();
+  select.addEventListener('change', () => setDictationLanguage(select.value));
+  return el('section', { class: 'block' }, el('h2', {}, tr("Язык голосового ввода")), field(tr("Язык"), select, 'language'),
+    el('p', { class: 'muted small' }, tr("Выбор действует на этом устройстве. GigaAM распознаёт только русский.")));
 }
 
 /* «Интернет» чата: ключ Exa учётки (PUT/DELETE /api/me/exa-key). Страница знает только признак `me.exa_key` —
@@ -1646,7 +1657,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     if (shown === 'input') {
       dictationHost = el('div', { class: 'dictation-settings' });
       renderDictation();
-      group('input', dictationHost, ...(other ? [exaBlock()] : []));
+      group('input', dictationHost, dictationLanguageBlock(), ...(other ? [exaBlock()] : []));
       return;
     }
     if (shown === 'appearance') {

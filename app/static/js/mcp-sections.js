@@ -269,6 +269,8 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       onChange?.();
     },
     get tool() { return picked()?.tool.name; }, get busy() { return busy(); },
+    /** Предел записи инструмента, с (`studio/limits`, mcp_sections.supported) или null. */
+    get maxSeconds() { return picked()?.tool.limits?.max_seconds ?? null; },
     destroy() {
       controller.abort();
       clearTimeout(timer);

@@ -17,12 +17,29 @@ import { tr } from './i18n.js';
  * рекордер (им же пишется образец голоса в настройках «Озвучки»). Запись одна на всю студию: новая
  * гасит прежнюю. cancelRecording() — отменить её (смена раздела — app.js, шторка и блокировка —
  * lock.js): микрофон отпущен, done — null, звук никуда не уходит. Кнопка `owner` ушла со страницы
- * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null. */
+ * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null.
+ *
+ * Язык распознавания (SPEECH_LANGUAGES, «Авто» — без поля): голосовой ввод берёт выбор устройства
+ * (`dictationLanguage`, localStorage `studio-dictation-language`, настройки «Ввод и интернет») полем формы `language`. */
 import { api, loadMe, me } from './api.js';
 import { icon, svg } from './icons.js';
 import { el, words } from './ui.js';
 
 export const MAX_SEC = 120;
+/** Выбор языка распознавания: id для сервера (`auto` — поле не шлётся) и подпись. */
+export const SPEECH_LANGUAGES = [['auto', tr("Авто")], ['ru', tr("Русский")], ['en', 'English']];
+const DICTATION_LANGUAGE = 'studio-dictation-language';
+
+/** Язык голосового ввода этого устройства: `ru`, `en` или `auto`. */
+export function dictationLanguage() {
+  const value = localStorage.getItem(DICTATION_LANGUAGE);
+  return SPEECH_LANGUAGES.some(([id]) => id === value) ? value : 'auto';
+}
+
+export function setDictationLanguage(value) {
+  if (value === 'auto') localStorage.removeItem(DICTATION_LANGUAGE);
+  else localStorage.setItem(DICTATION_LANGUAGE, value);
+}
 const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
 const ICON = svg('mic');
 
@@ -211,6 +228,8 @@ export function attachMic(field, host) {
     try {
       const body = new FormData();
       body.append('audio', blob, recordingName(blob));
+      const language = dictationLanguage();
+      if (language !== 'auto') body.append('language', language);
       const { text } = await api('POST', '/api/dictation', body, { signal });
       if (!button.isConnected) return;                 // поле уже убрали
       const at = field.value === value ? caret
