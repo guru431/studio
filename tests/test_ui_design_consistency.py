@@ -24,7 +24,9 @@ PHONES = {f"{width}-{lang}" for width in (320, 390) for lang in LANGS}
 #: Что ещё не по образцу «Агентов» (замер 2026-11-21) — тест → раздел → «ширина-язык». Задача 3 убирает строки по мере
 #: правки разделов; strict: исправленное, но не убранное отсюда, — провал.
 TODO = {
-    "head": {"photo": {"320-ru", "320-en", "390-en"}, "video": {"320-ru", "320-en"}},\n    "controls": {section: EVERY for section in ("photo", "video")},\n    "scroll": {},
+    "head": {"photo": {"320-ru", "320-en", "390-en"}},
+    "controls": {section: EVERY for section in ("photo", "video")},
+    "scroll": {},
 }
 
 #: Признак готовности раздела: его поле или кнопка и выборы, которые раздел дорисовывает после загрузки.
@@ -42,7 +44,8 @@ READY = {
 #: Замер открытого раздела: шапка, эталонная кнопка выбора, кнопки ряда управления, видимые системные выборы.
 #: Видимое — с размерами, не `visibility: hidden` и не прозрачное (select под кнопкой `.pick` прозрачен).
 #: Инструменты проекта «Агентов» (Git, «Файлы», «Чат») на телефоне переносятся отдельным рядом под шапку — это ряд
-#: инструментов, как `.split-toolbar` у разделов, и в высоту шапки он не входит.
+#: инструментов, как `.split-toolbar` у разделов, и в высоту шапки он не входит. Так же — кнопки-значки шапки
+#: «Фото» и «Видео» (`.head-tools`: «Выбрать», вид ленты, «Ещё»), что уходят под заголовок на 320 px.
 MEASURE = """() => {
   const view = document.querySelector('#view');
   const shown = e => { if (!e.getClientRects().length) return false;
@@ -54,7 +57,9 @@ MEASURE = """() => {
   const ref = [...view.querySelectorAll('.pick-trigger')].find(shown);
   const headHeight = () => {
     let height = head.getBoundingClientRect().height;
-    const line = head.querySelector(':scope > .code-location'), tools = head.querySelector(':scope > .code-project-tools');
+    const code = head.matches('.code-head');
+    const line = head.querySelector(code ? ':scope > .code-location' : ':scope > h1'),
+      tools = head.querySelector(code ? ':scope > .code-project-tools' : ':scope > .head-tools');
     if (line && tools && shown(tools) && tools.getBoundingClientRect().top >= line.getBoundingClientRect().bottom)
       height -= tools.getBoundingClientRect().bottom - line.getBoundingClientRect().bottom;
     return height;

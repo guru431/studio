@@ -28,6 +28,7 @@ import { kick } from './jobs.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
+import { picker } from './picker.js';
 import { sectionMcp } from './mcp-sections.js';
 import { button, el, openDialog, words } from './ui.js';
 import { tableHead, timeOf, viewSwitch } from './views.js';
@@ -88,8 +89,9 @@ function build(view, ctx) {
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const head = el('header', { class: 'head' }, el('h1', {}, tr("Видео")), selection.tools, el('span', { class: 'grow' }),
-    selection.button, layout.node);
+  // кнопки-значки шапки — одной группой справа: на 320 px она целиком уходит под заголовок
+  const head = el('header', { class: 'head' }, el('h1', {}, tr("Видео")), selection.tools,
+    el('div', { class: 'head-tools' }, selection.button, layout.node));
 
   const file = el('input', { type: 'file', id: 'video-file', class: 'sr', accept: ACCEPT });
   const pick = el('label', { class: 'icon-btn attach', id: 'video-pick', title: tr("Фото для ролика — выбрать с устройства") }, icon('clip'),
@@ -114,10 +116,10 @@ function build(view, ctx) {
   const secondsWords = tr("Длительность: {0}–{1} с", ...NATIVE_SECONDS);
   const seconds = el('input', { id: 'video-seconds', inputmode: 'numeric', maxlength: String(String(NATIVE_SECONDS[1]).length),
     value: String(DEFAULT_SECONDS), 'aria-label': secondsWords, autocomplete: 'off' });
-  const chipSeconds = el('label', { class: 'chip chip-num', id: 'chip-seconds', title: secondsWords }, seconds,
+  const chipSeconds = el('label', { class: 'chip ctl-chip chip-num', id: 'chip-seconds', title: secondsWords }, seconds,
     el('span', {}, tr("с")));
   const qualityName = el('span', { class: 'chip-name' });
-  const chipQuality = el('button', { type: 'button', class: 'chip', id: 'chip-quality' }, qualityName, icon('down', 'ico caret'));
+  const chipQuality = el('button', { type: 'button', class: 'chip ctl-chip', id: 'chip-quality' }, qualityName, icon('down', 'ico caret'));
   const qualityMenu = el('div', { class: 'chip-menu', id: 'chip-quality-menu', role: 'menu', 'aria-label': tr("Качество") },
     ...QUALITIES.map(([value, label]) => menuItem(label, { radio: true, attrs: { 'data-value': value }, onSelect: () => {
       quality = value;
@@ -125,10 +127,13 @@ function build(view, ctx) {
       qualityPopup.close(true);
     } })));
   const qualityPopup = popupMenu(chipQuality, qualityMenu, { side: 'above' });
-  const chipSmooth = el('button', { type: 'button', class: 'chip', id: 'chip-smooth', 'aria-pressed': 'true',
+  const chipSmooth = el('button', { type: 'button', class: 'chip ctl-chip', id: 'chip-smooth', 'aria-pressed': 'true',
     title: tr("Плавно: дорисовка кадров до 32 к/с; выключено — 16 к/с") }, tr("плавно"));
   // модель — из отмеченных раздела «Видео»; выбор показывается, только если вариантов больше одного
-  const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': tr("Модель"), hidden: true });
+  const modelPick = el('select', { class: 'chip', id: 'video-model', 'aria-label': tr("Модель") });
+  // выбор «как у Агентов» (picker.js): select под кнопкой хранит значение и change
+  const modelView = picker(view, tr("Модель"), modelPick);
+  modelView.wrap.hidden = true;
   function isH3() { return !mcp.tool && modelPick.value.split(':').slice(1).join(':') === 'h3'; }
   function paintModel() {
     const active = !!mcp.tool;
@@ -137,7 +142,8 @@ function build(view, ctx) {
       nativeHint.hidden = active;
       if (active && !form.parentNode) nativeHint.after(form);
     }
-    modelPick.hidden = modelPick.options.length < 2 || (active && !mcp.has('model'));
+    modelView.wrap.hidden = modelPick.options.length < 2 || (active && !mcp.has('model'));
+    modelView.sync();
     chipSeconds.hidden = active && !mcp.has('seconds');
     qualityWrap.hidden = active && !mcp.has('quality');
     pick.hidden = active && !mcp.hasFile('artifact_id');
@@ -180,7 +186,7 @@ function build(view, ctx) {
   const promptBox = fieldBox(prompt, { attach: pick });
   const qualityWrap = el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu);
   const form = el('form', { class: 'composer', id: 'video-composer', hidden: !!ctx.hint }, sourceBox, photoContext, promptBox.box, promptBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, chipSeconds,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, chipSeconds,
       qualityWrap, chipSmooth), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const root = el('div', { class: 'video' }, head, feedBox, error, mcp.output, nativeHint || form,
