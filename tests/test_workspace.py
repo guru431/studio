@@ -52,6 +52,25 @@ def test_empty_workspace(studio):
     assert done(studio.c.get(URL)) == EMPTY
 
 
+def test_pinning_is_an_account_preference_separate_from_tabs(studio):
+    aid = owner(studio)
+    pin = {"aid": aid, "pid": BETA}
+    assert done(act(studio, "pin", **pin, pinned=True))["pins"] == [pin]
+    assert done(act(studio, "pin", **pin, pinned=True))["pins"] == [pin]
+    assert act(studio, "pin", **pin, pinned="true").status_code == 422
+    done(act(studio, "open", aid=aid, pid=BETA, chat=A))
+    closed = done(act(studio, "close", aid=aid, pid=BETA, chat=A))
+    assert closed["projects"] == [] and closed["pins"] == [pin]
+    signin(studio, "owner")
+    assert done(studio.c.get(URL))["pins"] == [pin]
+    make_user(studio, "someone-else")
+    signin(studio, "someone-else")
+    assert done(studio.c.get(URL)) == EMPTY
+    assert act(studio, "pin", **pin, pinned=False).status_code == 404
+    signin(studio, "owner")
+    assert "pins" not in done(act(studio, "pin", **pin, pinned=False))
+
+
 def test_open_appends_activates_and_places(studio):
     aid = owner(studio)
     done(act(studio, "open", aid=aid, pid=ALPHA, chat=A))

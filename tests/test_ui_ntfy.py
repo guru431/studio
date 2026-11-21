@@ -24,6 +24,8 @@ def test_ntfy_settings_save_reload_test_and_disable(browser, live, monkeypatch, 
     before = len(live.gw.ntfy_requests)
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/notifications'), ('wait', ready),
         ('eval', 'default_off', "!document.querySelector('#ntfy-enabled').checked && document.querySelector('#ntfy-test').disabled"),
+        ('click', '#ntfy-generate-topic'), ('eval', 'topic1', "document.querySelector('#ntfy-topic').value"),
+        ('click', '#ntfy-generate-topic'), ('eval', 'topic2', "document.querySelector('#ntfy-topic').value"),
         set_value('#ntfy-server', 'https://psh.example.net'), set_value('#ntfy-topic', 'ui-private-topic'),
         set_value('#ntfy-token', 'tk-ui-private'), ('click', '#ntfy-enabled'), ('click', '#ntfy-save'),
         ('wait', "document.querySelector('#ntfy-status').textContent === 'Настройки ntfy сохранены на этом устройстве'"),
@@ -47,6 +49,8 @@ def test_ntfy_settings_save_reload_test_and_disable(browser, live, monkeypatch, 
         width=width, mobile=width == 320)
     assert not result.get('failed'), result
     assert result['values']['default_off']
+    first, second = (result['values'][key] for key in ('topic1', 'topic2'))
+    assert first != second and all(value.startswith('studio-') and len(value) == 43 for value in (first, second))
     assert result['values']['saved'] == {'server': 'https://psh.example.net', 'topic': 'ui-private-topic', 'enabled': True, 'has_token': True, 'configured': True}
     assert result['values']['subscribe'] == 'ntfy://psh.example.net/ui-private-topic'
     assert result['values']['restored'] == [True, 'ui-private-topic', '']

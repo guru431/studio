@@ -509,6 +509,63 @@ def test_recovery_has_neutral_response_single_use_and_ends_sessions(studio, mail
     assert not state.DB.execute("SELECT 1 FROM email_tokens WHERE user_id=?", (uid,)).fetchone()
 
 
+def test_admin_sends_a_reset_link_without_ending_sessions_until_password_changes(studio, mail):
+    uid = admin(studio)
+    member = make_user(studio, "member")
+    active, _ = auth.create_session(member)
+    path = f"/api/admin/users/{member}/password-link"
+    assert studio.c.post(f"/api/admin/users/{uid}/password-link").status_code == 409
+    assert not mail
+    assert studio.c.post(path).status_code == 204
+    assert mail[-1][0] == "member@example.com"
+    assert auth.session_user(active) is not None
+    secret = token(mail)
+    assert studio.c.post("/account/reset", json={"token": secret, "password": "new-password"}).status_code == 200
+    assert auth.session_user(active) is None
+    signin(studio, "owner")
+    state.DB.execute("UPDATE users SET disabled=1 WHERE id=?", (member,))
+    assert studio.c.post(path).status_code == 409
+    assert len(mail) == 1
+
+
+def test_admin_reset_link_failure_does_not_leave_a_token(studio, monkeypatch, mail):
+    admin(studio)
+    member = make_user(studio, "member")
+
+    async def broken(*args):
+        raise HTTPException(503, {"code": "mail", "message": "offline"})
+
+    monkeypatch.setattr(account_mail, "send", broken)
+    assert studio.c.post(f"/api/admin/users/{member}/password-link").status_code == 503
+    assert not state.DB.execute("SELECT 1 FROM email_tokens WHERE user_id=?", (member,)).fetchone()
+
+
+def test_mail_delivery_status_records_only_time_and_code_and_resets_after_edit(studio, monkeypatch):
+    admin(studio)
+    path = "/api/admin/smtp/status"
+    config = {"host": "smtp.example.com", "port": 587, "sender": "studio@example.com", "password": "private-key"}
+    saved = studio.c.put("/api/admin/smtp", json=config)
+    assert saved.status_code == 200
+    assert studio.c.get(path).json() == {"configured": True, "last": None}
+
+    def deliver(*args):
+        return None
+
+    monkeypatch.setattr(account_mail, "_send", deliver)
+    assert studio.c.post("/api/admin/smtp/test").status_code == 200
+    assert studio.c.get(path).json() == {"configured": True, "last": {"at": studio.clock[0], "code": "ok"}}
+
+    def fail(*args):
+        raise OSError("private provider detail")
+
+    monkeypatch.setattr(account_mail, "_send", fail)
+    studio.clock[0] += 60
+    assert studio.c.post("/api/admin/smtp/test").status_code == 503
+    assert studio.c.get(path).json() == {"configured": True, "last": {"at": studio.clock[0], "code": "mail"}}
+    assert studio.c.put("/api/admin/smtp", json={**config, "port": 465}).status_code == 200
+    assert studio.c.get(path).json() == {"configured": True, "last": None}
+
+
 def test_reset_link_expires_and_existing_password_still_works(studio, mail):
     make_user(studio, "owner")
     assert studio.c.post("/account/forgot", json={"login": "owner"}).status_code == 200

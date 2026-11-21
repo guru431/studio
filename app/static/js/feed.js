@@ -161,6 +161,26 @@ export function createPicker({ url, size, pollMs, running, paint, show, fail, po
   return s;
 }
 
+/** Идентификатор открытой записи: «Назад» и обновление страницы читают историю, новый вход в раздел — вкладку. */
+export function recordSelection(section, userId) {
+  const key = `studio-record:${userId}:${section}`;
+  return {
+    recall() {
+      const selected = history.state?.studioRecord;
+      if (selected?.key === key) return selected.id;
+      try { return sessionStorage.getItem(key); } catch { return null; }
+    },
+    save(id) {
+      if (location.hash.split('?')[0] !== `#/${section}`) return;
+      history.replaceState({ ...history.state, studioRecord: { key, id } }, '');
+      try {
+        if (id) sessionStorage.setItem(key, id);
+        else sessionStorage.removeItem(key);
+      } catch { /* хранилище вкладки может быть отключено */ }
+    },
+  };
+}
+
 /** Список createPicker на месте («Расшифровка», «Озвучка», «Сканы»): строка записи — кнопка .tr-item cls,
  * один и тот же узел, пока запись в списке, — меняются только её имя, слова состояния, data-state и
  * aria-current у выбранной; подписи дней и «Показать ещё» (id moreId) — тоже те же узлы; новые — на своё

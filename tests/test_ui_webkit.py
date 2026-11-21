@@ -1,5 +1,6 @@
 """Раздел «Код» в WebKit: касания и геометрия iPhone, не только узкое окно Chromium."""
 
+import base64
 import hashlib
 import threading
 from pathlib import Path
@@ -12,6 +13,7 @@ from browser import run_playwright
 from fake_bridge import pid
 from test_codex import CATALOG
 from test_ui_browser import CODE_CHAT_A, CODE_CHAT_B, code_online, code_three, live, visibility_js, wait_for
+from test_ui_ocr_page import large_rotated_photo
 
 pw = pytest.importorskip("playwright.sync_api")
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -74,6 +76,23 @@ def iphone(webkit, live, request):
 
 def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_webkit_resizes_a_photo_with_its_exif_orientation(webkit, live, large_rotated_photo):
+    with webkit.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True) as context:
+        page = context.new_page()
+        page.goto(live.url + "/login")
+        dims = page.evaluate("""async data => {
+          const { resizePhoto, DOCUMENT_PHOTO_SIDE } = await import('/static/js/resize-photo.js');
+          const photo = new File([Uint8Array.from(atob(data), c => c.charCodeAt(0))], 'portrait.jpg', {type: 'image/jpeg'});
+          const resized = await resizePhoto(photo, DOCUMENT_PHOTO_SIDE, true);
+          const url = URL.createObjectURL(resized);
+          try {
+            const image = new Image(); image.src = url; await image.decode();
+            return [image.naturalWidth, image.naturalHeight, resized.size < photo.size];
+          } finally { URL.revokeObjectURL(url); }
+        }""", base64.b64encode(large_rotated_photo).decode("ascii"))
+    assert dims == [500, 2200, True]
 
 
 def device_look(page, *, font=None, scale=None):

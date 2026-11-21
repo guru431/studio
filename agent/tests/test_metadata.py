@@ -80,7 +80,7 @@ async def test_catalogs_are_parallel_shared_and_activity_is_not_cached(home, tmp
             entered[index].set()
             await release.wait()
             return [{'chat': CHAT, 'title': 'metadata'}]
-        return SimpleNamespace(catalog={}, chats=chats, live=lambda: live)
+        return SimpleNamespace(catalog={}, chats=chats, live=lambda: live, activity=lambda: [])
 
     agent.codex, agent.opencode = backend(0), backend(1)
     monkeypatch.setattr(sessions, 'chats', lambda *args: [])
@@ -111,8 +111,8 @@ async def test_only_manual_refresh_asks_codex_to_reconcile_its_session_index(hom
         calls.append(('opencode', False))
         return []
 
-    agent.codex = SimpleNamespace(catalog={}, chats=codex_chats, live=lambda: {})
-    agent.opencode = SimpleNamespace(catalog={}, chats=opencode_chats, live=lambda: {})
+    agent.codex = SimpleNamespace(catalog={}, chats=codex_chats, live=lambda: {}, activity=lambda: [])
+    agent.opencode = SimpleNamespace(catalog={}, chats=opencode_chats, live=lambda: {}, activity=lambda: [])
     monkeypatch.setattr(sessions, 'chats', lambda *args: [])
     await opened(agent)
     assert (await agent.handle(req('chats', project=pid)))[0]['data']['complete']
@@ -133,7 +133,7 @@ async def test_catalog_timeout_keeps_shared_read_until_the_next_request(home, tm
         await release.wait()
         return [{'chat': CHAT, 'title': 'late catalog'}]
 
-    agent.codex = SimpleNamespace(catalog={}, chats=chats, live=lambda: {})
+    agent.codex = SimpleNamespace(catalog={}, chats=chats, live=lambda: {}, activity=lambda: [])
     monkeypatch.setattr(sessions, 'chats', lambda *args: [])
     await opened(agent)
     original_timeout = asyncio.timeout

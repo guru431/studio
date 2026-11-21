@@ -32,6 +32,8 @@ def test_say_speaks_with_the_speech_default_and_keeps_nothing(studio, fake_audio
     assert "текст образца".encode() in request.content          # голос — как у «Прочитать»
     assert {t: state.DB.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables} == before
     assert "Секретная" not in caplog.text and "разговора" not in caplog.text
+    assert say(studio, "A standalone English sentence.").status_code == 200
+    assert b'name="language"\r\n\r\nEnglish' in studio.gw.tts_requests[-1].content
     assert say(studio, "я" * 1001).status_code == 422
     assert say(studio, "  ").status_code == 422
 

@@ -4,13 +4,14 @@ import { message, tr } from './i18n.js';
  * Значок #jobs (полоса слева, на телефоне — вверху справа у темы): число идущих (`data-running`) и
  * точка, если есть готовые позже отметки просмотра (`data-new`). Отметка — время сервера `now` того
  * опроса, при котором панель открыли (localStorage `studio-jobs-seen`, удобство устройства, как тема:
- * пропала — новыми считаются все готовые за час). Панель — <dialog>: «Идёт» и «Готово за час», у
+ * пропала — новыми считаются все готовые за час). Панель — <dialog>: «Идёт» и «Готово» за час или с прошлого
+ * просмотра (до суток), у
  * строки — «Открыть» (адрес раздела с ?id=, chat/<id>), у идущих и ждущих — ещё «Отменить» (адрес
  * отмены раздела из ответа, `cancel`; удаления в панели нет). Открытая
  * панель на опросе строки не пересобирает: сопоставляет по id (fill), фокус и нажатие не теряются.
  *
  * Опрос: раз в JOBS_POLL_MS, пока что-то идёт или открыта панель, иначе раз в IDLE_POLL_MS и при
- * возвращении на экран; первый и при открытии панели — без since (готовое за час целиком: удалённое уходит), дальше
+ * возвращении на экран; первый и при открытии панели — без since (всё окно готового: удалённое уходит), дальше
  * since — `now` прошлого ответа. Повторённое задание (тот же id) — новый итог: строка заменяется (`take`).
  * У запроса срок POLL_TIMEOUT_MS: зависший fetch не держит следующие опросы.
  * Скрытая страница опрашивает, только если включены уведомления и что-то идёт. Запертая сессия: api() ждёт отпирания —
@@ -26,7 +27,7 @@ import { api } from './api.js';
 import { svg } from './icons.js';
 import { timeOnly } from './time.js';
 import { el, words } from './ui.js';
-import { allCodeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
+import { allCodeActivity, codeActivityState, codeActivityLabel, refreshCodeActivity } from './code-activity.js';
 import { ENGINE_NAMES } from './code-options.js';
 import { sectionName } from './sections-meta.js';
 
@@ -65,9 +66,12 @@ let gotAt = 0;               // Date.now() того ответа: идущим �
 let first = true;            // первый ответ: готовое до открытия страницы, не «стало готовым»
 let inflight = false;
 let again = false;
+let visibilityRevision = 0;  // ответ, начатый до блокировки разделов, может содержать закрытые строки
 let timer = null;
 let ticker = null;
 let shownMark = 0;           // отметка до открытия панели: по ней выделены новые строки
+let finishedTitle;
+let sinceVisit = false;
 
 function readSeen() {
   try {
@@ -110,7 +114,7 @@ function titleText(item) {
 }
 
 function detailText(item) {
-  if (item.section === 'code') return [ENGINE_NAMES[item.engine], CODE_ACTIVITY_LABELS[item.state]].filter(Boolean).join(' · ');
+  if (item.section === 'code') return [ENGINE_NAMES[item.engine], codeActivityLabel(item)].filter(Boolean).join(' · ');
   const when = item.finished === null
     ? [message(item.detail), item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
     : [message(item.detail), timeOnly(item.finished)];
@@ -204,7 +208,9 @@ function renderPanel() {
     fill(group.querySelector('ul'), items, () => kind === 'unread', '');
   }
   fill(runningList, running, () => false, tr("Сейчас ничего не идёт"));
-  fill(finishedList, finished, (i) => i.finished > shownMark, tr("За час ничего не закончилось"));
+  finishedTitle.textContent = sinceVisit ? tr("Готово с прошлого просмотра") : tr("Готово за час");
+  fill(finishedList, finished, (i) => i.finished > shownMark,
+    sinceVisit ? tr("С прошлого просмотра ничего не закончилось") : tr("За час ничего не закончилось"));
 }
 
 function paint() {
@@ -217,7 +223,7 @@ function paint() {
   count.textContent = total ? String(total) : '';
   count.hidden = !total;
   dot.hidden = !fresh;
-  const label = tr("В работе{0}{1}{2}", total ? `: ${total}` : '', agents.some((item) => item.asking) ? tr(", требуется ваше действие") : '', fresh ? tr(", есть готовое") : '');
+  const label = tr("В работе{0}{1}{2}", total ? `: ${total}` : '', agents.some((item) => codeActivityState(item) === 'asking') ? tr(", требуется ваше действие") : '', fresh ? tr(", есть готовое") : '');
   badge.setAttribute('aria-label', label);
   badge.title = label;
   const bySection = new Map();
@@ -252,9 +258,11 @@ function take(out, full = false) {
   const fresh = out.finished.filter((f) => !known.has(f.id) || f.finished > known.get(f.id));
   if (!first && !out.push) for (const item of fresh) notify(item);
   first = false;
+  const floor = out.window_start ?? out.now - RECENT_SEC;
+  sinceVisit = floor < out.now - RECENT_SEC;
   const taken = new Set(out.running.map((r) => r.id));       // идёт снова — не «готово»; первая строка id — свежая
   finished = (full ? out.finished : [...fresh, ...finished])
-    .filter((f) => f.finished >= out.now - RECENT_SEC && !taken.has(f.id) && taken.add(f.id))
+    .filter((f) => f.finished >= floor && !taken.has(f.id) && taken.add(f.id))
     .sort((a, b) => b.finished - a.finished);
   running = out.running;
   since = out.now;
@@ -281,6 +289,7 @@ async function poll(full = false) {
   clearTimeout(timer);
   inflight = true;
   again = false;
+  const revision = visibilityRevision;
   const whole = full || since === null;
   let out = null;
   try {
@@ -289,13 +298,17 @@ async function poll(full = false) {
     // со страницы (закрытие, перезагрузка): keepalive доносит visible=0, навигация запрос не обрывает
     // (WebKit назвал бы оборванный ошибкой страницы)
     const visible = document.visibilityState === 'visible' ? 1 : 0;
-    out = await api('GET', `/api/jobs?visible=${visible}${whole ? '' : `&since=${since}`}`, undefined,
+    const seen = panel.open ? shownMark : readSeen();
+    const query = new URLSearchParams({ visible });
+    if (!whole) query.set('since', since);
+    if (seen) query.set('seen', seen);
+    out = await api('GET', `/api/jobs?${query}`, undefined,
       { signal: AbortSignal.timeout(POLL_TIMEOUT_MS), keepalive: !visible });
   } catch {
     // нет связи или срок вышел — следующий опрос по расписанию
   }
   inflight = false;
-  if (out) take(out, whole);
+  if (out && revision === visibilityRevision) take(out, whole);
   if (again) poll(again === 'full');
   else schedule();
 }
@@ -388,6 +401,7 @@ export function setupJobs({ navigate }) {
   panel = document.getElementById('jobs-panel');
   runningList = document.getElementById('jobs-running');
   finishedList = document.getElementById('jobs-finished');
+  finishedTitle = document.getElementById('jobs-finished-title');
   badge.addEventListener('click', openPanel);
   document.getElementById('jobs-close').addEventListener('click', () => panel.close());
   panel.addEventListener('click', (event) => { if (event.target === panel) panel.close(); });   // мимо листа
@@ -404,12 +418,13 @@ export function setupJobs({ navigate }) {
   // срок частичной защиты истёк (lock.js): строки закрытых разделов уходят сразу; готовые за час (и сканы их документов —
   // их раздел знает только сервер) перечитываются без since, как при открытии страницы, без уведомлений о них
   document.addEventListener('studio-sections-locked', ({ detail }) => {
+    visibilityRevision += 1;
     running = running.filter((item) => !detail.sections.includes(item.section));
     finished = [];
     since = null;
     first = true;
     paint();
-    poll();
+    poll(true);
   });
   document.addEventListener('studio-code-snapshot', paint);
   document.addEventListener('studio-navigation', paint);

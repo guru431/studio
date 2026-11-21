@@ -8,6 +8,7 @@ import access
 import chat
 import chat_pending
 import mcp_sources
+import push
 import security
 import state
 from conftest import add_gateway
@@ -102,6 +103,31 @@ def test_second_answer_and_late_answer_get_pending_gone(studio):
     assert gone.status_code == 409 and gone.json()["detail"]["code"] == "pending_gone"
     assert state.DB.execute("SELECT outcome FROM chat_pending WHERE id = ?", (late["id"],)).fetchone()[0] == "expired"
     assert "tools/call" not in methods(calls)
+
+
+def test_pause_is_not_a_completed_job_and_deleted_chat_cannot_resume(studio, monkeypatch):
+    sid, calls = confirm_setup(studio)
+    cid = new_chat(studio)
+    notified = []
+    monkeypatch.setattr(push, "chat_answered", lambda *args: notified.append(args))
+    shown = pause_on(studio, cid, name_of(sid, 1))
+    mid = messages(studio, cid)[-1]["id"]
+    assert mid not in chat.ANSWERED and notified == []
+
+    async def delete_while_waiting_for_limit(conn, model):
+        state.DB.execute("UPDATE chats SET deleted = ? WHERE id = ?", (studio.clock[0], cid))
+        return chat.CONTEXT.get(model)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(chat, "_limit", delete_while_waiting_for_limit)
+        assert answer(studio, cid, shown["id"], "run").status_code == 404
+    row = state.DB.execute("SELECT resolved FROM chat_pending WHERE id = ?", (shown["id"],)).fetchone()
+    assert row["resolved"] is None and "tools/call" not in methods(calls)
+
+    state.DB.execute("UPDATE chats SET deleted = NULL WHERE id = ?", (cid,))
+    response = studio.c.post(f"/api/chats/{cid}/pending/{shown['id']}", json={"action": "run"})
+    assert sse(response)[-1] == ("done", {"status": "done"})
+    assert mid in chat.ANSWERED and len(notified) == 1 and notified[0][2:] == (mid, True)
 
 
 def test_new_message_supersedes_pending(studio):

@@ -76,7 +76,7 @@ def test_edit_select_replace_and_remove_samples(studio, fake_audio):
     assert studio.c.get(f"/api/voices/{vid}").json()["samples"][0]["active"]
     assert studio.c.delete(f"/api/voices/{vid}").status_code == 204
     assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 1     # в корзине — образец на месте
-    assert studio.c.delete(f"/api/trash/voices/{vid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/voices/{vid}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
 
@@ -120,8 +120,8 @@ def test_voice_deleted_during_conversion_does_not_leave_a_sample(studio, fake_au
     vid = create(studio).json()["id"]
     original = audio.to_wav
 
-    async def remove(src, dst, *, max_sec):
-        duration = await original(src, dst, max_sec=max_sec)
+    async def remove(src, dst, *, max_sec, start=0):
+        duration = await original(src, dst, max_sec=max_sec, start=start)
         state.DB.execute("DELETE FROM voices WHERE id = ?", (vid,))
         return duration
 

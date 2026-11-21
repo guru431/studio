@@ -158,7 +158,7 @@ def test_whole_chat_is_deleted_at_once_but_not_while_a_record_runs(studio, fake_
     assert [c['id'] for c in studio.c.get('/api/speeches/chats').json()['items']] == [other['id']]
     # чат в корзине: mp3 — до окончательного удаления; «Удалить навсегда» строки чата уносит все его записи
     assert [studio.c.get(f"/api/media/{i['media_id']}").status_code for i in (first, second, other)] == [200, 200, 200]
-    assert studio.c.delete(f"/api/trash/speeches/{second['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/speeches/{second['id']}", json={"password": "password-123"}).status_code == 204
     for record in (first, second, running):
         assert studio.c.delete(f"/api/trash/speeches/{record['id']}").status_code == 404
     assert [studio.c.get(f"/api/media/{i['media_id']}").status_code for i in (first, second, other)] == [404, 404, 200]

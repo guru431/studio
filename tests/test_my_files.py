@@ -26,10 +26,8 @@ ZID = "a" * 32
 def empty_cache():
     mcp_sources.CACHE.clear()
     mcp_contracts.STATUS.clear()
-    my_files.OPENED.clear()
     yield
     mcp_sources.CACHE.clear()
-    my_files.OPENED.clear()
 
 
 class FileServer:

@@ -368,15 +368,18 @@ async def accept_invite(request: Request):
     return {"ok": True}
 
 
-async def recovery_mail(token: str, email: str, origin: str | None) -> None:
+async def recovery_mail(token: str, email: str, origin: str | None, *, admin: bool = False) -> None:
+    send = account_mail.send_admin if admin else account_mail.send
     try:
-        await account_mail.send(email, "Студия: восстановление пароля / Studio: password recovery",
-                                "Чтобы задать новый пароль, откройте одноразовую ссылку, она действует 30 минут."
-                                " Если вы не запрашивали её, проигнорируйте письмо.\n"
-                                "To set a new password, open this one-time link, valid for 30 minutes."
-                                " If you did not request it, ignore this email.\n\n" + link("reset", token, origin))
+        await send(email, "Студия: восстановление пароля / Studio: password recovery",
+                   "Чтобы задать новый пароль, откройте одноразовую ссылку, она действует 30 минут."
+                   " Если вы не запрашивали её, проигнорируйте письмо.\n"
+                   "To set a new password, open this one-time link, valid for 30 minutes."
+                   " If you did not request it, ignore this email.\n\n" + link("reset", token, origin))
     except HTTPException:
         delete_token(token)
+        if admin:
+            raise
 
 
 @router.post("/account/forgot")

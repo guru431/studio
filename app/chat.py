@@ -229,11 +229,17 @@ class CleanerRule(BaseModel):
     type: str | None = Field(None, max_length=32)
 
 
+class EditTurnIn(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    last_id: str = Field(min_length=1, max_length=64)
+
+
 class TurnIn(BaseModel):
     request_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9_-]{16,64}$")
     text: str = Field("", max_length=TEXT_MAX)
     attachment_ids: list[str] = Field(default_factory=list, max_length=ATTACH_MAX)  # больше — ATTACHMENTS (main)
     regenerate: bool = False
+    edit: EditTurnIn | None = None
     external_ok: bool = False        # расшифровку — и нелокальной модели (человек подтвердил)
     web_ok: bool = False             # расшифровка в диалоге, а «Интернет» даёт Exa (человек подтвердил)
     cleaner_ticket: str | None = Field(None, max_length=64)
@@ -569,7 +575,8 @@ def _refused_turns(rows, model: "str | None") -> set[str]:
 
 
 def compose(chat_id: str, upto: str, model: "str | None" = None,
-            max_images: int = profiles.DEFAULT_MAX_IMAGES, excerpts: "dict | None" = None) -> list[dict]:
+            max_images: int = profiles.DEFAULT_MAX_IMAGES, excerpts: "dict | None" = None,
+            replacement: "tuple[str, list] | None" = None) -> list[dict]:
     """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
     пользователя подряд сливаются, картинок — не больше `max_images` на весь запрос. Найденное «Интернетом»
     (`messages.tools` ответа) — блоками web.history_block в начале сообщения пользователя перед этим ответом,
@@ -585,7 +592,9 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
     for row in rows:
         if row["status"] in ("done", "stopped"):
             if row["role"] == "user":
-                if row["id"] in refused:
+                if row["id"] == upto and replacement is not None:
+                    content = _content(replacement[0], replacement[1], excerpts)
+                elif row["id"] in refused:
                     marks = "".join(REFUSED.format(a["name"]) + "\n" for a in atts.get(row["id"], []))
                     content = _content(marks + row["content"], [])
                 else:
@@ -1483,7 +1492,7 @@ class StreamTask:
         try:
             if (_finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
                         *thought, error=error if status == "error" else None)
-                    and status != "stopped" and not self.shutdown):
+                    and status != "stopped" and not self.shutdown and not self.paused):
                 _answered(self, status)
         except Exception as e:                       # noqa: BLE001 — ответ не должен остаться в STREAMS
             status, error = "error", f"сбой службы: {type(e).__name__}"
@@ -1500,7 +1509,8 @@ STREAMS: dict[str, StreamTask] = {}
 #: кончившиеся ответы через сервер для «Готово за час» (jobs.py): id ответа → (user_id, chat_id, время, состояние).
 #: Только память процесса: после перезапуска ответов, кончившихся до него, в панели нет (их прервал перезапуск)
 ANSWERED: dict[str, tuple[int, str, float, str]] = {}
-ANSWERED_SEC = 3600
+ANSWERED_SEC = 86400
+ANSWERED_MAX = 2000
 
 
 def _answered(st: StreamTask, status: str) -> None:
@@ -1510,6 +1520,8 @@ def _answered(st: StreamTask, status: str) -> None:
     for key in [key for key, item in ANSWERED.items() if now - item[2] >= ANSWERED_SEC]:
         del ANSWERED[key]
     ANSWERED[st.message_id] = (st.user_id, st.chat_id, now, status)
+    if len(ANSWERED) > ANSWERED_MAX:
+        del ANSWERED[next(iter(ANSWERED))]
     push.chat_answered(st.user_id, st.chat_id, st.message_id, status == "done")
 
 
@@ -1725,7 +1737,7 @@ async def get_chat(chat_id: str, request: Request):
         marks = ",".join("?" * len(docs))
         for scan in state.DB.execute(
                 f"SELECT s.attachment_id, s.id, s.state, EXISTS (SELECT 1 FROM scan_pages p WHERE p.scan_id = s.id"
-                f" AND p.state IN ('failed', 'waiting')) AS unread FROM scans s WHERE s.user_id = ?"
+                f" AND p.state IN ('failed', 'waiting')) AS unread FROM scans s WHERE s.user_id = ? AND s.deleted IS NULL"
                 f" AND s.attachment_id IN ({marks}) ORDER BY s.created, s.rowid", (uid, *docs)):
             if scan["state"] in ocr.RUNNING:
                 scans.setdefault(scan["attachment_id"], []).append(scan["id"])
@@ -1984,7 +1996,7 @@ async def delete_attachment(att_id: str, request: Request):
 
 def _scan_of(user_id: int, att_id: str):
     """Последний документ распознавания вложения (или None)."""
-    return state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND attachment_id = ?"
+    return state.DB.execute("SELECT id FROM scans WHERE user_id = ? AND attachment_id = ? AND deleted IS NULL"
                             " ORDER BY created DESC, rowid DESC LIMIT 1", (user_id, att_id)).fetchone()
 
 
@@ -2069,6 +2081,53 @@ def _drop_last_answer(chat_id: str) -> str:
     return last["id"]
 
 
+def _user_turn(chat_id: str, message_id: str):
+    row = state.DB.execute("SELECT rowid, * FROM messages WHERE chat_id = ? AND id = ? AND role = 'user'",
+                           (chat_id, message_id)).fetchone()
+    if row is None:
+        raise _gone("такого сообщения нет")
+    return row
+
+
+def _edit_target(chat_id: str, body: TurnIn):
+    if body.edit is None:
+        return None
+    if body.regenerate:
+        raise HTTPException(422, {"code": "invalid", "message": "нельзя одновременно изменить ход и повторить ответ"})
+    target = _user_turn(chat_id, body.edit.id)
+    last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? ORDER BY created DESC, rowid DESC LIMIT 1",
+                            (chat_id,)).fetchone()
+    if last["id"] != body.edit.last_id:
+        raise HTTPException(409, {"code": "edit_stale", "message": "диалог изменился — откройте сообщение заново"})
+    return target
+
+
+@router.delete("/chats/{chat_id}/turns/{user_message_id}", status_code=204)
+async def delete_turn(chat_id: str, user_message_id: str, request: Request):
+    uid = request.state.user.id
+    _chat_row(uid, chat_id)
+    _busy(chat_id)
+    target = _user_turn(chat_id, user_message_id)
+    start = (target["created"], target["rowid"])
+    next_turn = state.DB.execute(
+        "SELECT created, rowid FROM messages WHERE chat_id = ? AND role = 'user' AND (created, rowid) > (?, ?)"
+        " ORDER BY created, rowid LIMIT 1", (chat_id, *start)).fetchone()
+    state.DB.execute("BEGIN")
+    try:
+        if next_turn is None:
+            state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND (created, rowid) >= (?, ?)",
+                             (chat_id, *start))
+        else:
+            state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND (created, rowid) >= (?, ?)"
+                             " AND (created, rowid) < (?, ?)", (chat_id, *start, *next_turn))
+        state.DB.execute("UPDATE chats SET updated = ? WHERE id = ?", (clock.NOW(), chat_id))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    return Response(status_code=204)
+
+
 def _known_links(chat_id: str) -> dict[str, str]:
     """Адреса, которые read_page и youtube_subtitles (по id ролика) могут читать в ходе (web.links: norm →
     адрес, спека 6.4): из сообщений
@@ -2086,12 +2145,14 @@ def _known_links(chat_id: str) -> dict[str, str]:
     return known
 
 
-def _pending_scans(user_id: int, chat_id: str, atts: list) -> list[str]:
+def _pending_scans(user_id: int, chat_id: str, atts: list, target=None) -> list[str]:
     """Идущие сканы вложений хода и истории диалога (повтор сразу после «Остановить», пока документ
     отменяется): модели вложение уходит только готовым."""
+    earlier = " AND (m.created, m.rowid) <= (?, ?)" if target is not None else ""
+    args = (chat_id, target["created"], target["rowid"]) if target is not None else (chat_id,)
     ids = [a["id"] for a in atts if a["kind"] == "document"] + [r["id"] for r in state.DB.execute(
         "SELECT a.id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?"
-        " AND a.kind = 'document'", (chat_id,))]
+        " AND a.kind = 'document'" + earlier, args)]
     return ocr.pending(user_id, ids)
 
 
@@ -2107,6 +2168,21 @@ def _sent_documents(chat_id: str, upto: str, model: str) -> list:
     return out
 
 
+def _plan_excerpts(docs: list, system: str, limit: "int | None", guess) -> tuple[set, list[dict]]:
+    """Выбрать документы, которые нужно представить выдержками, без изменения индекса."""
+    sizes = {a["id"]: estimate_tokens([{"role": "user", "content": a["text"]}]) for a in docs}
+    edge = knowledge.INLINE_TOKENS if limit is None else min(knowledge.INLINE_TOKENS, limit - RESERVE_TOKENS)
+    big = sorted((i for i, n in sizes.items() if n > edge), key=lambda i: sizes[i], reverse=True)
+    cut = set(big) if limit is None else set()
+    messages = guess(cut)
+    for att_id in big if limit is not None else ():
+        if estimate_tokens(chat_system.wrap(system, messages)) <= limit - RESERVE_TOKENS:
+            break
+        cut.add(att_id)
+        messages = guess(cut)
+    return cut, messages
+
+
 def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, system: str, limit: "int | None",
                   kbs: bool) -> tuple[set, list[dict]]:
     """Какие документы диалога модель хода получит выдержками, и сообщения для проверки контекста, где выдержки и блок
@@ -2116,26 +2192,16 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
     knowledge.INLINE_TOKENS. Документы знаний вложений — по решению: выдержкам `knowledge.adopt`, целым —
     `knowledge.release` (отметка «модель видит выдержки» у вложения — `knowledge.big_attachments`)."""
     docs = _sent_documents(chat_id, upto, model)
-    sizes = {a["id"]: estimate_tokens([{"role": "user", "content": a["text"]}]) for a in docs}
-    edge = knowledge.INLINE_TOKENS if limit is None else min(knowledge.INLINE_TOKENS, limit - RESERVE_TOKENS)
-    big = sorted((i for i, n in sizes.items() if n > edge), key=lambda i: sizes[i], reverse=True)
-
     def guess(cut):
         return _with_block(compose(chat_id, upto, model, cap, dict.fromkeys(cut, EXCERPT_GUESS)),
                            EXCERPT_GUESS if kbs else "")
 
-    cut = big if limit is None else []
-    messages = guess(cut)
-    for att_id in big if limit is not None else ():
-        if estimate_tokens(chat_system.wrap(system, messages)) <= limit - RESERVE_TOKENS:
-            break
-        cut = [*cut, att_id]
-        messages = guess(cut)
+    cut, messages = _plan_excerpts(docs, system, limit, guess)
     for a in docs:
         if a["id"] in cut:
             knowledge.adopt(uid, a["id"], a["name"], a["text"])
     knowledge.release([a["id"] for a in docs if a["id"] not in cut])
-    return set(cut), messages
+    return cut, messages
 
 
 async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Connection, system: str,
@@ -2171,7 +2237,8 @@ def _title(text: str) -> str | None:
 
 
 def _cleaner_messages(uid, chat_id, body, atts, model, conn):
-    if _pending_scans(uid, chat_id, atts):
+    edit = _edit_target(chat_id, body)
+    if _pending_scans(uid, chat_id, atts, edit):
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
     if any(a["kind"] == "document" and a["text"] is None for a in atts):
         raise cleaner.refused("Документ ещё не распознан")
@@ -2182,7 +2249,10 @@ def _cleaner_messages(uid, chat_id, body, atts, model, conn):
         raise cleaner.refused("Нечего переспрашивать")
     limit = profiles.max_images(conn)
     messages = compose(chat_id, last["id"], model, limit) if last else []
-    if not body.regenerate:
+    if edit is not None:
+        kept = _attachments(chat_id).get(edit["id"], [])
+        messages = compose(chat_id, edit["id"], model, limit, replacement=(body.text, [*kept, *atts]))
+    elif not body.regenerate:
         content = _content(body.text, atts)
         if messages and messages[-1]["role"] == "user":
             messages[-1]["content"] = _merge(messages[-1]["content"], content)
@@ -2205,8 +2275,12 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
-    if not body.regenerate and not body.text.strip() and not atts:
+    edit = _edit_target(chat_id, body)
+    saved = _attachments(chat_id).get(edit["id"], []) if edit is not None else []
+    if not body.regenerate and not body.text.strip() and not atts and not saved:
         raise cleaner.refused("Пустое сообщение", 422)
+    if len(atts) + len(saved) > ATTACH_MAX:
+        raise HTTPException(422, {"code": "attachments", "message": ATTACHMENTS})
     messages = _cleaner_messages(uid, chat_id, body, atts, row["model"] or manage.DEFAULT_MODEL, conn)
     preview, shown = await cleaner.prepare(conn, "chat", chat_id, row["model"], messages,
                                           [rule.model_dump() for rule in body.cleaner_rules], local=body.cleaner_local)
@@ -2253,7 +2327,10 @@ def _turn_receipt(chat_id: str, request_id: str | None, body: TurnIn | None = No
 
 def _turn_fingerprint(body: TurnIn) -> str:
     # Consent/one-use Cleaner tickets may change before acceptance. No copy of the text is stored.
-    raw = json.dumps([body.text, body.attachment_ids, body.regenerate], ensure_ascii=False, separators=(",", ":"))
+    fields = [body.text, body.attachment_ids, body.regenerate]
+    if body.edit is not None:
+        fields += [body.edit.id, body.edit.last_id]
+    raw = json.dumps(fields, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -2265,8 +2342,8 @@ class EstimateIn(BaseModel):
 @router.post("/chats/{chat_id}/estimate")
 async def estimate(chat_id: str, body: EstimateIn, request: Request):
     """Заполнение контекста будущим ходом: системное сообщение (куски 1–3, как у хода), история (`compose`), текст
-    и неотправленные вложения поля ввода — `estimate_tokens`; `limit` — предел модели (`_limit`) или None. Без
-    знаний и инструментов: оценка, не проверка (её делает ход)."""
+    и неотправленные вложения поля ввода — `estimate_tokens`; `limit` — предел модели (`_limit`) или None.
+    Знания оцениваются без поиска и индексации, как до отправки хода."""
     uid = request.state.user.id
     row = _chat_row(uid, chat_id)
     conn = _chat_connection(uid, row["connection_id"])
@@ -2278,15 +2355,28 @@ async def estimate(chat_id: str, body: EstimateIn, request: Request):
         if a["kind"] != "document" or a["text"] is not None]
     limit = await _limit(conn, model) if conn is not None else None
     cap = profiles.max_images(conn) if conn is not None else profiles.DEFAULT_MAX_IMAGES
-    messages = compose(chat_id, "", model, cap)
-    content = _content(body.text, atts)
-    if messages and messages[-1]["role"] == "user":
-        messages[-1]["content"] = _merge(messages[-1]["content"], content)
-    else:
-        messages.append({"role": "user", "content": content})
-    _cap_images(messages, cap)
     profiled = conn if conn is not None and (conn.proxied or not conn.shared) else None
     system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
+    excerpts_enabled = conn is None or not conn.cleaner
+    block = EXCERPT_GUESS if excerpts_enabled and knowledge.chat_kbs(uid, chat_id) else ""
+
+    def guess(cut):
+        excerpts = dict.fromkeys(cut, EXCERPT_GUESS)
+        messages = compose(chat_id, "", model, cap, excerpts)
+        content = _content(body.text, atts, excerpts)
+        if messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] = _merge(messages[-1]["content"], content)
+        else:
+            messages.append({"role": "user", "content": content})
+        _cap_images(messages, cap)
+        return _with_block(messages, block)
+
+    if excerpts_enabled:
+        docs = _sent_documents(chat_id, "", model)
+        docs += [a for a in atts if a["kind"] == "document" and a["text"]]
+        _, messages = _plan_excerpts(docs, system, limit, guess)
+    else:
+        messages = guess(())
     return {"tokens": estimate_tokens(chat_system.wrap(system, messages)), "limit": limit}
 
 
@@ -2315,9 +2405,13 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     model = row["model"] or manage.DEFAULT_MODEL
     if conn.shared:
         _chat_pair(uid, conn.id, model)
+    edit = _edit_target(chat_id, body)
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
-    if not body.regenerate and not body.text.strip() and not atts:
+    saved = _attachments(chat_id).get(edit["id"], []) if edit is not None else []
+    if not body.regenerate and not body.text.strip() and not atts and not saved:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
+    if len(atts) + len(saved) > ATTACH_MAX:
+        raise HTTPException(422, {"code": "attachments", "message": ATTACHMENTS})
     limit = await _limit(conn, model)
     operations.check(uid)
     receipt = _turn_receipt(chat_id, body.request_id, body)
@@ -2341,7 +2435,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             limit = CONTEXT.get(model)  # The cloud model's context limit does not describe the local recipient.
     via = "server" if conn.proxied else "browser"
     # скан ещё распознаётся: ход через сервер подождёт его в StreamTask, прямой — ждёт страница
-    scans = _pending_scans(uid, chat_id, atts)
+    scans = _pending_scans(uid, chat_id, atts, edit)
     if scans and via == "browser":
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
     free = body.external_ok or sections.is_local(conn, model) or conn.cleaner
@@ -2351,10 +2445,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     try:
         # инструменты «Интернета» этого хода — по кнопке, какой она стала к ходу (`row` прочитан до await
         # _limit); прямому подключению — никаких. Ключ Exa не расшифровался — шаги поиска скажут это (web.NO_KEY)
-        fresh = state.DB.execute("SELECT web, thinking, mcp_ids, mcp_off, role_id, protected_used FROM chats"
-                                 " WHERE id = ?", (chat_id,)).fetchone()
-        if fresh is None:
-            raise _gone()
+        fresh = _chat_row(uid, chat_id)
+        edit = _edit_target(chat_id, body)
+        if edit is not None and (fresh["connection_id"] != row["connection_id"] or fresh["model"] != row["model"]):
+            raise HTTPException(409, {"code": "edit_stale", "message": "диалог изменился — откройте сообщение заново"})
         chat_pending.supersede(chat_id)              # открытая пауза ответа больше не ждёт
         # куски 1–3 системного сообщения и параметры профиля — снимок на начало хода; профиль общего подключения
         # браузеру не уходит (его текст и параметры учётке не видны)
@@ -2379,9 +2473,17 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             ask = not free and _needs_consent(chat_id, model, via)
             user_mid = _drop_last_answer(chat_id)
         else:
-            user_mid = uuid.uuid4().hex
-            state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
-                             " VALUES (?, ?, 'user', ?, 'done', ?, ?, ?)", (user_mid, chat_id, body.text, via, model, now))
+            if edit is None:
+                user_mid = uuid.uuid4().hex
+                state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                                 " VALUES (?, ?, 'user', ?, 'done', ?, ?, ?)",
+                                 (user_mid, chat_id, body.text, via, model, now))
+            else:
+                user_mid = edit["id"]
+                state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND (created, rowid) > (?, ?)",
+                                 (chat_id, edit["created"], edit["rowid"]))
+                state.DB.execute("UPDATE messages SET content = ?, via = ?, model = ? WHERE id = ?",
+                                 (body.text, via, model, user_mid))
             for a in atts:
                 if state.DB.execute("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL",
                                     (user_mid, a["id"])).rowcount != 1:
@@ -2410,6 +2512,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         else:
             if conn.cleaner:
                 messages = compose(chat_id, user_mid, model, profiles.max_images(conn))
+                knowledge.release(knowledge.big_attachments(chat_id))
             else:
                 cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, profiles.max_images(conn), system,
                                               limit, kbs)

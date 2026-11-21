@@ -804,9 +804,35 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   };
 }
 
-export function gitView(host, { git, failed }) {
+export function gitView(host, { git, compare, openFile, failed }) {
   const box = el('div', { id: 'code-git', class: 'code-git', 'aria-busy': 'true' });
   const status = el('p', { id: 'code-git-error', class: 'error', 'aria-live': 'polite' });
+  let dialog = null;
+  async function showComparison(path) {
+    const progress = el('p', { class: 'muted', 'aria-live': 'polite' }, tr("Загружаю…"));
+    const preview = el('div', {}, progress);
+    const file = button(tr("Открыть файл"), { id: 'code-git-open-file', class: 'btn', hidden: true }, () => {
+      current.close();
+      openFile(path);
+    });
+    const current = openDialog(host, { id: 'code-git-compare', title: tr("Изменения файла"), body: [preview],
+      cancelText: tr("Закрыть"), actions: [file] });
+    dialog = current;
+    try {
+      const data = await compare(path);
+      if (!current.open) return;
+      const content = data.before === data.after ? el('p', { class: 'muted' }, tr("Текст файла не изменился."))
+        : changeView([{ ...data, path, whole: true }]);
+      preview.replaceChildren(content);
+      file.hidden = !data.exists;
+    } catch (error) {
+      if (current.open) {
+        if (error.code === 'closed') current.close();
+        progress.className = 'error';
+        failed(error, progress);
+      }
+    }
+  }
   host.replaceChildren(box, status);
   const unsubscribe = git.subscribe(({ data: git, error, loading }) => {
     if (loading) box.setAttribute('aria-busy', 'true');
@@ -833,11 +859,14 @@ export function gitView(host, { git, failed }) {
     const files = Array.isArray(git.files) ? git.files : [];
     box.replaceChildren(head, files.length
       ? el('ul', { class: 'code-git-files' }, ...files.map((f) => el('li', {},
-        el('span', { class: 'tag code-git-status' }, String(f.status)), el('span', { class: 'code-git-path' }, String(f.path)))))
+        el('span', { class: 'tag code-git-status' }, String(f.status)), git.compare === true
+          ? button(String(f.path), { class: 'btn-link code-git-path', 'aria-haspopup': 'dialog' }, () => showComparison(f.path))
+          : el('span', { class: 'code-git-path' }, String(f.path)))))
       : el('p', { class: 'muted code-git-empty' }, NO_CHANGES));
   });
   return {
     unmount() {
+      if (dialog?.open) dialog.close();
       unsubscribe();
     },
   };

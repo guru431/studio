@@ -885,7 +885,8 @@ async def chats(aid: int, pid: str, request: Request):
                       "created": _time(i.get("created")), "modified": _time(i.get("modified")),
                       "origin": "studio" if i.get("tag") == "studio" or (mark is not None and mark["origin"] == "studio") else "other",
                       "state": mark["state"] if mark is not None else "open", "running": bool(i.get("running")),
-                      "asking": bool(i.get("asking"))})
+                      "asking": bool(i.get("asking")),
+                      **({"queue_paused": True} if i.get("running") and i.get("queue_paused") is True else {})})
     for chat, mark in marks.items():
         if chat not in seen and mark["project"] == pid and mark["state"] == "open":
             items.append({"chat": chat, "engine": mark["engine"], "title": None, "created": mark["created"], "modified": mark["updated"],
@@ -1647,6 +1648,28 @@ async def pdf(aid: int, pid: str, body: PdfPage, request: Request):
 
 @router.get("/agents/{aid}/projects/{pid}/git")
 async def git(aid: int, pid: str, request: Request):
-    own_agent(request, aid)
+    agent = own_agent(request, aid)
     check_pid(pid)
-    return _relay(await ask(request, aid, "git", project=pid))
+    data = await ask(request, aid, "git", project=pid)
+    link = bridge.LINKS.get(aid)
+    if agent["user_id"] == request.state.user.id and link is not None and link.hello.get("git_compare") is True:
+        data = {**data, "compare": True}
+    return _relay(data)
+
+
+@router.post("/agents/{aid}/projects/{pid}/git/compare")
+async def git_compare(aid: int, pid: str, body: PathBody, request: Request):
+    """Один путь в теле запроса. Версию из HEAD видит владелец компьютера."""
+    agent = own_agent(request, aid)
+    if agent["user_id"] != request.state.user.id:
+        raise _refuse(404, "not_found", "нет такого компьютера", computer=True)
+    check_pid(pid)
+    path = check_path(body.path)
+    if not path:
+        raise _refuse(422, "path", BAD_PATH)
+    require_capability(aid, "git_compare")
+    result = await ask(request, aid, "git_compare", project=pid, path=path)
+    texts = _strings(result, "before", "after")
+    if type(result.get("exists")) is not bool or any(len(value.encode("utf-8", "surrogatepass")) > 128 * 1024 for value in texts.values()):
+        raise _refuse(502, "bridge", ODD)
+    return _relay({**texts, "exists": result["exists"]})

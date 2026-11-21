@@ -18,6 +18,7 @@ ID_MAX = 200
 
 #: встроенный перечень srvllm: короткое имя студии → возможности
 CATALOG_CAPS = {
+    "local-gemma-abl": ("vision",),
     "flux": ("generate", "edit", "mask", "seed"),
     "wan": ("video",),
     "h3": ("video",),
@@ -105,7 +106,7 @@ def models(kind: str, listed: list[dict], slot_ids: "list[str] | None", limit: i
             out[name] = {**out.get(name, {"id": name}), "caps": _caps(found, "catalog")}
     if kind == "srvllm":
         for name, found in CATALOG_CAPS.items():
-            entry = {"id": name, "caps": _caps(found, "catalog")}
+            entry = {**out.get(name, {"id": name}), "caps": _caps(found, "catalog")}
             if slot_ids is not None and name in GATEWAY_IDS and GATEWAY_IDS[name] not in slot_ids:
                 entry["absent"] = True
             out[name] = entry

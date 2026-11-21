@@ -265,7 +265,11 @@ class Runner:
     async def _wait_queue(self, t):
         """Пауза очереди держит ход не дольше `queue_pause_sec` от последней правки: страницу закрыли посреди
         правки — ход кончается, очередь уходит в `done.unsent`, слот заданий и обновление не держатся."""
+        notified = False
         while t.queue_paused and t.queued and not (t.stopped or t.closing):
+            if not notified:
+                self._send(t, {"k": "queue", "items": self._queue_state(t), "paused": True, "waiting": True})
+                notified = True
             t.queue_wake.clear()
             try:
                 await asyncio.wait_for(t.queue_wake.wait(), self.queue_pause_sec)
@@ -488,7 +492,8 @@ class Runner:
 
     def activity(self) -> list[dict]:
         """Только идентификаторы и статус; чтение не создаёт сессий CLI."""
-        return [{"project": t.pid, "chat": t.chat, "running": True, "asking": bool(t.asks)}
+        return [{"project": t.pid, "chat": t.chat, "running": True, "asking": bool(t.asks),
+                 **({"queue_paused": True} if t.queue_paused and t.queued else {})}
                 for t in self._turns.values()]
 
     def children(self, pid, chat):
@@ -878,7 +883,7 @@ class Runner:
     @staticmethod
     def _frame(t: _Turn, e: dict) -> dict:
         frame = {"t": "ev", "project": t.pid, "chat": t.chat, "turn": t.turn, "e": e}
-        if e.get("k") in ("ask", "done"):
+        if e.get("k") in ("ask", "done") or e.get("waiting") is True:
             frame["project_name"] = t.project.name
         return frame
 

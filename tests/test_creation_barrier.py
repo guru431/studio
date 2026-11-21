@@ -33,7 +33,8 @@ def test_voice_conversion_cannot_recreate_history(studio, env, monkeypatch, acti
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
     administrator = SimpleNamespace(id=make_user(studio, "administrator", is_admin=True))
 
-    async def convert(src, dst, *, max_sec):
+    async def convert(src, dst, *, max_sec, start=0):
+        assert start == 0
         if action == "wipe":
             await history.delete_all(uid)
         else:
@@ -50,7 +51,8 @@ def test_voice_conversion_cannot_recreate_history(studio, env, monkeypatch, acti
     assert list(env.media_dir.rglob("*.wav")) == []
     assert list(state.CFG.tmp_dir.iterdir()) == []
     if action != "disable":
-        async def fresh_conversion(src, dst, *, max_sec):
+        async def fresh_conversion(src, dst, *, max_sec, start=0):
+            assert start == 0
             dst.write_bytes(b"wav")
             return 8.0
 
@@ -97,7 +99,8 @@ def test_creation_started_during_wipe_is_rejected_after_wipe_finishes(studio, mo
         assert release_cleanup.wait(5)
         return real_remove(rows)
 
-    async def held_conversion(src, dst, *, max_sec):
+    async def held_conversion(src, dst, *, max_sec, start=0):
+        assert start == 0
         converting.set()
         async with asyncio.timeout(5):
             while state.DB.execute("SELECT 1 FROM media WHERE user_id = ?", (uid,)).fetchone():

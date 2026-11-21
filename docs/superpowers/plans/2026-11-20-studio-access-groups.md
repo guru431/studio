@@ -174,7 +174,7 @@ aitools хоста Spark подключается к Studio общим MCP с ф
 
 ### Task 7: Обёртка aitools — ядро (вне репозитория Studio)
 
-Каталог разработки — `<projects>/_work/aitools-studio` (свой локальный git, venv с mcp 2.3.0, starlette 1.10.0, uvicorn 0.54.0, httpx, pytest).
+Каталог разработки — `../aitools-studio` (свой локальный git, venv с mcp 2.3.0, starlette 1.10.0, uvicorn 0.54.0, httpx, pytest).
 
 **Files:**
 - Create: `aitools_studio.py`, `tests/fake_cli.py` (подмена `aitools_cli.py`: `list` — 3 инструмента, `call` — пишет файлы в `AITOOLS_WORKSPACE/out`,

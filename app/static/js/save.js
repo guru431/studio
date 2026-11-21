@@ -117,7 +117,7 @@ async function fetchAll(mediaIds, onProgress) {
     onProgress(i + 1, mediaIds.length);
     const abort = new AbortController();
     const response = await fetch(`/api/media/${encodeURIComponent(mediaId)}`,
-      { credentials: 'same-origin', signal: abort.signal });
+      { credentials: 'same-origin', cache: 'no-store', signal: abort.signal });
     if (response.status === 404) {
       abort.abort();
       continue;

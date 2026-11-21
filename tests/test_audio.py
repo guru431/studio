@@ -50,10 +50,12 @@ def test_probe_and_compress_to_small_mono_mp3(tmp):
 
 
 def test_to_wav_cuts_to_the_limit(tmp):
-    src = silence(tmp / "voice.wav", 3.0)
+    src = tone_after_silence(tmp / "voice.wav", 1.5, 1.5)
     dst = tmp / "voice-24k.wav"
-    assert asyncio.run(audio.to_wav(src, dst, max_sec=1.0)) == pytest.approx(1.0, abs=0.05)
+    assert asyncio.run(audio.to_wav(src, dst, max_sec=1.0, start=1.5)) == pytest.approx(1.0, abs=0.05)
     assert stream(dst) == "pcm_s16le,24000,1"
+    with wave.open(str(dst), "rb") as wav:
+        assert any(wav.readframes(2400))
 
 
 def test_mp3_of_joins_parts(tmp):

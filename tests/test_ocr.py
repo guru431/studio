@@ -1051,5 +1051,5 @@ def test_delete_running_is_409_and_done_removes_files(studio):
     assert studio.c.get(f"/api/ocr/{sid}").status_code == 404
     assert count(studio, "media") == 5 and count(studio, "scan_pages") == 4       # в корзине — всё на месте
     for scan in (sid, sid2):
-        assert studio.c.delete(f"/api/trash/scans/{scan}").status_code == 204
+        assert studio.c.request("DELETE", f"/api/trash/scans/{scan}", json={"password": "password-123"}).status_code == 204
     assert count(studio, "media") == 0 and count(studio, "scans") == 0 and count(studio, "scan_pages") == 0

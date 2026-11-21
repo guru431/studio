@@ -65,7 +65,7 @@ REFS = {
              f" AND message_id IN (SELECT id FROM messages WHERE chat_id IN ({_LIVE_CHATS}))"),
     "photo": ("images", ("media_id", "source_media_id", "mask_media_id"), LIVE),
     "video": ("videos", ("media_id", "source_media_id"), LIVE),
-    "transcribe": ("transcripts", ("source_media_id", "result_media_id"), LIVE),
+    "transcribe": ("transcripts", ("source_media_id", "result_media_id", "listen_media_id"), LIVE),
     "ocr": ("scans", ("source_media_id",), LIVE),
     "speech": ("speeches", ("media_id",), LIVE),
     "voices": ("voices", ("media_id",), LIVE),
@@ -242,7 +242,8 @@ def _videos(user_id: int, rows: list, files: dict) -> list:
 
 def _transcripts(user_id: int, rows: list, files: dict) -> list:
     return [_pick(r, "id", "model", "name", "duration", "speakers", "state", "detail", "created", "finished")
-            | {"file": files.get(r["source_media_id"]), "result_file": files.get(r["result_media_id"]),
+            | {"file": files.get(r["source_media_id"]), "listen_file": files.get(r["listen_media_id"]),
+               "result_file": files.get(r["result_media_id"]),
                "edits": _maybe_json(r["edits"])}
             for r in rows]
 

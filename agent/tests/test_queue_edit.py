@@ -55,8 +55,10 @@ async def test_claude_queue_runs_only_after_current_result(home, tmp_path, monke
     queued = await r.steer(PID, CHAT, "second", [], mode="queue")
     assert client.queries == ["first"]
     await r.pause_queue(PID, CHAT, True)
+    assert r.activity()[0]["queue_paused"] is True
+    assert not any(frame["e"].get("waiting") for frame in sent)
     release.set()
-    await until(lambda: r._turns[CHAT].pending == 0)
+    await until(lambda: any(frame["e"].get("waiting") for frame in sent))
     assert client.queries == ["first"] and not r._turns[CHAT].finishing
     if finish == "expire":
         r.queue_pause_sec = 0  # правка ниже заново отсчитывает срок — он уже истёк
@@ -67,6 +69,7 @@ async def test_claude_queue_runs_only_after_current_result(home, tmp_path, monke
         await r.stop(PID, CHAT)
     await asyncio.gather(*(t.task for t in list(r._turns.values())))
     assert not r._turns
+    assert sum(frame["e"].get("waiting") is True for frame in sent) == 1
     assert client.queries == (["first", "corrected"] if finish == "resume" else ["first"])
     assert any(frame["e"]["k"] == "followup_sent" for frame in sent) == (finish == "resume")
     done = next(frame["e"] for frame in sent if frame["e"]["k"] == "done")

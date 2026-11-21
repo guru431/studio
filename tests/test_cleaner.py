@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 import cleaner_client as cleaner
 import clock
+import knowledge
 import state
 from conftest import make_user, signin
 from test_chat import attach, messages, new_chat, png, sse, turn
@@ -146,6 +147,41 @@ def test_reviewed_chat_streams_restored_text_and_preserves_raw_answer(protected)
     assert studio.gw.chat_requests == []
 
 
+def test_cleaner_previews_the_edited_turn_before_replacing_history(protected):
+    studio, remote = protected
+    cid = new_chat(studio)
+    shown = preview(studio, cid).json()
+    first = sse(turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=shown["ticket"]))[0][1]
+    shown = preview(studio, cid, text="Later").json()
+    later = sse(turn(studio, cid, "Later", cleaner_ticket=shown["ticket"]))[0][1]
+    target = {"id": first["user_message_id"], "last_id": later["assistant_message_id"]}
+    shown = preview(studio, cid, text=f"Новый вопрос {EMAIL}", edit=target)
+    assert shown.status_code == 200, shown.text
+    assert len(messages(studio, cid)) == 4
+    assert len(remote.prepared[-1]["messages"]) == 2
+    response = turn(studio, cid, f"Новый вопрос {EMAIL}", edit=target, cleaner_ticket=shown.json()["ticket"])
+    assert sse(response)[-1] == ("done", {"status": "done"})
+    assert len(messages(studio, cid)) == 2
+    assert messages(studio, cid)[0]["id"] == target["id"]
+
+
+def test_cleaner_turn_clears_the_previous_excerpt_marker(protected):
+    studio, remote = protected
+    cid = new_chat(studio)
+    text = "Документ из предыдущего хода"
+    att = attach(studio, "context.txt", text.encode())
+    draft = {"attachment_ids": [att["id"]]}
+    shown = preview(studio, cid, **draft).json()
+    sse(turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=shown["ticket"], **draft))
+    studio.c.portal.call(knowledge.adopt, remote.uid, att["id"], "context.txt", text)
+    assert messages(studio, cid)[0]["attachments"][0]["excerpts"]
+
+    shown = preview(studio, cid).json()
+    assert sse(turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=shown["ticket"]))[-1] == ("done", {"status": "done"})
+    assert not messages(studio, cid)[0]["attachments"][0].get("excerpts")
+    assert f"<document name=\"context.txt\">\n{text}\n</document>" in remote.prepared[-1]["messages"][1]["content"]
+
+
 def test_explicit_local_preview_requires_its_own_confirmation_and_never_sends_cloud(protected):
     studio, remote = protected
     cid = new_chat(studio)
@@ -225,7 +261,7 @@ def test_context_deletion_retries_with_original_address_and_credential(protected
     cid = new_chat(studio)
     preview(studio, cid)
     studio.c.delete(f"/api/chats/{cid}")
-    studio.c.delete(f"/api/trash/chats/{cid}")     # контекст Cleaner — при окончательном удалении, не в корзину
+    studio.c.request("DELETE", f"/api/trash/chats/{cid}", json={"password": "password-123"})     # контекст Cleaner — при окончательном удалении, не в корзину
     assert not cleaner.TICKETS
     assert state.DB.execute("SELECT COUNT(*) FROM cleaner_contexts").fetchone()[0] == 0
     assert state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions").fetchone()[0] == 1
@@ -258,7 +294,7 @@ def test_revoked_cleanup_key_is_backed_off_and_pending_is_visible(protected):
     cid = new_chat(studio)
     preview(studio, cid)
     studio.c.delete(f"/api/chats/{cid}")
-    studio.c.delete(f"/api/trash/chats/{cid}")     # контекст Cleaner — при окончательном удалении, не в корзину
+    studio.c.request("DELETE", f"/api/trash/chats/{cid}", json={"password": "password-123"})     # контекст Cleaner — при окончательном удалении, не в корзину
     remote.revoked = True
     studio.c.portal.call(cleaner.purge)
     studio.c.portal.call(cleaner.purge)

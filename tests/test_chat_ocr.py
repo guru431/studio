@@ -56,8 +56,14 @@ def wait_until(s, cond, limit=3000):
 
 
 def held_until_the_turn_waits(s):
-    """Страница скана держится шлюзом, пока ход не начал ждать: иначе скан кончился бы до хода."""
-    s.gw.ocr_hold = lambda request: not chat.STREAMS
+    """Не отдавать страницу до первого замера прогресса самого хода."""
+    def held(request):
+        if any(st.scan_state for st in chat.STREAMS.values()):
+            s.gw.ocr_hold = False
+            return False
+        return True
+
+    s.gw.ocr_hold = held
 
 
 def paths(s) -> list:
@@ -347,6 +353,19 @@ def test_failed_scan_attachment_can_be_recognized_again(studio):
     assert sse(ask(studio, cid, "ещё раз"))[-1] == ("done", {"status": "done"})
     assert doc("скан.pdf", f"Страница 1\n\n{TEXT}", f"{QUESTION}\n\nещё раз") == (
         studio.gw.chat_requests[-1]["messages"][-1]["content"])
+
+
+def test_scan_in_trash_is_not_available_for_attachment_retry(studio):
+    add_gateway(studio)
+    cid = new_chat(studio)
+    held_until_the_turn_waits(studio)
+    studio.gw.ocr_replies = [(500, {"error": {"message": "внутренняя ошибка"}})]
+    att = upload(studio, scan_pdf("ink"))
+    assert sse(ask(studio, cid, ids=[att["id"]]))[-1][0] == "error"
+    assert messages(studio, cid)[0]["attachments"][0]["rescan"] is True
+    assert studio.c.delete(f"/api/ocr/{att['ocr']['id']}").status_code == 204
+    assert "rescan" not in messages(studio, cid)[0]["attachments"][0]
+    assert studio.c.post(f"/api/attachments/{att['id']}/ocr").status_code == 404
 
 
 def test_reload_shows_the_scan_progress(studio):

@@ -173,6 +173,30 @@ def test_real_merge_conflict_and_rename_keep_all_path_spaces(tmp_path):
     assert sorted(gitinfo.status(tmp_path)["files"], key=lambda row: row["path"]) == [
         {"path": "conflict with  spaces.txt", "status": "U"},
         {"path": "new name with  spaces.txt", "status": "R"}]
+    renamed = tmp_path / "new name with  spaces.txt"
+    renamed.write_bytes(b"renamed and edited\r\n")
+    assert gitinfo.compare(tmp_path, renamed.name) == {
+        "before": "rename\n", "after": "renamed and edited\n", "exists": True}
+
+
+@pytest.mark.integration
+def test_compare_includes_untracked_and_deleted_files_and_refuses_binary_or_large_files(tmp_path):
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    subprocess.run(git + ["init", "-q"], check=True)
+    (tmp_path / "remove.txt").write_bytes(b"removed\n")
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-qm", "initial"], check=True)
+    (tmp_path / "remove.txt").unlink()
+    (tmp_path / "новый.txt").write_bytes(b"new\n")
+    (tmp_path / "binary.txt").write_bytes(b"\0\xff")
+    (tmp_path / "large.txt").write_bytes(b"a" * (gitinfo.COMPARE_MAX + 1))
+    assert gitinfo.compare(tmp_path, "remove.txt") == {"before": "removed\n", "after": "", "exists": False}
+    assert gitinfo.compare(tmp_path, "новый.txt") == {"before": "", "after": "new\n", "exists": True}
+    for path, code in [("binary.txt", "binary"), ("large.txt", "too_large"), ("../outside.txt", "invalid"),
+                       (".git/config", "not_found")]:
+        with pytest.raises(errors.Refused) as e:
+            gitinfo.compare(tmp_path, path)
+        assert e.value.code == code
 
 
 def test_no_upstream_counts_unpublished_commits_and_keeps_failed_count_unknown(monkeypatch, tmp_path):

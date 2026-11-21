@@ -4,13 +4,39 @@ import json
 
 import pytest
 
-from test_ui_browser import (API, NO_OVERFLOW, READY, add_gateway, browser, go, live, problems, put_files, recognized,
-                             signin)
+from test_ui_browser import (API, NO_OVERFLOW, READY, TL_DONE, add_gateway, add_translator, browser, go, live, problems,
+                             put_files, recognized, signin, translator)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 CUT = (200, {"choices": [{"message": {"content": "Обрывок"}, "finish_reason": "length"}]})
 PAGE_NO = "document.querySelector('#ocr-page')?.textContent"
+
+
+def test_translate_reuses_the_scan_and_opens_the_translation(browser, live, translator):
+    from scans import photo
+
+    live.add_user("ocrtranslate")
+    translator.chat_script = [["Übersetzte Seite"]]
+    before = len(live.gw.ocr_requests)
+    r = browser.drive(live.url + "/", [*signin("ocrtranslate"), ("wait", READY), add_translator(), *go("ocr"),
+        put_files("#ocr-add input", [("Лист.png", photo("PNG"))]),
+        ("wait", "document.querySelector('#ocr-translate')"), ("click", "#ocr-translate"),
+        ("wait", "document.querySelector('#ocr-translate-target option[value=de]')"),
+        ("eval", "target", "document.querySelector('#ocr-translate-target').value = 'de'"),
+        ("click", "#ocr-translate-confirm"),
+        ("wait", f"{TL_DONE} && document.querySelector('#tl-output')?.textContent.includes('Übersetzte Seite')"),
+        ("eval", "targetAfter", "document.querySelector('#tl-target').value"),
+        ("click", "#tl-scan"), ("wait", "document.querySelector('#ocr-translate')"),
+        ("eval", "reload", "window.beforeReload = true; location.reload()"),
+        ("wait", "!window.beforeReload && document.querySelector('#ocr-translate')"),
+        *go("translate"), ("wait", "document.querySelector('#tl-output')?.textContent.includes('Übersetzte Seite')"),
+        ("click", "#tl-new"), *go("ocr"), ("wait", "document.querySelector('#ocr-translate')"),
+        *go("translate"), ("wait", f"{TL_DONE} && document.querySelector('#tl-output')?.textContent === ''")],
+        width=320, mobile=True)
+    assert not r.get("failed"), r
+    assert r["values"]["targetAfter"] == "de"
+    assert len(live.gw.ocr_requests) == before + 1 and not problems(r), problems(r)
 
 
 @pytest.mark.parametrize("width", [320, 1280])
@@ -86,7 +112,21 @@ def test_engine_is_chosen_for_upload_and_for_recognizing_again(browser, live, wi
     assert not problems(r), problems(r)
 
 
-def test_big_photos_are_shrunk_and_turned_before_the_upload(browser, live):
+@pytest.fixture
+def large_rotated_photo():
+    import io
+
+    from PIL import Image
+
+    noise = Image.effect_noise((4400, 1000), 64).convert("RGB")
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    out = io.BytesIO()
+    noise.save(out, "JPEG", quality=95, exif=exif)
+    return out.getvalue()
+
+
+def test_big_photos_are_shrunk_and_turned_before_the_upload(browser, live, large_rotated_photo):
     """05:F15: фото длиннее 2200 точек уходит JPEG с длинной стороной 2200, уже повёрнутым по EXIF (тег 6 —
     поворот на 90°) и без метаданных; фото не длиннее — как есть."""
     import io
@@ -96,12 +136,7 @@ def test_big_photos_are_shrunk_and_turned_before_the_upload(browser, live):
     import media
     import state
     from scans import photo
-    noise = Image.effect_noise((4400, 1000), 64).convert("RGB")
-    exif = Image.Exif()
-    exif[0x0112] = 6
-    out = io.BytesIO()
-    noise.save(out, "JPEG", quality=95, exif=exif)
-    big = out.getvalue()
+    big = large_rotated_photo
     live.add_user("ocrshrink")
     r = browser.drive(live.url + "/", [*signin("ocrshrink"), ("wait", READY), add_gateway(),
         *go("ocr"), ("wait", "document.querySelector('#ocr-add input')"),
@@ -119,6 +154,41 @@ def test_big_photos_are_shrunk_and_turned_before_the_upload(browser, live):
         assert image.size == (500, 2200) and image.getexif().get(0x0112) is None
     assert len(shrunk) < len(big)
     assert media.path(uid, rows[1]["media_id"]).read_bytes() == photo("PNG")
+    assert not problems(r), problems(r)
+
+
+def test_photo_inputs_shrink_and_turn_the_selected_photo(browser, live, large_rotated_photo):
+    live.add_user("shrinkphoto")
+    big = [("IMG_1.jpg", large_rotated_photo)]
+    r = browser.drive(live.url + "/", [*signin("shrinkphoto"), ("wait", READY), add_gateway(), *go("photo"),
+        ("wait", "document.querySelector('#photo-file')"), put_files("#photo-file", big, mime="image/jpeg"),
+        ("wait", "document.querySelector('#photo-source img')?.naturalHeight === 2048"),
+        ("wait", "!document.querySelector('#describe-file')?.disabled"),
+        put_files("#describe-file", big, mime="image/jpeg"),
+        ("wait", "document.querySelector('#describe-photo')?.naturalHeight === 2048")])
+    assert not r.get("failed"), r
+    assert not problems(r), problems(r)
+
+
+def test_translate_shrinks_and_turns_the_photo_before_upload(browser, live, large_rotated_photo, translator):
+    from test_ui_browser import translating
+
+    live.add_user("shrinktranslate")
+    r = browser.drive(live.url + "/", [*translating("shrinktranslate"),
+        ("eval", "observe", """(() => { const send = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.send = function(data) {
+            const file = data?.get?.('file');
+            if (file instanceof File) window.sentPhoto = createImageBitmap(file).then(img => {
+              const dims = [img.width, img.height, file.size]; img.close(); return dims;
+            });
+            return send.call(this, data);
+          }; return true; })()"""),
+        put_files("#tl-photo-input", [("IMG_1.jpg", large_rotated_photo)], mime="image/jpeg"),
+        ("wait", "document.querySelector('#tl-chip:not([hidden])') && !document.querySelector('#tl-go').disabled"),
+        ("click", "#tl-go"), ("wait", "window.sentPhoto"), ("eval", "sentDims", "window.sentPhoto")])
+    assert not r.get("failed"), r
+    width, height, size = r["values"]["sentDims"]
+    assert (width, height) == (500, 2200) and size < len(large_rotated_photo)
     assert not problems(r), problems(r)
 
 

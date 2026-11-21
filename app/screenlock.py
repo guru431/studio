@@ -44,7 +44,7 @@ PIN_MAX = 64                     # предел строки PIN в теле
 CHALLENGE_SEC = 120
 #: (digest сессии, "register" | "open") → (вызов, когда выдан); в памяти службы — перезапуск его забудет
 CHALLENGES: dict[tuple[str, str], tuple[bytes, float]] = {}
-NAMES = ("iPhone", "iPad", "Android", "Устройство")      # lock.js deviceName()
+NAMES = ("iPhone", "iPad", "Android", "Windows", "Mac", "Устройство")      # lock.js deviceName()
 TRANSPORTS = frozenset(t.value for t in AuthenticatorTransport)
 REFUSED_KEY = {"code": "passkey", "message": "устройство не подтвердило ключ"}
 REFUSED_OPEN = {"code": "passkey", "message": "ключ не подошёл — нажмите «Открыть» ещё раз"}

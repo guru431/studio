@@ -5,7 +5,8 @@
 распознавания (кроме сканов перевода и уже отправленного хода чата — `ocr.SERVED`) и переводы
 `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
-не старше JOBS_RECENT_SEC, не больше FINISHED_MAX; ответ чата через сервер — из памяти `chat.ANSWERED` (ответ с
+начала окна `window_start`: час по умолчанию, `seen` расширяет окно до последнего просмотра (до суток).
+Строк не больше FINISHED_MAX; ответ чата через сервер — из памяти `chat.ANSWERED` (ответ с
 рассуждением или в очереди за картой бывает долгим — как задание раздела).
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
 в тот же миг, не теряется, повтор страница отсекает по id. У идущих — `cancel`: адрес отмены своего раздела
@@ -15,6 +16,8 @@
 модулей (`detail` идущих — те же слова, что у раздела). Ни одного запроса к шлюзу. Журнал — ничего:
 названия записей, имена файлов и тексты не пишутся.
 """
+from math import isfinite
+
 from fastapi import APIRouter, Request
 
 import chat
@@ -31,6 +34,7 @@ import translate
 router = APIRouter(prefix="/api/jobs")
 
 JOBS_RECENT_SEC = 3600
+JOBS_VISIT_MAX_SEC = chat.ANSWERED_SEC
 FINISHED_MAX = 50
 SPEECH_TITLE = 40
 #: подписи моделей картинок — копия общей таблицы страницы (static/js/models.js), сверяет tests/test_docs.py
@@ -214,13 +218,17 @@ def _chat(uid: int) -> list:
 
 
 @router.get("")
-async def list_jobs(request: Request, since: "float | None" = None, visible: "bool | None" = None):
+async def list_jobs(request: Request, since: "float | None" = None, visible: "bool | None" = None,
+                    seen: "float | None" = None):
     """`visible` — страница сессии на экране (1) или ушла с него (0): готовность заданий push и ntfy ей не шлют
     (`push.screen`); прежняя страница его не шлёт — уведомления как раньше."""
     uid, now = request.state.user.id, clock.NOW()
     if visible is not None:
         push.screen(request.state.digest, visible)
-    after = now - JOBS_RECENT_SEC if since is None else max(since, now - JOBS_RECENT_SEC)
+    window_start = now - JOBS_RECENT_SEC
+    if seen is not None and seen > 0 and isfinite(seen):
+        window_start = max(now - JOBS_VISIT_MAX_SEC, min(window_start, seen))
+    after = window_start if since is None else max(since, window_start)
     hidden = lock_policy.hidden(request.state.digest)
     items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after, hidden)
              + _translate(uid, after) + _speech(uid, after) + ([] if "chat" in hidden else _chat_done(uid, after)))
@@ -230,4 +238,5 @@ async def list_jobs(request: Request, since: "float | None" = None, visible: "bo
     subscribed = state.DB.execute("SELECT 1 FROM push_subs WHERE digest = ? UNION ALL"
                                   " SELECT 1 FROM ntfy_devices WHERE user_id = ? AND digest = ? AND enabled = 1",
                                   (request.state.digest, uid, request.state.digest)).fetchone()
-    return {"now": now, "running": running, "finished": finished[:FINISHED_MAX], "push": subscribed is not None}
+    return {"now": now, "window_start": window_start, "running": running,
+            "finished": finished[:FINISHED_MAX], "push": subscribed is not None}

@@ -45,6 +45,7 @@ import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { presetChip } from './presets.js';
+import { resizePhoto } from './resize-photo.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { SERIES_MAX, seriesControl } from './series.js';
@@ -60,6 +61,7 @@ const PAGE = 30;
 const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
 const PHOTO_MAX = 20 * 1024 * 1024;  // фото с устройства — как у ролика (image_upload.VIDEO_UPLOAD)
+const PHOTO_SIDE = 2048;
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const SIZES = [['portrait', tr("Портрет 832×1216"), '832x1216'], ['square', tr("Квадрат 1024×1024"), '1024x1024'],
   ['landscape', tr("Альбом 1216×832"), '1216x832']];
@@ -87,6 +89,9 @@ function build(view, ctx) {
   let size = 'portrait';
   let sizes = SIZES;             // варианты чипа размера: свои или `size.enum` инструмента MCP
   let source = null;             // { file, url } — исходное фото с устройства
+  let choosing = 0;
+  let preparingSource = false;
+  let preparingDescription = false;
   let mcp;
   let submitting = false;
   let describing = false;
@@ -380,7 +385,8 @@ function build(view, ctx) {
 
   /* занятость: одно задание за раз */
   function isBusy() {
-    return submitting || describing || !!translating || !!orphan || running.size > 0 || mcp.busy;
+    return submitting || describing || preparingSource || preparingDescription || !!translating || !!orphan
+      || running.size > 0 || mcp.busy;
   }
 
   function syncBusy() {
@@ -1072,10 +1078,23 @@ function build(view, ctx) {
 
   /* события (меню закрывают сами: menu.js) */
 
-  file.addEventListener('change', () => setSource(file.files[0] || null));
+  file.addEventListener('change', async () => {
+    const selected = file.files[0];
+    const mine = ++choosing;
+    preparingSource = !!selected;
+    syncBusy();
+    const f = selected ? await resizePhoto(selected, PHOTO_SIDE) : null;
+    if (!alive || mine !== choosing) return;
+    preparingSource = false;
+    setSource(f);
+    syncBusy();
+  });
   sourceClear.addEventListener('click', () => {
+    choosing += 1;
+    preparingSource = false;
     file.value = '';
     setSource(null);
+    syncBusy();
   });
   strength.addEventListener('input', () => {
     strengthValue.textContent = Number(strength.value).toFixed(2);
@@ -1088,11 +1107,19 @@ function build(view, ctx) {
     autosize();
     prompt.focus();
   });
-  describeFile.addEventListener('change', () => {
-    const f = describeFile.files[0];
+  describeFile.addEventListener('change', async () => {
+    const selected = describeFile.files[0];
     describeFile.value = '';
-    if (f && f.size > PHOTO_MAX) error.textContent = tr("Фото больше 20 МиБ");   // как у «Создать»: тело Apache не пропустит
-    else if (f) describe({ file: f });
+    if (!selected || isBusy()) return;
+    preparingDescription = true;
+    file.disabled = true;
+    syncBusy();
+    const f = await resizePhoto(selected, PHOTO_SIDE);
+    if (!alive) return;
+    preparingDescription = file.disabled = false;
+    if (f.size > PHOTO_MAX) error.textContent = tr("Фото больше 20 МиБ");   // как у «Создать»: тело Apache не пропустит
+    else describe({ file: f });
+    syncBusy();
   });
   prompt.addEventListener('input', autosize);
   enterSends(prompt, () => form.requestSubmit());

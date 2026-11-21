@@ -152,7 +152,18 @@ def _values(body, old=None):
                               or any(not 32 <= ord(c) <= 126 for c in v) for k, v in headers.items())
             or any(not 32 <= ord(c) <= 126 for c in token)):
         raise refused("Проверьте токен и дополнительные HTTP-заголовки", "invalid", 422)
-    return body.name.strip(), body.url, security.encrypt(json.dumps({"token": token, "headers": headers})), int(body.enabled)
+    encrypted = None
+    if old is not None and (body.url, bool(body.enabled), bool(body.protected)) == (
+            old["url"], bool(old["enabled"]), bool(old["protected"])):
+        try:
+            previous = previous if keep else secret(old)
+        except HTTPException:
+            previous = {}  # полностью переданные новые реквизиты восстанавливают повреждённое подключение
+        if (token, headers) == (previous.get("token"), previous.get("headers", {})):
+            encrypted = old["secret_enc"]
+    if encrypted is None:
+        encrypted = security.encrypt(json.dumps({"token": token, "headers": headers}))
+    return body.name.strip(), body.url, encrypted, int(body.enabled)
 
 
 def list_for(uid):

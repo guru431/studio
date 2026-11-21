@@ -64,7 +64,7 @@ export async function editVoice(host, voice, onSaved) {
 
   function busy() {
     const pending = entries.some(e => e.pending);
-    save.disabled = saving || starting || !!recording || pending;
+    save.disabled = saving || starting || !!recording || pending || entries.some(rangeChanged);
     file.disabled = saving || starting || !!recording || pending;
     rec.disabled = saving || starting || pending;
     name.disabled = saving;
@@ -74,6 +74,8 @@ export async function editVoice(host, voice, onSaved) {
       entry.remove.disabled = saving || !!recording || starting;
       entry.replace.disabled = saving || !!recording || starting;
       entry.retry.disabled = saving || entry.pending || !!recording || starting;
+      entry.start.disabled = entry.end.disabled = entry.rangeStart.disabled = entry.rangeEnd.disabled = saving || entry.pending;
+      entry.applyRange.disabled = saving || entry.pending || !rangeChanged(entry);
     }
   }
 
@@ -84,7 +86,8 @@ export async function editVoice(host, voice, onSaved) {
 
   /** Name, samples (saved id, new recording, text) and the selected one — what saving would send. */
   function snapshot() {
-    return JSON.stringify([name.value, entries.map(e => [e.id || null, !!e.file, e.text.value]), entries.indexOf(selected)]);
+    return JSON.stringify([name.value, entries.map(e => [e.id || null, !!e.file, e.text.value, e.start.value, e.end.value]),
+      entries.indexOf(selected)]);
   }
 
   function dirty() {
@@ -120,17 +123,46 @@ export async function editVoice(host, voice, onSaved) {
     if (entry.file) entry.url = URL.createObjectURL(entry.file);
     const src = entry.url || (entry.mediaId ? `/api/media/${encodeURIComponent(entry.mediaId)}` : '');
     entry.player.hidden = !src;
+    entry.range.hidden = !entry.file;
     if (src) entry.player.src = src;
   }
 
+  function rangeChanged(entry) {
+    return !!entry.file && (entry.start.value !== entry.trim.start || entry.end.value !== entry.trim.end);
+  }
+
+  function formOf(entry) {
+    const body = new FormData();
+    body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
+    for (const [key, value] of Object.entries(entry.trim)) if (value !== '') body.append(key, value);
+    return body;
+  }
+
   function makeEntry(sample = {}) {
-    const entry = { id: sample.id, mediaId: sample.media_id, file: null, pending: false };
+    const entry = { id: sample.id, mediaId: sample.media_id, file: null, pending: false, trim: { start: '', end: '' } };
     entry.player = el('audio', { class: 'voice-sample-audio', controls: true, preload: 'metadata', hidden: true,
       'aria-label': tr("Прослушать образец") });
     entry.text = el('textarea', { class: 'input', name: 'text', rows: '3', maxlength: String(TEXT_MAX),
       placeholder: tr("Определится автоматически после загрузки или записи") }, sample.text || '');
     entry.note = el('p', { class: 'muted small', 'aria-live': 'polite', ...(!entries.length ? { id: 'voice-asr-status' } : {}) });
     entry.error = el('p', { class: 'error', 'aria-live': 'polite' });
+    entry.start = el('input', { class: 'input voice-start', type: 'number', min: '0', step: '0.1', placeholder: '0' });
+    entry.end = el('input', { class: 'input voice-end', type: 'number', min: '0', step: '0.1' });
+    const setTime = (input) => {
+      input.value = entry.player.currentTime.toFixed(1);
+      busy();
+    };
+    entry.rangeStart = button(tr("Начало здесь"), { class: 'btn btn-sm' }, () => setTime(entry.start));
+    entry.rangeEnd = button(tr("Конец здесь"), { class: 'btn btn-sm' }, () => setTime(entry.end));
+    entry.applyRange = button(tr("Распознать фрагмент"), { class: 'btn btn-sm voice-apply-range' }, () => {
+      entry.trim = { start: entry.start.value, end: entry.end.value };
+      transcribe(entry);
+    });
+    entry.start.addEventListener('input', busy);
+    entry.end.addEventListener('input', busy);
+    entry.range = el('details', { class: 'voice-range', hidden: true }, el('summary', {}, tr("Выбрать фрагмент")),
+      el('div', { class: 'row' }, field(tr("Начало, с"), entry.start), entry.rangeStart),
+      el('div', { class: 'row' }, field(tr("Конец, с"), entry.end), entry.rangeEnd), entry.applyRange);
     entry.radio = el('input', { type: 'radio', name: 'voice-reference' });
     entry.radio.addEventListener('change', () => choose(entry));
     entry.retry = button(tr("Распознать ещё раз"), { class: 'btn btn-sm', hidden: true,
@@ -139,6 +171,8 @@ export async function editVoice(host, voice, onSaved) {
     entry.replace.addEventListener('change', () => {
       if (!entry.replace.files[0]) return;
       entry.file = entry.replace.files[0];
+      entry.start.value = entry.end.value = '';
+      entry.trim = { start: '', end: '' };
       entry.replace.value = '';
       preview(entry);
       transcribe(entry);
@@ -159,7 +193,7 @@ export async function editVoice(host, voice, onSaved) {
     entry.node = el('section', { class: 'voice-sample' },
       el('label', { class: 'row' }, entry.radio, tr("Для озвучки"),
         sample.duration ? ` · ${clock(sample.duration)}` : ''),
-      entry.player,
+      entry.player, entry.range,
       field(tr("Текст образца (можно поправить)"), entry.text, 'text'),
       field(tr("Заменить запись"), entry.replace, 'replacement'), entry.note, entry.error,
       el('div', { class: 'row' }, entry.retry, entry.remove));
@@ -183,10 +217,8 @@ export async function editVoice(host, voice, onSaved) {
     entry.text.setAttribute('aria-busy', 'true');
     entry.retry.hidden = true;
     busy();
-    const body = new FormData();
-    body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
     try {
-      const result = await api('POST', '/api/voices/transcribe', body, { signal: controller.signal });
+      const result = await api('POST', '/api/voices/transcribe', formOf(entry), { signal: controller.signal });
       if (result.upload) {
         if (dialog.isConnected) issued.push(result.upload);
         else discard([result.upload]);   // the editor closed while recognizing: nobody will save it
@@ -297,9 +329,7 @@ export async function editVoice(host, voice, onSaved) {
         if (entry.file && entry.upload && Date.now() - entry.uploadAt < DRAFT_MS) {
           sample.upload = entry.upload;        // prepared by recognition: no second upload
         } else if (entry.file) {
-          const body = new FormData();
-          body.append('audio', entry.file, entry.file.name || recordingName(entry.file, 'sample'));
-          const { upload } = await api('POST', '/api/voices/prepare-sample', body);
+          const { upload } = await api('POST', '/api/voices/prepare-sample', formOf(entry));
           uploads.push(upload);
           sample.upload = upload;
         }

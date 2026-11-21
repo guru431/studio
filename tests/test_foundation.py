@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 58
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 60
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,7 +40,8 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
+        conn.executescript(db.SCHEMA.removesuffix(db.TRANSCRIPT_PLAYBACK_60).removesuffix(db.CODE_PINS_59)
+                           .removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
                            .removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
@@ -79,7 +80,7 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 58
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 60
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -181,7 +182,7 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
 def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env):
     """Шаг 58: ждущие ответы, корзина (`deleted`) с уходом записи из поиска, ссылки на файлы, защищённые MCP, память,
     базы знаний с FTS, язык речи. Прежний код (0.40.1) пишет своим списком столбцов — `deleted` остаётся NULL;
-    `trash.ROLLBACK_58` удаляет только корзину."""
+    `trash.ROLLBACK_58` защищает старый выпуск от доступа к защищённым данным."""
     from contextlib import closing
     import sqlite3
     import trash
@@ -191,7 +192,7 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 58
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 60
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -256,7 +257,34 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         assert found("аренды") == []
 
         conn.execute("INSERT INTO knowledge_bases(id,user_id,name,created,deleted) VALUES('kb2',1,'Gone',0,1)")
+        conn.execute("UPDATE chats SET protected_used = 1")
+        add_mcp = ("INSERT INTO mcp_servers(id,user_id,name,url,secret_enc,enabled,protected)"
+                   " VALUES(?,NULL,?,'https://tools.test/mcp',x'00',?,?)")
+        conn.executemany(add_mcp, [(1, "Enabled protected", 1, 1), (2, "Disabled protected", 0, 1),
+                                   (3, "Enabled public", 1, 0)])
+        with pytest.raises(sqlite3.IntegrityError, match="no_protected_chats = 1"):
+            conn.executescript(trash.ROLLBACK_58)
+        assert not conn.in_transaction
+        assert conn.execute("SELECT count(*) FROM images").fetchone()[0] == 2
+        assert conn.execute("SELECT enabled FROM mcp_servers WHERE id = 1").fetchone()[0] == 1
+        assert not conn.execute("SELECT 1 FROM settings WHERE key = ?", (trash.ROLLBACK_MCP_KEY,)).fetchone()
+        conn.execute("UPDATE chats SET protected_used = 0 WHERE id = 'before'")
         conn.executescript(trash.ROLLBACK_58)
+        conn.executescript(trash.ROLLBACK_58)                              # повтор не затирает сохранённый признак
+        assert [r[0] for r in conn.execute("SELECT enabled FROM mcp_servers ORDER BY id")] == [0, 0, 1]
+
+        import access
+        import state
+        previous_db, state.DB = state.DB, conn
+        try:
+            access.forward()                                             # старт старой версии не восстановит MCP
+            assert conn.execute("SELECT enabled FROM mcp_servers WHERE id = 1").fetchone()[0] == 0
+            trash.forward()
+            trash.forward()
+        finally:
+            state.DB = previous_db
+        assert [r[0] for r in conn.execute("SELECT enabled FROM mcp_servers ORDER BY id")] == [1, 0, 1]
+        assert not conn.execute("SELECT 1 FROM settings WHERE key = ?", (trash.ROLLBACK_MCP_KEY,)).fetchone()
         assert [r[0] for r in conn.execute("SELECT id FROM chats")] == ["before"]
         assert [r[0] for r in conn.execute("SELECT id FROM images")] == ["img2"]
         assert [r[0] for r in conn.execute("SELECT id FROM knowledge_bases")] == ["kb1"]

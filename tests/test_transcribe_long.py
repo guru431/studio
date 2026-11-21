@@ -152,11 +152,16 @@ def test_part_marker_between_parts(studio, fake_audio):
     tid = upload(studio).json()["id"]
     item = wait_tr(studio, tid, {"done", "error"})
     assert [s["text"] for s in item["segments"]] == ["Первая.", MARKER_2, "Вторая."]
+    assert [s.get("system", False) for s in item["segments"]] == [False, True, False]
     assert item["speakers"] == 1
     txt = studio.c.get(f"/api/transcripts/{tid}/export?format=txt").text
     assert txt.index("Первая.") < txt.index(MARKER_2) < txt.index("Вторая.")
     srt = studio.c.get(f"/api/transcripts/{tid}/export?format=srt").text
     assert "Собеседник 1: Вторая." in srt and "00:10:02,000" in srt
+    for fmt in ("txt", "srt"):
+        translated = studio.c.get(f"/api/transcripts/{tid}/export?format={fmt}&lang=en").text
+        assert "Part 2 (from 00:10:00): speaker numbering restarts" in translated
+        assert "Первая." in translated and MARKER_2 not in translated
 
 
 def test_language_sent_per_connection_kind_and_omitted_for_auto(studio, fake_audio, tmp_path, monkeypatch):

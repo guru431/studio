@@ -12,7 +12,7 @@ from test_code import A, ALPHA, B, BETA, setup
 def test_activity_summary_combines_own_computers_and_engines_without_history(studio):
     aid, machine, link = setup(studio, opened=False)
     link.hello["project_activity"] = True
-    machine.running = {A: {"project": ALPHA, "asks": {}, "engine": "codex"},
+    machine.running = {A: {"project": ALPHA, "asks": {}, "engine": "codex", "queue_paused": True},
                        B: {"project": BETA, "asks": {"r": {}}, "engine": "opencode"}}
     second, _ = enroll(studio, name="Второй ПК")
     other = FakeMachine()
@@ -24,7 +24,8 @@ def test_activity_summary_combines_own_computers_and_engines_without_history(stu
     assert result.status_code == 200
     assert result.json() == {"items": [
         {"aid": aid, "items": [
-            {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "codex", "title": "Чат студии"},
+            {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "codex", "title": "Чат студии",
+             "queue_paused": True},
             {"project": BETA, "chat": B, "running": True, "asking": True, "engine": "opencode", "title": None}]},
         {"aid": second, "items": [
             {"project": ALPHA, "chat": A, "running": True, "asking": False, "engine": "claude", "title": None}]}]}

@@ -29,12 +29,12 @@ def test_read_from_chat_answer_strips_markdown_and_uses_default_source(studio, f
     row = state.DB.execute("SELECT * FROM speeches WHERE chat_id = ?", (r.json()["chat_id"],)).fetchone()
     assert row["text"] == "Жирный ответ\n\nЗаголовок" and row["voice"] == first and row["model"] == "qwen3-tts"
     wait_sp(studio, row["id"], {"done"})
-    # последняя озвучка этой моделью — другим голосом и по-английски: «Прочитать» берёт её голос и язык
+    # «Прочитать» берёт голос предыдущей озвучки; язык подбирается по текущему тексту.
     later = studio.c.post("/api/speeches", json={"text": "Привет.", "voice": other, "language": "en"}).json()
     wait_sp(studio, later["id"], {"done"})
     r = read(studio, "`код` и текст", kind="translate", oid="t1")
     row = state.DB.execute("SELECT * FROM speeches WHERE chat_id = ?", (r.json()["chat_id"],)).fetchone()
-    assert row["text"] == "код и текст" and row["voice"] == other and row["language"] == "en"
+    assert row["text"] == "код и текст" and row["voice"] == other and row["language"] == "ru"
     assert read(studio, "Скан", kind="ocr", oid="s1").status_code == 202
     assert read(studio, "Текст", kind="mail").status_code == 422
     assert read(studio, "  ").status_code == 422

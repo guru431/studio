@@ -107,7 +107,7 @@ path)` — схема, хост и порт подключения, путь —
 ссылках» (`GET /api/me/access` → `file_links`); стирание истории, «Аварийный выход» и «Отозвать всё» уносят ссылки
 учётки, уже открытый по ним файл закрывается на следующем запросе ([security-lock](security-lock.md)). Анонимный вход: `GET /f` — оболочка `file.html` (`file-link.js`);
 `POST /f/check {token}` → `{name, size, expires}`; `POST /f/open {token}` → cookie `studio_file` (HttpOnly, Secure,
-SameSite=Strict, Path=/f/file, `my_files.OPEN_SEC` (600), значение — случайный id в памяти процесса);
+SameSite=Strict, Path=/f/file, `my_files.OPEN_SEC` (600), значение — зашифрованные id ссылки и время выдачи);
 `GET /f/file` — поток с Range, ссылка проверяется на каждый запрос. Тело POST — до `chat_shares.PUBLIC_BODY_MAX`
 (`chat_shares.public_guard`), чужой `Origin` — 403; неизвестный, истёкший, отозванный токен, сменённый адрес или
 ключ сервера (`stamp`), снятый доступ владельца, выключенная учётка, исчезнувший файл, отказ или недоступность

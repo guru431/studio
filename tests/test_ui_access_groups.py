@@ -33,11 +33,11 @@ def reload_page():
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_admin_sets_groups_and_tool_access(browser, live, width):
+def test_admin_sets_groups_and_tool_access(browser, live, width, monkeypatch):
     login, group = f"access-member-{width}", f"Media {width}"
     mcp, models = f"Access tools {width}", f"Access API {width}"
     live.add_user(login)
-    service(live.gw)
+    service(live.gw, monkeypatch=monkeypatch)
     tool = "#mcp-access-dialog .access-tool[data-tool=image_generate]"
     hidden = "#mcp-access-dialog .access-tool[data-tool=internal_action]"
     retired = "#mcp-access-dialog .access-tool[data-tool=retired_tool]"

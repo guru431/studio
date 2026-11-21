@@ -25,16 +25,15 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import access
+import account
 import auth
 import account_mail
 import bridge
 import chat
 import clock
 import connections
-import db
 import email_accounts
 import history
-import images
 import knowledge
 import manage
 import mcp_client
@@ -72,6 +71,11 @@ class Allowlist(BaseModel):
 @router.get("/smtp")
 async def smtp_settings():
     return account_mail.public_settings()
+
+
+@router.get("/smtp/status")
+async def smtp_status():
+    return account_mail.delivery_status(account_mail.settings())
 
 
 @router.put("/smtp")
@@ -139,6 +143,26 @@ async def create_user():
     raise HTTPException(410, {"code": "invite", "message": "Создавайте пользователей приглашением на email"})
 
 
+@router.post("/users/{uid}/password-link", status_code=204)
+async def send_password_link(uid: int, request: Request):
+    user = _user_out(uid)
+    if uid == request.state.user.id:
+        raise HTTPException(409, {"code": "self", "message": "свой пароль меняют в «Настройках» → «Защита»"})
+    if user["disabled"] or not user["email"]:
+        raise HTTPException(409, {"code": "email", "message": "Нужна активная учётка с подтверждённой почтой."})
+    if not account_mail.configured(account_mail.settings()):
+        raise account_mail.unset()
+    email_accounts.throttle("forgot-user", str(uid), 5, 900)
+    token = email_accounts.new_token(uid, "reset", user["email"], email_accounts.RESET_SEC)
+    try:
+        await email_accounts.recovery_mail(token, user["email"], auth.request_origin(request), admin=True)
+    except HTTPException:
+        email_accounts.refund("forgot-user", str(uid))
+        raise
+    log.info("пользователь %d: отправлена ссылка для нового пароля", uid)
+    return Response(status_code=204)
+
+
 @router.patch("/users/{uid}")
 async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.require_admin)):
     _user_out(uid)                                            # нет такого — 404 до всяких проверок
@@ -170,6 +194,8 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
     state.DB.execute("BEGIN")
     try:
         was = state.DB.execute("SELECT is_admin FROM users WHERE id = ?", (uid,)).fetchone()
+        if body.disabled or body.is_admin is False:
+            account.keep_active_admin(uid)
         if changes:
             cols = ", ".join(f"{k} = ?" for k in changes)    # имена — из кода выше, не из запроса
             state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))
@@ -198,32 +224,14 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
     return _user_out(uid)
 
 
-async def _delete_user(uid: int, admin: auth.User):
-    """pending_files — сколько файлов учётки ещё ждут удаления на шаре: очередь переживает учётку."""
-    # сначала отключить: пока стирается история и кончаются задания, новых запросов учётки нет
-    state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
-    auth.end_sessions(uid)
-    email_accounts.revoke_invited_by(uid)
-    await bridge.drop_user(uid)
-    await history.delete_all(uid)
-    # отменённые задания освобождают карту подключением учётки — его каскад удалит вместе с ней;
-    # не дождались (images.SETTLE_SEC) — карту освободит конец аренды шлюза
-    if not await images.settle_user(uid):
-        log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)
-    pending = media.pending(uid)          # после ожидания: и файлы заданий, отменённых в это время
-    db.retire_user_id(state.DB, uid)      # id не достанется следующей учётке вместе с хвостами этой
-    state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))   # сессии и подключения — каскадом
-    log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
-             admin.id, uid, pending)
-    return {"pending_files": pending}
-
-
 @router.delete("/users/{uid}")
 async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     _self(admin, uid)
     _user_out(uid)
-    with operations.barrier(uid):
-        return await _delete_user(uid, admin)
+    pending = await account.delete_user_data(uid)
+    log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
+             admin.id, uid, pending)
+    return {"pending_files": pending}
 
 
 #: проба шары — не дольше; ответ панели — словами

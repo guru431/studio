@@ -8,6 +8,7 @@
 import asyncio
 import json
 import logging
+import math
 import uuid
 from contextlib import contextmanager
 
@@ -88,12 +89,25 @@ async def _form(request: Request):
     return fields, data, mime
 
 
-async def _sample(uid: int, data: bytes, mime: str) -> tuple[bytes, float]:
+def _sample_range(fields: dict) -> tuple[float, float]:
+    try:
+        start = float(fields.get("start") or 0)
+        end = fields.get("end")
+        length = float(end) - start if end else SAMPLE_MAX
+    except (ValueError, OverflowError):
+        start, length = -1, 0
+    if not math.isfinite(start) or start < 0 or not SAMPLE_MIN <= length <= SAMPLE_MAX:
+        raise _bad("range", "начало и конец должны задавать фрагмент длительностью 5–60 секунд")
+    return start, length
+
+
+async def _sample(uid: int, fields: dict, data: bytes, mime: str) -> tuple[bytes, float]:
     """Один и тот же WAV и предел длительности для ASR и сохранения образца."""
+    start, length = _sample_range(fields)
     src, dst = audio.temp(media.EXT.get(mime, ".bin")), audio.temp(".wav")
     try:
         await audio.file_io(src.write_bytes, data)
-        duration = await asyncio.wait_for(audio.to_wav(src, dst, max_sec=SAMPLE_MAX), BUDGET_SEC)
+        duration = await asyncio.wait_for(audio.to_wav(src, dst, max_sec=length, start=start), BUDGET_SEC)
         if duration < SAMPLE_MIN:
             raise _bad("short", "образец — 5–60 секунд речи")
         wav = await audio.file_io(dst.read_bytes)
@@ -116,8 +130,8 @@ async def transcribe(request: Request):
     uid = request.state.user.id
 
     async def run():
-        _fields, data, mime = await _form(request)
-        wav, duration = await _sample(uid, data, mime)
+        fields, data, mime = await _form(request)
+        wav, duration = await _sample(uid, fields, data, mime)
         return await dictation.recognize(uid, wav, "audio/wav", "sample.wav"), wav, duration
 
     try:
@@ -143,7 +157,7 @@ async def create(request: Request):
     title, text = fields.get("name", "").strip(), _text(fields.get("text", ""))
     if not 1 <= len(title) <= NAME_MAX:
         raise _bad("name", f"имя голоса — от 1 до {NAME_MAX} знаков")
-    wav, duration = await _sample(uid, data, mime)
+    wav, duration = await _sample(uid, fields, data, mime)
     vid = uuid.uuid4().hex
     operations.check(uid)
     try:
@@ -249,8 +263,8 @@ class DraftsIn(BaseModel):
 async def prepare_sample(request: Request):
     """Проверить один новый WAV. Пока редактор не подтвердил весь голос, ссылки на него нет."""
     uid = request.state.user.id
-    _, data, mime = await _form(request)
-    wav, duration = await _sample(uid, data, mime)
+    fields, data, mime = await _form(request)
+    wav, duration = await _sample(uid, fields, data, mime)
     try:
         return {"upload": await _draft_of(uid, wav, duration)}
     except media.StorageError as e:
@@ -390,7 +404,7 @@ async def _save_sample(voice_id: str, request: Request, sample_id: str | None = 
         raise _bad("samples", f"у голоса не больше {SAMPLES_MAX} образцов")
     fields, data, mime = await _form(request)
     text = _text(fields.get("text", ""))
-    wav, duration = await _sample(uid, data, mime)
+    wav, duration = await _sample(uid, fields, data, mime)
     operations.check(uid)
     _row(uid, voice_id)
     try:

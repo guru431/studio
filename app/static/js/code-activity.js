@@ -14,13 +14,14 @@ let dot;
 let tab;
 let timer;
 let requested = false;
+let scope = 0;
 let lastAction = Date.now();
 
 function paint() {
   if (!badge) return;
   const items = allCodeActivity();
   const total = items.filter((item) => item.running).length;
-  const asking = items.filter((item) => item.asking).length;
+  const asking = items.filter((item) => codeActivityState(item) === 'asking').length;
   const unread = items.filter((item) => item.unread && !item.running).length;
   badge.textContent = String(total);
   badge.hidden = total === 0;
@@ -51,14 +52,17 @@ export function allCodeActivity() {
   return [...activity].flatMap(([aid, items]) => [...items.values()].map((item) => ({ ...item, aid })));
 }
 export function codeActivityState(item) {
-  return item.asking ? 'asking' : item.running ? 'running' : 'unread';
+  return item.asking || (item.running && item.queue_paused) ? 'asking' : item.running ? 'running' : 'unread';
 }
 export const CODE_ACTIVITY_LABELS = { running: tr("Работает"), asking: tr("Требует вашего действия"), unread: tr("Завершена · не прочитана") };
+export function codeActivityLabel(item) {
+  return !item.asking && item.running && item.queue_paused ? tr("Очередь на паузе") : CODE_ACTIVITY_LABELS[codeActivityState(item)];
+}
 export function refreshCodeActivity() { refresh(); }
 function clearActivity() {
   for (const aid of activity.keys()) setCodeActivity(aid, []);
 }
-document.addEventListener('studio-code-clear', () => { clearActivity(); revisions.clear(); });
+document.addEventListener('studio-code-clear', () => { scope += 1; clearActivity(); revisions.clear(); });
 
 function active() {
   return document.visibilityState === 'visible' && !document.documentElement.classList.contains('shrouded')
@@ -77,9 +81,11 @@ async function refresh() {
   clearTimeout(timer);
   timer = null;
   requested = true;
+  const mine = scope;
   const before = new Map(revisions);
   try {
     const { items } = await read('/api/code/activity');
+    if (mine !== scope || !active()) return;
     for (const aid of activity.keys()) {
       if (!items.some((agent) => agent.aid === aid) && revisions.get(aid) === before.get(aid)) setCodeActivity(aid, []);
     }
@@ -87,6 +93,7 @@ async function refresh() {
       if (revisions.get(agent.aid) === before.get(agent.aid)) setCodeActivity(agent.aid, agent.items);
     }
   } catch {
+    if (mine !== scope) return;
     for (const aid of activity.keys()) {
       if (revisions.get(aid) === before.get(aid)) setCodeActivity(aid, []);
     }
@@ -103,6 +110,7 @@ export function setupCodeActivity() {
   dot = document.getElementById('code-inbox-dot');
   tab = badge.closest('a');
   document.addEventListener('studio-code-activity', ({ detail: item }) => {
+    if (document.documentElement.classList.contains('shrouded')) return;
     const aid = Number(item.aid);
     const items = new Map(activity.get(aid));
     items.set(item.chat, { ...items.get(item.chat), ...item, project: item.project ?? item.pid });

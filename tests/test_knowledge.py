@@ -210,6 +210,43 @@ def test_big_document_whole_when_it_fits_excerpts_when_not(studio):
     assert len(messages(studio, cid)) == 8
 
 
+def test_estimate_counts_excerpt_before_indexing_and_when_document_is_in_history(studio):
+    gw = add_gateway(studio)
+    cid = new_chat(studio)
+    small_model(studio, cid, gw, 20_000)
+    doc = attach(studio, "long.txt", big_text("Вырезка для поиска.").encode())
+    url = f"/api/chats/{cid}/estimate"
+    draft = studio.c.post(url, json={"text": "Вырезка", "attachment_ids": [doc["id"]]})
+    assert draft.status_code == 200 and 0 < draft.json()["tokens"] < draft.json()["limit"]
+    assert state.DB.execute("SELECT count(*) FROM kb_documents").fetchone()[0] == 0
+
+    assert sse(turn(studio, cid, "Вырезка", attachment_ids=[doc["id"]]))[-1] == ("done", {"status": "done"})
+    history = studio.c.post(url, json={"text": "Ещё"})
+    assert history.status_code == 200 and draft.json()["tokens"] < history.json()["tokens"] < history.json()["limit"]
+    assert marks(studio, cid) == {"long.txt": True}
+
+
+def test_personal_kb_quota_counts_trashed_items(studio, monkeypatch):
+    monkeypatch.setattr(knowledge, "PERSONAL_BASES_MAX", 1)
+    monkeypatch.setattr(knowledge, "PERSONAL_DOCS_MAX", 2)
+    monkeypatch.setattr(knowledge, "PERSONAL_CHARS_MAX", 5)
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    kb = base(studio)
+    doc = upload(studio, kb, "one.txt", "one")["id"]
+    assert studio.c.delete(f"/api/knowledge/{kb}/documents/{doc}").status_code == 204
+    url = f"/api/knowledge/{kb}/documents"
+    headers = {"x-studio-name": "two.txt", "content-type": "text/plain"}
+    too_many_chars = studio.c.post(url, content=b"two", headers=headers)
+    assert too_many_chars.status_code == 409 and too_many_chars.json()["detail"] == knowledge.QUOTA
+    upload(studio, kb, "three.txt", "x")
+    too_many_docs = studio.c.post(url, content=b"y", headers=headers)
+    assert too_many_docs.status_code == 409 and too_many_docs.json()["detail"] == knowledge.QUOTA
+    assert studio.c.delete(f"/api/knowledge/{kb}").status_code == 204
+    too_many_bases = studio.c.post("/api/knowledge", json={"name": "Another"})
+    assert too_many_bases.status_code == 409 and too_many_bases.json()["detail"] == knowledge.QUOTA
+
+
 def test_shared_kb_visible_by_group_only_and_admin_always(studio):
     member, other = make_user(studio, "member"), make_user(studio, "other")
     make_user(studio, "admin", is_admin=True)
@@ -431,7 +468,7 @@ def test_kb_delete_goes_to_trash_and_restores(studio):
     assert studio.c.post(f"/api/trash/knowledge_bases/{kb}/restore").status_code == 204
     assert len(bases_of(studio)[kb]["documents"]) == 2
     assert studio.c.delete(f"/api/knowledge/{kb}").status_code == 204
-    assert studio.c.delete(f"/api/trash/knowledge_bases/{kb}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/knowledge_bases/{kb}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM kb_chunks").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM kb_fts WHERE kb_fts MATCH 'крыши'").fetchone()[0] == 0
 

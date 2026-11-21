@@ -497,10 +497,12 @@ def fake_audio(monkeypatch):
         fake.calls.append(("cut", start, length))
         P(dst).write_bytes(P(src).read_bytes())
 
-    async def to_wav(src, dst, *, max_sec):
+    async def to_wav(src, dst, *, max_sec, start=0):
         fake.calls.append(("to_wav", max_sec))
+        if start:
+            fake.calls.append(("wav_start", start))
         P(dst).write_bytes(P(src).read_bytes())
-        return min(fake.duration, max_sec)
+        return min(max(0, fake.duration - start), max_sec)
 
     async def mp3_of(parts, dst):
         fake.calls.append(("mp3_of", len(parts)))

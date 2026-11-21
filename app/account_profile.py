@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -63,6 +64,7 @@ class CodeQuickAction(BaseModel):
 
 
 class MePatch(BaseModel):
+    name: str | None = Field(None, max_length=64)
     theme: str | None = None
     accent: object = None                   # проверка — по ACCENTS в patch_me: отказ — 422 `accent`
     timezone: str | None = Field(None, min_length=1, max_length=100)
@@ -160,6 +162,11 @@ async def patch_me(body: MePatch, request: Request):
     uid = request.state.user.id
     sent = body.model_fields_set
     changes = {}
+    if "name" in sent:
+        name = (body.name or "").strip()
+        if not name or any(unicodedata.category(char).startswith("C") for char in name):
+            raise HTTPException(422, {"code": "name", "message": "Введите имя без управляющих символов."})
+        changes["name"] = name
     if "timezone" in sent:
         if body.timezone is None:
             raise HTTPException(422, {"code": "timezone", "message": "укажите часовой пояс"})

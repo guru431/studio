@@ -601,7 +601,7 @@ def test_deleting_a_chat_removes_its_files_off_the_loop(studio, env, unlinks):
     assert [p for p in env.media_dir.rglob("*") if p.is_file()]
     assert studio.c.delete(f"/api/chats/{cid}").status_code == 204            # в корзину: файлы на месте
     assert [p for p in env.media_dir.rglob("*") if p.is_file()] and not unlinks
-    assert studio.c.delete(f"/api/trash/chats/{cid}").status_code == 204      # окончательно
+    assert studio.c.request("DELETE", f"/api/trash/chats/{cid}", json={"password": "password-123"}).status_code == 204      # окончательно
     assert [p for p in env.media_dir.rglob("*") if p.is_file()] == []
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
@@ -1039,7 +1039,7 @@ def test_transcript_becomes_an_unsent_document_with_its_edits(studio, fake_audio
     assert studio.c.post(f"/api/trash/transcripts/{tid}/restore").status_code == 204
     assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": True}
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
-    assert studio.c.delete(f"/api/trash/transcripts/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/transcripts/{tid}", json={"password": "password-123"}).status_code == 204
     assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": False}
     assert studio.c.get(f"/api/media/{a['media_id']}").status_code == 200       # вложение — своим файлом
     doc = attach(studio, "a.txt", b"x", "text/plain")

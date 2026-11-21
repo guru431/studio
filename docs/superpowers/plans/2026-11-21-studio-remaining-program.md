@@ -41,8 +41,8 @@
 | E | 17 srvllm (⛔ если нет checkout `llm_routers`) · 18 Завершение | D |
 
 Команды: быстрый набор `.venv/Scripts/python -m pytest -q`; файл — `.venv/Scripts/python -m pytest -q -n0 <файл>`;
-браузерный файл — `.venv/Scripts/python -m pytest -q -n0 -m integration <файл>`; обёртка — в `<projects>\_work\aitools-studio`
-командой из её README; vLLM — `python -m pytest` в `<projects>\vLLM` (CLAUDE.md проекта).
+браузерный файл — `.venv/Scripts/python -m pytest -q -n0 -m integration <файл>`; обёртка — в `../aitools-studio`
+командой из её README; vLLM — `python -m pytest` в `../vLLM` (CLAUDE.md проекта).
 
 ## Global Constraints
 
@@ -216,7 +216,7 @@ def test_fields_do_not_zoom_on_iphone(iphone, ...):            # WebKit 390
 
 ### Task 6: Обёртка aitools — контракты файлов, файлов пользователя, состояния, руководства, пределов, протокола
 
-Вне репозитория: `<projects>\_work\aitools-studio` (локальный git). Open WebUI, `aitools_mcp.py` и панель Spark не трогать.
+Вне репозитория: `../aitools-studio` (локальный git). Open WebUI, `aitools_mcp.py` и панель Spark не трогать.
 Имена контракта общие для обеих сторон; описание для любых серверов — `docs/architecture/mcp-contracts.md` (задача 9).
 
 **Files:**
@@ -270,7 +270,7 @@ def test_limits_hint_becomes_meta(): assert tool["_meta"]["studio/limits"] == {"
 - [ ] **Step 4: Run** — PASS (весь набор обёртки).
 - [ ] **Step 5: Commit** (в репозитории обёртки) `Add files, user files, status, guide and limits contracts`.
 
-### Task 16: Панель s06 и шлюз речи s06 (проект `<projects>\vLLM`)
+### Task 16: Панель s06 и шлюз речи s06 (проект `../vLLM`)
 
 Правила — CLAUDE.md проекта vLLM: привилегированные действия только через `ai-ctl`, проверка дублируется в
 `app/configs.py` и `ai-ctl`, LF, ключи не копировать в файлы и вывод. Панель Spark не меняется; srvllm — задача 17.

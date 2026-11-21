@@ -316,7 +316,7 @@ def test_delete_forever_takes_one_record_now(s, kind):
     made = MAKE[kind](s, uid)
     assert s.c.delete(f"/api/trash/{kind}/{made.id}").status_code == 404      # не в корзине — нельзя
     assert made.delete().status_code == 204
-    assert s.c.delete(f"/api/trash/{kind}/{made.id}").status_code == 204
+    assert s.c.request("DELETE", f"/api/trash/{kind}/{made.id}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute(f"SELECT 1 FROM {trash.KINDS[kind].table} WHERE id = ?", (made.id,)).fetchone() is None
     assert s.c.post(f"/api/trash/{kind}/{made.id}/restore").status_code == 404
 
@@ -370,6 +370,7 @@ def test_speech_chat_delete_trashes_all_parts(s):
     assert hits(s, "melon") == ["solo"]
     listed = s.c.get("/api/trash").json()
     assert [(i["id"], i["title"], i["bytes"]) for i in listed] == [("part0", "melon 0", 18), ("part3", "melon 3", 6)]
+    assert s.c.get("/api/me/storage").json()["trash"]["speech"] == {"count": 2, "bytes": 24}
     assert all(state.DB.execute("SELECT 1 FROM media WHERE id = ?", (c,)).fetchone() for c in clips)
     assert s.c.post("/api/trash/speeches/part1/restore").status_code == 204    # любая запись чата — весь чат
     assert [i["id"] for i in s.c.get("/api/speeches/chats/part0").json()["items"]] == ["part0", "part1", "part2"]
@@ -382,12 +383,23 @@ def test_speech_chat_delete_trashes_all_parts(s):
             for c in clips] == [True, True, True, False]
 
 
+def test_delete_forever_requires_current_password(s):
+    uid = owner(s)
+    made = make_chat(s, uid)
+    assert made.delete().status_code == 204
+    path = f"/api/trash/chats/{made.id}"
+    assert s.c.delete(path).status_code == 422
+    assert s.c.request("DELETE", path, json={"password": "wrong"}).status_code == 403
+    assert s.c.get("/api/trash").json()[0]["id"] == made.id
+    assert s.c.request("DELETE", path, json={"password": "password-123"}).status_code == 204
+
+
 def test_speech_chat_in_trash_is_deleted_forever_and_purged_whole(s):
     """Ревью B1-I2: «Удалить навсегда» строки чата озвучки и уборка по сроку уносят все его записи и их файлы."""
     uid = owner(s)
     clips = speech_chat(s, uid)
     assert s.c.delete("/api/speeches/chats/part0").status_code == 204
-    assert s.c.delete("/api/trash/speeches/part2").status_code == 204
+    assert s.c.request("DELETE", "/api/trash/speeches/part2", json={"password": "password-123"}).status_code == 204
     assert [r[0] for r in state.DB.execute("SELECT id FROM speeches")] == ["solo"]
     assert not any(state.DB.execute("SELECT 1 FROM media WHERE id = ?", (c,)).fetchone() for c in clips)
     assert s.c.delete("/api/speeches/chats/solo").status_code == 204
@@ -413,7 +425,7 @@ def test_translation_delete_keeps_scan_until_purge(s):
         assert s.c.delete(f"/api/translate/{tid}").status_code == 204
     assert s.c.get("/api/ocr/scan").status_code == 200           # скан на месте и виден в «Сканах»
     assert "scan" in {i["id"] for i in s.c.get("/api/ocr").json()["items"]}
-    assert s.c.delete("/api/trash/translations/first").status_code == 204
+    assert s.c.request("DELETE", "/api/trash/translations/first", json={"password": "password-123"}).status_code == 204
     assert s.c.get("/api/ocr/scan").status_code == 200           # «again» в корзине ещё ссылается на скан
     assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (pdf,)).fetchone()
     s.clock[0] += trash.TRASH_SEC + 1

@@ -100,6 +100,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/pdf"): {"path": "a.pdf", "page": 1},
     ("POST", "/api/code/agents/1/projects/1/image"): {"path": "a.png"},
     ("GET", "/api/code/agents/1/projects/1/git"): None,
+    ("POST", "/api/code/agents/1/projects/1/git/compare"): {"path": "a.txt"},
     ("POST", "/api/code/agents/1/update"): None,
     ("GET", "/api/code/agents/1/update"): None,
     ('GET', '/api/code/agents/1/software'): None,
@@ -1345,6 +1346,23 @@ def test_git_status_passes_through_and_not_git_is_409(studio):
     r = studio.c.get(project_url(aid, "git"))
     assert (r.status_code, r.json()) == (200, status)
     assert {k: m.requests[-1][k] for k in ("op", "project")} == {"op": "git", "project": ALPHA}
+
+
+def test_git_compare_negotiates_capability_and_keeps_the_path_in_the_body(studio):
+    aid, m, link = with_files(studio)
+    address = project_url(aid, "git", "compare")
+    path = "src/app.py"
+    assert studio.c.post(address, json={"path": path}).status_code == 409
+    link.hello["git_compare"] = True
+    m.projects["alpha"]["git"] = {"files": [{"path": path, "status": "M"}]}
+    m.projects["alpha"]["git_comparisons"] = {path: {"before": "a", "after": "b", "exists": True}}
+    assert studio.c.get(project_url(aid, "git")).json()["compare"] is True
+    r = studio.c.post(address, json={"path": path})
+    assert r.status_code == 200 and r.json() == {"before": "a", "after": "b", "exists": True}
+    assert m.requests[-1]["op"] == "git_compare" and m.requests[-1]["path"] == path
+    requests = len(m.requests)
+    assert studio.c.post(address, json={"path": "../outside"}).status_code == 422
+    assert len(m.requests) == requests
 
 
 def test_file_paths_never_reach_the_log(studio, caplog, monkeypatch):

@@ -80,6 +80,23 @@ def test_transcribed_sample_is_saved_without_a_second_upload(studio, fake_audio)
     assert kept == {voice["samples"][0]["media_id"]}
 
 
+def test_transcription_and_save_share_the_selected_sample_range(studio, fake_audio):
+    add_gateway(studio)
+    fake_audio.duration = 90
+    for start, end in (("nan", "25"), ("24", "20"), ("0", "61")):
+        refused = studio.c.post("/api/voices/transcribe", data={"start": start, "end": end}, files=SAMPLE)
+        assert refused.status_code == 422 and refused.json()["detail"]["code"] == "range"
+    assert not fake_audio.calls
+    result = studio.c.post("/api/voices/transcribe", data={"start": "20.5", "end": "30.75"}, files=SAMPLE).json()
+    assert ("wav_start", 20.5) in fake_audio.calls and ("to_wav", 10.25) in fake_audio.calls
+    path = f"/api/voices/{'a' * 32}"
+    saved = studio.c.put(path + "/batch", json={"name": "Фрагмент", "selected": 0,
+                                               "samples": [{"upload": result["upload"], "text": result["text"]}]})
+    assert saved.status_code == 200
+    assert studio.c.get(path).json()["duration"] == 10.25
+    assert fake_audio.calls.count(("to_wav", 10.25)) == 1
+
+
 def test_transcribe_keeps_the_text_when_the_share_does_not_take_the_sample(studio, fake_audio, monkeypatch):
     import media
     add_gateway(studio)
@@ -165,7 +182,7 @@ def test_sample_cancellation_waits_for_file_io_and_cleanup(studio, fake_audio, m
             return real(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, operation, blocked)
-        task = asyncio.create_task(voices._sample(uid, SAMPLE["audio"][1], "audio/mp4"))
+        task = asyncio.create_task(voices._sample(uid, {}, SAMPLE["audio"][1], "audio/mp4"))
         try:
             await asyncio.wait_for(reached.wait(), 5)
             for _ in range(2):
@@ -226,7 +243,7 @@ def test_sample_that_outlasts_its_budget_is_refused_by_the_studio(studio, monkey
     add_gateway(studio)
     reached = expire_budget_at_event(monkeypatch, voices.BUDGET_SEC)
 
-    async def slow(src, dst, *, max_sec):
+    async def slow(src, dst, *, max_sec, start=0):
         reached.set()
         await asyncio.Future()
 
@@ -250,7 +267,7 @@ def test_voice_is_private_and_goes_with_delete_and_history(studio, env, fake_aud
     assert studio.c.delete(f"/api/voices/{vid}").status_code == 204
     assert studio.c.get(f"/api/voices/{vid}").status_code == 404
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 1          # в корзине — образец на месте
-    assert studio.c.delete(f"/api/trash/voices/{vid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/voices/{vid}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
     create(studio)
     assert erase_history(studio).status_code == 200

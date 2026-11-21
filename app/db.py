@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 58
+VERSION = 60
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -886,6 +886,12 @@ ALTER TABLE speeches ADD COLUMN language TEXT;
     f"  DELETE FROM search_docs WHERE section = '{s}' AND item = old.id; END;\n" for t, s in _TRASH_SEARCH_58.items())
 SCHEMA += REMAINING_58
 
+CODE_PINS_59 = "ALTER TABLE code_place ADD COLUMN pinned_projects TEXT NOT NULL DEFAULT '[]';"
+SCHEMA += CODE_PINS_59
+
+TRANSCRIPT_PLAYBACK_60 = "ALTER TABLE transcripts ADD COLUMN listen_media_id TEXT;"
+SCHEMA += TRANSCRIPT_PLAYBACK_60
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1006,6 +1012,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     57: CAPABILITIES_57,
     # ждущие ответы и список дел, корзина, ссылки на файлы, защищённые MCP, память, базы знаний, язык речи
     58: REMAINING_58,
+    59: CODE_PINS_59,
+    60: TRANSCRIPT_PLAYBACK_60,
 }
 
 

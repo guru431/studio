@@ -59,6 +59,9 @@ QUERY_WORDS = 32                 # слов запроса в BM25
 QUERY_MAX = 500                  # знаков запроса инструмента
 NAME_MAX = 100                   # имя базы
 NAME_WORDS = "имя базы — от 1 до 100 знаков"
+PERSONAL_BASES_MAX = 50
+PERSONAL_DOCS_MAX = 1000
+PERSONAL_CHARS_MAX = 50_000_000
 TIMEOUT_SEC = 120                # векторы кусков фоновой индексацией (`_vectors`)
 #: вектор запроса и переранжирование в ходе и в `knowledge_search`: ответ ждёт; отказ источника в ходе запоминается
 #: (`cache["down"]`) — дальше без векторов и без переранжирования
@@ -68,6 +71,7 @@ GONE = {"code": "gone", "message": "такой базы знаний нет"}
 DOC_GONE = {"code": "gone", "message": "такого документа нет"}
 EMPTY = "в документе нет текста"
 NOTHING = "В базах знаний ничего не найдено."
+QUOTA = {"code": "knowledge_quota", "message": "достигнут предел личных баз знаний — освободите место в корзине"}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
@@ -543,6 +547,9 @@ def _name(text: str) -> str:
 
 
 def create_base(owner: "int | None", name: str) -> dict:
+    if owner is not None and state.DB.execute(
+            "SELECT count(*) FROM knowledge_bases WHERE user_id = ?", (owner,)).fetchone()[0] >= PERSONAL_BASES_MAX:
+        raise HTTPException(409, QUOTA)
     kb_id = uuid.uuid4().hex
     state.DB.execute("INSERT INTO knowledge_bases(id, user_id, name, created) VALUES (?, ?, ?, ?)",
                      (kb_id, owner, _name(name), clock.NOW()))
@@ -589,6 +596,12 @@ async def add_document(owner: "int | None", kb_id: str, request: Request) -> dic
     if owner is not None:
         operations.check(owner)
     _base(owner, kb_id)                              # базу удалили, пока читался файл
+    if owner is not None:
+        count, chars = state.DB.execute(
+            "SELECT count(*), coalesce(sum(chars), 0) FROM kb_documents WHERE user_id = ? AND kb_id IS NOT NULL",
+            (owner,)).fetchone()
+        if count >= PERSONAL_DOCS_MAX or chars + len(text) > PERSONAL_CHARS_MAX:
+            raise HTTPException(409, QUOTA)
     doc_id = uuid.uuid4().hex
     state.DB.execute("INSERT INTO kb_documents(id, kb_id, user_id, name, chars, state, created)"
                      " VALUES (?, ?, ?, ?, ?, 'queued', ?)", (doc_id, kb_id, owner, name, len(text), clock.NOW()))

@@ -18,7 +18,7 @@ def live(tmp_path_factory):
     app.stop()
 
 
-def chat_row(live, uid: int, chat_id: str, title: str) -> None:
+def chat_row(live, uid: int, chat_id: str, title: str | None) -> None:
     now = time.time()
     live_sql(live, "INSERT INTO chats(id, user_id, title, model, created, updated) VALUES (?, ?, ?, 'm', ?, ?)",
              (chat_id, uid, title, now, now))
@@ -76,3 +76,29 @@ def test_trash_restores_and_empties_only_by_password(browser, live, width):
     # единственный отказ — неверный пароль, которого тест и ждал
     assert [line for line in problems(r) if "403" not in line or "/api/trash/empty" not in line] == []
     assert len(problems(r)) == 1
+
+
+def test_trash_localizes_only_default_title_and_prompts_to_purge_one(browser, live):
+    login = "trash-item-password"
+    uid = live.add_user(login)
+    chat_row(live, uid, "default", None)
+    live_sql(live, "INSERT INTO messages(id, chat_id, role, content, status, via, created)"
+             " VALUES ('trash-question', 'default', 'user', 'question', 'done', 'server', 1)")
+    chat_row(live, uid, "custom", "Новый диалог")
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("eval", "deleted", f"""(async () => {{
+          const m = {API};
+          await m.api('DELETE', '/api/chats/default');
+          await m.api('DELETE', '/api/chats/custom');
+        }})()"""),
+        *go("trash"), ("wait", "document.querySelectorAll('.trash-item').length === 2"),
+        ("eval", "titles", "Object.fromEntries([...document.querySelectorAll('.trash-item')]"
+                          ".map(e => [e.dataset.id, e.querySelector('b').textContent]))"),
+        ("click", ".trash-item[data-id='default'] .trash-forever"), ("wait", is_open("#trash-forever-dialog")),
+        ("type", "#trash-item-password", "password-123"), ("click", "#trash-forever-confirm"),
+        ("wait", "document.querySelectorAll('.trash-item').length === 1"), ("eval", "left", ITEMS)],
+        init="localStorage.setItem('studio-language', 'en')")
+    assert not r.get("failed"), r
+    assert r["values"]["titles"] == {"default": "New conversation", "custom": "Новый диалог"}
+    assert r["values"]["left"] == ["custom"]
+    assert not problems(r), problems(r)

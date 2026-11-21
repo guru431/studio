@@ -2,21 +2,21 @@ import { tr } from './i18n.js';
 /* «Поиск» (спека 2026-10-21-studio-history-search-design): своя история по словам и фильтрам.
  *
  * Поле (пауза SEARCH_PAUSE_MS после ввода, Enter — сразу; «очистить» и голосовой ввод — field.js), чипы раздела,
- * модель (GET /api/search/models — модели своей истории), период «с … по …» и «сбросить». Запрос —
+ * модель (GET /api/search/models — модели своей истории), даты и быстрые периоды. Запрос —
  * POST /api/search телом: адрес пишет журнал Apache и видно в истории браузера, поэтому слова и
  * фильтры живут только в памяти этого модуля (`memory`) — переживают уход в раздел и возврат, но не
  * перезагрузку; ни в адресе, ни в localStorage их нет.
  *
  * Выдача — новые сверху, по дням (как ленты), «Показать ещё» — курсором последней строки, если запрос
  * тот же, что у выдачи (иначе — новый поиск: ввод ещё ждал паузы). Строка —
- * значок раздела, заголовок, кусок текста с найденным (маркеры \u0002…\u0003 → <mark> узлами, не
+ * значок раздела и доступная миниатюра, заголовок, кусок текста с найденным (маркеры \u0002…\u0003 → <mark> узлами, не
  * HTML), модель (подпись — models.js, как в разделах) и время; у найденного в документе диалога — имя документа своей строкой (`attachment`); нажатие —
  * ctx.navigate(href) (адрес проверяет HREF jobs.js или MESSAGE_HREF: строка диалога — `chat/<id>?m=<сообщение>`,
  * chat.js прокручивает к нему и подсвечивает). Номер запроса:
  * запоздалый ответ прежнего не ляжет. Состояние выдачи — #search-results[data-state]: idle | loading |
  * ready | error (по нему ждут тесты); #search-status (aria-live) называет число найденного. */
 import { api } from './api.js';
-import { timeOnly } from './time.js';
+import { calendarRange, timeOnly } from './time.js';
 import { dayKey, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { HREF } from './jobs.js';
@@ -31,6 +31,7 @@ const LIMIT = 30;
 const SECTIONS = [['', tr("Все")], ...sectionPairs().filter(([id]) => id !== 'code')];
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
+const PERIODS = [[1, tr("Сегодня")], [7, tr("Неделя")], [30, tr("Месяц")]];
 const HAS_WORD = /[\p{L}\p{N}]/u;
 /** Строка диалога ведёт к своему сообщению: в адресе — только id (`?m=`), не слова поиска. */
 const MESSAGE_HREF = /^chat\/[\w-]+\?m=[\w-]+$/;
@@ -67,6 +68,15 @@ function when(created) {
   return timeOnly(created);
 }
 
+function preview(item) {
+  if (!item.thumbnail_id) return icon(item.section);
+  const img = el('img', { class: 'search-thumb', src: `/api/media/${encodeURIComponent(item.thumbnail_id)}?thumb=1`,
+    alt: '', loading: 'lazy', decoding: 'async' });
+  const box = el('span', { class: 'search-preview' }, img, icon(item.section));
+  img.addEventListener('error', () => box.replaceWith(icon(item.section)), { once: true });
+  return box;
+}
+
 function row(item, go) {
   const same = SAME_TEXT.has(item.section) && item.snippet;
   const title = el('b', { class: 'search-title' }, ...(same ? marked(item.snippet) : [item.title]));
@@ -77,7 +87,8 @@ function row(item, go) {
     .filter(Boolean).join(' · '));
   const node = el('button', { type: 'button', class: 'search-row', 'data-section': item.section, 'data-id': item.id,
     'data-part': item.part },
-    icon(item.section), el('span', { class: 'search-text' }, title, doc, snippet, meta));
+    preview(item), el('span', { class: 'sr' }, NAMES[item.section]),
+    el('span', { class: 'search-text' }, title, doc, snippet, meta));
   node.addEventListener('click', () => { if (HREF.test(item.href) || MESSAGE_HREF.test(item.href)) go(item, node); });
   return el('li', {}, node);
 }
@@ -102,6 +113,9 @@ function mountScreen(view, ctx) {
   const until = el('input', { id: 'search-until', class: 'input search-date', type: 'date', 'aria-label': tr("По какой день") });
   since.value = memory.since;
   until.value = memory.until;
+  const periods = el('div', { class: 'search-periods', role: 'group', 'aria-label': tr("Период") },
+    ...PERIODS.map(([days, label]) => el('button', { type: 'button', class: 'chip',
+      'data-days': days, 'aria-pressed': 'false' }, label)));
   const reset = el('button', { type: 'button', id: 'search-reset', class: 'btn-link' }, tr("сбросить"));
   const status = el('p', { id: 'search-status', class: 'muted small', 'aria-live': 'polite' });
   const results = el('div', { id: 'search-results', 'data-state': 'idle' });
@@ -111,7 +125,7 @@ function mountScreen(view, ctx) {
     el('div', { class: 'page search-page' },
       field.box, field.error, chips,
       el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, tr("с")), since,
-        el('label', { for: until.id }, tr("по")), until, reset),
+        el('label', { for: until.id }, tr("по")), until, reset), periods,
       status, results, moreBtn));
 
   function paintModels() {
@@ -144,6 +158,20 @@ function mountScreen(view, ctx) {
     const body = { limit: LIMIT };
     for (const key of ['q', 'section', 'model', 'since', 'until']) if (memory[key]) body[key] = memory[key];
     return body;
+  }
+
+  function paintPeriods() {
+    for (const b of periods.children) {
+      const range = calendarRange(Number(b.dataset.days));
+      b.setAttribute('aria-pressed', String(range.since === memory.since && range.until === memory.until));
+    }
+  }
+
+  function setPeriod(from, to) {
+    since.value = memory.since = from;
+    until.value = memory.until = to;
+    paintPeriods();
+    run();
   }
 
   function openResult(item, node) {
@@ -241,19 +269,21 @@ function mountScreen(view, ctx) {
   for (const [input, key] of [[since, 'since'], [until, 'until']]) {
     input.addEventListener('change', () => {
       memory[key] = input.value;
+      paintPeriods();
       run();
     });
   }
-  reset.addEventListener('click', () => {
-    memory.since = '';
-    memory.until = '';
-    since.value = '';
-    until.value = '';
-    run();
+  periods.addEventListener('click', (event) => {
+    const chip = event.target.closest('button[data-days]');
+    if (!chip) return;
+    const range = calendarRange(Number(chip.dataset.days));
+    setPeriod(range.since, range.until);
   });
+  reset.addEventListener('click', () => setPeriod('', ''));
   moreBtn.addEventListener('click', () => run(true));
 
   paintModels();
+  paintPeriods();
   api('GET', '/api/search/models').then((out) => {
     if (!screen || screen.results !== results) return;
     models = out.models;

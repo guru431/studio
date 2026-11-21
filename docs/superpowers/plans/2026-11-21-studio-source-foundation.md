@@ -85,7 +85,7 @@ Test `tests/test_mcp_sections.py`, `tests/test_ui_section_limits.py` (integratio
 
 ### Task A6: Обёртка aitools — правила, подсказки, пометки (вне репозитория)
 
-**Files:** `<projects>/_work/aitools-studio/aitools_studio.py`, `README.md`, `tests/test_aitools_studio.py`, примеры
+**Files:** `../aitools-studio/aitools_studio.py`, `README.md`, `tests/test_aitools_studio.py`, примеры
 `rules.example.md`, `prompts.example.json`, `hints.example.json`.
 **Interfaces:** Produces — `initialize.instructions` из `AITOOLS_STUDIO_RULES`; `prompts/list|get` из
 `AITOOLS_STUDIO_PROMPTS`; `annotations.openWorldHint` и `_meta["studio/confirm"]` из `AITOOLS_STUDIO_HINTS`

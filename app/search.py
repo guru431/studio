@@ -4,8 +4,9 @@
   только чтение (сканы и переводы — триггеры db.OCR_16 и db.TRANSLATE_18). Ответ чата попадает в индекс после
   «готово»; расшифровка и скан — по имени и тексту, перевод — по имени, исходнику и переводу.
 - `POST /api/search` — телом, а не строкой запроса (её пишет журнал Apache): `{q?, section?, model?,
-  since?, until?, before?, limit?}`. Слова — буквы и цифры Unicode (прочее — разделитель, синтаксис
-  FTS5 не проходит), до WORDS_MAX, каждое — начало слова, все вместе; «ё» = «е». Ни слов, ни фильтров —
+  since?, until?, before?, limit?}`. Слова — буквы и цифры Unicode (прочее — разделитель), вне кавычек
+  ищется начало слова, в кавычках — точная последовательность токенов. До WORDS_MAX условий,
+  все вместе; «ё» = «е». Ни слов, ни фильтров —
   400. Дни — по часовому поясу учётки, «по» включительно, годы YEARS (иначе 422 словами). Документ чата и текст
   расшифровки — первые db.INDEX_CHARS знаков.
 - Новые сверху (created, затем item по убыванию, у одной записи — позже проиндексированная); диалог —
@@ -16,7 +17,8 @@
 - Ответ: `{items: [{section, id, part, title, snippet, model, created, href, attachment}], more}`; snippet — FTS5
   с маркерами MARK вокруг найденного (страница строит выделение узлами), без слов — пусто. href строки диалога —
   `chat/<id>?m=<id сообщения>` (у документа — сообщения, с которым он отправлен; у названия — без `?m`),
-  attachment — имя документа строки-вложения, иначе null. В адресе — только id, не слова.
+  attachment — имя документа строки-вложения, иначе null. У фото и видео с доступной миниатюрой
+  есть `thumbnail_id` (у видео — обложка из исходного изображения). В адресе — только id, не слова.
 - `GET /api/search/models` — разные модели своей истории по разделам.
 - Только `user_id` сессии. Журнал — «search: N», без слов и фильтров.
 """
@@ -41,6 +43,7 @@ TITLE_MAX = 80
 SNIPPET_TOKENS = 16
 MARK = ("\u0002", "\u0003")
 WORD = re.compile(r"[^\W_]+")
+QUOTED = re.compile(r'"([^"]*)"')
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 YEARS = (2000, 2100)
 DAYS_WORDS = f"дни — с {YEARS[0]} по {YEARS[1]} год"
@@ -48,6 +51,7 @@ DAYS_WORDS = f"дни — с {YEARS[0]} по {YEARS[1]} год"
 TITLES = {"chat": ("chats", "title"), "photo": ("images", "prompt"), "video": ("videos", "prompt"),
           "transcribe": ("transcripts", "name"), "ocr": ("scans", "name"), "translate": ("translations", "name"),
           "speech": ("speeches", "text")}
+THUMBNAILS = {"photo": ("images", "media_id"), "video": ("videos", "source_media_id")}
 EMPTY = {"code": "input", "message": "введите слова или выберите фильтр"}
 #: строки разделов новее этого кода (откат install.sh после следующего шага схемы) — мимо выдачи, курсоров и
 #: моделей: заголовка у них нет (_title), а ссылка вела бы в никуда. «+» — без индекса по section: план
@@ -99,10 +103,18 @@ class SearchIn(BaseModel):
     limit: int = Field(30, ge=1, le=LIMIT_MAX)
 
 
-def words(q: str) -> list[str]:
-    """Слова запроса: буквы и цифры, «ё» → «е» (как в индексе), не больше WORDS_MAX."""
-    found = WORD.findall(unicodedata.normalize("NFC", q))
-    return [w.replace("ё", "е").replace("Ё", "Е") for w in found][:WORDS_MAX]
+def _match(q: str) -> str:
+    """Литеральные фразы и префиксы из слов; синтаксис FTS5 из запроса сюда не проходит."""
+    clean = unicodedata.normalize("NFC", q).replace("ё", "е").replace("Ё", "Е")
+    clauses = []
+    end = 0
+    for phrase in QUOTED.finditer(clean):
+        clauses.extend(f'"{word}"*' for word in WORD.findall(clean[end:phrase.start()]))
+        if tokens := WORD.findall(phrase[1]):
+            clauses.append('"' + " ".join(tokens) + '"')
+        end = phrase.end()
+    clauses.extend(f'"{word}"*' for word in WORD.findall(clean[end:]))
+    return " AND ".join(clauses[:WORDS_MAX])
 
 
 def _day(value: str) -> datetime:
@@ -198,6 +210,19 @@ def _href(section: str, item: str, message: "str | None" = None) -> str:
     return f"chat/{item}?m={message}" if message else f"chat/{item}"
 
 
+def _thumbnail(section: str, item: str, uid: int, hidden: list[str]) -> str | None:
+    source = THUMBNAILS.get(section)
+    if source is None:
+        return None
+    table, column = source
+    row = state.DB.execute(f"SELECT m.id FROM {table} t JOIN media m ON m.id = t.{column} AND m.user_id = t.user_id"
+                           " WHERE t.id = ? AND t.user_id = ? AND t.deleted IS NULL"
+                           " AND m.has_thumb = 1 AND m.mime LIKE 'image/%'", (item, uid)).fetchone()
+    if row is None or (hidden and lock_policy.media_sections(uid, row["id"]).intersection(hidden)):
+        return None
+    return row["id"]
+
+
 def _chat_place(item: str, part: str, user_id: int) -> tuple["str | None", "str | None"]:
     """(id сообщения, имя документа) строки диалога: сообщение — само, документ — сообщение, с которым он
     отправлен, и своё имя; название — (None, None). Адрес страницы несёт только id (`?m=`), не текст."""
@@ -214,8 +239,8 @@ def _chat_place(item: str, part: str, user_id: int) -> tuple["str | None", "str 
 @router.post("")
 async def find(body: SearchIn, request: Request):
     uid = request.state.user.id
-    terms = words(body.q)
-    if not terms and not (body.section or body.model or body.since or body.until):
+    match = _match(body.q)
+    if not match and not (body.section or body.model or body.since or body.until):
         raise HTTPException(400, EMPTY)
     where, args = ["d.user_id = ?", KNOWN, TRASHED], [uid] * (1 + TRASHED.count("?"))
     hidden = sorted(lock_policy.hidden(request.state.digest))
@@ -238,8 +263,7 @@ async def find(body: SearchIn, request: Request):
     if body.until:
         where.append("d.created < ?")
         args.append((_day(body.until).replace(tzinfo=zone) + timedelta(days=1)).timestamp())
-    match = " AND ".join('"{}"*'.format(t.replace('"', '""')) for t in terms)
-    if terms:
+    if match:
         # CROSS JOIN держит FTS5 внешним циклом и при курсоре, и при фильтрах: иначе планировщик идёт от
         # индекса search_docs и гоняет MATCH заново на каждую строку истории (вторая страница — секунды)
         source = "search CROSS JOIN search_docs d ON d.id = search.rowid"
@@ -278,16 +302,19 @@ async def find(body: SearchIn, request: Request):
     items = []
     for row in rows[:body.limit]:
         snippet = ""
-        if terms:
+        if match:
             snippet = state.DB.execute("SELECT snippet(search, 0, ?, ?, '…', ?) FROM search"
                                        " WHERE search MATCH ? AND rowid = ?",
                                        (*MARK, SNIPPET_TOKENS, match, row["doc"])).fetchone()[0]
         message, attachment = (_chat_place(row["item"], row["part"], uid) if row["section"] == "chat"
                                else (None, None))
-        items.append({"section": row["section"], "id": row["item"], "part": row["part"],
-                      "title": _title(row["section"], row["item"], uid), "snippet": snippet, "model": row["model"],
-                      "created": row["created"], "href": _href(row["section"], row["item"], message),
-                      "attachment": attachment})
+        item = {"section": row["section"], "id": row["item"], "part": row["part"],
+                "title": _title(row["section"], row["item"], uid), "snippet": snippet, "model": row["model"],
+                "created": row["created"], "href": _href(row["section"], row["item"], message),
+                "attachment": attachment}
+        if thumbnail := _thumbnail(row["section"], row["item"], uid, hidden):
+            item["thumbnail_id"] = thumbnail
+        items.append(item)
     log.info("search: %d", len(items))
     return {"items": items, "more": len(rows) > body.limit}
 

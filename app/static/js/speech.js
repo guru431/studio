@@ -24,7 +24,7 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
-import { sectionMcp } from './mcp-sections.js';
+import { schemaLimits, sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { chatPlayer } from './speech-read.js';
@@ -220,7 +220,7 @@ function build(view, ctx) {
       voiceView?.unmount();
       voiceView = null;
       voiceBox.replaceChildren(el('label', { class: 'ctl-chip sp-voice-field' }, el('input', { id: 'chip-voice', list: 'service-voices',
-        value: serviceVoice || (active ? '' : 'alloy'), placeholder: tr("Голос сервиса"),
+        value: serviceVoice || '', placeholder: tr("Голос сервиса"),
         maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' })), options);
     }
     langView.wrap.hidden = active || kind !== 'srvllm';
@@ -254,13 +254,13 @@ function build(view, ctx) {
       if (active && !form.parentNode) nativeHint.after(form);
     }
     const schema = mcp.argument('model');
-    const choices = mcp.canClone() && Array.isArray(schema?.enum) ? schema.enum.filter(id => typeof id === 'string') : [];
+    const choices = schemaLimits(schema)?.enum?.filter(id => typeof id === 'string') || [];
     const previous = mcpModelPick.value;
     mcpModelPick.replaceChildren(...choices.map(id => el('option', { value: id }, modelLabel(id))));
     if (choices.includes(previous)) mcpModelPick.value = previous;
     else if (choices.includes(schema?.default)) mcpModelPick.value = schema.default;
-    mcpModelView.wrap.hidden = choices.length < 2 || !voices.length;
-    modelView.wrap.hidden = modelPick.options.length < 2 || (active && (!mcp.has('model') || choices.length > 0));
+    mcpModelView.wrap.hidden = choices.length < 2 || (mcp.canClone() && !voices.length);
+    modelView.wrap.hidden = modelPick.options.length < 2 || active;
     paintVoice();
   }
 
@@ -486,6 +486,25 @@ function build(view, ctx) {
       }
     }
     if (!RUNNING.has(item.state)) {
+      if (item.state === 'error' || item.state === 'cancelled') {
+        const repeat = el('button', { type: 'button', class: 'btn btn-sm sp-repeat' }, tr("Повторить"));
+        repeat.addEventListener('click', async () => {
+          repeat.disabled = true;
+          error.textContent = '';
+          try {
+            await api('PATCH', `/api/speeches/${item.id}`, {
+              text: item.text, voice: item.voice, connection_id: item.connection_id, model: item.model, language: item.language,
+            });
+            kick();
+            await refresh();
+          } catch (err) {
+            error.textContent = words(err);
+          } finally {
+            repeat.disabled = false;
+          }
+        });
+        acts.append(repeat);
+      }
       if (!ctx.hint) {
         const edit = el('button', { type: 'button', class: 'btn btn-sm sp-edit' }, tr("Изменить"));
         edit.addEventListener('click', () => startEdit(item));
@@ -602,7 +621,7 @@ function build(view, ctx) {
         // голос из перечня сервера уходит полем voice, личный — образцом (voiceId)
         const shared = !!voiceField?.selectedOptions?.[0]?.dataset.mcp;
         const voiceId = voiceField?.tagName === 'SELECT' && !shared && mcp.canClone() ? voice : undefined;
-        const mcpModel = mcpModelPick.options.length ? (voiceId ? mcpModelPick.value : undefined) : model || undefined;
+        const mcpModel = voiceId || !mcp.canClone() ? mcpModelPick.value || undefined : undefined;
         const ok = await mcp.run({ text: value, model: mcpModel,
           voice: !voiceId && !voiceBox.hidden && voice ? voice : undefined }, { voiceId });
         if (ok) {

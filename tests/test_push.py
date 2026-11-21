@@ -480,6 +480,11 @@ def test_cards_and_ends_push_only_without_watchers(studio):
     settle(studio)
     assert [d.decrypt(r.content)["body"] for r in studio.gw.push_requests[1:]] == [
         "Рабочий ПК: вопрос", "Рабочий ПК: ход прерван", "Рабочий ПК: ошибка", "Рабочий ПК: ход окончен"]
+    queue = {"k": "queue", "items": [{"text": "секрет-очереди"}], "paused": True}
+    before = len(studio.gw.push_requests)
+    emit(studio, link, ALPHA, A, queue, {**queue, "waiting": True})
+    settle(studio)
+    assert [d.decrypt(r.content)["body"] for r in studio.gw.push_requests[before:]] == ["Рабочий ПК: очередь ждёт вас"]
 
 
 def test_agent_push_includes_project_name_and_no_chat_content(studio, caplog):

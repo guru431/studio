@@ -64,8 +64,6 @@ PHRASE_MAX = 220
 EXTERNAL_MAX = 4000
 #: шаг времени постановки соседних частей: очередь идёт по `queued`, а id случайны
 PART_STEP = 1e-6
-#: голос внешнего сервиса для «Прочитать», если этой моделью ещё не озвучивали
-SERVICE_VOICE = "alloy"
 NAME_CHARS = 40
 VOICE_NAME_MAX = 64
 RETRY_SEC = 15
@@ -583,24 +581,33 @@ async def create(body: SpeechIn, request: Request):
     return _out(_row(uid, _enqueue(uid, conn, model, voice, name, language, text, chat)))
 
 
-def _read_voice(uid: int, conn, model: str) -> "tuple[str, str, str | None]":
-    """Голос «Прочитать»: последней озвучки этой моделью (и её язык), иначе первый доступный."""
-    last = state.DB.execute(f"SELECT voice, language FROM speeches WHERE user_id = ? AND connection_id = ? AND model = ?"
-                            f" AND deleted IS NULL ORDER BY {QUEUE_KEY} DESC, rowid DESC LIMIT 1",
+def _read_voice(uid: int, conn, model: str) -> tuple[str, str]:
+    """Голос чтения: последний у этой модели, для шлюза без него — первый личный образец."""
+    completed = " AND state = 'done'" if conn.kind != "srvllm" else ""
+    last = state.DB.execute(f"SELECT voice FROM speeches WHERE user_id = ? AND connection_id = ? AND model = ?"
+                            f" AND deleted IS NULL{completed} ORDER BY {QUEUE_KEY} DESC, rowid DESC LIMIT 1",
                             (uid, conn.id, model)).fetchone()
     if conn.kind != "srvllm":
-        voice = last["voice"] if last is not None else SERVICE_VOICE
-        return voice, voice, None
+        if last is None:
+            raise HTTPException(409, {"code": "voice", "message": "сначала озвучьте текст голосом этого сервиса"})
+        return last["voice"], last["voice"]
     if last is not None:
         found = state.DB.execute("SELECT name FROM voices WHERE id = ? AND user_id = ? AND deleted IS NULL",
                                  (last["voice"], uid)).fetchone()
         if found is not None:
-            return last["voice"], found["name"], last["language"]
+            return last["voice"], found["name"]
     rows = state.DB.execute("SELECT id, name FROM voices WHERE user_id = ? AND deleted IS NULL", (uid,)).fetchall()
     if not rows:
         raise HTTPException(409, {"code": "voice", "message": "голосов пока нет — добавьте голос в настройках раздела «Озвучка»"})
     first = min(rows, key=lambda r: (r["name"].casefold(), r["id"]))       # первый в выборе страницы — по алфавиту
-    return first["id"], first["name"], None
+    return first["id"], first["name"]
+
+
+def _read_language(conn, text: str) -> "str | None":
+    """Шлюз озвучивает чтение по преобладающим буквам текста (русский и английский); внешний API язык не принимает."""
+    if conn.kind != "srvllm":
+        return None
+    return "en" if len(re.findall("[A-Za-z]", text)) > len(re.findall("[А-Яа-яЁё]", text)) else "ru"
 
 
 def _default_source(uid: int, code: str, message: str):
@@ -620,9 +627,9 @@ async def read(body: ReadIn, request: Request):
     operations.check(uid)
     text = _text_of(exports.md_plain(body.text), LONG_MAX)
     conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»")
-    voice, name, language = _read_voice(uid, conn, model)
+    voice, name = _read_voice(uid, conn, model)
     _room(uid, None)
-    sid = _enqueue(uid, conn, model, voice, name, language, text)
+    sid = _enqueue(uid, conn, model, voice, name, _read_language(conn, text), text)
     log.info("озвучка %s: «Прочитать» из %s", sid[:8], body.origin.kind)
     return {"chat_id": sid}
 
@@ -634,7 +641,7 @@ async def say(body: SayIn, request: Request):
     uid = request.state.user.id
     text = _text_of(exports.md_plain(body.text), SAY_MAX)
     conn, model = _default_source(uid, "say_mcp", "для «Разговора» нужен источник озвучки через API")
-    voice, _, language = _read_voice(uid, conn, model)
+    voice, _ = _read_voice(uid, conn, model)
     if uid in SAYING:
         raise HTTPException(429, {"code": "busy", "message": "предыдущая фраза ещё озвучивается"})
     SAYING.add(uid)
@@ -645,7 +652,7 @@ async def say(body: SayIn, request: Request):
         reference = await voices.reference(uid, voice)
         if model == "qwen3-tts":
             await speech.free_card(conn)
-        return await speech.say(conn, model, text, reference, language)
+        return await speech.say(conn, model, text, reference, _read_language(conn, text))
 
     try:
         data, mime = await asyncio.wait_for(run(), SAY_BUDGET_SEC)

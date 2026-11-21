@@ -30,9 +30,9 @@ import { calendarDay, dateTime, timeOnly } from './time.js';
 import { act, count, get, subscribe } from './code-workspace.js';
 import { attemptsLeft } from './lock.js';
 import { lazy } from './stale.js';
-import { agentInstallers, computerPin, el, words } from './ui.js';
+import { agentDownload, agentInstallers, computerPin, el, openDialog, words } from './ui.js';
 import { gitLevel } from './code-git.js';
-import { codeActivity, codeActivityState, CODE_ACTIVITY_LABELS, refreshCodeActivity } from './code-activity.js';
+import { codeActivity, codeActivityState, codeActivityLabel, refreshCodeActivity } from './code-activity.js';
 
 const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
 const PIN_LOCKED = tr("PIN заблокирован после 5 ошибок — разблокируйте его в окне моста на самом компьютере");
@@ -86,6 +86,8 @@ function remoteBadge(remote, name) {
 
 export function panelView(host, { selected: first = null, opened, chose, list, openJournal, initialAgents = null }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
+  const addAgent = el('button', { id: 'code-add-agent', type: 'button', class: 'btn-link', 'aria-haspopup': 'dialog' },
+    tr("Добавить компьютер"));
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
   const sort = el('select', { id: 'code-project-sort', hidden: true, 'aria-label': tr("Сортировка проектов") },
@@ -127,8 +129,10 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     followViewport: true, autoFocus: false });
   const footer = el('div', { class: 'code-panel-footer', hidden: true }, newProject, sortBox, sort, sortPanel, updated);
   const root = el('aside', { id: 'code-panel', class: 'code-panel', 'aria-label': tr("Компьютеры и проекты") },
-    el('div', { class: 'code-panel-agents' }, agentsBox), body, status, footer);
+    el('div', { class: 'code-panel-agents' }, agentsBox, addAgent), body, status, footer);
   host.append(root);
+  addAgent.addEventListener('click', () => openDialog(root, { id: 'code-add-agent-dialog', title: tr("Добавить компьютер"),
+    cancelText: tr("Закрыть"), body: [agentDownload()] }));
 
   let createDialog = null;
   let createLoading = false;
@@ -464,6 +468,8 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     };
     const rows = [...listBox.children];
     rows.sort((a, b) => {
+      const pinned = Number(b.dataset.pinned === 'true') - Number(a.dataset.pinned === 'true');
+      if (pinned) return pinned;
       if (byVisibility) {
         const diff = visibilityRank(a) - visibilityRank(b);
         if (diff) return diff;
@@ -595,7 +601,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     return items;
   }
 
-  const unsubscribe = subscribe(() => paintCounts());   // числа вкладок — после каждого действия и ответа сервера
+  const unsubscribe = subscribe(() => { paintCounts(); paintPins(); });
   let loaded = readAgents();
   loaded.then((got) => {
     scheduleUpdates();
@@ -729,10 +735,11 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
         const kind = codeActivityState(item);
         link.dataset.state = kind;
         const title = item.title || tr("Сессия");
-        link.title = `${title} · ${CODE_ACTIVITY_LABELS[kind]}`;
+        const label = codeActivityLabel(item);
+        link.title = `${title} · ${label}`;
         link.setAttribute('aria-label', link.title);
         link.replaceChildren(el('span', { class: 'code-session-name' }, title),
-          el('span', { class: 'code-session-state' }, CODE_ACTIVITY_LABELS[kind]));
+          el('span', { class: 'code-session-state' }, label));
       }
       for (const link of old.values()) link.remove();
       // «Отметить прочитанными» (D2): только ревизии, показанные здесь; новое завершение останется непрочитанным.
@@ -750,6 +757,21 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
       } else mark?.remove();
       list.hidden = !tasks.length;
     }
+  }
+
+  function paintPins() {
+    const pins = new Set((get().pins || []).filter((item) => item.aid === selected).map((item) => item.pid));
+    let changed = false;
+    for (const row of body.querySelectorAll('#code-projects li[data-pid]')) {
+      const pinned = String(pins.has(row.dataset.pid));
+      if (row.dataset.pinned === pinned) continue;
+      changed = true;
+      row.dataset.pinned = pinned;
+      const button = row.querySelector('.code-project-pin');
+      button.setAttribute('aria-pressed', pinned);
+      button.title = pinned === 'true' ? tr("Открепить проект") : tr("Закрепить проект");
+    }
+    if (changed) sortProjects();
   }
 
   /** Компьютер в панели: kind — open (вход, нажатие) или pin (отказ closed справа). */
@@ -856,6 +878,18 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     }
     const rows = found.map((p) => {
       const link = el('a', { class: 'code-project-name', title: p.name, href: `#/code/${agent.id}/${p.pid}` }, p.name);
+      const pinButton = el('button', { type: 'button', class: 'icon-btn code-project-pin',
+        'aria-label': tr("Закрепить проект {0}", p.name) }, icon('star'));
+      pinButton.addEventListener('click', async () => {
+        pinButton.disabled = true;
+        try {
+          await act('pin', { aid: agent.id, pid: p.pid, pinned: pinButton.getAttribute('aria-pressed') !== 'true' });
+        } catch (error) {
+          if (alive && mine === gen) status.textContent = words(error);
+        } finally {
+          pinButton.disabled = false;
+        }
+      });
       const row = el('div', { class: 'code-project' },
         el('span', { class: 'code-project-heading' },
           el('span', { class: 'code-project-title' },
@@ -864,7 +898,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
           el('span', { class: 'code-project-state running', hidden: true }),
           el('span', { class: 'code-project-state asking', hidden: true }),
           el('span', { class: 'code-project-state unread', hidden: true }),
-          el('span', { class: 'code-project-count' })),
+          el('span', { class: 'code-project-count' }), pinButton),
         el('span', { class: 'code-project-shared', hidden: !p.shared }, tr("Общий доступ")),
         el('span', { class: 'code-project-summary' }));
       link.addEventListener('click', (event) => {
@@ -886,6 +920,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
     observer.disconnect();
     for (const row of rows) observer.observe(row);
     paintCounts();
+    paintPins();
     paintHere();
     footer.hidden = false;
     newProject.hidden = !agent.project_create || !!agent.shared;

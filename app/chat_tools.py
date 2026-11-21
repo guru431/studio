@@ -145,7 +145,7 @@ def _todo(task, call) -> dict:
     return {"kind": "todo", "text": TODO_SAVED.format(len(items))}
 
 
-def _memory(task, call) -> dict:
+async def _memory(task, call) -> dict:
     """`memory_save` / `memory_forget`: только при `users.memory_on`; `memory_save` после защищённого источника —
     MEMORY_PROTECTED. Шаг текста записи не хранит (память — шифром),
     `memory_forget` принимает номер из блока — первые знаки id своей записи."""
@@ -157,8 +157,11 @@ def _memory(task, call) -> dict:
         if task.protected:
             return {"kind": "memory", "action": action, "error": MEMORY_PROTECTED}
         text = args.get("text")
-        if not isinstance(text, str):
+        if not isinstance(text, str) or not 0 < len(text.strip()) <= memory.ITEM_MAX:
             return {"kind": "memory", "action": action, "error": memory.INVALID["message"]}
+        if call is not task.confirmed:
+            await chat_pending.pause(task, "confirm", call, {"memory_text": text.strip()})
+            return {}
         try:
             memory.save(task.user_id, text)
         except HTTPException as exc:
@@ -230,7 +233,7 @@ async def call(task, call) -> dict:
     if call.name == "todo_write":
         return _todo(task, call)
     if call.name in ("memory_save", "memory_forget"):
-        return _memory(task, call)
+        return await _memory(task, call)
     if call.name == "knowledge_search":
         return await _knowledge(task, call)
     view = _ask_view(call.arguments)

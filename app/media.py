@@ -458,7 +458,7 @@ REFERENCES = {
     "videos": ("media_id", "source_media_id"),
     "attachments": ("media_id",),
     "chat_media": ("media_id",),                # звук и видео диалога для MCP
-    "transcripts": ("source_media_id", "result_media_id"),
+    "transcripts": ("source_media_id", "result_media_id", "listen_media_id"),
     "voices": ("media_id",),
     "voice_samples": ("media_id",),
     "speeches": ("media_id", "previous_media_id"),

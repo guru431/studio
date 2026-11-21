@@ -19,6 +19,7 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * HunyuanOCR — HTML-тегами, скрипты — нет); прочий текст сервера — только textContent. «Копировать» — весь
  * документ, как выгрузка .md; «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
  * другой документ его убирает). «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
+ * «Перевести» у готового скана — выбор языка и новая запись «Перевода» без повторного распознавания.
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me, toLogin } from './api.js';
@@ -27,21 +28,20 @@ import { icon } from './icons.js';
 import { actionMenu } from './menu.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
-import { busyBlock, createPicker, keep, pickerList } from './feed.js';
+import { busyBlock, createPicker, keep, pickerList, recordSelection } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
 import { clearRead, readAloud } from './speech-read.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
+import { DOCUMENT_PHOTO_SIDE, resizePhoto } from './resize-photo.js';
 import { el, field, openDialog, plural, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
 const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю загрузку
 const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
-const PHOTO_SIDE = 2200;                 // ocr_render.MAX_SIDE: длиннее фото уменьшает до отправки shrink
-const PHOTO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
@@ -51,35 +51,6 @@ let screen = null;
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-}
-
-/** Фото длиннее PHOTO_SIDE — JPEG с этой стороной до отправки: сервер всё равно ужимает до неё
- * (ocr_render.photo_png), а снимок телефона в 3–8 МБ съел бы предел UPLOAD_MAX за несколько страниц. Рисует <img>:
- * браузер сам поворачивает по EXIF (image-orientation: from-image), в JPEG метаданных нет. Не вышло меньше
- * исходного, не PNG/JPEG/WebP или не декодируется — исходный файл (откажет и объяснит сервер). */
-async function shrink(file) {
-  if (!PHOTO_TYPES.has(file.type)) return file;
-  const url = URL.createObjectURL(file);
-  try {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    const side = Math.max(img.naturalWidth, img.naturalHeight);
-    if (side <= PHOTO_SIDE) return file;
-    const canvas = el('canvas', { width: Math.round(img.naturalWidth * PHOTO_SIDE / side),
-      height: Math.round(img.naturalHeight * PHOTO_SIDE / side) });
-    const g = canvas.getContext('2d');
-    g.fillStyle = '#fff';                        // прозрачное PNG — на белом, а не на чёрном
-    g.fillRect(0, 0, canvas.width, canvas.height);
-    g.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((done) => { canvas.toBlob(done, 'image/jpeg', 0.9); });
-    if (!blob || blob.size >= file.size) return file;
-    return new File([blob], `${file.name.replace(/\.[^.]*$/, '') || file.name}.jpg`, { type: 'image/jpeg' });
-  } catch {
-    return file;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
 }
 
 /** Текст узла — только если сменился: опрос не сбрасывает выделение в нём. */
@@ -122,9 +93,11 @@ function build(view, ctx) {
   let acts = null;             // { key, box } — кнопки документа
   let two = null;              // { key, box, scan, text } — показанная страница: картинка и текст
   let engines = [];            // движки раздела через сервер: { connection_id, model, label } (GET /api/sections)
+  const selection = recordSelection('ocr', me.id);
   const docs = createPicker({ url: '/api/ocr', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
     show() {
+      if (docs.current.id !== shownId) selection.save(docs.current.id);
       error.textContent = '';
       paintList();
       paintView();
@@ -194,6 +167,41 @@ function build(view, ctx) {
     } });
   }
 
+  async function translateDialog(item) {
+    const target = el('select', { class: 'input', id: 'ocr-translate-target', disabled: true });
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const go = el('button', { type: 'button', class: 'btn btn-accent', id: 'ocr-translate-confirm', disabled: true }, tr("Перевести"));
+    let saving = false;
+    const dialog = openDialog(root, { id: 'ocr-translate-dialog', title: tr("Перевести"), actions: [go],
+      guard: () => !saving, body: [field(tr("Язык перевода"), target, 'target_lang'), fail] });
+    try {
+      const langs = await api('GET', '/api/translate/languages');
+      if (!dialog.open || !root.isConnected) return;
+      const names = language() === 'en' ? new Intl.DisplayNames(['en'], { type: 'language' }) : null;
+      target.replaceChildren(...langs.items.map(({ code, name }) => el('option', { value: code }, names?.of(code) || name)));
+      target.value = langs.default_target;
+      target.disabled = go.disabled = false;
+      target.focus();
+      go.addEventListener('click', async () => {
+        saving = target.disabled = go.disabled = true;
+        fail.textContent = '';
+        try {
+          const result = await api('POST', `/api/translate/scans/${encodeURIComponent(item.id)}`,
+            { source_lang: langs.auto, target_lang: target.value });
+          kick();
+          dialog.close();
+          if (root.isConnected) ctx.navigate(`translate?id=${encodeURIComponent(result.id)}`);
+        } catch (err) {
+          fail.textContent = words(err);
+        } finally {
+          saving = target.disabled = go.disabled = false;
+        }
+      });
+    } catch (err) {
+      fail.textContent = words(err);
+    }
+  }
+
   function confirmDelete(item) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'ocr-delete-confirm' }, tr("Удалить"));
@@ -205,6 +213,7 @@ function build(view, ctx) {
         await api('DELETE', `/api/ocr/${item.id}`);
         dialog.close();
         docs.forget(item.id);
+        selection.save(null);
         paintView();
         await docs.load();
       } catch (err) {
@@ -417,7 +426,7 @@ function build(view, ctx) {
     const running = RUNNING.has(item.state);
     const choose = engines.length > 1;
     const again = !running && (choose || item.pages.some((p) => p.state === 'waiting' || p.state === 'failed'));
-    const key = JSON.stringify([item.id, readable(item), again, choose, running]);
+    const key = JSON.stringify([item.id, readable(item), item.state === 'done', again, choose, running]);
     if (acts && acts.key === key) return acts.box;
     const box = el('div', { class: 'tr-acts' });
     if (readable(item)) {
@@ -436,6 +445,11 @@ function build(view, ctx) {
         menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
+      if (item.state === 'done') {
+        const translate = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-translate' }, tr("Перевести"));
+        translate.addEventListener('click', () => translateDialog(docs.current));
+        box.append(translate);
+      }
     }
     if (again && choose) {
       const go = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-retry' }, tr("Распознать заново"));
@@ -533,7 +547,7 @@ function build(view, ctx) {
     const files = [];
     for (const file of chosen) {                 // по одному: 50 декодированных снимков разом телефону не по силам
       if (file.type !== 'application/pdf') progress.textContent = tr("Уменьшаю фото · {0} из {1}", files.length + 1, chosen.length);
-      files.push(await shrink(file));
+      files.push(await resizePhoto(file, DOCUMENT_PHOTO_SIDE, true));
     }
     progress.textContent = '';
     if (files.reduce((sum, f) => sum + f.size, 0) > UPLOAD_MAX) {
@@ -597,8 +611,8 @@ function build(view, ctx) {
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   /** ?id адреса («Открыть» в «В работе», «Поиск») — при сборке и при переходе внутри раздела (update). */
-  function follow(wanted) {
-    if (wanted) {
+  function follow(wanted, linked = true) {
+    if (wanted && linked) {
       history.replaceState(history.state, '', '#/ocr');
       picked = false;
     }
@@ -607,7 +621,8 @@ function build(view, ctx) {
   }
   paintView();
   loadEngines();
-  follow(ctx.query && ctx.query.get('id'));
+  const linked = ctx.query && ctx.query.get('id');
+  follow(linked || selection.recall(), !!linked);
 
   return {
     follow,

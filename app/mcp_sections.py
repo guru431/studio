@@ -332,7 +332,7 @@ async def upload(session, kind, file):
     return (await upload_artifact(session, data, mime))["id"]
 
 
-async def voice_arguments(session, section, tool, voice_id, files):
+async def voice_arguments(session, section, tool, voice_id, files, args):
     props = tool["schema"].get("properties", {})
     engine = props.get("engine", {}).get("enum")
     if (section != "speech" or files or "reference_artifact_id" not in tool["files"] or "reference_text" not in props
@@ -341,8 +341,10 @@ async def voice_arguments(session, section, tool, voice_id, files):
     audio, text = await voices.reference(session.uid, voice_id)
     if not audio or len(audio) > UPLOAD_MAX:
         raise mcp.refused("Образец голоса превышает предел MCP", "too_big", 413)
+    values = {"engine": "clone", "reference_text": text}
+    check_bounds(tool, {**args, **values})
     aid = (await upload_artifact(session, audio, "audio/wav"))["id"]
-    return {"engine": "clone", "reference_artifact_id": aid, "reference_text": text}
+    return {**values, "reference_artifact_id": aid}
 
 
 LIMIT_MAX = 10**6
@@ -426,17 +428,19 @@ async def run(section: str, sid: int, request: Request):
         tool = next((item for item in tools if item["name"] == body.tool), None)
         if tool is None:
             raise mcp.refused("Инструмент недоступен в этом разделе MCP")
-        args = body.arguments
+        args = {key: value for key, value in body.arguments.items() if key not in body.files}
         if not body.files.keys() <= tool["files"].keys():
             raise mcp.refused("Инструмент не принимает этот файл MCP", "invalid", 422)
-        if body.voice_id:
-            args.update(await voice_arguments(session, section, tool, body.voice_id, body.files))
-            args.pop("voice", None)
-        else:
-            for key, file in body.files.items():
-                args[key] = await upload(session, tool["files"][key], file)
         if body.tool in {"image_generate", "image_edit"} and isinstance(args.get("model"), str):
             args["model"] = images.MODELS.get(args["model"], args["model"])
+        if body.voice_id:
+            for key in ("voice", "reference_artifact_id"):
+                args.pop(key, None)
+            args.update(await voice_arguments(session, section, tool, body.voice_id, body.files, args))
+        else:
+            check_bounds(tool, args)
+            for key, file in body.files.items():
+                args[key] = await upload(session, tool["files"][key], file)
         check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)

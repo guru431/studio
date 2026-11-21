@@ -33,6 +33,12 @@ export function ntfyBlock() {
   const enabled = el('input', { type: 'checkbox', id: 'ntfy-enabled' });
   const server = el('input', { type: 'url', id: 'ntfy-server', autocomplete: 'off', maxlength: 512 });
   const topic = el('input', { id: 'ntfy-topic', autocomplete: 'off', maxlength: 64, spellcheck: 'false' });
+  const generate = el('button', { type: 'button', id: 'ntfy-generate-topic' }, tr("Сгенерировать тему"));
+  generate.addEventListener('click', () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(18));
+    topic.value = 'studio-' + Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    topic.focus();
+  });
   const token = el('input', { type: 'password', id: 'ntfy-token', autocomplete: 'new-password', maxlength: 512 });
   const clearToken = el('input', { type: 'checkbox', id: 'ntfy-clear-token' });
   const clearLabel = el('label', { class: 'check', hidden: true }, clearToken, tr("Удалить сохранённый токен"));
@@ -42,7 +48,7 @@ export function ntfyBlock() {
   const remove = el('button', { type: 'button', id: 'ntfy-remove' }, tr("Сбросить"));
   const subscribe = el('a', { id: 'ntfy-subscribe', hidden: true }, tr("Подписаться в приложении ntfy"));
   let saved = false;
-  const controls = [enabled, server, topic, token, clearToken, save, test, remove];
+  const controls = [enabled, server, topic, generate, token, clearToken, save, test, remove];
   function busy(on) {
     for (const control of controls) control.disabled = on;
     if (!on) test.disabled = remove.disabled = !saved;
@@ -92,6 +98,8 @@ export function ntfyBlock() {
     el('p', { class: 'muted small' }, tr("Уведомления агентов и готовности заданий без Google-сервисов. Включается отдельно на каждом устройстве, по умолчанию выключено. После выхода из учётки включите заново.")),
     el('label', { class: 'check' }, enabled, tr("Уведомления через ntfy на этом устройстве")),
     field(tr("Сервер ntfy"), server, server.id), field(tr("Тема"), topic, topic.id),
+    el('div', { class: 'row' }, generate),
+    el('p', { class: 'muted small' }, tr("Тема работает как пароль на сервере без ограничения подписчиков.")),
     field(tr("Токен доступа"), token, token.id), clearLabel,
     el('p', { class: 'muted small' }, tr("Для каждого устройства используйте отдельную тему: ntfy доставляет сообщение всем её подписчикам. Сохраните настройки, подпишитесь на тему в приложении ntfy на этом устройстве и разрешите ему работу в фоне.")), subscribe,
     el('p', { class: 'muted small' }, tr("Токен хранится зашифрованным. Сервер ntfy получает только уведомление и ссылку, без переписки. «Проверить» отправляет уведомление с сохранёнными настройками.")),

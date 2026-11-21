@@ -292,7 +292,7 @@ def test_hello(agent):
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
-                             "account_disabled": True,
+                             "account_disabled": True, "git_compare": True,
                              "project_mirror_discovery": True, "mirror_exclude": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
                              **({'terminal': True} if host.platform_id() == 'linux' else {}),
@@ -577,7 +577,7 @@ async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, r
                               chats=AsyncMock(return_value=[{"chat": CHAT, "engine": "opencode"}]),
                               history=AsyncMock(return_value={"messages": []}),
                               state=AsyncMock(return_value={"settings": {"model": model}}),
-                              live=Mock(return_value={}), start=Mock(return_value="turn-id"),
+                              live=Mock(return_value={}), activity=Mock(return_value=[]), start=Mock(return_value="turn-id"),
                               watch=AsyncMock(return_value=(False, [])), answer=Mock(), stop=AsyncMock(), check_owner=Mock())
     agent.opencode = backend
     await opened(agent)

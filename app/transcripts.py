@@ -10,7 +10,7 @@
    Карта занята (503) — ждём и повторяем раз в RETRY_SEC до WAIT_MAX_SEC: чужая генерация — не
    отказ. Состояние словами: «готовлю запись», «распознаю · м:сс», «жду карту · м:сс».
 3. Итог — JSON реплик в media (`result_media_id`), собеседники — «Собеседник N» (speech.speakers);
-   исходная запись остаётся (её слушают в плеере). «Отменить» обрывает своё ожидание и запрос
+   плеер берёт сжатый MP3 (`listen_media_id`), прежние записи — исходник. «Отменить» обрывает своё ожидание и запрос
    (обрыв шлюз дальше не передаёт — WhisperX дослушает запись в пустоту; освободить слот `asr`
    нечем). Перезапуск службы — недоделанное становится ошибкой (`recover`).
 4. Журнал — только id и коды: имя файла, звук и текст туда не пишутся. База — только с цикла
@@ -70,6 +70,7 @@ TOTAL_MAX = 4 * 3600                         # самая длинная зап�
 #: встречи, вставшая на паузу у предела, не должна застревать на устройстве; страница сверяет с тем же допуском
 TOTAL_SLACK = 30
 MARKER = "— Часть {} (с {}): собеседники пронумерованы заново —"
+MARKER_PREFIX, _, MARKER_SUFFIX = MARKER.split("{}")
 NAME_MAX = 255
 RETRY_SEC = 15
 WAIT_MAX_SEC = 1800
@@ -82,7 +83,7 @@ QUEUE_MAX = 5
 QUEUED = "в очереди"
 #: столбцы строки для ленты, опроса и ответов — без `text` (весь текст записи, нужен только индексу поиска)
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, result_media_id, duration, speakers, state,"
-           " detail, created, finished, edits, language")
+           " detail, created, finished, edits, language, listen_media_id")
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/transcripts")
@@ -100,6 +101,7 @@ class Job:
     model: str
     source_media_id: str
     language: "str | None" = None
+    listen_media_id: "str | None" = None
     part: str = ""                           # «часть 2 из 4» длинной записи, иначе пусто
     stage: str = "готовлю запись"
     stage_at: float = 0.0
@@ -145,14 +147,18 @@ def _row(user_id: int, tid: str):
 
 
 def edits_of(row) -> dict:
-    """Правки строки: `{"texts": {номер: текст}, "names": {метка: имя}}` (пустые — правок нет)."""
+    """Правки строки: тексты, имена и назначения собеседников по номерам реплик."""
     data = json.loads(row["edits"]) if row["edits"] else {}
-    return {"texts": dict(data.get("texts") or {}), "names": dict(data.get("names") or {})}
+    return {key: dict(data.get(key) or {}) for key in ("texts", "names", "speakers")} | {
+        "speaker_count": data.get("speaker_count")}
 
 
-def _speakers(row, names: dict) -> "int | None":
-    """Число разных показываемых имён: метки — «Собеседник 1…N» (speech.turns), файл не нужен."""
+def _speakers(row, edits: dict) -> "int | None":
+    """Число разных показываемых имён, без загрузки результата для списка."""
+    if edits["speaker_count"] is not None:
+        return edits["speaker_count"]
     count = row["speakers"]
+    names = edits["names"]
     if not count or not names:
         return count
     return len({names.get(label, label) for label in (speech.LABEL.format(n) for n in range(1, count + 1))})
@@ -161,14 +167,24 @@ def _speakers(row, names: dict) -> "int | None":
 def view(row, result: dict) -> list[dict]:
     """Показываемые реплики — распознавание с правками: `{start, end, speaker, label, text, edited}`,
     у правленой ещё `original`. Одна для GET, выгрузок и вложения в чат."""
-    edits = edits_of(row)
+    return _edited_segments(result, edits_of(row))
+
+
+def _edited_segments(result: dict, edits: dict) -> list[dict]:
     out = []
     for n, s in enumerate(result["segments"]):
-        label, text = s.get("speaker"), edits["texts"].get(str(n))
+        index = str(n)
+        original_label = s.get("speaker")
+        label, text = edits["speakers"].get(index, original_label), edits["texts"].get(index)
         item = {"start": s["start"], "end": s["end"], "speaker": edits["names"].get(label, label) if label else None,
                 "label": label, "text": s["text"] if text is None else text, "edited": text is not None}
+        if (text is None and label is None and s["start"] == s["end"]
+                and s["text"].startswith(MARKER_PREFIX) and s["text"].endswith(MARKER_SUFFIX)):
+            item["system"] = True
         if text is not None:
             item["original"] = s["text"]
+        if label != original_label:
+            item["original_label"] = original_label
         out.append(item)
     return out
 
@@ -185,9 +201,12 @@ def _out(row, segments: "list | None" = None) -> dict:
     out = {"id": row["id"], "name": row["name"], "state": row["state"],
            "detail": detail(job) if job is not None and row["state"] == "working"
            else waiting(row) if row["state"] == "queued" else row["detail"],
-           "model": row["model"], "duration": row["duration"], "speakers": _speakers(row, edits["names"]),
+           "model": row["model"], "connection_id": row["connection_id"], "duration": row["duration"],
+           "speakers": _speakers(row, edits),
            "source_media_id": row["source_media_id"], "created": row["created"], "finished": row["finished"],
-           "names": edits["names"], "edited": bool(edits["texts"] or edits["names"]), "language": row["language"]}
+           "listen_media_id": row["listen_media_id"],
+           "names": edits["names"], "edited": any(edits[key] for key in ("texts", "names", "speakers")),
+           "language": row["language"]}
     if segments is not None:
         out["segments"] = segments
     return out
@@ -246,7 +265,8 @@ async def _runner(user_id: int) -> None:
         except HTTPException:                        # подключение удалили, пока запись ждала
             conn = None
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"],
-                  source_media_id=row["source_media_id"], language=row["language"], stage_at=now)
+                  source_media_id=row["source_media_id"], language=row["language"],
+                  listen_media_id=row["listen_media_id"], stage_at=now)
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
@@ -318,18 +338,53 @@ async def _in_parts(job: Job, whole, duration: float, step: int, tmp) -> tuple[l
     return replicas, raw
 
 
+async def _save_playback(uid: int, path, name: str) -> str:
+    """Поток MP3. При отмене дождаться читающего локальный файл потока, прежде чем run уберёт путь."""
+    stopped = False
+    reading = None
+
+    def read(offset):
+        with path.open("rb") as f:
+            f.seek(offset)
+            return f.read(1 << 20)
+
+    async def chunks():
+        nonlocal reading
+        offset = 0
+        while not stopped:
+            reading = asyncio.create_task(asyncio.to_thread(read, offset))
+            block = await asyncio.shield(reading)
+            if not block:
+                return
+            offset += len(block)
+            yield block
+
+    try:
+        return await media.save_stream(uid, chunks(), "audio/mpeg", _stem(name) + ".mp3", UPLOAD_MAX)
+    finally:
+        stopped = True
+        while reading is not None and not reading.done():
+            try:
+                await asyncio.wait({reading})
+            except asyncio.CancelledError:
+                pass
+        if reading is not None and not reading.cancelled():
+            reading.exception()
+
+
 async def run(job: Job) -> None:
     """Итог — в строку последним, после уборки временного файла (п. 5 шапки): «готово», ошибка и
     отмена значат «и чисто»; задание тогда же уходит из JOBS."""
     tmp = audio.temp(".mp3")
     whole = audio.temp(".mp3")                        # длинная запись, сжатая целиком: из неё режутся части
     outcome = ("error", INTERRUPTED, {})              # остановка службы
+    new_copy = None
     try:
         try:
             if job.conn is None:
                 raise JobError("подключение раздела удалено из профиля")
             try:
-                source = media.path(job.user_id, job.source_media_id)
+                source = media.path(job.user_id, job.listen_media_id or job.source_media_id)
             except HTTPException:
                 raise JobError("запись удалена") from None
             duration = await audio.probe(source)
@@ -337,18 +392,23 @@ async def run(job: Job) -> None:
             if duration > TOTAL_MAX + TOTAL_SLACK:
                 raise JobError(f"запись длиннее {TOTAL_MAX // 3600} ч — разделите её")
             step = (await speech.limits(job.conn, job.model)).max_seconds
+            compressed = source if job.listen_media_id else (tmp if duration <= step else whole)
+            if not job.listen_media_id:
+                await audio.compress(source, compressed)
             if duration <= step:
-                await audio.compress(source, tmp)
-                replicas, raw = speech.turns(await _recognize(job, tmp))
+                replicas, raw = speech.turns(await _recognize(job, compressed))
             else:
-                await audio.compress(source, whole)
-                replicas, raw = await _in_parts(job, whole, duration, step, tmp)
+                replicas, raw = await _in_parts(job, compressed, duration, step, tmp)
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
+            if not job.listen_media_id:
+                name = _row(job.user_id, job.id)["name"]
+                new_copy = await _save_playback(job.user_id, compressed, name)
             payload = json.dumps({"segments": [asdict(s) for s in replicas], "raw": raw},
                                  ensure_ascii=False).encode("utf-8")
             result = await media.save_async(job.user_id, payload, "application/json", "transcript.json")
             outcome = ("done", "готово", {"result_media_id": result,
+                                          "listen_media_id": job.listen_media_id or new_copy,
                                           "speakers": len({s.speaker for s in replicas if s.speaker}),
                                           "text": " ".join(s.text for s in replicas)})
             log.info("расшифровка %s: готова", job.id[:8])
@@ -369,6 +429,8 @@ async def run(job: Job) -> None:
     finally:
         try:
             await audio.remove_temp(tmp, whole)
+            if new_copy is not None and outcome[0] != "done":
+                await media.delete_async(job.user_id, new_copy)
         except asyncio.CancelledError:
             pass
         finally:
@@ -527,11 +589,15 @@ async def upload(request: Request):
     return _enqueue(uid, conn, model, name, source, language)
 
 
-def _enqueue(uid: int, conn, model: str, name: str, source: str, language: "str | None") -> dict:
+def _enqueue(uid: int, conn, model: str, name: str, source: str, language: "str | None", *, listen=None) -> dict:
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
-                     " created, language) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-                     (tid, uid, conn.id, model, name, source, QUEUED, now, language))
+                     " created, language, listen_media_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+                     (tid, uid, conn.id, model, name, source, QUEUED, now, language, listen))
+    return _start_queued(uid, tid)
+
+
+def _start_queued(uid: int, tid: str) -> dict:
     EPOCHS[tid] = operations.capture(uid)
     kick(uid)
     log.info("расшифровка %s: принята", tid[:8])
@@ -554,12 +620,17 @@ async def retry(tid: str, body: RetryIn, request: Request):
     conn, model = sections.resolve(uid, "transcribe", body.connection_id, body.model)
     if _full_queue(uid):
         raise _busy()
-    source = row["source_media_id"]
-    if not source or not media.alive(uid, source):
+    source, listen = row["source_media_id"], row["listen_media_id"]
+    if not media.alive(uid, listen or source):
         raise HTTPException(404, media.GONE)
     operations.check(uid)
-    # Между проверкой файла и новой ссылкой нет await. Старую запись можно удалять отдельно.
-    return _enqueue(uid, conn, model, row["name"], source, language)
+    if row["state"] in ("error", "cancelled"):
+        state.DB.execute("UPDATE transcripts SET connection_id = ?, model = ?, language = ?, state = 'queued',"
+                         " detail = ?, created = ?, finished = NULL, duration = NULL WHERE id = ? AND user_id = ?",
+                         (conn.id, model, language, QUEUED, clock.NOW(), tid, uid))
+        return _start_queued(uid, tid)
+    # Готовый результат остаётся доступен, пока другая попытка с тем же источником выполняется независимо.
+    return _enqueue(uid, conn, model, row["name"], source, language, listen=listen)
 
 
 @router.get("/limits")
@@ -616,6 +687,7 @@ async def get_transcript(tid: str, request: Request):
 class EditIn(BaseModel):
     texts: dict[str, "str | None"] = Field(default_factory=dict)
     names: dict[str, "str | None"] = Field(default_factory=dict)
+    speakers: dict[str, "str | None"] = Field(default_factory=dict)
     name: str | None = Field(default=None, max_length=NAME_MAX * 4)   # имя записи; предел — documents.rename
 
 
@@ -623,23 +695,28 @@ def _bad(message: str) -> HTTPException:
     return HTTPException(422, {"code": "input", "message": message})
 
 
-def _checked(body: EditIn, segments: list) -> tuple[dict, dict]:
+def _checked(body: EditIn, segments: list) -> dict:
     """Правки запроса, проверенные по файлу итога; None — снять правку (и значение, равное исходному).
     Текст реплики — одной строкой: управляющие знаки — пробелом, пробелы схлопнуты (пустая строка —
     разделитель реплик TXT и конец субтитра SRT, C0 ломает DOCX); предел — от длины исходной реплики
     (EDIT_TEXT_MAX сверх неё): реплика одного говорящего за 20+ минут длиннее EDIT_TEXT_MAX.
     Имя — без управляющих и разделителей строк; знаки формата (ZWJ эмодзи, мягкий перенос) — можно."""
-    texts, names = {}, {}
-    for key, value in body.texts.items():
-        if not (key.isascii() and key.isdigit()) or int(key) >= len(segments):
+    def index(key):
+        digits = key.lstrip("0") or "0"
+        if not (key.isascii() and key.isdigit()) or len(digits) > len(str(len(segments))) or int(digits) >= len(segments):
             raise _bad("такой реплики нет")
-        original = segments[int(key)]["text"]
+        return int(digits)
+
+    texts, names, speakers = {}, {}, {}
+    for key, value in body.texts.items():
+        n = index(key)
+        original = segments[n]["text"]
         if value is not None:
             value = " ".join(exports.CONTROL.sub(" ", value).split())
             limit = len(original) + EDIT_TEXT_MAX
             if not 1 <= len(value) <= limit:
                 raise _bad(f"текст реплики — от 1 до {limit} знаков")
-        texts[str(int(key))] = None if value == original else value
+        texts[str(n)] = None if value == original else value
     labels = {s.get("speaker") for s in segments} - {None}
     for label, value in body.names.items():
         if label not in labels:
@@ -649,7 +726,13 @@ def _checked(body: EditIn, segments: list) -> tuple[dict, dict]:
             if not 1 <= len(value) <= NAME_EDIT_MAX or any(unicodedata.category(c) in NAME_BANNED for c in value):
                 raise _bad(f"имя — от 1 до {NAME_EDIT_MAX} знаков, одной строкой")
         names[label] = None if value == label else value
-    return texts, names
+    for key, value in body.speakers.items():
+        n = index(key)
+        original = segments[n].get("speaker")
+        if original is None or (value is not None and value not in labels):
+            raise _bad("такого собеседника нет")
+        speakers[str(n)] = None if value == original else value
+    return {"texts": texts, "names": names, "speakers": speakers}
 
 
 def _rename(uid: int, tid: str, raw: str) -> None:
@@ -666,28 +749,30 @@ def _rename(uid: int, tid: str, raw: str) -> None:
 async def patch_transcript(tid: str, body: EditIn, request: Request):
     """Правка текстов реплик и имён поверх распознавания и имя записи (`name`); последнее сохранение побеждает."""
     uid = request.state.user.id
-    if not body.texts and not body.names:            # только имя: файл итога не нужен
+    if not (body.texts or body.names or body.speakers):  # только имя: файл итога не нужен
         if body.name is not None:
             _rename(uid, tid, body.name)
         return await _full(uid, _row(uid, tid))
     result = await result_of(uid, _done(uid, tid))
-    texts, names = _checked(body, result["segments"])
+    checked = _checked(body, result["segments"])
     row = _done(uid, tid)                            # после чтения файла: свежие правки, без await до UPDATE
     if body.name is not None:
         _rename(uid, tid, body.name)
     edits = edits_of(row)
-    for part, changes in (("texts", texts), ("names", names)):
+    for part, changes in checked.items():
         for key, value in changes.items():
             if value is None:
                 edits[part].pop(key, None)
             else:
                 edits[part][key] = value
-    stored = json.dumps(edits, ensure_ascii=False) if edits["texts"] or edits["names"] else None
-    state.DB.execute("UPDATE transcripts SET edits = ? WHERE id = ?", (stored, tid))
+    edited = any(edits[key] for key in checked)
+    segments = _edited_segments(result, edits)
+    edits["speaker_count"] = len({s["speaker"] for s in segments if s["speaker"]}) if edits["speakers"] else None
+    stored = json.dumps(edits, ensure_ascii=False) if edited else None
+    state.DB.execute("UPDATE transcripts SET edits = ?, text = ? WHERE id = ?",
+                     (stored, " ".join(s["text"] for s in segments), tid))
     log.info("расшифровка %s: правка", tid[:8])
-    row = _row(uid, tid)
-    state.DB.execute("UPDATE transcripts SET text = ? WHERE id = ?", (text_of(row, result), tid))
-    return _out(row, view(row, result))
+    return _out(_row(uid, tid), segments)
 
 
 @router.delete("/{tid}/edits")
@@ -731,14 +816,41 @@ async def delete(tid: str, request: Request):
     return Response(status_code=204)
 
 
+@router.delete("/{tid}/source", status_code=204)
+async def delete_source(tid: str, request: Request):
+    """Снять исходник только с готовой записи, у которой читается MP3-копия."""
+    uid = request.state.user.id
+    row = _done(uid, tid)
+    listen = row["listen_media_id"]
+    stored = state.DB.execute("SELECT size FROM media WHERE id = ? AND user_id = ? AND mime = 'audio/mpeg'",
+                              (listen, uid)).fetchone() if listen else None
+    if stored is None:
+        raise HTTPException(404, media.GONE)
+    try:
+        info = await asyncio.to_thread(media.path(uid, listen).stat)
+    except FileNotFoundError:
+        raise HTTPException(404, media.GONE) from None
+    except OSError:
+        raise HTTPException(503, {"code": "storage", "message": forms.STORAGE}) from None
+    if info.st_size <= 0 or info.st_size != stored["size"]:
+        raise HTTPException(404, media.GONE)
+    operations.check(uid)
+    source = _done(uid, tid)["source_media_id"]
+    if source != listen:
+        state.DB.execute("UPDATE transcripts SET source_media_id = ? WHERE id = ?", (listen, tid))
+        if not media.referenced(uid, source):
+            await media.delete_async(uid, source)
+    return Response(status_code=204)
+
+
 async def purge(user_id: int, item_id: str) -> None:
     """Окончательно: строка, запись и итог, если на них больше никто не ссылается. Строки уже нет — ничего."""
-    row = state.DB.execute("SELECT source_media_id, result_media_id FROM transcripts WHERE id = ? AND user_id = ?",
+    row = state.DB.execute("SELECT source_media_id, result_media_id, listen_media_id FROM transcripts WHERE id = ? AND user_id = ?",
                            (item_id, user_id)).fetchone()
     if row is None:
         return
     state.DB.execute("DELETE FROM transcripts WHERE id = ?", (item_id,))
-    for media_id in {row["source_media_id"], row["result_media_id"]} - {None}:
+    for media_id in set(row) - {None}:
         if not media.referenced(user_id, media_id):
             await media.delete_async(user_id, media_id)
     log.info("расшифровка %s: удалена", item_id[:8])

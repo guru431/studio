@@ -430,7 +430,7 @@ def test_the_source_of_a_video_stopped_while_sending_is_not_an_orphan(studio, en
         assert r.status_code == 404
         assert tuple(state.DB.execute("SELECT state, deleted IS NOT NULL FROM videos").fetchone()) == ("cancelled", 1)
         assert media.referenced(owner_id(), state.DB.execute("SELECT source_media_id FROM videos").fetchone()[0])
-        assert studio.c.delete(f"/api/trash/videos/{vid}").status_code == 204
+        assert studio.c.request("DELETE", f"/api/trash/videos/{vid}", json={"password": "password-123"}).status_code == 204
         assert media_rows() == 0 and share_files(env) == []
     else:
         assert r.status_code == 201 and r.json()["state"] == "cancelled"
@@ -914,7 +914,7 @@ def test_a_source_being_deleted_cannot_start_a_video(studio, monkeypatch):
 
     monkeypatch.setattr(media, "_remove", racing)
     assert studio.c.delete(f"/api/images/{'a' * 32}").status_code == 204
-    assert studio.c.delete(f"/api/trash/images/{'a' * 32}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/images/{'a' * 32}", json={"password": "password-123"}).status_code == 204
     (r,) = answers
     assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
     assert studio.c.get("/api/videos").json()["items"] == [] and studio.gw.videos == {}
@@ -1072,7 +1072,7 @@ def test_cancel_and_delete(studio, env, unlinks):
     assert studio.c.get("/api/videos").json()["items"] == []
     assert media_rows() == 4                                           # в корзине — три исходника и mp4 на месте
     for vid in (v["id"], running["id"], done["id"]):                   # окончательно уносит и mp4
-        assert studio.c.delete(f"/api/trash/videos/{vid}").status_code == 204
+        assert studio.c.request("DELETE", f"/api/trash/videos/{vid}", json={"password": "password-123"}).status_code == 204
     assert share_files(env) == [] and media_rows() == 0
     assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
 

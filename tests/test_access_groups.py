@@ -258,9 +258,16 @@ def test_closed_shared_model_hidden_from_sections(studio):
     make_user(studio, "admin", is_admin=True)
     member, other = make_user(studio, "member"), make_user(studio, "other")
     cid, _ = closed_models(studio, member)
+    passport = {"routes": [{"url": "https://private.example"}],
+                "models": [{"id": MODEL, "caps": [{"name": "chat"}]},
+                           {"id": "internal-model", "caps": [{"name": "vision"}]}]}
+    state.DB.execute("UPDATE connections SET passport = ? WHERE id = ?", (json.dumps(passport), cid))
     assert cid in chat_links(studio)                                  # администратор видит всё
     signin(studio, "member")
-    assert cid in chat_links(studio)
+    links = studio.c.get("/api/sections").json()["sections"][0]["links"]
+    shared = next(link for link in links if link["connection"]["id"] == cid)
+    assert shared["capabilities"] == {MODEL: ["chat"]} and "passport" not in shared["connection"]
+    assert "private.example" not in json.dumps(shared)
     assert cid in [c["id"] for c in studio.c.get("/api/connections").json()["items"]]
     assert studio.c.put("/api/sections/chat/default", json={"connection_id": cid, "model": MODEL}).status_code == 200
     signin(studio, "other")

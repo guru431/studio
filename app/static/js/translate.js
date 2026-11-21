@@ -48,7 +48,7 @@ import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
 import { actionMenu, menuItem, popupMenu } from './menu.js';
 import { timeOnly } from './time.js';
-import { createPicker, dayTitle } from './feed.js';
+import { createPicker, dayTitle, recordSelection } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
@@ -56,6 +56,7 @@ import { sectionMcp } from './mcp-sections.js';
 import { photoView, RTL } from './translate-photo.js';
 import { picker } from './picker.js';
 import { renderMarkdown } from './markdown.js';
+import { DOCUMENT_PHOTO_SIDE, resizePhoto } from './resize-photo.js';
 import { clearRead, readAloud } from './speech-read.js';
 import { el, openDialog, words } from './ui.js';
 
@@ -67,7 +68,7 @@ const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX
 const AUTO = 'auto';
 const LANGUAGE_NAMES = language() === 'en' ? new Intl.DisplayNames([locale()], { type: 'language' }) : null;
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
-const FILE_ACCEPT = '.pdf,.docx,.txt,.md';
+const FILE_ACCEPT = '.pdf,.docx,.txt,.md,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.toml,.ini,.log,.py,.js,.ts,.html,.css,.sql,.sh,.ps1';
 const PHOTO_ACCEPT = 'image/png,image/jpeg,image/webp';
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
 const FILE_KINDS = { pdf: 'PDF', docx: 'Word', txt: 'TXT', md: 'MD' };
@@ -130,6 +131,8 @@ function build(view, ctx) {
   let touched = false;         // языки выбрал человек: пара из истории их не перебьёт
   let picked = false;          // запись выбрали сами: ?id из адреса её не перебьёт
   let sending = false;
+  let choosing = 0;
+  let preparing = false;
   let sentText = null;         // текст поля, ушедший «Перевести»: пока его не правили — не черновик
   let timer = null;
   let photo = null;            // вид открытой записи-снимка: { id, node, setMode, update, destroy }
@@ -141,6 +144,7 @@ function build(view, ctx) {
   let statusKey = '';          // что показывает #tl-status: то же — не перерисовывается (aria-live — только перемены)
   let rows = new Map();        // id → { sig, node } строк истории: строка с теми же данными — тот же узел
   const dayNodes = new Map();  // подпись дня → узел
+  const selection = recordSelection('translate', me.id);
 
   const docs = createPicker({ url: '/api/translate', size: PAGE, pollMs: LIST_POLL_MS, polled: true,
     running: (i) => RUNNING.has(i.state),
@@ -335,8 +339,8 @@ function build(view, ctx) {
   }
 
   function paintGo() {
-    goBtn.disabled = sending || mcp.busy || (!pending && !(rec && rec.kind !== 'text') && input.value.length > TEXT_MAX);
-    fresh.disabled = sending || mcp.busy;
+    goBtn.disabled = sending || preparing || mcp.busy || (!pending && !(rec && rec.kind !== 'text') && input.value.length > TEXT_MAX);
+    fresh.disabled = sending || preparing || mcp.busy;
   }
 
   function paintMcp() {
@@ -413,7 +417,7 @@ function build(view, ctx) {
     else if (rec.result_lang && rec.result_lang !== rec.target_lang) {      // redirect: выбор справа не трогаем
       setStatus('muted', tr("Исходник уже на языке перевода — переведено на {0}", langName(rec.result_lang)));
     } else setStatus('', '');
-    const toScan = !!rec && rec.state === 'done' && !!rec.notice && !!rec.scan_id;
+    const toScan = !!rec?.scan_id && (rec.scan_owned === false || (rec.state === 'done' && !!rec.notice));
     scanLink.hidden = !toScan;
     if (toScan) scanLink.href = `#/ocr?id=${encodeURIComponent(rec.scan_id)}`;
     stop.hidden = !running || rec.state === 'cancelling';
@@ -435,6 +439,9 @@ function build(view, ctx) {
     docs.current = record;
     loose = '';
     if (!same) {
+      selection.save(record.id);
+      choosing += 1;
+      preparing = false;
       // набранный и не отправленный текст запись не сотрёт: он — в черновик, «Новый перевод» и × его вернут
       if (input.value.trim() && input.value !== sentText && !(before && input.value === (before.source || ''))) draft.stash();
       clearRead(readBox);
@@ -482,12 +489,15 @@ function build(view, ctx) {
   }
 
   function clearLeft() {
+    choosing += 1;
+    preparing = false;
     if (pending) {
       pending = null;
     } else {
       const shown = !!rec;
       rec = null;
       docs.deselect();                   // перечитывание в пути запись не вернёт
+      selection.save(null);
       loose = '';
       const kept = draft.take();         // набранное до открытия записи
       input.value = shown ? kept : '';
@@ -586,7 +596,7 @@ function build(view, ctx) {
   }
 
   function go() {
-    if (sending || mcp.busy || goBtn.hidden) return;
+    if (sending || preparing || mcp.busy || goBtn.hidden) return;
     error.textContent = '';
     const langs = { source_lang: source.value, target_lang: target.value };
     const pick = chosen();
@@ -600,6 +610,7 @@ function build(view, ctx) {
         const text = input.value;
         rec = null;
         docs.deselect();
+        selection.save(null);
         clearTimeout(timer);
         loose = '';
         paintRight();
@@ -623,10 +634,17 @@ function build(view, ctx) {
     }
   }
 
-  function choose(inputNode, photo) {
-    const file = inputNode.files[0];
+  async function choose(inputNode, photo) {
+    let file = inputNode.files[0];
     inputNode.value = '';
     if (!file) return;
+    const mine = ++choosing;
+    preparing = photo;
+    paintGo();
+    if (photo) file = await resizePhoto(file, DOCUMENT_PHOTO_SIDE, true);
+    if (!alive || mine !== choosing) return;
+    preparing = false;
+    paintGo();
     if (file.size > UPLOAD_MAX) {
       error.textContent = tr("Файл больше 20 МиБ");
       return;
@@ -642,7 +660,8 @@ function build(view, ctx) {
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, tr("Удалить"));
     const dialog = openDialog(body, { id: 'tl-delete-dialog', title: tr("Удалить перевод?"), actions: [yes],
       body: [el('p', {}, tr("Перевод уйдёт в корзину на 14 дней — оттуда его можно вернуть.")),
-        item.scan_id ? el('p', {}, item.scan_shared
+        item.scan_id ? el('p', {}, item.scan_owned === false
+          ? tr("Распознанный документ останется в «Сканах».") : item.scan_shared
           ? tr("Распознанный документ останется в «Сканах»: его использует повтор этого перевода.")
           : tr("Распознанный документ в «Сканах» удалится вместе с переводом, когда перевод удалится из корзины.")) : null, fail] });
     yes.addEventListener('click', async () => {
@@ -659,6 +678,7 @@ function build(view, ctx) {
             paintCount();
           }
           rec = null;
+          selection.save(null);
           clearTimeout(timer);
           paintLeft();
           paintRight();
@@ -791,6 +811,7 @@ function build(view, ctx) {
       loose = rec.source || '';
       rec = null;
       docs.deselect();                   // перечитывание в пути запись не вернёт
+      selection.save(null);
       clearTimeout(timer);
       input.value = done;
       paintCount();
@@ -848,16 +869,17 @@ function build(view, ctx) {
   const langsReady = loadLanguages();   // запись открывается после языков: она ставит свои
 
   /** ?id адреса («В работе», уведомление, «Поиск») — при сборке и при переходе внутри раздела (update). */
-  function follow(wanted) {
-    if (wanted) {
+  function follow(wanted, linked = true) {
+    if (wanted && linked) {
       history.replaceState(history.state, '', '#/translate');
       picked = false;
     }
     return Promise.all([docs.load(), langsReady]).then(() => { if (wanted && !picked) docs.select(wanted, true); });
   }
 
-  const wanted = ctx.query && ctx.query.get('id');
-  Promise.all([loadModels(), follow(wanted)]).then(() => {
+  const linked = ctx.query && ctx.query.get('id');
+  const wanted = linked || selection.recall();
+  Promise.all([loadModels(), follow(wanted, !!linked)]).then(() => {
     if (!alive) return;
     const last = docs.items[0];
     if (!touched && !rec && !wanted && last) setLangs(last.source_lang, last.target_lang);   // пара прошлого раза

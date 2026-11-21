@@ -18,6 +18,7 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   login_code_sent: tr("пароль верен, код отправлен на почту"), login_code_fail: tr("неверный код из письма"), unlock: tr("открыто"),
   unlock_fail: tr("не открыто"), pin_exhausted: tr("PIN исчерпан"), screen_lock_on: tr("блокировка включена"),
   screen_lock_off: tr("блокировка выключена"), screen_lock_change: tr("блокировка перенастроена"), password: tr("пароль сменён"), session_end: tr("сессия завершена"),
+  sessions_end: tr("остальные сессии завершены"),
   emergency: tr("аварийный выход"), share_create: tr("ссылка создана"), share_revoke: tr("ссылка отозвана"),
   file_link_create: tr("ссылка на файл создана"), file_link_revoke: tr("ссылка на файл отозвана"),
   share_pin_fail: tr("неверный PIN ссылки"), share_locked: tr("ссылка остановлена"), pin_set: tr("PIN задан"),
@@ -48,6 +49,8 @@ export function sessionsBlock(host) {
   const list = el('ul', { class: 'agents sessions', id: 'sessions' });
   const note = status('sessions-status');
   const refresh = button(tr("Обновить"), { class: 'btn btn-sm', id: 'sessions-refresh' }, () => reload());
+  const endOthers = button(tr("Завершить все остальные сессии"),
+    { class: 'btn btn-sm btn-danger', id: 'sessions-end-others', hidden: true }, () => end());
   let reading = 0;
 
   function title(s) {
@@ -80,19 +83,23 @@ export function sessionsBlock(host) {
   }
 
   function end(session) {
+    const all = !session;
     const yes = button(tr("Завершить"), { class: 'btn btn-danger', id: 'session-end-confirm' });
     const fail = el('p', { class: 'error' });
-    const dialog = openDialog(host, { id: 'session-end-dialog', title: tr("Завершить сессию?"), actions: [yes], body: [
-      el('p', { class: 'session-description' }, [title(session), session.browser, session.os, session.ip,
+    const dialog = openDialog(host, { id: 'session-end-dialog',
+      title: all ? tr("Завершить все остальные сессии?") : tr("Завершить сессию?"), actions: [yes], body: [
+      all ? null : el('p', { class: 'session-description' }, [title(session), session.browser, session.os, session.ip,
         tr("сессия {0}", session.id.slice(0, 8))].filter(Boolean).join(' · ')),
-      el('p', {}, tr("Устройство сразу потеряет доступ, push и ntfy на нём перестанут приходить. Войти снова можно паролем.")),
+      el('p', {}, all ? tr("На других устройствах нужно будет войти заново. Текущая сессия останется открытой.")
+        : tr("Устройство сразу потеряет доступ, push и ntfy на нём перестанут приходить. Войти снова можно паролем.")),
       fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
-        await api('DELETE', `/api/me/sessions/${encodeURIComponent(session.id)}`);
+        const url = all ? '/api/me/sessions' : `/api/me/sessions/${encodeURIComponent(session.id)}`;
+        await api('DELETE', url);
         dialog.close();
-        if (await reload()) say(note, tr("Сессия завершена"), 'ok');
+        if (await reload()) say(note, all ? tr("Остальные сессии завершены") : tr("Сессия завершена"), 'ok');
         refresh.focus({ preventScroll: true });
       } catch (err) {
         fail.textContent = words(err);
@@ -109,6 +116,7 @@ export function sessionsBlock(host) {
       const { items } = await api('GET', '/api/me/sessions');
       if (version !== reading) return false;
       say(note, '');
+      endOthers.hidden = !items.some((session) => !session.current);
       list.replaceChildren(...items.map((s) => el('li', { class: 'agent session', 'data-id': s.id },
         el('div', { class: 'session-info' },
           el('div', { class: 'row' }, el('b', { class: 'session-device' }, title(s)),
@@ -141,7 +149,7 @@ export function sessionsBlock(host) {
   return el('section', { class: 'block sessions-block' }, el('h2', {}, tr("Сессии")),
     el('p', { class: 'muted small' }, tr("Где открыта ваша учётка. Незнакомое устройство завершите здесь, а затем смените пароль.")),
     el('p', { class: 'muted small' }, tr("Браузер может скрывать модель и точную версию ОС. Задайте своё имя, чтобы различать одинаковые устройства. IP может совпадать у устройств в одной сети или меняться при VPN.")),
-    list, el('div', { class: 'row' }, refresh, note));
+    list, el('div', { class: 'row' }, refresh, endOthers, note));
 }
 
 /** «Доступы и ссылки» (GET /api/me/access): участники проектов ваших компьютеров — и к папкам, которых уже нет, — и

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import smtplib
+import sqlite3
 import ssl
 from contextlib import contextmanager
 from email.message import EmailMessage
@@ -15,6 +16,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+import clock
 import security
 import state
 
@@ -66,7 +68,26 @@ def settings():
 def public_settings():
     config = settings()
     return {**{k: v for k, v in config.items() if k not in ("password", "reenter")},
-            "password_set": bool(config.get("password")), "reenter": bool(config.get("reenter"))}
+            "password_set": bool(config.get("password")), "reenter": bool(config.get("reenter")),
+            "delivery": delivery_status(config)}
+
+
+def delivery_status(config):
+    row = state.DB.execute("SELECT value FROM settings WHERE key = 'smtp_delivery'").fetchone() if state.DB is not None else None
+    return {"configured": configured(config), "last": json.loads(row[0]) if row else None}
+
+
+def _record_delivery(config, code: str) -> None:
+    if state.DB is None:
+        return
+    try:
+        if settings() != config:
+            return
+        state.DB.execute("INSERT INTO settings(key, value) VALUES('smtp_delivery', ?)"
+                         " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (json.dumps({"at": clock.NOW(), "code": code}),))
+    except sqlite3.Error:
+        log.warning("account email: could not record delivery status")
 
 
 def save_settings(body):
@@ -86,10 +107,13 @@ def save_settings(body):
             raise ValueError()
     except ValueError:
         raise HTTPException(422, {"code": "smtp", "message": "Проверьте сервер SMTP, IP и адрес отправителя"}) from None
+    previous = settings()
     if body.password is None:
-        config["password"] = settings().get("password", "")
+        config["password"] = previous.get("password", "")
     state.DB.execute("INSERT INTO settings(key,value) VALUES('smtp',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                      (security.encrypt(json.dumps(config)),))
+    if config != previous:
+        state.DB.execute("DELETE FROM settings WHERE key = 'smtp_delivery'")
     return public_settings()
 
 
@@ -145,13 +169,16 @@ def unset() -> HTTPException:
 async def send(recipient: str, subject: str, body: str) -> None:
     config = settings()
     if not configured(config):
+        _record_delivery(config, "smtp_unset")
         log.warning("account email: not configured")
         raise HTTPException(503, {"code": "smtp_unset", "message": FAILED_MESSAGE})
     try:
         await asyncio.to_thread(_send, recipient, subject, body, config)
     except (OSError, ValueError):
+        _record_delivery(config, "mail")
         log.warning("account email: delivery failed")
         raise HTTPException(503, {"code": "mail", "message": FAILED_MESSAGE}) from None
+    _record_delivery(config, "ok")
 
 
 async def send_admin(recipient: str, subject: str, body: str) -> None:

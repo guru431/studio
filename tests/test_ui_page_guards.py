@@ -127,15 +127,28 @@ def test_expired_partial_lock_forgets_jobs_of_protected_sections_in_an_open_sect
       await m.api('POST', '/api/me/screen-lock', {{enabled:true, sections:['speech'], timeout:0}});
       await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
     speech_row = "document.querySelector('#jobs-finished .jobs-row[data-section=speech]')"
+    delay_stale = ("eval", "delayStale", """(async () => {
+      const original = window.fetch.bind(window);
+      const stale = await original('/api/jobs?visible=1').then(response => response.json());
+      window.fetch = (path, options) => {
+        if (!String(path).startsWith('/api/jobs?visible=0')) return original(path, options);
+        return new Promise(resolve => {
+          window.finishStaleJobs = () => resolve(Response.json(stale));
+        });
+      };
+      return stale.finished.some(item => item.section === 'speech');
+    })()""")
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure),
         ("click", "#jobs"), ("wait", f"!!{speech_row}"),
         ("eval", "title", f"{speech_row}.querySelector('.jobs-title').textContent"),
-        hide(), show(), ("wait", f"!{speech_row}"),
+        delay_stale, hide(), ("wait", "typeof window.finishStaleJobs === 'function'"), show(), ("wait", f"!{speech_row}"),
+        ("eval", "staleReturned", "window.finishStaleJobs(); true"),
         ("eval", "later", f"new Promise(r => setTimeout(() => r(!!{speech_row}), 1500))"),
         ("eval", "hash", "location.hash")])
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["title"].startswith("Озвучка · Тайный") and v["later"] is False and v["hash"] == "#/chat"
+    assert v["delayStale"] and v["title"].startswith("Озвучка · Тайный")
+    assert v["later"] is False and v["hash"] == "#/chat"
 
 
 def test_unsaved_transcript_edit_asks_before_another_record_or_section(browser, live):

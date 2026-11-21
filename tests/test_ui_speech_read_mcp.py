@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from test_mcp import TOKEN
-from test_ui_browser import browser, live, problems  # noqa: F401
+from test_ui_browser import add_gateway, browser, go, live, problems, set_value  # noqa: F401
 from test_ui_section_limits import SERVICE, TEXT, start
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
@@ -90,12 +90,14 @@ def test_each_read_runs_its_own_mcp_job(browser, live, width):
         ("wait", f"{BOX}[0]?.querySelector('.mcp-run .status')?.textContent === 'В работе'"),
         ("eval", "second", f"{READ}[1].click(); true"),
         ("wait", f"{BOX}[1]?.querySelector('.mcp-run .status')?.textContent === 'В работе'"),
-        ("wait", "performance.getEntriesByType('resource').filter(e => e.name.endsWith('/run')).length === 2")],
+        ("wait", "performance.getEntriesByType('resource').filter(e => e.name.endsWith('/run')).length === 2"),
+        ("eval", "controls", f"[...{BOX}].map(box => box.querySelector('.mcp-result').id)")],
         width=width, mobile=width == 320, timeout=20000)
     assert not r.get("failed"), r
     spoken = [args for name, args in calls if name == "speech_synthesize"]
     assert [args["text"] for args in spoken] == list(ANSWERS), spoken
     assert all(args["voice"] == "nova" for args in spoken)       # голос — умолчание схемы
+    assert len(set(r["values"]["controls"])) == 2
     assert not read_problems(r), read_problems(r)
 
 
@@ -105,10 +107,30 @@ def test_read_mcp_tool_without_voice_field(browser, live):
     calls = speaker(live.gw, {"speech_synthesize": {"properties": {"text": TEXT}, "required": ["text"]}, **SERVICE})
     r = browser.drive(live.url + "/", [*start(login), *opened(cid),
         ("eval", "first", f"{READ}[0].click(); true"),
-        ("wait", f"{BOX}[0]?.querySelector('#section-mcp-result pre')?.textContent === 'ok'")], width=1280, timeout=20000)
+        ("wait", f"{BOX}[0]?.querySelector('.mcp-result pre')?.textContent === 'ok'")], width=1280, timeout=20000)
     assert not r.get("failed"), r
     assert [args for name, args in calls if name == "speech_synthesize"] == [{"text": ANSWERS[0]}]
     assert not read_problems(r), read_problems(r)
+
+
+def test_speech_only_sends_a_model_selected_from_the_mcp_schema(browser, live):
+    login = "mcpspeechmodel"
+    live.add_user(login)
+    model = {"type": "string", "enum": ["first", "second"], "default": "first"}
+    calls = speaker(live.gw, {"speech_synthesize": {"properties": {"text": TEXT, "model": model},
+                                                  "required": ["text"]}, **SERVICE})
+    r = browser.drive(live.url + "/", [*start(login), add_gateway(), *go("speech"),
+        ("wait", "document.querySelector('#section-mcp-tool option[value*=speech_synthesize]')"),
+        ("eval", "tool", """(() => {
+          const pick = document.querySelector('#section-mcp-tool');
+          pick.value = [...pick.options].find(o => o.value.endsWith(':speech_synthesize')).value;
+          pick.dispatchEvent(new Event('change', { bubbles: true })); return true;
+        })()"""),
+        set_value("#chip-mcp-model", "second"), ("type", "#speech-text", "Read this"),
+        ("eval", "submit", "document.querySelector('#speech-composer').requestSubmit(); true"),
+        ("wait", "document.querySelector('.mcp-result pre')?.textContent === 'ok'")])
+    assert not r.get("failed"), r
+    assert [args for name, args in calls if name == "speech_synthesize"] == [{"text": "Read this", "model": "second"}]
 
 
 def test_read_mcp_without_a_speech_tool_says_so(browser, live):

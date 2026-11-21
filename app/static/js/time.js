@@ -4,6 +4,7 @@ import { locale } from './i18n.js';
 
 export const DEFAULT_TIMEZONE = 'Europe/Moscow';
 export const timeZone = () => me?.timezone || DEFAULT_TIMEZONE;
+const DAY_MS = 86400000;
 
 export function dateTime(stamp, options = {}) {
   return new Date(stamp * 1000).toLocaleString(locale(), { ...options, timeZone: timeZone() });
@@ -23,5 +24,12 @@ export function calendarDay(stamp) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timeZone(),
     year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date(stamp * 1000))
     .filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
-  return { ...parts, number: Date.UTC(parts.year, parts.month - 1, parts.day) / 86400000 };
+  return { ...parts, number: Date.UTC(parts.year, parts.month - 1, parts.day) / DAY_MS };
+}
+
+/** Включительный период из календарных дат, оканчивающийся днём пояса учётки. */
+export function calendarRange(days, stamp = Date.now() / 1000) {
+  const last = calendarDay(stamp).number;
+  const iso = (day) => new Date(day * DAY_MS).toISOString().slice(0, 10);
+  return { since: iso(last - days + 1), until: iso(last) };
 }

@@ -432,15 +432,31 @@ def catalog(conn: "connections.Connection", section: str) -> list[str] | None:
     return CATALOG.get(section) if conn.kind == "srvllm" else None
 
 
+def _link_out(user_id: int | None, section: str, link: Link, passport: bool) -> dict:
+    conn = link.connection
+    item = connections.out(conn, passport)
+    inherited = conn.shared and user_id is not None
+    result = {"connection": item, "models": list(link.models),
+              "catalog": None if inherited else catalog(conn, section),
+              "local_models": [m for m in link.models if is_local(conn, m)]}
+    if section == "chat" and passport:
+        # Unverified models remain absent. Never expose the passport's routes, probes or ungranted model IDs.
+        checked = connections.passport_of(conn) if inherited else item.get("passport")
+        caps = {model["id"]: [cap["name"] for cap in model["caps"]]
+                for model in (checked or {}).get("models", ()) if model["id"] in link.models}
+        if conn.kind == "srvllm" and "local-gemma-abl" in link.models:
+            # Existing passports predate the catalog entry for this role.
+            caps["local-gemma-abl"] = list(dict.fromkeys([*caps.get("local-gemma-abl", ()), "vision"]))
+        result["capabilities"] = caps
+    return result
+
+
 def section_out(user_id: int | None, section: str, passport: bool = True) -> dict:
     """passport=False — панель администратора: паспорт подключения туда не идёт."""
     available = links(user_id, section)
     chosen = default(user_id, section, available)
     return {"id": section, "name": NAMES[section],
-            "links": [{"connection": connections.out(l.connection, passport), "models": list(l.models),
-                       "catalog": None if l.connection.shared and user_id is not None else catalog(l.connection, section),
-                       "local_models": [m for m in l.models if is_local(l.connection, m)]}
-                      for l in available],
+            "links": [_link_out(user_id, section, link, passport) for link in available],
             "default": {"connection_id": chosen[0].id, "model": chosen[1]} if chosen else None}
 
 

@@ -11,7 +11,7 @@
 путь и имя — шифром, срок LINK_SEC. Анонимный вход `/f` со своей защитой: тело POST ≤ `chat_shares.PUBLIC_BODY_MAX`
 (`chat_shares.public_guard`), чужой `Origin` — 403, все отказы — одинаковый 404 без имени файла, неудачи —
 `email_accounts.throttle` по адресу (FAILS за FAIL_SEC, потом 429 `file_locked`). `POST /f/open` выдаёт cookie
-`studio_file` (OPEN_SEC, только `/f/file`) со случайным id в памяти процесса; каждый запрос файла проверяет ссылку
+`studio_file` (OPEN_SEC, только `/f/file`) с зашифрованными id ссылки и временем выдачи; каждый запрос файла проверяет ссылку
 заново. Ссылка ведёт к файлу, а не к пути: размер и mtime при создании сверяются на каждом входе (`_same_file`). В журнал — только id и числа: путей, имён и токенов там нет.
 """
 import asyncio
@@ -61,7 +61,6 @@ NAME_MAX = 255
 LIST_MAX = 4 * 1024 * 1024                    # JSON списка папки
 ENTRIES_MAX = 10_000
 LINKS_MAX = 100                               # действующих ссылок учётки
-OPENED_MAX = 1024
 STORAGE_SEC = 5                               # опрос объёма для «Хранилища»
 ZIP_SEC = mcp.TIMEOUT * 10                    # «ZIP папки» ждёт сборки архива сервером (Apache: свой ProxyPass)
 FAILS = 30                                    # неудач `/f` с адреса за FAIL_SEC
@@ -73,10 +72,6 @@ RANGE_RE = re.compile(r"bytes (\d{1,15})-(\d{1,15})/(\d{1,15})")
 EMPTY_RANGE = "bytes */0"
 GONE = "Ссылка недоступна"
 UNAVAILABLE = "Файл недоступен"
-
-#: id cookie `studio_file` → (id ссылки, срок)
-OPENED: dict[str, tuple[str, float]] = {}
-
 
 class PathIn(BaseModel):
     path: str = Field(default="", max_length=PATH_MAX)
@@ -151,6 +146,12 @@ async def _post(session, route, body, reply_max=mcp_contracts.REPLY_MAX, timeout
     return reply if isinstance(reply, (dict, list)) else {}
 
 
+def _file_entry(entry, name):
+    mtime = entry.get("mtime")
+    return {"name": name, "dir": entry.get("dir") is True, "size": _size(entry.get("size")),
+            "mtime": mtime if type(mtime) in (int, float) and mtime >= 0 else None}
+
+
 def _listing(reply, path):
     reply = reply if isinstance(reply, dict) else {}
     entries = []
@@ -158,9 +159,7 @@ def _listing(reply, path):
         name = _name(entry.get("name")) if isinstance(entry, dict) else None
         if name is None:
             continue
-        mtime = entry.get("mtime")
-        entries.append({"name": name, "dir": entry.get("dir") is True, "size": _size(entry.get("size")),
-                        "mtime": mtime if type(mtime) in (int, float) and mtime >= 0 else None})
+        entries.append(_file_entry(entry, name))
         if len(entries) >= ENTRIES_MAX:
             break
     return {"path": path, "total_bytes": _size(reply.get("total_bytes")), "entries": entries}
@@ -169,11 +168,12 @@ def _listing(reply, path):
 async def _entry(session, path):
     """Запись файла `path` из списка его папки (имя, размер); нет или папка — 404."""
     parent, _, name = path.rpartition("/")
-    found = _listing(await _post(session, "list", {"path": parent}, LIST_MAX), parent)
-    entry = next((e for e in found["entries"] if e["name"] == name and not e["dir"]), None)
-    if entry is None:
-        raise _not_found("Файла нет на сервере MCP")
-    return entry
+    reply = await _post(session, "list", {"path": parent}, LIST_MAX)
+    entries = reply.get("entries") if isinstance(reply, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict) and _name(entry.get("name")) == name and entry.get("dir") is not True:
+            return _file_entry(entry, name)
+    raise _not_found("Файла нет на сервере MCP")
 
 
 # ---- ticket скачивания ---------------------------------------------------------------------------------------
@@ -443,8 +443,6 @@ async def revoke(lid: str, request: Request):
                             " AND expires > ?", (clock.NOW(), lid, uid, clock.NOW())).rowcount
     if not done:
         raise _not_found("Ссылки нет")
-    for key in [key for key, (link, _) in OPENED.items() if link == lid]:
-        OPENED.pop(key, None)
     security_log.record(uid, "file_link_revoke", digest=request.state.digest, ip=auth.client_ip(request))
     log.info("пользователь %d: ссылка на файл %s отозвана", uid, lid[:8])
     return Response(status_code=204)
@@ -532,13 +530,7 @@ async def check(body: TokenIn, request: Request):
 @public.post("/f/open", status_code=204)
 async def open_link(body: TokenIn, request: Request):
     row, _, _ = await _verified(body, request)
-    now = clock.NOW()
-    for key in [key for key, (_, until) in OPENED.items() if until <= now]:
-        OPENED.pop(key, None)
-    while len(OPENED) >= OPENED_MAX:
-        OPENED.pop(next(iter(OPENED)))
-    opened = secrets.token_urlsafe(32)
-    OPENED[opened] = (row["id"], now + OPEN_SEC)
+    opened = security.encrypt(json.dumps([COOKIE, row["id"], clock.NOW()])).decode("ascii")
     log.info("ссылка на файл %s открыта", row["id"][:8])
     response = Response(status_code=204, headers=chat_shares.PUBLIC_HEADERS)
     response.set_cookie(COOKIE, opened, max_age=OPEN_SEC, path="/f/file", secure=True, httponly=True,
@@ -548,10 +540,16 @@ async def open_link(body: TokenIn, request: Request):
 
 @public.get("/f/file")
 async def link_file(request: Request):
-    held = OPENED.get(request.cookies.get(COOKIE, ""))
-    if held is None or held[1] <= clock.NOW():
-        raise _gone()
-    row = _live("l.id", held[0])
+    opened = request.cookies.get(COOKIE, "")
+    try:
+        if not opened or len(opened) > 512:
+            raise ValueError
+        scope, lid, issued = json.loads(security.decrypt(opened.encode("ascii")))
+        if scope != COOKIE or not ID_RE.fullmatch(lid) or not 0 <= clock.NOW() - issued < OPEN_SEC:
+            raise ValueError
+    except (InvalidToken, TypeError, ValueError):
+        raise _gone() from None
+    row = _live("l.id", lid)
     session, path, name = _resolve(row)
     try:
         await _same_file(session, row, path)

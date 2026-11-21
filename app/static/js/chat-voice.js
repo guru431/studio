@@ -3,7 +3,7 @@ import { tr } from './i18n.js';
  * ответа, по кругу. Кнопку держит chat.js, сюда — только сам круг.
  *
  * startConversation(chat) → stop(). `chat`: send(text, update) — обычный ход диалога с этим текстом, `update(content,
- * final)` — по мере `delta`; итог — статус ответа или false (хода не было: слова уже в диалоге); state(name) —
+ * final, replaced)` — по мере `delta` или `replace`; итог — статус ответа или false (хода не было: слова уже в диалоге); state(name) —
  * `listening`, `hearing`, `thinking`, `speaking`, `off`; failed(words) — слова под лентой.
  *
  * - Микрофон — владелец через mic.js `holdMic`: диктовка в это время не стартует, `cancelRecording()` (смена раздела,
@@ -65,6 +65,23 @@ function lastBoundary(text) {
   let end = 0;
   for (const match of text.matchAll(BOUNDARY)) end = match.index + match[0].length;
   return end;
+}
+
+/** Фрагменты блоков кода не озвучиваются, даже пока закрывающая строка ещё не пришла. */
+function withoutCode(text) {
+  let fence = '';
+  return text.split('\n').map((line) => {
+    const mark = /^(?: {0,3}> ?)* {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (mark?.[1].startsWith(fence) && !mark[2].trim()) fence = '';
+      return '';
+    }
+    if (mark) {
+      fence = mark[1];
+      return '';
+    }
+    return /^(?: {4}|\t)/.test(line) ? '' : line;
+  }).join('\n');
 }
 
 export function startConversation(chat) {
@@ -193,6 +210,7 @@ export function startConversation(chat) {
   /** Ход с текстом фразы; ответ — по предложениям в озвучку и воспроизведение по порядку. */
   async function answer(text) {
     let spoken = 0;
+    let rewritten = false;
     let fetching = Promise.resolve();
     let speaking = Promise.resolve();
     const enqueue = (sentence) => {
@@ -203,9 +221,11 @@ export function startConversation(chat) {
         if (buffer) await play(buffer);
       });
     };
-    const update = (content, final) => {
+    const update = (content, final, replaced) => {
       if (stopped) return;
-      const rest = content.slice(spoken);
+      rewritten ||= replaced;
+      if (rewritten && !final) return;      // Cleaner может переписать любую уже полученную часть
+      const rest = withoutCode(content).slice(spoken);
       const cut = final ? rest.length : lastBoundary(rest);
       if (!cut) return;
       for (const sentence of sentences(rest.slice(0, cut))) enqueue(sentence);

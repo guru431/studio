@@ -630,11 +630,11 @@ def test_repeating_a_brush_edit_keeps_its_mask(studio, env):
         assert result.getpixel((40, 30)) == source.getpixel((40, 30))          # снаружи — исходник
     # маска общая: удаление первой правки её не трогает, удаление последней ссылки — удаляет (окончательное — из корзины)
     assert studio.c.delete(f"/api/images/{edit['id']}").status_code == 204
-    assert studio.c.delete(f"/api/trash/images/{edit['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/images/{edit['id']}", json={"password": "password-123"}).status_code == 204
     assert studio.c.get(f"/api/media/{edit['mask_media_id']}").status_code == 200
     assert studio.c.delete(f"/api/images/{again['id']}").status_code == 204
     assert studio.c.get(f"/api/media/{edit['mask_media_id']}").status_code == 200       # в корзине — файл на месте
-    assert studio.c.delete(f"/api/trash/images/{again['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/images/{again['id']}", json={"password": "password-123"}).status_code == 204
     assert studio.c.get(f"/api/media/{edit['mask_media_id']}").status_code == 404
     # маска — одна: файлом или из истории; чужая или неизвестная — 404
     both = studio.c.post("/api/images", data=form | {"mask_media_id": first["media_id"]},
@@ -934,7 +934,7 @@ def test_running_image_cannot_be_deleted_and_done_one_can(studio, env, unlinks):
     assert studio.c.delete(f"/api/images/{job}").status_code == 204
     assert studio.c.get(f"/api/images/{job}").status_code == 404
     assert studio.c.get(f"/api/media/{done['media_id']}").status_code == 200       # в корзине — файл на месте
-    assert studio.c.delete(f"/api/trash/images/{job}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/images/{job}", json={"password": "password-123"}).status_code == 204
     assert studio.c.get(f"/api/media/{done['media_id']}").status_code == 404
     assert [p for p in env.media_dir.rglob("*") if p.is_file()] == [] and media_rows() == 0
     assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий
@@ -1201,7 +1201,7 @@ def test_a_source_being_deleted_cannot_start_a_job(studio, monkeypatch):
 
     monkeypatch.setattr(media, "_remove", racing)
     assert studio.c.delete(f"/api/images/{first['id']}").status_code == 204
-    assert studio.c.delete(f"/api/trash/images/{first['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/images/{first['id']}", json={"password": "password-123"}).status_code == 204
     (r,) = answers
     assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
     assert state.DB.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0

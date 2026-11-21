@@ -104,8 +104,12 @@ def _head(seg: dict, lang: str) -> str:
     return f"{_speaker(seg, lang)} · {stamp(seg['start'])}" if seg.get("speaker") else stamp(seg["start"])
 
 
+def _transcript_text(seg: dict, lang: str) -> str:
+    return server_word(seg["text"], lang) if seg.get("system") else seg["text"]
+
+
 def txt(segments: list[dict], lang: Lang = "ru") -> str:
-    return "\n".join(f"{_head(s, lang)}\n{s['text']}\n" for s in segments)
+    return "\n".join(f"{_head(s, lang)}\n{_transcript_text(s, lang)}\n" for s in segments)
 
 
 def _line(text: str) -> str:
@@ -171,7 +175,8 @@ def srt(segments: list[dict], raw: "list[dict] | None" = None, lang: Lang = "ru"
     cues: list[tuple[float, float, str]] = []
     for n, seg in enumerate(segments):
         own = [] if seg.get("edited") else by_turn.get(n, [])
-        spans = [(r["start"], r["end"], _line(r["text"])) for r in own] or [(seg["start"], seg["end"], _line(seg["text"]))]
+        spans = [(r["start"], r["end"], _line(r["text"])) for r in own] or [
+            (seg["start"], seg["end"], _line(_transcript_text(seg, lang)))]
         prefix = f"{_line(_speaker(seg, lang))}: " if seg.get("speaker") else ""
         for k, (start, end, text) in enumerate(spans):
             cues += _pieces(start, end, prefix + text if k == 0 else text)
@@ -195,7 +200,7 @@ def _paragraph(text: str, bold: bool = False, size: "int | None" = None) -> str:
 def docx(segments: list[dict], title: str, lang: Lang = "ru") -> bytes:
     body = [_paragraph(title, bold=True, size=32)]
     for s in segments:
-        body += [_paragraph(_head(s, lang), bold=True), _paragraph(s["text"])]
+        body += [_paragraph(_head(s, lang), bold=True), _paragraph(_transcript_text(s, lang))]
     return _package(body)
 
 

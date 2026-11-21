@@ -21,6 +21,29 @@ def theme(name):
     return ('eval', 'theme', f"document.documentElement.dataset.theme = '{name}'; true")
 
 
+def test_queue_pause_is_visible_in_jobs_project_and_tab(browser, live):
+    login = 'inbox-paused'
+    live.add_user(login)
+    project = pid('alpha')
+    machine = code_free_machine({CODE_CHAT_A: code_session('Пауза')})
+    machine.project_activity = True
+    machine.queue_edit = True
+    machine.running = {CODE_CHAT_A: {'project': project, 'asks': {}, 'text': '', 'steps': [], 'rest': [],
+        'followups': [{'id': 'next', 'text': 'Следом', 'mode': 'queue', 'sent': False, 'version': 1}], 'queue_paused': True}}
+    aid, server = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + '/', [*signin(login), ('wait', READY), ('click', '#jobs'),
+            ('wait', "document.querySelector('#jobs-code-asking:not([hidden])')?.textContent.includes('Очередь на паузе')"),
+            ('click', '#jobs-code-asking .jobs-open'), code_loaded(CODE_CHAT_A),
+            ('wait', "document.querySelector('.code-tab-mark.paused')?.title === 'Очередь на паузе'"),
+            ('wait', "document.querySelector('#code-projects .code-project-sessions .code-session-state')"
+                     "?.textContent === 'Очередь на паузе'")], width=1280)
+    finally:
+        server.stop()
+    assert not r.get('failed'), r
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize('width,shade', [(320, 'light'), (393, 'dark'), (1280, 'dark'), (1280, 'light')])
 def test_badge_opens_workspace_and_jobs_panel_opens_task_from_any_width(browser, live, width, shade, tmp_path):
     login = f'inbox-{width}-{shade}'

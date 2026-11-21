@@ -233,7 +233,7 @@ def parse_hello(frame: dict) -> dict:
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
-                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled"):
+                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -449,6 +449,8 @@ def _push(link: Link, frame: dict) -> None:
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
+    if e["k"] == "queue" and e.get("paused") is True and e.get("waiting") is True:
+        text = {"ru": "очередь ждёт вас", "en": "the queue is waiting for you"}
     user_id = _addressee(link, frame) if text is not None else None
     if e["k"] == "done":
         INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью

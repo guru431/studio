@@ -72,6 +72,8 @@ export function deviceName() {
   if (/iPhone/.test(ua)) return 'iPhone';
   if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
   if (/Android/.test(ua)) return 'Android';
+  if (/Windows/.test(ua)) return 'Windows';
+  if (/Macintosh|Mac OS X/.test(ua)) return 'Mac';
   return 'Устройство';
 }
 
@@ -242,6 +244,10 @@ function lockState(section = lockScope()) {
 function requestLock() {
   return api('POST', '/api/lock/now', undefined, { signal: AbortSignal.timeout(MARK_SEC * 1000) })
     .then(() => true, () => false);
+}
+
+export function lockImmediately() {
+  if (currentPolicy().enabled && !waiting) waitOpen(requestLock(), null, true);
 }
 
 /** Срок частичной защиты истёк, а показан открытый раздел: сервер уже не отдаёт данные защищённых разделов, страница

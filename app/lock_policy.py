@@ -86,7 +86,7 @@ MEDIA_SOURCES = {
     "chat": (("attachments", ("media_id",)), ("chat_media", ("media_id",))),
     "photo": (("images", ("media_id", "source_media_id", "mask_media_id")),),
     "video": (("videos", ("media_id", "source_media_id")),),
-    "transcribe": (("transcripts", ("source_media_id", "result_media_id")),),
+    "transcribe": (("transcripts", ("source_media_id", "result_media_id", "listen_media_id")),),
     "speech": (("voices", ("media_id",)), ("voice_samples", ("media_id",)), ("speeches", ("media_id", "previous_media_id"))),
     "translate": (("translations", ("source_media_id",)),),
 }
@@ -146,7 +146,7 @@ def blocks(request, uid: int, digest: str) -> bool:
     return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin", "/api/trash/",
                              "/api/my-files",
                              "/api/me/sessions", "/api/me/security-events", "/api/me/access", "/api/me/email"))
-            or path in ("/api/history", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
+            or path in ("/api/history", "/api/me/account", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
                         "/api/me/password-reset", "/api/me/storage/failed")
             or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/exa-key")
                 and request.method != "GET")

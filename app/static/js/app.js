@@ -30,7 +30,7 @@ import { tr } from './i18n.js';
 import { api, loadMe, me, watchSession } from './api.js';
 import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
-import { ensureSectionOpen, installLock } from './lock.js';
+import { ensureSectionOpen, installLock, lockImmediately } from './lock.js';
 import { cancelRecording } from './mic.js';
 import { choose, current as look, deviceSizeControls, follow, paintSave, retrySave, setupAppearance } from './appearance.js';
 import { setupMobileNavigation } from './mobile-navigation.js';
@@ -294,6 +294,12 @@ function sectionKey(event) {
     || event.ctrlKey !== MAC) return;
   if (document.querySelector('dialog[open]')
     || (event.target instanceof Element && event.target.closest('[contenteditable]:not([contenteditable="false"])'))) return;
+  if (event.code === 'KeyL' && me.screen_lock) {
+    event.preventDefault();
+    openMenu(false);
+    lockImmediately();
+    return;
+  }
   const digit = /^Digit([1-9])$/.exec(event.code);
   const target = event.code === 'Slash' ? document.getElementById('search-open')
     : digit ? document.querySelectorAll('#rail a.tab[data-section]')[Number(digit[1]) - 1] : null;
@@ -324,10 +330,21 @@ function openMenu(open) {
 
 function setupMenu() {
   document.getElementById('menu-device-controls').append(deviceSizeControls('menu'));
-  avatar.textContent = (me.name || me.login).slice(0, 1).toUpperCase();
-  document.getElementById('menu-name').textContent = me.name || me.login;
-  document.getElementById('menu-login').textContent = me.login;
-  document.getElementById('menu-login').hidden = !me.name || me.name === me.login;
+  const lockMenu = document.getElementById('menu-lock');
+  const syncLockMenu = () => { lockMenu.hidden = !me.screen_lock; };
+  lockMenu.setAttribute('aria-keyshortcuts', `${HOTKEY}L`);
+  lockMenu.title = `${tr("Запереть сейчас")} · ${HOTKEY}L`;
+  lockMenu.addEventListener('click', () => { openMenu(false); lockImmediately(); });
+  document.addEventListener('studio-me', syncLockMenu);
+  syncLockMenu();
+  const showName = () => {
+    avatar.textContent = (me.name || me.login).slice(0, 1).toUpperCase();
+    document.getElementById('menu-name').textContent = me.name || me.login;
+    document.getElementById('menu-login').textContent = me.login;
+    document.getElementById('menu-login').hidden = !me.name || me.name === me.login;
+  };
+  document.addEventListener('studio-me', showName);
+  showName();
   document.getElementById('menu-admin').hidden = !me.is_admin;
   checkMyFiles();
   avatar.addEventListener('click', (event) => {

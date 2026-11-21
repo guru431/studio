@@ -27,7 +27,15 @@ export function paintPending(box, pending, onAnswer) {
       for (const c of controls) c.disabled = false;
     }
   };
-  if (pending.kind === 'confirm') {
+  if (pending.kind === 'confirm' && typeof pending.memory_text === 'string') {
+    const title = tr("Запомнить для будущих чатов?");
+    card.setAttribute('aria-label', title);
+    card.append(el('p', { class: 'msg-pending-title' }, title),
+      el('p', { class: 'msg-pending-text' }, pending.memory_text),
+      el('div', { class: 'msg-pending-actions' },
+        button(tr("Запомнить"), { class: 'btn btn-sm btn-accent pending-run' }, choose('run')),
+        button(tr("Отмена"), { class: 'btn btn-sm pending-refuse' }, choose('refuse'))));
+  } else if (pending.kind === 'confirm') {
     card.setAttribute('aria-label', tr("Запустить инструмент?"));
     card.append(el('p', { class: 'msg-pending-title' }, tr("Запустить инструмент?")),
       el('p', { class: 'msg-pending-tool' }, `${pending.server || ''} · ${pending.tool || ''}`));

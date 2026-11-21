@@ -604,10 +604,10 @@ def test_every_pip_install_uses_the_constraints():
 
 def test_deploy_files_have_lf_endings():
     """\r в юните systemd принял бы за часть пути, bash — за часть команды."""
-    for path in DEPLOY.iterdir():
-        if not path.is_file():
-            continue
-        assert b"\r\n" not in path.read_bytes(), path.name
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "deploy/"],
+                             check=True, capture_output=True, timeout=20).stdout.decode("utf-8")
+    for name in filter(None, tracked.split("\0")):
+        assert b"\r\n" not in (ROOT / name).read_bytes(), name
 
 
 def test_docker_build_refreshes_the_base_and_the_packages_weekly():

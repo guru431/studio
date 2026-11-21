@@ -15,7 +15,13 @@ SPY = """(() => { const open = XMLHttpRequest.prototype.open, send = XMLHttpRequ
   XMLHttpRequest.prototype.send = function (body) {
     if (this.target !== '/api/transcripts') return send.call(this, body);
     window.sent.body = body.name;
-  }; return true; })()"""
+  };
+  const fetch = window.fetch;
+  window.fetch = async (url, init) => {
+    if (String(url).endsWith('/api/transcripts/limits')) await new Promise(resolve => { window.releaseLimits = resolve; });
+    return fetch(url, init);
+  };
+  return true; })()"""
 
 #: WAV 8 кГц 8 бит моно на 150 с (≈1,2 МБ) строится в странице — в поле файла «Расшифровки»
 LONG_WAV = """(() => { const rate = 8000, n = rate * 150, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
@@ -42,6 +48,9 @@ def test_check_before_upload_tells_about_parts_and_sends_the_language(browser, l
         set_value("#tr-language", "en"),
         ("eval", "chip", "document.querySelector('#tr-language-pick').textContent"),
         ("eval", "spy", SPY), ("eval", "file", LONG_WAV),
+        ("wait", "window.releaseLimits"),
+        ("eval", "preventReload", "!document.dispatchEvent(new Event('studio-before-auto-refresh', { cancelable: true }))"),
+        ("eval", "release", "window.releaseLimits(); true"),
         ("wait", "window.sent.body"),
         ("eval", "note", "document.querySelector('#transcribe-check').textContent"),
         ("eval", "sent", "[window.sent.body, window.sent['x-studio-language']]"),
@@ -53,6 +62,7 @@ def test_check_before_upload_tells_about_parts_and_sends_the_language(browser, l
     assert not r.get("failed"), r
     v = r["values"]
     assert v["chip"] == "English"
+    assert v["preventReload"]
     assert v["note"] == "«Планёрка.wav» будет расшифрована 3 частями"
     assert v["sent"] == ["Планёрка.wav", "en"] and v["fits"]
     assert v["device"] == "ru" and v["settingsFit"]            # язык голосового ввода — выбор устройства

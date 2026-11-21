@@ -76,7 +76,7 @@ const HOME = '#/transcribe';
 /* Загрузка записей — состояние модуля, а не экрана: уход из раздела XHR не обрывает, новый экран раздела
  * подхватывает ход, «Отменить загрузку» и итог. busy — идёт пачка, text — ход словами, abort — отменить идущий
  * файл (null — отменять нечего), note — отказ, случившийся без экрана раздела: его покажет следующий. */
-const transfer = { busy: false, text: '', abort: null, note: '' };
+const transfer = { busy: false, checking: false, text: '', abort: null, note: '' };
 const TOTAL_MAX = 4 * 3600;     // как transcripts.TOTAL_MAX: длиннее запись целиком не примут
 /* запись встречи встаёт на паузу за MEETING_MARGIN с до TOTAL_MAX: время приходит раз в 250 мс, а длительность,
  * измеренная сервером, чуть расходится со временем страницы (сверх предела — допуск transcripts.TOTAL_SLACK) */
@@ -101,7 +101,7 @@ function meetingName(started) {
 // перезагрузка стёрла бы несохранённую правку или оборвала пачку загрузок (между файлами holdRefresh не держит) —
 // автоматическую (refresh.js) они запрещают
 document.addEventListener('studio-before-auto-refresh', (event) => {
-  if (screen?.dirty() || transfer.busy) event.preventDefault();
+  if (screen?.dirty() || transfer.busy || transfer.checking) event.preventDefault();
 });
 
 function clock(sec) {
@@ -147,6 +147,9 @@ function speakerName(s) {
   return s.speaker && s.speaker === s.label ? serverMessage(s.label) : s.speaker;
 }
 
+const turnText = s => s.system ? serverMessage(s.text) : s.text;
+const speakerLabels = segments => [...new Set(segments.map(s => s.original_label || s.label).filter(Boolean))];
+
 /** Реплики итога инструмента MCP (`turns`, mcp_sections.turns) видом расшифровки: «Собеседник N · мм:сс» и текст;
  * итог без времени (текст с метками) — без него. Плеера нет: запись осталась у инструмента. */
 function mcpTurns(turns) {
@@ -158,16 +161,15 @@ function mcpTurns(turns) {
 
 /** Текст расшифровки — как выгрузка .txt. */
 export function asText(segments) {
-  return segments.map((s) => `${s.speaker ? `${speakerName(s)} · ` : ''}${clock(s.start)}\n${s.text}\n`).join('\n');
+  return segments.map((s) => `${s.speaker ? `${speakerName(s)} · ` : ''}${clock(s.start)}\n${turnText(s)}\n`).join('\n');
 }
 
 function build(view, ctx) {
-  let editing = null;         // { id, drafts: Map номер → текст } — черновик правки выбранной записи
+  let editing = null;         // черновики текста и назначений собеседников выбранной записи
   let audio = null;            // плеер выбранной записи: перерисовка того же id его не пересоздаёт
   let unplayable = null;       // слова под плеером: браузер запись не играет (событие error)
   let busy = null;             // блок «идёт» выбранной записи (feed.busyBlock): опрос меняет в нём только текст
   let picked = false;          // запись выбрали сами (список, загрузка): ?id из адреса её не перебивает
-  let checking = false;        // идёт проверка выбранных записей до загрузки
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
   const records = createPicker({ url: '/api/transcripts', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
@@ -356,8 +358,28 @@ function build(view, ctx) {
     });
   }
 
+  function confirmDropSource(item) {
+    const fail = el('p', { class: 'error' });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-source-confirm' },
+      tr("Удалить исходник"));
+    const dialog = openDialog(root, { id: 'tr-source-dialog', title: tr("Удалить исходник?"), actions: [yes],
+      body: [el('p', {}, tr("Расшифровка и MP3-копия останутся. Вернуть исходный файл будет нельзя.")), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `/api/transcripts/${item.id}/source`);
+        const got = await api('GET', `/api/transcripts/${item.id}`);
+        dialog.close();
+        adopt(got);
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
   function namesDialog(item) {
-    const labels = [...new Set(item.segments.map((s) => s.label).filter(Boolean))];
+    const labels = speakerLabels(item.segments);
     const inputs = labels.map((label) => el('input', { class: 'input', 'data-label': label, maxlength: '60',
       placeholder: serverMessage(label), 'aria-label': tr("Имя: {0}", serverMessage(label)), value: item.names[label] || '' }));
     const fail = el('p', { class: 'error' });
@@ -383,7 +405,8 @@ function build(view, ctx) {
     const item = records.current;
     // идущее «Сохранить» — уже не потеря: ответ ляжет, только если запись та же (adopt)
     return !!editing && !editing.saving && !!item && editing.id === item.id && !!item.segments
-      && [...editing.drafts].some(([i, text]) => text !== item.segments[i].text);
+      && ([...editing.drafts].some(([i, text]) => text !== item.segments[i].text)
+        || [...editing.speakers].some(([i, label]) => label !== item.segments[i].label));
   }
 
   /** Уйти от несохранённой правки (другая запись `to`, другой адрес): «Сохранить» (ушла — уйти), «Не сохранять»
@@ -421,8 +444,10 @@ function build(view, ctx) {
   /** true — правка сохранена (или нечего сохранять); отказ — словами, черновик цел. */
   async function saveEdits(item, save) {
     const texts = {};
+    const speakers = {};
     for (const [i, text] of editing.drafts) if (text !== item.segments[i].text) texts[i] = text;
-    if (!Object.keys(texts).length) {
+    for (const [i, label] of editing.speakers) if (label !== item.segments[i].label) speakers[i] = label;
+    if (!Object.keys(texts).length && !Object.keys(speakers).length) {
       editing = null;
       paintView();
       return true;
@@ -432,7 +457,7 @@ function build(view, ctx) {
     const own = editing;
     own.saving = true;
     try {
-      const got = await api('PATCH', `/api/transcripts/${item.id}`, { texts });
+      const got = await api('PATCH', `/api/transcripts/${item.id}`, { texts, speakers });
       if (editing && editing.id === item.id) editing = null;   // черновик другой записи — не трогать
       adopt(got);
       return true;
@@ -449,7 +474,7 @@ function build(view, ctx) {
     area.style.height = `${area.scrollHeight}px`;
   }
 
-  function turnNode(s, i) {
+  function turnNode(s, i, labels, names) {
     const speaker = s.speaker ? `${speakerName(s)} · ` : '';
     const original = s.edited ? s.original : s.text;
     // время реплики — кнопка: перемотка и с клавиатуры, не только нажатием по реплике; в правке — тоже
@@ -459,10 +484,11 @@ function build(view, ctx) {
       event.stopPropagation();
       seek(s.start, true);
     });
+    const changed = s.edited || !!s.original_label;
     const who = el('p', { class: 'tr-who' }, speaker, time);
     if (!editing) {
       const node = el('div', { class: 'tr-turn', 'data-index': String(i) }, who,
-        el('p', { class: 'tr-text' }, s.text), s.edited ? el('p', { class: 'tr-mark' }, tr("изменено")) : null);
+        el('p', { class: 'tr-text' }, turnText(s)), changed ? el('p', { class: 'tr-mark' }, tr("изменено")) : null);
       node.addEventListener('click', () => seek(s.start));
       return node;
     }
@@ -470,7 +496,19 @@ function build(view, ctx) {
     area.value = editing.drafts.has(i) ? editing.drafts.get(i) : s.text;
     const revert = el('button', { type: 'button', class: 'btn btn-sm tr-revert' }, tr("вернуть"));
     const mark = el('p', { class: 'tr-mark' }, tr("изменено"), revert);
-    const paintMark = () => { mark.hidden = area.value === original; };
+    const select = s.label && labels.length > 1 ? el('select', { class: 'input tr-turn-speaker',
+      'aria-label': tr("Собеседник реплики {0}", i + 1) },
+    ...labels.map(label => el('option', { value: label }, names[label] || serverMessage(label)))) : null;
+    const originalLabel = s.original_label || s.label;
+    if (select) {
+      select.value = editing.speakers.get(i) || s.label;
+      who.replaceChildren(select, time);
+      select.addEventListener('change', () => {
+        editing.speakers.set(i, select.value);
+        paintMark();
+      });
+    }
+    const paintMark = () => { mark.hidden = area.value === original && (!select || select.value === originalLabel); };
     area.addEventListener('input', () => {
       editing.drafts.set(i, area.value);
       grow(area);
@@ -479,6 +517,10 @@ function build(view, ctx) {
     revert.addEventListener('click', () => {
       area.value = original;
       area.dispatchEvent(new Event('input'));
+      if (select) {
+        select.value = originalLabel;
+        select.dispatchEvent(new Event('change'));
+      }
     });
     paintMark();
     return el('div', { class: 'tr-turn editing', 'data-index': String(i) }, who, area, mark);
@@ -508,16 +550,24 @@ function build(view, ctx) {
     }
   }
 
-  /** Плеер исходной записи и слова под ним, если браузер её не играет: сервер принимает всё, что читает ffmpeg
-   * (ogg/opus, mov, mkv…), а `<audio>` получает исходник как есть. */
+  /** Готовая MP3-копия или исходник старой записи. При недоступности копии — один переход на исходник. */
   function playerOf(item) {
-    if (!audio || audio.dataset.id !== item.id) {
+    const preferred = item.listen_media_id || item.source_media_id;
+    if (!audio || audio.dataset.id !== item.id || audio.dataset.preferred !== preferred) {
       audio = el('audio', { class: 'tr-audio', controls: true, preload: 'metadata', 'data-id': item.id,
-        src: `/api/media/${encodeURIComponent(item.source_media_id)}` });
+        'data-preferred': preferred, src: `/api/media/${encodeURIComponent(preferred)}` });
       audio.addEventListener('timeupdate', playing);
       unplayable = el('p', { class: 'muted small tr-unplayable', 'aria-live': 'polite', hidden: true },
         tr("Браузер не воспроизводит эту запись — слушать её и перематывать по репликам здесь нельзя. Текст расшифровки доступен."));
-      audio.addEventListener('error', () => { unplayable.hidden = false; });
+      let triedOriginal = false;
+      audio.addEventListener('error', (event) => {
+        if (event.currentTarget !== audio) return;
+        const original = records.current?.source_media_id;
+        if (!triedOriginal && original && original !== preferred) {
+          triedOriginal = true;
+          audio.src = `/api/media/${encodeURIComponent(original)}`;
+        } else unplayable.hidden = false;
+      });
     }
     return [audio, unplayable];
   }
@@ -568,7 +618,7 @@ function build(view, ctx) {
       if (item.segments && !editing) {
         const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit' }, tr("Править"));
         edit.addEventListener('click', () => {
-          editing = { id: item.id, drafts: new Map() };
+          editing = { id: item.id, drafts: new Map(), speakers: new Map() };
           paintView();
         });
         acts.append(edit);
@@ -584,6 +634,12 @@ function build(view, ctx) {
         acts.append(reset);
       }
       if (!editing) acts.append(chatMenu(item));
+      if (!editing && item.listen_media_id && item.listen_media_id !== item.source_media_id) {
+        const drop = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-source-delete' },
+          tr("Удалить исходник"));
+        drop.addEventListener('click', () => confirmDropSource(item));
+        acts.append(drop);
+      }
     }
     if (!editing) {
       const ren = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-rename' }, tr("Переименовать"));
@@ -592,8 +648,28 @@ function build(view, ctx) {
     }
     if (!RUNNING.has(item.state)) {
       if (!editing && item.source_media_id) {
-        const retry = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-retry' }, tr("Расшифровать ещё раз"));
-        retry.addEventListener('click', () => retryDialog(item));
+        const repeat = item.state === 'error' || item.state === 'cancelled';
+        const retry = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-retry' },
+          repeat ? tr("Повторить") : tr("Расшифровать ещё раз"));
+        retry.addEventListener('click', async () => {
+          if (!repeat) {
+            await retryDialog(item);
+            return;
+          }
+          retry.disabled = true;
+          error.textContent = '';
+          try {
+            const got = await api('POST', `/api/transcripts/${item.id}/retry`,
+              { connection_id: item.connection_id, model: item.model, language: item.language });
+            kick();
+            adopt(got);
+            await records.load();
+          } catch (err) {
+            error.textContent = words(err);
+          } finally {
+            retry.disabled = false;
+          }
+        });
         acts.append(retry);
       }
       const del = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-delete' }, tr("Удалить"));
@@ -603,7 +679,8 @@ function build(view, ctx) {
     nodes.push(acts);
     nodes.push(...playerOf(item));
     if (item.segments) {
-      nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map(turnNode)));
+      const labels = speakerLabels(item.segments);
+      nodes.push(el('div', { class: 'tr-turns' }, ...item.segments.map((s, i) => turnNode(s, i, labels, item.names))));
       if (editing) {
         const save = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'tr-save' }, tr("Сохранить"));
         const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-edit-cancel' }, tr("Отмена"));
@@ -638,14 +715,14 @@ function build(view, ctx) {
   }
 
   function paintBusy() {
-    input.disabled = upload.disabled = transfer.busy || mcp.busy || checking;
+    input.disabled = upload.disabled = transfer.busy || mcp.busy || transfer.checking;
     record.disabled = !!meeting() || starting;
   }
 
   /** Проверка до загрузки: записи, которые можно отправить; «не подходит» — в `error`, «частями» — в `checked`.
    * `seconds` — длительность, известная заранее (запись встречи: webm браузера её не называет). */
   async function fit(files, seconds = null) {
-    checking = true;
+    transfer.checking = true;
     paintBusy();
     try {
       const own = mcp.tool ? mcp.maxSeconds : null;
@@ -667,8 +744,9 @@ function build(view, ctx) {
       checked.textContent = parts.join(' ');
       return ok;
     } finally {
-      checking = false;
+      transfer.checking = false;
       paintBusy();
+      screen?.paintUpload();
     }
   }
 
@@ -686,6 +764,7 @@ function build(view, ctx) {
 
   /** Проверка и загрузка подходящих (файлы и запись встречи); true — приняты все. */
   async function deliver(files, seconds = null) {
+    if (transfer.checking || transfer.busy || mcp.busy) return false;
     error.textContent = checked.textContent = '';
     const tool = mcp.tool, chosen = langSelect.value;
     const ok = await fit(files, seconds);
@@ -732,7 +811,7 @@ function build(view, ctx) {
 
   /** Записи, оставшиеся в IndexedDB: «Восстановить запись (мм:сс)», «Скачать запись» и «Удалить». */
   async function paintRestore() {
-    const items = await pendingRecordings();
+    const items = await pendingRecordings({ inactiveOnly: true });
     const rec = meeting();
     const left = items.filter((item) => item.id !== rec?.id && !recording.sending.has(item.id));
     restoreBar.hidden = !left.length;
@@ -847,6 +926,7 @@ function build(view, ctx) {
     if (!event.detail) paintRestore();
   }
   document.addEventListener('studio-meeting', onMeeting);
+  window.addEventListener('focus', paintRestore);
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   /** ?id адреса («Открыть» в «В работе», «к записи» из чата) — при сборке и при переходе внутри раздела
@@ -889,6 +969,7 @@ function build(view, ctx) {
     load: () => records.load(),
     destroy() {
       window.removeEventListener('beforeunload', unload);
+      window.removeEventListener('focus', paintRestore);
       document.removeEventListener('studio-meeting', onMeeting);
       mcp.destroy();
       records.stop();

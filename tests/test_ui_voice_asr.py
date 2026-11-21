@@ -148,6 +148,23 @@ def test_file_is_transcribed_corrected_and_saved(page, live):
     assert page.locator(".voice").text_content().startswith("Голос с ASR")
 
 
+def test_a_selected_sample_fragment_is_transcribed_and_saved(page):
+    page.locator("#voice-dialog [name=name]").fill("Голос из фрагмента")
+    upload(page, seconds=20)
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    activate(page, ".voice-range summary")
+    page.locator(".voice-start").fill("6")
+    page.locator(".voice-end").fill("14")
+    assert page.locator("#voice-save").is_disabled()
+    activate(page, ".voice-apply-range")
+    page.wait_for_function("() => !document.querySelector('#voice-save').disabled")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    activate(page, "#voice-save")
+    page.locator("#voice-dialog").wait_for(state="detached")
+    saved = page.evaluate("async () => (await (await fetch('/api/voices')).json()).items[0]")
+    assert saved["name"] == "Голос из фрагмента" and abs(saved["duration"] - 8) < 0.05
+
+
 def test_replacing_sample_and_closing_ignore_late_answers(page):
     # Подмена только ASR: даже ответ fetch, проигнорировавший AbortSignal, не должен затереть новый текст.
     page.evaluate("""() => {

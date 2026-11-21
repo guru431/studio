@@ -292,6 +292,7 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary`, `read_only` (файл только для чтения; сервер — 409) |
 | `file_operation` (0.8.1, `hello.file_operations`) | `project`, `operation`, `path`, `destination` (путь или `null`) | `{}` | `outside`, `invalid`, `not_found`, `exists` (409), `read_only` (409), `busy` (409) |
 | `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git`; `git_unavailable` (0.42.0, сервер — 409: нет git, отказ `safe.directory`, сбой git при своём `.git`) |
+| `git_compare` (`hello.git_compare`, 0.43.0) | `project`, `path` | `{"before": str, "after": str, "exists": bool}` — HEAD и рабочий файл по одной строке статуса, UTF-8 до 128 КиБ с каждой стороны | `not_git`, `git_unavailable`, `not_found`, `outside`, `binary`, `too_large`; только владелец и открытая сессия |
 
 `visualization.source` — UTF-8 `.html` внутри выбранного проекта (относительный либо абсолютный
 путь) или абсолютный путь внутри `$CODEX_HOME/visualizations` (умолчание `~/.codex/visualizations`).

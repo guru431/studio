@@ -19,7 +19,8 @@ ARTIFACT = "art_" + "2" * 32
 PATH = f"/artifacts/{ARTIFACT}/content"
 
 
-def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False):
+def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False,
+            monkeypatch=None):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -90,8 +91,11 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
         assert request.headers["range"] == "bytes=0-9"
         return httpx.Response(206, headers={"content-range": f"bytes 0-9/{len(MP4)}"}, content=MP4[:10])
 
-    gateway.on["/mcp"] = rpc
-    gateway.on[PATH] = download
+    if monkeypatch is None:
+        gateway.on.update({"/mcp": rpc, PATH: download})
+    else:
+        monkeypatch.setitem(gateway.on, "/mcp", rpc)
+        monkeypatch.setitem(gateway.on, PATH, download)
     return calls
 
 
@@ -227,12 +231,14 @@ def test_video_can_use_only_a_readable_photo_from_studio_history(studio):
 
     uid = owner(studio)
     sid = add(studio)
-    calls = service(studio.gw)
+    calls = service(studio.gw, limits=True)
     source = media.save(uid, PNG_REAL, "image/png", "source.png")
     state.DB.execute(IMAGE, ("image", uid, "flux", "source", 1))
     state.DB.execute("UPDATE images SET media_id=? WHERE id='image'", (source,))
     payload = {"tool": "video_estimate", "files": {"artifact_id": {"media_id": source}}, "arguments": {"seconds": 7}}
     route = f"/api/mcp-tools/video/servers/{sid}/run"
+    assert studio.c.post(route, json={**payload, "arguments": {"seconds": 601}}).status_code == 422
+    assert calls == []
     assert studio.c.post(route, json=payload).json()["text"] == "Estimated time"
     assert calls[0][0] == "artifact_upload"
     assert calls[1] == ("video_estimate", {"artifact_id": ARTIFACT, "seconds": 7})
@@ -255,6 +261,8 @@ def test_speech_uses_the_selected_studio_voice_sample(studio):
                      (vid, uid, "Voice sample", sample, "Voice reference text"))
     route = f"/api/mcp-tools/speech/servers/{sid}/run"
     payload = {"tool": "speech_synthesize", "arguments": {"text": "Read this", "model": "f5-tts"}, "voice_id": vid}
+    assert studio.c.post(route, json={**payload, "arguments": {"text": "Read this", "model": "foreign"}}).status_code == 422
+    assert calls == []
     assert studio.c.post(route, json=payload).json()["text"] == "Synthesized speech"
     assert calls[0] == ("artifact_upload", {"data_base64": base64.b64encode(WAV_FAKE).decode(), "mime_type": "audio/wav"})
     assert calls[1] == ("speech_synthesize", {"text": "Read this", "model": "f5-tts", "engine": "clone", "reference_artifact_id": ARTIFACT,

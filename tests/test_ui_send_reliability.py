@@ -208,6 +208,7 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
         page.locator("#send").click()
         until(page, lambda: len(puts) == 2)
         pw.expect(answer.locator(".md")).to_have_text("Облако на связи.")
+        pw.expect(answer.locator(".msg-model")).to_have_text("cloud-chat")
         pw.expect(answer.locator(".msg-meta")).to_have_text("")
         assert page.evaluate(last_saved) == ["done", "Облако на связи."]
 

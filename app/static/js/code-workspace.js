@@ -79,13 +79,16 @@ export function get() {
 export function act(op, fields) {
   const mine = epoch;
   const action = { seq: ++sent, op, fields };
-  waiting.push(action);
-  publish(apply(doc, action));
+  if (op !== 'pin') {
+    waiting.push(action);
+    publish(apply(doc, action));
+  }
   const request = queue.then(() => api('PATCH', '/api/code/workspace', { op, ...fields }));
   queue = request.catch(() => {});
   request.then((next) => take(mine, action.seq, next), () => {
     if (mine === epoch) waiting = waiting.filter((a) => a !== action);
   });
+  return request;
 }
 
 function entry(aid, pid) {

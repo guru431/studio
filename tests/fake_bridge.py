@@ -88,6 +88,7 @@ class FakeMachine:
         self.desktop_clipboard = ''
         self.file_stats = False
         self.file_operations = False
+        self.git_compare = False
         self.file_suggestions = False
         self.chat_search = False
         self.queue_edit = False
@@ -128,7 +129,7 @@ class FakeMachine:
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "terminal", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
-                                           "software_update_all")
+                                           "software_update_all", "git_compare")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
@@ -287,7 +288,8 @@ class FakeMachine:
 
     def _op_activity(self, req, events):
         return {"items": [{"project": turn["project"], "chat": chat, "running": True,
-                           "asking": bool(turn.get("asks")), "engine": turn.get("engine", "claude")}
+                           "asking": bool(turn.get("asks")), "engine": turn.get("engine", "claude"),
+                           **({"queue_paused": True} if turn.get("queue_paused") else {})}
                           for chat, turn in self.running.items()]}
 
     def _op_usage(self, req, events):
@@ -299,7 +301,8 @@ class FakeMachine:
         _, project = self._project(req)
         items = [{"chat": chat, "title": c.get("title"), "created": c.get("created"), "modified": c.get("modified"),
                   "tag": c.get("tag"), "engine": c.get("engine", "claude"), "running": chat in self.running,
-                  "asking": chat in self.running and bool(self.running[chat]["asks"])}
+                  "asking": chat in self.running and bool(self.running[chat]["asks"]),
+                  **({"queue_paused": True} if self.running.get(chat, {}).get("queue_paused") else {})}
                  for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
 
@@ -675,6 +678,13 @@ class FakeMachine:
         if isinstance(project["git"], Refused):  # нет git, чужой владелец — `git_unavailable` моста
             raise project["git"]
         return dict(project["git"])
+
+    def _op_git_compare(self, req, events):
+        _, project = self._project(req)
+        row = project.get("git_comparisons", {}).get(req["path"])
+        if row is None:
+            raise Refused("not_found", "файл больше не числится изменённым")
+        return dict(row)
 
     # ---- ход ---------------------------------------------------------------------
 

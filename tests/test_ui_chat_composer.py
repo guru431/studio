@@ -73,9 +73,11 @@ def long_text(n) -> tuple:
 
 @pytest.mark.parametrize("width", [320, 1280])
 def test_passport_warning_and_context_ring(browser, live, width, monkeypatch):
+    live_sql(live, "UPDATE section_links SET models = ? WHERE section = 'chat'",
+             (json.dumps(["local-text-role"]),))
     live_sql(live, "UPDATE connections SET passport = ? WHERE kind = 'srvllm'",
-             (json.dumps({"models": [{"id": "local-gemma-abl", "caps": [{"name": "chat", "source": "probe"}]}]}),))
-    monkeypatch.setitem(chat.CONTEXT, "local-gemma-abl", 10000)
+             (json.dumps({"models": [{"id": "local-text-role", "caps": [{"name": "chat", "source": "probe"}]}]}),))
+    monkeypatch.setitem(chat.CONTEXT, "local-text-role", 10000)
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(width == 320),
         ("eval", "quiet", f"[{PASSPORT}.hidden, {RING}.hidden]"),
         attach(files(["p.png", "notes.txt"])), ("wait", f"!{PASSPORT}.hidden"),

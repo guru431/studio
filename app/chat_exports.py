@@ -462,7 +462,7 @@ def _plan(uid: int, chat_id: str, lang: str) -> tuple[str, bytes, list, list]:
     return snapshot["title"], text, local, results
 
 
-async def _result(uid: int, sid, stamp, aid, mime, room: int):
+async def _result(uid: int, sid, stamp, aid, mime, room: int, live):
     """An MCP result file spooled to a local temporary file — (file, crc, size) — with the checks of
     `mcp_files.result_file` (server open to the account and on, address and key unchanged); unavailable, gone on
     the server or larger than `room` — None."""
@@ -484,8 +484,8 @@ async def _result(uid: int, sid, stamp, aid, mime, room: int):
         try:
             async for chunk in response.body_iterator:
                 size += len(chunk)
-                if size > room:
-                    raise ConnectionError("over the archive limit")
+                if size > room or not live():
+                    raise ConnectionError("archive transfer stopped")
                 crc = zlib.crc32(chunk, crc)
                 spool.write(chunk)
         finally:
@@ -510,17 +510,25 @@ async def _archive(uid: int, chat_id: str, text: bytes, local: list, results: li
 
     async def put(name: str, created: float, f, crc: int, size: int):
         with f:
+            if not live():
+                return
             yield out.entry("files/" + _unique(name, used), created, crc, size)
             left = size
-            while left > 0:
+            while left > 0 and live():
                 block = await asyncio.to_thread(f.read, min(takeout.CHUNK, left))
+                if not live():
+                    return
                 if not block:
                     raise OSError("file got shorter")
                 left -= len(block)
                 yield block
 
     try:
+        if not live():
+            return
         yield out.entry("chat.md", now, zlib.crc32(text), len(text))
+        if not live():
+            return
         yield text
         for name, rel, _, created in local:
             plain = _clean(name, "file")
@@ -535,24 +543,32 @@ async def _archive(uid: int, chat_id: str, text: bytes, local: list, results: li
                 await asyncio.to_thread(state.CFG.media_dir.stat)     # the share is gone — break off, not "missing"
                 missing.append(plain)
                 continue
-            async for piece in put(plain, created, f, crc, size):
-                yield piece
+            async with contextlib.aclosing(put(plain, created, f, crc, size)) as chunks:
+                async for piece in chunks:
+                    yield piece
         for name, sid, stamp, aid, mime in results:
             plain = _clean(name, "result" + media.EXT.get(mime, ".bin"))
             if not live():
                 return
-            spooled = await _result(uid, sid, stamp, aid, mime, ARCHIVE_MAX - total)
+            spooled = await _result(uid, sid, stamp, aid, mime, ARCHIVE_MAX - total, live)
             if spooled is None:
                 missing.append(plain)
                 continue
             f, crc, size = spooled
             total += size
-            async for piece in put(plain, now, f, crc, size):
-                yield piece
+            async with contextlib.aclosing(put(plain, now, f, crc, size)) as chunks:
+                async for piece in chunks:
+                    yield piece
+        if not live():
+            return
         if missing:
             listed = ("\n".join(missing) + "\n").encode("utf-8")
             yield out.entry("missing.txt", now, zlib.crc32(listed), len(listed))
+            if not live():
+                return
             yield listed
+        if not live():
+            return
         yield out.end()
         log.info("chat archive %s: %d files, %d missing", chat_id[:8], out.count - 1 - bool(missing), len(missing))
     except OSError:

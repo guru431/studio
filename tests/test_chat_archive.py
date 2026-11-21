@@ -1,6 +1,8 @@
 """Архив чата одним ZIP (спека 2026-11-21-studio-source-capabilities-design, п. 32): `chat.md` — тот же Markdown,
 что у выгрузки, `files/` — исходники вложений, медиа диалога и файлы результатов MCP (через Studio), недоступные —
 списком в `missing.txt`; корзина — мимо; больше предела — 413; токен — только своей учётке и в срок."""
+import asyncio
+from contextlib import aclosing
 import io
 import logging
 import zipfile
@@ -111,3 +113,25 @@ def test_one_archive_at_a_time(studio):
         assert busy.status_code == 409 and busy.json()["detail"]["code"] == "busy"
     finally:
         takeout.RUNNING.clear()
+
+
+def test_archive_stops_between_chunks_of_one_file_after_signout(studio, monkeypatch):
+    cid, _ = full_chat(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login='member'").fetchone()[0]
+    digest = state.DB.execute("SELECT digest FROM sessions WHERE user_id=?", (uid,)).fetchone()[0]
+    _, text, local, _ = chat_exports._plan(uid, cid, "ru")
+    mark = object()
+    takeout.RUNNING[uid] = mark
+    monkeypatch.setattr(takeout, "CHUNK", 1)
+
+    async def check():
+        async with aclosing(chat_exports._archive(uid, cid, text, local, [], mark, digest)) as body:
+            await anext(body)  # chat.md header
+            await anext(body)  # chat.md contents
+            await anext(body)  # file header
+            assert len(await anext(body)) == 1
+            state.DB.execute("DELETE FROM sessions WHERE digest=?", (digest,))
+            assert [part async for part in body] == []
+
+    asyncio.run(check())
+    assert uid not in takeout.RUNNING

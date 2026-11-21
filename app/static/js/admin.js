@@ -13,6 +13,7 @@ import { roleDefaultsBlock } from './roles.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
+import { smtpDeliveryText } from './smtp-settings.js';
 import { button, el, field, openDialog, showError, words } from './ui.js';
 
 const COLUMNS = [['login', tr("Логин")], ['email', 'Email'], ['name', tr("Имя")], ['admin', tr("Админ")], ['disabled', tr("Отключён")],
@@ -106,6 +107,26 @@ function usersBlock(host) {
     });
   }
 
+  function sendPasswordLink(user) {
+    const send = button(tr("Отправить"), { class: 'btn btn-accent', id: 'password-link-send' });
+    const fail = el('p', { class: 'error', role: 'status' });
+    const dialog = openDialog(host, { id: 'password-link-dialog', title: tr("Отправить ссылку для нового пароля?"),
+      body: [el('p', {}, tr("Одноразовая ссылка уйдёт на {0}. Сессии закроются после смены пароля.", user.email)), fail],
+      actions: [send] });
+    send.addEventListener('click', async () => {
+      send.disabled = true;
+      try {
+        await api('POST', `/api/admin/users/${user.id}/password-link`);
+        dialog.close();
+        note.className = 'status ok';
+        note.textContent = tr("Ссылка для нового пароля отправлена");
+      } catch (err) {
+        mailFailure(fail, err);
+        send.disabled = false;
+      }
+    });
+  }
+
   function disable(user) {
     const yes = button(tr("Отключить"), { class: 'btn btn-danger solid', id: 'disable-confirm' });
     const fail = el('p', { class: 'error' });
@@ -170,6 +191,9 @@ function usersBlock(host) {
       el('td', { class: 'actions' }, el('div', { class: 'acts' },
         button(tr("Изменить"), { class: 'btn btn-sm user-edit' }, () => edit(user)),
         button(tr("Подключения"), { class: 'btn btn-sm user-conns' }, () => connections(user)),
+        !self && user.email && !user.disabled
+          ? button(tr("Отправить ссылку для нового пароля"), { class: 'btn btn-sm user-password-link' }, () => sendPasswordLink(user))
+          : null,
         button(tr("Сбросить пароль"), { class: 'btn btn-sm user-reset', disabled: self,
           title: self ? tr("свой пароль — в «Настройках» → «Защита»") : null }, () => resetPassword(user)),
         button(user.disabled ? tr("Включить") : tr("Отключить"), { class: 'btn btn-sm user-toggle', disabled: self,
@@ -195,6 +219,7 @@ function mailFailure(target, err) {
 function invitationsBlock(host) {
   const list = el('tbody', { id: 'invitations' });
   const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
+  const delivery = el('p', { class: 'muted small', id: 'admin-smtp-delivery' });
   const statuses = { accepted: tr("Зарегистрирован"), deleted: tr("Учётка удалена"), expired: tr("Срок истёк"),
     revoked: tr("Отозвано"), failed: tr("Письмо не отправлено") };
   const statusText = (invite) => invite.status === 'pending'
@@ -234,6 +259,10 @@ function invitationsBlock(host) {
     });
   }
   async function reload() {
+    api('GET', '/api/admin/smtp/status').then(status => {
+      delivery.textContent = smtpDeliveryText(status);
+      if (!status.configured) delivery.append(' ', el('a', { href: '#/settings/smtp' }, tr("Открыть настройки SMTP")));
+    }).catch(() => {});
     try {
       const { items } = await api('GET', '/api/admin/invitations');
       // DELETE: ожидающее — отзыв (строка остаётся «Отозвано»), прочие без живой учётки — удаление строки
@@ -262,6 +291,7 @@ function invitationsBlock(host) {
   }
   return { reload, el: el('section', { class: 'block' }, el('div', { class: 'block-head' },
     el('h2', {}, tr("Приглашения")), button(tr("Пригласить пользователя"), { class: 'btn btn-accent', id: 'user-add' }, () => edit())),
+    delivery,
     el('p', { class: 'muted small' }, tr("Ссылка одноразовая, действует 48 часов. Получатель сам выбирает логин и пароль.")),
     el('div', { class: 'table-wrap' }, el('table', { class: 'users' }, el('thead', {}, el('tr', {},
       ...['Email', tr("Комментарий"), tr("Статус"), tr("Действия")].map(text => el('th', { scope: 'col' }, text)))), list)), note) };

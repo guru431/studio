@@ -342,7 +342,7 @@ def test_media_upload_contract(studio, monkeypatch):
     media_ids = [r[0] for r in state.DB.execute("SELECT media_id FROM chat_media")]
     assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
     assert state.DB.execute("SELECT count(*) FROM chat_media").fetchone()[0] == 2
-    assert studio.c.delete(f"/api/trash/chats/{cid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/chats/{cid}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM chat_media").fetchone()[0] == 0
     assert state.DB.execute(f"SELECT count(*) FROM media WHERE id IN ({','.join('?' * len(media_ids))})",
                             media_ids).fetchone()[0] == 0
@@ -404,7 +404,7 @@ def test_media_delete_is_scoped_to_the_dialog_and_cleans_up_uploads(studio):
     signin(studio, "admin")
     assert studio.c.delete(f"/api/trash/chat_media/{item['id']}").status_code == 404
     signin(studio, "member")
-    assert studio.c.delete(f"/api/trash/chat_media/{item['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/chat_media/{item['id']}", json={"password": "password-123"}).status_code == 204
     assert not file.exists()
     assert not state.DB.execute("SELECT 1 FROM mcp_media_uploads WHERE chat_media_id=?", (item["id"],)).fetchone()
 

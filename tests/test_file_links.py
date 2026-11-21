@@ -91,6 +91,21 @@ def test_link_flow_check_open_file_range(studio):
     assert studio.c.get("/f/file").status_code == 404
 
 
+def test_link_lookup_reaches_beyond_the_ui_limit_and_survives_renaming(studio, monkeypatch):
+    member, sid, server = member_with_files(studio)
+    monkeypatch.setattr(my_files, "ENTRIES_MAX", 2)
+    folder = server.folder(access.studio_user(member, sid))
+    folder.update({"Фото/a.jpg": b"a", "Фото/b.jpg": b"b"})
+    token = make_link(studio, sid)["url"].split("#", 1)[1]
+    ticket = studio.c.post(f"/api/my-files/{sid}/ticket", json={"path": "Фото/кот.jpg"}).json()["url"]
+    item = mcp_client.row(member, sid)
+    mcp_client.update_for(None, sid, mcp_client.ServerIn(name="Renamed", url=item["url"], enabled=True))
+    assert studio.c.get(ticket).content == PHOTO
+    anonymous(studio)
+    assert opened(studio, token).status_code == 204
+    assert studio.c.get("/f/file").content == PHOTO
+
+
 def test_link_expired_revoked_stamp_changed_access_removed_file_gone_all_404(studio):
     member, sid, server = member_with_files(studio)
     bodies = []

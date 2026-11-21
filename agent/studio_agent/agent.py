@@ -83,6 +83,7 @@ OPS = {
     "visualization": ("project", "source"),
     "save": ("project", "path", "text", "version"),
     "git": ("project",),
+    "git_compare": ("project", "path"),
 }
 
 # Эти просьбы читают данные, обслуживают обновлятор или меняют только временное состояние.
@@ -93,7 +94,7 @@ RESTART_SAFE_OPS = frozenset({
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
     "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
-    "worktrees", "read", "raw", "visualization", "git", "mirror_identity", "mirror_candidates",
+    "worktrees", "read", "raw", "visualization", "git", "git_compare", "mirror_identity", "mirror_candidates",
     "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
 })
 
@@ -181,6 +182,7 @@ class Agent:
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
+                 "git_compare": True,
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
                  "project_mirror_discovery": True, "mirror_exclude": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
@@ -826,8 +828,11 @@ class Agent:
                     rows = await self._metadata.get((frame["project"], "chats", name), load, ttl=20,
                                                     refresh=bool(frame.get("refresh")))
                 live = backend.live()
+                paused = {item["chat"] for item in backend.activity()
+                          if item["project"] == frame["project"] and item.get("queue_paused") is True} if live else set()
                 return [{**item, **({"engine": name} if name != "claude" else {}),
-                         "running": item["chat"] in live, "asking": bool(live.get(item["chat"]))} for item in rows], True
+                         "running": item["chat"] in live, "asking": bool(live.get(item["chat"])),
+                         **({"queue_paused": True} if item["chat"] in paused else {})} for item in rows], True
             except Exception as e:
                 log.warning("%s: сессии: %s", name, type(e).__name__)
                 return [], False
@@ -1017,6 +1022,10 @@ class Agent:
     async def _op_git(self, frame, after):
         project = await self._project(frame)
         return await asyncio.to_thread(gitinfo.status, project)
+
+    async def _op_git_compare(self, frame, after):
+        project = await self._project(frame)
+        return await asyncio.to_thread(gitinfo.compare, project, frame["path"])
 
 
 def _error(rid: str) -> dict:

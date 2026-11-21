@@ -75,6 +75,7 @@ def test_gateway_check_reads_two_lists_and_spends_nothing(studio):
     assert caps(models["f5-tts"]) == {("voices", "catalog")}
     assert {("describe", "catalog"), ("translate", "catalog")} <= caps(models["gemma4-abl"])
     assert models["local-gemma-abl"]["context_length"] == 131072 and "other-x" in models
+    assert ("vision", "catalog") in caps(models["local-gemma-abl"])
     # найденные — короткие имена перечня, которые шлюз назвал; чат — из /v1/models
     found = r.json()["found"]
     assert found["photo"] == ["snofs"] and found["video"] == ["wan"]

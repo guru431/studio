@@ -18,8 +18,8 @@ import { tr } from './i18n.js';
  *   куска не хватает — отказ словами. Куски в IndexedDB остаются до discard: загрузку подтверждает «Расшифровка»;
  *   cancel() — запись стёрта.
  *
- * pendingRecordings() → [{ id, started, seconds }] — записи в IndexedDB (и идущая), restore(id) → Blob,
- * discard(id). */
+ * pendingRecordings({ inactiveOnly }) → [{ id, started, seconds }] — записи в IndexedDB; с inactiveOnly — без идущих.
+ * restore(id) → Blob, discard(id). Запись держит Web Lock до сохранения последнего куска. */
 import { holdMic } from './mic.js';
 
 export const CHUNK_MS = 10000;
@@ -30,6 +30,7 @@ const DB = 'studio-rec';
 const TICK_MS = 250;
 const BITS = 32000;
 const BUSY = tr("Микрофон занят: идёт запись встречи");
+const LOCK_PREFIX = 'studio-recording:';
 
 let current = null;              // идущая запись встречи студии
 let starting = false;            // браузер спрашивает разрешение
@@ -63,32 +64,60 @@ const finished = (tx) => new Promise((resolve, reject) => {
 });
 const piecesOf = (id) => IDBKeyRange.bound([id, 0], [id, Infinity]);
 
+function holdRecording(id) {
+  if (!navigator.locks) return Promise.resolve(() => {});
+  return new Promise((resolve, reject) => {
+    const held = navigator.locks.request(LOCK_PREFIX + id, () => new Promise((release) => {
+      resolve(() => { release(); return held; });
+    }));
+    held.catch(reject);
+  });
+}
+
+async function useRecording(id, use) {
+  if (current?.id === id) throw new Error(BUSY);
+  if (!navigator.locks) return use();
+  return navigator.locks.request(LOCK_PREFIX + id, { ifAvailable: true }, (lock) => {
+    if (!lock) throw new Error(BUSY);
+    return use();
+  });
+}
+
 /** Идущая запись встречи или null. */
 export function meeting() {
   return current;
 }
 
 /** Записи в IndexedDB, старые первыми; хранилище недоступно — пусто. */
-export async function pendingRecordings() {
+export async function pendingRecordings({ inactiveOnly = false } = {}) {
   try {
     const store = (await openDb()).transaction('recordings').objectStore('recordings');
     const all = await result(store.getAll());
-    return all.map(({ id, started, seconds }) => ({ id, started, seconds })).sort((a, b) => a.started - b.started);
+    const locks = inactiveOnly && navigator.locks
+      ? new Set((await navigator.locks.query()).held.map(lock => lock.name)) : new Set();
+    return all.filter(({ id }) => !locks.has(LOCK_PREFIX + id))
+      .map(({ id, started, seconds }) => ({ id, started, seconds })).sort((a, b) => a.started - b.started);
   } catch {
     return [];
   }
 }
 
 /** Запись из IndexedDB одним Blob. */
-export async function restore(id) {
-  const tx = (await openDb()).transaction(['chunks', 'recordings']);
-  const [meta, chunks] = await Promise.all([result(tx.objectStore('recordings').get(id)),
-    result(tx.objectStore('chunks').getAll(piecesOf(id)))]);
-  if (!meta || !chunks.length) throw new Error(tr("Запись не найдена на этом устройстве"));
-  return new Blob(chunks.map((chunk) => chunk.data), { type: meta.type });
+export function restore(id) {
+  return useRecording(id, async () => {
+    const tx = (await openDb()).transaction(['chunks', 'recordings']);
+    const [meta, chunks] = await Promise.all([result(tx.objectStore('recordings').get(id)),
+      result(tx.objectStore('chunks').getAll(piecesOf(id)))]);
+    if (!meta || !chunks.length) throw new Error(tr("Запись не найдена на этом устройстве"));
+    return new Blob(chunks.map((chunk) => chunk.data), { type: meta.type });
+  });
 }
 
-export async function discard(id) {
+export function discard(id) {
+  return useRecording(id, () => discardSaved(id));
+}
+
+async function discardSaved(id) {
   const tx = (await openDb()).transaction(['chunks', 'recordings'], 'readwrite');
   tx.objectStore('chunks').delete(piecesOf(id));
   tx.objectStore('recordings').delete(id);
@@ -124,9 +153,23 @@ export async function startMeeting({ onTick } = {}) {
   const type = TYPES.find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
   // речь: 32 кбит/с (сервер всё равно сжимает до 32k) — 4 ч ≈ 58 МБ; умолчание браузера (AAC Safari 128k+) — больше
   // предела загрузки 200 МиБ
-  const recorder = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: BITS });
-  const kind = (recorder.mimeType || type || 'audio/webm').split(';')[0];
   const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let recorder, releaseRecording;
+  try {
+    recorder = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: BITS });
+    releaseRecording = await holdRecording(id);
+  } catch (err) {
+    for (const track of stream.getTracks()) track.stop();
+    release();
+    throw err;
+  }
+  if (interrupted) {
+    for (const track of stream.getTracks()) track.stop();
+    releaseRecording();
+    release();
+    return null;
+  }
+  const kind = (recorder.mimeType || type || 'audio/webm').split(';')[0];
   const started = Date.now();
   const kept = new Map();        // номер → кусок, ещё не записанный в IndexedDB: записанные в памяти не держатся
   let n = 0;
@@ -136,6 +179,7 @@ export async function startMeeting({ onTick } = {}) {
   let safe = true;               // куски ложатся в IndexedDB
   let lock = null;               // Wake Lock экрана
   let dropping = false;          // cancel(): куски стираются до конца записи — «Восстановить» её не увидит
+  let joining = false;           // stop(): блокировка держится, пока не собран Blob
   let writing = openDb().then(() => {}, () => { safe = false; });
 
   const elapsed = () => (total + (running ? performance.now() - since : 0)) / 1000;
@@ -209,9 +253,10 @@ export async function startMeeting({ onTick } = {}) {
       document.removeEventListener('visibilitychange', onVisibility);
       for (const track of stream.getTracks()) track.stop();
       release();
-      if (current === handle) current = null;
       await writing;
-      if (dropping) await discard(id).catch(() => {});
+      if (dropping) await discardSaved(id).catch(() => {});
+      if (!joining) await releaseRecording();
+      if (current === handle) current = null;
       document.dispatchEvent(new CustomEvent('studio-meeting', { detail: null }));
       resolve();
     }, { once: true });
@@ -241,9 +286,14 @@ export async function startMeeting({ onTick } = {}) {
   handle = {
     id, started, pause, resume,
     async stop() {
-      if (recorder.state !== 'inactive') recorder.stop();
-      await stopped;
-      return whole();
+      joining = true;
+      try {
+        if (recorder.state !== 'inactive') recorder.stop();
+        await stopped;
+        return await whole();
+      } finally {
+        await releaseRecording();
+      }
     },
     async cancel() {
       dropping = true;
@@ -256,7 +306,17 @@ export async function startMeeting({ onTick } = {}) {
   };
   current = handle;
   document.addEventListener('visibilitychange', onVisibility);
-  recorder.start(CHUNK_MS);
+  try {
+    recorder.start(CHUNK_MS);
+  } catch (err) {
+    clearInterval(timer);
+    document.removeEventListener('visibilitychange', onVisibility);
+    for (const track of stream.getTracks()) track.stop();
+    current = null;
+    releaseRecording();
+    release();
+    throw err;
+  }
   since = performance.now();
   running = true;
   wake();

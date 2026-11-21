@@ -8,6 +8,7 @@ import state
 import web
 from conftest import signin
 from test_chat import messages, new_chat, sse, turn
+from test_chat_pending import answer, pending_of
 from test_chat_web import EXA_KEY, call
 from test_mcp import URL as MCP_URL
 from test_mcp_dialog import methods, name_of, offered, setup, tool, view
@@ -154,7 +155,9 @@ def test_memory_not_written_after_protected(studio):
     assert memory.list_for(uid) == []
     other = new_chat(studio)                        # в обычном диалоге память пишется
     studio.gw.chat_script = [{"tool_calls": [call("memory_save", text="любит краткость")]}, ["Готово"]]
-    assert sse(turn(studio, other, "Запомни"))[-1] == ("done", {"status": "done"})
+    shown = pending_of(sse(turn(studio, other, "Запомни")))
+    assert memory.list_for(uid) == []
+    assert sse(answer(studio, other, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     assert [i["text"] for i in memory.list_for(uid)] == ["любит краткость"]
 
 

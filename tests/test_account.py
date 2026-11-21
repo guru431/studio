@@ -117,6 +117,55 @@ def test_a_session_of_another_account_cannot_be_ended(studio):
 
 # ---- аварийный выход ------------------------------------------------------------------------
 
+
+def test_end_other_sessions_preserves_current_and_unrelated_account(studio):
+    uid = owner(studio)
+    current_digest = current(studio)
+    other_tokens = [auth.create_session(uid)[0] for _ in range(2)]
+    stranger_uid = make_user(studio, "stranger")
+    stranger_token, _ = auth.create_session(stranger_uid)
+    for token in other_tokens:
+        device_subs(security.digest(token), uid)
+    device_subs(security.digest(stranger_token), stranger_uid)
+    assert studio.c.delete("/api/me/sessions").json() == {"ended": 2}
+    assert studio.c.delete("/api/me/sessions").json() == {"ended": 0}
+    assert studio.c.get("/api/me").status_code == 200
+    assert current(studio) == current_digest
+    assert auth.session_user(stranger_token) is not None
+    assert all(auth.session_user(token) is None for token in other_tokens)
+    assert {r[0] for r in state.DB.execute("SELECT digest FROM push_subs")} == {security.digest(stranger_token)}
+    assert kinds(uid).count("sessions_end") == 1
+
+
+def test_own_name_changes_without_changing_login(studio):
+    uid = owner(studio)
+    assert studio.c.patch("/api/me", json={"name": "bad\nname"}).status_code == 422
+    response = studio.c.patch("/api/me", json={"name": "  New name  "})
+    assert response.status_code == 200
+    assert (response.json()["name"], response.json()["login"]) == ("New name", "owner")
+    assert state.DB.execute("SELECT name FROM users WHERE id = ?", (uid,)).fetchone()[0] == "New name"
+
+
+def test_own_account_deletion_requires_password_login_and_an_active_admin(studio):
+    uid = owner(studio)
+    another = make_user(studio, "next-admin", is_admin=True)
+    state.DB.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (uid,))
+    state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (another,))
+    path = "/api/me/account"
+
+    def delete(login_name, password="password-123"):
+        return studio.c.request("DELETE", path, json={"login": login_name, "password": password})
+
+    assert delete("owner", "wrong").status_code == 403
+    assert delete("other").json()["detail"]["code"] == "login"
+    assert delete("owner").json()["detail"]["code"] == "last_admin"
+    state.DB.execute("UPDATE users SET disabled = 0 WHERE id = ?", (another,))
+    answer = delete("owner")
+    assert answer.status_code == 200 and answer.json() == {"pending_files": 0}
+    assert answer.headers["clear-site-data"] == '"cache"'
+    assert studio.c.get("/api/me").status_code == 401
+    assert [(row["id"], row["name"]) for row in state.DB.execute("SELECT id, name FROM users")] == [(another, "next-admin")]
+
 @pytest.mark.parametrize("revoke_agents", [False, True])
 def test_emergency_exit_ends_everything_with_the_password(studio, monkeypatch, revoke_agents):
     endpoint, uid = regular(studio)

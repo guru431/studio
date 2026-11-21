@@ -47,6 +47,7 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     const engine = known ? el('span', { class: 'tag code-tab-engine' }, ENGINE_NAMES[known.engine || 'claude']) : null;
     let mark = null;
     if (known && known.asking) mark = el('span', { class: 'code-tab-mark asking', title: tr("ждёт ответа") }, el('span', { class: 'sr' }, tr("ждёт ответа")));
+    else if (known?.queue_paused) mark = el('span', { class: 'code-tab-mark asking paused', title: tr("Очередь на паузе") }, el('span', { class: 'sr' }, tr("Очередь на паузе")));
     else if (known && known.running) mark = el('span', { class: 'code-tab-mark running', title: tr("идёт ход") }, el('span', { class: 'sr' }, tr("идёт ход")));
     const shut = el('button', { type: 'button', tabindex: '-1', class: 'code-tab-close', 'aria-label': tr("Закрыть вкладку"), title: tr("Закрыть вкладку") }, icon('x'));
     const draft = state.drafts?.has(chat)
@@ -198,7 +199,7 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     }
     for (const id of next.tabs) {
       const info = next.info.get(id);
-      const signature = JSON.stringify([next.loaded, !!info, info?.title, info?.engine, !!info?.asking, !!info?.running,
+      const signature = JSON.stringify([next.loaded, !!info, info?.title, info?.engine, !!info?.asking, !!info?.running, !!info?.queue_paused,
         !!next.drafts?.has(id), !!next.offline]);
       if (!nodes.has(id) || signatures.get(id) !== signature) {
         const node = tabNode(id);

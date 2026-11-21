@@ -70,7 +70,7 @@ const TEXT_MAX = 200;
  * `.ctl-chip`, `enum` — выбор picker, число с границами — поле `chip-num`, строка без `format` с `maxLength` до TEXT_MAX —
  * маленькое поле. Обёртка `.mcp-fields` (display: contents): `values()` — значения, отличные от умолчания схемы
  * (пустое и нетронутое не шлётся; число вне границ — ошибка словами), `disable(on)`, `destroy()` — меню выбора. */
-export function extraFields(tool, shown) {
+export function extraFields(tool, shown, suffix = '') {
   const box = el('span', { class: 'mcp-fields' });
   const readers = [], picks = [], controls = [];
   const skip = new Set([...shown, ...Object.keys(tool?.files || {})]);
@@ -78,7 +78,7 @@ export function extraFields(tool, shown) {
     if (skip.has(key) || !prop || typeof prop !== 'object') continue;
     const name = FIELD_NAMES[key] || (typeof prop.title === 'string' && prop.title.trim().slice(0, 40)) || key;
     const limits = schemaLimits(prop);
-    const id = `mcp-field-${key.replace(/[^\w-]/g, '_')}`;
+    const id = `mcp-field-${key.replace(/[^\w-]/g, '_')}${suffix}`;
     if (prop.type === 'boolean') {
       const initial = prop.default === true;
       const chip = el('button', { type: 'button', class: 'chip ctl-chip', id, 'data-field': key, 'aria-pressed': String(initial) }, name);
@@ -172,6 +172,7 @@ function showResult(host, output, urls, render) {
  * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
 export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, key: place = section }) {
   const base = `/api/mcp-tools/${section}`;
+  const suffix = place === section ? '' : `-${place.replace(/[^\w-]/g, '-')}`;
   const controller = new AbortController();
   const urls = [];
   const options = new Map();
@@ -179,20 +180,20 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   let states = {};             // состояние серверов со `studio/status` (GET /api/mcp/status)
   // выбор «как у Агентов» (picker.js) поверх select#section-mcp-tool: значение и change — у select, прятать — обёртку;
   // меню — в body (поле ввода раздела прокручивается и ловит клавиши), уходит с destroy()
-  const select = el('select', { id: 'section-mcp-tool' });
+  const select = el('select', { id: `section-mcp-tool${suffix}` });
   const pick = picker(document.body, tr("Инструмент MCP"), select);
   const control = pick.wrap;
   control.classList.add('mcp-tool');
   control.hidden = true;
   const status = el('p', { class: 'status', 'aria-live': 'polite' });
-  const result = el('div', { class: 'mcp-result', id: 'section-mcp-result' });
+  const result = el('div', { class: 'mcp-result', id: `section-mcp-result${suffix}` });
   const retry = button(tr("Обновить"), { class: 'btn btn-sm', hidden: true }, () => {
     record().retry = false;
     poll();
   });
   const dismiss = button(tr("Закрыть"), { class: 'btn btn-sm', hidden: true }, clear);
   // сервер не ответил на список инструментов или каталог не загрузился — сказать, а не молча убрать выбор
-  const notice = el('p', { class: 'muted', id: 'section-mcp-notice', hidden: true });
+  const notice = el('p', { class: 'muted', id: `section-mcp-notice${suffix}`, hidden: true });
   const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss);
   // поля схемы выбранного инструмента, которых раздел не рисует (extraFields): раздел ставит `fields` в свой ряд
   const extras = el('span', { class: 'mcp-fields' });
@@ -340,7 +341,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   /** Поля выбранного инструмента вне `fields` раздела — заново при смене инструмента; «Студия» — без полей. */
   function paintFields() {
     extra?.destroy();
-    extra = picked() ? extraFields(picked().tool, fields) : null;
+    extra = picked() ? extraFields(picked().tool, fields, suffix) : null;
     extras.replaceChildren(...(extra ? [extra] : []));
     extra?.disable(busy());
   }

@@ -12,11 +12,12 @@ import pytest
 import auth
 import chat
 import db
+import media
 import search as search_api
 import state
 import transcripts
 from conftest import T0, add_gateway, erase_history, make_user, signin
-from test_chat import attach, events_of, new_chat, sse, turn, wait
+from test_chat import attach, events_of, new_chat, png, sse, turn, wait
 from test_transcripts import result_file, upload, wait_tr
 
 IMAGE = ("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
@@ -439,6 +440,32 @@ def test_another_users_history_is_never_found(studio):
         "video": ["wan"]}}
 
 
+def test_search_thumbnails_require_own_media_and_all_associated_sections_open(studio):
+    uid, other = make_user(studio, "owner"), make_user(studio, "other")
+    signin(studio, "owner")
+    preview = media.save(uid, png(), "image/png", "result.png", thumb=True)
+    foreign = media.save(other, png(), "image/png", "foreign.png", thumb=True)
+    state.DB.execute(IMAGE, ("photo", uid, "snofs", "Результат", T0))
+    state.DB.execute(IMAGE, ("foreign-photo", uid, "snofs", "Неподходящая связь", T0))
+    state.DB.execute(VIDEO, ("video", uid, "Ролик", T0))
+    state.DB.execute("UPDATE images SET media_id = ? WHERE id = 'photo'", (preview,))
+    state.DB.execute("UPDATE images SET media_id = ? WHERE id = 'foreign-photo'", (foreign,))
+    state.DB.execute("UPDATE videos SET source_media_id = ? WHERE id = 'video'", (preview,))
+    results = {r["id"]: r for section in ("photo", "video") for r in search(studio, section=section).json()["items"]}
+    assert results["photo"]["thumbnail_id"] == results["video"]["thumbnail_id"] == preview
+    assert "thumbnail_id" not in results["foreign-photo"]
+    thumb = studio.c.get(f"/api/media/{preview}?thumb=1")
+    assert thumb.status_code == 200 and thumb.headers["content-type"] == "image/webp"
+    assert studio.c.get(f"/api/media/{foreign}?thumb=1").status_code == 404
+
+    assert studio.c.post("/api/me/screen-lock", json={"enabled": True, "sections": ["photo"]}).status_code == 200
+    assert studio.c.post("/api/lock/now").status_code == 204
+    assert hits(search(studio, section="photo")) == []
+    video = search(studio, section="video").json()["items"][0]
+    assert video["id"] == "video" and "thumbnail_id" not in video
+    assert studio.c.get(f"/api/media/{preview}?thumb=1").status_code == 423
+
+
 def test_filters_narrow_and_alone_make_a_list(studio):
     """Раздел, модель, дни (по поясу учётки, «по» — включительно); без слов — тоже список, сниппета нет."""
     uid = make_user(studio, "owner"); signin(studio, "owner")
@@ -530,14 +557,26 @@ def test_deleted_records_chats_and_the_wiped_history_are_gone_at_once(studio):
 
 
 def test_fts_syntax_in_the_query_is_just_words(studio):
-    """Кавычки, звёздочки, скобки, NEAR, OR и «-» — разделители и слова, а не синтаксис FTS5."""
+    """Звёздочки, скобки, NEAR, OR и «-» — разделители и слова, а не синтаксис FTS5."""
     uid = make_user(studio, "owner"); signin(studio, "owner")
     seed(uid)
     state.DB.execute(IMAGE, ("near", uid, "flux", "NEAR OR кошка", T0 + 20))
-    assert hits(search(studio, q='"кош*" NEAR OR')) == [("photo", "near")]
+    assert hits(search(studio, q='кош* NEAR OR')) == [("photo", "near")]
+    assert hits(search(studio, q='"кош*" NEAR OR')) == []          # звёздочка не превращает точный токен в префикс
     assert hits(search(studio, q='кошк -крыш (')) == [("photo", "i")]           # «-» — не «кроме»
     assert search(studio, q='"*() -').status_code == 400
     assert hits(search(studio, q='"*', section="photo")) == [("photo", "near"), ("photo", "i")]
+
+
+def test_quoted_phrase_matches_whole_adjacent_tokens_alongside_prefix_terms(studio):
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    for n, title in enumerate(("Белая ёлка возле дома", "Белая снежная ёлка возле дома",
+                               "Белая ёлочка возле дома", "Ёлка белая возле дома", "Белая ёлка в лесу")):
+        state.DB.execute(IMAGE, (f"phrase-{n}", uid, "flux", title, T0 + n))
+    response = search(studio, q='"белая елка" дом')
+    assert hits(response) == [("photo", "phrase-0")]
+    assert "\u0002Белая ёлка\u0003" in response.json()["items"][0]["snippet"]
+    assert len(hits(search(studio, q='"белая ел'))) == 5          # незакрытая кавычка во время ввода
 
 
 def test_refusals_need_words_or_a_filter_a_session_and_csrf(studio):

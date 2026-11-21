@@ -21,6 +21,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+import auth
 import chat
 import chat_tools
 import clock
@@ -44,6 +45,7 @@ ARGS_MAX = 8                       # строк аргументов в карт
 ARG_CHARS = 200                    # знаков ключа и значения
 ANSWER_MAX = 4000
 REFUSED = "Пользователь отказался запускать этот инструмент."
+MEMORY_REFUSED = "Пользователь не подтвердил запись в память."
 GONE = "инструмент больше недоступен в этом диалоге — не вызван"
 # шаг паузы, снятой новым сообщением или сроком (`_unanswer`): вопрос и инструмент остаются модели следующих ходов
 UNANSWERED = "пользователь не ответил на карточке — ответ, если есть, в следующем сообщении"
@@ -55,7 +57,6 @@ RESOLVE = "resolved = ?, payload = '', view = ''"
 
 
 class PendingIn(BaseModel):
-    request_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{16,64}$")
     action: Literal["run", "refuse", "answer"]
     answer: str | None = Field(None, max_length=ANSWER_MAX)
 
@@ -107,6 +108,8 @@ def waiting_step(kind: str, view: dict) -> dict:
     if kind == "ask":
         return {"kind": "ask", "question": view["question"], "waiting": True, "text": json.dumps(
             {"question": view["question"], "answer": None, "note": UNANSWERED}, ensure_ascii=False)}
+    if "memory_text" in view:
+        return {"kind": "memory", "action": "save", "waiting": True, "text": MEMORY_REFUSED}
     args = json.dumps(dict(view["arguments"]), ensure_ascii=False)
     return {"kind": "mcp", "server": view["server"], "tool": view["tool"], "waiting": True,
             "text": NOT_RUN.format(view["tool"], args)}
@@ -119,7 +122,8 @@ def _unanswer(message_id: str) -> None:
     steps = json.loads(row["tools"] or "[]") if row is not None else []
     if not any(s.get("waiting") for s in steps):
         return
-    steps = [{k: v for k, v in s.items() if k != "waiting"} | ({"refused": True} if s["kind"] == "mcp" else {})
+    steps = [{k: v for k, v in s.items() if k != "waiting"} |
+             ({"refused": True} if s["kind"] in ("mcp", "memory") else {})
              if s.get("waiting") else s for s in steps]
     state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(steps, ensure_ascii=False), message_id))
 
@@ -150,7 +154,8 @@ def open_views(chat_id: str) -> dict:
             continue
         view = _payload(row, "view")
         if view is not None:
-            out[row["message_id"]] = {"id": row["id"], "kind": row["kind"], **{k: view.get(k) for k in VIEW}}
+            show = {"memory_text": view["memory_text"]} if "memory_text" in view else {k: view.get(k) for k in VIEW}
+            out[row["message_id"]] = {"id": row["id"], "kind": row["kind"], **show}
     return out
 
 
@@ -200,19 +205,28 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     if (conn is None or conn.id != payload["conn_id"] or model != payload["model"] or not conn.proxied
             or conn.cleaner):
         raise _changed()
-    try:
-        connections.token(conn)
-    except upstream.ConnectionChanged:
-        raise _changed() from None
-    except upstream.UpstreamRefused:
-        pass                                         # ключ не расшифровался — скажет запрос к модели
     if conn.shared:
         chat._chat_pair(uid, conn.id, model)
     limit = await chat._limit(conn, model)
+    auth.recheck(request)
     operations.check(uid)
+    if clock.NOW() - pending["created"] > PENDING_TTL_SEC:
+        _expire(pending)
+        raise _gone()
     # без await до COMMIT: второй ответ и новый ход не вклинятся
     state.DB.execute("BEGIN")
     try:
+        fresh = chat._chat_row(uid, chat_id)
+        if (fresh["connection_id"] != row["connection_id"] or fresh["model"] != row["model"]):
+            raise _changed()
+        if conn.shared:
+            chat._chat_pair(uid, conn.id, model)
+        try:
+            connections.token(conn)
+        except upstream.ConnectionChanged:
+            raise _changed() from None
+        except upstream.UpstreamRefused:
+            pass                                     # ключ не расшифровался — скажет запрос к модели
         if state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = ? WHERE id = ? AND resolved IS NULL",
                             (clock.NOW(), body.action, pending_id)).rowcount != 1:
             raise _gone()
@@ -230,8 +244,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
         message = state.DB.execute("SELECT content, reasoning, reasoning_sec FROM messages WHERE id = ?", (mid,)).fetchone()
         user = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND role = 'user'"
                                 " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
-        fresh = state.DB.execute("SELECT web, thinking, mcp_ids, mcp_off FROM chats WHERE id = ?", (chat_id,)).fetchone()
-        kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] else []
+        kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] and not fresh["protected_used"] else []
         try:
             exa_key = web.exa_key(uid) if "search" in kinds else None
         except web.ToolError:
@@ -259,4 +272,6 @@ def resume_step(kind: str, action: str, answer: "str | None", view: dict) -> dic
     """Шаг вызова, на котором стояла пауза, когда его не запускают: отказ подтверждению или ответ на вопрос."""
     if kind == "ask":
         return chat_tools.answer_step(view, action, answer)
+    if "memory_text" in view:
+        return {"kind": "memory", "action": "save", "refused": True, "text": MEMORY_REFUSED}
     return {"kind": "mcp", "server": view["server"], "tool": view["tool"], "refused": True, "text": REFUSED}

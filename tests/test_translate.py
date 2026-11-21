@@ -549,7 +549,7 @@ def test_delete_running_is_refused(studio):
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
     assert studio.c.get(f"/api/translate/{tid}").status_code == 404
     assert row_of(studio, tid)["deleted"] is not None and parts_of(studio, tid)      # в корзине
-    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
     assert row_of(studio, tid) is None and parts_of(studio, tid) == []
 
 
@@ -563,7 +563,7 @@ def test_delete_removes_a_source_file_nothing_else_uses(studio):
     assert studio.c.get(f"/api/translate/{tid}").json()["media_id"] == mid
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
     assert on_loop(studio, media.alive, uid, mid)                       # в корзине — файл на месте
-    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
     assert not on_loop(studio, media.referenced, uid, mid) and not on_loop(studio, media.alive, uid, mid)
 
 
@@ -669,10 +669,17 @@ def test_docx_and_pdf_with_a_layer_are_translated_from_their_text(studio, caplog
     assert "Записка" not in caplog.text and "Договор" not in caplog.text and "Payment" not in caplog.text
     r = send_file(studio, "фото.jpg", b"\xff\xd8\xff")
     assert r.status_code == 415 and r.json()["detail"] == {
-        "code": "format", "message": "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"}
+        "code": "format", "message": "нужен PDF, DOCX, текстовый файл, файл кода или снимок PNG, JPEG, WebP"}
     r = send_file(studio, "Записка.txt", b"Hi", target="xx")
     assert r.status_code == 422 and r.json()["detail"]["code"] == "lang"
     assert count(studio, "media") == 2
+
+
+def test_text_data_and_code_are_accepted_as_translation_input(studio):
+    add_gateway(studio)
+    for name, source in [("data.csv", "name,project\nPat,Studio"), ("script.py", "print('hello')")]:
+        row = wait_row(studio, start_file(studio, name, source.encode()))
+        assert (row["name"], row["source"], row["state"]) == (name, source, "done")
 
 
 def slow_ocr_release(s):
@@ -947,6 +954,30 @@ def test_repeat_reuses_a_recognized_scan(studio, small_pages, monkeypatch):
     assert count(studio, "scans") == 1 and len(studio.gw.ocr_requests) == 1
 
 
+def test_translate_an_existing_scan_keeps_the_original_document(studio, small_pages):
+    add_gateway(studio)
+    file = ("Договор.pdf", scan_pdf("ink"), "application/pdf")
+    uploaded = studio.c.post("/api/ocr", files={"file": file})
+    assert uploaded.status_code == 202, uploaded.text
+    sid = uploaded.json()["id"]
+    wait_until(studio, lambda: not ocr.RUNNERS)
+    assert scan_row(studio, sid)["state"] == "done"
+
+    r = studio.c.post(f"/api/translate/scans/{sid}", json={"source_lang": "en", "target_lang": "de"})
+    assert r.status_code == 202 and r.json()["scan_owned"] is False, r.text
+    tid = r.json()["id"]
+    row = wait_row(studio, tid)
+    assert (row["state"], row["scan_id"], row["target_lang"]) == ("done", sid, "de")
+    assert row["source"] == on_loop(studio, ocr.attachment_text, sid, False)
+    assert len(studio.gw.ocr_requests) == 1 and count(studio, "scans") == 1
+
+    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
+    assert studio.c.get(f"/api/ocr/{sid}").status_code == 200 and count(studio, "media") == 2
+    assert studio.c.delete(f"/api/ocr/{sid}").status_code == 204
+    assert studio.c.post(f"/api/translate/scans/{sid}", json={"source_lang": "en", "target_lang": "de"}).status_code == 404
+
+
 def test_continue_with_a_deleted_connection_says_so(studio, monkeypatch):
     """Ревью M14: не 404 gone — страница приняла бы его за удалённую запись."""
     monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
@@ -1060,7 +1091,7 @@ def test_delete_translation_removes_its_scan(studio, small_pages):
     assert count(studio, "media") == 2                                  # PDF и картинка страницы
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
     assert studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 200 and count(studio, "media") == 2
-    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
     assert scan_row(studio, row["scan_id"]) is None and count(studio, "scan_pages") == 0
     assert count(studio, "media") == 0 and studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 404
 
@@ -1071,11 +1102,11 @@ def test_delete_translation_removes_its_scan(studio, small_pages):
     assert studio.c.post(f"/api/translate/{tid}/cancel").json() == {"state": "cancelling"}
     assert wait_row(studio, tid)["state"] == "cancelled" and scan_row(studio, sid)["state"] == "cancelling"
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
-    r = studio.c.delete(f"/api/trash/translations/{tid}")
+    r = studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"})
     assert r.status_code == 409 and r.json()["detail"]["code"] == "running" and row_of(studio, tid) is not None
     studio.gw.ocr_hold = False
     wait_until(studio, lambda: not ocr.RUNNERS)
-    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
     assert scan_row(studio, sid) is None and count(studio, "media") == 0
 
 
@@ -1091,9 +1122,9 @@ def test_delete_translation_keeps_scan_shared_by_repeat(studio, small_pages):
     uid, mid = on_loop(studio, owner_of_tr, tid), first["source_media_id"]
     for record in (tid, again["id"]):
         assert studio.c.delete(f"/api/translate/{record}").status_code == 204
-    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
     assert scan_row(studio, first["scan_id"]) is not None and on_loop(studio, media.alive, uid, mid)
-    assert studio.c.delete(f"/api/trash/translations/{again['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/translations/{again['id']}", json={"password": "password-123"}).status_code == 204
     assert scan_row(studio, first["scan_id"]) is None and not on_loop(studio, media.alive, uid, mid)
 
 

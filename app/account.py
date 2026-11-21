@@ -38,6 +38,12 @@ from pydantic import BaseModel, Field, StrictBool, field_validator
 import auth
 import bridge
 import clock
+import db
+import email_accounts
+import history
+import images
+import media
+import operations
 import project_access
 import screenlock
 import security
@@ -67,6 +73,49 @@ class SessionLabel(BaseModel):
         if any(unicodedata.category(c).startswith("C") for c in value):
             raise ValueError("имя не должно содержать управляющие символы")
         return value.strip()
+
+
+class DeleteAccount(BaseModel):
+    login: str = Field(max_length=64)
+    password: str = Field(max_length=screenlock.PASSWORD_MAX)
+
+
+def keep_active_admin(uid: int) -> None:
+    if state.DB.execute("SELECT 1 FROM users WHERE id = ? AND is_admin = 1 AND disabled = 0"
+                        " AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1 AND disabled = 0 AND id != ?)",
+                        (uid, uid)).fetchone():
+        raise HTTPException(409, {"code": "last_admin", "message": "Нужен хотя бы один активный администратор."})
+
+
+async def delete_user_data(uid: int) -> int:
+    operations.check(uid)
+    keep_active_admin(uid)
+    with operations.barrier(uid):
+        state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))
+        auth.end_sessions(uid)
+        email_accounts.revoke_invited_by(uid)
+        await bridge.drop_user(uid)
+        await history.delete_all(uid)
+        if not await images.settle_user(uid):
+            log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)
+        pending = media.pending(uid)
+        db.retire_user_id(state.DB, uid)
+        state.DB.execute("DELETE FROM users WHERE id = ?", (uid,))
+    return pending
+
+
+@router.delete("/account")
+async def delete_own_account(body: DeleteAccount, request: Request):
+    uid = request.state.user.id
+    await auth.confirm_password(uid, body.password, "удаление учётки", digest=request.state.digest)
+    row = state.DB.execute("SELECT login FROM users WHERE id = ? AND disabled = 0", (uid,)).fetchone()
+    if row is None or body.login != row["login"]:
+        raise HTTPException(409, {"code": "login", "message": "Введите точный логин учётки."})
+    pending = await delete_user_data(uid)
+    log.info("пользователь %d: учётка удалена, файлов в очереди %d", uid, pending)
+    response = JSONResponse({"pending_files": pending}, headers={"Clear-Site-Data": auth.CLEAR_CACHE})
+    response.delete_cookie(auth.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 def _session_digest(uid: int, sid: str) -> str:
@@ -121,6 +170,18 @@ async def end_session(sid: str, request: Request):
     security_log.record(uid, "session_end", detail=sid, digest=current, ip=auth.client_ip(request))
     log.info("пользователь %d: сессия завершена", uid)
     return Response(status_code=204)
+
+
+@router.delete("/sessions")
+async def end_other_sessions(request: Request):
+    uid, current = request.state.user.id, request.state.digest
+    digests = [row["digest"] for row in state.DB.execute(
+        "DELETE FROM sessions WHERE user_id = ? AND digest != ? RETURNING digest", (uid, current)).fetchall()]
+    _forget(uid, digests)
+    if digests:
+        security_log.record(uid, "sessions_end", digest=current, ip=auth.client_ip(request))
+        log.info("пользователь %d: завершено других сессий %d", uid, len(digests))
+    return {"ended": len(digests)}
 
 
 @router.post("/emergency", status_code=204)

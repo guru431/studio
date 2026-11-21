@@ -224,11 +224,59 @@ def test_retry_reuses_the_account_recording_until_last_attempt_is_deleted(studio
     assert wait_tr(studio, attempt["id"], {"done"})["segments"] == original["segments"]
     assert studio.c.get(f"/api/transcripts/{tid}").json() == original
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
-    assert studio.c.delete(f"/api/trash/transcripts/{tid}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/transcripts/{tid}", json={"password": "password-123"}).status_code == 204
     assert studio.c.get(f"/api/media/{mid}").status_code == 200
     assert studio.c.delete(f"/api/transcripts/{attempt['id']}").status_code == 204
-    assert studio.c.delete(f"/api/trash/transcripts/{attempt['id']}").status_code == 204
+    assert studio.c.request("DELETE", f"/api/trash/transcripts/{attempt['id']}", json={"password": "password-123"}).status_code == 204
     assert studio.c.get(f"/api/media/{mid}").status_code == 404
+
+
+def test_failed_transcript_retry_keeps_one_record_and_its_source(studio, fake_audio):
+    conn = add_gateway(studio)
+    studio.gw.asr_replies = [(400, {"error": "recognition failed"})]
+    tid = upload(studio).json()["id"]
+    failed = wait_tr(studio, tid, {"error"})
+    studio.gw.asr_replies = []
+    retry = studio.c.post(f"/api/transcripts/{tid}/retry",
+                          json={"connection_id": conn, "model": failed["model"], "language": "en"})
+    assert retry.status_code == 202, retry.text
+    assert retry.json()["id"] == tid and retry.json()["source_media_id"] == failed["source_media_id"]
+    done = wait_tr(studio, tid, {"done"})
+    assert done["language"] == "en" and done["connection_id"] == conn
+    assert [item["id"] for item in studio.c.get("/api/transcripts").json()["items"]] == [tid]
+    assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
+    assert studio.c.post(f"/api/transcripts/{tid}/retry", json={}).status_code == 404
+
+
+def test_playback_copy_supports_range_and_retry_after_the_original_is_removed(studio, fake_audio, monkeypatch):
+    tid = done_tr(studio)
+    row = studio.c.get(f"/api/transcripts/{tid}").json()
+    source, listen = row["source_media_id"], row["listen_media_id"]
+    assert source != listen
+    cut = studio.c.get(f"/api/media/{listen}", headers={"Range": "bytes=0-9"})
+    assert cut.status_code == 206 and cut.headers["content-type"].startswith("audio/mpeg")
+    endpoint = f"/api/transcripts/{tid}/source"
+    uid = state.DB.execute("SELECT user_id FROM transcripts WHERE id = ?", (tid,)).fetchone()[0]
+    path = media.path(uid, listen)
+    stat = pathlib.Path.stat
+
+    def missing_copy(file, *args, **kwargs):
+        if file == path:
+            raise FileNotFoundError
+        return stat(file, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pathlib.Path, "stat", missing_copy)
+        assert studio.c.delete(endpoint).status_code == 404
+    assert studio.c.get(f"/api/media/{source}").status_code == 200
+    assert studio.c.delete(endpoint).status_code == 204
+    assert studio.c.get(f"/api/media/{source}").status_code == 404
+    assert studio.c.get(f"/api/media/{listen}").status_code == 200
+    assert studio.c.get(f"/api/transcripts/{tid}").json()["segments"] == row["segments"]
+    retry = studio.c.post(f"/api/transcripts/{tid}/retry", json={}).json()
+    retried = wait_tr(studio, retry["id"], {"done"})
+    assert retried["source_media_id"] == retried["listen_media_id"] == listen
+    assert fake_audio.calls.count(("compress",)) == 1
 
 
 def test_too_big_or_unknown_upload_leaves_nothing(studio, env, fake_audio, monkeypatch):
@@ -434,6 +482,26 @@ def test_speakers_count_the_shown_names(studio, fake_audio):
     assert studio.c.get("/api/transcripts").json()["items"][0]["speakers"] == 1
 
 
+def test_speaker_reassignment_updates_export_and_attachment_without_touching_recognition(studio, fake_audio):
+    tid = done_tr(studio)
+    before = result_file(tid).read_bytes()
+    assert edit(studio, tid, speakers={"2": "Собеседник 1"}).status_code == 422
+    assert edit(studio, tid, speakers={"1": "Собеседник 4"}).status_code == 422
+    response = edit(studio, tid, speakers={"1": "Собеседник 1"}, names={"Собеседник 1": "Иван"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["speakers"] == 1 and body["edited"]
+    second = body["segments"][1]
+    assert (second["speaker"], second["original_label"], second["edited"]) == ("Иван", "Собеседник 2", False)
+    assert studio.c.get("/api/transcripts").json()["items"][0]["speakers"] == 1
+    assert "Иван: Добрый день." in studio.c.get(f"/api/transcripts/{tid}/export?format=srt").text
+    attachment = studio.c.post(f"/api/transcripts/{tid}/attachments")
+    assert attachment.status_code == 201 and attachment.json()["text"].count("Иван ·") == 2
+    assert result_file(tid).read_bytes() == before
+    restored = edit(studio, tid, speakers={"1": "Собеседник 2"})
+    assert restored.json()["speakers"] == 2 and "original_label" not in restored.json()["segments"][1]
+
+
 def test_edit_is_checked_in_words(studio, fake_audio):
     tid = done_tr(studio)
     for body in ({"texts": {"2": "x"}}, {"texts": {"-1": "x"}}, {"texts": {"a": "x"}}, {"texts": {"0": "   "}},
@@ -526,9 +594,9 @@ def test_delete_takes_the_recording_and_the_result(studio, env, fake_audio):
     add_gateway(studio)
     tid = upload(studio).json()["id"]
     wait_tr(studio, tid, {"done"})
-    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 2
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 3
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
     assert studio.c.get(f"/api/transcripts/{tid}").status_code == 404
-    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 2      # в корзине — файлы на месте
-    assert studio.c.delete(f"/api/trash/transcripts/{tid}").status_code == 204
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 3      # в корзине — файлы на месте
+    assert studio.c.request("DELETE", f"/api/trash/transcripts/{tid}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0

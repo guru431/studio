@@ -3416,7 +3416,10 @@ def test_photo_selection_on_iphone_cancel_of_files_ready_keeps_the_picked(browse
 def test_photo_selection_on_iphone_skips_a_file_gone_in_another_tab(browser, live):
     live.add_user("iosgone")
     gone = ("eval", "gone", f"""(async () => {{ const id = document.querySelector('{nth(1)}').dataset.id;
-      await {API}.api('DELETE', '/api/images/' + id); return id; }})()""")
+      const m = {API};
+      await m.api('DELETE', '/api/images/' + id);
+      await m.api('POST', '/api/trash/empty', {{ password: 'password-123' }});
+      return id; }})()""")
     r = browser.drive(live.url + "/", [*photo_screen("iosgone", cards=3), ("wait", done_cards(3)), iphone(),
         ("eval", "spy", CLICKS), ("click", "#photo-select"), ("click", "#photo-select-all"), gone,
         ("click", "#photo-select-download"), ("wait", "window.shared.length === 1"), ("wait", f"!{selecting()}"),
@@ -4820,17 +4823,25 @@ def test_transcribe_edits_names_seeks_and_exports(browser, live, width):
         ("click", ".tr-turn[data-index='1'] .tr-text"),
         ("wait", "Math.abs(document.querySelector('audio.tr-audio').currentTime - 3) < 0.3"),
         ("wait", "document.querySelector('.tr-turn[aria-current=true]')?.dataset.index === '1'"),
+        ("click", "#tr-edit"), set_value(".tr-turn[data-index='1'] .tr-turn-speaker", "Собеседник 1"),
+        ("click", "#tr-save"), ("wait", "!document.querySelector('.tr-turn-speaker')"),
+        ("eval", "reassigned", "document.querySelector(\".tr-turn[data-index='1'] .tr-who\").textContent"),
         ("click", "#tr-reset"), ("wait", is_open("#tr-reset-dialog")), ("click", "#tr-reset-confirm"),
         ("wait", "!document.querySelector('#tr-reset')"),
         ("eval", "after", TR_TEXTS),
-        ("eval", "who_after", "document.querySelector('.tr-view .tr-who').textContent")],
+        ("eval", "who_after", "document.querySelector('.tr-view .tr-who').textContent"),
+        ("click", "#tr-source-delete"), ("wait", is_open("#tr-source-dialog")),
+        ("click", "#tr-source-confirm"), ("wait", "!document.querySelector('#tr-source-delete')"),
+        ("eval", "afterDrop", TR_TEXTS)],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["marked"] is True and v["fits"] is True
     assert v["who"] == ["Иван · 00:00", "Собеседник 2 · 00:03"] and v["texts"] == ["Здравствуйте.", "Добрый вечер."]
     assert v["txt"] == "Иван · 00:00\nЗдравствуйте.\n\nСобеседник 2 · 00:03\nДобрый вечер.\n"
+    assert v["reassigned"] == "Иван · 00:03"
     assert v["after"] == ["Здравствуйте.", "Добрый день."] and v["who_after"] == "Собеседник 1 · 00:00"
+    assert v["afterDrop"] == ["Здравствуйте.", "Добрый день."]
     assert not problems(r), problems(r)
 
 
@@ -5805,6 +5816,22 @@ def test_lock_settings_add_list_and_remove_a_key(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_desktop_platform_key_enrollment(browser, live):
+    login = "lock-desktop-key"
+    live.add_user(login)
+    init = """PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => true;
+      Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Windows NT 10.0)' });"""
+    result = browser.drive(live.url + "/", [*lock_settings(login),
+        ("wait", "!document.querySelector('#passkey-controls').hidden"),
+        ("click", "#lock-enabled"), server_lock_is(True),
+        ("type", "#passkey-password", "password-123"), ("click", "#passkey-next"),
+        ("wait", "!document.querySelector('#passkey-add').hidden"), ("click", "#passkey-add"),
+        ("wait", "document.querySelector('#passkeys .passkey b')?.textContent === 'Windows'")],
+        init=init, authenticator=True)
+    assert not result.get("failed"), result
+    assert not problems(result), problems(result)
+
+
 def test_lock_settings_add_a_key_in_english(browser, live):
     """Название ключа — код screenlock.NAMES: по-английски сенсорный не-телефон шлёт «Устройство», показ — «Device»."""
     login = "lockeng"
@@ -5817,7 +5844,7 @@ def test_lock_settings_add_a_key_in_english(browser, live):
         ("eval", "name", "document.querySelector('#passkeys .passkey b').textContent")],
         init="localStorage.setItem('studio-language', 'en')", **PHONE)
     assert not r.get("failed"), r
-    assert r["values"]["name"] in ("iPhone", "iPad", "Android", "Device"), r["values"]
+    assert r["values"]["name"] in ("iPhone", "iPad", "Android", "Windows", "Mac", "Device"), r["values"]
     assert not problems(r), problems(r)
 
 
@@ -5921,6 +5948,24 @@ LOCK_OPEN = "!!document.querySelector('#lock')?.open"
 CURTAIN_OPEN = "!!document.querySelector('#curtain')?.open"
 ME_STATUS = "fetch('/api/me').then(r => r.status)"
 PASSKEY_READY = "document.querySelector('#lock-open').dataset.ready === '1'"
+
+
+@pytest.mark.parametrize("shortcut", [False, True])
+def test_manual_lock_from_menu_and_shortcut(browser, live, shortcut):
+    login = f"manual-lock-{int(shortcut)}"
+    live.add_user(login)
+    lock = [("eval", "shortcut", """document.body.dispatchEvent(new KeyboardEvent('keydown',
+        {code: 'KeyL', bubbles: true, cancelable: true, altKey: true, ctrlKey: /Mac|iPhone|iPad/.test(navigator.platform)}))""")]
+    if not shortcut:
+        lock = [("click", "#avatar"), ("wait", "!document.querySelector('#menu-lock').hidden"),
+                ("click", "#menu-lock")]
+    result = browser.drive(live.url + "/", [*lock_settings(login),
+        ("eval", "disabled", "document.querySelector('#menu-lock').hidden"),
+        ("click", "#lock-enabled"), server_lock_is(True), *lock, ("wait", LOCK_OPEN),
+        ("wait", "fetch('/api/lock').then(r => r.json()).then(s => s.locked)")])
+    assert not result.get("failed"), result
+    assert result["values"]["disabled"] is True
+    assert not known_refusals(problems(result), 423), problems(result)
 
 
 def visibility_js(state):
@@ -6849,6 +6894,23 @@ def test_jobs_panel_shows_ready_and_opens_the_record(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_jobs_panel_shows_overnight_result_since_last_visit(browser, live):
+    login = "jobs-overnight"
+    uid = live.add_user(login)
+    finished = time.time() - 7200
+    live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created, finished)"
+                   " VALUES ('overnight', ?, 'generation', 'snofs', 'test', '832x1216', 1, 'done', '', ?, ?)",
+             (uid, finished - 30, finished))
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+        ("wait", "document.querySelector('#jobs').dataset.new === '1'"), ("click", "#jobs"),
+        ("wait", "document.querySelector('#jobs-finished .jobs-row[data-section=photo]')"),
+        ("eval", "title", "document.getElementById('jobs-finished-title').textContent")],
+        init="localStorage.setItem('studio-jobs-seen', String(Date.now() / 1000 - 10000))")
+    assert not result.get("failed"), result
+    assert result["values"]["title"] == "Готово с прошлого просмотра"
+    assert not problems(result), problems(result)
+
+
 def test_jobs_open_selects_records_in_every_section(browser, live):
     """#/<раздел>?id=<запись>: расшифровка, распознавание и озвучка выбраны в списке, карточка ролика
     подсвечена; ?id из адреса убран. Записи готовы за час — они же в «Готово за час»."""
@@ -7171,6 +7233,7 @@ def test_search_finds_a_word_filters_by_section_and_opens_the_record(browser, li
         ("eval", "current", "document.querySelector('#search-open').getAttribute('aria-current')"),
         ("eval", "idle", "document.querySelector('#search-status').textContent"),
         ("type", "#search-q", "кот"), ("wait", search_ready(2)),
+        ("wait", "document.querySelector('.search-row[data-section=photo] .search-thumb')?.naturalWidth > 0"),
         ("eval", "rows", SEARCH_ROWS), ("eval", "hash", "location.hash"),
         ("wait", "document.querySelectorAll('#search-model option').length === 3"),
         ("eval", "labels", "[[...document.querySelectorAll('#search-results .search-meta')].map((m) => m.textContent.split(' · ')[0]),"
@@ -8576,6 +8639,45 @@ def test_code_empty_offers_agent_download(browser, live):
     assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
+
+
+def test_code_panel_offers_installers_when_a_computer_is_already_enrolled(browser, live):
+    login = "code-add-agent"
+    live.add_user(login)
+    enroll_live(live, login, "Первый компьютер")
+    selector = "#code-add-agent-dialog[open]"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+        ("wait", "document.querySelector('#code-agents li[data-id]')"), ("click", "#code-add-agent"),
+        ("wait", f"document.querySelector('{selector}')"),
+        ("eval", "links", f"[...document.querySelectorAll('{selector} a[download]')].map(a => a.download)"),
+        ("click", f"{selector} .agent-download button"),
+        ("wait", f"document.querySelector('{selector} code')?.textContent.includes('curl -fsS')")])
+    assert not r.get("failed"), r
+    assert r["values"]["links"] == ["studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh"]
+    assert not problems(r), problems(r)
+
+
+def test_code_project_pin_is_shared_across_browser_sessions(browser, live):
+    from fake_bridge import pid
+
+    login = "code-project-pin"
+    live.add_user(login)
+    _, sb = code_online(live, login, code_three())
+    beta = f'#code-projects [data-pid="{pid("beta")}"] .code-project-pin'
+    first = "document.querySelector('#code-projects li .code-project-name')?.textContent"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", f"{first} === 'alpha'"), ("click", beta), ("wait", f"{first} === 'beta'"),
+            ("eval", "sort", """(() => { const s = document.querySelector('#code-project-sort');
+             s.value = 'modified'; s.dispatchEvent(new Event('change')); return s.value; })()"""),
+            ("eval", "first", first), ("eval", "out", "fetch('/logout', { method: 'POST' }).then(r => r.ok)")])
+        again = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", f"{first} === 'beta'"), ("click", beta), ("wait", f"{first} === 'alpha'")])
+    finally:
+        sb.stop()
+    assert not r.get("failed") and not again.get("failed"), (r, again)
+    assert r["values"]["first"] == "beta" and r["values"]["out"] is True
+    assert not known_refusals([*problems(r), *problems(again)], 409), (problems(r), problems(again))
 
 
 def test_code_panel_keeps_computers_while_projects_scroll(browser, live):
@@ -10893,6 +10995,33 @@ def test_code_git_panel(browser, live):
     assert v["beta"] == "Не репозиторий git"
     assert {q["project"] for q in code_requests(machine, "git")} == {pid("alpha"), pid("beta"), pid("gamma")}
     assert not known_refusals(problems(r), 409), problems(r)
+
+
+def test_code_git_compares_the_selected_file_and_opens_it(browser, live):
+    from fake_bridge import FakeMachine
+
+    login, path = "code-git-compare", "src/app.py"
+    live.add_user(login)
+    comparison = {"before": "print('before')\n", "after": "print('after')\n", "exists": True}
+    machine = FakeMachine(projects={"alpha": {"files": {path: comparison["after"].encode()},
+        "git": {"branch": "main", "files": [{"path": path, "status": "M"}]},
+        "git_comparisons": {path: comparison}}})
+    machine.git_compare = True
+    aid, sb = code_online(live, login, machine)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "git"),
+            ("click", "#code-git button.code-git-path"),
+            ("wait", "document.querySelector('#code-git-compare .code-change-line.removed')"),
+            ("eval", "diff", "['removed', 'added'].map(kind => document.querySelector("
+                             "`#code-git-compare .code-change-line.${kind} .code-change-code`).textContent)"),
+            ("click", "#code-git-open-file"),
+            ("wait", "document.querySelector('#code-editor')?.value === \"print('after')\\n\"" )])
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["diff"] == ["print('before')", "print('after')"]
+    assert [q["path"] for q in code_requests(machine, "git_compare")] == [path]
+    assert not problems(r), problems(r)
 
 
 def test_git_hides_zero_ahead_behind(browser, live):

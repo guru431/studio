@@ -1108,10 +1108,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     activity.dataset.state = state;
     activityText.textContent = text;
     activity.title = text;
+    const running = ['thinking', 'responding', 'tool', 'waiting'].includes(state);
     document.dispatchEvent(new CustomEvent('studio-code-activity', { detail: { aid: Number(aid), pid, chat,
       engine, ...(title ? { title } : {}),
-      running: ['thinking', 'responding', 'tool', 'waiting'].includes(state), asking: state === 'waiting',
+      running, asking: state === 'waiting', ...(!running ? { queue_paused: false } : {}),
       ...(completed ? { attention: completed, unread: true } : {}) } }));
+  }
+
+  function publishQueue(paused) {
+    document.dispatchEvent(new CustomEvent('studio-code-activity', { detail: { aid: Number(aid), pid, chat,
+      engine, ...(title ? { title } : {}), running: true, queue_paused: paused } }));
   }
 
   function continueActivity() {
@@ -1325,7 +1331,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         if (data.activity) paintActivity(data.activity.state, data.activity.tool);
         else continueActivity();
         for (const item of Array.isArray(data.followups) ? data.followups : []) showFollowup(item);
-        if (agent?.queue_edit) queue.update(data.queue || [], data.queue_paused === true);
+        if (agent?.queue_edit) {
+          queue.update(data.queue || [], data.queue_paused === true);
+          publishQueue(data.queue_paused === true && !!data.queue?.length);
+        }
         updateControls();
         return false;
       }
@@ -1348,6 +1357,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         return false;
       case 'queue':
         queue.update(data.items, data.paused === true);
+        publishQueue(data.paused === true && !!data.items?.length);
         updateControls();
         for (const item of data.items || []) {
           const node = followups.get(item.id);

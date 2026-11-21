@@ -23,7 +23,8 @@ async def session_activity(request: Request, aid: int, data: dict, *, passive: b
         if (isinstance(item, dict) and isinstance(item.get("project"), str)
                 and bridge.PID.fullmatch(item["project"]) and isinstance(item.get("chat"), str)
                 and bridge.UUID.fullmatch(item["chat"]) and (item.get("running") or item.get("asking"))):
-            items[item["chat"]] = {**item, "running": True, "title": None}
+            clean = {k: v for k, v in item.items() if k != "queue_paused" or v is True}
+            items[item["chat"]] = {**clean, "running": True, "title": None}
     since = None if allowed is None else {r[0]: r[1] for r in state.DB.execute(
         "SELECT project, created FROM project_members WHERE agent_id = ? AND user_id = ?",
         (aid, request.state.user.id)) if r[0] in allowed}

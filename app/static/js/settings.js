@@ -29,7 +29,7 @@ import { language, locale, message, tr } from './i18n.js';
  * settingsView — и для панели администратора (базы API — /api/admin/users/<id>/…, разделы
  * переключаются на месте, из «Учётки» — только «Голосовой ввод»; личных настроек, голосов и прямого списка моделей нет). На телефоне без раздела
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
-import { api, loadMe, me } from './api.js';
+import { api, loadMe, me, toLogin } from './api.js';
 import { emailBlock } from './email-settings.js';
 import { accessBlock, emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
 import { accountLookBlock, deviceLookBlock } from './appearance.js';
@@ -529,15 +529,15 @@ function lockBlock() {
     }
   }
 
-  const adding = [];
-  if (isTouch()) {
+  function passkeyControls() {
+    const touch = isTouch();
     const password = el('input', { class: 'input', id: 'passkey-password', type: 'password',
       autocomplete: 'current-password', maxlength: '1024' });
     const next = button(tr("Далее"), { class: 'btn', id: 'passkey-next' });
     const ask = el('div', {}, field(tr("Пароль учётки — чтобы добавить ключ этого устройства"), password, 'passkey'),
       el('div', { class: 'row' }, next));
-    const create = button(tr("Добавить Face ID / отпечаток этого устройства"), { class: 'btn btn-accent', id: 'passkey-add',
-      hidden: true });
+    const create = button(touch ? tr("Добавить Face ID / отпечаток этого устройства") : tr("Добавить ключ этого устройства"),
+      { class: 'btn btn-accent', id: 'passkey-add', hidden: true });
     let options = null;
     let optionsAt = 0;
     let stale = null;
@@ -593,7 +593,10 @@ function lockBlock() {
       }
       reload();
     });
-    adding.push(ask, el('div', { class: 'row' }, create));
+    const controls = el('div', { id: 'passkey-controls', hidden: !touch }, ask, el('div', { class: 'row' }, create));
+    if (!touch) globalThis.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.()
+      .then(available => { controls.hidden = !available; }).catch(() => {});
+    return controls;
   }
 
   reload();
@@ -605,7 +608,7 @@ function lockBlock() {
     field(tr("Запрашивать после бездействия"), timer.node, 'lock-period'),
     el('p', { class: 'muted small' }, tr("0 — при каждом возвращении в приложение. Максимум — 24 часа.")),
     passwordBox, el('div', { class: 'row' }, save), offBox,
-    el('div', { class: 'row pin-row' }, pinState, pinSet, pinRemove), pinForm, list, ...adding, note);
+    el('div', { class: 'row pin-row' }, pinState, pinSet, pinRemove), pinForm, list, passkeyControls(), note);
 }
 
 /* «Хранилище»: свои файлы по видам (из базы: размер оригиналов, без миниатюр), итог и очередь удаления —
@@ -1141,6 +1144,64 @@ function wipeWhat() {
     + tr("Codex и OpenCode хранятся на компьютерах и останутся.");
 }
 
+function accountNameBlock() {
+  const input = el('input', { class: 'input', id: 'profile-name', maxlength: '64', value: me.name, required: true,
+    autocomplete: 'name' });
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'profile-name-save', type: 'submit' });
+  const note = el('p', { class: 'status', role: 'status' });
+  const form = el('form', {}, field(tr("Имя"), input, input.id), el('div', { class: 'row' }, save), note);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (save.disabled) return;
+    save.disabled = true;
+    try {
+      await api('PATCH', '/api/me', { name: input.value });
+      await loadMe();
+      input.value = me.name;
+      document.dispatchEvent(new Event('studio-me'));
+      say(note, tr("Имя сохранено"), 'ok');
+    } catch (err) {
+      say(note, words(err), 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return el('section', { class: 'block' }, el('h2', {}, tr("Имя в Студии")), form);
+}
+
+function deleteAccountBlock(host) {
+  const start = button(tr("Удалить учётку"), { class: 'btn btn-danger', id: 'delete-own-account' }, () => {
+    const login = el('input', { class: 'input', id: 'delete-account-login', autocomplete: 'off', spellcheck: 'false' });
+    const password = el('input', { class: 'input', id: 'delete-account-password', type: 'password',
+      autocomplete: 'current-password', maxlength: '1024' });
+    const fail = el('p', { class: 'error', role: 'status' });
+    const confirm = button(tr("Удалить учётку"), { class: 'btn btn-danger solid', id: 'delete-account-confirm',
+      disabled: true });
+    openDialog(host, { id: 'delete-account-dialog', title: tr("Удалить учётку?"), actions: [confirm], body: [
+      el('p', {}, tr("Учётка, её подключения и история будут удалены. Для подтверждения введите {0} и пароль.", me.login)),
+      field(tr("Логин"), login, login.id), field(tr("Пароль учётки"), password, password.id), fail] });
+    let sending = false;
+    const sync = () => { confirm.disabled = sending || login.value !== me.login || !password.value; };
+    login.addEventListener('input', sync);
+    password.addEventListener('input', sync);
+    confirm.addEventListener('click', async () => {
+      if (confirm.disabled) return;
+      sending = true;
+      sync();
+      try {
+        await api('DELETE', '/api/me/account', { login: login.value, password: password.value });
+        password.value = '';
+        toLogin();
+      } catch (err) {
+        fail.textContent = words(err);
+        sending = false;
+        sync();
+      }
+    });
+  });
+  return el('section', { class: 'block' }, el('h2', {}, tr("Учётка")), start);
+}
+
 function wipeBlock(host, onWiped) {
   const note = status('wipe-status');
   const start = button(tr("Удалить всю историю"), { class: 'btn btn-danger', id: 'history-wipe' }, () => {
@@ -1662,7 +1723,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'appearance') {
-      group('appearance', accountLookBlock(), deviceLookBlock(), mobileNavBlock(), timezoneBlock(() => {}));
+      group('appearance', accountNameBlock(), accountLookBlock(), deviceLookBlock(), mobileNavBlock(), timezoneBlock(() => {}));
       return;
     }
     if (shown === 'security') {
@@ -1676,7 +1737,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
     if (shown === 'data') {
       const storage = storageBlock(host);
-      group('data', storage.el, wipeBlock(host, storage.reload));
+      group('data', storage.el, wipeBlock(host, storage.reload), deleteAccountBlock(host));
       return;
     }
     const s = sectionOf(shown);

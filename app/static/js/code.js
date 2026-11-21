@@ -106,6 +106,13 @@ document.addEventListener('studio-code-draft', ({ detail }) => {
   else draftKeys.delete(detail.key);
   if (proj && detail.key.startsWith(`${proj.aid}/`)) paintTabs();
 });
+document.addEventListener('studio-code-snapshot', ({ detail }) => {
+  if (proj && Number(proj.aid) === detail.aid) {
+    proj.queuePaused = new Set(detail.items.filter((item) => item.project === proj.pid && item.queue_paused)
+      .map((item) => item.chat));
+    paintTabs();
+  }
+});
 let wantSearch = false; // Ctrl+K: экран новой вкладки ставит фокус в поиск сессий
 
 function cacheKey(p) {
@@ -355,7 +362,9 @@ function paintTabs() {
   if (shownChat && !tabs.includes(shownChat)) tabs.push(shownChat);
   // Компьютер не на связи — ряд остаётся с точкой «не на связи»; неизвестный компьютер — ряда нет.
   ui.tabsHost.hidden = (blocked === String(p.aid) && !p.offline) || !tabs.length;
-  p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info: p.info, loaded: p.loaded,
+  const info = p.queuePaused ? new Map([...p.info].map(([chat, item]) => [chat, { ...item, queue_paused: p.queuePaused.has(chat) }]))
+    : p.info;
+  p.bar.show({ tabs, active: shownKey === 'chat' ? shownChat : null, info, loaded: p.loaded,
     choosing: shownKey === 'chat' && !shownChat, offline: !!p.offline,
     drafts: new Set(tabs.filter((chat) => draftKeys.has(`${p.aid}/${chat}`))) });
   p.gitActions?.controls();
@@ -832,6 +841,11 @@ async function git(p) {
     if (proj !== p || shownKey !== 'git') return;
     if (p.git) p.git.unmount();
     p.git = gitView(p.gitBox, { git: p.repo,
+      compare: (path) => api('POST', `${base(p.aid, p.pid)}/git/compare`, { path }),
+      openFile(path) {
+        wantFile = path;
+        ctx.navigate(`code/${p.aid}/${p.pid}?tab=files`);
+      },
       failed: (err, box) => {
         if (proj === p) failed(err, p.aid, box);
       } });

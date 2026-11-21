@@ -4,9 +4,11 @@
 
 Микрофон и MediaRecorder — поддельные (сценарий до скриптов каждой страницы): рекордер отдаёт куски WAV на 6 с по
 2000 байт каждые 300 мс, на stop — остаток; склеенные куски — целый WAV, и сервер принимает запись."""
+import httpx
 import pytest
 
 from test_ui_browser import NO_OVERFLOW, READY, add_gateway, browser, go, live, problems, signin  # noqa: F401
+from test_ui_chat_focus import focus_browser  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -149,6 +151,36 @@ def test_cancel_erases_the_recording_after_a_question(browser, live):
     assert r["values"] == {**r["values"], "restore": True, "stopped": 1}, r["values"]
     assert "POST /api/transcripts" not in r["sent"], r["sent"]
     assert not problems(r), problems(r)
+
+
+def test_another_tab_cannot_recover_or_delete_an_active_recording(focus_browser, live):
+    login = f"recshared-{focus_browser.browser_type.name}"
+    live.add_user(login)
+    signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
+    assert signed.status_code == 303
+    cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
+    with focus_browser.new_context(extra_http_headers={"Cookie": cookie}) as context:
+        if focus_browser.browser_type.name == "firefox":
+            context.add_cookies([{"name": key, "value": value, "url": live.url, "secure": True,
+                                  "httpOnly": True, "sameSite": "Lax"} for key, value in signed.cookies.items()])
+        context.add_init_script(FAKE_RECORDER)
+        first = context.new_page()
+        first.goto(live.url + "/f")
+        if not first.evaluate("() => !!navigator.locks && !!navigator.mediaDevices"):
+            pytest.skip("нет Web Locks или микрофона на HTTP localhost")
+        rid = first.evaluate(f"async () => (await {RECORDER}.startMeeting()).id")
+        first.wait_for_function(f"async () => (await {PENDING}).length === 1")
+        second = context.new_page()
+        second.goto(live.url + "/#/transcribe")
+        second.locator("#rec-restore-bar").wait_for(state="attached")
+        assert second.evaluate(f"async () => await {RECORDER}.pendingRecordings({{ inactiveOnly: true }})") == []
+        assert second.evaluate(f"""async () => {{
+          try {{ await {RECORDER}.discard({rid!r}); return false; }} catch {{ return true; }}
+        }}""")
+        assert not second.locator('.rec-restore').count()
+        first.close()
+        second.reload()
+        second.locator(f'.rec-restore[data-id="{rid}"]').wait_for()
 
 
 @pytest.mark.parametrize("width", [320, 1280])

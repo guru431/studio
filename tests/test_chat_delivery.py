@@ -50,7 +50,7 @@ def test_old_acknowledgement_cannot_regenerate_a_deleted_answer(studio):
     assert response.json()['detail']['code'] == 'request_gone'
     assert len(studio.gw.chat_requests) == 2
     assert studio.c.delete(f'/api/chats/{cid}').status_code == 204
-    assert studio.c.delete(f'/api/trash/chats/{cid}').status_code == 204     # окончательно — с отметками ходов
+    assert studio.c.request("DELETE", f'/api/trash/chats/{cid}', json={"password": "password-123"}).status_code == 204     # окончательно — с отметками ходов
     assert state.DB.execute('SELECT count(*) FROM chat_turn_requests').fetchone()[0] == 0
 
 
@@ -71,3 +71,46 @@ def test_retry_while_stream_runs_keeps_its_original_reader_and_attachment(studio
         assert list(events)[-1][0] == 'done'
     assert len(studio.gw.chat_requests) == 1
     assert messages(studio, cid)[0]['attachments'][0]['id'] == attachment['id']
+
+
+def test_edit_turn_replaces_suffix_atomically_and_preserves_attachment(studio, monkeypatch):
+    add_gateway(studio)
+    cid = new_chat(studio)
+    keep = attach(studio, "keep.txt", b"original attachment")
+    first = sse(turn(studio, cid, "Before", attachment_ids=[keep["id"]]))[0][1]
+    second = sse(turn(studio, cid, "Later"))[0][1]
+    original = messages(studio, cid)
+    target = {"id": first["user_message_id"], "last_id": second["assistant_message_id"]}
+    stale = turn(studio, cid, text="Edit", edit={**target, "last_id": first["assistant_message_id"]})
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "edit_stale"
+    assert messages(studio, cid) == original
+
+    with monkeypatch.context() as patch:
+        patch.setitem(chat.CONTEXT, "local-gemma-abl", 1)
+        too_large = turn(studio, cid, text="Edit", edit=target)
+        assert too_large.status_code == 413
+    assert messages(studio, cid) == original
+    accepted = sse(turn(studio, cid, text="Edit", request_id=KEY, edit=target))[0][1]
+    assert accepted["user_message_id"] == target["id"]
+    edited = messages(studio, cid)
+    assert len(edited) == 2 and edited[0]["content"] == "Edit"
+    assert [a["id"] for a in edited[0]["attachments"]] == [keep["id"]]
+    request = studio.gw.chat_requests[-1]["messages"][-1]["content"]
+    assert "original attachment" in request and "Edit" in request and "Later" not in request
+    replay = turn(studio, cid, text="Edit", request_id=KEY, edit=target)
+    assert replay.json() == {"replayed": True, **accepted}
+
+
+def test_delete_turn_leaves_subsequent_history_and_wont_delete_an_assistant_alone(studio):
+    add_gateway(studio)
+    cid = new_chat(studio)
+    first = sse(turn(studio, cid, "First", request_id=KEY))[0][1]
+    second = sse(turn(studio, cid, "Second"))[0][1]
+    path = f"/api/chats/{cid}/turns/"
+    assert studio.c.delete(path + first["assistant_message_id"]).status_code == 404
+    assert studio.c.delete(path + first["user_message_id"]).status_code == 204
+    assert [m["id"] for m in messages(studio, cid)] == list(second.values())
+    assert studio.c.get(path + KEY).json()["detail"]["code"] == "request_gone"
+    make_user(studio, "outsider")
+    signin(studio, "outsider")
+    assert studio.c.delete(path + second["user_message_id"]).status_code == 404

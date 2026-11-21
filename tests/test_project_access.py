@@ -64,6 +64,10 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
         assert studio.c.request(method, f'/api/code/agents/{aid}' + suffix).status_code == 404
     assert len(machine.requests) == before
     assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}
+    compare = url(aid, "projects", ALPHA, "git", "compare")
+    before_compare = len(machine.requests)
+    assert studio.c.post(compare, json={"path": "a.txt"}).status_code == 404
+    assert len(machine.requests) == before_compare
     original = machine.handle
 
     def leaky(req):  # мост, забывший убрать путь владельца: сервер не передаёт его участнику сам

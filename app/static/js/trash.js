@@ -1,7 +1,7 @@
 import { tr } from './i18n.js';
 /* «Корзина» (#/trash, меню аватара): удалённые записи всех разделов (GET /api/trash, trash.py) по разделам в порядке
  * рельса. «Вернуть» — POST /api/trash/<вид>/<id>/restore; «Удалить навсегда» — DELETE той же записи после окна
- * подтверждения; «Очистить корзину» — POST /api/trash/empty с паролем учётки в окне подтверждения (паузы — как у
+ * с паролем учётки; «Очистить корзину» — POST /api/trash/empty (паузы в обоих случаях — как у
  * выключения блокировки). Сервер прячет разделы, закрытые блокировкой; действия при запертом разделе — 423 словами. */
 import { api } from './api.js';
 import { SECTIONS, sectionName } from './sections-meta.js';
@@ -37,6 +37,7 @@ export function mount(view) {
 
   function row(item) {
     const path = `/api/trash/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}`;
+    const title = item.title_default ? tr(item.title) : item.title;
     const actions = el('div', { class: 'session-actions' });
     const act = async (method, url, done) => {
       for (const b of actions.querySelectorAll('button')) b.disabled = true;
@@ -52,23 +53,21 @@ export function mount(view) {
       }
     };
     actions.append(
-      button(tr("Вернуть"), { class: 'btn btn-sm trash-restore', 'aria-label': tr("Вернуть: {0}", item.title) },
-        () => act('POST', `${path}/restore`, tr("Возвращено: {0}", item.title))),
+      button(tr("Вернуть"), { class: 'btn btn-sm trash-restore', 'aria-label': tr("Вернуть: {0}", title) },
+        () => act('POST', `${path}/restore`, tr("Возвращено: {0}", title))),
       button(tr("Удалить навсегда"), { class: 'btn btn-sm btn-danger trash-forever',
-        'aria-label': tr("Удалить навсегда: {0}", item.title) }, () => {
-        const yes = button(tr("Удалить навсегда"), { class: 'btn btn-danger solid', id: 'trash-forever-confirm' });
-        const dialog = openDialog(host, { id: 'trash-forever-dialog', title: tr("Удалить навсегда?"), actions: [yes],
-          body: [el('p', { class: 'trash-forever-title' }, item.title),
-            el('p', {}, tr("Запись и её файлы удалятся сразу. Отменить нельзя."))] });
-        yes.addEventListener('click', () => {
-          dialog.close();
-          act('DELETE', path, tr("Удалено навсегда: {0}", item.title));
+        'aria-label': tr("Удалить навсегда: {0}", title) }, () => {
+        passwordDialog('forever', tr("Удалить навсегда?"), tr("Удалить навсегда"),
+          [el('p', { class: 'trash-forever-title' }, title),
+            el('p', {}, tr("Запись и её файлы удалятся сразу. Отменить нельзя."))], async (password) => {
+          await api('DELETE', path, { password }, { signal });
+          say(tr("Удалено навсегда: {0}", title), 'ok');
         });
       }));
     const facts = [KIND_TAGS[item.kind], tr("удалено {0}", moment(item.deleted)),
       tr("удалится {0}", moment(item.deleted + TRASH_DAYS * 86400)), item.bytes ? sizeText(item.bytes) : null];
     return el('li', { class: 'agent session trash-item', 'data-kind': item.kind, 'data-id': item.id },
-      el('div', { class: 'session-info' }, el('b', {}, item.title),
+      el('div', { class: 'session-info' }, el('b', {}, title),
         el('p', { class: 'muted small' }, facts.filter(Boolean).join(' · '))), actions);
   }
 
@@ -90,15 +89,25 @@ export function mount(view) {
   }
 
   function emptyDialog() {
+    passwordDialog('empty', tr("Очистить корзину?"), tr("Очистить навсегда"),
+      [el('p', {}, tr("Все записи корзины и их файлы удалятся сразу. Отменить нельзя. Введите пароль учётки."))],
+      async (password) => {
+        const { purged, left } = await api('POST', '/api/trash/empty', { password }, { signal });
+        say(left ? tr("Удалено навсегда: {0}; не удалось сейчас: {1}", purged, left)
+          : tr("Корзина очищена: {0}", purged), left ? 'error' : 'ok');
+      });
+  }
+
+  function passwordDialog(kind, title, label, body, submitPassword) {
     say('');
-    const password = el('input', { class: 'input', id: 'trash-password', type: 'password',
+    const password = el('input', { class: 'input', id: kind === 'empty' ? 'trash-password' : 'trash-item-password', type: 'password',
       autocomplete: 'current-password', maxlength: '1024' });
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
-    const yes = button(tr("Очистить навсегда"), { class: 'btn btn-danger solid', id: 'trash-empty-confirm' });
-    const dialog = openDialog(host, { id: 'trash-empty-dialog', title: tr("Очистить корзину?"), actions: [yes], body: [
-      el('p', {}, tr("Все записи корзины и их файлы удалятся сразу. Отменить нельзя. Введите пароль учётки.")),
-      field(tr("Пароль учётки"), password, 'password'), fail] });
+    const yes = button(label, { class: 'btn btn-danger solid', id: `trash-${kind}-confirm` });
+    const dialog = openDialog(host, { id: `trash-${kind}-dialog`, title, actions: [yes],
+      body: [...body, field(tr("Пароль учётки"), password, 'password'), fail] });
     const submit = async () => {
+      if (yes.disabled) return;
       fail.textContent = '';
       if (!password.value) {
         fail.textContent = tr("Введите пароль учётки");
@@ -107,11 +116,9 @@ export function mount(view) {
       }
       yes.disabled = true;
       try {
-        const { purged, left } = await api('POST', '/api/trash/empty', { password: password.value }, { signal });
+        await submitPassword(password.value);
         password.value = '';
         dialog.close();
-        say(left ? tr("Удалено навсегда: {0}; не удалось сейчас: {1}", purged, left)
-          : tr("Корзина очищена: {0}", purged), left ? 'error' : 'ok');
         await load();
       } catch (err) {
         if (signal.aborted) return;

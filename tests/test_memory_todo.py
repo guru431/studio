@@ -5,6 +5,7 @@ import json
 import logging
 
 import chat_system
+import chat_pending
 import chat_tools
 import memory
 import security
@@ -12,6 +13,7 @@ import state
 import takeout
 from conftest import add_gateway, erase_history, make_user, signin
 from test_chat import messages, new_chat, sse, turn
+from test_chat_pending import answer, pending_of
 from test_chat_web import call
 
 PLAN = [{"text": "Найти источники", "status": "done"}, {"text": "Сравнить цены", "status": "in_progress"},
@@ -75,7 +77,12 @@ def test_memory_saved_encrypted_and_in_system_block_capped(studio, caplog):
     cid = new_chat(studio)
     secret = "Любит краткие ответы без смайликов"
     studio.gw.chat_script = [{"tool_calls": [call("memory_save", text=secret)]}, ["Запомнил"]]
-    assert sse(turn(studio, cid, "Запомни"))[-1] == ("done", {"status": "done"})
+    shown = pending_of(sse(turn(studio, cid, "Запомни")))
+    assert shown["kind"] == "confirm" and shown["memory_text"] == secret
+    assert messages(studio, cid)[-1]["pending"]["memory_text"] == secret
+    assert state.DB.execute("SELECT count(*) FROM user_memory").fetchone()[0] == 0
+    assert secret not in state.DB.execute("SELECT tools FROM messages WHERE role = 'assistant'").fetchone()[0]
+    assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     assert {"memory_save", "memory_forget"} <= set(tool_names(studio.gw.chat_requests[0]))
     rows = state.DB.execute("SELECT id, text_enc FROM user_memory").fetchall()
     stored = rows[0]["text_enc"]
@@ -112,6 +119,20 @@ def test_memory_saved_encrypted_and_in_system_block_capped(studio, caplog):
     assert studio.c.delete(f"/api/memory/{one}").status_code == 404
     assert studio.c.delete("/api/memory").status_code == 204
     assert studio.c.get("/api/memory").json()["items"] == []
+
+
+def test_declined_memory_proposal_never_changes_future_turns(studio):
+    add_gateway(studio)
+    studio.c.patch("/api/me", json={"memory_on": True})
+    cid = new_chat(studio)
+    entry = "эта запись требует подтверждения"
+    studio.gw.chat_script = [{"tool_calls": [call("memory_save", text=entry)]}, ["Продолжу без записи."]]
+    shown = pending_of(sse(turn(studio, cid, "Вопрос")))
+    sse(answer(studio, cid, shown["id"], "refuse"))
+    assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == chat_pending.MEMORY_REFUSED
+    assert messages(studio, cid)[-1]["tools"] == [{"kind": "memory", "action": "save", "refused": True}]
+    assert studio.c.get("/api/memory").json()["items"] == []
+    assert entry not in chat_system.memory_block(uid_of(studio))
 
 
 def test_memory_is_private_to_its_owner(studio):

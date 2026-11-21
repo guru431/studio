@@ -4,6 +4,7 @@ import json
 import pytest
 import httpx
 
+import db
 import security
 import state
 from fake_bridge import FakeMachine
@@ -19,17 +20,28 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_admin_can_add_shared_models_and_mcp_for_an_ordinary_user(browser, live, width):
+def test_admin_can_add_shared_models_and_mcp_for_an_ordinary_user(browser, live, width, monkeypatch, request):
     login = f"shared-user-{width}"
     model, mcp_name = f"shared-model-{width}", f"Shared tools {width}"
+    api_name = f"Shared API {width}"
+
+    def clear_shared():
+        connection = db.connect(live.db_path)
+        try:
+            connection.execute("DELETE FROM mcp_servers WHERE name=? AND user_id IS NULL", (mcp_name,))
+            connection.execute("DELETE FROM connections WHERE name=? AND user_id IS NULL", (api_name,))
+        finally:
+            connection.close()
+
+    request.addfinalizer(clear_shared)
     live.add_user(login)
-    service(live.gw)
+    service(live.gw, monkeypatch=monkeypatch)
     panel = "#shared-models-dialog"
     card = f"{panel} .link:last-child"
     result = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("admin"),
         ("click", "#admin-shared-models"), ("wait", f"document.querySelector('{panel} #link-add')"),
         ("click", f"{panel} #link-add"), ("wait", is_open("#link-dialog")),
-        ("type", "#link-dialog [name=name]", f"Shared API {width}"),
+        ("type", "#link-dialog [name=name]", api_name),
         ("type", "#link-dialog [name=base_url]", "http://10.77.1.15:4000/v1"),
         ("type", "#link-dialog [name=token]", MODEL_KEY), ("click", "#link-save"),
         ("wait", f"!{is_open('#link-dialog')} && document.querySelector('{card} [name=model]')"),
@@ -54,11 +66,11 @@ def test_admin_can_add_shared_models_and_mcp_for_an_ordinary_user(browser, live,
 
 
 @pytest.mark.parametrize('width', [320, 1280])
-def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, width):
+def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, width, monkeypatch):
     login = 'owner' if width == 1280 else 'mcp-forms-mobile'
     if login != 'owner':
         live.add_user(login)
-    calls = service(live.gw)
+    calls = service(live.gw, monkeypatch=monkeypatch)
     choose = lambda tool: ('eval', 'tool', "(() => { const s = document.querySelector('#section-mcp-tool');"
                            f"s.value = [...s.options].find(o => o.value.endsWith(':{tool}')).value;"
                            "s.dispatchEvent(new Event('change', { bubbles: true })); })()")
@@ -106,10 +118,10 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
     assert not problems(result), result.get('log')
 
 
-def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
+def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live, monkeypatch):
     login = 'mcp-upload-forms'
     live.add_user(login)
-    calls = service(live.gw, uploads=True, clone_models=True)
+    calls = service(live.gw, uploads=True, clone_models=True, monkeypatch=monkeypatch)
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
         ('eval', 'settings', "location.hash='#/settings/chat'"), ('wait', "document.querySelector('#mcp-add')"),
         ('click', '#mcp-add'), ('type', '#mcp-name', 'Tool server'), ('type', '#mcp-url', URL),
@@ -141,12 +153,12 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live):
     assert not problems(result), result.get('log')
 
 
-def test_scan_model_choice_hides_while_an_mcp_tool_is_chosen(browser, live):
+def test_scan_model_choice_hides_while_an_mcp_tool_is_chosen(browser, live, monkeypatch):
     """Два движка «Сканов» — выбор модели виден; выбран инструмент MCP — скрыт (на него не влияет), «Студия» — снова виден."""
     from fakes import TOKEN as GW_TOKEN
     login = 'mcp-ocr-model'
     live.add_user(login)
-    service(live.gw, uploads=True)
+    service(live.gw, uploads=True, monkeypatch=monkeypatch)
     shown = "!document.querySelector('#ocr-model').closest('.pick').hidden"
     pick = lambda value: ('eval', 'pick', "(() => { const s = document.querySelector('#section-mcp-tool');"
                           f"s.value = {value}; s.dispatchEvent(new Event('change', {{ bubbles: true }})); }})()")
@@ -195,10 +207,7 @@ def test_unreachable_mcp_server_is_named_in_the_chat_answer_and_in_sections(brow
             ('eval', 'pick', "document.querySelector('#chat-mcp-dialog .chat-mcp-error').closest('.chat-mcp-item')"
                              ".querySelector('input.chat-mcp-server').click()"),
             ('click', '#chat-mcp-save'), ('wait', "!document.querySelector('#chat-mcp-dialog')"),
-            # общие MCP прошлых тестов того же сервера включены в новом диалоге по умолчанию
-            ('eval', 'chip', f"""(async () => {{ const m = {API};
-              const shared = (await m.api('GET', '/api/mcp')).items.filter(s => s.shared && s.enabled).length;
-              return {toggle}.textContent === 'MCP (' + (1 + shared) + ')'; }})()"""),
+            ('eval', 'chip', f"{toggle}.textContent === 'MCP (1)'"),
             ('type', '#chat-input', 'Привет'), ('press', 'Enter'),
             ('wait', f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.web-steps')"),
             ('eval', 'answer', f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),

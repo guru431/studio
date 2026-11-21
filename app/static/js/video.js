@@ -688,7 +688,9 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'video-delete-confirm' });
     const dialog = openDialog(root, { id: 'video-delete-dialog', title: tr("Удалить ролик?"),
-      body: [el('p', {}, tr("Ролик уйдёт в корзину на 14 дней вместе с файлом — оттуда его можно вернуть.")), fail], actions: [confirm] });
+      body: [el('p', {}, RUNNING.has(item.state)
+        ? tr("Генерация остановится. Запись уйдёт в корзину на 14 дней и вернётся со статусом «Отменено».")
+        : tr("Ролик уйдёт в корзину на 14 дней вместе с файлом — оттуда его можно вернуть.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {

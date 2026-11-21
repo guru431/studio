@@ -95,6 +95,7 @@ disconnect до освобождения хода. Вложения хода с 
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.43.0 | `hello.git_compare` — сравнение выбранного изменённого текстового файла с HEAD, только владельцу | §4 |
 | 0.42.0 | `hello.account_disabled` — закрытие 4403 «учётка отключена»: ходы прерваны, открытые сессии прочь, переподключение с паузами; прежним мостам отключение — 4401; отказ `git` — `git_unavailable` (нет git, `safe.directory`, сбой при своём `.git`; без capability); `agent_update_status.message` в `failed` — итог прошлого перехода; при `welcome.pending_asks` кадр `completions` несёт и открытые карточки, возникшие без канала (`permission|question`) | §2, §4, §18 |
 | 0.41.0 | `projects.items[].dir` — настоящая папка проекта владельцу (без capability); `hello.mirror_exclude` — постоянные исключения зеркала | §5, §23.2 |
 | 0.40.0 | `hello.project_mirror_discovery` — поиск существующих копий | §23.1 |

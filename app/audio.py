@@ -102,9 +102,10 @@ async def cut(src: Path, start: float, length: float, dst: Path) -> None:
     await _run([*BASE, "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src), *COMPRESS, str(dst)])
 
 
-async def to_wav(src: Path, dst: Path, *, max_sec: float) -> float:
-    """Образец голоса: WAV PCM 16 бит моно 24 кГц, не длиннее max_sec; итог — его длительность."""
-    await _run([*BASE, "-i", str(src), *WAV, "-t", f"{max_sec:.2f}", str(dst)])
+async def to_wav(src: Path, dst: Path, *, max_sec: float, start: float = 0) -> float:
+    """Образец голоса: WAV PCM 16 бит моно 24 кГц, от start и не длиннее max_sec."""
+    seek = ["-ss", f"{start:.3f}"] if start else []
+    await _run([*BASE, *seek, "-i", str(src), *WAV, "-t", f"{max_sec:.3f}", str(dst)])
     return await probe(dst)
 
 

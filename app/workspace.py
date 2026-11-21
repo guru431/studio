@@ -29,16 +29,17 @@ TABS_MAX = 20
 PROJECTS_MAX = 100
 #: действие → поля, без которых его нет
 NEEDS = {"open": ("pid", "chat"), "close": ("pid", "chat"), "place": ("pid", "view"), "panel": (),
-         "move": ("pid", "chat", "index")}
+         "move": ("pid", "chat", "index"), "pin": ("pid", "pinned")}
 
 
 class Action(BaseModel):
-    op: Literal["open", "close", "place", "panel", "move"]
+    op: Literal["open", "close", "place", "panel", "move", "pin"]
     aid: StrictInt
     pid: str | None = None
     chat: str | None = None
     view: Literal["chat", "files", "git"] | None = None
     index: StrictInt | None = Field(default=None, ge=0, lt=TABS_MAX)
+    pinned: bool | None = Field(default=None, strict=True)
 
     @model_validator(mode="after")
     def _needs(self):
@@ -49,7 +50,7 @@ class Action(BaseModel):
 
 def doc(user_id: int) -> dict:
     """Документ рабочего места: `panel`, `place` (компьютер отозван — `null`), проекты по убыванию `touched`."""
-    place = state.DB.execute("SELECT panel_id, agent_id, project, view FROM code_place WHERE user_id = ?",
+    place = state.DB.execute("SELECT panel_id, agent_id, project, view, pinned_projects FROM code_place WHERE user_id = ?",
                              (user_id,)).fetchone()
     rows = state.DB.execute("SELECT agent_id, project, tabs, active, touched, rowid AS position FROM code_tabs WHERE user_id = ?"
                             " UNION ALL SELECT agent_id, project, tabs, active, touched, rowid FROM code_member_tabs"
@@ -62,11 +63,13 @@ def doc(user_id: int) -> dict:
             return True
         except HTTPException:
             return False
+    pins = [item for item in json.loads(place["pinned_projects"]) if allowed(item["aid"], item["pid"])] if place else []
     return {"panel": place["panel_id"] if place and allowed(place["panel_id"]) else None,
             "place": ({"aid": place["agent_id"], "pid": place["project"], "view": place["view"]}
                       if place and allowed(place["agent_id"], place["project"]) else None),
             "projects": [{"aid": r["agent_id"], "pid": r["project"], "tabs": json.loads(r["tabs"]),
-                          "active": r["active"]} for r in rows if allowed(r["agent_id"], r["project"])]}
+                          "active": r["active"]} for r in rows if allowed(r["agent_id"], r["project"])],
+            **({"pins": pins} if pins else {})}
 
 
 def _table(uid: int, aid: int) -> str:
@@ -136,6 +139,18 @@ def _panel(uid: int, aid: int) -> None:
                      " ON CONFLICT(user_id) DO UPDATE SET panel_id = excluded.panel_id", (uid, aid))
 
 
+def _pin(uid: int, aid: int, pid: str, pinned: bool) -> None:
+    """Закрепление проекта независимо от открытых вкладок этого проекта."""
+    row = state.DB.execute("SELECT pinned_projects FROM code_place WHERE user_id = ?", (uid,)).fetchone()
+    project = {"aid": aid, "pid": pid}
+    pins = [item for item in json.loads(row[0]) if item != project] if row else []
+    if pinned:
+        pins.insert(0, project)
+    state.DB.execute("INSERT INTO code_place(user_id, pinned_projects) VALUES (?, ?)"
+                     " ON CONFLICT(user_id) DO UPDATE SET pinned_projects = excluded.pinned_projects",
+                     (uid, json.dumps(pins[:PROJECTS_MAX])))
+
+
 @router.get("/workspace")
 async def get_workspace(request: Request):
     return doc(request.state.user.id)
@@ -160,6 +175,8 @@ async def patch_workspace(body: Action, request: Request):
             _place(uid, body.aid, body.pid, body.view)
         elif body.op == "move":
             _move(uid, body.aid, body.pid, body.chat, body.index)
+        elif body.op == "pin":
+            _pin(uid, body.aid, body.pid, body.pinned)
         else:
             _panel(uid, body.aid)
         state.DB.execute("COMMIT")

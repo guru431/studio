@@ -341,6 +341,7 @@ SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles":
 #: Новый маршрут без строки здесь роняет тест: решите, к чему он относится, и научите этому lock_policy.blocks.
 ROUTES = {
     ("GET", "/api/admin/smtp"): "closed",
+    ("GET", "/api/admin/smtp/status"): "closed",
     ("PUT", "/api/admin/smtp"): "closed",
     ("POST", "/api/admin/smtp/check"): "closed",
     ("POST", "/api/admin/smtp/test"): "closed",
@@ -349,6 +350,7 @@ ROUTES = {
         ("PUT", "/api/admin/chat"), ("GET", "/api/admin/backup-check"),
         ("POST", "/api/admin/backup-check"), ("GET", "/api/admin/storage"), ("GET", "/api/admin/users"),
         ("POST", "/api/admin/users"), ("DELETE", "/api/admin/users/{uid}"), ("PATCH", "/api/admin/users/{uid}"),
+        ("POST", "/api/admin/users/{uid}/password-link"),
         ("GET", "/api/admin/users/{uid}/connections"), ("POST", "/api/admin/users/{uid}/connections"),
         ("DELETE", "/api/admin/users/{uid}/connections/{conn_id}"),
         ("PATCH", "/api/admin/users/{uid}/connections/{conn_id}"), ("GET", "/api/admin/users/{uid}/sections"),
@@ -383,6 +385,7 @@ ROUTES = {
         ("PUT", "/api/me/ntfy"), ("POST", "/api/me/ntfy/test"), ("POST", "/api/me/password"),
         ("DELETE", "/api/me/pin"), ("PUT", "/api/me/pin"), ("DELETE", "/api/me/push"), ("POST", "/api/me/push"),
         ("POST", "/api/me/screen-lock"), ("GET", "/api/me/sessions"), ("DELETE", "/api/me/sessions/{sid}"),
+        ("DELETE", "/api/me/sessions"), ("DELETE", "/api/me/account"),
         ("PATCH", "/api/me/sessions/{sid}"),
         ("POST", "/api/me/emergency"), ("GET", "/api/me/security-events"), ("DELETE", "/api/me/password-reset"),
         ("POST", "/api/me/email"), ("POST", "/api/me/email/confirm"), ("PUT", "/api/me/email-codes"),

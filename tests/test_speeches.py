@@ -311,15 +311,20 @@ def test_external_service_speaks_by_voice_name_in_one_request(studio, fake_audio
     monkeypatch.setattr(upstream, "RESOLVE", resolve)
     cid = add_connection(studio, base_url="https://voice.cloud.test/v1", token="k-1", sections=["speech"])
     studio.c.put(f"/api/sections/speech/links/{cid}", json={"models": ["tts-1"]})
+    assert studio.c.put("/api/sections/speech/default", json={"connection_id": cid, "model": "tts-1"}).status_code == 200
     seen = []
     async def speak(q):
         seen.append(q)
         return httpx.Response(200, content=b"ID3mp3", headers={"content-type": "audio/mpeg"})
     studio.gw.on["/v1/audio/speech"] = speak
-    r = studio.c.post("/api/speeches", json={"text": f"{LONG_A} {LONG_B}", "voice": "alloy",
+    unconfigured = studio.c.post("/api/speech/say", json={"text": "First phrase"})
+    assert unconfigured.status_code == 409 and unconfigured.json()["detail"]["code"] == "voice" and not seen
+    r = studio.c.post("/api/speeches", json={"text": f"{LONG_A} {LONG_B}", "voice": "narrator",
                                              "connection_id": cid, "model": "tts-1"})
     assert wait_sp(studio, r.json()["id"], {"done", "error"})["state"] == "done"
-    assert len(seen) == 1 and json.loads(seen[0].content)["voice"] == "alloy" and ("mp3_of", 1) in fake_audio.calls
+    assert len(seen) == 1 and json.loads(seen[0].content)["voice"] == "narrator" and ("mp3_of", 1) in fake_audio.calls
+    r = studio.c.post("/api/speech/say", json={"text": "Second phrase"})
+    assert r.status_code == 200 and json.loads(seen[1].content)["voice"] == "narrator"
 
 
 def test_text_limits_and_foreign_voice(studio, fake_audio):

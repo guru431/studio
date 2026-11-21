@@ -589,6 +589,8 @@ async def _translate(job: Job, row) -> "str | None":
         row = await (_await_scan(job, row) if row["scan_id"] is not None else _spot(job, row))
         if row is None:
             return NO_TEXT
+    elif row["scan_id"] is not None and sections.is_local(job.conn, job.model):
+        row = await _await_idle(job)
     if sections.is_local(job.conn, job.model) and not job.freed:
         job.freed = True
         await images.free_models(job.conn)       # и до определения языка: оно — запрос к той же модели
@@ -789,7 +791,7 @@ COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, d
            " scan_id IS NOT NULL AND EXISTS (SELECT 1 FROM translations AS o WHERE o.user_id = translations.user_id"
            " AND o.scan_id = translations.scan_id AND o.id != translations.id AND o.deleted IS NULL) AS scan_shared")
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
-FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
+FORMAT = "нужен PDF, DOCX, текстовый файл, файл кода или снимок PNG, JPEG, WebP"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
 FILE_GONE = "исходный файл удалён"
 NO_OCR_PHOTO = "чтобы переводить снимки, подключите «Сканы» в настройках"
@@ -846,6 +848,7 @@ def _out(row) -> dict:
             "done_parts": row["done_parts"], "created": row["created"], "finished": row["finished"],
             "source_head": heads[0], "text_head": heads[1], "can_continue": _can_continue(row),
             "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"]),
+            "scan_owned": row["scan_id"] is not None and row["source_media_id"] is not None,
             # «готово», но не всё: нераспознанные страницы скана (UNREAD), снимок без текста (NO_TEXT)
             "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None}
 
@@ -880,6 +883,24 @@ async def translate_field(body: TextIn, request: Request):
     tid = create(uid, conn, model, kind="text", name=_name(text), source_lang=body.source_lang,
                  target_lang=body.target_lang, source=text)
     kick(uid, "text")
+    return _out(_row(uid, tid))
+
+
+@router.post("/scans/{sid}", status_code=202)
+async def translate_scan(sid: str, body: RepeatIn, request: Request):
+    """Готовый документ «Сканов» — новый перевод из распознанного текста, без повторной загрузки."""
+    uid = request.state.user.id
+    scan = ocr._readable(uid, sid)
+    if scan["state"] != "done":
+        raise HTTPException(409, {"code": "scan", "message": "сначала завершите распознавание"})
+    _langs(body.source_lang, body.target_lang)
+    conn, model = sections.resolve(uid, "translate", body.connection_id, body.model)
+    source = _scan_source(sid)
+    if len(source) > translate_text.TEXT_MAX:
+        raise HTTPException(422, {"code": "too_long", "message": TOO_LONG})
+    tid = create(uid, conn, model, kind="file", name=scan["name"], source_lang=body.source_lang,
+                 target_lang=body.target_lang, source=source, scan_id=sid)
+    kick(uid, "file")
     return _out(_row(uid, tid))
 
 
@@ -1176,14 +1197,15 @@ async def delete(tid: str, request: Request):
 async def purge(user_id: int, item_id: str) -> None:
     """Окончательно: строка (куски — каскадом), с ней — её скан (документ «Сканов», что завёл перевод PDF), если на
     него не ссылается другая запись, и в корзине тоже (повтор берёт тот же скан): удалённый в «Переводе» договор не
-    остаётся в «Сканах». Скан ещё останавливается — 409, запись остаётся (уборка повторит через сутки). Затем
+    остаётся в «Сканах». Запись, созданная из готового скана, не владеет его исходным файлом и не удаляет скан.
+    Скан ещё останавливается — 409, запись остаётся (уборка повторит через сутки). Затем
     исходный файл, если на него больше ничто не ссылается. Строки уже нет — ничего."""
     row = state.DB.execute("SELECT scan_id, source_media_id FROM translations WHERE id = ? AND user_id = ?",
                            (item_id, user_id)).fetchone()
     if row is None:
         return
     scan = None
-    if row["scan_id"] is not None and state.DB.execute(
+    if row["scan_id"] is not None and row["source_media_id"] is not None and state.DB.execute(
             "SELECT 1 FROM translations WHERE user_id = ? AND scan_id = ? AND id != ? LIMIT 1",
             (user_id, row["scan_id"], item_id)).fetchone() is None:
         scan = state.DB.execute("SELECT id, source_media_id, state FROM scans WHERE id = ? AND user_id = ?",

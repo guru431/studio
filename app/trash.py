@@ -8,7 +8,7 @@ TRASH_SEC или владелец.
   `chat_id` и той же отметкой `deleted`).
 - `GET /api/trash` → `[{kind, section, id, title, deleted, bytes}]` своих (новые сверху; разделы, закрытые
   блокировкой, — мимо); `POST /api/trash/{kind}/{id}/restore` — вернуть (строки поиска — `search.reindex_item`);
-  `DELETE /api/trash/{kind}/{id}` — окончательно одну (группу — всю, по id любой её строки). Чужая запись и запись не в корзине — 404: администратор
+  `DELETE /api/trash/{kind}/{id} {password}` — окончательно одну (группу — всю, по id любой её строки). Чужая запись и запись не в корзине — 404: администратор
   чужую корзину не видит и не возвращает. «Вернуть» и «Удалить навсегда» закрыты, пока заперт любой раздел
   (`lock_policy.blocks`).
 - `POST /api/trash/empty {password}` — окончательно всё своё; пароль — `auth.confirm_password` (те же проверка и
@@ -19,7 +19,8 @@ TRASH_SEC или владелец.
 - Уборка `start_purger`: раз в PURGE_EVERY_SEC (отметка — `settings` PURGE_KEY, переживает перезапуски, как
   `media.orphans_due`) — `purge` записей старше TRASH_SEC.
 - Прежний код (до шага 58) столбец `deleted` не читает и показывает записи корзины как обычные: перед откатом
-  `ROLLBACK_58` окончательно удаляет корзину (с каскадами), файлы потом убирает чистка сирот прежнего кода.
+  `ROLLBACK_58` проверяет, что нет живых диалогов с защищёнными данными, выключает защищённые серверы MCP
+  и окончательно удаляет корзину (с каскадами). Файлы потом убирает чистка сирот прежнего кода.
 - Журнал — вид, начало id и числа; названий и имён файлов нет.
 """
 import asyncio
@@ -52,7 +53,22 @@ import voices
 TABLES = ("chats", "images", "videos", "speeches", "transcripts", "scans", "translations", "voices",
           "chat_media", "knowledge_bases", "kb_documents")
 
-ROLLBACK_58 = "BEGIN;\n" + "".join(f"DELETE FROM {t} WHERE deleted IS NOT NULL;\n" for t in TABLES) + "COMMIT;\n"
+ROLLBACK_MCP_KEY = "rollback_58_protected_mcp"
+_ROLLBACK_ALLOWED = "EXISTS (SELECT 1 FROM temp.rollback_58_guard)"
+ROLLBACK_58 = f"""BEGIN;
+CREATE TEMP TABLE rollback_58_guard (no_protected_chats INTEGER CHECK (no_protected_chats = 1));
+INSERT OR ROLLBACK INTO rollback_58_guard SELECT NOT EXISTS (
+    SELECT 1 FROM chats WHERE protected_used = 1 AND deleted IS NULL
+);
+INSERT OR IGNORE INTO settings(key, value)
+    SELECT '{ROLLBACK_MCP_KEY}', json_group_array(id) FROM mcp_servers
+    WHERE protected = 1 AND enabled = 1 AND {_ROLLBACK_ALLOWED}
+    HAVING count(*) > 0;
+UPDATE mcp_servers SET enabled = 0 WHERE protected = 1 AND {_ROLLBACK_ALLOWED};
+""" + "".join(f"DELETE FROM {t} WHERE deleted IS NOT NULL AND {_ROLLBACK_ALLOWED};\n" for t in TABLES) + """
+DROP TABLE temp.rollback_58_guard;
+COMMIT;
+"""
 
 TRASH_SEC = 14 * 86400
 PURGE_EVERY_SEC = 86400
@@ -64,12 +80,30 @@ log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/trash")
 
 
+def forward() -> None:
+    """Вернуть включённые до отката защищённые MCP при запуске версии с их защитой."""
+    row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (ROLLBACK_MCP_KEY,)).fetchone()
+    if row is None:
+        return
+    state.DB.execute("BEGIN")
+    try:
+        changed = state.DB.execute(
+            "UPDATE mcp_servers SET enabled = 1 WHERE protected = 1 AND enabled = 0"
+            " AND id IN (SELECT value FROM json_each(?))", (row["value"],)).rowcount
+        state.DB.execute("DELETE FROM settings WHERE key = ?", (ROLLBACK_MCP_KEY,))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    log.info("корзина: после отката возвращено защищённых MCP %d", changed)
+
+
 @dataclass(frozen=True)
 class Kind:
     table: str
     section: str                                  # раздел страницы (`sections-meta.js`) и блокировки
     purge: Callable[[int, str], Awaitable[None]]  # окончательное удаление раздела; записи нет — ничего
-    title: Callable[[object], str]                # название строки таблицы для списка
+    title: Callable[[object], str | None]         # название строки таблицы для списка
     files: str                                    # SQL: id файлов записи (`:id`), для `bytes`
     search: "str | None" = None                   # раздел поиска (`search.TITLES`), если запись в индексе
     live: str = ""                                # условие строки, которую видно и можно вернуть
@@ -77,51 +111,56 @@ class Kind:
                                                   # `deleted` (удалены одним действием) — одна запись корзины
     column: str = "name"                          # столбец, который читает `title`: списки корзины и «Хранилища»
                                                   # не читают полных текстов записей на цикле событий
+    fallback: str = ""
 
 
 HEAD = 80                                         # знаков текста записи в названии строки корзины
 NO_FILES = "SELECT NULL WHERE :id IS NULL"        # у записи нет файлов
 
 
-def _head(text: "str | None", fallback: str) -> str:
+def _head(text: "str | None") -> str:
     text = " ".join((text or "").split())
-    return (text[:HEAD].rstrip() + "…" if len(text) > HEAD else text) or fallback
+    return text[:HEAD].rstrip() + "…" if len(text) > HEAD else text
 
 
 KINDS: dict[str, Kind] = {
-    "chats": Kind("chats", "chat", chat.purge, lambda row: row["title"] or "Новый диалог",
+    "chats": Kind("chats", "chat", chat.purge, lambda row: row["title"],
                   "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = :id"
-                  " UNION SELECT media_id FROM chat_media WHERE chat_id = :id", search="chat", column="title"),
+                  " UNION SELECT media_id FROM chat_media WHERE chat_id = :id", search="chat", column="title",
+                  fallback="Новый диалог"),
     # медиа диалога в корзине вместе с диалогом — часть его строки, не отдельная
     "chat_media": Kind("chat_media", "chat", mcp_files.purge_media, lambda row: row["name"],
                        "SELECT media_id FROM chat_media WHERE id = :id",
                        live=" AND chat_id IN (SELECT id FROM chats WHERE deleted IS NULL)"),
-    "images": Kind("images", "photo", images.purge, lambda row: _head(row["prompt"], "Картинка"),
+    "images": Kind("images", "photo", images.purge, lambda row: _head(row["prompt"]),
                    "SELECT media_id FROM images WHERE id = :id UNION SELECT source_media_id FROM images WHERE id = :id"
-                   " UNION SELECT mask_media_id FROM images WHERE id = :id", search="photo", column="prompt"),
-    "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"], "Ролик"),
+                   " UNION SELECT mask_media_id FROM images WHERE id = :id", search="photo", column="prompt",
+                   fallback="Картинка"),
+    "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"]),
                    "SELECT media_id FROM videos WHERE id = :id UNION SELECT source_media_id FROM videos WHERE id = :id",
-                   search="video", column="prompt"),
+                   search="video", column="prompt", fallback="Ролик"),
     # чат озвучки, удалённый целиком («Удалить чат»), — одна запись корзины: возвращается и удаляется весь
-    "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"], "Озвучка"),
-                     "SELECT media_id FROM speeches WHERE id = :id", search="speech", group="chat_id", column="text"),
-    "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"], "Запись"),
+    "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"]),
+                     "SELECT media_id FROM speeches WHERE id = :id", search="speech", group="chat_id", column="text",
+                     fallback="Озвучка"),
+    "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"]),
                         "SELECT source_media_id FROM transcripts WHERE id = :id"
-                        " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe"),
-    "scans": Kind("scans", "ocr", ocr.purge, lambda row: _head(row["name"], "Документ"),
+                        " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe", fallback="Запись"),
+    "scans": Kind("scans", "ocr", ocr.purge, lambda row: _head(row["name"]),
                   "SELECT source_media_id FROM scans WHERE id = :id UNION SELECT media_id FROM scan_pages WHERE scan_id = :id",
-                  search="ocr"),
-    "translations": Kind("translations", "translate", translate.purge, lambda row: _head(row["name"], "Перевод"),
-                         "SELECT source_media_id FROM translations WHERE id = :id", search="translate"),
-    "voices": Kind("voices", "speech", voices.purge, lambda row: _head(row["name"], "Голос"),
-                   "SELECT media_id FROM voices WHERE id = :id UNION SELECT media_id FROM voice_samples WHERE voice_id = :id"),
+                  search="ocr", fallback="Документ"),
+    "translations": Kind("translations", "translate", translate.purge, lambda row: _head(row["name"]),
+                         "SELECT source_media_id FROM translations WHERE id = :id", search="translate", fallback="Перевод"),
+    "voices": Kind("voices", "speech", voices.purge, lambda row: _head(row["name"]),
+                   "SELECT media_id FROM voices WHERE id = :id UNION SELECT media_id FROM voice_samples WHERE voice_id = :id",
+                   fallback="Голос"),
     # личные базы знаний и их документы (общие удаляет панель сразу); файлов нет — только куски текста.
     # Документ базы в корзине вместе с базой — часть её строки
-    "knowledge_bases": Kind("knowledge_bases", "chat", knowledge.purge_base, lambda row: _head(row["name"], "База знаний"),
-                            NO_FILES),
-    "kb_documents": Kind("kb_documents", "chat", knowledge.purge_document, lambda row: _head(row["name"], "Документ"),
+    "knowledge_bases": Kind("knowledge_bases", "chat", knowledge.purge_base, lambda row: _head(row["name"]),
+                            NO_FILES, fallback="База знаний"),
+    "kb_documents": Kind("kb_documents", "chat", knowledge.purge_document, lambda row: _head(row["name"]),
                          NO_FILES, live=" AND (kb_id IS NULL OR kb_id IN"
-                                        " (SELECT id FROM knowledge_bases WHERE deleted IS NULL))"),
+                                        " (SELECT id FROM knowledge_bases WHERE deleted IS NULL))", fallback="Документ"),
 }
 
 
@@ -175,8 +214,11 @@ async def list_trash(request: Request):
             if key in groups:
                 groups[key]["bytes"] += size
                 continue
-            groups[key] = {"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
+            title = kind.title(row)
+            groups[key] = {"kind": name, "section": kind.section, "id": row["id"], "title": title or kind.fallback,
                            "deleted": row["deleted"], "bytes": size}
+            if not title and kind.fallback:
+                groups[key]["title_default"] = True
             items.append(groups[key])
     items.sort(key=lambda item: item["deleted"], reverse=True)
     return items
@@ -198,12 +240,21 @@ async def restore(kind: str, item_id: str, request: Request):
     return Response(status_code=204)
 
 
+class Confirm(BaseModel):
+    """Пароль учётки для окончательного удаления."""
+    password: str = Field("", max_length=screenlock.PASSWORD_MAX)
+
+
 @router.delete("/{kind}/{item_id}", status_code=204)
-async def delete_forever(kind: str, item_id: str, request: Request):
+async def delete_forever(kind: str, item_id: str, request: Request, body: Confirm | None = None):
     uid, found = request.state.user.id, _kind(kind)
-    ids = _members(found, uid, item_id)
-    if not ids:
+    confirmed = set(_members(found, uid, item_id))
+    if not confirmed:
         raise HTTPException(404, GONE)
+    await auth.confirm_password(uid, body.password if body else "", "удаление записи корзины",
+                                digest=request.state.digest)
+    operations.check(uid)
+    ids = [member for member in _members(found, uid, item_id) if member in confirmed]
     for one in ids:
         # перед каждой строкой группы — заново: пока удалялась прежняя, группу могли вернуть
         if state.DB.execute(f"SELECT 1 FROM {found.table} WHERE id = ? AND deleted IS NOT NULL",
@@ -211,11 +262,6 @@ async def delete_forever(kind: str, item_id: str, request: Request):
             await found.purge(uid, one)
     log.info("корзина: %s %s удалено навсегда, строк %d", kind, item_id[:8], len(ids))
     return Response(status_code=204)
-
-
-class Confirm(BaseModel):
-    """Пароль учётки окончательного удаления: «Очистить корзину» и «Удалить всю историю»."""
-    password: str = Field("", max_length=screenlock.PASSWORD_MAX)
 
 
 @router.post("/empty")
@@ -275,14 +321,17 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
     for name, kind in KINDS.items():
         if not kind.live and kind.section not in hidden:
             locked, args = _locked(kind, user_id, hidden)
-            heaviest += [{"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
+            heaviest += [{"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row) or kind.fallback,
                           "bytes": row["bytes"]}
                          for row in state.DB.execute(
                              f"SELECT * FROM (SELECT t.id, t.{kind.column}, {_sized(kind)} AS bytes FROM {kind.table} t"
                              f" WHERE t.user_id = ? AND t.deleted IS NULL{locked}) WHERE bytes > 0"
                              " ORDER BY bytes DESC LIMIT ?", (user_id, *args, HEAVIEST))]
-        count, size = state.DB.execute(f"SELECT COUNT(*), COALESCE(SUM({_sized(kind)}), 0) FROM {kind.table} t"
-                                       f" WHERE t.user_id = ? AND t.deleted IS NOT NULL{kind.live}", (user_id,)).fetchone()
+        group = f"t.{kind.group}, t.deleted" if kind.group else "t.id"
+        count, size = state.DB.execute(
+            f"SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM ("
+            f"SELECT SUM({_sized(kind)}) AS bytes FROM {kind.table} t"
+            f" WHERE t.user_id = ? AND t.deleted IS NOT NULL{kind.live} GROUP BY {group})", (user_id,)).fetchone()
         if count:
             got = trashed.setdefault(kind.section, {"count": 0, "bytes": 0})
             got["count"] += count

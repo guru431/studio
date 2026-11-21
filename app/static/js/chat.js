@@ -231,9 +231,9 @@ async function saveAnswer(chatId, message, body) {
   return true;
 }
 
-function notify(job, final) {
+function notify(job, final, replaced = false) {
   if (job.voice) {                                 // ход «Разговора» (chat-voice.js): текст ответа — в озвучку
-    job.voice.update(job.message.content, final);
+    job.voice.update(job.message.content, final, replaced);
     if (final) job.voice.resolve(job.message.status);
   }
   if (screen) screen.refresh(job, final);
@@ -297,7 +297,7 @@ async function readServer(job, response) {
       else if (event === 'replace' && data && typeof data.text === 'string') {
         job.message.content = data.text;
         job.first = true;
-        notify(job, false);
+        notify(job, false, true);
       } else if (event === 'cleaner' && data && typeof data.raw === 'string') job.message.cleaner_raw = data.raw;
       else if (event === 'pending' && data && typeof data.id === 'string') {   // пауза: карточка — после `done`
         job.message.pending = data;
@@ -520,9 +520,11 @@ function stepNode(s) {
   }
   else if (s.kind === 'duplicate') li.append(tr("Повтор пропущен: {0}", s.tool));   // chat.DUPLICATE
   else if (s.kind === 'todo') li.append(tr("План работы"));                        // chat_tools.TODO_WRITE
-  else if (s.kind === 'memory') li.append(s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
+  else if (s.kind === 'memory') li.append(s.refused || s.error ? tr("Память")
+    : s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
   else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${message(s.error)}`));
+  else if (s.refused) li.append(el('span', { class: 'muted' }, ` — ${tr("Вызов отклонён")}`));
   return li;
 }
 
@@ -610,6 +612,7 @@ function build(view, ctx) {
   let failures = 0;
   let historyRead = null;
   let pendingTurn = null;      // request id and unsent draft: this view's memory only
+  let editing = null;         // выбранное сообщение и снимок конца диалога
   let droppedNote = '';        // адрес подключения чипа убран из списка администратора — слова для #model-note
   const parts = new WeakMap(); // сообщение → его узлы в ленте
   const received = new WeakMap(); // сообщение с сервера → его JSON при получении (settle)
@@ -687,9 +690,14 @@ function build(view, ctx) {
   // пустого поля не растёт с первой буквой
   const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; } });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
+  const editNote = el('div', { class: 'chat-edit-note', hidden: true },
+    el('span', {}, tr("Правка сообщения. После отправки последующие сообщения будут удалены.")),
+    button(tr("Отменить правку"), { class: 'btn btn-sm chat-edit-cancel' }, () => {
+      if (!sending) closeEdit();
+    }));
   let passportKey = '';
   const ring = contextRing(estimateContext);
-  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, inputBox.box, inputBox.error,
+  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, editNote, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle, ring.node), send, stop),
     webNote, talkNote);
@@ -1163,7 +1171,7 @@ function build(view, ctx) {
   /* ход «Разговора» — обычный ход с текстом фразы; набранное в поле до него возвращается в поле. Итог — статус
      ответа или false: хода не было (идёт другой ответ, отказ — словами в #chat-error) */
   function voiceTurn(text, update) {
-    if (sending || jobs.has(chatId)) return Promise.resolve(false);
+    if (editing || sending || jobs.has(chatId)) return Promise.resolve(false);
     const typed = input.value;
     input.value = text;
     return new Promise((resolve) => {
@@ -1247,12 +1255,12 @@ function build(view, ctx) {
     return atts.filter((a) => !a.error && (a.file ? a.file.type.startsWith('image/') : a.meta.kind === 'image'));
   }
 
-  /* строка паспорта (п. 31): в паспорте модели чипа (`passport.models` подключения) есть запись без `vision`; нет
+  /* строка паспорта (п. 31): в возможностях модели чипа есть запись без `vision`; нет
      паспорта или записи — молчим. Сервер MCP набора с `chat_files` и согласием «Передать» — называем его */
   function paintPassport() {
     const { connection_id: connId, model } = chosen();
-    const entry = links.find((l) => l.connection.id === connId)?.connection.passport?.models?.find((m) => m.id === model);
-    const blind = photoAtts().length > 0 && !!entry && !entry.caps.some((c) => c.name === 'vision');
+    const caps = links.find((l) => l.connection.id === connId)?.capabilities;
+    const blind = photoAtts().length > 0 && !!caps && Object.hasOwn(caps, model) && !caps[model].includes('vision');
     const decisions = chat?.chat.mcp_file_consent || {};
     const tool = blind && chat ? mediaTargets(catalog, chat.chat.mcp_ids || [], stateOf(chat.chat), !!chat.chat.web)
       .find((t) => decisions[String(t.id)] === 'allowed') : null;
@@ -1278,7 +1286,7 @@ function build(view, ctx) {
      PDF и DOCX — не оценить до разбора. Новый диалог — нечего оценивать */
   async function estimateContext() {
     const id = chatId;
-    if (!id || chat?.chat.id !== id) return null;
+    if (!id || chat?.chat.id !== id || editing) return null;
     const sent = atts.filter((a) => a.meta && !a.error);
     const local = atts.filter((a) => !a.meta && !a.error && a.file);
     const out = await api('POST', `/api/chats/${id}/estimate`, { text: input.value,
@@ -1509,20 +1517,71 @@ function build(view, ctx) {
     });
   }
 
+  function closeEdit() {
+    if (!editing) return;
+    input.value = editing.previous;
+    editing = null;
+    editNote.hidden = true;
+    autosize();
+    ring.schedule();
+  }
+
+  function editTurn(m) {
+    if (sending || jobs.has(chatId) || remoteStream() || otherTab()) return;
+    if (talking) talking();
+    closeEdit();
+    editing = { message: m, last: chat.messages.at(-1).id, previous: input.value };
+    input.value = m.content;
+    autosize();
+    editNote.hidden = false;
+    ring.hide();
+    input.focus();
+  }
+
+  function askDeleteTurn(m) {
+    if (sending || jobs.has(chatId) || remoteStream() || otherTab()) return;
+    const id = chatId;
+    const remove = button(tr("Удалить ход"), { class: 'btn btn-danger msg-delete-confirm' });
+    const dialog = openDialog(root, { title: tr("Удалить ход?"), body: [
+      el('p', {}, tr("Сообщение и ответ будут удалены. Следующие ходы останутся."))], actions: [remove] });
+    remove.addEventListener('click', async () => {
+      remove.disabled = true;
+      try {
+        await api('DELETE', `/api/chats/${id}/turns/${m.id}`);
+        dialog.close();
+        if (chatId !== id) return;
+        if (editing?.message.id === m.id) closeEdit();
+        await reload();
+        loadList();
+      } catch (err) {
+        dialog.close();
+        if (chatId === id) notice.textContent = words(err);
+      }
+    });
+  }
+
   function messageNode(m, last) {
     if (m.role === 'user') {
       const box = el('div', { class: 'msg user', 'data-id': m.id });
       if (m.attachments && m.attachments.length) box.append(el('div', { class: 'atts' }, ...m.attachments.map(attLabel)));
       if (m.content) box.append(el('div', { class: 'bubble' }, m.content));
-      if (chat?.chat.cleaner && m.id && (m.content || (m.attachments || []).some((a) => a.kind === 'document'))) {
-        box.append(el('div', { class: 'msg-actions' }, cleanerCopy(m)));
+      if (m.id) {
+        const actions = el('div', { class: 'msg-actions' },
+          button(tr("Изменить"), { class: 'btn btn-sm msg-edit' }, () => editTurn(m)),
+          button(tr("Удалить ход"), { class: 'btn btn-sm msg-delete-turn' }, () => askDeleteTurn(m)));
+        if (chat?.chat.cleaner && (m.content || (m.attachments || []).some((a) => a.kind === 'document'))) {
+          actions.append(cleanerCopy(m));
+        }
+        box.append(actions);
       }
       return box;
     }
     const md = el('div', { class: 'md' });
     const meta = el('p', { class: 'msg-meta' });
+    const model = el('p', { class: 'msg-model muted small', hidden: true });
     const actions = el('div', { class: 'msg-actions' });
-    const steps = Array.isArray(m.tools) && m.tools.length ? sourcesNode(m.tools) : null;
+    const visibleTools = m.tools?.filter((step) => !m.pending || !step.waiting) || [];
+    const steps = visibleTools.length ? sourcesNode(visibleTools) : null;
     const badge = el('button', { type: 'button', class: 'web-badge', hidden: true });
     const think = el('div', { class: 'think-box' });
     badge.addEventListener('click', () => {                    // «Источники» этого ответа — там тексты ошибок
@@ -1546,9 +1605,10 @@ function build(view, ctx) {
     const pending = el('div', { class: 'msg-pending' });
     const plan = el('div', { class: 'msg-todo' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, plan, md, pending, resultFiles(chatId, m, root), consent, steps, meta, nowait, actions));
+      el('div', { class: 'msg-body' }, badge, think, plan, md, pending, resultFiles(chatId, m, root), consent, steps,
+        model, meta, nowait, actions));
     parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '',
-      pending, plan, planKey: '' });
+      pending, plan, model, planKey: '' });
     paint(m);
     return node;
   }
@@ -1572,7 +1632,7 @@ function build(view, ctx) {
      до перечитывания — итог без цвета (ошибок ещё не знаем); нет ничего — плашки нет (ответ по памяти) */
   function paintBadge(p, m, job) {
     const tools = Array.isArray(m.tools) && m.tools.length ? m.tools : null;
-    const steps = tools || m.calls || [];
+    const steps = (tools || m.calls || []).filter((step) => !m.pending || !step.waiting);
     // скан: своя вкладка — событие `ocr`, ответ, который читает не она, — `ocr` сообщения с сервера
     const scan = m.status === 'streaming' ? (job ? job.scan : m.ocr) : null;
     const busy = m.status === 'streaming' && job && job.tool;
@@ -1694,6 +1754,9 @@ function build(view, ctx) {
     }
     p.meta.textContent = text;
     p.meta.className = `msg-meta${kind}`;
+    p.model.hidden = !m.model || m.status === 'streaming';
+    if (!p.model.hidden) p.model.textContent = m.cleaner_raw != null || m.cleanerTurn
+      ? tr("{0} · через Cleaner", m.model) : m.model;
     p.actions.replaceChildren();
     if (m.status === 'streaming' && (job || m.via !== 'browser' || m.live)) return;   // «прервано» можно переспросить
     if (m.content) {
@@ -1801,6 +1864,7 @@ function build(view, ctx) {
 
   function syncBusy() {
     const busy = jobs.has(chatId) || remoteStream();
+    editNote.querySelector('button').disabled = sending;
     send.hidden = busy;
     stop.hidden = !busy;
     paintGuard();
@@ -1822,7 +1886,9 @@ function build(view, ctx) {
     if (attempt.regenerate || attempt.acknowledged) return;
     attempt.acknowledged = true;
     inputDraft.sent(attempt.text);                     // ушли из раздела до подтверждения — черновиком не вернётся
-    if (input.value === attempt.text) { input.value = ''; autosize(); }
+    if (attempt.edit) {
+      if (editing?.message.id === attempt.edit.id && chatId === attempt.id) closeEdit();
+    } else if (input.value === attempt.text) { input.value = ''; autosize(); }
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
   }
@@ -1875,6 +1941,7 @@ function build(view, ctx) {
     roles.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
+    closeEdit();
     if (talking) talking();                          // «Разговор» — у своего диалога, другой его останавливает
     const mine = ++opened;
     chatId = id;
@@ -2043,13 +2110,14 @@ function build(view, ctx) {
   async function submit(regenerate, externalOk = false, webOk = false) {
     stopWaiting();                                 // ждали скан — ход идёт сейчас
     const text = input.value;
-    if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length)) return;
+    const retained = editing?.message.attachments?.length || 0;
+    if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length && !retained)) return;
     if (!regenerate && blocked()) return;
     if (!regenerate && atts.some((a) => a.unfit)) {   // слова — у чипа с выбора файла; диалог не создаётся
       notice.textContent = tr("Уберите неподходящие файлы");
       return;
     }
-    if (!regenerate && atts.length > ATTACH_MAX) {   // как 422 `attachments` сервера; диалог не создаётся
+    if (!regenerate && atts.length + retained > ATTACH_MAX) {
       notice.textContent = tr("не больше {0} вложений в сообщении", ATTACH_MAX);
       return;
     }
@@ -2178,11 +2246,15 @@ function build(view, ctx) {
   async function turn(regenerate, text, externalOk, webOk, made) {
     await ensureChat(made);
     const id = chatId;
+    const edited = regenerate ? null : editing;
     const sent = regenerate ? [] : atts.slice();
     for (const a of sent) {
       if (!(await upload(a))) return;              // отказ — словами у чипа
     }
     if (chatId !== id) return;
+    const edit = edited ? { id: edited.message.id, last_id: edited.last } : null;
+    const turnInput = regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id),
+      ...(edit ? { edit } : {}) };
     let cleanerTicket;
     if (chat.chat.cleaner) {
       let retry;
@@ -2192,8 +2264,7 @@ function build(view, ctx) {
         retry = false;
         notice.textContent = tr("Проверяю данные в Cleaner…");
         const shown = await api('POST', `/api/chats/${id}/cleaner-preview`,
-          { ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
-            cleaner_rules: rules, cleaner_local: local });
+          { ...turnInput, cleaner_rules: rules, cleaner_local: local });
         notice.textContent = '';
         if (chatId !== id) return;
         cleanerTicket = await new Promise((resolve) => {
@@ -2242,12 +2313,16 @@ function build(view, ctx) {
       if (!cleanerTicket || chatId !== id || (!regenerate && input.value !== text)) return;
     }
     const before = chat.messages;
-    const user = regenerate ? null : { id: null, role: 'user', content: text, status: 'done',
-      attachments: sent.map((a) => (a.transcript ? { ...a.meta, source: { transcript_id: a.transcript, exists: true } } : a.meta)) };
-    const message = { id: null, role: 'assistant', content: '', status: 'streaming', via: null, attachments: [] };
+    const user = regenerate ? null : { id: edit?.id || null, role: 'user', content: text, status: 'done',
+      attachments: [...(edited?.message.attachments || []), ...sent.map((a) =>
+        (a.transcript ? { ...a.meta, source: { transcript_id: a.transcript, exists: true } } : a.meta))] };
+    const message = { id: null, role: 'assistant', content: '', status: 'streaming', via: null, attachments: [],
+      model: chat.chat.model, cleanerTurn: !!cleanerTicket };
     const job = { chatId: id, connId: chat.chat.connection_id, user, message, started: Date.now(), first: false,
       lost: false, controller: new AbortController() };
-    const kept = regenerate && before.length && before[before.length - 1].role === 'assistant' ? before.slice(0, -1) : before;
+    let kept = before;
+    if (edit) kept = before.slice(0, before.findIndex((m) => m.id === edit.id));
+    else if (regenerate && before.at(-1)?.role === 'assistant') kept = before.slice(0, -1);
     chat.messages = [...kept, ...(user ? [user] : []), message];
     jobs.set(id, job);
     answering.textContent = tr("Модель отвечает…");
@@ -2255,15 +2330,15 @@ function build(view, ctx) {
     syncBusy();
     scrollDown(true);
     let reply;
-    const signature = JSON.stringify([id, regenerate, text, sent.map((a) => a.meta.id)]);
+    const signature = JSON.stringify([id, turnInput]);
     if (pendingTurn?.signature !== signature) {
-      pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent };
+      pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent, edit };
     }
     const attempt = pendingTurn;
     try {
       reply = await api('POST', `/api/chats/${id}/turns`, {
         request_id: attempt.requestId,
-        ...(regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id) }),
+        ...turnInput,
         ...(externalOk ? { external_ok: true } : {}), ...(webOk ? { web_ok: true } : {}),
         ...(cleanerTicket ? { cleaner_ticket: cleanerTicket } : {}) });
     } catch (err) {
@@ -2308,7 +2383,7 @@ function build(view, ctx) {
     let reply;
     try {
       reply = await api('POST', `/api/chats/${id}/pending/${pending.id}`, {
-        request_id: crypto.randomUUID(), action, ...(answer !== undefined ? { answer } : {}) });
+        action, ...(answer !== undefined ? { answer } : {}) });
     } catch (err) {
       if (chatId === id) {
         notice.textContent = words(err);
@@ -2441,7 +2516,7 @@ function build(view, ctx) {
   }, (err) => { notice.textContent = words(err); });
   const firstList = loadList();
   roles.reload().catch(() => {});
-  kbs.refresh();                                   // нет баз — чипа нет                  // нет списка — в меню только «Без роли» и «Настроить роли»
+  kbs.refresh();                                   // нет баз — чипа нет
   api('GET', '/api/mcp').then(({ items }) => {     // нет списка — у нового диалога чип без числа
     mcpServers = items;
     paintWeb();
@@ -2473,6 +2548,8 @@ function build(view, ctx) {
     },
     destroy() {
       if (talking) talking();
+      closeEdit();
+      ring.hide();
       inputDraft.save();
       sharing.unmount();
       alive = false;
