@@ -721,7 +721,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'chat-delete-confirm' });
     const dialog = openDialog(root, { id: 'chat-delete-dialog', title: tr("Удалить диалог?"),
-      body: [el('p', {}, tr("«{0}» удалится вместе с вложениями.", item.title || tr("Новый диалог"))), fail], actions: [confirm] });
+      body: [el('p', {}, tr("«{0}» уйдёт в корзину на 14 дней вместе с вложениями — оттуда его можно вернуть.", item.title || tr("Новый диалог"))), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {
@@ -873,7 +873,8 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error small', role: 'alert' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'chat-media-delete-confirm' });
     const dialog = openDialog(root, { id: 'chat-media-delete-dialog', title: tr("Удалить файл?"),
-      body: [el('p', {}, item.name), fail], actions: [confirm] });
+      body: [el('p', {}, item.name), el('p', {}, tr("Файл уйдёт в корзину на 14 дней — оттуда его можно вернуть.")), fail],
+      actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       fail.textContent = '';

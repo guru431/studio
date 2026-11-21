@@ -206,7 +206,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'sp-delete-confirm' }, tr("Удалить"));
     const dialog = openDialog(root, { id: 'sp-delete-dialog', title: tr("Удалить озвучку?"), actions: [yes],
-      body: [el('p', {}, tr("Удалятся текст и звук.")), fail] });
+      body: [el('p', {}, tr("Текст и звук уйдут в корзину на 14 дней — оттуда их можно вернуть.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       const navigation = following;
@@ -236,7 +236,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'sp-delete-chat-confirm' }, tr("Удалить"));
     const dialog = openDialog(root, { id: 'sp-delete-chat-dialog', title: tr("Удалить чат озвучки?"), actions: [yes],
-      body: [el('p', {}, tr("Удалятся все записи чата: тексты и звук ({0}).", chat.items.length)), fail] });
+      body: [el('p', {}, tr("Все записи чата ({0}) уйдут в корзину на 14 дней — оттуда их можно вернуть.", chat.items.length)), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       const navigation = following;

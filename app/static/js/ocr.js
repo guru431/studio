@@ -189,7 +189,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'ocr-delete-confirm' }, tr("Удалить"));
     const dialog = openDialog(root, { id: 'ocr-delete-dialog', title: tr("Удалить документ?"), actions: [yes],
-      body: [el('p', {}, tr("Удалятся текст, картинки страниц и исходный файл.")), fail] });
+      body: [el('p', {}, tr("Документ уйдёт в корзину на 14 дней вместе с картинками страниц и исходным файлом — оттуда его можно вернуть.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {

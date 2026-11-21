@@ -197,13 +197,18 @@ export function accessBlock(host) {
     const facts = [sectionName(s.kind), s.expires ? tr("до {0}", moment(s.expires)) : tr("бессрочная"),
       tr("открыта {0} {1}", s.views || 0, plural(s.views || 0, [tr("раз"), tr("раза"), tr("раз")])),
       s.fails ? tr("неверных PIN: {0}", s.fails) : null].filter(Boolean).join(' · ');
-    const href = s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
+    // чат в корзине: ссылка получателю недоступна, пока его не вернут; открыть его — со страницы «Корзина»
+    const href = s.trashed ? '#/trash' : s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
       : s.session_id ? `#/code/${s.computer_id}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session_id)}` : null;
-    const info = el('div', { class: 'session-info' }, el('b', {}, title), el('p', { class: 'muted small' }, facts),
+    const info = el('div', { class: 'session-info' },
+      el('div', { class: 'row' }, el('b', {}, title),
+        s.trashed ? el('span', { class: 'tag access-trashed' }, tr("в корзине — недоступна")) : null),
+      el('p', { class: 'muted small' }, facts),
       el('p', { class: 'muted small' }, tr("Создана {0}", moment(s.created))));
     return el('li', { class: 'agent session access-share', 'data-id': s.id }, info,
       el('div', { class: 'session-actions' },
-        href ? el('a', { class: 'btn btn-sm access-open', href, 'aria-label': tr("Открыть чат: {0}", title) }, tr("Открыть чат")) : null,
+        href ? el('a', { class: 'btn btn-sm access-open', href, 'aria-label': s.trashed ? tr("Открыть корзину: {0}", title)
+          : tr("Открыть чат: {0}", title) }, s.trashed ? tr("Открыть корзину") : tr("Открыть чат")) : null,
         button(tr("Копировать ссылку"), { class: 'btn btn-sm access-copy', 'aria-label': tr("Копировать ссылку: {0}", title) },
           () => copyLink(s, info)),
         button(tr("Отключить"), { class: 'btn btn-sm btn-danger access-revoke',

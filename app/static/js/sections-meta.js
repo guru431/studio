@@ -25,6 +25,7 @@ export const NAMES = {
   search: tr("Поиск"),
   settings: tr("Настройки"),
   help: tr("Справка"),
+  trash: tr("Корзина"),
   admin: tr("Администрирование"),
 };
 
