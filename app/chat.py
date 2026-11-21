@@ -1168,6 +1168,8 @@ class StreamTask:
                     step = await chat_tools.call(self, c)
                     if self.paused:
                         return PAUSED
+                    if step["kind"] == "knowledge":     # найденное — до 9 тыс. знаков, как результат «Интернета»
+                        step = self._fit(step)
             elif n >= CALLS_PER_ROUND:
                 step = {"kind": kind, **web.asked(kind, c.arguments), "error": TOO_MANY}
             elif kind == "unknown":                  # не инструмент «Интернета» и не MCP — не «Интернет выключен»
