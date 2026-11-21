@@ -95,6 +95,7 @@ import { readSSE } from './sse.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
+import { NAMES } from './sections-meta.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
   '.ini', '.log', '.py', '.js', '.ts', '.html', '.css', '.sql', '.sh', '.ps1'];   // как documents.SUFFIXES
@@ -580,6 +581,7 @@ function build(view, ctx) {
   let failures = 0;
   let historyRead = null;
   let pendingTurn = null;      // request id and unsent draft: this view's memory only
+  let droppedNote = '';        // адрес подключения чипа убран из списка администратора — слова для #model-note
   const parts = new WeakMap(); // сообщение → его узлы в ленте
   const received = new WeakMap(); // сообщение с сервера → его JSON при получении (settle)
   const shown = new WeakMap();    // сообщение → { node, last, cleaner }: узел в ленте и с чем он нарисован
@@ -593,14 +595,15 @@ function build(view, ctx) {
   const toggle = iconButton('list', tr("Диалоги"), { id: 'chats-toggle', class: 'icon-btn chats-toggle', 'aria-controls': 'chats',
     'aria-expanded': 'false' });
   const chipName = el('span', { class: 'chip-name' });
-  const chip = el('button', { type: 'button', id: 'model-chip', class: 'model-chip' },
+  // чип модели — первым в ряду под полем, как выбор модели «Агентов»; подключение — подсказкой чипа и для скринридера
+  const chip = el('button', { type: 'button', id: 'model-chip', class: 'model-chip ctl-chip' },
     el('span', { class: 'dot', 'aria-hidden': 'true' }), chipName, icon('down', 'ico caret'));
   // меню моделей — общий компонент menu.js: группы по подключениям, выбранная — menuitemradio с ✓
   const modelMenu = el('div', { id: 'model-menu', class: 'model-menu', role: 'menu', 'aria-label': tr("Модель") });
-  const models = popupMenu(chip, modelMenu, { fill: fillModels });
-  const connName = el('span', { class: 'chat-conn' });
-  const head = el('header', { class: 'head chat-head' }, toggle,
-    el('div', { class: 'model-wrap' }, chip, modelMenu), connName);
+  const models = popupMenu(chip, modelMenu, { fill: fillModels, side: 'above' });
+  const connName = el('span', { class: 'chat-conn sr' });
+  const modelWrap = el('div', { class: 'model-wrap' }, chip, connName, modelMenu);
+  const head = el('header', { class: 'head chat-head' }, toggle, el('h1', {}, NAMES.chat), el('span', { class: 'grow' }));
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -619,11 +622,11 @@ function build(view, ctx) {
   const stop = el('button', { type: 'button', id: 'stop', class: 'send composer-go composer-stop', 'aria-label': tr("Остановить"),
     title: tr("Остановить"), hidden: true }, icon('stop'));
   // на узком экране слово кнопки прячется (.toggle-word), остаётся значок: слово — в aria-label и title
-  const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip web-toggle', 'aria-pressed': 'false',
+  const webToggle = el('button', { type: 'button', id: 'web-toggle', class: 'chip ctl-chip web-toggle', 'aria-pressed': 'false',
     'aria-label': tr("Интернет"), title: WEB_TITLE, hidden: true }, icon('globe'), el('span', { class: 'toggle-word' }, tr("Интернет")));
-  const mcpToggle = el('button', { type: 'button', id: 'mcp-toggle', class: 'chip', hidden: true,
+  const mcpToggle = el('button', { type: 'button', id: 'mcp-toggle', class: 'chip ctl-chip', hidden: true,
     'aria-label': tr("Инструменты MCP"), 'aria-haspopup': 'dialog' }, 'MCP');
-  const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip think-toggle', 'aria-pressed': 'false',
+  const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip ctl-chip think-toggle', 'aria-pressed': 'false',
     'aria-label': tr("Рассуждение"), title: THINK_TITLE, hidden: true }, icon('bulb'),
   el('span', { class: 'toggle-word' }, tr("Рассуждение")));
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
@@ -638,7 +641,7 @@ function build(view, ctx) {
     failed: (err) => { notice.textContent = words(err); } });
   const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, inputBox.box, inputBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, roles.chip, roles.menu, webToggle, mcpToggle,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, roles.chip, roles.menu, webToggle, mcpToggle,
       thinkToggle), send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
@@ -797,6 +800,8 @@ function build(view, ctx) {
     const name = link ? link.connection.name : '';
     connName.textContent = !dropped ? name : name ? tr("{0}: адрес убран из списка администратора", name)
       : tr("адрес подключения убран из списка администратора");
+    chip.title = connName.textContent;
+    droppedNote = dropped ? connName.textContent : '';     // в шапке подключения больше нет: отказ — строкой над лентой
     paintGuard();
     paintThink();
     paintWeb();
@@ -1130,7 +1135,7 @@ function build(view, ctx) {
   }
 
   function paintGuard() {
-    modelNote.textContent = blocked() ? EXTERNAL_NOTE : '';
+    modelNote.textContent = blocked() ? EXTERNAL_NOTE : droppedNote;
     send.disabled = sending || blocked();
   }
 

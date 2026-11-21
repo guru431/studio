@@ -25,7 +25,7 @@ PHONES = {f"{width}-{lang}" for width in (320, 390) for lang in LANGS}
 #: правки разделов; strict: исправленное, но не убранное отсюда, — провал.
 TODO = {
     "head": {"photo": {"320-ru", "320-en", "390-en"}, "video": {"320-ru", "320-en"}},
-    "controls": {section: EVERY for section in ("chat", "photo", "video", "speech")},
+    "controls": {section: EVERY for section in ("photo", "video", "speech")},
     "scroll": {},
 }
 
