@@ -20,7 +20,7 @@ function pairs(text, masked = false) {
   return Object.fromEntries(entries);
 }
 
-function editor(host, previous, { local = false, save }) {
+function editor(host, previous, { local = false, shared = false, save }) {
   const old = previous || {}, oldHeaders = { ...old.headers };
   const auth = local && Object.keys(oldHeaders).find(k => k.toLowerCase() === 'authorization');
   if (auth) delete oldHeaders[auth];
@@ -34,6 +34,10 @@ function editor(host, previous, { local = false, save }) {
   const command = input('mcp-command', 'text', old.command || '');
   const args = area('mcp-args', (old.args || []).join('\n')), env = area('mcp-env', lines(old.env));
   const enabled = input('mcp-enabled', 'checkbox'); enabled.checked = !old.disabled && old.enabled !== false;
+  // «Защищённый источник» (mcp_client.ServerIn.protected) — только у общего сервера в панели администратора
+  const guarded = input('mcp-protected', 'checkbox'); guarded.checked = !!old.protected;
+  const guard = shared ? el('div', {}, el('label', { class: 'check' }, guarded, tr("Защищённый источник")),
+    el('p', { class: 'muted small' }, tr("После первого успешного вызова инструмента этого сервера в диалоге выключаются «Интернет» и веб-инструменты, а вызовы со ссылками в аргументах отклоняются."))) : null;
   const remote = el('div', {}, field(tr("Адрес MCP"), url), field(tr("Токен Bearer"), token),
     el('label', { class: 'check' }, clear, tr("Удалить сохранённый токен")),
     field(tr("HTTP-заголовки (ИМЯ=значение, по одному на строку)"), headers),
@@ -47,7 +51,7 @@ function editor(host, previous, { local = false, save }) {
   const note = el('p', { class: 'error', id: 'mcp-editor-status', 'aria-live': 'polite' });
   const submit = button(tr("Сохранить"), { type: 'submit', class: 'btn btn-accent', id: 'mcp-save' });
   const form = el('form', { id: 'mcp-form' }, field(tr("Имя сервера"), name), field(tr("Тип подключения"), type), remote,
-    ...(local ? [stdio] : []), el('label', { class: 'check' }, enabled, tr("Включено")), note, submit);
+    ...(local ? [stdio] : []), el('label', { class: 'check' }, enabled, tr("Включено")), guard, note, submit);
   const dialog = openDialog(host, { id: 'mcp-editor', title: tr("Подключение MCP"), body: [form] });
   form.addEventListener('submit', async event => {
     event.preventDefault(); submit.disabled = true; note.textContent = '';
@@ -61,6 +65,7 @@ function editor(host, previous, { local = false, save }) {
           else if (auth && !clear.checked) value.headers[auth] = old.headers[auth];
         } else if (token.value || clear.checked) value.token = clear.checked ? '' : token.value;
       }
+      if (shared) value.protected = guarded.checked;
       await save(name.value.trim(), value, enabled.checked); dialog.close();
     } catch (err) { note.textContent = words(err); }
     finally { submit.disabled = false; }
@@ -268,7 +273,7 @@ export function chatMcpBlock({ admin = false } = {}) {
     }
   }
   function edit(item) {
-    editor(root, item, { save: async (name, value, enabled) => {
+    editor(root, item, { shared: admin, save: async (name, value, enabled) => {
       const { type, ...fields } = value;
       await api(item ? 'PUT' : 'POST', item ? `${base}/${item.id}` : base, { ...fields, name, enabled }); await reload();
     } });

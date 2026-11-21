@@ -131,6 +131,8 @@ const SCAN_RUNNING = ['queued', 'working', 'cancelling'];   // как ocr.RUNNIN
 const NOT_READY = tr("скан ещё распознаётся — отправлю, когда будет готов");
 const EXTERNAL_NOTE = tr("Запись уйдёт во внешний сервис — выберите модель");
 const WEB_HINT = tr("Задайте ключ Exa в Настройках → Ввод и интернет → Интернет");
+// chats.protected_used: в диалоге сработал «Защищённый источник» MCP — сервер не включит «Интернет» (409 `protected`)
+const PROTECTED_HINT = tr("В этом диалоге сработал защищённый источник — «Интернет» здесь недоступен");
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
 const WEB_TITLE = tr("Интернет: поиск, страницы и субтитры YouTube");
 const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
@@ -785,6 +787,7 @@ function build(view, ctx) {
       proxied = !!link && !!link.connection.proxied;
     }
     if (!proxied) return 'hidden';
+    if (chat?.chat.protected) return 'protected';
     return me && me.exa_key ? 'ready' : 'nokey';
   }
 
@@ -798,9 +801,9 @@ function build(view, ctx) {
 
   function paintWeb() {
     const mode = webState();
-    const hint = mode === 'nokey' ? WEB_HINT : '';
+    const hint = mode === 'nokey' ? WEB_HINT : mode === 'protected' ? PROTECTED_HINT : '';
     webToggle.hidden = mode === 'hidden';
-    webToggle.disabled = mode === 'nokey';
+    webToggle.disabled = mode === 'nokey' || mode === 'protected';
     webToggle.setAttribute('aria-pressed', String(webOn()));
     webToggle.title = hint || WEB_TITLE;
     webNote.textContent = hint || (webOn() && thinkOn() ? THINK_NOTE : '');
