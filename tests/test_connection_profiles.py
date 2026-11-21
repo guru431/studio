@@ -171,3 +171,14 @@ def test_refusal_needs_a_rejection_marker_next_to_the_name():
     extra = '{"detail": [{"type": "extra_forbidden", "loc": ["body", "top_k"], "msg": "Extra inputs are not permitted"}]}'
     assert profiles.refusal(extra, SENT) == profiles.REFUSED.format("top_k")
     assert profiles.refusal("Unrecognized request argument supplied: top_k", {"temperature": 0.3}) is None
+
+
+def test_page_rejection_markers_match_the_server():
+    """Прямой ход узнаёт отказ параметра на странице (chat.js `serviceRefusal`) по тем же признакам, что сервер."""
+    import re
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/chat.js").read_text(encoding="utf-8")
+    block = re.search(r"const REJECTED = \[(.*?)\];", source, re.S)
+    assert block, "нет REJECTED в chat.js"
+    assert tuple(re.findall(r"'([^']*)'", block.group(1))) == profiles.REJECTED
+    assert "REJECTED.some((marker) => lowered.includes(marker))" in source

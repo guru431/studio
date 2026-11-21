@@ -321,7 +321,12 @@ async function tokenFor(connId, url) {
   return fresh.token;
 }
 
-/* 400 с именем отправленного параметра профиля подключения — слова profiles.REFUSED, как у хода через сервер */
+/* признаки отказа по параметру в ответе 400 — как profiles.REJECTED (сверяет tests/test_connection_profiles.py) */
+const REJECTED = ['unknown', 'unsupported', 'unrecognized', 'not supported', 'extra fields not permitted',
+  'extra inputs are not permitted', 'unexpected keyword'];
+
+/* 400 с именем отправленного параметра профиля подключения и признаком отказа — слова profiles.REFUSED, как у хода
+   через сервер (profiles.refusal): одного имени мало — ошибка длины контекста vLLM называет `max_tokens` */
 async function serviceRefusal(response, params) {
   let text = '';
   try {
@@ -330,7 +335,8 @@ async function serviceRefusal(response, params) {
     // тело не прочиталось — без подробностей
   }
   const lowered = text.toLowerCase();
-  const refused = response.status === 400 && Object.keys(params || {}).find((name) => lowered.includes(name));
+  const refused = response.status === 400 && REJECTED.some((marker) => lowered.includes(marker))
+    && Object.keys(params || {}).find((name) => lowered.includes(name));
   if (refused) return tr("подключение не принимает параметр «{0}» — уберите его в профиле подключения", refused);
   let detail = '';
   try {
