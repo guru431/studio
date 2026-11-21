@@ -53,7 +53,7 @@ import { deviceZone, offsetOf } from './timezone-offer.js';
 import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { rolesBlock } from './roles.js';
 import { smtpSettings } from './smtp-settings.js';
-import { NAMES, SECTIONS as RAIL_SECTIONS, sectionPairs } from './sections-meta.js';
+import { NAMES, SECTIONS as RAIL_SECTIONS, sectionName, sectionPairs } from './sections-meta.js';
 
 export { modelLabel };     // подписи моделей — models.js; разделы берут их отсюда
 
@@ -625,6 +625,10 @@ export function filesText(n) {
   return `${n} ${plural(n, [tr("файл"), tr("файла"), tr("файлов")])}`;
 }
 
+export function recordsText(n) {
+  return `${n} ${plural(n, [tr("запись"), tr("записи"), tr("записей")])}`;
+}
+
 export function momentText(ts) {
   return dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 }
@@ -697,13 +701,28 @@ function exportDialog(host) {
   }
 }
 
+/** Адрес записи из «Самых тяжёлых»: чат — #/chat/<id>, голос — настройки «Озвучки», прочее — #/<раздел>?id=<id>. */
+function heavyHref(item) {
+  if (item.kind === 'chats') return `#/chat/${encodeURIComponent(item.id)}`;
+  if (item.kind === 'voices') return '#/settings/speech';
+  return `#/${item.section}?id=${encodeURIComponent(item.id)}`;
+}
+
 function storageBlock(host) {
   const list = el('dl', { class: 'storage', id: 'storage' });
   const queue = status('storage-queue');
+  // корзина (trash.py) и неудачные записи разделов: перенос в корзину обратим — без окна подтверждения
+  const trashLine = el('p', { id: 'storage-trash', class: 'small' });
+  const failedLine = el('p', { id: 'storage-failed', class: 'small' });
+  const moveFailed = button(tr("Перенести в корзину"), { class: 'btn btn-sm', id: 'storage-failed-move', hidden: true });
+  const heavy = el('ol', { id: 'storage-heaviest', class: 'storage-heaviest' });
+  const heavyBox = el('details', { class: 'storage-heavy', hidden: true }, el('summary', {}, tr("Самые тяжёлые записи")), heavy);
+  let failedSections = [];
 
   async function reload() {
     try {
-      const { kinds, total, pending, cleaner_pending, cleaner_stalled } = await api('GET', '/api/me/storage');
+      const { kinds, total, pending, cleaner_pending, cleaner_stalled, heaviest = [], trash = {}, failed = {} } =
+        await api('GET', '/api/me/storage');
       const line = (key, name, n) => [el('dt', {}, name),
         el('dd', { 'data-kind': key }, `${filesText(n.files)} · ${sizeText(n.bytes)}`)];
       list.replaceChildren(...kinds.filter((k) => k.files).flatMap((k) => line(k.kind, KIND_NAMES[k.kind] || k.kind, k)),
@@ -711,13 +730,40 @@ function storageBlock(host) {
       say(queue, ...queueText(pending));
       if (cleaner_pending) queue.textContent += tr(" Контекстов Cleaner в очереди удаления: {0}.", cleaner_pending);
       for (const s of cleaner_stalled || []) queue.textContent += tr(" Отложено после неудачи ({0}): {1}.", s.base_url, s.count);
+      const trashed = Object.values(trash).reduce((sum, t) => ({ count: sum.count + t.count, bytes: sum.bytes + t.bytes }),
+        { count: 0, bytes: 0 });
+      trashLine.replaceChildren(trashed.count
+        ? tr("В корзине: {0} · {1} — удалятся через 14 дней после удаления. ", recordsText(trashed.count), sizeText(trashed.bytes))
+        : tr("Корзина пуста. "), el('a', { href: '#/trash', id: 'storage-trash-open' }, tr("Открыть корзину")));
+      failedSections = Object.keys(failed);
+      failedLine.textContent = failedSections.length
+        ? tr("Неудачные и отменённые: {0}", failedSections.map((s) => `${sectionName(s)} — ${failed[s]}`).join(', ')) : '';
+      moveFailed.hidden = !failedSections.length;
+      heavy.replaceChildren(...heaviest.map((item) => el('li', { 'data-section': item.section },
+        el('a', { href: heavyHref(item) }, item.title), el('span', { class: 'muted small' },
+          ` · ${sectionName(item.section)} · ${sizeText(item.bytes)}`))));
+      heavyBox.hidden = !heaviest.length;
     } catch (err) {
       say(queue, words(err), 'error');
     }
   }
 
+  moveFailed.addEventListener('click', async () => {
+    moveFailed.disabled = true;
+    try {
+      const { moved } = await api('POST', '/api/me/storage/failed', { sections: failedSections });
+      say(queue, tr("В корзину перенесено: {0}", recordsText(moved)), 'ok');
+      await reload();
+    } catch (err) {
+      say(queue, words(err), 'error');
+    } finally {
+      moveFailed.disabled = false;
+    }
+  });
+
   reload();
   return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, tr("Хранилище")), list, queue,
+    trashLine, el('div', { class: 'row' }, failedLine, moveFailed), heavyBox,
     el('p', { class: 'muted small' }, tr("Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).")),
     el('div', { class: 'row' }, button(tr("Выгрузить мою историю"), { class: 'btn', id: 'export-open' },
       () => exportDialog(host)))) };
@@ -1027,20 +1073,33 @@ function wipeBlock(host, onWiped) {
     const text = el('p', {}, wipeWhat());
     const kept = el('p', { class: 'muted small' }, tr("Подключения, пресеты и ключи останутся, как и настройки, компьютеры, выданные доступы к проектам и журнал безопасности."));
     const fail = el('p', { class: 'error' });
+    // окончательно, с корзиной — только паролем учётки (те же паузы, что у выключения блокировки)
+    const password = el('input', { class: 'input', id: 'wipe-password', type: 'password',
+      autocomplete: 'current-password', maxlength: '1024' });
+    const passwordRow = field(tr("Пароль учётки"), password, 'password');
+    passwordRow.hidden = true;
     const next = button(tr("Удалить"), { class: 'btn btn-danger', id: 'wipe-next' });
     const confirm = button(tr("Да, удалить навсегда"), { class: 'btn btn-danger solid', id: 'wipe-confirm', hidden: true });
-    const dialog = openDialog(host, { id: 'wipe-dialog', title: tr("Удалить всю историю?"), body: [text, kept, fail],
-      actions: [next, confirm] });
+    const dialog = openDialog(host, { id: 'wipe-dialog', title: tr("Удалить всю историю?"),
+      body: [text, kept, passwordRow, fail], actions: [next, confirm] });
     next.addEventListener('click', () => {
-      text.textContent = tr("Точно? Отменить удаление нельзя.");
+      text.textContent = tr("Точно? Отменить удаление нельзя: корзина тоже очистится. Введите пароль учётки.");
       next.hidden = true;
       confirm.hidden = false;
-      confirm.focus();
+      passwordRow.hidden = false;
+      password.focus();
     });
     confirm.addEventListener('click', async () => {
+      fail.textContent = '';
+      if (!password.value) {
+        fail.textContent = tr("Введите пароль учётки");
+        password.focus();
+        return;
+      }
       confirm.disabled = true;
       try {
-        const { pending_files: left, cleaner_pending } = await api('DELETE', '/api/history');
+        const { pending_files: left, cleaner_pending } = await api('DELETE', '/api/history', { password: password.value });
+        password.value = '';
         dialog.close();
         // хранилище было недоступно: файлы ждут в очереди удаления — сказать как есть
         say(note, left ? tr("История удалена, но файлов на хранилище ещё {0}: удалятся, когда оно станет доступно", left)
@@ -1125,7 +1184,7 @@ function voicesBlock(host) {
     const yes = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'voice-delete-confirm' });
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
     const dialog = openDialog(host, { id: 'voice-delete-dialog', title: tr("Удалить голос?"), actions: [yes],
-      body: [el('p', {}, tr("Будет удалён голос «{0}». Количество образцов: {1}.", voice.name, voice.sample_count)), fail] });
+      body: [el('p', {}, tr("Голос «{0}» уйдёт в корзину на 14 дней — оттуда его можно вернуть. Количество образцов: {1}.", voice.name, voice.sample_count)), fail] });
     dialog.addEventListener('close', () => trigger.focus({ preventScroll: true }));
     yes.addEventListener('click', async () => {
       yes.disabled = true;

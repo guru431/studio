@@ -161,7 +161,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tr-delete-confirm' }, tr("Удалить"));
     const dialog = openDialog(root, { id: 'tr-delete-dialog', title: tr("Удалить расшифровку?"), actions: [yes],
-      body: [el('p', {}, tr("Текст удалится. Исходная запись сохранится, если её используют другие расшифровки.")), fail] });
+      body: [el('p', {}, tr("Расшифровка уйдёт в корзину на 14 дней — оттуда её можно вернуть.")), fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {

@@ -229,7 +229,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     const progress = el('p', { class: 'muted small', 'aria-live': 'polite' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: `${section}-select-delete-confirm` });
     const dialog = openDialog(ctx.root, { id: `${section}-select-delete-dialog`, title: tr("Удалить {0} {1}?", n, plural(n, nouns)),
-      body: [el('p', {}, tr("Удалятся из истории вместе с файлами.")), progress], actions: [confirm] });
+      body: [el('p', {}, tr("Уйдут в корзину на 14 дней вместе с файлами — оттуда их можно вернуть.")), progress], actions: [confirm] });
     let running = false;
     let stopped = false;
     dialog.addEventListener('close', () => { if (running) stopped = true; });

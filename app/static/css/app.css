@@ -1499,6 +1499,13 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .help-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
 .help-chips .chip { white-space: normal; text-align: left; }
 .help-text h2 { scroll-margin-top: var(--space-5); }
+/* «Корзина» (trash.js): записи по разделам — строки списка компьютеров (.agents/.session) */
+.trash-page { gap: var(--space-5); }
+.trash-page #trash-status:empty { display: none; }
+.trash-group h2 { margin: var(--space-5) 0 var(--space-4); font-size: var(--fs-md); font-weight: 600; }
+/* «Хранилище» (settings.js): самые тяжёлые записи */
+.storage-heaviest { margin: var(--space-3) 0 0; padding-left: var(--space-7); overflow-wrap: anywhere; }
+.storage-heaviest li + li { margin-top: var(--space-2); }
 /* «Поиск» (search.js): поле, чипы раздела, модель и период, выдача по дням */
 .search-page { gap: var(--space-5); }
 .search-chips, .search-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }

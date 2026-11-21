@@ -221,7 +221,7 @@ def test_avatar_menu_and_logout(browser, live, width):
         ("wait", "location.pathname === '/login' && document.querySelector('#login')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Справка", "Администрирование", "Выйти"]
+    assert r["values"]["items"] == ["Настройки", "Справка", "Корзина", "Администрирование", "Выйти"]
     assert r["values"]["inside"]
     assert not problems(r), problems(r)
 
@@ -335,7 +335,7 @@ def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
         ("eval", "items", MENU_ITEMS),
         ("eval", "go", "location.hash = '#/admin'"), ("wait", "location.hash === '#/chat'")])
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Справка", "Выйти"]
+    assert r["values"]["items"] == ["Настройки", "Справка", "Корзина", "Выйти"]
 
 
 def test_api_passes_the_deadline_through(browser, live):
@@ -943,7 +943,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
         ("eval", "confirmHidden", "document.querySelector('#wipe-confirm').hidden"),
         ("eval", "warning", "document.querySelector('#wipe-dialog p').textContent"),
         ("click", "#wipe-next"), ("wait", "!document.querySelector('#wipe-confirm').hidden"),
-        ("click", "#wipe-confirm"),
+        ("type", "#wipe-password", "password-123"), ("click", "#wipe-confirm"),
         # начало: Windows иногда на миг держит свежий файл (антивирус) — он уходит в очередь удаления,
         # и статус добавляет «но файлов на хранилище ещё 1»; на debian открытый файл удаляется сразу
         ("wait", "document.querySelector('#wipe-status').textContent.startsWith('История удалена')"),
@@ -1001,7 +1001,8 @@ def test_storage_block_shows_own_files_and_the_queue_until_the_wipe(browser, liv
             ("eval", "before", STORAGE_TEXTS), ("eval", "queue", "document.querySelector('#storage-queue').textContent"),
             ("eval", "fits", NO_OVERFLOW),
             ("click", "#history-wipe"), ("wait", is_open("#wipe-dialog")), ("click", "#wipe-next"),
-            ("wait", "!document.querySelector('#wipe-confirm').hidden"), ("click", "#wipe-confirm"),
+            ("wait", "!document.querySelector('#wipe-confirm').hidden"), ("type", "#wipe-password", "password-123"),
+            ("click", "#wipe-confirm"),
             ("wait", "document.querySelector('#storage-queue').textContent.startsWith('Очередь удаления пуста')"),
             ("eval", "after", STORAGE_TEXTS)], width=390, mobile=True)
     finally:
@@ -7778,7 +7779,7 @@ def test_translate_into_arabic_reads_right_to_left(browser, live, translator):
 
 def test_translate_delete_window_says_whether_the_scan_stays(browser, live, translator):
     """Ревью: перевод скана и его повтор держат один документ «Сканов» — окно удаления первой записи говорит, что
-    скан останется; удалили её — окно оставшейся говорит, что скан удалится вместе с переводом."""
+    скан останется; удалили её — окно оставшейся говорит, что скан удалится вместе с переводом (из корзины)."""
     from scans import scan_pdf
     live.add_user("tl-delscan")
     translator.chat_script = [["Страница."], ["Seite."]]
@@ -7811,7 +7812,7 @@ def test_translate_delete_window_says_whether_the_scan_stays(browser, live, tran
     v = r["values"]
     assert v["again"] is not None
     assert v["shared"][-1] == "Распознанный документ останется в «Сканах»: его использует повтор этого перевода."
-    assert v["alone"][-1] == "Распознанный документ в «Сканах» удалится вместе с переводом."
+    assert v["alone"][-1] == "Распознанный документ в «Сканах» удалится вместе с переводом, когда перевод удалится из корзины."
     assert not problems(r), problems(r)
 
 

@@ -613,11 +613,10 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'tl-delete-confirm' }, tr("Удалить"));
     const dialog = openDialog(body, { id: 'tl-delete-dialog', title: tr("Удалить перевод?"), actions: [yes],
-      body: [el('p', {}, item.kind === 'text' || item.scan_id ? tr("Удалятся исходник и перевод.")
-          : tr("Удалятся исходник и перевод, а исходный файл — если его не использует повтор этого перевода.")),
+      body: [el('p', {}, tr("Перевод уйдёт в корзину на 14 дней — оттуда его можно вернуть.")),
         item.scan_id ? el('p', {}, item.scan_shared
           ? tr("Распознанный документ останется в «Сканах»: его использует повтор этого перевода.")
-          : tr("Распознанный документ в «Сканах» удалится вместе с переводом.")) : null, fail] });
+          : tr("Распознанный документ в «Сканах» удалится вместе с переводом, когда перевод удалится из корзины.")) : null, fail] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
