@@ -291,7 +291,9 @@ def _store(job: Job) -> None:
 
 
 def _row(user_id: int, image_id: str):
-    row = state.DB.execute("SELECT * FROM images WHERE id = ? AND user_id = ?", (image_id, user_id)).fetchone()
+    """Своя картинка не из корзины (`deleted`, trash.py), иначе 404."""
+    row = state.DB.execute("SELECT * FROM images WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (image_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такой картинки нет"})
     return row
@@ -537,7 +539,7 @@ async def list_images(request: Request, before: "float | None" = None,
     after=<created>&after_id=<id> записи — ближайшие более новые (просмотр записи вне загруженной ленты)."""
     if (after is None) != (after_id is None):
         raise HTTPException(422, {"code": "after", "message": "after и after_id — только вместе"})
-    rows = db.page(state.DB, "images", request.state.user.id, before, before_id, limit,
+    rows = db.page(state.DB, "images", request.state.user.id, before, before_id, limit, extra=" AND deleted IS NULL",
                    after=None if after is None else (after, after_id))
     return {"items": [_out(r, with_chain=False) for r in rows]}
 
@@ -670,7 +672,8 @@ async def variants(image_id: str, request: Request):
         if media_id is None:
             return []
         rows = state.DB.execute("SELECT * FROM images WHERE user_id = ? AND source_media_id = ? AND id != ?"
-                                " AND state = 'done' AND media_id IS NOT NULL ORDER BY created DESC, id DESC LIMIT ?",
+                                " AND state = 'done' AND media_id IS NOT NULL AND deleted IS NULL"
+                                " ORDER BY created DESC, id DESC LIMIT ?",
                                 (uid, media_id, image_id, VARIANTS_MAX))
         return [_out(r, with_chain=False) for r in rows]
 
@@ -695,17 +698,29 @@ async def cancel_job(job_id: str, request: Request):
 
 @router.delete("/{image_id}", status_code=204)
 async def delete_image(image_id: str, request: Request):
-    """Строка и её файлы; файл, на который ссылается другая запись истории, остаётся."""
+    """Кончившаяся картинка — в корзину (`deleted`, trash.py); строка и файлы — до `purge`."""
     uid = request.state.user.id
     row = _row(uid, image_id)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
-    state.DB.execute("DELETE FROM images WHERE id = ?", (image_id,))
+    state.DB.execute("UPDATE images SET deleted = ? WHERE id = ?", (clock.NOW(), image_id))
     JOBS.pop(image_id, None)
-    for media_id in {row["media_id"], row["source_media_id"], row["mask_media_id"]} - {None}:
-        if not media.referenced(uid, media_id):
-            await media.delete_async(uid, media_id)
+    log.info("картинка %s: в корзине", image_id[:8])
     return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: строка и её файлы; файл, на который ссылается другая запись истории, остаётся. Строки уже
+    нет — ничего."""
+    row = state.DB.execute("SELECT * FROM images WHERE id = ? AND user_id = ?", (item_id, user_id)).fetchone()
+    if row is None:
+        return
+    state.DB.execute("DELETE FROM images WHERE id = ?", (item_id,))
+    JOBS.pop(item_id, None)
+    for media_id in {row["media_id"], row["source_media_id"], row["mask_media_id"]} - {None}:
+        if not media.referenced(user_id, media_id):
+            await media.delete_async(user_id, media_id)
+    log.info("картинка %s: удалена", item_id[:8])
 
 
 # ---- шлюз ------------------------------------------------------------------

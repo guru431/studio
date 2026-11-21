@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 import chat
 import clock
+import images
 import lock_policy
 import mcp_files
 import operations
@@ -58,6 +59,14 @@ class Kind:
     live: str = ""                                # условие строки, которую видно и можно вернуть
 
 
+HEAD = 80                                         # знаков текста записи в названии строки корзины
+
+
+def _head(text: "str | None", fallback: str) -> str:
+    text = " ".join((text or "").split())
+    return (text[:HEAD].rstrip() + "…" if len(text) > HEAD else text) or fallback
+
+
 KINDS: dict[str, Kind] = {
     "chats": Kind("chats", "chat", chat.purge, lambda row: row["title"] or "Новый диалог",
                   "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = :id"
@@ -66,6 +75,9 @@ KINDS: dict[str, Kind] = {
     "chat_media": Kind("chat_media", "chat", mcp_files.purge_media, lambda row: row["name"],
                        "SELECT media_id FROM chat_media WHERE id = :id",
                        live=" AND chat_id IN (SELECT id FROM chats WHERE deleted IS NULL)"),
+    "images": Kind("images", "photo", images.purge, lambda row: _head(row["prompt"], "Картинка"),
+                   "SELECT media_id FROM images WHERE id = :id UNION SELECT source_media_id FROM images WHERE id = :id"
+                   " UNION SELECT mask_media_id FROM images WHERE id = :id", search="photo"),
 }
 
 
