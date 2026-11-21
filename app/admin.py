@@ -35,6 +35,7 @@ import db
 import email_accounts
 import history
 import images
+import knowledge
 import manage
 import mcp_client
 import mcp_sources
@@ -441,6 +442,52 @@ async def put_chat_settings(body: ChatSettingsIn, admin: auth.User = Depends(aut
     chat.set_tool_rounds(body.tool_rounds)
     log.info("администратор %d: кругов инструментов в чате — %d", admin.id, body.tool_rounds)
     return {"tool_rounds": chat.tool_rounds()}
+
+
+# ---- знания: источник эмбеддингов и общие базы (knowledge.py) ----------------------
+
+class KnowledgeAccessIn(BaseModel):
+    groups: "list[int] | None" = Field(None, max_length=200)     # None — всем
+
+
+@router.get("/knowledge")
+async def get_knowledge():
+    """Источник эмбеддингов (`settings.knowledge_source`; null — только BM25) и общие базы с группами."""
+    return {"source": knowledge.source(), "bases": knowledge.shared_bases()}
+
+
+@router.put("/knowledge")
+async def put_knowledge(body: knowledge.SourceIn, admin: auth.User = Depends(auth.require_admin)):
+    knowledge.set_source(body)
+    log.info("администратор %d: источник знаний %s", admin.id, "задан" if body.connection_id else "снят")
+    return await get_knowledge()
+
+
+@router.post("/knowledge/bases", status_code=201)
+async def create_shared_base(body: knowledge.BaseIn):
+    return {**knowledge.create_base(None, body.name), "groups": []}
+
+
+@router.delete("/knowledge/bases/{kb_id}", status_code=204)
+async def delete_shared_base(kb_id: str):
+    knowledge.delete_shared(kb_id)
+    return Response(status_code=204)
+
+
+@router.put("/knowledge/bases/{kb_id}/access")
+async def put_shared_base_access(kb_id: str, body: KnowledgeAccessIn):
+    return {"groups": knowledge.set_access(kb_id, body.groups)}
+
+
+@router.post("/knowledge/bases/{kb_id}/documents", status_code=201)
+async def post_shared_document(kb_id: str, request: Request):
+    return await knowledge.add_document(None, kb_id, request)
+
+
+@router.delete("/knowledge/bases/{kb_id}/documents/{doc_id}", status_code=204)
+async def delete_shared_document(kb_id: str, doc_id: str):
+    knowledge.delete_shared_document(kb_id, doc_id)
+    return Response(status_code=204)
 
 
 @router.get("/allowlist")

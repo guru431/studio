@@ -4,15 +4,17 @@ Cleaner (`chat.StreamTask._read_model`). Спека 2026-11-21-studio-source-cap
 - `ask_user` (п. 17): вопрос пользователю кнопками; ход встаёт на паузу (`chat_pending.pause`), ответ продолжает
   тот же ответ;
 - `todo_write` (п. 18): видимый план многошаговой работы — `messages.todo` ответа и событие SSE `todo`;
-- `memory_save` / `memory_forget` (п. 18): личная память (`memory`), только при `users.memory_on`.
+- `memory_save` / `memory_forget` (п. 18): личная память (`memory`), только при `users.memory_on`;
+- `knowledge_search` (п. 15): поиск по базам знаний и большим вложениям диалога (`knowledge`).
 
-Новый инструмент: спецификация, строка в `KIND_OF`, ветка в `call`. В журнал — ничего: вопрос, ответ и план пишет
-только шаг в `messages.tools` и `messages.todo`, текст памяти — только `user_memory` шифром."""
+Новый инструмент: спецификация, строка в `KIND_OF`, ветка в `call`. В журнал — ничего: вопрос, ответ, план и
+запрос пишет только шаг в `messages.tools` и `messages.todo`, текст памяти — только `user_memory` шифром."""
 import json
 
 from fastapi import HTTPException
 
 import chat_pending
+import knowledge
 import memory
 import state
 
@@ -70,8 +72,24 @@ MEMORY_FORGET = {"type": "function", "function": {
         "id": {"type": "string", "description": "номер записи в квадратных скобках из «Что известно о пользователе»"}},
         "required": ["id"]}}}
 
+#: поиск по базам знаний и большим вложениям диалога (knowledge.py, п. 15): предлагается, когда у учётки есть базы
+#: или у диалога — большие вложения (`knowledge.offered`); без `kb_ids` — базы диалога (не выбраны — все видимые) и
+#: большие вложения диалога. Шаг — `{kind: knowledge, query, found, sources}`, найденное — модели в `text`
+KNOWLEDGE_SEARCH = {"type": "function", "function": {
+    "name": "knowledge_search",
+    "description": ("Найти куски документов в базах знаний пользователя и в больших документах этого диалога. "
+                    "Вызывай, когда ответ может быть в документах; запрос — своими словами о сути."),
+    "parameters": {"type": "object", "properties": {
+        "query": {"type": "string", "maxLength": knowledge.QUERY_MAX, "description": "что искать"},
+        "kb_ids": {"type": "array", "maxItems": 16, "items": {"type": "string"},
+                   "description": "id баз знаний; без него — базы диалога"}},
+        "required": ["query"]}}}
+KNOWLEDGE_ARGS = "неверные аргументы knowledge_search — нужен запрос до 500 знаков и список id баз"
+
+
 #: вид шага `messages.tools` каждого встроенного инструмента
-KIND_OF: dict[str, str] = {"ask_user": "ask", "todo_write": "todo", "memory_save": "memory", "memory_forget": "memory"}
+KIND_OF: dict[str, str] = {"ask_user": "ask", "todo_write": "todo", "memory_save": "memory", "memory_forget": "memory",
+                           "knowledge_search": "knowledge"}
 NAMES: set[str] = set(KIND_OF)
 KINDS: set[str] = set(KIND_OF.values())          # виды их шагов в `messages.tools`
 
@@ -83,8 +101,9 @@ def for_model(step: dict) -> str:
 
 def specs(task) -> list[dict]:
     """Встроенные инструменты хода `task` (`chat.StreamTask`): вопрос и план — всегда, память — только при
-    `users.memory_on`."""
-    return [ASK_USER, TODO_WRITE] + ([MEMORY_SAVE, MEMORY_FORGET] if memory.enabled(task.user_id) else [])
+    `users.memory_on`, поиск по знаниям — когда есть базы или большие вложения (`knowledge.offered`)."""
+    return ([ASK_USER, TODO_WRITE] + ([MEMORY_SAVE, MEMORY_FORGET] if memory.enabled(task.user_id) else [])
+            + ([_knowledge_spec(task)] if knowledge.offered(task.user_id, task.chat_id) else []))
 
 
 def _args(arguments: str) -> "dict | None":
@@ -147,6 +166,39 @@ def _memory(task, call) -> dict:
     return {"kind": "memory", "action": action, "text": MEMORY_FORGOTTEN}
 
 
+def _knowledge_spec(task) -> dict:
+    """`knowledge_search` с перечнем видимых баз (id и имя) в описании: иначе модели неоткуда взять `kb_ids`."""
+    listed = "; ".join(f'{b["id"]} — {b["name"]}' for b in knowledge.bases(task.user_id))
+    if not listed:
+        return KNOWLEDGE_SEARCH
+    spec = json.loads(json.dumps(KNOWLEDGE_SEARCH))
+    spec["function"]["description"] += f" Базы: {listed}."
+    return spec
+
+
+async def _knowledge(task, call) -> dict:
+    try:
+        args = json.loads(call.arguments) if call.arguments.strip() else {}
+    except ValueError:
+        args = None
+    query = args.get("query") if isinstance(args, dict) else None
+    ids = args.get("kb_ids") if isinstance(args, dict) else None
+    if (not isinstance(query, str) or not query.strip() or len(query) > knowledge.QUERY_MAX
+            or (ids is not None and (not isinstance(ids, list) or len(ids) > 16
+                                     or any(not isinstance(i, str) for i in ids)))):
+        return {"kind": "knowledge", "error": KNOWLEDGE_ARGS}
+    if ids:
+        scope = {"kb_ids": ids}
+    else:
+        chosen = knowledge.chat_kbs(task.user_id, task.chat_id)
+        scope = {"kb_ids": chosen or [b["id"] for b in knowledge.bases(task.user_id)],
+                 "attachment_ids": list(knowledge.big_attachments(task.chat_id))}
+    hits = await knowledge.search(task.user_id, query.strip(), **scope)
+    return {"kind": "knowledge", "query": query.strip(), "found": len(hits),
+            "sources": list(dict.fromkeys(h.doc_name for h in hits)),
+            "text": knowledge.render(hits) if hits else knowledge.NOTHING}
+
+
 def _ask_view(arguments: str) -> "dict | None":
     """Вид карточки вопроса из аргументов модели или None — аргументы неверные."""
     try:
@@ -173,6 +225,8 @@ async def call(task, call) -> dict:
         return _todo(task, call)
     if call.name in ("memory_save", "memory_forget"):
         return _memory(task, call)
+    if call.name == "knowledge_search":
+        return await _knowledge(task, call)
     view = _ask_view(call.arguments)
     if view is None:
         return {"kind": "ask", "error": BAD_ARGS}

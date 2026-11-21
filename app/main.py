@@ -57,6 +57,7 @@ import email_accounts
 import help as help_page
 import images
 import jobs
+import knowledge
 import media
 import ocr
 import ntfy
@@ -129,6 +130,7 @@ async def lifespan(_app):
     speeches.resume()
     ocr.resume_queued()
     translate.resume_queued()
+    knowledge.resume()                           # векторы документов, прерванные перезапуском
     loops =([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
               asyncio.create_task(cleaner.sweep()), admin.start_check_watch(), trash.start_purger()]
              if state.WATCHER else [])
@@ -194,6 +196,7 @@ app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)
 app.include_router(chat_pending.router)
+app.include_router(knowledge.router)
 app.include_router(roles.router)
 app.include_router(memory.router)
 app.include_router(mcp_contracts.router)       # раньше mcp_client: /api/mcp/status — не id сервера

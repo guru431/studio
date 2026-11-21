@@ -123,8 +123,8 @@ def blocks(request, uid: int, digest: str) -> bool:
     path = request.url.path.rstrip("/")
     pieces = path.split("/")
     head = pieces[2] if len(pieces) > 2 else ""
-    section = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "images": "photo",
-               "presets": "photo", "videos": "video", "transcripts": "transcribe", "transcribe": "transcribe",
+    section = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "knowledge": "chat",
+               "images": "photo", "presets": "photo", "videos": "video", "transcripts": "transcribe", "transcribe": "transcribe",
                "voices": "speech", "speeches": "speech", "speech": "speech", "ocr": "ocr",
                "translate": "translate", "code": "code", "agents": "code"}.get(head)
     if section == "ocr" and not protected(row, section) and len(pieces) > 3:
