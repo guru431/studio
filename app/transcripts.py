@@ -26,10 +26,16 @@
    (`RUNNERS`, `kick`) берёт старейшую в `working`; ждущих — не больше QUEUE_MAX (дальше 409 busy).
    Отмена ждущей — сразу `cancelled`; перезапуск службы: идущая — «прервано», ждущие остаются в очереди
    и продолжаются (`resume`); стирание истории и учётки отменяет и ждущие.
+8. Длинная запись (спека 2026-11-21-studio-source-capabilities-design, п. 23): длиннее TOTAL_MAX — отказ до работы;
+   длиннее предела источника (`speech.limits`) — части `audio.cut` длиной в предел, распознавание по очереди
+   («распознаю · часть 2 из 4»), склейка со сдвигом времени; собеседники в каждой части нумеруются заново — перед
+   каждой частью после первой служебная реплика MARKER. Язык распознавания — `transcripts.language` (None — «Авто»):
+   заголовок `X-Studio-Language` загрузки и `language` «Расшифровать ещё раз».
 """
 import asyncio
 import json
 import logging
+import math
 import unicodedata
 import uuid
 from dataclasses import asdict, dataclass
@@ -57,7 +63,9 @@ import speech
 import state
 
 UPLOAD_MAX = 200 * 1024 * 1024
-DURATION_MAX = 60 * 60
+DURATION_MAX = 60 * 60                       # предел одного запроса, если источник своего не сообщает
+TOTAL_MAX = 4 * 3600                         # самая длинная запись: дольше — отказ до работы
+MARKER = "— Часть {} (с {}): собеседники пронумерованы заново —"
 NAME_MAX = 255
 RETRY_SEC = 15
 WAIT_MAX_SEC = 1800
@@ -70,7 +78,7 @@ QUEUE_MAX = 5
 QUEUED = "в очереди"
 #: столбцы строки для ленты, опроса и ответов — без `text` (весь текст записи, нужен только индексу поиска)
 COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, result_media_id, duration, speakers, state,"
-           " detail, created, finished, edits")
+           " detail, created, finished, edits, language")
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/transcripts")
@@ -87,6 +95,8 @@ class Job:
     conn: object
     model: str
     source_media_id: str
+    language: "str | None" = None
+    part: str = ""                           # «часть 2 из 4» длинной записи, иначе пусто
     stage: str = "готовлю запись"
     stage_at: float = 0.0
     task: "asyncio.Task | None" = None
@@ -108,7 +118,8 @@ def _clock(sec: float) -> str:
 def detail(job: Job) -> str:
     """Состояние идущего задания словами со временем этапа."""
     if job.stage in ("распознаю", "жду карту"):
-        return f"{job.stage} · {_clock(clock.NOW() - job.stage_at)}"
+        part = f" · {job.part}" if job.part else ""
+        return f"{job.stage}{part} · {_clock(clock.NOW() - job.stage_at)}"
     return job.stage
 
 
@@ -172,7 +183,7 @@ def _out(row, segments: "list | None" = None) -> dict:
            else waiting(row) if row["state"] == "queued" else row["detail"],
            "model": row["model"], "duration": row["duration"], "speakers": _speakers(row, edits["names"]),
            "source_media_id": row["source_media_id"], "created": row["created"], "finished": row["finished"],
-           "names": edits["names"], "edited": bool(edits["texts"] or edits["names"])}
+           "names": edits["names"], "edited": bool(edits["texts"] or edits["names"]), "language": row["language"]}
     if segments is not None:
         out["segments"] = segments
     return out
@@ -231,7 +242,7 @@ async def _runner(user_id: int) -> None:
         except HTTPException:                        # подключение удалили, пока запись ждала
             conn = None
         job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"],
-                  source_media_id=row["source_media_id"], stage_at=now)
+                  source_media_id=row["source_media_id"], language=row["language"], stage_at=now)
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
@@ -255,7 +266,7 @@ async def _recognize(job: Job, path) -> list:
         # модель снимет сразу, не дожидаясь конца её аренды
         await speech.free_card(job.conn)
         try:
-            return await speech.transcribe(job.conn, job.model, path, "audio/mpeg")
+            return await speech.transcribe(job.conn, job.model, path, "audio/mpeg", job.language)
         except speech.Busy:
             now = clock.NOW()
             waited_from = now if waited_from is None else waited_from
@@ -266,6 +277,37 @@ async def _recognize(job: Job, path) -> list:
             await clock.SLEEP(RETRY_SEC)
             job.stage, job.stage_at = "распознаю", clock.NOW()
             _store(job)
+
+
+def _stamp(sec: float) -> str:
+    s = int(sec)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def _shift(s: speech.Segment, offset: float) -> speech.Segment:
+    return speech.Segment(s.start + offset, s.end + offset, s.speaker, s.text)
+
+
+async def _in_parts(job: Job, source, duration: float, step: int, tmp) -> tuple[list, list]:
+    """Длинная запись частями по `step` секунд (п. 8 шапки): реплики и сегменты до склейки — со сдвигом времени,
+    собеседники каждой части — свои (speech.turns по части), перед частью после первой — служебная реплика MARKER.
+    Часть — тот же временный файл `tmp`: следующая перезаписывает прежнюю, уборка — у `run`."""
+    total = math.ceil(duration / step)
+    replicas: list = []
+    raw: list = []
+    for n in range(total):
+        start = float(n * step)
+        job.part = f"часть {n + 1} из {total}"
+        job.stage, job.stage_at = "готовлю запись", clock.NOW()
+        _store(job)
+        await audio.cut(source, start, min(float(step), duration - start), tmp)
+        part, part_raw = speech.turns([_shift(s, start) for s in await _recognize(job, tmp)])
+        if n:
+            replicas.append(speech.Segment(start, start, None, MARKER.format(n + 1, _stamp(start))))
+        base = len(replicas)
+        replicas += part
+        raw += [{**r, "turn": r["turn"] + base} for r in part_raw]
+    return replicas, raw
 
 
 async def run(job: Job) -> None:
@@ -283,10 +325,14 @@ async def run(job: Job) -> None:
                 raise JobError("запись удалена") from None
             duration = await audio.probe(source)
             state.DB.execute("UPDATE transcripts SET duration = ? WHERE id = ?", (duration, job.id))
-            if duration > DURATION_MAX:
-                raise JobError(f"запись длиннее {DURATION_MAX // 60} минут — разделите её")
-            await audio.compress(source, tmp)
-            replicas, raw = speech.turns(await _recognize(job, tmp))
+            if duration > TOTAL_MAX:
+                raise JobError(f"запись длиннее {TOTAL_MAX // 3600} ч — разделите её")
+            step = (await speech.limits(job.conn, job.model)).max_seconds
+            if duration <= step:
+                await audio.compress(source, tmp)
+                replicas, raw = speech.turns(await _recognize(job, tmp))
+            else:
+                replicas, raw = await _in_parts(job, source, duration, step, tmp)
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
             payload = json.dumps({"segments": [asdict(s) for s in replicas], "raw": raw},
@@ -426,9 +472,17 @@ def _int_header(request: Request, key: str) -> "int | None":
     return int(value) if value.isdigit() else None
 
 
+def _language(value) -> "str | None":
+    try:
+        return speech.language_of(value)
+    except ValueError:
+        raise _bad("язык распознавания — Авто, русский или английский") from None
+
+
 @router.post("", status_code=202)
 async def upload(request: Request):
     uid = request.state.user.id
+    language = _language(request.headers.get("x-studio-language", "").strip())
     conn, model = sections.resolve(uid, "transcribe", _int_header(request, "x-studio-connection"),
                                    request.headers.get("x-studio-model") or None)
     if _full_queue(uid):
@@ -460,14 +514,14 @@ async def upload(request: Request):
     except HTTPException:
         await media.delete_async(uid, source)
         raise
-    return _enqueue(uid, conn, model, name, source)
+    return _enqueue(uid, conn, model, name, source, language)
 
 
-def _enqueue(uid: int, conn, model: str, name: str, source: str) -> dict:
+def _enqueue(uid: int, conn, model: str, name: str, source: str, language: "str | None") -> dict:
     tid, now = uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO transcripts(id, user_id, connection_id, model, name, source_media_id, state, detail,"
-                     " created) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-                     (tid, uid, conn.id, model, name, source, QUEUED, now))
+                     " created, language) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+                     (tid, uid, conn.id, model, name, source, QUEUED, now, language))
     EPOCHS[tid] = operations.capture(uid)
     kick(uid)
     log.info("расшифровка %s: принята", tid[:8])
@@ -477,6 +531,7 @@ def _enqueue(uid: int, conn, model: str, name: str, source: str) -> dict:
 class RetryIn(BaseModel):
     connection_id: int | None = None
     model: str | None = Field(default=None, max_length=200)
+    language: str | None = Field(default=None, max_length=8)      # None — «Авто»
 
 
 @router.post("/{tid}/retry", status_code=202)
@@ -485,6 +540,7 @@ async def retry(tid: str, body: RetryIn, request: Request):
     row = _row(uid, tid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "дождитесь завершения расшифровки или отмените её"})
+    language = _language(body.language)
     conn, model = sections.resolve(uid, "transcribe", body.connection_id, body.model)
     if _full_queue(uid):
         raise _busy()
@@ -493,7 +549,15 @@ async def retry(tid: str, body: RetryIn, request: Request):
         raise HTTPException(404, media.GONE)
     operations.check(uid)
     # Между проверкой файла и новой ссылкой нет await. Старую запись можно удалять отдельно.
-    return _enqueue(uid, conn, model, row["name"], source)
+    return _enqueue(uid, conn, model, row["name"], source, language)
+
+
+@router.get("/limits")
+async def get_limits(request: Request, connection_id: "int | None" = None,
+                     model: "str | None" = Query(None, max_length=200)):
+    """Пределы до загрузки (страница сверяет длительность записи): одного запроса источника и записи целиком."""
+    conn, model = sections.resolve(request.state.user.id, "transcribe", connection_id, model)
+    return {"max_seconds": (await speech.limits(conn, model)).max_seconds, "total_max": TOTAL_MAX}
 
 
 @router.get("")

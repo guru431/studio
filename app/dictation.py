@@ -9,7 +9,8 @@
 — секунды, человек нажмёт ещё раз. Ответ синхронный, поэтому распознавание целиком ограничено
 BUDGET_SEC (а не таймаутами вызовов шлюза: у WhisperX там 2460 с) — дольше: 504 словами
 «повторите»; таймаут маршрута Apache больше бюджета (сверяет tests/test_deploy.py), иначе он
-оборвал бы запрос раньше и текст пропал."""
+оборвал бы запрос раньше и текст пропал. Язык — поле формы `language` (`speech.LANGUAGES`, пусто — «Авто»):
+выбор устройства в настройках «Ввод и интернет»."""
 import asyncio
 import logging
 
@@ -34,14 +35,14 @@ class CardBusy(Exception):
     """WhisperX не получил карту за бюджет."""
 
 
-async def _recognize(conn, model: str, data: bytes, mime: str, name: str) -> str:
+async def _recognize(conn, model: str, data: bytes, mime: str, name: str, language: "str | None") -> str:
     if conn.kind != "srvllm" or model == "gigaam":            # карту делит только WhisperX (как speech.dictate)
-        return await speech.dictate(conn, model, data, mime, name)
+        return await speech.dictate(conn, model, data, mime, name, language)
     deadline = clock.NOW() + BUDGET_SEC
     while True:
         await speech.free_card(conn)                          # и перед повтором: кончившуюся генерацию картинок
         try:
-            return await speech.dictate(conn, model, data, mime, name)
+            return await speech.dictate(conn, model, data, mime, name, language)
         except speech.Busy:
             if clock.NOW() + RETRY_SEC >= deadline:
                 raise CardBusy from None
@@ -53,19 +54,23 @@ async def dictate(request: Request):
     uid = request.state.user.id
     try:
         raw = await forms.read_body(request, MAX_AUDIO + FORM_SLACK)
-        _fields, data, mime, name = await asyncio.to_thread(
+        fields, data, mime, name = await asyncio.to_thread(
             forms.audio_form, raw, request.headers.get("content-type", ""), max_bytes=MAX_AUDIO)
     except UploadError as e:
         raise HTTPException(e.status, {"code": "format" if e.status == 415 else "audio", "message": str(e)}) from None
     del raw
-    return {"text": await recognize(uid, data, mime, name)}
+    try:
+        language = speech.language_of(fields.get("language"))
+    except ValueError:
+        raise HTTPException(422, {"code": "input", "message": "язык ввода — Авто, русский или английский"}) from None
+    return {"text": await recognize(uid, data, mime, name, language)}
 
 
-async def recognize(uid: int, data: bytes, mime: str, name: str) -> str:
+async def recognize(uid: int, data: bytes, mime: str, name: str, language: "str | None" = None) -> str:
     """Распознать запись моделью голосового ввода, с теми же сроком и отказами для образца голоса."""
     conn, model = sections.resolve(uid, "dictation", None, None)
     try:
-        text = await asyncio.wait_for(_recognize(conn, model, data, mime, name), BUDGET_SEC)
+        text = await asyncio.wait_for(_recognize(conn, model, data, mime, name, language), BUDGET_SEC)
     except TimeoutError:
         log.info("пользователь %d: голосовой ввод — дольше %d с", uid, BUDGET_SEC)
         raise HTTPException(504, {"code": "timeout", "message": f"не успел распознать за {BUDGET_SEC} с — "

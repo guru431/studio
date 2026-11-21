@@ -262,6 +262,7 @@ def studio(env, schema_db, monkeypatch):
     import screenlock
     import security
     import state
+    import speech
     import speeches
     import takeout
     import transcripts
@@ -294,6 +295,7 @@ def studio(env, schema_db, monkeypatch):
     chat.LIMITS.clear()
     chat.NO_TOOLS.clear()
     transcripts.JOBS.clear()
+    speech.LIMITS.clear()                # пределы речи прошлого теста (ключ — id подключения той базы)
     ocr.JOBS.clear()
     ocr.RUNNERS.clear()
     ocr.LEASED.clear()
@@ -491,6 +493,10 @@ def fake_audio(monkeypatch):
         fake.calls.append(("compress",))
         P(dst).write_bytes(P(src).read_bytes())
 
+    async def cut(src, start, length, dst):
+        fake.calls.append(("cut", start, length))
+        P(dst).write_bytes(P(src).read_bytes())
+
     async def to_wav(src, dst, *, max_sec):
         fake.calls.append(("to_wav", max_sec))
         P(dst).write_bytes(P(src).read_bytes())
@@ -500,6 +506,6 @@ def fake_audio(monkeypatch):
         fake.calls.append(("mp3_of", len(parts)))
         P(dst).write_bytes(b"".join(P(p).read_bytes() for p in parts))
 
-    for name, fn in (("probe", probe), ("compress", compress), ("to_wav", to_wav), ("mp3_of", mp3_of)):
+    for name, fn in (("probe", probe), ("compress", compress), ("cut", cut), ("to_wav", to_wav), ("mp3_of", mp3_of)):
         monkeypatch.setattr(audio, name, fn)
     return fake

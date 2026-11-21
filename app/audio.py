@@ -96,6 +96,11 @@ async def compress(src: Path, dst: Path) -> None:
     await _run([*BASE, "-i", str(src), *COMPRESS, str(dst)])
 
 
+async def cut(src: Path, start: float, length: float, dst: Path) -> None:
+    """Часть записи с `start` длиной `length`, с — сжатая, как `compress` (длинная «Расшифровка» частями)."""
+    await _run([*BASE, "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src), *COMPRESS, str(dst)])
+
+
 async def to_wav(src: Path, dst: Path, *, max_sec: float) -> float:
     """Образец голоса: WAV PCM 16 бит моно 24 кГц, не длиннее max_sec; итог — его длительность."""
     await _run([*BASE, "-i", str(src), *WAV, "-t", f"{max_sec:.2f}", str(dst)])

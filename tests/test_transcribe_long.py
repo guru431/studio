@@ -1,0 +1,154 @@
+"""Длинные записи «Расшифровки» частями по живым пределам источника (`speech.limits`, `audio.cut`) и язык
+распознавания (`transcripts.language`, поле `language` по виду подключения)."""
+import asyncio
+
+import httpx
+
+import speech
+import state
+import transcripts
+from conftest import add_gateway
+from test_connections import conn_of
+from test_s06 import create as create_s06
+from test_speech import cloud
+from test_transcripts import upload, wait_tr
+
+MARKER_2 = "— Часть 2 (с 00:10:00): собеседники пронумерованы заново —"
+
+
+def limits_route(studio, seconds=600):
+    seen = []
+
+    async def limits(q):
+        seen.append(q)
+        return httpx.Response(200, json={"max_seconds": seconds, "max_bytes": 25 * 1024 * 1024})
+    studio.gw.on["/speech/limits"] = limits
+    return seen
+
+
+def parts(*replies):
+    return [(200, {"text": "", "segments": [{"start": a, "end": b, "speaker": who, "text": text}
+                                             for a, b, who, text in reply]}) for reply in replies]
+
+
+def test_long_recording_split_by_gateway_limits_and_times_shifted(studio, fake_audio):
+    add_gateway(studio)
+    asked = limits_route(studio)
+    assert studio.c.get("/api/transcripts/limits").json() == {"max_seconds": 600, "total_max": transcripts.TOTAL_MAX}
+    fake_audio.duration = 1500.0
+    studio.gw.asr_replies = parts([(0.0, 2.0, "SPEAKER_00", "Один.")], [(1.0, 3.0, "SPEAKER_01", "Два.")],
+                                  [(0.5, 1.0, "SPEAKER_00", "Три.")])
+    details = []
+
+    async def asr(q):
+        details.append(transcripts.detail(next(iter(transcripts.JOBS.values()))))
+        return await studio.gw.builtin(q)
+    studio.gw.on["/speech/asr"] = asr
+    item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
+    assert item["state"] == "done", item["detail"]
+    assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [
+        ("cut", 0.0, 600.0), ("cut", 600.0, 600.0), ("cut", 1200.0, 300.0)]
+    assert [d.split(" · ")[:2] for d in details] == [["распознаю", "часть 1 из 3"], ["распознаю", "часть 2 из 3"],
+                                                    ["распознаю", "часть 3 из 3"]]
+    assert [(s["start"], s["end"], s["speaker"], s["text"]) for s in item["segments"]] == [
+        (0.0, 2.0, "Собеседник 1", "Один."), (600.0, 600.0, None, MARKER_2), (601.0, 603.0, "Собеседник 1", "Два."),
+        (1200.0, 1200.0, None, "— Часть 3 (с 00:20:00): собеседники пронумерованы заново —"),
+        (1200.5, 1201.0, "Собеседник 1", "Три.")]
+    assert len(asked) == 1                            # предел — из кэша на 600 с
+
+
+def test_no_limits_route_falls_back_to_duration_max(studio, fake_audio, monkeypatch):
+    conn = conn_of(add_gateway(studio))
+    assert asyncio.run(speech.limits(conn, "whisperx")) == speech.Limits(transcripts.DURATION_MAX)
+    assert asyncio.run(speech.limits(conn, "whisperx")) == speech.Limits(transcripts.DURATION_MAX)
+    assert [q.url.path for q in studio.gw.requests].count("/speech/limits") == 1
+    external = conn_of(cloud(studio, monkeypatch))
+    before = len(studio.gw.requests)
+    assert asyncio.run(speech.limits(external, "whisper-1")) == speech.Limits(transcripts.DURATION_MAX)
+    assert len(studio.gw.requests) == before          # у внешнего сервиса маршрута пределов нет — не спрашиваем
+    fake_audio.duration = 4000.0
+    studio.gw.asr_replies = parts([(0.0, 1.0, None, "Начало.")], [(0.0, 1.0, None, "Конец.")])
+    item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
+    assert item["state"] == "done", item["detail"]
+    assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [("cut", 0.0, 3600.0), ("cut", 3600.0, 400.0)]
+
+
+def test_over_total_max_refused_before_work(studio, fake_audio):
+    add_gateway(studio)
+    limits_route(studio)
+    fake_audio.duration = transcripts.TOTAL_MAX + 1.0
+    item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
+    assert item["state"] == "error" and item["detail"] == "запись длиннее 4 ч — разделите её"
+    paths = [q.url.path for q in studio.gw.requests]
+    assert "/speech/asr" not in paths and "/speech/limits" not in paths
+    assert not [c for c in fake_audio.calls if c[0] in ("cut", "compress")]
+
+
+def test_part_marker_between_parts(studio, fake_audio):
+    add_gateway(studio)
+    limits_route(studio)
+    fake_audio.duration = 900.0
+    studio.gw.asr_replies = parts([(0.0, 1.0, "SPEAKER_00", "Первая.")], [(2.0, 4.0, "SPEAKER_00", "Вторая.")])
+    tid = upload(studio).json()["id"]
+    item = wait_tr(studio, tid, {"done", "error"})
+    assert [s["text"] for s in item["segments"]] == ["Первая.", MARKER_2, "Вторая."]
+    assert item["speakers"] == 1
+    txt = studio.c.get(f"/api/transcripts/{tid}/export?format=txt").text
+    assert txt.index("Первая.") < txt.index(MARKER_2) < txt.index("Вторая.")
+    srt = studio.c.get(f"/api/transcripts/{tid}/export?format=srt").text
+    assert "Собеседник 1: Вторая." in srt and "00:10:02,000" in srt
+
+
+def test_language_sent_per_connection_kind_and_omitted_for_auto(studio, fake_audio, tmp_path, monkeypatch):
+    gateway = conn_of(add_gateway(studio))
+    f = tmp_path / "a.mp3"
+    f.write_bytes(b"ID3fake")
+    for language in ("en", None):
+        asyncio.run(speech.transcribe(gateway, "whisperx", f, "audio/mpeg", language=language))
+        assert studio.gw.asr_requests[-1].url.params.get("language") == language
+        asyncio.run(speech.dictate(gateway, "whisperx", b"a", "audio/webm", "a.webm", language=language))
+        assert (b'name="language"\r\n\r\nen' in studio.gw.asr_requests[-1].content) == (language == "en")
+        assert (b'name="language"' in studio.gw.asr_requests[-1].content) == bool(language)
+    s06 = conn_of(create_s06(studio).json()["id"])
+    for language in ("ru", None):
+        asyncio.run(speech.transcribe(s06, "whisperx", f, "audio/mpeg", language=language))
+        body = studio.gw.asr_requests[-1].content
+        assert (b'name="language"\r\n\r\nru' in body) == (language == "ru") and (b'name="language"' in body) == bool(language)
+        asyncio.run(speech.dictate(s06, "whisperx", b"a", "audio/webm", "a.webm", language=language))
+        assert (b'name="language"' in studio.gw.asr_requests[-1].content) == bool(language)
+    external = conn_of(cloud(studio, monkeypatch))
+    seen = []
+
+    async def transcriptions(q):
+        seen.append(q)
+        return httpx.Response(200, json={"text": "целиком", "segments": [{"start": 0, "end": 1, "text": "целиком"}]})
+    studio.gw.on["/v1/audio/transcriptions"] = transcriptions
+    for language in ("en", None):
+        asyncio.run(speech.transcribe(external, "whisper-1", f, "audio/mpeg", language=language))
+        asyncio.run(speech.dictate(external, "whisper-1", b"a", "audio/webm", "a.webm", language=language))
+        for q in seen[-2:]:
+            assert (b'name="language"\r\n\r\nen' in q.content) == (language == "en")
+            assert (b'name="language"' in q.content) == bool(language)
+    # загрузка и «Расшифровать ещё раз» помнят язык записи; «Авто» — без поля
+    r = studio.c.post("/api/transcripts", content=b"\x00" * 64,
+                      headers={"content-type": "audio/mp4", "x-studio-name": "a.m4a", "x-studio-language": "en",
+                               "x-studio-connection": str(gateway.id), "x-studio-model": "whisperx"})
+    assert r.status_code == 202 and r.json()["language"] == "en"
+    wait_tr(studio, r.json()["id"], {"done"})
+    assert studio.gw.asr_requests[-1].url.params.get("language") == "en"
+    again = studio.c.post(f"/api/transcripts/{r.json()['id']}/retry",
+                          json={"connection_id": gateway.id, "model": "whisperx", "language": None})
+    assert again.status_code == 202 and again.json()["language"] is None
+    wait_tr(studio, again.json()["id"], {"done"})
+    assert "language" not in studio.gw.asr_requests[-1].url.params
+    assert state.DB.execute("SELECT language FROM transcripts WHERE id = ?", (again.json()["id"],)).fetchone()[0] is None
+    bad = studio.c.post("/api/transcripts", content=b"\x00", headers={"content-type": "audio/mp4", "x-studio-language": "xx"})
+    assert bad.status_code == 422
+    # голосовой ввод: язык устройства — поле формы `language` до модели раздела «Голосовой ввод»
+    assert studio.c.put("/api/sections/dictation/default", json={"connection_id": gateway.id, "model": "whisperx"}).status_code == 200
+    voice = {"audio": ("voice.webm", b"\x00" * 64, "audio/webm")}
+    assert studio.c.post("/api/dictation", files=voice, data={"language": "en"}).status_code == 200
+    assert b'name="language"\r\n\r\nen' in studio.gw.asr_requests[-1].content
+    assert studio.c.post("/api/dictation", files=voice).status_code == 200
+    assert b'name="language"' not in studio.gw.asr_requests[-1].content
+    assert studio.c.post("/api/dictation", files=voice, data={"language": "xx"}).status_code == 422
