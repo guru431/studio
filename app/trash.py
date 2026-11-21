@@ -70,6 +70,10 @@ DROP TABLE temp.rollback_58_guard;
 COMMIT;
 """
 
+#: перед откатом на код до шага 61 (тот образцы корзины видит и озвучивает ими): окончательно удалить образцы из
+#: корзины — отметки уходят каскадом, файлы потом убирает чистка сирот прежнего кода
+ROLLBACK_61 = "DELETE FROM voice_samples WHERE id IN (SELECT id FROM voice_sample_trash);\n"
+
 TRASH_SEC = 14 * 86400
 PURGE_EVERY_SEC = 86400
 CHECK_SEC = 3600                 # как часто уборка смотрит на отметку

@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 60
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,8 +40,8 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.TRANSCRIPT_PLAYBACK_60).removesuffix(db.CODE_PINS_59)
-                           .removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
+        conn.executescript(db.SCHEMA.removesuffix(db.VOICE_TRASH_61).removesuffix(db.TRANSCRIPT_PLAYBACK_60)
+                           .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
                            .removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
@@ -80,7 +80,7 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 60
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -192,7 +192,7 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 60
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -291,6 +291,48 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         assert conn.execute("SELECT count(*) FROM chat_pending").fetchone()[0] == 0     # каскадом с чатом
         conn.execute("DELETE FROM users WHERE id = 1")
         assert conn.execute("SELECT count(*) FROM knowledge_bases").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_61_trashes_voice_samples_aside_and_previous_writer_works(env):
+    """Шаг 61: корзина образцов голоса — своя таблица отметок `voice_sample_trash` и вид `voice_sample_items`
+    (образец с `deleted`), а не столбец `voice_samples`: прежний код вставляет образец без списка столбцов
+    (`INSERT INTO voice_samples VALUES (7 значений)`) и с лишним столбцом упал бы. «Вернуть» — UPDATE вида;
+    образец, удалённый прежним кодом, уносит отметку каскадом; `trash.ROLLBACK_61` окончательно удаляет образцы
+    корзины."""
+    from contextlib import closing
+    import trash
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 60)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        voice = ("INSERT INTO voices(id, user_id, name, ref_text, media_id, duration, created)"
+                 " VALUES(?,1,'Voice','Reference',?,8,0)")
+        conn.execute(voice, ("before", "before-audio"))
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
+
+        # прежний код: голос (первый образец — триггером) и образец без списка столбцов
+        conn.execute(voice, ("previous", "previous-audio"))
+        conn.execute("INSERT INTO voice_samples VALUES('second','previous',1,'Two','second-audio',7,1)")
+        conn.execute("INSERT INTO voice_samples VALUES('third','previous',1,'Three','third-audio',7,2)")
+        assert {tuple(r) for r in conn.execute("SELECT id, deleted FROM voice_sample_items")} == {
+            ("before", None), ("previous", None), ("second", None), ("third", None)}
+
+        conn.execute("INSERT INTO voice_sample_trash(id, deleted) VALUES('second', 5), ('third', 6)")
+        assert conn.execute("SELECT deleted FROM voice_sample_items WHERE id = 'second'").fetchone()[0] == 5
+        conn.execute("UPDATE voice_sample_items SET deleted = NULL WHERE id = 'second'")      # «Вернуть»
+        assert [r[0] for r in conn.execute("SELECT id FROM voice_sample_trash")] == ["third"]
+        conn.execute("DELETE FROM voice_samples WHERE id = 'third'")                          # прежний код
+        assert conn.execute("SELECT count(*) FROM voice_sample_trash").fetchone()[0] == 0
+
+        conn.execute("INSERT INTO voice_sample_trash(id, deleted) VALUES('second', 7)")
+        conn.executescript(trash.ROLLBACK_61)
+        assert sorted(r[0] for r in conn.execute("SELECT id FROM voice_samples")) == ["before", "previous"]
+        assert conn.execute("SELECT count(*) FROM voice_sample_trash").fetchone()[0] == 0
+        conn.execute("INSERT INTO voice_sample_trash(id, deleted) VALUES('before', 8)")
+        conn.execute("DELETE FROM users WHERE id = 1")
+        assert conn.execute("SELECT count(*) FROM voice_sample_trash").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

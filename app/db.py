@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 60
+VERSION = 61
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -892,6 +892,23 @@ SCHEMA += CODE_PINS_59
 TRANSCRIPT_PLAYBACK_60 = "ALTER TABLE transcripts ADD COLUMN listen_media_id TEXT;"
 SCHEMA += TRANSCRIPT_PLAYBACK_60
 
+#: корзина отдельных образцов голоса (trash.py): отметка — своей таблицей, не столбцом `voice_samples`: прежний код
+#: вставляет образец без списка столбцов, и лишний столбец уронил бы его вставку. Вид `voice_sample_items` — образец
+#: с `deleted`, как строка таблицы корзины; «Вернуть» (UPDATE вида `deleted = NULL`) снимает отметку триггером.
+#: Образец, удалённый прежним кодом, уносит отметку каскадом; прежний код отметок не читает — перед откатом
+#: `trash.ROLLBACK_61`.
+VOICE_TRASH_61 = """CREATE TABLE voice_sample_trash(id TEXT PRIMARY KEY REFERENCES voice_samples ON DELETE CASCADE,
+       deleted REAL NOT NULL);
+CREATE INDEX voice_sample_trash_deleted ON voice_sample_trash(deleted);
+CREATE VIEW voice_sample_items AS SELECT s.id, s.voice_id, s.user_id, s.ref_text, s.media_id, s.duration, s.created,
+       t.deleted FROM voice_samples s LEFT JOIN voice_sample_trash t ON t.id = s.id;
+CREATE TRIGGER voice_sample_items_restore INSTEAD OF UPDATE OF deleted ON voice_sample_items
+       WHEN NEW.deleted IS NULL BEGIN
+  DELETE FROM voice_sample_trash WHERE id = OLD.id;
+END;
+"""
+SCHEMA += VOICE_TRASH_61
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1014,6 +1031,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     58: REMAINING_58,
     59: CODE_PINS_59,
     60: TRANSCRIPT_PLAYBACK_60,
+    # корзина отдельных образцов голоса
+    61: VOICE_TRASH_61,
 }
 
 
