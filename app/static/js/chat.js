@@ -699,7 +699,7 @@ function build(view, ctx) {
   view.append(root);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
   if (input.value) autosize();
-  const sharing = shareMenu(root, { id: 'chat-share', content: scroller,
+  const sharing = shareMenu(root, { id: 'chat-share', content: scroller, archive: true,
     failed: (err) => { notice.textContent = words(err); } });
   const share = sharing.button;
   share.hidden = true;
@@ -709,7 +709,7 @@ function build(view, ctx) {
     const current = chat?.chat.id === chatId ? chat.chat : null;
     share.hidden = !current;
     sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
-      export: `/api/chats/${chatId}/export` } : null);
+      export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive` } : null);
   }
 
   /* выдвижная панель списка (≤ 760px) */

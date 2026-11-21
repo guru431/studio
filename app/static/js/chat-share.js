@@ -10,8 +10,9 @@ import { dateTime } from './time.js';
 import { button, el, field, openDialog, plural, words } from './ui.js';
 
 
-/** Меню «Поделиться и экспортировать» — общий компонент menu.js: popover, стрелки, Escape только этого меню. */
-export function shareMenu(host, { id, content = null, request = api, failed = () => {} }) {
+/** Меню «Поделиться и экспортировать» — общий компонент menu.js: popover, стрелки, Escape только этого меню.
+ * `archive` — пункт «архив ZIP с файлами» (обычный чат): POST `context.archive` → токен, загрузка — ссылкой по нему. */
+export function shareMenu(host, { id, content = null, request = api, failed = () => {}, archive = false }) {
   const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': tr("Поделиться и экспортировать чат"),
     title: tr("Поделиться и экспортировать чат"), 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
   trigger.innerHTML = svg('share');   // константа icons.js
@@ -32,13 +33,14 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
   const clear = () => { selected = null; selectionItem.disabled = true; };
   const close = () => popup.close();
   const items = [['link', tr("Поделиться ссылкой")], ['pdf', tr("Скачать PDF")],
-    ['selection', tr("Скачать выделенное в PDF")], ['md', tr("Скачать Markdown")]].map(([key, label]) => {
+    ['selection', tr("Скачать выделенное в PDF")], ['md', tr("Скачать Markdown")],
+    ...(archive ? [['zip', tr("Скачать архив ZIP с файлами")]] : [])].map(([key, label]) => {
     const item = menuItem(label, { attrs: { 'data-action': key } });
     item.addEventListener('click', async () => {
       const current = context;
       if (!current || busy) return;
       const fragment = key === 'selection' ? selected : null;
-      if ((key === 'selection' && !fragment) || (key === 'link' && !current.share)) return;
+      if ((key === 'selection' && !fragment) || (key === 'link' && !current.share) || (key === 'zip' && !current.archive)) return;
       close();
       if (key === 'link') { shareDialog(host, current.share, current.title, request); return; }
       busy = true;
@@ -46,6 +48,16 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
       trigger.setAttribute('aria-busy', 'true');
       controller = new AbortController();
       try {
+        if (key === 'zip') {
+          // архив собирается потоком при загрузке: здесь — только токен (отказ — словами), дальше — ссылка
+          const { token } = await request('POST', current.archive, { lang: language() }, { signal: controller.signal });
+          if (context !== current || !trigger.isConnected) return;
+          const download = el('a', { href: `/api/chats/archive/${encodeURIComponent(token)}`, download: '' });
+          document.body.append(download);
+          download.click();
+          download.remove();
+          return;
+        }
         const format = key === 'selection' ? 'pdf' : key;
         const response = await request('POST', current.export, { format, title: current.title, lang: language(),
           ...(fragment ? { selection: fragment } : {}) }, { signal: controller.signal });
@@ -79,7 +91,8 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
   document.addEventListener('studio-code-clear', clear);
   const popup = popupMenu(trigger, menu, { align: 'end', blocked: () => !context || busy });
   return { button: trigger, set(value) {
-    if (context?.share === value?.share && context?.export === value?.export && context?.title === value?.title) return;
+    if (context?.share === value?.share && context?.export === value?.export && context?.title === value?.title
+      && context?.archive === value?.archive) return;
     close();
     host.querySelector('#chat-share-dialog')?.close();
     controller?.abort();
