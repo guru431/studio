@@ -1,6 +1,8 @@
 """Звук студии (app/audio.py) настоящим ffmpeg: длительность, сжатие перед распознаванием,
 образец голоса в WAV, склейка озвучки. Нужен ffmpeg на PATH — integration."""
+import array
 import asyncio
+import math
 import re
 import subprocess
 import wave
@@ -67,6 +69,45 @@ def test_browser_webm_without_duration_is_measured(tmp):
     webm = tmp / "rec.webm"
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(src), "-c:a", "libopus", str(webm)], check=True)
     assert asyncio.run(audio.probe(webm)) == pytest.approx(1.5, abs=0.1)
+
+
+def tone_after_silence(path: Path, silent: float, loud: float, rate: int = 16000) -> Path:
+    """Моно WAV: `silent` с тишины, затем `loud` с тона 1 кГц."""
+    samples = [0] * int(rate * silent) + [int(16000 * math.sin(2 * math.pi * 1000 * i / rate)) for i in range(int(rate * loud))]
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(array.array("h", samples).tobytes())
+    return path
+
+
+def peaks(path: Path, window: float = 0.05) -> list[int]:
+    """Наибольшая громкость каждого окна `window` с записи (PCM 16 кГц моно)."""
+    pcm = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-f", "s16le", "-ac", "1", "-ar", "16000",
+                          "pipe:1"], capture_output=True, check=True).stdout
+    data, size = array.array("h", pcm), int(16000 * window)
+    return [max(abs(x) for x in data[i:i + size]) for i in range(0, len(data), size)]
+
+
+def test_parts_of_a_cueless_webm_are_cut_exactly_from_the_compressed_mp3(tmp):
+    """Длинная «Расшифровка» (ревью C-M12): webm MediaRecorder — без индекса (здесь — вывод в поток, как у браузера);
+    запись один раз сжимается в CBR mp3, части режутся из него — граница части на своём месте с точностью до 30 мс."""
+    src = tone_after_silence(tmp / "a.wav", 30.0, 10.0)
+    webm = tmp / "rec.webm"
+    with webm.open("wb") as out:                       # в поток: muxer не пишет ни индекса, ни длительности
+        subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(src), "-c:a", "libopus", "-f", "webm", "pipe:1"],
+                       stdout=out, check=True)
+    whole = tmp / "whole.mp3"
+    asyncio.run(audio.compress(webm, whole))
+    assert stream(whole) == "mp3,16000,1"
+    quiet, edge = tmp / "quiet.mp3", tmp / "edge.mp3"
+    asyncio.run(audio.cut(whole, 28.0, 1.9, quiet))
+    asyncio.run(audio.cut(whole, 29.0, 2.0, edge))
+    assert max(peaks(quiet)) < 2000                   # до тона — тишина целиком
+    assert asyncio.run(audio.probe(edge)) == pytest.approx(2.0, abs=0.1)
+    onset = next(i for i, peak in enumerate(peaks(edge, 0.01)) if peak > 8000) * 0.01
+    assert onset == pytest.approx(1.0, abs=0.03)      # тон начинается на 30-й секунде записи — через 1 с от начала части
 
 
 def test_garbage_is_a_plain_error_without_paths(tmp):

@@ -97,7 +97,8 @@ async def compress(src: Path, dst: Path) -> None:
 
 
 async def cut(src: Path, start: float, length: float, dst: Path) -> None:
-    """Часть записи с `start` длиной `length`, с — сжатая, как `compress` (длинная «Расшифровка» частями)."""
+    """Часть записи с `start` длиной `length`, с — сжатая, как `compress` (длинная «Расшифровка» частями).
+    `src` — уже итог `compress` (CBR mp3): поиск в нём точный, в webm без индекса и VBR mp3 — приблизительный."""
     await _run([*BASE, "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src), *COMPRESS, str(dst)])
 
 

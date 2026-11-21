@@ -288,12 +288,13 @@ def _shift(s: speech.Segment, offset: float) -> speech.Segment:
     return speech.Segment(s.start + offset, s.end + offset, s.speaker, s.text)
 
 
-async def _in_parts(job: Job, source, duration: float, step: int, tmp) -> tuple[list, list]:
+async def _in_parts(job: Job, whole, duration: float, step: int, tmp) -> tuple[list, list]:
     """Длинная запись равными частями не длиннее `step` секунд (п. 8 шапки): равные — чтобы хвост в доли секунды
-    не стал отдельной частью (внешний сервис ему откажет, и пропадёт вся расшифровка). Реплики и сегменты до
-    склейки — со сдвигом времени, собеседники каждой части — свои (speech.turns по части), перед частью после
-    первой — служебная реплика MARKER. Часть — тот же временный файл `tmp`: следующая перезаписывает прежнюю,
-    уборка — у `run`."""
+    не стал отдельной частью (внешний сервис ему откажет, и пропадёт вся расшифровка). Режется `whole` — запись,
+    уже сжатая `audio.compress` в CBR mp3: поиск по нему точный и дешёвый, а в webm браузера без индекса и в VBR
+    mp3 — приблизительный. Реплики и сегменты до склейки — со сдвигом времени, собеседники каждой части — свои
+    (speech.turns по части), перед частью после первой — служебная реплика MARKER. Часть — тот же временный файл
+    `tmp`: следующая перезаписывает прежнюю, уборка — у `run`."""
     total = math.ceil(duration / step)
     length = duration / total
     replicas: list = []
@@ -303,7 +304,7 @@ async def _in_parts(job: Job, source, duration: float, step: int, tmp) -> tuple[
         job.part = f"часть {n + 1} из {total}"
         job.stage, job.stage_at = "готовлю запись", clock.NOW()
         _store(job)
-        await audio.cut(source, start, length if n < total - 1 else duration - start, tmp)
+        await audio.cut(whole, start, length if n < total - 1 else duration - start, tmp)
         part, part_raw = speech.turns([_shift(s, start) for s in await _recognize(job, tmp)])
         if n:
             replicas.append(speech.Segment(start, start, None, MARKER.format(n + 1, _stamp(start))))
@@ -317,6 +318,7 @@ async def run(job: Job) -> None:
     """Итог — в строку последним, после уборки временного файла (п. 5 шапки): «готово», ошибка и
     отмена значат «и чисто»; задание тогда же уходит из JOBS."""
     tmp = audio.temp(".mp3")
+    whole = audio.temp(".mp3")                        # длинная запись, сжатая целиком: из неё режутся части
     outcome = ("error", INTERRUPTED, {})              # остановка службы
     try:
         try:
@@ -335,7 +337,8 @@ async def run(job: Job) -> None:
                 await audio.compress(source, tmp)
                 replicas, raw = speech.turns(await _recognize(job, tmp))
             else:
-                replicas, raw = await _in_parts(job, source, duration, step, tmp)
+                await audio.compress(source, whole)
+                replicas, raw = await _in_parts(job, whole, duration, step, tmp)
             if not replicas:
                 raise JobError("в записи не распознано ни слова")
             payload = json.dumps({"segments": [asdict(s) for s in replicas], "raw": raw},
@@ -361,7 +364,7 @@ async def run(job: Job) -> None:
         log.info("расшифровка %s: отменена", job.id[:8])
     finally:
         try:
-            await audio.remove_temp(tmp)
+            await audio.remove_temp(tmp, whole)
         except asyncio.CancelledError:
             pass
         finally:
