@@ -1,5 +1,6 @@
 import { locale, message, tr } from './i18n.js';
 import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
+import { knowledgeChip } from './knowledge.js';
 import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
   uploadMedia } from './chat-files.js';
 import { paintPending } from './chat-pending.js';
@@ -491,6 +492,10 @@ function stepNode(s) {
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
   } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
   else if (s.kind === 'ask') li.append(s.question ? tr("Вопрос: «{0}»", s.question) : tr("Вопрос модели"));
+  else if (s.kind === 'knowledge') {                // knowledge_search (chat_tools.py): запрос и документы найденного
+    li.append(s.query ? tr("Знания: «{0}»", s.query) : tr("Знания"));
+    if (Array.isArray(s.sources) && s.sources.length) li.append(el('span', { class: 'muted' }, ` · ${s.sources.join(', ')}`));
+  }
   else if (s.kind === 'duplicate') li.append(tr("Повтор пропущен: {0}", s.tool));   // chat.DUPLICATE
   else if (s.kind === 'todo') li.append(tr("План работы"));                        // chat_tools.TODO_WRITE
   else if (s.kind === 'memory') li.append(s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
@@ -532,10 +537,11 @@ function badgeText(steps) {
   if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), [tr("ролик"), tr("ролика"), tr("роликов")])}`);
   if (of('mcp')) parts.push(`MCP: ${of('mcp')}`);
   if (of('ask')) parts.push(count(of('ask'), [tr("вопрос"), tr("вопроса"), tr("вопросов")]));   // ask_user (chat-pending.js)
+  if (of('knowledge')) parts.push(tr("Знания: {0}", count(of('knowledge'), [tr("поиск"), tr("поиска"), tr("поисков")])));
   if (of('duplicate')) parts.push(count(of('duplicate'), [tr("повтор пропущен"), tr("повтора пропущено"), tr("повторов пропущено")]));
   if (of('todo')) parts.push(tr("план"));
   if (of('memory')) parts.push(tr("память: {0}", of('memory')));
-  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && !['mcp', 'ask', 'duplicate', 'todo', 'memory'].includes(s.kind)).length;
+  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && !['mcp', 'ask', 'knowledge', 'duplicate', 'todo', 'memory'].includes(s.kind)).length;
   if (wrong) parts.push(count(wrong, [tr("неверный вызов"), tr("неверных вызова"), tr("неверных вызовов")]));
   const errors = steps.filter((s) => s.error).length;
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
@@ -568,6 +574,7 @@ function build(view, ctx) {
   let creating = null;         // идущее создание нового диалога (ensureChat)
   let draftThink = false;      // «Рассуждение» нового диалога — так же
   let draftRole = null;        // роль нового диалога {id, name}: PATCH {role_id} после его создания
+  let draftKbs = [];           // базы знаний нового диалога (чип «Знания»): PUT …/knowledge после его создания
   let sending = false;
   let stick = true;
   let found = null;            // { id, lit } сообщение из поиска (?m=): держим на виду, пока человек не тронул ленту
@@ -639,10 +646,19 @@ function build(view, ctx) {
       if (current === chat) chat.chat = out;
     },
     failed: (err) => { notice.textContent = words(err); } });
+  // базы знаний диалога (knowledge.js): у открытого — `knowledge` сервера, у нового — черновик до создания
+  const kbs = knowledgeChip({ current: () => (chat ? chat.knowledge || [] : draftKbs),
+    choose: async (ids) => {
+      if (!chat) { draftKbs = ids; return; }
+      const current = chat;
+      const out = await api('PUT', `/api/chats/${chat.chat.id}/knowledge`, { kb_ids: ids });
+      if (current === chat) chat.knowledge = out.kb_ids;
+    },
+    failed: (err) => { notice.textContent = words(err); } });
   const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, roles.chip, roles.menu, webToggle, mcpToggle,
-      thinkToggle), send, stop),
+      kbs.chip, kbs.panel, thinkToggle), send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
@@ -806,6 +822,7 @@ function build(view, ctx) {
     paintThink();
     paintWeb();
     roles.paint();
+    kbs.paint();
   }
 
   /* «Интернет» (как web.tools_for): 'hidden' — прямое подключение, кнопки нет; 'nokey' — через сервер без
@@ -1707,6 +1724,7 @@ function build(view, ctx) {
     draftMcp = null;
     draftThink = false;
     draftRole = null;
+    draftKbs = [];
     pendingMedia = [];
     clearTimeout(poll);
     stopWaiting();                                  // ушли из диалога — скан больше не ждём
@@ -1912,6 +1930,7 @@ function build(view, ctx) {
     if (chatId === id) {
       if (!chat || chat.messages.length) return;
       const was = chat.chat;
+      const knew = chat.knowledge || [];
       ++opened;
       chatId = null;
       chat = null;
@@ -1920,6 +1939,7 @@ function build(view, ctx) {
       draftMcp = draftOf(was, mcpServers);
       draftThink = !!was.thinking;
       draftRole = was.role || null;
+      draftKbs = knew;
       if (location.hash === `#/chat/${id}`) history.replaceState(history.state, '', '#/chat');
       shareContext();
       feed.replaceChildren(emptyNote());
@@ -1969,6 +1989,12 @@ function build(view, ctx) {
       draftRole = null;
       chat.chat = await api('PATCH', `/api/chats/${created.id}`, { role_id: role.id });
       roles.paint();
+    }
+    if (draftKbs.length) {                      // базы знаний, выбранные до создания диалога
+      const ids = draftKbs;
+      draftKbs = [];
+      chat.knowledge = (await api('PUT', `/api/chats/${created.id}/knowledge`, { kb_ids: ids })).kb_ids;
+      kbs.paint();
     }
     if (think) {
       chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
@@ -2240,7 +2266,8 @@ function build(view, ctx) {
     paintChip();
   }, (err) => { notice.textContent = words(err); });
   const firstList = loadList();
-  roles.reload().catch(() => {});                  // нет списка — в меню только «Без роли» и «Настроить роли»
+  roles.reload().catch(() => {});
+  kbs.refresh();                                   // нет баз — чипа нет                  // нет списка — в меню только «Без роли» и «Настроить роли»
   api('GET', '/api/mcp').then(({ items }) => {     // нет списка — у нового диалога чип без числа
     mcpServers = items;
     paintWeb();

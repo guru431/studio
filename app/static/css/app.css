@@ -1305,6 +1305,13 @@ label.chip { cursor: pointer; }
 /* роли диалога (roles.js): чип в поле чата, списки в настройках и панели администратора */
 .role-chip { min-width: 0; max-width: min(220px, 45%); }
 .role-chip .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* базы знаний (knowledge.js): панель флажков чипа «Знания» и документы базы в настройках */
+.kb-panel { flex-direction: column; gap: var(--space-2); min-width: 220px; max-width: 320px; }
+.kb-panel:popover-open { display: flex; }          /* закрытый popover — display: none браузера */
+.kb-option { min-height: var(--h-touch); padding: 0 var(--space-3); overflow-wrap: anywhere; }
+.kb-docs { margin: var(--space-3) 0; padding-left: var(--space-6); }
+.kb-doc { overflow-wrap: anywhere; }
+.kb-doc .btn { margin-left: var(--space-3); }
 .role-menu .menu-option { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .role-list { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
 .role-item { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3) var(--space-5);
