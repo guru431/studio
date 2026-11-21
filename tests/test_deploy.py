@@ -1354,12 +1354,12 @@ def test_docker_install_keeps_current_previous_and_cleans_orphan_images(docker_r
     revs = [f"{n:x}" * 40 for n in range(1, 9)]
     names = [f"{rev}-2026110{n}T120000" for n, rev in enumerate(revs, start=1)]
     images = [f'studio:{rev}' for rev in revs]
-    images[-1] = f'studio:0.18.3-{revs[-1]}'
+    images[-1] = f'arcane.local/studio:0.18.3-{revs[-1]}'
     for name, image in zip(names, images):
         config = root / 'releases' / name / 'deploy/docker/host.conf'
         config.parent.mkdir(parents=True)
         config.write_text(f'STUDIO_IMAGE={image}\n')
-    orphan = 'studio:0.18.2-' + 'f' * 40  # нет каталога релиза: prepare-only или неудачная выкладка
+    orphan = 'arcane.local/studio:0.18.2-' + 'f' * 40  # нет каталога релиза: prepare-only или неудачная выкладка
     legacy = ['studio:development', 'studio:migration-preflight']
     inventory = '\n'.join([*images, orphan, *legacy, 'other:latest'])
     (root / 'images').write_text(inventory, newline='\n')
@@ -1380,7 +1380,7 @@ def test_docker_install_keeps_current_previous_and_cleans_orphan_images(docker_r
     assert r.returncode == 0 and "deployed" in r.stdout and "removed 6 old releases" in r.stdout, r
     assert sorted(p.name for p in (root / "releases").iterdir()) == sorted([names[0], names[-1], 'unmanaged'])
     assert (root / "calls").read_text().splitlines() == [
-        "image ls --filter reference=studio:* --format {{.Repository}}:{{.Tag}}",
+        "image ls --filter reference=arcane.local/studio:* --filter reference=studio:* --format {{.Repository}}:{{.Tag}}",
         *[f'image rm {image}' for image in [*images[1:-1], orphan, *legacy]],
         "image prune -f --filter label=org.opencontainers.image.title=Studio",
         "builder prune -f --filter until=168h"]
@@ -1423,7 +1423,7 @@ def test_docker_build_uses_application_version_in_tag_and_metadata(tmp_path):
     version_file.write_text('VERSION = "0.18.3"\n')
     result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
-    image = 'studio:0.18.3-' + 'a' * 40
+    image = 'arcane.local/studio:0.18.3-' + 'a' * 40
     assert '--build-arg STUDIO_VERSION=0.18.3' in result.stdout and f'-t {image}' in result.stdout
     assert (tmp_path / 'deploy/docker/host.conf').read_text().strip() == f'STUDIO_IMAGE={image}'
     version_file.write_text('VERSION = "invalid"\n')

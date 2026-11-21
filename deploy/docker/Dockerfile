@@ -1,4 +1,5 @@
 FROM python:3.13-slim-trixie
+LABEL org.opencontainers.image.title="Studio"
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 # install-docker.sh passes the ISO week: the first build of each week misses the cache here and
@@ -24,8 +25,7 @@ COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY agent/studio-agent.zip agent/studio-agent-setup.exe agent/studio-agent-setup.pkg agent/studio-agent-setup.sh ./agent/
 ARG STUDIO_REVISION=development
 ARG STUDIO_VERSION=development
-LABEL org.opencontainers.image.title="Studio" \
-      org.opencontainers.image.version=$STUDIO_VERSION \
+LABEL org.opencontainers.image.version=$STUDIO_VERSION \
       org.opencontainers.image.revision=$STUDIO_REVISION
 USER 10001:10001
 ENTRYPOINT ["/bin/sh", "/opt/studio/deploy/docker/entrypoint.sh"]
