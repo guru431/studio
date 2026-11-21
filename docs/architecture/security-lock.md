@@ -125,18 +125,22 @@
   чужая или истёкшая сессия — 404. `DELETE /api/me/sessions/<признак>` — завершить (текущая — 409 `current`): строка
   удаляется, push/ntfy уходят каскадом, `bridge.forget(..., close_computers=True)` — доступ теряется сразу.
 - `POST /api/me/emergency {password, agents}` — все сессии, все ссылки «Поделиться» (и на чаты своих компьютеров),
+  все ссылки на файлы «Моих файлов» (`file_links`; уже открытый по ссылке файл закрывается на следующем запросе
+  `/f/file` — строка ссылки проверяется на каждый запрос),
   всегда — выдачи проектов своих компьютеров (`project_access.granted`, `project_access.drop`,
   `project_access.wake`), push/ntfy (и шаблон `ntfy_settings`), по выбору — отзыв компьютеров (DELETE agents,
   `bridge.record('revoke')`, `bridge.drop`).
 - `GET /api/me/access` — «Доступы и ссылки»: выдачи проектов компьютеров учётки (участник, компьютер, проект; имя
   проекта — фоновой просьбой `projects` к мосту не дольше `account.ACCESS_NAMES_SEC`, иначе null; `missing` — папки
   нет) и её ссылки «Поделиться» (срок, открытия, неверные PIN, куда перейти — `chat_id` или `computer_id`/`project`/
-  `session_id`; без адреса ссылки). Адрес — только по «Копировать ссылку»: `GET /api/me/access/shares/<id>/link`
+  `session_id`; без адреса ссылки) и `file_links` — число действующих ссылок на файлы (`account._file_links`; сами
+  ссылки с «Отозвать» — в «Моих файлах», страница ведёт туда). Адрес — только по «Копировать ссылку»: `GET /api/me/access/shares/<id>/link`
   (`account.share_link`) расшифровывает `token_enc` лишь владельцу живой ссылки (чужая или истёкшая — 404, сменили
   ключ данных — 409 `share_key`), ответ `no-store`, в журнал ничего. Отзыв одной —
   `DELETE /api/me/access/members/<компьютер>/<проект>/<участник>` (`project_access.revoke`, без моста) и
-  `DELETE /api/me/access/shares/<id>`; `DELETE /api/me/access` — «Отозвать всё» (`project_access.revoke_all` и все
-  ссылки, `share_revoke` с `detail` all). Чужие строки не видны и не отзываются (404 / 204 без изменений).
+  `DELETE /api/me/access/shares/<id>`; `DELETE /api/me/access` — «Отозвать всё» (`project_access.revoke_all`, все
+  ссылки «Поделиться» — `share_revoke` с `detail` all, все ссылки на файлы — `file_link_revoke` с `detail` all;
+  ответ `{members, shares, file_links}`). Чужие строки не видны и не отзываются (404 / 204 без изменений).
   Участник сам покидает совместные проекты чужого компьютера — `DELETE /api/me/access/shared/<компьютер>`
   (`project_access.leave`, без моста; «Покинуть» в «Настройки → Агенты → Компьютеры»): его выдачи этого компьютера
   со вкладками и местом — прочь, ему `project_leave`, владельцу — строка `member_remove` истории подключений с
@@ -149,7 +153,8 @@
   `screen_lock_change` (область или таймер включённой блокировки изменились), смена пароля, `session_end` (`detail` —
   признак завершённой сессии, страница показывает его начало), `emergency`, `pin_set`, `pin_delete`,
   `passkey_add`, `passkey_delete`, `password_reset`, `admin_grant`, `admin_revoke`, `share_create`, `share_revoke`, `share_pin_fail`,
-  `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest),
+  `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest), `file_link_create`,
+  `file_link_revoke` (ссылка на файл «Моих файлов» создана, отозвана; без подробности, у «Отозвать всё» — all),
   `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
   подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
   `agent_events.ip`. Хранение — `security_log.KEEP_SEC` (180 дней), `security_log.KEEP_MAX` (1000) строк на учётку.

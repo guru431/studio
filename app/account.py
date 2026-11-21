@@ -137,8 +137,10 @@ async def emergency(body: Emergency, request: Request):
         # выдачи проектов её компьютеров — всегда: украденная сессия могла выдать доступ своей учётке
         grants = project_access.granted(uid)
         project_access.drop(grants)
-        # и почтовые ссылки и коды (смена почты, восстановление, код входа): чужой, знающий пароль, мог их запросить
-        for table in ("chat_shares", "push_subs", "ntfy_devices", "ntfy_settings", "email_tokens", "sessions"):
+        # и почтовые ссылки и коды (смена почты, восстановление, код входа): чужой, знающий пароль, мог их запросить;
+        # и ссылки на файлы «Моих файлов» — уже открытый по ним файл закрывает проверка строки на каждом запросе
+        for table in ("chat_shares", "file_links", "push_subs", "ntfy_devices", "ntfy_settings", "email_tokens",
+                      "sessions"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (uid,))   # имена — из кода
         state.DB.execute("DELETE FROM chat_shares WHERE agent_id IN (SELECT id FROM agents WHERE user_id = ?)", (uid,))
         state.DB.execute("UPDATE users SET password_reset = NULL WHERE id = ?", (uid,))  # совет сброса исполнен
@@ -195,9 +197,16 @@ def _label(blob) -> "str | None":
         return None
 
 
+def _file_links(uid) -> int:
+    """Действующие ссылки на файлы «Моих файлов» учётки (my_files.py: список — там же, «Мои ссылки»)."""
+    return state.DB.execute("SELECT COUNT(*) FROM file_links WHERE user_id = ? AND revoked IS NULL AND expires > ?",
+                            (uid, clock.NOW())).fetchone()[0]
+
+
 @router.get("/access")
 async def access(request: Request):
-    """Все выданные доступы к проектам компьютеров учётки (и к исчезнувшим папкам) и все её ссылки «Поделиться»."""
+    """Все выданные доступы к проектам компьютеров учётки (и к исчезнувшим папкам), все её ссылки «Поделиться» и
+    число действующих ссылок на файлы (`file_links`; сами ссылки — в «Моих файлах»)."""
     uid = request.state.user.id
     members = state.DB.execute(
         "SELECT m.agent_id, a.name AS computer, m.project, m.user_id, u.login, u.disabled, m.created"
@@ -222,7 +231,8 @@ async def access(request: Request):
                         "computer": r["computer"], "project": r["project"],
                         **(_place(names, r["agent_id"], r["project"]) if r["agent_id"] else {}),
                         "created": r["created"], "expires": r["expires"], "views": r["views"], "viewed": r["viewed"],
-                        "fails": r["fails"]} for r in shares]}
+                        "fails": r["fails"]} for r in shares],
+            "file_links": _file_links(uid)}
 
 
 @router.delete("/access/members/{aid}/{pid}/{member}", status_code=204)
@@ -270,15 +280,21 @@ async def revoke_share(share_id: str, request: Request):
 
 @router.delete("/access")
 async def revoke_access(request: Request):
-    """«Отозвать всё»: выдачи проектов компьютеров учётки и все ссылки «Поделиться» (и на чаты её компьютеров)."""
+    """«Отозвать всё»: выдачи проектов компьютеров учётки, все ссылки «Поделиться» (и на чаты её компьютеров) и все
+    ссылки на файлы «Моих файлов» (открытый по ним файл закрывает проверка строки на каждом запросе `/f/file`)."""
     uid = request.state.user.id
     members = project_access.revoke_all(request)
     shares = state.DB.execute("DELETE FROM chat_shares WHERE user_id = ? OR agent_id IN"
                               " (SELECT id FROM agents WHERE user_id = ?)", (uid, uid)).rowcount
+    files = _file_links(uid)
+    state.DB.execute("DELETE FROM file_links WHERE user_id = ?", (uid,))      # и отозванные, и истёкшие
     if shares:
         security_log.record(uid, "share_revoke", detail="all", digest=request.state.digest, ip=auth.client_ip(request))
-    log.info("пользователь %d: отозваны все ссылки «Поделиться» — %d", uid, shares)
-    return {"members": members, "shares": shares}
+    if files:
+        security_log.record(uid, "file_link_revoke", detail="all", digest=request.state.digest,
+                            ip=auth.client_ip(request))
+    log.info("пользователь %d: отозваны все ссылки «Поделиться» — %d, ссылки на файлы — %d", uid, shares, files)
+    return {"members": members, "shares": shares, "file_links": files}
 
 
 @router.delete("/password-reset", status_code=204)

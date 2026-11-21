@@ -103,7 +103,9 @@ path)` — схема, хост и порт подключения, путь —
 `{id, url: "https://<хост>/f#<token>", expires}`; токен `secrets.token_urlsafe(32)` только во фрагменте адреса, в
 базе — sha256, путь и имя — шифром, срок `my_files.LINK_SEC` (86400); не больше `my_files.LINKS_MAX` (100)
 действующих у учётки. `GET /api/my-files/links` — свои действующие, `DELETE /api/my-files/links/{id}` — отзыв;
-стирание истории уносит ссылки учётки. Анонимный вход: `GET /f` — оболочка `file.html` (`file-link.js`);
+создание и отзыв — в журнале безопасности (`file_link_create`, `file_link_revoke`), число действующих — в «Доступах и
+ссылках» (`GET /api/me/access` → `file_links`); стирание истории, «Аварийный выход» и «Отозвать всё» уносят ссылки
+учётки, уже открытый по ним файл закрывается на следующем запросе ([security-lock](security-lock.md)). Анонимный вход: `GET /f` — оболочка `file.html` (`file-link.js`);
 `POST /f/check {token}` → `{name, size, expires}`; `POST /f/open {token}` → cookie `studio_file` (HttpOnly, Secure,
 SameSite=Strict, Path=/f/file, `my_files.OPEN_SEC` (600), значение — случайный id в памяти процесса);
 `GET /f/file` — поток с Range, ссылка проверяется на каждый запрос. Тело POST — до `chat_shares.PUBLIC_BODY_MAX`
