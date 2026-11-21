@@ -40,8 +40,9 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * «Записать» (п. 38, recorder.js): запись встречи с микрофона рядом с «Загрузить запись» — время, «Пауза» /
  * «Продолжить», «Стоп и расшифровать» (Blob записи уходит тем же путём, что файл, с той же проверкой пределов; её
  * длительность известна сама), «Отменить» (окно: запись стирается). Запись — модуля recorder.js: уход из раздела её не
- * прерывает, новый экран подхватывает её по событию `studio-meeting`. На TOTAL_MAX запись встаёт на паузу. Записи,
- * оставшиеся в IndexedDB (перезагрузка, закрытая вкладка, отказ загрузки), — «Восстановить запись (мм:сс)» и
+ * прерывает, новый экран подхватывает её по событию `studio-meeting`. За MEETING_MARGIN до TOTAL_MAX запись встаёт на
+ * паузу; проверка до загрузки — с допуском сервера `total_slack`. Записи, оставшиеся в IndexedDB (перезагрузка,
+ * закрытая вкладка, отказ загрузки), — «Восстановить запись (мм:сс)», «Скачать запись» (файл с устройства) и
  * «Удалить»; куски стираются, только когда сервер запись принял. На iPhone — строка, что запись встаёт, когда экран
  * гаснет. */
 import { api, hooks, me, toLogin } from './api.js';
@@ -77,13 +78,16 @@ const HOME = '#/transcribe';
  * файл (null — отменять нечего), note — отказ, случившийся без экрана раздела: его покажет следующий. */
 const transfer = { busy: false, text: '', abort: null, note: '' };
 const TOTAL_MAX = 4 * 3600;     // как transcripts.TOTAL_MAX: длиннее запись целиком не примут
+/* запись встречи встаёт на паузу за MEETING_MARGIN с до TOTAL_MAX: время приходит раз в 250 мс, а длительность,
+ * измеренная сервером, чуть расходится со временем страницы (сверх предела — допуск transcripts.TOTAL_SLACK) */
+const MEETING_MARGIN = 10;
 /* Запись встречи (recorder.js) — модуля: note — слова о ней (пауза на пределе), sending — id записей, что уходят
  * сейчас («Восстановить» их не предлагает). */
 const recording = { note: '', sending: new Set() };
 
-/** Время записи встречи: на TOTAL_MAX — пауза и слова (длиннее не примут, записанное цело). */
+/** Время записи встречи: у TOTAL_MAX — пауза и слова (длиннее не примут, записанное цело). */
 function meetingTick(seconds, paused) {
-  if (paused || seconds < TOTAL_MAX) return;
+  if (paused || seconds < TOTAL_MAX - MEETING_MARGIN) return;
   recording.note = tr("Запись достигла {0} — остановите её и расшифруйте", span(TOTAL_MAX));
   meeting()?.pause();
 }
@@ -651,7 +655,7 @@ function build(view, ctx) {
       const ok = [], refused = [], parts = [];
       for (const file of files) {
         const sec = seconds ?? await durationOf(file);
-        if (sec !== null && sec > limits.total_max) {
+        if (sec !== null && sec > limits.total_max + (limits.total_slack || 0)) {   // допуск — как на сервере
           refused.push(tr("«{0}» не подходит: длиннее {1}", file.name, span(limits.total_max)));
           continue;
         }
@@ -712,7 +716,21 @@ function build(view, ctx) {
       SCREEN_STOPS ? tr("Когда экран гаснет, запись встаёт: держите его включённым.") : ''].filter(Boolean).join(' ');
   }
 
-  /** Записи, оставшиеся в IndexedDB: «Восстановить запись (мм:сс)» и «Удалить». */
+  /** «Скачать запись» с устройства: её можно сохранить, даже если расшифровать её не выйдет (предел инструмента). */
+  async function saveRecording(item) {
+    let blob;
+    try {
+      blob = await restore(item.id);
+    } catch (err) {
+      error.textContent = words(err);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    el('a', { href: url, download: recordingName(blob, meetingName(item.started)) }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);   // сразу — Safari не успевает начать загрузку
+  }
+
+  /** Записи, оставшиеся в IndexedDB: «Восстановить запись (мм:сс)», «Скачать запись» и «Удалить». */
   async function paintRestore() {
     const items = await pendingRecordings();
     const rec = meeting();
@@ -722,13 +740,15 @@ function build(view, ctx) {
       const back = el('button', { type: 'button', class: 'btn btn-sm btn-accent rec-restore', 'data-id': item.id },
         tr("Восстановить запись ({0})", clock(item.seconds)));
       back.addEventListener('click', () => recover(item));
+      const save = el('button', { type: 'button', class: 'btn btn-sm rec-save', 'data-id': item.id }, tr("Скачать запись"));
+      save.addEventListener('click', () => saveRecording(item));
       const drop = el('button', { type: 'button', class: 'btn btn-sm btn-danger rec-discard', 'data-id': item.id }, tr("Удалить"));
       drop.addEventListener('click', () => confirmDrop(async () => {
         await discard(item.id);
         await paintRestore();
       }));
       return el('div', { class: 'tr-rec-item' }, el('span', { class: 'muted small' }, tr("Незаконченная запись · {0}", when(item.started))),
-        back, drop);
+        back, save, drop);
     }));
   }
 

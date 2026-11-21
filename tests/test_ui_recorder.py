@@ -146,3 +146,62 @@ def test_reload_in_the_middle_offers_to_restore_the_recording(browser, live, wid
     assert v["item"].startswith("Запись "), v["item"]
     assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
     assert not problems(r), problems(r)
+
+
+def test_meeting_pauses_before_the_limit_and_is_still_accepted(browser, live):
+    """Ревью C-I1: запись встаёт на паузу до 4 ч с запасом, проверка страницы — с допуском сервера; прежде она
+    вставала на 14400,0–14400,25 с, а страница и сервер отказывали всему длиннее 14400 с — запись застревала."""
+    login = "reclimit"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*record(login),
+        # часы страницы — на 5 с до предела: запись «длилась» почти 4 ч
+        ("eval", "shift", "(() => { const real = performance.now.bind(performance);"
+                          " performance.now = () => real() + (4 * 3600 - 5) * 1000; return true; })()"),
+        ("wait", f"{LAST}.state === 'paused' && {PANEL}.dataset.state === 'paused'"),
+        ("eval", "seconds", f"(async () => {RECORDER}.meeting().seconds)()"),
+        ("eval", "note", "document.querySelector('#rec-note').textContent"),
+        ("click", "#rec-stop"),
+        ("wait", "document.querySelector('.tr-item') || document.querySelector('.tr-error')?.textContent"),
+        ("eval", "error", "document.querySelector('.tr-error').textContent"),
+        ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)()")],
+        init=FAKE_RECORDER, timeout=30000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert 4 * 3600 - 60 < v["seconds"] < 4 * 3600, v
+    assert "Запись достигла 4 ч" in v["note"] and not v["error"], v
+    assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
+    assert not problems(r), problems(r)
+
+
+def test_left_recording_can_be_downloaded(browser, live):
+    """Ревью C-I1: запись, оставшаяся на устройстве (перезагрузка, отказ загрузки), — «Скачать запись»: её можно
+    снять с устройства, даже если расшифровать её не выйдет; куски остаются до «Восстановить» или «Удалить»."""
+    login = "recsave"
+    live.add_user(login)
+    save = "document.querySelector('.rec-save')"
+    r = browser.drive(live.url + "/", [*record(login),
+        ("wait", f"(async () => {{ const p = await {RECORDER}.pendingRecordings(); return p.length === 1 && p[0].seconds >= 1; }})()"),
+        ("eval", "reload", "location.reload(); true"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", f"{save}?.offsetWidth > 0"),
+        ("eval", "label", f"{save}.textContent"),
+        ("eval", "fits", NO_OVERFLOW),
+        # blob: URL CSP читать не даёт (connect-src) — Blob берётся у createObjectURL
+        ("eval", "spy", "(() => { window.clicked = []; const make = URL.createObjectURL;"
+                        " URL.createObjectURL = (blob) => { window.made = blob; return make(blob); };"
+                        " HTMLAnchorElement.prototype.click = function () {"
+                        " window.clicked.push([this.getAttribute('href'), this.getAttribute('download')]); }; return true; })()"),
+        ("click", ".rec-save"),
+        ("wait", "window.clicked.length === 1"),
+        ("eval", "file", "(() => { const [href, name] = window.clicked[0];"
+                         " return [href.slice(0, 5), name, window.made.size, window.made.type]; })()"),
+        ("eval", "left", f"(async () => (await {RECORDER}.pendingRecordings()).length)()")],
+        width=320, height=900, mobile=True, init=FAKE_RECORDER, timeout=30000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["label"] == "Скачать запись" and v["fits"], v
+    href, name, size, kind = v["file"]
+    assert href == "blob:" and name.startswith("Запись ") and name.endswith(".webm") and size > 0, v["file"]
+    assert kind == "audio/webm" and v["left"] == 1, v
+    assert "POST /api/transcripts" not in r["sent"], r["sent"]
+    assert not problems(r), problems(r)

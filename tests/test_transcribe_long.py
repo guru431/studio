@@ -36,7 +36,8 @@ def parts(*replies):
 def test_long_recording_split_by_gateway_limits_and_times_shifted(studio, fake_audio):
     add_gateway(studio)
     asked = limits_route(studio)
-    assert studio.c.get("/api/transcripts/limits").json() == {"max_seconds": 600, "total_max": transcripts.TOTAL_MAX}
+    assert studio.c.get("/api/transcripts/limits").json() == {"max_seconds": 600, "total_max": transcripts.TOTAL_MAX,
+                                                              "total_slack": transcripts.TOTAL_SLACK}
     fake_audio.duration = 1500.0
     studio.gw.asr_replies = parts([(0.0, 2.0, "SPEAKER_00", "Один.")], [(1.0, 3.0, "SPEAKER_01", "Два.")],
                                   [(0.5, 1.0, "SPEAKER_00", "Три.")])
@@ -78,10 +79,21 @@ def test_no_limits_route_falls_back_to_duration_max(studio, fake_audio, monkeypa
         ("compress",), ("cut", 0.0, 2000.0), ("cut", 2000.0, 2000.0)]
 
 
+def test_recording_at_the_limit_is_accepted_within_the_slack(studio, fake_audio):
+    """Запись встречи встаёт на паузу у предела, а ffmpeg меряет её чуть длиннее времени страницы: в пределах
+    `TOTAL_SLACK` сверх 4 ч она расшифровывается, а не застревает на устройстве (ревью C-I1)."""
+    add_gateway(studio)
+    limits_route(studio)
+    assert studio.c.get("/api/transcripts/limits").json()["total_slack"] == transcripts.TOTAL_SLACK
+    fake_audio.duration = transcripts.TOTAL_MAX + 0.25
+    item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
+    assert item["state"] == "done", item["detail"]
+
+
 def test_over_total_max_refused_before_work(studio, fake_audio):
     add_gateway(studio)
     limits_route(studio)
-    fake_audio.duration = transcripts.TOTAL_MAX + 1.0
+    fake_audio.duration = transcripts.TOTAL_MAX + transcripts.TOTAL_SLACK + 1.0
     item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
     assert item["state"] == "error" and item["detail"] == "запись длиннее 4 ч — разделите её"
     paths = [q.url.path for q in studio.gw.requests]
