@@ -4,10 +4,11 @@ TRASH_SEC или владелец.
 
 - Таблицы с корзиной — `TABLES` (тот же набор, что `db._TRASH_58` шага 58). Вид записи корзины — `KINDS`
   (ключ — таблица): раздел, окончательное удаление `purge(user_id, id)` раздела, название строки, её файлы.
-  Новый раздел — строка в `KINDS`.
+  Новый раздел — строка в `KINDS`. Чат озвучки, удалённый целиком, — одна запись (`Kind.group`: строки с тем же
+  `chat_id` и той же отметкой `deleted`).
 - `GET /api/trash` → `[{kind, section, id, title, deleted, bytes}]` своих (новые сверху; разделы, закрытые
   блокировкой, — мимо); `POST /api/trash/{kind}/{id}/restore` — вернуть (строки поиска — `search.reindex_item`);
-  `DELETE /api/trash/{kind}/{id}` — окончательно одну. Чужая запись и запись не в корзине — 404: администратор
+  `DELETE /api/trash/{kind}/{id}` — окончательно одну (группу — всю, по id любой её строки). Чужая запись и запись не в корзине — 404: администратор
   чужую корзину не видит и не возвращает. «Вернуть» и «Удалить навсегда» закрыты, пока заперт любой раздел
   (`lock_policy.blocks`).
 - `POST /api/trash/empty {password}` — окончательно всё своё; пароль — `auth.confirm_password` (те же проверка и
@@ -72,6 +73,8 @@ class Kind:
     files: str                                    # SQL: id файлов записи (`:id`), для `bytes`
     search: "str | None" = None                   # раздел поиска (`search.TITLES`), если запись в индексе
     live: str = ""                                # условие строки, которую видно и можно вернуть
+    group: str = ""                               # столбец группы: строки с тем же значением и той же отметкой
+                                                  # `deleted` (удалены одним действием) — одна запись корзины
 
 
 HEAD = 80                                         # знаков текста записи в названии строки корзины
@@ -97,8 +100,9 @@ KINDS: dict[str, Kind] = {
     "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"], "Ролик"),
                    "SELECT media_id FROM videos WHERE id = :id UNION SELECT source_media_id FROM videos WHERE id = :id",
                    search="video"),
+    # чат озвучки, удалённый целиком («Удалить чат»), — одна запись корзины: возвращается и удаляется весь
     "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"], "Озвучка"),
-                     "SELECT media_id FROM speeches WHERE id = :id", search="speech"),
+                     "SELECT media_id FROM speeches WHERE id = :id", search="speech", group="chat_id"),
     "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"], "Запись"),
                         "SELECT source_media_id FROM transcripts WHERE id = :id"
                         " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe"),
@@ -130,18 +134,37 @@ def _bytes(kind: Kind, user_id: int, item_id: str) -> int:
                             {"uid": user_id, "id": item_id}).fetchone()[0]
 
 
+def _members(kind: Kind, uid: int, item_id: str, live: str = "") -> list[str]:
+    """id строк записи корзины `item_id`: она сама, а у вида с `group` — все строки её группы (тот же столбец группы
+    и та же отметка `deleted`). Чужая или не в корзине — []."""
+    row = state.DB.execute(f"SELECT deleted{', ' + kind.group if kind.group else ''} FROM {kind.table}"
+                           f" WHERE id = ? AND user_id = ? AND deleted IS NOT NULL{live}", (item_id, uid)).fetchone()
+    if row is None or not kind.group:
+        return [] if row is None else [item_id]
+    return [r["id"] for r in state.DB.execute(f"SELECT id FROM {kind.table} WHERE user_id = ? AND deleted = ?"
+                                              f" AND {kind.group} IS ?", (uid, row["deleted"], row[kind.group]))]
+
+
 @router.get("")
 async def list_trash(request: Request):
+    """Группа (`Kind.group`) — одна строка: id и название первой записи, объём — всех."""
     uid = request.state.user.id
     hidden = lock_policy.hidden(request.state.digest)
     items = []
     for name, kind in KINDS.items():
         if kind.section in hidden:
             continue
-        for row in state.DB.execute(f"SELECT * FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL{kind.live}",
-                                    (uid,)).fetchall():
-            items.append({"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
-                          "deleted": row["deleted"], "bytes": _bytes(kind, uid, row["id"])})
+        groups = {}
+        for row in state.DB.execute(f"SELECT * FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL{kind.live}"
+                                    " ORDER BY created, id", (uid,)).fetchall():
+            key = (row[kind.group], row["deleted"]) if kind.group else row["id"]
+            size = _bytes(kind, uid, row["id"])
+            if key in groups:
+                groups[key]["bytes"] += size
+                continue
+            groups[key] = {"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
+                           "deleted": row["deleted"], "bytes": size}
+            items.append(groups[key])
     items.sort(key=lambda item: item["deleted"], reverse=True)
     return items
 
@@ -150,23 +173,30 @@ async def list_trash(request: Request):
 async def restore(kind: str, item_id: str, request: Request):
     uid, found = request.state.user.id, _kind(kind)
     operations.check(uid)
-    if state.DB.execute(f"UPDATE {found.table} SET deleted = NULL WHERE id = ? AND user_id = ?"
-                        f" AND deleted IS NOT NULL{found.live}", (item_id, uid)).rowcount != 1:
+    ids = _members(found, uid, item_id, found.live)
+    if not ids:
         raise HTTPException(404, GONE)
+    state.DB.execute(f"UPDATE {found.table} SET deleted = NULL WHERE user_id = ?"
+                     " AND id IN (SELECT value FROM json_each(?))", (uid, json.dumps(ids)))
     if found.search is not None:
-        search.reindex_item(found.search, item_id)
-    log.info("корзина: %s %s возвращено", kind, item_id[:8])
+        for one in ids:
+            search.reindex_item(found.search, one)
+    log.info("корзина: %s %s возвращено, строк %d", kind, item_id[:8], len(ids))
     return Response(status_code=204)
 
 
 @router.delete("/{kind}/{item_id}", status_code=204)
 async def delete_forever(kind: str, item_id: str, request: Request):
     uid, found = request.state.user.id, _kind(kind)
-    if state.DB.execute(f"SELECT 1 FROM {found.table} WHERE id = ? AND user_id = ? AND deleted IS NOT NULL",
-                        (item_id, uid)).fetchone() is None:
+    ids = _members(found, uid, item_id)
+    if not ids:
         raise HTTPException(404, GONE)
-    await found.purge(uid, item_id)
-    log.info("корзина: %s %s удалено навсегда", kind, item_id[:8])
+    for one in ids:
+        # перед каждой строкой группы — заново: пока удалялась прежняя, группу могли вернуть
+        if state.DB.execute(f"SELECT 1 FROM {found.table} WHERE id = ? AND deleted IS NOT NULL",
+                            (one,)).fetchone() is not None:
+            await found.purge(uid, one)
+    log.info("корзина: %s %s удалено навсегда, строк %d", kind, item_id[:8], len(ids))
     return Response(status_code=204)
 
 

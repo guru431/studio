@@ -341,15 +341,24 @@ def test_share_link_of_trashed_chat_is_unavailable_and_returns_after_restore(s):
     assert s.c.post("/share/check", json={"access": access}).status_code == 204
 
 
-def test_speech_chat_delete_trashes_all_parts(s):
-    """Удаление чата озвучки — `deleted` всем его записям: чат и записи уходят из лент, файлы — до окончательного
-    удаления; «Вернуть» одной записи возвращает чат с ней одной."""
-    uid = owner(s)
-    clips = [save(uid, f"part {n}".encode(), "audio/mpeg", f"p{n}.mp3") for n in range(3)]
+def speech_chat(s, uid: int, parts: int = 4) -> list:
+    """Чат озвучки `part0` из `parts` записей (у каждой — свой mp3) и отдельный чат `solo`; файлы чата `part0`."""
+    clips = [save(uid, f"part {n}".encode(), "audio/mpeg", f"p{n}.mp3") for n in range(parts)]
     for n, clip in enumerate(clips):
         state.DB.execute(SPEECH, (f"part{n}", uid, f"melon {n}", clip, T0 + n, T0 + n, "part0", T0))
     other = save(uid, b"other", "audio/mpeg", "o.mp3")
     state.DB.execute(SPEECH, ("solo", uid, "melon solo", other, T0 + 9, T0 + 9, "solo", T0 + 9))
+    return clips
+
+
+def test_speech_chat_delete_trashes_all_parts(s):
+    """Удаление чата озвучки — `deleted` всем его записям: чат и записи уходят из лент, файлы — до окончательного
+    удаления. Ревью B1-I2: в корзине чат — одна строка (первая запись, объём — всех), «Вернуть» возвращает весь чат,
+    запись, удалённая раньше по одной, — своей строкой и сама по себе."""
+    uid = owner(s)
+    clips = speech_chat(s, uid)
+    assert s.c.delete("/api/speeches/part3").status_code == 204                # одна запись — раньше чата
+    s.clock[0] += 5
     assert s.c.get("/api/speeches/chats/part0").status_code == 200
     assert s.c.delete("/api/speeches/chats/part0").status_code == 204
     assert [r[0] for r in state.DB.execute("SELECT id FROM speeches WHERE deleted = ? ORDER BY id",
@@ -359,15 +368,32 @@ def test_speech_chat_delete_trashes_all_parts(s):
     assert [c["id"] for c in s.c.get("/api/speeches/chats").json()["items"]] == ["solo"]
     assert [i["id"] for i in s.c.get("/api/speeches").json()["items"]] == ["solo"]
     assert hits(s, "melon") == ["solo"]
-    assert sorted(i["id"] for i in s.c.get("/api/trash").json()) == ["part0", "part1", "part2"]
+    listed = s.c.get("/api/trash").json()
+    assert [(i["id"], i["title"], i["bytes"]) for i in listed] == [("part0", "melon 0", 18), ("part3", "melon 3", 6)]
     assert all(state.DB.execute("SELECT 1 FROM media WHERE id = ?", (c,)).fetchone() for c in clips)
-    assert s.c.post("/api/trash/speeches/part1/restore").status_code == 204
-    assert [i["id"] for i in s.c.get("/api/speeches/chats/part0").json()["items"]] == ["part1"]
+    assert s.c.post("/api/trash/speeches/part1/restore").status_code == 204    # любая запись чата — весь чат
+    assert [i["id"] for i in s.c.get("/api/speeches/chats/part0").json()["items"]] == ["part0", "part1", "part2"]
+    assert sorted(hits(s, "melon")) == ["part0", "part1", "part2", "solo"]
+    assert [i["id"] for i in s.c.get("/api/trash").json()] == ["part3"]
     s.clock[0] += trash.TRASH_SEC + 1
-    assert s.c.portal.call(trash.purge_expired) == 2
-    assert [r[0] for r in state.DB.execute("SELECT id FROM speeches ORDER BY id")] == ["part1", "solo"]
+    assert s.c.portal.call(trash.purge_expired) == 1
+    assert [r[0] for r in state.DB.execute("SELECT id FROM speeches ORDER BY id")] == ["part0", "part1", "part2", "solo"]
     assert [state.DB.execute("SELECT 1 FROM media WHERE id = ?", (c,)).fetchone() is not None
-            for c in clips] == [False, True, False]
+            for c in clips] == [True, True, True, False]
+
+
+def test_speech_chat_in_trash_is_deleted_forever_and_purged_whole(s):
+    """Ревью B1-I2: «Удалить навсегда» строки чата озвучки и уборка по сроку уносят все его записи и их файлы."""
+    uid = owner(s)
+    clips = speech_chat(s, uid)
+    assert s.c.delete("/api/speeches/chats/part0").status_code == 204
+    assert s.c.delete("/api/trash/speeches/part2").status_code == 204
+    assert [r[0] for r in state.DB.execute("SELECT id FROM speeches")] == ["solo"]
+    assert not any(state.DB.execute("SELECT 1 FROM media WHERE id = ?", (c,)).fetchone() for c in clips)
+    assert s.c.delete("/api/speeches/chats/solo").status_code == 204
+    s.clock[0] += trash.TRASH_SEC + 1
+    assert s.c.portal.call(trash.purge_expired) == 1
+    assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
 
 
 def test_translation_delete_keeps_scan_until_purge(s):
