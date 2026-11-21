@@ -1,5 +1,5 @@
 import { locale, message, tr } from './i18n.js';
-import { chooseMcp } from './mcp-settings.js';
+import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
@@ -63,6 +63,9 @@ import { chooseMcp } from './mcp-settings.js';
  * до первого текста модели. Прямое подключение — 409 `not_ready`: под полем NOT_READY, страница опрашивает документы
  * сканов поля ввода и вложений диалога и повторяет ход. #/chat?ocr=<id>&ask=… — как из расшифровки,
  * POST /api/ocr/<id>/attachments, модель — умолчание раздела, без окна внешней модели.
+ *
+ * Роль диалога — чип roles.js, серверы и инструменты MCP — окно chat-mcp.js (чип #mcp-toggle `MCP (n)`): у нового
+ * диалога — черновики `draftRole` и `draftMcp` (null — общие серверы по умолчанию), PATCH после его создания.
  *
  * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
@@ -499,7 +502,8 @@ function build(view, ctx) {
   let atts = [];               // вложения поля ввода: { file, meta, error, busy, transcript }; из расшифровки — без file
   let needModel = false;       // диалог из расшифровки без локальной модели: «Отправить» — после явного выбора
   let draftWeb = false;        // «Интернет» нового диалога: PATCH после его создания
-  let draftMcp = [];
+  let draftMcp = null;         // MCP нового диалога (тело PATCH, chat-mcp.js); null — общие серверы по умолчанию
+  let mcpServers = [];         // серверы MCP учётки (GET /api/mcp): счёт `MCP (n)` нового диалога
   let draftThink = false;      // «Рассуждение» нового диалога — так же
   let draftRole = null;        // роль нового диалога {id, name}: PATCH {role_id} после его создания
   let sending = false;
@@ -769,23 +773,28 @@ function build(view, ctx) {
     webNote.textContent = hint || (webOn() && thinkOn() ? THINK_NOTE : '');
     const conn = links.find(l => l.connection.id === chosen().connection_id)?.connection;
     mcpToggle.hidden = chat ? !chat.chat.mcp_ok : !conn?.proxied || !!conn?.cleaner;
-    const ids = chat ? chat.chat.mcp_ids || [] : draftMcp;
-    mcpToggle.textContent = ids.length ? `MCP (${ids.length})` : 'MCP';
-    mcpToggle.setAttribute('aria-pressed', String(ids.length > 0));
+    const count = mcpCount();
+    mcpToggle.textContent = count ? `MCP (${count})` : 'MCP';
+    mcpToggle.setAttribute('aria-pressed', String(count > 0));
   }
-  mcpToggle.addEventListener('click', async () => {
-    if (mcpToggle.disabled) return;
-    mcpToggle.disabled = true;
+
+  /* действующие серверы MCP: у открытого диалога — `mcp_ids` сервера, у нового — черновик поверх общих по умолчанию
+     (прямое подключение и Cleaner общих по умолчанию не получают, как mcp_sources.dialog_servers) */
+  function mcpCount() {
+    if (chat) return (chat.chat.mcp_ids || []).length;
+    const conn = links.find(l => l.connection.id === chosen().connection_id)?.connection;
+    if (!conn?.proxied || conn?.cleaner) return draftMcp ? draftMcp.mcp_ids.length : 0;
+    return draftCount(draftMcp, mcpServers);
+  }
+
+  mcpToggle.addEventListener('click', () => {
     const current = chat, mine = opened;
-    try {
-      await chooseMcp(root, chat ? chat.chat.mcp_ids || [] : draftMcp, async ids => {
-        if (mine !== opened || current !== chat) return;
-        if (chat) chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { mcp_ids: ids });
-        else draftMcp = ids;
-        paintWeb();
-      });
-    } catch (err) { notice.textContent = words(err); }
-    finally { mcpToggle.disabled = false; }
+    chooseDialogMcp(root, stateOf(chat ? chat.chat : draftMcp), async (body) => {
+      if (mine !== opened || current !== chat) return;
+      if (chat) chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, body);
+      else draftMcp = body;
+      paintWeb();
+    });
   });
 
   /* 409 `no_exa_key`: ключ убрали в другой вкладке — профиль этой вкладки ещё не знал */
@@ -868,7 +877,7 @@ function build(view, ctx) {
   /* ход даст модели Exa, а запросы она составит из расшифровки без подтверждения: в истории (`external_web`
    * сервера; он не считает неотправленное вложение) или в этом ходе (новое вложение из расшифровки) */
   function needsWebConsent(regenerate) {
-    if (!(chat?.chat.mcp_ids?.length || draftMcp.length) && (!webOn() || !webTools().includes('search'))) return false;
+    if (!mcpCount() && (!webOn() || !webTools().includes('search'))) return false;
     const fresh = !regenerate && atts.some((a) => a.transcript);
     return fresh || (!!chat && !!chat.chat.external_web);
   }
@@ -906,7 +915,7 @@ function build(view, ctx) {
   function askWeb(regenerate, externalOk) {
     const confirm = button(tr("Отправить"), { class: 'btn btn-accent', id: 'web-confirm' });
     const dialog = openDialog(root, { id: 'web-dialog', title: tr("Расшифровка и интернет"), actions: [confirm],
-      body: [el('p', {}, chat?.chat.mcp_ids?.length || draftMcp.length
+      body: [el('p', {}, mcpCount()
         ? tr("Запросы из расшифровки могут уйти на выбранные MCP-серверы — отправить?") : WEB_ASK)] });
     confirm.addEventListener('click', () => {
       dialog.close();
@@ -1447,7 +1456,7 @@ function build(view, ctx) {
     historyRead?.controller.abort();
     historyRead = null;
     draftWeb = false;
-    draftMcp = [];
+    draftMcp = null;
     draftThink = false;
     draftRole = null;
     clearTimeout(poll);
@@ -1655,7 +1664,7 @@ function build(view, ctx) {
       chat = null;
       draft = { connection_id: was.connection_id, model: was.model };
       draftWeb = !!was.web;
-      draftMcp = was.mcp_ids || [];
+      draftMcp = draftOf(was, mcpServers);
       draftThink = !!was.thinking;
       draftRole = was.role || null;
       if (location.hash === `#/chat/${id}`) history.replaceState(history.state, '', '#/chat');
@@ -1680,9 +1689,11 @@ function build(view, ctx) {
       if (alive && location.hash === '#/chat') history.replaceState(history.state, '', `#/chat/${created.id}`);
       loadList();
       const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
-      if (draftMcp.length) {
-        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { mcp_ids: draftMcp });
-        draftMcp = []; paintWeb();
+      if (draftMcp) {                              // MCP, выбранные до создания диалога; иначе — общие по умолчанию
+        const body = draftMcp;
+        draftMcp = null;
+        chat.chat = await api('PATCH', `/api/chats/${created.id}`, body);
+        paintWeb();
       }
       draftThink = false;
       if (draftRole) {                            // роль, выбранная до создания диалога
@@ -1926,6 +1937,10 @@ function build(view, ctx) {
   }, (err) => { notice.textContent = words(err); });
   const firstList = loadList();
   roles.reload().catch(() => {});                  // нет списка — в меню только «Без роли» и «Настроить роли»
+  api('GET', '/api/mcp').then(({ items }) => {     // нет списка — у нового диалога чип без числа
+    mcpServers = items;
+    paintWeb();
+  }, () => {});
 
   return {
     open,

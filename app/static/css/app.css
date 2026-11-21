@@ -1184,6 +1184,22 @@ label.chip { cursor: pointer; }
   overflow-wrap: anywhere; }
 #role-dialog { width: min(640px, calc(100 * var(--vw) - 32px)); }
 #role-dialog .role-count { margin-top: calc(-1 * var(--space-4)); text-align: end; }
+/* MCP диалога (chat-mcp.js) и политика инструментов общего MCP (mcp-settings.js) */
+#chat-mcp-dialog { width: min(640px, calc(100 * var(--vw) - 32px)); }
+.chat-mcp-servers { display: flex; flex-direction: column; }
+.chat-mcp-item { padding: var(--space-4) 0; border-top: 1px solid var(--line); min-width: 0; }
+.chat-mcp-item .check { margin-bottom: 0; }
+.chat-mcp-head, .chat-mcp-tool-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); min-width: 0; }
+.chat-mcp-name, .chat-mcp-tool-name { min-width: 0; overflow-wrap: anywhere; }
+.chat-mcp-item details { margin-top: var(--space-3); }
+.chat-mcp-item summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); }
+.chat-mcp-instructions { white-space: pre-wrap; overflow-wrap: anywhere; margin: var(--space-2) 0 0; }
+.chat-mcp-tools ul { list-style: none; margin: var(--space-3) 0 0; padding: 0 0 0 var(--space-6); display: flex; flex-direction: column;
+  gap: var(--space-4); }
+.chat-mcp-tool-code { font-family: var(--mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.chat-mcp-tool-text { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.mcp-policy { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.mcp-policy .input { flex: 1 1 200px; width: auto; min-width: 0; }
 .edit-tools { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
 .edit-brush { display: flex; align-items: center; gap: var(--space-5); }
 #describe-photo { display: block; max-width: 100%; max-height: calc(24 * var(--vh)); margin: 0 auto var(--space-6); border-radius: var(--r-control); }

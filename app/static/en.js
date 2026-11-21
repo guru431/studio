@@ -3211,7 +3211,27 @@ globalThis.StudioEnglish = Object.freeze({
   "Роль — текст, который модель получает в начале диалога. Выбирается в чате кнопкой рядом с полем ввода.": "A role is text the model receives at the start of a chat. Choose it in the chat with the button next to the message field.",
   "Русский": "Russian",
   "Роли по умолчанию": "Default roles",
-  "Новые учётки получают роли своего языка при первом открытии чата; «Добавить роли по умолчанию» в настройках возвращает недостающие. Уже созданные роли пользователей правка не меняет.": "New accounts get the roles of their language when they first open the chat; “Add default roles” in settings brings back missing ones. Editing does not change roles users already have."
+  "Новые учётки получают роли своего языка при первом открытии чата; «Добавить роли по умолчанию» в настройках возвращает недостающие. Уже созданные роли пользователей правка не меняет.": "New accounts get the roles of their language when they first open the chat; “Add default roles” in settings brings back missing ones. Editing does not change roles users already have.",
+  "Обновить список": "Refresh list",
+  "Общие серверы включены по умолчанию, свои — включайте сами.": "Shared servers are on by default; turn on your own servers yourself.",
+  "Инструмент {0}": "Tool {0}",
+  "Работает только при включённом «Интернете»": "Works only when “Internet” is on",
+  "интернет": "internet",
+  "По умолчанию выключен: включите, если доверяете ему": "Off by default: turn it on if you trust it",
+  "с подтверждением": "needs confirmation",
+  "Инструменты: {0} из {1}": "Tools: {0} of {1}",
+  "общий": "shared",
+  "Выключен в настройках подключения": "Turned off in the connection settings",
+  "Правила сервера": "Server rules",
+  "Интернет для инструмента {0}": "Internet for tool {0}",
+  "Интернет: как у сервера": "Internet: as the server says",
+  "Интернет: да": "Internet: yes",
+  "Интернет: нет": "Internet: no",
+  "Подтверждение для инструмента {0}": "Confirmation for tool {0}",
+  "Подтверждение: как у сервера": "Confirmation: as the server says",
+  "Подтверждение: всегда": "Confirmation: always",
+  "Подтверждение: никогда": "Confirmation: never",
+  "«Интернет» и «Подтверждение» заменяют пометки самого сервера: инструмент с интернетом работает только при включённом «Интернете» диалога, с подтверждением — по умолчанию выключен в диалогах.": "“Internet” and “Confirmation” replace the server’s own hints: a tool with internet works only when the chat’s “Internet” is on; a tool that needs confirmation is off by default in chats."
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не расшифрованы: {1} из {2} — STUDIO_DATA_KEY не тот, что у копии",
