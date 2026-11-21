@@ -24,8 +24,8 @@ PHONES = {f"{width}-{lang}" for width in (320, 390) for lang in LANGS}
 #: Что ещё не по образцу «Агентов» (замер 2026-11-21) — тест → раздел → «ширина-язык». Задача 3 убирает строки по мере
 #: правки разделов; strict: исправленное, но не убранное отсюда, — провал.
 TODO = {
-    "head": {"photo": {"320-ru", "320-en", "390-en"}, "video": {"320-ru", "320-en"}, "translate": PHONES},
-    "controls": {section: EVERY for section in ("chat", "photo", "video", "speech", "translate")},
+    "head": {"photo": {"320-ru", "320-en", "390-en"}, "video": {"320-ru", "320-en"}},
+    "controls": {section: EVERY for section in ("chat", "photo", "video", "speech")},
     "scroll": {},
 }
 
