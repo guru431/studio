@@ -1467,6 +1467,8 @@ function build(view, ctx) {
     return el('span', { class: 'att' }, mark, name,
       // идущий скан (`ocr` ответа загрузки или вложения диалога) знаков ещё не знает — их скажет перечитанный диалог
       a.kind === 'document' && !a.ocr ? el('span', { class: 'muted' }, tr("{0} зн.", Number(a.chars || 0).toLocaleString(locale()))) : null,
+      // последний ход отдал документ модели выдержками: он не поместился в её контекст (или предел не известен)
+      a.excerpts ? el('span', { class: 'muted att-excerpts' }, tr("модель видит выдержки")) : null,
       a.source && a.source.exists ? el('a', { class: 'att-source',
         href: `#/transcribe?id=${encodeURIComponent(a.source.transcript_id)}` }, tr("к записи")) : null,
       // скан вложения кончился с нераспознанными страницами: тот же документ — снова в очередь, текст — его итог

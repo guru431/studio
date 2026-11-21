@@ -199,7 +199,7 @@ async def _knowledge(task, call) -> dict:
         chosen = knowledge.chat_kbs(task.user_id, task.chat_id)
         scope = {"kb_ids": chosen or [b["id"] for b in knowledge.bases(task.user_id)],
                  "attachment_ids": list(knowledge.big_attachments(task.chat_id))}
-    hits = await knowledge.search(task.user_id, query.strip(), **scope)
+    hits = await knowledge.search(task.user_id, query.strip(), **scope, cache=task.knowledge_cache)
     return {"kind": "knowledge", "query": query.strip(), "found": len(hits),
             "sources": list(dict.fromkeys(h.doc_name for h in hits)),
             "text": knowledge.render(hits) if hits else knowledge.NOTHING}

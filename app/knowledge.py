@@ -11,10 +11,12 @@
   скалярное произведение); `rerank` — `POST <api>/rerank {model, query, documents}` → `results[{index,
   relevance_score}]`. Отказ источника при поиске — без векторов или без переранжирования, не ошибка.
 - `search` — BM25 топ-CANDIDATES ∪ векторы топ-CANDIDATES → RRF (RRF_K) → переранжирование → TOP_K кусков `Hit`.
-- Большое вложение (`adopt`, chat.py): текст длиннее INLINE_TOKENS по `chat.estimate_tokens` или не помещается в
-  контекст модели — документ с `attachment_id`; модель получает не весь текст, а выдержки по последнему сообщению
-  (`for_turn`, `excerpts`). Базы, выбранные в диалоге (`chat_kbs`), — блоком `block` в сообщение пользователя хода;
-  встроенный инструмент `knowledge_search` (chat_tools.py).
+- Большое вложение: ход решает сам (`chat._excerpt_plan`) — целиком, если запрос помещается в контекст модели;
+  иначе (или предел не известен, а текст длиннее INLINE_TOKENS) — документ с `attachment_id` (`adopt`), модель
+  получает выдержки по последнему сообщению (`for_turn`, `excerpts`); снова целиком — документ удаляется (`release`).
+  Базы, выбранные в диалоге (`chat_kbs`), — блоком `block` в сообщение пользователя хода; встроенный инструмент
+  `knowledge_search` (chat_tools.py). Поиск хода — после начала ответа (`chat.StreamTask`), источник ждёт
+  TURN_TIMEOUT_SEC.
 - Базы: личные (`user_id` — владелец; видит и удаляет только он, администратор — нет) и общие (`user_id NULL`, панель
   администратора): правил `kb_rules` нет — всем, есть — участникам их групп, администратору — всегда. Удаление личной
   базы и документа — в корзину (trash.py, `deleted`); общих — из панели сразу.
@@ -342,12 +344,12 @@ def chat_kbs(uid: int, chat_id: str) -> list[str]:
     return visible_ids(uid, ids) if ids else []
 
 
-def big_attachments(chat_id: str, extra=()) -> dict[str, str]:
-    """Большие вложения диалога (и хода: `extra`) с документом знаний: id вложения → id документа."""
+def big_attachments(chat_id: str) -> dict[str, str]:
+    """Большие вложения диалога, которые модель получает выдержками (документ знаний есть): id вложения → id
+    документа."""
     return {r["attachment_id"]: r["id"] for r in state.DB.execute(
         "SELECT d.id, d.attachment_id FROM kb_documents d JOIN attachments a ON a.id = d.attachment_id"
-        " WHERE d.deleted IS NULL AND (a.message_id IN (SELECT id FROM messages WHERE chat_id = ?)"
-        " OR a.id IN (SELECT value FROM json_each(?)))", (chat_id, json.dumps(list(extra))))}
+        " WHERE d.deleted IS NULL AND a.message_id IN (SELECT id FROM messages WHERE chat_id = ?)", (chat_id,))}
 
 
 def offered(uid: int, chat_id: str) -> bool:
@@ -479,14 +481,19 @@ def _head(doc_id: str, name: str, k: int) -> list[Hit]:
         "SELECT n, text FROM kb_chunks WHERE doc_id = ? ORDER BY n LIMIT ?", (doc_id, k))]
 
 
-async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=()) -> tuple[dict[str, str], str]:
-    """Знания хода по его сообщению `query`: выдержки больших вложений диалога и хода (id вложения → текст
-    выдержек) и блок найденного в базах диалога (пусто — баз нет или ничего не нашлось)."""
-    cache: dict = {}
+async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
+                   cache: "dict | None" = None) -> tuple[dict[str, str], str]:
+    """Знания хода по его сообщению `query`: выдержки вложений `attachment_ids`, которые модель получает выдержками
+    (`adopt`; id вложения → текст выдержек), и блок найденного в базах диалога (пусто — баз нет или ничего не
+    нашлось). `cache` — общий на ход (`_vector`, отказ источника)."""
+    cache = {} if cache is None else cache
     out = {}
-    for att_id, doc_id in big_attachments(chat_id, attachment_ids).items():
-        row = state.DB.execute("SELECT name FROM kb_documents WHERE id = ?", (doc_id,)).fetchone()
-        hits = await _search(uid, query, {doc_id: row["name"]}, TOP_K, cache) or _head(doc_id, row["name"], TOP_K)
+    for att_id in attachment_ids:
+        row = state.DB.execute("SELECT id, name FROM kb_documents WHERE attachment_id = ? AND deleted IS NULL",
+                               (att_id,)).fetchone()
+        if row is None:
+            continue
+        hits = await _search(uid, query, {row["id"]: row["name"]}, TOP_K, cache) or _head(row["id"], row["name"], TOP_K)
         out[att_id] = excerpts(hits)
     kbs = chat_kbs(uid, chat_id)
     found = await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache) if kbs else []
@@ -496,7 +503,8 @@ async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=()) -> tup
 
 
 def adopt(uid: int, att_id: str, name: str, text: str) -> str:
-    """Большое вложение — документ знаний (повтор — тот же документ). Итог — id документа."""
+    """Вложение, которое ход отдаёт модели выдержками, — документ знаний (повтор — тот же документ). Итог — id
+    документа."""
     row = state.DB.execute("SELECT id FROM kb_documents WHERE attachment_id = ?", (att_id,)).fetchone()
     if row is not None:
         return row["id"]
@@ -506,6 +514,15 @@ def adopt(uid: int, att_id: str, name: str, text: str) -> str:
     index(doc_id, text)
     log.info("знания: вложение %s — документ %s", att_id[:8], doc_id[:8])
     return doc_id
+
+
+def release(att_ids) -> None:
+    """Вложения, которые ход отдаёт модели целиком: их документы знаний не нужны (куски — каскадом); отметка
+    «модель видит выдержки» (`big_attachments`) снимается."""
+    count = state.DB.execute("DELETE FROM kb_documents WHERE attachment_id IN (SELECT value FROM json_each(?))",
+                             (json.dumps(list(att_ids)),)).rowcount
+    if count:
+        log.info("знания: документов вложений целиком — %d", count)
 
 
 # ---- базы -----------------------------------------------------------------------

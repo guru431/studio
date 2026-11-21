@@ -13,9 +13,9 @@ import chat
 import knowledge
 import security
 import state
-from conftest import add_gateway, make_user, signin
+from conftest import add_connection, add_gateway, make_user, signin
 from fakes import TOKEN
-from test_chat import attach, messages, new_chat, sse, turn
+from test_chat import attach, messages, new_chat, png, sse, turn
 from test_chat_web import call
 
 #: слова, по которым поддельная модель эмбеддингов строит вектор: текст про собак и текст про кошек — разные оси
@@ -163,27 +163,51 @@ def big_text(secret: str) -> str:
     return filler + secret + " " + filler
 
 
-def test_big_attachment_sends_excerpts_not_whole_text(studio):
-    add_gateway(studio)
+def first_user(studio) -> str:
+    return [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "user"][0]["content"]
+
+
+def marks(studio, cid) -> dict:
+    """Отметки «модель видит выдержки» у вложений первого сообщения: имя → `excerpts`."""
+    return {a["name"]: a.get("excerpts", False) for a in messages(studio, cid)[0]["attachments"]}
+
+
+def test_big_document_whole_when_it_fits_excerpts_when_not(studio):
+    """Документ больше knowledge.INLINE_TOKENS уходит целиком, пока запрос помещается в контекст модели (сводка
+    полуторачасовой расшифровки, перевод 40 страниц); не помещается или предел не известен — выдержками, с отметкой
+    «модель видит выдержки» у вложения и `excerpts="true"` в теге `<document>`. Решение — каждый ход."""
+    gw = add_gateway(studio)
     cid = new_chat(studio)
     text = big_text("Пароль от сейфа — 4711.")
     assert chat.estimate_tokens([{"role": "user", "content": text}]) > knowledge.INLINE_TOKENS
     doc = attach(studio, "отчёт.txt", text.encode())
     small = attach(studio, "заметка.txt", "Короткая заметка.".encode())
-    row = state.DB.execute("SELECT * FROM kb_documents WHERE attachment_id = ?", (doc["id"],)).fetchone()
-    assert row is not None and row["kb_id"] is None and row["state"] == "ready" and row["chars"] == len(text)
-    assert state.DB.execute("SELECT 1 FROM kb_documents WHERE attachment_id = ?", (small["id"],)).fetchone() is None
+    assert state.DB.execute("SELECT count(*) FROM kb_documents").fetchone()[0] == 0     # загрузка не решает
     sse(turn(studio, cid, "Какой пароль от сейфа?", attachment_ids=[doc["id"], small["id"]]))
-    sent = [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "user"][-1]["content"]
+    assert f'<document name="отчёт.txt">\n{text}\n</document>' in first_user(studio)     # 131 тыс. — помещается
+    assert marks(studio, cid) == {"отчёт.txt": False, "заметка.txt": False}
+    # модель с пределом 20 тыс.: тот же документ из истории — выдержками по сообщению хода
+    small_model(studio, cid, gw, 20_000)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny", "nolimit"]})
+    sse(turn(studio, cid, "Какой пароль от сейфа?"))
+    sent = first_user(studio)
     assert '<document name="отчёт.txt" excerpts="true">' in sent and "4711" in sent
-    assert re.search(r"\[кусок \d+\]", sent)
-    assert len(sent) < len(text) // 4 and sent.count("Обычная строка") < 300
+    assert re.search(r"\[кусок \d+\]", sent) and len(sent) < len(text) // 4
     assert '<document name="заметка.txt">\nКороткая заметка.\n</document>' in sent
-    # следующий ход ищет по своему сообщению: в выдержках — то, что спросили теперь
+    assert marks(studio, cid) == {"отчёт.txt": True, "заметка.txt": False}
+    row = state.DB.execute("SELECT * FROM kb_documents WHERE attachment_id = ?", (doc["id"],)).fetchone()
+    assert row["kb_id"] is None and row["state"] == "ready" and row["chars"] == len(text)
+    # предел не известен — выдержками всё, что длиннее INLINE_TOKENS
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "nolimit"}).json()["model"] == "nolimit"
+    sse(turn(studio, cid, "Ещё раз"))
+    assert '<document name="отчёт.txt" excerpts="true">' in first_user(studio)
+    # снова большая модель — целиком, отметка снята, документ знаний вложения не нужен
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "local-gemma-abl"}).status_code == 200
     sse(turn(studio, cid, "Что ещё в отчёте?"))
-    again = [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "user"][0]["content"]
-    assert 'excerpts="true"' in again and len(again) < len(text) // 4
-    assert len(messages(studio, cid)) == 4
+    assert f'<document name="отчёт.txt">\n{text}\n</document>' in first_user(studio)
+    assert marks(studio, cid) == {"отчёт.txt": False, "заметка.txt": False}
+    assert state.DB.execute("SELECT count(*) FROM kb_documents").fetchone()[0] == 0
+    assert len(messages(studio, cid)) == 8
 
 
 def test_shared_kb_visible_by_group_only_and_admin_always(studio):
@@ -281,18 +305,19 @@ def test_knowledge_search_result_fits_the_context(studio):
 
 
 def knowledge_dialog(studio) -> tuple[str, list[str]]:
-    """Источник знаний с векторами, база диалога и два больших вложения, что модель `tiny` (20 тыс.) получит
-    выдержками: (id диалога, id вложений)."""
+    """Источник знаний с векторами, база диалога и в истории — два больших вложения, что модель `tiny` (20 тыс.)
+    получает выдержками (первый ход их разметил, векторы готовы): (id диалога, id вложений)."""
     gateway(studio)
     shared_source(studio)
     gw = add_gateway(studio)
     kb = base(studio)
     upload(studio, kb, "пароли.txt", "Кодовое слово отдела — бирюза. Его меняют весной.")
     docs = [attach(studio, f"отчёт-{n}.txt", big_text(f"Пароль от сейфа {n} — 4711.").encode()) for n in (1, 2)]
-    settle(studio)
     cid = new_chat(studio)
     small_model(studio, cid, gw, 20_000)
     assert studio.c.put(f"/api/chats/{cid}/knowledge", json={"kb_ids": [kb]}).status_code == 200
+    assert sse(turn(studio, cid, "Начнём", attachment_ids=[d["id"] for d in docs]))[-1] == ("done", {"status": "done"})
+    settle(studio)
     studio.embeds.clear()
     return cid, [d["id"] for d in docs]
 
@@ -309,16 +334,78 @@ def test_turn_search_remembers_source_failure_and_uses_short_timeout(studio):
         raise httpx.ReadTimeout("нет ответа", request=request)
 
     studio.gw.on["/v1/embeddings"] = studio.gw.on["/v1/rerank"] = hang
-    assert sse(turn(studio, cid, "Какой пароль от сейфа?", attachment_ids=docs))[-1] == ("done", {"status": "done"})
+    assert sse(turn(studio, cid, "Какой пароль от сейфа?"))[-1] == ("done", {"status": "done"})
     assert waits == [("/v1/embeddings", knowledge.TURN_TIMEOUT_SEC)]
-    sent = [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "user"][-1]["content"]
-    assert sent.count('excerpts="true"') == 2 and "<knowledge>" in sent      # BM25 нашёл без источника
+    users = [m["content"] for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "user"]
+    assert users[0].count('excerpts="true"') == 2 and "<knowledge>" in users[-1]      # BM25 нашёл без источника
     # вектор есть, переранжирование отказало — второй раз в ходе его не спрашивают
     gateway(studio)
     studio.gw.on["/v1/rerank"] = hang
     waits.clear()
     assert sse(turn(studio, cid, "Что ещё про пароль?"))[-1] == ("done", {"status": "done"})
     assert waits == [("/v1/rerank", knowledge.TURN_TIMEOUT_SEC)] and len(studio.embeds) == 1
+
+
+def test_turn_search_runs_after_the_turn_is_accepted(studio):
+    """Поиск знаний хода — после его записи: квитанция `request_id` уже есть (повтор POST сразу получает
+    `replayed`), ответ — `streaming`, поток с пингами идёт; прежде POST молчал весь поиск."""
+    cid, _ = knowledge_dialog(studio)
+    seen = []
+
+    async def embeddings(request):
+        seen.append((state.DB.execute("SELECT count(*) FROM chat_turn_requests WHERE chat_id = ?", (cid,)).fetchone()[0],
+                     state.DB.execute("SELECT count(*) FROM messages WHERE chat_id = ? AND status = 'streaming'",
+                                      (cid,)).fetchone()[0]))
+        body = json.loads(request.content)
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": vector(t)} for i, t in enumerate(body["input"])]})
+
+    studio.gw.on["/v1/embeddings"] = embeddings
+    events = sse(turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20))
+    assert seen == [(1, 1)] and events[0][0] == "turn" and events[-1] == ("done", {"status": "done"})
+    sent = first_user(studio)
+    assert sent.count('excerpts="true"') == 2 and "4711" in sent
+    again = turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20)
+    assert again.json()["replayed"] is True and len(seen) == 1
+
+
+def test_direct_turn_gets_knowledge_after_the_turn_is_accepted(studio, monkeypatch):
+    """Прямое подключение: выдержки и блок баз — в сообщениях ответа JSON, поиск — тоже после записи хода."""
+    add_connection(studio)
+    kb = base(studio)
+    upload(studio, kb, "пароли.txt", "Кодовое слово отдела — бирюза. Его меняют весной.")
+    cid = new_chat(studio)
+    assert studio.c.put(f"/api/chats/{cid}/knowledge", json={"kb_ids": [kb]}).status_code == 200
+    accepted = []
+    real = knowledge.for_turn
+
+    async def spy(*args, **kwargs):
+        accepted.append(state.DB.execute("SELECT count(*) FROM messages WHERE chat_id = ? AND status = 'streaming'",
+                                         (cid,)).fetchone()[0])
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(knowledge, "for_turn", spy)
+    body = turn(studio, cid, "Какое кодовое слово?").json()
+    assert accepted == [1]
+    assert body["messages"][-1]["content"].startswith("<knowledge>") and "бирюза" in body["messages"][-1]["content"]
+
+
+def test_pause_after_knowledge_turn_keeps_photos_by_media_id(studio):
+    """Ход с базой диалога собирает контекст в потоке (`StreamTask._context`): фото и тогда уходят в payload паузы
+    ссылкой `media_id` (A-I3), а не base64."""
+    add_gateway(studio)
+    kb = base(studio)
+    upload(studio, kb, "пароли.txt", "Кодовое слово отдела — бирюза.")
+    cid = new_chat(studio)
+    assert studio.c.put(f"/api/chats/{cid}/knowledge", json={"kb_ids": [kb]}).status_code == 200
+    pic = attach(studio, "photo.png", png("red"), "image/png")
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Какое слово?")]}]
+    events = sse(turn(studio, cid, "Какое кодовое слово?", attachment_ids=[pic["id"]]))
+    shown = next(d for e, d in events if e == "pending")
+    first = studio.gw.chat_requests[0]["messages"][-1]["content"]
+    assert first[0]["text"].startswith("<knowledge>") and first[1]["image_url"]["url"].startswith("data:image/png")
+    row = state.DB.execute("SELECT payload FROM chat_pending WHERE id = ?", (shown["id"],)).fetchone()
+    stored = security.decrypt(row["payload"].encode("ascii"))
+    assert "base64" not in stored and pic["media_id"] in stored
 
 
 def test_kb_delete_goes_to_trash_and_restores(studio):

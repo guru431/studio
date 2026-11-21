@@ -845,6 +845,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Нет отмеченных моделей — выберите в настройках раздела «Чат»": "No models selected. Select one in Settings → Chat",
   "{0} зн.": "{0} chars",
   "к записи": "to recording",
+  "модель видит выдержки": "the model sees excerpts",
   "Распознать заново": "Recognize again",
   "Не ждать": "Stop waiting",
   "{0} — показать источники": "{0} — show sources",

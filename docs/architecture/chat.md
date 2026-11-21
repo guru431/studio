@@ -501,12 +501,21 @@ Cleaner). Скан в чате, ожидание сканов ходом, пов
   фоновый обработчик (`knowledge.kick`, при старте — `knowledge.resume`): `queued` → `ready` / `error` (куски остаются).
   `knowledge.embed` — `POST <api>/embeddings` пачками по `knowledge.EMBED_BATCH` (64), float32 `array('f')` единичной
   длины; `knowledge.rerank` — `POST <api>/rerank`. Смена подключения или модели эмбеддингов — векторы заново.
+  Векторы кусков ждут `knowledge.TIMEOUT_SEC` (120), вектор запроса и переранжирование в ходе —
+  `knowledge.TURN_TIMEOUT_SEC` (15).
 - **Поиск** `knowledge.search` — BM25 топ-`knowledge.CANDIDATES` (30) ∪ векторы топ-30 → RRF → переранжирование →
-  `knowledge.TOP_K` (6) кусков `knowledge.Hit`. Отказ источника — без векторов или без переранжирования, не ошибка.
-- **Большое вложение**: текст длиннее `knowledge.INLINE_TOKENS` (30000) по `chat.estimate_tokens` (при загрузке,
-  `chat.upload_attachment`) или больше контекста модели хода (`chat._knowledge`) — документ с `attachment_id`
-  (`knowledge.adopt`); модель получает `<document name=… excerpts="true">` с кусками `[кусок N]`, найденными по
-  сообщению хода (`knowledge.for_turn`; ничего не нашлось — начало документа), вместо всего текста.
+  `knowledge.TOP_K` (6) кусков `knowledge.Hit`. Отказ источника — без векторов или без переранжирования, не ошибка;
+  в ходе он запоминается (`chat.StreamTask.knowledge_cache`, общий с `knowledge_search`) — дальше источник не спрашивается.
+- **Большое вложение** — решение каждого хода (`chat._excerpt_plan`), загрузка не решает: документ уходит целиком, пока
+  запрос помещается в предел модели без `chat.RESERVE_TOKENS`; не помещается — документы длиннее
+  `knowledge.INLINE_TOKENS` (30000) по `chat.estimate_tokens` (или самого предела) выдержками, с самого большого, пока
+  не поместится; предел не известен — выдержками все длиннее `knowledge.INLINE_TOKENS`. Такой документ — с
+  `attachment_id` (`knowledge.adopt`), модель получает `<document name=… excerpts="true">` с кусками `[кусок N]`,
+  найденными по сообщению хода (`knowledge.for_turn`; ничего не нашлось — начало документа); снова целиком — документ
+  знаний удаляется (`knowledge.release`). Вложение с документом знаний — `excerpts: true` в GET диалога, на странице —
+  «модель видит выдержки». До записи хода проверка идёт с оценкой выдержек и блока баз `chat.EXCERPT_GUESS`, сам поиск —
+  после записи (квитанция `request_id` уже есть): ход через сервер — в потоке с пингами (`chat.StreamTask._context`),
+  прямое подключение — до ответа JSON (`chat._turn_context`).
 - **Базы**: личные (`GET/POST /api/knowledge`, `DELETE /api/knowledge/{id}`, документы — `POST
   /api/knowledge/{id}/documents` телом-файлом с `X-Studio-Name` до `documents.DOC_MAX`, `DELETE …/documents/{doc}`;
   удаление — в корзину, виды `knowledge_bases` и `kb_documents`) и общие — из панели (`/api/admin/knowledge/bases…`,
