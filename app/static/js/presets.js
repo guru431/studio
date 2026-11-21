@@ -17,7 +17,7 @@ import { menuItem, popupMenu } from './menu.js';
 
 export function presetChip({ host, snapshot, apply, say }) {
   let items = [];
-  const chip = el('button', { type: 'button', class: 'chip', id: 'chip-preset', 'aria-label': tr("Пресеты"), title: tr("Пресеты") },
+  const chip = el('button', { type: 'button', class: 'chip ctl-chip', id: 'chip-preset', 'aria-label': tr("Пресеты"), title: tr("Пресеты") },
     icon('star'));
   const list = el('div', { class: 'preset-list' });
   const save = menuItem(tr("Сохранить как пресет…"), { attrs: { id: 'preset-save' } });

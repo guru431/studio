@@ -322,7 +322,6 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
   border-bottom: 1px solid var(--line); }
 .head h1 { flex: none; margin: 0; font-size:var(--title-font); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .grow { flex: 1; }
-.head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
 /* кнопки-значки шапки «Фото» и «Видео» одной группой справа; не помещаются рядом с заголовком — целиком уходят под него
    (ряд инструментов, как у «Агентов») */
 .head-tools { display: flex; flex: none; align-items: center; gap: var(--space-5); margin-left: auto; }
@@ -907,6 +906,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .model-chip .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); }
 .model-chip.off .dot { background: var(--text-2); }
 .model-chip svg.caret { flex: none; width: 12px; height: 12px; }
+/* чип только со значком («Пресеты», «Интернет» на узком) — той же высоты, что чип со словом: значок в строку текста */
+.composer .ctl-chip > svg.ico:only-child { height: 1lh; }
 .model-menu { width: 320px; }
 .model-group + .model-group { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .model-group-name { margin: var(--space-2) var(--space-4); color: var(--text-2); font-size:var(--fs-xs); }
@@ -1128,7 +1129,7 @@ video.msg-file-media { max-height: 320px; }
 .feed-more { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); padding: var(--space-6) 0; text-align: center; }
 .feed-more:empty { display: none; }
 .feed-more p { margin: 0; }
-.feed-more .feed-empty { max-width: 360px; margin-top: calc(15 * var(--vh)); }
+.feed-more .feed-empty { font-size: var(--empty-font); max-width: 360px; margin-top: calc(15 * var(--vh)); }
 
 .photo-card { aspect-ratio: 2 / 3; }
 .card-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: var(--surface-2); cursor: zoom-in; }
