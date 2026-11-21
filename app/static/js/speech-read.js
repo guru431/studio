@@ -156,6 +156,9 @@ function readMcp(text, host) {
     const prop = mcp.argument('voice');
     const choices = Array.isArray(prop?.enum) ? prop.enum : [];
     await mcp.run({ text, voice: choices.includes(prop?.default) ? prop.default : choices[0] });
+  }, onEmpty() {                 // подключения MCP есть, а озвучивать ни один не умеет — не ждать вечно
+    status.className = 'error small';
+    status.textContent = tr("Нет источника озвучки — выберите его в «Озвучке»");
   } });
   host.replaceChildren(status, mcp.output);
   track(host, () => mcp.destroy());

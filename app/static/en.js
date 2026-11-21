@@ -2514,6 +2514,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Готово частей: {0} — можно слушать, пока озвучка идёт": "Parts ready: {0}. You can listen while synthesis continues",
   "Готово частей: {0} из {1}": "Parts ready: {0} of {1}",
   "Ищу инструмент озвучки MCP…": "Looking for the MCP speech tool…",
+  "Нет источника озвучки — выберите его в «Озвучке»": "No speech source — choose one in “Speech”",
   "Готовлю озвучку…": "Preparing speech…",
   "Прочитать": "Read aloud",
   "Слушать подряд": "Play all",
