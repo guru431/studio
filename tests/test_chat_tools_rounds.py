@@ -123,4 +123,3 @@ def test_gateway_refusing_tools_retried_without_them(studio):
     studio.clock[0] += chat.NO_TOOLS_SEC
     sse(turn(studio, cid, "Снова"))
     assert sent[3:] == [True, False]
-
