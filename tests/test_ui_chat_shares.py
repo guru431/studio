@@ -30,7 +30,9 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
     cid = client.post('/api/chats', json={}).json()['id']
     conn = db.connect(live.db_path)
     text = 'Ответ для получателя **с выделением** <script>window.shareXss=1</script>'
-    tools = '[{"kind":"search","query":"погода","results":[{"title":"Пример","url":"https://example.org/a"}],"text":"x"}]'
+    tools = ('[{"kind":"search","query":"погода","results":[{"title":"Пример","url":"https://example.org/a"}],"text":"x"},'
+             '{"kind":"mcp","server":"Shared","tool":"make","text":"made","sid":1,"stamp":"s",'
+             '"files":[{"aid":"art_' + 'a' * 32 + '","mime":"image/png","name":"out.png"}]}]')
     conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,tools)"
                  " VALUES(?,?,'assistant',?,'done','server',1,?)", (uuid.uuid4().hex, cid, text, tools))
     conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,error)"
@@ -101,6 +103,9 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
                 pw.expect(reader.locator('#shared-messages strong')).to_have_text('с выделением')
                 pw.expect(reader.locator('.shared-sources summary')).to_have_text('Источники (1)')
                 pw.expect(reader.locator('.shared-sources a')).to_have_attribute('href', 'https://example.org/a')
+                # файлы результата MCP — только имена, без ссылок на скачивание
+                pw.expect(reader.locator('.shared-sources .shared-files li')).to_have_text('out.png')
+                assert reader.locator('#shared-messages a[href*="/files/"]').count() == 0
                 pw.expect(reader.locator('#shared-messages p.error')).to_have_text('шлюз не ответил')
                 assert reader.locator('textarea').count() == 0
                 assert not reader.evaluate('window.shareXss || false')

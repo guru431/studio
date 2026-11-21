@@ -13,6 +13,7 @@ import state
 from conftest import make_user, signin
 from test_access_groups import shared_tools
 from test_chat import attach, messages, new_chat, sse, turn
+from test_chat_shares import create as create_share, unlock as unlock_share
 from test_chat_web import call
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
 from test_shared_integrations import add_models
@@ -343,6 +344,20 @@ def test_result_file_404_after_address_or_key_change(studio):
     assert studio.c.get(url).status_code == 200
     change_key(studio, sid, url=MCP_URL.replace("/mcp", "/moved"), token=MCP_KEY + "-2")
     assert studio.c.get(url).status_code == 404
+
+
+def test_share_link_shows_only_result_file_names(studio):
+    """Снимок ссылки «Поделиться» несёт имена файлов результата MCP, но не сервер, отпечаток и id файла на нём:
+    получатель видит имена, скачать файлы по ссылке нельзя."""
+    sid, _ = setup(studio)
+    cid, _ = made(studio, sid)
+    _, token = create_share(studio, f"/api/chats/{cid}/share")
+    opened = unlock_share(studio, token)
+    assert opened.status_code == 200, opened.text
+    step = opened.json()["messages"][-1]["tools"][0]
+    assert step["files"] == [{"name": "out.png", "mime": "image/png"}]
+    assert "sid" not in step and "stamp" not in step
+    assert ART not in opened.text and "/files/" not in opened.text
 
 
 def test_file_names_not_in_log(studio, caplog):

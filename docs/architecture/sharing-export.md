@@ -80,7 +80,10 @@ read-токен живёт только в памяти страницы, не �
 - Снимок обычного чата (`chat_shares.regular_snapshot`) берёт сообщение так, как его показывает чат (`chat._message_out`):
   `tools` — шаги «Интернета» и MCP без текста для модели (`web.public`), `error` — слова ответа-ошибки, `status`.
   Получатель (`share-view.js`) и оба файла показывают «Источники (N)»/«Вызовы инструментов (N)», слова ошибки и пометку
-  недописанного ответа (`streaming`: снимок потом не дополняется).
+  недописанного ответа (`streaming`: снимок потом не дополняется). Файлы результатов MCP (`mcp_files.result_files`)
+  `web.public` сводит к `{name, mime}` — без сервера, отпечатка его ключа и id файла: получатель (`.shared-files`) и
+  оба файла (`chat_exports._tool_line`) видят только имена, маршрута скачивания у ссылки нет (сторожат
+  `test_mcp_chat_files.py::test_share_link_shows_only_result_file_names`, `test_ui_chat_shares.py`).
 - Сообщение пользователя — текст, а не Markdown (в чате оно `pre-wrap`): `chat_exports._parts` отдаёт его частью
   `plain`. В PDF (`chat_exports.pdf_html`) — блок `div.chat-export-plain` с `&#10;` вместо переводов строк и стилями
   `chat_export_selection.CSS`, как в выделенном фрагменте; в `.md` (`chat_exports._literal`) — жёсткие переводы строк
