@@ -4577,8 +4577,8 @@ def geo_steps(name, field, scope):
 
 @pytest.mark.parametrize("width", [320, 390])
 def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, width):
-    """Чат, фото, видео: с первой буквой появляется «очистить» над скрепкой и микрофоном, рамка поля
-    не меняет высоту, значки в рамке, середина поля свободна. «Очистить» шлёт `input`: поле чата сжимается
+    """Чат, фото, видео: с первой буквой появляется «очистить» над скрепкой и микрофоном (у чата — вместо
+    «Разговора»), рамка поля не меняет высоту, значки в рамке, середина поля свободна. «Очистить» шлёт `input`: поле чата сжимается
     обратно, счётчик озвучки — «0 / 200 000», поиск — снова в ожидании."""
     login = f"oneline{width}"
     live.add_user(login)
@@ -4603,14 +4603,15 @@ def test_one_line_fields_keep_their_height_and_clear_sends_input(browser, live, 
         ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=True, height=760)
     assert not r.get("failed"), r
     v = r["values"]
-    for name, tools in (("photo", 3), ("chat", 3), ("video", 3)):
+    # у чата пустое поле держит ещё «Разговор»: с первой буквой его место занимает «очистить» — значков столько же
+    for name, idle, tools in (("photo", 2, 3), ("chat", 3, 3), ("video", 2, 3)):
         empty, typed, cleared = v[f"{name}-empty"], v[f"{name}-typed"], v[f"{name}-cleared"]
         # Начальные три строки держат колонку кнопок и не прыгают после первой буквы.
         assert 72 <= empty[0] <= 76, (name, empty)
         hint, height = v[f"{name}-hint"]
         assert name == "chat" or hint <= height, (name, v[f"{name}-hint"], empty)
         assert abs(typed[0] - empty[0]) <= 1 and cleared[0] == empty[0], (name, empty, typed, cleared)
-        assert empty[1:4] == [2, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
+        assert empty[1:4] == [idle, True, True] and typed[1:4] == [tools, True, True], (name, empty, typed)
     assert v["chatTall"] > v["chat-empty"][4] + 20 and abs(v["chatBack"] - v["chat-empty"][4]) <= 1, (v["chatTall"], v["chatBack"])
     assert v["speechTyped"] == "3 / 200 000" and v["speechCleared"] == "0 / 200 000"
     assert v["searchCleared"] == "" and not v["overflow"]

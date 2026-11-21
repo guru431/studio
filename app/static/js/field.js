@@ -8,12 +8,13 @@ import { tr } from './i18n.js';
  * `input` и при любой записи `field.value` кодом раздела (ответ модели, перевод, пресет, отправка) — иначе
  * значок «очистить» оставался бы у пустого поля. Нажатие «очистить» — пустое поле, событие `input` (раздел
  * пересчитает высоту, счётчик, поиск), фокус в поле; у поля только для чтения (перевод «EN») — ничего.
+ * `painted()` раздела зовётся после каждой такой сверки (чат прячет «Разговор», пока в поле текст).
  * error — место ошибки микрофона под рамкой: его ставит раздел. */
 import { icon } from './icons.js';
 import { attachMic } from './mic.js';
 import { el } from './ui.js';
 
-export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false } = {}) {
+export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false, painted = null } = {}) {
   const error = el('div', { class: 'field-error' });
   const column = el('div', { class: 'field-tools' });
   const shown = [...tools];
@@ -40,6 +41,7 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
       field.style.height = 'auto';
       if (field.value) field.style.height = `${field.scrollHeight}px`;
     }
+    painted?.();
   };
   // запись value кодом раздела события input не шлёт — значки следят и за ней
   const own = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value');
