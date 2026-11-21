@@ -323,14 +323,14 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .head h1 { margin: 0; font-size:var(--title-font); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .grow { flex: 1; }
 .head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
-.mcp-tool { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
-/* состояние источника MCP (mcp_contracts, `studio/status`): точка у чипа MCP чата и у выбора «Студия/MCP» разделов */
+/* состояние источника MCP (mcp_contracts, `studio/status`): точка у чипа MCP чата и у выбора «Студия/MCP» разделов
+ * (кнопка .pick-trigger: после подписи у неё стрелка, поэтому точка — перед подписью) */
 [data-mcp-state] { --mcp-state: var(--success); }
 [data-mcp-state="busy"] { --mcp-state: var(--warn); }
 [data-mcp-state="down"] { --mcp-state: var(--danger); }
-button[data-mcp-state]::after { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--mcp-state); }
-select[data-mcp-state] { padding-left: 24px; background-image: radial-gradient(circle, var(--mcp-state) 4px, transparent 4.5px);
-  background-repeat: no-repeat; background-size: 10px 10px; background-position: 9px center; }
+button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]::before { content: ''; flex: none; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--mcp-state); }
+.pick-trigger[data-mcp-state] .pick-value { flex: 1; }
 .mcp-run { flex: none; max-height: 40dvh; overflow: auto; padding: var(--space-4) var(--space-7); }
 .mcp-run > .status { margin: 0 0 var(--space-3); }
 .mcp-result { display: grid; gap: var(--space-4); }
