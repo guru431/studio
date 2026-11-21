@@ -7,7 +7,8 @@ import { message as translateMessage, tr } from './i18n.js';
  * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message, detail)
  * из `detail` ответа; code 'login' (сессия кончилась) уводит на страницу входа (toLogin — с адресом раздела).
  * 423 `screen_locked` (студия заперта, lock.js) при заданном hooks.locked ждёт отпирания и повторяет
- * тот же запрос: опрос хода задания не показывает ошибку из-за блокировки.
+ * тот же запрос: опрос хода задания не показывает ошибку из-за блокировки. `unlock: false` — без экрана блокировки:
+ * 423 уходит отказом (фоновая проверка, которую пользователь не просил, не должна запирать открытый раздел).
  *
  * Модули разделов импортируют './api.js' — один экземпляр на страницу (app.js — не импортировать:
  * его адрес с ?v= и второй импорт без версии запустил бы оболочку дважды). */
@@ -71,7 +72,7 @@ export async function loadMe() {
   return me;
 }
 
-export async function api(method, path, body, { signal, headers: extraHeaders, keepalive = false } = {}) {
+export async function api(method, path, body, { signal, headers: extraHeaders, keepalive = false, unlock = true } = {}) {
   const headers = { ...extraHeaders };
   let payload;
   const token = me ? me.csrf : csrf;
@@ -105,7 +106,7 @@ export async function api(method, path, body, { signal, headers: extraHeaders, k
     }
     if (code === 'login') toLogin();
     if (code === 'email_required') location.href = '/account/email';
-    if (code === 'screen_locked' && hooks.locked) {
+    if (code === 'screen_locked' && hooks.locked && unlock) {
       await hooks.locked();
       return api(method, path, body, { signal, headers: extraHeaders });
     }

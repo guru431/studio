@@ -88,3 +88,24 @@ def test_my_files_upload_folder_and_day_link_opens_in_a_clean_browser(browser, c
     assert not got["overflow"] and "studio_file" not in got["cookie"] and got["clicked"] == "/f/file"
     assert got["body"][0] == 200 and got["body"][1].startswith("attachment;") and got["body"][2] == TEXT
     assert not problems(shared), problems(shared)
+
+
+def test_avatar_menu_under_expired_partial_lock_does_not_force_the_lock_screen(browser, live):
+    """Защищён только «Чат», срок истёк, открыто «Фото»: проверка пункта «Мои файлы» при открытии меню аватара
+    (GET /api/my-files/servers — 423, пока заперт хоть один раздел) экран блокировки не вызывает; содержимое «Моих
+    файлов» по-прежнему закрыто."""
+    from test_ui_browser import API, LOCK_OPEN, go, hide, show
+    login = "files-partial"
+    live.add_user(login)
+    configure = f"""(async () => {{ const m = {API};
+      await m.api('POST', '/api/me/screen-lock', {{enabled:true, sections:['chat'], timeout:0}});
+      await m.loadMe(); document.dispatchEvent(new Event('studio-me')); return true; }})()"""
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "configure", configure),
+        *go("photo"), ("wait", "document.querySelector('#rail [data-section=photo][aria-current=page]')"),
+        hide(), show(),
+        ("wait", "fetch('/api/my-files/servers').then(r => r.status === 423)"),
+        ("click", "#avatar"), ("wait", MENU_OPEN),
+        ("eval", "later", f"new Promise(r => setTimeout(() => r({LOCK_OPEN}), 1500))"),
+        ("eval", "hash", "location.hash")])
+    assert not r.get("failed"), r
+    assert r["values"]["later"] is False and r["values"]["hash"] == "#/photo"

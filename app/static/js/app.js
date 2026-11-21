@@ -303,9 +303,10 @@ function sectionKey(event) {
 }
 
 /** «Мои файлы» в меню — только при сервере MCP с контрактом `studio/files` (GET /api/my-files/servers; каталоги
- * серверов — из кэша сервера). Сбой проверки пункт не меняет. */
+ * серверов — из кэша сервера). Сбой проверки пункт не меняет. Пока заперт хоть один раздел, маршрут отвечает 423:
+ * открытие меню экран блокировки не вызывает (`unlock: false`), пункт остаётся как был. */
 function checkMyFiles() {
-  api('GET', '/api/my-files/servers').then((items) => {
+  api('GET', '/api/my-files/servers', undefined, { unlock: false }).then((items) => {
     document.getElementById('menu-my-files').hidden = !(Array.isArray(items) && items.length);
   }).catch(() => {});
 }
