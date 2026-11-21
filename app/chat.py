@@ -610,9 +610,10 @@ def _read_photos(paths: dict) -> dict:
     return urls
 
 
-async def fill_photos(chat_id: str, user_id: int, messages: list[dict]) -> list[dict]:
+async def fill_photos(chat_id: str, user_id: int, messages: list[dict], refs: "dict | None" = None) -> list[dict]:
     """Картинки сообщений compose — data: URL; файлы читаются в потоке. Фото, которого нет на
-    шаре, — короткая пометка текстом: иначе каждый следующий ход диалога падал бы."""
+    шаре, — короткая пометка текстом: иначе каждый следующий ход диалога падал бы. `refs` (StreamTask.photos)
+    получает data: URL → id media: пауза хода хранит картинки ссылкой (`photo_refs`)."""
     ids = {p["media_id"] for m in messages if isinstance(m["content"], list) for p in m["content"] if "media_id" in p}
     if not ids:
         return messages
@@ -625,6 +626,8 @@ async def fill_photos(chat_id: str, user_id: int, messages: list[dict]) -> list[
     urls = await asyncio.to_thread(_read_photos, paths)
     for media_id in sorted(m for m in ids if urls[m] is None):
         log.warning("чат %s: фото %s нет в хранилище — вместо него пометка", chat_id[:8], media_id)
+    if refs is not None:
+        refs.update({url: media_id for media_id, url in urls.items() if url})
 
     def part(p):
         if "media_id" not in p:
@@ -633,6 +636,17 @@ async def fill_photos(chat_id: str, user_id: int, messages: list[dict]) -> list[
         return {"type": "image_url", "image_url": {"url": url}} if url else {"type": "text", "text": NO_PHOTO}
 
     return [{**m, "content": [part(p) for p in m["content"]]} if isinstance(m["content"], list) else m
+            for m in messages]
+
+
+def photo_refs(messages: list[dict], refs: dict) -> list[dict]:
+    """Обратное fill_photos для payload паузы: картинки, прочитанные этим ходом (`refs`: data: URL → id media), —
+    снова частями с id media; продолжение прочитает файлы заново."""
+    def part(p):
+        url = p.get("image_url", {}).get("url") if p.get("type") == "image_url" else None
+        return {"type": "image_url", "media_id": refs[url]} if url in refs else p
+
+    return [{**m, "content": [part(p) for p in m["content"]]} if isinstance(m.get("content"), list) else m
             for m in messages]
 
 
@@ -815,6 +829,8 @@ class StreamTask:
     confirmed: "ToolCall | None" = field(default=None, repr=False)
     #: вызовы продолжения, чьих инструментов больше нет: [(объект вызова, (сервер, инструмент))] — тоже по `is`
     gone: list = field(default_factory=list, repr=False)
+    #: картинки запроса: data: URL → id media (fill_photos) — payload паузы хранит их ссылкой (photo_refs)
+    photos: dict = field(default_factory=dict, repr=False)
     builtin_off: bool = False    # встроенные инструменты не предлагать (шлюз их не принял, метка NO_TOOLS)
     #: в диалоге сработал «Защищённый источник» MCP (`chats.protected_used`, читает `_read`; ставит `_protect`):
     #: аргументы со ссылками (mcp_client.has_url) — отказ mcp_client.URL_REFUSED без вызова
@@ -1191,9 +1207,15 @@ class StreamTask:
         """Продолжение после паузы: вызов, на котором она стояла, — по ответу пользователя («Запустить» — исполнить
         без нового вопроса; отказ и ответ на вопрос — шаг словами, chat_pending.resume_step), затем оставшиеся вызовы
         круга. Инструменты MCP — по серверу и имени (`targets` паузы): каталог продолжения мог пронумеровать иначе,
-        а доступ, «Интернет» и выключение — убрать инструмент из набора: тогда шаг chat_pending.GONE без вызова."""
+        а доступ, «Интернет» и выключение — убрать инструмент из набора: тогда шаг chat_pending.GONE без вызова.
+        Картинки payload хранит ссылкой (photo_refs): файлы читаются заново, пропавший — пометкой (fill_photos)."""
         r = self.resume
         self.rounds, self.seen = r["rounds"], set(r["seen"])
+        try:
+            self.messages = await fill_photos(self.chat_id, self.user_id, self.messages, self.photos)
+        except OSError as e:
+            log.warning("чат %s: вложение не прочиталось (%s)", self.chat_id[:8], type(e).__name__)
+            return STORAGE
         names = {(session.sid, tool): name for name, (session, tool, _, _) in (self.mcp.calls.items() if self.mcp else ())}
         calls = []
         for raw in [r["call"], *r["rest"]]:
@@ -1404,7 +1426,7 @@ class StreamTask:
         if self.tools:
             self.known = _known_links(self.chat_id)
         try:
-            photos = await fill_photos(self.chat_id, self.user_id, composed)
+            photos = await fill_photos(self.chat_id, self.user_id, composed, self.photos)
             operations.check(self.user_id)
             self.messages = chat_system.wrap(self.system, photos)
         except OSError as e:
@@ -2339,9 +2361,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
+    refs = {}                                        # data: URL → id media (StreamTask.photos)
     try:
         if not scans:
-            photos = await fill_photos(chat_id, uid, messages)   # файлы — после COMMIT и в потоке
+            photos = await fill_photos(chat_id, uid, messages, refs)   # файлы — после COMMIT и в потоке
             operations.check(uid)
             messages = chat_system.wrap(system, photos)
     except BaseException as e:
@@ -2370,7 +2393,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                     mcp_explicit=mcp_explicit,
                     system=system,
                     thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
-                    scans=scans, user_message_id=user_mid, cleaner_preview=preview)
+                    scans=scans, user_message_id=user_mid, cleaner_preview=preview, photos=refs)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid, getattr(request.state, "digest", None))

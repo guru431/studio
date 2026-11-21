@@ -50,8 +50,8 @@ UNANSWERED = "пользователь не ответил на карточке
 NOT_RUN = "Вызов {0} с аргументами {1} не запущен: " + UNANSWERED + "."
 VIEW = ("server", "tool", "arguments", "question", "options", "allow_text")
 ACTIONS = {"confirm": ("run", "refuse"), "ask": ("answer", "refuse")}
-# решённая пауза (любой исход) payload не хранит: в нём сообщения модели с картинками base64 — мегабайты на строку
-RESOLVE = "resolved = ?, payload = ''"
+# решённая пауза (любой исход) payload и вид карточки не хранит: в нём сообщения модели, документы и вопрос
+RESOLVE = "resolved = ?, payload = '', view = ''"
 
 
 class PendingIn(BaseModel):
@@ -82,12 +82,15 @@ async def pause(task, kind: str, call, view: dict) -> str:
     pid = uuid.uuid4().hex
     rest = [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in task.rest]
     targets = {c.name: t for c in [call, *task.rest] if (t := _target(task, c.name)) is not None}
-    payload = {"messages": task.messages, "call": {"id": call.id, "name": call.name, "arguments": call.arguments},
+    # картинки — ссылкой на media, не base64 (фото телефона — десятки мегабайт): продолжение прочитает файлы заново
+    payload = {"messages": chat.photo_refs(task.messages, task.photos),
+               "call": {"id": call.id, "name": call.name, "arguments": call.arguments},
                "rounds": task.rounds, "seen": sorted(task.seen), "steps": task.steps, "rest": rest, "index": task.index,
                "targets": targets, "view": view, "conn_id": task.conn.id, "model": task.model}
     sealed = security.encrypt(json.dumps(payload, ensure_ascii=False)).decode("ascii")
-    state.DB.execute("INSERT INTO chat_pending(id, chat_id, message_id, kind, payload, created) VALUES (?, ?, ?, ?, ?, ?)",
-                     (pid, task.chat_id, task.message_id, kind, sealed, clock.NOW()))
+    shown = security.encrypt(json.dumps(view, ensure_ascii=False)).decode("ascii")   # выдаче сообщений — только он
+    state.DB.execute("INSERT INTO chat_pending(id, chat_id, message_id, kind, payload, view, created)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?)", (pid, task.chat_id, task.message_id, kind, sealed, shown, clock.NOW()))
     # шаг вызова — сразу (в payload его нет: продолжение запишет вместо него итог вызова)
     task._step(waiting_step(kind, view))
     task.paused = pid
@@ -121,9 +124,9 @@ def _unanswer(message_id: str) -> None:
     state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(steps, ensure_ascii=False), message_id))
 
 
-def _payload(row) -> "dict | None":
+def _payload(row, column: str = "payload") -> "dict | None":
     try:
-        return json.loads(security.decrypt(row["payload"].encode("ascii")))
+        return json.loads(security.decrypt(row[column].encode("ascii")))
     except (InvalidToken, ValueError):
         return None
 
@@ -137,15 +140,17 @@ def _expire(row) -> None:
 
 def open_views(chat_id: str) -> dict:
     """Открытые паузы диалога для выдачи сообщений: id сообщения → `{id, kind, server, tool, arguments, question,
-    options, allow_text}`. Старше PENDING_TTL_SEC — снимается (`_expire`); не расшифровалась — нет."""
+    options, allow_text}` — из столбца `view`, payload не расшифровывается. Старше PENDING_TTL_SEC — снимается
+    (`_expire`); не расшифровалась — нет."""
     out = {}
-    for row in state.DB.execute("SELECT * FROM chat_pending WHERE chat_id = ? AND resolved IS NULL", (chat_id,)).fetchall():
+    for row in state.DB.execute("SELECT id, message_id, kind, view, created FROM chat_pending"
+                                " WHERE chat_id = ? AND resolved IS NULL", (chat_id,)).fetchall():
         if clock.NOW() - row["created"] > PENDING_TTL_SEC:
             _expire(row)
             continue
-        payload = _payload(row)
-        if payload is not None:
-            out[row["message_id"]] = {"id": row["id"], "kind": row["kind"], **{k: payload["view"].get(k) for k in VIEW}}
+        view = _payload(row, "view")
+        if view is not None:
+            out[row["message_id"]] = {"id": row["id"], "kind": row["kind"], **{k: view.get(k) for k in VIEW}}
     return out
 
 
