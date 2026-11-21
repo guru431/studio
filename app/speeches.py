@@ -23,6 +23,10 @@
    ответа чата, перевода или скана без разметки (`exports.md_plain`) источником по умолчанию; умолчание раздела —
    инструмент MCP (своей модели нет, подключения MCP есть) — 409 `read_mcp`, его запускает страница.
 7. Язык озвучки шлюза — `language` записи (`speech.TTS_LANGUAGES`; нет — `speech.TTS_LANGUAGE`).
+8. «Разговор» чата (`POST /api/speech/say`, п. 13 спеки 2026-11-21-studio-source-capabilities-design): фраза до
+   SAY_MAX знаков без разметки — звуком в ответе (`no-store`), источником и голосом «Прочитать»; не запись очереди
+   и не история: ни строки, ни файла, в журнал — только id учётки и код отказа. Одна фраза учётки за раз (429 `busy`),
+   вся операция — до SAY_BUDGET_SEC (меньше таймаута Apache); умолчание — инструмент MCP — 409 `say_mcp`.
 """
 import asyncio
 import json
@@ -75,9 +79,15 @@ KEPT = ("text", "connection_id", "model", "voice", "voice_name", "language", "du
 KEPT_NOTE = "прежняя озвучка сохранена"
 #: порядок очереди: время постановки, у строк прежнего кода — создания
 QUEUE_KEY = "COALESCE(queued, created)"
+#: фраза «Разговора» (п. 8 шапки): знаков без разметки и бюджет всей операции, секунд
+SAY_MAX = 1000
+SAY_BUDGET_SEC = 120
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/speeches")
+say_router = APIRouter(prefix="/api/speech")
+#: учётки, чья фраза «Разговора» сейчас озвучивается
+SAYING: set[int] = set()
 
 
 class JobError(Exception):
@@ -101,6 +111,10 @@ class Origin(BaseModel):
 class ReadIn(BaseModel):
     text: str = Field(max_length=LONG_MAX * 2)
     origin: Origin
+
+
+class SayIn(BaseModel):
+    text: str = Field(max_length=SAY_MAX * 4)                   # с разметкой; предел — после `exports.md_plain`
 
 
 @dataclass
@@ -561,23 +575,64 @@ def _read_voice(uid: int, conn, model: str) -> "tuple[str, str, str | None]":
     return first["id"], first["name"], None
 
 
+def _default_source(uid: int, code: str, message: str):
+    """Умолчание «Озвучки»; своей модели нет, а подключения MCP есть (озвучка — инструментом MCP) — 409 `code`."""
+    try:
+        return sections.resolve(uid, "speech", None, None)
+    except HTTPException as e:
+        if e.detail.get("code") == "no_model" and mcp_client.servers(uid, enabled_only=True):
+            raise HTTPException(409, {"code": code, "message": message}) from None
+        raise
+
+
 @router.post("/read", status_code=202)
 async def read(body: ReadIn, request: Request):
     """«Прочитать» ответ чата, перевод или скан (п. 6 шапки) — новым чатом озвучки → `{chat_id}`."""
     uid = request.state.user.id
     operations.check(uid)
     text = _text_of(exports.md_plain(body.text), LONG_MAX)
-    try:
-        conn, model = sections.resolve(uid, "speech", None, None)
-    except HTTPException as e:
-        if e.detail.get("code") == "no_model" and mcp_client.servers(uid, enabled_only=True):
-            raise HTTPException(409, {"code": "read_mcp", "message": "озвучка — инструментом MCP раздела «Озвучка»"}) from None
-        raise
+    conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»")
     voice, name, language = _read_voice(uid, conn, model)
     _room(uid, None)
     sid = _enqueue(uid, conn, model, voice, name, language, text)
     log.info("озвучка %s: «Прочитать» из %s", sid[:8], body.origin.kind)
     return {"chat_id": sid}
+
+
+@say_router.post("/say")
+async def say(body: SayIn, request: Request):
+    """Фраза «Разговора» (п. 8 шапки) — звук в ответе, ничего не сохраняется. Карта занята — сразу 503 словами:
+    страница скажет и продолжит разговор."""
+    uid = request.state.user.id
+    text = _text_of(exports.md_plain(body.text), SAY_MAX)
+    conn, model = _default_source(uid, "say_mcp", "для «Разговора» нужен источник озвучки через API")
+    voice, _, language = _read_voice(uid, conn, model)
+    if uid in SAYING:
+        raise HTTPException(429, {"code": "busy", "message": "предыдущая фраза ещё озвучивается"})
+    SAYING.add(uid)
+
+    async def run():
+        if conn.kind != "srvllm":
+            return await speech.say(conn, model, text, voice)
+        reference = await voices.reference(uid, voice)
+        if model == "qwen3-tts":
+            await speech.free_card(conn)
+        return await speech.say(conn, model, text, reference, language)
+
+    try:
+        data, mime = await asyncio.wait_for(run(), SAY_BUDGET_SEC)
+    except TimeoutError:
+        log.info("пользователь %d: фраза разговора — дольше %d с", uid, SAY_BUDGET_SEC)
+        raise HTTPException(504, {"code": "timeout", "message": f"служба озвучки не ответила за {SAY_BUDGET_SEC} с"}) from None
+    except speech.Busy:
+        log.info("пользователь %d: фраза разговора — карта занята", uid)
+        raise HTTPException(503, {"code": "card", "message": "карта занята — ответ остался текстом"}) from None
+    except speech.SpeechError as e:
+        log.info("пользователь %d: фраза разговора — отказ службы", uid)
+        raise HTTPException(502, {"code": "speech", "message": str(e)}) from None
+    finally:
+        SAYING.discard(uid)
+    return Response(data, media_type=mime, headers={"Cache-Control": "no-store"})
 
 
 @router.get("")
