@@ -235,6 +235,8 @@ async def call(task, call) -> dict:
 
 
 def answer_step(view: dict, action: str, answer: "str | None") -> dict:
-    """Шаг ответа на вопрос: модели — JSON `{"answer": текст}`, отказ — `{"answer": null, "note": NO_ANSWER}`."""
-    result = {"answer": answer} if action == "answer" else {"answer": None, "note": NO_ANSWER}
+    """Шаг ответа на вопрос: модели — JSON `{"question", "answer": текст}`, отказ — `{"question", "answer": null,
+    "note": NO_ANSWER}`: вопрос — в результате, следующие ходы видят его в истории (chat.compose)."""
+    result = {"question": view["question"]} | (
+        {"answer": answer} if action == "answer" else {"answer": None, "note": NO_ANSWER})
     return {"kind": "ask", "question": view["question"], "text": json.dumps(result, ensure_ascii=False)}

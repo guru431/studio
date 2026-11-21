@@ -8,7 +8,8 @@
    ответ и ответ позже PENDING_TTL_SEC получают 409 `pending_gone`; подключение диалога заново — сменилось — 409
    `connection_changed`. То же сообщение снова `streaming`, `chat.StreamTask` с `resume` продолжает цикл, ответ — поток
    SSE, как у хода. Доступ, политика и «Интернет» перепроверяют каталог хода и `mcp_client.Tools.call`.
-3. Новый ход диалога снимает открытую паузу (`supersede`, исход `superseded`).
+3. Новый ход диалога снимает открытую паузу (`supersede`, исход `superseded`), срок — `_expire`. Шаг вызова паузы
+   пишется сразу (`waiting_step`): снятая без ответа пауза оставляет вопрос странице и модели следующих ходов.
 4. В журнал — только id и вид паузы: ни вопроса, ни аргументов, ни ответа."""
 import asyncio
 import json
@@ -44,6 +45,9 @@ ARG_CHARS = 200                    # знаков ключа и значения
 ANSWER_MAX = 4000
 REFUSED = "Пользователь отказался запускать этот инструмент."
 GONE = "инструмент больше недоступен в этом диалоге — не вызван"
+# шаг паузы, снятой новым сообщением или сроком (`_unanswer`): вопрос и инструмент остаются модели следующих ходов
+UNANSWERED = "пользователь не ответил на карточке — ответ, если есть, в следующем сообщении"
+NOT_RUN = "Вызов {0} с аргументами {1} не запущен: " + UNANSWERED + "."
 VIEW = ("server", "tool", "arguments", "question", "options", "allow_text")
 ACTIONS = {"confirm": ("run", "refuse"), "ask": ("answer", "refuse")}
 # решённая пауза (любой исход) payload не хранит: в нём сообщения модели с картинками base64 — мегабайты на строку
@@ -84,11 +88,37 @@ async def pause(task, kind: str, call, view: dict) -> str:
     sealed = security.encrypt(json.dumps(payload, ensure_ascii=False)).decode("ascii")
     state.DB.execute("INSERT INTO chat_pending(id, chat_id, message_id, kind, payload, created) VALUES (?, ?, ?, ?, ?, ?)",
                      (pid, task.chat_id, task.message_id, kind, sealed, clock.NOW()))
+    # шаг вызова — сразу (в payload его нет: продолжение запишет вместо него итог вызова)
+    task._step(waiting_step(kind, view))
     task.paused = pid
     task.fresh = True
     task.put("pending", {"id": pid, "kind": kind, **view})
     log.info("чат %s: ответ %s — пауза %s (%s)", task.chat_id[:8], task.message_id[:8], pid[:8], kind)
     return pid
+
+
+def waiting_step(kind: str, view: dict) -> dict:
+    """Шаг вызова, на котором ход встал на паузу (`waiting`): вопрос или инструмент видны странице сразу. Текст — уже
+    для снятой паузы (вопрос с UNANSWERED, вызов с аргументами — NOT_RUN): пока пауза открыта, модели он не уходит
+    (продолжение берёт сообщения из payload и пишет вместо шага итог), снятую — отдаёт следующий ход (`_unanswer`)."""
+    if kind == "ask":
+        return {"kind": "ask", "question": view["question"], "waiting": True, "text": json.dumps(
+            {"question": view["question"], "answer": None, "note": UNANSWERED}, ensure_ascii=False)}
+    args = json.dumps(dict(view["arguments"]), ensure_ascii=False)
+    return {"kind": "mcp", "server": view["server"], "tool": view["tool"], "waiting": True,
+            "text": NOT_RUN.format(view["tool"], args)}
+
+
+def _unanswer(message_id: str) -> None:
+    """Пауза снята без ответа (новое сообщение, срок): шаг `waiting` ответа больше не ждёт, вызов MCP — `refused`
+    (не запускался); следующий ход отдаёт его текст модели (chat.compose) — вопрос не теряется."""
+    row = state.DB.execute("SELECT tools FROM messages WHERE id = ?", (message_id,)).fetchone()
+    steps = json.loads(row["tools"] or "[]") if row is not None else []
+    if not any(s.get("waiting") for s in steps):
+        return
+    steps = [{k: v for k, v in s.items() if k != "waiting"} | ({"refused": True} if s["kind"] == "mcp" else {})
+             if s.get("waiting") else s for s in steps]
+    state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(steps, ensure_ascii=False), message_id))
 
 
 def _payload(row) -> "dict | None":
@@ -98,21 +128,34 @@ def _payload(row) -> "dict | None":
         return None
 
 
+def _expire(row) -> None:
+    """Пауза старше PENDING_TTL_SEC: исход `expired`, payload стёрт, шаг — без ответа (`_unanswer`)."""
+    if state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = 'expired' WHERE id = ? AND resolved IS NULL",
+                        (clock.NOW(), row["id"])).rowcount == 1:
+        _unanswer(row["message_id"])
+
+
 def open_views(chat_id: str) -> dict:
     """Открытые паузы диалога для выдачи сообщений: id сообщения → `{id, kind, server, tool, arguments, question,
-    options, allow_text}`. Старше PENDING_TTL_SEC или не расшифровалась — нет."""
+    options, allow_text}`. Старше PENDING_TTL_SEC — снимается (`_expire`); не расшифровалась — нет."""
     out = {}
-    for row in state.DB.execute("SELECT * FROM chat_pending WHERE chat_id = ? AND resolved IS NULL", (chat_id,)):
-        payload = _payload(row) if clock.NOW() - row["created"] <= PENDING_TTL_SEC else None
+    for row in state.DB.execute("SELECT * FROM chat_pending WHERE chat_id = ? AND resolved IS NULL", (chat_id,)).fetchall():
+        if clock.NOW() - row["created"] > PENDING_TTL_SEC:
+            _expire(row)
+            continue
+        payload = _payload(row)
         if payload is not None:
             out[row["message_id"]] = {"id": row["id"], "kind": row["kind"], **{k: payload["view"].get(k) for k in VIEW}}
     return out
 
 
 def supersede(chat_id: str) -> None:
-    """Новый ход диалога: открытая пауза больше не ждёт ответа (синхронно — в транзакции хода)."""
-    state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = 'superseded' WHERE chat_id = ? AND resolved IS NULL",
-                     (clock.NOW(), chat_id))
+    """Новый ход диалога: открытая пауза больше не ждёт ответа, её шаг — без ответа (синхронно — в транзакции хода)."""
+    for row in state.DB.execute("SELECT id, message_id FROM chat_pending WHERE chat_id = ? AND resolved IS NULL",
+                                (chat_id,)).fetchall():
+        state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = 'superseded' WHERE id = ?",
+                         (clock.NOW(), row["id"]))
+        _unanswer(row["message_id"])
 
 
 def _gone() -> HTTPException:
@@ -136,8 +179,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     if pending["resolved"] is not None:
         raise _gone()
     if clock.NOW() - pending["created"] > PENDING_TTL_SEC:
-        state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = 'expired' WHERE id = ? AND resolved IS NULL",
-                         (clock.NOW(), pending_id))
+        _expire(pending)
         raise _gone()
     payload = _payload(pending)
     if payload is None:
