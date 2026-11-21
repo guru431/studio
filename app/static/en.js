@@ -2676,7 +2676,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Перевод уйдёт в корзину на 14 дней — оттуда его можно вернуть.": "The translation will move to the trash for 14 days — you can restore it from there.",
   "Распознанный документ останется в «Сканах»: его использует повтор этого перевода.": "The recognized document will remain in Scans: a repeat translation uses it.",
   "Распознанный документ останется в «Сканах».": "The recognized document will remain in Scans.",
-  "Распознанный документ в «Сканах» удалится вместе с переводом, когда перевод удалится из корзины.": "The recognized document in Scans will be deleted with the translation once the translation is deleted from the trash.",
+  "Распознанный документ уйдёт из «Сканов» в корзину вместе с переводом и вернётся вместе с ним.": "The recognized document will leave Scans for the trash together with the translation and come back with it.",
   "Открыть в «Сканах»": "Open in Scans",
   "Удалить перевод": "Delete translation",
   "Не получилось": "Could not complete",

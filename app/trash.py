@@ -120,6 +120,11 @@ class Kind:
     fallback: str = ""
     restoring: "Callable[[int, list[str]], None] | None" = None   # перед «Вернуть» строк (`uid`, id): отказ —
                                                   # HTTPException, или вернуть заодно части записи
+    part: str = ""                                # условие строки (SQL по таблице без псевдонима), что ушла в
+                                                  # корзину частью записи другого вида (скан перевода): её нет в
+                                                  # списке, её не возвращают и не удаляют саму, уборка и очистка
+                                                  # корзины её пропускают — удаляет `purge` той записи
+                                                  # (`_alone`)
 
 
 HEAD = 80                                         # знаков текста записи в названии строки корзины
@@ -154,11 +159,16 @@ KINDS: dict[str, Kind] = {
     "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"]),
                         "SELECT source_media_id FROM transcripts WHERE id = :id"
                         " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe", fallback="Запись"),
+    # скан, что ушёл в корзину со своим переводом, — часть строки перевода: объём — в ней, «Вернуть» перевода
+    # возвращает и его (`translate.restoring`), удаляет его `translate.purge`
     "scans": Kind("scans", "ocr", ocr.purge, lambda row: _head(row["name"]),
                   "SELECT source_media_id FROM scans WHERE id = :id UNION SELECT media_id FROM scan_pages WHERE scan_id = :id",
-                  search="ocr", fallback="Документ"),
+                  search="ocr", fallback="Документ", part=translate.SCAN_WITH),
     "translations": Kind("translations", "translate", translate.purge, lambda row: _head(row["name"]),
-                         "SELECT source_media_id FROM translations WHERE id = :id", search="translate", fallback="Перевод"),
+                         "SELECT source_media_id FROM translations WHERE id = :id UNION SELECT p.media_id"
+                         " FROM scan_pages p JOIN scans s ON s.id = p.scan_id JOIN translations x ON x.scan_id = s.id"
+                         " WHERE x.id = :id AND x.source_media_id IS NOT NULL AND s.deleted = x.deleted",
+                         search="translate", fallback="Перевод", restoring=translate.restoring),
     # образцы голоса из корзины — в весе голоса, только когда в корзине и он (иначе — своей строкой)
     "voices": Kind("voices", "speech", voices.purge, lambda row: _head(row["name"]),
                    "SELECT media_id FROM voices WHERE id = :id UNION SELECT s.media_id FROM voice_sample_items s"
@@ -192,11 +202,18 @@ def _bytes(kind: Kind, user_id: int, item_id: str) -> int:
                             {"uid": user_id, "id": item_id}).fetchone()[0]
 
 
+def _alone(kind: Kind, column: str = "id") -> str:
+    """Условие (`AND …`) по id строки (`column`): строка в корзине сама по себе, а не частью записи другого вида
+    (`Kind.part`)."""
+    return f" AND {column} NOT IN (SELECT id FROM {kind.table} WHERE {kind.part})" if kind.part else ""
+
+
 def _members(kind: Kind, uid: int, item_id: str, live: str = "") -> list[str]:
     """id строк записи корзины `item_id`: она сама, а у вида с `group` — все строки её группы (тот же столбец группы
-    и та же отметка `deleted`). Чужая или не в корзине — []."""
+    и та же отметка `deleted`). Чужая, не в корзине или часть записи другого вида (`Kind.part`) — []."""
     row = state.DB.execute(f"SELECT deleted{', ' + kind.group if kind.group else ''} FROM {kind.table}"
-                           f" WHERE id = ? AND user_id = ? AND deleted IS NOT NULL{live}", (item_id, uid)).fetchone()
+                           f" WHERE id = ? AND user_id = ? AND deleted IS NOT NULL{live}{_alone(kind)}",
+                           (item_id, uid)).fetchone()
     if row is None or not kind.group:
         return [] if row is None else [item_id]
     return [r["id"] for r in state.DB.execute(f"SELECT id FROM {kind.table} WHERE user_id = ? AND deleted = ?"
@@ -225,7 +242,7 @@ async def list_trash(request: Request):
         groups = {}
         cols = ", ".join(dict.fromkeys(("id", "deleted", *([kind.group] if kind.group else []), kind.column)))
         for row in state.DB.execute(f"SELECT {cols} FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL"
-                                    f"{kind.live}{locked} ORDER BY created, id", (uid, *args)).fetchall():
+                                    f"{kind.live}{_alone(kind)}{locked} ORDER BY created, id", (uid, *args)).fetchall():
             key = (row[kind.group], row["deleted"]) if kind.group else row["id"]
             size = _bytes(kind, uid, row["id"])
             if key in groups:
@@ -291,8 +308,8 @@ async def empty(body: Confirm, request: Request):
     await auth.confirm_password(uid, body.password, "очистка корзины", digest=request.state.digest)
     done = left = 0
     for name, kind in KINDS.items():
-        for row in state.DB.execute(f"SELECT id FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL",
-                                    (uid,)).fetchall():
+        for row in state.DB.execute(f"SELECT id FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL"
+                                    f"{_alone(kind)}", (uid,)).fetchall():
             # перед каждой — заново: окончательное удаление прежней могло унести и эту (медиа диалога, скан перевода)
             if state.DB.execute(f"SELECT 1 FROM {kind.table} WHERE id = ? AND deleted IS NOT NULL",
                                 (row["id"],)).fetchone() is None:
@@ -350,7 +367,8 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
         count, size = state.DB.execute(
             f"SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM ("
             f"SELECT SUM({_sized(kind)}) AS bytes FROM {kind.table} t"
-            f" WHERE t.user_id = ? AND t.deleted IS NOT NULL{kind.live} GROUP BY {group})", (user_id,)).fetchone()
+            f" WHERE t.user_id = ? AND t.deleted IS NOT NULL{kind.live}{_alone(kind, 't.id')} GROUP BY {group})",
+            (user_id,)).fetchone()
         if count:
             got = trashed.setdefault(kind.section, {"count": 0, "bytes": 0})
             got["count"] += count
@@ -393,11 +411,11 @@ async def purge_expired() -> int:
     вернуть, пока шла предыдущая. Сбой одной записи не останавливает прочие. Итог — число удалённых."""
     edge, done = clock.NOW() - TRASH_SEC, 0
     for name, kind in KINDS.items():
-        rows = state.DB.execute(f"SELECT id, user_id FROM {kind.table} WHERE deleted IS NOT NULL AND deleted < ?",
-                                (edge,)).fetchall()
+        rows = state.DB.execute(f"SELECT id, user_id FROM {kind.table} WHERE deleted IS NOT NULL AND deleted < ?"
+                                f"{_alone(kind)}", (edge,)).fetchall()
         for row in rows:
-            if state.DB.execute(f"SELECT 1 FROM {kind.table} WHERE id = ? AND deleted IS NOT NULL AND deleted < ?",
-                                (row["id"], edge)).fetchone() is None:
+            if state.DB.execute(f"SELECT 1 FROM {kind.table} WHERE id = ? AND deleted IS NOT NULL AND deleted < ?"
+                                f"{_alone(kind)}", (row["id"], edge)).fetchone() is None:
                 continue
             try:
                 await kind.purge(row["user_id"], row["id"])

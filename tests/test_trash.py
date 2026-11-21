@@ -420,10 +420,9 @@ def test_speech_chat_in_trash_is_deleted_forever_and_purged_whole(s):
     assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
 
 
-def test_translation_delete_keeps_scan_until_purge(s):
-    """Удаление перевода больше не трогает его скан: документ «Сканов» и файлы остаются, пока запись в корзине;
-    окончательное удаление уносит скан, если на него не ссылается другой перевод (и в корзине тоже)."""
-    uid = owner(s)
+def translated_scan(uid: int, records=("first", "again")) -> tuple[str, str]:
+    """Скан, который завёл перевод PDF (`scan_owned`: у записи свой исходник), и записи перевода с ним (повтор берёт
+    тот же скан); id PDF и картинки страницы."""
     pdf = save(uid, b"%PDF- deal", "application/pdf", "deal.pdf")
     page = save(uid, b"page png", "image/png", "p1.png")
     state.DB.execute("INSERT INTO scans(id, user_id, model, name, source_media_id, origin, pages, done_pages, state,"
@@ -431,20 +430,66 @@ def test_translation_delete_keeps_scan_until_purge(s):
                      " 'done', 'готово', ?, ?, 'pear text')", (uid, pdf, T0, T0))
     state.DB.execute("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text) VALUES ('scan', ?, 1, ?,"
                      " 'done', 'pear text')", (uid, page))
-    for tid in ("first", "again"):                               # повтор берёт тот же скан
+    for tid in records:
         state.DB.execute(TRANSLATION, (tid, uid, "deal.pdf", pdf, "scan", "pear text", "груша", T0, T0))
-    for tid in ("first", "again"):
-        assert s.c.delete(f"/api/translate/{tid}").status_code == 204
-    assert s.c.get("/api/ocr/scan").status_code == 200           # скан на месте и виден в «Сканах»
-    assert "scan" in {i["id"] for i in s.c.get("/api/ocr").json()["items"]}
+    return pdf, page
+
+
+def scan_visible(s) -> bool:
+    listed = "scan" in {i["id"] for i in s.c.get("/api/ocr").json()["items"]}
+    assert listed == (s.c.get("/api/ocr/scan").status_code == 200)
+    return listed
+
+
+def test_scan_of_a_translation_goes_to_trash_and_back_with_it(s):
+    """Находка «Корзина: сканы переводов»: скан, который завёл перевод, живёт и умирает с ним. Удаление последнего
+    живого перевода с ним ставит скану ту же отметку `deleted` — он уходит из «Сканов» и поиска, отдельной строкой
+    корзины не виден (объём — в строке перевода), «Вернуть» перевода возвращает и скан; пока скан у другого живого
+    перевода (повтор), удаление его не трогает; уборка удаляет оба один раз."""
+    uid = owner(s)
+    pdf, page = translated_scan(uid)
+    assert s.c.delete("/api/translate/first").status_code == 204
+    assert scan_visible(s) and "scan" in hits(s, "pear")          # скан ещё у живого повтора
+    s.clock[0] += 5
+    assert s.c.delete("/api/translate/again").status_code == 204
+    assert not scan_visible(s) and "scan" not in hits(s, "pear")
+    assert state.DB.execute("SELECT deleted FROM scans WHERE id = 'scan'").fetchone()[0] == s.clock[0]
+    listed = s.c.get("/api/trash").json()
+    assert [(i["kind"], i["id"]) for i in listed] == [("translations", "again"), ("translations", "first")]
+    assert listed[0]["bytes"] == len(b"%PDF- deal") + len(b"page png") and listed[1]["bytes"] == len(b"%PDF- deal")
+    assert s.c.get("/api/me/storage").json()["trash"] == {"translate": {"count": 2, "bytes": 28}}
+    assert s.c.post("/api/trash/scans/scan/restore").status_code == 404                 # не сам по себе
+
+    assert s.c.post("/api/trash/translations/first/restore").status_code == 204          # любой из переводов скана
+    assert scan_visible(s) and "scan" in hits(s, "pear")
+    assert s.c.delete("/api/translate/first").status_code == 204
+    assert not scan_visible(s)
     assert s.c.request("DELETE", "/api/trash/translations/first", json={"password": "password-123"}).status_code == 204
-    assert s.c.get("/api/ocr/scan").status_code == 200           # «again» в корзине ещё ссылается на скан
-    assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (pdf,)).fetchone()
+    assert state.DB.execute("SELECT 1 FROM scans WHERE id = 'scan'").fetchone()               # «again» ещё с ним
     s.clock[0] += trash.TRASH_SEC + 1
     assert s.c.portal.call(trash.purge_expired) == 1
     assert state.DB.execute("SELECT count(*) FROM translations").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM scans").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media WHERE id IN (?, ?)", (pdf, page)).fetchone()[0] == 0
+
+
+def test_emptying_the_trash_counts_a_translation_with_its_scan_once(s):
+    uid = owner(s)
+    translated_scan(uid, ("only",))
+    assert s.c.delete("/api/translate/only").status_code == 204
+    assert s.c.post("/api/trash/empty", json={"password": "password-123"}).json() == {"purged": 1}
+    assert state.DB.execute("SELECT count(*) FROM scans").fetchone()[0] == 0
+
+
+def test_translation_of_a_recognized_scan_leaves_it_in_scans(s):
+    """Скан, распознанный в «Сканах» и потом переведённый (у записи нет своего исходника), переводом не уносится."""
+    uid = owner(s)
+    translated_scan(uid, ())
+    state.DB.execute(TRANSLATION, ("own", uid, "deal.pdf", None, "scan", "pear text", "груша", T0, T0))
+    assert s.c.delete("/api/translate/own").status_code == 204
+    assert scan_visible(s)
+    assert s.c.request("DELETE", "/api/trash/translations/own", json={"password": "password-123"}).status_code == 204
+    assert scan_visible(s)
 
 
 def test_takeout_skips_trash(s):

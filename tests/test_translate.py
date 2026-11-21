@@ -1081,8 +1081,8 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
 
 def test_delete_translation_removes_its_scan(studio, small_pages):
     """Находка «удаление записи оставляет её скан»: документ «Сканов», что завёл перевод PDF, удаляется с записью —
-    строка, страницы, исходный PDF и картинки страниц — окончательным удалением (`translate.purge`), корзина скан не
-    трогает; скан ещё останавливается — 409, запись на месте."""
+    строка, страницы, исходный PDF и картинки страниц — окончательным удалением (`translate.purge`); в корзину он
+    уходит с ней (из «Сканов» пропадает, файлы на месте); скан ещё останавливается — 409, запись на месте."""
     add_gateway(studio)
     tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
     row = wait_row(studio, tid)
@@ -1090,7 +1090,7 @@ def test_delete_translation_removes_its_scan(studio, small_pages):
     assert studio.c.get("/api/translate").json()["items"][0]["scan_id"] == row["scan_id"]   # окну подтверждения
     assert count(studio, "media") == 2                                  # PDF и картинка страницы
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
-    assert studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 200 and count(studio, "media") == 2
+    assert studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 404 and count(studio, "media") == 2
     assert studio.c.request("DELETE", f"/api/trash/translations/{tid}", json={"password": "password-123"}).status_code == 204
     assert scan_row(studio, row["scan_id"]) is None and count(studio, "scan_pages") == 0
     assert count(studio, "media") == 0 and studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 404

@@ -7861,7 +7861,7 @@ def test_translate_into_arabic_reads_right_to_left(browser, live, translator):
 
 def test_translate_delete_window_says_whether_the_scan_stays(browser, live, translator):
     """Ревью: перевод скана и его повтор держат один документ «Сканов» — окно удаления первой записи говорит, что
-    скан останется; удалили её — окно оставшейся говорит, что скан удалится вместе с переводом (из корзины)."""
+    скан останется; удалили её — окно оставшейся говорит, что скан уйдёт в корзину и вернётся вместе с переводом."""
     from scans import scan_pdf
     live.add_user("tl-delscan")
     translator.chat_script = [["Страница."], ["Seite."]]
@@ -7894,7 +7894,7 @@ def test_translate_delete_window_says_whether_the_scan_stays(browser, live, tran
     v = r["values"]
     assert v["again"] is not None
     assert v["shared"][-1] == "Распознанный документ останется в «Сканах»: его использует повтор этого перевода."
-    assert v["alone"][-1] == "Распознанный документ в «Сканах» удалится вместе с переводом, когда перевод удалится из корзины."
+    assert v["alone"][-1] == "Распознанный документ уйдёт из «Сканов» в корзину вместе с переводом и вернётся вместе с ним."
     assert not problems(r), problems(r)
 
 

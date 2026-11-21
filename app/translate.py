@@ -71,6 +71,7 @@ import operations
 import ocr
 import ocr_render
 import push
+import search
 import sections
 import state
 import translate_spot
@@ -1184,14 +1185,38 @@ async def export(tid: str, request: Request, format: str = Query(..., pattern="^
 
 @router.delete("/{tid}", status_code=204)
 async def delete(tid: str, request: Request):
-    """Кончившаяся запись — в корзину (`deleted`, trash.py); куски, скан и исходный файл — до `purge`."""
+    """Кончившаяся запись — в корзину (`deleted`, trash.py); куски, скан и исходный файл — до `purge`. Свой скан
+    записи (`scan_owned`: документ «Сканов», что завёл перевод PDF), если он не нужен другой живой записи
+    (`scan_shared`), уходит в корзину с ней — той же отметкой (`SCAN_WITH`); скан, удалённый раньше сам, не трогается."""
     uid = request.state.user.id
     row = _row(uid, tid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала остановите"})
-    state.DB.execute("UPDATE translations SET deleted = ? WHERE id = ?", (clock.NOW(), tid))
+    now = clock.NOW()
+    state.DB.execute("UPDATE translations SET deleted = ? WHERE id = ?", (now, tid))
+    if row["scan_id"] is not None and row["source_media_id"] is not None and not row["scan_shared"]:
+        state.DB.execute("UPDATE scans SET deleted = ? WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                         (now, row["scan_id"], uid))
     log.info("перевод %s: в корзине", tid[:8])
     return Response(status_code=204)
+
+
+#: условие SQL на строку `scans`: скан ушёл в корзину вместе со своим переводом — у записи перевода с этим сканом и
+#: своим исходником та же отметка `deleted`. Такой скан — часть строки перевода в корзине (trash.py `Kind.part`)
+SCAN_WITH = ("EXISTS (SELECT 1 FROM translations x WHERE x.scan_id = scans.id AND x.source_media_id IS NOT NULL"
+             " AND x.deleted = scans.deleted)")
+
+
+def restoring(user_id: int, ids: "list[str]") -> None:
+    """Перед «Вернуть» записей (trash.py): их свой скан, ушедший в корзину с переводом (`SCAN_WITH`, отметка любой
+    записи с ним), возвращается тоже — с поиском."""
+    for (sid,) in state.DB.execute(
+            f"SELECT id FROM scans WHERE user_id = ? AND deleted IS NOT NULL AND {SCAN_WITH} AND id IN"
+            " (SELECT scan_id FROM translations WHERE source_media_id IS NOT NULL"
+            " AND id IN (SELECT value FROM json_each(?)))", (user_id, json.dumps(ids))).fetchall():
+        state.DB.execute("UPDATE scans SET deleted = NULL WHERE id = ?", (sid,))
+        search.reindex_item("ocr", sid)
+        log.info("перевод: скан %s возвращён с записью", sid[:8])
 
 
 async def purge(user_id: int, item_id: str) -> None:
@@ -1199,7 +1224,8 @@ async def purge(user_id: int, item_id: str) -> None:
     него не ссылается другая запись, и в корзине тоже (повтор берёт тот же скан): удалённый в «Переводе» договор не
     остаётся в «Сканах». Запись, созданная из готового скана, не владеет его исходным файлом и не удаляет скан.
     Скан ещё останавливается — 409, запись остаётся (уборка повторит через сутки). Затем
-    исходный файл, если на него больше ничто не ссылается. Строки уже нет — ничего."""
+    исходный файл, если на него больше ничто не ссылается. Строки уже нет — ничего. Скан, ушедший в корзину с
+    записью (`SCAN_WITH`), уборка и очистка корзины сами не трогают — его удаляет только эта функция."""
     row = state.DB.execute("SELECT scan_id, source_media_id FROM translations WHERE id = ? AND user_id = ?",
                            (item_id, user_id)).fetchone()
     if row is None:
