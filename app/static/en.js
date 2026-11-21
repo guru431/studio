@@ -1910,6 +1910,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Запись не сохраняется на устройстве — перезагрузка её сотрёт.": "The recording is not being saved on this device; reloading will erase it.",
   "Когда экран гаснет, запись встаёт: держите его включённым.": "Recording stops when the screen turns off: keep it on.",
   "Восстановить запись ({0})": "Restore recording ({0})",
+  "Скачать запись": "Download recording",
   "Незаконченная запись · {0}": "Unfinished recording · {0}",
   "Удалить запись": "Delete recording",
   "Удалить запись?": "Delete the recording?",

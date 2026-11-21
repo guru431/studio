@@ -26,7 +26,8 @@
    (`RUNNERS`, `kick`) берёт старейшую в `working`; ждущих — не больше QUEUE_MAX (дальше 409 busy).
    Отмена ждущей — сразу `cancelled`; перезапуск службы: идущая — «прервано», ждущие остаются в очереди
    и продолжаются (`resume`); стирание истории и учётки отменяет и ждущие.
-8. Длинная запись (спека 2026-11-21-studio-source-capabilities-design, п. 23): длиннее TOTAL_MAX — отказ до работы;
+8. Длинная запись (спека 2026-11-21-studio-source-capabilities-design, п. 23): длиннее TOTAL_MAX (с допуском
+   TOTAL_SLACK) — отказ до работы;
    длиннее предела источника (`speech.limits`) — части `audio.cut` длиной в предел, распознавание по очереди
    («распознаю · часть 2 из 4»), склейка со сдвигом времени; собеседники в каждой части нумеруются заново — перед
    каждой частью после первой служебная реплика MARKER. Язык распознавания — `transcripts.language` (None — «Авто»):
@@ -65,6 +66,9 @@ import state
 UPLOAD_MAX = 200 * 1024 * 1024
 DURATION_MAX = 60 * 60                       # предел одного запроса, если источник своего не сообщает
 TOTAL_MAX = 4 * 3600                         # самая длинная запись: дольше — отказ до работы
+#: допуск сверх TOTAL_MAX (с): время записи на странице и длительность, измеренная ffmpeg, расходятся — запись
+#: встречи, вставшая на паузу у предела, не должна застревать на устройстве; страница сверяет с тем же допуском
+TOTAL_SLACK = 30
 MARKER = "— Часть {} (с {}): собеседники пронумерованы заново —"
 NAME_MAX = 255
 RETRY_SEC = 15
@@ -330,7 +334,7 @@ async def run(job: Job) -> None:
                 raise JobError("запись удалена") from None
             duration = await audio.probe(source)
             state.DB.execute("UPDATE transcripts SET duration = ? WHERE id = ?", (duration, job.id))
-            if duration > TOTAL_MAX:
+            if duration > TOTAL_MAX + TOTAL_SLACK:
                 raise JobError(f"запись длиннее {TOTAL_MAX // 3600} ч — разделите её")
             step = (await speech.limits(job.conn, job.model)).max_seconds
             if duration <= step:
@@ -561,9 +565,11 @@ async def retry(tid: str, body: RetryIn, request: Request):
 @router.get("/limits")
 async def get_limits(request: Request, connection_id: "int | None" = None,
                      model: "str | None" = Query(None, max_length=200)):
-    """Пределы до загрузки (страница сверяет длительность записи): одного запроса источника и записи целиком."""
+    """Пределы до загрузки (страница сверяет длительность записи): одного запроса источника, записи целиком и
+    допуск сверх него (`TOTAL_SLACK`)."""
     conn, model = sections.resolve(request.state.user.id, "transcribe", connection_id, model)
-    return {"max_seconds": (await speech.limits(conn, model)).max_seconds, "total_max": TOTAL_MAX}
+    return {"max_seconds": (await speech.limits(conn, model)).max_seconds, "total_max": TOTAL_MAX,
+            "total_slack": TOTAL_SLACK}
 
 
 @router.get("")
