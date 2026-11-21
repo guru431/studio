@@ -488,11 +488,12 @@ function build(view, ctx) {
   function paintEngine() {
     enginePick.wrap.hidden = engines.length < 2 || !!mcp.tool;
     enginePick.sync();
+    // ряд с выбором виден и на компьютере: «Загрузить скан» тогда в нём, а не над списком
+    add.hidden = !mcp.control.hidden || !enginePick.wrap.hidden || !!ctx.hint;
   }
 
   /* загрузка */
   function paintMcp() {
-    add.hidden = !mcp.control.hidden || !!ctx.hint;
     const active = !!mcp.tool;
     paintEngine();
     upload.hidden = !!ctx.hint && !active;
