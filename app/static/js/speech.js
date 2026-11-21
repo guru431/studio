@@ -21,6 +21,7 @@ import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
+import { picker } from './picker.js';
 import { el, openDialog, words } from './ui.js';
 import { timeOnly } from './time.js';
 
@@ -76,7 +77,12 @@ function build(view, ctx) {
   const over = el('p', { class: 'error small', id: 'speech-over', 'aria-live': 'polite', hidden: true },
     tr("Текст длиннее {0} знаков — сократите его или разделите на несколько записей чата.", TEXT_MAX));
   const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': tr("Модель") });
-  const mcpModelPick = el('select', { class: 'chip', id: 'chip-mcp-model', 'aria-label': tr("Модель"), hidden: true });
+  const mcpModelPick = el('select', { class: 'chip', id: 'chip-mcp-model', 'aria-label': tr("Модель") });
+  // выборы — «как у Агентов» (picker.js): select остаётся под кнопкой и хранит значение; голос сервиса — поле в рамке чипа
+  const modelView = picker(view, tr("Модель"), modelPick);
+  const mcpModelView = picker(view, tr("Модель"), mcpModelPick);
+  mcpModelView.wrap.hidden = true;
+  let voiceView = null;          // выбор голоса-образца: пересоздаётся вместе с select #chip-voice
   const voiceBox = el('span', { class: 'sp-voice' });
   const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, tr("Озвучить"));
   const hint = el('p', { class: 'muted small sp-voice-hint', hidden: true });
@@ -87,7 +93,7 @@ function build(view, ctx) {
     onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, over, hint,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelPick, mcpModelPick, voiceBox, count, cancelEdit), go));
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap, voiceBox, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const main = el('section', { class: 'split-main' }, head, toolbar, error, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
@@ -121,7 +127,9 @@ function build(view, ctx) {
       const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': tr("Голос") },
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
       if (voices.some(v => v.id === sampleId)) pick.value = sampleId;
-      voiceBox.replaceChildren(pick);
+      voiceView?.unmount();
+      voiceView = picker(view, tr("Голос"), pick);
+      voiceBox.replaceChildren(voiceView.wrap);
       if (active) {
         hint.textContent = tr("Выбранный образец голоса будет отправлен на MCP-сервер.");
         hint.hidden = false;
@@ -132,10 +140,20 @@ function build(view, ctx) {
       }
     } else {
       const options = el('datalist', { id: 'service-voices' }, ...SERVICE_VOICES.map((v) => el('option', { value: v })));
-      voiceBox.replaceChildren(el('input', { class: 'chip', id: 'chip-voice', list: 'service-voices',
+      voiceView?.unmount();
+      voiceView = null;
+      voiceBox.replaceChildren(el('label', { class: 'ctl-chip sp-voice-field' }, el('input', { id: 'chip-voice', list: 'service-voices',
         value: serviceVoice || (active ? '' : 'alloy'), placeholder: tr("Голос сервиса"),
-        maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' }), options);
+        maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' })), options);
     }
+    syncPicks();
+  }
+
+  /** Подписи выборов после программной смены значения, опций или видимости select. */
+  function syncPicks() {
+    modelView.sync();
+    mcpModelView.sync();
+    voiceView?.sync();
   }
 
   function paintMcp() {
@@ -152,8 +170,8 @@ function build(view, ctx) {
     mcpModelPick.replaceChildren(...choices.map(id => el('option', { value: id }, modelLabel(id))));
     if (choices.includes(previous)) mcpModelPick.value = previous;
     else if (choices.includes(schema?.default)) mcpModelPick.value = schema.default;
-    mcpModelPick.hidden = choices.length < 2 || !voices.length;
-    modelPick.hidden = modelPick.options.length < 2 || (active && (!mcp.has('model') || choices.length > 0));
+    mcpModelView.wrap.hidden = choices.length < 2 || !voices.length;
+    modelView.wrap.hidden = modelPick.options.length < 2 || (active && (!mcp.has('model') || choices.length > 0));
     paintVoice();
   }
 
@@ -302,6 +320,7 @@ function build(view, ctx) {
       modelPick.value = editing.model;
       paintVoice();
       voiceBox.querySelector('#chip-voice').value = editing.voice;
+      voiceView?.sync();
       setText(editing.draft);
     }
     editing = null;
@@ -322,6 +341,7 @@ function build(view, ctx) {
     paintVoice();
     const pick = voiceBox.querySelector('#chip-voice');
     pick.value = chosen().kind === 'srvllm' && !voices.some((v) => v.id === item.voice) ? '' : item.voice;
+    voiceView?.sync();
     setText(item.text);
     editNote.hidden = false;
     cancelEdit.hidden = false;
