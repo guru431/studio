@@ -1911,6 +1911,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Когда экран гаснет, запись встаёт: держите его включённым.": "Recording stops when the screen turns off: keep it on.",
   "Восстановить запись ({0})": "Restore recording ({0})",
   "Скачать запись": "Download recording",
+  "Запись не прочиталась на устройстве — восстановите её позже": "The recording could not be read on this device. Restore it later",
   "Незаконченная запись · {0}": "Unfinished recording · {0}",
   "Удалить запись": "Delete recording",
   "Удалить запись?": "Delete the recording?",

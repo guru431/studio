@@ -31,7 +31,7 @@ FAKE_RECORDER = """(() => {
   class FakeRecorder extends EventTarget {
     static isTypeSupported(type) { return type === 'audio/webm;codecs=opus'; }
     constructor(stream, options) { super(); this.mimeType = (options && options.mimeType) || ''; this.state = 'inactive';
-      this.at = 0; window.recorders.push(this); }
+      this.options = options; this.at = 0; window.recorders.push(this); }
     give(all) { const end = all ? wav.length : Math.min(wav.length, this.at + 2000);
       const event = new Event('dataavailable'); event.data = new Blob([wav.slice(this.at, end)], { type: 'audio/webm' });
       this.at = end; this.dispatchEvent(event); }
@@ -44,6 +44,9 @@ FAKE_RECORDER = """(() => {
       setTimeout(() => this.dispatchEvent(new Event('stop')), 0); }
   }
   window.MediaRecorder = FakeRecorder;
+  window.wavSize = wav.length;
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function (body) { window.sentSize = body && body.size; return send.call(this, body); };
 })();"""
 
 RECORDER = "(await import('/static/js/recorder.js'))"
@@ -69,6 +72,7 @@ def test_record_pause_leave_and_stop_uploads_the_recording(browser, live, width)
         ("eval", "fits", NO_OVERFLOW),
         ("eval", "slice", "window.recSlices[0]"),
         ("eval", "type", f"{LAST}.mimeType"),
+        ("eval", "bits", f"{LAST}.options?.audioBitsPerSecond ?? null"),
         ("click", "#rec-pause"), ("wait", f"{LAST}.state === 'paused' && {PANEL}.dataset.state === 'paused'"),
         ("eval", "paused", "document.querySelector('#rec-pause').textContent"),
         ("eval", "unlocked", "window.unlocks"),
@@ -88,20 +92,46 @@ def test_record_pause_leave_and_stop_uploads_the_recording(browser, live, width)
         ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)()"),
         ("wait", f"{DOT}.hidden && {PANEL}.hidden"),
         ("eval", "item", "document.querySelector('.tr-item').textContent"),
+        ("eval", "whole", "[window.sentSize, window.wavSize]"),
         ("eval", "released", "[window.stopped, window.locks, window.unlocks]")],
         width=width, height=900, mobile=width == 320, init=FAKE_RECORDER, timeout=30000)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["fits"] and v["dotFits"], v
     assert v["slice"] == 10000 and v["type"] == "audio/webm;codecs=opus", v      # кусок каждые 10 с
+    # ревью C-M5: речь — 32 кбит/с (сервер всё равно сжимает до 32k); 4 ч AAC по умолчанию браузера — больше 200 МиБ
+    assert v["bits"] == 32000, v
     assert v["paused"] == "Продолжить" and v["unlocked"] >= 1, v                 # на паузе экран может гаснуть
     assert "запись" in v["dictation"] and v["dictation"] != "started", v
     assert "Запись" in v["dot"] and v["still"] == "recording", v
     assert v["item"].startswith("Запись "), v["item"]
+    sent, wav = v["whole"]
+    assert sent == wav, v["whole"]                    # куски, уже лежащие в IndexedDB, — из неё, запись целиком
     stopped, locks, unlocks = v["released"]
     assert stopped == 1 and locks >= 2 and unlocks == locks, v["released"]
     assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
     assert not problems(r), problems(r)
+
+
+def test_without_device_storage_the_recording_still_uploads_whole(browser, live):
+    """Ревью C-M5: записанные в IndexedDB куски в памяти не держатся; когда хранилища нет, они остаются в памяти, и
+    «Стоп и расшифровать» всё равно отправляет запись целиком (и предупреждает, что перезагрузка её сотрёт)."""
+    login = "recnodb"
+    live.add_user(login)
+    no_db = "indexedDB.open = () => { throw new DOMException('blocked', 'SecurityError'); };"
+    r = browser.drive(live.url + "/", [*record(login),
+        ("wait", f"{LAST}.at > 2000"),
+        ("eval", "note", "document.querySelector('#rec-note').textContent"),
+        ("click", "#rec-stop"),
+        ("wait", "document.querySelector('.tr-item')"),
+        ("eval", "whole", "[window.sentSize, window.wavSize]")],
+        init=FAKE_RECORDER.replace("window.MediaRecorder = FakeRecorder;", f"window.MediaRecorder = FakeRecorder; {no_db}"))
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert "перезагрузка её сотрёт" in v["note"], v
+    sent, wav = v["whole"]
+    assert sent == wav, v["whole"]
+    assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
 
 
 def test_cancel_erases_the_recording_after_a_question(browser, live):

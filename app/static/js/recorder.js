@@ -4,7 +4,7 @@ import { tr } from './i18n.js';
  *
  * startMeeting({ onTick }) → { id, started, pause(), resume(), stop(): Promise<Blob>, cancel(), paused, seconds, safe }
  * или null (шторка или блокировка пришли, пока браузер спрашивал разрешение). Отказ — Error со словами.
- * - MediaRecorder: TYPES по порядку (`audio/webm;codecs=opus`, иначе `audio/mp4` — iPhone); кусок — каждые CHUNK_MS
+ * - MediaRecorder: TYPES по порядку (`audio/webm;codecs=opus`, иначе `audio/mp4` — iPhone), BITS бит/с; кусок — каждые CHUNK_MS
  *   в IndexedDB DB (`chunks` по `[id, n]`, сводка — `recordings` по id: начало, секунды, тип). Звук не уходит
  *   никуда, пока его не загрузит «Расшифровка»; перезагрузка, закрытая вкладка, сбой — теряется не больше куска.
  *   На паузе и при уходе вкладки с экрана записанное дописывается сразу (requestData).
@@ -14,7 +14,8 @@ import { tr } from './i18n.js';
  *   запись всё равно встаёт, когда экран гаснет, — «Расшифровка» говорит это словами.
  * - Время — только записанное (без пауз); onTick(seconds, paused) и событие `studio-meeting` документа
  *   (`detail` — { id, seconds, paused }, конец записи — null: точка у рельса, app.js) — каждые TICK_MS.
- * - stop() — Blob всей записи (куски в IndexedDB остаются до discard: загрузку подтверждает «Расшифровка»);
+ * - stop() — Blob всей записи: записанные куски — из IndexedDB (в памяти их не держим), остальные — из памяти;
+ *   куска не хватает — отказ словами. Куски в IndexedDB остаются до discard: загрузку подтверждает «Расшифровка»;
  *   cancel() — запись стёрта.
  *
  * pendingRecordings() → [{ id, started, seconds }] — записи в IndexedDB (и идущая), restore(id) → Blob,
@@ -27,6 +28,7 @@ export const SCREEN_STOPS = /iP(hone|ad|od)/.test(navigator.userAgent)
   || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 const DB = 'studio-rec';
 const TICK_MS = 250;
+const BITS = 32000;
 const BUSY = tr("Микрофон занят: идёт запись встречи");
 
 let current = null;              // идущая запись встречи студии
@@ -120,11 +122,13 @@ export async function startMeeting({ onTick } = {}) {
     return null;
   }
   const type = TYPES.find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
-  const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  // речь: 32 кбит/с (сервер всё равно сжимает до 32k) — 4 ч ≈ 58 МБ; умолчание браузера (AAC Safari 128k+) — больше
+  // предела загрузки 200 МиБ
+  const recorder = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: BITS });
   const kind = (recorder.mimeType || type || 'audio/webm').split(';')[0];
   const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const started = Date.now();
-  const pieces = [];             // вся запись в памяти: stop() отдаёт её, не читая IndexedDB
+  const kept = new Map();        // номер → кусок, ещё не записанный в IndexedDB: записанные в памяти не держатся
   let n = 0;
   let total = 0;                 // записанные мс до последней паузы
   let since = 0;                 // начало идущего отрезка (performance.now)
@@ -139,13 +143,28 @@ export async function startMeeting({ onTick } = {}) {
   function save(data) {
     const at = elapsed();
     const number = n++;
+    kept.set(number, data);
     writing = writing.then(async () => {
       const buffer = await data.arrayBuffer();
       const tx = (await openDb()).transaction(['chunks', 'recordings'], 'readwrite');
       tx.objectStore('chunks').put({ id, n: number, data: buffer });
       tx.objectStore('recordings').put({ id, started, seconds: at, type: kind });
       await finished(tx);
+      kept.delete(number);
     }).catch(() => { safe = false; });
+  }
+
+  /** Вся запись одним Blob: записанные куски — из IndexedDB, не записанные — из памяти. Не хватает куска (IndexedDB
+   * не читается) — отказ: неполная запись ушла бы на сервер, а её куски стёрлись бы после приёма. */
+  async function whole() {
+    const all = new Map();
+    if (kept.size < n) {
+      const store = (await openDb()).transaction('chunks').objectStore('chunks');
+      for (const chunk of await result(store.getAll(piecesOf(id)))) all.set(chunk.n, chunk.data);
+    }
+    for (const [number, data] of kept) all.set(number, data);
+    if (all.size !== n) throw new Error(tr("Запись не прочиталась на устройстве — восстановите её позже"));
+    return new Blob([...all.keys()].sort((a, b) => a - b).map((number) => all.get(number)), { type: kind });
   }
 
   async function wake() {
@@ -177,7 +196,6 @@ export async function startMeeting({ onTick } = {}) {
 
   recorder.addEventListener('dataavailable', (event) => {
     if (!event.data || !event.data.size) return;
-    pieces.push(event.data);
     save(event.data);
   });
   const timer = setInterval(announce, TICK_MS);
@@ -225,7 +243,7 @@ export async function startMeeting({ onTick } = {}) {
     async stop() {
       if (recorder.state !== 'inactive') recorder.stop();
       await stopped;
-      return new Blob(pieces, { type: kind });
+      return whole();
     },
     async cancel() {
       dropping = true;

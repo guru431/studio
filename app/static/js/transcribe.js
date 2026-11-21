@@ -826,7 +826,15 @@ function build(view, ctx) {
     const seconds = rec.seconds;
     recording.sending.add(rec.id);            // конец записи перерисует «Восстановить» — её там нет
     recording.note = '';
-    const blob = await rec.stop();
+    let blob;
+    try {
+      blob = await rec.stop();
+    } catch (err) {                            // IndexedDB не прочиталась: запись — в «Восстановить» и «Скачать»
+      error.textContent = words(err);
+      recording.sending.delete(rec.id);
+      screen?.paintRestore();
+      return;
+    }
     await sendMeeting(rec.id, blob, rec.started, seconds);
   });
   recCancel.addEventListener('click', () => {
