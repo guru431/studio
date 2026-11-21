@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 57
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 58
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,7 +40,8 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.CAPABILITIES_57).removesuffix(db.ACCESS_56)
+        conn.executescript(db.SCHEMA.removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
+                           .removesuffix(db.ACCESS_56)
                            .removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         model = ("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created,server_only)"
@@ -78,7 +79,7 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 57
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 58
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -126,7 +127,8 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
 
         # согласие на передачу файлов, политика инструментов, медиа диалога и их загрузки на MCP
         assert columns("mcp_tool_policy") == {"server_id", "tool", "open_world", "confirm"}
-        assert columns("chat_media") == {"id", "chat_id", "user_id", "name", "mime", "size", "media_id", "created"}
+        assert columns("chat_media") - {"deleted"} == {"id", "chat_id", "user_id", "name", "mime", "size", "media_id",
+                                                       "created"}                     # корзина — шаг 58
         assert columns("mcp_media_uploads") == {"chat_media_id", "server_id", "artifact_id", "path", "stamp", "created"}
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index')")}
         assert {"mcp_tool_policy_server_delete", "mcp_media_uploads_server_delete", "chat_media_chat"} <= names
@@ -141,7 +143,8 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
             conn.execute(policy, (sid, "bad", 2, None))
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(policy, (sid, "search", 0, None))
-        media = "INSERT INTO chat_media VALUES(?, ?, 1, 'a.mp4', 'video/mp4', 1, 'm1', 0)"
+        media = ("INSERT INTO chat_media(id, chat_id, user_id, name, mime, size, media_id, created)"
+                 " VALUES(?, ?, 1, 'a.mp4', 'video/mp4', 1, 'm1', 0)")
         for mid, chat in (("cm1", "before"), ("cm2", "before"), ("cm3", "previous")):
             conn.execute(media, (mid, chat))
         with pytest.raises(sqlite3.IntegrityError):
@@ -172,6 +175,94 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         assert conn.execute("SELECT count(*) FROM chat_roles").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM chat_media").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM mcp_media_uploads").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env):
+    """Шаг 58: ждущие ответы, корзина (`deleted`) с уходом записи из поиска, ссылки на файлы, защищённые MCP, память,
+    базы знаний с FTS, язык речи. Прежний код (0.40.1) пишет своим списком столбцов — `deleted` остаётся NULL;
+    `trash.ROLLBACK_58` удаляет только корзину."""
+    from contextlib import closing
+    import sqlite3
+    import trash
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 57)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 58
+
+        def columns(table):
+            return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index')")}
+        for t in trash.TABLES:
+            assert "deleted" in columns(t) and f"{t}_trash" in names
+        assert {"chat_pending", "file_links", "user_memory", "knowledge_bases", "kb_documents",
+                "kb_chunks", "kb_rules", "chat_kbs"} <= tables
+        assert "kb_fts" in tables and {"kb_chunks_ai", "kb_chunks_ad", "chat_pending_open"} <= names
+        assert {f"search_{t}_hide" for t in ("chats", "images", "videos", "speeches", "transcripts", "scans",
+                                             "translations")} <= names
+        assert "todo" in columns("messages") and "memory_on" in columns("users")
+        assert "protected" in columns("mcp_servers") and "protected_used" in columns("chats")
+        assert "language" in columns("transcripts") and "language" in columns("speeches")
+        assert columns("file_links") == {"id", "token_hash", "user_id", "server_id", "stamp", "path_enc", "name_enc",
+                                         "size", "created", "expires", "revoked"}
+        assert conn.execute("SELECT deleted, protected_used FROM chats").fetchone()[:] == (None, 0)
+
+        # прежний код: вставки своим списком столбцов
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('previous',1,'Old',0,0)")
+        image = ("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, media_id, state, detail, created)"
+                 " VALUES(?, 1, 'generation', 'flux', ?, '1024x1024', 1, NULL, 'done', '', 0)")
+        conn.execute(image, ("img1", "кот на крыше"))
+        conn.execute(image, ("img2", "собака в парке"))
+        assert {r[0] for r in conn.execute("SELECT deleted FROM chats UNION ALL SELECT deleted FROM images")} == {None}
+        conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('m1','previous','user','привет','done','server',0)")
+
+        def docs(section, item):
+            return conn.execute("SELECT count(*) FROM search_docs WHERE section = ? AND item = ?",
+                                (section, item)).fetchone()[0]
+        assert docs("photo", "img1") == 1 and docs("chat", "previous") == 2
+        conn.execute("UPDATE images SET deleted = 1 WHERE id = 'img1'")
+        conn.execute("UPDATE chats SET deleted = 1 WHERE id = 'previous'")
+        assert docs("photo", "img1") == 0 and docs("photo", "img2") == 1
+        assert docs("chat", "previous") == 0 and docs("chat", "before") == 1
+
+        # ждущий ответ: вид и исход — из перечня
+        conn.execute("INSERT INTO chat_pending(id,chat_id,message_id,kind,payload,created)"
+                     " VALUES('p1','previous','m1','confirm','{}',0)")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO chat_pending(id,chat_id,message_id,kind,payload,created)"
+                         " VALUES('p2','previous','m1','other','{}',0)")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE chat_pending SET outcome = 'maybe'")
+
+        # знания: документ — либо базы, либо вложения; куски ищутся через FTS и уходят из него
+        conn.execute("INSERT INTO knowledge_bases(id,user_id,name,created) VALUES('kb1',1,'Base',0)")
+        conn.execute("INSERT INTO kb_documents(id,kb_id,user_id,name,state,created) VALUES('d1','kb1',1,'a','ready',0)")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO kb_documents(id,user_id,name,state,created) VALUES('d2',1,'a','ready',0)")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO kb_documents(id,kb_id,user_id,name,state,created)"
+                         " VALUES('d3','kb1',1,'a','done',0)")
+        chunk = conn.execute("INSERT INTO kb_chunks(doc_id,n,text) VALUES('d1',0,'Договор аренды склада')").lastrowid
+
+        def found(word):
+            return [r[0] for r in conn.execute("SELECT rowid FROM kb_fts WHERE kb_fts MATCH ?", (word,))]
+        assert found("аренды") == [chunk]
+        conn.execute("DELETE FROM kb_chunks WHERE id = ?", (chunk,))
+        assert found("аренды") == []
+
+        conn.execute("INSERT INTO knowledge_bases(id,user_id,name,created,deleted) VALUES('kb2',1,'Gone',0,1)")
+        conn.executescript(trash.ROLLBACK_58)
+        assert [r[0] for r in conn.execute("SELECT id FROM chats")] == ["before"]
+        assert [r[0] for r in conn.execute("SELECT id FROM images")] == ["img2"]
+        assert [r[0] for r in conn.execute("SELECT id FROM knowledge_bases")] == ["kb1"]
+        assert conn.execute("SELECT count(*) FROM chat_pending").fetchone()[0] == 0     # каскадом с чатом
+        conn.execute("DELETE FROM users WHERE id = 1")
+        assert conn.execute("SELECT count(*) FROM knowledge_bases").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -209,7 +300,8 @@ def test_step_42_preserves_references_and_accepts_previous_voice_writer(env):
     with closing(db.connect(env.db_path)) as conn:
         install_schema(conn, 41)
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
-        insert = "INSERT INTO voices VALUES(?,1,'Voice','Reference',?,8,0)"
+        insert = ("INSERT INTO voices(id, user_id, name, ref_text, media_id, duration, created)"   # как прежний код
+                  " VALUES(?,1,'Voice','Reference',?,8,0)")
         conn.execute(insert, ('before', 'before-audio'))
         db.migrate(conn)
         db.migrate(conn)
