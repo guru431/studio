@@ -98,3 +98,15 @@ def test_each_read_runs_its_own_mcp_job(browser, live, width):
     assert all(args["voice"] == "nova" for args in spoken)       # голос — умолчание схемы
     assert not read_problems(r), read_problems(r)
 
+
+def test_read_mcp_tool_without_voice_field(browser, live):
+    login = "readmcpnovoice"
+    cid = chat_with_answers(live, live.add_user(login))
+    calls = speaker(live.gw, {"speech_synthesize": {"properties": {"text": TEXT}, "required": ["text"]}, **SERVICE})
+    r = browser.drive(live.url + "/", [*start(login), *opened(cid),
+        ("eval", "first", f"{READ}[0].click(); true"),
+        ("wait", f"{BOX}[0]?.querySelector('#section-mcp-result pre')?.textContent === 'ok'")], width=1280, timeout=20000)
+    assert not r.get("failed"), r
+    assert [args for name, args in calls if name == "speech_synthesize"] == [{"text": ANSWERS[0]}]
+    assert not read_problems(r), read_problems(r)
+
