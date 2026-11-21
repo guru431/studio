@@ -11,6 +11,10 @@ sections-voice-design, 6.1 и 6.3–6.5; контракт шлюза свере�
 - 503 (карта занята, `busy` Qwen) — Busy: ждать и повторять решает вызывающий; прочие отказы —
   SpeechError словами. Освобождения слотов `asr` и `tts-qwen` у шлюза нет: перед речью студия
   освобождает модели картинок и gemma-abl (`free_card`), чтобы карта досталась речи.
+- Язык распознавания (`LANGUAGES`, None — «Авто»): srvllm — `language=` в запросе `/speech/asr` (поле формы у
+  `/speech/transcriptions`), s06 и внешний сервис — поле `language`; «Авто» — поля нет. GigaAM — только русский, без поля.
+- Пределы (`limits`): srvllm и s06 — `GET <адрес>/speech/limits` (`max_seconds`), кэш LIMITS_TTL_SEC; нет маршрута или
+  внешний сервис — `transcripts.DURATION_MAX`. Инструмент MCP — пометка `studio/limits` (`tool_limits`).
 - Звук, текст и имена в журнал не пишутся.
 """
 import asyncio
@@ -20,12 +24,18 @@ from urllib.parse import urlencode
 
 import httpx
 
+import clock
 import images
 import upstream
 
 GATEWAY = {"whisperx": "large-v3", "gigaam": "gigaam-v3"}
-ASR_QUERY = {"language": "ru", "diarize": "true", "word_timestamps": "true", "output_format": "json",
-             "model": GATEWAY["whisperx"]}
+ASR_QUERY = {"diarize": "true", "word_timestamps": "true", "output_format": "json", "model": GATEWAY["whisperx"]}
+LANGUAGES = ("ru", "en")         # язык распознавания; None — «Авто»
+LIMITS_TTL_SEC = 600
+LIMITS_TIMEOUT_SEC = 10
+LIMITS_MIN_SEC = 60              # предел короче — неверный ответ: части по секунде не режем
+#: (id подключения, адрес) → (когда спросили, Limits)
+LIMITS: dict = {}
 ASR_TIMEOUT_SEC = 2460          # таймаут LiteLLM маршрута /speech/asr и /speech/transcriptions
 LITE_TIMEOUT_SEC = 180
 TTS_TIMEOUT_SEC = 720
@@ -53,6 +63,60 @@ class Segment:
     end: float
     speaker: "str | None"
     text: str
+
+
+@dataclass(frozen=True)
+class Limits:
+    max_seconds: int
+
+
+def _max_seconds(value) -> "int | None":
+    return value if type(value) is int and value >= LIMITS_MIN_SEC else None
+
+
+async def limits(conn, model: str) -> Limits:
+    """Самая длинная запись, которую источник распознаёт за один запрос. srvllm и s06 — их маршрут пределов (кэш
+    LIMITS_TTL_SEC и на «нет маршрута»); внешний сервис, нет маршрута, неверный ответ — `transcripts.DURATION_MAX`.
+    Сбой сети не кэшируется."""
+    import transcripts                       # transcripts импортирует speech
+    fallback = Limits(transcripts.DURATION_MAX)
+    if not (conn.s06 or conn.kind == "srvllm"):
+        return fallback
+    key = (conn.id, conn.base_url)
+    cached = LIMITS.get(key)
+    if cached is not None and clock.NOW() - cached[0] < LIMITS_TTL_SEC:
+        return cached[1]
+    try:
+        r = await upstream.request(conn, "GET", f"{conn.base_url}/speech/limits", timeout=LIMITS_TIMEOUT_SEC)
+    except (httpx.HTTPError, upstream.UpstreamRefused):
+        return fallback
+    if r.status_code not in (200, 404):
+        return fallback
+    seconds = _max_seconds(upstream.json_body(r).get("max_seconds")) if r.status_code == 200 else None
+    found = Limits(seconds) if seconds else fallback
+    LIMITS[key] = (clock.NOW(), found)
+    return found
+
+
+def tool_limits(tool: dict) -> "Limits | None":
+    """Предел инструмента MCP из `_meta["studio/limits"].max_seconds`; нет или неверный — None."""
+    meta = tool.get("_meta") if isinstance(tool, dict) else None
+    raw = meta.get("studio/limits") if isinstance(meta, dict) else None
+    seconds = raw.get("max_seconds") if isinstance(raw, dict) else None
+    return Limits(seconds) if type(seconds) is int and seconds > 0 else None
+
+
+def language_of(value) -> "str | None":
+    """Язык запроса: «ru»/«en», пусто — «Авто» (None); другое — ValueError."""
+    if value in (None, "", "auto"):
+        return None
+    if value not in LANGUAGES:
+        raise ValueError(value)
+    return value
+
+
+def _lang(language: "str | None") -> dict:
+    return {"language": language} if language else {}
 
 
 async def _post(conn, url: str, timeout: float, **kw) -> httpx.Response:
@@ -91,8 +155,8 @@ def _text(r: httpx.Response) -> str:
     return text.strip() if isinstance(text, str) else ""
 
 
-async def transcribe(conn, model: str, audio: Path, mime: str) -> list[Segment]:
-    """Расшифровка сжатой записи (audio.compress) — сегменты по порядку."""
+async def transcribe(conn, model: str, audio: Path, mime: str, language: "str | None" = None) -> list[Segment]:
+    """Расшифровка сжатой записи (audio.compress) — сегменты по порядку; `language` — из LANGUAGES, None — «Авто»."""
     reading = asyncio.create_task(asyncio.to_thread(audio.read_bytes))
     try:
         data = await asyncio.shield(reading)
@@ -106,37 +170,40 @@ async def transcribe(conn, model: str, audio: Path, mime: str) -> list[Segment]:
                 pass
     if conn.s06:
         r = await _post(conn, f"{conn.base_url}/speech/transcriptions", ASR_TIMEOUT_SEC,
-                        data={"model": model, "language": "ru", "diarize": "true"},
+                        data={"model": model, **_lang(language), "diarize": "true"},
                         files={"file": ("audio.mp3", data, mime)})
     elif conn.kind == "srvllm":
-        r = await _post(conn, f"{conn.base_url}/speech/asr?{urlencode(ASR_QUERY)}", ASR_TIMEOUT_SEC,
-                        files={"audio_file": ("audio.mp3", data, mime)})
+        r = await _post(conn, f"{conn.base_url}/speech/asr?{urlencode({**_lang(language), **ASR_QUERY})}",
+                        ASR_TIMEOUT_SEC, files={"audio_file": ("audio.mp3", data, mime)})
     else:
         url = f"{conn.base_url}/audio/transcriptions"
         try:
-            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC, data={"model": model, "response_format": "verbose_json"},
+            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC,
+                            data={"model": model, "response_format": "verbose_json", **_lang(language)},
                             files={"file": ("audio.mp3", data, mime)})
         except BadRequest:
             # OpenAI gpt-4o-transcribe и gpt-4o-mini-transcribe понимают только json/text: текст одной репликой
-            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC, data={"model": model, "response_format": "json"},
+            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC, data={"model": model, "response_format": "json",
+                                                                   **_lang(language)},
                             files={"file": ("audio.mp3", data, mime)})
     return _segments(upstream.json_body(r))
 
 
-async def dictate(conn, model: str, data: bytes, mime: str, name: str) -> str:
-    """Голосовой ввод: запись как есть (m4a iPhone, webm Chrome) — текст."""
+async def dictate(conn, model: str, data: bytes, mime: str, name: str, language: "str | None" = None) -> str:
+    """Голосовой ввод: запись как есть (m4a iPhone, webm Chrome) — текст; `language` — как у `transcribe`."""
     if conn.s06:
         r = await _post(conn, f"{conn.base_url}/speech/transcriptions", ASR_TIMEOUT_SEC,
-                        data={"model": model, "language": "ru", "diarize": "false"}, files={"file": (name, data, mime)})
+                        data={"model": model, **_lang(language), "diarize": "false"}, files={"file": (name, data, mime)})
     elif conn.kind != "srvllm":
         r = await _post(conn, f"{conn.base_url}/audio/transcriptions", EXTERNAL_TIMEOUT_SEC,
-                        data={"model": model, "response_format": "json"}, files={"file": (name, data, mime)})
+                        data={"model": model, "response_format": "json", **_lang(language)},
+                        files={"file": (name, data, mime)})
     elif model == "gigaam":
         r = await _post(conn, f"{conn.base_url}/speech/lite/transcriptions", LITE_TIMEOUT_SEC,
                         data={"model": GATEWAY["gigaam"], "response_format": "json"}, files={"file": (name, data, mime)})
     else:
         r = await _post(conn, f"{conn.base_url}/speech/transcriptions", ASR_TIMEOUT_SEC,
-                        data={"model": GATEWAY["whisperx"], "language": "ru", "response_format": "json"},
+                        data={"model": GATEWAY["whisperx"], **_lang(language), "response_format": "json"},
                         files={"file": (name, data, mime)})
     return _text(r)
 

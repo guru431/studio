@@ -31,7 +31,7 @@ def test_transcribe_asks_whisperx_with_diarization(studio, tmp_path):
         {"start": 4.1, "end": 6.0, "speaker": "SPEAKER_00", "text": "У меня вопрос."}]}
     f = tmp_path / "a.mp3"
     f.write_bytes(b"ID3fake")
-    segs = speech.speakers(asyncio.run(speech.transcribe(conn, "whisperx", f, "audio/mpeg")))
+    segs = speech.speakers(asyncio.run(speech.transcribe(conn, "whisperx", f, "audio/mpeg", language="ru")))
     q = studio.gw.asr_requests[0]
     assert q.url.path == "/speech/asr" and dict(q.url.params) == {"language": "ru", "diarize": "true",
         "word_timestamps": "true", "output_format": "json", "model": "large-v3"}
