@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru" data-language-default="browser">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1b1b" media="(prefers-color-scheme: dark)">
+<title data-i18n>Студия — файл по ссылке</title>
+<link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/css/app.css?v={{v}}">
+<link rel="stylesheet" href="/static/css/share.css?v={{v}}">
+<script src="/static/en.js?v={{v}}"></script>
+<script src="/static/i18n.js?v={{v}}"></script>
+<script src="/static/theme.js?v={{v}}"></script>
+<script type="module" src="/static/js/file-link.js?v={{v}}"></script>
+</head>
+<body class="share-page">
+<main id="file-main">
+  <section id="file-card" class="solo-card" aria-labelledby="file-heading">
+    <div class="brand"><img src="/static/icons/icon.svg" alt=""><h1 id="file-heading" data-i18n>Файл по ссылке</h1></div>
+    <p class="muted" data-i18n>Личная ссылка на файл. Она действует сутки и только для скачивания.</p>
+    <div id="file-info" hidden>
+      <p><b id="file-name"></b></p>
+      <p class="muted" id="file-facts"></p>
+    </div>
+    <p id="file-error" class="error" role="alert"></p>
+    <button id="file-download" class="btn btn-accent" type="button" hidden data-i18n>Скачать</button>
+    <p id="file-status" class="muted" role="status" aria-live="polite"></p>
+    <div data-language-picker="file-language"></div>
+  </section>
+</main>
+</body>
+</html>

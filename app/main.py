@@ -40,6 +40,7 @@ import mcp_contracts
 import mcp_files
 import mcp_sections
 import memory
+import my_files
 import chat_exports
 import chat_shares
 import cleaner_client as cleaner
@@ -161,7 +162,7 @@ async def headers(request: Request, call_next):
     response = await chat_shares.public_guard(request, call_next)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers.setdefault("Referrer-Policy", "same-origin")
-    if request.url.path == "/share" or request.url.path.startswith("/share/"):
+    if request.url.path in ("/share", "/f") or request.url.path.startswith(("/share/", "/f/")):
         response.headers.update(chat_shares.PUBLIC_HEADERS)
     if request.url.path.startswith("/account/"):
         response.headers.update(email_accounts.PUBLIC_HEADERS)
@@ -203,6 +204,8 @@ app.include_router(mcp_contracts.router)       # раньше mcp_client: /api/m
 app.include_router(mcp_client.router)
 app.include_router(mcp_sections.router)
 app.include_router(mcp_files.router)
+app.include_router(my_files.router)
+app.include_router(my_files.public)            # анонимный `/f` со своей защитой (my_files.py)
 app.include_router(chat_exports.router)
 app.include_router(chat_shares.router)
 app.include_router(dictation.router)

@@ -43,11 +43,18 @@ minor для возможностей, major для несовместимых �
   только в снимке ссылки «Поделиться» и только шифром `STUDIO_DATA_KEY` ([sharing-export](docs/architecture/sharing-export.md)).
 - **Анонимны только**: `/health`, `/login` (страница и вход), `/logout`, `/robots.txt`, оболочка PWA (`/static/*`,
   `/manifest.webmanifest` (и английский `/manifest.en.webmanifest`), `/sw.js`, `/offline.html`, значки из корня `/apple-touch-icon.png`,
-  `/apple-touch-icon-precomposed.png`, `/favicon.ico`) и три класса входов **со своей защитой**:
+  `/apple-touch-icon-precomposed.png`, `/favicon.ico`) и четыре класса входов **со своей защитой**:
   - ссылка «Поделиться»: `/share` (оболочка) и `/share/unlock|check|file` (`chat_shares.py`): секреты — только телом
     JSON до 4096 байт (`chat_shares.public_guard`), чужой `Origin` — 403, PIN ссылки с паузами (5 на ссылку, 30 на IP
     за 15 мин) и общим пределом `chat_shares.FAILS_MAX`, read-токен в памяти страницы без прав API учётки, всё —
     `no-store`, `no-referrer`, `noindex`;
+  - личная ссылка на файл «Моих файлов»: `/f` (оболочка) и `/f/check|open|file` (`my_files.py`): токен — только во
+    фрагменте адреса и телом JSON до 4096 байт (`chat_shares.public_guard`), в базе — sha256, путь и имя — шифром,
+    срок `my_files.LINK_SEC` (86400); чужой `Origin` — 403; неизвестный, истёкший, отозванный токен, сменённый ключ
+    сервера, снятый доступ владельца, исчезнувший файл — одинаковый 404; неудачи — пауза по адресу (`my_files.FAILS`
+    (30) за `my_files.FAIL_SEC` (900), потом 429 `file_locked`); файл — по cookie `studio_file` (`my_files.OPEN_SEC`
+    (600), только `/f/file`, id в памяти процесса), каждый запрос проверяет ссылку заново; всё — `no-store`,
+    `no-referrer`, `noindex`;
   - почта учётки `/account/*` (`email_accounts.py`): страницы и JSON-действия приглашения, восстановления и
     кодов; свой Origin, предел тела, одноразовые хешированные токены, сроки и паузы — [email-accounts](docs/architecture/email-accounts.md);
   - `auth.OPEN_API`: `/api/agent/enroll` (`POST` — вход логином/email и паролем, при включении ещё кодом, со счётом и паузами `/login`; `DELETE` —
@@ -100,7 +107,7 @@ minor для возможностей, major для несовместимых �
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
 | Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities`, `access` (группы доступа к общему), `profiles` (профиль подключения: системный текст, параметры запроса, подсказки) | [connections](docs/architecture/connections.md) |
 | Чат | `chat`, `chat_pending` (пауза хода: подтверждение инструмента, вопрос `ask_user`), `chat_tools` (встроенные инструменты хода), `chat_system` (системное сообщение: дата, профиль, роль, правила MCP), `roles` (роли диалога и их умолчания), `web`, `documents`, `cleaner_client`, `mcp_client` (подключения MCP, инструменты хода), `mcp_sources` (кэш каталогов MCP, пометки и политика инструментов, MCP диалога по умолчанию), `mcp_sections` (инструменты MCP разделов), `mcp_files` (файлы диалога на MCP с согласием, медиа диалога, файлы результатов), `mcp_contracts` (контракты Studio для любых MCP: возможности из `experimental`, файлы пользователя, состояние источника), `help` («Справка»: руководство Studio и руководства MCP), `memory` (личная память, шифром), `knowledge` (большие вложения и базы знаний: куски, BM25, эмбеддинги, переранжирование) | [chat](docs/architecture/chat.md), [mcp-contracts](docs/architecture/mcp-contracts.md) |
-| Ссылки и экспорт | `chat_shares`, `chat_exports`, `chat_export_selection` | [sharing-export](docs/architecture/sharing-export.md) |
+| Ссылки и экспорт | `chat_shares`, `chat_exports`, `chat_export_selection`, `my_files` («Мои файлы» на серверах MCP, личная ссылка на файл на сутки и анонимный `/f`) | [sharing-export](docs/architecture/sharing-export.md), [mcp-contracts](docs/architecture/mcp-contracts.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history`, `trash` (корзина истории) | [media](docs/architecture/media.md) |
 | Речь (раздел «Озвучка», «Расшифровка», голосовой ввод) | `speech`, `audio`, `dictation`, `transcripts`, `voices`, `speeches`, `exports` | [speech](docs/architecture/speech.md) |
 | Сканы и перевод | `ocr`, `ocr_render`, `translate`, `translate_text`, `translate_spot` | [ocr-translate](docs/architecture/ocr-translate.md) |

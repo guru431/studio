@@ -103,12 +103,14 @@ async def server_features(session) -> Features:
         raise mcp.refused("MCP не ответил вовремя") from None
 
 
-async def call(session, method, path, *, content=None, timeout=mcp.TIMEOUT):
-    """Маршрут контракта на сервере: (код HTTP, разобранный JSON или None). Тело ответа — не больше REPLY_MAX."""
-    headers = session.headers(rpc=False)
+async def call(session, method, path, *, content=None, timeout=mcp.TIMEOUT, headers=None,
+               content_type="application/octet-stream", reply_max=REPLY_MAX):
+    """Маршрут контракта на сервере: (код HTTP, разобранный JSON или None). Тело ответа — не больше `reply_max`;
+    `headers` — заголовки маршрута поверх заголовков сервера (my_files: `X-Studio-Path`, `Content-Range`)."""
+    headers = {**session.headers(rpc=False), **(headers or {})}
     headers["Accept"] = "application/json"
     if content is not None:
-        headers["Content-Type"] = "application/octet-stream"
+        headers["Content-Type"] = content_type
     data = bytearray()
     try:
         async with asyncio.timeout(timeout):
@@ -116,7 +118,7 @@ async def call(session, method, path, *, content=None, timeout=mcp.TIMEOUT):
                                        keyless=True, headers=headers, content=content, timeout=timeout) as response:
                 async for chunk in response.aiter_bytes():
                     data.extend(chunk)
-                    if len(data) > REPLY_MAX:
+                    if len(data) > reply_max:
                         raise mcp.refused("Ответ MCP слишком большой")
                 code = response.status_code
     except upstream.UpstreamRefused:

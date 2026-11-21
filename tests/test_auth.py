@@ -338,6 +338,7 @@ ANONYMOUS = {"/health", "/login", "/logout", "/", "/sw.js", "/manifest.webmanife
              "/share", "/share/unlock", "/share/check", "/share/file"}
 ANONYMOUS |= {"/account/{screen}", "/account/invite/check", "/account/invite/accept", "/account/forgot", "/account/reset", "/account/code",
               "/account/reset/check", "/account/code/resend"}
+ANONYMOUS |= {"/f", "/f/check", "/f/open", "/f/file"}            # личная ссылка на файл (test_file_links.py)
 
 
 def test_pages_answer_head_and_robots_are_turned_away(studio):
