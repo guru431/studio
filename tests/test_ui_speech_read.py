@@ -14,20 +14,59 @@ PLAYER = ".msg.assistant .msg-read .read-player"
 LONG = "\\n\\n".join(f"Абзац {n}. " + "Слово номер такое. " * 80 for n in range(3))
 
 
-def answer_chat(live, uid) -> str:
+def answer_chat(live, uid, text="**Короткий** ответ модели.") -> str:
     import db
     cid, now = uuid.uuid4().hex, time.time()
     conn = db.connect(live.db_path)
     try:
         conn.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES (?, ?, 'чтение', ?, ?)",
                      (cid, uid, now, now))
-        for n, (role, content) in enumerate([("user", "вопрос"), ("assistant", "**Короткий** ответ модели.")]):
+        for n, (role, content) in enumerate([("user", "вопрос"), ("assistant", text)]):
             conn.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
                          " VALUES (?, ?, ?, ?, 'done', 'server', 'local-gemma-abl', ?)",
                          (uuid.uuid4().hex, cid, role, content, now + n))
     finally:
         conn.close()
     return cid
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_long_read_is_cancelled_as_a_whole(browser, live, width):
+    """C-I3: «Отменить» в проигрывателе «Прочитать» отменяет весь чат; повторное «Прочитать» отменяет прежний чат;
+    «Отменить» в «Озвучке» — весь чат из нескольких записей."""
+    from fakes import WAV_FAKE
+
+    login = f"readcancel{width}"
+    cid = answer_chat(live, live.add_user(login), LONG.replace("\\n", "\n"))
+    gw = live.gw
+    gw.tts_replies = [(503, {"detail": "busy"})]             # первая часть ждёт карту — чат идёт
+    cancel = f"{PLAYER} .read-cancel"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), add_voice(),
+            *go(f"chat/{cid}"), ("wait", "document.querySelector('.msg.assistant .msg-read')"),
+            ("click", ".msg.assistant .msg-read"),
+            ("wait", f"document.querySelector('{cancel}') && !document.querySelector('{cancel}').hidden"),
+            ("click", cancel),
+            ("wait", f"document.querySelector('{cancel}').hidden"),
+            ("click", ".msg.assistant .msg-read"),
+            ("wait", f"document.querySelector('{cancel}') && !document.querySelector('{cancel}').hidden"),
+            ("click", ".msg.assistant .msg-read"),                 # заменяет прежний — его чат отменяется
+            ("wait", f"document.querySelector('{cancel}') && !document.querySelector('{cancel}').hidden"),
+            *go("speech"), ("wait", "document.querySelector('.sp-item')"),
+            *([("click", ".split-toggle")] if width == 320 else []), ("click", ".sp-item"),
+            ("wait", "!document.querySelector('#sp-cancel-chat').hidden"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", "#sp-cancel-chat"),
+            ("wait", "document.querySelector('#sp-cancel-chat').hidden"),
+            ("eval", "chats", "fetch('/api/speeches/chats').then(r => r.json()).then(b => b.items.map(c => c.state))")],
+            width=width, height=900, mobile=width == 320, timeout=30000)
+    finally:
+        gw.tts_replies = [(200, WAV_FAKE)]
+    assert not r.get("failed"), r
+    cancels = [s for s in r["sent"] if s.startswith("POST /api/speeches/chats/") and s.endswith("/cancel")]
+    assert len(cancels) == 3 and len(set(cancels)) == 3, r["sent"]
+    assert r["values"]["chats"] == ["cancelled"] * 3 and r["values"]["fits"], r["values"]
+    assert not problems(r), problems(r)
 
 
 @pytest.mark.parametrize("width", [320, 1280])

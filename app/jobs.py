@@ -163,6 +163,8 @@ def _speech(uid: int, after: float) -> list:
         item = _item("speech", row, f"Озвучка · {head(row)}", detail, f"speech?id={row['id']}")
         # повторная озвучка — с новой постановки, не с создания
         item.update(id=key, started=min(speeches.queued_at(r) for r in rows))
+        if row["chat_id"]:                            # «Отменить» — весь чат: ждущие части и идущую
+            item["cancel"] = f"/api/speeches/chats/{row['chat_id']}/cancel"
         out.append(item)
     for row in done:                                  # новые сверху: первая строка чата — его последняя запись
         key = row["chat_id"] or row["id"]

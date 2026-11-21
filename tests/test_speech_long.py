@@ -159,6 +159,47 @@ def test_long_text_is_one_row_in_jobs(studio, fake_audio, monkeypatch):
     assert [(i["id"], i["state"]) for i in finished] == [(cid, "done")]
 
 
+def test_chat_cancel_stops_the_whole_long_text(studio, fake_audio, monkeypatch):
+    """C-I3: «Отменить» чата снимает ждущие части и останавливает идущую; «В работе» отменяет чат целиком."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.tts_replies = [(503, {"detail": "busy"})]                 # первая часть ждёт карту
+    text = "\n\n".join(paragraph(n) for n in range(3))
+    cid = studio.c.post("/api/speeches", json={"text": text, "voice": vid}).json()["chat_id"]
+    rows = chat_rows(cid)
+    wait_sp(studio, rows[0]["id"], {"working"})
+    running = [i for i in studio.c.get("/api/jobs").json()["running"] if i["section"] == "speech"]
+    assert [i["cancel"] for i in running] == [f"/api/speeches/chats/{cid}/cancel"]
+    r = studio.c.post(f"/api/speeches/chats/{cid}/cancel")
+    assert r.status_code == 200, r.text
+    assert [row["state"] for row in chat_rows(cid)] == ["cancelled"] * 3
+    assert studio.c.post(f"/api/speeches/chats/{'0' * 32}/cancel").status_code == 404
+    # следующая озвучка не ждёт отменённый чат
+    studio.gw.tts_replies = [(200, WAV_FAKE)]
+    later = studio.c.post("/api/speeches", json={"text": "Потом.", "voice": vid}).json()
+    assert wait_sp(studio, later["id"], {"done"})["state"] == "done"
+
+
+def test_delete_chat_drops_its_waiting_parts(studio, fake_audio, monkeypatch):
+    """C-I3: «Удалить чат», чьи части только ждут очереди, снимает их и уносит чат в корзину; идущая — 409."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.tts_replies = [(503, {"detail": "busy"})]
+    first = studio.c.post("/api/speeches", json={"text": "Сначала.", "voice": vid}).json()
+    wait_sp(studio, first["id"], {"working"})
+    cid = studio.c.post("/api/speeches", json={"text": "\n\n".join(paragraph(n) for n in range(3)),
+                                               "voice": vid}).json()["chat_id"]
+    assert {row["state"] for row in chat_rows(cid)} == {"queued"}
+    r = studio.c.delete(f"/api/speeches/chats/{cid}")
+    assert r.status_code == 204, r.text
+    rows = chat_rows(cid)
+    assert {row["state"] for row in rows} == {"cancelled"} and all(row["deleted"] for row in rows)
+    busy = studio.c.delete(f"/api/speeches/chats/{first['chat_id']}")
+    assert busy.status_code == 409 and busy.json()["detail"]["code"] == "running"
+
+
 def test_tts_language_sent_to_gateway(studio, fake_audio):
     add_gateway(studio)
     vid = voice(studio, fake_audio)

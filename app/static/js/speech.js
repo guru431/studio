@@ -9,7 +9,8 @@ import { message as serverMessage, tr } from './i18n.js';
  * счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их заводят в настройках раздела «Озвучка»),
  * у внешнего сервиса — имя голоса с подсказками; у инструмента MCP с перечнем голосов (`enum` поля voice) — его
  * голоса группой «имя сервера» рядом с личными. У чата из нескольких записей — «Слушать подряд» (#sp-play-all,
- * speech-read.js chatPlayer) и «Скачать одним mp3» (#sp-download-all, GET /api/speeches/chats/<id>/audio).
+ * speech-read.js chatPlayer), «Скачать одним mp3» (#sp-download-all, GET /api/speeches/chats/<id>/audio) и, пока
+ * в нём что-то ждёт или идёт, «Отменить» весь чат (#sp-cancel-chat, POST /api/speeches/chats/<id>/cancel).
  * Озвучка — POST /api/speeches, задание на сервере (очередь пользователя: «в очереди · N»); идущие
  * опрашиваются раз в POLL_MS, готовые части идущей можно слушать до склейки (#sp-live).
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
@@ -115,10 +116,12 @@ function build(view, ctx) {
   const playAll = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-play-all', hidden: true }, tr("Слушать подряд"));
   const downloadAll = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-download-all', hidden: true },
     tr("Скачать одним mp3"));
+  const cancelChat = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-cancel-chat', hidden: true },
+    tr("Отменить"));
   const chainBox = el('div', { class: 'read-box', id: 'sp-chain' });
   let chain = null;              // «Слушать подряд» показанного чата: { box, stop }
   const head = el('header', { class: 'head' }, el('h1', {}, NAMES.speech));
-  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, playAll, downloadAll, dropChat);
+  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, playAll, downloadAll, cancelChat, dropChat);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
@@ -509,6 +512,7 @@ function build(view, ctx) {
     const items = chat?.items || [];
     playAll.hidden = items.length < 2;
     downloadAll.hidden = items.length < 2 || !items.some((i) => i.media_id && !RUNNING.has(i.state));
+    cancelChat.hidden = items.length < 2 || !items.some((i) => RUNNING.has(i.state));
     if (live && !items.some((i) => i.id === live.id && RUNNING.has(i.state))) {
       live.audio.pause();
       live = null;
@@ -548,8 +552,22 @@ function build(view, ctx) {
   playAll.addEventListener('click', () => {
     if (!records.current) return;
     stopChain();
-    chain = chatPlayer(records.current.id, { download: false });
+    chain = chatPlayer(records.current.id, { download: false, cancel: false });
     chainBox.replaceChildren(chain.box);
+  });
+  // весь чат: ждущие части снимаются, идущая останавливается (длинный текст — до 100 записей)
+  cancelChat.addEventListener('click', async () => {
+    if (!records.current) return;
+    cancelChat.disabled = true;
+    try {
+      await api('POST', `/api/speeches/chats/${encodeURIComponent(records.current.id)}/cancel`);
+      kick();
+      await refresh();
+    } catch (err) {
+      error.textContent = words(err);
+    } finally {
+      cancelChat.disabled = false;
+    }
   });
   downloadAll.addEventListener('click', () => {
     if (records.current) el('a', { href: `/api/speeches/chats/${encodeURIComponent(records.current.id)}/audio`, download: '' }).click();
