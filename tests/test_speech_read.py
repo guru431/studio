@@ -21,8 +21,8 @@ def read(s, text, kind="chat", oid="m1", **extra):
 def test_read_from_chat_answer_strips_markdown_and_uses_default_source(studio, fake_audio, caplog):
     caplog.set_level(logging.DEBUG)
     add_gateway(studio)
-    first = voice(studio, fake_audio)
-    other = second_voice(studio)
+    other = voice(studio, fake_audio)                      # «Мой»
+    first = second_voice(studio)                           # «Второй» — первый по алфавиту, как в выборе страницы
     # ни одной озвучки — первый доступный голос
     r = read(studio, "**Жирный** ответ\n\n# Заголовок")
     assert r.status_code == 202, r.text

@@ -49,6 +49,7 @@ def test_continue_and_edit_speech_chat(browser, live, width):
     assert v['fits'] and not problems(r), problems(r)
 
 
+LONG_MAX = 200_000          # speeches.LONG_MAX
 FILL = "(() => {{ const t = document.querySelector('#speech-text'); t.value = {0!r}; t.dispatchEvent(new Event('input', {{bubbles:true}})); return true; }})()"
 
 
@@ -72,7 +73,7 @@ def test_failed_revoice_long_text_new_chat_and_whole_chat_delete(browser, live, 
             ('wait', "document.querySelector('.sp-record p.error') && document.querySelector('.sp-item[data-state=error]')"),
             ('eval', 'failed', "({text: document.querySelector('.sp-text').textContent, src: document.querySelector('.sp-record audio')?.src,"
                                " state: document.querySelector('.sp-item .tr-state').textContent.includes(' · ')})"),
-            ('eval', 'long', FILL.format('я' * 2100)),
+            ('eval', 'long', FILL.format('я' * (LONG_MAX + 1))),     # длиннее записи — частями; длиннее LONG_MAX — отказ
             ('eval', 'over', "({length: document.querySelector('#speech-text').value.length, go: document.querySelector('#speech-go').disabled,"
                              " words: !document.querySelector('#speech-over').hidden,"
                              " red: document.querySelector('#speech-count').classList.contains('error')})"),
@@ -92,7 +93,7 @@ def test_failed_revoice_long_text_new_chat_and_whole_chat_delete(browser, live, 
     assert not r.get('failed'), r
     v = r['values']
     assert v['failed'] == {'text': 'Первая запись.', 'src': v['first'], 'state': True}
-    assert v['over'] == {'length': 2100, 'go': True, 'words': True, 'red': True}
+    assert v['over'] == {'length': LONG_MAX + 1, 'go': True, 'words': True, 'red': True}
     assert v['kept'] == ['Набранное', True] and v['fits']
     assert any(s.startswith('DELETE /api/speeches/chats/') for s in r['sent'])
     assert not problems(r), problems(r)

@@ -17,7 +17,8 @@ import { language, message as serverMessage, tr } from './i18n.js';
  *
  * Текст страницы — Markdown модели через renderMarkdown(…, { html: true }) (marked + DOMPurify: таблицы
  * HunyuanOCR — HTML-тегами, скрипты — нет); прочий текст сервера — только textContent. «Копировать» — весь
- * документ, как выгрузка .md. «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
+ * документ, как выгрузка .md; «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
+ * другой документ его убирает). «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me, toLogin } from './api.js';
@@ -30,6 +31,7 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
+import { clearRead, readAloud } from './speech-read.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { el, field, openDialog, plural, renameDialog, words } from './ui.js';
@@ -112,6 +114,8 @@ function build(view, ctx) {
   let uploading = false;
   let picked = false;          // документ выбрали сами (список, загрузка): ?id из адреса его не перебивает
   let shownId = null;          // документ, чья страница сейчас в листалке
+  let readFor = null;          // документ, чью озвучку показывает readBox
+  const readBox = el('div', { class: 'read-box', id: 'ocr-read-box' });
   let at = 0;                  // номер показанной страницы (с 0)
   let busy = null;             // блок «идёт» выбранного документа (feed.busyBlock): опрос меняет в нём только текст
   // вид выбранного переживает опрос (05:F14): узлы — по ключу своих данных, иначе меняются только тексты
@@ -426,7 +430,9 @@ function build(view, ctx) {
           error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
         }
       });
-      box.append(copy,
+      const read = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-read' }, tr("Прочитать"));
+      read.addEventListener('click', () => readAloud(asMarkdown(docs.current.pages), { kind: 'ocr', id: docs.current.id }, readBox));
+      box.append(copy, read,
         menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
@@ -453,6 +459,10 @@ function build(view, ctx) {
   function paintView() {
     const item = docs.current;
     put(title, item ? item.name : NAMES.ocr);
+    if (readFor !== item?.id) {
+      clearRead(readBox);
+      readFor = item?.id;
+    }
     if (!item) {
       shownId = null;
       busy = acts = two = null;
@@ -479,7 +489,7 @@ function build(view, ctx) {
       toFailed.hidden = n < 2;
       nodes.push(failed);
     }
-    nodes.push(actions(item), ...pageView(item));
+    nodes.push(actions(item), readBox, ...pageView(item));
     keep(body, nodes);
   }
 
@@ -603,6 +613,7 @@ function build(view, ctx) {
     follow,
     destroy() {
       mcp.destroy();
+      clearRead(readBox);
       docs.stop();
     },
   };

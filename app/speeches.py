@@ -554,10 +554,10 @@ def _read_voice(uid: int, conn, model: str) -> "tuple[str, str, str | None]":
                                  (last["voice"], uid)).fetchone()
         if found is not None:
             return last["voice"], found["name"], last["language"]
-    first = state.DB.execute("SELECT id, name FROM voices WHERE user_id = ? AND deleted IS NULL ORDER BY created, id"
-                             " LIMIT 1", (uid,)).fetchone()
-    if first is None:
+    rows = state.DB.execute("SELECT id, name FROM voices WHERE user_id = ? AND deleted IS NULL", (uid,)).fetchall()
+    if not rows:
         raise HTTPException(409, {"code": "voice", "message": "голосов пока нет — добавьте голос в настройках раздела «Озвучка»"})
+    first = min(rows, key=lambda r: (r["name"].casefold(), r["id"]))       # первый в выборе страницы — по алфавиту
     return first["id"], first["name"], None
 
 

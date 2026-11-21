@@ -13,7 +13,8 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * /api/media/<id>, под ней текст). Скрепка открывает «Файл» (#tl-file-input) / «Фото» (#tl-photo-input); под полем счётчик
  * #tl-count и «Перевести» #tl-go. Правое окно #tl-output — перевод (только чтение), над ним состояние
  * #tl-status, «Остановить» #tl-stop и «Продолжить» #tl-continue, под ним «Копировать» #tl-copy и «Скачать ▾»
- * #tl-export (.txt, .docx; у скана и файла .md — ещё .md). Готовый перевод скана — Markdown распознавания
+ * #tl-export (.txt, .docx; у скана и файла .md — ещё .md), «Прочитать» #tl-read (speech-read.js: проигрыватель — в #tl-read-box,
+ * другая запись его убирает). Готовый перевод скана — Markdown распознавания
  * разметкой (renderMarkdown html, как «Сканы»), прочее и идущий — текстом. «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
  * строка истории цветом предупреждения, у записи скана рядом — ссылка #tl-scan «Открыть в „Сканах“».
  *
@@ -55,6 +56,7 @@ import { sectionMcp } from './mcp-sections.js';
 import { photoView, RTL } from './translate-photo.js';
 import { picker } from './picker.js';
 import { renderMarkdown } from './markdown.js';
+import { clearRead, readAloud } from './speech-read.js';
 import { el, openDialog, words } from './ui.js';
 
 const POLL_MS = 1000;                    // опрос открытой идущей записи
@@ -197,9 +199,11 @@ function build(view, ctx) {
   const copy = el('button', { type: 'button', id: 'tl-copy', class: 'btn btn-sm' }, tr("Копировать"));
   const formats = actionMenu(tr("Скачать ▾"), { id: 'tl-export', cls: 'tl-formats', entries: FORMATS.map(([key, label]) => [label,
     { 'data-format': key }, () => download(key)]) });
-  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, formats);
+  const readBtn = el('button', { type: 'button', id: 'tl-read', class: 'btn btn-sm' }, tr("Прочитать"));
+  const readBox = el('div', { id: 'tl-read-box', class: 'read-box' });
+  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, readBtn, formats);
   const exportBtn = formats.querySelector('#tl-export');
-  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, scanLink, stop, cont), mcp.output, output, acts);
+  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, scanLink, stop, cont), mcp.output, output, acts, readBox);
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
@@ -433,6 +437,7 @@ function build(view, ctx) {
     if (!same) {
       // набранный и не отправленный текст запись не сотрёт: он — в черновик, «Новый перевод» и × его вернут
       if (input.value.trim() && input.value !== sentText && !(before && input.value === (before.source || ''))) draft.stash();
+      clearRead(readBox);
       pending = null;
       setLangs(record.source_lang, record.target_lang);   // выбор человека; куда переведено на деле — в состоянии
       if (record.kind === 'text') {
@@ -832,6 +837,8 @@ function build(view, ctx) {
       error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
     }
   });
+  readBtn.addEventListener('click', () => readAloud(rec ? translation(rec) : loose,
+    { kind: 'translate', id: rec?.id || 'mcp' }, readBox));
 
   paintCount();
   paintLeft();
@@ -866,6 +873,7 @@ function build(view, ctx) {
       draft.save();
       alive = false;
       mcp.destroy();
+      clearRead(readBox);
       clearTimeout(timer);
       docs.stop();
       if (photo) photo.destroy();
