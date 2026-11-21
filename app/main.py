@@ -36,6 +36,7 @@ import bridge
 import chat
 import chat_pending
 import mcp_client
+import mcp_contracts
 import mcp_files
 import mcp_sections
 import chat_exports
@@ -192,6 +193,7 @@ app.include_router(videos.router)
 app.include_router(chat.router)
 app.include_router(chat_pending.router)
 app.include_router(roles.router)
+app.include_router(mcp_contracts.router)       # раньше mcp_client: /api/mcp/status — не id сервера
 app.include_router(mcp_client.router)
 app.include_router(mcp_sections.router)
 app.include_router(mcp_files.router)

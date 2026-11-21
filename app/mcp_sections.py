@@ -422,11 +422,19 @@ async def download(section: str, encoded: str, request: Request):
 GONE_FILE = "Файла больше нет на сервере MCP"
 
 
+def endpoint(session: mcp.Session, path: str) -> httpx.URL:
+    """Адрес маршрута контракта на хосте сервера MCP: тот же хост и порт, путь — из кода Studio (`/artifacts/…`,
+    `/status`, `/user-files/…`), никогда не из ответа сервера или инструмента."""
+    if not path.startswith("/") or not path.isascii() or "?" in path or "#" in path:
+        raise ValueError("contract path")
+    return httpx.URL(session.url).copy_with(raw_path=path.encode())
+
+
 async def relay(session, aid, mime, request):
     """Файл результата MCP `aid` потоком через Studio: диапазоны (`Range`), `nosniff`, предел DOWNLOAD_MAX;
     не картинка, звук или видео — вложением. Сервер ответил 404 — 404 GONE_FILE."""
     # The transfer path is part of the service contract. Never fetch a URL from a tool result.
-    url = httpx.URL(session.url).copy_with(raw_path=f"/artifacts/{aid}/content".encode())
+    url = endpoint(session, f"/artifacts/{aid}/content")
     headers = httpx.Headers(session.headers(rpc=False))
     headers["Accept-Encoding"] = "identity"
     headers.pop("Range", None)
