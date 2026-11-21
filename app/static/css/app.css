@@ -906,6 +906,19 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .msg-consent p { margin: 0; overflow-wrap: anywhere; }
 .msg-consent-text { font-size: var(--fs-sm); }
 .msg-consent-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-3); }
+/* пауза ответа (chat-pending.js): подтверждение инструмента или вопрос модели под ответом */
+.msg-pending:empty { display: none; }
+.msg-pending-card { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-1); min-width: 0; }
+.msg-pending-card p { margin: 0; overflow-wrap: anywhere; }
+.msg-pending-title { font-weight: 600; }
+.msg-pending-tool, .msg-pending-text { font-size: var(--fs-sm); }
+.msg-pending-args { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: var(--space-2) var(--space-4);
+  margin: 0; font-size: var(--fs-sm); }
+.msg-pending-args dt { color: var(--text-2); overflow-wrap: anywhere; }
+.msg-pending-args dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.msg-pending-actions, .msg-pending-own { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.msg-pending-own .input { flex: 1 1 12rem; min-width: 0; }
 .msg-files { display: flex; flex-wrap: wrap; gap: var(--space-4); min-width: 0; }
 .msg-file { max-width: 100%; min-width: 0; }
 .msg-file-image { display: block; padding: 0; border: 1px solid var(--line); border-radius: var(--r-control); background: none;

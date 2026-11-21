@@ -4,7 +4,9 @@ import { tr } from './i18n.js';
  *
  * Сервер — переключатель `.chat-mcp-server`: общий включён по умолчанию, выключение пишет его в `mcp_off`; свой —
  * только вручную, в `mcp_ids`. Внутри `<details>` — инструменты с переключателями `.chat-mcp-tool`: выключенный —
- * в `mcp_tools_off`; инструмент «с подтверждением» по умолчанию выключен, включение пишет его в `mcp_tools_on`.
+ * в `mcp_tools_off`; инструмент «с подтверждением» включён, как остальные (вызов ждёт «Запустить» в чате, chat-pending.js),
+ * кроме загрузки файлов диалога `artifact_upload`: её Studio делает сама — по умолчанию выключена, включение пишет её в
+ * `mcp_tools_on`.
  * У инструмента — описание и метки «интернет» (`open_world`: только при включённом «Интернете») и «с подтверждением»;
  * правила сервера (`instructions`) — свёрнутым «Правила сервера»; недоступный сервер — с его словами.
  *
@@ -18,6 +20,7 @@ const HINT = tr("Модель сможет вызывать инструмент
 const MAX_SERVERS = 16;   // как mcp_client.MAX_SERVERS
 
 /** Пустое состояние: новый диалог без черновика — общие серверы по умолчанию. */
+const UPLOAD = 'artifact_upload';               // как mcp_files.UPLOAD
 export const DEFAULTS = Object.freeze({ ids: [], off: [], toolsOff: {}, toolsOn: {} });
 
 /** Состояние окна из диалога сервера (`_chat_view`) или черновика (тело PATCH). */
@@ -67,7 +70,10 @@ export function chooseDialogMcp(host, state, save) {
     return map.get(sid);
   };
   const serverOn = (s) => s.state !== 'off' && (s.shared ? !off.has(s.id) : explicit.has(s.id));
-  const toolOn = (s, t) => !named(toolsOff, s.id).has(t.name) && (!t.confirm || named(toolsOn, s.id).has(t.name));
+  // загрузку файлов диалога (`artifact_upload`) Studio делает сама, без карточки «Запустить»: «с подтверждением» она
+  // по умолчанию выключена и включается явно (`mcp_tools_on`, mcp_files.py)
+  const gated = (t) => t.confirm && t.name === UPLOAD;
+  const toolOn = (s, t) => !named(toolsOff, s.id).has(t.name) && (!gated(t) || named(toolsOn, s.id).has(t.name));
 
   function setServer(s, on) {
     if (s.shared) {
@@ -77,11 +83,12 @@ export function chooseDialogMcp(host, state, save) {
     else explicit.delete(s.id);
   }
 
+  /* «с подтверждением» включён, как остальные: его вызов ждёт «Запустить» в чате */
   function setTool(s, t, on) {
     if (on) {
       named(toolsOff, s.id).delete(t.name);
-      if (t.confirm) named(toolsOn, s.id).add(t.name);
-    } else if (t.confirm) named(toolsOn, s.id).delete(t.name);
+      if (gated(t)) named(toolsOn, s.id).add(t.name);
+    } else if (gated(t)) named(toolsOn, s.id).delete(t.name);
     else named(toolsOff, s.id).add(t.name);
   }
 
@@ -97,7 +104,8 @@ export function chooseDialogMcp(host, state, save) {
     return el('li', { class: 'chat-mcp-tool-row', 'data-tool': t.name },
       el('label', { class: 'check chat-mcp-tool-head' }, control, el('span', { class: 'chat-mcp-tool-name' }, t.title || t.name),
         t.open_world ? el('span', { class: 'tag chat-mcp-web', title: tr("Работает только при включённом «Интернете»") }, tr("интернет")) : null,
-        t.confirm ? el('span', { class: 'tag chat-mcp-confirm', title: tr("По умолчанию выключен: включите, если доверяете ему") },
+        t.confirm ? el('span', { class: 'tag chat-mcp-confirm', title: (gated(t) ? tr("По умолчанию выключен: включите, если доверяете ему")
+          : tr("Запускается только после вашего подтверждения в чате")) },
           tr("с подтверждением")) : null),
       t.title && t.title !== t.name ? el('code', { class: 'chat-mcp-tool-code' }, t.name) : null,
       t.description ? el('p', { class: 'muted small chat-mcp-tool-text' }, t.description) : null);

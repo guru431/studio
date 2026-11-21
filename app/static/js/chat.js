@@ -2,6 +2,7 @@ import { locale, message, tr } from './i18n.js';
 import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
 import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
   uploadMedia } from './chat-files.js';
+import { paintPending } from './chat-pending.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
@@ -70,6 +71,10 @@ import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, me
  * диалога — черновики `draftRole` и `draftMcp` (null — общие серверы по умолчанию), PATCH после его создания.
  * Согласие на передачу файлов диалога MCP, звук и видео диалога и файлы результатов MCP под ответом — chat-files.js;
  * звук нового диалога сначала создаёт диалог из черновика (`ensureChat`, как первый ход).
+ *
+ * Пауза ответа (спека 2026-11-21-studio-source-capabilities-design, п. 5 и 17): событие SSE `pending` или `pending`
+ * сообщения с сервера — карточка chat-pending.js под ответом (подтверждение инструмента или вопрос модели); ответ —
+ * POST /api/chats/<id>/pending/<id>, его поток SSE читает тот же пузырь (`answerPending`, `readServer`).
  *
  * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
@@ -265,6 +270,10 @@ async function readServer(job, response) {
         job.first = true;
         notify(job, false);
       } else if (event === 'cleaner' && data && typeof data.raw === 'string') job.message.cleaner_raw = data.raw;
+      else if (event === 'pending' && data && typeof data.id === 'string') {   // пауза: карточка — после `done`
+        job.message.pending = data;
+        notify(job, false);
+      }
       else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {
         job.scan = data;                           // ответ ждёт распознавания скана — плашка до первого текста
         notify(job, false);
@@ -471,6 +480,7 @@ function stepNode(s) {
     const about = [s.channel, s.duration ? duration(s.duration) : '', s.lang].filter(Boolean).join(' · ');
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
   } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
+  else if (s.kind === 'ask') li.append(s.question ? tr("Вопрос: «{0}»", s.question) : tr("Вопрос модели"));
   else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${message(s.error)}`));
   return li;
@@ -488,7 +498,8 @@ function badgeText(steps) {
   const parts = exa.length ? [tr("🌐 Интернет (Exa): {0}", exa.join(', '))] : [];
   if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), [tr("ролик"), tr("ролика"), tr("роликов")])}`);
   if (of('mcp')) parts.push(`MCP: ${of('mcp')}`);
-  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && s.kind !== 'mcp').length;
+  if (of('ask')) parts.push(count(of('ask'), [tr("вопрос"), tr("вопроса"), tr("вопросов")]));   // ask_user (chat-pending.js)
+  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && s.kind !== 'mcp' && s.kind !== 'ask').length;
   if (wrong) parts.push(count(wrong, [tr("неверный вызов"), tr("неверных вызова"), tr("неверных вызовов")]));
   const errors = steps.filter((s) => s.error).length;
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
@@ -1307,9 +1318,11 @@ function build(view, ctx) {
       }
     });
     const consent = el('div', { class: 'msg-consents' });
+    const pending = el('div', { class: 'msg-pending' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, md, resultFiles(chatId, m, root), consent, steps, meta, nowait, actions));
-    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '' });
+      el('div', { class: 'msg-body' }, badge, think, md, pending, resultFiles(chatId, m, root), consent, steps, meta, nowait, actions));
+    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '',
+      pending });
     paint(m);
     return node;
   }
@@ -1418,6 +1431,8 @@ function build(view, ctx) {
     paintBadge(p, m, job);
     paintThought(p, m, job);
     paintConsent(m);
+    paintPending(p.pending, m.status !== 'streaming' && m.pending ? m.pending : null,
+      (action, answer) => answerPending(m, action, answer));
     const displayed = String((m.cleaner_show_raw ? m.cleaner_raw : m.content) ?? '');
     const final = m.status !== 'streaming';
     if (p.shown !== displayed || p.final !== final) {
@@ -2024,6 +2039,35 @@ function build(view, ctx) {
       readServer(job, reply);
     }
     else readBrowser(job, reply);
+  }
+
+  /* ответ на паузу сообщения `m` (кнопка карточки): то же сообщение снова идёт, поток SSE ответа — в его пузырь */
+  async function answerPending(m, action, answer) {
+    const id = chatId;
+    const pending = m.pending;
+    if (!id || !pending || jobs.has(id)) return;
+    let reply;
+    try {
+      reply = await api('POST', `/api/chats/${id}/pending/${pending.id}`, {
+        request_id: crypto.randomUUID(), action, ...(answer !== undefined ? { answer } : {}) });
+    } catch (err) {
+      if (chatId === id) {
+        notice.textContent = words(err);
+        if (err.code === 'pending_gone' || err.code === 'connection_changed') reload();
+      }
+      return;
+    }
+    delete m.pending;
+    m.status = 'streaming';
+    const job = { chatId: id, connId: chat?.chat.connection_id, user: null, message: m, started: Date.now(),
+      first: !!m.content, lost: false, controller: new AbortController() };
+    jobs.set(id, job);
+    notice.textContent = '';
+    answering.textContent = tr("Модель отвечает…");
+    renderFeed();
+    syncBusy();
+    kick();
+    readServer(job, reply);
   }
 
   /* ответ, который читает вкладка: перерисовка не чаще RENDER_MS */
