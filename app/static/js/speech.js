@@ -148,7 +148,7 @@ function build(view, ctx) {
     onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, over, hint,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap, voiceBox, langView.wrap, count, cancelEdit), go));
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap, voiceBox, langView.wrap, mcp.fields, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const main = el('section', { class: 'split-main' }, head, toolbar, error, chainBox, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);

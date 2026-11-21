@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { button, el, words } from './ui.js';
+import { icon } from './icons.js';
 import { picker } from './picker.js';
 
 const records = new Map();
@@ -59,10 +60,93 @@ function fileData(file, limit) {
   });
 }
 
-function showResult(host, output, urls) {
+// подписи известных полей инструментов разделов (у остальных — `title` схемы или имя поля)
+const FIELD_NAMES = { protocol: tr("Протокол"), speakers: tr("Говорящих"), language: tr("Язык"),
+  diarize: tr("Разделить по говорящим") };
+const LANGUAGE_NAMES = { ru: tr("Русский"), en: 'English' };
+const TEXT_MAX = 200;
+
+/** Поля схемы инструмента, которых раздел сам не рисует (`shown`) и не файловые: `boolean` — переключатель
+ * `.ctl-chip`, `enum` — выбор picker, число с границами — поле `chip-num`, строка без `format` с `maxLength` до TEXT_MAX —
+ * маленькое поле. Обёртка `.mcp-fields` (display: contents): `values()` — значения, отличные от умолчания схемы
+ * (пустое и нетронутое не шлётся; число вне границ — ошибка словами), `disable(on)`, `destroy()` — меню выбора. */
+export function extraFields(tool, shown) {
+  const box = el('span', { class: 'mcp-fields' });
+  const readers = [], picks = [], controls = [];
+  const skip = new Set([...shown, ...Object.keys(tool?.files || {})]);
+  for (const [key, prop] of Object.entries(tool?.schema?.properties || {})) {
+    if (skip.has(key) || !prop || typeof prop !== 'object') continue;
+    const name = FIELD_NAMES[key] || (typeof prop.title === 'string' && prop.title.trim().slice(0, 40)) || key;
+    const limits = schemaLimits(prop);
+    const id = `mcp-field-${key.replace(/[^\w-]/g, '_')}`;
+    if (prop.type === 'boolean') {
+      const initial = prop.default === true;
+      const chip = el('button', { type: 'button', class: 'chip ctl-chip', id, 'data-field': key, 'aria-pressed': String(initial) }, name);
+      chip.addEventListener('click', () => chip.setAttribute('aria-pressed', String(chip.getAttribute('aria-pressed') !== 'true')));
+      box.append(chip);
+      controls.push(chip);
+      readers.push([key, () => (chip.getAttribute('aria-pressed') === 'true') === initial ? undefined : !initial]);
+    } else if (limits?.enum) {
+      const label = value => (/lang/i.test(key) && LANGUAGE_NAMES[value]) || String(value);
+      const select = el('select', { id, 'data-field': key }, el('option', { value: '' }, name),
+        ...limits.enum.map(value => el('option', { value: String(value) }, label(value))));
+      select.value = limits.default === null ? '' : String(limits.default);
+      const pick = picker(document.body, name, select);
+      picks.push(pick);
+      box.append(pick.wrap);
+      controls.push(select);
+      readers.push([key, () => {
+        const value = limits.enum.find(item => String(item) === select.value);
+        return value === limits.default ? undefined : value;
+      }]);
+    } else if (['number', 'integer'].includes(prop.type) && limits && (limits.min !== null || limits.max !== null)) {
+      const { min, max } = limits;
+      const range = min !== null && max !== null ? tr("Значение «{0}» — от {1} до {2}", name, min, max)
+        : min !== null ? tr("Значение «{0}» — не меньше {1}", name, min) : tr("Значение «{0}» — не больше {1}", name, max);
+      const input = el('input', { id, 'data-field': key, inputmode: prop.type === 'integer' ? 'numeric' : 'decimal',
+        autocomplete: 'off', 'aria-label': `${name}: ${range}`, value: limits.default === null ? '' : String(limits.default) });
+      input.style.width = `${Math.max(2, String(max ?? min).length)}ch`;
+      box.append(el('label', { class: 'chip ctl-chip chip-num', title: range }, el('span', {}, name), input));
+      controls.push(input);
+      readers.push([key, () => {
+        const raw = input.value.trim();
+        if (!raw) return undefined;
+        const value = Number(raw.replace(',', '.'));
+        if (!Number.isFinite(value) || (prop.type === 'integer' && !Number.isInteger(value))
+          || (min !== null && value < min) || (max !== null && value > max)) throw new Error(range);
+        return value === limits.default ? undefined : value;
+      }]);
+    } else if (prop.type === 'string' && !prop.format && Number.isInteger(prop.maxLength) && prop.maxLength > 0
+      && prop.maxLength <= TEXT_MAX) {
+      const initial = typeof prop.default === 'string' ? prop.default : '';
+      const input = el('input', { id, 'data-field': key, maxlength: String(prop.maxLength), autocomplete: 'off',
+        'aria-label': name, value: initial });
+      input.style.width = '10ch';
+      box.append(el('label', { class: 'chip ctl-chip chip-num mcp-field-text', title: name }, el('span', {}, name), input));
+      controls.push(input);
+      readers.push([key, () => {
+        const value = input.value.trim();
+        return !value || value === initial ? undefined : value;
+      }]);
+    }
+  }
+  box.values = () => Object.fromEntries(readers.map(([key, read]) => [key, read()]).filter(([, value]) => value !== undefined));
+  box.disable = (on) => {
+    for (const control of controls) control.disabled = on;
+    for (const pick of picks) pick.sync();
+  };
+  box.destroy = () => { for (const pick of picks) pick.unmount(); };
+  return box;
+}
+
+/** Реплики расшифровки инструмента (`turns` итога, mcp_sections.turns) — видом раздела `render`; файлы, кроме
+ * картинок, звука и видео, — списком скачивания под итогом. */
+function showResult(host, output, urls, render) {
   for (const url of urls.splice(0)) URL.revokeObjectURL(url);
   host.replaceChildren();
-  if (output?.text) host.append(el('pre', {}, output.text));
+  if (output?.turns?.length && render) host.append(render(output.turns));
+  else if (output?.text) host.append(el('pre', {}, output.text));
+  const downloads = el('ul', { class: 'mcp-files' });
   for (const result of output?.files || []) {
     let url = result.url;
     if (result.base64) {
@@ -76,12 +160,15 @@ function showResult(host, output, urls) {
     const type = result.mime.split('/')[0];
     const preview = type === 'image' ? el('img', { src: url, alt: result.name || tr("Результат MCP") }) :
       ['audio', 'video'].includes(type) ? el(type, { src: url, controls: true, preload: 'metadata', playsinline: true }) : null;
-    host.append(el('div', {}, preview, el('a', { class: 'btn btn-sm', href: url, download: result.name || '' }, tr("Скачать"))));
+    if (preview) host.append(el('div', {}, preview, el('a', { class: 'btn btn-sm', href: url, download: result.name || '' }, tr("Скачать"))));
+    else downloads.append(el('li', {}, el('a', { class: 'btn btn-sm', href: url, download: result.name || '',
+      title: result.name ? tr("Скачать «{0}»", result.name) : tr("Скачать") }, icon('save'), result.name || tr("Скачать"))));
   }
+  if (downloads.children.length) host.append(downloads);
 }
 
 /** The section owns its controls. MCP receives only the arguments from those controls that the tool declares. */
-export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText }) {
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns }) {
   const base = `/api/mcp-tools/${section}`;
   const controller = new AbortController();
   const urls = [];
@@ -105,6 +192,9 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   // сервер не ответил на список инструментов или каталог не загрузился — сказать, а не молча убрать выбор
   const notice = el('p', { class: 'muted', id: 'section-mcp-notice', hidden: true });
   const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss);
+  // поля схемы выбранного инструмента, которых раздел не рисует (extraFields): раздел ставит `fields` в свой ряд
+  const extras = el('span', { class: 'mcp-fields' });
+  let extra = null;
   const record = () => records.get(section);
   const picked = () => options.get(select.value);
   const busy = () => !!(record()?.starting || record()?.job);
@@ -116,6 +206,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const current = record();
     const active = busy();
     select.disabled = active;
+    extra?.disable(active);
     paintState();
     retry.hidden = !current?.retry;
     dismiss.hidden = active || !(current?.output || current?.error);
@@ -125,7 +216,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     if (rendered !== current?.output) {
       rendered = current?.output;
       if (onText) onText(rendered?.text || '');
-      showResult(result, onText && rendered ? { files: rendered.files } : rendered, urls);
+      showResult(result, onText && rendered ? { files: rendered.files } : rendered, urls, turns);
     }
     onBusy?.();
     clearTimeout(timer);
@@ -170,7 +261,8 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     records.set(section, current);
     paint();
     try {
-      const args = Object.fromEntries(Object.entries(values).filter(([key, value]) => has(key) && value !== undefined));
+      const args = Object.fromEntries(Object.entries({ ...extra?.values(), ...values })
+        .filter(([key, value]) => has(key) && value !== undefined));
       const sources = Object.entries(files).filter(([key, value]) => hasFile(key) && value);
       const supplied = new Set([...Object.keys(args), ...sources.map(([key]) => key)]);
       if (voiceId) ['reference_artifact_id', 'reference_text'].forEach(key => supplied.add(key));
@@ -227,6 +319,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const last = record()?.key;
     select.value = options.has(last) ? last : native ? '' : options.keys().next().value;
     control.hidden = false;
+    paintFields();
     onChange?.();
     paint();
     // состояние источника: точка у выбора — по выбранному серверу, занятый и недоступный подписаны в списке
@@ -237,6 +330,14 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       }
       paintState();
     }, () => {});
+  }
+
+  /** Поля выбранного инструмента вне `fields` раздела — заново при смене инструмента; «Студия» — без полей. */
+  function paintFields() {
+    extra?.destroy();
+    extra = picked() ? extraFields(picked().tool, fields) : null;
+    extras.replaceChildren(...(extra ? [extra] : []));
+    extra?.disable(busy());
   }
 
   /** Подпись выбора и точка состояния выбранного сервера на кнопке; подсказка — «Инструмент MCP: …, работает». */
@@ -251,11 +352,11 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     }
   }
 
-  select.addEventListener('change', () => { paintState(); onChange?.(); });
+  select.addEventListener('change', () => { paintState(); paintFields(); onChange?.(); });
   document.addEventListener(`studio-mcp-${section}`, paint, { signal: controller.signal });
   document.addEventListener('studio-locked', paint, { signal: controller.signal });
   queueMicrotask(() => { paint(); load(); });
-  return { control, output, has, hasFile, run, clear,
+  return { control, output, fields: extras, has, hasFile, run, clear,
     argument(key) { return picked()?.tool.schema.properties?.[key]; },
     limits(key) { return schemaLimits(picked()?.tool.schema.properties?.[key]); },
     canClone() {
@@ -266,6 +367,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       if (!native) return;
       select.value = '';
       paintState();
+      paintFields();
       onChange?.();
     },
     get tool() { return picked()?.tool.name; }, get busy() { return busy(); },
@@ -276,6 +378,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       controller.abort();
       clearTimeout(timer);
       pick.unmount();
+      extra?.destroy();
       for (const url of urls.splice(0)) URL.revokeObjectURL(url);
     } };
 }
