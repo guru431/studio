@@ -1105,7 +1105,7 @@ class StreamTask:
     def _protect(self) -> None:
         """Вызов дошёл до защищённого источника (`mcp_client.Tools.reached_protected`, итог любой): «Интернет»
         диалога выключен и больше не включается (`chats.protected_used`), веб-инструменты не предлагаются и в этом
-        ходе."""
+        ходе, личная память не пишется (chat_tools.MEMORY_PROTECTED)."""
         state.DB.execute("UPDATE chats SET protected_used = 1, web = 0 WHERE id = ?", (self.chat_id,))
         self.protected, self.tools = True, []
         self.mcp.lock()

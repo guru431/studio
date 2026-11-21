@@ -368,7 +368,8 @@ Studio проксирует файлы через исходное подклю�
   `mcp_client.Tools.discover`/`call`, `create_turn` проверяют `protected_used`, а не только `web`).
 - Дальше в диалоге: `PATCH {web: true}` — 409 `protected` (`chat.PROTECTED_WEB`), выключить можно; вызов любого
   инструмента со строкой аргумента по `mcp_client.URL_RE` (любая вложенность, ключи тоже, без учёта регистра;
-  `mcp_client.has_url`) — шаг-отказ `mcp_client.URL_REFUSED` без вызова и без карточки подтверждения. Вид диалога —
+  `mcp_client.has_url`) — шаг-отказ `mcp_client.URL_REFUSED` без вызова и без карточки подтверждения; `memory_save` —
+  шаг-отказ `chat_tools.MEMORY_PROTECTED` (память идёт в системное сообщение всех диалогов). Вид диалога —
   `protected: true`; чип «Интернет» `chat.js` неактивен с подсказкой. Журнал — только id чата и ответа.
 
 ## План работы и личная память (спека 2026-11-21-studio-source-capabilities-design, п. 18, шаг схемы 58)
