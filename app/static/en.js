@@ -2526,6 +2526,7 @@ globalThis.StudioEnglish = Object.freeze({
   "частей": "parts",
   "Мои голоса": "My voices",
   "в чате ещё нет готовых озвучек": "The chat has no finished speech yet",
+  "предыдущий mp3 чата ещё собирается": "The previous chat mp3 is still being assembled",
   "голосов пока нет — добавьте голос в настройках раздела «Озвучка»": "No voices yet. Add a voice in the Speech section settings",
   "озвучка — инструментом MCP раздела «Озвучка»": "Speech uses the MCP tool of the Speech section",
   "Выберите озвучку в списке.": "Choose a speech recording from the list.",
