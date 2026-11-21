@@ -547,8 +547,10 @@ def test_delete_running_is_refused(studio):
     held[0] = False
     wait_row(studio, tid)
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
-    assert row_of(studio, tid) is None and parts_of(studio, tid) == []
     assert studio.c.get(f"/api/translate/{tid}").status_code == 404
+    assert row_of(studio, tid)["deleted"] is not None and parts_of(studio, tid)      # в корзине
+    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
+    assert row_of(studio, tid) is None and parts_of(studio, tid) == []
 
 
 def test_delete_removes_a_source_file_nothing_else_uses(studio):
@@ -560,6 +562,8 @@ def test_delete_removes_a_source_file_nothing_else_uses(studio):
     studio.c.post(f"/api/translate/{tid}/cancel")
     assert studio.c.get(f"/api/translate/{tid}").json()["media_id"] == mid
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert on_loop(studio, media.alive, uid, mid)                       # в корзине — файл на месте
+    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
     assert not on_loop(studio, media.referenced, uid, mid) and not on_loop(studio, media.alive, uid, mid)
 
 
@@ -1046,7 +1050,8 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
 
 def test_delete_translation_removes_its_scan(studio, small_pages):
     """Находка «удаление записи оставляет её скан»: документ «Сканов», что завёл перевод PDF, удаляется с записью —
-    строка, страницы, исходный PDF и картинки страниц; скан ещё останавливается — 409, запись на месте."""
+    строка, страницы, исходный PDF и картинки страниц — окончательным удалением (`translate.purge`), корзина скан не
+    трогает; скан ещё останавливается — 409, запись на месте."""
     add_gateway(studio)
     tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
     row = wait_row(studio, tid)
@@ -1054,6 +1059,8 @@ def test_delete_translation_removes_its_scan(studio, small_pages):
     assert studio.c.get("/api/translate").json()["items"][0]["scan_id"] == row["scan_id"]   # окну подтверждения
     assert count(studio, "media") == 2                                  # PDF и картинка страницы
     assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 200 and count(studio, "media") == 2
+    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
     assert scan_row(studio, row["scan_id"]) is None and count(studio, "scan_pages") == 0
     assert count(studio, "media") == 0 and studio.c.get(f"/api/ocr/{row['scan_id']}").status_code == 404
 
@@ -1063,16 +1070,17 @@ def test_delete_translation_removes_its_scan(studio, small_pages):
     wait_until(studio, lambda: len(studio.gw.ocr_requests) == 2)
     assert studio.c.post(f"/api/translate/{tid}/cancel").json() == {"state": "cancelling"}
     assert wait_row(studio, tid)["state"] == "cancelled" and scan_row(studio, sid)["state"] == "cancelling"
-    r = studio.c.delete(f"/api/translate/{tid}")
+    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    r = studio.c.delete(f"/api/trash/translations/{tid}")
     assert r.status_code == 409 and r.json()["detail"]["code"] == "running" and row_of(studio, tid) is not None
     studio.gw.ocr_hold = False
     wait_until(studio, lambda: not ocr.RUNNERS)
-    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
     assert scan_row(studio, sid) is None and count(studio, "media") == 0
 
 
 def test_delete_translation_keeps_scan_shared_by_repeat(studio, small_pages):
-    """Повтор ссылается на тот же скан: удаление одной записи его не трогает, последней — уносит."""
+    """Повтор ссылается на тот же скан: окончательное удаление одной записи его не трогает, последней — уносит."""
     add_gateway(studio)
     tid = start_file(studio, "Скан.pdf", scan_pdf("ink"))
     first = wait_row(studio, tid)
@@ -1081,9 +1089,11 @@ def test_delete_translation_keeps_scan_shared_by_repeat(studio, small_pages):
     assert again["scan_id"] == first["scan_id"]
     wait_until(studio, lambda: not ocr.RUNNERS)
     uid, mid = on_loop(studio, owner_of_tr, tid), first["source_media_id"]
-    assert studio.c.delete(f"/api/translate/{tid}").status_code == 204
+    for record in (tid, again["id"]):
+        assert studio.c.delete(f"/api/translate/{record}").status_code == 204
+    assert studio.c.delete(f"/api/trash/translations/{tid}").status_code == 204
     assert scan_row(studio, first["scan_id"]) is not None and on_loop(studio, media.alive, uid, mid)
-    assert studio.c.delete(f"/api/translate/{again['id']}").status_code == 204
+    assert studio.c.delete(f"/api/trash/translations/{again['id']}").status_code == 204
     assert scan_row(studio, first["scan_id"]) is None and not on_loop(studio, media.alive, uid, mid)
 
 

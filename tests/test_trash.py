@@ -167,8 +167,22 @@ def make_scan(s, uid: int) -> Made:
                                    "UPDATE scans SET name = 'quince.pdf' WHERE id = ?"])
 
 
+TRANSLATION = ("INSERT INTO translations(id, user_id, kind, model, source_lang, target_lang, name, source_media_id,"
+               " scan_id, source, text, parts, done_parts, state, detail, created, finished) VALUES (?, ?, 'file',"
+               " 'local-gemma-abl', 'en', 'ru', ?, ?, ?, ?, ?, 0, 0, 'done', 'готово', ?, ?)")
+
+
+def make_translation(s, uid: int) -> Made:
+    doc = save(uid, b"docx source", "application/octet-stream", "deal.docx")
+    state.DB.execute(TRANSLATION, ("tl1", uid, "durian.docx", doc, None, "durian source", "durian перевод", T0,
+                                   s.clock[0]))
+    return section_made(s, "tl1", [doc], "/api/translate", word="durian", href="translate?id=tl1",
+                        touch_sql=["UPDATE translations SET name = 'durian 2.docx' WHERE id = ?",
+                                   "UPDATE translations SET name = 'durian.docx' WHERE id = ?"])
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation}
 
 
 def owner(s) -> int:
@@ -317,6 +331,33 @@ def test_speech_chat_delete_trashes_all_parts(s):
     assert [r[0] for r in state.DB.execute("SELECT id FROM speeches ORDER BY id")] == ["part1", "solo"]
     assert [state.DB.execute("SELECT 1 FROM media WHERE id = ?", (c,)).fetchone() is not None
             for c in clips] == [False, True, False]
+
+
+def test_translation_delete_keeps_scan_until_purge(s):
+    """Удаление перевода больше не трогает его скан: документ «Сканов» и файлы остаются, пока запись в корзине;
+    окончательное удаление уносит скан, если на него не ссылается другой перевод (и в корзине тоже)."""
+    uid = owner(s)
+    pdf = save(uid, b"%PDF- deal", "application/pdf", "deal.pdf")
+    page = save(uid, b"page png", "image/png", "p1.png")
+    state.DB.execute("INSERT INTO scans(id, user_id, model, name, source_media_id, origin, pages, done_pages, state,"
+                     " detail, created, finished, text) VALUES ('scan', ?, 'hunyuan-ocr', 'deal.pdf', ?, 'section', 1, 1,"
+                     " 'done', 'готово', ?, ?, 'pear text')", (uid, pdf, T0, T0))
+    state.DB.execute("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text) VALUES ('scan', ?, 1, ?,"
+                     " 'done', 'pear text')", (uid, page))
+    for tid in ("first", "again"):                               # повтор берёт тот же скан
+        state.DB.execute(TRANSLATION, (tid, uid, "deal.pdf", pdf, "scan", "pear text", "груша", T0, T0))
+    for tid in ("first", "again"):
+        assert s.c.delete(f"/api/translate/{tid}").status_code == 204
+    assert s.c.get("/api/ocr/scan").status_code == 200           # скан на месте и виден в «Сканах»
+    assert "scan" in {i["id"] for i in s.c.get("/api/ocr").json()["items"]}
+    assert s.c.delete("/api/trash/translations/first").status_code == 204
+    assert s.c.get("/api/ocr/scan").status_code == 200           # «again» в корзине ещё ссылается на скан
+    assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (pdf,)).fetchone()
+    s.clock[0] += trash.TRASH_SEC + 1
+    assert s.c.portal.call(trash.purge_expired) == 1
+    assert state.DB.execute("SELECT count(*) FROM translations").fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM scans").fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM media WHERE id IN (?, ?)", (pdf, page)).fetchone()[0] == 0
 
 
 def test_takeout_skips_trash(s):

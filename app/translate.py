@@ -785,9 +785,9 @@ COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, d
            " source_media_id, scan_id, parts, done_parts, state, detail, created, finished,"
            f" source IS NOT NULL AS has_source, {_HEAD.format('source')} AS source_head,"
            f" {_HEAD.format('text')} AS text_head,"
-           # скан записи нужен и другой (повтор берёт тот же скан): удаление этой его не уносит (`delete`)
+           # скан записи нужен и другой живой (повтор берёт тот же скан): удаление этой его не уносит (`purge`)
            " scan_id IS NOT NULL AND EXISTS (SELECT 1 FROM translations AS o WHERE o.user_id = translations.user_id"
-           " AND o.scan_id = translations.scan_id AND o.id != translations.id) AS scan_shared")
+           " AND o.scan_id = translations.scan_id AND o.id != translations.id AND o.deleted IS NULL) AS scan_shared")
 TOO_LONG = f"текст длиннее {translate_text.TEXT_MAX:,} знаков — разделите его".replace(",", " ")
 FORMAT = "нужен PDF, DOCX, TXT, MD или снимок PNG, JPEG, WebP"
 SOME_SCANS = "страниц-сканов в PDF — {} из {}, без распознавания перевод вышел бы без них"
@@ -815,7 +815,8 @@ class RepeatIn(BaseModel):
 
 
 def _row(user_id: int, tid: str):
-    row = state.DB.execute(f"SELECT {COLUMNS} FROM translations WHERE id = ? AND user_id = ?",
+    """Своя запись не из корзины (`deleted`, trash.py), иначе 404."""
+    row = state.DB.execute(f"SELECT {COLUMNS} FROM translations WHERE id = ? AND user_id = ? AND deleted IS NULL",
                            (tid, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого перевода нет"})
@@ -1046,7 +1047,8 @@ async def _read_media(user_id: int, media_id: str) -> bytes:
 async def list_translations(request: Request, before: "float | None" = None,
                             before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
     """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "translations", request.state.user.id, before, before_id, limit, COLUMNS)
+    rows = db.page(state.DB, "translations", request.state.user.id, before, before_id, limit, COLUMNS,
+                   " AND deleted IS NULL")
     return {"items": [_out(r) for r in rows]}
 
 
@@ -1132,7 +1134,8 @@ def _scan_done(user_id: int, sid: "str | None") -> bool:
     """Скан записи готов и есть что переводить (`_unread`) — повтор берёт его текст, не распознавая заново."""
     if sid is None:
         return False
-    scan = state.DB.execute("SELECT state FROM scans WHERE id = ? AND user_id = ?", (sid, user_id)).fetchone()
+    scan = state.DB.execute("SELECT state FROM scans WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                            (sid, user_id)).fetchone()
     return scan is not None and scan["state"] == "done" and _unread(sid) is None
 
 
@@ -1160,27 +1163,38 @@ async def export(tid: str, request: Request, format: str = Query(..., pattern="^
 
 @router.delete("/{tid}", status_code=204)
 async def delete(tid: str, request: Request):
-    """Строка (куски — каскадом), с ней — её скан (документ «Сканов», что завёл перевод PDF), если на него не
-    ссылается другая запись (повтор берёт тот же скан): удалённый в «Переводе» договор не остаётся в «Сканах».
-    Скан ещё останавливается (только что «Остановить») — 409. Затем исходный файл, если на него больше ничто не
-    ссылается."""
+    """Кончившаяся запись — в корзину (`deleted`, trash.py); куски, скан и исходный файл — до `purge`."""
     uid = request.state.user.id
     row = _row(uid, tid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала остановите"})
+    state.DB.execute("UPDATE translations SET deleted = ? WHERE id = ?", (clock.NOW(), tid))
+    log.info("перевод %s: в корзине", tid[:8])
+    return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: строка (куски — каскадом), с ней — её скан (документ «Сканов», что завёл перевод PDF), если на
+    него не ссылается другая запись, и в корзине тоже (повтор берёт тот же скан): удалённый в «Переводе» договор не
+    остаётся в «Сканах». Скан ещё останавливается — 409, запись остаётся (уборка повторит через сутки). Затем
+    исходный файл, если на него больше ничто не ссылается. Строки уже нет — ничего."""
+    row = state.DB.execute("SELECT scan_id, source_media_id FROM translations WHERE id = ? AND user_id = ?",
+                           (item_id, user_id)).fetchone()
+    if row is None:
+        return
     scan = None
     if row["scan_id"] is not None and state.DB.execute(
             "SELECT 1 FROM translations WHERE user_id = ? AND scan_id = ? AND id != ? LIMIT 1",
-            (uid, row["scan_id"], tid)).fetchone() is None:
+            (user_id, row["scan_id"], item_id)).fetchone() is None:
         scan = state.DB.execute("SELECT id, source_media_id, state FROM scans WHERE id = ? AND user_id = ?",
-                                (row["scan_id"], uid)).fetchone()
+                                (row["scan_id"], user_id)).fetchone()
         if scan is not None and scan["state"] not in ocr.TERMINAL:
             raise HTTPException(409, {"code": "running", "message": (
                 "распознавание ещё останавливается — удалите чуть позже")})
-    state.DB.execute("DELETE FROM translations WHERE id = ?", (tid,))
+    state.DB.execute("DELETE FROM translations WHERE id = ?", (item_id,))
     if scan is not None:
-        await ocr.remove(uid, scan)
+        await ocr.remove(user_id, scan)
     media_id = row["source_media_id"]
-    if media_id is not None and not media.referenced(uid, media_id):
-        await media.delete_async(uid, media_id)
-    return Response(status_code=204)
+    if media_id is not None and not media.referenced(user_id, media_id):
+        await media.delete_async(user_id, media_id)
+    log.info("перевод %s: удалён", item_id[:8])
