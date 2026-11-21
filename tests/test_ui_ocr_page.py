@@ -59,7 +59,7 @@ def test_engine_is_chosen_for_upload_and_for_recognizing_again(browser, live, wi
             ("eval", "s06", f"""(async () => {{ const m = {API};
               await m.api('POST', '/api/connections', {{ name: 's06', kind: 'openai', s06: true,
                 base_url: 'http://10.77.1.15:4000', token: {TOKEN!r}, sections: ['ocr'] }}); return true; }})()"""),
-            *go("ocr"), ("wait", "document.querySelector('#ocr-model:not([hidden]) option:nth-child(2)')"),
+            *go("ocr"), ("wait", "document.querySelector('.split-toolbar .pick:not([hidden]) #ocr-model option:nth-child(2)')"),
             ("eval", "options", "[...document.querySelectorAll('#ocr-model option')].map(o => o.textContent)"),
             ("eval", "fits", NO_OVERFLOW),
             ("eval", "pick", "(() => { const s = document.querySelector('#ocr-model'); s.selectedIndex ="

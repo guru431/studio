@@ -147,7 +147,7 @@ def test_scan_model_choice_hides_while_an_mcp_tool_is_chosen(browser, live):
     login = 'mcp-ocr-model'
     live.add_user(login)
     service(live.gw, uploads=True)
-    shown = "!document.querySelector('#ocr-model').hidden"
+    shown = "!document.querySelector('#ocr-model').closest('.pick').hidden"
     pick = lambda value: ('eval', 'pick', "(() => { const s = document.querySelector('#section-mcp-tool');"
                           f"s.value = {value}; s.dispatchEvent(new Event('change', {{ bubbles: true }})); }})()")
     result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), add_gateway(),
