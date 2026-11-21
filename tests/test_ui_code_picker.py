@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 GEOMETRY = """menuId => {
     const menu = document.querySelector('#' + menuId).getBoundingClientRect();
     const viewport = visualViewport;
-    const buttons = [...document.querySelectorAll('#code-composer .code-pick-trigger, #code-send')];
+    const buttons = [...document.querySelectorAll('#code-composer .pick-trigger, #code-send')];
     const rects = buttons.filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect());
     return {menu:menu.toJSON(), viewport:{left:viewport.offsetLeft,top:viewport.offsetTop,width:viewport.width,height:viewport.height},
       menuFits:menu.left >= viewport.offsetLeft && menu.right <= viewport.offsetLeft + viewport.width

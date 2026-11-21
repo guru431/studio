@@ -38,7 +38,7 @@ import { opencodeView } from './code-opencode.js';
 import { api as request, me, unknownOutcome } from './api.js';
 import { icon } from './icons.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
-import { codePicker } from './code-picker.js';
+import { picker as choice } from './picker.js';
 import { enterSends, fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
 import { readSSE } from './sse.js';
@@ -287,11 +287,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   if (fresh) applyDefaults();
   const send = el('button', { type: 'submit', id: 'code-send', class: 'btn btn-accent composer-go',
-    'aria-label': tr("Отправить"), title: tr("Отправить") }, el('span', { class: 'code-go-label' }, tr("Отправить")));
+    'aria-label': tr("Отправить"), title: tr("Отправить") }, el('span', { class: 'go-label' }, tr("Отправить")));
   const stop = el('button', { type: 'button', id: 'code-stop', class: 'btn composer-go composer-stop', hidden: true,
-    'aria-label': tr("Остановить"), title: tr("Остановить") }, el('span', { class: 'code-go-label' }, tr("Остановить")));
-  send.prepend(icon('send', 'ico code-go-icon'));
-  stop.prepend(icon('stop', 'ico code-go-icon'));
+    'aria-label': tr("Остановить"), title: tr("Остановить") }, el('span', { class: 'go-label' }, tr("Остановить")));
+  send.prepend(icon('send', 'ico go-icon'));
+  stop.prepend(icon('stop', 'ico go-icon'));
   const activityText = el('span', {}, tr("Нет активной задачи"));
   const activity = el('div', { id: 'code-activity', class: 'code-activity', role: 'status',
     'aria-live': 'polite', 'aria-atomic': 'true', 'data-state': 'idle' },
@@ -339,9 +339,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const sessionNotice = el('div', { id: 'code-session-notice', class: 'code-session-notice', hidden: true, role: 'status' },
     sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
   const pick = (label, select) => {
-    const view = codePicker(host, label, select);
+    const view = choice(host, label, select);
     picks.set(select, view);
-    return view.root;
+    return view.wrap;
   };
   const form = el('form', { class: 'composer code-composer', id: 'code-composer' }, attachments, picker, field.box, field.error,
     el('div', { class: 'composer-bar' },
@@ -419,7 +419,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const statusControls = statusActions(host, statusBar, activity, actions, statusFixed);
   const deliveryPick = pick(tr("Когда передать сообщение"), delivery);
   deliveryPick.hidden = true;
-  access.closest('.code-pick').after(deliveryPick);
+  access.closest('.pick').after(deliveryPick);
   delivery.addEventListener('change', paintPicks);
   const hintsHost = el('div', { hidden: true });
   form.insertBefore(hintsHost, field.box);
@@ -434,7 +434,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   paintImages();
 
   function paintPicks() {
-    for (const view of picks.values()) view.update();
+    for (const view of picks.values()) view.sync();
   }
 
   function paintSettings(data) {
@@ -923,7 +923,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const label = running ? (engine === 'opencode' ? tr("Отправить после ответа") : tr("Отправить уточнение")) : tr("Отправить");
     send.title = label;
     send.setAttribute('aria-label', label);
-    send.querySelector('.code-go-label').textContent = label;
+    send.querySelector('.go-label').textContent = label;
     text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
     for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
     paintSessionNotice();

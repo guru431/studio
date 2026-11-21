@@ -9226,7 +9226,7 @@ def test_code_turn_streams_text_and_steps(browser, live):
             ("eval", "saved", f"localStorage.setItem('studio-code-choice:{aid}',"
                               " JSON.stringify({ model: 'sonnet', effort: 'high' }))"),
             *code_chat(aid, CODE_CHAT_A),
-            ("eval", "labels", "[...document.querySelectorAll('.code-pick')]"
+            ("eval", "labels", "[...document.querySelectorAll('.pick')]"
                                ".filter(l => !l.hidden).map((l) => l.firstChild.textContent)"),
             ("eval", "options", "['#code-model', '#code-effort'].map((s) => [...document.querySelector(s).options]"
                                 ".map((o) => [o.value, o.textContent]))"),

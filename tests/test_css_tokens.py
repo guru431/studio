@@ -96,6 +96,21 @@ def split_list(selectors):
     return out + [selectors[start:].strip()]
 
 
+#: Ряды управления и шапки разделов: размер шрифта — только токеном (--ctl-*, --title-font), не числом в разделе.
+CONTROL_BLOCKS = (".pick-trigger", ".ctl-chip", ".ctl-primary", ".composer .chip", ".head h1")
+
+
+def test_control_rows_take_font_size_only_from_tokens():
+    css = strip_comments(CSS["app.css"])
+    found, raw = set(), []
+    for prelude, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        hit = set(split_list(" ".join(prelude.split()))) & set(CONTROL_BLOCKS)
+        found |= hit
+        sizes = [d.split(":", 1)[1].strip() for d in body.split(";") if d.split(":")[0].strip() == "font-size"]
+        raw += [(sorted(hit), size) for size in sizes if hit and not size.startswith("var(--")]
+    assert found == set(CONTROL_BLOCKS) and not raw, (set(CONTROL_BLOCKS) - found, raw)
+
+
 def test_focus_ring_is_not_hidden_and_reaches_upload_labels():
     css = strip_comments(CSS["app.css"])
     assert ".icon-btn:focus-within" not in css
