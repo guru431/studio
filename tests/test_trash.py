@@ -91,8 +91,36 @@ def make_chat_media(s, uid: int) -> Made:
     return Made("dm1", [clip], lambda: s.c.delete("/api/chats/host/media/dm1"), visible)
 
 
+def section_made(s, item: str, files: list, url: str, *, word=None, touch_sql=None, href=None, listing=None) -> Made:
+    """Запись раздела с лентой `url` и записью `url/<id>`: удаление — `DELETE url/<id>`; `touch_sql` — правка
+    столбца поиска и обратно (`?` — id); `href` — ссылка строки «В работе»."""
+    def visible():
+        listed = item in {i["id"] for i in s.c.get(listing or url).json()["items"]}
+        one = s.c.get(f"{url}/{item}").status_code
+        assert listed == (one == 200), (listed, one)
+        return listed
+
+    def touch():
+        for sql in touch_sql:
+            state.DB.execute(sql, (item,))
+
+    def jobs():
+        return any(j["href"] == href for j in s.c.get("/api/jobs").json()["finished"])
+
+    return Made(item, files, lambda: s.c.delete(f"{url}/{item}"), visible, word=word,
+                touch=touch if touch_sql else None, jobs=jobs if href else None)
+
+
+def make_image(s, uid: int) -> Made:
+    source, picture = save(uid, b"source png", "image/png", "in.png"), save(uid, b"edited png", "image/png", "out.png")
+    state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, source_media_id, media_id, state,"
+                     " detail, created, finished) VALUES ('img1', ?, 'edit', 'flux', 'mango sunset', '1024x1024', 1, ?, ?,"
+                     " 'done', 'готово', ?, ?)", (uid, source, picture, T0, s.clock[0]))
+    return section_made(s, "img1", [source, picture], "/api/images", word="mango", href="photo?id=img1")
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image}
 
 
 def owner(s) -> int:
