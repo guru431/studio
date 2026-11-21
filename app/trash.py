@@ -31,6 +31,7 @@ import lock_policy
 import mcp_files
 import operations
 import search
+import speeches
 import state
 import videos
 
@@ -82,6 +83,8 @@ KINDS: dict[str, Kind] = {
     "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"], "Ролик"),
                    "SELECT media_id FROM videos WHERE id = :id UNION SELECT source_media_id FROM videos WHERE id = :id",
                    search="video"),
+    "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"], "Озвучка"),
+                     "SELECT media_id FROM speeches WHERE id = :id", search="speech"),
 }
 
 

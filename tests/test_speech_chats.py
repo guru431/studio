@@ -136,7 +136,7 @@ def test_cancelled_revoice_restores_the_record_and_waits_its_turn(studio, fake_a
 
 
 def test_whole_chat_is_deleted_at_once_but_not_while_a_record_runs(studio, fake_audio, monkeypatch):
-    """«Удалить чат» — все записи и их mp3 одним запросом; идущая запись — 409, чужой чат — 404 (04:F11)."""
+    """«Удалить чат» — все записи в корзину одним запросом; идущая запись — 409, чужой чат — 404 (04:F11)."""
     add_gateway(studio)
     vid = voice(studio, fake_audio)
     first = wait_sp(studio, studio.c.post('/api/speeches', json={'text': 'Первая.', 'voice': vid}).json()['id'], {'done'})
@@ -156,6 +156,10 @@ def test_whole_chat_is_deleted_at_once_but_not_while_a_record_runs(studio, fake_
     signin(studio, 'owner')
     assert studio.c.delete(f"/api/speeches/chats/{first['id']}").status_code == 204
     assert [c['id'] for c in studio.c.get('/api/speeches/chats').json()['items']] == [other['id']]
+    # чат в корзине: mp3 — до окончательного удаления каждой записи
+    assert [studio.c.get(f"/api/media/{i['media_id']}").status_code for i in (first, second, other)] == [200, 200, 200]
+    for record in (first, second, running):
+        assert studio.c.delete(f"/api/trash/speeches/{record['id']}").status_code == 204
     assert [studio.c.get(f"/api/media/{i['media_id']}").status_code for i in (first, second, other)] == [404, 404, 200]
 
 

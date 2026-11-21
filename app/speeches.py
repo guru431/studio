@@ -133,7 +133,9 @@ def phrases(text: str, limit: int = PHRASE_MAX) -> list[str]:
 # ---- задание -------------------------------------------------------------------------
 
 def _row(user_id: int, sid: str):
-    row = state.DB.execute("SELECT * FROM speeches WHERE id = ? AND user_id = ?", (sid, user_id)).fetchone()
+    """Своя озвучка не из корзины (`deleted`, trash.py), иначе 404."""
+    row = state.DB.execute("SELECT * FROM speeches WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (sid, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такой озвучки нет"})
     return row
@@ -407,8 +409,9 @@ def _input(uid: int, body: SpeechIn):
 
 
 def _chat_rows(uid: int, cid: str):
-    rows = state.DB.execute("SELECT * FROM speeches WHERE user_id = ? AND chat_id = ? ORDER BY created, rowid",
-                            (uid, cid)).fetchall()
+    """Записи чата озвучки не из корзины; ни одной — 404."""
+    rows = state.DB.execute("SELECT * FROM speeches WHERE user_id = ? AND chat_id = ? AND deleted IS NULL"
+                            " ORDER BY created, rowid", (uid, cid)).fetchall()
     if not rows:
         raise HTTPException(404, {"code": "gone", "message": "такого чата озвучки нет"})
     return rows
@@ -446,7 +449,7 @@ async def create(body: SpeechIn, request: Request):
 async def list_speeches(request: Request, before: "float | None" = None,
                         before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
     """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "speeches", request.state.user.id, before, before_id, limit)
+    rows = db.page(state.DB, "speeches", request.state.user.id, before, before_id, limit, extra=" AND deleted IS NULL")
     return {"items": [_out(r) for r in rows]}
 
 
@@ -458,7 +461,7 @@ async def list_chats(request: Request, before: "float | None" = None,
     if before is not None:
         where = " AND (chat_created < ? OR (chat_created = ? AND chat_id < ?))" if before_id else " AND chat_created < ?"
         args.extend((before, before, before_id) if before_id else (before,))
-    chats = state.DB.execute("SELECT chat_id FROM speeches WHERE user_id = ?" + where
+    chats = state.DB.execute("SELECT chat_id FROM speeches WHERE user_id = ? AND deleted IS NULL" + where
                              + " GROUP BY chat_id ORDER BY chat_created DESC, chat_id DESC LIMIT ?", (*args, limit)).fetchall()
     return {"items": [_chat_out(_chat_rows(uid, r["chat_id"])) for r in chats]}
 
@@ -470,14 +473,15 @@ async def get_chat(cid: str, request: Request):
 
 @router.delete("/chats/{cid}", status_code=204)
 async def delete_chat(cid: str, request: Request):
-    """Весь чат — записи и их mp3 (если на файл больше никто не ссылается); идущая или ждущая запись — 409."""
+    """Весь чат — в корзину: `deleted` каждой его записи (trash.py, окончательно — `purge` каждой); идущая или
+    ждущая запись — 409."""
     uid = request.state.user.id
     rows = _chat_rows(uid, cid)
     if any(r["state"] not in TERMINAL for r in rows):
         raise HTTPException(409, {"code": "running", "message": "сначала отмените идущие озвучки чата"})
-    state.DB.execute("DELETE FROM speeches WHERE user_id = ? AND chat_id = ?", (uid, cid))
-    for row in rows:
-        await _drop(uid, row["media_id"])
+    state.DB.execute("UPDATE speeches SET deleted = ? WHERE user_id = ? AND chat_id = ? AND deleted IS NULL",
+                     (clock.NOW(), uid, cid))
+    log.info("чат озвучки %s: в корзине, записей %d", cid[:8], len(rows))
     return Response(status_code=204)
 
 
@@ -553,7 +557,16 @@ async def delete(sid: str, request: Request):
     row = _row(uid, sid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
-    state.DB.execute("DELETE FROM speeches WHERE id = ?", (sid,))
-    if row["media_id"] and not media.referenced(uid, row["media_id"]):
-        await media.delete_async(uid, row["media_id"])
+    state.DB.execute("UPDATE speeches SET deleted = ? WHERE id = ?", (clock.NOW(), sid))
+    log.info("озвучка %s: в корзине", sid[:8])
     return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: строка и её mp3, если на него больше никто не ссылается. Строки уже нет — ничего."""
+    row = state.DB.execute("SELECT media_id FROM speeches WHERE id = ? AND user_id = ?", (item_id, user_id)).fetchone()
+    if row is None:
+        return
+    state.DB.execute("DELETE FROM speeches WHERE id = ?", (item_id,))
+    await _drop(user_id, row["media_id"])
+    log.info("озвучка %s: удалена", item_id[:8])
