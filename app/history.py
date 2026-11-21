@@ -68,7 +68,7 @@ async def _delete_all(user_id: int) -> int:
         # scan_pages и translation_parts — каскадом; code_chats — отметки студии, сессии остаются на машинах;
         # code_tabs и code_place — рабочее место раздела: номера сессий — тоже история (спека code-workspace 6.8);
         # agents, agent_events и push_subs — не история (спека claude-code 6.1); security_events — тоже:
-        # след входов в учётку, стирание истории пароля не требует (security_log.py); личная память «Чата»
+        # след входов в учётку: стирание (с 0.41.0 — паролем) не уносит следы чужого входа (security_log.py); личная память «Чата»
         # (user_memory, memory.py) — история: стирается, выключатель users.memory_on остаётся; личные ссылки на
         # файлы MCP (file_links, my_files.py) — как ссылки «Поделиться»: сами файлы остаются на сервере MCP
         for table in ("chat_shares", "images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "code_chats",
