@@ -262,8 +262,10 @@ def unread_scans(scan_ids) -> set:
     return {row[0] for row in rows}
 
 
-def job_finished(table: str, item_id: str) -> None:
-    """После первого сохранения итога: только готовое/ошибка, только подписки владельца, без содержимого."""
+def job_finished(table: str, item_id: str, *, tag: str | None = None, failed: bool = False) -> None:
+    """После первого сохранения итога: только готовое/ошибка, только подписки владельца, без содержимого. `tag` —
+    метка уведомления (нет — id записи), `failed` — «не получилось» и при готовой записи (чат озвучки, где не
+    получилась другая часть)."""
     section, done, error = JOB_NOTICES[table]  # имя таблицы — только из кода
     if table == "scans" and state.DB.execute("SELECT 1 FROM scans WHERE id = ? AND origin = 'chat'",
                                              (item_id,)).fetchone():
@@ -277,9 +279,9 @@ def job_finished(table: str, item_id: str) -> None:
                             " WHERE n.user_id = j.user_id AND n.enabled = 1 AND s.expires > ?))",
                             (item_id, clock.NOW(), clock.NOW())).fetchone()
     if row is not None:
-        ok = row["state"] == "done" and not (table == "scans" and unread_scans([item_id]))
+        ok = row["state"] == "done" and not failed and not (table == "scans" and unread_scans([item_id]))
         notify_later(row["user_id"], done if ok else error,
-                     f"{section}?id={item_id}", item_id, title=STUDIO, quiet=True)
+                     f"{section}?id={item_id}", tag or item_id, title=STUDIO, quiet=True)
 
 
 def chat_answered(user_id: int, chat_id: str, message_id: str, ok: bool) -> None:

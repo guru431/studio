@@ -105,6 +105,60 @@ def test_chat_audio_without_ready_parts_is_refused(studio, fake_audio, monkeypat
     assert r.status_code == 409 and r.json()["detail"]["code"] == "not_ready"
 
 
+def notices(studio, monkeypatch) -> list:
+    """Подписка push этой сессии и перехват уведомлений готовности: (тело, адрес, метка)."""
+    from test_push import Device
+
+    import push
+    assert studio.c.post("/api/me/push", json=Device().body()).status_code == 204
+    sent = []
+    monkeypatch.setattr(push, "notify_later", lambda uid, body, href, tag, **kw: sent.append((body["ru"], href, tag)))
+    return sent
+
+
+def test_long_text_notifies_once_per_chat(studio, fake_audio, monkeypatch):
+    """C-I2: длинный текст — одно уведомление на чат, когда кончилась последняя часть; ошибка любой части — «не
+    получилась»; метка — id чата."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    sent = notices(studio, monkeypatch)
+    monkeypatch.setattr(speeches, "TEXT_MAX", 30)
+    text = "Первая часть текста.\n\nВторая часть текста.\n\nТретья часть текста."
+    cid = studio.c.post("/api/speeches", json={"text": text, "voice": vid}).json()["chat_id"]
+    rows = chat_rows(cid)
+    assert len(rows) == 3
+    for row in rows:
+        wait_sp(studio, row["id"], {"done", "error"})
+    assert sent == [("озвучка готова", f"speech?id={rows[-1]['id']}", cid)]
+    sent.clear()
+    studio.gw.tts_replies = [(200, WAV_FAKE), (500, {"detail": "сбой"}), (200, WAV_FAKE)]
+    studio.gw.tts_requests.clear()
+    cid = studio.c.post("/api/speeches", json={"text": text, "voice": vid}).json()["chat_id"]
+    rows = chat_rows(cid)
+    assert [wait_sp(studio, row["id"], {"done", "error"})["state"] for row in rows] == ["done", "error", "done"]
+    assert sent == [("озвучка не получилась", f"speech?id={rows[-1]['id']}", cid)]
+
+
+def test_long_text_is_one_row_in_jobs(studio, fake_audio, monkeypatch):
+    """C-I2: «В работе» — одна строка на чат озвучки, а не на каждую часть; готовый чат — одна строка «готово»."""
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    monkeypatch.setattr(speeches, "WAIT_MAX_SEC", 10 ** 9)
+    studio.gw.tts_replies = [(503, {"detail": "busy"})]                 # первая часть ждёт карту
+    text = "\n\n".join(paragraph(n) for n in range(3))
+    cid = studio.c.post("/api/speeches", json={"text": text, "voice": vid}).json()["chat_id"]
+    running = [i for i in studio.c.get("/api/jobs").json()["running"] if i["section"] == "speech"]
+    assert len(running) == 1, running
+    assert running[0]["id"] == cid and running[0]["title"].startswith("Озвучка · Абзац 0.")
+    studio.gw.tts_replies = [(200, WAV_FAKE)]
+    for row in chat_rows(cid):
+        wait_sp(studio, row["id"], {"done"})
+    out = studio.c.get("/api/jobs").json()
+    assert [i for i in out["running"] if i["section"] == "speech"] == []
+    finished = [i for i in out["finished"] if i["section"] == "speech"]
+    assert [(i["id"], i["state"]) for i in finished] == [(cid, "done")]
+
+
 def test_tts_language_sent_to_gateway(studio, fake_audio):
     add_gateway(studio)
     vid = voice(studio, fake_audio)
