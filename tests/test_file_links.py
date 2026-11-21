@@ -215,3 +215,38 @@ def test_link_deeply_nested_listing_is_the_uniform_404(studio):
         assert response.json() == gone
         public_headers(response)
 
+
+def test_link_file_refusals_of_the_server_are_the_uniform_404(studio, monkeypatch):
+    """B2-M2: отказ сервера (5xx, недоступен) или нерасшифрованный ключ MCP на `/f/file` отвечал 409 словами о
+    настройке MCP владельца — анонимный получатель видит только одинаковый 404 «ссылка недоступна»."""
+    member, sid, server = member_with_files(studio)
+    token = make_link(studio, sid)["url"].split("#")[1]
+    gone = check(studio, secrets.token_urlsafe(32)).json()
+    anonymous(studio)
+    assert opened(studio, token).status_code == 204
+
+    async def failing(request):
+        return httpx.Response(500, json={"message": "внутренний сбой MCP"})
+
+    async def forbidden(request):
+        return httpx.Response(403)
+
+    async def broken(request):
+        raise httpx.ConnectError("down")
+
+    for reply in (failing, forbidden, broken):
+        studio.gw.on["/files/content"] = reply
+        refused = studio.c.get("/f/file")
+        assert refused.status_code == 404, refused.text
+        assert refused.json() == gone and "MCP" not in refused.text
+        public_headers(refused)
+    studio.gw.on["/files/content"] = server.files
+    assert studio.c.get("/f/file").status_code == 200
+
+    def undecryptable(item):
+        raise mcp_client.refused("Ключ MCP не расшифрован — введите его заново")
+
+    monkeypatch.setattr(mcp_client, "secret", undecryptable)
+    refused = studio.c.get("/f/file")
+    assert refused.status_code == 404 and refused.json() == gone
+    public_headers(refused)

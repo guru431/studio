@@ -538,4 +538,7 @@ async def link_file(request: Request):
     if held is None or held[1] <= clock.NOW():
         raise _gone()
     session, path, name = _resolve(_live("l.id", held[0]))
-    return await _stream(session, "/files/content", {"X-Studio-Path": _b64(path)}, request, name, _gone)
+    try:
+        return await _stream(session, "/files/content", {"X-Studio-Path": _b64(path)}, request, name, _gone)
+    except HTTPException:                        # слова о MCP владельца получателю не нужны: любой отказ — `_gone`
+        raise _gone() from None
