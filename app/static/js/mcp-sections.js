@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { button, el, words } from './ui.js';
+import { picker } from './picker.js';
 
 const records = new Map();
 document.addEventListener('studio-locked', () => {
@@ -87,7 +88,13 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   const options = new Map();
   let limit, timer, rendered, polling = false;
   let states = {};             // состояние серверов со `studio/status` (GET /api/mcp/status)
-  const control = el('select', { id: 'section-mcp-tool', class: 'chip mcp-tool', hidden: true, 'aria-label': tr("Инструмент MCP") });
+  // выбор «как у Агентов» (picker.js) поверх select#section-mcp-tool: значение и change — у select, прятать — обёртку;
+  // меню — в body (поле ввода раздела прокручивается и ловит клавиши), уходит с destroy()
+  const select = el('select', { id: 'section-mcp-tool' });
+  const pick = picker(document.body, tr("Инструмент MCP"), select);
+  const control = pick.wrap;
+  control.classList.add('mcp-tool');
+  control.hidden = true;
   const status = el('p', { class: 'status', 'aria-live': 'polite' });
   const result = el('div', { class: 'mcp-result', id: 'section-mcp-result' });
   const retry = button(tr("Обновить"), { class: 'btn btn-sm', hidden: true }, () => {
@@ -99,7 +106,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   const notice = el('p', { class: 'muted', id: 'section-mcp-notice', hidden: true });
   const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss);
   const record = () => records.get(section);
-  const picked = () => options.get(control.value);
+  const picked = () => options.get(select.value);
   const busy = () => !!(record()?.starting || record()?.job);
   const has = key => Object.hasOwn(picked()?.tool.schema.properties || {}, key);
   const hasFile = key => Object.hasOwn(picked()?.tool.files || {}, key);
@@ -108,7 +115,8 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     if (controller.signal.aborted) return;
     const current = record();
     const active = busy();
-    control.disabled = active;
+    select.disabled = active;
+    paintState();
     retry.hidden = !current?.retry;
     dismiss.hidden = active || !(current?.output || current?.error);
     output.hidden = notice.hidden && !active && !(current?.error || current?.output);
@@ -158,7 +166,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const choice = picked();
     if (!choice || busy()) return false;
     const { server, tool } = choice;
-    const current = { starting: true, key: control.value };
+    const current = { starting: true, key: select.value };
     records.set(section, current);
     paint();
     try {
@@ -211,13 +219,13 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const label = tool => tool.title || (Object.hasOwn(imageNames, tool.name) ? imageNames[tool.name] :
       tool.name === 'video_estimate' ? tr("Оценить время генерации") : '');
     const names = new Map();
-    control.append(el('option', { value: '', disabled: !native }, tr("Студия")), ...[...options].map(([key, { server, tool }]) => {
+    select.append(el('option', { value: '', disabled: !native }, tr("Студия")), ...[...options].map(([key, { server, tool }]) => {
       const option = el('option', { value: key }, ['MCP', server.name, label(tool)].filter(Boolean).join(' · '));
       names.set(option, server.id);
       return option;
     }));
     const last = record()?.key;
-    control.value = options.has(last) ? last : native ? '' : options.keys().next().value;
+    select.value = options.has(last) ? last : native ? '' : options.keys().next().value;
     control.hidden = false;
     onChange?.();
     paint();
@@ -231,18 +239,19 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     }, () => {});
   }
 
+  /** Подпись выбора и точка состояния выбранного сервера на кнопке; подсказка — «Инструмент MCP: …, работает». */
   function paintState() {
+    pick.sync();
     const item = states[picked()?.server.id];
     if (item) {
-      control.dataset.mcpState = item.state;
-      control.title = mcpStateWords(item);
+      pick.trigger.dataset.mcpState = item.state;
+      pick.trigger.title += ` · ${mcpStateWords(item)}`;
     } else {
-      delete control.dataset.mcpState;
-      control.removeAttribute('title');
+      delete pick.trigger.dataset.mcpState;
     }
   }
 
-  control.addEventListener('change', () => { paintState(); onChange?.(); });
+  select.addEventListener('change', () => { paintState(); onChange?.(); });
   document.addEventListener(`studio-mcp-${section}`, paint, { signal: controller.signal });
   document.addEventListener('studio-locked', paint, { signal: controller.signal });
   queueMicrotask(() => { paint(); load(); });
@@ -255,7 +264,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     },
     useNative() {
       if (!native) return;
-      control.value = '';
+      select.value = '';
       paintState();
       onChange?.();
     },
@@ -263,6 +272,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     destroy() {
       controller.abort();
       clearTimeout(timer);
+      pick.unmount();
       for (const url of urls.splice(0)) URL.revokeObjectURL(url);
     } };
 }
