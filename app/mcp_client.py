@@ -60,6 +60,9 @@ class ServerIn(BaseModel):
     # Значение null — оставить сохранённое значение заголовка с тем же именем (`detail` значения не отдаёт).
     headers: dict[str, str | None] | None = Field(default=None, max_length=32)
     enabled: bool = True
+    #: «Защищённый источник» (только общие): после успешного вызова его инструмента диалог без «Интернета»
+    #: и ссылок в аргументах (`chat.StreamTask._calls`)
+    protected: bool = False
 
 
 def _gate(uid):
@@ -92,6 +95,8 @@ def public(item, uid=None):
            "enabled": bool(item["enabled"])}
     if shared:
         out["shared"] = True
+        if uid is None:                          # флажок — редактору администратора
+            out["protected"] = bool(item["protected"])
     return out
 
 
@@ -157,14 +162,17 @@ def list_for(uid):
 def _save_values(uid, body, old=None):
     if uid is None and "?" in body.url:
         raise refused("Адрес общего MCP — без строки запроса. Передайте ключ в токене или HTTP-заголовке", "invalid", 422)
-    return _values(body, old)
+    if uid is not None and body.protected:
+        raise refused("«Защищённый источник» — только у общих подключений MCP", "invalid", 422)
+    return (*_values(body, old), int(body.protected))
 
 
 def create_for(uid, body):
     if state.DB.execute("SELECT count(*) FROM mcp_servers WHERE user_id IS ?", (uid,)).fetchone()[0] >= MAX_SERVERS:
         raise refused("Не больше 16 подключений MCP")
     values = _save_values(uid, body)
-    cursor = state.DB.execute("INSERT INTO mcp_servers(name,url,secret_enc,enabled,user_id) VALUES(?,?,?,?,?)", (*values, uid))
+    cursor = state.DB.execute("INSERT INTO mcp_servers(name,url,secret_enc,enabled,protected,user_id)"
+                              " VALUES(?,?,?,?,?,?)", (*values, uid))
     return public(row(uid, cursor.lastrowid, own=True), uid)
 
 
@@ -177,7 +185,8 @@ def detail_for(uid, sid):
 
 def update_for(uid, sid, body):
     values = _save_values(uid, body, row(uid, sid, own=True))
-    state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=? WHERE id=? AND user_id IS ?", (*values, sid, uid))
+    state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=?,protected=? WHERE id=? AND user_id IS ?",
+                     (*values, sid, uid))
     mcp_sources.forget(sid)
     return public(row(uid, sid, own=True), uid)
 
@@ -537,6 +546,20 @@ TOOL_OFF = "Инструмент выключен в этом диалоге"
 WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
 TRIMMED = "Инструментов MCP больше 128 — часть этого сервера не предложена модели"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
+#: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED
+URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
+URL_REFUSED = "Ссылки в аргументах после защищённого источника запрещены"
+
+
+def has_url(value) -> bool:
+    """В аргументах (JSON любой вложенности; ключи тоже) есть строка со ссылкой по URL_RE."""
+    if isinstance(value, str):
+        return URL_RE.search(value) is not None
+    if isinstance(value, dict):
+        return any(has_url(k) or has_url(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(has_url(v) for v in value)
+    return False
 
 
 def _unknown_tool(error, text=""):
@@ -557,6 +580,8 @@ class Tools:
         self.failed = []                     # (имя сервера, слова) — сервер пропущен или урезан, ход идёт
         self.instructions = []               # (имя сервера, правила) серверов, давших инструменты ходу
         self.found = []                      # (строка сервера, сессия, каталог) ответивших серверов — mcp_files.sync
+        self.protected = set()               # id общих серверов набора с флажком «Защищённый источник»
+        self.open_world = set()              # имена вызовов веб-инструментов (пометка «интернет») — снимает `lock`
 
     def _chat(self):
         return state.DB.execute("SELECT * FROM chats WHERE id=? AND user_id=? AND deleted IS NULL",
@@ -585,6 +610,15 @@ class Tools:
             return hint, WEB_OFF
         return hint, None
 
+    def is_protected(self, name):
+        """Вызов хода `name` — инструмент защищённого источника."""
+        return name in self.calls and self.calls[name][0].sid in self.protected
+
+    def lock(self):
+        """Защищённый источник сработал: веб-инструменты MCP больше не предлагаются модели в этом ходе (вызов и так
+        перепроверит «Интернет» в `call`)."""
+        self.specs = [spec for spec in self.specs if spec["function"]["name"] not in self.open_world]
+
     def confirm_hint(self, name):
         """Пометки инструмента хода `name` с политикой администратора, прочитанной заново (`mcp_sources.effective`);
         для `mcp_sources.confirm_needed`. Не инструмент MCP хода — None."""
@@ -604,7 +638,7 @@ class Tools:
         if chat is None:
             return
         off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
-        web = bool(chat["web"])
+        web = bool(chat["web"]) and not chat["protected_used"]   # после защищённого источника — без веб-инструментов
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
         items = [enabled[sid] for sid in self.ids if sid in enabled]
         self.sessions = [Session(item, uid=self.uid) for item in items]
@@ -616,6 +650,8 @@ class Tools:
                 self.failed.append((item["name"], catalog))
                 continue
             self.found.append((item, session, catalog))
+            if item["user_id"] is None and item["protected"]:
+                self.protected.add(item["id"])
             rules =mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
             given = trimmed = 0
             for tool in catalog.tools:
@@ -631,6 +667,8 @@ class Tools:
                     continue
                 name = f"mcp_{item['id']}_{len(self.calls)}"
                 self.calls[name] = (session, tool["name"], item["name"], tool)
+                if hint["open_world"]:
+                    self.open_world.add(name)
                 self.specs.append({"type": "function", "function": {"name": name,
                     "description": (f"{item['name']}: {tool['name']}. " + str(tool.get("description", "")))[:4000],
                     "parameters": tool["inputSchema"]}})
@@ -658,7 +696,7 @@ class Tools:
                 raise refused("Нет доступа к инструменту MCP")
             item = {"id": session.sid, "user_id": session.owner_id}
             rules = mcp_sources.policy(session.sid) if session.owner_id is None else {}
-            refusal = self._offered(item, spec, rules, bool(chat["web"]))[1]
+            refusal = self._offered(item, spec, rules, bool(chat["web"]) and not chat["protected_used"])[1]
             if refusal is not None:
                 raise refused(refusal)
             args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""

@@ -341,6 +341,19 @@ Studio проксирует файлы через исходное подклю�
   попадает — его повтор исполнится; отказ подтверждению и ответ на вопрос — попадают. `seen` переживает паузу:
   он в payload, продолжение (`chat.StreamTask._resume`) его восстанавливает. Страница показывает шаг «Повтор пропущен».
 
+## «Защищённый источник» MCP (спека 2026-11-21-studio-source-capabilities-design, п. 14, шаг схемы 58)
+
+- Флажок общего сервера — `mcp_servers.protected` (`mcp_client.ServerIn` `protected`, «Защищённый источник» в редакторе
+  панели администратора `mcp-settings.js`); личному — 422 `invalid`. Флажок видит только администратор.
+- Успешный вызов инструмента такого сервера (`mcp_client.Tools.is_protected`, шаг без `error`) —
+  `chat.StreamTask._protect`: `UPDATE chats SET protected_used = 1, web = 0`, веб-инструменты MCP (пометка «интернет»)
+  в этом же ходе снимает `mcp_client.Tools.lock`, «Интернета» дальше нет (`chat.StreamTask._web_on`,
+  `mcp_client.Tools.discover`/`call`, `create_turn` проверяют `protected_used`, а не только `web`).
+- Дальше в диалоге: `PATCH {web: true}` — 409 `protected` (`chat.PROTECTED_WEB`), выключить можно; вызов любого
+  инструмента со строкой аргумента по `mcp_client.URL_RE` (любая вложенность, ключи тоже, без учёта регистра;
+  `mcp_client.has_url`) — шаг-отказ `mcp_client.URL_REFUSED` без вызова и без карточки подтверждения. Вид диалога —
+  `protected: true`; чип «Интернет» `chat.js` неактивен с подсказкой. Журнал — только id чата и ответа.
+
 ## Рассуждение (спека 2026-10-22-studio-chat-tools-badge-reasoning, шаг схемы 15)
 
 Кнопка «Рассуждение» — `chats.thinking`: действует только при `sections.is_local` (`thinking_ok` диалога; иначе

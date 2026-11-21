@@ -23,8 +23,9 @@ ASK_USER = {"type": "function", "function": {
         "allow_text": {"type": "boolean", "default": True, "description": "можно ли ответить своим текстом"}},
         "required": ["question"]}}}
 
-NAMES: set[str] = {"ask_user"}
-KINDS: set[str] = {"ask"}                         # виды их шагов в `messages.tools`
+KIND_OF: dict[str, str] = {"ask_user": "ask"}     # вид шага `messages.tools` каждого встроенного инструмента
+NAMES: set[str] = set(KIND_OF)
+KINDS: set[str] = set(KIND_OF.values())          # виды их шагов в `messages.tools`
 
 
 def for_model(step: dict) -> str:

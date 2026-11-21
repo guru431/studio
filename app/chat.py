@@ -152,6 +152,8 @@ NO_MCP = "эта модель не поддерживает инструмент
 NO_TOOLS: dict[tuple[int, str], float] = {}
 NO_TOOLS_SEC = 3600
 NO_EXA_KEY = "сначала задайте ключ Exa в Настройках → Ввод и интернет → Интернет"   # PATCH {web: true} без ключа — 409
+#: PATCH {web: true} диалога, где сработал «Защищённый источник» MCP (`chats.protected_used`), — 409 `protected`
+PROTECTED_WEB = "в этом диалоге сработал защищённый источник — «Интернет» здесь не включается"
 NO_THINKING = "эта модель не умеет рассуждать по кнопке"   # PATCH {thinking: true} не у роли local-* srvllm — 409
 # к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
 # памяти (проба 2026-10-21, спека раздел 8). Последняя фраза — против «я заглянула в интернет» без вызова: на
@@ -322,6 +324,7 @@ def _chat_view(user_id: int, row) -> dict:
     out["external"] = conn is not None and not conn.cleaner and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
     out["web"] = bool(row["web"])
+    out["protected"] = bool(row["protected_used"])   # сработал защищённый источник MCP: «Интернет» не включить
     out["proxied"] = conn is not None and conn.proxied
     out["web_tools"] = [] if out["cleaner"] else web.tools_for(conn, web.has_exa_key(user_id))
     out["external_web"] = out["web"] and "search" in out["web_tools"] and _needs_web_consent(
@@ -798,6 +801,9 @@ class StreamTask:
     confirmed: str | None = None   # id вызова, которому «Запустить» дано этой паузой
     gone: dict = field(default_factory=dict, repr=False)   # id вызова продолжения → (сервер, инструмент), которых нет
     builtin_off: bool = False    # встроенные инструменты не предлагать (шлюз их не принял, метка NO_TOOLS)
+    #: в диалоге сработал «Защищённый источник» MCP (`chats.protected_used`, читает `_read`; ставит `_protect`):
+    #: аргументы со ссылками (mcp_client.has_url) — отказ mcp_client.URL_REFUSED без вызова
+    protected: bool = False
 
     def waited(self) -> "float | None":
         """Секунды ожидания карты для страницы; не ждём — None."""
@@ -1059,9 +1065,18 @@ class StreamTask:
         return TIME_WORDS
 
     def _web_on(self) -> bool:
-        """«Интернет» диалога ещё включён (кнопку могли нажать посреди ответа, диалог — удалить)."""
-        row = state.DB.execute("SELECT web FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
-        return row is not None and bool(row[0])
+        """«Интернет» диалога ещё включён (кнопку могли нажать посреди ответа, диалог — удалить) и защищённый
+        источник в нём не срабатывал."""
+        row = state.DB.execute("SELECT web, protected_used FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
+        return row is not None and bool(row[0]) and not row[1]
+
+    def _protect(self) -> None:
+        """Успешный вызов инструмента защищённого источника: «Интернет» диалога выключен и больше не включается
+        (`chats.protected_used`), веб-инструменты не предлагаются и в этом ходе."""
+        state.DB.execute("UPDATE chats SET protected_used = 1, web = 0 WHERE id = ?", (self.chat_id,))
+        self.protected, self.tools = True, []
+        self.mcp.lock()
+        log.info("чат %s: ответ %s — защищённый источник, «Интернет» выключен", self.chat_id[:8], self.message_id[:8])
 
     async def _tools(self, calls: list[ToolCall], text: str) -> "str | object | None":
         """Вызовы круга: в историю — сообщение модели с ними, затем исполнение (`_calls`)."""
@@ -1081,6 +1096,8 @@ class StreamTask:
         (`mcp_sources.confirm_needed`; не тот, что подтвердила эта пауза), и `ask_user` (chat_tools) ставят ход на
         паузу (chat_pending.pause): итог PAUSED, остальные вызовы круга ждут в payload. Вызов, уже исполненный в этом
         ответе с теми же аргументами (`seen`), — шаг `duplicate` без исполнения и подтверждения, модели — DUPLICATE.
+        После защищённого источника (`protected`) вызов любого инструмента со ссылкой в аргументах — шаг
+        mcp_client.URL_REFUSED без вызова; его успешный вызов выключает «Интернет» (`_protect`).
         Итог — слова ошибки ответа (срок вышел), PAUSED или None."""
         for i, c in enumerate(calls):
             n = start + i
@@ -1095,6 +1112,8 @@ class StreamTask:
             elif key in self.seen:                   # тот же вызов уже исполнен в этом ответе — результат выше
                 step = {"kind": "duplicate",
                         "tool": self.mcp.calls[c.name][1] if self.mcp and c.name in self.mcp.calls else c.name}
+            elif self.protected and mcp_client.has_url(web.args_of(c.arguments) or c.arguments):
+                step = self._url_refused(c, kind)    # после защищённого источника ссылка не уходит никуда
             elif self.mcp and c.name in self.mcp.calls:
                 _, tool, server, _ = self.mcp.calls[c.name]
                 hint = self.mcp.confirm_hint(c.name)
@@ -1107,6 +1126,8 @@ class StreamTask:
                 self.put("tool", {"kind": "mcp", "label": f"{server} · {tool}"})
                 step = ({"kind": "mcp", "server": server, "tool": tool, "error": TOO_MANY}
                         if n >= CALLS_PER_ROUND else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
+                if "error" not in step and not self.protected and self.mcp.is_protected(c.name):
+                    self._protect()
             elif c.name in chat_tools.NAMES and not self.builtin_off:
                 if n >= CALLS_PER_ROUND:
                     step = {"kind": "ask", "error": TOO_MANY}
@@ -1130,6 +1151,13 @@ class StreamTask:
             self._step(step)
             self.messages.append({"role": "tool", "tool_call_id": c.id, "content": _for_model(step)})
         return None
+
+    def _url_refused(self, c: ToolCall, kind: str) -> dict:
+        """Шаг-отказ mcp_client.URL_REFUSED вызову со ссылкой в аргументах после защищённого источника."""
+        if self.mcp and c.name in self.mcp.calls:
+            _, tool, server, _ = self.mcp.calls[c.name]
+            return {"kind": "mcp", "server": server, "tool": tool, "error": mcp_client.URL_REFUSED}
+        return {"kind": chat_tools.KIND_OF.get(c.name, kind), "error": mcp_client.URL_REFUSED}
 
     def _seen_key(self, c: ToolCall) -> str:
         """Ключ вызова для `seen`: sha256 имени и аргументов (JSON с сортировкой ключей). Инструмент MCP — по
@@ -1185,6 +1213,8 @@ class StreamTask:
         идёт с остальными инструментами."""
         self.mcp = mcp_client.Tools(self.user_id, self.chat_id, self.mcp_ids, explicit=self.mcp_explicit,
                                     conn=self.conn)
+        row = state.DB.execute("SELECT protected_used FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
+        self.protected = row is not None and bool(row[0])
         try:
             if not self.conn.cleaner:
                 await self.mcp.discover()
@@ -1650,6 +1680,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         conn = _chat_connection(uid, row["connection_id"])
         if body.web and conn is not None and conn.cleaner:
             raise cleaner.refused("Интернет недоступен в подключении Cleaner: поисковые запросы уходят отдельно")
+        if body.web and row["protected_used"]:             # после защищённого источника — только выключить
+            raise HTTPException(409, {"code": "protected", "message": PROTECTED_WEB})
         if body.web and not web.has_exa_key(uid):            # без ключа «Интернет» не включается
             raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})
         changes["web"] = int(body.web)
@@ -2102,8 +2134,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     try:
         # инструменты «Интернета» этого хода — по кнопке, какой она стала к ходу (`row` прочитан до await
         # _limit); прямому подключению — никаких. Ключ Exa не расшифровался — шаги поиска скажут это (web.NO_KEY)
-        fresh = state.DB.execute("SELECT web, thinking, mcp_ids, mcp_off, role_id FROM chats WHERE id = ?",
-                                 (chat_id,)).fetchone()
+        fresh = state.DB.execute("SELECT web, thinking, mcp_ids, mcp_off, role_id, protected_used FROM chats"
+                                 " WHERE id = ?", (chat_id,)).fetchone()
         if fresh is None:
             raise _gone()
         chat_pending.supersede(chat_id)              # открытая пауза ответа больше не ждёт
@@ -2112,7 +2144,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         profiled = conn if conn.proxied or not conn.shared else None
         system = chat_system.base(uid, profiled, _role(uid, fresh["role_id"]))
         params = profiles.request_params(profiled) if profiled is not None else {}
-        kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] and not conn.cleaner else []
+        kinds = (web.tools_for(conn, web.has_exa_key(uid))
+                 if fresh["web"] and not fresh["protected_used"] and not conn.cleaner else [])
         mcp_ids = mcp_sources.dialog_servers(uid, fresh, conn)
         mcp_explicit = mcp_client.present(uid, fresh["mcp_ids"])
         try:
