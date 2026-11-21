@@ -497,7 +497,6 @@ def _prompt(item):
 
 TOOL_OFF = "Инструмент выключен в этом диалоге"
 WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
-NEEDS_CONFIRM = "Инструмент MCP с подтверждением — включите его в диалоге явно"
 TRIMMED = "Инструментов MCP больше 128 — часть этого сервера не предложена модели"
 
 
@@ -539,26 +538,33 @@ class Tools:
         return found
 
     @staticmethod
-    def _offered(item, tool, rules, web, on):
-        """Пометки инструмента и решение, предлагать ли его ходу: веб-инструмент — только при «Интернете»,
-        «с подтверждением» — только явно включённый в диалоге (окна подтверждения пока нет)."""
+    def _offered(item, tool, rules, web):
+        """Пометки инструмента и решение, предлагать ли его ходу: веб-инструмент — только при «Интернете».
+        «С подтверждением» предлагается всегда: вызов ждёт «Запустить» (`chat_pending`, `confirm_hint`)."""
         hint = mcp_sources.effective(tool, rules.get(tool["name"]) if item["user_id"] is None else None)
         if hint["open_world"] and not web:
             return hint, WEB_OFF
-        if hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ()):
-            return hint, NEEDS_CONFIRM
         return hint, None
+
+    def confirm_hint(self, name):
+        """Пометки инструмента хода `name` с политикой администратора, прочитанной заново (`mcp_sources.effective`);
+        для `mcp_sources.confirm_needed`. Не инструмент MCP хода — None."""
+        if name not in self.calls:
+            return None
+        session, tool, _, spec = self.calls[name]
+        rules = mcp_sources.policy(session.sid) if session.owner_id is None else {}
+        return mcp_sources.effective(spec, rules.get(tool))
 
     async def discover(self):
         """Каталоги серверов набора — из кэша (`mcp_sources.catalog`), без знакомства с сервером: его делает первый
         вызов. Холодный кэш: явные ждут каждый DISCOVER_SEC, серверы по умолчанию — все вместе
         `mcp_sources.DEFAULT_WAIT_SEC`; не успевший пропускается словами в `failed`. Отбор — группы доступа,
-        выключенные в диалоге, «Интернет» и подтверждение (`_offered`); сверх MAX_TOOLS — лишнее по порядку
-        набора отбрасывается заметкой, ход не отказывает."""
+        выключенные в диалоге и «Интернет» (`_offered`); сверх MAX_TOOLS — лишнее по порядку набора отбрасывается
+        заметкой, ход не отказывает."""
         chat = self._chat()
         if chat is None:
             return
-        off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
+        off, _ = mcp_sources.tool_state(chat["mcp_tools_off"])
         web = bool(chat["web"])
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
         items = [enabled[sid] for sid in self.ids if sid in enabled]
@@ -576,7 +582,7 @@ class Tools:
             for tool in catalog.tools:
                 if (not access.tool_allowed(self.uid, item["id"], tool["name"])   # закрыт группами доступа
                         or tool["name"] in off.get(item["id"], ())
-                        or self._offered(item, tool, rules, web, on)[1] is not None):
+                        or self._offered(item, tool, rules, web)[1] is not None):
                     continue
                 if len(self.calls) >= MAX_TOOLS:
                     trimmed += 1
@@ -594,22 +600,23 @@ class Tools:
 
     async def call(self, name, arguments):
         """Вызов инструмента. Перед ним — заново: сервер в действующем наборе диалога, инструмент не выключен,
-        открыт группами, веб-инструмент — при включённом «Интернете», «с подтверждением» — явно включён; иначе
-        шаг-ошибка без запроса к MCP. Знакомство с сервером — здесь, при первом вызове."""
+        открыт группами, веб-инструмент — при включённом «Интернете»; иначе шаг-ошибка без запроса к MCP.
+        Подтверждение вызова спрашивает ход до него (`chat.StreamTask._calls`). Знакомство с сервером — здесь, при
+        первом вызове."""
         session, tool, server, spec = self.calls[name]
         step = {"kind": "mcp", "server": server, "tool": tool}
         try:
             chat = self._chat()
             if chat is None or session.sid not in mcp_sources.dialog_servers(self.uid, chat, self.conn):
                 raise refused("MCP выключен в этом диалоге")
-            off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
+            off, _ = mcp_sources.tool_state(chat["mcp_tools_off"])
             if tool in off.get(session.sid, ()):
                 raise refused(TOOL_OFF)
             if not access.tool_allowed(self.uid, session.sid, tool):   # правило могли сменить посреди хода
                 raise refused("Нет доступа к инструменту MCP")
             item = {"id": session.sid, "user_id": session.owner_id}
             rules = mcp_sources.policy(session.sid) if session.owner_id is None else {}
-            refusal = self._offered(item, spec, rules, bool(chat["web"]), on)[1]
+            refusal = self._offered(item, spec, rules, bool(chat["web"]))[1]
             if refusal is not None:
                 raise refused(refusal)
             args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""

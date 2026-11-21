@@ -11,7 +11,7 @@ import security
 import state
 from conftest import APP, add_gateway, make_user, signin
 from test_chat import messages, new_chat, sse, turn
-from test_chat_web import call
+from test_chat_web import call, names
 
 URL = "http://10.77.1.15:4000/mcp"
 TOKEN = "private-mcp-token"
@@ -86,7 +86,7 @@ def test_mcp_unselected_is_not_contacted_and_calls_are_not_retried(studio):
     sid = add(studio); calls = mock(studio, fail=True)
     cid = new_chat(studio)
     sse(turn(studio, cid, 'Hello'))
-    assert calls == [] and 'tools' not in studio.gw.chat_requests[-1]
+    assert calls == [] and names(studio.gw.chat_requests[-1]) == []
     studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]})
     studio.gw.chat_script = [{'tool_calls': [call(f'mcp_{sid}_0')]}, ['Failed']]
     sse(turn(studio, cid, 'Use tool'))
@@ -109,7 +109,7 @@ def test_unreachable_mcp_server_is_skipped_and_named_not_the_whole_turn(studio):
     events = sse(turn(studio, cid, 'Use tool'))
     assert events[-1] == ('done', {'status': 'done'})
     assert ('tool', {'kind': 'mcp', 'label': 'Down', 'skipped': True}) in events
-    assert [t['function']['name'] for t in studio.gw.chat_requests[-1]['tools']] == [f'mcp_{sid}_0']
+    assert names(studio.gw.chat_requests[-1]) == [f'mcp_{sid}_0']
     assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Down',
                                                  'error': 'MCP недоступен или вернул неверный ответ'}]
 
@@ -168,7 +168,7 @@ def test_disabled_mcp_server_can_be_checked_but_not_used(studio):
     cid = new_chat(studio)
     state.DB.execute('UPDATE chats SET mcp_ids=? WHERE id=?', (json.dumps([sid]), cid))
     sse(turn(studio, cid, 'Hello'))
-    assert calls == [] and 'tools' not in studio.gw.chat_requests[-1]
+    assert calls == [] and names(studio.gw.chat_requests[-1]) == []
 
 
 def test_new_mcp_address_requires_secrets_again(studio):

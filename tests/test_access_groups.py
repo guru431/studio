@@ -12,6 +12,7 @@ import security
 import state
 from conftest import add_connection, make_user, signin
 from historical_schema import install_schema
+from test_chat_web import names
 
 
 def shared_connection() -> int:
@@ -481,7 +482,7 @@ def test_closed_mcp_dropped_from_chat_selection(studio):
     assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["mcp_ids"] == []
     studio.gw.chat_script = [["Done"]]
     assert sse(turn(studio, chat_id))[-1] == ("done", {"status": "done"})
-    assert calls == [] and "tools" not in studio.gw.chat_requests[-1]
+    assert calls == [] and names(studio.gw.chat_requests[-1]) == []
 
 
 def test_ticket_rechecks_server_access(studio):

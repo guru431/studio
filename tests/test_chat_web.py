@@ -5,6 +5,7 @@ import json
 import logging
 
 import chat
+import chat_tools
 import state
 import web
 from conftest import T0, add_connection, add_gateway, make_user, signin
@@ -155,7 +156,8 @@ def noted(tools=ALL) -> dict:
 
 
 def names(request) -> list[str]:
-    return [t["function"]["name"] for t in request.get("tools", [])]
+    """Инструменты «Интернета» запроса — без встроенных (chat_tools), которые идут в каждом ходе через сервер."""
+    return [t["function"]["name"] for t in request.get("tools", []) if t["function"]["name"] not in chat_tools.NAMES]
 
 
 def test_web_note_goes_only_with_tools(studio):
@@ -168,7 +170,7 @@ def test_web_note_goes_only_with_tools(studio):
     patch(studio, cid, web=False)
     sse(turn(studio, cid, "А ещё?"))
     third = studio.gw.chat_requests[2]
-    assert "tools" not in third and "tool_choice" not in third
+    assert names(third) == []
     assert third["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
 
 
@@ -183,13 +185,13 @@ def test_web_off_sends_no_tools_and_calls_nothing(studio, monkeypatch):
     studio.gw.chat_script = [{"text": ["Смотрю"], "tool_calls": [call("youtube_subtitles", url=CANON),
                                                                  call("web_search", query="ролик")]}]
     events = sse(turn(studio, cid, f"Перескажи {CANON}"))
-    (request,) = studio.gw.chat_requests
-    assert "tools" not in request and "tool_choice" not in request
+    request = studio.gw.chat_requests[0]                  # встроенные инструменты есть — вызовы получают ответ
+    assert names(request) == []
     assert request["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
     assert studio.gw.exa_requests == [] and fake.calls == []
     assert "tool" not in [e for e, _ in events]
     answer = messages(studio, cid)[1]
-    assert answer["tools"] == [] and steps_of(answer["id"]) is None
+    assert [s["error"] for s in answer["tools"]] == [chat.WEB_OFF] * 2
 
 
 def test_model_searches_and_answers(studio):
@@ -289,7 +291,7 @@ def test_rounds_are_capped(studio):
     requests = studio.gw.chat_requests
     assert len(requests) == chat.TOOL_ROUNDS + 1
     assert all(names(r) == ALL.split(", ") and r["messages"][0] == noted() for r in requests[:-1])
-    assert "tools" not in requests[-1] and "tool_choice" not in requests[-1]
+    assert "tools" not in requests[-1] and "tool_choice" not in requests[-1]   # после TOOL_ROUNDS — без всех tools
     assert requests[-1]["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
     assert sum(m["role"] == "tool" for m in requests[-1]["messages"]) == chat.TOOL_ROUNDS
     answer = messages(studio, cid)[1]
@@ -327,7 +329,7 @@ def test_model_without_tools_answers_in_words(studio):
     cid = web_chat(studio)
     studio.gw.chat_error = (400, {"error": {"message": "\"auto\" tool choice requires --enable-auto-tool-choice"}})
     events = sse(turn(studio, cid))
-    assert events[-1] == ("error", {"message": chat.NO_TOOLS})
+    assert events[-1] == ("error", {"message": chat.NO_WEB_TOOLS})
     assert messages(studio, cid)[1]["status"] == "error"
     patch(studio, cid, web=False)                                         # без tools — прежние слова шлюза
     events = sse(turn(studio, cid))
@@ -340,7 +342,7 @@ def test_other_400_on_the_first_round_is_the_gateway_words(studio):
     studio.gw.chat_error = (400, {"error": {"message": "This model's maximum context length is 8192 tokens"}})
     events = sse(turn(studio, cid))
     assert events[-1][0] == "error" and events[-1][1]["message"].startswith("шлюз отклонил запрос")
-    assert events[-1][1]["message"] != chat.NO_TOOLS
+    assert events[-1][1]["message"] != chat.NO_WEB_TOOLS
 
 
 def test_page_is_read_only_from_the_chat_or_the_search(studio):
@@ -476,7 +478,7 @@ def test_switch_off_during_an_answer_stops_the_next_calls(studio, monkeypatch):
     assert steps[1]["query"] == "q"
     first, second = studio.gw.chat_requests
     assert names(first) == ALL.split(", ")
-    assert "tools" not in second and "tool_choice" not in second
+    assert names(second) == []
     assert second["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
     assert [m["role"] for m in second["messages"][-2:]] == ["tool", "tool"]
 
@@ -505,7 +507,7 @@ def test_switch_off_during_the_last_call_of_a_round_drops_the_tools(studio, monk
         release.append(True)
     assert [s.get("error") for s in steps_of(messages(studio, cid)[1]["id"])] == [None]
     second = studio.gw.chat_requests[1]
-    assert "tools" not in second and "tool_choice" not in second
+    assert names(second) == []
     assert second["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
 
 
@@ -528,8 +530,8 @@ def test_switch_is_read_inside_the_turn_not_before_the_model_list(studio):
     studio.gw.chat_script = [{"tool_calls": [call("web_search", query="q")]}]
     sse(turn(studio, cid))
     assert listed
-    (request,) = studio.gw.chat_requests
-    assert "tools" not in request and studio.gw.exa_requests == []
+    request = studio.gw.chat_requests[0]
+    assert names(request) == [] and studio.gw.exa_requests == []
 
 
 def test_last_round_of_only_calls_is_an_error_not_an_empty_answer(studio):
@@ -609,12 +611,12 @@ def test_without_a_key_nothing_is_offered_even_if_the_switch_is_on(studio, monke
     studio.gw.chat_script = [{"text": ["ok"], "tool_calls": [call("youtube_subtitles", url=CANON),
                                                              call("web_search", query="q")]}]
     sse(turn(studio, cid, f"Перескажи {CANON}"))
-    (request,) = studio.gw.chat_requests
-    assert "tools" not in request and "tool_choice" not in request
+    request = studio.gw.chat_requests[0]
+    assert names(request) == []
     assert request["messages"][0] == {"role": "system", "content": chat.today_line(T0)}
     assert studio.gw.exa_requests == [] and fake.calls == []
     answer = messages(studio, cid)[1]
-    assert answer["tools"] == [] and steps_of(answer["id"]) is None
+    assert [s["error"] for s in answer["tools"]] == [chat.WEB_OFF] * 2
     view = chat_of(studio, cid)
     assert view["web"] is True and view["web_tools"] == [] and view["external_web"] is False
 

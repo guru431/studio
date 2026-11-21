@@ -55,6 +55,7 @@ RESULT_FILES = 16                            # файлов результата
 NAME_MAX = 255
 REFUSED = "refused:"                         # «Не передавать»: `chats.mcp_file_consent[sid]` = REFUSED + stamp
 UPLOAD = "artifact_upload"
+CONFIRM = "confirm"                          # итог `_blocked`: загрузка «с подтверждением» не включена в диалоге
 
 NO_CONSENT = "Файлы диалога не переданы серверу «{0}» без согласия пользователя"
 NOT_SENT = "Файлы диалога есть, но не переданы серверу «{0}» без согласия пользователя: {1}."
@@ -154,11 +155,15 @@ def _blocked(item, found, row) -> "str | None":
     """Слова отказа, если `artifact_upload` сервера `item` (каталог `found`) не предлагается при нынешних
     «Интернете» и явно включённых инструментах диалога `row` — та же классификация, что у хода
     (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера); иначе None. `artifact_upload`
-    в `found` есть: его пометка и делает сервер получателем (`limit_of`)."""
+    в `found` есть: его пометка и делает сервер получателем (`limit_of`). Загрузку делает сама Studio, без карточки
+    «Запустить»: «с подтверждением» — только явно включённая в диалоге (`mcp_tools_on`), иначе `CONFIRM`."""
     tool = upload_tool(found)
     rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
     _, on = mcp_sources.tool_state(row["mcp_tools_off"])
-    return mcp_client.Tools._offered(item, tool, rules, bool(row["web"]), on)[1]
+    hint, refusal = mcp_client.Tools._offered(item, tool, rules, bool(row["web"]))
+    if refusal is None and hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ()):
+        return CONFIRM
+    return refusal
 
 
 def _allowed(task, sid: int, stamp: str, found) -> bool:

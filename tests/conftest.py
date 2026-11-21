@@ -292,6 +292,7 @@ def studio(env, schema_db, monkeypatch):
     images.JOBS.clear()
     chat.STREAMS.clear()
     chat.LIMITS.clear()
+    chat.NO_TOOLS.clear()
     transcripts.JOBS.clear()
     ocr.JOBS.clear()
     ocr.RUNNERS.clear()
