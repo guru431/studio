@@ -63,6 +63,7 @@ import lock_policy
 import manage
 import media
 import mcp_client
+import mcp_files
 import mcp_sources
 import ocr
 import ocr_render
@@ -313,6 +314,7 @@ def _chat_view(user_id: int, row) -> dict:
     out["mcp_tools_off"] = {str(sid): sorted(names) for sid, names in off.items()}
     out["mcp_tools_on"] = {str(sid): sorted(names) for sid, names in on.items()}
     out["mcp_ok"] = out["proxied"] and not out["cleaner"]
+    out["mcp_file_consent"] = mcp_files.consent_state(user_id, row)   # {sid: "allowed" | "refused"}
     if out["mcp_ids"] and out["mcp_ok"] and _needs_web_consent(row["id"], row["web_consent"]):
         out["external_web"] = True
     role = _role(user_id, row["role_id"])
@@ -875,7 +877,7 @@ class StreamTask:
             return step
         room = (self.limit - RESERVE_TOKENS - used) * 3 - len(CUT_CONTEXT)
         if room < 500:
-            return {**web.public(step), "error": NO_ROOM}
+            return {**{k: v for k, v in step.items() if k != "text"}, "error": NO_ROOM}
         return {**step, "text": step["text"][:room] + CUT_CONTEXT}
 
     async def _round(self, payload: dict, offer: bool) -> "tuple[str | None, str | None, list[ToolCall], str]":
@@ -1035,7 +1037,13 @@ class StreamTask:
                 for server, words in self.mcp.failed:
                     self.put("tool", {"kind": "mcp", "label": server, "skipped": True})
                     self._step({"kind": "mcp", "server": server, "error": words})
-                self.mcp_rules = chat_system.mcp_block(self.mcp.instructions, [])
+                # файлы диалога на серверы с пометкой `studio/chat-files` и согласием (mcp_files.sync)
+                notes, steps = await mcp_files.sync(self, self.mcp.found)
+                for step in steps:
+                    self.put("tool", {"kind": "mcp", "label": step["server"], "skipped": True}
+                             | ({"consent": step["consent"]} if "consent" in step else {}))
+                    self._step(step)
+                self.mcp_rules = chat_system.mcp_block(self.mcp.instructions, notes)
             return await self._read_model()
         except HTTPException as exc:
             return exc.detail["message"]
@@ -1404,7 +1412,7 @@ async def get_chat(chat_id: str, request: Request):
         sources = {r[0] for r in state.DB.execute(
             f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
     views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
-    return {"chat": _chat_view(uid, row),
+    return {"chat": _chat_view(uid, row), "media": mcp_files.media_of(chat_id),
             "messages": [_message_out(m, atts.get(m["id"], []), views) for m in _messages(chat_id)]}
 
 
@@ -1503,8 +1511,9 @@ async def delete_chat(chat_id: str, request: Request, empty: str = ""):
     cleaner.forget(uid, chat_id)
     await _cancel(_chat_streams(chat_id))
     media_ids = {r["media_id"] for r in state.DB.execute(
-        "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?", (chat_id,))}
-    state.DB.execute("DELETE FROM chats WHERE id = ?", (chat_id,))   # сообщения и вложения — каскадом
+        "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?"
+        " UNION SELECT media_id FROM chat_media WHERE chat_id = ?", (chat_id, chat_id))}
+    state.DB.execute("DELETE FROM chats WHERE id = ?", (chat_id,))   # сообщения, вложения и медиа MCP — каскадом
     for media_id in media_ids:
         if not media.referenced(uid, media_id):
             await media.delete_async(uid, media_id)

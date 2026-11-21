@@ -106,6 +106,8 @@ def _tool_line(step: dict, lang: str) -> list[str]:
                  + "".join(" · " + a for a in about)]
     elif kind == "mcp":
         lines = ["- " + " · ".join(["MCP"] + [_inline(step[key]) for key in ("server", "tool") if step.get(key)])]
+        # файлы результата — только имена (web.public): сами файлы остаются на сервере MCP
+        lines += ["  - " + _inline(f["name"]) for f in step.get("files") or [] if isinstance(f, dict) and f.get("name")]
     else:
         lines = ["- " + word("Инструмент", lang)]
     if error:
