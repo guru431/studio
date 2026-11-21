@@ -406,7 +406,8 @@ Studio проксирует файлы через исходное подклю�
 
 Поиск и страницы Exa — `EXA_URL` через `state.HTTP`, не `upstream`; субтитры YouTube — `yt-dlp` образа Docker (версия
 закреплена в Dockerfile, ночного обновления нет: новая версия — сменой закрепления и выкладкой,
-[deploy-docker](deploy-docker.md#обновления-базы-и-пакетов-образа); JS-рантайма deno в образе нет) списком
+[deploy-docker](deploy-docker.md#обновления-базы-и-пакетов-образа); JS-рантайм deno — тоже в образе, его кэш и
+кэш yt-dlp — в `web.YTDLP_CACHE` временного каталога: корень только для чтения, HOME нет) списком
 аргументов только по `https://www.youtube.com/watch?v=<id>` из `web.youtube_id`, одна дорожка `pick_track`, файлы
 `<uuid>.*` в `tmp_dir`; запуск — `web.RUN`, тесты подменяют; кнопка — `chats.web` (`PATCH` диалога), инструменты хода —
 `web.tools_for` (только `proxied` и только с ключом Exa — без ключа ни одного, YouTube тоже; `PATCH {web: true}` без

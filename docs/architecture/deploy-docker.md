@@ -214,7 +214,8 @@ PY
 В образе — `yt-dlp[default]` (с yt-dlp-ejs: решатель JS-проверок YouTube) и `deno` — JS-рантайм, без которого
 YouTube отдаёт не все форматы и субтитры. Версия yt-dlp — одна строка `pip install` в `deploy/docker/Dockerfile`;
 deno и пакеты extra `default` — в `constraints.txt` (wheel `deno` — `manylinux_2_27_x86_64`, ставится в trixie).
-Самообновления нет: только новое закрепление и выкладка.
+Самообновления нет: только новое закрепление и выкладка. Корень `web` только для чтения, HOME нет: `web._env` даёт
+deno (`DENO_DIR`) и yt-dlp (`XDG_CACHE_HOME`) каталоги в `web.YTDLP_CACHE` на tmpfs `/tmp`.
 
 Когда: субтитры YouTube в чате отказывают у любых публичных роликов (шаг «Ролик» с ошибкой, приёмка выше
 падает), а сам YouTube из сети Docker-хоста открывается — YouTube сменил плеер, и закреплённый yt-dlp его не понимает.
