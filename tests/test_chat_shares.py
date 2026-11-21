@@ -16,7 +16,7 @@ import media
 import operations
 import security
 import state
-from conftest import make_user, signin
+from conftest import erase_history, make_user, signin
 from test_code import A, ALPHA, setup
 
 
@@ -107,7 +107,7 @@ def test_ownership_csrf_screen_lock_and_history_cleanup(studio):
     for method in ('GET', 'POST', 'DELETE'):
         assert studio.c.request(method, endpoint, json={'pin': '0123'}).status_code == 404
     signin(studio, 'owner')
-    assert studio.c.delete('/api/history').status_code == 200
+    assert erase_history(studio).status_code == 200
     assert unlock(studio, token).status_code == 404
     assert state.DB.execute('PRAGMA foreign_key_check').fetchall() == []
 

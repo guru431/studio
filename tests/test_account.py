@@ -10,7 +10,7 @@ import security
 import security_log
 import state
 import takeout
-from conftest import login, make_user, signin
+from conftest import erase_history, login, make_user, signin
 from test_chat_shares import create, regular
 
 PHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
@@ -51,7 +51,7 @@ def test_history_wipe_forgets_unread_finished_sessions_of_own_computers_only(stu
     mine, theirs = agent(uid), agent(other)
     state.DB.execute("INSERT INTO code_attention VALUES (?, 'p', 'c1', 'r', 1, 0)", (mine,))
     state.DB.execute("INSERT INTO code_attention VALUES (?, 'p', 'c2', 'r', 1, 0)", (theirs,))
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert [r[0] for r in state.DB.execute("SELECT agent_id FROM code_attention")] == [theirs]
     assert state.DB.execute("SELECT count(*) FROM agents").fetchone()[0] == 2
 
@@ -60,7 +60,7 @@ def test_logout_and_history_wipe_clear_only_the_http_cache(studio):
     """Clear-Site-Data: "cache" — медиа не остаются в HTTP-кэше; cookies и хранилища (кэш оболочки offline,
     служебный работник, флаги устройства) — не трогаются."""
     owner(studio)
-    wiped = studio.c.delete("/api/history")
+    wiped = erase_history(studio)
     assert wiped.status_code == 200 and wiped.json() == {"pending_files": 0}
     assert wiped.headers["clear-site-data"] == '"cache"'
     out = studio.c.post("/logout", follow_redirects=False)
@@ -313,7 +313,7 @@ def test_admin_password_reset_offers_the_owner_an_emergency_exit(studio):
 
 def test_security_journal_survives_history_wipe_and_is_in_the_export(studio):
     uid = owner(studio)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert kinds(uid) == ["login"]
     assert "security" in takeout.SECTIONS
     out = studio.c.post("/api/me/export", json={"sections": ["security"]}).json()

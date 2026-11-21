@@ -6,7 +6,7 @@ from fastapi import HTTPException
 import media
 import state
 import voices
-from conftest import add_gateway, make_user, signin
+from conftest import add_gateway, erase_history, make_user, signin
 from test_voices import SAMPLE, create
 
 
@@ -108,7 +108,7 @@ def test_samples_are_private_bounded_and_exported(studio, fake_audio, monkeypatc
     exported = takeout._voices(owner, [voices._row(owner, vid)], {r["id"]: takeout._file_name(r) for r in rows})
     assert len(exported[0]["samples"]) == voices.SAMPLES_MAX
     assert all(s["file"] for s in exported[0]["samples"])
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
 

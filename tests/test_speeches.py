@@ -12,7 +12,7 @@ import speeches
 import state
 import upstream
 import voices
-from conftest import add_connection, add_gateway, make_user, signin
+from conftest import add_connection, add_gateway, erase_history, make_user, signin
 from fakes import WAV_FAKE
 from http_checks import on_http
 from test_transcripts import hold_temp_unlink
@@ -177,7 +177,7 @@ def test_history_wipe_drops_the_jobs_from_memory(studio, fake_audio, monkeypatch
     assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
     assert studio.c.post(f"/api/speeches/{waiting[0]['id']}/cancel").json() == {"state": "cancelled"}
     assert studio.c.get(f"/api/speeches/{waiting[1]['id']}").json()["detail"] == "в очереди · 1"
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0 and speeches.JOBS == {}
     assert speeches.RUNNERS == {}
 

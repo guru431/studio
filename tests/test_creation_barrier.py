@@ -15,7 +15,7 @@ import operations
 import speeches
 import state
 import transcripts
-from conftest import add_gateway, make_user
+from conftest import add_gateway, erase_history, make_user
 from fakes import PNG_REAL, WAV_FAKE, video_object
 from test_speeches import busy_speech, voice, wait_sp
 from test_transcripts import upload, wait_tr
@@ -108,7 +108,7 @@ def test_creation_started_during_wipe_is_rejected_after_wipe_finishes(studio, mo
     monkeypatch.setattr(media, "remove_files", held_remove)
     monkeypatch.setattr(audio, "to_wav", held_conversion)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        wiping = executor.submit(studio.c.delete, "/api/history")
+        wiping = executor.submit(erase_history, studio)
         try:
             assert cleaning.wait(5)
             creation = executor.submit(studio.c.post, "/api/voices", data={"name": "late", "text": "reference"},
@@ -159,7 +159,7 @@ def wipe_held(studio, monkeypatch):
 
     monkeypatch.setattr(media, "remove_files", held_remove)
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    wiping = executor.submit(studio.c.delete, "/api/history")
+    wiping = executor.submit(erase_history, studio)
     executor.shutdown(wait=False)
     assert cleaning.wait(5)
     return wiping, release_cleanup.set

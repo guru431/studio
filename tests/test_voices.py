@@ -11,7 +11,7 @@ import pytest
 import speech
 import state
 import voices
-from conftest import add_gateway, make_user, signin
+from conftest import add_gateway, erase_history, make_user, signin
 
 SAMPLE = {"audio": ("sample.m4a", b"\x00" * 2048, "audio/mp4")}
 
@@ -253,5 +253,5 @@ def test_voice_is_private_and_goes_with_delete_and_history(studio, env, fake_aud
     assert studio.c.delete(f"/api/trash/voices/{vid}").status_code == 204
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
     create(studio)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert state.DB.execute("SELECT count(*) FROM voices").fetchone()[0] == 0

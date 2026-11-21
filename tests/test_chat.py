@@ -14,7 +14,7 @@ import chat
 import documents
 import profiles
 import state
-from conftest import T0, add_connection, add_gateway, make_user, signin
+from conftest import T0, add_connection, add_gateway, erase_history, make_user, signin
 from fakes import TOKEN
 from test_documents import pdf
 from test_images import describe, wait_description
@@ -695,7 +695,7 @@ def test_chat_deleted_while_the_turn_reads_its_photos_gets_no_model_call(studio,
 
 def test_history_wipe_while_the_turn_reads_its_photos_gets_no_model_call(studio, monkeypatch):
     """Стирание истории, пока ход читает фото: модели ход уже не зовёт (ревью N2)."""
-    _, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: studio.c.delete("/api/history"))
+    _, r, answers = _during_photo_read(studio, monkeypatch, lambda cid: erase_history(studio))
     assert answers == [200] and r.status_code == 409
     assert r.json()["detail"]["code"] == "history_changed"
     assert not studio.gw.chat_requests and not chat.STREAMS
@@ -826,7 +826,7 @@ def test_history_wipe_refuses_a_turn_started_during_it(studio, monkeypatch):
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert len(responses) == 1 and responses[0].status_code == 409
     assert responses[0].json()["detail"]["code"] == "history_changed"
     assert not studio.gw.chat_requests and not chat.STREAMS
@@ -897,7 +897,7 @@ def test_history_wipe_stops_the_users_streams(studio):
             assert next(events)[0] == "turn"
             assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
             (stream,) = chat.STREAMS.values()
-        assert studio.c.delete("/api/history").status_code == 200
+        assert erase_history(studio).status_code == 200
         assert stream.task.done() and not chat.STREAMS
     finally:
         studio.gw.chat_hold = False

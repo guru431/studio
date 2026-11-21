@@ -8,7 +8,7 @@ import zipfile
 
 import roles
 import state
-from conftest import make_user, signin
+from conftest import erase_history, make_user, signin
 
 RU = [name for _, name, _ in roles.BUILTIN["ru"]]
 EN = [name for _, name, _ in roles.BUILTIN["en"]]
@@ -139,7 +139,7 @@ def test_deleted_role_leaves_dialogs_without_role_and_history_wipe_keeps_roles(s
                      (uid, role["id"]))
     assert studio.c.delete(f"/api/roles/{role['id']}").status_code == 204
     assert state.DB.execute("SELECT role_id FROM chats WHERE id = 'c'").fetchone()[0] is None
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert roles.get(uid, keep["id"]) is not None
 
 

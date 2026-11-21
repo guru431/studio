@@ -175,7 +175,8 @@ def test_partial_lock_hides_search_results_models_and_jobs_and_guards_settings(s
     assert studio.c.get("/api/search/models").json()["models"] == {"photo": ["flux"]}
     assert all(item["section"] != "chat" for item in studio.c.get("/api/jobs").json()["running"])
     for path, method, body in [("/api/me/screen-lock", "POST", {"enabled": False, "password": "password-123"}),
-                               ("/api/history", "DELETE", None), ("/api/me/export", "POST", {"sections": ["chat"]})]:
+                               ("/api/history", "DELETE", {"password": "password-123"}),
+                               ("/api/me/export", "POST", {"sections": ["chat"]})]:
         assert studio.c.request(method, path, json=body).status_code == 423
 
 
@@ -389,6 +390,7 @@ ROUTES = {
         ("DELETE", "/api/me/access/shared/{aid}"),
         # записи корзины разных разделов на одном адресе: вернуть и удалить навсегда — только без запертых разделов
         ("POST", "/api/trash/{kind}/{item_id}/restore"), ("DELETE", "/api/trash/{kind}/{item_id}"),
+        ("POST", "/api/trash/empty"), ("POST", "/api/me/storage/failed"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
         ("DELETE", "/api/passkeys/{key_id}"),

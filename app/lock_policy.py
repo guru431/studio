@@ -140,11 +140,12 @@ def blocks(request, uid: int, digest: str) -> bool:
     # (адрес, ключ, разделы) — переписку закрытого раздела на чужой сервер. Каждый маршрут /api/*
     # отнесён к разделу, закрываемым или открытым явно — реестр в tests/test_lock_policy.py.
     # Корзина: список (`GET /api/trash`) прячет закрытые разделы сам, а «Вернуть» и «Удалить навсегда» любой
-    # записи закрыты, пока заперт хоть один раздел — записи разных разделов на одном адресе.
+    # записи закрыты, пока заперт хоть один раздел — записи разных разделов на одном адресе; так же «Очистить
+    # корзину» и перенос неудачных из «Хранилища».
     return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin", "/api/trash/",
                              "/api/me/sessions", "/api/me/security-events", "/api/me/access", "/api/me/email"))
             or path in ("/api/history", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
-                        "/api/me/password-reset")
+                        "/api/me/password-reset", "/api/me/storage/failed")
             or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/exa-key")
                 and request.method != "GET")
             or (head == "connections" and request.method != "GET")

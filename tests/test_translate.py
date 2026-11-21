@@ -23,7 +23,7 @@ import sections
 import state
 import translate
 import translate_text
-from conftest import add_connection, add_gateway, make_user, signin
+from conftest import add_connection, add_gateway, erase_history, make_user, signin
 from fakes import FakeGateway
 from scans import scan_pdf
 from test_documents import docx, pdf
@@ -572,7 +572,7 @@ def test_erasing_history_stops_and_removes_translations(studio):
     held = hold_chat(studio)
     tid = start(studio, "Hello.")
     wait_row(studio, tid, ("working",))
-    r = studio.c.delete("/api/history")
+    r = erase_history(studio)
     assert r.status_code == 200, r.text
     assert row_of(studio, tid) is None and parts_of(studio, tid) == [] and translate.RUNNERS == {}
     held[0] = False

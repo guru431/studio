@@ -21,7 +21,7 @@ import images
 import media
 import state
 import upstream
-from conftest import T0, add_connection, add_gateway, login, make_user, signin
+from conftest import T0, add_connection, add_gateway, erase_history, login, make_user, signin
 from fakes import PNG_REAL, TOKEN
 from http_checks import on_http
 from image_upload import decode_form, image_size, normalize_image
@@ -955,7 +955,7 @@ def test_history_wipe_during_a_generation_leaves_nothing(studio, env):
     add_gateway(studio)
     job_id = start(studio).json()["id"]
     wait_for(lambda: studio.gw.generations)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     studio.gw.hold = False
     job = wait_job(job_id)
     assert job.state == "cancelled" and "карта освобождена" in job.detail
@@ -977,7 +977,7 @@ def test_generation_started_during_the_wipe_leaves_nothing(studio, env, monkeypa
     monkeypatch.setattr(media, "remove_files", racing)
     media.save(state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0],
                photo(), "image/png", "old.png", thumb=True)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     studio.gw.hold = False
     assert replies[0].status_code == 409
     assert replies[0].json()["detail"]["code"] == "history_changed"
@@ -1641,7 +1641,7 @@ def test_stop_marks_queued_rows_interrupted(studio, monkeypatch):
 
 def test_history_wipe_during_a_series_starts_nothing_more(studio, env):
     ids, go = series_held(studio)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     go.set()
     job = wait_job(ids[0])
     assert job.state == "cancelled" and "карта освобождена" in job.detail
@@ -1812,7 +1812,7 @@ def test_presets_outlive_the_history_wipe_but_not_the_account(studio):
     signin(studio, "bob")
     add_gateway(studio)
     save_preset(studio)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert len(studio.c.get("/api/images/presets").json()["items"]) == 1
     signin(studio, "owner")
     assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
