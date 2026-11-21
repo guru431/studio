@@ -323,6 +323,10 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .head h1 { flex: none; margin: 0; font-size:var(--title-font); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .grow { flex: 1; }
 .head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
+/* кнопки-значки шапки «Фото» и «Видео» одной группой справа; не помещаются рядом с заголовком — целиком уходят под него
+   (ряд инструментов, как у «Агентов») */
+.head-tools { display: flex; flex: none; align-items: center; gap: var(--space-5); margin-left: auto; }
+.mcp-tool { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
 /* состояние источника MCP (mcp_contracts, `studio/status`): точка у чипа MCP чата и у выбора «Студия/MCP» разделов
  * (кнопка .pick-trigger: после подписи у неё стрелка, поэтому точка — перед подписью) */
 [data-mcp-state] { --mcp-state: var(--success); }
@@ -380,6 +384,7 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
     .head .view-toggle { width: var(--h-icon); }
     .head .view-toggle svg.caret { display: none; }
     :is(.photo, .video) .head h1 { flex-basis: 100%; }
+    .head-tools { gap: var(--space-3); }
   }
   /* шапка, что прокручивается с разделом (профиль, панель), — на месте: иначе блоки шли бы под аватар */
   #view > .head { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-0); }
@@ -1163,7 +1168,7 @@ video.msg-file-media { max-height: 320px; }
 .chip svg.ico { width: 15px; height: 15px; }
 .chip svg.caret { width: 12px; height: 12px; }
 label.chip { cursor: pointer; }
-.chip-num input { width: 2ch; padding: 0; border: 0; outline: none; background: none; color: inherit; font: inherit;
+.chip-num input { height: calc(var(--ctl-h) - 2 * var(--ctl-pad-y) - 2px); line-height: 1; width: 2ch; padding: 0; border: 0; outline: none; background: none; color: inherit; font: inherit;
   text-align: center; }
 .chip-num:focus-within { border-color: var(--text-2); }
 .chip-option { display: block; width: 100%; padding: 7px var(--space-5); border: 0; border-radius: var(--r-control); background: none;
@@ -1438,7 +1443,7 @@ label.chip { cursor: pointer; }
 .select-btn svg.ico { width: 17px; height: 17px; }
 .select-tools, .select-actions, .select-bar { display: none; }
 [data-selecting] :is(.select-tools, .select-actions) { display: flex; align-items: center; gap: var(--space-4); }
-[data-selecting] .head > :is(h1, .select-btn, .photo-menu-wrap) { display: none; }
+[data-selecting] .head :is(h1, .select-btn, .photo-menu-wrap) { display: none; }
 .select-tools .icon-btn svg.ico { width: 18px; height: 18px; }
 .select-count { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* долгое нажатие — выделение: без меню картинки iPhone, выделения текста и перетаскивания картинки (Chrome на
