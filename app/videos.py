@@ -135,7 +135,9 @@ def _profile(body: VideoIn) -> None:
 # ---- строки ------------------------------------------------------------------
 
 def _row(user_id: int, video_id: str):
-    row = state.DB.execute("SELECT * FROM videos WHERE id = ? AND user_id = ?", (video_id, user_id)).fetchone()
+    """Свой ролик не из корзины (`deleted`, trash.py), иначе 404."""
+    row = state.DB.execute("SELECT * FROM videos WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (video_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого ролика нет"})
     return row
@@ -491,7 +493,7 @@ async def list_videos(request: Request, before: "float | None" = None,
     if (after is None) != (after_id is None):
         raise HTTPException(422, {"code": "after", "message": "after и after_id — только вместе"})
     uid = request.state.user.id
-    rows = db.page(state.DB, "videos", uid, before, before_id, limit,
+    rows = db.page(state.DB, "videos", uid, before, before_id, limit, extra=" AND deleted IS NULL",
                    after=None if after is None else (after, after_id)).fetchall()
     steps = chains.video_counts(uid, rows)
     return {"items": [_out(r, with_chain=False, steps=steps[r["id"]]) for r in rows]}
@@ -518,19 +520,31 @@ async def cancel_video(video_id: str, request: Request):
 
 @router.delete("/{video_id}", status_code=204)
 async def delete_video(video_id: str, request: Request):
-    """Идущий — сначала снять у шлюза; затем строка и её файлы (кроме тех, на что ссылается другая запись)."""
+    """Идущий — сначала снять у шлюза (отказ — 502, ролик идёт дальше); затем в корзину (`deleted`, trash.py),
+    идущий — ещё и отменённым: наблюдатель его больше не ждёт. Строка и файлы — до `purge`."""
     uid = request.state.user.id
     row = _row(uid, video_id)
     if row["state"] in ACTIVE:
         words = await _drop(row)
         if words is not None:
             raise HTTPException(502, {"code": "gateway", "message": words})
-    row = _row(uid, video_id)                     # наблюдатель мог успеть положить ролик
-    state.DB.execute("DELETE FROM videos WHERE id = ?", (video_id,))
-    for media_id in {row["media_id"], row["source_media_id"]} - {None}:
-        if not media.referenced(uid, media_id):
-            await media.delete_async(uid, media_id)
+    _row(uid, video_id)                           # пока снимали, ролик могли убрать в корзину
+    state.DB.execute("UPDATE videos SET deleted = ? WHERE id = ?", (clock.NOW(), video_id))
+    _settle(video_id, "cancelled", "отменено")    # кончившийся (и положенный наблюдателем) — как есть
+    log.info("ролик %s: в корзине", video_id[:8])
     return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: строка и её файлы (кроме тех, на что ссылается другая запись). Строки уже нет — ничего."""
+    row = state.DB.execute("SELECT * FROM videos WHERE id = ? AND user_id = ?", (item_id, user_id)).fetchone()
+    if row is None:
+        return
+    state.DB.execute("DELETE FROM videos WHERE id = ?", (item_id,))
+    for media_id in {row["media_id"], row["source_media_id"]} - {None}:
+        if not media.referenced(user_id, media_id):
+            await media.delete_async(user_id, media_id)
+    log.info("ролик %s: удалён", item_id[:8])
 
 
 # ---- наблюдатель -------------------------------------------------------------
