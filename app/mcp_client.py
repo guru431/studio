@@ -238,7 +238,8 @@ async def catalog_for(uid, refresh=False):
                      if isinstance(tool, dict) and isinstance(tool.get("name"), str) and NAME.fullmatch(tool["name"])
                      and access.tool_allowed(uid, item["id"], tool["name"])]
             instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
-            chat_files = mcp_sources.chat_files(found)
+            import mcp_files                  # здесь, не при загрузке: mcp_files тянет разделы и chat
+            chat_files = mcp_files.limit_of(found)          # с потолком mcp_files.MEDIA_MAX, как у загрузки
         except HTTPException as exc:
             return {**out, "state": "error", "message": exc.detail["message"], **empty}
         except TimeoutError:
