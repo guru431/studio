@@ -51,6 +51,20 @@ def test_duplicate_call_skipped(studio):
     assert [m["content"] for m in sent] == ["result-lookup", chat.DUPLICATE, "result-lookup"]
 
 
+def test_next_turn_after_duplicate_and_builtin_steps_keeps_history(studio):
+    """Шаги `duplicate` и встроенных инструментов без `text` попадают в историю следующего хода тем же текстом,
+    что получила модель (chat._for_model), а не роняют сборку истории KeyError."""
+    sid, calls, _ = setup(studio)
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="1")]},
+                             {"tool_calls": [call(name_of(sid), q="1"), call("ask_user", question="")]}, ["Готово"],
+                             ["Снова"]]
+    assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
+    assert sse(turn(studio, cid, "Ещё"))[-1] == ("done", {"status": "done"})
+    history = " ".join(str(m["content"]) for m in studio.gw.chat_requests[-1]["messages"])
+    assert chat.DUPLICATE in history and chat_tools.BAD_ARGS in history and web.NOTHING not in history
+
+
 def test_duplicate_after_resumed_pause_skipped(studio):
     """Вызовы до паузы помнит payload: после «Запустить» их повтор не исполняется и не спрашивает снова."""
     sid, calls = confirm_setup(studio)
