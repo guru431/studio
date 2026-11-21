@@ -181,8 +181,17 @@ def make_translation(s, uid: int) -> Made:
                                    "UPDATE translations SET name = 'durian.docx' WHERE id = ?"])
 
 
+def make_voice(s, uid: int) -> Made:
+    first, second = save(uid, b"wav one", "audio/wav", "v1.wav"), save(uid, b"wav two", "audio/wav", "v2.wav")
+    # первый образец добавляет триггер `voices_sample_ai`
+    state.DB.execute("INSERT INTO voices(id, user_id, name, ref_text, media_id, duration, created)"
+                     " VALUES ('vo1', ?, 'Fig voice', 'fig text', ?, 6, ?)", (uid, first, T0))
+    state.DB.execute("INSERT INTO voice_samples VALUES ('vs2', 'vo1', ?, 'fig two', ?, 7, ?)", (uid, second, T0))
+    return section_made(s, "vo1", [first, second], "/api/voices")
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation, "voices": make_voice}
 
 
 def owner(s) -> int:
