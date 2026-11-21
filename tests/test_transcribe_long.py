@@ -1,6 +1,7 @@
 """Длинные записи «Расшифровки» частями по живым пределам источника (`speech.limits`, `audio.cut`) и язык
 распознавания (`transcripts.language`, поле `language` по виду подключения)."""
 import asyncio
+import json
 
 import httpx
 
@@ -152,3 +153,26 @@ def test_language_sent_per_connection_kind_and_omitted_for_auto(studio, fake_aud
     assert studio.c.post("/api/dictation", files=voice).status_code == 200
     assert b'name="language"' not in studio.gw.asr_requests[-1].content
     assert studio.c.post("/api/dictation", files=voice, data={"language": "xx"}).status_code == 422
+
+
+def test_mcp_transcribe_tool_limits_reach_the_page(studio):
+    """У MCP Studio запись не режет — только сверяет предел: `_meta["studio/limits"]` инструмента — в каталоге раздела."""
+    from test_mcp import add
+    from test_mcp_sections import service
+    add(studio)
+    service(studio.gw, uploads=True)
+    plain = studio.gw.on["/mcp"]
+
+    async def rpc(request):
+        reply = await plain(request)
+        if not reply.content:
+            return reply
+        body = json.loads(reply.content)
+        for tool in body.get("result", {}).get("tools", []):
+            if tool["name"] == "audio_transcribe":
+                tool["_meta"] = {"studio/limits": {"max_seconds": 3600}}
+        return httpx.Response(reply.status_code, json=body)
+    studio.gw.on["/mcp"] = rpc
+    tools = {t["name"]: t for s in studio.c.get("/api/mcp-tools/transcribe").json()["items"] for t in s["tools"]}
+    assert tools["audio_transcribe"]["limits"] == {"max_seconds": 3600}
+    assert speech.tool_limits({"_meta": {"studio/limits": {"max_seconds": "3600"}}}) is None
