@@ -169,8 +169,8 @@ function showResult(host, output, urls, render) {
 
 /** The section owns its controls. MCP receives only the arguments from those controls that the tool declares.
  * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
- * своё на каждый запуск, уходит с destroy(). */
-export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, key: place = section }) {
+ * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, key: place = section }) {
   const base = `/api/mcp-tools/${section}`;
   const controller = new AbortController();
   const urls = [];
@@ -309,7 +309,10 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       if (!(tool.schema.required || []).every(key => allowed.has(key) || Object.hasOwn(tool.files, key))) continue;
       options.set(`${server.id}:${tool.name}`, { server, tool });
     }
-    if (!options.size) return;
+    if (!options.size) {
+      onEmpty?.();
+      return;
+    }
     const label = tool => tool.title || (Object.hasOwn(imageNames, tool.name) ? imageNames[tool.name] :
       tool.name === 'video_estimate' ? tr("Оценить время генерации") : '');
     const names = new Map();

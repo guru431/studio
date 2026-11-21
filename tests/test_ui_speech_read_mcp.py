@@ -110,3 +110,16 @@ def test_read_mcp_tool_without_voice_field(browser, live):
     assert [args for name, args in calls if name == "speech_synthesize"] == [{"text": ANSWERS[0]}]
     assert not read_problems(r), read_problems(r)
 
+
+def test_read_mcp_without_a_speech_tool_says_so(browser, live):
+    login = "readmcpnone"
+    cid = chat_with_answers(live, live.add_user(login))
+    speaker(live.gw, dict(SERVICE))
+    r = browser.drive(live.url + "/", [*start(login), *opened(cid),
+        ("eval", "first", f"{READ}[0].click(); true"),
+        ("wait", f"{BOX}[0]?.textContent.includes('Нет источника озвучки')"),
+        ("eval", "words", f"{BOX}[0].textContent")], width=1280, timeout=20000)
+    assert not r.get("failed"), r
+    assert "Нет источника озвучки — выберите его в «Озвучке»" in r["values"]["words"]
+    assert "Ищу инструмент" not in r["values"]["words"]
+    assert not read_problems(r), read_problems(r)
