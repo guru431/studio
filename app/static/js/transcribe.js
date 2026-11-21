@@ -35,7 +35,15 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * окна «Расшифровать ещё раз»; у инструмента MCP язык — его поле. Проверка до загрузки (п. 36): длительность записи —
  * `loadedmetadata` по blob URL, пределы — GET /api/transcripts/limits (у инструмента MCP — его `studio/limits`);
  * длиннее записи целиком — «не подходит» словами и не отправляется, длиннее одного запроса — «будет расшифрована
- * N частями» (`#transcribe-check`). Длительность не прочиталась или пределов нет — решает сервер. */
+ * N частями» (`#transcribe-check`). Длительность не прочиталась или пределов нет — решает сервер.
+ *
+ * «Записать» (п. 38, recorder.js): запись встречи с микрофона рядом с «Загрузить запись» — время, «Пауза» /
+ * «Продолжить», «Стоп и расшифровать» (Blob записи уходит тем же путём, что файл, с той же проверкой пределов; её
+ * длительность известна сама), «Отменить» (окно: запись стирается). Запись — модуля recorder.js: уход из раздела её не
+ * прерывает, новый экран подхватывает её по событию `studio-meeting`. На TOTAL_MAX запись встаёт на паузу. Записи,
+ * оставшиеся в IndexedDB (перезагрузка, закрытая вкладка, отказ загрузки), — «Восстановить запись (мм:сс)» и
+ * «Удалить»; куски стираются, только когда сервер запись принял. На iPhone — строка, что запись встаёт, когда экран
+ * гаснет. */
 import { api, hooks, me, toLogin } from './api.js';
 import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
@@ -47,7 +55,8 @@ import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
-import { SPEECH_LANGUAGES } from './mic.js';
+import { SPEECH_LANGUAGES, recordingName } from './mic.js';
+import { SCREEN_STOPS, discard, meeting, pendingRecordings, restore, startMeeting } from './recorder.js';
 import { el, field, openDialog, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -67,6 +76,24 @@ const HOME = '#/transcribe';
  * подхватывает ход, «Отменить загрузку» и итог. busy — идёт пачка, text — ход словами, abort — отменить идущий
  * файл (null — отменять нечего), note — отказ, случившийся без экрана раздела: его покажет следующий. */
 const transfer = { busy: false, text: '', abort: null, note: '' };
+const TOTAL_MAX = 4 * 3600;     // как transcripts.TOTAL_MAX: длиннее запись целиком не примут
+/* Запись встречи (recorder.js) — модуля: note — слова о ней (пауза на пределе), sending — id записей, что уходят
+ * сейчас («Восстановить» их не предлагает). */
+const recording = { note: '', sending: new Set() };
+
+/** Время записи встречи: на TOTAL_MAX — пауза и слова (длиннее не примут, записанное цело). */
+function meetingTick(seconds, paused) {
+  if (paused || seconds < TOTAL_MAX) return;
+  recording.note = tr("Запись достигла {0} — остановите её и расшифруйте", span(TOTAL_MAX));
+  meeting()?.pause();
+}
+
+/** Имя записи встречи по её началу: «Запись 2026-11-21 14-05» (без «:» — имя файла выгрузки). */
+function meetingName(started) {
+  const d = new Date(started);
+  const two = (x) => String(x).padStart(2, '0');
+  return tr("Запись {0}", `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}`);
+}
 // перезагрузка стёрла бы несохранённую правку или оборвала пачку загрузок (между файлами holdRefresh не держит) —
 // автоматическую (refresh.js) они запрещают
 document.addEventListener('studio-before-auto-refresh', (event) => {
@@ -164,16 +191,27 @@ function build(view, ctx) {
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
   const upload = el('button', { type: 'button', class: 'ctl-primary', id: 'transcribe-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"));
   upload.addEventListener('click', () => input.click());
+  const record = el('button', { type: 'button', class: 'ctl-chip', id: 'transcribe-record', hidden: !!ctx.hint }, icon('mic'), tr("Записать"));
+  let starting = false;        // запись встречи ждёт разрешения на микрофон
   const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy,
     turns: mcpTurns });
-  const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
+  const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ...(ctx.hint ? [] : [upload, record]));
   const title = el('h1', {}, NAMES.transcribe);
   const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const checked = el('p', { class: 'muted small', id: 'transcribe-check', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
+  // запись встречи: время, «Пауза», «Стоп и расшифровать», «Отменить»; оставшиеся записи — «Восстановить»
+  const recTime = el('span', { class: 'rec-time', id: 'rec-time', role: 'timer' });
+  const recPause = el('button', { type: 'button', class: 'btn btn-sm', id: 'rec-pause' });
+  const recStop = el('button', { type: 'button', class: 'btn btn-sm btn-accent', id: 'rec-stop' }, icon('stop'), tr("Стоп и расшифровать"));
+  const recCancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'rec-cancel' }, tr("Отменить"));
+  const recNote = el('p', { class: 'muted small', id: 'rec-note', 'aria-live': 'polite' });
+  const recPanel = el('div', { class: 'tr-rec', id: 'rec-panel', hidden: true }, recTime, recPause, recStop, recCancel, recNote);
+  const restoreBar = el('div', { class: 'tr-rec', id: 'rec-restore-bar', hidden: true });
   const nativeHint = ctx.hint?.('hint-bar');
-  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, checked, sending, mcp.output, body);
+  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, checked, recPanel, restoreBar, sending,
+    mcp.output, body);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
   // язык загрузки — «как у Агентов» (picker.js) после выбора инструмента MCP
@@ -582,11 +620,12 @@ function build(view, ctx) {
   function paintMcp() {
     add.hidden = !mcp.control.hidden || !!ctx.hint;
     upload.hidden = !!ctx.hint && !mcp.tool;
+    record.hidden = upload.hidden;
     if (nativeHint && mcp.tool) {
       nativeHint.hidden = true;
       if (!upload.parentNode) {
         aside.prepend(add);
-        toolbar.append(upload);
+        toolbar.append(upload, record);
       }
     }
     input.multiple = !mcp.tool;                    // инструмент MCP берёт один файл
@@ -596,10 +635,12 @@ function build(view, ctx) {
 
   function paintBusy() {
     input.disabled = upload.disabled = transfer.busy || mcp.busy || checking;
+    record.disabled = !!meeting() || starting;
   }
 
-  /** Проверка до загрузки: записи, которые можно отправить; «не подходит» — в `error`, «частями» — в `checked`. */
-  async function fit(files) {
+  /** Проверка до загрузки: записи, которые можно отправить; «не подходит» — в `error`, «частями» — в `checked`.
+   * `seconds` — длительность, известная заранее (запись встречи: webm браузера её не называет). */
+  async function fit(files, seconds = null) {
     checking = true;
     paintBusy();
     try {
@@ -609,7 +650,7 @@ function build(view, ctx) {
       if (!limits) return files;
       const ok = [], refused = [], parts = [];
       for (const file of files) {
-        const sec = await durationOf(file);
+        const sec = seconds ?? await durationOf(file);
         if (sec !== null && sec > limits.total_max) {
           refused.push(tr("«{0}» не подходит: длиннее {1}", file.name, span(limits.total_max)));
           continue;
@@ -639,17 +680,145 @@ function build(view, ctx) {
     }
   }
 
-  input.addEventListener('change', async () => {
-    const files = [...input.files];
-    input.value = '';
-    if (!files.length || input.disabled) return;
+  /** Проверка и загрузка подходящих (файлы и запись встречи); true — приняты все. */
+  async function deliver(files, seconds = null) {
     error.textContent = checked.textContent = '';
     const tool = mcp.tool, chosen = langSelect.value;
-    const ok = await fit(files);
-    if (!ok.length || tool !== mcp.tool) return;    // пока проверяли, сменили инструмент — выбрать заново
-    if (tool) mcp.run({}, { files: { artifact_id: ok[0] } });
-    else sendAll(ok, chosen === 'auto' ? '' : chosen);
+    const ok = await fit(files, seconds);
+    if (!ok.length || tool !== mcp.tool) return false;    // пока проверяли, сменили инструмент — выбрать заново
+    const sent = tool ? await mcp.run({}, { files: { artifact_id: ok[0] } }) : await sendAll(ok, chosen === 'auto' ? '' : chosen);
+    return sent && ok.length === files.length;
+  }
+
+  input.addEventListener('change', () => {
+    const files = [...input.files];
+    input.value = '';
+    if (files.length && !input.disabled) deliver(files);
   });
+
+  /* запись встречи */
+  function paintMeeting() {
+    const rec = meeting();
+    recPanel.hidden = !rec;
+    paintBusy();
+    if (!rec) return;
+    recPanel.dataset.state = rec.paused ? 'paused' : 'recording';
+    recTime.textContent = `${rec.paused ? tr("Пауза") : tr("Идёт запись")} · ${clock(rec.seconds)}`;
+    if (recPause.dataset.paused !== String(rec.paused)) {
+      recPause.dataset.paused = String(rec.paused);
+      recPause.replaceChildren(icon(rec.paused ? 'mic' : 'pause'), rec.paused ? tr("Продолжить") : tr("Пауза"));
+    }
+    recNote.textContent = [recording.note, rec.safe ? '' : tr("Запись не сохраняется на устройстве — перезагрузка её сотрёт."),
+      SCREEN_STOPS ? tr("Когда экран гаснет, запись встаёт: держите его включённым.") : ''].filter(Boolean).join(' ');
+  }
+
+  /** Записи, оставшиеся в IndexedDB: «Восстановить запись (мм:сс)» и «Удалить». */
+  async function paintRestore() {
+    const items = await pendingRecordings();
+    const rec = meeting();
+    const left = items.filter((item) => item.id !== rec?.id && !recording.sending.has(item.id));
+    restoreBar.hidden = !left.length;
+    restoreBar.replaceChildren(...left.map((item) => {
+      const back = el('button', { type: 'button', class: 'btn btn-sm btn-accent rec-restore', 'data-id': item.id },
+        tr("Восстановить запись ({0})", clock(item.seconds)));
+      back.addEventListener('click', () => recover(item));
+      const drop = el('button', { type: 'button', class: 'btn btn-sm btn-danger rec-discard', 'data-id': item.id }, tr("Удалить"));
+      drop.addEventListener('click', () => confirmDrop(async () => {
+        await discard(item.id);
+        await paintRestore();
+      }));
+      return el('div', { class: 'tr-rec-item' }, el('span', { class: 'muted small' }, tr("Незаконченная запись · {0}", when(item.started))),
+        back, drop);
+    }));
+  }
+
+  /** «Отменить» запись и «Удалить» оставшуюся — окном: звук стирается с устройства. */
+  function confirmDrop(go) {
+    const fail = el('p', { class: 'error' });
+    const yes = el('button', { type: 'button', class: 'btn btn-danger solid', id: 'rec-drop-confirm' }, tr("Удалить запись"));
+    const dialog = openDialog(root, { id: 'rec-drop-dialog', title: tr("Удалить запись?"), actions: [yes],
+      body: [el('p', {}, tr("Записанный звук сотрётся с этого устройства — вернуть его нельзя.")), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await go();
+        dialog.close();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
+  /** Запись встречи — тем же путём, что файл; куски на устройстве стираются, только когда сервер её принял. */
+  async function sendMeeting(id, blob, started, seconds) {
+    recording.sending.add(id);
+    try {
+      const file = new File([blob], recordingName(blob, meetingName(started)), { type: blob.type });
+      if (await deliver([file], seconds)) await discard(id).catch(() => {});
+    } finally {
+      recording.sending.delete(id);
+      screen?.paintRestore();
+    }
+  }
+
+  async function recover(item) {
+    if (recording.sending.has(item.id)) return;
+    let blob;
+    try {
+      blob = await restore(item.id);
+    } catch (err) {
+      error.textContent = words(err);
+      return;
+    }
+    await sendMeeting(item.id, blob, item.started, item.seconds);
+  }
+
+  record.addEventListener('click', async () => {
+    if (meeting() || starting) return;
+    error.textContent = '';
+    recording.note = '';
+    starting = true;
+    paintBusy();
+    try {
+      await startMeeting({ onTick: meetingTick });
+    } catch (err) {
+      error.textContent = words(err);
+    } finally {
+      starting = false;
+      paintMeeting();
+    }
+  });
+  recPause.addEventListener('click', () => {
+    const rec = meeting();
+    if (!rec) return;
+    if (rec.paused) {
+      recording.note = '';
+      rec.resume();
+    } else {
+      rec.pause();
+    }
+    paintMeeting();
+  });
+  recStop.addEventListener('click', async () => {
+    const rec = meeting();
+    if (!rec || recording.sending.has(rec.id)) return;   // уже останавливается
+    const seconds = rec.seconds;
+    recording.sending.add(rec.id);            // конец записи перерисует «Восстановить» — её там нет
+    recording.note = '';
+    const blob = await rec.stop();
+    await sendMeeting(rec.id, blob, rec.started, seconds);
+  });
+  recCancel.addEventListener('click', () => {
+    const rec = meeting();
+    if (rec && !recording.sending.has(rec.id)) confirmDrop(() => rec.cancel());
+  });
+  /** Время и пауза — каждые 250 мс; конец записи (stop, cancel, сама встала) — и оставшиеся записи. */
+  function onMeeting(event) {
+    paintMeeting();
+    if (!event.detail) paintRestore();
+  }
+  document.addEventListener('studio-meeting', onMeeting);
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
   /** ?id адреса («Открыть» в «В работе», «к записи» из чата) — при сборке и при переходе внутри раздела
@@ -664,6 +833,8 @@ function build(view, ctx) {
   }
   paintView();
   paintUpload();
+  paintMeeting();
+  paintRestore();
   follow(ctx.query && ctx.query.get('id'));
 
   /** Закрытие вкладки и ручная перезагрузка с несохранённой правкой — вопрос браузера. */
@@ -679,6 +850,7 @@ function build(view, ctx) {
     dirty,
     leave,
     paintUpload,
+    paintRestore,
     say(text) { error.textContent = text; },
     /** Запись принята: список, и она выбрана, если несохранённая правка не держит открытую. */
     async accepted(id) {
@@ -689,6 +861,7 @@ function build(view, ctx) {
     load: () => records.load(),
     destroy() {
       window.removeEventListener('beforeunload', unload);
+      document.removeEventListener('studio-meeting', onMeeting);
       mcp.destroy();
       records.stop();
     },
@@ -764,13 +937,15 @@ function send(file, label, language) {
 }
 
 /** Несколько записей — по одной, пока сервер принимает (очередь transcripts.QUEUE_MAX); первая неудача или
- * «Отменить загрузку» останавливает пачку, не отправленные называются словами. */
+ * «Отменить загрузку» останавливает пачку, не отправленные называются словами. true — приняты все. */
 async function sendAll(files, language) {
   transfer.busy = true;
   transfer.note = '';
+  let all = true;
   for (const [i, file] of files.entries()) {
     const fail = await send(file, files.length > 1 ? tr("{0} из {1}", i + 1, files.length) : '', language);
     if (fail === null) continue;
+    all = false;
     const left = files.slice(i).map((f) => f.name);
     say(files.length > 1 ? `${fail} ${tr("Не отправлены: {0}", left.join(', '))}` : fail);
     if (fail === CANCELLED) screen?.load();        // сервер мог успеть принять запись целиком — список покажет её
@@ -779,6 +954,7 @@ async function sendAll(files, language) {
   transfer.busy = false;
   transfer.text = '';
   screen?.paintUpload();
+  return all;
 }
 
 export function mount(view, ctx) {

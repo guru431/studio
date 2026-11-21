@@ -1,0 +1,148 @@
+"""«Записать» в «Расшифровке» (п. 38 спеки 2026-11-21): длинная запись с микрофона — пауза, смена раздела её не
+прерывает (точка у рельса), «Стоп и расшифровать» загружает тем же путём, что файл; перезагрузка посреди записи —
+«Восстановить запись (мм:сс)» из IndexedDB (Chromium 320/1280).
+
+Микрофон и MediaRecorder — поддельные (сценарий до скриптов каждой страницы): рекордер отдаёт куски WAV на 6 с по
+2000 байт каждые 300 мс, на stop — остаток; склеенные куски — целый WAV, и сервер принимает запись."""
+import pytest
+
+from test_ui_browser import NO_OVERFLOW, READY, add_gateway, browser, go, live, problems, signin  # noqa: F401
+
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+
+#: window.recorders — созданные рекордеры, recSlices — timeslice их start, stopped — отпущенные дорожки,
+#: locks / unlocks — Wake Lock экрана
+FAKE_RECORDER = """(() => {
+  const rate = 8000, n = rate * 6, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  const put = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  put(0, 'RIFF'); v.setUint32(4, 36 + n, true); put(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true);
+  v.setUint16(34, 8, true); put(36, 'data'); v.setUint32(40, n, true); new Uint8Array(buf, 44).fill(128);
+  const wav = new Uint8Array(buf);
+  window.recorders = []; window.recSlices = []; window.stopped = 0; window.locks = 0; window.unlocks = 0;
+  if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = async () => {
+    const track = { enabled: true, stop() { window.stopped += 1; } };
+    return { getTracks: () => [track] };
+  };
+  Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: async () => {
+    window.locks += 1;
+    const lock = { released: false, async release() { if (!lock.released) { lock.released = true; window.unlocks += 1; } } };
+    return lock; } } });
+  class FakeRecorder extends EventTarget {
+    static isTypeSupported(type) { return type === 'audio/webm;codecs=opus'; }
+    constructor(stream, options) { super(); this.mimeType = (options && options.mimeType) || ''; this.state = 'inactive';
+      this.at = 0; window.recorders.push(this); }
+    give(all) { const end = all ? wav.length : Math.min(wav.length, this.at + 2000);
+      const event = new Event('dataavailable'); event.data = new Blob([wav.slice(this.at, end)], { type: 'audio/webm' });
+      this.at = end; this.dispatchEvent(event); }
+    start(slice) { window.recSlices.push(slice); this.state = 'recording';
+      this.timer = setInterval(() => { if (this.state === 'recording') this.give(false); }, 300); }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
+    requestData() { if (this.state !== 'inactive') this.give(false); }
+    stop() { clearInterval(this.timer); this.give(true); this.state = 'inactive';
+      setTimeout(() => this.dispatchEvent(new Event('stop')), 0); }
+  }
+  window.MediaRecorder = FakeRecorder;
+})();"""
+
+RECORDER = "(await import('/static/js/recorder.js'))"
+PENDING = f"(async () => {RECORDER}.pendingRecordings())()"
+LAST = "window.recorders.at(-1)"
+PANEL = "document.querySelector('#rec-panel')"
+DOT = "document.querySelector('#rec-dot')"
+
+
+def record(login):
+    return [*signin(login), ("wait", READY), add_gateway(),
+            *go("transcribe"), ("wait", "document.querySelector('#transcribe-record')?.offsetWidth > 0"),
+            ("click", "#transcribe-record"),
+            ("wait", f"{PANEL} && !{PANEL}.hidden && {LAST}?.state === 'recording'")]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_record_pause_leave_and_stop_uploads_the_recording(browser, live, width):
+    login = f"rec{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*record(login),
+        ("wait", f"(async () => {{ const p = await {RECORDER}.pendingRecordings(); return p.length === 1 && p[0].seconds > 0; }})()"),
+        ("eval", "fits", NO_OVERFLOW),
+        ("eval", "slice", "window.recSlices[0]"),
+        ("eval", "type", f"{LAST}.mimeType"),
+        ("click", "#rec-pause"), ("wait", f"{LAST}.state === 'paused' && {PANEL}.dataset.state === 'paused'"),
+        ("eval", "paused", "document.querySelector('#rec-pause').textContent"),
+        ("eval", "unlocked", "window.unlocks"),
+        # диктовка, пока идёт запись встречи, не стартует: микрофон у неё
+        ("eval", "dictation", "(async () => { const m = await import('/static/js/mic.js');"
+                              " try { await m.startRecording(10); return 'started'; } catch (e) { return e.message; } })()"),
+        ("click", "#rec-pause"), ("wait", f"{LAST}.state === 'recording' && {PANEL}.dataset.state === 'recording'"),
+        # смена раздела запись не прерывает: точка у рельса, запись идёт
+        *go("chat"), ("wait", "document.querySelector('#chat-input')"),
+        ("wait", f"{DOT} && !{DOT}.hidden && /\\d\\d:\\d\\d/.test({DOT}.textContent)"),
+        ("eval", "dot", f"{DOT}.textContent"),
+        ("eval", "dotFits", NO_OVERFLOW),
+        ("eval", "still", f"{LAST}.state"),
+        ("click", "#rec-dot"), ("wait", f"location.hash === '#/transcribe' && {PANEL} && !{PANEL}.hidden"),
+        ("click", "#rec-stop"),
+        ("wait", "document.querySelector('.tr-item')"),
+        ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)()"),
+        ("wait", f"{DOT}.hidden && {PANEL}.hidden"),
+        ("eval", "item", "document.querySelector('.tr-item').textContent"),
+        ("eval", "released", "[window.stopped, window.locks, window.unlocks]")],
+        width=width, height=900, mobile=width == 320, init=FAKE_RECORDER, timeout=30000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["fits"] and v["dotFits"], v
+    assert v["slice"] == 10000 and v["type"] == "audio/webm;codecs=opus", v      # кусок каждые 10 с
+    assert v["paused"] == "Продолжить" and v["unlocked"] >= 1, v                 # на паузе экран может гаснуть
+    assert "запись" in v["dictation"] and v["dictation"] != "started", v
+    assert "Запись" in v["dot"] and v["still"] == "recording", v
+    assert v["item"].startswith("Запись "), v["item"]
+    stopped, locks, unlocks = v["released"]
+    assert stopped == 1 and locks >= 2 and unlocks == locks, v["released"]
+    assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
+    assert not problems(r), problems(r)
+
+
+def test_cancel_erases_the_recording_after_a_question(browser, live):
+    login = "reccancel"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*record(login),
+        ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 1)()"),
+        ("click", "#rec-cancel"), ("wait", "document.querySelector('#rec-drop-dialog[open]')"),
+        ("click", "#rec-drop-confirm"),
+        ("wait", f"{PANEL}.hidden && {DOT}.hidden && !document.querySelector('#rec-drop-dialog[open]')"),
+        ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)()"),
+        ("eval", "restore", "document.querySelector('#rec-restore-bar').hidden"),
+        ("eval", "stopped", "window.stopped")], init=FAKE_RECORDER)
+    assert not r.get("failed"), r
+    assert r["values"] == {**r["values"], "restore": True, "stopped": 1}, r["values"]
+    assert "POST /api/transcripts" not in r["sent"], r["sent"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_reload_in_the_middle_offers_to_restore_the_recording(browser, live, width):
+    login = f"recback{width}"
+    live.add_user(login)
+    restore = "document.querySelector('.rec-restore')"
+    r = browser.drive(live.url + "/", [*record(login),
+        ("wait", f"(async () => {{ const p = await {RECORDER}.pendingRecordings(); return p.length === 1 && p[0].seconds >= 1; }})()"),
+        ("eval", "reload", "location.reload(); true"),
+        ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
+        ("wait", f"{restore}?.offsetWidth > 0"),
+        ("eval", "label", f"{restore}.textContent"),
+        ("eval", "panel", f"{PANEL}.hidden"),
+        ("eval", "fits", NO_OVERFLOW),
+        ("click", ".rec-restore"),
+        ("wait", "document.querySelector('.tr-item')"),
+        ("wait", f"(async () => (await {RECORDER}.pendingRecordings()).length === 0)() && !{restore}"),
+        ("eval", "item", "document.querySelector('.tr-item').textContent")],
+        width=width, height=900, mobile=width == 320, init=FAKE_RECORDER, timeout=30000)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["label"].startswith("Восстановить запись (00:0"), v["label"]
+    assert v["panel"] and v["fits"], v
+    assert v["item"].startswith("Запись "), v["item"]
+    assert r["sent"].count("POST /api/transcripts") == 1, r["sent"]
+    assert not problems(r), problems(r)
