@@ -65,8 +65,9 @@ REFS = {
     "voices": ("voices", ("media_id",), ""),
     "translate": ("translations", ("source_media_id",), ""),
 }
-#: вторые таблицы раздела с файлами — так же, со своим user_id (картинки и фото страниц распознавания)
-MORE_REFS = {"ocr": (("scan_pages", ("media_id",), ""),),
+#: вторые таблицы раздела с файлами — так же, со своим user_id (медиа диалога, фото страниц распознавания, образцы)
+MORE_REFS = {"chat": (("chat_media", ("media_id",), ""),),
+             "ocr": (("scan_pages", ("media_id",), ""),),
              "voices": (("voice_samples", ("media_id",), ""),)}
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
 BUSY = {"code": "busy", "message": "выгрузка уже идёт — дождитесь, пока она скачается"}
@@ -78,7 +79,7 @@ README = """Выгрузка истории студии
   (подключения и отмеченные модели, умолчания), пресеты и роли чата (имя, текст, порядок).
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
   найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом) и рассуждение модели (reasoning,
-  reasoning_sec — секунды).
+  reasoning_sec — секунды), звук и видео диалога для MCP (media: имя, тип, размер, ссылка на файл).
 - images/0001.json, images/0002.json … — картинки страницами по 500: промпт, модель, размер, seed,
   цепочка промптов, файлы итога, исходника, маски.
 - videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
@@ -182,7 +183,12 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
                 for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
                                           " reasoning_sec FROM messages"
                                           " WHERE chat_id = ? ORDER BY created, rowid", (chat_id,))]
-    return {**dict(chat), "messages": messages}
+    chat_media = [{"id": r["id"], "name": r["name"], "mime": r["mime"], "size": r["size"], "created": r["created"],
+                   "file": files.get(r["media_id"])}
+                  for r in state.DB.execute("SELECT id, name, mime, size, created, media_id FROM chat_media"
+                                            " WHERE chat_id = ? AND user_id = ? ORDER BY created, rowid",
+                                            (chat_id, user_id))]
+    return {**dict(chat), "messages": messages, "media": chat_media}
 
 
 def _pages(table: str, user_id: int):
