@@ -103,6 +103,7 @@ import { readSSE } from './sse.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
+import { readAloud } from './speech-read.js';
 import { NAMES } from './sections-meta.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
@@ -1635,7 +1636,15 @@ function build(view, ctx) {
         }
         setTimeout(() => { copy.textContent = tr("Копировать"); }, COPIED_MS);
       });
-      p.actions.append(copy);
+      // «Прочитать» — источником «Озвучки» по умолчанию; проигрыватель — под кнопками, перерисовка его не трогает
+      const read = button(tr("Прочитать"), { class: 'btn btn-sm msg-read' }, () => {
+        if (!p.read?.isConnected) {
+          p.read = el('div', { class: 'msg-read' });
+          p.actions.after(p.read);
+        }
+        readAloud(displayed, { kind: 'chat', id: String(m.id || chatId) }, p.read);
+      });
+      p.actions.append(copy, read);
     }
     const kept = unsaved.get(m.id);
     if (kept?.message === m && !kept.closed) {

@@ -609,7 +609,13 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .sp-record + .sp-record { margin-top: var(--space-7); padding-top: var(--space-7); border-top: 1px solid var(--border); }
 .sp-voice-name { margin: 0; overflow-wrap: anywhere; }
 .sp-audio { width: 100%; }
-.sp-toolbar { display: flex; flex: none; gap: var(--space-4); padding: var(--space-4) var(--space-7); }
+.sp-toolbar { display: flex; flex: none; flex-wrap: wrap; gap: var(--space-4); padding: var(--space-4) var(--space-7); }
+/* «Прочитать» (speech-read.js): проигрыватель под кнопками ответа, перевода и скана; «Слушать подряд» чата озвучки */
+.read-box:empty, .msg-read:empty { display: none; }
+.read-player { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
+.read-player p { margin: 0; }
+.read-download { align-self: flex-start; }
+#sp-chain { flex: none; padding: 0 var(--space-7); }
 .sp-item[data-state="error"] .tr-state { color: var(--danger); }
 #speech-over { margin: 0; }
 .speech .split-main { overflow: hidden; }

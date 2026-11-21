@@ -46,7 +46,13 @@ export function picker(host, label, select) {
   host.append(menu);
   const popup = popupMenu(trigger, menu, { side: 'above', blocked: () => select.disabled || wrap.hidden, fill: close => {
     const items = optionItems(select, close);
-    return [[el('div', { class: 'pick-heading', 'aria-hidden': 'true' }, label), ...items], items];
+    // группы select (optgroup) — подзаголовками перед первым своим пунктом
+    const nodes = items.flatMap((item, n) => {
+      const group = select.options[n].parentElement;
+      const first = group.tagName === 'OPTGROUP' && group.querySelector('option') === select.options[n];
+      return first ? [el('div', { class: 'pick-heading pick-group', 'aria-hidden': 'true' }, group.label), item] : [item];
+    });
+    return [[el('div', { class: 'pick-heading', 'aria-hidden': 'true' }, label), ...nodes], items];
   } });
   const sync = () => {
     value.textContent = shown(select);

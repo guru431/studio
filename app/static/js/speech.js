@@ -3,9 +3,13 @@ import { message as serverMessage, tr } from './i18n.js';
  *
  * Слева — чаты по дням и времени начала (идущий, ошибка, отмена — словами), справа — их записи: текст, голос, плеер,
  * «Изменить», «Скачать», «Удалить»; идущая — состояние словами и «Отменить»; «Удалить чат» — весь чат разом.
- * Внизу — поле текста (до TEXT_MAX знаков, сверх — отказ словами; field.js: «очистить», микрофон)
- * и строка под ним: «модель» (отмеченные модели раздела), «голос», счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их
- * заводят в настройках раздела «Озвучка»), у внешнего сервиса — имя голоса с подсказками.
+ * Внизу — поле текста (до LONG_MAX знаков: длиннее записи — частями одного чата, «n / 200 000 · будет N частей»;
+ * правка записи — до предела записи PART_MAX; сверх — отказ словами; field.js: «очистить», микрофон)
+ * и строка под ним: «модель» (отмеченные модели раздела), «голос», «язык» (Qwen3-TTS и F5-TTS шлюза: #chip-language),
+ * счётчик и «Озвучить» справа; у шлюза srvllm — свои голоса по образцу (их заводят в настройках раздела «Озвучка»),
+ * у внешнего сервиса — имя голоса с подсказками; у инструмента MCP с перечнем голосов (`enum` поля voice) — его
+ * голоса группой «имя сервера» рядом с личными. У чата из нескольких записей — «Слушать подряд» (#sp-play-all,
+ * speech-read.js chatPlayer) и «Скачать одним mp3» (#sp-download-all, GET /api/speeches/chats/<id>/audio).
  * Озвучка — POST /api/speeches, задание на сервере (очередь пользователя: «в очереди · N»); идущие
  * опрашиваются раз в POLL_MS, готовые части идущей можно слушать до склейки (#sp-live).
  * Список и выбор — как у «Расшифровки» (createPicker, feed.js): страницы по PAGE с «Показать ещё»,
@@ -22,16 +26,59 @@ import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
-import { el, openDialog, words } from './ui.js';
+import { chatPlayer } from './speech-read.js';
+import { el, openDialog, plural, words } from './ui.js';
 import { timeOnly } from './time.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
-const TEXT_MAX = 2000;
+const LONG_MAX = 200000;                            // speeches.LONG_MAX
+const PART_MAX = { srvllm: 2000, other: 4000 };     // speeches.TEXT_MAX, speeches.EXTERNAL_MAX
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const SERVICE_VOICES = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
 
 let screen = null;
+
+/** 200000 → «200 000». */
+function grouped(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+/** Сколько записей даст текст: как speeches.split_text — абзацы, предложения, слова, соседние — вместе до limit. */
+function partCount(text, limit) {
+  let count = 0;
+  let last = 0;
+  const add = (size, sep) => {
+    if (count && last + sep + size <= limit) last += sep + size;
+    else {
+      count += 1;
+      last = size;
+    }
+  };
+  for (const raw of text.split(/\n\s*\n/)) {
+    const paragraph = raw.trim();
+    if (paragraph.length <= limit) {
+      if (paragraph) add(paragraph.length, 2);
+      continue;
+    }
+    for (const rawSentence of paragraph.split(/(?<=[.!?…])\s+|\n+/)) {
+      const sentence = rawSentence.trim();
+      if (sentence.length <= limit) {
+        if (sentence) add(sentence.length, 1);
+        continue;
+      }
+      for (let word of sentence.split(/\s+/)) {
+        while (word.length > limit) {
+          count += 1;
+          last = limit;
+          word = word.slice(limit);
+        }
+        if (word) add(word.length, 1);
+      }
+    }
+  }
+  return count;
+}
 
 function build(view, ctx) {
   let links = [];
@@ -65,17 +112,21 @@ function build(view, ctx) {
   const fresh = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-new' }, icon('plus'), tr("Новый чат"));
   const dropChat = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'sp-delete-chat', hidden: true },
     tr("Удалить чат"));
+  const playAll = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-play-all', hidden: true }, tr("Слушать подряд"));
+  const downloadAll = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-download-all', hidden: true },
+    tr("Скачать одним mp3"));
+  const chainBox = el('div', { class: 'read-box', id: 'sp-chain' });
+  let chain = null;              // «Слушать подряд» показанного чата: { box, stop }
   const head = el('header', { class: 'head' }, el('h1', {}, NAMES.speech));
-  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, dropChat);
+  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, playAll, downloadAll, dropChat);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
   // без maxlength: вставка длинного текста не режется молча — сверх TEXT_MAX счётчик красный, «Озвучить» закрыта словами
   const text = el('textarea', { id: 'speech-text', rows: '1', 'aria-label': tr("Текст для озвучки"),
     placeholder: tr("Текст, который нужно озвучить") });
-  const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${TEXT_MAX}`);
-  const over = el('p', { class: 'error small', id: 'speech-over', 'aria-live': 'polite', hidden: true },
-    tr("Текст длиннее {0} знаков — сократите его или разделите на несколько записей чата.", TEXT_MAX));
+  const count = el('span', { id: 'speech-count', class: 'muted small' }, `0 / ${grouped(LONG_MAX)}`);
+  const over = el('p', { class: 'error small', id: 'speech-over', 'aria-live': 'polite', hidden: true });
   const modelPick = el('select', { class: 'chip', id: 'chip-model', 'aria-label': tr("Модель") });
   const mcpModelPick = el('select', { class: 'chip', id: 'chip-mcp-model', 'aria-label': tr("Модель") });
   // выборы — «как у Агентов» (picker.js): select остаётся под кнопкой и хранит значение; голос сервиса — поле в рамке чипа
@@ -83,6 +134,10 @@ function build(view, ctx) {
   const mcpModelView = picker(view, tr("Модель"), mcpModelPick);
   mcpModelView.wrap.hidden = true;
   let voiceView = null;          // выбор голоса-образца: пересоздаётся вместе с select #chip-voice
+  // язык озвучки шлюза (Qwen3-TTS, F5-TTS); названия языков — на самих языках
+  const langPick = el('select', { class: 'chip', id: 'chip-language', 'aria-label': tr("Язык озвучки") },
+    el('option', { value: 'ru' }, 'Русский'), el('option', { value: 'en' }, 'English'));
+  const langView = picker(view, tr("Язык озвучки"), langPick);
   const voiceBox = el('span', { class: 'sp-voice' });
   const go = el('button', { type: 'submit', id: 'speech-go', class: 'btn btn-accent composer-go' }, tr("Озвучить"));
   const hint = el('p', { class: 'muted small sp-voice-hint', hidden: true });
@@ -93,9 +148,9 @@ function build(view, ctx) {
     onChange: paintMcp, onBusy: paintBusy });
   const textBox = fieldBox(text, { fit: true });
   const form = el('form', { class: 'composer', id: 'speech-composer', hidden: !!ctx.hint }, editNote, textBox.box, textBox.error, over, hint,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap, voiceBox, count, cancelEdit), go));
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, mcpModelView.wrap, voiceBox, langView.wrap, count, cancelEdit), go));
   const nativeHint = ctx.hint?.('hint-bar');
-  const main = el('section', { class: 'split-main' }, head, toolbar, error, body, mcp.output, nativeHint || form);
+  const main = el('section', { class: 'split-main' }, head, toolbar, error, chainBox, body, mcp.output, nativeHint || form);
   const root = el('div', { class: 'split speech' }, aside, backdrop, main);
   view.append(root);
   const draft = sectionDraft('speech', text);
@@ -122,8 +177,27 @@ function build(view, ctx) {
     if (previous?.tagName === 'INPUT') serviceVoice = previous.value;
     hint.hidden = true;
     const clone = active && mcp.canClone() && !!voices.length;
+    // голоса сервера MCP — перечень (`enum`) поля voice инструмента: группой «имя сервера» рядом с личными
+    const schema = active && mcp.has('voice') ? mcp.argument('voice') : null;
+    const shared = Array.isArray(schema?.enum) ? schema.enum.filter((v) => typeof v === 'string' && v) : [];
     voiceBox.hidden = active && !mcp.has('voice') && !clone;
-    if (active ? clone && (mcpModelPick.options.length || kind === 'srvllm' || !mcp.has('voice')) : kind === 'srvllm') {
+    if (active && shared.length) {
+      const mine = clone ? voices.map((v) => el('option', { value: v.id }, v.name)) : [];
+      const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': tr("Голос") },
+        ...(mine.length ? [el('optgroup', { label: tr("Мои голоса") }, ...mine)] : []),
+        el('optgroup', { label: mcp.server || 'MCP' }, ...shared.map((v) => el('option', { value: v, 'data-mcp': '1' }, v))));
+      const known = [...pick.options].find((o) => o.value === sampleId);
+      pick.value = known ? sampleId : shared.includes(schema.default) ? schema.default : shared[0];
+      const sampleHint = () => {
+        hint.textContent = tr("Выбранный образец голоса будет отправлен на MCP-сервер.");
+        hint.hidden = !!pick.selectedOptions[0]?.dataset.mcp;
+      };
+      pick.addEventListener('change', sampleHint);
+      voiceView?.unmount();
+      voiceView = picker(view, tr("Голос"), pick);
+      voiceBox.replaceChildren(voiceView.wrap);
+      sampleHint();
+    } else if (active ? clone && (mcpModelPick.options.length || kind === 'srvllm' || !mcp.has('voice')) : kind === 'srvllm') {
       const pick = el('select', { class: 'chip', id: 'chip-voice', 'aria-label': tr("Голос") },
         ...voices.map((v) => el('option', { value: v.id }, v.name)));
       if (voices.some(v => v.id === sampleId)) pick.value = sampleId;
@@ -146,7 +220,9 @@ function build(view, ctx) {
         value: serviceVoice || (active ? '' : 'alloy'), placeholder: tr("Голос сервиса"),
         maxlength: '64', 'aria-label': tr("Голос сервиса"), autocomplete: 'off' })), options);
     }
+    langView.wrap.hidden = active || kind !== 'srvllm';
     syncPicks();
+    paintCount();
   }
 
   /** Подписи выборов после программной смены значения, опций или видимости select. */
@@ -154,6 +230,16 @@ function build(view, ctx) {
     modelView.sync();
     mcpModelView.sync();
     voiceView?.sync();
+    langView.sync();
+  }
+
+  /** Предел поля: новая озвучка — LONG_MAX частями; правка записи и инструмент MCP — одна запись. */
+  function partMax() {
+    return PART_MAX[chosen().kind === 'srvllm' || mcp.tool ? 'srvllm' : 'other'];
+  }
+
+  function limit() {
+    return editing || mcp.tool ? partMax() : LONG_MAX;
   }
 
   function paintMcp() {
@@ -177,14 +263,19 @@ function build(view, ctx) {
 
   function paintBusy() {
     fresh.disabled = cancelEdit.disabled = sending || mcp.busy;
-    go.disabled = fresh.disabled || text.value.length > TEXT_MAX;
+    go.disabled = fresh.disabled || text.value.length > limit();
   }
 
   function paintCount() {
-    const long = text.value.length > TEXT_MAX;
-    count.textContent = `${text.value.length} / ${TEXT_MAX}`;
+    const max = limit();
+    const long = text.value.length > max;
+    const value = text.value.trim();
+    const parts = !long && max === LONG_MAX && value.length > partMax() ? partCount(value, partMax()) : 1;
+    count.textContent = `${grouped(text.value.length)} / ${grouped(max)}`
+      + (parts > 1 ? ` · ${tr("будет {0} {1}", parts, plural(parts, [tr("часть"), tr("части"), tr("частей")]))}` : '');
     count.classList.toggle('muted', !long);
     count.classList.toggle('error', long);
+    over.textContent = tr("Текст длиннее {0} знаков — сократите его или разделите на несколько записей чата.", grouped(max));
     over.hidden = !long;
     paintBusy();
   }
@@ -320,13 +411,15 @@ function build(view, ctx) {
       modelPick.value = editing.model;
       paintVoice();
       voiceBox.querySelector('#chip-voice').value = editing.voice;
-      voiceView?.sync();
+      langPick.value = editing.language;
+      syncPicks();
       setText(editing.draft);
     }
     editing = null;
     editNote.hidden = true;
     cancelEdit.hidden = true;
     go.textContent = tr("Озвучить");
+    paintCount();
   }
 
   async function startEdit(item) {
@@ -334,14 +427,15 @@ function build(view, ctx) {
     if (!alive || ctx.hint || records.current?.id !== item.chat_id || fresh.disabled || !voiceBox.querySelector('#chip-voice')) return;
     mcp.useNative();
     if (!editing) editing = { draft: text.value, model: modelPick.value,
-      voice: voiceBox.querySelector('#chip-voice').value };
+      voice: voiceBox.querySelector('#chip-voice').value, language: langPick.value };
     editing.id = item.id;
     const option = `${item.connection_id}:${item.model}`;
     if ([...modelPick.options].some((o) => o.value === option)) modelPick.value = option;
     paintVoice();
     const pick = voiceBox.querySelector('#chip-voice');
     pick.value = chosen().kind === 'srvllm' && !voices.some((v) => v.id === item.voice) ? '' : item.voice;
-    voiceView?.sync();
+    langPick.value = item.language || 'ru';
+    syncPicks();
     setText(item.text);
     editNote.hidden = false;
     cancelEdit.hidden = false;
@@ -409,9 +503,12 @@ function build(view, ctx) {
     if (shownChat !== chat?.id) {
       endEdit();
       shownChat = chat?.id;
+      stopChain();
     }
     dropChat.hidden = !chat;
     const items = chat?.items || [];
+    playAll.hidden = items.length < 2;
+    downloadAll.hidden = items.length < 2 || !items.some((i) => i.media_id && !RUNNING.has(i.state));
     if (live && !items.some((i) => i.id === live.id && RUNNING.has(i.state))) {
       live.audio.pause();
       live = null;
@@ -442,6 +539,21 @@ function build(view, ctx) {
     text.focus();
   });
   dropChat.addEventListener('click', () => { if (records.current) confirmDeleteChat(records.current); });
+  function stopChain() {
+    chain?.stop();
+    chain = null;
+    chainBox.replaceChildren();
+  }
+  // записи чата по порядку в одном плеере; ещё идущие играют, когда будут готовы
+  playAll.addEventListener('click', () => {
+    if (!records.current) return;
+    stopChain();
+    chain = chatPlayer(records.current.id, { download: false });
+    chainBox.replaceChildren(chain.box);
+  });
+  downloadAll.addEventListener('click', () => {
+    if (records.current) el('a', { href: `/api/speeches/chats/${encodeURIComponent(records.current.id)}/audio`, download: '' }).click();
+  });
   text.addEventListener('input', paintCount);
   modelPick.addEventListener('change', paintVoice);
   cancelEdit.addEventListener('click', () => endEdit());
@@ -469,7 +581,9 @@ function build(view, ctx) {
     try {
       const { connection_id: connectionId, model } = chosen();
       if (mcp.tool) {
-        const voiceId = voiceField?.tagName === 'SELECT' && mcp.canClone() ? voice : undefined;
+        // голос из перечня сервера уходит полем voice, личный — образцом (voiceId)
+        const shared = !!voiceField?.selectedOptions?.[0]?.dataset.mcp;
+        const voiceId = voiceField?.tagName === 'SELECT' && !shared && mcp.canClone() ? voice : undefined;
         const mcpModel = mcpModelPick.options.length ? (voiceId ? mcpModelPick.value : undefined) : model || undefined;
         const ok = await mcp.run({ text: value, model: mcpModel,
           voice: !voiceId && !voiceBox.hidden && voice ? voice : undefined }, { voiceId });
@@ -481,7 +595,8 @@ function build(view, ctx) {
       }
       const created = await api(edited ? 'PATCH' : 'POST', edited ? `/api/speeches/${edited}` : '/api/speeches', { text: value, voice,
         ...(cid ? { chat_id: cid } : {}),
-        ...(model ? { connection_id: connectionId, model } : {}) });
+        ...(model ? { connection_id: connectionId, model } : {}),
+        ...(langView.wrap.hidden ? {} : { language: langPick.value }) });
       draft.sent(raw);                 // ушли из раздела до ответа — озвученный текст черновиком не вернётся
       kick();
       if (alive && following === navigation && records.current?.id === cid && text.value === raw && editing?.id === edited) {
@@ -529,6 +644,7 @@ function build(view, ctx) {
       if (editing) setText(editing.draft);
       draft.save();
       records.stop();
+      stopChain();
       if (live) live.audio.pause();
       for (const card of cards.values()) card.box.querySelectorAll('audio').forEach((a) => a.pause());
     },

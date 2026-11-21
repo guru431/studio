@@ -74,7 +74,7 @@ The server runs on infrastructure you control. Connect local models through the 
 - Preview reference voices, listen to completed phrases while synthesis continues and download the final MP3.
 - Dictate into chat, media prompts, translation and search. Recognized text is inserted at the cursor for review before sending.
 - Voice input audio is processed without being saved as a recording in Studio history.
-- Gateway speech models speak and recognize **Russian only** (the language is fixed in the request). For other languages, use a compatible external service, which takes the language from the text or the recording.
+- Gateway speech recognition is **Russian only** (the language is fixed in the request); gateway speech synthesis speaks Russian or English (chosen next to the voice). For other languages, use a compatible external service, which takes the language from the text or the recording.
 
 ### Transcription
 
