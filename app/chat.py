@@ -1141,7 +1141,7 @@ class StreamTask:
             if gone is not None:                     # продолжение: инструмента больше нет в наборе хода
                 server, tool = gone
                 step = {"kind": "mcp", "server": server, "tool": tool, "error": chat_pending.GONE}
-            elif key in self.seen:                   # тот же вызов уже исполнен в этом ответе — результат выше
+            elif key in self.seen and not self._polls(c):   # тот же вызов уже исполнен в этом ответе — результат выше
                 step = {"kind": "duplicate",
                         "tool": self.mcp.calls[c.name][1] if self.mcp and c.name in self.mcp.calls else c.name}
             elif self.protected and mcp_client.has_url(web.args_of(c.arguments) or c.arguments):
@@ -1190,6 +1190,12 @@ class StreamTask:
             _, tool, server, _ = self.mcp.calls[c.name]
             return {"kind": "mcp", "server": server, "tool": tool, "error": mcp_client.URL_REFUSED}
         return {"kind": chat_tools.KIND_OF.get(c.name, kind), "error": mcp_client.URL_REFUSED}
+
+    def _polls(self, c: ToolCall) -> bool:
+        """Инструмент MCP с пометкой опроса (`_meta["studio/poll"]`, `mcp_sources.hints`): статус долгого задания —
+        законный повтор, его тот же вызов исполняется снова."""
+        hint = self.mcp.confirm_hint(c.name) if self.mcp else None
+        return bool(hint and hint["poll"])
 
     def _seen_key(self, c: ToolCall) -> str:
         """Ключ вызова для `seen`: sha256 имени и аргументов (JSON с сортировкой ключей). Инструмент MCP — по
