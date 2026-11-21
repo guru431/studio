@@ -432,10 +432,14 @@ def _same_origin(request):
         raise _refuse(403, "origin", "откройте ссылку в браузере")
 
 
+#: ссылка обычного чата в корзине «недоступна», после «Вернуть» — снова открывается (строка и снимок — на месте)
+LIVE = " AND (s.chat_id IS NULL OR s.chat_id IN (SELECT id FROM chats WHERE deleted IS NULL))"
+
+
 def _public_share(token_hash):
     row = state.DB.execute("SELECT s.* FROM chat_shares s JOIN users u ON u.id = s.user_id"
-                            " WHERE s.token_hash = ? AND u.disabled = 0 AND (s.expires IS NULL OR s.expires > ?)",
-                            (token_hash, clock.NOW())).fetchone()
+                            " WHERE s.token_hash = ? AND u.disabled = 0 AND (s.expires IS NULL OR s.expires > ?)"
+                            + LIVE, (token_hash, clock.NOW())).fetchone()
     if row is None:
         raise _refuse()
     return row
@@ -524,12 +528,13 @@ def _visitor(access):
     row = state.DB.execute(
         "SELECT s.id, s.user_id FROM chat_share_visitors v JOIN chat_shares s ON s.id = v.share_id"
         " JOIN users u ON u.id = s.user_id WHERE v.digest = ? AND v.expires > ? AND u.disabled = 0"
-        " AND (s.expires IS NULL OR s.expires > ?)", (security.digest(access), clock.NOW(), clock.NOW())).fetchone()
+        " AND (s.expires IS NULL OR s.expires > ?)" + LIVE,
+        (security.digest(access), clock.NOW(), clock.NOW())).fetchone()
     if row is None:
         # VIEW_SEC прошли, а ссылка жива: хватит снова ввести PIN — не «ссылка недоступна»
         if state.DB.execute(
                 "SELECT 1 FROM chat_share_visitors v JOIN chat_shares s ON s.id = v.share_id JOIN users u ON u.id = s.user_id"
-                " WHERE v.digest = ? AND u.disabled = 0 AND (s.expires IS NULL OR s.expires > ?)",
+                " WHERE v.digest = ? AND u.disabled = 0 AND (s.expires IS NULL OR s.expires > ?)" + LIVE,
                 (security.digest(access), clock.NOW())).fetchone():
             raise _refuse(404, "share_view_expired", "время просмотра истекло — введите PIN снова")
         raise _refuse()

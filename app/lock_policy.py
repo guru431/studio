@@ -139,7 +139,9 @@ def blocks(request, uid: int, digest: str) -> bool:
     # уведомлений (ntfy, push) увело бы на чужое устройство события закрытых разделов, изменение подключений
     # (адрес, ключ, разделы) — переписку закрытого раздела на чужой сервер. Каждый маршрут /api/*
     # отнесён к разделу, закрываемым или открытым явно — реестр в tests/test_lock_policy.py.
-    return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin",
+    # Корзина: список (`GET /api/trash`) прячет закрытые разделы сам, а «Вернуть» и «Удалить навсегда» любой
+    # записи закрыты, пока заперт хоть один раздел — записи разных разделов на одном адресе.
+    return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin", "/api/trash/",
                              "/api/me/sessions", "/api/me/security-events", "/api/me/access", "/api/me/email"))
             or path in ("/api/history", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
                         "/api/me/password-reset")

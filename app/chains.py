@@ -124,21 +124,22 @@ def video_counts(user_id: int, rows) -> dict[str, int]:
     return counts
 
 
-def _exists(table: str, user_id: int, key: str, value: str) -> bool:
-    # table и key — из кода этого модуля, не из запроса
-    return state.DB.execute(f"SELECT 1 FROM {table} WHERE {key} = ? AND user_id = ?", (value, user_id)).fetchone() is not None
+def _exists(table: str, user_id: int, key: str, value: str, extra: str = "") -> bool:
+    # table, key и extra — из кода этого модуля, не из запроса
+    return state.DB.execute(f"SELECT 1 FROM {table} WHERE {key} = ? AND user_id = ?{extra}",
+                            (value, user_id)).fetchone() is not None
 
 
 def annotate(user_id: int, chain: list[dict]) -> list[dict]:
-    """Копия для ответа API: `gone` — картинки или ролика шага больше нет; `media_id` — только своего
-    живого файла."""
+    """Копия для ответа API: `gone` — картинки или ролика шага больше нет или он в корзине (сборка цепочки
+    старой строки корзину читает: промпт шага — часть снимка); `media_id` — только своего живого файла."""
     out = []
     for step in chain:
         step = dict(step)
         if "image_id" in step:
-            step["gone"] = not _exists("images", user_id, "id", step["image_id"])
+            step["gone"] = not _exists("images", user_id, "id", step["image_id"], " AND deleted IS NULL")
         elif "video_id" in step:
-            step["gone"] = not _exists("videos", user_id, "id", step["video_id"])
+            step["gone"] = not _exists("videos", user_id, "id", step["video_id"], " AND deleted IS NULL")
         if "media_id" in step and not (step["media_id"] and _exists("media", user_id, "id", step["media_id"])):
             del step["media_id"]
         out.append(step)
