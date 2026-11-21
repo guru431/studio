@@ -5501,7 +5501,7 @@ def test_speech_speaks_with_a_voice_and_plays(browser, live, width):
         ("eval", "overflow", f"!({NO_OVERFLOW})")], width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
-    assert "добавьте голос" in v["hint"] and v["count"].startswith("17 / 2000")
+    assert "добавьте голос" in v["hint"] and v["count"] == "17 / 200 000"
     assert v["audio"].startswith("/api/media/") and v["text"] == "Привет. Как дела?"
     assert v["clicked"][0].endswith("?download=1") and v["clicked"][1] and not v["overflow"]
     assert not problems(r), problems(r)
@@ -5533,7 +5533,7 @@ def test_speech_new_chat_leaves_the_old_record_and_keeps_voice_and_model(browser
     assert not r.get("failed"), r
     v = r["values"]
     # «Новый чат» не стирает набранное (04:F11): черновик остаётся в поле нового чата
-    assert v["fresh"] == {"text": "Черновик", "count": "8 / 2000", "focused": "speech-text", "choices": v["choices"]}
+    assert v["fresh"] == {"text": "Черновик", "count": "8 / 200 000", "focused": "speech-text", "choices": v["choices"]}
     assert v["veto"] is True
     assert v["rows"] == 2 and v["newVisible"] and v["fits"]
     assert not problems(r), problems(r)
