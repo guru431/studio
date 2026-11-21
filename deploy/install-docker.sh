@@ -75,6 +75,15 @@ case "$build_network" in
     *) echo 'studio: invalid Docker build network' >&2; exit 1 ;;
 esac
 if [ "$REFRESH_BASE" = 1 ]; then build+=(--no-cache); fi
+if [ "$REFRESH_BASE" = 0 ] && [ -r "$R/current/deploy/docker/host.conf" ] &&
+   { [ "${DOCKER_BUILDKIT:-}" = 0 ] || ! docker buildx version >/dev/null 2>&1; }; then
+    # The classic builder can restore intermediate layers from the current release's history.
+    cache_image=$(sed -n 's/^STUDIO_IMAGE=//p' "$R/current/deploy/docker/host.conf")
+    if [[ $cache_image =~ ^(arcane\.local/)?studio:([0-9]+\.[0-9]+\.[0-9]+-)?[a-f0-9]{40}$ ]] &&
+       docker image inspect "$cache_image" >/dev/null 2>&1; then
+        build+=(--cache-from "$cache_image")
+    fi
+fi
 "${build[@]}" -t "$image" -f "$NEW/deploy/docker/Dockerfile" "$NEW"
 printf '\nSTUDIO_IMAGE=%s\n' "$image" >> "$NEW/deploy/docker/host.conf"
 docker compose --env-file "$NEW/deploy/docker/host.conf" -f "$NEW/deploy/docker/compose.yaml" config --quiet
@@ -164,8 +173,8 @@ prune_releases() {
         # No --force: Docker protects images referenced by any other container.
         docker image rm "$image" >/dev/null || status=1
     done <<< "$images"
-    # Only Studio's untagged builds; do not prune unrelated application images.
-    docker image prune -f --filter label=org.opencontainers.image.title=Studio >/dev/null || status=1
+    # Keep the classic builder's recent dependency layers available for this week's releases.
+    docker image prune -f --filter label=org.opencontainers.image.title=Studio --filter until=168h >/dev/null || status=1
     docker builder prune -f --filter until=168h >/dev/null || status=1
     printf 'studio: removed %d old releases\n' "$removed"
     return "$status"

@@ -117,6 +117,19 @@ git -C "$D" -c core.autocrlf=false archive --format=tar "$REV" "${PARTS[@]}" \
 echo "==> мост ${REV:0:7} → ZIP и установщик EXE"
 "${SSH[@]}" "sudo install -d -m 0755 $IN/agent"
 for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studio-agent-setup.sh; do
+    if [ "$RUNTIME" = docker ]; then
+        expected=$(sha256sum "$package/$file" | cut -d' ' -f1)
+        printf -v reuse 'sudo -n bash -c %q -- %q %q %q' '
+            source=$1 target=$2 expected=$3
+            if [ -f "$source" ] && sha256sum -- "$source" | grep -q "^$expected " &&
+               cp --reflink=auto -- "$source" "$target" &&
+               sha256sum -- "$target" | grep -q "^$expected "; then printf reused; fi
+        ' "$R/current/agent/$file" "$IN/agent/$file" "$expected"
+        if [ "$("${SSH[@]}" "$reuse")" = reused ]; then
+            echo "==> $file: использован файл на сервере"
+            continue
+        fi
+    fi
     "${SSH[@]}" "sudo sh -c 'cat > $IN/agent/$file'" < "$package/$file"
 done
 

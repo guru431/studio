@@ -491,9 +491,36 @@ def test_deploy_cleanup_removes_only_the_folder_it_created(tmp_path, outcome):
         assert result.returncode == {"success": 0, "upload-failed": 7, "mkdir-failed": 1}[outcome], result.stderr
 
 
-@pytest.mark.parametrize("path", [".tmp/deploy-x/studio-agent.zip", ".tmp/browser-mcp-1/shot.png"])
+@pytest.mark.integration
+def test_docker_deploy_reuses_only_bridge_files_with_matching_hash(tmp_path):
+    bash = _bash()
+    if not bash:
+        pytest.skip("нет bash")
+    root = tmp_path / "server"
+    incoming = root / "incoming" / "agent"
+    incoming.mkdir(parents=True)
+    current = root / "current" / "agent"
+    current.mkdir(parents=True)
+    package = tmp_path / "package"
+    package.mkdir()
+    for name in ("studio-agent.zip", "studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh"):
+        (package / name).write_bytes(name.encode())
+        (current / name).write_bytes(name.encode() if name.endswith(".pkg") else b"old")
+    start = DEPLOY_SH.index("for file in studio-agent.zip")
+    loop = DEPLOY_SH[start:DEPLOY_SH.index('\nif [ "$NEW_SECRET"', start)]
+    result = subprocess.run(
+        [bash, "-c", 'set -euo pipefail\nR=$1; IN=$R/incoming; package=$2; RUNTIME=docker; SSH=(ssh)\n'
+         'ssh() { eval "$1"; }\nsudo() { if [ "$1" = -n ]; then shift; fi; "$@"; }\n' + loop,
+         "fixture", root.as_posix(), package.as_posix()], capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["==> studio-agent-setup.pkg: использован файл на сервере"]
+    assert {p.name: p.read_bytes() for p in incoming.iterdir()} == {p.name: p.read_bytes() for p in package.iterdir()}
+
+
+@pytest.mark.parametrize("path", [".tmp/deploy-x/studio-agent.zip", ".tmp/browser-mcp-1/shot.png",
+                                  ".cache/studio-agent-bundle/studio-agent.zip"])
 def test_local_build_folder_is_gitignored(path):
-    """Пакет выкладки (ZIP моста с адресом установки) и снимки MCP лежат в .tmp/: `git add -A` не уносит их."""
+    """Рабочие файлы выкладки, кэш пакетов и снимки MCP исключены из Git."""
     git = shutil.which("git")
     if not git:
         pytest.skip("нет git — проверка .gitignore пропущена")
@@ -1417,7 +1444,7 @@ def test_docker_install_keeps_current_previous_and_cleans_orphan_images(docker_r
     assert (root / "calls").read_text().splitlines() == [
         "image ls --filter reference=arcane.local/studio:* --filter reference=studio:* --format {{.Repository}}:{{.Tag}}",
         *[f'image rm {image}' for image in [*images[1:-1], orphan, *legacy]],
-        "image prune -f --filter label=org.opencontainers.image.title=Studio",
+        "image prune -f --filter label=org.opencontainers.image.title=Studio --filter until=168h",
         "builder prune -f --filter until=168h"]
     assert ("cleanup of old releases or images failed" in r.stderr) is bool(cleanup_failure)
 
@@ -1453,7 +1480,8 @@ def test_docker_build_uses_application_version_in_tag_and_metadata(tmp_path):
     version_file = app / 'release.py'
     start = INSTALL_DOCKER.index('version=$(sed')
     block = INSTALL_DOCKER[start:INSTALL_DOCKER.index('\ndocker compose', start)]
-    stubs = f'NEW={tmp_path.as_posix()}; REVISION={"a" * 40}; REFRESH_BASE=0\ndocker() {{ printf "%s\\n" "$*"; }}\n'
+    stubs = (f'R={tmp_path.as_posix()}; NEW=$R; REVISION={"a" * 40}; REFRESH_BASE=0\n'
+             'docker() { printf "%s\\n" "$*"; }\n')
     (tmp_path / 'deploy/docker').mkdir(parents=True)
     version_file.write_text('VERSION = "0.18.3"\n')
     result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
@@ -1461,6 +1489,16 @@ def test_docker_build_uses_application_version_in_tag_and_metadata(tmp_path):
     image = 'arcane.local/studio:0.18.3-' + 'a' * 40
     assert '--build-arg STUDIO_VERSION=0.18.3' in result.stdout and f'-t {image}' in result.stdout
     assert (tmp_path / 'deploy/docker/host.conf').read_text().strip() == f'STUDIO_IMAGE={image}'
+    current_config = tmp_path / 'current/deploy/docker/host.conf'
+    current_config.parent.mkdir(parents=True)
+    current_config.write_text(f'STUDIO_IMAGE={image}\n', encoding='ascii', newline='\n')
+    legacy = stubs + 'docker() { [ "$*" = "buildx version" ] && return 1; printf "%s\\n" "$*"; }\n'
+    result = subprocess.run([bash, '-c', legacy + block], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert f'--cache-from {image}' in result.stdout
+    result = subprocess.run([bash, '-c', legacy + 'REFRESH_BASE=1\n' + block],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0 and '--no-cache' in result.stdout and '--cache-from' not in result.stdout
     version_file.write_text('VERSION = "invalid"\n')
     result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
     assert result.returncode == 1 and 'invalid application version' in result.stderr
