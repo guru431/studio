@@ -827,7 +827,8 @@ _TRASH_SEARCH_58 = {"chats": "chat", "images": "photo", "videos": "video", "spee
 #: ждущий ответ хода (`chat_pending`: подтверждение инструмента или вопрос модели; `view` — вид карточки отдельным
 #: шифром, выдача сообщений не расшифровывает payload) и список дел ответа
 #: (`messages.todo`, JSON); память учётки (`user_memory.text_enc` — шифром) и её выключатель; корзина;
-#: личные ссылки на файлы MCP (`file_links`: хеш токена, путь и имя — шифром, `stamp` — подпись секрета сервера);
+#: личные ссылки на файлы MCP (`file_links`: хеш токена, путь и имя — шифром, `stamp` — подпись секрета сервера,
+#: размер и mtime файла при создании — ссылка ведёт к файлу, а не к пути);
 #: «защищённый источник» MCP и отметка диалога о его срабатывании; базы знаний (`user_id NULL` — общая, закрытая
 #: группами `kb_rules`), документы базы или большого вложения диалога, куски с FTS5 и вектором; язык расшифровки и
 #: озвучки (NULL — авто, как раньше). FTS кусков — с внешним содержимым и заменой «ё» на «е», как индекс поиска
@@ -849,8 +850,8 @@ CREATE INDEX user_memory_user ON user_memory(user_id);
 CREATE TABLE file_links(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE,
        user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
        server_id INTEGER NOT NULL REFERENCES mcp_servers ON DELETE CASCADE, stamp TEXT NOT NULL,
-       path_enc TEXT NOT NULL, name_enc TEXT NOT NULL, size INTEGER, created REAL NOT NULL, expires REAL NOT NULL,
-       revoked REAL);
+       path_enc TEXT NOT NULL, name_enc TEXT NOT NULL, size INTEGER, mtime REAL, created REAL NOT NULL,
+       expires REAL NOT NULL, revoked REAL);
 CREATE INDEX file_links_user ON file_links(user_id);
 ALTER TABLE mcp_servers ADD COLUMN protected INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE chats ADD COLUMN protected_used INTEGER NOT NULL DEFAULT 0;

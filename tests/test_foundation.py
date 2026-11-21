@@ -208,7 +208,7 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         assert "protected" in columns("mcp_servers") and "protected_used" in columns("chats")
         assert "language" in columns("transcripts") and "language" in columns("speeches")
         assert columns("file_links") == {"id", "token_hash", "user_id", "server_id", "stamp", "path_enc", "name_enc",
-                                         "size", "created", "expires", "revoked"}
+                                         "size", "mtime", "created", "expires", "revoked"}
         assert conn.execute("SELECT deleted, protected_used FROM chats").fetchone()[:] == (None, 0)
 
         # прежний код: вставки своим списком столбцов
