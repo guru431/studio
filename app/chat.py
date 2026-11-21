@@ -1103,8 +1103,9 @@ class StreamTask:
         return row is not None and bool(row[0]) and not row[1]
 
     def _protect(self) -> None:
-        """Успешный вызов инструмента защищённого источника: «Интернет» диалога выключен и больше не включается
-        (`chats.protected_used`), веб-инструменты не предлагаются и в этом ходе."""
+        """Вызов дошёл до защищённого источника (`mcp_client.Tools.reached_protected`, итог любой): «Интернет»
+        диалога выключен и больше не включается (`chats.protected_used`), веб-инструменты не предлагаются и в этом
+        ходе."""
         state.DB.execute("UPDATE chats SET protected_used = 1, web = 0 WHERE id = ?", (self.chat_id,))
         self.protected, self.tools = True, []
         self.mcp.lock()
@@ -1129,7 +1130,7 @@ class StreamTask:
         паузу (chat_pending.pause): итог PAUSED, остальные вызовы круга ждут в payload. Вызов, уже исполненный в этом
         ответе с теми же аргументами (`seen`), — шаг `duplicate` без исполнения и подтверждения, модели — DUPLICATE.
         После защищённого источника (`protected`) вызов любого инструмента со ссылкой в аргументах — шаг
-        mcp_client.URL_REFUSED без вызова; его успешный вызов выключает «Интернет» (`_protect`).
+        mcp_client.URL_REFUSED без вызова; вызов, дошедший до него, выключает «Интернет» (`_protect`).
         Итог — слова ошибки ответа (срок вышел), PAUSED или None."""
         for i, c in enumerate(calls):
             n = start + i
@@ -1159,7 +1160,7 @@ class StreamTask:
                 self.put("tool", {"kind": "mcp", "label": f"{server} · {tool}"})
                 step = ({"kind": "mcp", "server": server, "tool": tool, "error": TOO_MANY}
                         if n >= CALLS_PER_ROUND else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
-                if "error" not in step and not self.protected and self.mcp.is_protected(c.name):
+                if not self.protected and self.mcp.reached_protected():
                     self._protect()
             elif c.name in chat_tools.NAMES and not self.builtin_off:
                 if n >= CALLS_PER_ROUND:
