@@ -75,6 +75,7 @@ def start_live_app(tmp_path: Path, *, tls: tuple[Path, Path] | None = None) -> L
     import auth
     import main
     import manage
+    import speech
     import state
     import videos
 
@@ -109,6 +110,7 @@ def start_live_app(tmp_path: Path, *, tls: tuple[Path, Path] | None = None) -> L
     state.WATCHER = True
     videos.POLL_SEC = POLL_SEC
     auth.FAILS.clear()
+    speech.LIMITS.clear()            # пределы речи другой живой студии (ключ — id подключения её базы)
     assert manage.create_admin({"STUDIO_ADMIN_LOGIN": "owner", "STUDIO_ADMIN_PASSWORD": PASSWORD,
                                 "STUDIO_ADMIN_EMAIL": "owner@example.com",
                                 "GATEWAY_KEY_OWNER_IMAGES": FakeGateway.TOKEN}) == 0

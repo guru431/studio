@@ -28,7 +28,14 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * слова `.tr-unplayable` под ним, нажатие по реплике их повторяет. «В чат ▾» → #/chat?transcript=<id>&ask=…; #/transcribe?id=<id> («Открыть» в «В работе»,
  * ссылка «к записи» из чата) выбирает запись после загрузки списка, если её не выбрали сами (нет её —
  * список как обычно), ?id из адреса уходит; принятая запись зовёт jobs.kick(). Текст сервера — только
- * textContent. */
+ * textContent.
+ *
+ * Язык распознавания (спека 2026-11-21-studio-source-capabilities-design, п. 26): выбор «Авто / Русский / English»
+ * в ряду над видом (picker.js, `#tr-language`) — заголовком X-Studio-Language загрузки («Авто» — без него) и полем
+ * окна «Расшифровать ещё раз»; у инструмента MCP язык — его поле. Проверка до загрузки (п. 36): длительность записи —
+ * `loadedmetadata` по blob URL, пределы — GET /api/transcripts/limits (у инструмента MCP — его `studio/limits`);
+ * длиннее записи целиком — «не подходит» словами и не отправляется, длиннее одного запроса — «будет расшифрована
+ * N частями» (`#transcribe-check`). Длительность не прочиталась или пределов нет — решает сервер. */
 import { api, hooks, me, toLogin } from './api.js';
 import { holdRefresh } from './refresh.js';
 import { icon } from './icons.js';
@@ -39,6 +46,8 @@ import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
+import { picker } from './picker.js';
+import { SPEECH_LANGUAGES } from './mic.js';
 import { el, field, openDialog, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -48,6 +57,7 @@ const ACCEPT = 'audio/*,video/*,.m4a,.mp3,.wav,.ogg,.opus,.webm,.flac,.aac';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const CANCELLED = tr("Загрузка отменена.");
 const FORMATS = [['txt', tr("Текст .txt")], ['docx', 'Word .docx'], ['srt', tr("Субтитры .srt")]];
+const METADATA_MS = 5000;
 const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Составить итоги")], ['tasks', tr("Выделить решения и задачи")]];
 
 let screen = null;
@@ -71,6 +81,32 @@ function clock(sec) {
   return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+/** Предел словами: целые часы — «4 ч», иначе минуты. */
+function span(sec) {
+  return sec % 3600 === 0 ? tr("{0} ч", sec / 3600) : tr("{0} мин", Math.round(sec / 60));
+}
+
+/** Длительность файла по его метаданным в браузере, с; не прочиталась (формат, webm без длительности) — null. */
+function durationOf(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const probe = el('audio', { preload: 'metadata' });
+    let timer = null;
+    const done = (value) => {
+      clearTimeout(timer);
+      probe.removeAttribute('src');
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(value) && value > 0 ? value : null);
+    };
+    probe.addEventListener('loadedmetadata', () => done(probe.duration), { once: true });
+    probe.addEventListener('error', () => done(null), { once: true });
+    timer = setTimeout(() => done(null), METADATA_MS);
+    probe.src = url;
+  });
+}
+
+const languageOptions = (value) => SPEECH_LANGUAGES.map(([id, label]) => el('option', { value: id, selected: id === value }, label));
+
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
@@ -91,6 +127,7 @@ function build(view, ctx) {
   let unplayable = null;       // слова под плеером: браузер запись не играет (событие error)
   let busy = null;             // блок «идёт» выбранной записи (feed.busyBlock): опрос меняет в нём только текст
   let picked = false;          // запись выбрали сами (список, загрузка): ?id из адреса её не перебивает
+  let checking = false;        // идёт проверка выбранных записей до загрузки
   // records.current — выбранная запись (с segments, если готова); records.done — старше подгруженных нет
   const records = createPicker({ url: '/api/transcripts', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
@@ -123,11 +160,17 @@ function build(view, ctx) {
   const title = el('h1', {}, NAMES.transcribe);
   const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
+  const checked = el('p', { class: 'muted small', id: 'transcribe-check', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view' });
   const nativeHint = ctx.hint?.('hint-bar');
-  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, sending, mcp.output, body);
+  const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, checked, sending, mcp.output, body);
   const root = el('div', { class: 'split transcribe' }, aside, backdrop, main);
   view.append(root);
+  // язык загрузки — «как у Агентов» (picker.js) после выбора инструмента MCP
+  const langSelect = el('select', { id: 'tr-language' }, ...languageOptions('auto'));
+  const languagePick = picker(root, tr("Язык"), langSelect);
+  languagePick.wrap.hidden = !!ctx.hint;
+  mcp.control.after(languagePick.wrap);
 
   function panel(open) {
     root.classList.toggle('panel-open', open);
@@ -180,10 +223,11 @@ function build(view, ctx) {
   async function retryDialog(item) {
     if (root.querySelector('#tr-retry-dialog')) return;
     const model = el('select', { class: 'input', id: 'tr-retry-model', disabled: true });
+    const lang = el('select', { class: 'input', id: 'tr-retry-language' }, ...languageOptions(item.language || 'auto'));
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
     const go = el('button', { type: 'button', class: 'btn btn-accent', id: 'tr-retry-confirm', disabled: true }, tr("Расшифровать запись"));
     const dialog = openDialog(root, { id: 'tr-retry-dialog', title: tr("Расшифровать ещё раз"), actions: [go],
-      body: [field(tr("Модель"), model, 'model'), fail] });
+      body: [field(tr("Модель"), model, 'model'), field(tr("Язык"), lang, 'language'), fail] });
     let choices;
     try {
       const { sections } = await api('GET', '/api/sections');
@@ -209,7 +253,8 @@ function build(view, ctx) {
       go.disabled = model.disabled = true;
       fail.textContent = '';
       try {
-        const answer = await api('POST', `/api/transcripts/${item.id}/retry`, { connection_id, model: chosen });
+        const answer = await api('POST', `/api/transcripts/${item.id}/retry`,
+          { connection_id, model: chosen, language: lang.value === 'auto' ? null : lang.value });
         kick();
         if (!dialog.open || !dialog.isConnected) return;
         dialog.close();
@@ -534,10 +579,41 @@ function build(view, ctx) {
       }
     }
     input.multiple = !mcp.tool;                    // инструмент MCP берёт один файл
+    languagePick.wrap.hidden = !!ctx.hint || !!mcp.tool;
+    languagePick.sync();
   }
 
   function paintBusy() {
-    input.disabled = upload.disabled = transfer.busy || mcp.busy;
+    input.disabled = upload.disabled = transfer.busy || mcp.busy || checking;
+  }
+
+  /** Проверка до загрузки: записи, которые можно отправить; «не подходит» — в `error`, «частями» — в `checked`. */
+  async function fit(files) {
+    checking = true;
+    paintBusy();
+    try {
+      const own = mcp.tool ? mcp.maxSeconds : null;
+      const limits = own ? { max_seconds: own, total_max: own }
+        : mcp.tool ? null : await api('GET', '/api/transcripts/limits').catch(() => null);
+      if (!limits) return files;
+      const ok = [], refused = [], parts = [];
+      for (const file of files) {
+        const sec = await durationOf(file);
+        if (sec !== null && sec > limits.total_max) {
+          refused.push(tr("«{0}» не подходит: длиннее {1}", file.name, span(limits.total_max)));
+          continue;
+        }
+        ok.push(file);
+        const count = sec === null ? 1 : Math.ceil(sec / limits.max_seconds);
+        if (count > 1) parts.push(tr("«{0}» будет расшифрована {1} частями", file.name, count));
+      }
+      error.textContent = refused.join(' ');
+      checked.textContent = parts.join(' ');
+      return ok;
+    } finally {
+      checking = false;
+      paintBusy();
+    }
   }
 
   /** Ход загрузки модуля (transfer) — в вид: строка хода, «Отменить загрузку», занятая кнопка; отказ без экрана. */
@@ -552,13 +628,16 @@ function build(view, ctx) {
     }
   }
 
-  input.addEventListener('change', () => {
+  input.addEventListener('change', async () => {
     const files = [...input.files];
     input.value = '';
     if (!files.length || input.disabled) return;
-    error.textContent = '';
-    if (mcp.tool) mcp.run({}, { files: { artifact_id: files[0] } });
-    else sendAll(files);
+    error.textContent = checked.textContent = '';
+    const tool = mcp.tool, chosen = langSelect.value;
+    const ok = await fit(files);
+    if (!ok.length || tool !== mcp.tool) return;    // пока проверяли, сменили инструмент — выбрать заново
+    if (tool) mcp.run({}, { files: { artifact_id: ok[0] } });
+    else sendAll(ok, chosen === 'auto' ? '' : chosen);
   });
   toggle.addEventListener('click', () => panel(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panel(false));
@@ -611,8 +690,9 @@ function say(text) {
   else transfer.note = text;
 }
 
-/** Одна запись; null — принята, строка — отказ словами («Отменить загрузку» — тоже). `label` — «N из M» пачки. */
-function send(file, label) {
+/** Одна запись; null — принята, строка — отказ словами («Отменить загрузку» — тоже). `label` — «N из M» пачки,
+ * `language` — язык распознавания (пусто — «Авто»). */
+function send(file, label, language) {
   if (file.size > UPLOAD_MAX) return Promise.resolve(tr("Запись больше 200 МиБ"));
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
@@ -633,6 +713,7 @@ function send(file, label) {
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('X-Studio-Name', encodeURIComponent(file.name));
     xhr.setRequestHeader('x-studio-csrf', me.csrf);
+    if (language) xhr.setRequestHeader('X-Studio-Language', language);
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) show(Math.round(event.loaded * 100 / event.total));
     });
@@ -657,7 +738,7 @@ function send(file, label) {
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         settled = true;
         await hooks.locked();          // студия заперта (lock.js): та же запись — после отпирания
-        resolve(await send(file, label));
+        resolve(await send(file, label, language));
         return;
       }
       finish(words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером"))));
@@ -673,11 +754,11 @@ function send(file, label) {
 
 /** Несколько записей — по одной, пока сервер принимает (очередь transcripts.QUEUE_MAX); первая неудача или
  * «Отменить загрузку» останавливает пачку, не отправленные называются словами. */
-async function sendAll(files) {
+async function sendAll(files, language) {
   transfer.busy = true;
   transfer.note = '';
   for (const [i, file] of files.entries()) {
-    const fail = await send(file, files.length > 1 ? tr("{0} из {1}", i + 1, files.length) : '');
+    const fail = await send(file, files.length > 1 ? tr("{0} из {1}", i + 1, files.length) : '', language);
     if (fail === null) continue;
     const left = files.slice(i).map((f) => f.name);
     say(files.length > 1 ? `${fail} ${tr("Не отправлены: {0}", left.join(', '))}` : fail);
