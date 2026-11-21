@@ -255,7 +255,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 Полные формулировки — в «Ловушках» файлов docs/architecture.
 
 - Apache: `ProxyPass` — на имя `studio-backend`, не `localhost`; `/api/chats/` и `/api/code/` (600 с, `flushpackets=on`,
-  `no-gzip`), `/api/videos` (330 с) и `/api/agent/link` (`upgrade=websocket timeout=300`) — раньше общего `ProxyPass /`;
+  `no-gzip`), `/api/videos` (330 с), `/api/my-files/` (330 с, ZIP папки — `my_files.ZIP_SEC`) и `/api/agent/link` (`upgrade=websocket timeout=300`) — раньше общего `ProxyPass /`;
   `LimitRequestBody` не меньше пределов службы. Сверяет `tests/test_deploy.py`.
 - SQLite — только локальный диск (на CIFS портится); копия на шару — готовым файлом. `studio-backup.service` — те же
   `User`/`Group`/`StateDirectory`, что у службы.
