@@ -38,6 +38,7 @@ import chains
 import clock
 import db
 import media
+import memory
 import state
 import trash
 import workspace
@@ -82,10 +83,12 @@ README = """Выгрузка истории студии
 
 Что внутри:
 - settings.json — профиль (логин, имя, тема, виды лент), подключения (адреса без ключей), разделы
-  (подключения и отмеченные модели, умолчания), пресеты и роли чата (имя, текст, порядок).
+  (подключения и отмеченные модели, умолчания), пресеты и роли чата (имя, текст, порядок),
+  личная память чата (memory_on — включена ли, memory — записи: текст и время, новые первыми).
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
-  найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом) и рассуждение модели (reasoning,
-  reasoning_sec — секунды), звук и видео диалога для MCP (media: имя, тип, размер, ссылка на файл).
+  найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом), рассуждение модели (reasoning,
+  reasoning_sec — секунды) и план работы (todo: шаги и их состояние), звук и видео диалога для MCP
+  (media: имя, тип, размер, ссылка на файл).
 - images/0001.json, images/0002.json … — картинки страницами по 500: промпт, модель, размер, seed,
   цепочка промптов, файлы итога, исходника, маски.
 - videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
@@ -144,7 +147,7 @@ def _file_name(row) -> str:
 
 
 def _settings(user_id: int) -> dict | None:
-    user = state.DB.execute("SELECT login, name, theme, views, screen_lock FROM users WHERE id = ?",
+    user = state.DB.execute("SELECT login, name, theme, views, screen_lock, memory_on FROM users WHERE id = ?",
                             (user_id,)).fetchone()
     if user is None:
         return None
@@ -167,6 +170,8 @@ def _settings(user_id: int) -> dict | None:
         "roles": [{k: r[k] for k in r.keys() if k != "user_id"}
                   for r in state.DB.execute("SELECT * FROM chat_roles WHERE user_id = ? ORDER BY position, created, id",
                                             (user_id,))],
+        "memory_on": bool(user["memory_on"]),
+        "memory": memory.list_for(user_id),            # личная память «Чата» — расшифрованной, новые первыми
     }
 
 
@@ -185,9 +190,10 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
     messages = [{"id": m["id"], "role": m["role"], "content": m["content"], "status": m["status"], "model": m["model"],
                  "created": m["created"], "attachments": attachments.get(m["id"], []),
                  "tools": _maybe_json(m["tools"] or "[]"),                 # шаги «Интернета» целиком
-                 "reasoning": m["reasoning"], "reasoning_sec": m["reasoning_sec"]}
+                 "reasoning": m["reasoning"], "reasoning_sec": m["reasoning_sec"],
+                 "todo": _maybe_json(m["todo"])}                            # план ответа (todo_write)
                 for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
-                                          " reasoning_sec FROM messages"
+                                          " reasoning_sec, todo FROM messages"
                                           " WHERE chat_id = ? ORDER BY created, rowid", (chat_id,))]
     chat_media = [{"id": r["id"], "name": r["name"], "mime": r["mime"], "size": r["size"], "created": r["created"],
                    "file": files.get(r["media_id"])}

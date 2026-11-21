@@ -391,7 +391,8 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
     распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null), `wait` — секунды ожидания карты
     идущим ответом (не ждёт — null), `error` — слова ответа-ошибки (`messages.error`; у строк до шага 35 — только
     «скан не распознан: …» из content). Слова, записанные и в content (скан, хранилище: прежний код читает их
-    оттуда), — не текст ответа: тогда content — пустой, модели ответ не уходил. `pending` — открытые паузы диалога
+    оттуда), — не текст ответа: тогда content — пустой, модели ответ не уходил. `todo` — план ответа `[{text,
+    status}]` (`messages.todo`; не было — null). `pending` — открытые паузы диалога
     (`chat_pending.open_views`): у сообщения с паузой — ключ `pending`, карточка подтверждения или вопроса."""
     live = STREAMS.get(row["id"])
     steps = live.steps if live else json.loads(row["tools"] or "[]")
@@ -409,7 +410,8 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
            "live": _alive(row),
            "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
-           "ocr": live.scan_state if live else None, "wait": live.waited() if live else None}
+           "ocr": live.scan_state if live else None, "wait": live.waited() if live else None,
+           "todo": json.loads(row["todo"]) if row["todo"] else None}   # план ответа (chat_tools.TODO_WRITE)
     if pending and row["id"] in pending:
         out["pending"] = pending[row["id"]]
     return out
@@ -1130,7 +1132,7 @@ class StreamTask:
                     self._protect()
             elif c.name in chat_tools.NAMES and not self.builtin_off:
                 if n >= CALLS_PER_ROUND:
-                    step = {"kind": "ask", "error": TOO_MANY}
+                    step = {"kind": chat_tools.KIND_OF[c.name], "error": TOO_MANY}
                 else:
                     step = await chat_tools.call(self, c)
                     if self.paused:
@@ -1541,7 +1543,7 @@ async def _events(st: StreamTask, user_message_id: str, digest: "str | None" = N
             yield _sse("ocr", data)
         elif kind == "wait":
             yield _sse("wait", data if data is not None else {})
-        elif kind in ("replace", "cleaner", "pending"):
+        elif kind in ("replace", "cleaner", "pending", "todo"):
             yield _sse(kind, data)
         elif kind == "done":
             yield _sse("done", data)

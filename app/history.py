@@ -1,5 +1,5 @@
 """Вся история пользователя: чаты с сообщениями, вложения, картинки, ролики, расшифровки, голоса,
-озвучки, отметки чатов и рабочее место Claude Code и файлы media."""
+озвучки, отметки чатов и рабочее место Claude Code, личная память «Чата» и файлы media."""
 import asyncio
 import logging
 
@@ -68,9 +68,10 @@ async def _delete_all(user_id: int) -> int:
         # scan_pages и translation_parts — каскадом; code_chats — отметки студии, сессии остаются на машинах;
         # code_tabs и code_place — рабочее место раздела: номера сессий — тоже история (спека code-workspace 6.8);
         # agents, agent_events и push_subs — не история (спека claude-code 6.1); security_events — тоже:
-        # след входов в учётку, стирание истории пароля не требует (security_log.py)
+        # след входов в учётку, стирание истории пароля не требует (security_log.py); личная память «Чата»
+        # (user_memory, memory.py) — история: стирается, выключатель users.memory_on остаётся
         for table in ("chat_shares", "images", "videos", "transcripts", "voices", "speeches", "scans", "translations", "code_chats",
-                      "code_tabs", "code_member_tabs", "code_place", "media"):
+                      "code_tabs", "code_member_tabs", "code_place", "media", "user_memory"):
             state.DB.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         # отметки «завершено, не прочитано» — тоже номера сессий (своего user_id нет — по компьютерам учётки);
         # и ссылки «Поделиться» на чаты её компьютеров, кем бы ни созданы (участник проекта — прежним кодом)

@@ -69,6 +69,7 @@ ENCRYPTED_BACKUP_FIELDS = (
      " SELECT sealed FROM chat_shares WHERE sealed IS NOT NULL"),
     ("smtp", "настройки SMTP", "SELECT value FROM settings WHERE key = 'smtp'"),
     ("mcp", "настройки MCP", "SELECT secret_enc FROM mcp_servers"),
+    ("memory", "личная память чата", "SELECT text_enc FROM user_memory"),
     ("mirrors", "сведения о зеркалах", "SELECT location FROM project_mirrors UNION ALL"
      " SELECT baseline FROM project_mirrors WHERE baseline IS NOT NULL"),
     ("cleaner", "токены Cleaner", "SELECT token_enc FROM cleaner_contexts UNION ALL"
