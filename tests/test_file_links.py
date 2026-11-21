@@ -3,7 +3,10 @@
 import json
 import secrets
 
+import httpx
+
 import access
+import mcp_client
 import my_files
 import security
 import state
@@ -192,3 +195,23 @@ def test_link_bruteforce_locks_ip_429(studio):
     assert check(studio, token, **{"X-Forwarded-For": "203.0.113.9"}).status_code == 200
     studio.clock[0] += 901
     assert check(studio, token).status_code == 200
+
+
+def test_link_deeply_nested_listing_is_the_uniform_404(studio):
+    """B2-M1: глубоко вложенный JSON маршрута контракта (`RecursionError`, не `ValueError`) отдавал 500 без
+    заголовков `/f` — теперь тот же 404, что любой отказ; свой список папки — пустой, без 500."""
+    member, sid, server = member_with_files(studio)
+    token = make_link(studio, sid)["url"].split("#")[1]
+    gone = check(studio, secrets.token_urlsafe(32)).json()
+    async def nested(request):
+        return httpx.Response(200, content=b"[" * 65536)
+
+    studio.gw.on["/files/list"] = nested
+    listed = studio.c.post(f"/api/my-files/{sid}/list", json={"path": ""})
+    assert listed.status_code == 200 and listed.json()["entries"] == []
+    anonymous(studio)
+    for response in (check(studio, token), opened(studio, token)):
+        assert response.status_code == 404, response.text
+        assert response.json() == gone
+        public_headers(response)
+
