@@ -1,7 +1,9 @@
 """«Защищённый источник» MCP (спека 2026-11-21-studio-source-capabilities-design, п. 14): после успешного вызова
 инструмента такого общего сервера «Интернет» диалога выключается и больше не включается, веб-инструменты не
 предлагаются, а аргументы со ссылками отклоняются."""
+import chat_tools
 import mcp_client
+import memory
 import state
 import web
 from conftest import signin
@@ -130,6 +132,30 @@ def test_url_in_arguments_refused_after_protected(studio):
                              ["Готово"]]
     assert sse(turn(studio, cid, "Ещё"))[-1] == ("done", {"status": "done"})
     assert [p["arguments"] for m, p in calls if m == "tools/call"] == [{"q": "2"}]
+
+
+def test_memory_not_written_after_protected(studio):
+    """Личная память идёт в системное сообщение всех диалогов (и с «Интернетом», и прямых облачных): после
+    защищённого источника `memory_save` — шаг-отказ chat_tools.MEMORY_PROTECTED, в этом ходе и в следующих."""
+    sid, calls, _ = setup(studio)
+    protect(studio, sid)
+    assert studio.c.patch("/api/me", json={"memory_on": True}).json()["memory_on"] is True
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'member'").fetchone()[0]
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="79001234567")]},
+                             {"tool_calls": [call("memory_save", text="SIM 79001234567, тариф X")]}, ["Готово"]]
+    assert sse(turn(studio, cid, "Проверь номер"))[-1] == ("done", {"status": "done"})
+    steps = messages(studio, cid)[-1]["tools"]
+    assert steps[1] == {"kind": "memory", "action": "save", "error": chat_tools.MEMORY_PROTECTED}
+    assert memory.list_for(uid) == []
+    studio.gw.chat_script = [{"tool_calls": [call("memory_save", text="SIM 79001234567")]}, ["Готово"]]
+    assert sse(turn(studio, cid, "Запомни"))[-1] == ("done", {"status": "done"})
+    assert messages(studio, cid)[-1]["tools"][0]["error"] == chat_tools.MEMORY_PROTECTED
+    assert memory.list_for(uid) == []
+    other = new_chat(studio)                        # в обычном диалоге память пишется
+    studio.gw.chat_script = [{"tool_calls": [call("memory_save", text="любит краткость")]}, ["Готово"]]
+    assert sse(turn(studio, other, "Запомни"))[-1] == ("done", {"status": "done"})
+    assert [i["text"] for i in memory.list_for(uid)] == ["любит краткость"]
 
 
 def test_non_protected_dialog_unchanged(studio):

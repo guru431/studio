@@ -57,6 +57,9 @@ MEMORY_OFF = "память выключена пользователем"
 MEMORY_GONE = "такой записи памяти нет — номер из блока «Что известно о пользователе»"
 MEMORY_SAVED = "Запомнено."
 MEMORY_FORGOTTEN = "Запись удалена из памяти."
+#: память идёт в системное сообщение всех диалогов (и с «Интернетом», и прямых облачных): после защищённого
+#: источника (`task.protected`, chats.protected_used) `memory_save` не пишет
+MEMORY_PROTECTED = "после защищённого источника память не пишется"
 
 MEMORY_SAVE = {"type": "function", "function": {
     "name": "memory_save",
@@ -143,13 +146,16 @@ def _todo(task, call) -> dict:
 
 
 def _memory(task, call) -> dict:
-    """`memory_save` / `memory_forget`: только при `users.memory_on`. Шаг текста записи не хранит (память — шифром),
+    """`memory_save` / `memory_forget`: только при `users.memory_on`; `memory_save` после защищённого источника —
+    MEMORY_PROTECTED. Шаг текста записи не хранит (память — шифром),
     `memory_forget` принимает номер из блока — первые знаки id своей записи."""
     action = "save" if call.name == "memory_save" else "forget"
     if not memory.enabled(task.user_id):
         return {"kind": "memory", "action": action, "error": MEMORY_OFF}
     args = _args(call.arguments) or {}
     if action == "save":
+        if task.protected:
+            return {"kind": "memory", "action": action, "error": MEMORY_PROTECTED}
         text = args.get("text")
         if not isinstance(text, str):
             return {"kind": "memory", "action": action, "error": memory.INVALID["message"]}
