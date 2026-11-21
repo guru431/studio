@@ -43,6 +43,7 @@ import mcp_sections
 import mcp_sources
 import media
 import security
+import security_log
 import state
 import upstream
 
@@ -418,6 +419,7 @@ async def create_link(sid: int, body: PathIn, request: Request):
                      " created, expires) VALUES (?,?,?,?,?,?,?,?,?,?)",
                      (lid, security.digest(token), uid, sid, stamp, security.encrypt(path).decode(),
                       security.encrypt(entry["name"]).decode(), entry["size"], now, now + LINK_SEC))
+    security_log.record(uid, "file_link_create", digest=request.state.digest, ip=auth.client_ip(request))
     log.info("пользователь %d: ссылка на файл %s, mcp %d", uid, lid[:8], sid)
     origin = auth.request_origin(request) or state.CFG.origin.rstrip("/")
     return {"id": lid, "url": f"{origin}/f#{token}", "expires": now + LINK_SEC}
@@ -443,6 +445,7 @@ async def revoke(lid: str, request: Request):
         raise _not_found("Ссылки нет")
     for key in [key for key, (link, _) in OPENED.items() if link == lid]:
         OPENED.pop(key, None)
+    security_log.record(uid, "file_link_revoke", digest=request.state.digest, ip=auth.client_ip(request))
     log.info("пользователь %d: ссылка на файл %s отозвана", uid, lid[:8])
     return Response(status_code=204)
 

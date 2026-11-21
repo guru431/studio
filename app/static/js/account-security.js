@@ -4,7 +4,7 @@ import { tr } from './i18n.js';
  *
  * Сессия — признак сервера (не дайджест и не cookie), своё имя, браузер, ОС, доступная модель, последний IP,
  * время входа и активности, push и ntfy. Текущую закрывает обычный «Выйти». Аварийный выход — с паролем
- * учётки: все сессии, ссылки «Поделиться», доступы участников к проектам, push и ntfy, по выбору ключи компьютеров;
+ * учётки: все сессии, ссылки «Поделиться» и на файлы, доступы участников к проектам, push и ntfy, по выбору ключи компьютеров;
  * затем страница входа.
  * Журнал — новые сверху страницами сервера, «Показать ещё» — по `next`. */
 import { api } from './api.js';
@@ -19,6 +19,7 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   unlock_fail: tr("не открыто"), pin_exhausted: tr("PIN исчерпан"), screen_lock_on: tr("блокировка включена"),
   screen_lock_off: tr("блокировка выключена"), screen_lock_change: tr("блокировка перенастроена"), password: tr("пароль сменён"), session_end: tr("сессия завершена"),
   emergency: tr("аварийный выход"), share_create: tr("ссылка создана"), share_revoke: tr("ссылка отозвана"),
+  file_link_create: tr("ссылка на файл создана"), file_link_revoke: tr("ссылка на файл отозвана"),
   share_pin_fail: tr("неверный PIN ссылки"), share_locked: tr("ссылка остановлена"), pin_set: tr("PIN задан"),
   pin_delete: tr("PIN убран"), passkey_add: tr("ключ добавлен"), passkey_delete: tr("ключ удалён"),
   password_reset: tr("пароль сброшен администратором"), admin_grant: tr("права администратора выданы"),
@@ -149,6 +150,7 @@ export function sessionsBlock(host) {
 export function accessBlock(host) {
   const members = el('ul', { class: 'agents access-list', id: 'access-members', 'aria-label': tr("Участники проектов") });
   const shares = el('ul', { class: 'agents access-list', id: 'access-shares', 'aria-label': tr("Ссылки «Поделиться»") });
+  const files = el('p', { class: 'small', id: 'access-file-links' });
   const note = status('access-status');
   const refresh = button(tr("Обновить"), { class: 'btn btn-sm', id: 'access-refresh' }, () => reload());
   const all = button(tr("Отозвать всё"), { class: 'btn btn-sm btn-danger', id: 'access-revoke-all', hidden: true },
@@ -243,7 +245,7 @@ export function accessBlock(host) {
   function revokeAll() {
     const yes = button(tr("Отозвать всё"), { class: 'btn btn-danger solid', id: 'access-revoke-all-confirm' });
     const dialog = openDialog(host, { id: 'access-revoke-all-dialog', title: tr("Отозвать все доступы и ссылки?"),
-      actions: [yes], body: [el('p', {}, tr("Участники потеряют доступ к проектам ваших компьютеров, все ссылки «Поделиться» отключатся. Вернуть их можно, только выдав доступ и создав ссылки заново."))] });
+      actions: [yes], body: [el('p', {}, tr("Участники потеряют доступ к проектам ваших компьютеров, все ссылки «Поделиться» и ссылки на файлы отключатся. Вернуть их можно, только выдав доступ и создав ссылки заново."))] });
     yes.addEventListener('click', () => {
       dialog.close();
       act(() => api('DELETE', '/api/me/access'), tr("Все доступы и ссылки отозваны")).then(() => refresh.focus({ preventScroll: true }));
@@ -261,7 +263,11 @@ export function accessBlock(host) {
         : [el('li', { class: 'muted small' }, tr("Проекты ваших компьютеров никому не открыты."))]));
       shares.replaceChildren(...(data.shares.length ? data.shares.map(shareRow)
         : [el('li', { class: 'muted small' }, tr("Ссылок нет."))]));
-      all.hidden = !data.members.length && !data.shares.length;
+      // ссылки на файлы — только счёт: список с «Отозвать» — в «Моих файлах»
+      files.replaceChildren(data.file_links ? tr("Действующих ссылок на файлы: {0}.", data.file_links) : tr("Ссылок на файлы нет."),
+        ...(data.file_links ? [' ', el('a', { class: 'btn btn-sm access-open', id: 'access-file-links-open', href: '#/myfiles' },
+          sectionName('myfiles'))] : []));
+      all.hidden = !data.members.length && !data.shares.length && !data.file_links;
       return true;
     } catch (err) {
       if (version === reading) say(note, words(err), 'error');
@@ -276,6 +282,7 @@ export function accessBlock(host) {
     el('p', { class: 'muted small' }, tr("Кому открыты проекты ваших компьютеров и какие чаты доступны по ссылке. Доступ привязан к имени папки: удаление или переименование папки его не снимает — отзовите его здесь.")),
     el('h3', {}, tr("Участники проектов")), members,
     el('h3', {}, tr("Ссылки «Поделиться»")), shares,
+    el('h3', {}, tr("Ссылки на файлы")), files,
     el('div', { class: 'row' }, refresh, all, note));
 }
 
@@ -294,7 +301,7 @@ export function emergencyBlock(host) {
     const yes = button(tr("Выйти везде"), { class: 'btn btn-danger solid', id: 'emergency-confirm' });
     const fail = el('p', { class: 'error' });
     const dialog = openDialog(host, { id: 'emergency-dialog', title: tr("Выйти на всех устройствах?"), actions: [yes], body: [
-      el('p', {}, tr("Все сессии, включая эту, завершатся; ссылки «Поделиться», почтовые ссылки и коды отключатся; участники потеряют доступ к проектам ваших компьютеров; push и ntfy придётся включить заново. После выхода смените пароль: со старым можно войти снова.")
+      el('p', {}, tr("Все сессии, включая эту, завершатся; ссылки «Поделиться», ссылки на файлы, почтовые ссылки и коды отключатся; участники потеряют доступ к проектам ваших компьютеров; push и ntfy придётся включить заново. После выхода смените пароль: со старым можно войти снова.")
         + (agents.checked ? tr(" Компьютеры будут отвязаны — мосты войдут снова только с паролем.") : '')),
       fail] });
     yes.addEventListener('click', async () => {
@@ -311,7 +318,7 @@ export function emergencyBlock(host) {
     });
   });
   return el('section', { class: 'block emergency-block' }, el('h2', {}, tr("Аварийный выход")),
-    el('p', { class: 'muted small' }, tr("Если телефон или пароль могли попасть в чужие руки: завершает все сессии, отключает ссылки «Поделиться», почтовые ссылки и коды, доступ участников к проектам, push и ntfy. История и настройки остаются. Затем смените пароль.")),
+    el('p', { class: 'muted small' }, tr("Если телефон или пароль могли попасть в чужие руки: завершает все сессии, отключает ссылки «Поделиться», ссылки на файлы, почтовые ссылки и коды, доступ участников к проектам, push и ntfy. История и настройки остаются. Затем смените пароль.")),
     field(tr("Пароль учётки"), password, 'emergency-password'),
     el('label', { class: 'check' }, agents, tr("Отозвать и ключи компьютеров (мосты)")),
     el('div', { class: 'row' }, start, note));
@@ -368,6 +375,6 @@ export function securityEventsBlock() {
 
   load(null);
   return el('section', { class: 'block security-events-block' }, el('h2', {}, tr("Журнал безопасности")),
-    el('p', { class: 'muted small' }, tr("Входы и неудачные попытки (и коды из письма), отпирания и настройка блокировки, PIN и ключи, завершённые сессии и ссылки «Поделиться» за полгода; повторы неудач с одного адреса — одной строкой со счётчиком. «Удалить всю историю» его не стирает; он входит в выгрузку истории.")),
+    el('p', { class: 'muted small' }, tr("Входы и неудачные попытки (и коды из письма), отпирания и настройка блокировки, PIN и ключи, завершённые сессии, ссылки «Поделиться» и ссылки на файлы за полгода; повторы неудач с одного адреса — одной строкой со счётчиком. «Удалить всю историю» его не стирает; он входит в выгрузку истории.")),
     events, note, el('div', { class: 'row' }, more));
 }

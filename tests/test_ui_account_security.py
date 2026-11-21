@@ -125,6 +125,12 @@ def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, 
                  " pin_hash, snapshot, created, label) VALUES (?, ?, ?, 'fedcba9876543210', ?, 'claude', ?, ?, 'x', '{}', ?, ?)",
                  (uuid.uuid4().hex, uid, aid, session, uuid.uuid4().hex, security.encrypt(security.new_token()),
                   now - 90, security.encrypt('Чат агента')))
+    # ссылка на файл «Моих файлов»: в «Доступах и ссылках» — счётом с переходом, «Отозвать всё» её снимает
+    server = conn.execute("INSERT INTO mcp_servers(user_id, name, url, secret_enc) VALUES (?, 'Файлы', 'https://x', 'x')",
+                          (uid,)).lastrowid
+    conn.execute("INSERT INTO file_links(id, token_hash, user_id, server_id, stamp, path_enc, name_enc, size, created,"
+                 " expires) VALUES (?, ?, ?, ?, 'x', 'x', 'x', 1, ?, ?)",
+                 (uuid.uuid4().hex, uuid.uuid4().hex, uid, server, now - 10, now + 3600))
     conn.close()
     engine = focus_browser.browser_type.name
     mobile = width == 320 and engine != 'firefox'
@@ -152,6 +158,8 @@ def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, 
         pw.expect(members.first).to_contain_text('Рабочий ПК · проект 01234567')
         pw.expect(shares).to_have_count(2)
         pw.expect(shares.first).to_contain_text('Отчёт за неделю')
+        pw.expect(page.locator('#access-file-links')).to_contain_text('Действующих ссылок на файлы: 1.')
+        pw.expect(page.locator('#access-file-links-open')).to_have_attribute('href', '#/myfiles')
         pw.expect(shares.first).to_contain_text('Чат · бессрочная · открыта 3 раза')
         # FINDINGS 06:F15: из списка — к чату (обычному и на компьютере) и «Копировать ссылку»
         pw.expect(shares.first.locator('.access-open')).to_have_attribute('href', f'#/chat/{chat}')
@@ -177,9 +185,10 @@ def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, 
         pw.expect(page.locator('#access-status')).to_have_text('Все доступы и ссылки отозваны')
         pw.expect(members).to_have_count(0)
         pw.expect(shares).to_have_count(0)
+        pw.expect(page.locator('#access-file-links')).to_have_text('Ссылок на файлы нет.')
         pw.expect(page.locator('#access-revoke-all')).to_be_hidden()
         journal = page.evaluate("fetch('/api/me/security-events').then(r => r.json()).then(p => p.items.map(i => i.kind))")
-        assert journal[:3] == ['share_revoke', 'project_member_remove', 'project_member_remove']
+        assert journal[:4] == ['file_link_revoke', 'share_revoke', 'project_member_remove', 'project_member_remove']
         assert not errors, errors
     conn = db.connect(live.db_path)
     try:

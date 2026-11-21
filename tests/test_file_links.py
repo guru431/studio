@@ -161,6 +161,46 @@ def test_link_expired_revoked_stamp_changed_access_removed_file_gone_all_404(stu
     assert state.DB.execute("SELECT COUNT(*) FROM file_links").fetchone()[0] == 0
 
 
+def file_events(uid):
+    return [(row["kind"], row["detail"]) for row in state.DB.execute(
+        "SELECT kind, detail FROM security_events WHERE user_id = ? AND kind LIKE 'file_link%' ORDER BY id", (uid,))]
+
+
+def test_links_are_journaled_counted_in_access_and_dropped_by_revoke_all(studio):
+    """Ссылки на файлы видны средствам безопасности: создание и отзыв — в журнале, счёт — в «Доступах и ссылках»,
+    «Отозвать всё» их снимает, и уже открытый файл закрывается на следующем запросе."""
+    member, sid, server = member_with_files(studio)
+    first = make_link(studio, sid)
+    make_link(studio, sid, "Фото/кот2.jpg")
+    assert studio.c.delete(f"/api/my-files/links/{first['id']}").status_code == 204
+    token = make_link(studio, sid, "Фото/кот3.jpg")["url"].split("#")[1]
+    assert file_events(member) == [("file_link_create", None)] * 2 + [("file_link_revoke", None),
+                                                                      ("file_link_create", None)]
+    assert studio.c.get("/api/me/access").json()["file_links"] == 2
+    assert opened(studio, token).status_code == 204
+    assert studio.c.get("/f/file").status_code == 200
+
+    revoked = studio.c.delete("/api/me/access")
+    assert revoked.status_code == 200 and revoked.json()["file_links"] == 2
+    assert studio.c.get("/f/file").status_code == 404
+    assert check(studio, token).status_code == 404
+    assert state.DB.execute("SELECT COUNT(*) FROM file_links WHERE user_id = ?", (member,)).fetchone()[0] == 0
+    assert file_events(member)[-1] == ("file_link_revoke", "all")
+    assert studio.c.get("/api/me/access").json()["file_links"] == 0
+
+
+def test_emergency_exit_drops_file_links_and_closes_an_open_file(studio):
+    member, sid, server = member_with_files(studio)
+    token = make_link(studio, sid)["url"].split("#")[1]
+    make_link(studio, sid, "Фото/кот2.jpg")
+    assert opened(studio, token).status_code == 204
+    assert studio.c.get("/f/file").status_code == 200
+    assert studio.c.post("/api/me/emergency", json={"password": "password-123"}).status_code == 204
+    assert state.DB.execute("SELECT COUNT(*) FROM file_links WHERE user_id = ?", (member,)).fetchone()[0] == 0
+    assert studio.c.get("/f/file").status_code == 404
+    assert check(studio, token).status_code == 404
+
+
 def test_link_post_foreign_origin_403_and_body_cap_413(studio):
     member, sid, server = member_with_files(studio)
     token = make_link(studio, sid)["url"].split("#")[1]
