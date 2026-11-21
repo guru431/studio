@@ -33,6 +33,7 @@ import operations
 import search
 import speeches
 import state
+import transcripts
 import videos
 
 TABLES = ("chats", "images", "videos", "speeches", "transcripts", "scans", "translations", "voices",
@@ -85,6 +86,9 @@ KINDS: dict[str, Kind] = {
                    search="video"),
     "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"], "Озвучка"),
                      "SELECT media_id FROM speeches WHERE id = :id", search="speech"),
+    "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"], "Запись"),
+                        "SELECT source_media_id FROM transcripts WHERE id = :id"
+                        " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe"),
 }
 
 

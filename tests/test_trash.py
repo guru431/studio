@@ -142,8 +142,20 @@ def make_speech(s, uid: int) -> Made:
                                    "UPDATE speeches SET text = 'guava story' WHERE id = ?"])
 
 
+def make_transcript(s, uid: int) -> Made:
+    source = save(uid, b"m4a recording", "audio/mp4", "call.m4a")
+    result = save(uid, json.dumps({"segments": [{"start": 0, "end": 1, "text": "lychee talk", "speaker": "SPEAKER_00"}]})
+                  .encode(), "application/json", "result.json")
+    state.DB.execute("INSERT INTO transcripts(id, user_id, model, name, source_media_id, result_media_id, state, detail,"
+                     " created, finished, text) VALUES ('tr1', ?, 'whisperx', 'lychee.m4a', ?, ?, 'done', 'готово', ?, ?,"
+                     " 'lychee talk')", (uid, source, result, T0, s.clock[0]))
+    return section_made(s, "tr1", [source, result], "/api/transcripts", word="lychee", href="transcribe?id=tr1",
+                        touch_sql=["UPDATE transcripts SET name = 'lychee 2.m4a' WHERE id = ?",
+                                   "UPDATE transcripts SET name = 'lychee.m4a' WHERE id = ?"])
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript}
 
 
 def owner(s) -> int:

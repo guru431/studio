@@ -121,7 +121,9 @@ def waiting(row) -> str:
 
 
 def _row(user_id: int, tid: str):
-    row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE id = ? AND user_id = ?", (tid, user_id)).fetchone()
+    """Своя расшифровка не из корзины (`deleted`, trash.py), иначе 404."""
+    row = state.DB.execute(f"SELECT {COLUMNS} FROM transcripts WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (tid, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такой расшифровки нет"})
     return row
@@ -498,7 +500,8 @@ async def retry(tid: str, body: RetryIn, request: Request):
 async def list_transcripts(request: Request, before: "float | None" = None,
                            before_id: "str | None" = Query(None, max_length=64), limit: int = Query(60, ge=1, le=100)):
     """Новые сверху; следующая страница — before=<created>&before_id=<id> последней."""
-    rows = db.page(state.DB, "transcripts", request.state.user.id, before, before_id, limit, COLUMNS)
+    rows = db.page(state.DB, "transcripts", request.state.user.id, before, before_id, limit, COLUMNS,
+                   " AND deleted IS NULL")
     return {"items": [_out(r) for r in rows]}
 
 
@@ -647,11 +650,22 @@ async def delete(tid: str, request: Request):
     row = _row(uid, tid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
-    state.DB.execute("DELETE FROM transcripts WHERE id = ?", (tid,))
-    for media_id in {row["source_media_id"], row["result_media_id"]} - {None}:
-        if not media.referenced(uid, media_id):
-            await media.delete_async(uid, media_id)
+    state.DB.execute("UPDATE transcripts SET deleted = ? WHERE id = ?", (clock.NOW(), tid))
+    log.info("расшифровка %s: в корзине", tid[:8])
     return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: строка, запись и итог, если на них больше никто не ссылается. Строки уже нет — ничего."""
+    row = state.DB.execute("SELECT source_media_id, result_media_id FROM transcripts WHERE id = ? AND user_id = ?",
+                           (item_id, user_id)).fetchone()
+    if row is None:
+        return
+    state.DB.execute("DELETE FROM transcripts WHERE id = ?", (item_id,))
+    for media_id in {row["source_media_id"], row["result_media_id"]} - {None}:
+        if not media.referenced(user_id, media_id):
+            await media.delete_async(user_id, media_id)
+    log.info("расшифровка %s: удалена", item_id[:8])
 
 
 def _stem(name: str) -> str:
