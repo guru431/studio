@@ -98,7 +98,8 @@ def test_estimate_counts_system_history_and_attachments(studio):
     sse(turn(studio, cid, "в" * 600))
     assert estimate()["tokens"] - with_profile in range(399, 403)
 
-    # отправленное вложение — 404, как у хода
+    # уже отправленное (поле страницы ещё не перерисовано) не считается и не отказ; чужой диалог — 404
     sse(turn(studio, cid, "ещё", attachment_ids=[photo["id"]]))
-    assert studio.c.post(url, json={"text": "", "attachment_ids": [photo["id"]]}).status_code == 404
+    assert estimate("", [photo["id"], "missing"]) == estimate()
     assert math.isfinite(estimate()["tokens"])
+    assert studio.c.post("/api/chats/nope/estimate", json={"text": ""}).status_code == 404

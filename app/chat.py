@@ -2171,8 +2171,11 @@ async def estimate(chat_id: str, body: EstimateIn, request: Request):
     row = _chat_row(uid, chat_id)
     conn = _chat_connection(uid, row["connection_id"])
     model = row["model"] or manage.DEFAULT_MODEL
+    # уже отправленное или удалённое вложение (поле ещё не перерисовано) не считается, а не 404: оценка — подсказка;
     # скан, что ещё распознаётся, ходу пока не даст текста
-    atts = [a for a in _free_attachments(uid, body.attachment_ids) if a["kind"] != "document" or a["text"] is not None]
+    atts = [a for att_id in dict.fromkeys(body.attachment_ids) for a in state.DB.execute(
+        "SELECT * FROM attachments WHERE id = ? AND user_id = ? AND message_id IS NULL", (att_id, uid))
+        if a["kind"] != "document" or a["text"] is not None]
     limit = await _limit(conn, model) if conn is not None else None
     cap = profiles.max_images(conn) if conn is not None else profiles.DEFAULT_MAX_IMAGES
     messages = compose(chat_id, "", model, cap)
