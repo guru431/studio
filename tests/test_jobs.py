@@ -98,7 +98,7 @@ def test_running_jobs_of_every_section(studio):
     assert {k: v["cancel"] for k, v in run.items()} == {
         "i1": "/api/images/i1/cancel", "i2": "/api/images/i2/cancel", "i3": "/api/images/i3/cancel",
         "v1": "/api/videos/v1/cancel", "v2": "/api/videos/v2/cancel", "t1": "/api/transcripts/t1/cancel",
-        "s1": "/api/speeches/s1/cancel", "m1": "/api/chats/c1/stop"}
+        "s1": "/api/speeches/chats/s1/cancel", "m1": "/api/chats/c1/stop"}      # озвучка — весь чат (C-I3)
 
 
 def test_queued_records_and_speeches_are_running_with_their_place(studio):

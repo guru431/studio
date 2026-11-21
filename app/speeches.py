@@ -461,10 +461,14 @@ async def _cancel(jobs: list[Job]) -> None:
     await asyncio.gather(*(asyncio.shield(j.task) for j in jobs), return_exceptions=True)
 
 
-def _drop_waiting(user_id: int, sid: "str | None" = None) -> int:
-    """Ждущие озвучки пользователя (или одна) — `cancelled`; итог — сколько."""
-    rows = state.DB.execute("SELECT id FROM speeches WHERE user_id = ? AND state = 'queued'"
-                            + (" AND id = ?" if sid else ""), (user_id, sid) if sid else (user_id,)).fetchall()
+def _drop_waiting(user_id: int, sid: "str | None" = None, *, chat_id: "str | None" = None) -> int:
+    """Ждущие озвучки пользователя (или одна, или записи чата `chat_id`) — `cancelled`; итог — сколько."""
+    where, args = "", (user_id,)
+    if sid:
+        where, args = " AND id = ?", (user_id, sid)
+    elif chat_id:
+        where, args = " AND chat_id = ?", (user_id, chat_id)
+    rows = state.DB.execute("SELECT id FROM speeches WHERE user_id = ? AND state = 'queued'" + where, args).fetchall()
     for (wid,) in rows:
         _finish(wid, "cancelled", "отменено")
     return len(rows)
@@ -714,14 +718,29 @@ async def chat_audio(cid: str, request: Request):
                                  "Cache-Control": "no-store"})
 
 
+@router.post("/chats/{cid}/cancel")
+async def cancel_chat(cid: str, request: Request):
+    """«Отменить» чата (длинный текст целиком): ждущие записи — `cancelled`, идущая — как `/{sid}/cancel`."""
+    uid = request.state.user.id
+    rows = _chat_rows(uid, cid)
+    dropped = _drop_waiting(uid, chat_id=cid)
+    jobs = [JOBS[r["id"]] for r in rows if r["id"] in JOBS and JOBS[r["id"]].task is not None
+            and not JOBS[r["id"]].task.done()]
+    await _cancel(jobs)
+    log.info("чат озвучки %s: отменён, снято из очереди %d, остановлено %d", cid[:8], dropped, len(jobs))
+    return {"state": _chat_out(_chat_rows(uid, cid))["state"]}
+
+
 @router.delete("/chats/{cid}", status_code=204)
 async def delete_chat(cid: str, request: Request):
     """Весь чат — в корзину: `deleted` каждой его записи одной отметкой (trash.py: в корзине — одна строка группы
-    `chat_id`, возвращается и удаляется целиком, окончательно — `purge` каждой); идущая или ждущая запись — 409."""
+    `chat_id`, возвращается и удаляется целиком, окончательно — `purge` каждой); ждущие записи снимаются из очереди,
+    идущая — 409."""
     uid = request.state.user.id
     rows = _chat_rows(uid, cid)
-    if any(r["state"] not in TERMINAL for r in rows):
+    if any(r["state"] not in TERMINAL and r["state"] != "queued" for r in rows):
         raise HTTPException(409, {"code": "running", "message": "сначала отмените идущие озвучки чата"})
+    _drop_waiting(uid, chat_id=cid)                 # без await до отметки: раннер не возьмёт их в работу
     state.DB.execute("UPDATE speeches SET deleted = ? WHERE user_id = ? AND chat_id = ? AND deleted IS NULL",
                      (clock.NOW(), uid, cid))
     log.info("чат озвучки %s: в корзине, записей %d", cid[:8], len(rows))

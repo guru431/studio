@@ -2,7 +2,8 @@ import { message as serverMessage, tr } from './i18n.js';
 /* «Прочитать» (п. 12, 28 спеки 2026-11-21-studio-source-capabilities-design): текст ответа чата, перевода или скана —
  * новым чатом «Озвучки» (POST /api/speeches/read) источником по умолчанию раздела. Проигрыватель на месте (chatPlayer):
  * записи чата — части длинного текста — играют по порядку по мере готовности (опрос GET /api/speeches/chats/<id>
- * раз в POLL_MS), «Скачать» — готовые части одним mp3 (GET /api/speeches/chats/<id>/audio). Умолчание раздела —
+ * раз в POLL_MS), «Скачать» — готовые части одним mp3 (GET /api/speeches/chats/<id>/audio), «Отменить» — весь чат
+ * (POST /api/speeches/chats/<id>/cancel; повторное «Прочитать» в том же месте отменяет прежний чат). Умолчание раздела —
  * инструмент MCP (409 `read_mcp`): его запускает sectionMcp('speech').run, как раздел «Озвучка», результат — его
  * вывод. Проигрыватель и опрос живут, пока узел-хозяин на странице (ушёл — sweep останавливает). */
 import { api } from './api.js';
@@ -51,13 +52,15 @@ export function clearRead(host) {
 }
 
 /** Записи чата озвучки `chatId` по порядку в одном плеере: готовая — сразу, следующая — по `ended`, а пока её нет —
- * после опроса. Кончившаяся без звука (ошибка, отмена) пропускается словами. `download` — кнопка «Скачать». */
-export function chatPlayer(chatId, { download = true } = {}) {
+ * после опроса. Кончившаяся без звука (ошибка, отмена) пропускается словами. `download` — кнопка «Скачать»,
+ * `cancel` — «Отменить» весь чат, пока в нём что-то ждёт или идёт (POST /api/speeches/chats/<id>/cancel). */
+export function chatPlayer(chatId, { download = true, cancel = true } = {}) {
   const audio = el('audio', { class: 'sp-audio read-audio', controls: true, preload: 'auto' });
   const note = el('p', { class: 'muted small', 'aria-live': 'polite' });
   const save = el('a', { class: 'btn btn-sm read-download', download: '', hidden: true,
     href: `/api/speeches/chats/${encodeURIComponent(chatId)}/audio` }, tr("Скачать"));
-  const box = el('div', { class: 'read-player' }, note, audio, ...(download ? [save] : []));
+  const stopButton = el('button', { type: 'button', class: 'btn btn-sm read-cancel', hidden: true }, tr("Отменить"));
+  const box = el('div', { class: 'read-player' }, note, audio, ...(download ? [save] : []), ...(cancel ? [stopButton] : []));
   let items = [];
   let next = 0;
   let waiting = true;            // плеер ждёт следующую готовую запись
@@ -84,7 +87,27 @@ export function chatPlayer(chatId, { download = true } = {}) {
       : items.length > 1 ? tr("Готово частей: {0} из {1}", done, items.length)
         : running ? serverMessage(running.detail) : '';
     save.hidden = !done;
+    stopButton.hidden = !running;
   }
+
+  /** Весь чат — отменить на сервере (ждущие части снимаются, идущая останавливается); итог — опросом. */
+  async function cancelChat() {
+    stopButton.disabled = true;
+    try {
+      await api('POST', `/api/speeches/chats/${encodeURIComponent(chatId)}/cancel`);
+      kick();
+    } catch (err) {
+      note.className = 'error small';
+      note.textContent = words(err);
+    } finally {
+      stopButton.disabled = false;
+    }
+    if (!stopped) {
+      clearTimeout(timer);
+      timer = setTimeout(poll, 0);
+    }
+  }
+  stopButton.addEventListener('click', cancelChat);
 
   async function poll() {
     timer = null;
@@ -108,6 +131,9 @@ export function chatPlayer(chatId, { download = true } = {}) {
   timer = setTimeout(poll, 0);
   return {
     box,
+    cancel: cancelChat,
+    /** В чате что-то ждёт или идёт (по последнему опросу; до первого — да). */
+    get running() { return !items.length || items.some((i) => !TERMINAL.has(i.state)); },
     stop() {
       stopped = true;
       clearTimeout(timer);
@@ -133,8 +159,11 @@ function readMcp(text, host) {
 }
 
 /** «Прочитать» `text` (Markdown — сервер снимет разметку) из `origin` {kind: 'chat'|'translate'|'ocr', id}: в `host` —
- * состояние, затем проигрыватель. Повторное нажатие в том же узле заменяет прежний проигрыватель. */
+ * состояние, затем проигрыватель. Повторное нажатие в том же узле заменяет прежний проигрыватель и отменяет его
+ * чат, если тот ещё не озвучен (иначе его части ждали бы в очереди впереди нового). */
 export async function readAloud(text, origin, host) {
+  const previous = players.get(host)?.player;
+  if (previous?.running) previous.cancel();
   clearRead(host);
   const status = el('p', { class: 'muted small', 'aria-live': 'polite' }, tr("Готовлю озвучку…"));
   host.replaceChildren(status);
@@ -145,7 +174,7 @@ export async function readAloud(text, origin, host) {
     if (cancelled) return;
     kick();
     const player = chatPlayer(chatId);
-    players.get(host).stop = player.stop;
+    Object.assign(players.get(host), { stop: player.stop, player });
     host.replaceChildren(player.box);
   } catch (err) {
     if (cancelled) return;

@@ -50,7 +50,7 @@ const NOTICES = {
  * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>. */
 export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
 /** Адрес отмены из ответа (jobs.py CANCEL): иное не отправляется. */
-const CANCEL = /^\/api\/(?:(?:images|videos|transcripts|ocr|translate|speeches)\/[\w-]+\/cancel|chats\/[\w-]+\/stop)$/;
+const CANCEL = /^\/api\/(?:(?:images|videos|transcripts|ocr|translate|speeches|speeches\/chats)\/[\w-]+\/cancel|chats\/[\w-]+\/stop)$/;
 let badge = null;
 let count;
 let dot;
