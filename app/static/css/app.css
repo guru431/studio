@@ -919,6 +919,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .model-chip .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); }
 .model-chip.off .dot { background: var(--text-2); }
 .model-chip svg.caret { flex: none; width: 12px; height: 12px; }
+/* узкое поле: ряд переносится по основе чипов — у выбора модели она нулевая, и он сжимается до многоточия, а не уводит
+   «Рассуждение» и главную кнопку второй строкой (как .pick «Агентов»); шире своего имени не растёт */
+@container composer (max-width: 550px) {
+  .model-wrap { flex: 1 1 0; max-width: max-content; }
+  .model-chip { max-width: 220px; }
+}
 /* чип только со значком («Пресеты», «Интернет» на узком) — той же высоты, что чип со словом: значок в строку текста */
 .composer .ctl-chip > svg.ico:only-child { height: 1lh; }
 .model-menu { width: 320px; }
