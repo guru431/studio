@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from studio_agent import VERSION, store, update_helper, updater
+from studio_agent import VERSION, shortcut, store, update_helper, updater
 from studio_agent.errors import Refused
 
 FUTURE = {'version': '99.0.0', 'sha256': 'a' * 64, 'size': 100}
@@ -100,6 +100,7 @@ def test_prepare_checks_checksum_and_builds_a_separate_venv(home, tmp_path, monk
     stage = updater.prepare(home, release)
     assert stage.parent == tmp_path / 'local/Programs/studio-agent/releases'
     assert (stage / 'studio_agent.pyw').is_file() and (stage / '_update_helper.py').is_file()
+    assert (stage / '_shortcut.py').read_bytes() == (updater.REPO / 'studio_agent/shortcut.py').read_bytes()
     assert len(run.call_args_list) == 4
     assert '.venv' in str(run.call_args_list[0])
     assert '--without-pip' in run.call_args_list[0].args[0]
@@ -477,6 +478,7 @@ else:
         assert trace.read_text().splitlines() == ['old-exit', 'new']
         assert (old_repo / 'studio_agent.pyw').read_text() == 'previous source'
         assert store.load_config(home).url == 'https://studio.example'
+        assert shortcut.read() == shortcut.target(stage)  # автономный хелпер — своей копией `_shortcut.py`
     finally:
         if not old.stdin.closed:
             old.stdin.close()

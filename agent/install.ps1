@@ -3,7 +3,8 @@
 # должен быть закрыт владельцем после завершения заданий; затем файлы копируются поверх (среда остаётся).
 # Из git-копии — на месте (разработка). Повторный запуск безопасен: среда остаётся, пакеты догоняют
 # requirements.txt. Автозапуск ставит окно моста и указывает на ту копию, из которой мост запущен; установка в
-# Programs уже включённый автозапуск (значение StudioAgent в Run) переписывает на себя, не включённый — не заводит.
+# Programs уже включённый автозапуск (значение StudioAgent в Run) переписывает на себя, не включённый — не заводит,
+# и ставит ярлык «Studio Agent» в меню «Пуск» пользователя (%APPDATA%) с той же командой.
 #   install.cmd  (двойной щелчок)  или  powershell -ExecutionPolicy Bypass -File install.ps1 [-Python <python.exe>]
 #   -NoVenv — без среды и пакетов, -NoStart — без запуска, -RunKey — ключ автозапуска (тесты установки).
 param(
@@ -15,6 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $source = $PSScriptRoot
+$installed = $false
 
 function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
     & $Exe @Arguments
@@ -40,6 +42,7 @@ if ((Test-Path -LiteralPath (Join-Path $source '.git')) -or
     $repo = $source
 } else {
     $repo = Join-Path $env:LOCALAPPDATA 'Programs\studio-agent'
+    $installed = $true
     $from = [IO.Path]::GetFullPath($source).TrimEnd('\')
     $to = [IO.Path]::GetFullPath($repo).TrimEnd('\')
     if ($from -ne $to) {
@@ -89,6 +92,20 @@ if (-not $NoVenv) {
         Invoke-Checked $exe ($base + @('-m', 'venv', $venv))
     }
     Invoke-Checked $py @('-m', 'pip', 'install', '--disable-pip-version-check', '-q', '-r', (Join-Path $repo 'requirements.txt'), '-c', (Join-Path $repo 'constraints.txt'))
+}
+
+if ($installed) {
+    # Ярлык «Studio Agent» в меню «Пуск» пользователя — та же команда и папка, что автозапуск (shortcut.target).
+    # Самообновление переводит его на новый выпуск; копия из git ярлык не ставит.
+    $menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+    New-Item -ItemType Directory -Force -Path $menu | Out-Null
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $menu 'Studio Agent.lnk'))
+    $link.TargetPath = $pyw
+    $link.Arguments = '"{0}"' -f (Join-Path $repo 'studio_agent.pyw')
+    $link.WorkingDirectory = $repo
+    $link.Description = 'Studio Agent'
+    $link.Save()
+    Write-Host 'Ярлык «Studio Agent» — в меню «Пуск».'
 }
 
 if (-not $NoStart) {

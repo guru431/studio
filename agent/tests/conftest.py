@@ -70,7 +70,9 @@ def start_menu(_appdata, monkeypatch):
     """`APPDATA` — временная папка: ярлык меню «Пуск» (`shortcut.path`) тесты, хелпер обновления и `install.ps1`
     в дочерних процессах пишут не в настоящий профиль."""
     monkeypatch.setenv('APPDATA', str(_appdata))
-    return _appdata / 'Microsoft/Windows/Start Menu/Programs'
+    menu = _appdata / 'Microsoft/Windows/Start Menu/Programs'
+    yield menu
+    (menu / 'Studio Agent.lnk').unlink(missing_ok=True)  # папка общая на прогон: следующий тест — без ярлыка
 
 
 @pytest.fixture(autouse=True)

@@ -14,7 +14,7 @@ import pytest
 
 winreg = pytest.importorskip('winreg')
 
-from studio_agent import autostart
+from studio_agent import autostart, shortcut
 
 pytestmark = pytest.mark.integration
 
@@ -138,6 +138,18 @@ def test_install_ps1_installs_into_programs_from_archive(tmp_path):
     assert r.stdout.strip() == f'"{target}\\.venv\\Scripts\\pythonw.exe" "{target}\\studio_agent.pyw"'
     with pytest.raises(FileNotFoundError):                              # автозапуска не было — и не заведён
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY)
+    # Ярлык меню «Пуск» (PowerShell WScript.Shell) — та же команда, что у моста (`shortcut.target`, IShellLinkW).
+    assert shortcut.read() == shortcut.target(target)
+
+
+def test_install_points_the_start_menu_shortcut_back_to_the_installed_copy(tmp_path):
+    """Ярлык самообновлённого выпуска (или прежний) установка из архива переписывает на корень установки."""
+    src = archive(tmp_path / "Downloads" / "studio-agent")
+    local = tmp_path / "Local"
+    target = local / "Programs" / "studio-agent"
+    shortcut.write(target / "releases" / "release-abc")
+    install(src, local)
+    assert shortcut.read() == shortcut.target(target)
 
 
 def test_install_refuses_a_bridge_running_from_a_self_update_release(tmp_path):
@@ -198,6 +210,7 @@ def test_install_from_studio_checkout_keeps_the_component_in_place(tmp_path):
     local = tmp_path / "Local"
     install(src, local)
     assert not (local / "Programs").exists()
+    assert shortcut.read() is None                                      # разработческая копия — без ярлыка
     assert (src / "studio_agent.pyw").is_file()
 
     running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)",

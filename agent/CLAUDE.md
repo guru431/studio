@@ -33,7 +33,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Ход: ввод и вывод | `timeline`, `image_input`, `attachments`, `diffs`, `discovery` |
 | Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `desktop`, `desktop_native` (Windows), `desktop_macos` (macOS) |
-| Обновление | `updater`, `update_helper` (stdlib-хелпер), `winacl` (ACL выпуска Windows), `install.ps1`, `install.cmd` |
+| Обновление | `updater`, `update_helper` (stdlib-хелпер), `winacl` (ACL выпуска Windows), `shortcut` (ярлык меню «Пуск»), `install.ps1`, `install.cmd` |
 | Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `i18n` (язык окна, трея и консоли), `__main__` (консольные команды), `studio_agent.pyw` |
 
 ## Правила
@@ -83,6 +83,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 - Git проекта — недоверенный: `gitinfo.SAFE`, фильтры репозитория выключены (`gitinfo._filters`), хуки не запускаются,
   частичный клон не дозагружает объекты (`gitinfo.OFFLINE`); исключение — `worktree add` по действию владельца.
 - Автозапуск Windows — значение `StudioAgent` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; Task Scheduler не трогать.
+  Ярлык «Studio Agent» меню «Пуск» (`%APPDATA%`) — та же команда; тесты пишут его во временную `APPDATA` (conftest).
   macOS — `~/Library/LaunchAgents/com.studio.agent.plist`, без принудительного перезапуска.
 - Кодировки: `.py` — UTF-8 без BOM, LF; `.ps1` — UTF-8 **с BOM**, CRLF (`.gitattributes`).
 - Комментарии, докстринги и тексты — по-русски, как в студии; слова отказов и интерфейса — дословно из «Тексты» плана.
