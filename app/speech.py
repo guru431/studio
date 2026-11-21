@@ -6,8 +6,10 @@ sections-voice-design, 6.1 и 6.3–6.5; контракт шлюза свере�
   `/speech/lite/transcriptions` или WhisperX `/speech/transcriptions` (`file`); озвучка — Qwen3-TTS
   `/speech/tts-qwen` и F5-TTS `/speech/tts-f5` (`text`, `language`, `ref_text`, `ref_audio`; ответ — WAV).
 - Внешний сервис: `/audio/transcriptions` (расшифровка — `verbose_json` с временем сегментов, без собеседников;
-  на 400 — повтор с `json`, текст одной репликой; ввод — `json`) и `/audio/speech` (JSON с голосом по имени;
-  ответ — mp3).
+  на 400 — повтор с `json`, текст одной репликой; модели `*-diarize*` — `diarized_json`, реплики по `speaker`;
+  ввод — `json`) и `/audio/speech` (JSON с голосом по имени; ответ — mp3).
+- Расшифровка, пришедшая текстом (результат MCP): `segments_from_labeled` — строки «Говорящий N:», «Speaker N:»,
+  «Собеседник N:»; `segments_from_srt` — субтитры SRT.
 - 503 (карта занята, `busy` Qwen) — Busy: ждать и повторять решает вызывающий; прочие отказы —
   SpeechError словами. Освобождения слотов `asr` и `tts-qwen` у шлюза нет: перед речью студия
   освобождает модели картинок и gemma-abl (`free_card`), чтобы карта досталась речи.
@@ -20,6 +22,7 @@ sections-voice-design, 6.1 и 6.3–6.5; контракт шлюза свере�
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from urllib.parse import urlencode
 
 import httpx
@@ -152,6 +155,55 @@ def _segments(body: dict) -> list[Segment]:
     return out
 
 
+#: метка собеседника в начале строки: «Говорящий 2:», «Speaker 2:», «Собеседник 2:» или «[SPEAKER_01]:» (с нуля)
+_LABELED = re.compile(r"\s*(?:(?:Говорящий|Собеседник|Speaker)\s+(\d{1,3})|\[?SPEAKER_(\d{1,3})\]?)\s*:\s*(.*)", re.I)
+_SRT_TIME = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})")
+
+
+def _label(line: str) -> "tuple[str | None, str]":
+    """Собеседник строки (LABEL с номером из метки) и текст после метки; без метки — (None, строка)."""
+    found = _LABELED.fullmatch(line)
+    if not found:
+        return None, line.strip()
+    number = int(found[1]) if found[1] else int(found[2]) + 1
+    return LABEL.format(number), found[3].strip()
+
+
+def segments_from_labeled(text: str) -> list[Segment]:
+    """Текст с метками собеседников по строкам — реплики без времени; строка без метки продолжает реплику (до первой
+    метки — реплика без собеседника). Ни одной метки — пусто: это не расшифровка по собеседникам."""
+    out: list[Segment] = []
+    labeled = False
+    for line in text.splitlines():
+        speaker, rest = _label(line)
+        if speaker is not None:
+            labeled = True
+            out.append(Segment(0.0, 0.0, speaker, rest))
+        elif rest and out:
+            out[-1] = Segment(0.0, 0.0, out[-1].speaker, f"{out[-1].text} {rest}".strip())
+        elif rest:
+            out.append(Segment(0.0, 0.0, None, rest))
+    return [s for s in out if s.text] if labeled else []
+
+
+def segments_from_srt(text: str) -> list[Segment]:
+    """Субтитры SRT — сегменты со временем; метка собеседника — у первого субтитра реплики, субтитр без метки — тот же
+    собеседник. Не SRT (ни одной строки времени) — пусто."""
+    out: list[Segment] = []
+    speaker = None
+    for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()):
+        lines = block.split("\n")
+        at = next((n for n, line in enumerate(lines[:2]) if _SRT_TIME.fullmatch(line.strip())), None)
+        if at is None:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, _SRT_TIME.fullmatch(lines[at].strip()).groups())
+        own, words = _label(" ".join(line.strip() for line in lines[at + 1:]))
+        speaker = own or speaker
+        if words:
+            out.append(Segment(h1 * 3600 + m1 * 60 + s1 + ms1 / 1000, h2 * 3600 + m2 * 60 + s2 + ms2 / 1000, speaker, words))
+    return out
+
+
 def _text(r: httpx.Response) -> str:
     text = upstream.json_body(r).get("text")
     return text.strip() if isinstance(text, str) else ""
@@ -179,9 +231,12 @@ async def transcribe(conn, model: str, audio: Path, mime: str, language: "str | 
                         ASR_TIMEOUT_SEC, files={"audio_file": ("audio.mp3", data, mime)})
     else:
         url = f"{conn.base_url}/audio/transcriptions"
+        # модели *-diarize* (gpt-4o-transcribe-diarize) отдают реплики по `speaker` в diarized_json; запись длиннее 30 с
+        # они принимают только с chunking_strategy
+        shape = ({"response_format": "diarized_json", "chunking_strategy": "auto"} if "-diarize" in model
+                 else {"response_format": "verbose_json"})
         try:
-            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC,
-                            data={"model": model, "response_format": "verbose_json", **_lang(language)},
+            r = await _post(conn, url, EXTERNAL_TIMEOUT_SEC, data={"model": model, **shape, **_lang(language)},
                             files={"file": ("audio.mp3", data, mime)})
         except BadRequest:
             # OpenAI gpt-4o-transcribe и gpt-4o-mini-transcribe понимают только json/text: текст одной репликой
