@@ -72,8 +72,8 @@ def test_me_carries_csrf_and_profile(studio):
     assert set(me) == {"id", "login", "name", "is_admin", "theme", "timezone", "views", "default_connection_id", "default_model",
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
-                       "studio_version", "email", "email_codes", "code_quick_actions_default", "notify_langs"}
-    assert me["password_reset"] is None and me["notify_langs"] == []
+                       "studio_version", "email", "email_codes", "code_quick_actions_default", "notify_langs", "memory_on"}
+    assert me["password_reset"] is None and me["notify_langs"] == [] and me["memory_on"] is False
 
 
 def test_timezone_is_persisted_per_account_without_changing_other_preferences(studio):
