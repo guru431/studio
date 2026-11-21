@@ -495,7 +495,8 @@ Cleaner). Скан в чате, ожидание сканов ходом, пов
   /api/knowledge/{id}/documents` телом-файлом с `X-Studio-Name` до `documents.DOC_MAX`, `DELETE …/documents/{doc}`;
   удаление — в корзину, виды `knowledge_bases` и `kb_documents`) и общие — из панели (`/api/admin/knowledge/bases…`,
   удаление сразу) с группами `kb_rules` (нет строк — всем, строки — участникам групп, администратор — всегда;
-  `knowledge.set_access`). Чужие личные базы администратор не видит.
+  `knowledge.set_access`). Чужие личные базы администратор не видит. Личные базы — история: «Удалить всю историю»
+  (`history`) стирает их с документами, живые и из корзины (куски и `kb_fts` — каскадом); общие остаются.
 - **В диалоге**: `PUT /api/chats/{chat_id}/knowledge {kb_ids}` (чип «Знания» поля ввода, `knowledge.js`); найденное в
   базах диалога по сообщению хода — блоком `<knowledge>` в начало сообщения пользователя хода (`chat._with_block`,
   в историю не пишется); встроенный инструмент `knowledge_search` (`chat_tools.KNOWLEDGE_SEARCH`, шаг `knowledge`),
