@@ -28,6 +28,7 @@ import access
 import auth
 import account_mail
 import bridge
+import chat
 import clock
 import connections
 import db
@@ -423,6 +424,23 @@ async def get_backup_check():
     if not CHECK.done():
         return {"state": "running"}
     return {"state": "done", "result": CHECK.result()}
+
+
+class ChatSettingsIn(BaseModel):
+    tool_rounds: int = Field(ge=chat.ROUNDS_MIN, le=chat.ROUNDS_MAX)
+
+
+@router.get("/chat")
+async def get_chat_settings():
+    """Настройки чата для всех учёток: кругов с инструментами на ответ (`chat.tool_rounds`)."""
+    return {"tool_rounds": chat.tool_rounds()}
+
+
+@router.put("/chat")
+async def put_chat_settings(body: ChatSettingsIn, admin: auth.User = Depends(auth.require_admin)):
+    chat.set_tool_rounds(body.tool_rounds)
+    log.info("администратор %d: кругов инструментов в чате — %d", admin.id, body.tool_rounds)
+    return {"tool_rounds": chat.tool_rounds()}
 
 
 @router.get("/allowlist")

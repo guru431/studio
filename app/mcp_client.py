@@ -536,6 +536,7 @@ def _prompt(item):
 TOOL_OFF = "Инструмент выключен в этом диалоге"
 WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
 TRIMMED = "Инструментов MCP больше 128 — часть этого сервера не предложена модели"
+UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
 
 
 def _unknown_tool(error, text=""):
@@ -597,12 +598,12 @@ class Tools:
         """Каталоги серверов набора — из кэша (`mcp_sources.catalog`), без знакомства с сервером: его делает первый
         вызов. Холодный кэш: явные ждут каждый DISCOVER_SEC, серверы по умолчанию — все вместе
         `mcp_sources.DEFAULT_WAIT_SEC`; не успевший пропускается словами в `failed`. Отбор — группы доступа,
-        выключенные в диалоге и «Интернет» (`_offered`); сверх MAX_TOOLS — лишнее по порядку набора отбрасывается
+        выключенные в диалоге, «Интернет» (`_offered`) и UPLOAD «с подтверждением» без явного включения; сверх MAX_TOOLS — лишнее по порядку набора отбрасывается
         заметкой, ход не отказывает."""
         chat = self._chat()
         if chat is None:
             return
-        off, _ = mcp_sources.tool_state(chat["mcp_tools_off"])
+        off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
         web = bool(chat["web"])
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
         items = [enabled[sid] for sid in self.ids if sid in enabled]
@@ -618,9 +619,12 @@ class Tools:
             rules =mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
             given = trimmed = 0
             for tool in catalog.tools:
-                if (not access.tool_allowed(self.uid, item["id"], tool["name"])   # закрыт группами доступа
-                        or tool["name"] in off.get(item["id"], ())
-                        or self._offered(item, tool, rules, web)[1] is not None):
+                if not access.tool_allowed(self.uid, item["id"], tool["name"]):   # закрыт группами доступа
+                    continue
+                hint, refusal = self._offered(item, tool, rules, web)
+                # загрузка файлов «с подтверждением» — только явно включённая, как в окне MCP (mcp_files.CONFIRM)
+                gated = tool["name"] == UPLOAD and hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ())
+                if tool["name"] in off.get(item["id"], ()) or refusal is not None or gated:
                     continue
                 if len(self.calls) >= MAX_TOOLS:
                     trimmed += 1

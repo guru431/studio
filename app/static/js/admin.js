@@ -337,6 +337,47 @@ function allowlistBlock() {
   };
 }
 
+/* «Чат»: кругов с инструментами на ответ (chat.tool_rounds, 1–30) — для всех учёток */
+function chatSettingsBlock() {
+  const input = el('input', { class: 'input', id: 'chat-tool-rounds', type: 'number', min: 1, max: 30, step: 1,
+    inputmode: 'numeric', required: true });
+  const note = el('p', { class: 'status', id: 'chat-settings-status', 'aria-live': 'polite' });
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'chat-settings-save' });
+
+  function say(text, kind) {
+    note.textContent = text;
+    note.className = `status${kind ? ` ${kind}` : ''}`;
+  }
+
+  async function load() {
+    try {
+      input.value = (await api('GET', '/api/admin/chat')).tool_rounds;
+    } catch (err) {
+      say(words(err), 'error');
+    }
+  }
+
+  save.addEventListener('click', async () => {
+    if (!input.reportValidity()) return;
+    save.disabled = true;
+    try {
+      input.value = (await api('PUT', '/api/admin/chat', { tool_rounds: Number(input.value) })).tool_rounds;
+      say(tr("Сохранено"), 'ok');
+    } catch (err) {
+      say(words(err), 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  return {
+    el: el('section', { class: 'block' }, el('h2', {}, tr("Чат")),
+      el('p', { class: 'muted small' }, tr("Сколько раз за один ответ модель может вызвать инструменты (интернет, MCP, вопросы), прежде чем ответить по найденному. Повторный вызов с теми же аргументами не исполняется.")),
+      field(tr("Кругов инструментов на ответ (1–30)"), input), el('div', { class: 'row' }, save, note)),
+    load,
+  };
+}
+
 /* «Хранилище»: шара (доступна — свободное место; недоступна или не отвечает — словами сервера), возраст
  * последней копии базы (старше `stale_sec` сервера — admin.COPY_STALE_SEC, тот же порог push о пропущенной
  * копии — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
@@ -646,14 +687,16 @@ export function mount(view, ctx) {
   const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
   const storage = storageBlock();
+  const chatSettings = chatSettingsBlock();
   const groups = groupsBlock(root, users.reload);
-  root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }),
-    roleDefaultsBlock(), storage.el);
+  root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatSettings.el,
+    chatMcpBlock({ admin: true }), roleDefaultsBlock(), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
   groups.reload();
   invitations.reload();
   allow.load();
+  chatSettings.load();
   storage.load();
 }
 

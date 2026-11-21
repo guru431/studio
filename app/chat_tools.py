@@ -24,6 +24,12 @@ ASK_USER = {"type": "function", "function": {
         "required": ["question"]}}}
 
 NAMES: set[str] = {"ask_user"}
+KINDS: set[str] = {"ask"}                         # виды их шагов в `messages.tools`
+
+
+def for_model(step: dict) -> str:
+    """Результат шага встроенного инструмента для модели; ошибка — без приписки «Интернета» (web.NOTHING)."""
+    return f"Ошибка инструмента: {step['error']}" if "error" in step else step["text"]
 
 
 def specs(task) -> list[dict]:
