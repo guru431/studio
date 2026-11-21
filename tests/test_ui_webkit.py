@@ -797,11 +797,11 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
       const scale = parseFloat(root.style.zoom), box = field.getBoundingClientRect();
       return { readable: parseFloat(getComputedStyle(field).fontSize) * scale >= 16,
         // подписи не мельче 11 px: --fs-2xs / --fs-xs = max(11px, 11 или 12 × размер текста)
-        compactPicks: [...document.querySelectorAll('.code-pick-value')].every(e =>
+        compactPicks: [...document.querySelectorAll('.pick-value')].every(e =>
           Math.abs(parseFloat(getComputedStyle(e).fontSize) - Math.max(11,
             (parseFloat(getComputedStyle(document.querySelector('.code-compose-area')).width) <= 550 ? 11 : 12)
               * parseFloat(getComputedStyle(root).getPropertyValue('--font-scale')))) < .01),
-        nativePicks: [...document.querySelectorAll('.code-pick select')].every(e =>
+        nativePicks: [...document.querySelectorAll('.pick select')].every(e =>
           parseFloat(getComputedStyle(e).fontSize) * scale >= 16),
         viewport: visualViewport.scale === 1,
         fits: box.left >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
@@ -815,7 +815,7 @@ def test_text_fields_stay_readable_and_fit_when_focused_at_reduced_scale(iphone,
     page.locator('#code-effort-menu [role="menuitemradio"]').nth(1).tap()
     assert page.locator('#code-effort').evaluate("""e => {
       const trigger = document.querySelector('#code-effort-pick'), r = trigger.getBoundingClientRect();
-      return trigger.querySelector('.code-pick-value').textContent.includes(e.selectedOptions[0].textContent)
+      return trigger.querySelector('.pick-value').textContent.includes(e.selectedOptions[0].textContent)
         && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2).closest('button') === trigger;
     }""")
 
