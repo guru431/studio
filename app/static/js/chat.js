@@ -4,6 +4,8 @@ import { knowledgeChip } from './knowledge.js';
 import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
   uploadMedia } from './chat-files.js';
 import { paintPending } from './chat-pending.js';
+import { paintSuggestions } from './chat-suggest.js';
+import { contextRing } from './chat-context.js';
 import { mcpStateWords } from './mcp-sections.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
@@ -77,6 +79,11 @@ import { mcpStateWords } from './mcp-sections.js';
  * Пауза ответа (спека 2026-11-21-studio-source-capabilities-design, п. 5 и 17): событие SSE `pending` или `pending`
  * сообщения с сервера — карточка chat-pending.js под ответом (подтверждение инструмента или вопрос модели); ответ —
  * POST /api/chats/<id>/pending/<id>, его поток SSE читает тот же пузырь (`answerPending`, `readServer`).
+ *
+ * Поле ввода (спека 2026-11-21-studio-source-capabilities-design, п. 2, 31, 33): подсказки под пустой заметкой —
+ * chat-suggest.js; строка паспорта над полем (`paintPassport`): фото во вложениях, а в паспорте модели чипа нет
+ * `vision` — «Убрать фото» и «Сменить модель», при MCP с `studio/chat-files` и согласием — какой сервер получит фото;
+ * отправку не закрывает. Кольцо заполнения контекста открытого диалога — chat-context.js в `.composer-opts`.
  *
  * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
@@ -656,10 +663,14 @@ function build(view, ctx) {
     },
     failed: (err) => { notice.textContent = words(err); } });
   const inputBox = fieldBox(input, { attach: clip });
-  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, inputBox.box, inputBox.error,
+  const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
+  let passportKey = '';
+  const ring = contextRing(estimateContext);
+  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, roles.chip, roles.menu, webToggle, mcpToggle,
-      kbs.chip, kbs.panel, thinkToggle), send, stop),
+      kbs.chip, kbs.panel, thinkToggle, ring.node), send, stop),
     webNote);
+  let suggestKey = null;       // подсказки пустого экрана: { query, items } последнего запроса (items — когда пришли)
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
@@ -823,6 +834,8 @@ function build(view, ctx) {
     paintWeb();
     roles.paint();
     kbs.paint();
+    paintSuggest();
+    ring.schedule();
   }
 
   /* «Интернет» (как web.tools_for): 'hidden' — прямое подключение, кнопки нет; 'nokey' — через сервер без
@@ -919,6 +932,7 @@ function build(view, ctx) {
       }
       return chip;
     }));
+    paintPassport();                                 // каталог MCP и согласие — для строки паспорта
   }
 
   function deleteMedia(item) {
@@ -1050,6 +1064,8 @@ function build(view, ctx) {
       if (chat) chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, body);
       else draftMcp = body;
       paintWeb();
+      const host = feed.querySelector('.chat-suggest');   // подсказки MCP — уже другого набора
+      if (host && chat) { suggestKey = null; delete host.dataset.query; paintSuggest(host); }
     });
   });
 
@@ -1154,6 +1170,72 @@ function build(view, ctx) {
   function paintGuard() {
     modelNote.textContent = blocked() ? EXTERNAL_NOTE : droppedNote;
     send.disabled = sending || blocked();
+    paintPassport();
+  }
+
+  /* фото поля ввода, которые уйдут с ходом (не отвергнутые при выборе или сервером) */
+  function photoAtts() {
+    return atts.filter((a) => !a.error && (a.file ? a.file.type.startsWith('image/') : a.meta.kind === 'image'));
+  }
+
+  /* строка паспорта (п. 31): в паспорте модели чипа (`passport.models` подключения) есть запись без `vision`; нет
+     паспорта или записи — молчим. Сервер MCP набора с `chat_files` и согласием «Передать» — называем его */
+  function paintPassport() {
+    const { connection_id: connId, model } = chosen();
+    const entry = links.find((l) => l.connection.id === connId)?.connection.passport?.models?.find((m) => m.id === model);
+    const blind = photoAtts().length > 0 && !!entry && !entry.caps.some((c) => c.name === 'vision');
+    const decisions = chat?.chat.mcp_file_consent || {};
+    const tool = blind && chat ? mediaTargets(catalog, chat.chat.mcp_ids || [], stateOf(chat.chat), !!chat.chat.web)
+      .find((t) => decisions[String(t.id)] === 'allowed') : null;
+    const key = blind ? `blind:${tool ? tool.name : ''}` : '';
+    if (key === passportKey) return;                 // ссылки не пересоздаются: фокус на них не теряется
+    passportKey = key;
+    passportNote.hidden = !blind;
+    passportNote.replaceChildren(...(!blind ? [] : [el('span', {}, tr("Модель по паспорту не смотрит фото")),
+      tool ? el('span', { class: 'chat-passport-mcp' }, tr("Фото получит инструмент MCP «{0}»", tool.name)) : null,
+      button(tr("Убрать фото"), { class: 'btn-link passport-drop' }, () => {
+        const gone = photoAtts();
+        atts = atts.filter((a) => !gone.includes(a));
+        for (const a of gone) if (a.meta) api('DELETE', `/api/attachments/${a.meta.id}`).catch(() => {});
+        dropWaiting();
+        paintAtts();
+        input.focus({ preventScroll: true });
+      }),
+      button(tr("Сменить модель"), { class: 'btn-link passport-model' }, () => chip.click())].filter(Boolean)));
+  }
+
+  /* оценка контекста открытого диалога (chat-context.js): загруженные вложения — сервером, ещё не загруженные
+     (грузятся при отправке) — здесь грубо: фото — 1000 токенов (как chat.estimate_tokens), текстовый файл — байты / 3,
+     PDF и DOCX — не оценить до разбора. Новый диалог — нечего оценивать */
+  async function estimateContext() {
+    const id = chatId;
+    if (!id || chat?.chat.id !== id) return null;
+    const sent = atts.filter((a) => a.meta && !a.error);
+    const local = atts.filter((a) => !a.meta && !a.error && a.file);
+    const out = await api('POST', `/api/chats/${id}/estimate`, { text: input.value,
+      attachment_ids: sent.slice(0, ATTACH_MAX).map((a) => a.meta.id) });
+    if (chatId !== id) return null;
+    const guess = local.reduce((sum, a) => sum + (a.file.type.startsWith('image/') ? 1000
+      : /\.(pdf|docx)$/i.test(a.file.name) ? 0 : Math.ceil(a.file.size / 3)), 0);
+    return { tokens: out.tokens + guess, limit: out.limit };
+  }
+
+  /* подсказки пустого экрана (chat-suggest.js): открытый пустой диалог — его подключение и MCP, новый — пара чипа и
+     MCP по умолчанию; пара та же — не перезапрашиваются */
+  function paintSuggest(host = feed.querySelector('.chat-suggest')) {
+    if (!host) return;
+    const { connection_id: connId, model } = chosen();
+    const query = chatId ? `chat_id=${encodeURIComponent(chatId)}`
+      : connId === null ? '' : `connection_id=${connId}&model=${encodeURIComponent(model || '')}`;
+    if (host.dataset.query === query) return;
+    host.dataset.query = query;
+    if (!query) { paintSuggestions(host, [], input); return; }
+    if (suggestKey?.query === query && suggestKey.items) { paintSuggestions(host, suggestKey.items, input); return; }
+    const mine = suggestKey = { query, items: null };
+    api('GET', `/api/chats/suggestions?${query}`).then((items) => {
+      mine.items = items;
+      if (mine === suggestKey && host.isConnected) paintSuggestions(host, items, input);
+    }, () => { if (mine === suggestKey && host.isConnected) paintSuggestions(host, [], input); });
   }
 
   /* окна подтверждений — по очереди: сначала внешняя модель, затем Exa; каждое несёт уже данное другое */
@@ -1594,8 +1676,11 @@ function build(view, ctx) {
   }
 
   function emptyNote() {
+    const suggest = el('div', { class: 'chat-suggest', id: 'chat-suggest', role: 'group', 'aria-label': tr("Подсказки"),
+      hidden: true });
+    paintSuggest(suggest);
     return el('div', { class: 'empty chat-empty' }, el('span', { class: 'badge', 'aria-hidden': 'true' }, icon('chat')),
-      el('p', {}, tr("Напишите сообщение или прикрепите документ — PDF, DOCX, TXT, MD или фото")));
+      el('p', {}, tr("Напишите сообщение или прикрепите документ — PDF, DOCX, TXT, MD или фото")), suggest);
   }
 
   function scrollDown(force) {
@@ -1716,6 +1801,8 @@ function build(view, ctx) {
     found = null;                                    // ?m= нового адреса ставит query() следом
     shareContext();
     chat = null;
+    ring.hide();                                     // кольцо прежнего диалога — до оценки этого
+    suggestKey = null;                               // подсказки — заново: профиль и MCP могли смениться
     needsReload = false;
     failures = 0;
     historyRead?.controller.abort();
@@ -1793,6 +1880,7 @@ function build(view, ctx) {
         sending ? null : remove);
     }));
     paintGuard();
+    ring.schedule();
   }
 
   function autosize() {
@@ -2224,6 +2312,7 @@ function build(view, ctx) {
   input.addEventListener('input', () => {
     autosize();
     dropWaiting();
+    ring.schedule();
   });
   enterSends(input, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {
