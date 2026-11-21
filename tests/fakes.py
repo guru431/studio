@@ -268,10 +268,11 @@ class FakeGateway:
             for piece in then.get("text", []):
                 yield data({"content": piece})
             # вызовы — как vLLM gemma-abl через шлюз (проба 2026-10-21): имя с id и index, затем
-            # аргументы кусками; конец — finish_reason "tool_calls"
-            for i, (name, arguments) in enumerate(calls):
-                yield data({"tool_calls": [{"index": i, "id": f"chatcmpl-tool-{number}-{i}", "type": "function",
-                                            "function": {"name": name}}]})
+            # аргументы кусками; конец — finish_reason "tool_calls"; третий элемент вызова — свой id (шлюзы с id
+            # по номеру в ответе: `call_0` в каждом круге)
+            for i, (name, arguments, *own) in enumerate(calls):
+                yield data({"tool_calls": [{"index": i, "id": own[0] if own else f"chatcmpl-tool-{number}-{i}",
+                                            "type": "function", "function": {"name": name}}]})
                 half = len(arguments) // 2
                 for part in (arguments[:half], arguments[half:]):
                     yield data({"tool_calls": [{"index": i, "function": {"arguments": part}}]})

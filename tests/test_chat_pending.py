@@ -222,3 +222,34 @@ def test_ask_user_option_and_own_text_reach_model(studio):
     assert sse(answer(studio, cid, shown["id"], "refuse"))[-1] == ("done", {"status": "done"})
     assert json.loads(studio.gw.chat_requests[-1]["messages"][-1]["content"]) == {
         "answer": None, "note": "пользователь не ответил"}
+
+
+def test_confirmation_covers_only_the_resumed_call_not_a_reused_id(studio):
+    """Ревью A-I2: «Запустить» относится к вызову, на котором стояла пауза, по месту, а не по id: шлюз с id по номеру
+    в ответе (`call_0` в каждом круге) или модель, повторившая id, не запускают следующий вызов без карточки."""
+    sid, calls = confirm_setup(studio)
+    cid = new_chat(studio)
+    translate = name_of(sid, 1)
+    studio.gw.chat_script = [{"tool_calls": [(*call(translate, phrase="one"), "call_0")]},
+                             {"tool_calls": [(*call(translate, phrase="two"), "call_0")]}, ["Готово."]]
+    shown = pending_of(sse(turn(studio, cid, "Переведи")))
+    events = sse(answer(studio, cid, shown["id"], "run"))
+    assert [p for m, p in calls if m == "tools/call"] == [{"name": "translate", "arguments": {"phrase": "one"}}]
+    again = pending_of(events)
+    assert again["id"] != shown["id"] and again["arguments"] == [["phrase", "two"]]
+
+
+def test_gone_tool_does_not_mark_a_later_call_with_the_same_id(studio):
+    """Ревью A-I2: инструмент, пропавший к продолжению, — шаг GONE только у вызовов продолжения; вызов следующего
+    круга с тем же id исполняется."""
+    sid, calls = confirm_setup(studio)
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [(*call(name_of(sid, 1), phrase="one"), "call_0")]},
+                             {"tool_calls": [(*call(name_of(sid, 0), q="x"), "call_0")]}, ["Готово."]]
+    shown = pending_of(sse(turn(studio, cid, "Переведи")))
+    access.set_tool_rules(sid, {"translate": []})
+    assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
+    steps = messages(studio, cid)[-1]["tools"]
+    assert steps[0]["tool"] == "translate" and steps[0]["error"] == chat_pending.GONE
+    assert steps[1] == {"kind": "mcp", "server": "Shared tools", "tool": "lookup"}
+    assert [p["name"] for m, p in calls if m == "tools/call"] == ["lookup"]

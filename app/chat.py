@@ -810,8 +810,11 @@ class StreamTask:
     seen: set = field(default_factory=set, repr=False)
     rest: list = field(default_factory=list, repr=False)   # вызовы круга после идущего — в payload паузы
     index: int = 0               # номер идущего вызова в круге (CALLS_PER_ROUND)
-    confirmed: str | None = None   # id вызова, которому «Запустить» дано этой паузой
-    gone: dict = field(default_factory=dict, repr=False)   # id вызова продолжения → (сервер, инструмент), которых нет
+    #: вызов, которому «Запустить» дано этой паузой, — сам объект первого вызова продолжения (`is`, не id: id даёт
+    #: шлюз или модель, и вызов следующего круга с тем же id подтверждения не получает)
+    confirmed: "ToolCall | None" = field(default=None, repr=False)
+    #: вызовы продолжения, чьих инструментов больше нет: [(объект вызова, (сервер, инструмент))] — тоже по `is`
+    gone: list = field(default_factory=list, repr=False)
     builtin_off: bool = False    # встроенные инструменты не предлагать (шлюз их не принял, метка NO_TOOLS)
     #: в диалоге сработал «Защищённый источник» MCP (`chats.protected_used`, читает `_read`; ставит `_protect`):
     #: аргументы со ссылками (mcp_client.has_url) — отказ mcp_client.URL_REFUSED без вызова
@@ -1118,8 +1121,9 @@ class StreamTask:
             self.rest, self.index = calls[i + 1:], n
             kind = web.NAMES.get(c.name, "unknown")
             key = self._seen_key(c)
-            if c.id in self.gone:                    # продолжение: инструмента больше нет в наборе хода
-                server, tool = self.gone[c.id]
+            gone = next((where for call, where in self.gone if call is c), None)
+            if gone is not None:                     # продолжение: инструмента больше нет в наборе хода
+                server, tool = gone
                 step = {"kind": "mcp", "server": server, "tool": tool, "error": chat_pending.GONE}
             elif key in self.seen:                   # тот же вызов уже исполнен в этом ответе — результат выше
                 step = {"kind": "duplicate",
@@ -1129,7 +1133,7 @@ class StreamTask:
             elif self.mcp and c.name in self.mcp.calls:
                 _, tool, server, _ = self.mcp.calls[c.name]
                 hint = self.mcp.confirm_hint(c.name)
-                if (n < CALLS_PER_ROUND and c.id != self.confirmed
+                if (n < CALLS_PER_ROUND and c is not self.confirmed
                         and mcp_sources.confirm_needed(hint, web.args_of(c.arguments))):
                     await chat_pending.pause(self, "confirm", c, {
                         "server": server, "tool": tool, "arguments": chat_pending.arguments_view(c.arguments),
@@ -1198,12 +1202,12 @@ class StreamTask:
             if target is not None:
                 found = names.get((target[0], target[1]))
                 if found is None:
-                    self.gone[c.id] = (target[2], target[1])
+                    self.gone.append((c, (target[2], target[1])))
                 else:
                     c.name = found
             calls.append(c)
         if r["action"] == "run":
-            self.confirmed = calls[0].id
+            self.confirmed = calls[0]
             return await self._calls(calls, r["index"])
         step = chat_pending.resume_step(r["kind"], r["action"], r["answer"], r["view"])
         self.seen.add(self._seen_key(calls[0]))      # отказ и ответ — тоже результат: повтор не спросит снова
