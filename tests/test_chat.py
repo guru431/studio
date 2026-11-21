@@ -594,7 +594,9 @@ def test_deleting_a_chat_removes_its_files_off_the_loop(studio, env, unlinks):
     pic = attach(studio, "photo.jpg", png(), "image/jpeg")
     sse(turn(studio, cid, "Что на фото?", attachment_ids=[pic["id"]]))
     assert [p for p in env.media_dir.rglob("*") if p.is_file()]
-    assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
+    assert studio.c.delete(f"/api/chats/{cid}").status_code == 204            # в корзину: файлы на месте
+    assert [p for p in env.media_dir.rglob("*") if p.is_file()] and not unlinks
+    assert studio.c.delete(f"/api/trash/chats/{cid}").status_code == 204      # окончательно
     assert [p for p in env.media_dir.rglob("*") if p.is_file()] == []
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert unlinks and not any(unlinks)                  # файлы удалены не с цикла событий

@@ -50,6 +50,7 @@ def test_old_acknowledgement_cannot_regenerate_a_deleted_answer(studio):
     assert response.json()['detail']['code'] == 'request_gone'
     assert len(studio.gw.chat_requests) == 2
     assert studio.c.delete(f'/api/chats/{cid}').status_code == 204
+    assert studio.c.delete(f'/api/trash/chats/{cid}').status_code == 204     # окончательно — с отметками ходов
     assert state.DB.execute('SELECT count(*) FROM chat_turn_requests').fetchone()[0] == 0
 
 

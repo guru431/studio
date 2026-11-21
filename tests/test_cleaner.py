@@ -225,6 +225,7 @@ def test_context_deletion_retries_with_original_address_and_credential(protected
     cid = new_chat(studio)
     preview(studio, cid)
     studio.c.delete(f"/api/chats/{cid}")
+    studio.c.delete(f"/api/trash/chats/{cid}")     # контекст Cleaner — при окончательном удалении, не в корзину
     assert not cleaner.TICKETS
     assert state.DB.execute("SELECT COUNT(*) FROM cleaner_contexts").fetchone()[0] == 0
     assert state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions").fetchone()[0] == 1
@@ -257,6 +258,7 @@ def test_revoked_cleanup_key_is_backed_off_and_pending_is_visible(protected):
     cid = new_chat(studio)
     preview(studio, cid)
     studio.c.delete(f"/api/chats/{cid}")
+    studio.c.delete(f"/api/trash/chats/{cid}")     # контекст Cleaner — при окончательном удалении, не в корзину
     remote.revoked = True
     studio.c.portal.call(cleaner.purge)
     studio.c.portal.call(cleaner.purge)

@@ -111,10 +111,10 @@ def consent_state(uid: int, row) -> dict:
 
 
 def media_of(chat_id: str) -> list[dict]:
-    """Звук и видео диалога для страницы (без id файла учётки)."""
+    """Звук и видео диалога для страницы (без id файла учётки); корзина — мимо."""
     return [{"id": r["id"], "name": r["name"], "mime": r["mime"], "size": r["size"], "created": r["created"]}
             for r in state.DB.execute("SELECT id, name, mime, size, created FROM chat_media WHERE chat_id = ?"
-                                      " ORDER BY created, rowid", (chat_id,))]
+                                      " AND deleted IS NULL ORDER BY created, rowid", (chat_id,))]
 
 
 def _candidates(task) -> list[dict]:
@@ -135,7 +135,8 @@ def _candidates(task) -> list[dict]:
             break
     for r in state.DB.execute(
             "SELECT c.id, c.name, c.media_id, c.mime, c.size FROM chat_media c JOIN media m ON m.id = c.media_id"
-            " AND m.user_id = c.user_id WHERE c.chat_id = ? AND c.user_id = ? ORDER BY c.created DESC, c.rowid DESC"
+            " AND m.user_id = c.user_id WHERE c.chat_id = ? AND c.user_id = ? AND c.deleted IS NULL"
+            " ORDER BY c.created DESC, c.rowid DESC"
             " LIMIT ?", (task.chat_id, task.user_id, PER_TURN)):
         files.append({"table": "mcp_media_uploads", "key": "chat_media_id", "id": r["id"], "name": r["name"],
                       "media_id": r["media_id"], "mime": r["mime"], "size": r["size"]})
@@ -168,7 +169,8 @@ def _allowed(task, sid: int, stamp: str, found) -> bool:
         item = mcp_client.row(task.user_id, sid)
     except HTTPException:
         return False
-    row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ?", (task.chat_id, task.user_id)).fetchone()
+    row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (task.chat_id, task.user_id)).fetchone()
     if row is None or not item["enabled"] or mcp_sources.stamp(item["secret_enc"]) != stamp:
         return False
     off, _ = mcp_sources.tool_state(row["mcp_tools_off"])
@@ -194,7 +196,8 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
                if (limit := limit_of(found)) is not None]
     if not targets:
         return [], []
-    row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ?", (task.chat_id, task.user_id)).fetchone()
+    row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (task.chat_id, task.user_id)).fetchone()
     files = _candidates(task) if row is not None else []
     if not files:
         return [], []
@@ -391,17 +394,29 @@ async def upload_media(chat_id: str, request: Request):
 
 @router.delete("/chats/{chat_id}/media/{item_id}", status_code=204)
 async def delete_media(chat_id: str, item_id: str, request: Request):
+    """Медиа диалога — в корзину (`deleted`, trash.py); строка и файл — до `purge_media`."""
     uid = request.state.user.id
     chat._chat_row(uid, chat_id)
-    item = state.DB.execute("SELECT media_id FROM chat_media WHERE id = ? AND chat_id = ? AND user_id = ?",
+    item = state.DB.execute("SELECT 1 FROM chat_media WHERE id = ? AND chat_id = ? AND user_id = ? AND deleted IS NULL",
                             (item_id, chat_id, uid)).fetchone()
     if item is None:
         raise chat._gone("такого вложения нет")
     chat._busy(chat_id)
+    state.DB.execute("UPDATE chat_media SET deleted = ? WHERE id = ?", (clock.NOW(), item_id))
+    log.info("чат %s: медиа диалога %s в корзине", chat_id[:8], item_id[:8])
+
+
+async def purge_media(user_id: int, item_id: str) -> None:
+    """Окончательно: строка медиа диалога (загрузки на MCP — каскадом) и файл, если на него никто не ссылается.
+    Строки уже нет — ничего."""
+    item = state.DB.execute("SELECT chat_id, media_id FROM chat_media WHERE id = ? AND user_id = ?",
+                            (item_id, user_id)).fetchone()
+    if item is None:
+        return
     state.DB.execute("DELETE FROM chat_media WHERE id = ?", (item_id,))
-    if not media.referenced(uid, item["media_id"]):
-        await media.delete_async(uid, item["media_id"])
-    log.info("чат %s: медиа диалога %s удалено", chat_id[:8], item_id[:8])
+    if not media.referenced(user_id, item["media_id"]):
+        await media.delete_async(user_id, item["media_id"])
+    log.info("чат %s: медиа диалога %s удалено", item["chat_id"][:8], item_id[:8])
 
 
 @router.get("/chats/{chat_id}/messages/{message_id}/files/{step}/{n}")

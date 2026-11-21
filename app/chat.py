@@ -231,7 +231,9 @@ def _gone(what: str = "такого диалога нет") -> HTTPException:
 
 
 def _chat_row(user_id: int, chat_id: str):
-    row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id)).fetchone()
+    """Свой диалог не из корзины (`deleted`), иначе 404."""
+    row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (chat_id, user_id)).fetchone()
     if row is None:
         raise _gone()
     return row
@@ -1271,7 +1273,8 @@ async def stop_user(user_id: int) -> None:
     модель не держит карту ради ответа, который уже некуда сохранить. Потоки — по user_id, а не по
     диалогам: поток диалога, который уже удалён, тоже его."""
     cleaner.forget(user_id)
-    chats = {r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ?", (user_id,))}
+    chats = {r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? AND deleted IS NULL",
+                                               (user_id,))}
     _stop_unstarted(chats)
     await _cancel([st for st in STREAMS.values() if st.user_id == user_id])
 
@@ -1369,7 +1372,8 @@ async def _ended(user_message_id: str, answer_id: str, status: str):
 
 @router.get("/chats")
 async def list_chats(request: Request):
-    rows = state.DB.execute("SELECT * FROM chats WHERE user_id = ? ORDER BY updated DESC, rowid DESC",
+    rows = state.DB.execute("SELECT * FROM chats WHERE user_id = ? AND deleted IS NULL"
+                            " ORDER BY updated DESC, rowid DESC",
                             (request.state.user.id,))
     return {"items": [_chat_out(r) for r in rows]}
 
@@ -1497,8 +1501,9 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
 
 @router.delete("/chats/{chat_id}", status_code=204)
 async def delete_chat(chat_id: str, request: Request, empty: str = ""):
-    """Диалог, его сообщения и вложения; файл, на который ссылается другая запись истории, остаётся. `?empty=1` —
-    только диалог без сообщений (страница убирает созданный под первый ход, который не прошёл), иначе 409 `not_empty`."""
+    """Диалог — в корзину (`deleted`, trash.py): идущие ответы останавливаются, строки и файлы остаются до `purge`.
+    `?empty=1` — только диалог без сообщений, сразу окончательно (страница убирает созданный под первый ход, который
+    не прошёл), иначе 409 `not_empty`."""
     uid = request.state.user.id
     _chat_row(uid, chat_id)
     if empty == "1":                                 # проверка и удаление — без await между ними: ход не вклинится
@@ -1508,17 +1513,32 @@ async def delete_chat(chat_id: str, request: Request, empty: str = ""):
         cleaner.forget(uid, chat_id)
         log.info("чат %s: удалён пустым", chat_id[:8])
         return Response(status_code=204)
+    # сначала метка: новый ход, push и «В работе» диалог уже не видят; потом остановка идущих
+    state.DB.execute("UPDATE chats SET deleted = ? WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                     (clock.NOW(), chat_id, uid))
     cleaner.forget(uid, chat_id)
+    _stop_unstarted({chat_id})                       # ход, дочитав фото, модель уже не зовёт
     await _cancel(_chat_streams(chat_id))
+    log.info("чат %s: в корзине", chat_id[:8])
+    return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: диалог, его сообщения и вложения, медиа диалога (каскадом); файл, на который ссылается другая
+    запись истории, остаётся. Диалога уже нет — ничего."""
+    if state.DB.execute("SELECT 1 FROM chats WHERE id = ? AND user_id = ?", (item_id, user_id)).fetchone() is None:
+        return
+    cleaner.forget(user_id, item_id)
+    _stop_unstarted({item_id})
+    await _cancel(_chat_streams(item_id))
     media_ids = {r["media_id"] for r in state.DB.execute(
         "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ?"
-        " UNION SELECT media_id FROM chat_media WHERE chat_id = ?", (chat_id, chat_id))}
-    state.DB.execute("DELETE FROM chats WHERE id = ?", (chat_id,))   # сообщения, вложения и медиа MCP — каскадом
+        " UNION SELECT media_id FROM chat_media WHERE chat_id = ?", (item_id, item_id))}
+    state.DB.execute("DELETE FROM chats WHERE id = ? AND user_id = ?", (item_id, user_id))   # всё прочее — каскадом
     for media_id in media_ids:
-        if not media.referenced(uid, media_id):
-            await media.delete_async(uid, media_id)
-    log.info("чат %s: удалён", chat_id[:8])
-    return Response(status_code=204)
+        if not media.referenced(user_id, media_id):
+            await media.delete_async(user_id, media_id)
+    log.info("чат %s: удалён", item_id[:8])
 
 
 # ---- API: вложения -------------------------------------------------------------
@@ -1992,8 +2012,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             log.warning("чат %s: вложение не прочиталось (%s)", chat_id[:8], type(e).__name__)
             raise HTTPException(503, {"code": "storage", "message": STORAGE}) from None
         raise
-    # пока читались фото, ответ могли остановить, а диалог — удалить (и стиранием истории)
-    answer = state.DB.execute("SELECT status FROM messages WHERE id = ?", (answer_id,)).fetchone()
+    # пока читались фото, ответ могли остановить, а диалог — удалить или убрать в корзину (и стиранием истории)
+    answer = state.DB.execute("SELECT m.status FROM messages m JOIN chats c ON c.id = m.chat_id"
+                              " WHERE m.id = ? AND c.deleted IS NULL", (answer_id,)).fetchone()
     if answer is None:
         raise _gone()
     if answer["status"] != "streaming":
