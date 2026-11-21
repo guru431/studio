@@ -258,6 +258,28 @@ def test_chat_kb_block_and_tool(studio):
     assert uid != other
 
 
+def small_model(studio, cid, gw, context_length):
+    """Модель диалога `tiny` с пределом контекста из списка моделей подключения."""
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny"]})
+    studio.gw.models.append({"id": "tiny", "context_length": context_length})
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"}).json()["model"] == "tiny"
+
+
+def test_knowledge_search_result_fits_the_context(studio):
+    """Найденное `knowledge_search` — через подгонку контекста, как результаты «Интернета» и MCP: модель с малым
+    пределом получает обрезанный текст с пометкой chat.CUT_CONTEXT, а не запрос больше контекста (400 шлюза)."""
+    gw = add_gateway(studio)
+    kb = base(studio)
+    upload(studio, kb, "бирюза.txt", "Кодовое слово отдела — бирюза. " * 600)    # ≈ 18 тыс. знаков, 14 кусков
+    cid = new_chat(studio)
+    small_model(studio, cid, gw, 6000)
+    studio.gw.chat_script = [{"tool_calls": [call("knowledge_search", query="бирюза")]}, ["Бирюза."]]
+    assert sse(turn(studio, cid, "Какое кодовое слово?"))[-1] == ("done", {"status": "done"})
+    tool = [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
+    assert tool.endswith(chat.CUT_CONTEXT) and len(tool) < 6000
+    assert chat.estimate_tokens(studio.gw.chat_requests[-1]["messages"]) <= 6000 - chat.RESERVE_TOKENS
+
+
 def test_kb_delete_goes_to_trash_and_restores(studio):
     uid = make_user(studio, "owner")
     signin(studio, "owner")
