@@ -1026,6 +1026,7 @@ def test_transcript_becomes_an_unsent_document_with_its_edits(studio, fake_audio
         f'<document name="Звонок Ивану.txt">\n{TRANSCRIPT_TEXT}\n</document>\n\nИтоги?')}]
     assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": True}
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
+    assert studio.c.delete(f"/api/trash/transcripts/{tid}").status_code == 204
     assert messages(studio, cid)[0]["attachments"][0]["source"] == {"transcript_id": tid, "exists": False}
     assert studio.c.get(f"/api/media/{a['media_id']}").status_code == 200       # вложение — своим файлом
     doc = attach(studio, "a.txt", b"x", "text/plain")
