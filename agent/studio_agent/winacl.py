@@ -5,6 +5,8 @@
 повышением владелец новых объектов — группа Administrators: обычный сеанс того же пользователя её права не
 имеет (в его токене она deny-only) и теряет доступ к выпуску — запись автозапуска отвечает «Отказано в доступе»."""
 import ctypes
+import os
+import stat
 from ctypes import wintypes
 
 SE_FILE_OBJECT = 1
@@ -82,11 +84,18 @@ def describe(path) -> tuple[bool, list[tuple[str | None, bool]]]:
         kernel.LocalFree(descriptor)
 
 
+def owner_only(path) -> bool:
+    """DACL режима 0o700 Python: защищён от наследования и даёт права `OWNER RIGHTS` своим (не унаследованным) ACE."""
+    protected, entries = describe(path)
+    return protected and (OWNER_RIGHTS, False) in entries
+
+
 def inherit(path) -> bool:
-    """Защищённый DACL → только ACE, унаследованные от родителя; вложенным ОС пересчитывает наследуемые сама.
-    True — DACL менялся. Нужны READ_CONTROL и WRITE_DAC: прежний DACL `mkdtemp` даёт их SYSTEM, Administrators
-    (сеанс с повышением) и владельцу; обычный сеанс при владельце-Administrators — `OSError` (отказано в доступе)."""
-    if not describe(path)[0]:
+    """DACL режима 0o700 (`owner_only`) → только ACE, унаследованные от родителя; вложенным ОС пересчитывает
+    наследуемые сама. Другой защищённый DACL не трогается. True — DACL менялся. Нужны READ_CONTROL и WRITE_DAC:
+    DACL 0o700 даёт их SYSTEM, Administrators (сеанс с повышением) и владельцу; обычный сеанс при
+    владельце-Administrators — `OSError` (отказано в доступе)."""
+    if not owner_only(path):
         return False
     advapi, _ = _api()
     empty = ctypes.create_string_buffer(64)
@@ -98,3 +107,21 @@ def inherit(path) -> bool:
     if error:
         raise ctypes.WinError(error)
     return True
+
+
+def repair_tree(root) -> int:
+    """`inherit` для `root` и всех вложенных каталогов сверху вниз (каталог 0o700 внутри защищён сам и наследования
+    родителя не получает); ссылки и junction не обходятся, недоступное пропускается. Итог — число исправленных."""
+    fixed, pending = 0, [str(root)]
+    while pending:
+        folder = pending.pop()
+        try:
+            fixed += inherit(folder)
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode) and not info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                        pending.append(entry.path)
+        except OSError:
+            continue
+    return fixed

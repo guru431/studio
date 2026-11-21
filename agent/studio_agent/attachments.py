@@ -4,10 +4,9 @@ import base64
 import json
 import re
 import shutil
-import tempfile
 from pathlib import Path
 
-from . import image_input, limits, store
+from . import host, image_input, limits, store
 from .errors import Refused
 
 FOLDER = "attachments"  # в каталоге моста: после падения посреди хода `sweep` при старте знает, что убрать
@@ -61,10 +60,10 @@ class Files:
             return text
         validate(items)
         if self._directory is None:
-            # mkdtemp создаёт приватный каталог пользователя (0700, на Windows — ACL) в каталоге моста.
+            # Приватный каталог пользователя в каталоге моста: POSIX — 0700, Windows — ACL профиля (`host.private_dir`).
             root = store.home() / FOLDER
-            root.mkdir(mode=0o700, exist_ok=True)
-            self._directory = tempfile.TemporaryDirectory(prefix=PREFIX, dir=root)
+            host.private_dir(root, exist_ok=True)
+            self._directory = host.temporary_dir(root, PREFIX)
         metadata = []
         for item in items:
             original = name(item["name"])

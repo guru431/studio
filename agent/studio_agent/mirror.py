@@ -7,14 +7,13 @@ import os
 import re
 import stat
 import subprocess
-import tempfile
 import threading
 import time
 import unicodedata
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import files, gitinfo, projects
+from . import files, gitinfo, host, projects
 from .errors import Refused
 
 CHUNK = 4 * 1024 * 1024
@@ -311,7 +310,8 @@ class Transfer:
         self.destination = destination
         self.session = session
         self.ticket = ticket
-        self.temp = Path(tempfile.mkdtemp(dir=destination.parent, prefix=".studio-mirror-"))
+        # Windows — ACL папки назначения: файлы переносятся отсюда в зеркало вместе со своим ACL.
+        self.temp = host.new_dir(destination.parent, ".studio-mirror-")
         self.incoming = self.temp / "files"
         self.incoming.mkdir()
         self.preserve = False
@@ -380,7 +380,7 @@ class Transfer:
         undo = []
         try:
             if new_project:
-                dest.mkdir(mode=0o700)
+                host.private_dir(dest)
                 root_info = dest.lstat()
                 undo.append((dest, None, root_info))
             if not stat.S_ISDIR(root_info.st_mode) or _reparse(root_info):

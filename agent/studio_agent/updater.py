@@ -5,12 +5,10 @@ import json
 import logging
 import os
 import re
-import secrets
 import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -35,22 +33,6 @@ FAILED_WORDS = {
     'old_running': 'Мост не завершился вовремя — обновление не применено',
     'failed': 'Программа обновления моста завершилась с ошибкой — работает прежняя версия',
 }
-
-
-def new_dir(parent: Path, prefix: str) -> Path:
-    """Новая папка выпуска (и временная внутри него). Windows — `mkdir` без режима: ACL наследуется от каталога
-    установки; `tempfile.mkdtemp` дал бы защищённый DACL по владельцу (`winacl`), и после запуска с повышением
-    обычный сеанс терял бы доступ к выпуску автозапуска."""
-    if host.MACOS or host.LINUX:
-        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
-    for _ in range(100):
-        path = parent / (prefix + secrets.token_hex(6))
-        try:
-            path.mkdir()
-        except FileExistsError:
-            continue
-        return path
-    raise FileExistsError(prefix)
 
 
 def repair_acl(repo: Path) -> int:
@@ -197,7 +179,7 @@ def prepare(h: Path, release: dict) -> Path:
     url = package_url(cfg.url)
     base = host.install_home() / 'releases'
     base.mkdir(parents=True, exist_ok=True)
-    stage = new_dir(base, 'release-')
+    stage = host.new_dir(base, 'release-')  # Windows — ACL каталога установки
     try:
         archive = stage / 'package.zip'
         _download(url, key, archive, release['size'], release['sha256'])
@@ -227,7 +209,7 @@ def prepare(h: Path, release: dict) -> Path:
              '-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')],
             [pythonw, '-c', 'import studio_agent.app'],
         ]
-        temporary = str(new_dir(stage, 'prepare-'))
+        temporary = str(host.new_dir(stage, 'prepare-'))
         try:
             env.update(TMP=temporary, TEMP=temporary, TMPDIR=temporary, PIP_CACHE_DIR=temporary)
             for step, command in enumerate(commands, 1):
