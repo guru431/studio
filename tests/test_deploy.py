@@ -1437,3 +1437,18 @@ def test_apache_lets_dialog_media_through_only_on_its_route():
     assert not re.search(r"^/api/chats/[^/]+/media$", "/api/chats/" + "a" * 32 + "/messages")
     general = int(re.search(r"^\s*LimitRequestBody (\d+)", v, re.M).group(1))
     assert general < mcp_files.MEDIA_MAX
+
+
+def test_apache_lets_my_files_chunks_through_only_on_the_upload_route():
+    """Кусок «Моих файлов» (`PUT /api/my-files/<sid>/upload`) — до my_files.CHUNK телом запроса: свой LocationMatch
+    на 33 МиБ + 1 МиБ, общий предел меньше; nginx контейнера пропускает не меньше (общий тест выше)."""
+    import my_files
+    v = uncommented(VHOST)
+    block = re.search(r'<LocationMatch "\^/api/my-files/\[\^/\]\+/upload\$">(.*?)</LocationMatch>', v, re.S)
+    assert block, "нет LocationMatch загрузки «Моих файлов»"
+    limit = int(re.search(r"LimitRequestBody (\d+)", block.group(1)).group(1))
+    assert limit == (33 << 20) + (1 << 20) and limit > my_files.CHUNK
+    assert re.search(r"^/api/my-files/[^/]+/upload$", "/api/my-files/12/upload")
+    assert not re.search(r"^/api/my-files/[^/]+/upload$", "/api/my-files/12/list")
+    general = int(re.search(r"^\s*LimitRequestBody (\d+)", v, re.M).group(1))
+    assert general < my_files.CHUNK
