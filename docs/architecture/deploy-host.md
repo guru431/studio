@@ -224,7 +224,8 @@ SQL — как у шага 16 ниже.
   (`voices.AUDIO_MAX`, 32 МиБ) — свой `LocationMatch` на все маршруты, что его принимают (редактор и прямые
   `POST /api/voices`, `/api/voices/{id}/samples[/{sample_id}]`), сверяет `test_voice_editor_uploads_fit_through_the_proxy`;
   звук и видео диалога для MCP (`mcp_files.MEDIA_MAX`, 64 МиБ) — `LocationMatch ^/api/chats/[^/]+/media$` с запасом
-  64 КиБ, сверяет `tests/test_deploy.py`.
+  64 КиБ, сверяет `tests/test_deploy.py`; кусок загрузки «Моих файлов» (`my_files.CHUNK`, 32 МиБ) —
+  `LocationMatch ^/api/my-files/[^/]+/upload$` на 34 МиБ, сверяет `tests/test_deploy.py`.
 - SQLite — только на локальном диске: на CIFS он портится. Копия базы на шару — готовым файлом
   (`journal_mode=DELETE`), а не живой базой.
 - `studio-backup.service` — с теми же `User`/`Group`/`StateDirectory`, что у службы: другой

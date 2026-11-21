@@ -95,6 +95,11 @@ read-токен живёт только в памяти страницы, не �
   `web.public` сводит к `{name, mime}` — без сервера, отпечатка его ключа и id файла: получатель (`.shared-files`) и
   оба файла (`chat_exports._tool_line`) видят только имена, маршрута скачивания у ссылки нет (сторожат
   `test_mcp_chat_files.py::test_share_link_shows_only_result_file_names`, `test_ui_chat_shares.py`).
+  Шаги встроенных инструментов (`ask`, `duplicate`, `todo`, `memory`, `knowledge`) получатель видит словами чата
+  (`chat.js` `stepNode`): вопрос, «Повтор пропущен», «План работы», у памяти — только действие (текста записи в
+  шаге нет), у знаний — запрос и документы. План ответа (`messages.todo`) снимок несёт полем `todo`, получатель видит
+  «План: N из M» над текстом; ссылки, созданные до 0.41.0, плана не содержат. Оба файла (`chat_exports._tool_line`)
+  такие шаги пока называют «Инструмент».
 - Сообщение пользователя — текст, а не Markdown (в чате оно `pre-wrap`): `chat_exports._parts` отдаёт его частью
   `plain`. В PDF (`chat_exports.pdf_html`) — блок `div.chat-export-plain` с `&#10;` вместо переводов строк и стилями
   `chat_export_selection.CSS`, как в выделенном фрагменте; в `.md` (`chat_exports._literal`) — жёсткие переводы строк
