@@ -516,6 +516,41 @@ def test_storage_heaviest_and_failed_move_to_trash(s):
     assert s.c.post("/api/me/storage/failed", json={"sections": ["video"]}).status_code == 423
 
 
+def test_failed_are_only_records_with_nothing_to_keep(s):
+    """Ревью B1-I1: «Перенести в корзину» в «Хранилище» не уносит неудачные записи, где ещё есть содержимое
+    пользователя: прежняя озвучка после сбоя повтора, единственная копия записи расшифровки, распознанные страницы
+    скана, переведённые куски перевода."""
+    uid = owner(s)
+    kept_mp3 = save(uid, b"good audio", "audio/mpeg", "kept.mp3")
+    for sid, media_id, st in (("sp-kept", kept_mp3, "error"), ("sp-empty", None, "error"), ("sp-off", None, "cancelled")):
+        state.DB.execute("INSERT INTO speeches(id, user_id, model, voice, voice_name, text, media_id, state, detail,"
+                         " created, finished, chat_id, chat_created) VALUES (?, ?, 'qwen3-tts', 'v', 'Voice', 'pear', ?,"
+                         " ?, 'сбой — прежняя озвучка сохранена', ?, ?, ?, ?)", (sid, uid, media_id, st, T0, T0, sid, T0))
+    only = save(uid, b"meeting", "audio/mp4", "meeting.m4a")
+    shared = save(uid, b"call", "audio/mp4", "call.m4a")
+    for tid, source, st in (("tr-only", only, "error"), ("tr-shared", shared, "error"), ("tr-retry", shared, "done"),
+                            ("tr-nofile", "no-file", "cancelled")):
+        state.DB.execute("INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
+                         " VALUES (?, ?, 'whisperx', 'call.m4a', ?, ?, '', ?)", (tid, uid, source, st, T0))
+    for scid, st, page in (("sc-pages", "error", "done"), ("sc-layer", "cancelled", "layer"),
+                           ("sc-empty", "error", "failed")):
+        state.DB.execute("INSERT INTO scans(id, user_id, model, name, origin, pages, done_pages, state, detail, created,"
+                         " finished, text) VALUES (?, ?, 'hunyuan-ocr', 'deal.pdf', 'section', 1, 0, ?, '', ?, ?, '')",
+                         (scid, uid, st, T0, T0))
+        state.DB.execute("INSERT INTO scan_pages(scan_id, user_id, n, state, text) VALUES (?, ?, 1, ?, '')",
+                         (scid, uid, page))
+    for tlid, parts in (("tl-parts", 1), ("tl-empty", 0)):
+        state.DB.execute(TRANSLATION, (tlid, uid, "deal.docx", None, None, "source", "", T0, T0))
+        state.DB.execute("UPDATE translations SET state = 'error', parts = 2, done_parts = ? WHERE id = ?", (parts, tlid))
+    body = s.c.get("/api/me/storage").json()
+    assert body["failed"] == {"speech": 2, "transcribe": 2, "ocr": 1, "translate": 1}
+    r = s.c.post("/api/me/storage/failed", json={"sections": ["speech", "transcribe", "ocr", "translate"]})
+    assert r.status_code == 200 and r.json() == {"moved": 6}
+    assert sorted(i["id"] for i in s.c.get("/api/trash").json()) == [
+        "sc-empty", "sp-empty", "sp-off", "tl-empty", "tr-nofile", "tr-shared"]
+    assert s.c.get("/api/me/storage").json()["failed"] == {}
+
+
 @pytest.mark.parametrize("section", sorted(search.TITLES))
 def test_reindex_item_writes_the_rows_of_the_triggers(s, section):
     """`search.reindex_item` — те же строки индекса, что вставили триггеры (тело, модель, время, части чата)."""

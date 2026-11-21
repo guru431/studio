@@ -672,7 +672,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Файл уйдёт в корзину на 14 дней — оттуда его можно вернуть.": "The file will move to the trash for 14 days — you can restore it from there.",
   "Точно? Отменить удаление нельзя: корзина тоже очистится. Введите пароль учётки.": "Are you sure? This cannot be undone, and the trash will be emptied too. Enter your account password.",
   "В корзине: {0} · {1} — удалятся через 14 дней после удаления. ": "In the trash: {0} · {1} — deleted 14 days after removal. ",
-  "Неудачные и отменённые: {0}": "Failed and cancelled: {0}",
+  "Неудачные без результата: {0}": "Failed with no result: {0}",
   "Перенести в корзину": "Move to trash",
   "В корзину перенесено: {0}": "Moved to trash: {0}",
   "Самые тяжёлые записи": "Largest items",
