@@ -713,7 +713,8 @@ function heavyHref(item) {
 function storageBlock(host) {
   const list = el('dl', { class: 'storage', id: 'storage' });
   const queue = status('storage-queue');
-  // корзина (trash.py) и неудачные записи разделов: перенос в корзину обратим — без окна подтверждения
+  // корзина (trash.py) и неудачные записи разделов без результата (trash.FAILED): перенос в корзину обратим —
+  // без окна подтверждения
   const trashLine = el('p', { id: 'storage-trash', class: 'small' });
   const failedLine = el('p', { id: 'storage-failed', class: 'small' });
   // «Мои файлы» на серверах MCP (my_files.storage): объём личной папки на каждом — не в итоге Студии
@@ -745,7 +746,7 @@ function storageBlock(host) {
         : tr("Корзина пуста. "), el('a', { href: '#/trash', id: 'storage-trash-open' }, tr("Открыть корзину")));
       failedSections = Object.keys(failed);
       failedLine.textContent = failedSections.length
-        ? tr("Неудачные и отменённые: {0}", failedSections.map((s) => `${sectionName(s)} — ${failed[s]}`).join(', ')) : '';
+        ? tr("Неудачные без результата: {0}", failedSections.map((s) => `${sectionName(s)} — ${failed[s]}`).join(', ')) : '';
       moveFailed.hidden = !failedSections.length;
       heavy.replaceChildren(...heaviest.map((item) => el('li', { 'data-section': item.section },
         el('a', { href: heavyHref(item) }, item.title), el('span', { class: 'muted small' },

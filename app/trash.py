@@ -13,7 +13,8 @@ TRASH_SEC или владелец.
 - `POST /api/trash/empty {password}` — окончательно всё своё; пароль — `auth.confirm_password` (те же проверка и
   паузы, что у выключения блокировки), как у `DELETE /api/history` (account_profile.py).
 - «Хранилище» (`GET /api/me/storage`, account_profile.py): `storage` — самые тяжёлые живые записи (HEAVIEST, по сумме
-  `media.size` их файлов), корзина и неудачные по разделам; `move_failed` — неудачные и отменённые (FAILED) в корзину.
+  `media.size` их файлов), корзина и неудачные по разделам; `move_failed` — неудачные и отменённые без содержимого
+  пользователя (FAILED) в корзину.
 - Уборка `start_purger`: раз в PURGE_EVERY_SEC (отметка — `settings` PURGE_KEY, переживает перезапуски, как
   `media.orphans_due`) — `purge` записей старше TRASH_SEC.
 - Прежний код (до шага 58) столбец `deleted` не читает и показывает записи корзины как обычные: перед откатом
@@ -200,10 +201,22 @@ async def empty(body: Confirm, request: Request):
 # ---- «Хранилище» ----------------------------------------------------------------
 
 HEAVIEST = 50
-#: неудачные и отменённые записи по таблицам: «Хранилище» переносит их в корзину разом
-FAILED = {"images": ("error", "cancelled"), "videos": ("failed", "cancelled"), "speeches": ("error", "cancelled"),
-          "transcripts": ("error", "cancelled"), "scans": ("error", "cancelled"),
-          "translations": ("error", "cancelled")}
+#: неудачные и отменённые записи по таблицам — только без содержимого пользователя: «Хранилище» переносит их в
+#: корзину разом. Остаются: озвучка с прежним звуком после сбоя повтора, расшифровка с единственной ссылкой на
+#: запись (другая живая попытка той же записи — не неудачная), скан с распознанными страницами, перевод с
+#: переведёнными кусками. Условие — SQL по строке таблицы без псевдонима (его берут и SELECT, и UPDATE)
+FAILED = {
+    "images": "state IN ('error', 'cancelled') AND media_id IS NULL",
+    "videos": "state IN ('failed', 'cancelled') AND media_id IS NULL",
+    "speeches": "state IN ('error', 'cancelled') AND media_id IS NULL AND previous_media_id IS NULL",
+    "transcripts": "state IN ('error', 'cancelled') AND result_media_id IS NULL"
+                   " AND (NOT EXISTS (SELECT 1 FROM media WHERE id = transcripts.source_media_id)"
+                   " OR EXISTS (SELECT 1 FROM transcripts o WHERE o.source_media_id = transcripts.source_media_id"
+                   " AND o.id != transcripts.id AND o.deleted IS NULL AND o.state NOT IN ('error', 'cancelled')))",
+    "scans": "state IN ('error', 'cancelled') AND NOT EXISTS (SELECT 1 FROM scan_pages WHERE scan_id = scans.id"
+             " AND state IN ('done', 'layer'))",
+    "translations": "state IN ('error', 'cancelled') AND done_parts = 0",
+}
 FAILED_SECTIONS = {KINDS[table].section: table for table in FAILED}
 
 
@@ -230,9 +243,9 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
             got = trashed.setdefault(kind.section, {"count": 0, "bytes": 0})
             got["count"] += count
             got["bytes"] += size
-    for table, states in FAILED.items():
-        count = state.DB.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id = ? AND deleted IS NULL"
-                                 f" AND state IN ({', '.join('?' * len(states))})", (user_id, *states)).fetchone()[0]
+    for table, where in FAILED.items():
+        count = state.DB.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id = ? AND deleted IS NULL AND {where}",
+                                 (user_id,)).fetchone()[0]
         if count:
             failed[KINDS[table].section] = count
     heaviest.sort(key=lambda item: item["bytes"], reverse=True)
@@ -240,13 +253,13 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
 
 
 def move_failed(user_id: int, sections: list[str]) -> int:
-    """Неудачные и отменённые записи разделов — в корзину (кончившиеся: идущих среди них нет). Итог — сколько."""
+    """Неудачные и отменённые записи разделов без содержимого (FAILED) — в корзину (кончившиеся: идущих среди них
+    нет). Итог — сколько."""
     moved, now = 0, clock.NOW()
     for section in dict.fromkeys(sections):
-        states = FAILED[FAILED_SECTIONS[section]]
-        moved += state.DB.execute(f"UPDATE {FAILED_SECTIONS[section]} SET deleted = ? WHERE user_id = ?"
-                                  f" AND deleted IS NULL AND state IN ({', '.join('?' * len(states))})",
-                                  (now, user_id, *states)).rowcount
+        table = FAILED_SECTIONS[section]
+        moved += state.DB.execute(f"UPDATE {table} SET deleted = ? WHERE user_id = ? AND deleted IS NULL"
+                                  f" AND {FAILED[table]}", (now, user_id)).rowcount
     log.info("пользователь %d: неудачные в корзину — %d", user_id, moved)
     return moved
 
