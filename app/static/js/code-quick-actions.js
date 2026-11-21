@@ -1,6 +1,8 @@
 import { tr } from './i18n.js';
-/* Настройки быстрых действий учётки; тексты передаются без обрезки и переформатирования. */
+/* Настройки быстрых действий учётки; тексты передаются без обрезки и переформатирования.
+ * «Добавить из набора» — меню действий набора Studio (`me.code_quick_actions_set`), чьего текста нет в списке. */
 import { api, me } from './api.js';
+import { menuItem, popupMenu } from './menu.js';
 import { button, el, field, words } from './ui.js';
 
 export function quickActionsBlock() {
@@ -10,8 +12,23 @@ export function quickActionsBlock() {
     const row = addRow({ title: '', text: '' });
     row.querySelector('input').focus();
   });
+  const fromSet = button(tr("Добавить из набора"), { id: 'code-quick-actions-preset', class: 'btn', 'aria-haspopup': 'menu' });
+  const setMenu = el('div', { id: 'code-quick-actions-preset-menu', 'aria-label': tr("Набор быстрых действий") });
+  const missing = () => (me?.code_quick_actions_set || []).filter((action) =>
+    ![...rows.children].some((row) => row.querySelector('textarea').value === action.text));
+  const limit = () => {
+    add.disabled = rows.children.length >= 20;
+    fromSet.disabled = add.disabled || !missing().length;
+  };
+  popupMenu(fromSet, setMenu, { blocked: () => fromSet.disabled, fill: (close) => {
+    const items = missing().map((action) => menuItem(tr(action.title), { onSelect: () => {
+      close(true);
+      addRow(action).querySelector('input').focus();
+    } }));
+    return [items, items];
+  } });
   const save = el('button', { id: 'code-quick-actions-save', class: 'btn btn-accent', type: 'submit' }, tr("Сохранить"));
-  const form = el('form', {}, rows, el('div', { class: 'row' }, add, save), note);
+  const form = el('form', {}, rows, el('div', { class: 'row' }, add, fromSet, save), setMenu, note);
   const block = el('section', { class: 'block code-quick-actions-settings' }, el('h2', {}, tr("Быстрые действия")),
     el('p', { class: 'muted small' }, tr("Показываются в новом чате до первого сообщения. Нажатие сразу отправляет полный текст задания. Действия общие для ваших компьютеров и помощников.")), form);
 
@@ -23,12 +40,13 @@ export function quickActionsBlock() {
     text.value = action.text;
     const remove = button(tr("Удалить"), { class: 'btn btn-sm', 'aria-label': tr("Удалить действие") }, () => {
       row.remove();
-      add.disabled = rows.children.length >= 20;
+      limit();
     });
+    text.addEventListener('input', limit);
     const row = el('div', { class: 'block code-quick-action-row' },
       field(tr("Заголовок"), title), field(tr("Текст сообщения"), text), remove);
     rows.append(row);
-    add.disabled = rows.children.length >= 20;
+    limit();
     return row;
   }
 
@@ -56,7 +74,7 @@ export function quickActionsBlock() {
       note.textContent = words(err);
     } finally {
       for (const control of controls) control.disabled = false;
-      add.disabled = rows.children.length >= 20;
+      limit();
     }
   });
   return block;

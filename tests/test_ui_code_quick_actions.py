@@ -76,7 +76,7 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
     prompt = "  Точный текст.\n\nБез сокращений и правок.  "
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
-            ("wait", "document.querySelectorAll('.code-quick-action-row').length === 3"),
+            ("wait", f"document.querySelectorAll('.code-quick-action-row').length === {len(code_actions.DEFAULTS)}"),
             ("eval", "defaults", "[...document.querySelectorAll('.code-quick-action-row textarea')].map(n=>n.value)"),
             set_value(".code-quick-action-row input", "Моё действие " + "с длинным названием " * 3),
             set_value(".code-quick-action-row textarea", prompt),
@@ -88,6 +88,12 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
             ("wait", "document.querySelector('#code-quick-actions-status').textContent.includes('сохранены')"),
             ("eval", "reload", "location.reload(); true"), ("wait", READY),
             ("wait", "document.querySelector('.code-quick-action-row textarea')?.value === " + json.dumps(prompt)),
+            # «Добавить из набора» — только действия набора, чьего текста в списке нет (первое изменено, третье удалено)
+            ("click", "#code-quick-actions-preset"),
+            ("wait", "!!document.querySelector('#code-quick-actions-preset-menu:popover-open')"),
+            ("eval", "preset", "[...document.querySelectorAll('#code-quick-actions-preset-menu [role=menuitem]')].map(n=>n.textContent)"),
+            ("click", "#code-quick-actions-preset-menu [role=menuitem]"),
+            ("eval", "presetAdded", "document.querySelector('.code-quick-action-row:last-child textarea').value"),
             *code_chat(aid, CODE_CHAT_A), ("wait", "!document.querySelector('#code-quick-actions').hidden"),
             ("eval", "titles", """[...document.querySelectorAll('.code-quick-action')].every(b => {
               const s=getComputedStyle(b); return s.whiteSpace==='nowrap' && b.getBoundingClientRect().right <= innerWidth;
@@ -105,6 +111,8 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
     assert not result.get("failed"), result
     values = result["values"]
     assert values["defaults"] == [a["text"] for a in code_actions.DEFAULTS]
+    assert values["preset"] == [code_actions.DEFAULTS[0]["title"], code_actions.DEFAULTS[2]["title"]]
+    assert values["presetAdded"] == code_actions.DEFAULTS[0]["text"]
     assert values["titles"] and values["hidden"] and values["stillHidden"]
     assert values["stored"][0]["text"] == prompt and values["stored"][-1]["text"] == "Добавленный текст"
     turns = [r for r in machine.requests if r["op"] == "turn"]
@@ -145,10 +153,9 @@ def test_quick_action_keeps_the_typed_draft_and_can_be_retried(browser, live):
             ("wait", "document.querySelector('#code-chat').dataset.running === '0' && document.querySelector('.code-msg.assistant .md')?.textContent.includes('Готово')"),
             ("eval", "hidden", "document.querySelector('#code-quick-actions').hidden"),
             ("eval", "kept", "document.querySelector('#code-text').value"),
-            *go("settings/code"), ("wait", "document.querySelectorAll('.code-quick-action-row').length === 3"),
-            ("click", ".code-quick-action-row [aria-label='Удалить действие']"),
-            ("click", ".code-quick-action-row [aria-label='Удалить действие']"),
-            ("click", ".code-quick-action-row [aria-label='Удалить действие']"),
+            *go("settings/code"),
+            ("wait", f"document.querySelectorAll('.code-quick-action-row').length === {len(code_actions.DEFAULTS)}"),
+            *[("click", ".code-quick-action-row [aria-label='Удалить действие']")] * len(code_actions.DEFAULTS),
             ("click", "#code-quick-actions-save"),
             ("wait", "document.querySelector('#code-quick-actions-status').textContent.includes('сохранены')"),
             *go("code"), ("click", "#code-tab-add"), ("wait", "!!document.querySelector('#code-new-chat')"),
