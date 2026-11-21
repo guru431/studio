@@ -119,8 +119,19 @@ def make_image(s, uid: int) -> Made:
     return section_made(s, "img1", [source, picture], "/api/images", word="mango", href="photo?id=img1")
 
 
+def make_video(s, uid: int) -> Made:
+    source, clip = save(uid, b"source png", "image/png", "in.png"), save(uid, b"mp4 clip", "video/mp4", "clip.mp4")
+    state.DB.execute("INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, media_id, prompt,"
+                     " seconds, quality, smooth, state, progress, detail, created, finished) VALUES ('vid1', ?, 1,"
+                     " 'video_1', ?, ?, 'papaya waves', 5, 'fast', 0, 'done', 100, 'готово', ?, ?)",
+                     (uid, source, clip, T0, s.clock[0]))
+    return section_made(s, "vid1", [source, clip], "/api/videos", word="papaya", href="video?id=vid1",
+                        touch_sql=["UPDATE videos SET prompt = 'papaya dawn' WHERE id = ?",
+                                   "UPDATE videos SET prompt = 'papaya waves' WHERE id = ?"])
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video}
 
 
 def owner(s) -> int:

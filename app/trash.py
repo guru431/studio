@@ -32,6 +32,7 @@ import mcp_files
 import operations
 import search
 import state
+import videos
 
 TABLES = ("chats", "images", "videos", "speeches", "transcripts", "scans", "translations", "voices",
           "chat_media", "knowledge_bases", "kb_documents")
@@ -78,6 +79,9 @@ KINDS: dict[str, Kind] = {
     "images": Kind("images", "photo", images.purge, lambda row: _head(row["prompt"], "Картинка"),
                    "SELECT media_id FROM images WHERE id = :id UNION SELECT source_media_id FROM images WHERE id = :id"
                    " UNION SELECT mask_media_id FROM images WHERE id = :id", search="photo"),
+    "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"], "Ролик"),
+                   "SELECT media_id FROM videos WHERE id = :id UNION SELECT source_media_id FROM videos WHERE id = :id",
+                   search="video"),
 }
 
 
