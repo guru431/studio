@@ -200,11 +200,13 @@ def test_unsent_chat_text_turns_the_automatic_refresh_into_an_offer(browser, liv
     assert v["kept"] == ["navigate", "Не потерять этот текст"] and v["offer"] is False
 
 
-#: После первой загрузки пачки список записей ждёт `window.releaseList()`: между файлами XHR нет (holdRefresh не держит)
+#: После первой загрузки пачки список записей ждёт `window.releaseList()`: между файлами XHR нет (holdRefresh не держит).
+#: Проверка пределов до загрузки (GET /api/transcripts/limits) идёт мимо: это ещё не пачка.
 HOLD_LIST = """(() => { const real = window.fetch; let release; const gate = new Promise(r => { release = r; });
   window.releaseList = () => { release(); return true; }; window.listHeld = false; window.armList = false;
   window.fetch = (url, options = {}) => {
-    if (window.armList && String(url).startsWith('/api/transcripts') && (options.method || 'GET') === 'GET') {
+    if (window.armList && String(url).startsWith('/api/transcripts') && !String(url).startsWith('/api/transcripts/limits')
+        && (options.method || 'GET') === 'GET') {
       window.armList = false; window.listHeld = true; return gate.then(() => real(url, options));
     }
     return real(url, options);
