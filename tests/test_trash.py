@@ -15,7 +15,7 @@ import media
 import search
 import state
 import trash
-from conftest import T0, make_user, signin
+from conftest import T0, erase_history, make_user, signin
 from test_chat_shares import create as create_share, regular as regular_chat, unlock
 
 
@@ -500,6 +500,31 @@ def test_history_erase_and_empty_trash_need_password_and_count_failures(s):
     assert r.status_code == 200 and r.headers["clear-site-data"] == auth.CLEAR_CACHE
     assert state.DB.execute("SELECT count(*) FROM chats").fetchone()[0] == 0
     assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (kept_doc,)).fetchone() is None
+
+
+def test_history_erase_takes_personal_knowledge_live_and_trashed_and_keeps_shared(s):
+    """Ревью B1-M3 (A-I6): «Удалить всю историю» уносит личные базы знаний с документами и кусками — живые и из
+    корзины; общие базы (`user_id IS NULL`) остаются."""
+    import knowledge
+    owner(s)
+    live_kb, _ = knowledge_base(s)
+    gone_kb, _ = knowledge_base(s)
+    third_kb, gone_doc = knowledge_base(s)
+    assert s.c.delete(f"/api/knowledge/{gone_kb}").status_code == 204
+    assert s.c.delete(f"/api/knowledge/{third_kb}/documents/{gone_doc}").status_code == 204
+    shared = knowledge.create_base(None, "Общая")["id"]
+    state.DB.execute("INSERT INTO kb_documents(id, kb_id, user_id, name, chars, state, created)"
+                     " VALUES ('shared-doc', ?, NULL, 'all.txt', 9, 'ready', ?)", (shared, T0))
+    knowledge.index("shared-doc", "Общий гранат.")
+    assert {i["kind"] for i in s.c.get("/api/trash").json()} == {"knowledge_bases", "kb_documents"}
+    assert erase_history(s).status_code == 200
+    assert s.c.get("/api/trash").json() == []
+    assert [r[0] for r in state.DB.execute("SELECT id FROM knowledge_bases")] == [shared]
+    assert [r[0] for r in state.DB.execute("SELECT id FROM kb_documents")] == ["shared-doc"]
+    assert {r[0] for r in state.DB.execute("SELECT doc_id FROM kb_chunks")} == {"shared-doc"}
+    assert [r[0] for r in state.DB.execute("SELECT rowid FROM kb_fts WHERE kb_fts MATCH 'гранат'")] == [
+        r[0] for r in state.DB.execute("SELECT id FROM kb_chunks")]
+    assert live_kb not in {b["id"] for b in s.c.get("/api/knowledge").json()["items"]}
 
 
 def test_storage_heaviest_and_failed_move_to_trash(s):
