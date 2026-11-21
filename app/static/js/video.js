@@ -187,7 +187,7 @@ function build(view, ctx) {
   const qualityWrap = el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu);
   const form = el('form', { class: 'composer', id: 'video-composer', hidden: !!ctx.hint }, sourceBox, photoContext, promptBox.box, promptBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, modelView.wrap, chipSeconds,
-      qualityWrap, chipSmooth), go));
+      qualityWrap, chipSmooth, mcp.fields), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const root = el('div', { class: 'video' }, head, feedBox, error, mcp.output, nativeHint || form,
     selection.bar);

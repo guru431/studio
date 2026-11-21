@@ -339,6 +339,12 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
 .mcp-result { display: grid; gap: var(--space-4); }
 .mcp-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .mcp-result :is(img, video, audio) { display: block; max-width: 100%; max-height: 32dvh; margin-bottom: var(--space-3); }
+/* файлы итога инструмента (.txt, .srt, .md, .docx) — списком скачивания под итогом */
+.mcp-files { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.mcp-files a { max-width: 100%; overflow-wrap: anywhere; }
+/* поля схемы инструмента в ряду раздела (mcp-sections.js extraFields): чипы — прямо в ряду, обёртка не ломает перенос */
+.mcp-fields { display: contents; }
+.chip-num.mcp-field-text input { text-align: start; }   /* короткая строка — поле chip-num с подписью, текст слева */
 /* ряд «Расшифровки» и «Сканов» над видом: на компьютере — только когда в нём есть выбор (инструмент MCP, модель);
  * размеры выбора и кнопки — как в поле ввода той же ширины (контейнер composer, образец — «Агенты») */
 .split-toolbar { container: composer / inline-size; }

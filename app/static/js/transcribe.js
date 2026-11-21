@@ -116,6 +116,15 @@ function speakerName(s) {
   return s.speaker && s.speaker === s.label ? serverMessage(s.label) : s.speaker;
 }
 
+/** Реплики итога инструмента MCP (`turns`, mcp_sections.turns) видом расшифровки: «Собеседник N · мм:сс» и текст;
+ * итог без времени (текст с метками) — без него. Плеера нет: запись осталась у инструмента. */
+function mcpTurns(turns) {
+  const timed = turns.some((s) => s.start || s.end);
+  return el('div', { class: 'tr-turns', id: 'section-mcp-turns' }, ...turns.map((s) => el('div', { class: 'tr-turn' },
+    el('p', { class: 'tr-who' }, [s.speaker ? serverMessage(s.speaker) : '', timed ? clock(s.start) : ''].filter(Boolean).join(' · ')),
+    el('p', { class: 'tr-text' }, s.text))));
+}
+
 /** Текст расшифровки — как выгрузка .txt. */
 export function asText(segments) {
   return segments.map((s) => `${s.speaker ? `${speakerName(s)} · ` : ''}${clock(s.start)}\n${s.text}\n`).join('\n');
@@ -155,7 +164,8 @@ function build(view, ctx) {
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
   const upload = el('button', { type: 'button', class: 'ctl-primary', id: 'transcribe-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"));
   upload.addEventListener('click', () => input.click());
-  const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
+  const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy,
+    turns: mcpTurns });
   const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
   const title = el('h1', {}, NAMES.transcribe);
   const head = el('header', { class: 'head' }, title);
@@ -171,6 +181,7 @@ function build(view, ctx) {
   const languagePick = picker(root, tr("Язык"), langSelect);
   languagePick.wrap.hidden = !!ctx.hint;
   mcp.control.after(languagePick.wrap);
+  languagePick.wrap.after(mcp.fields);           // поля инструмента MCP по его схеме: «Протокол», «Говорящих», «Язык»
 
   function panel(open) {
     root.classList.toggle('panel-open', open);

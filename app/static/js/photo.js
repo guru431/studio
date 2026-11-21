@@ -167,7 +167,7 @@ function build(view, ctx) {
   const seriesWrap = el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu);
   const form = el('form', { class: 'composer', id: 'photo-composer', hidden: !!ctx.hint }, sourceBox, promptBox.box, promptBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, chipModel.wrap, chipSize.wrap, chipTranslate,
-      chipUndo, seriesWrap, presets.wrap), go));
+      chipUndo, seriesWrap, mcp.fields, presets.wrap), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, orphanLine, mcp.output, nativeHint || form,
     selection.bar);
