@@ -182,6 +182,7 @@ def test_prompts_not_requested_without_capability(studio):
 
 
 def test_prompts_refuse_repeated_cursor(studio):
+    """Повтор курсора подсказок — отказ `prompts`, но каталог остаётся: инструменты есть, подсказок нет."""
     sid = add(studio)
     uid = owner(sid)
     calls = serve(studio, prompts=[[{"name": "a"}], [{"name": "b"}], [{"name": "c"}]])
@@ -197,8 +198,47 @@ def test_prompts_refuse_repeated_cursor(studio):
 
     studio.gw.on["/mcp"] = handler
     with pytest.raises(HTTPException):
-        fetch(studio, sid, uid)
-    assert mcp_sources.CACHE == {} and calls
+        studio.c.portal.call(lambda: mcp_client.Session(mcp_client.row(uid, sid), uid=uid).prompts())
+    item = fetch(studio, sid, uid)
+    assert [t["name"] for t in item.tools] == ["lookup"] and item.prompts == [] and calls
+
+
+def test_failing_prompts_keep_the_catalog(studio):
+    """`prompts/list` с ошибкой — каталог без подсказок, а не отказ всего сервера."""
+    sid = add(studio)
+    uid = owner(sid)
+    serve(studio, prompts=[[{"name": "brief"}]], fail=["prompts/list"])
+    item = fetch(studio, sid, uid)
+    assert [t["name"] for t in item.tools] == ["lookup"] and item.prompts == []
+
+
+def test_tools_over_limit_trimmed_with_paging_stopped(monkeypatch):
+    """Больше MAX_TOOLS — первые MAX_TOOLS и признак `trimmed`, листание дальше не идёт; повтор курсора — отказ."""
+    monkeypatch.setattr(mcp_client, "MAX_TOOLS", 3)
+    pages = {None: ([{"name": "a"}, {"name": "b"}], "1"), "1": ([{"name": "c"}, {"name": "d"}], "2"),
+             "2": ([{"name": "e"}], None)}
+
+    def session_with(pages):
+        session = mcp_client.Session({"id": 1, "user_id": 1, "url": URL, "secret_enc": "x"}, uid=1)
+        session.version, seen = "2025-06-18", []
+
+        async def rpc(method, params=None, **kwargs):
+            cursor = (params or {}).get("cursor")
+            seen.append(cursor)
+            batch, after = pages[cursor]
+            return {"tools": batch, **({"nextCursor": after} if after else {})}
+
+        session.rpc = rpc
+        return session, seen
+
+    session, seen = session_with(pages)
+    assert [t["name"] for t in asyncio.run(session.tools())] == ["a", "b", "c"]
+    assert session.trimmed and seen == [None, "1"]
+    session, _ = session_with({None: ([{"name": "a"}, {"name": "b"}, {"name": "c"}], None)})
+    assert len(asyncio.run(session.tools())) == 3 and not session.trimmed
+    session, _ = session_with({None: ([{"name": "a"}], "1"), "1": ([{"name": "b"}], "1")})
+    with pytest.raises(HTTPException):
+        asyncio.run(session.tools())
 
 
 def test_prompt_returns_user_text_only(studio):

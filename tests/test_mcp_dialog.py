@@ -391,6 +391,33 @@ def test_tools_over_limit_trimmed_not_refused(studio, monkeypatch):
                                                  "error": mcp_client.TRIMMED}]
 
 
+def test_server_over_tool_limit_trimmed_in_catalog_and_turn(studio, monkeypatch):
+    """Сервер предлагает больше MAX_TOOLS — первые MAX_TOOLS, заметка в ходе и `trimmed` в каталоге (§7a п. 5)."""
+    sid, _, _ = setup(studio, tools=[tool(n) for n in "abcd"])
+    monkeypatch.setattr(mcp_client, "MAX_TOOLS", 3)
+    item, = studio.c.get("/api/mcp/catalog").json()["items"]
+    assert item["state"] == "ok" and item["trimmed"] and [t["name"] for t in item["tools"]] == ["a", "b", "c"]
+    cid = new_chat(studio)
+    studio.gw.chat_script = [["Готово"]]
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: a", "Shared tools: b", "Shared tools: c"]
+    assert messages(studio, cid)[1]["tools"] == [{"kind": "mcp", "server": "Shared tools",
+                                                 "error": mcp_client.TRIMMED}]
+
+
+def test_failing_prompts_keep_the_server_in_chat_and_catalog(studio):
+    sid, calls, _ = setup(studio, prompts=[{"name": "brief"}], fail=["prompts/list"] * 2)
+    item, = studio.c.get("/api/mcp/catalog").json()["items"]
+    assert item["state"] == "ok" and item["prompts"] == [] and [t["name"] for t in item["tools"]] == ["lookup"]
+    mcp_sources.CACHE.clear()
+    calls.clear()
+    cid = new_chat(studio)
+    studio.gw.chat_script = [["Готово"]]
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert "prompts/list" in methods(calls) and messages(studio, cid)[1]["tools"] == []
+    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: lookup"]
+
+
 # ---- §7a п. 2: «интернет» и «с подтверждением» -----------------------------------------------------------
 
 def test_open_world_only_with_internet_and_rechecked_midturn(studio):
