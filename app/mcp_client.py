@@ -39,6 +39,9 @@ PROMPT_TITLE_MAX = 120
 PROMPT_DESCRIPTION_MAX = 300
 PROMPT_ARGUMENTS_MAX = 16
 PROMPT_TEXT_MAX = 20_000                     # текст сообщений `user` из prompts/get
+RESOURCES_MAX = 64                           # ресурсов сервера из resources/list
+RESOURCE_URI_MAX = 2048
+RESOURCE_MAX = 1024 * 1024                   # текст ресурса из resources/read, байт UTF-8
 PROTOCOL = "2025-06-18"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 HEADER = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
@@ -463,6 +466,35 @@ class Session:
         text = "\n\n".join(texts)[:PROMPT_TEXT_MAX]
         if not text.strip():
             raise refused("MCP вернул подсказку без текста")
+        return text
+
+    async def resources(self):
+        """Ресурсы сервера (`resources/list` с листанием): не больше RESOURCES_MAX словарей с `uri`-строкой."""
+        await self.ensure()
+        found, cursor, seen = [], None, set()
+        while True:
+            result = await self.rpc("resources/list", {"cursor": cursor} if cursor else {})
+            batch = result.get("resources")
+            if not isinstance(batch, list):
+                raise refused("MCP вернул неверный список ресурсов")
+            found.extend(item for item in batch if isinstance(item, dict) and isinstance(item.get("uri"), str)
+                         and 0 < len(item["uri"]) <= RESOURCE_URI_MAX)
+            cursor = result.get("nextCursor")
+            if len(found) >= RESOURCES_MAX or not cursor:
+                return found[:RESOURCES_MAX]
+            if not isinstance(cursor, str) or len(cursor) > 8192 or cursor in seen or not batch:
+                raise refused("MCP вернул неверную страницу ресурсов")
+            seen.add(cursor)
+
+    async def read_resource(self, uri):
+        """Текст ресурса `uri` (`resources/read`): текстовые части подряд, не больше RESOURCE_MAX байт UTF-8."""
+        await self.ensure()
+        result = await self.rpc("resources/read", {"uri": uri}, max_bytes=8 * RESOURCE_MAX)
+        contents = result.get("contents")
+        text = "".join(part["text"] for part in contents if isinstance(part, dict) and isinstance(part.get("text"), str)
+                       ) if isinstance(contents, list) else ""
+        if len(text.encode("utf-8", "replace")) > RESOURCE_MAX:
+            raise refused(f"Ресурс MCP больше {RESOURCE_MAX >> 20} МиБ")
         return text
 
     async def close(self):
