@@ -45,7 +45,7 @@ def test_jobs_panel_cancels_a_queued_record(browser, live, width):
     v = r["values"]
     assert "в очереди · 1" in v["trDetail"] and v["detail"].startswith("в очереди · 1")
     assert v["fits"] and v["noCancel"]
-    assert any(s == f"POST /api/speeches/{login}-sp/cancel" for s in r["sent"])
+    assert any(s == f"POST /api/speeches/chats/{login}-sp/cancel" for s in r["sent"])     # весь чат (C-I3)
     assert not problems(r), problems(r)
 
 
