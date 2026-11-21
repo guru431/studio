@@ -953,6 +953,31 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
   font-size:var(--fs-xs); }
 @media (hover: hover) { .msg-actions .btn:hover { background: var(--surface-2); color: var(--text-1); } }
 .chat-empty { margin: auto; font-size: var(--empty-font); }
+/* подсказки пустого экрана (chat-suggest.js): чипы под заметкой, форма аргументов подсказки MCP — панель у чипа */
+.chat-suggest { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-3); max-width: 100%; }
+.chat-suggest[hidden] { display: none; }
+.suggest-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.chat-suggest .chat-suggest-note { flex-basis: 100%; color: var(--danger); font-size: var(--fs-xs); }
+.chat-suggest-note:empty { display: none; }
+.suggest-form { flex-direction: column; gap: var(--space-3); min-width: 240px; max-width: 360px; padding: var(--space-4); text-align: left; }
+.suggest-form:popover-open { display: flex; }
+.suggest-form .suggest-title { color: var(--text-1); font-weight: 600; }
+.suggest-arg { display: flex; flex-direction: column; gap: var(--space-1); }
+.suggest-go { align-self: flex-end; }
+/* строка паспорта над полем (chat.js paintPassport): модель не смотрит фото — «Убрать фото», «Сменить модель» */
+.chat-passport { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); margin: 0; color: var(--caution);
+  font-size: var(--fs-xs); }
+.chat-passport[hidden] { display: none; }
+.chat-passport .btn-link { padding: 0; }
+/* кольцо заполнения контекста (chat-context.js): ячейка ряда высотой --ctl-h, само кольцо — 18 px, как у «Агентов» */
+.ctx-meter { --context-color: var(--accent); --context-percent: 0%; display: inline-grid; place-items: center; flex: none;
+  align-self: stretch; min-width: var(--ctl-h); min-height: var(--ctl-h); border-radius: var(--ctl-radius); }
+.ctx-meter[hidden] { display: none; }
+.ctx-meter.ctx-warn { --context-color: var(--caution); }
+.ctx-meter.ctx-full { --context-color: var(--danger); }
+.ctx-ring { position: relative; width: 18px; height: 18px; border-radius: 50%;
+  background: conic-gradient(var(--context-color) var(--context-percent), var(--line) 0); }
+.ctx-ring::before { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--surface-1); }
 
 .chat-error { margin: 0 var(--space-7) var(--space-4); font-size:var(--fs-md); }
 .chat-error:empty { display: none; }
