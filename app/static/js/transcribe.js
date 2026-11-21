@@ -116,7 +116,7 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Записи"),
     'aria-controls': 'tr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Записи"));
-  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'transcribe-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"));
+  const upload = el('button', { type: 'button', class: 'ctl-primary', id: 'transcribe-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"));
   upload.addEventListener('click', () => input.click());
   const mcp = sectionMcp('transcribe', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
   const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
