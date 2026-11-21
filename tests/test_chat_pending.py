@@ -206,14 +206,15 @@ def test_ask_user_option_and_own_text_reach_model(studio):
     assert answer(studio, cid, shown["id"], "run").status_code == 422          # запуск — только подтверждению
     assert sse(answer(studio, cid, shown["id"], "answer", "Красный"))[-1] == ("done", {"status": "done"})
     sent = studio.gw.chat_requests[-1]["messages"][-1]
-    assert sent["role"] == "tool" and json.loads(sent["content"]) == {"answer": "Красный"}
+    assert sent["role"] == "tool" and json.loads(sent["content"]) == {"question": "Какой цвет?", "answer": "Красный"}
     assert messages(studio, cid)[-1]["content"] == "Выбран красный."
 
     studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Как вас зовут?")]}, ["Привет, Ася."]]
     shown = pending_of(sse(turn(studio, cid, "Поздоровайся")))
     assert shown["options"] == [] and shown["allow_text"] is True
     assert sse(answer(studio, cid, shown["id"], "answer", "Ася"))[-1] == ("done", {"status": "done"})
-    assert json.loads(studio.gw.chat_requests[-1]["messages"][-1]["content"]) == {"answer": "Ася"}
+    assert json.loads(studio.gw.chat_requests[-1]["messages"][-1]["content"]) == {
+        "question": "Как вас зовут?", "answer": "Ася"}
 
     studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Да или нет?", options=["Да", "Нет"],
                                                   allow_text=False)]}, ["Ладно."]]
@@ -221,7 +222,50 @@ def test_ask_user_option_and_own_text_reach_model(studio):
     assert answer(studio, cid, shown["id"], "answer", "Может быть").status_code == 422   # только варианты
     assert sse(answer(studio, cid, shown["id"], "refuse"))[-1] == ("done", {"status": "done"})
     assert json.loads(studio.gw.chat_requests[-1]["messages"][-1]["content"]) == {
-        "answer": None, "note": "пользователь не ответил"}
+        "question": "Да или нет?", "answer": None, "note": "пользователь не ответил"}
+
+
+def test_superseded_or_expired_pause_keeps_the_question(studio):
+    """Ревью A-I1: шаг паузы пишется сразу; новое сообщение или срок снимают паузу, а вопрос и инструмент остаются
+    шагом — странице и модели следующего хода; ответ на карточке модель получает вместе с вопросом."""
+    sid, calls = confirm_setup(studio)
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Какой цвет?", options=["Красный", "Синий"])]}]
+    shown = pending_of(sse(turn(studio, cid, "Нарисуй кота")))
+    paused = messages(studio, cid)[-1]
+    assert paused["content"] == "" and paused["pending"]["id"] == shown["id"]
+    assert [s["question"] for s in paused["tools"]] == ["Какой цвет?"]
+    studio.gw.chat_script = [["Рисую красного кота."]]
+    assert sse(turn(studio, cid, "Красный"))[-1] == ("done", {"status": "done"})
+    asked = studio.gw.chat_requests[-1]["messages"][-1]
+    assert asked["role"] == "user" and "Какой цвет?" in asked["content"] and "Красный" in asked["content"]
+    assert chat_pending.UNANSWERED in asked["content"]
+    assert messages(studio, cid)[1]["tools"] == [{"kind": "ask", "question": "Какой цвет?"}]
+
+    shown = pause_on(studio, cid, name_of(sid, 1), text="Переведи", phrase="hello")
+    studio.gw.chat_script = [["Хорошо."]]
+    assert sse(turn(studio, cid, "да, запусти"))[-1] == ("done", {"status": "done"})
+    sent = studio.gw.chat_requests[-1]["messages"]       # шаг — перед текстом до паузы «Сейчас переведу.»
+    assert [m["role"] for m in sent[-3:]] == ["user", "assistant", "user"] and sent[-1]["content"] == "да, запусти"
+    assert chat_pending.NOT_RUN.format("translate", '{"phrase": "hello"}') in sent[-3]["content"]
+    assert messages(studio, cid)[5]["tools"] == [
+        {"kind": "mcp", "server": "Shared tools", "tool": "translate", "refused": True}]
+
+    late = pause_on(studio, cid, name_of(sid, 1), text="Ещё", phrase="late")
+    assert messages(studio, cid)[-1]["tools"][-1]["waiting"] is True
+    studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
+    reply = messages(studio, cid)[-1]
+    assert "pending" not in reply and reply["tools"][-1] == {
+        "kind": "mcp", "server": "Shared tools", "tool": "translate", "refused": True}
+    assert state.DB.execute("SELECT outcome FROM chat_pending WHERE id = ?", (late["id"],)).fetchone()[0] == "expired"
+    assert "tools/call" not in methods(calls)
+
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Какой размер?")]}, ["Ладно."]]
+    shown = pending_of(sse(turn(studio, cid, "Ещё кота")))
+    assert sse(answer(studio, cid, shown["id"], "answer", "Большой"))[-1] == ("done", {"status": "done"})
+    assert json.loads(studio.gw.chat_requests[-1]["messages"][-1]["content"]) == {
+        "question": "Какой размер?", "answer": "Большой"}
+    assert messages(studio, cid)[-1]["tools"] == [{"kind": "ask", "question": "Какой размер?"}]
 
 
 def test_confirmation_covers_only_the_resumed_call_not_a_reused_id(studio):

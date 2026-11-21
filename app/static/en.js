@@ -170,6 +170,7 @@ globalThis.StudioEnglish = Object.freeze({
   "вопроса": "questions",
   "вопросов": "questions",
   "инструмент больше недоступен в этом диалоге — не вызван": "the tool is no longer available in this conversation — not called",
+  "пользователь не ответил на карточке — ответ, если есть, в следующем сообщении": "the user did not answer on the card — the answer, if any, is in the next message",
   "на этот вопрос уже ответили или он больше не ждёт": "this question has already been answered or is no longer waiting",
   "подключение или модель диалога изменились — отправьте сообщение заново": "the conversation's connection or model changed — send the message again",
   "такой ответ этой карточке не подходит": "this answer does not fit this card",
