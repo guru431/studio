@@ -8,9 +8,10 @@ import access
 import chat
 import chat_pending
 import mcp_sources
+import security
 import state
 from conftest import add_gateway
-from test_chat import messages, new_chat, sse, turn
+from test_chat import attach, messages, new_chat, png, sse, turn
 from test_chat_ocr import on_loop
 from test_chat_web import call
 from test_mcp_dialog import methods, name_of, offered, setup, tool
@@ -266,6 +267,39 @@ def test_superseded_or_expired_pause_keeps_the_question(studio):
     assert json.loads(studio.gw.chat_requests[-1]["messages"][-1]["content"]) == {
         "question": "Какой размер?", "answer": "Большой"}
     assert messages(studio, cid)[-1]["tools"] == [{"kind": "ask", "question": "Какой размер?"}]
+
+
+def test_pause_keeps_photos_by_media_id_and_reads_the_card_alone(studio):
+    """Ревью A-I3: payload паузы хранит картинки ссылкой `media_id` (не base64 — десятки мегабайт на строку),
+    продолжение читает файлы заново; выдача сообщений читает только вид карточки, не расшифровывая payload; паузу
+    старше срока выдача снимает и стирает."""
+    add_gateway(studio)
+    cid = new_chat(studio)
+    pics = [attach(studio, f"photo{i}.png", png(color), "image/png") for i, color in enumerate(("red", "blue"))]
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="В каком регионе?")]}, ["Это фикус."]]
+    shown = pending_of(sse(turn(studio, cid, "Что за растение?", attachment_ids=[p["id"] for p in pics])))
+    first = studio.gw.chat_requests[0]["messages"][-1]["content"]
+    assert [p["image_url"]["url"][:22] for p in first if p["type"] == "image_url"] == ["data:image/png;base64,"] * 2
+    row = state.DB.execute("SELECT payload FROM chat_pending WHERE id = ?", (shown["id"],)).fetchone()
+    stored = security.decrypt(row["payload"].encode("ascii"))
+    assert "base64" not in stored and all(p["media_id"] in stored for p in pics)
+
+    sealed = row["payload"]
+    state.DB.execute("UPDATE chat_pending SET payload = 'broken' WHERE id = ?", (shown["id"],))
+    assert messages(studio, cid)[-1]["pending"]["question"] == "В каком регионе?"   # payload не читался
+    state.DB.execute("UPDATE chat_pending SET payload = ? WHERE id = ?", (sealed, shown["id"]))
+    assert sse(answer(studio, cid, shown["id"], "answer", "Тропики"))[-1] == ("done", {"status": "done"})
+    resumed = studio.gw.chat_requests[-1]["messages"]
+    assert resumed[-1]["role"] == "tool"
+    assert [p["image_url"]["url"] for p in resumed[-3]["content"] if p["type"] == "image_url"] == [
+        p["image_url"]["url"] for p in first if p["type"] == "image_url"]
+
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Ещё?")]}]
+    late = pending_of(sse(turn(studio, cid, "Ещё")))
+    studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
+    assert "pending" not in messages(studio, cid)[-1]
+    row = state.DB.execute("SELECT outcome, payload, view FROM chat_pending WHERE id = ?", (late["id"],)).fetchone()
+    assert (row["outcome"], row["payload"], row["view"]) == ("expired", "", "")
 
 
 def test_confirmation_covers_only_the_resumed_call_not_a_reused_id(studio):

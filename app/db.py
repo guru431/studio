@@ -824,7 +824,8 @@ _TRASH_58 = ("chats", "images", "videos", "speeches", "transcripts", "scans", "t
 #: id чата)
 _TRASH_SEARCH_58 = {"chats": "chat", "images": "photo", "videos": "video", "speeches": "speech",
                     "transcripts": "transcribe", "scans": "ocr", "translations": "translate"}
-#: ждущий ответ хода (`chat_pending`: подтверждение инструмента или вопрос модели) и список дел ответа
+#: ждущий ответ хода (`chat_pending`: подтверждение инструмента или вопрос модели; `view` — вид карточки отдельным
+#: шифром, выдача сообщений не расшифровывает payload) и список дел ответа
 #: (`messages.todo`, JSON); память учётки (`user_memory.text_enc` — шифром) и её выключатель; корзина;
 #: личные ссылки на файлы MCP (`file_links`: хеш токена, путь и имя — шифром, `stamp` — подпись секрета сервера);
 #: «защищённый источник» MCP и отметка диалога о его срабатывании; базы знаний (`user_id NULL` — общая, закрытая
@@ -836,7 +837,8 @@ _TRASH_SEARCH_58 = {"chats": "chat", "images": "photo", "videos": "video", "spee
 REMAINING_58 = f"""CREATE TABLE chat_pending(id TEXT PRIMARY KEY,
        chat_id TEXT NOT NULL REFERENCES chats ON DELETE CASCADE,
        message_id TEXT NOT NULL REFERENCES messages ON DELETE CASCADE,
-       kind TEXT NOT NULL CHECK (kind IN ('confirm','ask')), payload TEXT NOT NULL, created REAL NOT NULL,
+       kind TEXT NOT NULL CHECK (kind IN ('confirm','ask')), payload TEXT NOT NULL, view TEXT NOT NULL DEFAULT '',
+       created REAL NOT NULL,
        resolved REAL, outcome TEXT CHECK (outcome IN ('run','refuse','answer','superseded','expired')));
 CREATE INDEX chat_pending_open ON chat_pending(chat_id) WHERE resolved IS NULL;
 ALTER TABLE messages ADD COLUMN todo TEXT;
