@@ -491,6 +491,35 @@ def test_scans_of_locked_chat_and_translation_stay_hidden_in_trash_and_heaviest(
     assert [h["id"] for h in s.c.get("/api/me/storage").json()["heaviest"]] == ["plain"]
 
 
+def test_trash_and_storage_lists_do_not_read_full_texts(s):
+    """Ревью B1-M5: `GET /api/trash` и `GET /api/me/storage` (цикл событий) читают только id и столбцы названия, не
+    полные тексты сканов, расшифровок, переводов (сотни КБ на запись). Сверяет авторизатор SQLite: чтения столбцов."""
+    import sqlite3
+    uid = owner(s)
+    for made in (make_scan(s, uid), make_transcript(s, uid), make_translation(s, uid)):
+        assert made.delete().status_code == 204
+    pdf = save(uid, b"%PDF- live", "application/pdf", "live.pdf")
+    state.DB.execute("INSERT INTO scans(id, user_id, model, name, source_media_id, origin, pages, done_pages, state,"
+                     " detail, created, finished, text) VALUES ('sc2', ?, 'hunyuan-ocr', 'live.pdf', ?, 'section', 1, 1,"
+                     " 'done', '', ?, ?, 'long text')", (uid, pdf, T0, T0))
+    reads = set()
+
+    def watch(action, table, column, *_):
+        if action == sqlite3.SQLITE_READ:
+            reads.add((table, column))
+        return sqlite3.SQLITE_OK
+
+    state.DB.set_authorizer(watch)
+    try:
+        assert len(s.c.get("/api/trash").json()) == 3
+        assert s.c.get("/api/me/storage").json()["heaviest"]
+    finally:
+        state.DB.set_authorizer(None)
+    assert ("scans", "name") in reads                               # авторизатор видит чтения
+    assert not reads & {("scans", "text"), ("transcripts", "text"), ("translations", "source"),
+                        ("translations", "text"), ("scan_pages", "text")}
+
+
 def test_history_erase_and_empty_trash_need_password_and_count_failures(s):
     """«Удалить всю историю» и «Очистить корзину» — окончательно и только паролем учётки: та же проверка и паузы,
     что у выключения блокировки и смены пароля (`auth.confirm_password`), неудачи всех этих действий — в один счёт."""

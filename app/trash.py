@@ -75,6 +75,8 @@ class Kind:
     live: str = ""                                # условие строки, которую видно и можно вернуть
     group: str = ""                               # столбец группы: строки с тем же значением и той же отметкой
                                                   # `deleted` (удалены одним действием) — одна запись корзины
+    column: str = "name"                          # столбец, который читает `title`: списки корзины и «Хранилища»
+                                                  # не читают полных текстов записей на цикле событий
 
 
 HEAD = 80                                         # знаков текста записи в названии строки корзины
@@ -89,20 +91,20 @@ def _head(text: "str | None", fallback: str) -> str:
 KINDS: dict[str, Kind] = {
     "chats": Kind("chats", "chat", chat.purge, lambda row: row["title"] or "Новый диалог",
                   "SELECT a.media_id FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.chat_id = :id"
-                  " UNION SELECT media_id FROM chat_media WHERE chat_id = :id", search="chat"),
+                  " UNION SELECT media_id FROM chat_media WHERE chat_id = :id", search="chat", column="title"),
     # медиа диалога в корзине вместе с диалогом — часть его строки, не отдельная
     "chat_media": Kind("chat_media", "chat", mcp_files.purge_media, lambda row: row["name"],
                        "SELECT media_id FROM chat_media WHERE id = :id",
                        live=" AND chat_id IN (SELECT id FROM chats WHERE deleted IS NULL)"),
     "images": Kind("images", "photo", images.purge, lambda row: _head(row["prompt"], "Картинка"),
                    "SELECT media_id FROM images WHERE id = :id UNION SELECT source_media_id FROM images WHERE id = :id"
-                   " UNION SELECT mask_media_id FROM images WHERE id = :id", search="photo"),
+                   " UNION SELECT mask_media_id FROM images WHERE id = :id", search="photo", column="prompt"),
     "videos": Kind("videos", "video", videos.purge, lambda row: _head(row["prompt"], "Ролик"),
                    "SELECT media_id FROM videos WHERE id = :id UNION SELECT source_media_id FROM videos WHERE id = :id",
-                   search="video"),
+                   search="video", column="prompt"),
     # чат озвучки, удалённый целиком («Удалить чат»), — одна запись корзины: возвращается и удаляется весь
     "speeches": Kind("speeches", "speech", speeches.purge, lambda row: _head(row["text"], "Озвучка"),
-                     "SELECT media_id FROM speeches WHERE id = :id", search="speech", group="chat_id"),
+                     "SELECT media_id FROM speeches WHERE id = :id", search="speech", group="chat_id", column="text"),
     "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"], "Запись"),
                         "SELECT source_media_id FROM transcripts WHERE id = :id"
                         " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe"),
@@ -165,8 +167,9 @@ async def list_trash(request: Request):
             continue
         locked, args = _locked(kind, uid, hidden)
         groups = {}
-        for row in state.DB.execute(f"SELECT * FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL{kind.live}"
-                                    f"{locked} ORDER BY created, id", (uid, *args)).fetchall():
+        cols = ", ".join(dict.fromkeys(("id", "deleted", *([kind.group] if kind.group else []), kind.column)))
+        for row in state.DB.execute(f"SELECT {cols} FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL"
+                                    f"{kind.live}{locked} ORDER BY created, id", (uid, *args)).fetchall():
             key = (row[kind.group], row["deleted"]) if kind.group else row["id"]
             size = _bytes(kind, uid, row["id"])
             if key in groups:
@@ -275,7 +278,7 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
             heaviest += [{"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
                           "bytes": row["bytes"]}
                          for row in state.DB.execute(
-                             f"SELECT * FROM (SELECT t.*, {_sized(kind)} AS bytes FROM {kind.table} t"
+                             f"SELECT * FROM (SELECT t.id, t.{kind.column}, {_sized(kind)} AS bytes FROM {kind.table} t"
                              f" WHERE t.user_id = ? AND t.deleted IS NULL{locked}) WHERE bytes > 0"
                              " ORDER BY bytes DESC LIMIT ?", (user_id, *args, HEAVIEST))]
         count, size = state.DB.execute(f"SELECT COUNT(*), COALESCE(SUM({_sized(kind)}), 0) FROM {kind.table} t"
