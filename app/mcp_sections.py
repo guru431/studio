@@ -217,13 +217,20 @@ def present(session, section, result):
     return {"text": clean_text(text), "files": files}
 
 
-async def upload_artifact(session, data, mime):
-    reply = await call(session, "artifact_upload", {"data_base64": base64.b64encode(data).decode(), "mime_type": mime})
+async def upload_artifact(session, data, mime, name=None):
+    """Файл на сервер MCP (`artifact_upload`) → `{id, path}`; `path` — путь файла на сервере, если сервер его
+    сообщил (иначе пусто), `name` — имя файла для сервера (файлы чата)."""
+    args = {"data_base64": base64.b64encode(data).decode(), "mime_type": mime}
+    if name:
+        args["name"] = name
+    reply = await call(session, "artifact_upload", args)
     item = reply.get("structuredContent")
     aid = item.get("id") if isinstance(item, dict) else None
     if not isinstance(aid, str) or not ARTIFACT_ID.fullmatch(aid):
         raise mcp.refused("MCP не вернул идентификатор файла")
-    return aid
+    path = item.get("path")
+    path = path if isinstance(path, str) and len(path) <= 1024 and path.isprintable() else ""
+    return {"id": aid, "path": path}
 
 
 async def upload(session, kind, file):
@@ -234,7 +241,7 @@ async def upload(session, kind, file):
             data = await forms.photo(session.uid, None, file.media_id)
         except forms.UploadError as exc:
             raise mcp.refused(str(exc), "invalid", exc.status) from None
-        return await upload_artifact(session, data, "image/png")
+        return (await upload_artifact(session, data, "image/png"))["id"]
     encoded = file.data
     try:
         data = base64.b64decode(encoded or "", validate=True)
@@ -252,7 +259,7 @@ async def upload(session, kind, file):
         mime = forms.audio_type(file.mime_type, file.name)
         if mime not in INLINE_MIME:
             raise mcp.refused("Выберите звуковой файл MCP", "invalid", 415)
-    return await upload_artifact(session, data, mime)
+    return (await upload_artifact(session, data, mime))["id"]
 
 
 async def voice_arguments(session, section, tool, voice_id, files):
@@ -264,7 +271,7 @@ async def voice_arguments(session, section, tool, voice_id, files):
     audio, text = await voices.reference(session.uid, voice_id)
     if not audio or len(audio) > UPLOAD_MAX:
         raise mcp.refused("Образец голоса превышает предел MCP", "too_big", 413)
-    aid = await upload_artifact(session, audio, "audio/wav")
+    aid = (await upload_artifact(session, audio, "audio/wav"))["id"]
     return {"engine": "clone", "reference_artifact_id": aid, "reference_text": text}
 
 
@@ -404,6 +411,15 @@ class ArtifactStream(StreamingResponse):
 async def download(section: str, encoded: str, request: Request):
     section_tools(section)
     session, (aid, mime) = redeem(request, section, encoded, "file")
+    return await relay(session, aid, mime, request)
+
+
+GONE_FILE = "Файла больше нет на сервере MCP"
+
+
+async def relay(session, aid, mime, request):
+    """Файл результата MCP `aid` потоком через Studio: диапазоны (`Range`), `nosniff`, предел DOWNLOAD_MAX;
+    не картинка, звук или видео — вложением. Сервер ответил 404 — 404 GONE_FILE."""
     # The transfer path is part of the service contract. Never fetch a URL from a tool result.
     url = httpx.URL(session.url).copy_with(raw_path=f"/artifacts/{aid}/content".encode())
     headers = httpx.Headers(session.headers(rpc=False))
@@ -425,6 +441,8 @@ async def download(section: str, encoded: str, request: Request):
         if response.status_code == 416:
             return Response(status_code=416, headers={k: v for k, v in outgoing.items() if k != "content-length"})
         length = outgoing.get("content-length", "")
+        if response.status_code == 404:
+            raise mcp.refused(GONE_FILE, "not_found", 404)
         if (response.status_code not in (200, 206) or response.headers.get("content-encoding", "identity") != "identity"
                 or (length and (not re.fullmatch(r"[0-9]{1,10}", length) or int(length) > DOWNLOAD_MAX))):
             raise mcp.refused("Файл MCP недоступен или превышает предел загрузки")

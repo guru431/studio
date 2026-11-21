@@ -133,6 +133,14 @@ def hints(tool) -> dict:
             "chat_files": limit if type(limit) is int and limit > 0 else None}
 
 
+def chat_files(found: Catalog) -> "int | None":
+    """Предел файлов чата сервера: `max_bytes` пометки `studio/chat-files` у его `artifact_upload`; нет — None
+    (сервер файлов диалога не получает)."""
+    upload = next((tool for tool in found.tools if isinstance(tool, dict) and tool.get("name") == "artifact_upload"),
+                  None)
+    return hints(upload)["chat_files"] if upload is not None else None
+
+
 def _exceeds(value, bound):
     if isinstance(value, str):
         try:

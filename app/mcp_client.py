@@ -240,7 +240,8 @@ async def catalog_for(uid, refresh=False):
                  if isinstance(tool, dict) and isinstance(tool.get("name"), str) and NAME.fullmatch(tool["name"])
                  and access.tool_allowed(uid, item["id"], tool["name"])]
         instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
-        return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts}
+        return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts,
+                "chat_files": mcp_sources.chat_files(found)}
 
     return {"items": list(await asyncio.gather(*(one(item) for item in servers(uid))))}
 
@@ -499,6 +500,7 @@ class Tools:
         self.sessions, self.calls, self.specs = [], {}, []
         self.failed = []                     # (имя сервера, слова) — сервер пропущен или урезан, ход идёт
         self.instructions = []               # (имя сервера, правила) серверов, давших инструменты ходу
+        self.found = []                      # (строка сервера, сессия, каталог) ответивших серверов — mcp_files.sync
 
     def _chat(self):
         return state.DB.execute("SELECT * FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
@@ -549,7 +551,8 @@ class Tools:
             if isinstance(catalog, str):
                 self.failed.append((item["name"], catalog))
                 continue
-            rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
+            self.found.append((item, session, catalog))
+            rules =mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
             given = trimmed = 0
             for tool in catalog.tools:
                 if (not access.tool_allowed(self.uid, item["id"], tool["name"])   # закрыт группами доступа
@@ -609,6 +612,10 @@ class Tools:
             if not text:
                 text = "Инструмент MCP вернул результат без текста"
             step["error" if result.get("isError") else "text"] = text[:60_000]
+            import mcp_files                  # здесь, не при загрузке: mcp_files тянет разделы и chat
+            files = [] if result.get("isError") else mcp_files.result_files(result)
+            if files:                         # файлы под ответом: маршрут скачивания сверит сервер и отпечаток
+                step |= {"sid": session.sid, "stamp": mcp_sources.stamp(session.stamp), "files": files}
         except HTTPException as exc:
             step["error"] = exc.detail["message"]
         except (ValueError, TypeError):

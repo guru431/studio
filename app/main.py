@@ -35,6 +35,7 @@ import auth
 import bridge
 import chat
 import mcp_client
+import mcp_files
 import mcp_sections
 import chat_exports
 import chat_shares
@@ -190,6 +191,7 @@ app.include_router(chat.router)
 app.include_router(roles.router)
 app.include_router(mcp_client.router)
 app.include_router(mcp_sections.router)
+app.include_router(mcp_files.router)
 app.include_router(chat_exports.router)
 app.include_router(chat_shares.router)
 app.include_router(dictation.router)

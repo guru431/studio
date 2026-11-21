@@ -424,8 +424,12 @@ def history_block(steps: list[dict]) -> str:
 
 
 def public(step: dict) -> dict:
-    """Шаг для страницы — без текста для модели."""
-    return {k: v for k, v in step.items() if k != "text"}
+    """Шаг для страницы — без текста для модели; файлы результата MCP (`mcp_files.result_files`) — только имя и
+    тип, без сервера, отпечатка его ключа и id файла на сервере (их читает маршрут скачивания)."""
+    out = {k: v for k, v in step.items() if k not in ("text", "sid", "stamp", "files")}
+    if isinstance(step.get("files"), list):
+        out["files"] = [{"name": f.get("name", ""), "mime": f.get("mime", "")} for f in step["files"] if isinstance(f, dict)]
+    return out
 
 
 # ---- какие адреса можно читать (read_page, youtube_subtitles) -----------------------------
