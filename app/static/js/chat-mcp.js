@@ -122,6 +122,7 @@ export function chooseDialogMcp(host, state, save) {
         s.shared ? el('span', { class: 'tag' }, tr("общий")) : null),
       s.state === 'error' ? el('p', { class: 'error small chat-mcp-error' }, words(s.message)) : null,
       s.state === 'off' ? el('p', { class: 'muted small' }, tr("Выключен в настройках подключения")) : null,
+      s.trimmed ? el('p', { class: 'muted small chat-mcp-trimmed' }, tr("Сервер предлагает больше 128 инструментов — показаны первые 128")) : null,
       s.instructions ? el('details', { class: 'chat-mcp-rules' }, el('summary', {}, tr("Правила сервера")),
         el('p', { class: 'small chat-mcp-instructions' }, s.instructions)) : null,
       tools.length ? el('details', { class: 'chat-mcp-tools' }, el('summary', {}, count), el('ul', {}, ...tools)) : null);

@@ -19,6 +19,8 @@ import logging
 import math
 import re
 
+from fastapi import HTTPException
+
 import access
 import clock
 import mcp_client
@@ -47,6 +49,7 @@ class Catalog:
     instructions: str | None
     prompts: list
     capabilities: dict
+    trimmed: bool = False                    # сервер предлагает больше `mcp_client.MAX_TOOLS` — список урезан
 
 
 CACHE: dict[tuple, Catalog] = {}
@@ -67,18 +70,25 @@ def stamp(secret_enc) -> str:
 
 async def catalog(session, timeout, *, refresh=False) -> Catalog:
     """Каталог сервера из кэша или опросом в срок `timeout`. `refresh` — опросить заново, если запись старше
-    REFRESH_MIN_SEC. Отказ (HTTPException) и истёкший срок (TimeoutError) уходят вызывающему и не кэшируются."""
+    REFRESH_MIN_SEC. Отказ (HTTPException) и истёкший срок (TimeoutError) списка инструментов уходят вызывающему
+    и не кэшируются; подсказки — по возможности: их отказ или срок оставляют каталог без подсказок."""
     key = _key(session)
     found = CACHE.get(key)
     if found is not None:
         age = clock.NOW() - found.at
         if age < (REFRESH_MIN_SEC if refresh else CATALOG_TTL_SEC):
             return found
-    async with asyncio.timeout(timeout):
+    async with asyncio.timeout(timeout) as limit:
         tools = await session.tools()
-        # Возможность объявляется объектом, часто пустым: `"prompts": {}`.
-        prompts = await session.prompts() if isinstance(session.capabilities.get("prompts"), dict) else []
-    item = Catalog(clock.NOW(), tools, session.instructions, prompts, session.capabilities)
+    prompts = []
+    # Возможность объявляется объектом, часто пустым: `"prompts": {}`.
+    if isinstance(session.capabilities.get("prompts"), dict):
+        try:
+            async with asyncio.timeout_at(limit.when()):
+                prompts = await session.prompts()
+        except (HTTPException, TimeoutError):
+            log.info("mcp %d: подсказки не прочитаны", session.sid)
+    item = Catalog(clock.NOW(), tools, session.instructions, prompts, session.capabilities, session.trimmed)
     CACHE.pop(key, None)
     CACHE[key] = item
     while len(CACHE) > CACHE_KEEP:

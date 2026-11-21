@@ -249,7 +249,7 @@ async def catalog_for(uid, refresh=False):
         finally:
             await session.close()
         return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts,
-                "chat_files": chat_files}
+                "chat_files": chat_files, "trimmed": found.trimmed}
 
     return {"items": list(await asyncio.gather(*(one(item) for item in servers(uid))))}
 
@@ -301,6 +301,7 @@ class Session:
         self.instructions = None             # правила сервера из initialize — как прислал, режет chat_system
         self.capabilities = {}
         self.error = None                    # поле `error` последнего ответа JSON-RPC
+        self.trimmed = False                 # `tools` урезал список до MAX_TOOLS
         self.seq = 0
 
     def headers(self, *, rpc=True):
@@ -401,17 +402,21 @@ class Session:
             await self.initialize()
 
     async def tools(self):
+        """Инструменты сервера (`tools/list` с листанием): не больше MAX_TOOLS — набрав их, листание
+        останавливается, лишнее отбрасывается, `trimmed` — признак урезанного списка."""
         await self.ensure()
         tools, cursor, seen = [], None, set()
+        self.trimmed = False
         while True:
             result = await self.rpc("tools/list", {"cursor": cursor} if cursor else {})
             batch = result.get("tools")
             if not isinstance(batch, list):
                 raise refused("MCP вернул неверный список инструментов")
             tools.extend(batch)
-            if len(tools) > MAX_TOOLS:
-                raise refused("MCP предлагает больше 128 инструментов")
             cursor = result.get("nextCursor")
+            if len(tools) >= MAX_TOOLS:
+                self.trimmed = len(tools) > MAX_TOOLS or bool(cursor)
+                return tools[:MAX_TOOLS]
             if not cursor:
                 return tools
             if not isinstance(cursor, str) or len(cursor) > 8192 or cursor in seen or not batch:
@@ -576,7 +581,7 @@ class Tools:
                     "description": (f"{item['name']}: {tool['name']}. " + str(tool.get("description", "")))[:4000],
                     "parameters": tool["inputSchema"]}})
                 given += 1
-            if trimmed:
+            if trimmed or catalog.trimmed:
                 self.failed.append((item["name"], TRIMMED))
             if given:
                 self.instructions.append((item["name"], catalog.instructions))
