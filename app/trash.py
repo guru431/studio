@@ -209,7 +209,8 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
     heaviest, trashed, failed = [], {}, {}
     for name, kind in KINDS.items():
         if not kind.live and kind.section not in hidden:
-            heaviest += [{"section": kind.section, "id": row["id"], "title": kind.title(row), "bytes": row["bytes"]}
+            heaviest += [{"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
+                          "bytes": row["bytes"]}
                          for row in state.DB.execute(
                              f"SELECT * FROM (SELECT t.*, {_sized(kind)} AS bytes FROM {kind.table} t"
                              f" WHERE t.user_id = ? AND t.deleted IS NULL) WHERE bytes > 0 ORDER BY bytes DESC LIMIT ?",

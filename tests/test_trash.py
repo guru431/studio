@@ -470,9 +470,11 @@ def test_storage_heaviest_and_failed_move_to_trash(s):
     other = make_user(s, "other")
     new_chat(other, "theirs", "theirs")                                        # чужое не в счёт
     body = s.c.get("/api/me/storage").json()
-    assert body["heaviest"][:3] == [{"section": "video", "id": "bad", "title": "broken waves", "bytes": 50},
-                                    {"section": "photo", "id": "img1", "title": "mango sunset", "bytes": 20},
-                                    {"section": "chat", "id": "kiwi", "title": "kiwi title", "bytes": 9}]
+    # `kind` — вид корзины: страница по нему строит адрес записи (голос — не запись «Озвучки»)
+    assert body["heaviest"][:3] == [
+        {"kind": "videos", "section": "video", "id": "bad", "title": "broken waves", "bytes": 50},
+        {"kind": "images", "section": "photo", "id": "img1", "title": "mango sunset", "bytes": 20},
+        {"kind": "chats", "section": "chat", "id": "kiwi", "title": "kiwi title", "bytes": 9}]
     assert "gone" not in {h["id"] for h in body["heaviest"]}
     assert body["trash"] == {"chat": {"count": 1, "bytes": 9}}
     assert body["failed"] == {"video": 1, "transcribe": 2}
