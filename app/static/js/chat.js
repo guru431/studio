@@ -1,5 +1,7 @@
 import { locale, message, tr } from './i18n.js';
 import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
+import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
+  uploadMedia } from './chat-files.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
@@ -66,6 +68,8 @@ import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
  *
  * Роль диалога — чип roles.js, серверы и инструменты MCP — окно chat-mcp.js (чип #mcp-toggle `MCP (n)`): у нового
  * диалога — черновики `draftRole` и `draftMcp` (null — общие серверы по умолчанию), PATCH после его создания.
+ * Согласие на передачу файлов диалога MCP, звук и видео диалога и файлы результатов MCP под ответом — chat-files.js;
+ * звук нового диалога сначала создаёт диалог из черновика (`ensureChat`, как первый ход).
  *
  * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
@@ -277,7 +281,8 @@ async function readServer(job, response) {
           job.tool = data;
         }
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
-        (job.message.calls ||= []).push({ kind: data.kind });   // плашка до перечитывания — без итогов шагов
+        // плашка до перечитывания — без итогов шагов; запрос согласия на файлы MCP — сразу блоком под ответом
+        (job.message.calls ||= []).push(data.consent ? { kind: data.kind, server: data.label, consent: data.consent } : { kind: data.kind });
         notify(job, false);
       } else if (event === 'think' && data) {      // {text} — ход мысли виден, {} — модель только думает
         job.tool = null;                           // модель снова думает — инструмент кончился
@@ -504,6 +509,9 @@ function build(view, ctx) {
   let draftWeb = false;        // «Интернет» нового диалога: PATCH после его создания
   let draftMcp = null;         // MCP нового диалога (тело PATCH, chat-mcp.js); null — общие серверы по умолчанию
   let mcpServers = [];         // серверы MCP учётки (GET /api/mcp): счёт `MCP (n)` нового диалога
+  let catalog = [];            // каталог MCP учётки (GET /api/mcp/catalog): `chat_files` — звук и видео в поле ввода
+  let pendingMedia = [];       // звук и видео, что грузятся или не приняты: { name, mime, size, busy, error }
+  let creating = null;         // идущее создание нового диалога (ensureChat)
   let draftThink = false;      // «Рассуждение» нового диалога — так же
   let draftRole = null;        // роль нового диалога {id, name}: PATCH {role_id} после его создания
   let sending = false;
@@ -547,6 +555,7 @@ function build(view, ctx) {
   // скринридеру — начало и конец ответа короткой фразой; сам текст ответа сюда не кладётся (поток не зачитывается кусками)
   const answering = el('p', { class: 'sr', id: 'chat-status', role: 'status' });
   const chipsBox = el('div', { class: 'att-chips' });
+  const mediaBox = el('div', { class: 'att-chips chat-media', id: 'chat-media', 'aria-label': tr("Звук и видео диалога для MCP") });
   const input = el('textarea', { id: 'chat-input', rows: '1', placeholder: tr("Напишите сообщение…"), 'aria-label': tr("Сообщение"),
     maxlength: '200000' });
   const file = el('input', { type: 'file', id: 'attach', class: 'sr', accept: ACCEPT, multiple: true });
@@ -575,7 +584,7 @@ function build(view, ctx) {
     },
     failed: (err) => { notice.textContent = words(err); } });
   const inputBox = fieldBox(input, { attach: clip });
-  const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
+  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, roles.chip, roles.menu, webToggle, mcpToggle,
       thinkToggle), send, stop),
     webNote);
@@ -776,6 +785,136 @@ function build(view, ctx) {
     const count = mcpCount();
     mcpToggle.textContent = count ? `MCP (${count})` : 'MCP';
     mcpToggle.setAttribute('aria-pressed', String(count > 0));
+    paintMedia();
+  }
+
+  /* звук и видео диалога (как mcp_files.media_limit): через сервер, не Cleaner; серверы набора с `chat_files`, кроме
+     «Не передавать». null — не принимаются; `ask` — у кого спросить согласие (ни один ещё не разрешён), `limit` — наибольший
+     предел разрешённых (или тех, у кого спросим) */
+  function mediaState() {
+    let ids;
+    let toolsOff;
+    let decisions = {};
+    if (chat) {
+      if (!chat.chat.proxied || chat.chat.cleaner) return null;
+      ids = chat.chat.mcp_ids || [];
+      toolsOff = chat.chat.mcp_tools_off || {};
+      decisions = chat.chat.mcp_file_consent || {};
+    } else {
+      const conn = links.find((l) => l.connection.id === chosen().connection_id)?.connection;
+      if (!conn?.proxied || conn.cleaner) return null;
+      ids = draftIds(draftMcp, mcpServers);
+      toolsOff = stateOf(draftMcp).toolsOff;
+    }
+    const targets = mediaTargets(catalog, ids, toolsOff).filter((t) => decisions[String(t.id)] !== 'refused');
+    if (!targets.length) return null;
+    const allowed = targets.filter((t) => decisions[String(t.id)] === 'allowed');
+    return { ask: allowed.length ? [] : targets, limit: Math.max(...(allowed.length ? allowed : targets).map((t) => t.max)) };
+  }
+
+  function paintMedia() {
+    file.accept = mediaState() ? `${ACCEPT},${MEDIA_ACCEPT}` : ACCEPT;
+    mediaBox.replaceChildren(...(chat?.media || []).map((item) => mediaChip(item)), ...pendingMedia.map((item) => {
+      const chip = mediaChip(item);
+      if (!item.busy) {
+        const remove = iconButton('x', tr("Убрать {0}", item.name), { class: 'icon-btn att-remove' });
+        remove.addEventListener('click', () => {
+          pendingMedia = pendingMedia.filter((x) => x !== item);
+          paintMedia();
+        });
+        chip.append(remove);
+      }
+      return chip;
+    }));
+  }
+
+  /* согласие на звук нового диалога или диалога, где серверу ещё не разрешали файлы: окно со списком файлов диалога */
+  function askMediaConsent(targets, files) {
+    const names = [...new Set([...(chat ? chat.messages : []).flatMap((m) => (m.attachments || []).map((a) => a.name)),
+      ...(chat?.media || []).map((m) => m.name), ...files.map((f) => f.name)])];
+    const allow = button(tr("Передать"), { class: 'btn btn-accent', id: 'media-consent-allow' });
+    const dialog = openDialog(root, { id: 'media-consent-dialog', title: tr("Файлы диалога для MCP"), cancelText: tr("Не передавать"),
+      actions: [allow], body: [el('p', {}, tr("Передать серверу «{0}» файлы диалога: {1}?", targets.map((t) => t.name).join(', '),
+        names.join(', ')))] });
+    return new Promise((resolve) => {
+      let yes = false;
+      allow.addEventListener('click', () => { yes = true; dialog.close(); });
+      dialog.addEventListener('close', () => resolve(yes), { once: true });
+    });
+  }
+
+  /* звук и видео из поля ввода: больше предела — отказ до загрузки; без согласия — окно; новый диалог — создать */
+  async function pickMedia(files, state) {
+    const fit = [];
+    for (const f of files) {
+      if (f.size > state.limit) {
+        pendingMedia.push({ name: f.name, mime: f.type, size: f.size,
+          error: tr("больше {0} — предела MCP этого диалога", byteSize(state.limit)) });
+      } else fit.push(f);
+    }
+    paintMedia();
+    if (!fit.length || (state.ask.length && !(await askMediaConsent(state.ask, fit)))) return;
+    const made = {};
+    let saved = 0;
+    try {
+      await ensureChat(made);
+      const id = chatId;
+      for (const t of state.ask) {
+        const out = await api('POST', `/api/chats/${id}/mcp-consent`, { server_id: t.id, allow: true });
+        if (chatId === id) chat.chat.mcp_file_consent = out.mcp_file_consent;
+      }
+      paintConsents();
+      for (const f of fit) {
+        if (chatId !== id) break;                  // ушли в другой диалог — остальное не грузить
+        const item = { name: f.name, mime: f.type, size: f.size, busy: true };
+        pendingMedia.push(item);
+        paintMedia();
+        try {
+          const done = await uploadMedia(id, f);
+          pendingMedia = pendingMedia.filter((x) => x !== item);
+          saved += 1;
+          if (chatId === id) chat.media = [...(chat.media || []), done];
+        } catch (err) {
+          item.busy = false;
+          item.error = words(err);
+        }
+        paintMedia();
+      }
+    } catch (err) {
+      notice.textContent = words(err);
+    }
+    if (made.id && !saved) dropEmpty(made.id);
+  }
+
+  /* «Передать» / «Не передавать» файлы диалога серверу MCP: решение — во все блоки согласия ленты и в поле ввода */
+  async function decideConsent(sid, allow) {
+    const id = chatId;
+    try {
+      const out = await api('POST', `/api/chats/${id}/mcp-consent`, { server_id: sid, allow });
+      if (chatId !== id || !chat) return;
+      chat.chat.mcp_file_consent = out.mcp_file_consent;
+      notice.textContent = '';
+    } catch (err) {
+      notice.textContent = words(err);
+      return;
+    }
+    paintConsents();
+    paintMedia();
+  }
+
+  function paintConsent(m) {
+    const p = parts.get(m);
+    if (!p) return;
+    const asks = consentAsks(Array.isArray(m.tools) && m.tools.length ? m.tools : m.calls || []);
+    const decisions = chat?.chat.mcp_file_consent || {};
+    const key = JSON.stringify([asks, asks.map((a) => decisions[String(a.sid)] || '')]);
+    if (p.consentKey === key) return;
+    p.consentKey = key;
+    p.consent.replaceChildren(...asks.map((a) => consentNode(a, decisions[String(a.sid)], decideConsent)));
+  }
+
+  function paintConsents() {
+    for (const m of chat ? chat.messages : []) paintConsent(liveOf(m));
   }
 
   /* действующие серверы MCP: у открытого диалога — `mcp_ids` сервера, у нового — черновик поверх общих по умолчанию
@@ -1133,9 +1272,10 @@ function build(view, ctx) {
         nowait.disabled = false;
       }
     });
+    const consent = el('div', { class: 'msg-consents' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, md, steps, meta, nowait, actions));
-    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null });
+      el('div', { class: 'msg-body' }, badge, think, md, resultFiles(chatId, m, root), consent, steps, meta, nowait, actions));
+    parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '' });
     paint(m);
     return node;
   }
@@ -1243,6 +1383,7 @@ function build(view, ctx) {
     const job = reading(m);
     paintBadge(p, m, job);
     paintThought(p, m, job);
+    paintConsent(m);
     const displayed = String((m.cleaner_show_raw ? m.cleaner_raw : m.content) ?? '');
     const final = m.status !== 'streaming';
     if (p.shown !== displayed || p.final !== final) {
@@ -1326,6 +1467,7 @@ function build(view, ctx) {
       shown.set(m, { node, last, cleaner });
       return node;
     }));
+    paintConsents();                                   // решение о файлах MCP могло смениться и у прежних узлов
   }
 
   function emptyNote() {
@@ -1459,6 +1601,7 @@ function build(view, ctx) {
     draftMcp = null;
     draftThink = false;
     draftRole = null;
+    pendingMedia = [];
     clearTimeout(poll);
     stopWaiting();                                  // ушли из диалога — скан больше не ждём
     notice.textContent = '';
@@ -1676,42 +1819,60 @@ function build(view, ctx) {
     api('DELETE', `/api/chats/${encodeURIComponent(id)}?empty=1`).catch(() => {}).then(loadList);
   }
 
-  async function turn(regenerate, text, externalOk, webOk, made) {
-    if (!chatId) {
-      const created = await api('POST', '/api/chats', draft || {});
-      ++opened;
-      chatId = created.id;
-      made.id = created.id;
-      chat = { chat: created, messages: [] };
-      shareContext();
-      draft = null;
-      // ушли из раздела или в другой диалог, пока создавался этот, — адрес не трогать: ход дочитает «В работе»
-      if (alive && location.hash === '#/chat') history.replaceState(history.state, '', `#/chat/${created.id}`);
-      loadList();
-      const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
-      if (draftMcp) {                              // MCP, выбранные до создания диалога; иначе — общие по умолчанию
-        const body = draftMcp;
-        draftMcp = null;
-        chat.chat = await api('PATCH', `/api/chats/${created.id}`, body);
-        paintWeb();
-      }
-      draftThink = false;
-      if (draftRole) {                            // роль, выбранная до создания диалога
-        const role = draftRole;
-        draftRole = null;
-        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { role_id: role.id });
-        roles.paint();
-      }
-      if (think) {
-        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
-        paintThink();
-      }
-      if (draftWeb && webState() === 'ready') {    // «Интернет», включённый до создания диалога
-        draftWeb = false;
-        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { web: true });
-        paintWeb();
-      }
+  /* диалог для хода или звука нового диалога: создать из черновика (модель, MCP, роль, «Рассуждение», «Интернет»);
+     `made.id` — создал этот вызов. Идущее создание второй вызов ждёт, а не создаёт ещё один диалог */
+  async function ensureChat(made) {
+    if (chatId) return;
+    if (creating) {
+      await creating;
+      return;
     }
+    creating = createChat(made);
+    try {
+      await creating;
+    } finally {
+      creating = null;
+    }
+  }
+
+  async function createChat(made) {
+    const created = await api('POST', '/api/chats', draft || {});
+    ++opened;
+    chatId = created.id;
+    made.id = created.id;
+    chat = { chat: created, messages: [] };
+    shareContext();
+    draft = null;
+    // ушли из раздела или в другой диалог, пока создавался этот, — адрес не трогать: ход дочитает «В работе»
+    if (alive && location.hash === '#/chat') history.replaceState(history.state, '', `#/chat/${created.id}`);
+    loadList();
+    const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
+    if (draftMcp) {                              // MCP, выбранные до создания диалога; иначе — общие по умолчанию
+      const body = draftMcp;
+      draftMcp = null;
+      chat.chat = await api('PATCH', `/api/chats/${created.id}`, body);
+      paintWeb();
+    }
+    draftThink = false;
+    if (draftRole) {                            // роль, выбранная до создания диалога
+      const role = draftRole;
+      draftRole = null;
+      chat.chat = await api('PATCH', `/api/chats/${created.id}`, { role_id: role.id });
+      roles.paint();
+    }
+    if (think) {
+      chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
+      paintThink();
+    }
+    if (draftWeb && webState() === 'ready') {    // «Интернет», включённый до создания диалога
+      draftWeb = false;
+      chat.chat = await api('PATCH', `/api/chats/${created.id}`, { web: true });
+      paintWeb();
+    }
+  }
+
+  async function turn(regenerate, text, externalOk, webOk, made) {
+    await ensureChat(made);
     const id = chatId;
     const sent = regenerate ? [] : atts.slice();
     for (const a of sent) {
@@ -1905,7 +2066,10 @@ function build(view, ctx) {
     submit(false);
   });
   file.addEventListener('change', () => {
-    for (const f of file.files) {
+    const media = mediaState();                    // звук и видео — в диалог для MCP, если он их примет
+    const picked = [...file.files];
+    if (media && picked.some(isMedia)) pickMedia(picked.filter(isMedia), media);
+    for (const f of media ? picked.filter((x) => !isMedia(x)) : picked) {
       const error = unfit(f);
       atts.push({ file: f, meta: null, error: error && words(error), busy: false, unfit: !!error });   // как отказ сервера
     }
@@ -1940,7 +2104,13 @@ function build(view, ctx) {
   api('GET', '/api/mcp').then(({ items }) => {     // нет списка — у нового диалога чип без числа
     mcpServers = items;
     paintWeb();
-  }, () => {});
+    // каталог — только если есть включённые серверы: из него `chat_files` (звук и видео в поле ввода)
+    if (!items.some((s) => s.enabled)) return null;
+    return api('GET', '/api/mcp/catalog').then((out) => {
+      catalog = out.items;
+      paintMedia();
+    });
+  }).catch(() => {});
 
   return {
     open,

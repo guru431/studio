@@ -898,6 +898,27 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 /* «Остановить» — одинаково во всех разделах: нейтральная кнопка с рамкой, не цвет главного действия */
 .composer-stop, .send.composer-stop { border: 1px solid var(--field-border); background: var(--surface-1); color: var(--text-1); }
 
+/* файлы MCP (chat-files.js): согласие и файлы результатов под ответом, звук и видео диалога в поле ввода */
+.msg-consents { display: flex; flex-direction: column; gap: var(--space-3); }
+.msg-consents:empty { display: none; }
+.msg-consent { padding: var(--space-4) var(--space-5); border: 1px solid var(--line); border-radius: var(--r-control);
+  background: var(--surface-1); min-width: 0; }
+.msg-consent p { margin: 0; overflow-wrap: anywhere; }
+.msg-consent-text { font-size: var(--fs-sm); }
+.msg-consent-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-3); }
+.msg-files { display: flex; flex-wrap: wrap; gap: var(--space-4); min-width: 0; }
+.msg-file { max-width: 100%; min-width: 0; }
+.msg-file-image { display: block; padding: 0; border: 1px solid var(--line); border-radius: var(--r-control); background: none;
+  cursor: zoom-in; line-height: 0; overflow: hidden; }
+.msg-file-image img { display: block; max-width: min(100%, 320px); max-height: 240px; object-fit: contain; }
+.msg-file-media { display: block; max-width: 100%; }
+video.msg-file-media { max-height: 320px; }
+.msg-file-link { display: inline-flex; align-items: center; gap: var(--space-3); color: var(--accent); font-size: var(--fs-sm);
+  overflow-wrap: anywhere; }
+.msg-file-link svg.ico { width: 15px; height: 15px; flex: none; }
+.msg-file-gone { margin: 0; overflow-wrap: anywhere; }
+#msg-file-dialog { width: min(800px, calc(100 * var(--vw) - 32px)); }
+
 /* «Интернет»: кнопка у скрепки, подсказка под полем, плашка над ответом, источники под ним */
 .web-note { margin: 0; }
 .web-note:empty { display: none; }
