@@ -138,6 +138,8 @@ JOBS: dict[str, Job] = {}
 RUNNERS: dict[int, asyncio.Task] = {}
 #: id ждущей озвучки → эпоха создания (`operations.capture` при постановке; раннер исполняет её под ней)
 EPOCHS: dict[str, tuple] = {}
+#: чаты, где запись не получилась, пока другие ещё ждали или шли: их уведомление — «не получилась» (`_notify`)
+FAILED: set[str] = set()
 
 
 # ---- фразы ---------------------------------------------------------------------------
@@ -266,13 +268,33 @@ def _settle(sid: str, state_: str, detail: str, extra: dict) -> "tuple[bool, str
 
 
 def _finish(sid: str, state_: str, detail: str, **extra) -> "str | None":
-    """Итог задания; уведомление — о готовом и об ошибке (отмена молчит, даже вернув прежнее «готово»).
-    Возвращает id прежнего mp3, который зовущий удаляет (`_drop`)."""
+    """Итог задания; уведомление — одно на чат (`_notify`). Возвращает id прежнего mp3, который зовущий удаляет
+    (`_drop`)."""
     changed, dropped = _settle(sid, state_, detail, extra)
     EPOCHS.pop(sid, None)
-    if changed and state_ != "cancelled":
-        push.job_finished("speeches", sid)
+    if changed:
+        _notify(sid, state_)
     return dropped
+
+
+def _notify(sid: str, state_: str) -> None:
+    """Уведомление чата озвучки (п. 6 шапки): когда кончилась его последняя ждущая или идущая запись — «готово» или,
+    если не получилась хоть одна из них, «не получилась»; метка — id чата. Отмена молчит, даже вернув прежнее
+    «готово»."""
+    row = state.DB.execute("SELECT user_id, chat_id FROM speeches WHERE id = ?", (sid,)).fetchone()
+    if row is None:
+        return
+    chat = row["chat_id"] or sid
+    if state_ == "error":
+        FAILED.add(chat)
+    if row["chat_id"] and state.DB.execute("SELECT 1 FROM speeches WHERE user_id = ? AND chat_id = ? AND id != ?"
+                                           " AND state IN ('queued', 'working')",
+                                           (row["user_id"], chat, sid)).fetchone():
+        return
+    failed = chat in FAILED
+    FAILED.discard(chat)
+    if state_ != "cancelled":
+        push.job_finished("speeches", sid, tag=chat, failed=failed)
 
 
 async def _drop(user_id: int, media_id: "str | None") -> None:

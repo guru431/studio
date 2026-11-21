@@ -140,16 +140,43 @@ def _translate(uid: int, after: float) -> list:
 
 
 def _speech(uid: int, after: float) -> list:
+    """Строка на чат озвучки (части длинного текста — записи одного чата), id — id чата (строки прежнего кода без
+    чата — своя): идущий — по идущей или первой ждущей записи, готовый — когда в чате ничего не ждёт и не идёт, по
+    последней кончившейся; запись чата, не получившаяся за JOBS_RECENT_SEC, делает готовый чат ошибкой (как push)."""
     going, done = _rows("speeches", uid, ("working", "queued"), after)
+    chats: dict[str, list] = {}
+    for row in going:
+        chats.setdefault(row["chat_id"] or row["id"], []).append(row)
     out = []
-    for row in going + done:
+
+    def head(row) -> str:
+        first = row if row["chat_id"] is None else state.DB.execute(
+            "SELECT text FROM speeches WHERE user_id = ? AND chat_id = ? ORDER BY created, rowid LIMIT 1",
+            (uid, row["chat_id"])).fetchone()
+        text = first["text"]
+        return text if len(text) <= SPEECH_TITLE else text[:SPEECH_TITLE].rstrip() + "…"
+
+    for key, rows in chats.items():
+        row = min(rows, key=lambda r: (r["state"] != "working", speeches.queued_at(r), r["id"]))
         job = speeches.JOBS.get(row["id"])
-        detail = (job.stage if job is not None and row["finished"] is None
-                  else speeches.waiting(row) if row["state"] == "queued" else row["detail"])
-        text = row["text"]
-        head = text if len(text) <= SPEECH_TITLE else text[:SPEECH_TITLE].rstrip() + "…"
-        item = _item("speech", row, f"Озвучка · {head}", detail, f"speech?id={row['id']}")
-        item["started"] = speeches.queued_at(row)    # повторная озвучка — с новой постановки, не с создания
+        detail = job.stage if job is not None else speeches.waiting(row) if row["state"] == "queued" else row["detail"]
+        item = _item("speech", row, f"Озвучка · {head(row)}", detail, f"speech?id={row['id']}")
+        # повторная озвучка — с новой постановки, не с создания
+        item.update(id=key, started=min(speeches.queued_at(r) for r in rows))
+        out.append(item)
+    for row in done:                                  # новые сверху: первая строка чата — его последняя запись
+        key = row["chat_id"] or row["id"]
+        if key in chats:
+            continue
+        chats[key] = [row]
+        item = _item("speech", row, f"Озвучка · {head(row)}", row["detail"], f"speech?id={row['id']}")
+        failed = row["chat_id"] is not None and row["state"] == "done" and state.DB.execute(
+            "SELECT detail FROM speeches WHERE user_id = ? AND chat_id = ? AND state = 'error' AND finished >= ?"
+            " AND deleted IS NULL ORDER BY finished DESC LIMIT 1",
+            (uid, row["chat_id"], clock.NOW() - JOBS_RECENT_SEC)).fetchone()
+        if failed:
+            item.update(state="error", detail=failed["detail"])
+        item.update(id=key, started=speeches.queued_at(row))
         out.append(item)
     return out
 
