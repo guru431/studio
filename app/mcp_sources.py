@@ -7,9 +7,9 @@
 потребитель. В журнал — только id и числа.
 
 Пометки — свои ключи `_meta` (стандартного поля в MCP нет): `studio/confirm` — вызов с подтверждением,
-`studio/chat-files` — инструмент принимает файлы чата. Веб-инструмент — только при явном
-`annotations.openWorldHint = true` (вопреки умолчанию спецификации MCP: неразмеченные серверы не попадают под
-«Интернет»).
+`studio/chat-files` — инструмент принимает файлы чата, `studio/poll` — опрос, его повтор не пропускается.
+Веб-инструмент — только при явном `annotations.openWorldHint = true` (вопреки умолчанию спецификации MCP:
+неразмеченные серверы не попадают под «Интернет»).
 """
 
 import asyncio
@@ -132,7 +132,8 @@ def _confirm(raw):
 
 def hints(tool) -> dict:
     """Пометки инструмента: `open_world` (только явное true), `confirm` (см. `_confirm`), `chat_files` —
-    `max_bytes` из `_meta["studio/chat-files"]` или None."""
+    `max_bytes` из `_meta["studio/chat-files"]` или None, `poll` — опрос (`_meta["studio/poll"]`, только явное
+    true): его повтор с теми же аргументами в одном ответе исполняется (`chat.StreamTask._calls`)."""
     annotations = tool.get("annotations")
     meta = tool.get("_meta")
     meta = meta if isinstance(meta, dict) else {}
@@ -140,7 +141,8 @@ def hints(tool) -> dict:
     limit = files.get("max_bytes") if isinstance(files, dict) else None
     return {"open_world": isinstance(annotations, dict) and annotations.get("openWorldHint") is True,
             "confirm": _confirm(meta.get("studio/confirm")),
-            "chat_files": limit if type(limit) is int and limit > 0 else None}
+            "chat_files": limit if type(limit) is int and limit > 0 else None,
+            "poll": meta.get("studio/poll") is True}
 
 
 def chat_files(found: Catalog) -> "int | None":

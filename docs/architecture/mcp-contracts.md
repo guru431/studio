@@ -12,7 +12,7 @@ Studio — клиент MCP по Streamable HTTP (`mcp_client.Session`, [chat](c
 
 | Что | Где сервер объявляет | Ключ |
 |---|---|---|
-| Пометки инструмента | `_meta` инструмента в `tools/list` | `studio/confirm`, `studio/chat-files`, `studio/limits` |
+| Пометки инструмента | `_meta` инструмента в `tools/list` | `studio/confirm`, `studio/poll`, `studio/chat-files`, `studio/limits` |
 | Возможности сервера | ответ `initialize`: `experimental` в `capabilities` | `studio/files`, `studio/user-files`, `studio/status` |
 | Руководство | стандартные ресурсы MCP: `resources/list`, `resources/read` | ресурс `text/markdown` с `audience` для пользователя |
 
@@ -51,6 +51,11 @@ path)` — схема, хост и порт подключения, путь —
   `{"arg", "nonempty": true}`); спрашивать, если условий нет или выполнено хотя бы одно
   (`mcp_sources.confirm_needed`). Неверная разметка — подтверждение всегда. Политика администратора общего сервера
   сильнее пометки (`mcp_sources.effective`); как это действует в чате — [chat](chat.md#mcp-в-диалоге-спека-2026-11-21-studio-source-foundation-design-4-и-7a-шаг-схемы-57).
+- **`studio/poll`** — `true` (только явное значение): инструмент опрашивает долгое задание (`job_status`,
+  `job_result` обёртки aitools-studio), и его тот же вызов с теми же аргументами в одном ответе — законный повтор.
+  Обычный повтор Studio не исполняет (шаг «Повтор пропущен», [chat](chat.md#круги-инструментов-и-повторы-спека-2026-11-21-studio-source-capabilities-design-п-6)),
+  помеченный — исполняет снова (`mcp_sources.hints`, `chat.StreamTask._polls`). Подтверждение пометка не снимает;
+  ставить её только инструментам без побочных действий — повтор вызова ничего не меняет на сервере.
 - **`studio/chat-files`** — `{"max_bytes": N}` у инструмента `artifact_upload`: сервер принимает файлы диалога
   (вложения, звук и видео) — `mcp_sources.chat_files`, с согласием на пару «диалог, сервер»
   ([chat](chat.md#файлы-между-чатом-и-mcp)).

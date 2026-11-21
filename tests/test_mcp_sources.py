@@ -303,7 +303,10 @@ def test_confirm_hint_and_conditions():
     assert mcp_sources.confirm_needed(hint(True), {})
     for value in (False, "true", 1, None, []):
         assert hint(value)["confirm"] is None and not mcp_sources.confirm_needed(hint(value), {"seconds": 99})
-    assert mcp_sources.hints({"name": "t"}) == {"open_world": False, "confirm": None, "chat_files": None}
+    assert mcp_sources.hints({"name": "t"}) == {"open_world": False, "confirm": None, "chat_files": None,
+                                                "poll": False}
+    for value, polls in ((True, True), ("true", False), (1, False), ({}, False)):   # опрос — только явное true
+        assert mcp_sources.hints({"name": "t", "_meta": {"studio/poll": value}})["poll"] is polls
 
     video = hint({"message": "  Долгий ролик  ", "when": [{"arg": "seconds", "gt": 30}]})
     assert video["confirm"] == {"message": "Долгий ролик", "when": [{"arg": "seconds", "gt": 30}]}
