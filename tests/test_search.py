@@ -15,7 +15,7 @@ import db
 import search as search_api
 import state
 import transcripts
-from conftest import T0, add_gateway, make_user, signin
+from conftest import T0, add_gateway, erase_history, make_user, signin
 from test_chat import attach, events_of, new_chat, sse, turn, wait
 from test_transcripts import result_file, upload, wait_tr
 
@@ -161,7 +161,7 @@ def test_scan_text_is_found_and_removed_with_the_scan(studio):
     assert found("скан") == [("ocr", "o2", "")]
     state.DB.execute("UPDATE scans SET text = ? WHERE id = 'o2'", ("начало " + "слово " * (db.INDEX_CHARS // 6) + "хвост",))
     assert found("начал") == [("ocr", "o2", "")] and found("хвост") == []
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert found("скан") == [] and state.DB.execute("SELECT COUNT(*) FROM search_docs").fetchone()[0] == 0
 
 
@@ -525,7 +525,7 @@ def test_deleted_records_chats_and_the_wiped_history_are_gone_at_once(studio):
     assert studio.c.delete("/api/images/i").status_code == 204
     assert studio.c.delete("/api/chats/c").status_code == 204
     assert hits(search(studio, q="кошк")) == [("speech", "s"), ("transcribe", "t")]
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert hits(search(studio, q="кошк")) == [] and hits(search(studio, section="video")) == []
 
 

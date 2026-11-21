@@ -13,7 +13,7 @@ import sections
 import security
 import state
 import web
-from conftest import add_connection, add_gateway, login, make_user, signin
+from conftest import add_connection, add_gateway, erase_history, login, make_user, signin
 
 
 def add_history(s, env, uid, tag="тайна"):
@@ -152,7 +152,7 @@ def test_quick_actions_preserve_exact_text_order_and_user_isolation(studio, capl
     assert "Частный текст" not in caplog.text
     studio.c.patch("/api/me", json={"theme": "dark"})
     assert studio.c.get("/api/me").json()["code_quick_actions"] == saved
-    studio.c.delete("/api/history")
+    erase_history(studio)
     assert studio.c.get("/api/me").json()["code_quick_actions"] == saved
     make_user(studio, "friend"); signin(studio, "friend")
     assert studio.c.get("/api/me").json()["code_quick_actions"] == code_actions.DEFAULTS
@@ -287,7 +287,7 @@ def test_validation_errors_keep_the_error_format_and_do_not_echo_input(studio):
 def test_history_wipe_takes_only_ones_own(studio, env):
     uid = make_user(studio, "owner"); other = make_user(studio, "bob"); signin(studio, "owner")
     mine, theirs = add_history(studio, env, uid), add_history(studio, env, other)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert history_rows(uid) == 0 and not mine.exists()
     assert history_rows(other) == len(HISTORY) and theirs.exists()
 
@@ -342,7 +342,7 @@ def test_exa_key_survives_the_history_wipe(studio, env):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     add_history(studio, env, uid)
     assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert history_rows(uid) == 0 and web.exa_key(uid) == EXA_KEY
     assert studio.c.get("/api/me").json()["exa_key"] is True
 

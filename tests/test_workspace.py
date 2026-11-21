@@ -6,7 +6,7 @@ import logging
 import uuid
 
 import state
-from conftest import make_user, signin
+from conftest import erase_history, make_user, signin
 from fake_bridge import FakeMachine, connect, enroll, pid
 
 A = "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
@@ -211,7 +211,7 @@ def test_erase_history_clears_it_and_a_stale_action_does_not_resurrect(studio):
     done(act(studio, "open", aid=aid, pid=ALPHA, chat=A))
     done(act(studio, "open", aid=aid, pid=ALPHA, chat=B))
     done(act(studio, "panel", aid=aid))
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert done(studio.c.get(URL)) == EMPTY and counts() == [0, 0]
     doc = done(act(studio, "open", aid=aid, pid=ALPHA, chat=C))
     assert doc["projects"] == [{"aid": aid, "pid": ALPHA, "tabs": [C], "active": C}] and doc["panel"] is None

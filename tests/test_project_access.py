@@ -8,7 +8,7 @@ import claude_code
 import security
 import state
 from fakes import PNG_REAL
-from conftest import make_user, signin
+from conftest import erase_history, make_user, signin
 from test_code import A, ALPHA, BETA, DONE, setup, url
 
 
@@ -335,7 +335,7 @@ def test_member_links_go_with_revocation_history_wipe_and_emergency_exit(studio)
     assert links(user_id=member) == []
     assert studio.c.post(base, json={"login": "friend"}).status_code == 201
     member_link(aid, member)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert links(user_id=member) == []
     member_link(aid, member)
     assert studio.c.post("/api/me/emergency", json={"password": "password-123"}).status_code == 204

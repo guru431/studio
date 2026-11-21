@@ -3,7 +3,7 @@ import logging
 
 import media
 import state
-from conftest import add_gateway, make_user, signin
+from conftest import add_gateway, erase_history, make_user, signin
 from test_images import start, wait_state
 from test_screenlock import lock_on, phone, set_pin
 from test_videos import create_video
@@ -59,7 +59,7 @@ def test_photo_video_context_keeps_ownership_lock_and_history_contracts(studio, 
     assert repeated.status_code == 201
     assert studio.gw.video_forms[-1][0]["prompt"] == combined
 
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert create().status_code == 404
     assert studio.c.get(f"/api/images/{photo['id']}").status_code == 404
     assert studio.c.get("/api/videos").json()["items"] == []

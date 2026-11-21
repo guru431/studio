@@ -20,7 +20,7 @@ import forms
 import media
 import state
 import videos
-from conftest import T0, add_connection, add_gateway, make_user, signin
+from conftest import T0, add_connection, add_gateway, erase_history, make_user, signin
 from fakes import MP4, PNG_REAL, TOKEN, video_object
 from image_upload import normalize_image
 
@@ -1080,7 +1080,7 @@ def test_cancel_and_delete(studio, env, unlinks):
 def test_history_wipe_cancels_running_videos_at_the_gateway(studio, env):
     add_gateway(studio)
     create_video(studio)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert studio.gw.video_deleted == [v_gateway_id(studio)]
     assert studio.c.get("/api/videos").json()["items"] == [] and share_files(env) == []
 
@@ -1107,7 +1107,7 @@ def test_clip_landing_during_the_wipe_leaves_no_orphan(studio, env, monkeypatch)
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert polls and media_rows() == 0
     assert state.DB.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 0
     assert share_files(env) == []

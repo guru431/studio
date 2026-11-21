@@ -18,6 +18,7 @@ import auth
 import cleaner_client
 import code_actions
 import history
+import lock_policy
 import media
 import ntfy
 import release
@@ -25,6 +26,7 @@ import sections
 import security
 import security_log
 import state
+import trash
 
 THEMES = ("auto", "dark", "light")
 #: акцент учётки (appearance.js, `[data-accent]` в app.css): первый — умолчание. Хранится ключом `accent` в JSON
@@ -261,13 +263,28 @@ async def get_storage(request: Request):
     if pending:
         result["cleaner_pending"] = pending
         result["cleaner_stalled"] = cleaner_client.stalled(uid)
-    return result
+    return {**result, **trash.storage(uid, lock_policy.hidden(request.state.digest))}
+
+
+class FailedSections(BaseModel):
+    sections: list[str] = Field(min_length=1, max_length=len(trash.FAILED))
+
+
+@router.post("/me/storage/failed")
+async def move_failed(body: FailedSections, request: Request):
+    """Неудачные и отменённые записи разделов — в корзину (trash.py). Пока заперт хоть один раздел — 423
+    (`lock_policy.blocks`)."""
+    if any(section not in trash.FAILED_SECTIONS for section in body.sections):
+        raise HTTPException(422, {"code": "sections", "message": "разделы — " + ", ".join(trash.FAILED_SECTIONS)})
+    return {"moved": trash.move_failed(request.state.user.id, body.sections)}
 
 
 @router.delete("/history")
-async def delete_history(request: Request):
-    """pending_files — сколько файлов на шаре ещё ждут удаления (она была недоступна): страница так и скажет.
-    Clear-Site-Data: "cache" — картинки и ролики не остаются в HTTP-кэше этого браузера до суток."""
+async def delete_history(body: trash.Confirm, request: Request):
+    """Окончательно, вместе с корзиной, и только паролем учётки (`auth.confirm_password`: проверка и паузы — как у
+    выключения блокировки). pending_files — сколько файлов на шаре ещё ждут удаления (она была недоступна): страница
+    так и скажет. Clear-Site-Data: "cache" — картинки и ролики не остаются в HTTP-кэше этого браузера до суток."""
+    await auth.confirm_password(request.state.user.id, body.password, "удаление истории", digest=request.state.digest)
     result = {"pending_files": await history.delete_all(request.state.user.id)}
     pending = state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions WHERE user_id = ?",
                                (request.state.user.id,)).fetchone()[0]

@@ -392,6 +392,11 @@ def make_user(s, login, password="password-123", is_admin=False) -> int:
     return cur.lastrowid
 
 
+def erase_history(s, password="password-123"):
+    """«Удалить всю историю» — паролем учётки (по умолчанию — пароль make_user)."""
+    return s.c.request("DELETE", "/api/history", json={"password": password})
+
+
 def login(s, login, password, ip=LOGIN_IP, spoofed=None):
     """Apache дописывает настоящий адрес клиента В КОНЕЦ X-Forwarded-For; начало может прислать
     сам клиент (`spoofed`)."""

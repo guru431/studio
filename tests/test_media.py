@@ -19,7 +19,7 @@ from PIL import Image
 import auth
 import media
 import state
-from conftest import T0, make_user, signin
+from conftest import T0, erase_history, make_user, signin
 
 DATA = bytes(range(250)) * 4               # 1000 байт
 
@@ -219,7 +219,7 @@ def test_history_wipe_removes_files(studio, env, unlinks):
     mine = media.save(uid, png(500, 300), "image/png", "a.png", thumb=True)
     theirs = media.save(bob, DATA, "video/mp4", "b.mp4")
     assert len(files(env.media_dir)) == 3
-    r = studio.c.delete("/api/history")
+    r = erase_history(studio)
     assert r.status_code == 200 and r.json() == {"pending_files": 0}
     assert files(env.media_dir) == [media.path(bob, theirs)]
     assert studio.c.get(f"/api/media/{mine}").status_code == 404
@@ -242,7 +242,7 @@ def test_scan_files_are_referenced(studio):
                          (uid, n, media_id))
     assert media.referenced(uid, "src") and media.referenced(uid, "p1")
     assert not media.referenced(uid, "other") and not media.referenced(bob, "src") and not media.referenced(bob, "p1")
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert state.DB.execute("SELECT (SELECT COUNT(*) FROM scans) + (SELECT COUNT(*) FROM scan_pages)").fetchone()[0] == 0
 
 
@@ -259,7 +259,7 @@ def test_history_wipe_removes_all_files_in_one_thread_call(studio, env, monkeypa
         return real(rows[1:]) + rows[:1]             # первая строка «не удалилась»
 
     monkeypatch.setattr(media, "remove_files", spy)
-    assert studio.c.delete("/api/history").json() == {"pending_files": 1}
+    assert erase_history(studio).json() == {"pending_files": 1}
     assert calls == [ids]
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert len(files(env.media_dir)) == 2                       # файл и превью первой строки остались
@@ -281,7 +281,7 @@ def test_attachment_uploaded_during_the_wipe_leaves_no_orphan(studio, env, monke
         return real(rows)
 
     monkeypatch.setattr(media, "remove_files", racing)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert uploads == [409]
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert files(env.media_dir) == []
@@ -356,14 +356,14 @@ def test_wipe_keeps_the_paths_the_share_refused_until_it_is_back(studio, env, mo
         real(media_id, rel_path)
 
     monkeypatch.setattr(media, "_remove", refusing)
-    r = studio.c.delete("/api/history")
+    r = erase_history(studio)
     assert r.status_code == 200 and r.json() == {"pending_files": 1}
     assert state.DB.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     assert queued() == [(kept, uid, 0)] and len(files(env.media_dir)) == 2     # файл и превью — ещё на шаре
-    assert studio.c.delete("/api/history").json() == {"pending_files": 1}      # шара всё ещё недоступна
+    assert erase_history(studio).json() == {"pending_files": 1}      # шара всё ещё недоступна
     assert queued() == [(kept, uid, 1)]
     monkeypatch.setattr(media, "_remove", real)
-    assert studio.c.delete("/api/history").json() == {"pending_files": 0}
+    assert erase_history(studio).json() == {"pending_files": 0}
     assert files(env.media_dir) == [] and queued() == []
 
 

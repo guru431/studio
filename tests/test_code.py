@@ -16,7 +16,7 @@ import fake_bridge
 import ocr_render
 import security
 import state
-from conftest import make_user, signin
+from conftest import erase_history, make_user, signin
 from fake_bridge import FakeMachine, Refused, connect, enroll, pid, settle
 from http_checks import on_http
 from scans import scan_pdf
@@ -1387,7 +1387,7 @@ def test_wipe_forgets_code_chats_but_keeps_agents_events_and_push(studio):
     before = {t: count(t) for t in ("agents", "agent_events", "push_subs")}
     assert count("code_chats") == 2 and all(before.values())
     requests, frames = len(m.requests), len(link.sent)
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert count("code_chats") == 0
     assert {t: count(t) for t in ("agents", "agent_events", "push_subs")} == before
     assert len(m.requests) == requests and len(link.sent) == frames and link.closed_with is None

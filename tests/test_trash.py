@@ -9,6 +9,7 @@ from typing import Callable
 
 import pytest
 
+import auth
 import chat
 import media
 import search
@@ -415,6 +416,75 @@ def test_trash_list_hides_locked_sections_and_actions_wait_for_unlock(s):
     assert s.c.get("/api/trash").json() == []
     assert s.c.post("/api/trash/chats/c1/restore").status_code == 423
     assert s.c.delete("/api/trash/chats/c1").status_code == 423
+
+
+def test_history_erase_and_empty_trash_need_password_and_count_failures(s):
+    """«Удалить всю историю» и «Очистить корзину» — окончательно и только паролем учётки: та же проверка и паузы,
+    что у выключения блокировки и смены пароля (`auth.confirm_password`), неудачи всех этих действий — в один счёт."""
+    uid = owner(s)
+    kept_doc = new_chat(uid, "kept", "kept")
+    gone_doc = new_chat(uid, "gone", "gone")
+    assert s.c.delete("/api/chats/gone").status_code == 204
+    erase = lambda password: s.c.request("DELETE", "/api/history", json={"password": password})     # noqa: E731
+    empty = lambda password: s.c.post("/api/trash/empty", json={"password": password})            # noqa: E731
+    assert s.c.delete("/api/history").status_code == 422              # без тела — не стирает
+    assert erase("").status_code == 422 and empty("").status_code == 422      # пустое поле — до счёта
+    assert erase("wrong-password").status_code == 403
+    assert empty("wrong-password").status_code == 403
+    assert state.DB.execute("SELECT count(*) FROM chats").fetchone()[0] == 2
+    for _ in range(auth.LOCK_FAILS - 2):
+        assert s.c.post("/api/me/password", json={"current": "wrong", "new": "new-password-123"}).status_code == 403
+    assert empty("password-123").status_code == 429                            # пауза — общая с прочими действиями
+    assert erase("password-123").status_code == 429
+    s.clock[0] += auth.LOCK_SEC
+    r = empty("password-123")
+    assert r.status_code == 200 and r.json() == {"purged": 1}
+    assert [r[0] for r in state.DB.execute("SELECT id FROM chats")] == ["kept"]
+    assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (gone_doc,)).fetchone() is None
+    assert s.c.get("/api/trash").json() == []
+    assert s.c.delete("/api/chats/kept").status_code == 204                   # в корзине — и её стирает история
+    r = erase("password-123")
+    assert r.status_code == 200 and r.headers["clear-site-data"] == auth.CLEAR_CACHE
+    assert state.DB.execute("SELECT count(*) FROM chats").fetchone()[0] == 0
+    assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (kept_doc,)).fetchone() is None
+
+
+def test_storage_heaviest_and_failed_move_to_trash(s):
+    """«Хранилище»: самые тяжёлые живые записи (по сумме `media.size` их файлов), корзина и неудачные по разделам;
+    `POST /api/me/storage/failed` переносит неудачные и отменённые записи разделов в корзину."""
+    uid = owner(s)
+    make_image(s, uid)                                                         # 20 байт: in.png + out.png
+    new_chat(uid, "kiwi", "kiwi")                                              # 9 байт: doc.pdf
+    big = save(uid, b"x" * 50, "video/mp4", "clip.mp4")
+    state.DB.execute("INSERT INTO videos(id, user_id, connection_id, gateway_id, source_media_id, media_id, prompt,"
+                     " seconds, quality, smooth, state, progress, detail, created, finished) VALUES ('bad', ?, 1, 'v',"
+                     " ?, NULL, 'broken waves', 5, 'fast', 0, 'failed', 0, 'сбой', ?, ?)", (uid, big, T0, T0))
+    for tid, st in (("tr-err", "error"), ("tr-off", "cancelled"), ("tr-ok", "done")):
+        state.DB.execute("INSERT INTO transcripts(id, user_id, model, name, source_media_id, state, detail, created)"
+                         " VALUES (?, ?, 'whisperx', 'call.m4a', 'no-file', ?, '', ?)", (tid, uid, st, T0))
+    new_chat(uid, "gone", "gone")
+    assert s.c.delete("/api/chats/gone").status_code == 204
+    other = make_user(s, "other")
+    new_chat(other, "theirs", "theirs")                                        # чужое не в счёт
+    body = s.c.get("/api/me/storage").json()
+    assert body["heaviest"][:3] == [{"section": "video", "id": "bad", "title": "broken waves", "bytes": 50},
+                                    {"section": "photo", "id": "img1", "title": "mango sunset", "bytes": 20},
+                                    {"section": "chat", "id": "kiwi", "title": "kiwi title", "bytes": 9}]
+    assert "gone" not in {h["id"] for h in body["heaviest"]}
+    assert body["trash"] == {"chat": {"count": 1, "bytes": 9}}
+    assert body["failed"] == {"video": 1, "transcribe": 2}
+    assert body["total"]["files"] == 5                                         # прежние поля — на месте
+    assert s.c.post("/api/me/storage/failed", json={"sections": ["nothing"]}).status_code == 422
+    r = s.c.post("/api/me/storage/failed", json={"sections": ["transcribe"]})
+    assert r.status_code == 200 and r.json() == {"moved": 2}
+    assert sorted(i["id"] for i in s.c.get("/api/trash").json()) == ["gone", "tr-err", "tr-off"]
+    after = s.c.get("/api/me/storage").json()
+    assert after["failed"] == {"video": 1}
+    assert after["trash"] == {"chat": {"count": 1, "bytes": 9}, "transcribe": {"count": 2, "bytes": 0}}
+    state.DB.execute("UPDATE users SET screen_lock = 1, screen_lock_sections = '[\"video\"]' WHERE id = ?", (uid,))
+    state.DB.execute("UPDATE sessions SET seen = NULL WHERE user_id = ?", (uid,))
+    assert "video" not in {h["section"] for h in s.c.get("/api/me/storage").json()["heaviest"]}
+    assert s.c.post("/api/me/storage/failed", json={"sections": ["video"]}).status_code == 423
 
 
 @pytest.mark.parametrize("section", sorted(search.TITLES))

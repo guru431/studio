@@ -17,7 +17,7 @@ import speeches
 import state
 import transcripts
 from fastapi import HTTPException
-from conftest import T0, add_gateway, make_user, signin
+from conftest import T0, add_gateway, erase_history, make_user, signin
 
 NAME = "Звонок Ивану.m4a"
 
@@ -291,7 +291,7 @@ def test_uploads_queue_up_and_history_wipe_takes_all(studio, env, fake_audio, mo
     # ждущую можно снять: остальные сдвигаются
     assert studio.c.post(f"/api/transcripts/{waiting[0]['id']}/cancel").json() == {"state": "cancelled"}
     assert studio.c.get(f"/api/transcripts/{waiting[1]['id']}").json()["detail"] == "в очереди · 1"
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert state.DB.execute("SELECT count(*) FROM transcripts").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
     assert transcripts.JOBS == {} and transcripts.RUNNERS == {}   # и задание стёртой истории не держится в памяти
