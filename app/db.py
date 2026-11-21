@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 57
+VERSION = 58
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -817,6 +817,72 @@ END;
 """
 SCHEMA += CAPABILITIES_57
 
+#: таблицы с корзиной (`deleted` — время переноса, NULL — запись на месте); список — `trash.TABLES`
+_TRASH_58 = ("chats", "images", "videos", "speeches", "transcripts", "scans", "translations", "voices",
+             "chat_media", "knowledge_bases", "kb_documents")
+#: раздел поиска записи корзины: запись в корзине уходит из поиска (у чата — с сообщениями и вложениями: их `item` —
+#: id чата)
+_TRASH_SEARCH_58 = {"chats": "chat", "images": "photo", "videos": "video", "speeches": "speech",
+                    "transcripts": "transcribe", "scans": "ocr", "translations": "translate"}
+#: ждущий ответ хода (`chat_pending`: подтверждение инструмента или вопрос модели) и список дел ответа
+#: (`messages.todo`, JSON); память учётки (`user_memory.text_enc` — шифром) и её выключатель; корзина;
+#: личные ссылки на файлы MCP (`file_links`: хеш токена, путь и имя — шифром, `stamp` — подпись секрета сервера);
+#: «защищённый источник» MCP и отметка диалога о его срабатывании; базы знаний (`user_id NULL` — общая, закрытая
+#: группами `kb_rules`), документы базы или большого вложения диалога, куски с FTS5 и вектором; язык расшифровки и
+#: озвучки (NULL — авто, как раньше). FTS кусков — с внешним содержимым и заменой «ё» на «е», как индекс поиска
+#: (`YO`): запрос к `kb_fts` сворачивается так же. К `mcp_servers` — только столбец: таблица пересобиралась на шаге 55.
+#: Прежний код новые таблицы и столбцы не читает, его вставки получают умолчания; записи корзины он показывает как
+#: обычные — перед откатом `trash.ROLLBACK_58`.
+REMAINING_58 = f"""CREATE TABLE chat_pending(id TEXT PRIMARY KEY,
+       chat_id TEXT NOT NULL REFERENCES chats ON DELETE CASCADE,
+       message_id TEXT NOT NULL REFERENCES messages ON DELETE CASCADE,
+       kind TEXT NOT NULL CHECK (kind IN ('confirm','ask')), payload TEXT NOT NULL, created REAL NOT NULL,
+       resolved REAL, outcome TEXT CHECK (outcome IN ('run','refuse','answer','superseded','expired')));
+CREATE INDEX chat_pending_open ON chat_pending(chat_id) WHERE resolved IS NULL;
+ALTER TABLE messages ADD COLUMN todo TEXT;
+ALTER TABLE users ADD COLUMN memory_on INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE user_memory(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       text_enc TEXT NOT NULL, created REAL NOT NULL);
+CREATE INDEX user_memory_user ON user_memory(user_id);
+CREATE TABLE file_links(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       server_id INTEGER NOT NULL REFERENCES mcp_servers ON DELETE CASCADE, stamp TEXT NOT NULL,
+       path_enc TEXT NOT NULL, name_enc TEXT NOT NULL, size INTEGER, created REAL NOT NULL, expires REAL NOT NULL,
+       revoked REAL);
+CREATE INDEX file_links_user ON file_links(user_id);
+ALTER TABLE mcp_servers ADD COLUMN protected INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chats ADD COLUMN protected_used INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE knowledge_bases(id TEXT PRIMARY KEY, user_id INTEGER REFERENCES users ON DELETE CASCADE,
+       name TEXT NOT NULL, created REAL NOT NULL, deleted REAL);
+CREATE TABLE kb_documents(id TEXT PRIMARY KEY, kb_id TEXT REFERENCES knowledge_bases ON DELETE CASCADE,
+       attachment_id TEXT REFERENCES attachments ON DELETE CASCADE,
+       user_id INTEGER REFERENCES users ON DELETE CASCADE, name TEXT NOT NULL, chars INTEGER NOT NULL DEFAULT 0,
+       state TEXT NOT NULL CHECK (state IN ('queued','ready','error')), created REAL NOT NULL, deleted REAL,
+       CHECK ((kb_id IS NULL) <> (attachment_id IS NULL)));
+CREATE INDEX kb_documents_kb ON kb_documents(kb_id);
+CREATE INDEX kb_documents_attachment ON kb_documents(attachment_id);
+CREATE TABLE kb_chunks(id INTEGER PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES kb_documents ON DELETE CASCADE,
+       n INTEGER NOT NULL, text TEXT NOT NULL, vector BLOB);
+CREATE INDEX kb_chunks_doc ON kb_chunks(doc_id, n);
+CREATE VIRTUAL TABLE kb_fts USING fts5(text, content='kb_chunks', content_rowid='id',
+       tokenize='unicode61 remove_diacritics 2');
+CREATE TRIGGER kb_chunks_ai AFTER INSERT ON kb_chunks BEGIN
+  INSERT INTO kb_fts(rowid, text) VALUES (new.id, {YO.format('new.text')}); END;
+CREATE TRIGGER kb_chunks_ad AFTER DELETE ON kb_chunks BEGIN
+  INSERT INTO kb_fts(kb_fts, rowid, text) VALUES ('delete', old.id, {YO.format('old.text')}); END;
+CREATE TABLE kb_rules(kb_id TEXT NOT NULL REFERENCES knowledge_bases ON DELETE CASCADE,
+       group_id INTEGER NOT NULL REFERENCES access_groups ON DELETE CASCADE, PRIMARY KEY (kb_id, group_id));
+CREATE TABLE chat_kbs(chat_id TEXT NOT NULL REFERENCES chats ON DELETE CASCADE,
+       kb_id TEXT NOT NULL REFERENCES knowledge_bases ON DELETE CASCADE, PRIMARY KEY (chat_id, kb_id));
+ALTER TABLE transcripts ADD COLUMN language TEXT;
+ALTER TABLE speeches ADD COLUMN language TEXT;
+""" + "".join(
+    (f"ALTER TABLE {t} ADD COLUMN deleted REAL;\n" if t not in ("knowledge_bases", "kb_documents") else "")
+    + f"CREATE INDEX {t}_trash ON {t}(user_id, deleted) WHERE deleted IS NOT NULL;\n" for t in _TRASH_58) + "".join(
+    f"CREATE TRIGGER search_{t}_hide AFTER UPDATE OF deleted ON {t} WHEN NEW.deleted IS NOT NULL BEGIN\n"
+    f"  DELETE FROM search_docs WHERE section = '{s}' AND item = old.id; END;\n" for t, s in _TRASH_SEARCH_58.items())
+SCHEMA += REMAINING_58
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -935,6 +1001,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     56: ACCESS_56,
     # профили подключений, роли диалога, состояние MCP диалога, загрузки вложений на MCP
     57: CAPABILITIES_57,
+    # ждущие ответы и список дел, корзина, ссылки на файлы, защищённые MCP, память, базы знаний, язык речи
+    58: REMAINING_58,
 }
 
 
