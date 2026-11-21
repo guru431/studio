@@ -10,11 +10,10 @@ import json
 import os
 import re
 import shutil
-import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import dpapi, store
+from . import dpapi, host, store
 from .errors import Refused
 
 MAX_BYTES = 64 * 1024
@@ -116,7 +115,7 @@ class ClaudeConfig:
         if servers:
             root = Path(home) / "mcp"
             root.mkdir(parents=True, exist_ok=True)
-            self.directory = tempfile.TemporaryDirectory(prefix="runtime-", dir=root)
+            self.directory = host.temporary_dir(root, "runtime-")  # Windows — ACL профиля, не DACL 0o700
             try:
                 path = Path(self.directory.name) / "config.json"
                 path.write_text(json.dumps({"mcpServers": servers}, ensure_ascii=True), encoding="utf-8")

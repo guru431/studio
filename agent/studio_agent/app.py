@@ -511,6 +511,9 @@ class Controller:
     async def _main(self) -> None:
         # Версию `claude --version` (до 30 с при первом запуске) спросит первый канал (`_refresh_cli`) — до своего
         # `hello`: готовность ядра (`_built`, метка самообновления) её не ждёт.
+        repaired = await asyncio.to_thread(store.repair_acl, self.h)  # Windows: DACL 0o700 прежних версий
+        if repaired:
+            log.info("права каталога моста исправлены: %d", repaired)
         stale = await asyncio.to_thread(lambda: mcp.sweep(self.h) + attachments.sweep(self.h))  # до первого хода
         if stale:
             log.info("уборка после прошлого запуска: %d", stale)

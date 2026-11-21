@@ -90,8 +90,18 @@ class Config:
 def home() -> Path:
     """STUDIO_AGENT_HOME, иначе %LOCALAPPDATA%\\studio-agent; каталог создаётся."""
     h = Path(os.environ.get("STUDIO_AGENT_HOME") or host.data_home())
-    h.mkdir(parents=True, exist_ok=True, mode=0o700)
+    host.private_dir(h, parents=True, exist_ok=True)
     return h
+
+
+def repair_acl(h: Path) -> int:
+    """Запуск ядра на Windows: каталог моста и вложенные каталоги с DACL режима 0o700 прежних версий снова наследуют
+    ACL профиля (`winacl.repair_tree`). Удаётся сеансу с правом WRITE_DAC — владельцу каталога или сеансу с
+    повышением; папку, созданную с повышением, обычный сеанс не читает и не исправит. Итог — число исправленных."""
+    if host.MACOS or host.LINUX:
+        return 0
+    from . import winacl
+    return winacl.repair_tree(h)
 
 
 def load_config(h: Path) -> Config:

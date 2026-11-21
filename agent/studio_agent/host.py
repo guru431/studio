@@ -3,9 +3,11 @@ import os
 import ctypes
 import errno
 import platform
+import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -49,6 +51,43 @@ def install_home() -> Path:
     if MACOS or LINUX:
         return data_home() / "app"
     return Path(os.environ["LOCALAPPDATA"]) / "Programs/studio-agent"
+
+
+# Каталоги, которые потом читает обычный сеанс пользователя (данные моста, выпуски, временные папки хода, зеркала).
+# POSIX — режим 0o700. Windows — без режима: ACL наследуется от родителя (в профиле — пользователь, SYSTEM,
+# Administrators). Режим 0o700 на Windows (`os.mkdir`, `tempfile.mkdtemp`) дал бы защищённый DACL «по владельцу»
+# (`winacl`), и после запуска с повышением обычный сеанс терял бы доступ.
+
+def private_dir(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+    """`mkdir`: POSIX — 0o700, Windows — с наследуемым ACL."""
+    Path(path).mkdir(parents=parents, exist_ok=exist_ok, **({"mode": 0o700} if MACOS or LINUX else {}))
+
+
+def new_dir(parent: Path, prefix: str) -> Path:
+    """Новая уникальная папка `prefix*` в `parent` (как `tempfile.mkdtemp`, на Windows — с наследуемым ACL)."""
+    if MACOS or LINUX:
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    for _ in range(100):
+        path = Path(parent) / (prefix + secrets.token_hex(6))
+        try:
+            path.mkdir()
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError(prefix)
+
+
+def temporary_dir(parent: Path, prefix: str) -> tempfile.TemporaryDirectory:
+    """`tempfile.TemporaryDirectory` (уборка `cleanup()`); на Windows DACL сразу переводится на наследование."""
+    folder = tempfile.TemporaryDirectory(prefix=prefix, dir=parent)
+    if not (MACOS or LINUX):
+        from . import winacl
+        try:
+            winacl.inherit(folder.name)
+        except BaseException:
+            folder.cleanup()
+            raise
+    return folder
 
 
 def python(repo: Path) -> Path:
