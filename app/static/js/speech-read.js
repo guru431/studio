@@ -18,6 +18,7 @@ const MCP_FIELDS = ['text', 'voice', 'model', 'engine', 'reference_text'];
 const active = new Set();        // { host, stop, seen } — проигрыватели «Прочитать» на странице
 const players = new WeakMap();   // host → запись active
 let sweeper = null;
+let reads = 0;                   // номер запуска «Прочитать» через MCP — его место задания в sectionMcp
 
 function sweep() {
   for (const entry of active) {
@@ -142,11 +143,13 @@ export function chatPlayer(chatId, { download = true, cancel = true } = {}) {
   };
 }
 
-/** Инструмент MCP по умолчанию раздела «Озвучка» — тем же путём, что раздел; голос — по умолчанию схемы. */
+/** Инструмент MCP по умолчанию раздела «Озвучка» — тем же путём, что раздел; голос — по умолчанию схемы. Место
+ * задания — своё у каждого запуска (`key`): второе чтение и раздел «Озвучка» не делят с ним задание и звук. */
 function readMcp(text, host) {
   const status = el('p', { class: 'muted small', 'aria-live': 'polite' }, tr("Ищу инструмент озвучки MCP…"));
   let started = false;
-  const mcp = sectionMcp('speech', { native: false, fields: MCP_FIELDS, async onChange() {
+  reads += 1;
+  const mcp = sectionMcp('speech', { key: `read:${reads}`, native: false, fields: MCP_FIELDS, async onChange() {
     if (started || !mcp.tool) return;
     started = true;
     status.hidden = true;

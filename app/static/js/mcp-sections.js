@@ -167,8 +167,10 @@ function showResult(host, output, urls, render) {
   if (downloads.children.length) host.append(downloads);
 }
 
-/** The section owns its controls. MCP receives only the arguments from those controls that the tool declares. */
-export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns }) {
+/** The section owns its controls. MCP receives only the arguments from those controls that the tool declares.
+ * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
+ * своё на каждый запуск, уходит с destroy(). */
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, key: place = section }) {
   const base = `/api/mcp-tools/${section}`;
   const controller = new AbortController();
   const urls = [];
@@ -195,7 +197,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   // поля схемы выбранного инструмента, которых раздел не рисует (extraFields): раздел ставит `fields` в свой ряд
   const extras = el('span', { class: 'mcp-fields' });
   let extra = null;
-  const record = () => records.get(section);
+  const record = () => records.get(place);
   const picked = () => options.get(select.value);
   const busy = () => !!(record()?.starting || record()?.job);
   const has = key => Object.hasOwn(picked()?.tool.schema.properties || {}, key);
@@ -225,7 +227,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
 
   function clear() {
     if (busy()) return;
-    records.delete(section);
+    records.delete(place);
     paint();
   }
 
@@ -258,7 +260,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     if (!choice || busy()) return false;
     const { server, tool } = choice;
     const current = { starting: true, key: select.value };
-    records.set(section, current);
+    records.set(place, current);
     paint();
     try {
       const args = Object.fromEntries(Object.entries({ ...extra?.values(), ...values })
@@ -377,6 +379,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     destroy() {
       controller.abort();
       clearTimeout(timer);
+      if (place !== section) records.delete(place);      // своё место запуска с ним и уходит
       pick.unmount();
       extra?.destroy();
       for (const url of urls.splice(0)) URL.revokeObjectURL(url);
