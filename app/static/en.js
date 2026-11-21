@@ -3273,7 +3273,17 @@ globalThis.StudioEnglish = Object.freeze({
   "Файл «{0}» загружен": "File “{0}” uploaded",
   "Файл должен быть непустым и не больше {0}": "The file must not be empty and must be at most {0}",
   "загружен, {0}": "uploaded, {0}",
-  "не загружен": "not uploaded"
+  "не загружен": "not uploaded",
+  "Руководство не найдено": "Guide not found",
+  "MCP вернул неверную страницу ресурсов": "MCP returned an invalid resource page",
+  "MCP вернул неверный список ресурсов": "MCP returned an invalid resource list",
+  "Ресурс MCP больше 1 МиБ": "The MCP resource is larger than 1 MiB",
+  "Выберите непустой файл": "Choose a non-empty file",
+  "Ответ MCP слишком большой": "The MCP response is too large",
+  "Состояние сервера не получено": "Server state was not received",
+  "Такого файла у сервера MCP нет": "The MCP server has no such file",
+  "Файл больше предела сервера MCP": "The file exceeds the MCP server limit",
+  "Файла нет на сервере MCP": "The file is not on the MCP server"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не расшифрованы: {1} из {2} — STUDIO_DATA_KEY не тот, что у копии",

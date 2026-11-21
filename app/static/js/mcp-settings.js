@@ -255,8 +255,17 @@ export function chatMcpBlock({ admin = false } = {}) {
             try { await api('DELETE', `${base}/${item.id}`); dialog.close(); await reload(); }
             finally { remove.disabled = false; }
           }));
-        })), !admin && item.enabled ? userFilesBlock(item) : null)));
+        })))));
     if (!items.length) list.append(el('p', { class: 'muted' }, tr("Подключений MCP пока нет")));
+    // файлы пользователя — только у серверов, объявивших `studio/user-files` (каталог не падает от сбоя сервера)
+    if (!admin && items.some(item => item.enabled)) {
+      api('GET', '/api/mcp/catalog').then(({ items: found }) => {
+        for (const server of found) if (server.contracts?.user_files) {
+          const block = list.querySelector(`[data-mcp-id="${server.id}"]`);
+          if (block && !block.querySelector('.mcp-user-files')) block.append(userFilesBlock(server));
+        }
+      }, () => {});
+    }
   }
   function edit(item) {
     editor(root, item, { save: async (name, value, enabled) => {

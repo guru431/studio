@@ -2201,8 +2201,10 @@ function build(view, ctx) {
     return api('GET', '/api/mcp/catalog').then((out) => {
       catalog = out.items;
       paintMedia();
-      return api('GET', '/api/mcp/status');
+      // состояние — только если его объявил хоть один сервер (`contracts.status`)
+      return catalog.some((s) => s.contracts?.status) ? api('GET', '/api/mcp/status') : null;
     }).then((out) => {
+      if (!out) return;
       mcpStatus = out;
       paintMcpState();
     });

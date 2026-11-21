@@ -91,8 +91,8 @@ async def _server(item, uid):
     session = mcp.Session(item, uid=uid)
     try:
         resources = await guides(session)
-    except (HTTPException, TimeoutError):
-        log.info("mcp %d: руководства не прочитаны", item["id"])
+    except Exception as exc:                     # сбой одного сервера не роняет «Справку»; текст исключения — никуда
+        log.info("mcp %d: руководства не прочитаны (%s)", item["id"], type(exc).__name__)
         return None
     finally:
         await session.close()
