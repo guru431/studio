@@ -24,8 +24,10 @@ router = APIRouter(prefix="/api/help")
 GUIDE = Path(__file__).resolve().parent.parent / "docs" / "guide.ru.md"
 MIME = "text/markdown"
 NAME_MAX = 160
-#: ссылка или картинка Markdown, чей адрес — не http(s) и не почта: относительный путь репозитория или якорь
-LOCAL_LINK = re.compile(r"!?\[([^\]\n]*)\]\((?!https?://|mailto:)[^)\n]*\)")
+#: ссылка или картинка Markdown, чей адрес — не http(s) и не почта: относительный путь репозитория или якорь.
+#: Подпись без `[`, адрес без скобок и пробелов — разбор линейный: длинная строка из `[` руководства MCP не держит
+#: цикл событий (ресурс до 1 МиБ)
+LOCAL_LINK = re.compile(r"!?\[([^\[\]\n]*)\]\((?!https?://|mailto:)[^()\s]*\)")
 FENCE = re.compile(r"^\s*(```|~~~)")
 NOT_FOUND = "Руководство не найдено"
 

@@ -1,6 +1,7 @@
 """«Справка» (`help.py`): руководство Studio из docs/guide.ru.md и руководства MCP-серверов — ресурсы
 `text/markdown` для пользователя (`audience` с `user`)."""
 import re
+import time
 
 import help as help_module
 from test_mcp_contracts import GUIDE, RESOURCES, empty_cache, member_with_server  # noqa: F401 — фикстура кэша
@@ -47,3 +48,12 @@ def test_help_guide_strips_intro_and_relative_links():
                                    "См. [правила](../docs/publication.md), ![схема](img/a.png), "
                                    "[сайт](https://example.com) и [ниже](#раздел).\n")
     assert text == ("## Раздел\nСм. правила, схема, [сайт](https://example.com) и ниже.\n")
+
+
+def test_help_local_links_are_linear_on_hostile_lines():
+    """B2-I3: строка из одних `[` или `[a](` без закрывающих скобок разбиралась квадратично (40 000 знаков —
+    десятки секунд на цикле событий: вся Studio стояла); теперь — доли секунды."""
+    started = time.perf_counter()
+    for line in ("[" * 20_000, "[a](" * 5_000, "](" * 10_000 + "x"):
+        assert help_module.plain_links(line) == line
+    assert time.perf_counter() - started < 0.5
