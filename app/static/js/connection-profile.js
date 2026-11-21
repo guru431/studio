@@ -17,6 +17,8 @@ const PARAMS = [
   { key: 'top_k', label: () => tr("Число кандидатов"), min: 1, max: 1000, step: '1', int: true },
   { key: 'presence_penalty', label: () => tr("Штраф за повтор тем"), min: -2, max: 2, step: '0.1' },
   { key: 'max_tokens', label: () => tr("Предел ответа, токенов"), min: 1, max: 1000000, step: '1', int: true },
+  // в запрос не уходит: предел картинок на весь запрос (`profiles.max_images`), без него — 4
+  { key: 'max_images', label: () => tr("Картинок в запросе"), min: 1, max: 32, step: '1', int: true },
 ];
 
 function range(p) {

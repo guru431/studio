@@ -3193,6 +3193,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Число кандидатов": "Candidate count",
   "Штраф за повтор тем": "Topic repetition penalty",
   "Предел ответа, токенов": "Answer limit, tokens",
+  "Картинок в запросе": "Images per request",
   "не задано": "not set",
   "От {0} до {1}": "From {0} to {1}",
   "Целое от {0} до {1}": "Whole number from {0} to {1}",
