@@ -419,10 +419,11 @@ def for_model(step: dict) -> str:
     return f"Ошибка инструмента: {step['error']}\n{NOTHING}" if "error" in step else step["text"]
 
 
-def history_block(steps: list[dict]) -> str:
+def history_block(steps: list[dict], text=for_model) -> str:
     """Шаги прежнего ответа для следующих ходов: блоком `<web kind>` на шаг, текст — как его получила модель
-    (for_model). Без ролей `tool` — шаблоны Gemma требуют чередования ролей (chat.compose)."""
-    return "".join(f'<web kind="{s["kind"]}">\n{for_model(s)}\n</web>\n\n' for s in steps)
+    (`text`: у чата — его формат шагов с повторами и встроенными инструментами, по умолчанию for_model).
+    Без ролей `tool` — шаблоны Gemma требуют чередования ролей (chat.compose)."""
+    return "".join(f'<web kind="{s["kind"]}">\n{text(s)}\n</web>\n\n' for s in steps)
 
 
 def public(step: dict) -> dict:

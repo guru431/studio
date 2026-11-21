@@ -10,7 +10,7 @@ import memory
 import security
 import state
 import takeout
-from conftest import add_gateway, make_user, signin
+from conftest import add_gateway, erase_history, make_user, signin
 from test_chat import messages, new_chat, sse, turn
 from test_chat_web import call
 
@@ -133,5 +133,5 @@ def test_history_erase_clears_memory(studio):
     assert takeout._settings(uid)["memory"][0]["text"] == "моё"       # выгрузка истории — с памятью
     bob = make_user(studio, "bob")
     memory.save(bob, "его")
-    assert studio.c.delete("/api/history").status_code == 200
+    assert erase_history(studio).status_code == 200
     assert memory.list_for(uid) == [] and [i["text"] for i in memory.list_for(bob)] == ["его"]

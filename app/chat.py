@@ -578,7 +578,7 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
             else:
                 steps = json.loads(row["tools"] or "[]")
                 if steps and out and out[-1]["role"] == "user":
-                    out[-1]["content"] = _prefix(web.history_block(steps), out[-1]["content"])
+                    out[-1]["content"] = _prefix(web.history_block(steps, _for_model), out[-1]["content"])
                 if row["content"]:
                     out.append({"role": "assistant", "content": row["content"]})
         if row["id"] == upto:
