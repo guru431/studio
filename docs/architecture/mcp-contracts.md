@@ -80,8 +80,31 @@ path)` — схема, хост и порт подключения, путь —
 
 Загрузка кусками: `a` должно равняться принятому размеру (больше — 409 с `size`, меньше — повтор куска), последний
 кусок переносит файл на место; `total` больше `max_upload` или кусок больше `chunk` — 413; пустой файл —
-`Content-Range: bytes */0`. Studio читает объявление (`files` в `mcp_contracts.Features`); страница «Мои файлы» и
-ссылки на файлы — отдельная часть Studio.
+`Content-Range: bytes */0`. Studio читает объявление (`files` в `mcp_contracts.Features`).
+
+**В Studio** (`my_files.py`, страница `#/myfiles` — `my-files.js`, пункт меню аватара «Мои файлы» виден при хотя бы
+одном таком сервере): маршруты `/api/my-files` — прокси на маршруты выше с ключом сервера и `X-Studio-User` учётки,
+поэтому каждый видит свою папку, администратор — тоже свою; доступ к серверу — как у остального MCP. `GET /servers`
+→ `[{sid, name, max_upload, chunk}]` (кусок — не больше `my_files.CHUNK`); `POST /{sid}/list|mkdir|delete|trash|restore`;
+`POST /{sid}/ticket {path}` и `POST /{sid}/zip {path}` → адрес `GET /{sid}/download/{ticket}` (ticket — шифр
+`STUDIO_DATA_KEY` с учёткой, сервером и подписью его адреса и ключа, срок `my_files.TICKET_SEC`; Range — докачка);
+`PUT /{sid}/upload` — путь в `X-Studio-Name`, `Content-Range`, кусок до `my_files.CHUNK` (Apache —
+свой `LocationMatch` на 34 МиБ), 409 `gap` с `size` — продолжить с принятого. Ответ всегда вложением
+(`application/octet-stream`, `nosniff`, песочница CSP). `GET /api/me/storage` → `mcp_files: [{sid, name, bytes}]` по
+`total_bytes`. Пока заперт хоть один раздел, `/api/my-files` закрыт (`lock_policy.blocks`).
+
+**Личная ссылка на файл** (`file_links`, шаг схемы 58): `POST /api/my-files/{sid}/links {path}` →
+`{id, url: "https://<хост>/f#<token>", expires}`; токен `secrets.token_urlsafe(32)` только во фрагменте адреса, в
+базе — sha256, путь и имя — шифром, срок `my_files.LINK_SEC` (86400); не больше `my_files.LINKS_MAX` (100)
+действующих у учётки. `GET /api/my-files/links` — свои действующие, `DELETE /api/my-files/links/{id}` — отзыв;
+стирание истории уносит ссылки учётки. Анонимный вход: `GET /f` — оболочка `file.html` (`file-link.js`);
+`POST /f/check {token}` → `{name, size, expires}`; `POST /f/open {token}` → cookie `studio_file` (HttpOnly, Secure,
+SameSite=Strict, Path=/f/file, `my_files.OPEN_SEC` (600), значение — случайный id в памяти процесса);
+`GET /f/file` — поток с Range, ссылка проверяется на каждый запрос. Тело POST — до `chat_shares.PUBLIC_BODY_MAX`
+(`chat_shares.public_guard`), чужой `Origin` — 403; неизвестный, истёкший, отозванный токен, сменённый адрес или
+ключ сервера (`stamp`), снятый доступ владельца, выключенная учётка, исчезнувший файл — одинаковый 404 без имени
+файла; неудачи — `email_accounts.throttle` по адресу (`my_files.FAILS` (30) за `my_files.FAIL_SEC` (900)), потом
+429 `file_locked`; удачная проверка попытку возвращает. Все ответы — `no-store`, `no-referrer`, `noindex`.
 
 ## `studio/user-files` — файлы пользователя
 
