@@ -49,7 +49,7 @@ def test_long_recording_split_by_gateway_limits_and_times_shifted(studio, fake_a
     item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
     assert item["state"] == "done", item["detail"]
     assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [
-        ("cut", 0.0, 500.0), ("cut", 500.0, 500.0), ("cut", 1000.0, 500.0)]       # равные части не длиннее предела
+        ("compress",), ("cut", 0.0, 500.0), ("cut", 500.0, 500.0), ("cut", 1000.0, 500.0)]   # равные, не длиннее предела
     assert [d.split(" · ")[:2] for d in details] == [["распознаю", "часть 1 из 3"], ["распознаю", "часть 2 из 3"],
                                                     ["распознаю", "часть 3 из 3"]]
     assert [(s["start"], s["end"], s["speaker"], s["text"]) for s in item["segments"]] == [
@@ -74,7 +74,8 @@ def test_no_limits_route_falls_back_to_duration_max(studio, fake_audio, monkeypa
     studio.gw.asr_replies = parts([(0.0, 1.0, None, "Начало.")], [(0.0, 1.0, None, "Конец.")])
     item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
     assert item["state"] == "done", item["detail"]
-    assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [("cut", 0.0, 2000.0), ("cut", 2000.0, 2000.0)]
+    assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [
+        ("compress",), ("cut", 0.0, 2000.0), ("cut", 2000.0, 2000.0)]
 
 
 def test_over_total_max_refused_before_work(studio, fake_audio):
@@ -101,6 +102,34 @@ def test_tiny_tail_does_not_become_its_own_part(studio, fake_audio):
     assert len(cuts) == 3 and all(c[2] == pytest.approx(1200.05 / 3) for c in cuts), cuts
     assert [c[1] for c in cuts] == pytest.approx([0.0, 1200.05 / 3, 2 * 1200.05 / 3])
     assert all(c[2] <= 600 for c in cuts)
+
+
+def test_long_recording_compressed_once_and_parts_cut_from_the_mp3(studio, fake_audio, monkeypatch):
+    """webm браузера без индекса и VBR mp3 ищутся неточно: источник один раз сжимается в CBR mp3 16 кГц, части
+    режутся из него (точный и дешёвый поиск), исходник после сжатия не трогается (ревью C-M12)."""
+    import audio
+    add_gateway(studio)
+    limits_route(studio)
+    fake_audio.duration = 1500.0
+    seen = []
+    compress, cut = audio.compress, audio.cut
+
+    async def compress_spy(src, dst):
+        seen.append(("compress", src, dst))
+        await compress(src, dst)
+
+    async def cut_spy(src, start, length, dst):
+        seen.append(("cut", src, dst))
+        await cut(src, start, length, dst)
+    monkeypatch.setattr(audio, "compress", compress_spy)
+    monkeypatch.setattr(audio, "cut", cut_spy)
+    item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
+    assert item["state"] == "done", item["detail"]
+    assert [s[0] for s in seen] == ["compress", "cut", "cut", "cut"], seen
+    _, source, whole = seen[0]
+    assert str(whole).endswith(".mp3") and whole != source
+    assert all(src == whole and dst != whole for _, src, dst in seen[1:]), seen
+    assert not whole.exists()                         # сжатая запись целиком — временная, убрана
 
 
 def test_part_marker_between_parts(studio, fake_audio):
