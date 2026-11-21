@@ -128,9 +128,14 @@ THINK_EVERY_SEC = 1              # «думает» (`think {}`) при выкл
 THINK_LONG = "рассуждение слишком длинное — ответ остановлен"
 REASONING_CUT = "\n\n[рассуждение обрезано: длиннее предела студии]"
 LOOPED = "модель зациклилась — ответ остановлен"
-# «Интернет» (спека 2026-10-21-studio-chat-internet, 6.3): кругов с инструментами на ответ, затем последний
-# запрос без tools — модель отвечает по найденному
-TOOL_ROUNDS = 5
+# кругов с инструментами на ответ (спека 2026-11-21-studio-source-capabilities-design, п. 6), затем последний
+# запрос без tools — модель отвечает по найденному. По умолчанию — TOOL_ROUNDS, администратор задаёт
+# `settings.chat_tool_rounds` (ROUNDS_MIN–ROUNDS_MAX, tool_rounds)
+TOOL_ROUNDS = 15
+ROUNDS_MIN, ROUNDS_MAX = 1, 30
+ROUNDS_KEY = "chat_tool_rounds"
+# повторный вызов того же инструмента с теми же аргументами в одном ответе не исполняется (StreamTask.seen)
+DUPLICATE = "Повторный вызов с теми же аргументами пропущен: результат уже есть выше."
 # вызовов в одном круге: каждый — до 30 с Exa или 2×60 с yt-dlp и деньги ключа Exa; лишние — шаг-ошибка
 CALLS_PER_ROUND = 4
 TOO_MANY = f"не больше {CALLS_PER_ROUND} вызовов за раз"
@@ -671,6 +676,29 @@ TOOLS_REFUSED = object()
 PAUSED = object()
 
 
+def tool_rounds() -> int:
+    """Кругов с инструментами на ответ: настройка администратора (`settings.chat_tool_rounds`), иначе TOOL_ROUNDS."""
+    row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (ROUNDS_KEY,)).fetchone()
+    try:
+        value = int(row[0]) if row is not None else TOOL_ROUNDS
+    except (TypeError, ValueError):
+        return TOOL_ROUNDS
+    return min(max(value, ROUNDS_MIN), ROUNDS_MAX)
+
+
+def _for_model(step: dict) -> str:
+    """Результат шага для модели (`role: tool`): повтор — DUPLICATE, встроенный инструмент — chat_tools.for_model
+    (его ошибка — не про интернет), остальное — web.for_model."""
+    if step["kind"] == "duplicate":
+        return DUPLICATE
+    return chat_tools.for_model(step) if step["kind"] in chat_tools.KINDS else web.for_model(step)
+
+
+def set_tool_rounds(value: int) -> None:
+    state.DB.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (ROUNDS_KEY, str(value)))
+
+
 @dataclass
 class ToolCall:
     """Вызов инструмента из потока модели: `id` и имя — из первого куска, аргументы — склейкой кусков."""
@@ -688,7 +716,7 @@ class StreamTask:
     (клиент ушёл) — `listening` гаснет, и события больше не копятся: ответ только дочитывается и сохраняется.
 
     `tools` — виды инструментов «Интернета» (web.tools_for; пусто — запрос без tools, как прежде): модель
-    зовёт их кругами (не больше TOOL_ROUNDS, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
+    зовёт их кругами (не больше tool_rounds, в круге — не больше CALLS_PER_ROUND), шаги — в `steps` и сразу в
     `messages.tools`. Перед каждым вызовом и кругом — срок ответа и `chats.web` заново: выключили — вызова нет,
     и дальше запросы без tools. `known` — адреса, которые read_page может читать, и ролики (по id) для
     youtube_subtitles (`_known_links` и найденное поиском этого ответа).
@@ -743,7 +771,9 @@ class StreamTask:
     #: продолжение после паузы (chat_pending): payload паузы и ответ `{kind, action, answer}`; новый ход — None
     resume: "dict | None" = field(default=None, repr=False)
     paused: str | None = None    # id паузы, на которой ход кончился (chat_pending.pause)
-    rounds: int = 0              # кругов с исполненными вызовами
+    rounds: int = 0              # кругов с исполненными вызовами (предел — tool_rounds)
+    #: ключи исполненных вызовов ответа (`_seen_key`): повтор с теми же аргументами — шаг duplicate без вызова
+    seen: set = field(default_factory=set, repr=False)
     rest: list = field(default_factory=list, repr=False)   # вызовы круга после идущего — в payload паузы
     index: int = 0               # номер идущего вызова в круге (CALLS_PER_ROUND)
     confirmed: str | None = None   # id вызова, которому «Запустить» дано этой паузой
@@ -1030,17 +1060,22 @@ class StreamTask:
         модели `role: tool` (и вызову без исполнения: id пар должны сойтись). Сверх CALLS_PER_ROUND — шаг TOO_MANY;
         «Интернет» выключили — шаг WEB_OFF, и tools дальше не идут. Инструмент MCP, чей вызов требует подтверждения
         (`mcp_sources.confirm_needed`; не тот, что подтвердила эта пауза), и `ask_user` (chat_tools) ставят ход на
-        паузу (chat_pending.pause): итог PAUSED, остальные вызовы круга ждут в payload. Итог — слова ошибки ответа
-        (срок вышел), PAUSED или None."""
+        паузу (chat_pending.pause): итог PAUSED, остальные вызовы круга ждут в payload. Вызов, уже исполненный в этом
+        ответе с теми же аргументами (`seen`), — шаг `duplicate` без исполнения и подтверждения, модели — DUPLICATE.
+        Итог — слова ошибки ответа (срок вышел), PAUSED или None."""
         for i, c in enumerate(calls):
             n = start + i
             if clock.NOW() > self.deadline:
                 return self._cut_time()
             self.rest, self.index = calls[i + 1:], n
             kind = web.NAMES.get(c.name, "unknown")
+            key = self._seen_key(c)
             if c.id in self.gone:                    # продолжение: инструмента больше нет в наборе хода
                 server, tool = self.gone[c.id]
                 step = {"kind": "mcp", "server": server, "tool": tool, "error": chat_pending.GONE}
+            elif key in self.seen:                   # тот же вызов уже исполнен в этом ответе — результат выше
+                step = {"kind": "duplicate",
+                        "tool": self.mcp.calls[c.name][1] if self.mcp and c.name in self.mcp.calls else c.name}
             elif self.mcp and c.name in self.mcp.calls:
                 _, tool, server, _ = self.mcp.calls[c.name]
                 hint = self.mcp.confirm_hint(c.name)
@@ -1071,9 +1106,23 @@ class StreamTask:
                 self.put("tool", {"kind": kind, "label": web.label(kind, web.args_of(c.arguments) or {})})
                 step = self._fit(await web.call(c.name, c.arguments, self.exa_key, self.tools, self.known))
                 self.known |= web.found_links(step)
+            if "error" not in step and step["kind"] != "duplicate":   # ошибка — не результат: повтор исполнится
+                self.seen.add(key)
             self._step(step)
-            self.messages.append({"role": "tool", "tool_call_id": c.id, "content": web.for_model(step)})
+            self.messages.append({"role": "tool", "tool_call_id": c.id, "content": _for_model(step)})
         return None
+
+    def _seen_key(self, c: ToolCall) -> str:
+        """Ключ вызова для `seen`: sha256 имени и аргументов (JSON с сортировкой ключей). Инструмент MCP — по
+        серверу и имени инструмента: продолжение после паузы может пронумеровать `mcp_<sid>_<n>` иначе."""
+        name = c.name
+        if self.mcp and c.name in self.mcp.calls:
+            session, tool, _, _ = self.mcp.calls[c.name]
+            name = f"mcp:{session.sid}:{tool}"
+        args = web.args_of(c.arguments or "{}")
+        text = json.dumps(c.arguments if args is None else args, sort_keys=True, ensure_ascii=False,
+                          separators=(",", ":"))
+        return hashlib.sha256(f"{name}\0{text}".encode()).hexdigest()
 
     async def _resume(self) -> "str | object | None":
         """Продолжение после паузы: вызов, на котором она стояла, — по ответу пользователя («Запустить» — исполнить
@@ -1081,7 +1130,7 @@ class StreamTask:
         круга. Инструменты MCP — по серверу и имени (`targets` паузы): каталог продолжения мог пронумеровать иначе,
         а доступ, «Интернет» и выключение — убрать инструмент из набора: тогда шаг chat_pending.GONE без вызова."""
         r = self.resume
-        self.rounds = r["rounds"]
+        self.rounds, self.seen = r["rounds"], set(r["seen"])
         names = {(session.sid, tool): name for name, (session, tool, _, _) in (self.mcp.calls.items() if self.mcp else ())}
         calls = []
         for raw in [r["call"], *r["rest"]]:
@@ -1098,8 +1147,9 @@ class StreamTask:
             self.confirmed = calls[0].id
             return await self._calls(calls, r["index"])
         step = chat_pending.resume_step(r["kind"], r["action"], r["answer"], r["view"])
+        self.seen.add(self._seen_key(calls[0]))      # отказ и ответ — тоже результат: повтор не спросит снова
         self._step(step)
-        self.messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": web.for_model(step)})
+        self.messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": _for_model(step)})
         return await self._calls(calls[1:], r["index"] + 1)
 
     def _step(self, step: dict) -> None:
@@ -1141,7 +1191,7 @@ class StreamTask:
         поток, кончившийся без них (обрыв, HTML с кодом 200, пустой ответ), — ошибка, а не готовый
         ответ. Обрезанный пределом длины модели, объёма (ANSWER_MAX) или срока (STREAM_TOTAL_SEC) —
         ошибка с пометкой в тексте; прочитанное сохраняется. С `tools` — круги: модель кончила вызовами
-        (`finish_reason: tool_calls`) — студия их исполняет и зовёт её снова; после TOOL_ROUNDS кругов
+        (`finish_reason: tool_calls`) — студия их исполняет и зовёт её снова; после tool_rounds кругов
         запрос без tools. Срок — один на весь ответ: проверяется и перед каждым кругом и вызовом. Последний
         круг кончился вызовами, которые уже не исполнялись, без текста — ошибка NO_ANSWER, а не пустой ответ."""
         if self.conn.cleaner:
@@ -1176,7 +1226,7 @@ class StreamTask:
         key = (self.conn.id, self.model)
         if clock.NOW() - NO_TOOLS.get(key, -math.inf) < NO_TOOLS_SEC:
             self.builtin_off = True
-        retried = False
+        retried, max_rounds = False, tool_rounds()
         if self.resume is not None:
             error = await self._resume()
             if error is PAUSED:
@@ -1193,7 +1243,7 @@ class StreamTask:
             extra = web.specs(self.tools) + (self.mcp.specs if self.mcp else [])
             builtin = [] if self.builtin_off else chat_tools.specs(self)
             specs = extra + builtin
-            offer = bool(specs) and self.rounds < TOOL_ROUNDS
+            offer = bool(specs) and self.rounds < max_rounds
             payload = {**self.params, "model": self.model, "messages": self._request(offer), "stream": True}
             if offer:
                 payload |= {"tools": specs, "tool_choice": "auto"}

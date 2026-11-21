@@ -154,6 +154,44 @@ def test_web_off_or_access_removed_before_answer_refuses(studio):
     assert "tools/call" not in methods(calls)
 
 
+def test_resolved_pause_drops_payload(studio):
+    """payload паузы (сообщения модели с картинками) после любого исхода не хранится: база не растёт."""
+    sid, _ = confirm_setup(studio)
+    cid = new_chat(studio)
+
+    def payload(pid):
+        return state.DB.execute("SELECT payload FROM chat_pending WHERE id = ?", (pid,)).fetchone()[0]
+
+    shown = pause_on(studio, cid, name_of(sid, 1))
+    assert payload(shown["id"])
+    assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
+    assert payload(shown["id"]) == ""
+    shown = pause_on(studio, cid, name_of(sid, 1), text="Ещё")
+    studio.gw.chat_script = [["Хорошо, о другом."]]
+    sse(turn(studio, cid, "О другом"))
+    assert payload(shown["id"]) == ""                    # superseded
+    shown = pause_on(studio, cid, name_of(sid, 1), text="Снова")
+    studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
+    assert answer(studio, cid, shown["id"], "refuse").status_code == 409
+    assert payload(shown["id"]) == ""                    # expired
+
+
+def test_confirm_upload_offered_only_when_turned_on(studio):
+    """`artifact_upload` «с подтверждением» модели предлагается, только когда включён в диалоге явно — как в окне
+    MCP (`chat-mcp.js`, mcp_files.CONFIRM)."""
+    sid, _ = confirm_setup(studio, more=[tool("artifact_upload", _meta={"studio/confirm": True})])
+    cid = new_chat(studio)
+    studio.gw.chat_script = [["Готово"]]
+    sse(turn(studio, cid))
+    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: lookup", "Shared tools: translate"]
+    on = studio.c.patch(f"/api/chats/{cid}", json={"mcp_tools_on": {str(sid): ["artifact_upload"]}})
+    assert on.status_code == 200, on.text
+    studio.gw.chat_script = [["Готово"]]
+    sse(turn(studio, cid, "Ещё"))
+    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: lookup", "Shared tools: translate",
+                                                    "Shared tools: artifact_upload"]
+
+
 def test_ask_user_option_and_own_text_reach_model(studio):
     add_gateway(studio)
     cid = new_chat(studio)

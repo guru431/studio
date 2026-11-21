@@ -46,6 +46,8 @@ REFUSED = "Пользователь отказался запускать это
 GONE = "инструмент больше недоступен в этом диалоге — не вызван"
 VIEW = ("server", "tool", "arguments", "question", "options", "allow_text")
 ACTIONS = {"confirm": ("run", "refuse"), "ask": ("answer", "refuse")}
+# решённая пауза (любой исход) payload не хранит: в нём сообщения модели с картинками base64 — мегабайты на строку
+RESOLVE = "resolved = ?, payload = ''"
 
 
 class PendingIn(BaseModel):
@@ -77,7 +79,7 @@ async def pause(task, kind: str, call, view: dict) -> str:
     rest = [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in task.rest]
     targets = {c.name: t for c in [call, *task.rest] if (t := _target(task, c.name)) is not None}
     payload = {"messages": task.messages, "call": {"id": call.id, "name": call.name, "arguments": call.arguments},
-               "rounds": task.rounds, "seen": [], "steps": task.steps, "rest": rest, "index": task.index,
+               "rounds": task.rounds, "seen": sorted(task.seen), "steps": task.steps, "rest": rest, "index": task.index,
                "targets": targets, "view": view, "conn_id": task.conn.id, "model": task.model}
     sealed = security.encrypt(json.dumps(payload, ensure_ascii=False)).decode("ascii")
     state.DB.execute("INSERT INTO chat_pending(id, chat_id, message_id, kind, payload, created) VALUES (?, ?, ?, ?, ?, ?)",
@@ -109,7 +111,7 @@ def open_views(chat_id: str) -> dict:
 
 def supersede(chat_id: str) -> None:
     """Новый ход диалога: открытая пауза больше не ждёт ответа (синхронно — в транзакции хода)."""
-    state.DB.execute("UPDATE chat_pending SET resolved = ?, outcome = 'superseded' WHERE chat_id = ? AND resolved IS NULL",
+    state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = 'superseded' WHERE chat_id = ? AND resolved IS NULL",
                      (clock.NOW(), chat_id))
 
 
@@ -134,7 +136,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     if pending["resolved"] is not None:
         raise _gone()
     if clock.NOW() - pending["created"] > PENDING_TTL_SEC:
-        state.DB.execute("UPDATE chat_pending SET resolved = ?, outcome = 'expired' WHERE id = ? AND resolved IS NULL",
+        state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = 'expired' WHERE id = ? AND resolved IS NULL",
                          (clock.NOW(), pending_id))
         raise _gone()
     payload = _payload(pending)
@@ -164,7 +166,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     # без await до COMMIT: второй ответ и новый ход не вклинятся
     state.DB.execute("BEGIN")
     try:
-        if state.DB.execute("UPDATE chat_pending SET resolved = ?, outcome = ? WHERE id = ? AND resolved IS NULL",
+        if state.DB.execute(f"UPDATE chat_pending SET {RESOLVE}, outcome = ? WHERE id = ? AND resolved IS NULL",
                             (clock.NOW(), body.action, pending_id)).rowcount != 1:
             raise _gone()
         chat._busy(chat_id)

@@ -1095,6 +1095,19 @@ def test_admin_storage_block_shows_the_share_and_the_backup_age(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_admin_sets_chat_tool_rounds(browser, live):
+    """Блок «Чат» панели: кругов инструментов на ответ (chat.tool_rounds) — по умолчанию 15, сохраняется."""
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("admin"),
+        ("wait", "document.querySelector('#chat-tool-rounds').value !== ''"),
+        ("eval", "before", "document.querySelector('#chat-tool-rounds').value"),
+        set_value("#chat-tool-rounds", "3"), ("click", "#chat-settings-save"),
+        ("wait", "document.querySelector('#chat-settings-status').classList.contains('ok')"),
+        ("eval", "saved", "fetch('/api/admin/chat').then((r) => r.json())")])
+    assert not r.get("failed"), r
+    assert r["values"]["before"] == "15" and r["values"]["saved"] == {"tool_rounds": 3}
+    assert not problems(r), problems(r)
+
+
 def test_admin_checks_the_backup(browser, live):
     """«Хранилище» → «Проверить копию»: итог словами, зелёным, — копия живой базы поднимается."""
     import sqlite3
