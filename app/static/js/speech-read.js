@@ -155,7 +155,7 @@ function readMcp(text, host) {
     status.hidden = true;
     const prop = mcp.argument('voice');
     const choices = Array.isArray(prop?.enum) ? prop.enum : [];
-    await mcp.run({ text, voice: choices.includes(prop.default) ? prop.default : choices[0] });
+    await mcp.run({ text, voice: choices.includes(prop?.default) ? prop.default : choices[0] });
   } });
   host.replaceChildren(status, mcp.output);
   track(host, () => mcp.destroy());
