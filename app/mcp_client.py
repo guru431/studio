@@ -10,6 +10,7 @@
 
 import asyncio
 import json
+import logging
 import re
 from types import SimpleNamespace
 
@@ -25,7 +26,9 @@ import state
 import connections  # Загрузить Connection до upstream: его аннотации участвуют в цикле импорта.
 import upstream
 
+log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/mcp")
+CATALOG_FAILED = "Список инструментов MCP не прочитан"
 MAX_SERVERS = 16
 MAX_TOOLS = 128
 MAX_BYTES = 1024 * 1024
@@ -224,24 +227,29 @@ async def catalog_for(uid, refresh=False):
 
     async def one(item):
         out = {"id": item["id"], "name": item["name"], "shared": item["user_id"] is None}
+        empty = {"instructions": None, "tools": [], "prompts": []}
         if not item["enabled"]:
-            return {**out, "state": "off", "instructions": None, "tools": [], "prompts": []}
+            return {**out, "state": "off", **empty}
         session = Session(item, uid=uid)
         try:
             found = await mcp_sources.catalog(session, mcp_sources.LIST_SEC, refresh=refresh)
+            rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
+            tools = [_catalog_tool(item, tool, rules) for tool in found.tools
+                     if isinstance(tool, dict) and isinstance(tool.get("name"), str) and NAME.fullmatch(tool["name"])
+                     and access.tool_allowed(uid, item["id"], tool["name"])]
+            instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
+            chat_files = mcp_sources.chat_files(found)
         except HTTPException as exc:
-            return {**out, "state": "error", "message": exc.detail["message"]}
+            return {**out, "state": "error", "message": exc.detail["message"], **empty}
         except TimeoutError:
-            return {**out, "state": "error", "message": "MCP не ответил вовремя"}
+            return {**out, "state": "error", "message": "MCP не ответил вовремя", **empty}
+        except Exception as exc:                     # сбой одного сервера не роняет каталог; текст исключения — никуда
+            log.warning("mcp %d: каталог не прочитан (%s)", item["id"], type(exc).__name__)
+            return {**out, "state": "error", "message": CATALOG_FAILED, **empty}
         finally:
             await session.close()
-        rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
-        tools = [_catalog_tool(item, tool, rules) for tool in found.tools
-                 if isinstance(tool, dict) and isinstance(tool.get("name"), str) and NAME.fullmatch(tool["name"])
-                 and access.tool_allowed(uid, item["id"], tool["name"])]
-        instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
         return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts,
-                "chat_files": mcp_sources.chat_files(found)}
+                "chat_files": chat_files}
 
     return {"items": list(await asyncio.gather(*(one(item) for item in servers(uid))))}
 
