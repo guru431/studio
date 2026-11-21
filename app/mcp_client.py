@@ -582,6 +582,7 @@ class Tools:
         self.found = []                      # (строка сервера, сессия, каталог) ответивших серверов — mcp_files.sync
         self.protected = set()               # id общих серверов набора с флажком «Защищённый источник»
         self.open_world = set()              # имена вызовов веб-инструментов (пометка «интернет») — снимает `lock`
+        self.reached = set()                 # id серверов, которым ход послал `tools/call` (с любым итогом)
 
     def _chat(self):
         return state.DB.execute("SELECT * FROM chats WHERE id=? AND user_id=? AND deleted IS NULL",
@@ -610,9 +611,10 @@ class Tools:
             return hint, WEB_OFF
         return hint, None
 
-    def is_protected(self, name):
-        """Вызов хода `name` — инструмент защищённого источника."""
-        return name in self.calls and self.calls[name][0].sid in self.protected
+    def reached_protected(self):
+        """Ход послал вызов защищённому серверу — с любым итогом: ответ-ошибка тоже несёт его данные; отказ студии
+        до запроса (доступ, «Интернет», выключение, неверные аргументы) — нет."""
+        return bool(self.reached & self.protected)
 
     def lock(self):
         """Защищённый источник сработал: веб-инструменты MCP больше не предлагаются модели в этом ходе (вызов и так
@@ -703,6 +705,7 @@ class Tools:
             if not isinstance(args, dict):
                 raise refused("Неверные аргументы инструмента MCP")
             await session.ensure()
+            self.reached.add(session.sid)     # дальше — ответ сервера, и ошибка тоже (`reached_protected`)
             try:
                 result = await session.rpc("tools/call", {"name": tool, "arguments": args})
             except HTTPException:

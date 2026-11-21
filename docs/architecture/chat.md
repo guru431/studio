@@ -361,8 +361,9 @@ Studio проксирует файлы через исходное подклю�
 
 - Флажок общего сервера — `mcp_servers.protected` (`mcp_client.ServerIn` `protected`, «Защищённый источник» в редакторе
   панели администратора `mcp-settings.js`); личному — 422 `invalid`. Флажок видит только администратор.
-- Успешный вызов инструмента такого сервера (`mcp_client.Tools.is_protected`, шаг без `error`) —
-  `chat.StreamTask._protect`: `UPDATE chats SET protected_used = 1, web = 0`, веб-инструменты MCP (пометка «интернет»)
+- Вызов инструмента такого сервера, дошедший до него, с любым итогом — ответ-ошибка тоже несёт его данные
+  (`mcp_client.Tools.reached_protected`; отказ студии до запроса — доступ, «Интернет», выключение, неверные
+  аргументы — не в счёт) — `chat.StreamTask._protect`: `UPDATE chats SET protected_used = 1, web = 0`, веб-инструменты MCP (пометка «интернет»)
   в этом же ходе снимает `mcp_client.Tools.lock`, «Интернета» дальше нет (`chat.StreamTask._web_on`,
   `mcp_client.Tools.discover`/`call`, `create_turn` проверяют `protected_used`, а не только `web`).
 - Дальше в диалоге: `PATCH {web: true}` — 409 `protected` (`chat.PROTECTED_WEB`), выключить можно; вызов любого

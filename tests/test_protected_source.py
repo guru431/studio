@@ -60,14 +60,28 @@ def test_protected_call_turns_web_off_and_locks_it(studio):
     assert studio.c.patch(f"/api/chats/{cid}", json={"web": False}).status_code == 200
 
 
-def test_failed_protected_call_changes_nothing(studio):
-    """Срабатывание — только успешный вызов: ошибка инструмента «Интернет» не трогает."""
+def test_protected_error_result_locks_too(studio):
+    """Срабатывание — любой вызов, дошедший до сервера: ответ-ошибка тоже несёт его данные модели
+    («SIM 79… не найдена»)."""
     sid, calls, _ = setup(studio, tools=[tool("gone")])
     protect(studio, sid)
     cid = web_dialog(studio)
     studio.gw.chat_script = [{"tool_calls": [call(name_of(sid))]}, ["Готово"]]
     assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
+    assert "tools/call" in methods(calls)
     assert "error" in messages(studio, cid)[-1]["tools"][0]
+    assert flags(cid) == (1, 0)
+
+
+def test_refused_before_the_call_changes_nothing(studio):
+    """Отказ самой студии до запроса к серверу (неверные аргументы) — не срабатывание: «Интернет» не трогает."""
+    sid, calls, _ = setup(studio)
+    protect(studio, sid)
+    cid = web_dialog(studio)
+    studio.gw.chat_script = [{"tool_calls": [(name_of(sid), "[1]")]}, ["Готово"]]
+    assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
+    assert "tools/call" not in methods(calls)
+    assert messages(studio, cid)[-1]["tools"][0]["error"] == "Неверные аргументы инструмента MCP"
     assert flags(cid) == (0, 1)
 
 
