@@ -308,7 +308,10 @@ def test_share_link_of_trashed_chat_is_unavailable_and_returns_after_restore(s):
     assert gone.status_code == 404 and gone.json()["detail"]["code"] == "share_gone"
     assert s.c.post("/share/check", json={"access": access}).status_code == 404
     assert s.c.get(endpoint).status_code == 404                  # владелец ссылку чата из корзины не видит
+    # «Доступы и ссылки»: ссылка остаётся (её можно отключить), но помечена — чат в корзине, ссылка недоступна
+    assert [x["trashed"] for x in s.c.get("/api/me/access").json()["shares"]] == [True]
     assert s.c.post("/api/trash/chats/chat/restore").status_code == 204
+    assert [x["trashed"] for x in s.c.get("/api/me/access").json()["shares"]] == [False]
     again = unlock(s, token)
     assert again.status_code == 200 and again.json()["messages"][1]["text"] == "**Private answer**"
     assert s.c.post("/share/check", json={"access": access}).status_code == 204
