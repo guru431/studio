@@ -224,8 +224,10 @@ def test_retry_reuses_the_account_recording_until_last_attempt_is_deleted(studio
     assert wait_tr(studio, attempt["id"], {"done"})["segments"] == original["segments"]
     assert studio.c.get(f"/api/transcripts/{tid}").json() == original
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
+    assert studio.c.delete(f"/api/trash/transcripts/{tid}").status_code == 204
     assert studio.c.get(f"/api/media/{mid}").status_code == 200
     assert studio.c.delete(f"/api/transcripts/{attempt['id']}").status_code == 204
+    assert studio.c.delete(f"/api/trash/transcripts/{attempt['id']}").status_code == 204
     assert studio.c.get(f"/api/media/{mid}").status_code == 404
 
 
@@ -526,5 +528,7 @@ def test_delete_takes_the_recording_and_the_result(studio, env, fake_audio):
     wait_tr(studio, tid, {"done"})
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 2
     assert studio.c.delete(f"/api/transcripts/{tid}").status_code == 204
-    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
     assert studio.c.get(f"/api/transcripts/{tid}").status_code == 404
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 2      # в корзине — файлы на месте
+    assert studio.c.delete(f"/api/trash/transcripts/{tid}").status_code == 204
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
