@@ -85,6 +85,7 @@ PING_SEC = 15
 RESERVE_TOKENS = 4096
 ATTACH_MAX = 10                  # вложений в сообщении (фото и документы вместе)
 ATTACHMENTS = f"не больше {ATTACH_MAX} вложений в сообщении"
+SUGGESTIONS_MAX = 8              # подсказок пустого экрана: профиль подключения, затем `prompts` MCP диалога
 CONTEXT = {"local-gemma-abl": 131072}
 TITLE_CHARS = 60
 
@@ -1613,6 +1614,51 @@ async def create_chat(body: ChatIn, request: Request):
     return _chat_view(user.id, _chat_row(user.id, chat_id))
 
 
+async def _mcp_prompts(uid: int, ids: list[int]) -> list[dict]:
+    """Подсказки (`prompts`) серверов набора `ids` по порядку — из кэша каталогов (`mcp_sources.catalog`), холодный
+    ждёт `mcp_sources.DEFAULT_WAIT_SEC`; не ответивший сервер пропускается."""
+    enabled = {item["id"]: item for item in mcp_client.servers(uid, enabled_only=True)}
+    items = [enabled[sid] for sid in ids if sid in enabled]
+
+    async def one(item):
+        session = mcp_client.Session(item, uid=uid)
+        try:
+            return (await mcp_sources.catalog(session, mcp_sources.DEFAULT_WAIT_SEC)).prompts
+        except (HTTPException, TimeoutError):
+            return []
+        except Exception as exc:                     # сбой одного сервера не роняет подсказки; текст — никуда
+            log.warning("mcp %d: подсказки не прочитаны (%s)", item["id"], type(exc).__name__)
+            return []
+        finally:
+            await session.close()
+
+    found = await asyncio.gather(*(one(item) for item in items))
+    return [{"title": p["title"] or p["name"], "text": p["description"], "source": "mcp", "server": item["name"],
+             "prompt": {"sid": item["id"], "name": p["name"], "arguments": p["arguments"]}}
+            for item, prompts in zip(items, found) for p in prompts]
+
+
+@router.get("/chats/suggestions")
+async def suggestions(request: Request, connection_id: "int | None" = None, model: str = "", chat_id: str = ""):
+    """Подсказки пустого экрана (не больше SUGGESTIONS_MAX): профиль подключения (`profiles.suggestions_of`), затем
+    `prompts` MCP диалога; новый диалог (`chat_id` пуст) — подключение `connection_id` и MCP по умолчанию.
+    Подсказка MCP несёт `prompt` — её текст страница берёт POST /api/mcp/{sid}/prompt. `model` — пара чипа, профиль
+    один на подключение."""
+    uid = request.state.user.id
+    if chat_id:
+        row = _chat_row(uid, chat_id)
+        conn = _chat_connection(uid, row["connection_id"])
+    else:
+        row = {"mcp_ids": "[]", "mcp_off": "[]"}
+        conn = _chat_connection(uid, connection_id)
+    if conn is None:
+        return []
+    out = [{"title": s["title"], "text": s["text"], "source": "profile"} for s in profiles.suggestions_of(conn)]
+    if len(out) < SUGGESTIONS_MAX:
+        out += await _mcp_prompts(uid, mcp_sources.dialog_servers(uid, row, conn))
+    return out[:SUGGESTIONS_MAX]
+
+
 @router.get("/chats/{chat_id}")
 async def get_chat(chat_id: str, request: Request):
     uid = request.state.user.id
@@ -2109,6 +2155,36 @@ def _turn_fingerprint(body: TurnIn) -> str:
     # Consent/one-use Cleaner tickets may change before acceptance. No copy of the text is stored.
     raw = json.dumps([body.text, body.attachment_ids, body.regenerate], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+class EstimateIn(BaseModel):
+    text: str = Field("", max_length=TEXT_MAX)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=ATTACH_MAX)
+
+
+@router.post("/chats/{chat_id}/estimate")
+async def estimate(chat_id: str, body: EstimateIn, request: Request):
+    """Заполнение контекста будущим ходом: системное сообщение (куски 1–3, как у хода), история (`compose`), текст
+    и неотправленные вложения поля ввода — `estimate_tokens`; `limit` — предел модели (`_limit`) или None. Без
+    знаний и инструментов: оценка, не проверка (её делает ход)."""
+    uid = request.state.user.id
+    row = _chat_row(uid, chat_id)
+    conn = _chat_connection(uid, row["connection_id"])
+    model = row["model"] or manage.DEFAULT_MODEL
+    # скан, что ещё распознаётся, ходу пока не даст текста
+    atts = [a for a in _free_attachments(uid, body.attachment_ids) if a["kind"] != "document" or a["text"] is not None]
+    limit = await _limit(conn, model) if conn is not None else None
+    cap = profiles.max_images(conn) if conn is not None else profiles.DEFAULT_MAX_IMAGES
+    messages = compose(chat_id, "", model, cap)
+    content = _content(body.text, atts)
+    if messages and messages[-1]["role"] == "user":
+        messages[-1]["content"] = _merge(messages[-1]["content"], content)
+    else:
+        messages.append({"role": "user", "content": content})
+    _cap_images(messages, cap)
+    profiled = conn if conn is not None and (conn.proxied or not conn.shared) else None
+    system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
+    return {"tokens": estimate_tokens(chat_system.wrap(system, messages)), "limit": limit}
 
 
 @router.get("/chats/{chat_id}/turns/{request_id}")
