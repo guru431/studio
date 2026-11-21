@@ -404,7 +404,8 @@ ROUTES = {
         ("GET", "/api/connections/{conn_id}/profile"),
         ("POST", "/api/dictation"), ("GET", "/api/jobs"),
         ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/storage"),
-        ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections"), ("GET", "/api/trash")]},
+        ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections"), ("GET", "/api/trash"),
+        ("GET", "/api/help"), ("GET", "/api/help/studio"), ("POST", "/api/help/server")]},
     **{(m, p): "lock" for m, p in [
         ("GET", "/api/lock"), ("POST", "/api/lock/alive"), ("POST", "/api/lock/challenge"), ("POST", "/api/lock/now"),
         ("POST", "/api/lock/open"), ("POST", "/api/lock/password"), ("POST", "/api/lock/pin")]},

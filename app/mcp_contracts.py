@@ -238,6 +238,9 @@ async def _status_of(item, uid):
                 return None
         except HTTPException:
             return None
+        except Exception as exc:                 # сбой одного сервера не роняет ответ; текст исключения — никуда
+            log.warning("mcp %d: состояние не прочитано (%s)", item["id"], type(exc).__name__)
+            return None
         try:
             code, body = await call(session, "GET", "/status", timeout=STATUS_SEC)
             value = _state(body) if code == 200 else None

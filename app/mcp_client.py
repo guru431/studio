@@ -225,7 +225,8 @@ def _catalog_tool(item, tool, rules):
 async def catalog_for(uid, refresh=False):
     """Серверы учётки для окна MCP диалога: `state` — `off` (выключен, не опрашивается), `ok`, `error`
     (`message`); правила сервера, инструменты, открытые учётке группами (с пометками «интернет» и «с
-    подтверждением» после политики администратора), подсказки. Опрос параллельно, каждый — до
+    подтверждением» после политики администратора), подсказки, объявленные контракты Studio (`contracts`:
+    files, user_files, status — mcp_contracts). Опрос параллельно, каждый — до
     `mcp_sources.LIST_SEC`, из кэша; `refresh` — заново, если запись старше `mcp_sources.REFRESH_MIN_SEC`."""
 
     async def one(item):
@@ -241,7 +242,11 @@ async def catalog_for(uid, refresh=False):
                      if isinstance(tool, dict) and isinstance(tool.get("name"), str) and NAME.fullmatch(tool["name"])
                      and access.tool_allowed(uid, item["id"], tool["name"])]
             instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
+            import mcp_contracts              # здесь, не при загрузке: модуль сам импортирует mcp_client
             import mcp_files                  # здесь, не при загрузке: mcp_files тянет разделы и chat
+            features = mcp_contracts.features(found)
+            contracts = {"files": features.files is not None, "user_files": bool(features.user_files),
+                         "status": features.status}
             chat_files = mcp_files.limit_of(found)          # с потолком mcp_files.MEDIA_MAX, как у загрузки
             upload_policy = None
             if chat_files is not None:
@@ -257,7 +262,8 @@ async def catalog_for(uid, refresh=False):
         finally:
             await session.close()
         return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts,
-                "chat_files": chat_files, "chat_files_policy": upload_policy, "trimmed": found.trimmed}
+                "chat_files": chat_files, "chat_files_policy": upload_policy, "trimmed": found.trimmed,
+                "contracts": contracts}
 
     return {"items": list(await asyncio.gather(*(one(item) for item in servers(uid))))}
 
@@ -494,7 +500,7 @@ class Session:
         text = "".join(part["text"] for part in contents if isinstance(part, dict) and isinstance(part.get("text"), str)
                        ) if isinstance(contents, list) else ""
         if len(text.encode("utf-8", "replace")) > RESOURCE_MAX:
-            raise refused(f"Ресурс MCP больше {RESOURCE_MAX >> 20} МиБ")
+            raise refused("Ресурс MCP больше 1 МиБ")   # = RESOURCE_MAX
         return text
 
     async def close(self):

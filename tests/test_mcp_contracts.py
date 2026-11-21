@@ -213,3 +213,12 @@ def test_status_skips_servers_without_the_contract(studio):
     member, sid, seen = member_with_server(studio, experimental={})
     assert studio.c.get("/api/mcp/status").json() == {}
     assert not [s for s in seen if s[1] == "/status"]
+    item = studio.c.get("/api/mcp/catalog").json()["items"][0]
+    assert item["contracts"] == {"files": False, "user_files": False, "status": False}
+
+
+def test_catalog_names_declared_contracts(studio):
+    """Страница спрашивает файлы пользователя и состояние только у серверов, которые их объявили."""
+    member_with_server(studio)
+    item = studio.c.get("/api/mcp/catalog").json()["items"][0]
+    assert item["state"] == "ok" and item["contracts"] == {"files": True, "user_files": True, "status": True}
