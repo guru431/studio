@@ -18,6 +18,7 @@ import sqlite3
 import threading
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -35,6 +36,7 @@ import history
 import images
 import manage
 import mcp_client
+import mcp_sources
 import media
 import operations
 import account_profile as profile
@@ -727,3 +729,43 @@ async def patch_role_default(did: int, request: Request):
 async def delete_role_default(did: int):
     roles.delete_default(did)
     return Response(status_code=204)
+
+
+# ---- политика инструментов общего MCP (mcp_tool_policy): сильнее подсказок сервера ----------------------
+
+class ToolPolicyIn(BaseModel):
+    open_world: bool | None = None                         # «интернет»: null — как у сервера
+    confirm: Literal["never", "always"] | None = None      # «подтверждение»: null — как у сервера
+
+
+class McpPolicyIn(BaseModel):
+    tools: dict[str, ToolPolicyIn] = Field(max_length=256)  # полный набор
+
+
+def _mcp_policy(sid: int) -> dict:
+    return {"tools": {tool: {"open_world": None if r["open_world"] is None else bool(r["open_world"]),
+                             "confirm": None if r["confirm"] is None else "never" if r["confirm"] == "never"
+                             else "always"}
+                      for tool, r in sorted(mcp_sources.policy(sid).items())}}
+
+
+@router.get("/shared/mcp/{sid}/policy")
+async def get_mcp_policy(sid: int):
+    mcp_client.row(None, sid, own=True)
+    return _mcp_policy(sid)
+
+
+@router.put("/shared/mcp/{sid}/policy")
+async def put_mcp_policy(sid: int, body: McpPolicyIn):
+    mcp_client.row(None, sid, own=True)
+    if any(not mcp_client.NAME.fullmatch(tool) for tool in body.tools):
+        raise HTTPException(422, {"code": "tool", "message": "неверное имя инструмента MCP"})
+    rows = [(sid, tool, None if rule.open_world is None else int(rule.open_world),
+             {"never": "never", "always": "true"}.get(rule.confirm))
+            for tool, rule in body.tools.items() if rule.open_world is not None or rule.confirm is not None]
+    with sections.transaction():
+        state.DB.execute("DELETE FROM mcp_tool_policy WHERE server_id = ?", (sid,))
+        state.DB.executemany("INSERT INTO mcp_tool_policy(server_id, tool, open_world, confirm) VALUES (?, ?, ?, ?)",
+                             rows)
+    log.info("mcp %d: политика инструментов, правил %d", sid, len(rows))
+    return _mcp_policy(sid)

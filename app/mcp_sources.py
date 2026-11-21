@@ -14,13 +14,16 @@
 
 import asyncio
 from dataclasses import dataclass
+import json
 import logging
 import math
 import re
 
 import access
 import clock
+import mcp_client
 import security
+import state
 
 log = logging.getLogger("studio")
 
@@ -30,6 +33,8 @@ INSTRUCTIONS_MAX = 4000                      # правила одного се�
 INSTRUCTIONS_TOTAL = 12000                   # правила всех серверов хода
 LIST_SEC = 8                                 # срок опроса сервера для списка каталога
 REFRESH_MIN_SEC = 10                         # «Обновить список» опрашивает сервер не чаще
+DEFAULT_WAIT_SEC = 5                         # общий срок каталогов серверов по умолчанию на холодном кэше хода
+ON = "on"                                    # ключ `chats.mcp_tools_off`: явно включённые инструменты {sid: [имена]}
 CONFIRM_MESSAGE_MAX = 300
 CONFIRM_WHEN_MAX = 16
 ARG = re.compile(r"[A-Za-z0-9_.-]{1,128}")
@@ -156,3 +161,53 @@ def confirm_needed(hint, args) -> bool:
     args = args if isinstance(args, dict) else {}
     return any(_exceeds(args.get(item["arg"]), item["gt"]) if "gt" in item else _filled(args.get(item["arg"]))
                for item in confirm["when"])
+
+
+# ---- MCP в диалоге: действующий набор, выключенные и явно включённые инструменты, политика админа ----
+
+def dialog_servers(uid, row, conn) -> list:
+    """id действующих серверов диалога `row` (строка `chats`) по порядку: явно включённые (`mcp_ids`, только
+    ещё доступные — `mcp_client.present`), затем общие включённые и открытые учётке, кроме `mcp_off`, по id; не
+    больше `mcp_client.MAX_SERVERS`. Личные — только явно. Прямое подключение, Cleaner или диалог без
+    подключения — общие по умолчанию молча не действуют (явные проверяет 409 хода и PATCH)."""
+    explicit = mcp_client.present(uid, row["mcp_ids"])
+    if conn is None or not conn.proxied or conn.cleaner:
+        return explicit
+    off = set(json.loads(row["mcp_off"]))
+    defaults = [item["id"] for item in mcp_client.servers(uid, enabled_only=True)
+                if item["user_id"] is None and item["id"] not in off and item["id"] not in explicit]
+    return (explicit + defaults)[:mcp_client.MAX_SERVERS]
+
+
+def tool_state(raw) -> tuple[dict, dict]:
+    """`chats.mcp_tools_off` → (выключенные {sid: set(имён)}, явно включённые {sid: set(имён)}). Явно
+    включённые лежат под ключом ON того же JSON: инструмент «с подтверждением» входит в набор хода только так."""
+    data = json.loads(raw)
+    on = data.pop(ON, {})
+    return ({int(sid): set(names) for sid, names in data.items()},
+            {int(sid): set(names) for sid, names in on.items()})
+
+
+def policy(sid) -> dict:
+    """Политика администратора для инструментов общего сервера: {имя: строка `mcp_tool_policy`}."""
+    return {r["tool"]: r for r in state.DB.execute(
+        "SELECT tool, open_world, confirm FROM mcp_tool_policy WHERE server_id = ?", (sid,))}
+
+
+def effective(tool, rule=None) -> dict:
+    """Пометки инструмента для Studio: подсказки сервера (`hints`), поверх — политика администратора `rule`
+    (строка `mcp_tool_policy` общего сервера): `open_world` 0/1 — вместо подсказки; `confirm` 'never' —
+    без подтверждения, JSON — по нему (неверный — подтверждение всегда), NULL — как у сервера."""
+    hint = hints(tool)
+    if rule is None:
+        return hint
+    if rule["open_world"] is not None:
+        hint["open_world"] = bool(rule["open_world"])
+    if rule["confirm"] == "never":
+        hint["confirm"] = None
+    elif rule["confirm"] is not None:
+        try:
+            hint["confirm"] = _confirm(json.loads(rule["confirm"])) or {"message": None, "when": []}
+        except ValueError:
+            hint["confirm"] = {"message": None, "when": []}
+    return hint

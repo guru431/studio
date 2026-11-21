@@ -313,6 +313,8 @@ def studio(env, schema_db, monkeypatch):
     claude_code.NEW_CHATS.clear()
     clear_bridge()
     clear_push()
+    import mcp_sources
+    mcp_sources.CACHE.clear()            # каталоги MCP прошлого теста (ключ — id сервера той базы)
     if not env.db_path.exists():
         env.db_path.write_bytes(schema_db)
     with TestClient(main.app, base_url="https://testserver",

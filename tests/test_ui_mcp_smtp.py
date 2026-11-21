@@ -311,12 +311,15 @@ def test_chat_mcp_selection_is_saved_for_the_current_dialog(browser, live):
         created = client.post('/api/chats', json={'connection_id':connection.json()['id'],'model':'local-gemma-abl'})
         assert created.status_code == 201, created.text
         cid = created.json()['id']
+        # общие MCP прошлых тестов того же сервера включены в диалоге по умолчанию
+        shared = client.get(f'/api/chats/{cid}').json()['chat']['mcp_ids']
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
             ('eval','nav',f"location.hash='#/chat/{cid}'"), ('wait', "document.querySelector('#mcp-toggle')?.hidden === false"),
             ('click','#mcp-toggle'), ('wait', "document.querySelector('#chat-mcp-dialog')?.open"),
             ('click',f'#chat-mcp-{sid}'), ('click','#chat-mcp-save'),
-            ('wait',"!document.querySelector('#chat-mcp-dialog') && document.querySelector('#mcp-toggle').textContent === 'MCP (1)'"),
+            ('wait',"!document.querySelector('#chat-mcp-dialog') && document.querySelector('#mcp-toggle').textContent"
+                    f" === 'MCP ({1 + len(shared)})'"),
             ('eval','fits',NO_OVERFLOW)], width=320, mobile=True)
         assert not result.get('failed'), result
         assert result['values']['fits']
-        assert client.get(f'/api/chats/{cid}').json()['chat']['mcp_ids'] == [sid]
+        assert sorted(client.get(f'/api/chats/{cid}').json()['chat']['mcp_ids']) == sorted([sid, *shared])

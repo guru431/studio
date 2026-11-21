@@ -24,6 +24,7 @@ import clock
 import forms
 import images
 import mcp_client as mcp
+import mcp_sources
 import media
 import security
 import upstream
@@ -97,8 +98,8 @@ async def catalog(section: str, request: Request):
     async def discover(item):
         session = mcp.Session(item, uid=uid)
         try:
-            async with asyncio.timeout(DISCOVERY_TIMEOUT):
-                tools = list(supported(section, await session.tools(), uid=uid, sid=session.sid))
+            found = await mcp_sources.catalog(session, DISCOVERY_TIMEOUT)     # общий кэш каталогов MCP
+            tools = list(supported(section, found.tools, uid=uid, sid=session.sid))
             # Keep broad or malformed schemas from breaking discovery for other servers.
             encoded = json.dumps(tools, ensure_ascii=False, allow_nan=False).encode("utf-8", "replace")
             return {"id": session.sid, "name": item["name"], "tools": json.loads(encoded)}

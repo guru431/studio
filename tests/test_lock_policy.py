@@ -368,6 +368,7 @@ ROUTES = {
         ("DELETE", "/api/admin/groups/{gid}"), ("PUT", "/api/admin/groups/{gid}/members"),
         ("GET", "/api/admin/shared/connections/{cid}/access"), ("PUT", "/api/admin/shared/connections/{cid}/access"),
         ("GET", "/api/admin/shared/mcp/{sid}/access"), ("PUT", "/api/admin/shared/mcp/{sid}/access"),
+        ("GET", "/api/admin/shared/mcp/{sid}/policy"), ("PUT", "/api/admin/shared/mcp/{sid}/policy"),
         ("GET", "/api/admin/roles"), ("POST", "/api/admin/roles"), ("PATCH", "/api/admin/roles/{did}"),
         ("DELETE", "/api/admin/roles/{did}"),
         ("DELETE", "/api/history"), ("PATCH", "/api/me"), ("DELETE", "/api/me/exa-key"), ("PUT", "/api/me/exa-key"),
