@@ -31,6 +31,7 @@ import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
 import { modelLabel } from './settings.js';
+import { picker } from './picker.js';
 import { el, field, openDialog, plural, renameDialog, words } from './ui.js';
 
 const POLL_MS = 3000;
@@ -135,20 +136,24 @@ function build(view, ctx) {
   const backdrop = el('div', { class: 'split-backdrop', hidden: true });
   const toggle = el('button', { type: 'button', class: 'btn btn-sm split-toggle', 'aria-label': tr("Документы"),
     'aria-controls': 'ocr-aside', 'aria-expanded': 'false' }, icon('list'), tr("Документы"));
-  const upload = el('button', { type: 'button', class: 'btn btn-accent btn-sm', id: 'ocr-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"));
+  const upload = el('button', { type: 'button', class: 'ctl-primary', id: 'ocr-upload', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"));
   upload.addEventListener('click', () => input.click());
   const mcp = sectionMcp('ocr', { native: !ctx.hint, fields: [], fileRequired: 'artifact_id', onChange: paintMcp, onBusy: paintBusy });
   const toolbar = el('div', { class: 'split-toolbar' }, toggle, mcp.control, ctx.hint ? null : upload);
   const title = el('h1', {}, NAMES.ocr);
-  // движок загрузки — когда отмеченных пар раздела больше одной; иначе — умолчание раздела на сервере
-  const engine = el('select', { id: 'ocr-model', class: 'chip tl-model', 'aria-label': tr("Модель распознавания"), hidden: true });
-  const head = el('header', { class: 'head' }, title, engine);
+  // движок загрузки — когда отмеченных пар раздела больше одной; иначе — умолчание раздела на сервере.
+  // Выбор «как у Агентов» (picker.js) — в ряду над видом, после выбора инструмента MCP
+  const engine = el('select', { id: 'ocr-model' });
+  const head = el('header', { class: 'head' }, title);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'ocr-view' });
   const nativeHint = ctx.hint?.('hint-bar');
   const main = el('section', { class: 'split-main' }, head, toolbar, nativeHint, error, mcp.output, body);
   const root = el('div', { class: 'split ocr' }, aside, backdrop, main);
   view.append(root);
+  const enginePick = picker(root, tr("Модель распознавания"), engine);
+  enginePick.wrap.hidden = true;
+  mcp.control.after(enginePick.wrap);
 
   function panel(open) {
     root.classList.toggle('panel-open', open);
@@ -481,7 +486,8 @@ function build(view, ctx) {
   /** Выбор модели — только когда есть из чего выбрать и скан идёт своим распознаванием: при инструменте MCP он
    * ни на что не влияет. */
   function paintEngine() {
-    engine.hidden = engines.length < 2 || !!mcp.tool;
+    enginePick.wrap.hidden = engines.length < 2 || !!mcp.tool;
+    enginePick.sync();
   }
 
   /* загрузка */
