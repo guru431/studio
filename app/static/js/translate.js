@@ -1,10 +1,12 @@
 import { language, locale, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Перевод» (#/translate) — спека 2026-10-28-studio-translator-design, 6.1–6.4.
  *
- * Шапка — «Перевод» и выбор модели #tl-model («подключение · модель» из отмеченных раздела, GET /api/sections;
- * нелокальная по `local_models` — « · облако»): выбор живёт в памяти экрана, по умолчанию — умолчание раздела,
- * и уходит в каждый запрос (`connection_id`, `model`). Ниже — языки (#tl-source с «Определить язык» первым,
- * ⇄ #tl-swap, #tl-target) в нижнем composer; над ним прокручиваются результат и история.
+ * Шапка — «Перевод» и «Новый перевод» #tl-new (на телефоне — значок с подсказкой). Выборы — picker.js поверх
+ * select, как у «Агентов»: модель #tl-model («подключение · модель» из отмеченных раздела, GET /api/sections;
+ * нелокальная по `local_models` — « · облако») — в ряду под полем; выбор живёт в памяти экрана, по умолчанию —
+ * умолчание раздела, и уходит в каждый запрос (`connection_id`, `model`). Языки — компактный ряд над полем
+ * (#tl-source с «Определить язык» первым, ⇄ #tl-swap, #tl-target) в нижнем composer; над ним прокручиваются
+ * результат и история. Программная смена значения или опций выбора — затем sync() его кнопки (paintLangs, paintMcp).
  *
  * Нижний composer — поле fieldBox (#tl-input, колонка «очистить», скрепка, микрофон) или плашка #tl-chip: файл/снимок
  * (имя, крестик #tl-chip-x — назад к полю) либо исходник открытой записи-файла (имя — ссылка на файл
@@ -51,6 +53,7 @@ import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
 import { sectionMcp } from './mcp-sections.js';
 import { photoView, RTL } from './translate-photo.js';
+import { picker } from './picker.js';
 import { renderMarkdown } from './markdown.js';
 import { el, openDialog, words } from './ui.js';
 
@@ -147,13 +150,13 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
 
   /* шапка и языки */
-  const model = el('select', { id: 'tl-model', class: 'chip tl-model', 'aria-label': tr("Модель перевода"), hidden: true });
-  const fresh = el('button', { type: 'button', id: 'tl-new', class: 'btn btn-sm', hidden: !!ctx.hint },
-    icon('plus'), tr("Новый перевод"));
-  const head = el('header', { class: 'head tl-head' }, el('h1', {}, tr("Перевод")), model,
-    el('span', { class: 'grow' }), fresh);
-  const source = el('select', { id: 'tl-source', class: 'input tl-lang', 'aria-label': tr("Язык исходника") });
-  const target = el('select', { id: 'tl-target', class: 'input tl-lang', 'aria-label': tr("Язык перевода") });
+  const model = el('select', { id: 'tl-model' });
+  const fresh = el('button', { type: 'button', id: 'tl-new', class: 'ctl-primary', hidden: !!ctx.hint,
+    title: tr("Новый перевод"), 'aria-label': tr("Новый перевод") },
+  icon('plus'), el('span', { class: 'tl-new-label' }, tr("Новый перевод")));
+  const head = el('header', { class: 'head tl-head' }, el('h1', {}, tr("Перевод")), el('span', { class: 'grow' }), fresh);
+  const source = el('select', { id: 'tl-source' });
+  const target = el('select', { id: 'tl-target' });
   const swap = el('button', { type: 'button', id: 'tl-swap', class: 'icon-btn', 'aria-label': tr("Поменять языки местами"),
     title: tr("Поменять языки местами"), disabled: true }, icon('swap'));
   const langRow = el('div', { class: 'tl-langs' }, source, swap, target);
@@ -200,13 +203,22 @@ function build(view, ctx) {
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
-  const empty = el('p', { class: 'muted small' }, tr("Здесь появятся ваши переводы"));
+  const empty = el('p', { class: 'muted tl-empty' }, tr("Здесь появятся ваши переводы"));
   const more = el('button', { type: 'button', class: 'btn btn-sm tr-more', id: 'tl-more' }, tr("Показать ещё"));
   more.addEventListener('click', () => docs.more());
   const nativeHint = ctx.hint?.('hint-bar');
   const body = el('div', { class: 'tl-view' }, nativeHint, right, error,
     el('section', { class: 'tl-past', 'aria-label': tr("История переводов") }, el('h2', {}, tr("История")), list));
-  view.append(el('div', { class: 'translate' }, head, body, left));
+  const root = el('div', { class: 'translate' }, head, body, left);
+  view.append(root);
+  // выборы «как у Агентов»: языки — по краям ⇄, модель — в ряду под полем после выбора инструмента MCP
+  const sourcePick = picker(root, tr("Язык исходника"), source);
+  const targetPick = picker(root, tr("Язык перевода"), target);
+  const modelPick = picker(root, tr("Модель перевода"), model);
+  langRow.prepend(sourcePick.wrap);
+  langRow.append(targetPick.wrap);
+  modelPick.wrap.hidden = true;
+  mcp.control.after(modelPick.wrap);
   // запись по ?id — позже, её исходник встанет вместо черновика; исходник открытой записи — не набранный текст
   const draft = sectionDraft('translate', input, () => !rec || input.value !== (rec.source || ''));
 
@@ -251,11 +263,18 @@ function build(view, ctx) {
     target.replaceChildren(...options());
     source.value = AUTO;
     target.value = answer.default_target;
+    paintLangs();
   }
 
   function setLangs(from, to) {
     if ([...source.options].some((o) => o.value === from)) source.value = from;
     if ([...target.options].some((o) => o.value === to)) target.value = to;
+    paintLangs();
+  }
+
+  function paintLangs() {
+    sourcePick.sync();
+    targetPick.sync();
   }
 
   /** «Определить язык · английский» — определённый язык показанной записи. */
@@ -264,7 +283,10 @@ function build(view, ctx) {
     if (!auto) return;
     const found = rec && rec.source_lang === AUTO && rec.detected_lang;
     const label = found ? tr("Определить язык · {0}", langName(rec.detected_lang)) : tr("Определить язык");
-    if (auto.textContent !== label) auto.textContent = label;   // опрос раскрытый список не трогает
+    if (auto.textContent !== label) {                          // опрос раскрытый список не трогает
+      auto.textContent = label;
+      paintLangs();
+    }
     swap.disabled = !languages.length || (source.value === AUTO && !(rec && rec.detected_lang));
   }
 
@@ -318,7 +340,8 @@ function build(view, ctx) {
     goBtn.hidden = fresh.hidden = !!ctx.hint && !active;
     if (active && !goBtn.parentNode) bar.append(goBtn);
     attach.hidden = !!ctx.hint || active;
-    model.hidden = !model.options.length || (active && !mcp.has('model'));
+    modelPick.wrap.hidden = !model.options.length || (active && !mcp.has('model'));
+    modelPick.sync();
     if (nativeHint) nativeHint.hidden = active;
   }
 

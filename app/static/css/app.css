@@ -631,14 +631,14 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 }
 /* «Перевод» (translate.js): результат и история прокручиваются над полем ввода */
 .translate { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tl-head { flex-wrap: wrap; }
-.tl-head h1 { flex: none; }   /* узко сжимается выбор модели, а не заголовок */
-.head > .tl-model { flex: 0 1 auto; min-width: 0; max-width: 360px; margin-left: auto; text-overflow: ellipsis; }
+.tl-head h1 { flex: none; }   /* шапка в одну строку: заголовок и «Новый перевод» (на телефоне — значком) */
 .tl-view { flex: 1; min-height: 0; overflow: auto; width: 100%; max-width: 1400px; margin: 0 auto; padding: var(--space-7);
   display: flex; flex-direction: column; gap: var(--space-6); }
 .tl-view > .hint.hint-bar { margin: 0; }
-.tl-langs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--space-4); }
-.tl-lang { min-width: 0; padding: 7px var(--space-5); text-overflow: ellipsis; }
+/* компактный ряд языков над полем: [Язык ▾] ⇄ [Язык ▾], выборы — по содержимому (не делят строку, как ряд под полем) */
+.tl-langs { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.tl-langs .pick { flex: 0 1 auto; }
+.tl-empty { font-size: var(--empty-font); }
 .tl-pane { flex: none; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5) var(--space-6); background: var(--surface-1);
   border: 1px solid var(--line); border-radius: var(--r-card); }
 .tl-source-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
@@ -686,6 +686,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
   background: rgba(255, 255, 255, .92); color: #111; white-space: pre-wrap; overflow-wrap: normal; word-break: normal; }
 @media (max-width: 760px) {
   .tl-view { padding: var(--space-6); }
+  .tl-new-label { display: none; }
 }
 @media (max-width: 760px) {
   .split-aside { position: fixed; z-index: var(--z-drawer); top: 0; bottom: var(--tabs-h); left: 0; width: min(300px, calc(85 * var(--vw)));
