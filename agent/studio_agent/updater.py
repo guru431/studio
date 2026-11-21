@@ -209,6 +209,8 @@ def prepare(h: Path, release: dict) -> Path:
         # Хелпер берём из уже работающей доверенной копии; он не импортирует пакет обновления.
         if not host.LINUX:
             shutil.copyfile(REPO / 'studio_agent' / 'update_helper.py', stage / '_update_helper.py')
+        if not host.LINUX and not host.MACOS:
+            shutil.copyfile(REPO / 'studio_agent' / 'shortcut.py', stage / '_shortcut.py')
         if host.MACOS:
             shutil.copyfile(REPO / 'studio_agent' / 'macos_autostart.py', stage / '_macos_autostart.py')
         env = os.environ.copy()

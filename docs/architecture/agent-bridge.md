@@ -24,6 +24,23 @@
 профиля, без `OWNER RIGHTS`; починка выпуска `mkdtemp`). Сам переход «повышение → обычный сеанс» (UAC) тесты не
 воспроизводят — проверяется условие, при котором доступ от владельца не зависит.
 
+С 0.43.0 на Windows есть ярлык «Studio Agent» в меню «Пуск» пользователя (`shortcut.path`:
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Studio Agent.lnk`, без повышения) — как приложение моста macOS.
+Команда и рабочая папка — те же, что у автозапуска HKCU Run (`shortcut.target` = `autostart.command`): `pythonw.exe`
+копии и её `studio_agent.pyw`, без консоли. Ставит его `install.ps1` при установке в `Programs` (COM `WScript.Shell`;
+git-копия ярлык не ставит). При самообновлении ярлык переводит на подтверждённый выпуск `update_helper._switch` —
+вместе с автозапуском, только для выпуска в управляемом `releases` (`update_helper._shortcut`); хелпер вне пакета
+читает доверенную копию `_shortcut.py`, которую кладёт `updater.prepare`. Переход, который ведёт хелпер прежней
+версии без ярлыка, довершает сама новая копия: `update_helper.cleanup_started` после `complete` ставит ярлык или
+исправляет его, если он указывает не на неё (удалённый вручную появится при следующем запуске выпуска). Неудачный
+или неподтверждённый переход ярлык не трогает. `.lnk` пишется через `IShellLinkW` (ctypes, без сторонних пакетов):
+путь, аргумент и папка — поля ярлыка, а не командная строка, аргумент — один путь в кавычках (кавычки в пути
+Windows невозможны). Ярлык при уже работающем мосте второй копии не запускает: `single.acquire` занят — окно «Мост
+уже запущен» и выход, как у повторного автозапуска. Удаления моста в коде нет; «Отключиться» стирает только ключ и
+PIN — автозапуск и ярлык остаются. Проверки — `agent/tests/test_shortcut.py` (настоящий `.lnk` во временной
+`APPDATA`, фикстура `start_menu` conftest), `agent/tests/test_install.py` и `test_updater.py` (integration:
+ярлык `install.ps1` и автономного хелпера читается тем же `shortcut.read`).
+
 С 0.33.2 режим Codex «Полный доступ» передаёт `approvalPolicy: on-request` и
 `approvalsReviewer: auto_review` при создании, возобновлении чата и каждом ходе.
 Команды, для которых Codex требует согласования, проходят автоматическую проверку.
@@ -785,7 +802,8 @@ UUID нового чата задаёт студия, настоящий thread 
   `updater.prepare`), запуск `pythonw.exe studio_agent.pyw` без ожидания; `-NoVenv`, `-NoStart`,
   `-RunKey` (ключ автозапуска, тесты — `HKCU:\Software\studio-agent-test\Run`) — для тестов; повтор безопасен;
   автозапуск ставит окно (`autostart.REPO` — та копия, что запущена), а установка в `Programs` значение `StudioAgent`,
-  если оно есть, переписывает на эту копию (как `autostart.command()`), нет — не заводит.
+  если оно есть, переписывает на эту копию (как `autostart.command()`), нет — не заводит. Установка в `Programs` (с 0.43.0)
+  ставит или переписывает на эту копию ярлык «Studio Agent» меню «Пуск» (`shortcut.target`); git-копия — без ярлыка.
 - `install.cmd` (ASCII, CRLF) — двойной щелчок: `install.ps1` с `-ExecutionPolicy Bypass`, код не 0 — `pause`.
 - Архив моста собирает выкладка студии (`git archive` `HEAD:agent`): `.gitattributes` `export-ignore` — тесты, `.claude/`,
   `CLAUDE.md`, `AGENTS.md`, `FINDINGS*`, `IDEAS*`, `pytest.ini`, `requirements-dev.txt`, `.gitignore`, `.gitattributes`;

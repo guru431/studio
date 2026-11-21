@@ -528,10 +528,29 @@ def cleanup_started(stage: Path) -> bool:
             _switch(stage, plan)
             (stage / '_update_result').write_text('complete', encoding='ascii')
         else:
+            _shortcut(stage)  # и переход, который вёл хелпер без ярлыка (до 0.43.0)
             prune(stage, plan, _autostart())
     except (OSError, ValueError):
         pass
     return True
+
+
+def _shortcut(stage: Path) -> None:
+    """Ярлык «Studio Agent» меню «Пуск» — на подтверждённый выпуск (Windows, только управляемый `releases/`).
+    Хелпер читает доверенную копию `_shortcut.py`, а не пакет обновления; сбой ярлыка переходу не мешает."""
+    if MACOS or LINUX or _managed_location(stage) is None:
+        return
+    try:
+        if __package__:
+            from . import shortcut
+            shortcut.ensure(stage)
+        else:
+            import runpy
+            source = Path(__file__).with_name('_shortcut.py')
+            if source.is_file():
+                runpy.run_path(str(source))['ensure'](stage)
+    except Exception:
+        pass
 
 
 def _result(item):
@@ -614,12 +633,14 @@ def _switch_windows(stage: Path, old: Path):
 
 
 def _switch(stage: Path, plan: dict) -> None:
-    """Новая копия подтвердила запуск: автозапуск и `current` — на неё, затем уборка прежних выпусков."""
+    """Новая копия подтвердила запуск: автозапуск, ярлык меню «Пуск» (Windows) и `current` — на неё, затем уборка
+    прежних выпусков."""
     if MACOS:
         switch_macos(stage, Path(plan['old_repo']))
         prune(stage, plan, _autostart())
         return
     autostart = _switch_windows(stage, Path(plan['old_repo']))
+    _shortcut(stage)
     try:
         prune(stage, plan, autostart)
     except OSError:
