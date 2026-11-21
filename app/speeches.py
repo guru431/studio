@@ -34,12 +34,12 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
-from starlette.background import BackgroundTask
 
 import audio
 import clock
@@ -88,6 +88,8 @@ router = APIRouter(prefix="/api/speeches")
 say_router = APIRouter(prefix="/api/speech")
 #: учётки, чья фраза «Разговора» сейчас озвучивается
 SAYING: set[int] = set()
+#: учётки, чей «Скачать одним mp3» сейчас склеивается (`chat_audio`)
+GLUING: set[int] = set()
 
 
 class JobError(Exception):
@@ -693,29 +695,45 @@ def _file_name(text: str) -> str:
     return f"{head or 'speech'}.mp3"
 
 
+class TempFileResponse(FileResponse):
+    """FileResponse временного файла: файл уходит и после обрыва клиента (фоновая задача FileResponse тогда не идёт)."""
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await audio.remove_temp(Path(self.path))
+
+
 @router.get("/chats/{cid}/audio")
 async def chat_audio(cid: str, request: Request):
-    """Готовые записи чата по порядку — один mp3 (`audio.mp3_of`); готовых нет — 409. Файл — временный, уходит
-    после отдачи; диапазоны — у FileResponse."""
+    """Готовые записи чата по порядку — один mp3 (`audio.join_mp3`: без перекодирования); готовых нет — 409. Склейка —
+    одна на учётку за раз (`GLUING`, иначе 429). Файл — временный, уходит после отдачи и при обрыве
+    (`TempFileResponse`); диапазоны — у FileResponse."""
     uid = request.state.user.id
     rows = _chat_rows(uid, cid)
     ready = [r for r in rows if r["state"] == "done" and r["media_id"]]
     if not ready:
         raise HTTPException(409, {"code": "not_ready", "message": "в чате ещё нет готовых озвучек"})
+    if uid in GLUING:
+        raise HTTPException(429, {"code": "busy", "message": "предыдущий mp3 чата ещё собирается"})
+    GLUING.add(uid)
     parts = [media.path(uid, r["media_id"]) for r in ready]
     out = audio.temp(".mp3")
     try:
-        await audio.mp3_of(parts, out)
+        await audio.join_mp3(parts, out)
     except audio.AudioError as e:
         await audio.remove_temp(out)
         raise HTTPException(502, {"code": "audio", "message": str(e)}) from None
     except BaseException:
         await audio.remove_temp(out)
         raise
+    finally:
+        GLUING.discard(uid)
     log.info("чат озвучки %s: один mp3 из %d", cid[:8], len(ready))
-    return FileResponse(out, media_type="audio/mpeg", background=BackgroundTask(audio.remove_temp, out),
-                        headers={"Content-Disposition": media.disposition(_file_name(rows[0]["text"])),
-                                 "Cache-Control": "no-store"})
+    return TempFileResponse(out, media_type="audio/mpeg",
+                            headers={"Content-Disposition": media.disposition(_file_name(rows[0]["text"])),
+                                     "Cache-Control": "no-store"})
 
 
 @router.post("/chats/{cid}/cancel")

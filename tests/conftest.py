@@ -506,6 +506,11 @@ def fake_audio(monkeypatch):
         fake.calls.append(("mp3_of", len(parts)))
         P(dst).write_bytes(b"".join(P(p).read_bytes() for p in parts))
 
-    for name, fn in (("probe", probe), ("compress", compress), ("cut", cut), ("to_wav", to_wav), ("mp3_of", mp3_of)):
+    async def join_mp3(parts, dst):
+        fake.calls.append(("join_mp3", len(parts)))
+        P(dst).write_bytes(b"".join(P(p).read_bytes() for p in parts))
+
+    for name, fn in (("probe", probe), ("compress", compress), ("cut", cut), ("to_wav", to_wav), ("mp3_of", mp3_of),
+                     ("join_mp3", join_mp3)):
         monkeypatch.setattr(audio, name, fn)
     return fake

@@ -117,6 +117,42 @@ async def mp3_of(parts: list[Path], dst: Path) -> None:
     await _run([*argv, "-filter_complex", joined, "-map", "[a]", "-ac", "1", "-c:a", "libmp3lame", "-q:a", "4", str(dst)])
 
 
+def mp3_format(path: Path) -> "tuple | None":
+    """Версия MPEG, слой, индекс частоты и «моно» первого кадра mp3 (после тега ID3v2); не mp3 или не читается — None."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(10)
+            skip = 0
+            if len(head) == 10 and head[:3] == b"ID3":
+                skip = 10 + sum((b & 0x7F) << s for b, s in zip(head[6:10], (21, 14, 7, 0))) + (10 if head[5] & 0x10 else 0)
+            f.seek(skip)
+            data = f.read(4096)
+    except OSError:
+        return None
+    for i in range(len(data) - 3):
+        if data[i] == 0xFF and data[i + 1] & 0xE0 == 0xE0:
+            version, layer, rate = (data[i + 1] >> 3) & 3, (data[i + 1] >> 1) & 3, (data[i + 2] >> 2) & 3
+            if version != 1 and layer and rate != 3 and data[i + 2] >> 4 != 15:
+                return version, layer, rate, data[i + 3] >> 6 == 3
+    return None
+
+
+async def join_mp3(parts: list[Path], dst: Path) -> None:
+    """mp3 записей озвучки по порядку — один mp3: одного вида (`mp3_format`) — без перекодирования (демультиплексор
+    concat, `-c copy`), иначе (разные частоты моделей чата) — `mp3_of`. Список частей — рядом с `dst`, уходит сразу."""
+    formats = await file_io(lambda: {mp3_format(p) for p in parts})
+    if len(formats) != 1 or None in formats:
+        await mp3_of(parts, dst)
+        return
+    listing = dst.with_suffix(".txt")
+    text = "".join("file '{}'\n".format(str(p).replace("'", "'\\''")) for p in parts)
+    try:
+        await file_io(listing.write_text, text, "utf-8")
+        await _run([*BASE, "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(dst)])
+    finally:
+        await remove_temp(listing)
+
+
 async def file_io(fn, *args):
     """При отмене дождаться закрытия файла в потоке, прежде чем продолжить уборку."""
     task = asyncio.create_task(asyncio.to_thread(fn, *args))

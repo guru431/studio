@@ -63,6 +63,25 @@ def test_mp3_of_joins_parts(tmp):
     assert asyncio.run(audio.probe(dst)) == pytest.approx(2.5, abs=0.15)
 
 
+def test_join_mp3_copies_parts_of_one_format_and_reencodes_mixed(tmp):
+    """C-M6: записи чата озвучки (mp3 `mp3_of`) — одним mp3 без перекодирования; разные частоты — перекодирование."""
+    def mp3(name, seconds, rate):
+        out = tmp / f"{name}.mp3"
+        asyncio.run(audio.mp3_of([silence(tmp / f"{name}.wav", seconds, rate)], out))
+        return out
+
+    same = [mp3("a", 1.0, 24000), mp3("b", 1.5, 24000)]
+    assert audio.mp3_format(same[0]) == audio.mp3_format(same[1]) is not None
+    dst = tmp / "chat.mp3"
+    asyncio.run(audio.join_mp3(same, dst))
+    assert asyncio.run(audio.probe(dst)) == pytest.approx(2.5, abs=0.15) and stream(dst) == "mp3,24000,1"
+    mixed = [same[0], mp3("c", 1.0, 44100)]
+    assert audio.mp3_format(mixed[0]) != audio.mp3_format(mixed[1])
+    asyncio.run(audio.join_mp3(mixed, dst))
+    assert asyncio.run(audio.probe(dst)) == pytest.approx(2.0, abs=0.15)
+    assert list(tmp.glob("*.txt")) == []                                    # список частей убран
+
+
 def test_browser_webm_without_duration_is_measured(tmp):
     """Запись MediaRecorder (webm) длительности в заголовке не несёт — мерится декодированием."""
     src = silence(tmp / "a.wav", 1.5)
