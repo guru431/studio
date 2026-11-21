@@ -289,18 +289,21 @@ def _shift(s: speech.Segment, offset: float) -> speech.Segment:
 
 
 async def _in_parts(job: Job, source, duration: float, step: int, tmp) -> tuple[list, list]:
-    """Длинная запись частями по `step` секунд (п. 8 шапки): реплики и сегменты до склейки — со сдвигом времени,
-    собеседники каждой части — свои (speech.turns по части), перед частью после первой — служебная реплика MARKER.
-    Часть — тот же временный файл `tmp`: следующая перезаписывает прежнюю, уборка — у `run`."""
+    """Длинная запись равными частями не длиннее `step` секунд (п. 8 шапки): равные — чтобы хвост в доли секунды
+    не стал отдельной частью (внешний сервис ему откажет, и пропадёт вся расшифровка). Реплики и сегменты до
+    склейки — со сдвигом времени, собеседники каждой части — свои (speech.turns по части), перед частью после
+    первой — служебная реплика MARKER. Часть — тот же временный файл `tmp`: следующая перезаписывает прежнюю,
+    уборка — у `run`."""
     total = math.ceil(duration / step)
+    length = duration / total
     replicas: list = []
     raw: list = []
     for n in range(total):
-        start = float(n * step)
+        start = n * length
         job.part = f"часть {n + 1} из {total}"
         job.stage, job.stage_at = "готовлю запись", clock.NOW()
         _store(job)
-        await audio.cut(source, start, min(float(step), duration - start), tmp)
+        await audio.cut(source, start, length if n < total - 1 else duration - start, tmp)
         part, part_raw = speech.turns([_shift(s, start) for s in await _recognize(job, tmp)])
         if n:
             replicas.append(speech.Segment(start, start, None, MARKER.format(n + 1, _stamp(start))))
