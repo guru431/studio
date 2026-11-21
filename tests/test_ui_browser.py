@@ -1716,22 +1716,40 @@ def test_chat_internet_needs_an_exa_key(browser, live):
 
 
 def test_chat_context_refusal_keeps_the_text_and_the_attachments(browser, live):
-    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *open_new_chat(),
-        attach("[new File(['а'.repeat(400000)], 'том.txt', { type: 'text/plain' })]"),
-        ("type", "#chat-input", "Перескажи"), ("click", "#send"),
-        ("wait", "document.querySelector('#chat-error').textContent.length > 0"),
-        ("eval", "error", "document.querySelector('#chat-error').textContent"),
-        ("eval", "kept", "[document.querySelector('#chat-input').value,"
-                         " document.querySelectorAll('#composer .att-chip').length,"
-                         " document.querySelectorAll('#messages .msg').length]"),
-        ("eval", "ready", "!document.querySelector('#send').hidden && !document.querySelector('#send').disabled"),
-        # загруженное, но не отправленное вложение крестик убирает и с сервера
-        ("click", "#composer .att-remove"), ("wait", "!document.querySelector('#composer .att-chip')"),
-        ("idle",)])
+    """Сообщение больше контекста модели — 413 до записи хода: текст и вложение остаются в поле. Большой документ модель
+    получает выдержками знаний (test_chat.py), поэтому отказ вызывает длинный текст к модели с контекстом 8 тыс."""
+    login = "ctx-refusal"
+    live.add_user(login)
+    tiny = f"""(async () => {{ const m = {API};
+      const chat = (await m.api('GET', '/api/sections')).sections.find(x => x.id === 'chat');
+      const link = chat.links.find(l => l.connection.kind === 'srvllm');
+      await m.api('PUT', '/api/sections/chat/links/' + link.connection.id, {{ models: ['tiny'] }});
+      return true; }})()"""
+    text = "Перескажи " + "а" * 30_000                                  # ≈ 10 тыс. токенов
+    model = {"id": "tiny", "context_length": 8192}
+    live.gw.models.append(model)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), ("eval", "tiny", tiny),
+            # чат читает разделы заново, уже с отмеченной tiny
+            *go("settings"), ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('tiny')"),
+            attach("[new File(['Глава первая.'], 'том.txt', { type: 'text/plain' })]"),
+            ("type", "#chat-input", text), ("click", "#send"),
+            ("wait", "document.querySelector('#chat-error').textContent.length > 0"),
+            ("eval", "error", "document.querySelector('#chat-error').textContent"),
+            ("eval", "kept", "[document.querySelector('#chat-input').value,"
+                             " document.querySelectorAll('#composer .att-chip').length,"
+                             " document.querySelectorAll('#messages .msg').length]"),
+            ("eval", "ready", "!document.querySelector('#send').hidden && !document.querySelector('#send').disabled"),
+            # загруженное, но не отправленное вложение крестик убирает и с сервера
+            ("click", "#composer .att-remove"), ("wait", "!document.querySelector('#composer .att-chip')"),
+            ("idle",)])
+    finally:
+        live.gw.models.remove(model)
     assert not r.get("failed"), r
     v = r["values"]
     assert v["error"].startswith("Не помещается в контекст модели")
-    assert v["kept"] == ["Перескажи", 1, 0] and v["ready"]
+    assert v["kept"] == [text, 1, 0] and v["ready"]
     assert any(re.fullmatch(r"DELETE /api/attachments/[0-9a-f]{32}", s) for s in r["sent"]), r["sent"]
     assert not known_refusals(problems(r), 413), problems(r)
 
