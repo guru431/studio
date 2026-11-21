@@ -60,6 +60,19 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(scope='session')
+def _appdata(tmp_path_factory):
+    return tmp_path_factory.mktemp('appdata')
+
+
+@pytest.fixture(autouse=True)
+def start_menu(_appdata, monkeypatch):
+    """`APPDATA` — временная папка: ярлык меню «Пуск» (`shortcut.path`) тесты, хелпер обновления и `install.ps1`
+    в дочерних процессах пишут не в настоящий профиль."""
+    monkeypatch.setenv('APPDATA', str(_appdata))
+    return _appdata / 'Microsoft/Windows/Start Menu/Programs'
+
+
 @pytest.fixture(autouse=True)
 def macos_test_secrets(monkeypatch, request):
     """Быстрые тесты не открывают Keychain и не создают в нём сотни временных записей."""

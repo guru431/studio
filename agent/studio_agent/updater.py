@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -16,6 +17,9 @@ import zipfile
 from pathlib import Path
 
 from . import VERSION, host, macos_signed, store, update_helper
+
+if not host.MACOS and not host.LINUX:
+    from . import winacl
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -33,9 +37,54 @@ FAILED_WORDS = {
 }
 
 
+def new_dir(parent: Path, prefix: str) -> Path:
+    """Новая папка выпуска (и временная внутри него). Windows — `mkdir` без режима: ACL наследуется от каталога
+    установки; `tempfile.mkdtemp` дал бы защищённый DACL по владельцу (`winacl`), и после запуска с повышением
+    обычный сеанс терял бы доступ к выпуску автозапуска."""
+    if host.MACOS or host.LINUX:
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    for _ in range(100):
+        path = parent / (prefix + secrets.token_hex(6))
+        try:
+            path.mkdir()
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError(prefix)
+
+
+def repair_acl(repo: Path) -> int:
+    """Запуск установленной копии Windows: выпуски `release-*` с защищённым DACL прежних версий (`mkdtemp`) снова
+    наследуют ACL `releases/`. Чинит сеанс, которому DACL разрешает это: владелец выпуска или сеанс с повышением.
+    Выпуск, созданный с повышением, обычному сеансу недоступен даже для чтения DACL — он пропускается (такой выпуск
+    обычный сеанс и не запустил бы). Разработческая копия папку установки не трогает. Итог — число исправленных."""
+    repo = Path(repo)
+    if (host.MACOS or host.LINUX or update_helper._managed_location(repo) is None
+            and os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(host.install_home()))):
+        return 0
+    base = update_helper._checked_base(host.install_home() / 'releases')
+    if base is None:
+        return 0
+    fixed = 0
+    for item in sorted(base.iterdir()):
+        try:
+            if (update_helper.RELEASE_NAME.fullmatch(item.name) and update_helper._identity(item) is not None
+                    and winacl.inherit(item)):
+                fixed += 1
+        except OSError:
+            continue
+    if fixed:
+        log.info('обновление: права выпусков исправлены: %d', fixed)
+    return fixed
+
+
 async def cleanup_releases(*, repo=None, sleep=asyncio.sleep):
     """Уборка новым кодом после подтверждённого запуска; helper перехода ещё может быть старой версии."""
     stage = Path(repo) if repo is not None else REPO
+    try:
+        await asyncio.to_thread(repair_acl, stage)
+    except OSError:
+        pass
     for _ in range(240):
         if await asyncio.to_thread(update_helper.cleanup_started, stage):
             return
@@ -148,7 +197,7 @@ def prepare(h: Path, release: dict) -> Path:
     url = package_url(cfg.url)
     base = host.install_home() / 'releases'
     base.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix='release-', dir=base))
+    stage = new_dir(base, 'release-')
     try:
         archive = stage / 'package.zip'
         _download(url, key, archive, release['size'], release['sha256'])
@@ -176,7 +225,8 @@ def prepare(h: Path, release: dict) -> Path:
              '-r', str(stage / 'requirements.txt'), '-c', str(stage / 'constraints.txt')],
             [pythonw, '-c', 'import studio_agent.app'],
         ]
-        with tempfile.TemporaryDirectory(prefix='prepare-', dir=stage) as temporary:
+        temporary = str(new_dir(stage, 'prepare-'))
+        try:
             env.update(TMP=temporary, TEMP=temporary, TMPDIR=temporary, PIP_CACHE_DIR=temporary)
             for step, command in enumerate(commands, 1):
                 log.info('обновление: шаг %d', step)
@@ -184,6 +234,8 @@ def prepare(h: Path, release: dict) -> Path:
                 subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, creationflags=host.NO_WINDOW,
                                timeout=timeout, check=True)
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
         return stage
     except BaseException:
         discard(stage)
