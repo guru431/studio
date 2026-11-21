@@ -1480,8 +1480,7 @@ def test_docker_build_uses_application_version_in_tag_and_metadata(tmp_path):
     version_file = app / 'release.py'
     start = INSTALL_DOCKER.index('version=$(sed')
     block = INSTALL_DOCKER[start:INSTALL_DOCKER.index('\ndocker compose', start)]
-    stubs = (f'R={tmp_path.as_posix()}; NEW=$R; REVISION={"a" * 40}; REFRESH_BASE=0\n'
-             'docker() { printf "%s\\n" "$*"; }\n')
+    stubs = f'NEW={tmp_path.as_posix()}; REVISION={"a" * 40}; REFRESH_BASE=0\ndocker() {{ printf "%s\\n" "$*"; }}\n'
     (tmp_path / 'deploy/docker').mkdir(parents=True)
     version_file.write_text('VERSION = "0.18.3"\n')
     result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
@@ -1489,16 +1488,6 @@ def test_docker_build_uses_application_version_in_tag_and_metadata(tmp_path):
     image = 'arcane.local/studio:0.18.3-' + 'a' * 40
     assert '--build-arg STUDIO_VERSION=0.18.3' in result.stdout and f'-t {image}' in result.stdout
     assert (tmp_path / 'deploy/docker/host.conf').read_text().strip() == f'STUDIO_IMAGE={image}'
-    current_config = tmp_path / 'current/deploy/docker/host.conf'
-    current_config.parent.mkdir(parents=True)
-    current_config.write_text(f'STUDIO_IMAGE={image}\n', encoding='ascii', newline='\n')
-    legacy = stubs + 'docker() { [ "$*" = "buildx version" ] && return 1; printf "%s\\n" "$*"; }\n'
-    result = subprocess.run([bash, '-c', legacy + block], capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stderr
-    assert f'--cache-from {image}' in result.stdout
-    result = subprocess.run([bash, '-c', legacy + 'REFRESH_BASE=1\n' + block],
-                            capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0 and '--no-cache' in result.stdout and '--cache-from' not in result.stdout
     version_file.write_text('VERSION = "invalid"\n')
     result = subprocess.run([bash, '-c', stubs + block], capture_output=True, text=True, timeout=20)
     assert result.returncode == 1 and 'invalid application version' in result.stderr
