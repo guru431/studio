@@ -683,7 +683,9 @@ function build(view, ctx) {
       if (current === chat) chat.knowledge = out.kb_ids;
     },
     failed: (err) => { notice.textContent = words(err); } });
-  const inputBox = fieldBox(input, { attach: clip });
+  // «Разговор» уступает место «очистить», пока в поле текст (идущий — виден всегда): колонка — три значка, рамка
+  // пустого поля не растёт с первой буквой
+  const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; } });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
   let passportKey = '';
   const ring = contextRing(estimateContext);
@@ -1151,6 +1153,7 @@ function build(view, ctx) {
 
   function paintTalk(state) {
     if (state === 'off') talking = null;
+    talkToggle.hidden = state === 'off' && !!input.value;
     talkToggle.dataset.state = state;
     talkToggle.setAttribute('aria-pressed', String(state !== 'off'));
     talkNote.hidden = state === 'off';
