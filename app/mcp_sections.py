@@ -53,7 +53,9 @@ JOB_ID = re.compile(r"job_[0-9a-f]{32}")
 ARTIFACT_ID = re.compile(r"art_[0-9a-f]{32}")
 ACTIVE = {"queued", "running", "waiting_gpu"}
 INLINE_MIME = {mime for mime in media.EXT if mime.startswith(("image/", "audio/", "video/"))}
-TICKET_MIME = INLINE_MIME | {"text/plain", "text/markdown", "application/json", "application/octet-stream"}
+TICKET_MIME = INLINE_MIME | {"text/plain", "text/markdown", "application/json", "application/octet-stream", media.DOCX}
+SRT_MAX = 2 << 20                # файл .srt итога «Расшифровки», который Studio читает сама для вида расшифровки
+SRT_MIME = "application/x-subrip"
 
 
 def section_tools(section: str) -> set[str]:
@@ -134,7 +136,7 @@ class RunIn(BaseModel):
 
 def ticket(session: mcp.Session, section: str, kind: str, *payload) -> str:
     return security.encrypt(json.dumps([session.uid, session.sid, security.digest(session.stamp.decode()),
-                                       section, kind, clock.NOW(), *payload])).decode()
+                                       section, kind, clock.NOW(), *payload], ensure_ascii=False)).decode()
 
 
 def redeem(request, section, encoded, kind):
@@ -194,6 +196,18 @@ def result_text(data):
     return ""
 
 
+def artifacts(data):
+    """Файлы итога `(id, mime, имя)` с путём скачивания по контракту; прочие записи `artifacts` пропускаются."""
+    found = data.get("artifacts") if isinstance(data, dict) else None
+    for artifact in found[:128] if isinstance(found, list) else ():
+        if not isinstance(artifact, dict):
+            continue
+        aid, mime = artifact.get("id"), artifact.get("mime_type")
+        if (isinstance(aid, str) and ARTIFACT_ID.fullmatch(aid) and isinstance(mime, str)
+                and artifact.get("download_path") == f"/artifacts/{aid}/content"):
+            yield aid, mime, clean_text(artifact.get("name"), 120)
+
+
 def present(session, section, result):
     data = result.get("structuredContent")
     files = []
@@ -204,22 +218,71 @@ def present(session, section, result):
             files.append({"mime": mime, "base64": encoded})
     if not isinstance(data, dict):
         return {"text": first_text(result), "files": files}
-    artifacts = data.get("artifacts")
-    if isinstance(artifacts, list):
-        for artifact in artifacts[:128]:
-            if not isinstance(artifact, dict):
-                continue
-            aid, mime = artifact.get("id"), artifact.get("mime_type")
-            if (not isinstance(aid, str) or not ARTIFACT_ID.fullmatch(aid)
-                    or not isinstance(mime, str) or artifact.get("download_path") != f"/artifacts/{aid}/content"):
-                continue
-            mime = mime if mime in TICKET_MIME else "application/octet-stream"
-            files.append({"mime": mime, "name": clean_text(artifact.get("name"), 120),
-                          "url": f"/api/mcp-tools/{section}/files/{ticket(session, section, 'file', aid, mime)}"})
+    for aid, mime, name in artifacts(data):
+        mime = mime if mime in TICKET_MIME else "application/octet-stream"
+        # имя файла — для скачивания (`.srt`, `.docx`, `.md` под своим именем): только последняя часть пути
+        plain = name.replace("\\", "/").rsplit("/", 1)[-1][:80]
+        files.append({"mime": mime, "name": name,
+                      "url": f"/api/mcp-tools/{section}/files/{ticket(session, section, 'file', aid, mime, plain)}"})
     text = result_text(data)
     if not text and not files:
         text = json.dumps(data, ensure_ascii=False, indent=2)
     return {"text": clean_text(text), "files": files}
+
+
+async def _srt_file(session, data) -> str:
+    """Текст первого файла .srt итога (не больше SRT_MAX); нет, недоступен или больше — пусто."""
+    for aid, mime, name in artifacts(data):
+        if mime != SRT_MIME and not name.lower().endswith(".srt"):
+            continue
+        headers = httpx.Headers(session.headers(rpc=False))
+        headers["Accept-Encoding"] = "identity"
+        try:
+            async with upstream.stream(SimpleNamespace(id=session.sid), "GET", endpoint(session, f"/artifacts/{aid}/content"),
+                                       keyless=True, headers=dict(headers), timeout=mcp.TIMEOUT) as response:
+                if response.status_code != 200:
+                    return ""
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > SRT_MAX:
+                        return ""
+        except (httpx.HTTPError, upstream.UpstreamRefused, ValueError):
+            return ""
+        return bytes(body).decode("utf-8-sig", "replace")
+    return ""
+
+
+def _joined(segments) -> list[dict]:
+    """Соседние сегменты одного собеседника — одна реплика (номера меток источника сохраняются)."""
+    out = []
+    for s in segments:
+        if out and s.speaker is not None and out[-1]["speaker"] == s.speaker:
+            out[-1].update(end=s.end, text=f"{out[-1]['text']} {s.text}")
+        else:
+            out.append({"start": s.start, "end": s.end, "speaker": s.speaker, "text": s.text})
+    return out
+
+
+async def turns(session, result, text) -> list[dict]:
+    """Расшифровка MCP по собеседникам для вида «Расшифровки»: сегменты итога с `speaker` (метки — «Собеседник N» по
+    первому появлению), SRT или строки с метками в тексте, файл .srt итога. Не по собеседникам — пусто."""
+    data = result.get("structuredContent")
+    raw = data.get("segments") if isinstance(data, dict) else None
+    if isinstance(raw, list) and any(isinstance(s, dict) and isinstance(s.get("speaker"), str) for s in raw):
+        return _joined(speech.speakers(speech._segments(data)))
+    found = speech.segments_from_srt(text) or speech.segments_from_labeled(text)
+    if not found and isinstance(data, dict):
+        found = speech.segments_from_srt(await _srt_file(session, data))
+    return _joined(found)
+
+
+async def shown(session, section, result):
+    """Итог инструмента для страницы (`present`); у «Расшифровки» — ещё реплики по собеседникам (`turns`)."""
+    out = present(session, section, result)
+    if section == "transcribe" and (found := await turns(session, result, out["text"])):
+        out["turns"] = found
+    return out
 
 
 async def upload_artifact(session, data, mime, name=None):
@@ -313,17 +376,29 @@ def field_limits(prop) -> dict | None:
 
 def check_bounds(tool: dict, args: dict) -> None:
     """Refuse values outside the limits the tool schema declares (`minimum`/`maximum`, `enum`) — the same limits the
-    page form enforces (`field_limits`); a field with nonsense limits is left to the tool."""
+    page form enforces (`field_limits`); a field with nonsense limits is left to the tool. Also the field types the page
+    renders as extra fields (mcp-sections.js `extraFields`): `boolean` — only true/false, `integer` — a whole number,
+    `string` with `maxLength` — a string that fits."""
     properties = tool["schema"].get("properties", {})
     for key, value in args.items():
-        limits = field_limits(properties.get(key))
+        prop = properties.get(key)
+        kind = prop.get("type") if isinstance(prop, dict) else None
+        number = isinstance(value, (int, float)) and not isinstance(value, bool)
+        name = clean_text(key, 80)
+        if kind == "boolean" and not isinstance(value, bool):
+            raise mcp.refused(f"Значение «{name}» — да или нет", "invalid", 422)
+        if kind == "integer" and isinstance(value, float) and not value.is_integer():
+            raise mcp.refused(f"Значение «{name}» — целое число", "invalid", 422)
+        longest = prop.get("maxLength") if kind == "string" else None
+        if (isinstance(longest, int) and not isinstance(longest, bool) and 0 < longest <= LIMIT_MAX
+                and (not isinstance(value, str) or len(value) > longest)):
+            raise mcp.refused(f"Значение «{name}» — строка до {longest} знаков", "invalid", 422)
+        limits = field_limits(prop)
         if limits is None:
             continue
         low, high = limits["min"], limits["max"]
-        number = isinstance(value, (int, float)) and not isinstance(value, bool)
         if (low is not None or high is not None) and (
                 not number or (low is not None and value < low) or (high is not None and value > high)):
-            name = clean_text(key, 80)
             lo, hi = (int(bound) if isinstance(bound, float) and bound.is_integer() else bound for bound in (low, high))
             words = (f"Значение «{name}» — от {lo} до {hi}" if lo is not None and hi is not None
                      else f"Значение «{name}» — не меньше {lo}" if hi is None else f"Значение «{name}» — не больше {hi}")
@@ -370,7 +445,7 @@ async def run(section: str, sid: int, request: Request):
         jid = data.get("id") if isinstance(data, dict) else None
         if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid):
             return {"job": ticket(session, section, "job", jid), "status": "queued"}
-        return present(session, section, result)
+        return await shown(session, section, result)
     except TimeoutError:
         raise mcp.refused("MCP не успел вернуть список инструментов") from None
     finally:
@@ -393,7 +468,7 @@ async def status(section: str, body: JobIn, request: Request):
         if job["status"] == "completed":
             reply = (await call(session, "job_result", {"job_id": jid})).get("structuredContent")
             if isinstance(reply, dict) and isinstance(reply.get("result"), dict):
-                return present(session, section, {"structuredContent": reply["result"]})
+                return await shown(session, section, {"structuredContent": reply["result"]})
             raise mcp.refused("MCP не вернул результат задания")
         error = job.get("error")
         return {"status": clean_text(job["status"], 80), "active": job["status"] in ACTIVE,
@@ -417,8 +492,8 @@ class ArtifactStream(StreamingResponse):
 @router.get("/{section}/files/{encoded}")
 async def download(section: str, encoded: str, request: Request):
     section_tools(section)
-    session, (aid, mime) = redeem(request, section, encoded, "file")
-    return await relay(session, aid, mime, request)
+    session, (aid, mime, *name) = redeem(request, section, encoded, "file")    # билеты до 0.41.0 — без имени
+    return await relay(session, aid, mime, request, name=name[0] if name and isinstance(name[0], str) else "")
 
 
 GONE_FILE = "Файла больше нет на сервере MCP"
@@ -432,9 +507,9 @@ def endpoint(session: mcp.Session, path: str) -> httpx.URL:
     return httpx.URL(session.url).copy_with(raw_path=path.encode())
 
 
-async def relay(session, aid, mime, request):
+async def relay(session, aid, mime, request, *, name=""):
     """Файл результата MCP `aid` потоком через Studio: диапазоны (`Range`), `nosniff`, предел DOWNLOAD_MAX;
-    не картинка, звук или видео — вложением. Сервер ответил 404 — 404 GONE_FILE."""
+    не картинка, звук или видео — вложением (под именем `name`, если оно есть). Сервер ответил 404 — 404 GONE_FILE."""
     # The transfer path is part of the service contract. Never fetch a URL from a tool result.
     url = endpoint(session, f"/artifacts/{aid}/content")
     headers = httpx.Headers(session.headers(rpc=False))
@@ -463,7 +538,8 @@ async def relay(session, aid, mime, request):
             raise mcp.refused("Файл MCP недоступен или превышает предел загрузки")
         outgoing["X-Content-Type-Options"] = "nosniff"
         if mime not in INLINE_MIME:
-            outgoing["Content-Disposition"] = f'attachment; filename="result{media.EXT.get(mime, ".bin")}"'
+            outgoing["Content-Disposition"] = (media.disposition(name) if name
+                                               else f'attachment; filename="result{media.EXT.get(mime, ".bin")}"')
 
         async def chunks():
             size = 0
