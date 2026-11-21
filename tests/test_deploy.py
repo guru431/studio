@@ -281,8 +281,19 @@ def test_admin_secrets_travel_by_stdin_only():
 
 def test_install_and_deploy_ship_the_same_parts():
     parts = {re.search(r"^PARTS=\((.*)\)$", text, re.M).group(1) for text in (INSTALL, DEPLOY_SH)}
-    assert parts == {"app deploy requirements.txt constraints.txt"}
+    assert parts == {"app deploy requirements.txt constraints.txt docs/guide.ru.md"}
     assert "URL=${STUDIO_URL:-https://studio.example.com}" in DEPLOY_SH and '"$URL/health"' in DEPLOY_SH
+
+
+def test_help_guide_ships_with_the_app():
+    """«Справка» читает docs/guide.ru.md рядом с app/ (`help.GUIDE`): часть выкладки, образ и обмен частей с
+    подкаталогом — на прежнее место, и прежняя копия — в .previous по тому же пути."""
+    import help as help_module
+    assert help_module.GUIDE == ROOT / "docs" / "guide.ru.md" and help_module.GUIDE.is_file()
+    assert "COPY docs/guide.ru.md ./docs/guide.ru.md" in DOCKERFILE                # /opt/studio/docs рядом с app
+    assert {"!docs/", "!docs/guide.ru.md"} <= set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+    assert 'mkdir -p "$R/$(dirname "$p")" "$OLD/$(dirname "$p")"' in INSTALL
+    assert 'if [ -e "$R/$p" ]; then mv "$R/$p" "$OLD/$p"; fi' in INSTALL
 
 
 def test_unit_lets_a_frame_just_over_the_limit_reach_the_app():
@@ -1021,6 +1032,8 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     (repo / "app" / "main.py").write_text("# server\n")
     (repo / "requirements.txt").write_text("# requirements\n")
     (repo / "constraints.txt").write_text("# constraints\n")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "guide.ru.md").write_text("# guide\n")
     converter_bytes = b'# Shared converter fixture\n'
     (repo / 'deploy' / 'md2pdf.py').write_bytes(converter_bytes)
     (repo / 'deploy' / 'md2pdf.sha256').write_text(hashlib.sha256(converter_bytes).hexdigest() + '\n', encoding='utf-8')

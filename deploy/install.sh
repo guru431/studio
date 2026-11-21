@@ -18,7 +18,8 @@ ENV_FILE=/etc/studio/studio.env
 UNIT=studio-web.service
 SOCK=/run/studio/web.sock
 MEDIA=/mnt/storage/SharedData/studio
-PARTS=(app deploy requirements.txt constraints.txt)
+# docs/guide.ru.md — руководство Studio для «Справки» (help.py)
+PARTS=(app deploy requirements.txt constraints.txt docs/guide.ru.md)
 
 SECRET=0
 ADMIN=0
@@ -140,7 +141,8 @@ chmod -R u=rwX,go=rX "$NEW"
 rm -rf "$OLD"
 install -d -o root -g root -m 0700 "$OLD"
 for p in "${SWAP[@]}"; do       # убранные из репозитория файлы уходят вместе с прежним каталогом
-    if [ -e "$R/$p" ]; then mv "$R/$p" "$OLD/"; fi
+    mkdir -p "$R/$(dirname "$p")" "$OLD/$(dirname "$p")"   # часть может лежать в подкаталоге (docs/…)
+    if [ -e "$R/$p" ]; then mv "$R/$p" "$OLD/$p"; fi
     mv "$NEW/$p" "$R/$p"
 done
 rm -rf "$NEW"
@@ -172,7 +174,7 @@ service_failed() {      # $1 — что не прошло; прежняя слу
     systemctl status "$UNIT" --no-pager 2>&1 | tail -n 15 >&2 || true
     journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
     echo "Откат: прежние код, юнит и (если менялась) среда Python — в $OLD:" >&2
-    echo "  for p in ${SWAP[*]}; do rm -rf $R/\$p; [ ! -e $OLD/\$p ] || mv $OLD/\$p $R/; done" >&2
+    echo "  for p in ${SWAP[*]}; do rm -rf $R/\$p; [ ! -e $OLD/\$p ] || mv $OLD/\$p $R/\$p; done" >&2
     echo "  install -m 0644 $R/deploy/$UNIT /etc/systemd/system/$UNIT; systemctl daemon-reload; systemctl restart $UNIT" >&2
     if [ -f "$OLD/deploy/$UNIT" ] && grep -q ' server:app' "$OLD/deploy/$UNIT"; then
         echo "Но это переход со старой студии (server:app): в $ENV_FILE уже только STUDIO_DATA_KEY," \

@@ -24,6 +24,7 @@ export const NAMES = {
   dictation: tr("Голосовой ввод"),
   search: tr("Поиск"),
   settings: tr("Настройки"),
+  help: tr("Справка"),
   admin: tr("Администрирование"),
 };
 

@@ -221,7 +221,7 @@ def test_avatar_menu_and_logout(browser, live, width):
         ("wait", "location.pathname === '/login' && document.querySelector('#login')")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Администрирование", "Выйти"]
+    assert r["values"]["items"] == ["Настройки", "Справка", "Администрирование", "Выйти"]
     assert r["values"]["inside"]
     assert not problems(r), problems(r)
 
@@ -335,7 +335,7 @@ def test_non_admin_menu_has_no_panel_and_admin_route_falls_back(browser, live):
         ("eval", "items", MENU_ITEMS),
         ("eval", "go", "location.hash = '#/admin'"), ("wait", "location.hash === '#/chat'")])
     assert not r.get("failed"), r
-    assert r["values"]["items"] == ["Настройки", "Выйти"]
+    assert r["values"]["items"] == ["Настройки", "Справка", "Выйти"]
 
 
 def test_api_passes_the_deadline_through(browser, live):

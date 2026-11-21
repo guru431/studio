@@ -12,6 +12,16 @@ const imageNames = {
   image_describe: tr("Описать фото"), describe_image: tr("Описать фото"),
 };
 
+const STATE_WORDS = { ok: tr("работает"), busy: tr("занят"), down: tr("недоступен") };
+
+/** Состояние источника MCP (`studio/status`, GET /api/mcp/status) словами: «занят, в очереди 2, сообщение сервера». */
+export function mcpStateWords(item) {
+  const parts = [STATE_WORDS[item.state] || item.state];
+  if (item.queue) parts.push(tr("в очереди {0}", item.queue));
+  if (item.message) parts.push(item.message);
+  return parts.join(', ');
+}
+
 const LIMIT_MAX = 1e6;
 const ENUM_MAX = 64;
 const ENUM_TEXT = 80;
@@ -76,6 +86,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   const urls = [];
   const options = new Map();
   let limit, timer, rendered, polling = false;
+  let states = {};             // состояние серверов со `studio/status` (GET /api/mcp/status)
   const control = el('select', { id: 'section-mcp-tool', class: 'chip mcp-tool', hidden: true, 'aria-label': tr("Инструмент MCP") });
   const status = el('p', { class: 'status', 'aria-live': 'polite' });
   const result = el('div', { class: 'mcp-result', id: 'section-mcp-result' });
@@ -199,16 +210,39 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     if (!options.size) return;
     const label = tool => tool.title || (Object.hasOwn(imageNames, tool.name) ? imageNames[tool.name] :
       tool.name === 'video_estimate' ? tr("Оценить время генерации") : '');
-    control.append(el('option', { value: '', disabled: !native }, tr("Студия")), ...[...options].map(([key, { server, tool }]) =>
-      el('option', { value: key }, ['MCP', server.name, label(tool)].filter(Boolean).join(' · '))));
+    const names = new Map();
+    control.append(el('option', { value: '', disabled: !native }, tr("Студия")), ...[...options].map(([key, { server, tool }]) => {
+      const option = el('option', { value: key }, ['MCP', server.name, label(tool)].filter(Boolean).join(' · '));
+      names.set(option, server.id);
+      return option;
+    }));
     const last = record()?.key;
     control.value = options.has(last) ? last : native ? '' : options.keys().next().value;
     control.hidden = false;
     onChange?.();
     paint();
+    // состояние источника: точка у выбора — по выбранному серверу, занятый и недоступный подписаны в списке
+    api('GET', '/api/mcp/status', undefined, { signal: controller.signal }).then((found) => {
+      states = found;
+      for (const [option, sid] of names) if (found[sid] && found[sid].state !== 'ok') {
+        option.textContent += ` · ${STATE_WORDS[found[sid].state]}`;
+      }
+      paintState();
+    }, () => {});
   }
 
-  control.addEventListener('change', () => onChange?.());
+  function paintState() {
+    const item = states[picked()?.server.id];
+    if (item) {
+      control.dataset.mcpState = item.state;
+      control.title = mcpStateWords(item);
+    } else {
+      delete control.dataset.mcpState;
+      control.removeAttribute('title');
+    }
+  }
+
+  control.addEventListener('change', () => { paintState(); onChange?.(); });
   document.addEventListener(`studio-mcp-${section}`, paint, { signal: controller.signal });
   document.addEventListener('studio-locked', paint, { signal: controller.signal });
   queueMicrotask(() => { paint(); load(); });
@@ -222,6 +256,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     useNative() {
       if (!native) return;
       control.value = '';
+      paintState();
       onChange?.();
     },
     get tool() { return picked()?.tool.name; }, get busy() { return busy(); },

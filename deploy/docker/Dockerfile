@@ -14,6 +14,7 @@ WORKDIR /opt/studio
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt yt-dlp==2026.10.26
 COPY app ./app
+COPY docs/guide.ru.md ./docs/guide.ru.md
 COPY deploy/md2pdf.py deploy/md2pdf.sha256 deploy/chromium-offline.sh ./deploy/
 COPY deploy/md2pdf.LICENSE ./deploy/
 RUN cd deploy && echo "$(cat md2pdf.sha256)  md2pdf.py" | sha256sum --check --status

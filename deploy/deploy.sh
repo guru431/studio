@@ -35,7 +35,8 @@ KEY=${STUDIO_SSH_KEY:-$HOME/.ssh/studio_deploy_key}
 VAULT=${STUDIO_VAULT:-/c/work/projects/local-config/secrets/vault.env}
 URL=${STUDIO_URL:-https://studio.example.com}
 R=${STUDIO_REMOTE_ROOT:-/opt/services/studio}
-PARTS=(app deploy requirements.txt constraints.txt)
+# docs/guide.ru.md — руководство Studio для «Справки» (help.py)
+PARTS=(app deploy requirements.txt constraints.txt docs/guide.ru.md)
 RUNTIME=${STUDIO_RUNTIME:-systemd}
 case "$RUNTIME" in systemd|docker) ;; *) echo 'deploy: invalid STUDIO_RUNTIME' >&2; exit 1 ;; esac
 if [ "$RUNTIME" = docker ]; then PARTS+=(.dockerignore); fi
