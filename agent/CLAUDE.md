@@ -33,7 +33,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Ход: ввод и вывод | `timeline`, `image_input`, `attachments`, `diffs`, `discovery` |
 | Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `desktop`, `desktop_native` (Windows), `desktop_macos` (macOS) |
-| Обновление | `updater`, `update_helper` (stdlib-хелпер), `install.ps1`, `install.cmd` |
+| Обновление | `updater`, `update_helper` (stdlib-хелпер), `winacl` (ACL выпуска Windows), `install.ps1`, `install.cmd` |
 | Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `i18n` (язык окна, трея и консоли), `__main__` (консольные команды), `studio_agent.pyw` |
 
 ## Правила
