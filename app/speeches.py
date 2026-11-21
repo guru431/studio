@@ -17,6 +17,12 @@
    `previous_media_id`. Готово — прежний mp3 удаляется (если на него больше никто не ссылается); отмена — запись
    как была; отказ или перезапуск — прежние текст и звук с ошибкой словами (`KEPT_NOTE`). Очередь и «В работе»
    идут по времени постановки `queued` (у строк прежнего кода его нет — `created`), место в чате — по `created`.
+6. Длинный текст (до LONG_MAX): новая озвучка длиннее предела записи (TEXT_MAX у шлюза, EXTERNAL_MAX у внешнего
+   сервиса) делится `split_text` и ставится записями одного чата по порядку; QUEUE_MAX — число разных чатов в
+   очереди и работе. Готовые записи чата — одним mp3 (`GET /chats/{id}/audio`). «Прочитать» (`POST /read`) — текст
+   ответа чата, перевода или скана без разметки (`exports.md_plain`) источником по умолчанию; умолчание раздела —
+   инструмент MCP (своей модели нет, подключения MCP есть) — 409 `read_mcp`, его запускает страница.
+7. Язык озвучки шлюза — `language` записи (`speech.TTS_LANGUAGES`; нет — `speech.TTS_LANGUAGE`).
 """
 import asyncio
 import json
@@ -24,17 +30,21 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 import audio
 import clock
 import connections
 import db
 import documents
+import exports
 import lock_policy
+import mcp_client
 import media
 import operations
 import push
@@ -44,8 +54,15 @@ import state
 import voices
 
 TEXT_MAX = 2000
+#: текст новой озвучки: длиннее предела записи — частями одного чата (п. 6 шапки)
+LONG_MAX = 200_000
 PHRASE_MAX = 220
 EXTERNAL_MAX = 4000
+#: шаг времени постановки соседних частей: очередь идёт по `queued`, а id случайны
+PART_STEP = 1e-6
+#: голос внешнего сервиса для «Прочитать», если этой моделью ещё не озвучивали
+SERVICE_VOICE = "alloy"
+NAME_CHARS = 40
 VOICE_NAME_MAX = 64
 RETRY_SEC = 15
 WAIT_MAX_SEC = 1800
@@ -54,7 +71,7 @@ INTERRUPTED = "прервано перезапуском студии"
 QUEUE_MAX = 5
 QUEUED = "в очереди"
 #: поля записи, которые повторная озвучка заменяет, а отказ и отмена возвращают (п. 5 шапки)
-KEPT = ("text", "connection_id", "model", "voice", "voice_name", "duration", "state", "detail", "finished")
+KEPT = ("text", "connection_id", "model", "voice", "voice_name", "language", "duration", "state", "detail", "finished")
 KEPT_NOTE = "прежняя озвучка сохранена"
 #: порядок очереди: время постановки, у строк прежнего кода — создания
 QUEUE_KEY = "COALESCE(queued, created)"
@@ -68,11 +85,22 @@ class JobError(Exception):
 
 
 class SpeechIn(BaseModel):
-    text: str = Field(max_length=TEXT_MAX * 2)
+    text: str = Field(max_length=LONG_MAX * 2)
     voice: str = Field(max_length=VOICE_NAME_MAX)
     connection_id: "int | None" = None
     model: "str | None" = Field(default=None, max_length=200)
     chat_id: "str | None" = Field(default=None, min_length=1, max_length=64)
+    language: "Literal['ru', 'en'] | None" = None
+
+
+class Origin(BaseModel):
+    kind: Literal["chat", "translate", "ocr"]
+    id: str = Field(min_length=1, max_length=64)
+
+
+class ReadIn(BaseModel):
+    text: str = Field(max_length=LONG_MAX * 2)
+    origin: Origin
 
 
 @dataclass
@@ -88,6 +116,7 @@ class Job:
     by_user: bool = False
     files: list = field(default_factory=list)
     ready: int = 0                                    # частей, уже записанных во временные файлы (слушать до склейки)
+    language: "str | None" = None
 
 
 JOBS: dict[str, Job] = {}
@@ -130,6 +159,38 @@ def phrases(text: str, limit: int = PHRASE_MAX) -> list[str]:
     return out
 
 
+def split_text(text: str, limit: int) -> list[str]:
+    """Части длинного текста не длиннее limit: по абзацам, абзац длиннее — по предложениям, предложение
+    длиннее — по словам, слово длиннее — режем; соседние единицы — вместе, пока помещаются."""
+    out: list[str] = []
+
+    def add(unit: str, sep: str) -> None:
+        if out and len(out[-1]) + len(sep) + len(unit) <= limit:
+            out[-1] = f"{out[-1]}{sep}{unit}"
+        else:
+            out.append(unit)
+
+    for paragraph in re.split(r"\n\s*\n", text):
+        paragraph = paragraph.strip()
+        if len(paragraph) <= limit:
+            if paragraph:
+                add(paragraph, "\n\n")
+            continue
+        for sentence in re.split(r"(?<=[.!?…])\s+|\n+", paragraph):
+            sentence = sentence.strip()
+            if len(sentence) <= limit:
+                if sentence:
+                    add(sentence, " ")
+                continue
+            for word in sentence.split():
+                while len(word) > limit:
+                    out.append(word[:limit])
+                    word = word[limit:]
+                if word:
+                    add(word, " ")
+    return out
+
+
 # ---- задание -------------------------------------------------------------------------
 
 def _row(user_id: int, sid: str):
@@ -158,7 +219,7 @@ def queued_at(row) -> float:
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
     return {"id": row["id"], "chat_id": row["chat_id"], "voice_name": row["voice_name"],
-            "connection_id": row["connection_id"],
+            "connection_id": row["connection_id"], "language": row["language"],
             "text": row["text"], "voice": row["voice"], "model": row["model"], "state": row["state"],
             "detail": job.stage if job is not None and row["state"] == "working"
             else waiting(row) if row["state"] == "queued" else row["detail"],
@@ -206,9 +267,11 @@ async def _drop(user_id: int, media_id: "str | None") -> None:
         await media.delete_async(user_id, media_id)
 
 
-def _full_queue(user_id: int) -> bool:
-    return state.DB.execute("SELECT COUNT(*) FROM speeches WHERE user_id = ? AND state = 'queued'",
-                            (user_id,)).fetchone()[0] >= QUEUE_MAX
+def _full_queue(user_id: int, chat_id: "str | None" = None) -> bool:
+    """В очереди и работе уже QUEUE_MAX разных чатов, не считая чата `chat_id` (запись в него нового не добавит)."""
+    return state.DB.execute("SELECT COUNT(DISTINCT chat_id) FROM speeches WHERE user_id = ?"
+                            " AND state IN ('queued', 'working') AND chat_id IS NOT ?",
+                            (user_id, chat_id)).fetchone()[0] >= QUEUE_MAX
 
 
 def kick(user_id: int) -> None:
@@ -238,7 +301,8 @@ async def _runner(user_id: int) -> None:
             conn = connections.get(user_id, row["connection_id"], gate=False)
         except HTTPException:                        # подключение удалили, пока озвучка ждала
             conn = None
-        job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"], voice=row["voice"], text=row["text"])
+        job = Job(id=row["id"], user_id=user_id, conn=conn, model=row["model"], voice=row["voice"], text=row["text"],
+                  language=row["language"])
         JOBS[job.id] = job
         with operations.restore(epoch):
             job.task = asyncio.create_task(run(job))
@@ -257,7 +321,7 @@ async def _say(job: Job, text: str, voice, label: str) -> tuple[bytes, str]:
     waited_from = None
     while True:
         try:
-            return await speech.say(job.conn, job.model, text, voice)
+            return await speech.say(job.conn, job.model, text, voice, job.language)
         except speech.Busy:
             now = clock.NOW()
             waited_from = now if waited_from is None else waited_from
@@ -389,23 +453,63 @@ async def stop() -> None:
 
 # ---- API -----------------------------------------------------------------------------
 
-def _input(uid: int, body: SpeechIn):
-    """Одинаковые проверки при новой записи и при её повторной озвучке."""
-    text = documents.nfc(body.text).strip()           # текст идёт в поиск (search_speeches_*), как у документов
-    if not text or len(text) > TEXT_MAX:
-        raise HTTPException(422, {"code": "text", "message": f"текст — от 1 до {TEXT_MAX} знаков"})
-    conn, model = sections.resolve(uid, "speech", body.connection_id, body.model)
-    voice = body.voice.strip()
+def part_max(conn) -> int:
+    """Предел текста одной записи: у шлюза — TEXT_MAX, у внешнего сервиса — EXTERNAL_MAX."""
+    return TEXT_MAX if conn.kind == "srvllm" else EXTERNAL_MAX
+
+
+def _text_of(raw: str, limit: int) -> str:
+    text = documents.nfc(raw).strip()                 # текст идёт в поиск (search_speeches_*), как у документов
+    if not text or len(text) > limit:
+        raise HTTPException(422, {"code": "text", "message": f"текст — от 1 до {limit} знаков"})
+    return text
+
+
+def _voice_name(uid: int, conn, voice: str) -> str:
     if conn.kind == "srvllm":
-        name = voices._row(uid, voice)["name"]                    # чужой и неизвестный голос — 404 gone
-    elif not voice:
+        return voices._row(uid, voice)["name"]                    # чужой и неизвестный голос — 404 gone
+    if not voice:
         raise HTTPException(422, {"code": "voice", "message": "назовите голос сервиса"})
-    else:
-        name = voice
-    if _full_queue(uid):
+    return voice
+
+
+def _room(uid: int, chat_id: "str | None") -> None:
+    if _full_queue(uid, chat_id):
         raise HTTPException(409, {"code": "busy", "message": (
             f"в очереди уже {QUEUE_MAX} озвучек — дождитесь их или отмените")})
-    return text, conn, model, voice, name
+
+
+def _input(uid: int, body: SpeechIn, chat_id: "str | None", *, long: bool):
+    """Одинаковые проверки при новой записи (`long` — текст до LONG_MAX частями) и при её повторной озвучке
+    (одна запись, до `part_max`)."""
+    text = _text_of(body.text, LONG_MAX) if long else None
+    conn, model = sections.resolve(uid, "speech", body.connection_id, body.model)
+    text = text or _text_of(body.text, part_max(conn))
+    voice = body.voice.strip()
+    name = _voice_name(uid, conn, voice)
+    _room(uid, chat_id)
+    return text, conn, model, voice, name, body.language if conn.kind == "srvllm" else None
+
+
+def _enqueue(uid: int, conn, model: str, voice: str, name: str, language: "str | None", text: str,
+             chat=None) -> str:
+    """Записи текста в конец чата `chat` (нет — новый чат): длиннее `part_max` — частями по порядку
+    (`split_text`); итог — id первой."""
+    pieces = split_text(text, part_max(conn)) if len(text) > part_max(conn) else [text]
+    now = clock.NOW()
+    chat_id, chat_created = (chat["chat_id"], chat["chat_created"]) if chat else (None, now)
+    first = None
+    for n, piece in enumerate(pieces):
+        sid, at = uuid.uuid4().hex, now + n * PART_STEP
+        first, chat_id = first or sid, chat_id or sid
+        state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, voice_name, text, state, detail,"
+                         " created, queued, chat_id, chat_created, language)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
+                         (sid, uid, conn.id, model, voice, name, piece, QUEUED, at, at, chat_id, chat_created, language))
+        EPOCHS[sid] = operations.capture(uid)
+    kick(uid)
+    log.info("озвучка %s: принята, частей %d", first[:8], len(pieces))
+    return first
 
 
 def _chat_rows(uid: int, cid: str):
@@ -433,16 +537,47 @@ async def create(body: SpeechIn, request: Request):
     uid = request.state.user.id
     operations.check(uid)
     chat = _chat_rows(uid, body.chat_id)[0] if body.chat_id else None
-    text, conn, model, voice, name = _input(uid, body)
-    sid, now = uuid.uuid4().hex, clock.NOW()
-    state.DB.execute("INSERT INTO speeches(id, user_id, connection_id, model, voice, voice_name, text, state, detail,"
-                     " created, queued, chat_id, chat_created) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
-                     (sid, uid, conn.id, model, voice, name, text, QUEUED, now, now,
-                      chat["chat_id"] if chat else sid, chat["chat_created"] if chat else now))
-    EPOCHS[sid] = operations.capture(uid)
-    kick(uid)
-    log.info("озвучка %s: принята", sid[:8])
-    return _out(_row(uid, sid))
+    text, conn, model, voice, name, language = _input(uid, body, body.chat_id, long=True)
+    return _out(_row(uid, _enqueue(uid, conn, model, voice, name, language, text, chat)))
+
+
+def _read_voice(uid: int, conn, model: str) -> "tuple[str, str, str | None]":
+    """Голос «Прочитать»: последней озвучки этой моделью (и её язык), иначе первый доступный."""
+    last = state.DB.execute(f"SELECT voice, language FROM speeches WHERE user_id = ? AND connection_id = ? AND model = ?"
+                            f" AND deleted IS NULL ORDER BY {QUEUE_KEY} DESC, rowid DESC LIMIT 1",
+                            (uid, conn.id, model)).fetchone()
+    if conn.kind != "srvllm":
+        voice = last["voice"] if last is not None else SERVICE_VOICE
+        return voice, voice, None
+    if last is not None:
+        found = state.DB.execute("SELECT name FROM voices WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                                 (last["voice"], uid)).fetchone()
+        if found is not None:
+            return last["voice"], found["name"], last["language"]
+    first = state.DB.execute("SELECT id, name FROM voices WHERE user_id = ? AND deleted IS NULL ORDER BY created, id"
+                             " LIMIT 1", (uid,)).fetchone()
+    if first is None:
+        raise HTTPException(409, {"code": "voice", "message": "голосов пока нет — добавьте голос в настройках раздела «Озвучка»"})
+    return first["id"], first["name"], None
+
+
+@router.post("/read", status_code=202)
+async def read(body: ReadIn, request: Request):
+    """«Прочитать» ответ чата, перевод или скан (п. 6 шапки) — новым чатом озвучки → `{chat_id}`."""
+    uid = request.state.user.id
+    operations.check(uid)
+    text = _text_of(exports.md_plain(body.text), LONG_MAX)
+    try:
+        conn, model = sections.resolve(uid, "speech", None, None)
+    except HTTPException as e:
+        if e.detail.get("code") == "no_model" and mcp_client.servers(uid, enabled_only=True):
+            raise HTTPException(409, {"code": "read_mcp", "message": "озвучка — инструментом MCP раздела «Озвучка»"}) from None
+        raise
+    voice, name, language = _read_voice(uid, conn, model)
+    _room(uid, None)
+    sid = _enqueue(uid, conn, model, voice, name, language, text)
+    log.info("озвучка %s: «Прочитать» из %s", sid[:8], body.origin.kind)
+    return {"chat_id": sid}
 
 
 @router.get("")
@@ -471,6 +606,37 @@ async def get_chat(cid: str, request: Request):
     return _chat_out(_chat_rows(request.state.user.id, cid), full=True)
 
 
+def _file_name(text: str) -> str:
+    """Имя mp3 чата — по началу текста, без знаков, запрещённых в именах файлов."""
+    head = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", " ".join(text.split()))[:NAME_CHARS].strip(" .")
+    return f"{head or 'speech'}.mp3"
+
+
+@router.get("/chats/{cid}/audio")
+async def chat_audio(cid: str, request: Request):
+    """Готовые записи чата по порядку — один mp3 (`audio.mp3_of`); готовых нет — 409. Файл — временный, уходит
+    после отдачи; диапазоны — у FileResponse."""
+    uid = request.state.user.id
+    rows = _chat_rows(uid, cid)
+    ready = [r for r in rows if r["state"] == "done" and r["media_id"]]
+    if not ready:
+        raise HTTPException(409, {"code": "not_ready", "message": "в чате ещё нет готовых озвучек"})
+    parts = [media.path(uid, r["media_id"]) for r in ready]
+    out = audio.temp(".mp3")
+    try:
+        await audio.mp3_of(parts, out)
+    except audio.AudioError as e:
+        await audio.remove_temp(out)
+        raise HTTPException(502, {"code": "audio", "message": str(e)}) from None
+    except BaseException:
+        await audio.remove_temp(out)
+        raise
+    log.info("чат озвучки %s: один mp3 из %d", cid[:8], len(ready))
+    return FileResponse(out, media_type="audio/mpeg", background=BackgroundTask(audio.remove_temp, out),
+                        headers={"Content-Disposition": media.disposition(_file_name(rows[0]["text"])),
+                                 "Cache-Control": "no-store"})
+
+
 @router.delete("/chats/{cid}", status_code=204)
 async def delete_chat(cid: str, request: Request):
     """Весь чат — в корзину: `deleted` каждой его записи (trash.py, окончательно — `purge` каждой); идущая или
@@ -494,13 +660,13 @@ async def edit(sid: str, body: SpeechIn, request: Request):
         raise HTTPException(409, {"code": "running", "message": "дождитесь озвучки или отмените её"})
     if body.chat_id is not None and body.chat_id != row["chat_id"]:
         raise HTTPException(422, {"code": "chat", "message": "нельзя перенести запись в другой чат"})
-    text, conn, model, voice, name = _input(uid, body)
+    text, conn, model, voice, name, language = _input(uid, body, row["chat_id"], long=False)
     # прежние поля и звук — до итога новой озвучки (п. 5 шапки); записи без звука возвращать нечего
     previous = json.dumps({k: row[k] for k in KEPT}, ensure_ascii=False) if row["media_id"] else None
-    state.DB.execute("UPDATE speeches SET text = ?, connection_id = ?, model = ?, voice = ?, voice_name = ?,"
+    state.DB.execute("UPDATE speeches SET text = ?, connection_id = ?, model = ?, voice = ?, voice_name = ?, language = ?,"
                      " state = 'queued', detail = ?, media_id = NULL, duration = NULL, finished = NULL, queued = ?,"
                      " previous = ?, previous_media_id = ? WHERE id = ?",
-                     (text, conn.id, model, voice, name, QUEUED, clock.NOW(), previous, row["media_id"], sid))
+                     (text, conn.id, model, voice, name, language, QUEUED, clock.NOW(), previous, row["media_id"], sid))
     EPOCHS[sid] = operations.capture(uid)
     kick(uid)
     return _out(_row(uid, sid))
