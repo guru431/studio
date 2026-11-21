@@ -3232,7 +3232,20 @@ globalThis.StudioEnglish = Object.freeze({
   "Подтверждение: как у сервера": "Confirmation: as the server says",
   "Подтверждение: всегда": "Confirmation: always",
   "Подтверждение: никогда": "Confirmation: never",
-  "«Интернет» и «Подтверждение» заменяют пометки самого сервера: инструмент с интернетом работает только при включённом «Интернете» диалога, с подтверждением — по умолчанию выключен в диалогах.": "“Internet” and “Confirmation” replace the server’s own hints: a tool with internet works only when the chat’s “Internet” is on; a tool that needs confirmation is off by default in chats."
+  "«Интернет» и «Подтверждение» заменяют пометки самого сервера: инструмент с интернетом работает только при включённом «Интернете» диалога, с подтверждением — по умолчанию выключен в диалогах.": "“Internet” and “Confirmation” replace the server’s own hints: a tool with internet works only when the chat’s “Internet” is on; a tool that needs confirmation is off by default in chats.",
+  "{0} КиБ": "{0} KiB",
+  "{0} МиБ": "{0} MiB",
+  "Серверу «{0}» разрешено получать файлы диалога — они уйдут ему со следующим сообщением": "“{0}” may receive the chat files — they will be sent with the next message",
+  "Файлы диалога серверу «{0}» не передаются": "Chat files are not sent to “{0}”",
+  "Передать серверу «{0}» файлы диалога: {1}?": "Send the chat files to “{0}”: {1}?",
+  "Передать": "Send",
+  "Не передавать": "Don’t send",
+  "«{0}» не загрузился: файла больше нет на сервере MCP или он недоступен": "“{0}” did not load: the MCP server no longer has the file or is unavailable",
+  "Открыть {0}": "Open {0}",
+  "Скачать «{0}»": "Download “{0}”",
+  "Звук и видео диалога для MCP": "Chat audio and video for MCP",
+  "Файлы диалога для MCP": "Chat files for MCP",
+  "больше {0} — предела MCP этого диалога": "larger than {0}, the MCP limit of this chat"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не расшифрованы: {1} из {2} — STUDIO_DATA_KEY не тот, что у копии",

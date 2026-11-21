@@ -1,7 +1,7 @@
 import { message as translateMessage, tr } from './i18n.js';
 /* Запросы к API студии.
  *
- * api(метод, путь, тело, { signal, headers }): путь — полный, '/api/...'; тело — объект (уходит JSON) или FormData;
+ * api(метод, путь, тело, { signal, headers }): путь — полный, '/api/...'; тело — объект (уходит JSON), FormData или Blob;
  * signal — обрыв запроса (AbortSignal, например срок).
  * Не-GET несёт заголовок CSRF из me.csrf (профиля ещё нет — из useCsrf). Ответ: JSON → объект, 204 → null, прочее (например,
  * поток text/event-stream для readSSE) → сам Response. Отказ → ApiError(status, code, message, detail)
@@ -76,7 +76,7 @@ export async function api(method, path, body, { signal, headers: extraHeaders, k
   let payload;
   const token = me ? me.csrf : csrf;
   if (method !== 'GET' && token) headers['x-studio-csrf'] = token;
-  if (body instanceof FormData) payload = body;
+  if (body instanceof FormData || body instanceof Blob) payload = body;   // Blob (файл) — как есть, тип — в headers
   else if (body !== undefined) {
     headers['content-type'] = 'application/json';
     payload = JSON.stringify(body);
