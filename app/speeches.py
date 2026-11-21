@@ -694,8 +694,8 @@ async def chat_audio(cid: str, request: Request):
 
 @router.delete("/chats/{cid}", status_code=204)
 async def delete_chat(cid: str, request: Request):
-    """Весь чат — в корзину: `deleted` каждой его записи (trash.py, окончательно — `purge` каждой); идущая или
-    ждущая запись — 409."""
+    """Весь чат — в корзину: `deleted` каждой его записи одной отметкой (trash.py: в корзине — одна строка группы
+    `chat_id`, возвращается и удаляется целиком, окончательно — `purge` каждой); идущая или ждущая запись — 409."""
     uid = request.state.user.id
     rows = _chat_rows(uid, cid)
     if any(r["state"] not in TERMINAL for r in rows):
