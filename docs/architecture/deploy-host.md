@@ -222,7 +222,9 @@ SQL — как у шага 16 ниже.
 - `LimitRequestBody` vhost не меньше пределов службы (документ, картинка ролика и фото «Фото» — 20 МиБ,
   тело фото — до 2×10 МиБ) — сверяет `test_apache_lets_through_the_largest_body_the_studio_accepts`; образец голоса
   (`voices.AUDIO_MAX`, 32 МиБ) — свой `LocationMatch` на все маршруты, что его принимают (редактор и прямые
-  `POST /api/voices`, `/api/voices/{id}/samples[/{sample_id}]`), сверяет `test_voice_editor_uploads_fit_through_the_proxy`.
+  `POST /api/voices`, `/api/voices/{id}/samples[/{sample_id}]`), сверяет `test_voice_editor_uploads_fit_through_the_proxy`;
+  звук и видео диалога для MCP (`mcp_files.MEDIA_MAX`, 64 МиБ) — `LocationMatch ^/api/chats/[^/]+/media$` с запасом
+  64 КиБ, сверяет `tests/test_deploy.py`.
 - SQLite — только на локальном диске: на CIFS он портится. Копия базы на шару — готовым файлом
   (`journal_mode=DELETE`), а не живой базой.
 - `studio-backup.service` — с теми же `User`/`Group`/`StateDirectory`, что у службы: другой
