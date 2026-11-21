@@ -108,7 +108,7 @@ minor для возможностей, major для несовместимых �
 | «Агенты» | `agents`, `agent_release`, `bridge`, `claude_code`, `workspace`, `code_activity`, `code_attention`, `code_usage`, `code_visualizations`, `code_actions`, `computer_info`, `desktop`, `terminal_links`, `project_access` (участники), `project_mirrors` (зеркала) | [agents](docs/architecture/agents.md), [agents-workspace](docs/architecture/agents-workspace.md), [project-collaboration](docs/architecture/project-collaboration.md) |
 | Мост `agent/` | `studio_agent/*`, правила — [agent/CLAUDE.md](agent/CLAUDE.md) | [agent-bridge](docs/architecture/agent-bridge.md) |
 | Страница: общее | `app/static/js/`: `app.js` (роутер, рельс `buildRail`, `announce`), `sections-meta.js` (реестр разделов), `icons.js` (значки), `menu.js` (меню и панели), `appearance.js` (тема, акцент, плотность, шрифт, масштаб), `settings.js`, `account-security.js` (сессии, аварийный выход, журнал), `mobile-navigation.js`; `theme.js` — до модулей | [shell](docs/architecture/shell.md), [security-lock](docs/architecture/security-lock.md) |
-| Страница: «Агенты» | `code.js`, `code-panel.js`, `code-tabs.js`, `code-chat.js`, `code-workspace.js`, `code-files.js`, `code-git.js`, `code-picker.js` и др. | [agents-workspace](docs/architecture/agents-workspace.md) |
+| Страница: «Агенты» | `code.js`, `code-panel.js`, `code-tabs.js`, `code-chat.js`, `code-workspace.js`, `code-files.js`, `code-git.js` и др.; общий выбор-кнопка разделов — `picker.js` | [agents-workspace](docs/architecture/agents-workspace.md) |
 
 Фронтенд без сборки — `app/static/` (модули ES, библиотеки копией в `static/vendor/`, без CDN; importmap с SHA-CSP,
 снимок статики в памяти — после правки статики служба и тестовый процесс требуют перезапуска). Протокол моста —
