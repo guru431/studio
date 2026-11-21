@@ -145,7 +145,8 @@ STUDIO_APACHE_PORT=8443
   (команда compose — ниже).
 - Python-пакеты обновляются только сменой закреплений в репозитории: прямые — `requirements.txt`,
   транзитивные — `constraints.txt`. yt-dlp — сменой его закрепления в Dockerfile и выкладкой: YouTube
-  ломает старые версии, поэтому при отказах субтитров первым делом поднимают версию yt-dlp.
+  ломает старые версии, поэтому при отказах субтитров первым делом поднимают версию yt-dlp
+  ([Поднять yt-dlp](#поднять-yt-dlp)).
 
 Из каталога установки на Docker-хосте:
 
@@ -205,6 +206,36 @@ async def check():
 asyncio.run(check())
 PY
 ```
+
+## Поднять yt-dlp
+
+В образе — `yt-dlp[default]` (с yt-dlp-ejs: решатель JS-проверок YouTube) и `deno` — JS-рантайм, без которого
+YouTube отдаёт не все форматы и субтитры. Версия yt-dlp — одна строка `pip install` в `deploy/docker/Dockerfile`;
+deno и пакеты extra `default` — в `constraints.txt` (wheel `deno` — `manylinux_2_27_x86_64`, ставится в trixie).
+Самообновления нет: только новое закрепление и выкладка.
+
+Когда: субтитры YouTube в чате отказывают у любых публичных роликов (шаг «Ролик» с ошибкой, приёмка выше
+падает), а сам YouTube из сети Docker-хоста открывается — YouTube сменил плеер, и закреплённый yt-dlp его не понимает.
+
+1. Новая версия — последний выпуск `yt-dlp` на PyPI. Его метаданные (`https://pypi.org/pypi/yt-dlp/json`,
+   `requires_dist`) перечисляют точные версии в extra `pin` (yt-dlp-ejs, requests, urllib3, brotli, mutagen,
+   pycryptodomex, charset-normalizer, certifi, idna, websockets) и `pin-deno` (deno). В Dockerfile — новая
+   `yt-dlp[default]==<версия>`; в `constraints.txt` — версии из `pin`. Общие со службой certifi, idna и websockets
+   поднимать, только если нижняя граница нового yt-dlp выше закреплённых (иначе — прежние, их сверяет замыкание
+   службы). Проверить, что у новой deno есть wheel `manylinux_*_x86_64`. Быстрый набор — `tests/test_deploy.py`.
+2. Закоммитить и собрать образ без запуска: `bash deploy/deploy.sh --prepare-only`. На Docker-хосте — версии в
+   собранном образе (тег `studio:<версия>-<ревизия>` — последний в `sudo docker image ls studio`):
+
+   ```bash
+   IMAGE=studio:0.41.0-abcdef123456
+   sudo docker run --rm --network none --entrypoint sh "$IMAGE" -c \
+     'yt-dlp --version && deno --version && python -c "import yt_dlp_ejs"'
+   ```
+
+   Ожидаются новая версия yt-dlp, версия deno из `constraints.txt` и тихий импорт yt-dlp-ejs.
+3. Выложить: `bash deploy/deploy.sh` (оба экземпляра, как обычно), затем приёмка YouTube выше — пробный
+   ролик `VIDEO=` с субтитрами внутри `web`, ожидается строка `ok`. Отказ и на новой версии — проверить сеть
+   Docker-хоста до `www.youtube.com` и журнал `web` (только коды и числа), прежний образ — `previous` ([Откат](#откат)).
 
 ## Перенос с нативной установки
 

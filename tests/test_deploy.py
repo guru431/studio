@@ -561,6 +561,24 @@ def test_constraints_pin_the_whole_dependency_closure():
                                  [LINUX_313]) == set()
 
 
+def test_dockerfile_pins_yt_dlp_default_and_deno():
+    """YouTube требует JS-рантайм (спека 2026-11-21-studio-source-capabilities-design, п. 22): yt-dlp с extra
+    `default` (yt-dlp-ejs) и deno — закреплёнными версиями; версия yt-dlp — одна, в Dockerfile, замыкание и deno —
+    в constraints.txt (wheel deno manylinux_2_27_x86_64 ставится в trixie); регламент подъёма — в deploy-docker.md."""
+    line = next(s for s in DOCKERFILE.splitlines() if "pip install" in s)
+    assert re.search(r'"yt-dlp\[default\]==\d{4}\.\d{1,2}\.\d{1,2}" deno$', line), line
+    pins = _constraints(ROOT / "constraints.txt")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pins.get("deno", "")), pins.get("deno")
+    for name in ("yt-dlp-ejs", "requests", "urllib3", "charset-normalizer", "certifi", "idna", "mutagen",
+                 "pycryptodomex", "brotli", "websockets"):
+        assert name in pins, name
+    assert "yt-dlp" not in pins
+    doc = (ROOT / "docs" / "architecture" / "deploy-docker.md").read_text(encoding="utf-8")
+    section = doc.split("## Поднять yt-dlp", 1)[1].split("\n## ", 1)[0]
+    for needle in ("yt-dlp --version", "deno --version", "VIDEO=", "deploy.sh"):
+        assert needle in section, needle
+
+
 def test_every_pip_install_uses_the_constraints():
     assert "pip install --no-cache-dir -r requirements.txt -c constraints.txt " in DOCKERFILE
     assert "COPY requirements.txt constraints.txt ./" in DOCKERFILE
