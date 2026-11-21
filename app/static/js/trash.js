@@ -10,8 +10,8 @@ import { dateTime } from './time.js';
 import { button, el, field, openDialog, words } from './ui.js';
 
 const TRASH_DAYS = 14;                       // trash.TRASH_SEC: запись удалится сама через столько дней
-const KIND_TAGS = { chat_media: tr("файл диалога"), voices: tr("голос"), knowledge_bases: tr("база знаний"),
-  kb_documents: tr("документ базы знаний") };
+const KIND_TAGS = { chat_media: tr("файл диалога"), voices: tr("голос"), voice_samples: tr("образец голоса"),
+  knowledge_bases: tr("база знаний"), kb_documents: tr("документ базы знаний") };
 let controller = null;
 
 const moment = (ts) => dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });

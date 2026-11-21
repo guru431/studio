@@ -41,6 +41,7 @@ import media
 import memory
 import state
 import trash
+import voices
 import workspace
 
 #: порядок вкладок студии; Claude Code — в конце: отметки чатов (code) и история подключений (agents)
@@ -75,7 +76,8 @@ REFS = {
 MORE_REFS = {"chat": (("chat_media", ("media_id",), f"{LIVE} AND chat_id IN ({_LIVE_CHATS})"),),
              "ocr": (("scan_pages", ("media_id",), " AND scan_id IN (SELECT id FROM scans WHERE deleted IS NULL)"),),
              "voices": (("voice_samples", ("media_id",),
-                         " AND voice_id IN (SELECT id FROM voices WHERE deleted IS NULL)"),)}
+                         " AND voice_id IN (SELECT id FROM voices WHERE deleted IS NULL)"
+                         " AND id NOT IN (SELECT id FROM voice_sample_trash)"),)}
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
 BUSY = {"code": "busy", "message": "выгрузка уже идёт — дождитесь, пока она скачается"}
 
@@ -272,8 +274,8 @@ def _voices(user_id: int, rows: list, files: dict) -> list:
     samples: dict[str, list] = {}
     if rows:
         marks = ", ".join("?" * len(rows))
-        for sample in state.DB.execute(f"SELECT * FROM voice_samples WHERE user_id = ? AND voice_id IN ({marks})"
-                                        " ORDER BY created, id", (user_id, *(r["id"] for r in rows))):
+        for sample in state.DB.execute(f"SELECT * FROM voice_samples s WHERE user_id = ? AND voice_id IN ({marks})"
+                                        f" AND {voices.LIVE} ORDER BY created, id", (user_id, *(r["id"] for r in rows))):
             samples.setdefault(sample["voice_id"], []).append(
                 _pick(sample, "id", "ref_text", "duration", "created") | {"file": files.get(sample["media_id"])})
     return [_pick(r, "id", "name", "ref_text", "duration", "created") | {"file": files.get(r["media_id"])}

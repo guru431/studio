@@ -5,7 +5,9 @@ TRASH_SEC или владелец.
 - Таблицы с корзиной — `TABLES` (тот же набор, что `db._TRASH_58` шага 58). Вид записи корзины — `KINDS`
   (ключ — таблица): раздел, окончательное удаление `purge(user_id, id)` раздела, название строки, её файлы.
   Новый раздел — строка в `KINDS`. Чат озвучки, удалённый целиком, — одна запись (`Kind.group`: строки с тем же
-  `chat_id` и той же отметкой `deleted`).
+  `chat_id` и той же отметкой `deleted`). Отдельный образец голоса (шаг схемы 61) — вид `voice_samples`: его таблица —
+  вид базы `voice_sample_items` (отметка — в `voice_sample_trash`), «Вернуть» — UPDATE вида; у голоса больше
+  `voices.SAMPLES_MAX` живых — отказ (`Kind.restoring`).
 - `GET /api/trash` → `[{kind, section, id, title, deleted, bytes}]` своих (новые сверху; разделы, закрытые
   блокировкой, — мимо); `POST /api/trash/{kind}/{id}/restore` — вернуть (строки поиска — `search.reindex_item`);
   `DELETE /api/trash/{kind}/{id} {password}` — окончательно одну (группу — всю, по id любой её строки). Чужая запись и запись не в корзине — 404: администратор
@@ -116,6 +118,8 @@ class Kind:
     column: str = "name"                          # столбец, который читает `title`: списки корзины и «Хранилища»
                                                   # не читают полных текстов записей на цикле событий
     fallback: str = ""
+    restoring: "Callable[[int, list[str]], None] | None" = None   # перед «Вернуть» строк (`uid`, id): отказ —
+                                                  # HTTPException, или вернуть заодно части записи
 
 
 HEAD = 80                                         # знаков текста записи в названии строки корзины
@@ -155,9 +159,18 @@ KINDS: dict[str, Kind] = {
                   search="ocr", fallback="Документ"),
     "translations": Kind("translations", "translate", translate.purge, lambda row: _head(row["name"]),
                          "SELECT source_media_id FROM translations WHERE id = :id", search="translate", fallback="Перевод"),
+    # образцы голоса из корзины — в весе голоса, только когда в корзине и он (иначе — своей строкой)
     "voices": Kind("voices", "speech", voices.purge, lambda row: _head(row["name"]),
-                   "SELECT media_id FROM voices WHERE id = :id UNION SELECT media_id FROM voice_samples WHERE voice_id = :id",
+                   "SELECT media_id FROM voices WHERE id = :id UNION SELECT s.media_id FROM voice_sample_items s"
+                   " JOIN voices v ON v.id = s.voice_id WHERE s.voice_id = :id"
+                   " AND (s.deleted IS NULL OR v.deleted IS NOT NULL)",
                    fallback="Голос"),
+    # отдельный образец (шаг схемы 61: таблица — вид `voice_sample_items`, «Вернуть» — его UPDATE); образцы голоса
+    # в корзине — часть его строки
+    "voice_samples": Kind("voice_sample_items", "speech", voices.purge_sample, voices.sample_title,
+                          "SELECT media_id FROM voice_samples WHERE id = :id", column="voice_id",
+                          live=" AND voice_id IN (SELECT id FROM voices WHERE deleted IS NULL)",
+                          restoring=voices.restoring),
     # личные базы знаний и их документы (общие удаляет панель сразу); файлов нет — только куски текста.
     # Документ базы в корзине вместе с базой — часть её строки
     "knowledge_bases": Kind("knowledge_bases", "chat", knowledge.purge_base, lambda row: _head(row["name"]),
@@ -235,6 +248,8 @@ async def restore(kind: str, item_id: str, request: Request):
     ids = _members(found, uid, item_id, found.live)
     if not ids:
         raise HTTPException(404, GONE)
+    if found.restoring is not None:
+        found.restoring(uid, ids)
     state.DB.execute(f"UPDATE {found.table} SET deleted = NULL WHERE user_id = ?"
                      " AND id IN (SELECT value FROM json_each(?))", (uid, json.dumps(ids)))
     if found.search is not None:

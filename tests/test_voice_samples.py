@@ -75,10 +75,70 @@ def test_edit_select_replace_and_remove_samples(studio, fake_audio):
     assert studio.c.delete(f"/api/voices/{vid}/samples/{vid}").status_code == 422
     assert studio.c.get(f"/api/voices/{vid}").json()["samples"][0]["active"]
     assert studio.c.delete(f"/api/voices/{vid}").status_code == 204
-    assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 1     # в корзине — образец на месте
+    assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 3     # в корзине — образцы на месте
     assert studio.c.request("DELETE", f"/api/trash/voices/{vid}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+
+
+def trash_of(studio, kind="voice_samples"):
+    return [item for item in studio.c.get("/api/trash").json() if item["kind"] == kind]
+
+
+def test_removed_sample_goes_to_trash_and_comes_back(studio, fake_audio, monkeypatch):
+    """Находка «Корзина: образцы голосов»: удалённый образец (кнопкой и сохранением редактора без него) — в корзине
+    на 14 дней: его нет в карточке, счёте, выборе для озвучки и выгрузке, файл на месте; последний живой образец
+    удалить нельзя; «Вернуть» возвращает, пока у голоса меньше SAMPLES_MAX; голос в корзине прячет свои образцы."""
+    monkeypatch.setattr(voices, "SAMPLES_MAX", 3)
+    add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    fake_audio.duration = 8
+    vid = create(studio, name="Слива").json()["id"]
+    second = add(studio, vid).json()["id"]
+    third = add(studio, vid, "Третий").json()["id"]
+    assert studio.c.patch(f"/api/voices/{vid}/samples/{second}", json={"active": True}).status_code == 200
+    mid = state.DB.execute("SELECT media_id FROM voice_samples WHERE id = ?", (second,)).fetchone()[0]
+
+    assert studio.c.delete(f"/api/voices/{vid}/samples/{second}").status_code == 204      # выбранный — в корзину
+    voice = studio.c.get(f"/api/voices/{vid}").json()
+    assert {s["id"] for s in voice["samples"]} == {vid, third} and voice["sample_count"] == 2
+    assert voice["samples"][0]["active"] and asyncio.run(voices.reference(uid, vid))[1] != "Второй образец"
+    assert media.referenced(uid, mid) and studio.c.get(f"/api/media/{mid}").status_code == 200
+    assert studio.c.delete(f"/api/voices/{vid}/samples/{second}").status_code == 404      # уже в корзине
+    assert studio.c.patch(f"/api/voices/{vid}/samples/{second}", json={"active": True}).status_code == 404
+    listed = trash_of(studio)
+    assert [(i["id"], i["section"]) for i in listed] == [(second, "speech")] and "Слива" in listed[0]["title"]
+    import takeout
+    rows = takeout._media_rows(uid, ("voices",))
+    assert mid not in {r["id"] for r in rows}
+    exported = takeout._voices(uid, [voices._row(uid, vid)], {r["id"]: takeout._file_name(r) for r in rows})
+    assert {s["id"] for s in exported[0]["samples"]} == {vid, third}
+
+    # сохранение редактора без образца — тоже в корзину, файл на месте
+    before = studio.c.get(f"/api/voices/{vid}").json()
+    third_mid = state.DB.execute("SELECT media_id FROM voice_samples WHERE id = ?", (third,)).fetchone()[0]
+    edit = {"name": "Слива", "revision": before["revision"], "selected": 0, "samples": [{"id": vid, "text": "Первый"}]}
+    assert studio.c.put(f"/api/voices/{vid}/batch", json=edit).status_code == 200
+    assert studio.c.get(f"/api/voices/{vid}").json()["sample_count"] == 1
+    assert {i["id"] for i in trash_of(studio)} == {second, third} and media.referenced(uid, third_mid)
+    assert studio.c.delete(f"/api/voices/{vid}/samples/{vid}").status_code == 422          # последний живой
+
+    assert studio.c.post(f"/api/trash/voice_samples/{second}/restore").status_code == 204
+    assert add(studio, vid, "Четвёртый").status_code == 201
+    r = studio.c.post(f"/api/trash/voice_samples/{third}/restore")                         # было бы четыре из трёх
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "samples"
+    assert [i["id"] for i in trash_of(studio)] == [third]
+
+    assert studio.c.delete(f"/api/voices/{vid}").status_code == 204                        # голос — с образцами
+    assert trash_of(studio) == [] and [i["id"] for i in trash_of(studio, "voices")] == [vid]
+    assert studio.c.post(f"/api/trash/voice_samples/{third}/restore").status_code == 404
+    assert studio.c.post(f"/api/trash/voices/{vid}/restore").status_code == 204
+    assert [i["id"] for i in trash_of(studio)] == [third]
+    assert studio.c.request("DELETE", f"/api/trash/voice_samples/{third}",
+                            json={"password": "password-123"}).status_code == 204
+    assert state.DB.execute("SELECT 1 FROM voice_samples WHERE id = ?", (third,)).fetchone() is None
+    assert not media.referenced(uid, third_mid)
+    assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (third_mid,)).fetchone() is None
 
 
 def test_samples_are_private_bounded_and_exported(studio, fake_audio, monkeypatch):
@@ -212,4 +272,4 @@ def test_batch_changes_voice_only_after_all_uploads_are_valid(studio, fake_audio
     after = studio.c.get(f"/api/voices/{vid}").json()
     assert after["sample_count"] == 2 and after["text"] == "Новый" and after["name"] == edit["name"]
     assert {sample["text"] for sample in after["samples"]} == {"Правка", "Новый"}
-    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 2
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 3        # убранный образец — в корзине

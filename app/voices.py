@@ -1,6 +1,6 @@
 """Голоса озвучки по образцу (спека 2026-10-20-studio-sections-voice-design, 6.4): запись 5–60 с,
 её текст и имя. Образец — WAV моно 24 кГц в media (audio.to_wav; длиннее SAMPLE_MAX — обрезается),
-принадлежит пользователю, удаляется им и вместе с историей. Его WAV и текст берёт озвучка srvllm
+принадлежит пользователю, удаляется им (сначала — в корзину, trash.py) и вместе с историей. Его WAV и текст берёт озвучка srvllm
 (Qwen3-TTS `/clone`). Текст образца в списке не отдаётся — только в карточке голоса. Образец
 обрабатывается в запросе, поэтому ffmpeg ограничен BUDGET_SEC (а не audio.TIMEOUT_SEC фоновой
 расшифровки) — дольше: 504 словами; таймаут маршрута Apache больше (сверяет tests/test_deploy.py).
@@ -44,6 +44,11 @@ DRAFT_SEC = 900                 # подготовленные WAV без ссы
 #: пользователи, чья проба голоса идёт сейчас (одна за раз)
 PROBING: set = set()
 
+#: условие на образец `s` (`voice_samples`): не в корзине (отметка `voice_sample_trash`, шаг схемы 61, trash.py).
+#: Образец из корзины не виден в карточке, счёте и выгрузке, не выбирается для озвучки; файл держит до `purge_sample`
+LIVE = "NOT EXISTS (SELECT 1 FROM voice_sample_trash t WHERE t.id = s.id)"
+_COUNT = f"(SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id AND {LIVE}) AS sample_count"
+
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/voices")
 
@@ -54,7 +59,7 @@ def _bad(code: str, message: str) -> HTTPException:
 
 def _row(user_id: int, voice_id: str):
     """Свой голос не из корзины (`deleted`, trash.py), иначе 404: и озвучка голосом из корзины — «голос удалён»."""
-    row = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
+    row = state.DB.execute(f"SELECT v.*, {_COUNT}"
                            " FROM voices v WHERE v.id = ? AND v.user_id = ? AND v.deleted IS NULL",
                            (voice_id, user_id)).fetchone()
     if row is None:
@@ -172,7 +177,7 @@ async def create(request: Request):
 
 @router.get("")
 async def list_voices(request: Request):
-    rows = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
+    rows = state.DB.execute(f"SELECT v.*, {_COUNT}"
                            " FROM voices v WHERE user_id = ? AND deleted IS NULL ORDER BY created, id",
                            (request.state.user.id,))
     # SQLite NOCASE only folds ASCII. Keep Cyrillic names and Ё in alphabetical order too.
@@ -192,8 +197,9 @@ async def get_voice(voice_id: str, request: Request):
 
 
 def _samples(uid, voice_id):
-    return state.DB.execute("SELECT * FROM voice_samples WHERE voice_id = ? AND user_id = ? ORDER BY created, id",
-                            (voice_id, uid)).fetchall()
+    """Живые образцы голоса (не из корзины) по порядку."""
+    return state.DB.execute(f"SELECT * FROM voice_samples s WHERE voice_id = ? AND user_id = ? AND {LIVE}"
+                            " ORDER BY created, id", (voice_id, uid)).fetchall()
 
 
 def _revision(voice, samples) -> str:
@@ -218,7 +224,7 @@ def _text(text: str) -> str:
 
 def _sample_row(uid: int, voice_id: str, sample_id: str):
     _row(uid, voice_id)
-    sample = state.DB.execute("SELECT * FROM voice_samples WHERE id = ? AND voice_id = ? AND user_id = ?",
+    sample = state.DB.execute(f"SELECT * FROM voice_samples s WHERE id = ? AND voice_id = ? AND user_id = ? AND {LIVE}",
                               (sample_id, voice_id, uid)).fetchone()
     if sample is None:
         raise HTTPException(404, {"code": "gone", "message": "такого образца нет"})
@@ -367,9 +373,10 @@ async def save_batch(body: BatchIn, request: Request, voice_id: str = Path(patte
         if not creating or body.selected != 0:
             state.DB.execute("UPDATE voices SET name = ?, ref_text = ?, media_id = ?, duration = ? WHERE id = ?",
                              (name, active_text, active_media, active_duration, voice_id))
-        if not creating:
-            state.DB.executemany("DELETE FROM voice_samples WHERE id = ?",
-                                 [(sid,) for sid in old.keys() - {s[0] for s in plan}])
+        if not creating:                             # убранные из списка — в корзину, их файлы остаются
+            now = clock.NOW()
+            state.DB.executemany("INSERT INTO voice_sample_trash(id, deleted) VALUES (?, ?)",
+                                 [(sid, now) for sid in old.keys() - {s[0] for s in plan}])
         _retire_samples(uid, {s["media_id"] for s in samples} - {s[2] for s in plan})
     log.info("пользователь %d: голос %s сохранён", uid, voice_id[:8])
     return _out(_row(uid, voice_id))
@@ -452,20 +459,51 @@ async def edit_sample(voice_id: str, sample_id: str, body: SampleIn, request: Re
 
 @router.delete("/{voice_id}/samples/{sample_id}", status_code=204)
 async def delete_sample(voice_id: str, sample_id: str, request: Request):
+    """Образец — в корзину (`voice_sample_trash`, trash.py); строка и файл — до `purge_sample`. Последний живой — 422;
+    выбранный для озвучки — выбор переходит к первому живому."""
     uid = request.state.user.id
     sample = _sample_row(uid, voice_id, sample_id)
     voice = _row(uid, voice_id)
     if voice["sample_count"] <= 1:
         raise _bad("samples", "нужен хотя бы один образец голоса")
     with _transaction():
-        state.DB.execute("DELETE FROM voice_samples WHERE id = ?", (sample_id,))
+        state.DB.execute("INSERT INTO voice_sample_trash(id, deleted) VALUES (?, ?)", (sample_id, clock.NOW()))
         if voice["media_id"] == sample["media_id"]:
-            other = state.DB.execute("SELECT id FROM voice_samples WHERE voice_id = ? ORDER BY created, id LIMIT 1",
-                                     (voice_id,)).fetchone()
-            _select(uid, voice_id, other["id"])
-    if not media.referenced(uid, sample["media_id"]):
-        await media.delete_async(uid, sample["media_id"])
+            _select(uid, voice_id, _samples(uid, voice_id)[0]["id"])
+    log.info("пользователь %d: образец голоса %s в корзине", uid, voice_id[:8])
     return Response(status_code=204)
+
+
+def sample_title(row) -> str:
+    """Название образца в корзине (строка с `id` и `voice_id`): «имя голоса · номер образца» — по порядку всех его
+    образцов, и из корзины тоже."""
+    voice = state.DB.execute("SELECT name FROM voices WHERE id = ?", (row["voice_id"],)).fetchone()
+    n = state.DB.execute("SELECT count(*) FROM voice_samples o, voice_samples s WHERE s.id = ? AND o.voice_id = s.voice_id"
+                         " AND (o.created, o.id) <= (s.created, s.id)", (row["id"],)).fetchone()[0]
+    return f"{voice['name'] if voice else ''} · {n}"
+
+
+def restoring(user_id: int, ids: "list[str]") -> None:
+    """Перед «Вернуть» образца (trash.py): у голоса стало бы больше SAMPLES_MAX живых — 409 `samples`."""
+    for voice_id, count in state.DB.execute(
+            "SELECT voice_id, count(*) FROM voice_samples WHERE user_id = ?"
+            " AND id IN (SELECT value FROM json_each(?)) GROUP BY voice_id", (user_id, json.dumps(ids))).fetchall():
+        if _row(user_id, voice_id)["sample_count"] + count > SAMPLES_MAX:
+            raise HTTPException(409, {"code": "samples", "message": (
+                f"у голоса уже {SAMPLES_MAX} образцов — удалите лишний, чтобы вернуть этот")})
+
+
+async def purge_sample(user_id: int, item_id: str) -> None:
+    """Окончательно: образец (отметка корзины — каскадом) и его файл, если на него больше никто не ссылается.
+    Образца уже нет — ничего."""
+    row = state.DB.execute("SELECT media_id FROM voice_samples WHERE id = ? AND user_id = ?",
+                           (item_id, user_id)).fetchone()
+    if row is None:
+        return
+    state.DB.execute("DELETE FROM voice_samples WHERE id = ?", (item_id,))
+    if not media.referenced(user_id, row["media_id"]):
+        await media.delete_async(user_id, row["media_id"])
+    log.info("пользователь %d: образец голоса %s удалён", user_id, item_id[:8])
 
 
 class ProbeIn(BaseModel):

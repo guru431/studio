@@ -191,6 +191,18 @@ def make_voice(s, uid: int) -> Made:
     return section_made(s, "vo1", [first, second], "/api/voices")
 
 
+def make_voice_sample(s, uid: int) -> Made:
+    first, second = save(uid, b"wav one", "audio/wav", "v1.wav"), save(uid, b"wav two", "audio/wav", "v2.wav")
+    state.DB.execute("INSERT INTO voices(id, user_id, name, ref_text, media_id, duration, created)"
+                     " VALUES ('vo2', ?, 'Plum voice', 'plum text', ?, 6, ?)", (uid, first, T0))
+    state.DB.execute("INSERT INTO voice_samples VALUES ('vs3', 'vo2', ?, 'plum two', ?, 7, ?)", (uid, second, T0 + 1))
+
+    def visible():
+        return "vs3" in {x["id"] for x in s.c.get("/api/voices/vo2").json()["samples"]}
+
+    return Made("vs3", [second], lambda: s.c.delete("/api/voices/vo2/samples/vs3"), visible)
+
+
 def knowledge_base(s) -> tuple[str, str]:
     """Личная база знаний с документом (файлов у них нет — только куски текста): id базы и документа."""
     kb = s.c.post("/api/knowledge", json={"name": "Плоды"}).json()["id"]
@@ -216,7 +228,7 @@ def make_kb_document(s, uid: int) -> Made:
 
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
 MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation, "voices": make_voice,
-        "knowledge_bases": make_knowledge_base, "kb_documents": make_kb_document}
+        "voice_samples": make_voice_sample, "knowledge_bases": make_knowledge_base, "kb_documents": make_kb_document}
 
 
 def owner(s) -> int:
