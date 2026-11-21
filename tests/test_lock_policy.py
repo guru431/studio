@@ -386,6 +386,8 @@ ROUTES = {
         ("GET", "/api/me/access/shares/{share_id}/link"),
         ("DELETE", "/api/me/access/members/{aid}/{pid}/{member}"),
         ("DELETE", "/api/me/access/shared/{aid}"),
+        # записи корзины разных разделов на одном адресе: вернуть и удалить навсегда — только без запертых разделов
+        ("POST", "/api/trash/{kind}/{item_id}/restore"), ("DELETE", "/api/trash/{kind}/{item_id}"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
         ("DELETE", "/api/passkeys/{key_id}"),
@@ -402,7 +404,7 @@ ROUTES = {
         ("GET", "/api/connections/{conn_id}/profile"),
         ("POST", "/api/dictation"), ("GET", "/api/jobs"),
         ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/storage"),
-        ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections")]},
+        ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections"), ("GET", "/api/trash")]},
     **{(m, p): "lock" for m, p in [
         ("GET", "/api/lock"), ("POST", "/api/lock/alive"), ("POST", "/api/lock/challenge"), ("POST", "/api/lock/now"),
         ("POST", "/api/lock/open"), ("POST", "/api/lock/password"), ("POST", "/api/lock/pin")]},

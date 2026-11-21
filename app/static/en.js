@@ -2551,6 +2551,7 @@ globalThis.StudioEnglish = Object.freeze({
   "\n\n[ответ обрезан пределом длины модели]": "\n\n[response cut off by the model's length limit]",
   "\n\n[ответ обрезан: слишком длинный для студии]": "\n\n[response cut off: too long for Studio]",
   "такого диалога нет": "no such conversation",
+  "такой записи в корзине нет": "no such item in the trash",
   "ответ слишком длинный — обрезан": "response too long; truncated",
   "модель вызвала инструмент, которого у неё нет": "model called a tool it does not have",
   "Ответ слишком длинный": "Response too long",

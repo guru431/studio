@@ -124,6 +124,7 @@ def test_real_cleaner_preview_send_restore_and_delete(studio, cleaner_server, cl
     assert "https://external.example/?v=ivan@contoso.ru" not in answer["content"]
     assert "<EMAIL_1>" in answer["cleaner_raw"]
     assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
+    assert studio.c.delete(f"/api/trash/chats/{cid}").status_code == 204   # контекст — при окончательном удалении
     studio.c.portal.call(cleaner_client.purge)
     assert state.DB.execute("SELECT COUNT(*) FROM cleaner_deletions").fetchone()[0] == 0
     assert real.get(url + "/api/v1/chats", headers={"X-Cleaner-Key": "ck_" + "A" * 43}).json() == []

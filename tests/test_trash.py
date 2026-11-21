@@ -1,0 +1,292 @@
+"""Корзина на 14 дней (app/trash.py, шаг схемы 58): удаление переносит запись в корзину — она уходит из лент,
+поиска, «В работе», push, ссылок «Поделиться» и выгрузки; «Вернуть» возвращает всё, уборка через
+`trash.TRASH_SEC` удаляет окончательно. Виды записей — `trash.KINDS`: новый вид без строки в MAKE роняет тесты."""
+import io
+import json
+import zipfile
+from dataclasses import dataclass, field
+from typing import Callable
+
+import pytest
+
+import chat
+import media
+import search
+import state
+import trash
+from conftest import T0, make_user, signin
+from test_chat_shares import create as create_share, regular as regular_chat, unlock
+
+
+def save(uid: int, data: bytes, mime: str = "audio/mpeg", name: str = "file.mp3") -> str:
+    """Файл на «шаре» и строка media (как test_takeout.save)."""
+    media_id, rel = media._plan(uid, mime)
+    full = state.CFG.media_dir / rel
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_bytes(data)
+    state.DB.execute("INSERT INTO media(id, user_id, rel_path, mime, size, has_thumb, download_name, created)"
+                     " VALUES (?, ?, ?, ?, ?, 0, ?, ?)", (media_id, uid, rel, mime, len(data), name, T0))
+    return media_id
+
+
+def new_chat(uid: int, chat_id: str, word: str) -> str:
+    """Диалог с вопросом, ответом и отправленным документом (файл — на «шаре»); id файла."""
+    state.DB.execute("INSERT INTO chats(id, user_id, title, model, created, updated) VALUES (?, ?, ?, 'm', ?, ?)",
+                     (chat_id, uid, f"{word} title", T0, T0))
+    state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                     " VALUES (?, ?, 'user', ?, 'done', 'server', NULL, ?)", (chat_id + "-q", chat_id, f"{word} question", T0))
+    state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                     " VALUES (?, ?, 'assistant', ?, 'done', 'server', 'm', ?)", (chat_id + "-a", chat_id, f"{word} answer", T0))
+    doc = save(uid, b"%PDF " + word.encode(), "application/pdf", "doc.pdf")
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
+                     " VALUES (?, ?, ?, 'document', 'doc.pdf', ?, ?, 5, ?)",
+                     (chat_id + "-att", uid, chat_id + "-q", doc, f"{word} document", T0))
+    return doc
+
+
+@dataclass
+class Made:
+    """Запись вида корзины: id, её файлы, как удалить через API раздела и как увидеть в его ленте и по id."""
+    id: str
+    files: list
+    delete: Callable
+    visible: Callable                     # лента и запись по id — обе видят
+    word: "str | None" = None             # слово поиска (запись в индексе)
+    touch: "Callable | None" = None       # правка записи (триггер `*_au` поиска), пока она в корзине
+    jobs: "Callable | None" = None        # запись видна в «В работе»
+    extra: dict = field(default_factory=dict)
+
+
+def make_chat(s, uid: int) -> Made:
+    doc = new_chat(uid, "kiwi", "kiwi")
+    chat.ANSWERED["kiwi-a"] = (uid, "kiwi", s.clock[0], "done")     # ответ через сервер кончился только что
+
+    def visible():
+        listed = "kiwi" in {c["id"] for c in s.c.get("/api/chats").json()["items"]}
+        one = s.c.get("/api/chats/kiwi").status_code
+        assert listed == (one == 200), (listed, one)
+        return listed
+
+    def touch():
+        state.DB.execute("UPDATE messages SET content = 'kiwi answer edited' WHERE id = 'kiwi-a'")
+        state.DB.execute("UPDATE chats SET title = 'kiwi title edited' WHERE id = 'kiwi'")
+        state.DB.execute("UPDATE messages SET content = 'kiwi answer' WHERE id = 'kiwi-a'")
+        state.DB.execute("UPDATE chats SET title = 'kiwi title' WHERE id = 'kiwi'")
+
+    def jobs():
+        return any(j["href"] == "chat/kiwi" for j in s.c.get("/api/jobs").json()["finished"])
+
+    return Made("kiwi", [doc], lambda: s.c.delete("/api/chats/kiwi"), visible, word="kiwi", touch=touch, jobs=jobs)
+
+
+def make_chat_media(s, uid: int) -> Made:
+    new_chat(uid, "host", "host")
+    clip = save(uid, b"dialog audio", "audio/mpeg", "voice.mp3")
+    state.DB.execute("INSERT INTO chat_media(id, chat_id, user_id, name, mime, size, media_id, created)"
+                     " VALUES ('dm1', 'host', ?, 'voice.mp3', 'audio/mpeg', 12, ?, ?)", (uid, clip, T0))
+
+    def visible():
+        return "dm1" in {m["id"] for m in s.c.get("/api/chats/host").json()["media"]}
+
+    return Made("dm1", [clip], lambda: s.c.delete("/api/chats/host/media/dm1"), visible)
+
+
+#: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
+MAKE = {"chats": make_chat, "chat_media": make_chat_media}
+
+
+def owner(s) -> int:
+    uid = make_user(s, "owner")
+    signin(s, "owner")
+    return uid
+
+
+def hits(s, word: str) -> list:
+    """id записей выдачи поиска (`POST /api/search`)."""
+    return [i["id"] for i in s.c.post("/api/search", json={"q": word}).json()["items"]]
+
+
+@pytest.fixture
+def s(studio):
+    return studio
+
+
+def index_rows(item: str) -> list:
+    return sorted(tuple(r) for r in state.DB.execute(
+        "SELECT section, item, part, user_id, model, created, body FROM search_docs WHERE item = ?", (item,)))
+
+
+@pytest.fixture(params=sorted(trash.KINDS))
+def kind(request):
+    assert request.param in MAKE, f"вид корзины {request.param} без строки MAKE"
+    return request.param
+
+
+def test_delete_hides_everywhere_and_restore_returns(s, kind):
+    uid = owner(s)
+    made = MAKE[kind](s, uid)
+    assert made.visible()
+    indexed = index_rows(made.id)
+    if made.word:
+        assert made.id in hits(s, made.word)
+    if made.jobs:
+        assert made.jobs()
+    assert made.delete().status_code == 204
+    assert not made.visible()
+    assert made.delete().status_code == 404                      # запись в корзине по id — 404
+    listed = [i for i in s.c.get("/api/trash").json() if i["kind"] == kind and i["id"] == made.id]
+    sizes = sum(state.DB.execute("SELECT size FROM media WHERE id = ?", (m,)).fetchone()[0] for m in made.files)
+    assert len(listed) == 1 and listed[0]["deleted"] == s.clock[0] and listed[0]["bytes"] == sizes
+    assert listed[0]["section"] == trash.KINDS[kind].section and listed[0]["title"]
+    for media_id in made.files:                                  # файлы — до окончательного удаления
+        assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (media_id,)).fetchone()
+    if made.word:
+        assert made.id not in hits(s, made.word)
+        if made.touch:                                           # правка в корзине снова вставляет строки индекса
+            made.touch()
+            assert index_rows(made.id) and made.id not in hits(s, made.word)
+    if made.jobs:
+        assert not made.jobs()
+    assert s.c.post(f"/api/trash/{kind}/{made.id}/restore").status_code == 204
+    assert made.visible()
+    assert index_rows(made.id) == indexed
+    if made.word:
+        assert made.id in hits(s, made.word)
+    if made.jobs:
+        assert made.jobs()
+    assert not [i for i in s.c.get("/api/trash").json() if i["id"] == made.id]
+    assert s.c.post(f"/api/trash/{kind}/{made.id}/restore").status_code == 404
+    assert s.c.post(f"/api/trash/nothing/{made.id}/restore").status_code == 404
+
+
+def test_purge_after_14_days_removes_files_once(s, kind, unlinks):
+    uid = owner(s)
+    made = MAKE[kind](s, uid)
+    table = trash.KINDS[kind].table
+    paths = [state.CFG.media_dir / state.DB.execute("SELECT rel_path FROM media WHERE id = ?", (m,)).fetchone()[0]
+             for m in made.files]
+    assert made.delete().status_code == 204
+    s.clock[0] += trash.TRASH_SEC - 1
+    assert s.c.portal.call(trash.purge_expired) == 0
+    assert state.DB.execute(f"SELECT 1 FROM {table} WHERE id = ?", (made.id,)).fetchone()
+    s.clock[0] += 2
+    assert trash.purge_due_now() is False                        # отметка прохода — только что
+    assert s.c.portal.call(trash.purge_expired) == 1
+    assert state.DB.execute(f"SELECT 1 FROM {table} WHERE id = ?", (made.id,)).fetchone() is None
+    for media_id, path in zip(made.files, paths):
+        assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (media_id,)).fetchone() is None
+        assert not path.exists()
+    assert index_rows(made.id) == []
+    removed = len(unlinks)
+    assert removed and all(not on_loop for on_loop in unlinks)
+    assert s.c.portal.call(trash.purge_expired) == 0             # повтор — ни ошибок, ни новых удалений
+    assert len(unlinks) == removed
+    s.clock[0] += trash.PURGE_EVERY_SEC
+    assert trash.purge_due_now() is True
+    assert json.loads(state.DB.execute("SELECT value FROM settings WHERE key = ?",
+                                       (trash.PURGE_KEY,)).fetchone()[0])["purged"] == 0
+
+
+def test_delete_forever_takes_one_record_now(s, kind):
+    uid = owner(s)
+    made = MAKE[kind](s, uid)
+    assert s.c.delete(f"/api/trash/{kind}/{made.id}").status_code == 404      # не в корзине — нельзя
+    assert made.delete().status_code == 204
+    assert s.c.delete(f"/api/trash/{kind}/{made.id}").status_code == 204
+    assert state.DB.execute(f"SELECT 1 FROM {trash.KINDS[kind].table} WHERE id = ?", (made.id,)).fetchone() is None
+    assert s.c.post(f"/api/trash/{kind}/{made.id}/restore").status_code == 404
+
+
+def test_share_link_of_trashed_chat_is_unavailable_and_returns_after_restore(s):
+    endpoint, _ = regular_chat(s)
+    _, token = create_share(s, endpoint)
+    opened = unlock(s, token)
+    assert opened.status_code == 200
+    access = opened.json()["access"]
+    assert s.c.delete("/api/chats/chat").status_code == 204
+    gone = unlock(s, token)
+    assert gone.status_code == 404 and gone.json()["detail"]["code"] == "share_gone"
+    assert s.c.post("/share/check", json={"access": access}).status_code == 404
+    assert s.c.get(endpoint).status_code == 404                  # владелец ссылку чата из корзины не видит
+    assert s.c.post("/api/trash/chats/chat/restore").status_code == 204
+    again = unlock(s, token)
+    assert again.status_code == 200 and again.json()["messages"][1]["text"] == "**Private answer**"
+    assert s.c.post("/share/check", json={"access": access}).status_code == 204
+
+
+def test_takeout_skips_trash(s):
+    uid = owner(s)
+    kept_doc = new_chat(uid, "kept", "kept")
+    gone_doc = new_chat(uid, "gone", "gone")
+    clip = save(uid, b"dialog audio", "audio/mpeg", "voice.mp3")
+    state.DB.execute("INSERT INTO chat_media(id, chat_id, user_id, name, mime, size, media_id, created)"
+                     " VALUES ('dm1', 'kept', ?, 'voice.mp3', 'audio/mpeg', 12, ?, ?)", (uid, clip, T0))
+    picture = save(uid, b"png", "image/png", "img.png")
+    state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, media_id, state, detail, created,"
+                     " finished, deleted) VALUES ('img', ?, 'generation', 'flux', 'p', '1024x1024', 1, ?, 'done', '',"
+                     " ?, ?, ?)", (uid, picture, T0, T0, T0))
+    assert s.c.delete("/api/chats/gone").status_code == 204
+    assert s.c.delete("/api/chats/kept/media/dm1").status_code == 204
+    r = s.c.post("/api/me/export", json={"sections": ["chat", "photo"]})
+    assert r.status_code == 200 and r.json()["files"] == 1
+    z = zipfile.ZipFile(io.BytesIO(s.c.get(f"/api/me/export/{r.json()['id']}").content))
+    names = set(z.namelist())
+    assert "chats/kept.json" in names and "chats/gone.json" not in names
+    assert not any(gone_doc in n or clip in n or picture in n for n in names)
+    assert any(kept_doc in n for n in names)
+    assert json.loads(z.read("chats/kept.json"))["media"] == []
+    assert json.loads(z.read("images/0001.json")) == []
+    assert json.loads(z.read("manifest.json"))["counts"]["chats"] == 1
+
+
+def test_admin_sees_no_foreign_trash(s):
+    other = make_user(s, "other")
+    new_chat(other, "theirs", "theirs")
+    state.DB.execute("UPDATE chats SET deleted = ? WHERE id = 'theirs'", (T0,))
+    make_user(s, "admin", is_admin=True)
+    signin(s, "admin")
+    assert s.c.get("/api/trash").json() == []
+    assert s.c.post("/api/trash/chats/theirs/restore").status_code == 404
+    assert s.c.delete("/api/trash/chats/theirs").status_code == 404
+    assert state.DB.execute("SELECT deleted FROM chats WHERE id = 'theirs'").fetchone()[0] == T0
+
+
+def test_trash_list_hides_locked_sections_and_actions_wait_for_unlock(s):
+    uid = owner(s)
+    new_chat(uid, "c1", "plum")
+    assert s.c.delete("/api/chats/c1").status_code == 204
+    state.DB.execute("UPDATE users SET screen_lock = 1, screen_lock_sections = '[\"chat\"]' WHERE id = ?", (uid,))
+    state.DB.execute("UPDATE sessions SET seen = NULL WHERE user_id = ?", (uid,))
+    assert s.c.get("/api/trash").json() == []
+    assert s.c.post("/api/trash/chats/c1/restore").status_code == 423
+    assert s.c.delete("/api/trash/chats/c1").status_code == 423
+
+
+@pytest.mark.parametrize("section", sorted(search.TITLES))
+def test_reindex_item_writes_the_rows_of_the_triggers(s, section):
+    """`search.reindex_item` — те же строки индекса, что вставили триггеры (тело, модель, время, части чата)."""
+    uid = make_user(s, "owner")
+    if section == "chat":
+        new_chat(uid, "rec", "ёлка")
+    else:
+        from test_search import IMAGE, SCAN, SPEECH, TRANSCRIPT, TRANSLATION, VIDEO
+        sql, args = {"photo": (IMAGE, ("rec", uid, "flux", "Ёлка", 1)), "video": (VIDEO, ("rec", uid, "Ёлка", 2)),
+                     "transcribe": (TRANSCRIPT, ("rec", uid, "Ёлка.m4a", 3, "ёлка речь")),
+                     "speech": (SPEECH, ("rec", uid, "Ёлка", 4)), "ocr": (SCAN, ("rec", uid, "Ёлка.pdf", 5, "ёлка текст")),
+                     "translate": (TRANSLATION, ("rec", uid, "Ёлка", "ёлка исходник", 6))}[section]
+        state.DB.execute(sql, args)
+        if section == "translate":
+            state.DB.execute("UPDATE translations SET text = 'ёлка перевод' WHERE id = 'rec'")
+    before = index_rows("rec")
+    assert before
+    table = search.TITLES[section][0]
+    state.DB.execute(f"UPDATE {table} SET deleted = 1 WHERE id = 'rec'")
+    assert index_rows("rec") == []
+    search.reindex_item(section, "rec")                          # в корзине — не вставляет
+    assert index_rows("rec") == []
+    state.DB.execute(f"UPDATE {table} SET deleted = NULL WHERE id = 'rec'")
+    search.reindex_item(section, "rec")
+    search.reindex_item(section, "rec")                          # повтор — без дублей
+    assert index_rows("rec") == before
+    assert {r[0] for r in state.DB.execute("SELECT d.item FROM search JOIN search_docs d ON d.id = search.rowid"
+                                           " WHERE search MATCH 'елка*'")} == {"rec"}

@@ -73,6 +73,7 @@ import static_assets
 import takeout
 import transcripts
 import translate
+import trash
 import videos
 import voices
 import workspace
@@ -125,7 +126,7 @@ async def lifespan(_app):
     ocr.resume_queued()
     translate.resume_queued()
     loops =([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
-              asyncio.create_task(cleaner.sweep()), admin.start_check_watch()]
+              asyncio.create_task(cleaner.sweep()), admin.start_check_watch(), trash.start_purger()]
              if state.WATCHER else [])
     try:
         yield
@@ -202,6 +203,7 @@ app.include_router(voices.router)
 app.include_router(speeches.router)
 app.include_router(jobs.router)
 app.include_router(search.router)
+app.include_router(trash.router)
 app.include_router(takeout.router)
 app.include_router(agents.router)
 app.include_router(bridge.router)
