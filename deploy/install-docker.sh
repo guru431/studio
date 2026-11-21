@@ -64,7 +64,7 @@ for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studi
 done
 version=$(sed -nE 's/^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$NEW/app/release.py")
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'studio: invalid application version' >&2; exit 1; }
-image="studio:$version-$REVISION"
+image="arcane.local/studio:$version-$REVISION"
 # --pull: a newer base image (Debian and Python patches) replaces the cached one. REFRESH: the
 # first build of each ISO week reinstalls apt packages. --refresh-base: rebuild every layer now.
 build=(docker build --pull --build-arg "STUDIO_VERSION=$version" --build-arg "STUDIO_REVISION=$REVISION" --build-arg "REFRESH=$(date -u +%G-W%V)")
@@ -146,11 +146,12 @@ prune_releases() {
         dir="$R/$name"
         if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then continue; fi
         image=$(sed -n 's/^STUDIO_IMAGE=//p' "$dir/deploy/docker/host.conf") || return 1
-        [[ $image =~ ^studio:([0-9]+\.[0-9]+\.[0-9]+-)?[a-f0-9]{40}$ ]] || return 1
+        [[ $image =~ ^(arcane\.local/)?studio:([0-9]+\.[0-9]+\.[0-9]+-)?[a-f0-9]{40}$ ]] || return 1
         kept+=("$image")
     done
     [ "${#kept[@]}" -gt 0 ] || return 1
-    images=$(docker image ls --filter 'reference=studio:*' --format '{{.Repository}}:{{.Tag}}') || return 1
+    images=$(docker image ls --filter 'reference=arcane.local/studio:*' --filter 'reference=studio:*' \
+        --format '{{.Repository}}:{{.Tag}}') || return 1
     for dir in "$R"/releases/*; do
         name=${dir##*/}
         [[ $name =~ ^[a-f0-9]{40}-[0-9]{8}T[0-9]{6}$ ]] || continue
@@ -158,7 +159,7 @@ prune_releases() {
         if rm -rf -- "$dir"; then removed=$((removed + 1)); else status=1; fi
     done
     while IFS= read -r image; do
-        [[ $image =~ ^studio:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || continue
+        [[ $image =~ ^(arcane\.local/)?studio:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || continue
         if printf '%s\n' "${kept[@]}" | grep -Fxq -- "$image"; then continue; fi
         # No --force: Docker protects images referenced by any other container.
         docker image rm "$image" >/dev/null || status=1
