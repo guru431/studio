@@ -214,8 +214,10 @@ def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
     вызов шлюза — у WhisperX там 2460 с) уложена в бюджет меньше таймаута маршрута, иначе Apache
     оборвал бы запрос раньше службы и текст диктовки пропал бы."""
     import dictation
+    import speeches
     import voices
     assert dictation.BUDGET_SEC < _route_timeout("/api/dictation")
+    assert speeches.SAY_BUDGET_SEC < _route_timeout("/api/speech/say")
     assert voices.BUDGET_SEC < _route_timeout("/api/voices")
     assert voices.TRANSCRIBE_BUDGET_SEC + voices.DRAFT_SAVE_SEC < _route_timeout("/api/voices/transcribe")
     assert voices.BUDGET_SEC + media.SAVE_TIMEOUT_SEC < _route_timeout("/api/voices/prepare-sample")
