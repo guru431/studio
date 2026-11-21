@@ -318,9 +318,9 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 #mobile-nav-editor > .btn-link { white-space:normal; margin-top:var(--space-4); }
 
 /* шапка раздела */
-.head { flex: none; display: flex; align-items: center; gap: var(--space-5); min-height: 54px; padding: var(--space-5) var(--space-7);
+.head { flex: none; display: flex; align-items: center; gap: var(--space-5); min-height: var(--head-h); padding: var(--space-5) var(--space-7);
   border-bottom: 1px solid var(--line); }
-.head h1 { margin: 0; font-size:var(--title-font); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.head h1 { flex: none; margin: 0; font-size:var(--title-font); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .grow { flex: 1; }
 .head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
 /* состояние источника MCP (mcp_contracts, `studio/status`): точка у чипа MCP чата и у выбора «Студия/MCP» разделов
@@ -889,16 +889,13 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 
 .chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .chat-head { gap: var(--space-4); }
-.model-wrap { min-width: 0; }
-.model-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 5px var(--space-5) 5px 11px;
-  border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface-1); color: var(--text-1); font-weight: 500;
-  font-size:var(--fs-md); }
-@media (hover: hover) { .model-chip:hover { background: var(--surface-2); } }
+/* чип модели — первым в ряду под полем; размеры — .ctl-chip («Агенты»), сжимается до многоточия */
+.model-wrap { display: flex; flex: 0 1 auto; min-width: 0; max-width: 220px; }
+.model-chip { flex: 0 1 auto; max-width: 100%; }
 .model-chip .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-chip .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); }
 .model-chip.off .dot { background: var(--text-2); }
-.model-chip svg.caret { width: 14px; height: 14px; }
-.chat-conn { min-width: 0; color: var(--text-2); font-size:var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-chip svg.caret { flex: none; width: 12px; height: 12px; }
 .model-menu { width: 320px; }
 .model-group + .model-group { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .model-group-name { margin: var(--space-2) var(--space-4); color: var(--text-2); font-size:var(--fs-xs); }
@@ -943,7 +940,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .msg-actions .btn { min-height: 28px; padding: var(--space-1) 9px; border-color: transparent; background: none; color: var(--text-2);
   font-size:var(--fs-xs); }
 @media (hover: hover) { .msg-actions .btn:hover { background: var(--surface-2); color: var(--text-1); } }
-.chat-empty { margin: auto; }
+.chat-empty { margin: auto; font-size: var(--empty-font); }
 
 .chat-error { margin: 0 var(--space-7) var(--space-4); font-size:var(--fs-md); }
 .chat-error:empty { display: none; }

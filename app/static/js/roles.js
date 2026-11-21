@@ -25,7 +25,7 @@ const lang = () => (language() === 'en' ? 'en' : 'ru');
 export function roleChooser({ current, choose, failed = () => {} }) {
   let roles = [];
   const name = el('span', { class: 'chip-name' });
-  const chip = el('button', { type: 'button', id: 'role-chip', class: 'chip role-chip', title: tr("Роль диалога") },
+  const chip = el('button', { type: 'button', id: 'role-chip', class: 'chip ctl-chip role-chip', title: tr("Роль диалога") },
     name, icon('down', 'ico caret'));
   const menu = el('div', { id: 'role-menu', class: 'role-menu', role: 'menu', 'aria-label': tr("Роль диалога") });
   const popup = popupMenu(chip, menu, { side: 'above', fill: (close) => {
