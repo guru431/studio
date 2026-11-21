@@ -204,6 +204,63 @@ async def create(body: ServerIn, request: Request):
     return create_for(request.state.user.id, body)
 
 
+class PromptIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, str] = Field(default_factory=dict, max_length=PROMPT_ARGUMENTS_MAX)
+
+
+def _catalog_tool(item, tool, rules):
+    hint = mcp_sources.effective(tool, rules.get(tool["name"]) if item["user_id"] is None else None)
+    return {"name": tool["name"], "title": _text(tool.get("title"), 160),
+            "description": _text(tool.get("description"), 2000), "open_world": hint["open_world"],
+            "confirm": hint["confirm"] is not None}
+
+
+async def catalog_for(uid, refresh=False):
+    """Серверы учётки для окна MCP диалога: `state` — `off` (выключен, не опрашивается), `ok`, `error`
+    (`message`); правила сервера, инструменты, открытые учётке группами (с пометками «интернет» и «с
+    подтверждением» после политики администратора), подсказки. Опрос параллельно, каждый — до
+    `mcp_sources.LIST_SEC`, из кэша; `refresh` — заново, если запись старше `mcp_sources.REFRESH_MIN_SEC`."""
+
+    async def one(item):
+        out = {"id": item["id"], "name": item["name"], "shared": item["user_id"] is None}
+        if not item["enabled"]:
+            return {**out, "state": "off", "instructions": None, "tools": [], "prompts": []}
+        session = Session(item, uid=uid)
+        try:
+            found = await mcp_sources.catalog(session, mcp_sources.LIST_SEC, refresh=refresh)
+        except HTTPException as exc:
+            return {**out, "state": "error", "message": exc.detail["message"]}
+        except TimeoutError:
+            return {**out, "state": "error", "message": "MCP не ответил вовремя"}
+        finally:
+            await session.close()
+        rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
+        tools = [_catalog_tool(item, tool, rules) for tool in found.tools
+                 if isinstance(tool, dict) and isinstance(tool.get("name"), str) and NAME.fullmatch(tool["name"])
+                 and access.tool_allowed(uid, item["id"], tool["name"])]
+        instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
+        return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts}
+
+    return {"items": list(await asyncio.gather(*(one(item) for item in servers(uid))))}
+
+
+@router.get("/catalog")
+async def catalog(request: Request, refresh: str = ""):
+    return await catalog_for(request.state.user.id, refresh == "1")
+
+
+@router.post("/{sid}/prompt")
+async def prompt(sid: int, body: PromptIn, request: Request):
+    """Текст подсказки сервера (`prompts/get`) — страница кладёт его в поле ввода."""
+    uid = request.state.user.id
+    session = Session(row(uid, sid), uid=uid)
+    try:
+        return {"text": await session.prompt(body.name, body.arguments)}
+    finally:
+        await session.close()
+
+
 @router.get("/{sid}")
 async def detail(sid: int, request: Request):
     return detail_for(request.state.user.id, sid)
@@ -234,6 +291,7 @@ class Session:
         self.version = None
         self.instructions = None             # правила сервера из initialize — как прислал, режет chat_system
         self.capabilities = {}
+        self.error = None                    # поле `error` последнего ответа JSON-RPC
         self.seq = 0
 
     def headers(self, *, rpc=True):
@@ -305,8 +363,8 @@ class Session:
         except (httpx.HTTPError, TimeoutError, ValueError, RecursionError):
             raise refused("MCP недоступен или вернул неверный ответ") from None
 
-    @staticmethod
-    def _result(result):
+    def _result(self, result):
+        self.error = result.get("error")     # ответ-ошибка JSON-RPC: Tools.call узнаёт по нему «нет инструмента»
         if "error" in result or not isinstance(result.get("result"), dict):
             raise refused("MCP отклонил запрос")
         return result["result"]
@@ -418,65 +476,134 @@ def _prompt(item):
             "arguments": arguments[:PROMPT_ARGUMENTS_MAX]}
 
 
+TOOL_OFF = "Инструмент выключен в этом диалоге"
+WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
+NEEDS_CONFIRM = "Инструмент MCP с подтверждением — включите его в диалоге явно"
+TRIMMED = "Инструментов MCP больше 128 — часть этого сервера не предложена модели"
+
+
+def _unknown_tool(error, text=""):
+    """Ответ сервера «нет такого инструмента»: JSON-RPC −32602 или слова в ответе-ошибке."""
+    words = (error.get("message") if isinstance(error, dict) else "") or text
+    return (isinstance(error, dict) and error.get("code") == -32602) or (
+        isinstance(words, str) and "unknown tool" in words.lower())
+
+
 class Tools:
-    def __init__(self, uid, chat_id, ids):
-        self.uid, self.chat_id = uid, chat_id
-        self.ids = list(ids)
+    """Инструменты MCP хода: `ids` — действующий набор диалога (`mcp_sources.dialog_servers`, явные первыми),
+    `explicit` — его явно включённые, `conn` — подключение хода (для перепроверки набора перед вызовом)."""
+
+    def __init__(self, uid, chat_id, ids, *, explicit=(), conn=None):
+        self.uid, self.chat_id, self.conn = uid, chat_id, conn
+        self.ids, self.explicit = list(ids), set(explicit)
         self.sessions, self.calls, self.specs = [], {}, []
-        self.failed = []                     # (имя сервера, слова) — сервер пропущен, ход идёт без него
+        self.failed = []                     # (имя сервера, слова) — сервер пропущен или урезан, ход идёт
+        self.instructions = []               # (имя сервера, правила) серверов, давших инструменты ходу
+
+    def _chat(self):
+        return state.DB.execute("SELECT * FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
 
     @staticmethod
-    async def _list(session):
-        """Инструменты сервера или слова отказа: недоступный сервер не рвёт ход."""
+    async def _list(session, timeout):
+        """Каталог сервера (кэш `mcp_sources`) или слова отказа: недоступный сервер не рвёт ход."""
         try:
-            async with asyncio.timeout(DISCOVER_SEC):
-                tools = await session.tools()
+            found = await mcp_sources.catalog(session, timeout)
         except HTTPException as exc:
             return exc.detail["message"]
         except TimeoutError:
             return "MCP не ответил вовремя"
         if any(not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not NAME.fullmatch(tool["name"])
-               or not isinstance(tool.get("inputSchema"), dict) for tool in tools):
+               or not isinstance(tool.get("inputSchema"), dict) for tool in found.tools):
             return "MCP вернул неверное описание инструмента"
-        return tools
+        return found
+
+    @staticmethod
+    def _offered(item, tool, rules, web, on):
+        """Пометки инструмента и решение, предлагать ли его ходу: веб-инструмент — только при «Интернете»,
+        «с подтверждением» — только явно включённый в диалоге (окна подтверждения пока нет)."""
+        hint = mcp_sources.effective(tool, rules.get(tool["name"]) if item["user_id"] is None else None)
+        if hint["open_world"] and not web:
+            return hint, WEB_OFF
+        if hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ()):
+            return hint, NEEDS_CONFIRM
+        return hint, None
 
     async def discover(self):
-        """Выбранные включённые серверы опрашиваются параллельно, каждый в свой срок DISCOVER_SEC. Отказавший
-        пропускается — его имя и слова в `failed`; превышение MAX_TOOLS суммарно — отказ хода."""
+        """Каталоги серверов набора — из кэша (`mcp_sources.catalog`), без знакомства с сервером: его делает первый
+        вызов. Холодный кэш: явные ждут каждый DISCOVER_SEC, серверы по умолчанию — все вместе
+        `mcp_sources.DEFAULT_WAIT_SEC`; не успевший пропускается словами в `failed`. Отбор — группы доступа,
+        выключенные в диалоге, «Интернет» и подтверждение (`_offered`); сверх MAX_TOOLS — лишнее по порядку
+        набора отбрасывается заметкой, ход не отказывает."""
+        chat = self._chat()
+        if chat is None:
+            return
+        off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
+        web = bool(chat["web"])
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
         items = [enabled[sid] for sid in self.ids if sid in enabled]
         self.sessions = [Session(item, uid=self.uid) for item in items]
-        found = await asyncio.gather(*(self._list(session) for session in self.sessions))
-        for item, session, tools in zip(items, self.sessions, found):
-            if isinstance(tools, str):
-                self.failed.append((item["name"], tools))
+        found = await asyncio.gather(*(self._list(session, DISCOVER_SEC if item["id"] in self.explicit
+                                                  else mcp_sources.DEFAULT_WAIT_SEC)
+                                       for item, session in zip(items, self.sessions)))
+        for item, session, catalog in zip(items, self.sessions, found):
+            if isinstance(catalog, str):
+                self.failed.append((item["name"], catalog))
                 continue
-            for tool in tools:
-                if not access.tool_allowed(self.uid, item["id"], tool["name"]):
-                    continue                 # закрыт группами доступа — модели не предлагается
-                name = f"mcp_{item['id']}_{len(self.calls)}"
+            rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
+            given = trimmed = 0
+            for tool in catalog.tools:
+                if (not access.tool_allowed(self.uid, item["id"], tool["name"])   # закрыт группами доступа
+                        or tool["name"] in off.get(item["id"], ())
+                        or self._offered(item, tool, rules, web, on)[1] is not None):
+                    continue
                 if len(self.calls) >= MAX_TOOLS:
-                    raise refused("Выберите MCP с суммарно не больше 128 инструментов")
-                self.calls[name] = (session, tool["name"], item["name"])
+                    trimmed += 1
+                    continue
+                name = f"mcp_{item['id']}_{len(self.calls)}"
+                self.calls[name] = (session, tool["name"], item["name"], tool)
                 self.specs.append({"type": "function", "function": {"name": name,
                     "description": (f"{item['name']}: {tool['name']}. " + str(tool.get("description", "")))[:4000],
                     "parameters": tool["inputSchema"]}})
+                given += 1
+            if trimmed:
+                self.failed.append((item["name"], TRIMMED))
+            if given:
+                self.instructions.append((item["name"], catalog.instructions))
 
     async def call(self, name, arguments):
-        session, tool, server = self.calls[name]
+        """Вызов инструмента. Перед ним — заново: сервер в действующем наборе диалога, инструмент не выключен,
+        открыт группами, веб-инструмент — при включённом «Интернете», «с подтверждением» — явно включён; иначе
+        шаг-ошибка без запроса к MCP. Знакомство с сервером — здесь, при первом вызове."""
+        session, tool, server, spec = self.calls[name]
         step = {"kind": "mcp", "server": server, "tool": tool}
         try:
-            selected_row = state.DB.execute("SELECT mcp_ids FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
-            if selected_row is None or session.sid not in json.loads(selected_row[0]):
+            chat = self._chat()
+            if chat is None or session.sid not in mcp_sources.dialog_servers(self.uid, chat, self.conn):
                 raise refused("MCP выключен в этом диалоге")
+            off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
+            if tool in off.get(session.sid, ()):
+                raise refused(TOOL_OFF)
             if not access.tool_allowed(self.uid, session.sid, tool):   # правило могли сменить посреди хода
                 raise refused("Нет доступа к инструменту MCP")
+            item = {"id": session.sid, "user_id": session.owner_id}
+            rules = mcp_sources.policy(session.sid) if session.owner_id is None else {}
+            refusal = self._offered(item, spec, rules, bool(chat["web"]), on)[1]
+            if refusal is not None:
+                raise refused(refusal)
             args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""
             if not isinstance(args, dict):
                 raise refused("Неверные аргументы инструмента MCP")
-            result = await session.rpc("tools/call", {"name": tool, "arguments": args})
+            await session.ensure()
+            try:
+                result = await session.rpc("tools/call", {"name": tool, "arguments": args})
+            except HTTPException:
+                if _unknown_tool(session.error):
+                    mcp_sources.forget(session.sid)       # каталог устарел: следующий ход спросит список заново
+                raise
             text = "\n".join(block["text"] for block in result.get("content", [])
                              if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str))
+            if result.get("isError") and _unknown_tool(None, text):
+                mcp_sources.forget(session.sid)
             if result.get("structuredContent") is not None:
                 text += "\n" + json.dumps(result["structuredContent"], ensure_ascii=True)
             if not text:

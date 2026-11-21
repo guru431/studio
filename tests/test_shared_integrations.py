@@ -2,6 +2,7 @@
 
 import base64
 
+import mcp_sources
 import state
 from conftest import add_connection, make_user, signin
 from fakes import PNG_REAL, TOKEN as MODEL_KEY
@@ -91,12 +92,13 @@ def test_shared_mcp_uses_the_current_users_chat_and_keeps_result_tickets_private
     assert studio.c.put(f"/api/mcp/{sid}", json=body).status_code == 404
     assert studio.c.delete(f"/api/mcp/{sid}").status_code == 404
     chat_id = new_chat(studio)
-    assert studio.c.patch(f"/api/chats/{chat_id}", json={"mcp_ids": [sid]}).status_code == 200
+    assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["mcp_ids"] == [sid]   # общий — по умолчанию
     studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_0")]}, ["Done"]]
     assert sse(turn(studio, chat_id, "Call the tool"))[-1] == ("done", {"status": "done"})
     assert calls[-2][0] == "tools/call"
 
     service(studio.gw)
+    mcp_sources.forget(sid)          # тот же адрес отвечает другим набором: каталог в кэше — до CATALOG_TTL_SEC
     base = "/api/mcp-tools/video"
     assert studio.c.get(base).json()["items"][0]["id"] == sid
     result = studio.c.post(f"{base}/servers/{sid}/run", json={"tool": "video_create", "files": {

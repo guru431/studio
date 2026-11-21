@@ -475,6 +475,7 @@ def test_closed_mcp_dropped_from_chat_selection(studio):
     calls = mock(studio)
     signin(studio, "member")
     chat_id = new_chat(studio)
+    assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["mcp_ids"] == [sid]   # общий — по умолчанию
     assert studio.c.patch(f"/api/chats/{chat_id}", json={"mcp_ids": [sid]}).status_code == 200
     access.set_rule("mcp", sid, [])
     assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["mcp_ids"] == []
