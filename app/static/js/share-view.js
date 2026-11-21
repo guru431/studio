@@ -75,7 +75,16 @@ function stepNode(s) {
     const names = (Array.isArray(s.files) ? s.files : []).map((f) => (f && typeof f.name === 'string' ? f.name : ''))
       .filter(Boolean);
     if (names.length) li.append(el('ul', { class: 'shared-files' }, ...names.map((name) => el('li', {}, partText(name)))));
-  } else li.append(tr("Инструмент"));
+  } else if (s.kind === 'ask') li.append(s.question ? tr("Вопрос: «{0}»", partText(s.question)) : tr("Вопрос модели"));
+  else if (s.kind === 'knowledge') {
+    li.append(s.query ? tr("Знания: «{0}»", partText(s.query)) : tr("Знания"));
+    const sources = (Array.isArray(s.sources) ? s.sources : []).filter((x) => typeof x === 'string' && x);
+    if (sources.length) li.append(el('span', { class: 'muted' }, ` · ${sources.join(', ')}`));
+  } else if (s.kind === 'duplicate') li.append(tr("Повтор пропущен: {0}", partText(s.tool)));
+  else if (s.kind === 'todo') li.append(tr("План работы"));
+  // шаг памяти — только действие: текста записи в снимке нет
+  else if (s.kind === 'memory') li.append(s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
+  else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${partText(s.error)}`));
   return li;
 }
@@ -86,6 +95,19 @@ function sourcesNode(steps) {
   return el('details', { class: 'shared-sources' },
     el('summary', {}, links ? tr("Источники ({0})", links) : tr("Вызовы инструментов ({0})", steps.length)),
     el('ul', {}, ...steps.map(stepNode)));
+}
+
+/* план ответа (`messages.todo`) — как в чате (chat.js paintTodo): «План: N из M» и шаги с отметкой состояния */
+const TODO_STATES = { done: tr("сделано"), in_progress: tr("в работе"), pending: tr("впереди") };
+
+function todoNode(items) {
+  const list = Array.isArray(items) ? items.filter((i) => i && typeof i.text === 'string' && TODO_STATES[i.status]) : [];
+  if (!list.length) return null;
+  const done = list.filter((i) => i.status === 'done').length;
+  return el('div', { class: 'chat-todo', role: 'group', 'aria-label': tr("План работы") },
+    el('p', { class: 'chat-todo-head' }, tr("План: {0} из {1}", done, list.length)),
+    el('ol', {}, ...list.map((i) => el('li', { class: `todo-${i.status}` },
+      el('span', { class: 'sr' }, `${TODO_STATES[i.status]}: `), i.text))));
 }
 
 async function download(file, button) {
@@ -159,7 +181,8 @@ form.addEventListener('submit', async (event) => {
       const text = typeof message.text === 'string' ? message.text : '';
       const steps = Array.isArray(message.steps) ? message.steps : [];
       const node = el('article', { class: 'msg shared-message' },
-        el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")));
+        el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")),
+        todoNode(message.todo));
       // `parts` — порядок текста и шагов ответа (сервер собрал его из timeline моста); иначе текст, затем шаги.
       const ordered = Array.isArray(message.parts) && message.parts.every((part) => typeof part?.text === 'string'
         || (Number.isInteger(part?.step) && part.step >= 0 && part.step < steps.length));
