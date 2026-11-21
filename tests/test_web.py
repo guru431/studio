@@ -485,7 +485,22 @@ def test_run_gives_yt_dlp_no_environment_of_the_service(studio, monkeypatch):
     assert code == 0 and "STUDIO_DATA_KEY" not in env
     assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin" and env["LANG"] == "C.UTF-8"
     assert env["HOME"] == "/nonexistent" and str(state.CFG.tmp_dir) not in env.values()   # каталог там уронил бы старт
-    assert set(env) - {"PATH", "LANG", "HOME", "SYSTEMROOT"} <= {"COMSPEC", "PATHEXT", "WINDIR"}   # Windows дописывает свои
+    assert (set(env) - {"PATH", "LANG", "HOME", "DENO_DIR", "XDG_CACHE_HOME", "SYSTEMROOT"}
+            <= {"COMSPEC", "PATHEXT", "WINDIR"})   # Windows дописывает свои
+
+
+def test_yt_dlp_runtime_caches_go_to_a_writable_temp_dir_not_tmp_dir(studio):
+    """B2-DENO: в образе корень только для чтения и HOME=/nonexistent — deno (JS-рантайм yt-dlp-ejs) и кэш yt-dlp
+    пишут во временный каталог (tmpfs `/tmp`), а не в tmp_dir службы: каталог там уронил бы старт (audio.clean_tmp)."""
+    import tempfile
+
+    import state
+    import web
+    env = web._env()
+    assert env["HOME"] == "/nonexistent"
+    for key in ("DENO_DIR", "XDG_CACHE_HOME"):
+        path = Path(env[key])
+        assert path.is_relative_to(tempfile.gettempdir()) and not path.is_relative_to(state.CFG.tmp_dir), key
 
 
 def test_youtube_runs_no_more_than_two_at_once(studio, monkeypatch):

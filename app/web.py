@@ -25,6 +25,7 @@ import html
 import json
 import os
 import re
+import tempfile
 import uuid
 from asyncio.subprocess import DEVNULL, PIPE
 from collections.abc import Awaitable, Callable
@@ -57,6 +58,7 @@ YTDLP_TIMEOUT_SEC = 60       # на каждый из двух вызовов; �
 # yt-dlp сразу на всю службу: каждый — процесс Python в MemoryMax службы, и YouTube отвечает 429 одному
 # адресу на частые запросы
 YT_SLOTS = asyncio.Semaphore(2)
+YTDLP_CACHE = Path(tempfile.gettempdir()) / "studio-yt-dlp"     # кэш deno и yt-dlp (`_env`); каталоги заводят они сами
 SUBS_MAX = 120_000           # знаков субтитров: 1,5 ч — ~94 тыс., ~30 тыс. токенов из 131 072 контекста
 PARAGRAPH_SEC = 30           # абзац с отметкой времени — не чаще раза в 30 с ролика
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
@@ -210,9 +212,11 @@ async def page(key: str, url: str) -> dict:
 
 def _env() -> dict:
     """Окружение yt-dlp: без окружения службы (там STUDIO_DATA_KEY); Windows (тесты) без SYSTEMROOT
-    процессы не запускает. HOME — не tmp_dir: каталог, что там завёл бы yt-dlp или его JS-рантайм
-    (`.cache/` deno; в образе deno нет), уронил бы старт службы — audio.clean_tmp удаляет файлы `unlink`-ом."""
-    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent"}
+    процессы не запускает. Корень образа только для чтения, HOME нет: кэш deno (JS-рантайм yt-dlp-ejs) и
+    yt-dlp — в YTDLP_CACHE временного каталога (tmpfs `/tmp`). Не в tmp_dir: каталог, что там завели бы, уронил
+    бы старт службы — audio.clean_tmp удаляет файлы `unlink`-ом."""
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent",
+           "DENO_DIR": str(YTDLP_CACHE / "deno"), "XDG_CACHE_HOME": str(YTDLP_CACHE / "cache")}
     if os.name == "nt":
         env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
     return env
