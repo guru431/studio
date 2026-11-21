@@ -3191,7 +3191,27 @@ globalThis.StudioEnglish = Object.freeze({
   "Удалить подсказку": "Remove suggestion",
   "Заполните заголовок и текст каждой подсказки": "Fill in the title and text of every suggestion",
   "Текст добавляется к системному сообщению диалогов с этим подключением, параметры уходят в каждый запрос.": "The text is added to the system message of chats with this connection; the parameters go with every request.",
-  "Текст добавляется к системному сообщению диалогов с этим подключением, параметры уходят в каждый запрос. Пользователи видят только подсказки.": "The text is added to the system message of chats with this connection; the parameters go with every request. Users see only the suggestions."
+  "Текст добавляется к системному сообщению диалогов с этим подключением, параметры уходят в каждый запрос. Пользователи видят только подсказки.": "The text is added to the system message of chats with this connection; the parameters go with every request. Users see only the suggestions.",
+  "Роль диалога": "Chat role",
+  "Без роли": "No role",
+  "Настроить роли": "Manage roles",
+  "Роль": "Role",
+  "Роль диалога: {0}": "Chat role: {0}",
+  "Роль диалога: без роли": "Chat role: none",
+  "Текст роли": "Role text",
+  "Заполните название и текст роли": "Fill in the role name and text",
+  "Удалить роль?": "Delete role?",
+  "«{0}» удалится; диалоги с ней останутся без роли.": "“{0}” will be deleted; chats that use it will have no role.",
+  "Изменить роль": "Edit role",
+  "Ролей пока нет": "No roles yet",
+  "Создать роль": "Create role",
+  "Новая роль": "New role",
+  "Добавить роли по умолчанию": "Add default roles",
+  "Роли": "Roles",
+  "Роль — текст, который модель получает в начале диалога. Выбирается в чате кнопкой рядом с полем ввода.": "A role is text the model receives at the start of a chat. Choose it in the chat with the button next to the message field.",
+  "Русский": "Russian",
+  "Роли по умолчанию": "Default roles",
+  "Новые учётки получают роли своего языка при первом открытии чата; «Добавить роли по умолчанию» в настройках возвращает недостающие. Уже созданные роли пользователей правка не меняет.": "New accounts get the roles of their language when they first open the chat; “Add default roles” in settings brings back missing ones. Editing does not change roles users already have."
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не расшифрованы: {1} из {2} — STUDIO_DATA_KEY не тот, что у копии",

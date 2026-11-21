@@ -8,6 +8,7 @@ import { locale, message, tr } from './i18n.js';
  * выключены (сервер всё равно ответил бы 409). Чужую историю панель не показывает и не получает. */
 import { api, loadMe, me } from './api.js';
 import { accessPicker, chatMcpBlock } from './mcp-settings.js';
+import { roleDefaultsBlock } from './roles.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
@@ -646,7 +647,8 @@ export function mount(view, ctx) {
   const allow = allowlistBlock();
   const storage = storageBlock();
   const groups = groupsBlock(root, users.reload);
-  root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }), storage.el);
+  root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatMcpBlock({ admin: true }),
+    roleDefaultsBlock(), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
   groups.reload();

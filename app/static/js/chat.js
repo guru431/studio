@@ -81,6 +81,7 @@ import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
 import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
+import { roleChooser } from './roles.js';
 
 const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md'];               // как documents.SUFFIXES
@@ -500,6 +501,7 @@ function build(view, ctx) {
   let draftWeb = false;        // «Интернет» нового диалога: PATCH после его создания
   let draftMcp = [];
   let draftThink = false;      // «Рассуждение» нового диалога — так же
+  let draftRole = null;        // роль нового диалога {id, name}: PATCH {role_id} после его создания
   let sending = false;
   let stick = true;
   let found = null;            // { id, lit } сообщение из поиска (?m=): держим на виду, пока человек не тронул ленту
@@ -559,9 +561,19 @@ function build(view, ctx) {
     'aria-label': tr("Рассуждение"), title: THINK_TITLE, hidden: true }, icon('bulb'),
   el('span', { class: 'toggle-word' }, tr("Рассуждение")));
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
+  // роль диалога (roles.js): у открытого — `role` сервера, у нового — черновик до создания
+  const roles = roleChooser({ current: () => (chat ? chat.chat.role : draftRole),
+    choose: async (role) => {
+      if (!chat) { draftRole = role; return; }
+      const current = chat;
+      const out = await api('PATCH', `/api/chats/${chat.chat.id}`, { role_id: role ? role.id : null });
+      if (current === chat) chat.chat = out;
+    },
+    failed: (err) => { notice.textContent = words(err); } });
   const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer', id: 'composer' }, chipsBox, inputBox.box, inputBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, webToggle, mcpToggle, thinkToggle), send, stop),
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, roles.chip, roles.menu, webToggle, mcpToggle,
+      thinkToggle), send, stop),
     webNote);
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
@@ -721,6 +733,7 @@ function build(view, ctx) {
     paintGuard();
     paintThink();
     paintWeb();
+    roles.paint();
   }
 
   /* «Интернет» (как web.tools_for): 'hidden' — прямое подключение, кнопки нет; 'nokey' — через сервер без
@@ -1421,6 +1434,7 @@ function build(view, ctx) {
   async function open(id) {
     panel(false);
     models.close();
+    roles.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
     const mine = ++opened;
@@ -1435,6 +1449,7 @@ function build(view, ctx) {
     draftWeb = false;
     draftMcp = [];
     draftThink = false;
+    draftRole = null;
     clearTimeout(poll);
     stopWaiting();                                  // ушли из диалога — скан больше не ждём
     notice.textContent = '';
@@ -1642,6 +1657,7 @@ function build(view, ctx) {
       draftWeb = !!was.web;
       draftMcp = was.mcp_ids || [];
       draftThink = !!was.thinking;
+      draftRole = was.role || null;
       if (location.hash === `#/chat/${id}`) history.replaceState(history.state, '', '#/chat');
       shareContext();
       feed.replaceChildren(emptyNote());
@@ -1669,6 +1685,12 @@ function build(view, ctx) {
         draftMcp = []; paintWeb();
       }
       draftThink = false;
+      if (draftRole) {                            // роль, выбранная до создания диалога
+        const role = draftRole;
+        draftRole = null;
+        chat.chat = await api('PATCH', `/api/chats/${created.id}`, { role_id: role.id });
+        roles.paint();
+      }
       if (think) {
         chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
         paintThink();
@@ -1903,6 +1925,7 @@ function build(view, ctx) {
     paintChip();
   }, (err) => { notice.textContent = words(err); });
   const firstList = loadList();
+  roles.reload().catch(() => {});                  // нет списка — в меню только «Без роли» и «Настроить роли»
 
   return {
     open,
@@ -1926,6 +1949,7 @@ function build(view, ctx) {
       document.removeEventListener('visibilitychange', resume);
       document.removeEventListener('keydown', onKey);
       models.close();
+      roles.close();
       document.removeEventListener('studio-me', paintWeb);
       clearInterval(tick);
       clearTimeout(poll);
