@@ -169,7 +169,8 @@
   (`shutil.disk_usage`) и возраст новейшей копии `backup/<manage.BACKUP_GLOB>` в своём потоке-демоне
   со сроком `admin.PROBE_SEC`, одна проба за раз (`admin.PROBE`: зависшая CIFS держит один поток, а не
   пул `to_thread`), очередь — числом. Чужой истории (и объёмов по пользователям) панель не получает.
-  `GET /api/me/storage` дополняет `trash.storage`: `heaviest` — до `trash.HEAVIEST` (50) живых записей по сумме
+  `GET /api/me/storage` дополняет `trash.storage`: `heaviest` — `[{kind, section, id, title, bytes}]`, до
+  `trash.HEAVIEST` (50) живых записей по сумме
   `media.size` их файлов (запрос файлов вида — тот же `Kind.files`; медиа диалога — в весе диалога; разделы,
   закрытые блокировкой, — мимо: названия — содержимое), `trash` — `{раздел: {count, bytes}}`, `failed` —
   `{раздел: число}` неудачных и отменённых (`trash.FAILED`). `POST /api/me/storage/failed {sections}` →
