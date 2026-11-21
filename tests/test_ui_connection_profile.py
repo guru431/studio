@@ -31,7 +31,7 @@ def reload_page():
 
 #: значения окна: текст, параметры, подсказки по порядку, состояние top_k
 VALUES = (f"""[document.querySelector('#profile-text').value,
-  ['temperature', 'top-p', 'top-k', 'presence-penalty', 'max-tokens'].map(k => document.querySelector('#profile-' + k).value),
+  ['temperature', 'top-p', 'top-k', 'presence-penalty', 'max-tokens', 'max-images'].map(k => document.querySelector('#profile-' + k).value),
   [...document.querySelectorAll('#profile-suggestions li')].map(li => [li.querySelector('input').value,
     li.querySelector('textarea').value]),
   document.querySelector('#profile-top-k').disabled]""")
@@ -53,7 +53,7 @@ def test_own_profile_is_saved_and_survives_reload(browser, live, width):
         ("eval", "hint", "document.querySelector('[data-hint=top_k]').textContent"),
         set_value("#profile-temperature", "0.4"), set_value("#profile-top-p", "0.9"),
         set_value("#profile-top-k", "40"), set_value("#profile-presence-penalty", "-0.5"),
-        set_value("#profile-max-tokens", "700"),
+        set_value("#profile-max-tokens", "700"), set_value("#profile-max-images", "6"),
         # вне предела — слова под полем, профиль не уходит
         set_value("#profile-top-p", "0"), ("click", "#profile-save"),
         ("eval", "outOfRange", f"[document.querySelector('{DIALOG} .error[data-for=top_p]').textContent, {is_open(DIALOG)}]"),
@@ -77,9 +77,10 @@ def test_own_profile_is_saved_and_survives_reload(browser, live, width):
     assert values["hint"].endswith("только vLLM и совместимые")
     assert values["outOfRange"] == ["Больше 0 и не больше 1", True]
     assert values["dialogFits"] is True
-    assert values["saved"] == ["Отвечай кратко", ["0.4", "0.9", "40", "-0.5", "700"],
+    assert values["saved"] == ["Отвечай кратко", ["0.4", "0.9", "40", "-0.5", "700", "6"],
                                [["План", "Составь план"], ["Сводка", "Сделай сводку"]], False]
-    assert values["server"] == {"temperature": 0.4, "top_p": 0.9, "top_k": 40, "presence_penalty": -0.5, "max_tokens": 700}
+    assert values["server"] == {"temperature": 0.4, "top_p": 0.9, "top_k": 40, "presence_penalty": -0.5, "max_tokens": 700,
+                                "max_images": 6}
     assert not problems(result), result.get("log")
 
 
@@ -117,7 +118,7 @@ def test_admin_edits_shared_profile_and_user_sees_no_text(browser, live, width):
     assert not result.get("failed"), result
     values = result["values"]
     assert values["dialogFits"] is True
-    assert values["saved"] == [secret, ["0.2", "", "", "", ""], [["Перевод", "Переведи на английский"]], False]
+    assert values["saved"] == [secret, ["0.2", "", "", "", "", ""], [["Перевод", "Переведи на английский"]], False]
     assert values["userCard"] == [False, False]
     suggestions, has_text, has_params, leaked, status = values["userApi"]
     assert suggestions == [{"title": "Перевод", "text": "Переведи на английский"}]
