@@ -47,5 +47,6 @@ def test_question_card_answer_continues_the_same_bubble(browser, live, width):
     count, after_id, text, card_left = v["after"]
     assert count == 1 and after_id == mid and not card_left
     assert text.startswith("Уточню.") and text.endswith("Выбран красный.")
-    assert json.loads(live.gw.chat_requests[-1]["messages"][-1]["content"]) == {"answer": "Красный"}
+    assert json.loads(live.gw.chat_requests[-1]["messages"][-1]["content"]) == {"question": "Какой цвет?",
+                                                                                "answer": "Красный"}
     assert not problems(r), r.get("log")
