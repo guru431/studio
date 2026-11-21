@@ -145,6 +145,15 @@ def _members(kind: Kind, uid: int, item_id: str, live: str = "") -> list[str]:
                                               f" AND {kind.group} IS ?", (uid, row["deleted"], row[kind.group]))]
 
 
+def _locked(kind: Kind, uid: int, hidden) -> "tuple[str, tuple]":
+    """Условие (`AND …`) и аргументы: строки вида, закрытые блокировкой сверх своего раздела, — сканы запертых
+    «Чата» и «Перевода» (`lock_policy.hidden_scans`, как лента и поиск «Сканов»: имя документа — содержимое)."""
+    if kind.table != "scans":
+        return "", ()
+    sub, args = lock_policy.hidden_scans(uid, hidden)
+    return (f" AND id NOT IN ({sub})", args) if sub else ("", ())
+
+
 @router.get("")
 async def list_trash(request: Request):
     """Группа (`Kind.group`) — одна строка: id и название первой записи, объём — всех."""
@@ -154,9 +163,10 @@ async def list_trash(request: Request):
     for name, kind in KINDS.items():
         if kind.section in hidden:
             continue
+        locked, args = _locked(kind, uid, hidden)
         groups = {}
         for row in state.DB.execute(f"SELECT * FROM {kind.table} WHERE user_id = ? AND deleted IS NOT NULL{kind.live}"
-                                    " ORDER BY created, id", (uid,)).fetchall():
+                                    f"{locked} ORDER BY created, id", (uid, *args)).fetchall():
             key = (row[kind.group], row["deleted"]) if kind.group else row["id"]
             size = _bytes(kind, uid, row["id"])
             if key in groups:
@@ -261,12 +271,13 @@ def storage(user_id: int, hidden: "set[str] | frozenset[str]") -> dict:
     heaviest, trashed, failed = [], {}, {}
     for name, kind in KINDS.items():
         if not kind.live and kind.section not in hidden:
+            locked, args = _locked(kind, user_id, hidden)
             heaviest += [{"kind": name, "section": kind.section, "id": row["id"], "title": kind.title(row),
                           "bytes": row["bytes"]}
                          for row in state.DB.execute(
                              f"SELECT * FROM (SELECT t.*, {_sized(kind)} AS bytes FROM {kind.table} t"
-                             f" WHERE t.user_id = ? AND t.deleted IS NULL) WHERE bytes > 0 ORDER BY bytes DESC LIMIT ?",
-                             (user_id, HEAVIEST))]
+                             f" WHERE t.user_id = ? AND t.deleted IS NULL{locked}) WHERE bytes > 0"
+                             " ORDER BY bytes DESC LIMIT ?", (user_id, *args, HEAVIEST))]
         count, size = state.DB.execute(f"SELECT COUNT(*), COALESCE(SUM({_sized(kind)}), 0) FROM {kind.table} t"
                                        f" WHERE t.user_id = ? AND t.deleted IS NOT NULL{kind.live}", (user_id,)).fetchone()
         if count:
