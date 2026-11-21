@@ -406,6 +406,24 @@ def test_reasoning_is_left_out_of_a_link_unless_the_owner_includes_it(studio):
     assert chat_shares.regular_snapshot(uid, 'chat')[0]['messages'][1]['reasoning'] == 'Private draft'
 
 
+def test_link_carries_the_answer_plan_and_built_in_steps_without_memory_text(studio):
+    """Получатель видит план ответа (`messages.todo`) и шаги встроенных инструментов, как в чате; текста памяти
+    в снимке нет (шаг памяти — только действие)."""
+    endpoint, _ = regular(studio)
+    steps = [{'kind': 'memory', 'action': 'remember', 'text': 'Запомнила'},
+             {'kind': 'ask', 'question': 'Какой город?', 'text': '{"answer": "Тула"}'},
+             {'kind': 'duplicate', 'tool': 'web_search'}]
+    plan = [{'text': 'Найти данные', 'status': 'done'}, {'text': 'Свести', 'status': 'in_progress'}]
+    state.DB.execute("UPDATE messages SET tools=?, todo=? WHERE id='chat-a'",
+                     (json.dumps(steps, ensure_ascii=False), json.dumps(plan, ensure_ascii=False)))
+    _, token = create(studio, endpoint)
+    answer = unlock(studio, token).json()['messages'][1]
+    assert answer['todo'] == plan
+    assert answer['tools'] == [{'kind': 'memory', 'action': 'remember'}, {'kind': 'ask', 'question': 'Какой город?'},
+                               {'kind': 'duplicate', 'tool': 'web_search'}]
+    assert 'Запомнила' not in json.dumps(answer, ensure_ascii=False)
+
+
 def test_link_lifetime_defaults_to_a_week_and_expired_links_are_deleted(studio):
     endpoint, _ = regular(studio)
     out, token = create(studio, endpoint)

@@ -161,6 +161,43 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
 
 
 @pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320)])
+def test_reader_sees_built_in_steps_and_the_plan_like_the_chat(focus_browser, live, mobile, width):
+    """Находка 4b: вопрос, пропущенный повтор, план, память и знания — словами чата (chat.js stepNode), а не
+    «Инструмент»; план ответа — «План: N из M» со списком шагов."""
+    if mobile and focus_browser.browser_type.name == 'firefox':
+        pytest.skip('Playwright не эмулирует мобильный Firefox')
+    client, _, _ = owner(live)
+    cid = client.post('/api/chats', json={}).json()['id']
+    conn = db.connect(live.db_path)
+    tools = ('[{"kind":"ask","question":"Какой город?"},{"kind":"duplicate","tool":"web_search"},'
+             '{"kind":"todo"},{"kind":"memory","action":"forget"},'
+             '{"kind":"knowledge","query":"отпуск","sources":["Регламент.pdf"]}]')
+    plan = '[{"text":"Найти данные","status":"done"},{"text":"Свести","status":"in_progress"}]'
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,tools,todo)"
+                 " VALUES(?,?,'assistant','Готово','done','server',1,?,?)", (uuid.uuid4().hex, cid, tools, plan))
+    conn.close()
+    try:
+        url = client.post(f'/api/chats/{cid}/share', json={'pin': '0123'}).json()['url']
+        options = {'viewport': {'width': width, 'height': 852}, 'is_mobile': mobile, 'has_touch': mobile}
+        with focus_browser.new_context(**options, locale='ru-RU') as context:
+            reader = context.new_page()
+            reader.set_default_timeout(10000)
+            reader.goto(url)
+            reader.locator('#share-pin').fill('0123')
+            reader.locator('#share-open').click()
+            pw.expect(reader.locator('.chat-todo-head')).to_have_text('План: 1 из 2')
+            pw.expect(reader.locator('.chat-todo li')).to_have_count(2)
+            pw.expect(reader.locator('.shared-sources summary')).to_have_text('Вызовы инструментов (5)')
+            pw.expect(reader.locator('.shared-sources > ul > li')).to_have_text([
+                'Вопрос: «Какой город?»', 'Повтор пропущен: web_search', 'План работы', 'Память: запись удалена',
+                'Знания: «отпуск» · Регламент.pdf'])
+            assert reader.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    finally:
+        client.delete('/api/chats/' + cid)
+        client.close()
+
+
+@pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320)])
 def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, width):
     if mobile and focus_browser.browser_type.name == 'firefox':
         pytest.skip('Playwright не эмулирует мобильный Firefox')
