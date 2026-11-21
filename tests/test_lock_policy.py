@@ -395,6 +395,13 @@ ROUTES = {
         # записи корзины разных разделов на одном адресе: вернуть и удалить навсегда — только без запертых разделов
         ("POST", "/api/trash/{kind}/{item_id}/restore"), ("DELETE", "/api/trash/{kind}/{item_id}"),
         ("POST", "/api/trash/empty"), ("POST", "/api/me/storage/failed"),
+        # «Мои файлы» на MCP: результаты инструментов любых разделов в одной папке, ссылки на них
+        ("GET", "/api/my-files/servers"), ("POST", "/api/my-files/{sid}/list"), ("POST", "/api/my-files/{sid}/ticket"),
+        ("GET", "/api/my-files/{sid}/download/{encoded}"), ("PUT", "/api/my-files/{sid}/upload"),
+        ("POST", "/api/my-files/{sid}/mkdir"), ("POST", "/api/my-files/{sid}/delete"),
+        ("POST", "/api/my-files/{sid}/trash"), ("POST", "/api/my-files/{sid}/restore"),
+        ("POST", "/api/my-files/{sid}/zip"), ("POST", "/api/my-files/{sid}/links"), ("GET", "/api/my-files/links"),
+        ("DELETE", "/api/my-files/links/{lid}"),
         ("POST", "/api/media/archives"), ("GET", "/api/media/archives/{token}"),
         ("GET", "/api/passkeys"), ("POST", "/api/passkeys"), ("POST", "/api/passkeys/options"),
         ("DELETE", "/api/passkeys/{key_id}"),

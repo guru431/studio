@@ -715,6 +715,8 @@ function storageBlock(host) {
   // корзина (trash.py) и неудачные записи разделов: перенос в корзину обратим — без окна подтверждения
   const trashLine = el('p', { id: 'storage-trash', class: 'small' });
   const failedLine = el('p', { id: 'storage-failed', class: 'small' });
+  // «Мои файлы» на серверах MCP (my_files.storage): объём личной папки на каждом — не в итоге Студии
+  const mcpLine = el('p', { id: 'storage-mcp-files', class: 'small', hidden: true });
   const moveFailed = button(tr("Перенести в корзину"), { class: 'btn btn-sm', id: 'storage-failed-move', hidden: true });
   const heavy = el('ol', { id: 'storage-heaviest', class: 'storage-heaviest' });
   const heavyBox = el('details', { class: 'storage-heavy', hidden: true }, el('summary', {}, tr("Самые тяжёлые записи")), heavy);
@@ -722,8 +724,12 @@ function storageBlock(host) {
 
   async function reload() {
     try {
-      const { kinds, total, pending, cleaner_pending, cleaner_stalled, heaviest = [], trash = {}, failed = {} } =
-        await api('GET', '/api/me/storage');
+      const { kinds, total, pending, cleaner_pending, cleaner_stalled, heaviest = [], trash = {}, failed = {},
+        mcp_files: mcpFiles = [] } = await api('GET', '/api/me/storage');
+      mcpLine.replaceChildren(...(mcpFiles.length ? [tr("Мои файлы на серверах MCP: {0}. ",
+        mcpFiles.map((s) => `${s.name} — ${sizeText(s.bytes)}`).join(', ')),
+      el('a', { href: '#/myfiles', id: 'storage-mcp-files-open' }, tr("Открыть «Мои файлы»"))] : []));
+      mcpLine.hidden = !mcpFiles.length;
       const line = (key, name, n) => [el('dt', {}, name),
         el('dd', { 'data-kind': key }, `${filesText(n.files)} · ${sizeText(n.bytes)}`)];
       list.replaceChildren(...kinds.filter((k) => k.files).flatMap((k) => line(k.kind, KIND_NAMES[k.kind] || k.kind, k)),
@@ -764,7 +770,7 @@ function storageBlock(host) {
 
   reload();
   return { reload, el: el('section', { class: 'block storage-block' }, el('h2', {}, tr("Хранилище")), list, queue,
-    trashLine, el('div', { class: 'row' }, failedLine, moveFailed), heavyBox,
+    trashLine, mcpLine, el('div', { class: 'row' }, failedLine, moveFailed), heavyBox,
     el('p', { class: 'muted small' }, tr("Счёт — по записям истории, без миниатюр. Тексты чатов и промпты — в базе: удалённое из неё остаётся в копиях базы, пока его не вытеснят 7 новых копий (обычно неделю).")),
     el('div', { class: 'row' }, button(tr("Выгрузить мою историю"), { class: 'btn', id: 'export-open' },
       () => exportDialog(host)))) };
