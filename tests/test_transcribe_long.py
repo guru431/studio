@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 import speech
 import state
@@ -48,13 +49,15 @@ def test_long_recording_split_by_gateway_limits_and_times_shifted(studio, fake_a
     item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
     assert item["state"] == "done", item["detail"]
     assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [
-        ("cut", 0.0, 600.0), ("cut", 600.0, 600.0), ("cut", 1200.0, 300.0)]
+        ("cut", 0.0, 500.0), ("cut", 500.0, 500.0), ("cut", 1000.0, 500.0)]       # равные части не длиннее предела
     assert [d.split(" · ")[:2] for d in details] == [["распознаю", "часть 1 из 3"], ["распознаю", "часть 2 из 3"],
                                                     ["распознаю", "часть 3 из 3"]]
     assert [(s["start"], s["end"], s["speaker"], s["text"]) for s in item["segments"]] == [
-        (0.0, 2.0, "Собеседник 1", "Один."), (600.0, 600.0, None, MARKER_2), (601.0, 603.0, "Собеседник 1", "Два."),
-        (1200.0, 1200.0, None, "— Часть 3 (с 00:20:00): собеседники пронумерованы заново —"),
-        (1200.5, 1201.0, "Собеседник 1", "Три.")]
+        (0.0, 2.0, "Собеседник 1", "Один."),
+        (500.0, 500.0, None, "— Часть 2 (с 00:08:20): собеседники пронумерованы заново —"),
+        (501.0, 503.0, "Собеседник 1", "Два."),
+        (1000.0, 1000.0, None, "— Часть 3 (с 00:16:40): собеседники пронумерованы заново —"),
+        (1000.5, 1001.0, "Собеседник 1", "Три.")]
     assert len(asked) == 1                            # предел — из кэша на 600 с
 
 
@@ -71,7 +74,7 @@ def test_no_limits_route_falls_back_to_duration_max(studio, fake_audio, monkeypa
     studio.gw.asr_replies = parts([(0.0, 1.0, None, "Начало.")], [(0.0, 1.0, None, "Конец.")])
     item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
     assert item["state"] == "done", item["detail"]
-    assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [("cut", 0.0, 3600.0), ("cut", 3600.0, 400.0)]
+    assert [c for c in fake_audio.calls if c[0] in ("cut", "compress")] == [("cut", 0.0, 2000.0), ("cut", 2000.0, 2000.0)]
 
 
 def test_over_total_max_refused_before_work(studio, fake_audio):
@@ -85,10 +88,25 @@ def test_over_total_max_refused_before_work(studio, fake_audio):
     assert not [c for c in fake_audio.calls if c[0] in ("cut", "compress")]
 
 
+def test_tiny_tail_does_not_become_its_own_part(studio, fake_audio):
+    """Запись чуть длиннее кратного пределу: части равные, без 50-мс хвоста — внешний сервис отказал бы ему
+    (у OpenAI минимум 0,1 с), и вместе с ним пропали бы уже распознанные часы (ревью C-M3)."""
+    add_gateway(studio)
+    limits_route(studio)
+    fake_audio.duration = 1200.05
+    studio.gw.asr_replies = parts(*[[(0.0, 1.0, None, f"Часть {n}.")] for n in range(3)])
+    item = wait_tr(studio, upload(studio).json()["id"], {"done", "error"})
+    assert item["state"] == "done", item["detail"]
+    cuts = [c for c in fake_audio.calls if c[0] == "cut"]
+    assert len(cuts) == 3 and all(c[2] == pytest.approx(1200.05 / 3) for c in cuts), cuts
+    assert [c[1] for c in cuts] == pytest.approx([0.0, 1200.05 / 3, 2 * 1200.05 / 3])
+    assert all(c[2] <= 600 for c in cuts)
+
+
 def test_part_marker_between_parts(studio, fake_audio):
     add_gateway(studio)
     limits_route(studio)
-    fake_audio.duration = 900.0
+    fake_audio.duration = 1200.0
     studio.gw.asr_replies = parts([(0.0, 1.0, "SPEAKER_00", "Первая.")], [(2.0, 4.0, "SPEAKER_00", "Вторая.")])
     tid = upload(studio).json()["id"]
     item = wait_tr(studio, tid, {"done", "error"})
