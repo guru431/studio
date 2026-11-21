@@ -280,6 +280,47 @@ def test_knowledge_search_result_fits_the_context(studio):
     assert chat.estimate_tokens(studio.gw.chat_requests[-1]["messages"]) <= 6000 - chat.RESERVE_TOKENS
 
 
+def knowledge_dialog(studio) -> tuple[str, list[str]]:
+    """Источник знаний с векторами, база диалога и два больших вложения, что модель `tiny` (20 тыс.) получит
+    выдержками: (id диалога, id вложений)."""
+    gateway(studio)
+    shared_source(studio)
+    gw = add_gateway(studio)
+    kb = base(studio)
+    upload(studio, kb, "пароли.txt", "Кодовое слово отдела — бирюза. Его меняют весной.")
+    docs = [attach(studio, f"отчёт-{n}.txt", big_text(f"Пароль от сейфа {n} — 4711.").encode()) for n in (1, 2)]
+    settle(studio)
+    cid = new_chat(studio)
+    small_model(studio, cid, gw, 20_000)
+    assert studio.c.put(f"/api/chats/{cid}/knowledge", json={"kb_ids": [kb]}).status_code == 200
+    studio.embeds.clear()
+    return cid, [d["id"] for d in docs]
+
+
+def test_turn_search_remembers_source_failure_and_uses_short_timeout(studio):
+    """Источник знаний завис: вектор запроса хода ждёт knowledge.TURN_TIMEOUT_SEC, а не TIMEOUT_SEC фоновой
+    индексации; отказ запоминается в ходе — переранжирование уже не спрашивается (было: 120 с на каждое вложение
+    и базу)."""
+    cid, docs = knowledge_dialog(studio)
+    waits = []
+
+    async def hang(request):
+        waits.append((request.url.path, request.extensions["timeout"]["read"]))
+        raise httpx.ReadTimeout("нет ответа", request=request)
+
+    studio.gw.on["/v1/embeddings"] = studio.gw.on["/v1/rerank"] = hang
+    assert sse(turn(studio, cid, "Какой пароль от сейфа?", attachment_ids=docs))[-1] == ("done", {"status": "done"})
+    assert waits == [("/v1/embeddings", knowledge.TURN_TIMEOUT_SEC)]
+    sent = [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "user"][-1]["content"]
+    assert sent.count('excerpts="true"') == 2 and "<knowledge>" in sent      # BM25 нашёл без источника
+    # вектор есть, переранжирование отказало — второй раз в ходе его не спрашивают
+    gateway(studio)
+    studio.gw.on["/v1/rerank"] = hang
+    waits.clear()
+    assert sse(turn(studio, cid, "Что ещё про пароль?"))[-1] == ("done", {"status": "done"})
+    assert waits == [("/v1/rerank", knowledge.TURN_TIMEOUT_SEC)] and len(studio.embeds) == 1
+
+
 def test_kb_delete_goes_to_trash_and_restores(studio):
     uid = make_user(studio, "owner")
     signin(studio, "owner")

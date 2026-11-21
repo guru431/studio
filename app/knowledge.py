@@ -57,7 +57,10 @@ QUERY_WORDS = 32                 # слов запроса в BM25
 QUERY_MAX = 500                  # знаков запроса инструмента
 NAME_MAX = 100                   # имя базы
 NAME_WORDS = "имя базы — от 1 до 100 знаков"
-TIMEOUT_SEC = 120
+TIMEOUT_SEC = 120                # векторы кусков фоновой индексацией (`_vectors`)
+#: вектор запроса и переранжирование в ходе и в `knowledge_search`: ответ ждёт; отказ источника в ходе запоминается
+#: (`cache["down"]`) — дальше без векторов и без переранжирования
+TURN_TIMEOUT_SEC = 15
 SOURCE_KEY = "knowledge_source"
 GONE = {"code": "gone", "message": "такой базы знаний нет"}
 DOC_GONE = {"code": "gone", "message": "такого документа нет"}
@@ -163,9 +166,9 @@ def _pack(values) -> bytes:
     return array("f", (v / norm for v in values)).tobytes()
 
 
-async def _post(conn, path: str, body: dict) -> dict:
+async def _post(conn, path: str, body: dict, timeout: float) -> dict:
     try:
-        r = await upstream.request(conn, "POST", connections._api(conn) + path, json=body, timeout=TIMEOUT_SEC)
+        r = await upstream.request(conn, "POST", connections._api(conn) + path, json=body, timeout=timeout)
     except upstream.UpstreamRefused as e:
         raise SourceError(e.reason) from None
     except httpx.HTTPError as e:
@@ -178,7 +181,7 @@ async def _post(conn, path: str, body: dict) -> dict:
     return out
 
 
-async def embed(texts: list[str]) -> list[bytes]:
+async def embed(texts: list[str], timeout: float = TIMEOUT_SEC) -> list[bytes]:
     """Векторы текстов (`POST <api>/embeddings` пачками по EMBED_BATCH); нет источника или отказ — SourceError."""
     found = _source_conn()
     if found is None:
@@ -187,7 +190,7 @@ async def embed(texts: list[str]) -> list[bytes]:
     out = []
     for i in range(0, len(texts), EMBED_BATCH):
         batch = texts[i:i + EMBED_BATCH]
-        data = (await _post(conn, "/embeddings", {"model": src["embed_model"], "input": batch})).get("data")
+        data = (await _post(conn, "/embeddings", {"model": src["embed_model"], "input": batch}, timeout)).get("data")
         if not isinstance(data, list) or len(data) != len(batch):
             raise SourceError("shape")
         try:
@@ -199,12 +202,14 @@ async def embed(texts: list[str]) -> list[bytes]:
 
 
 async def rerank(query: str, docs: list[str]) -> list[float]:
-    """Оценки кусков по порядку `docs` (`POST <api>/rerank`); нет модели переранжирования — SourceError."""
+    """Оценки кусков по порядку `docs` (`POST <api>/rerank`, ждёт TURN_TIMEOUT_SEC); нет модели переранжирования —
+    SourceError."""
     found = _source_conn()
     if found is None or not found[0].get("rerank_model"):
         raise SourceError("none")
     src, conn = found
-    results = (await _post(conn, "/rerank", {"model": src["rerank_model"], "query": query, "documents": docs})).get("results")
+    results = (await _post(conn, "/rerank", {"model": src["rerank_model"], "query": query, "documents": docs},
+                           TURN_TIMEOUT_SEC)).get("results")
     scores = [None] * len(docs)
     try:
         for item in results:
@@ -402,22 +407,23 @@ def _nearest(query: bytes, rows: list) -> list[int]:
 
 
 async def _vector(query: str, docs: dict, cache: dict) -> list[int]:
-    """Куски по близости векторов; нет источника или векторов — []. Вектор запроса — один на ход (`cache`)."""
-    if source() is None:
+    """Куски по близости векторов; нет источника или векторов — []. Вектор запроса — один на ход (`cache`: по
+    тексту запроса); источник в этом ходе уже отказал (`cache["down"]`) — не спрашивается."""
+    if source() is None or cache.get("down"):
         return []
     rows = state.DB.execute("SELECT id, vector FROM kb_chunks WHERE vector IS NOT NULL"
                             " AND doc_id IN (SELECT value FROM json_each(?))", (json.dumps(list(docs)),)).fetchall()
     if not rows:
         return []
-    if "vector" not in cache:
+    key = ("vector", query)
+    if key not in cache:
         try:
-            cache["vector"] = (await embed([query]))[0]
+            cache[key] = (await embed([query], TURN_TIMEOUT_SEC))[0]
         except SourceError as e:
-            cache["vector"] = None
+            cache["down"] = True
             log.warning("знания: вектор запроса не получен (%s)", e.code)
-    if cache["vector"] is None:
-        return []
-    return await asyncio.to_thread(_nearest, cache["vector"], [(r[0], r[1]) for r in rows])
+            return []
+    return await asyncio.to_thread(_nearest, cache[key], [(r[0], r[1]) for r in rows])
 
 
 async def _search(uid: int, query: str, docs: dict, k: int, cache: dict) -> list[Hit]:
@@ -434,19 +440,21 @@ async def _search(uid: int, query: str, docs: dict, k: int, cache: dict) -> list
         "SELECT id, doc_id, n, text FROM kb_chunks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(best),))}
     found = [(rows[i], fused[i]) for i in best if i in rows]
     src = source()
-    if src and src.get("rerank_model") and len(found) > 1:
+    if src and src.get("rerank_model") and len(found) > 1 and not cache.get("down"):
         try:
             scores = await rerank(query, [row["text"] for row, _ in found])
             found = sorted(((row, s) for (row, _), s in zip(found, scores)), key=lambda x: x[1], reverse=True)
         except SourceError as e:
+            cache["down"] = True
             log.warning("знания: переранжирование не прошло (%s)", e.code)
     return [Hit(docs[row["doc_id"]], row["n"], row["text"], score) for row, score in found[:k]]
 
 
-async def search(uid: int, query: str, *, kb_ids=(), attachment_ids=(), k: int = TOP_K) -> list[Hit]:
+async def search(uid: int, query: str, *, kb_ids=(), attachment_ids=(), k: int = TOP_K,
+                 cache: "dict | None" = None) -> list[Hit]:
     """Куски документов видимых баз `kb_ids` и больших вложений учётки `attachment_ids` по запросу: BM25 топ-30 ∪
-    векторы топ-30 → RRF → переранжирование; не больше `k`."""
-    return await _search(uid, query, _scope(uid, kb_ids, attachment_ids), k, {})
+    векторы топ-30 → RRF → переранжирование; не больше `k`. `cache` — общий на ход (отказ источника, векторы)."""
+    return await _search(uid, query, _scope(uid, kb_ids, attachment_ids), k, {} if cache is None else cache)
 
 
 def render(hits: list[Hit]) -> str:
