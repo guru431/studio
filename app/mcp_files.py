@@ -85,6 +85,10 @@ def limit_of(found) -> "int | None":
     return None if limit is None else min(limit, MEDIA_MAX)
 
 
+def upload_tool(found) -> dict:
+    return next(t for t in found.tools if isinstance(t, dict) and t.get("name") == UPLOAD)
+
+
 def _consent(row) -> dict:
     data = json.loads(row["mcp_file_consent"] or "{}")
     return data if isinstance(data, dict) else {}
@@ -150,7 +154,7 @@ def _blocked(item, found, row) -> "str | None":
     «Интернете» и явно включённых инструментах диалога `row` — та же классификация, что у хода
     (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера); иначе None. `artifact_upload`
     в `found` есть: его пометка и делает сервер получателем (`limit_of`)."""
-    tool = next(t for t in found.tools if isinstance(t, dict) and t.get("name") == UPLOAD)
+    tool = upload_tool(found)
     rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
     _, on = mcp_sources.tool_state(row["mcp_tools_off"])
     return mcp_client.Tools._offered(item, tool, rules, bool(row["web"]), on)[1]
@@ -212,7 +216,7 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
                               "consent": {"server_id": sid, "files": names}})
             continue
         # имя файла — только серверу, чья схема `artifact_upload` его принимает
-        schema = next(t for t in found.tools if t.get("name") == UPLOAD).get("inputSchema")
+        schema = upload_tool(found).get("inputSchema")
         named = isinstance(schema, dict) and isinstance(schema.get("properties"), dict) and "name" in schema["properties"]
         lines, broken, given = [], False, 0
         for f in files:
@@ -383,6 +387,21 @@ async def upload_media(chat_id: str, request: Request):
                      " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (item_id, chat_id, uid, name, mime, size, media_id, now))
     log.info("чат %s: медиа диалога %s, %d байт", chat_id[:8], item_id[:8], size)
     return {"id": item_id, "name": name, "mime": mime, "size": size, "created": now}
+
+
+@router.delete("/chats/{chat_id}/media/{item_id}", status_code=204)
+async def delete_media(chat_id: str, item_id: str, request: Request):
+    uid = request.state.user.id
+    chat._chat_row(uid, chat_id)
+    item = state.DB.execute("SELECT media_id FROM chat_media WHERE id = ? AND chat_id = ? AND user_id = ?",
+                            (item_id, chat_id, uid)).fetchone()
+    if item is None:
+        raise chat._gone("такого вложения нет")
+    chat._busy(chat_id)
+    state.DB.execute("DELETE FROM chat_media WHERE id = ?", (item_id,))
+    if not media.referenced(uid, item["media_id"]):
+        await media.delete_async(uid, item["media_id"])
+    log.info("чат %s: медиа диалога %s удалено", chat_id[:8], item_id[:8])
 
 
 @router.get("/chats/{chat_id}/messages/{message_id}/files/{step}/{n}")

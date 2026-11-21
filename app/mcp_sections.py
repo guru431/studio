@@ -83,6 +83,11 @@ def supported(section, tools, *, uid=None, sid=None):
         file_fields = FILE_FIELDS.get(section, {})
         if not has_upload and file_fields.keys() & set(required):
             continue
+        try:
+            encoded = json.dumps(schema, ensure_ascii=False, allow_nan=False).encode("utf-8", "replace")
+            schema = json.loads(encoded)
+        except (ValueError, RecursionError):
+            continue
         yield {"name": name, "title": clean_text(tool.get("title"), 160),
                "description": clean_text(tool.get("description"), 2000),
                "files": {key: kind for key, kind in file_fields.items() if has_upload and key in properties},
@@ -100,9 +105,7 @@ async def catalog(section: str, request: Request):
         try:
             found = await mcp_sources.catalog(session, DISCOVERY_TIMEOUT)     # общий кэш каталогов MCP
             tools = list(supported(section, found.tools, uid=uid, sid=session.sid))
-            # Keep broad or malformed schemas from breaking discovery for other servers.
-            encoded = json.dumps(tools, ensure_ascii=False, allow_nan=False).encode("utf-8", "replace")
-            return {"id": session.sid, "name": item["name"], "tools": json.loads(encoded)}
+            return {"id": session.sid, "name": item["name"], "tools": tools}
         except (HTTPException, TimeoutError, ValueError, RecursionError):
             return {"id": session.sid, "name": item["name"], "unavailable": True}
         finally:
@@ -148,8 +151,8 @@ def redeem(request, section, encoded, kind):
     return mcp.Session(item, uid=uid), payload
 
 
-async def call(session, name, args):
-    result = await session.rpc("tools/call", {"name": name, "arguments": args}, max_bytes=RESULT_MAX)
+async def call(session, name, args, *, timeout=mcp.TIMEOUT):
+    result = await session.rpc("tools/call", {"name": name, "arguments": args}, max_bytes=RESULT_MAX, timeout=timeout)
     if result.get("isError"):
         data = result.get("structuredContent")
         error = data.get("error") if isinstance(data, dict) else None
@@ -223,7 +226,9 @@ async def upload_artifact(session, data, mime, name=None):
     args = {"data_base64": base64.b64encode(data).decode(), "mime_type": mime}
     if name:
         args["name"] = name
-    reply = await call(session, "artifact_upload", args)
+    # Keep the normal response budget and allow for sending the encoded body at 512 KiB/s.
+    timeout = mcp.TIMEOUT + math.ceil(len(args["data_base64"]) / (512 << 10))
+    reply = await call(session, "artifact_upload", args, timeout=timeout)
     item = reply.get("structuredContent")
     aid = item.get("id") if isinstance(item, dict) else None
     if not isinstance(aid, str) or not ARTIFACT_ID.fullmatch(aid):

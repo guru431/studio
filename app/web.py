@@ -318,6 +318,8 @@ def _yt_words(err: bytes) -> str:
     text = err.decode("utf-8", "replace")
     if "HTTP Error 429" in text:
         return "YouTube временно ограничил запросы — попробуйте позже"
+    if "not a bot" in text.lower():
+        return "YouTube требует подтверждения, что запрос не от бота — с адреса сервера субтитры сейчас не получить"
     if any(s in text for s in _YT_CLOSED):
         return "ролик закрыт или недоступен"
     return "субтитры не получены"

@@ -416,6 +416,7 @@ def test_bridge_refusals_and_turn_failures_are_collected():
         assert text in found, text
 
 
+@pytest.mark.integration
 def test_page_runtime_translates_the_same_server_words():
     """Сторож и английские выгрузки переводят слова `i18n_words.message`; настоящий `i18n.js` должен дать то же."""
     node = shutil.which('node')

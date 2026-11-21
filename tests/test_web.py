@@ -385,6 +385,8 @@ STDERR_429 = b"ERROR: Unable to download video subtitles for 'ru-orig': HTTP Err
     ((1, b"ERROR: [youtube] x: Private video. Sign in if you've been granted access"),
      "ролик закрыт или недоступен"),
     ((1, b"ERROR: [youtube] x: Sign in to confirm your age. Use --cookies"), "ролик закрыт или недоступен"),
+    ((1, b"ERROR: [youtube] x: Sign in to confirm you're not a bot"),
+     "YouTube требует подтверждения, что запрос не от бота — с адреса сервера субтитры сейчас не получить"),
     ((1, b"ERROR: [youtube] x: This video is unavailable"), "ролик закрыт или недоступен"),
     ((1, b"ERROR: [youtube] x: This video has been removed for violating YouTube's policy"),
      "ролик закрыт или недоступен"),

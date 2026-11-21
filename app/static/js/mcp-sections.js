@@ -27,7 +27,8 @@ export function schemaLimits(prop) {
   if ((min !== null && !number(min)) || (max !== null && !number(max)) || (min !== null && max !== null && min > max)) return null;
   const choices = prop.enum ?? null;
   if (choices !== null && (!Array.isArray(choices) || !choices.length || choices.length > ENUM_MAX
-    || !choices.every(value => (typeof value === 'string' && value.length <= ENUM_TEXT) || number(value)))) return null;
+    || !choices.every(value => (typeof value === 'string' && value.length <= 2 * ENUM_TEXT && [...value].length <= ENUM_TEXT)
+      || number(value)))) return null;
   const value = prop.default;
   const inRange = typeof value === 'number' ? (min === null || value >= min) && (max === null || value <= max) : min === null && max === null;
   const fits = value !== undefined && value !== null && inRange && (!choices || choices.includes(value));
