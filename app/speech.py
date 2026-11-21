@@ -41,6 +41,8 @@ LITE_TIMEOUT_SEC = 180
 TTS_TIMEOUT_SEC = 720
 EXTERNAL_TIMEOUT_SEC = 600
 TTS_LANGUAGE = "Russian"
+#: язык озвучки шлюза: код Studio (`speeches.language`) → значение поля `language` Qwen3-TTS и F5-TTS
+TTS_LANGUAGES = {"ru": "Russian", "en": "English"}
 TTS_ROUTES = {"qwen3-tts": "/speech/tts-qwen", "f5-tts": "/speech/tts-f5"}
 LABEL = "Собеседник {}"          # метка собеседника по порядку первого появления (с 1)
 
@@ -208,15 +210,16 @@ async def dictate(conn, model: str, data: bytes, mime: str, name: str, language:
     return _text(r)
 
 
-async def say(conn, model: str, text: str, voice) -> tuple[bytes, str]:
-    """Одна фраза: srvllm — `voice` = (WAV образца, его текст), ответ WAV; внешний — имя голоса, mp3."""
+async def say(conn, model: str, text: str, voice, language: "str | None" = None) -> tuple[bytes, str]:
+    """Одна фраза: srvllm — `voice` = (WAV образца, его текст), ответ WAV; внешний — имя голоса, mp3.
+    `language` — код из TTS_LANGUAGES (только шлюз; нет — TTS_LANGUAGE); внешний сервис язык не принимает."""
     if conn.kind == "srvllm":
         route = TTS_ROUTES.get(model)
         if route is None:
             raise SpeechError("неизвестная модель озвучки шлюза")
         wav, ref_text = voice
         r = await _post(conn, f"{conn.base_url}{route}", TTS_TIMEOUT_SEC,
-                        data={"text": text, "language": TTS_LANGUAGE, "ref_text": ref_text},
+                        data={"text": text, "language": TTS_LANGUAGES.get(language, TTS_LANGUAGE), "ref_text": ref_text},
                         files={"ref_audio": ("voice.wav", wav, "audio/wav")})
         mime = "audio/wav"
     else:

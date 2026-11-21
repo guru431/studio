@@ -169,10 +169,11 @@ def test_history_wipe_drops_the_jobs_from_memory(studio, fake_audio, monkeypatch
     first = busy_speech(studio, fake_audio, monkeypatch)
     wait_sp(studio, first, {"working"})
     vid = state.DB.execute("SELECT voice FROM speeches").fetchone()[0]
+    # QUEUE_MAX — чатов в очереди и работе: идущий чат занимает одно место
     waiting = [studio.c.post("/api/speeches", json={"text": f"Фраза {n}.", "voice": vid}).json()
-               for n in range(speeches.QUEUE_MAX)]
+               for n in range(speeches.QUEUE_MAX - 1)]
     assert [(w["state"], w["detail"]) for w in waiting] == [
-        ("queued", f"в очереди · {n}") for n in range(1, speeches.QUEUE_MAX + 1)]
+        ("queued", f"в очереди · {n}") for n in range(1, speeches.QUEUE_MAX)]
     r = studio.c.post("/api/speeches", json={"text": "Лишняя.", "voice": vid})
     assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
     assert studio.c.post(f"/api/speeches/{waiting[0]['id']}/cancel").json() == {"state": "cancelled"}
@@ -324,7 +325,7 @@ def test_external_service_speaks_by_voice_name_in_one_request(studio, fake_audio
 def test_text_limits_and_foreign_voice(studio, fake_audio):
     add_gateway(studio)
     vid = voice(studio, fake_audio)
-    assert studio.c.post("/api/speeches", json={"text": "я" * 2001, "voice": vid}).status_code == 422
+    assert studio.c.post("/api/speeches", json={"text": "я" * (speeches.LONG_MAX + 1), "voice": vid}).status_code == 422
     assert studio.c.post("/api/speeches", json={"text": " ", "voice": vid}).status_code == 422
     r = studio.c.post("/api/speeches", json={"text": "Привет.", "voice": "0" * 32})
     assert r.status_code == 404 and r.json()["detail"]["code"] == "gone"
