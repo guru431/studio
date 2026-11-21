@@ -61,8 +61,8 @@ PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
 
 
 async def public_guard(request: Request, call_next):
-    """Bound anonymous JSON before FastAPI parses it, including chunked requests."""
-    if request.method == "POST" and request.url.path.startswith("/share/"):
+    """Bound anonymous JSON before FastAPI parses it, including chunked requests (`/share/*` and `/f/*`, my_files)."""
+    if request.method == "POST" and request.url.path.startswith(("/share/", "/f/")):
         body = bytearray()
         async for block in request.stream():
             if len(body) + len(block) > PUBLIC_BODY_MAX:

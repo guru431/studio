@@ -20,6 +20,7 @@ import code_actions
 import history
 import lock_policy
 import media
+import my_files
 import ntfy
 import release
 import sections
@@ -267,7 +268,9 @@ async def get_storage(request: Request):
     if pending:
         result["cleaner_pending"] = pending
         result["cleaner_stalled"] = cleaner_client.stalled(uid)
-    return {**result, **trash.storage(uid, lock_policy.hidden(request.state.digest))}
+    # «Мои файлы» на серверах MCP: объём личной папки на каждом (my_files.storage; недоступный — без строки)
+    return {**result, **trash.storage(uid, lock_policy.hidden(request.state.digest)),
+            "mcp_files": await my_files.storage(uid)}
 
 
 class FailedSections(BaseModel):

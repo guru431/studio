@@ -102,7 +102,7 @@ MODULE_IMPORTS = json.dumps({"imports": {"/static/js/": f"/static/v/{STATIC_VERS
 MODULE_IMPORTS_HASH = base64.b64encode(hashlib.sha256(MODULE_IMPORTS.encode()).digest()).decode("ascii")
 MODULE_PRELOADS = html.escape(json.dumps(static_assets.module_preloads(STATIC), separators=(",", ":")))
 _PAGES = {name: (STATIC / name).read_text(encoding='utf-8')
-          for name in ('index.html', 'login.html', 'offline.html', 'share.html', 'account.html')}
+          for name in ('index.html', 'login.html', 'offline.html', 'share.html', 'account.html', 'file.html')}
 
 #: ("pair", логин, адрес), ("ip", адрес) и ("pw", uid, digest сессии) → моменты неудач за последние LOCK_SEC.
 FAILS: dict[tuple, list[float]] = {}
