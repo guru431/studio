@@ -240,6 +240,10 @@ async def catalog_for(uid, refresh=False):
             instructions = (found.instructions or "").strip()[:mcp_sources.INSTRUCTIONS_MAX] or None
             import mcp_files                  # здесь, не при загрузке: mcp_files тянет разделы и chat
             chat_files = mcp_files.limit_of(found)          # с потолком mcp_files.MEDIA_MAX, как у загрузки
+            upload_policy = None
+            if chat_files is not None:
+                hint = mcp_sources.effective(mcp_files.upload_tool(found), rules.get(mcp_files.UPLOAD))
+                upload_policy = {"open_world": hint["open_world"], "confirm": hint["confirm"] is not None}
         except HTTPException as exc:
             return {**out, "state": "error", "message": exc.detail["message"], **empty}
         except TimeoutError:
@@ -250,7 +254,7 @@ async def catalog_for(uid, refresh=False):
         finally:
             await session.close()
         return {**out, "state": "ok", "instructions": instructions, "tools": tools, "prompts": found.prompts,
-                "chat_files": chat_files, "trimmed": found.trimmed}
+                "chat_files": chat_files, "chat_files_policy": upload_policy, "trimmed": found.trimmed}
 
     return {"items": list(await asyncio.gather(*(one(item) for item in servers(uid))))}
 
@@ -326,7 +330,7 @@ class Session:
             headers["MCP-Protocol-Version"] = self.version
         return dict(headers)
 
-    async def rpc(self, method, params=None, *, notification=False, max_bytes=MAX_BYTES):
+    async def rpc(self, method, params=None, *, notification=False, max_bytes=MAX_BYTES, timeout=TIMEOUT):
         self.seq += 1
         payload = {"jsonrpc": "2.0", "method": method}
         if params is not None:
@@ -334,9 +338,9 @@ class Session:
         if not notification:
             payload["id"] = self.seq
         try:
-            async with asyncio.timeout(TIMEOUT):
+            async with asyncio.timeout(timeout):
                 async with upstream.stream(SimpleNamespace(id=self.sid), "POST", self.url, keyless=True,
-                                           headers=self.headers(), json=payload, timeout=TIMEOUT) as response:
+                                           headers=self.headers(), json=payload, timeout=timeout) as response:
                     if response.status_code not in (200, 202, 204):
                         raise refused(f"MCP ответил HTTP {response.status_code}")
                     if method == "initialize":

@@ -606,8 +606,9 @@ function build(view, ctx) {
   head.append(share);
 
   function shareContext() {
-    share.hidden = !chatId;
-    sharing.set(chatId ? { title: chat?.chat.id === chatId ? chat.chat.title || tr("Чат") : tr("Чат"), share: `/api/chats/${chatId}/share`,
+    const current = chat?.chat.id === chatId ? chat.chat : null;
+    share.hidden = !current;
+    sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
       export: `/api/chats/${chatId}/export` } : null);
   }
 
@@ -799,20 +800,18 @@ function build(view, ctx) {
      предел разрешённых (или тех, у кого спросим) */
   function mediaState() {
     let ids;
-    let toolsOff;
     let decisions = {};
     if (chat) {
       if (!chat.chat.proxied || chat.chat.cleaner) return null;
       ids = chat.chat.mcp_ids || [];
-      toolsOff = chat.chat.mcp_tools_off || {};
       decisions = chat.chat.mcp_file_consent || {};
     } else {
       const conn = links.find((l) => l.connection.id === chosen().connection_id)?.connection;
       if (!conn?.proxied || conn.cleaner) return null;
       ids = draftIds(draftMcp, mcpServers);
-      toolsOff = stateOf(draftMcp).toolsOff;
     }
-    const targets = mediaTargets(catalog, ids, toolsOff).filter((t) => decisions[String(t.id)] !== 'refused');
+    const targets = mediaTargets(catalog, ids, stateOf(chat?.chat ?? draftMcp), chat ? !!chat.chat.web : webOn())
+      .filter((t) => decisions[String(t.id)] !== 'refused');
     if (!targets.length) return null;
     const allowed = targets.filter((t) => decisions[String(t.id)] === 'allowed');
     return { ask: allowed.length ? [] : targets, limit: Math.max(...(allowed.length ? allowed : targets).map((t) => t.max)) };
@@ -820,7 +819,13 @@ function build(view, ctx) {
 
   function paintMedia() {
     file.accept = mediaState() ? `${ACCEPT},${MEDIA_ACCEPT}` : ACCEPT;
-    mediaBox.replaceChildren(...(chat?.media || []).map((item) => mediaChip(item)), ...pendingMedia.map((item) => {
+    mediaBox.replaceChildren(...(chat?.media || []).map((item) => {
+      const chip = mediaChip(item);
+      const remove = iconButton('x', tr("Удалить {0}", item.name), { class: 'icon-btn att-remove' });
+      remove.addEventListener('click', () => deleteMedia(item));
+      chip.append(remove);
+      return chip;
+    }), ...pendingMedia.map((item) => {
       const chip = mediaChip(item);
       if (!item.busy) {
         const remove = iconButton('x', tr("Убрать {0}", item.name), { class: 'icon-btn att-remove' });
@@ -832,6 +837,29 @@ function build(view, ctx) {
       }
       return chip;
     }));
+  }
+
+  function deleteMedia(item) {
+    const id = chatId;
+    const fail = el('p', { class: 'error small', role: 'alert' });
+    const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'chat-media-delete-confirm' });
+    const dialog = openDialog(root, { id: 'chat-media-delete-dialog', title: tr("Удалить файл?"),
+      body: [el('p', {}, item.name), fail], actions: [confirm] });
+    confirm.addEventListener('click', async () => {
+      confirm.disabled = true;
+      fail.textContent = '';
+      try {
+        await api('DELETE', `/api/chats/${id}/media/${item.id}`);
+        if (chatId === id && chat) {
+          chat.media = (chat.media || []).filter((entry) => entry.id !== item.id);
+          paintMedia();
+        }
+        dialog.close();
+      } catch (err) {
+        fail.textContent = words(err);
+        confirm.disabled = false;
+      }
+    });
   }
 
   /* согласие на звук нового диалога или диалога, где серверу ещё не разрешали файлы: окно со списком файлов диалога */

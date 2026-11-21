@@ -36,10 +36,14 @@ export function draftIds(draft, servers) {
 }
 
 /** Серверы набора `ids`, принимающие файлы чата: [{id, name, max}] по каталогу; `artifact_upload`, выключенный в
- *  диалоге (`toolsOff`), сервер не считается. */
-export function mediaTargets(catalog, ids, toolsOff = {}) {
-  return catalog.filter((s) => ids.includes(s.id) && s.state === 'ok' && Number.isFinite(s.chat_files) && s.chat_files > 0
-    && !(toolsOff[String(s.id)] || []).includes(UPLOAD)).map((s) => ({ id: s.id, name: s.name, max: s.chat_files }));
+ *  диалоге, пометки «интернет» и «с подтверждением» — как в mcp_files.media_limit. */
+export function mediaTargets(catalog, ids, { toolsOff, toolsOn }, web) {
+  return catalog.filter((s) => {
+    const policy = s.chat_files_policy;
+    return ids.includes(s.id) && s.state === 'ok' && Number.isFinite(s.chat_files) && s.chat_files > 0 && policy
+      && !(toolsOff[s.id] || []).includes(UPLOAD) && (!policy.open_world || web)
+      && (!policy.confirm || (toolsOn[s.id] || []).includes(UPLOAD));
+  }).map((s) => ({ id: s.id, name: s.name, max: s.chat_files }));
 }
 
 /** Размер файла словами: КиБ до мебибайта, дальше МиБ. */

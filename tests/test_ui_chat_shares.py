@@ -41,7 +41,7 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
     conn.close()
     options = {'viewport': {'width': width, 'height': 852}, 'is_mobile': mobile, 'has_touch': mobile}
     try:
-        with focus_browser.new_context(**options, extra_http_headers={'Cookie': cookie}) as context:
+        with focus_browser.new_context(**options, extra_http_headers={'Cookie': cookie}, service_workers='block') as context:
             if focus_browser.browser_type.name == 'firefox':
                 context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
                                      'httpOnly': True, 'sameSite': 'Lax'} for key, value in cookies.items()])
@@ -50,8 +50,18 @@ def test_owner_shares_and_anonymous_reader_must_enter_pin_on_each_open(focus_bro
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: {writeText: async text => {window.copiedShare = text}}})")
-            page.goto(live.url + '/#/chat/' + cid)
+            # The loading placeholder used to enable sharing with a provisional title.
+            pending = []
+            chat_url = f'{live.url}/api/chats/{cid}'
+            page.route(chat_url, lambda route: pending.append(route))
+            with page.expect_request(chat_url):
+                page.goto(live.url + '/#/chat/' + cid)
+            pw.expect(page.get_by_text('Загружаю диалог…')).to_be_visible()
+            pw.expect(page.locator('#chat-share')).to_be_hidden()
+            pending.pop().continue_()
+            page.unroute(chat_url)
             page.locator('#chat-share').click()
+            pw.expect(page.locator('#chat-share-menu:popover-open')).to_be_visible()
             page.locator('#chat-share-menu [data-action="link"]').click()
             pin = page.locator('#chat-share-pin')
             pw.expect(pin).to_be_enabled()

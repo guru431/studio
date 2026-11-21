@@ -19,7 +19,7 @@ ARTIFACT = "art_" + "2" * 32
 PATH = f"/artifacts/{ARTIFACT}/content"
 
 
-def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False):
+def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -53,6 +53,11 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
         elif method == "tools/list":
             result = {"tools": [{"name": name, "inputSchema": {"type": "object", "properties": props,
                                                               "required": required}} for name, (props, required) in tools.items()]}
+            if broken_schema:
+                schema = result["tools"][1]["inputSchema"]
+                schema["properties"] = {**schema["properties"], "seconds": {"maximum": "__overflow__"}}
+                content = json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result})
+                return httpx.Response(200, content=content.replace('"__overflow__"', '1e400'))
         else:
             name, args = (payload["params"][key] for key in ("name", "arguments"))
             calls.append((name, args))
@@ -154,6 +159,8 @@ LIMIT_CASES = [
     ("huge_enum", {"type": "string", "enum": ["832x1216", *(f"{n}x{n}" for n in range(99))]}, ["nope", "832x1216"],
      [True, True], None),
     ("long_enum_value", {"type": "string", "enum": ["a" * 81, "b"]}, ["c"], [True], None),
+    ("astral_enum_value", {"type": "string", "enum": ["🛠" * 80], "default": "🛠" * 80},
+     ["🛠" * 80, "🛠" * 79], [True, False], "🛠" * 80),
     ("default_out_of_range", {"type": "integer", "minimum": 1, "maximum": 60, "default": 999}, [60, 61], [True, False], None),
     ("over_limit", {"type": "number", "maximum": 10**7}, [5 * 10**6], [True], None),
     ("non_finite", {"type": "number", "minimum": 1, "maximum": float("inf")}, [0, 10**9], [True, True], None),
@@ -202,6 +209,17 @@ def test_unavailable_mcp_does_not_hide_other_servers(studio):
     assert [server["id"] for server in reply["items"]] == [sid, other["id"]]
     assert reply["items"][0]["tools"][0]["name"] == "image_generate"
     assert reply["items"][1] == {"id": other["id"], "name": "Offline", "unavailable": True}
+
+
+def test_overflow_in_one_tool_schema_keeps_the_servers_other_tools(studio):
+    sid = add(studio)
+    calls = service(studio.gw, broken_schema=True)
+    base = "/api/mcp-tools/video"
+    items = studio.c.get(base).json()["items"]
+    assert [item["id"] for item in items] == [sid]
+    assert [tool["name"] for tool in items[0]["tools"]] == ["video_estimate"]
+    assert studio.c.post(f"{base}/servers/{sid}/run", json={"tool": "video_create"}).status_code == 409
+    assert calls == []
 
 
 def test_video_can_use_only_a_readable_photo_from_studio_history(studio):

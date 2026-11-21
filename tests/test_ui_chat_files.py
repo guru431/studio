@@ -1,6 +1,7 @@
 """Файлы между чатом и MCP на странице (chat-files.js, спека 2026-11-21-studio-source-foundation-design §5 и §7a п. 1,
 3): запрос согласия в ленте старого диалога после включения общего MCP с `studio/chat-files`, «Передать» и «Не
 передавать», звук в поле ввода только при таком сервере и в его пределе, файлы результата под ответом."""
+from contextlib import closing
 import json
 
 import httpx
@@ -12,9 +13,9 @@ from test_chat_web import call
 from test_documents import pdf
 from test_mcp import TOKEN as MCP_KEY
 from test_mcp_dialog import HOST
-from test_ui_browser import (ANSWERED, API, CHAT_ID, GATEWAY_URL, NO_OVERFLOW, READY, browser, is_open, live,  # noqa: F401
-                             open_new_chat, problems, signin)
-from test_ui_chat_mcp import admin_client
+from test_ui_browser import (ANSWERED, API, CHAT_ID, GATEWAY_URL, NO_OVERFLOW, READY, WEB_TOGGLE, browser,  # noqa: F401
+                             is_open, live, open_new_chat, problems, signin)
+from test_ui_chat_mcp import DIALOG, admin_client, open_dialog, row, tool_switch
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -170,6 +171,9 @@ def test_consent_media_and_result_files_in_chat(browser, live, width):
             ("eval", "preview", "[document.querySelector('#msg-file-dialog img').src.includes('/files/0/0'),"
                                 " document.querySelector('#msg-file-save').getAttribute('href').includes('/files/0/0')]"),
             ("click", "#msg-file-dialog .dialog-close"), ("wait", f"!{is_open('#msg-file-dialog')}"),
+            ("click", "#chat-media .att-remove"), ("wait", is_open("#chat-media-delete-dialog")),
+            ("click", "#chat-media-delete-confirm"), ("wait", "!document.querySelector('#chat-media .chat-media-chip')"),
+            ("eval", "afterDelete", f"{chat_of(with_pdf)}.then(d => d.media)"),
             # «Не передавать»: запрос больше не повторяется, звук не предлагается
             *open_chat(with_note), *say("А здесь?"),
             ("wait", f"{consent}?.querySelector('.consent-refuse')"),
@@ -205,6 +209,7 @@ def test_consent_media_and_result_files_in_chat(browser, live, width):
         assert "voice.mp3" in values["mediaChip"] and "1 КиБ" in values["mediaChip"]
         assert values["files"] == [1, "Скачать «report.docx»", True, 200, len(DOCX)]
         assert values["preview"] == [True, True]
+        assert values["afterDelete"] == []
         assert "не передаются" in values["refusedText"]
         assert "audio/*" not in values["acceptRefused"] and values["askedAgain"] is False
         assert "audio/*" not in values["acceptOff"]
@@ -219,3 +224,36 @@ def test_consent_media_and_result_files_in_chat(browser, live, width):
             admin.delete(f"/api/admin/shared/mcp/{sid}")
         admin.close()
         client.close()
+
+
+def test_media_picker_follows_upload_policy(browser, live):
+    login = "chat-files-policy"
+    live.add_user(login)
+    files_server(live, "/chat-files-policy")
+    with closing(admin_client(live)) as admin, closing(member_client(live, login)) as client:
+        made = admin.post("/api/admin/shared/mcp", json={"name": "Protected files", "url": HOST + "/chat-files-policy",
+                                                        "token": MCP_KEY})
+        assert made.status_code == 201, made.text
+        sid = made.json()["id"]
+        try:
+            policy = {"artifact_upload": {"open_world": True, "confirm": "always"}}
+            assert admin.put(f"/api/admin/shared/mcp/{sid}/policy", json={"tools": policy}).status_code == 200
+            assert client.put("/api/me/exa-key", json={"key": "exa-test-key"}).status_code == 204
+            cid = old_dialog(client, "note.txt", b"note", "text/plain")
+            supports_audio = f"{ACCEPT}.includes('audio/*')"
+            switch = tool_switch(sid, "artifact_upload")
+            result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *open_chat(cid),
+                *open_dialog(sid), ("eval", "initial", supports_audio),
+                ("eval", "openTools", f"{row(sid)}.querySelector('.chat-mcp-tools').open = true"),
+                ("eval", "enableUpload", f"{switch}.click()"),
+                ("click", "#chat-mcp-save"), ("wait", f"!{is_open(DIALOG)}"),
+                ("eval", "withoutWeb", supports_audio),
+                ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+                ("wait", supports_audio), ("eval", "allowed", ACCEPT),
+                ("click", "#web-toggle"), ("wait", f"!{supports_audio}")], width=1280)
+            assert not result.get("failed"), result
+            assert result["values"]["initial"] is False and result["values"]["withoutWeb"] is False
+            assert "video/*" in result["values"]["allowed"]
+            assert not problems(result), result.get("log")
+        finally:
+            admin.delete(f"/api/admin/shared/mcp/{sid}")

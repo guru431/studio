@@ -8,7 +8,9 @@ import logging
 import httpx
 
 import access
+import mcp_client
 import mcp_files
+import media
 import state
 from conftest import make_user, signin
 from test_access_groups import shared_tools
@@ -215,6 +217,8 @@ def test_upload_follows_internet_and_confirm_policy(studio):
     ни приёма медиа, модели — заметка; с «Интернетом» — как обычно. «С подтверждением» — только явно включённый."""
     sid, calls = setup(studio)
     policy(studio, sid, {"artifact_upload": {"open_world": True}})
+    item, = studio.c.get("/api/mcp/catalog").json()["items"]
+    assert item["chat_files_policy"] == {"open_world": True, "confirm": False}
     cid = new_chat(studio)
     consent(studio, cid, sid)
     with_note(studio, cid)
@@ -227,6 +231,8 @@ def test_upload_follows_internet_and_confirm_policy(studio):
     send(studio, cid, "Теперь с Интернетом")
     assert len(uploads(calls)) == 2 and "Файлы диалога на сервере «Shared tools»:" in system(studio)
     policy(studio, sid, {"artifact_upload": {"confirm": "always"}})
+    item, = studio.c.get("/api/mcp/catalog").json()["items"]
+    assert item["chat_files_policy"] == {"open_world": False, "confirm": True}
     studio.clock[0] += mcp_files.UPLOAD_TTL_SEC + 1
     send(studio, cid, "С подтверждением")
     assert len(uploads(calls)) == 2 and mcp_files.BLOCKED_CONFIRM.format("Shared tools") in system(studio)
@@ -350,6 +356,50 @@ def test_sync_time_limit_leaves_the_rest(studio):
     first, second = attach(studio, "a.txt", b"first"), attach(studio, "b.txt", b"second")
     send(studio, cid, attachment_ids=[first["id"], second["id"]])
     assert len(uploads(calls)) == 1 and "не передан: предел хода" in system(studio)
+
+
+def test_upload_timeout_includes_time_for_the_encoded_body(studio):
+    sid, _ = setup(studio)
+    cid = new_chat(studio)
+    consent(studio, cid, sid)
+    assert post_media(studio, cid, b"x" * (1 << 20)).status_code == 201
+    upstream = studio.gw.on["/mcp"]
+    seen = {}
+
+    async def timed(request):
+        payload = json.loads(request.content)
+        name = payload.get("params", {}).get("name", payload["method"])
+        seen[name] = request.extensions["timeout"]["write"]
+        return await upstream(request)
+
+    studio.gw.on["/mcp"] = timed
+    send(studio, cid)
+    assert seen["initialize"] == mcp_client.TIMEOUT
+    assert seen["artifact_upload"] == mcp_client.TIMEOUT + 3
+
+
+def test_media_delete_is_scoped_to_the_dialog_and_cleans_up_uploads(studio):
+    sid, calls = setup(studio)
+    cid = new_chat(studio)
+    consent(studio, cid, sid)
+    item = post_media(studio, cid, b"voice").json()
+    other = post_media(studio, cid, b"keep", name="keep.mp3").json()
+    uid, mid = state.DB.execute("SELECT user_id, media_id FROM chat_media WHERE id=?", (item["id"],)).fetchone()
+    file = media.path(uid, mid)
+    send(studio, cid)
+    url = f"/api/chats/{cid}/media/{item['id']}"
+    assert studio.c.delete(f"/api/chats/{new_chat(studio)}/media/{item['id']}").status_code == 404
+    signin(studio, "admin")
+    assert studio.c.delete(url).status_code == 404
+    signin(studio, "member")
+    assert studio.c.delete(url).status_code == 204
+    assert studio.c.delete(url).status_code == 404
+    assert not file.exists()
+    assert not state.DB.execute("SELECT 1 FROM mcp_media_uploads WHERE chat_media_id=?", (item["id"],)).fetchone()
+    assert studio.c.get(f"/api/chats/{cid}").json()["media"] == [other]
+    send(studio, cid)
+    assert [entry["name"] for entry in uploads(calls)] == ["keep.mp3", "voice.mp3"]
+    assert "voice.mp3" not in system(studio)
 
 
 # ---- файлы результата -------------------------------------------------------------------------------------
