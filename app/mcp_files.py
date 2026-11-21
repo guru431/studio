@@ -3,7 +3,9 @@
 1. Вложения и медиа диалога получают только серверы действующего набора диалога, у чьего `artifact_upload` есть
    пометка `_meta["studio/chat-files"] = {"max_bytes": N}` (`mcp_sources.chat_files`), и только с согласием
    пользователя на пару «диалог, сервер»: `chats.mcp_file_consent` `{sid: stamp}` (`mcp_sources.stamp` шифра
-   ключа). Новый сервер, сменённый адрес или ключ требуют нового согласия; «Не передавать» хранит `REFUSED` +
+   ключа), и только если `artifact_upload` проходит классификацию хода (`_blocked`: веб-инструмент — при
+   «Интернете», «с подтверждением» — явно включённый). Предел сервера — не больше MEDIA_MAX (`limit_of`).
+   Новый сервер, сменённый адрес или ключ требуют нового согласия; «Не передавать» хранит `REFUSED` +
    stamp — запрос больше не повторяется, пока сервер тот же. Без согласия `sync` ничего не грузит: модель
    получает имена файлов «есть, но не переданы», лента — шаг с `consent` (кнопки на странице).
 2. `sync` в `chat.StreamTask._read` после `discover`: PER_TURN новейших вложений (кроме отклонённых моделью
@@ -48,6 +50,7 @@ UPLOAD_TTL_SEC = 72000                       # загрузка на серве�
 PER_TURN = 8                                 # новейших вложений (и отдельно медиа) диалога на ход
 SYNC_BYTES = 256 << 20                       # байтов загрузок на ход, все серверы вместе
 SYNC_SEC = 120                               # загрузки хода начинаются не позже стольких секунд от первой
+MEDIA_MAX = 64 << 20                         # потолок `max_bytes` сервера: тело загрузки (Apache) и память `sync`
 RESULT_FILES = 16                            # файлов результата на шаг
 NAME_MAX = 255
 REFUSED = "refused:"                         # «Не передавать»: `chats.mcp_file_consent[sid]` = REFUSED + stamp
@@ -55,6 +58,9 @@ UPLOAD = "artifact_upload"
 
 NO_CONSENT = "Файлы диалога не переданы серверу «{0}» без согласия пользователя"
 NOT_SENT = "Файлы диалога есть, но не переданы серверу «{0}» без согласия пользователя: {1}."
+BLOCKED_WEB = "Файлы диалога не переданы серверу «{0}»: его загрузка файлов работает только при включённом «Интернете»."
+BLOCKED_CONFIRM = ("Файлы диалога не переданы серверу «{0}»: его загрузка файлов — с подтверждением и не включена "
+                   "в диалоге.")
 ON_SERVER = "Файлы диалога на сервере «{0}»:"
 TOO_BIG = "файл «{0}» не передан: больше предела сервера ({1} МиБ)"
 LEFT = "файл «{0}» не передан: предел хода"
@@ -70,6 +76,13 @@ GONE = mcp_sections.GONE_FILE
 
 def _mib(size: int) -> int:
     return max(size >> 20, 1)
+
+
+def limit_of(found) -> "int | None":
+    """Предел файлов чата сервера с каталогом `found`: `mcp_sources.chat_files`, не больше MEDIA_MAX
+    (файл, его base64 и тело JSON — в памяти службы); пометки нет — None."""
+    limit = mcp_sources.chat_files(found)
+    return None if limit is None else min(limit, MEDIA_MAX)
 
 
 def _consent(row) -> dict:
@@ -132,9 +145,21 @@ def _fresh(f: dict, sid: int, stamp: str):
         " AND created > ?", (f["id"], sid, stamp, clock.NOW() - UPLOAD_TTL_SEC)).fetchone()
 
 
-def _allowed(task, sid: int, stamp: str) -> bool:
+def _blocked(item, found, row) -> "str | None":
+    """Слова отказа, если `artifact_upload` сервера `item` (каталог `found`) не предлагается при нынешних
+    «Интернете» и явно включённых инструментах диалога `row` — та же классификация, что у хода
+    (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера); иначе None. `artifact_upload`
+    в `found` есть: его пометка и делает сервер получателем (`limit_of`)."""
+    tool = next(t for t in found.tools if isinstance(t, dict) and t.get("name") == UPLOAD)
+    rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
+    _, on = mcp_sources.tool_state(row["mcp_tools_off"])
+    return mcp_client.Tools._offered(item, tool, rules, bool(row["web"]), on)[1]
+
+
+def _allowed(task, sid: int, stamp: str, found) -> bool:
     """Перед загрузкой — заново: сервер открыт учётке и включён, его адрес и ключ прежние, он в действующем наборе
-    диалога, `artifact_upload` не выключен в диалоге, согласие на тот же stamp."""
+    диалога, `artifact_upload` не выключен в диалоге и предлагается при нынешних «Интернете» и подтверждении
+    (`_blocked`), согласие на тот же stamp."""
     try:
         item = mcp_client.row(task.user_id, sid)
     except HTTPException:
@@ -144,10 +169,12 @@ def _allowed(task, sid: int, stamp: str) -> bool:
         return False
     off, _ = mcp_sources.tool_state(row["mcp_tools_off"])
     return (sid in mcp_sources.dialog_servers(task.user_id, row, task.conn) and UPLOAD not in off.get(sid, ())
-            and _consent(row).get(str(sid)) == stamp)
+            and _blocked(item, found, row) is None and _consent(row).get(str(sid)) == stamp)
 
 
 def _line(name: str, path: str, aid: str) -> str:
+    """Строка о файле на сервере: имя и путь — от пользователя и сервера, через `chat_system.clean`."""
+    path = chat_system.clean(path, 300) if path else ""
     return f"- {chat_system.clean(name, 200)} — path {path or '—'}, artifact {aid}"
 
 
@@ -160,7 +187,7 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
     серверов (`mcp_client.Tools.found`). Итог — строки для модели (кусок 5, `chat_system.mcp_block`) и шаги ленты
     (ошибки загрузки; запрос согласия — шаг с `consent: {server_id, files}`)."""
     targets = [(item, session, found, limit) for item, session, found in servers
-               if (limit := mcp_sources.chat_files(found)) is not None]
+               if (limit := limit_of(found)) is not None]
     if not targets:
         return [], []
     row = state.DB.execute("SELECT * FROM chats WHERE id = ? AND user_id = ?", (task.chat_id, task.user_id)).fetchone()
@@ -172,6 +199,11 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
     for item, session, found, limit in targets:
         sid, server, stamp = item["id"], item["name"], mcp_sources.stamp(item["secret_enc"])
         names = [f["name"] for f in files]
+        blocked = _blocked(item, found, row)
+        if blocked is not None:                  # «Интернет» выключен или загрузка — с подтверждением, не включена
+            notes.append((BLOCKED_WEB if blocked == mcp_client.WEB_OFF else BLOCKED_CONFIRM).format(
+                chat_system.clean(server, 200)))
+            continue
         if consent.get(str(sid)) != stamp:
             notes.append(NOT_SENT.format(chat_system.clean(server, 200),
                                          ", ".join(chat_system.clean(n, 200) for n in names)))
@@ -198,7 +230,7 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
             if sent + f["size"] > SYNC_BYTES or clock.NOW() - started > SYNC_SEC:
                 lines.append("- " + LEFT.format(chat_system.clean(f["name"], 200)))
                 continue
-            if not _allowed(task, sid, stamp):
+            if not _allowed(task, sid, stamp, found):
                 lines.append("- " + CHANGED.format(chat_system.clean(f["name"], 200)))
                 continue
             try:
@@ -281,8 +313,9 @@ async def set_consent(chat_id: str, body: ConsentIn, request: Request):
 
 
 async def media_limit(uid: int, row) -> "int | None":
-    """Наибольший `max_bytes` серверов действующего набора диалога с пометкой `studio/chat-files` и согласием
-    (каталог — из кэша `mcp_sources`, не ответивший сервер пропускается); таких нет — None."""
+    """Наибольший предел (`limit_of`: `max_bytes`, не больше MEDIA_MAX) серверов действующего набора диалога с
+    пометкой `studio/chat-files`, согласием и `artifact_upload`, который предлагается при нынешних «Интернете» и
+    подтверждении (`_blocked`); каталог — из кэша `mcp_sources`, не ответивший сервер пропускается; таких нет — None."""
     conn = chat._chat_connection(uid, row["connection_id"])
     if conn is None or not conn.proxied or conn.cleaner:
         return None
@@ -300,7 +333,9 @@ async def media_limit(uid: int, row) -> "int | None":
     async def one(item):
         session = mcp_client.Session(item, uid=uid)
         try:
-            return mcp_sources.chat_files(await mcp_sources.catalog(session, mcp_sources.LIST_SEC))
+            found = await mcp_sources.catalog(session, mcp_sources.LIST_SEC)
+            limit = limit_of(found)
+            return limit if limit is not None and _blocked(item, found, row) is None else None
         except (HTTPException, TimeoutError):
             return None
         finally:

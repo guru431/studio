@@ -1409,3 +1409,18 @@ def test_apache_lets_a_recording_through_only_on_its_route():
     assert limit >= transcripts.UPLOAD_MAX
     general = int(re.search(r"^\s*LimitRequestBody (\d+)", v, re.M).group(1))
     assert general < transcripts.UPLOAD_MAX
+
+
+def test_apache_lets_dialog_media_through_only_on_its_route():
+    """Звук и видео диалога для MCP (`POST /api/chats/<id>/media`) — до mcp_files.MEDIA_MAX телом запроса: свой
+    LocationMatch, общий предел меньше; nginx контейнера пропускает не меньше."""
+    import mcp_files
+    v = uncommented(VHOST)
+    block = re.search(r'<LocationMatch "\^/api/chats/\[\^/\]\+/media\$">(.*?)</LocationMatch>', v, re.S)
+    assert block, "нет LocationMatch медиа диалога"
+    limit = int(re.search(r"LimitRequestBody (\d+)", block.group(1)).group(1))
+    assert mcp_files.MEDIA_MAX <= limit <= mcp_files.MEDIA_MAX + (1 << 20)
+    assert re.search(r"^/api/chats/[^/]+/media$", "/api/chats/" + "a" * 32 + "/media")
+    assert not re.search(r"^/api/chats/[^/]+/media$", "/api/chats/" + "a" * 32 + "/messages")
+    general = int(re.search(r"^\s*LimitRequestBody (\d+)", v, re.M).group(1))
+    assert general < mcp_files.MEDIA_MAX
