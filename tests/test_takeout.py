@@ -189,6 +189,24 @@ def test_export_holds_every_section_its_files_and_a_manifest(studio, caplog):
         assert secret not in caplog.text
 
 
+def test_export_holds_dialog_media(studio):
+    """Звук и видео диалога для MCP (`chat_media`) — в `chats/<id>.json` и файлом в files/, только в разделе чата."""
+    uid = make_user(studio, "owner"); signin(studio, "owner")
+    history(uid, "mine")
+    clip = save(uid, DATA + b"dialog", "audio/mpeg", "voice.mp3")
+    put("INSERT INTO chat_media(id, chat_id, user_id, name, mime, size, media_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "dm1", "minechat2", uid, "voice.mp3", "audio/mpeg", len(DATA) + 6, clip, T0 + 1)
+    est, z = download(studio, ["chat"])
+    zf = unzip(z)
+    assert est["files"] == 2 and zf.read(f"files/{clip}.mp3") == DATA + b"dialog"
+    assert json.loads(zf.read("chats/minechat2.json"))["media"] == [
+        {"id": "dm1", "name": "voice.mp3", "mime": "audio/mpeg", "size": len(DATA) + 6, "created": T0 + 1,
+         "file": f"files/{clip}.mp3"}]
+    assert json.loads(zf.read("chats/minechat1.json"))["media"] == []
+    est, _ = download(studio, ["photo"])
+    assert est["files"] == 3
+
+
 def test_export_takes_only_chosen_sections(studio):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     m = history(uid, "mine")
