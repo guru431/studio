@@ -88,11 +88,75 @@ def test_chat_audio_concatenates_done_parts(studio, fake_audio):
     assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg"
     medias = [state.DB.execute("SELECT media_id FROM speeches WHERE id = ?", (row["id"],)).fetchone()[0] for row in rows]
     expected = b"".join(studio.c.get(f"/api/media/{m}").content for m in medias)
-    assert r.content == expected and ("mp3_of", 2) in fake_audio.calls
+    # C-M6: склейка без перекодирования (`audio.join_mp3`), а не `mp3_of` всего чата на каждый запрос
+    assert r.content == expected and fake_audio.calls == [("join_mp3", 2)]
     disposition = r.headers["content-disposition"]
     assert disposition.startswith("attachment;") and "filename*=UTF-8''" in disposition
     assert re.search(r"filename\*=UTF-8''%D0%90%D0%B1%D0%B7%D0%B0%D1%86", disposition)       # «Абзац…»
     assert studio.c.get(f"/api/speeches/chats/{'0' * 32}/audio").status_code == 404
+
+
+def done_chat(studio, fake_audio) -> str:
+    add_gateway(studio)
+    vid = voice(studio, fake_audio)
+    cid = studio.c.post("/api/speeches", json={"text": "\n\n".join(paragraph(n) for n in range(2)),
+                                               "voice": vid}).json()["chat_id"]
+    for row in chat_rows(cid):
+        wait_sp(studio, row["id"], {"done"})
+    return cid
+
+
+def test_chat_audio_one_join_per_account_at_a_time(studio, fake_audio, monkeypatch):
+    """C-M6: склейка чата — одна на учётку за раз (429 `busy`); после неё — снова можно."""
+    import audio
+    cid = done_chat(studio, fake_audio)
+    uid = chat_rows(cid)[0]["user_id"]
+    seen = []
+    joined = audio.join_mp3
+
+    async def watch(parts, dst):
+        seen.append(uid in speeches.GLUING)
+        await joined(parts, dst)
+
+    monkeypatch.setattr(audio, "join_mp3", watch)
+    assert studio.c.get(f"/api/speeches/chats/{cid}/audio").status_code == 200
+    assert seen == [True] and uid not in speeches.GLUING
+    speeches.GLUING.add(uid)                                            # идёт другая склейка этой учётки
+    try:
+        r = studio.c.get(f"/api/speeches/chats/{cid}/audio")
+    finally:
+        speeches.GLUING.discard(uid)
+    assert r.status_code == 429 and r.json()["detail"]["code"] == "busy"
+
+
+def test_chat_audio_temp_file_removed_when_client_leaves(studio, fake_audio):
+    """C-M6: клиент ушёл до конца отдачи — временный mp3 всё равно убран (фоновая задача FileResponse после обрыва
+    не запускается)."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pytest
+    cid = done_chat(studio, fake_audio)
+    request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=chat_rows(cid)[0]["user_id"])))
+
+    async def leave():
+        response = await speeches.chat_audio(cid, request)
+        path = Path(response.path)
+        assert path.exists()
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body":
+                raise OSError("клиент ушёл")
+
+        scope = {"type": "http", "method": "GET", "headers": [], "asgi": {"spec_version": "2.4"}}
+        with pytest.raises(OSError):
+            await response(scope, receive, send)
+        return path.exists()
+
+    assert studio.c.portal.call(leave) is False
 
 
 def test_chat_audio_without_ready_parts_is_refused(studio, fake_audio, monkeypatch):
