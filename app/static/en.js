@@ -132,6 +132,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Неверные параметры подсказки MCP": "Invalid MCP prompt parameters",
   "MCP вернул подсказку без текста": "MCP returned a prompt without text",
   "MCP не ответил вовремя": "MCP timed out",
+  "Список инструментов MCP не прочитан": "Could not read the MCP tool list",
   "MCP вернул неверное описание инструмента": "MCP returned an invalid tool description",
   "Инструментов MCP больше 128 — часть этого сервера не предложена модели": "More than 128 MCP tools — some of this server's tools were not offered to the model",
   "MCP выключен в этом диалоге": "MCP is off in this conversation",

@@ -288,6 +288,29 @@ def test_catalog_names_failed_server(studio):
     assert item["state"] == "error" and item["message"]
 
 
+def test_catalog_survives_unexpected_server_error(studio, monkeypatch, caplog):
+    sid, _, _ = setup(studio)
+    signin(studio, "admin")
+    other = add_shared(studio, "Other", "/other")
+    server(studio, "/other")
+    signin(studio, "member")
+
+    async def broken(session, timeout, refresh=False):
+        if session.sid == sid:
+            raise KeyError("private-secret-detail")
+        return await real(session, timeout, refresh=refresh)
+
+    real = mcp_sources.catalog
+    monkeypatch.setattr(mcp_sources, "catalog", broken)
+    response = studio.c.get("/api/mcp/catalog")
+    assert response.status_code == 200
+    items = {i["id"]: i for i in response.json()["items"]}
+    assert items[sid] == {"id": sid, "name": "Shared tools", "shared": True, "state": "error",
+                          "message": mcp_client.CATALOG_FAILED, "instructions": None, "tools": [], "prompts": []}
+    assert items[other]["state"] == "ok" and items[other]["tools"]
+    assert "private-secret-detail" not in caplog.text and "private-secret-detail" not in response.text
+
+
 def test_prompt_route(studio):
     sid, calls, _ = setup(studio, prompts=[{"name": "brief"}])
     response = studio.c.post(f"/api/mcp/{sid}/prompt", json={"name": "brief", "arguments": {"topic": "кино"}})
