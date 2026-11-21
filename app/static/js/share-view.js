@@ -69,8 +69,13 @@ function stepNode(s) {
   } else if (s.kind === 'page' || s.kind === 'youtube') {
     li.append(s.kind === 'page' ? tr("Страница: ") : tr("Ролик: "),
       s.error ? el('span', {}, partText(s.title || s.url || '')) : sourceLink(s.url, s.title));
-  } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter((x) => typeof x === 'string' && x).join(' · '));
-  else li.append(tr("Инструмент"));
+  } else if (s.kind === 'mcp') {
+    li.append(['MCP', s.server, s.tool].filter((x) => typeof x === 'string' && x).join(' · '));
+    // файлы результата MCP — только имена (web.public): скачать их по ссылке нельзя, файлы остаются на сервере MCP
+    const names = (Array.isArray(s.files) ? s.files : []).map((f) => (f && typeof f.name === 'string' ? f.name : ''))
+      .filter(Boolean);
+    if (names.length) li.append(el('ul', { class: 'shared-files' }, ...names.map((name) => el('li', {}, partText(name)))));
+  } else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${partText(s.error)}`));
   return li;
 }
