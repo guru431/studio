@@ -27,6 +27,7 @@ import mcp_client as mcp
 import mcp_sources
 import media
 import security
+import speech
 import upstream
 import voices
 
@@ -91,7 +92,8 @@ def supported(section, tools, *, uid=None, sid=None):
         yield {"name": name, "title": clean_text(tool.get("title"), 160),
                "description": clean_text(tool.get("description"), 2000),
                "files": {key: kind for key, kind in file_fields.items() if has_upload and key in properties},
-               "schema": schema, "jobs": {"job_status", "job_result"} <= by_name.keys()}
+               "schema": schema, "jobs": {"job_status", "job_result"} <= by_name.keys(),
+               "limits": {"max_seconds": found.max_seconds} if (found := speech.tool_limits(tool)) else None}
 
 
 @router.get("/{section}")
