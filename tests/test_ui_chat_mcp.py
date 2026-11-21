@@ -1,6 +1,6 @@
 """MCP в диалоге на странице (chat-mcp.js, спека 2026-11-21-studio-source-foundation-design §4 и §7a п. 2): окно
-`#chat-mcp-dialog` — общий сервер включён по умолчанию, инструменты с метками, явное включение инструмента «с
-подтверждением»; политика инструментов общего MCP в окне «Доступ» панели администратора."""
+`#chat-mcp-dialog` — общий сервер включён по умолчанию, инструменты с метками, инструмент «с подтверждением»
+включён, как остальные (вызов ждёт «Запустить» в чате); политика инструментов общего MCP в окне «Доступ» панели администратора."""
 import httpx
 import pytest
 
@@ -87,7 +87,7 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
         ("eval", "draftChip", f"""(async () => {{ const m = {API};
           const shared = (await m.api('GET', '/api/mcp')).items.filter(s => s.shared && s.enabled).length;
           return {TOGGLE}.textContent === 'MCP (' + shared + ')'; }})()"""),
-        # новый диалог: общий сервер включён по умолчанию, инструмент «с подтверждением» — выключен
+        # новый диалог: общий сервер и все его инструменты, и «с подтверждением», включены по умолчанию
         *open_dialog(sid), state(sid),
         ("eval", "labels", f"""[...{row(sid)}.querySelectorAll('.chat-mcp-tool-row')].map(li => [li.dataset.tool,
           [...li.querySelectorAll('.tag')].map(t => t.textContent),
@@ -97,7 +97,7 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
         ("eval", "rules", f"""(() => {{ const d = {row(sid)}.querySelector('details.chat-mcp-rules');
           return [d.open, d.querySelector('summary').textContent, d.querySelector('.chat-mcp-instructions').textContent]; }})()"""),
         ("eval", "openTools", f"{row(sid)}.querySelector('details.chat-mcp-tools').open = true"),
-        pick("lookup"), pick("video_translate"),
+        pick("lookup"),
         ("eval", "count", f"{row(sid)}.querySelector('.chat-mcp-count').textContent"),
         # «Обновить список» перечитывает каталог, несохранённые переключатели остаются
         ("click", "#chat-mcp-refresh"),
@@ -120,7 +120,7 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
     assert not result.get("failed"), result
     values = result["values"]
     assert values["draftChip"] is True
-    assert values["state"] == [True, True, True, False]
+    assert values["state"] == [True, True, True, True]
     assert values["labels"] == [["lookup", [], "desc lookup"], ["web_search", ["интернет"], "desc web_search"],
                                 ["video_translate", ["с подтверждением"], "desc video_translate"]]
     assert values["names"] == ["Поиск по базе", "lookup"]
@@ -131,14 +131,14 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
     matches, chat = values["created"]
     assert matches and sid in chat["mcp_ids"] and sid not in chat["mcp_off"]
     assert chat["mcp_tools_off"] == {str(sid): ["lookup"]}
-    assert chat["mcp_tools_on"] == {str(sid): ["video_translate"]}
+    assert chat["mcp_tools_on"] == {}
     assert values["kept"] == [True, False, True, True]
     assert values["toolsLocked"] is True
     matches, chat = values["switchedOff"]
     assert matches and sid not in chat["mcp_ids"] and chat["mcp_off"] == [sid]
-    assert chat["mcp_tools_on"] == {str(sid): ["video_translate"]}
+    assert chat["mcp_tools_on"] == {}
     assert values["keptOff"] == [False, False, True, True]
-    # первый ход: «с подтверждением» включён явно — предложен; выключенный и веб-инструмент без «Интернета» — нет
+    # первый ход: «с подтверждением» предложен; выключенный и веб-инструмент без «Интернета» — нет
     offered = [t["function"]["description"].split(". ", 1)[0] for r in live.gw.chat_requests
                for t in r.get("tools", []) if t["function"]["name"].startswith(f"mcp_{sid}_")]
     assert offered == [f"{name}: video_translate"]
