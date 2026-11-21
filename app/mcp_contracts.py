@@ -127,7 +127,7 @@ async def call(session, method, path, *, content=None, timeout=mcp.TIMEOUT, head
         raise mcp.refused("MCP недоступен или вернул неверный ответ") from None
     try:
         return code, json.loads(data) if data else None
-    except ValueError:
+    except (ValueError, RecursionError):           # глубокая вложенность — RecursionError, не ValueError
         return code, None
 
 
