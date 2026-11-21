@@ -2797,6 +2797,7 @@ globalThis.StudioEnglish = Object.freeze({
   "«Защищённый источник» — только у общих подключений MCP": "Protected source is available only for shared MCP connections",
   "неверные аргументы todo_write — нужен список items до {0} пунктов: text до {1} знаков и status pending, in_progress или done": "invalid todo_write arguments: items must be a list of up to {0} entries with text up to {1} characters and status pending, in_progress or done",
   "память выключена пользователем": "memory is turned off by the user",
+  "после защищённого источника память не пишется": "memory is not written after a protected source",
   "такой записи памяти нет — номер из блока «Что известно о пользователе»": "no such memory entry; use a number from the “What is known about the user” block",
   "запись памяти — от 1 до {0} знаков": "a memory entry must be 1 to {0} characters",
   "в памяти уже {0} записей — удалите ненужные": "memory already has {0} entries. Delete the ones you no longer need",
