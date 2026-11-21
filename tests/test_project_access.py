@@ -407,11 +407,11 @@ def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(stud
     assert {(m["project"], m["name"], m["missing"]) for m in closed} == {(ALPHA, None, None), (BETA, None, None)}
     make_user(studio, "stranger")
     signin(studio, "stranger")
-    assert studio.c.get("/api/me/access").json() == {"members": [], "shares": []}
+    assert studio.c.get("/api/me/access").json() == {"members": [], "shares": [], "file_links": 0}
     assert studio.c.get(f"/api/me/access/shares/{shares['chat']['id']}/link").status_code == 404   # чужая — не видна
     assert studio.c.delete(f"/api/me/access/members/{aid}/{BETA}/{member}").status_code == 404
     assert studio.c.delete("/api/me/access/shares/" + data["shares"][0]["id"]).status_code == 204
-    assert studio.c.delete("/api/me/access").json() == {"members": 0, "shares": 0}
+    assert studio.c.delete("/api/me/access").json() == {"members": 0, "shares": 0, "file_links": 0}
     assert len(links()) == 2 and state.DB.execute("SELECT count(*) FROM project_members").fetchone()[0] == 2
     signin(studio, "owner")
     before = len(machine.requests)
@@ -422,7 +422,7 @@ def test_access_list_shows_and_revokes_grants_of_vanished_folders_and_links(stud
     chat_link = next(s["id"] for s in data["shares"] if s["kind"] == "chat")
     assert studio.c.delete("/api/me/access/shares/" + chat_link).status_code == 204
     assert studio.c.get("/api/chats/c1/share").json() == {"enabled": False}
-    assert studio.c.delete("/api/me/access").json() == {"members": 1, "shares": 1}
+    assert studio.c.delete("/api/me/access").json() == {"members": 1, "shares": 1, "file_links": 0}
     assert links() == [] and state.DB.execute("SELECT count(*) FROM project_members").fetchone()[0] == 0
     kinds = [r[0] for r in state.DB.execute("SELECT kind FROM security_events WHERE user_id = ? ORDER BY id", (owner_id,))]
     assert kinds[-4:] == ["project_member_remove", "share_revoke", "project_member_remove", "share_revoke"]
