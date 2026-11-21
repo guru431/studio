@@ -1,5 +1,6 @@
 """Один автономный PKG для Intel/Apple Silicon. Сборка на Mac локально или через SSH."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -13,12 +14,18 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 import uuid
 import zipfile
 
 HERE = Path(__file__).resolve().parent
 IDENTIFIER = "com.studio.agent.installer"
+CACHE_NAME = "studio-agent-macos"
+RUNTIME_MAX_BYTES = 256 * 1024 * 1024
+CACHE_LOCK_TIMEOUT = 900
+WHEEL_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*\.whl")
+WHEEL_PLATFORM_PREFIX = "macosx_13_0_"
 
 
 def run(argv, *, timeout=900, **kwargs):
@@ -46,29 +53,91 @@ def unpack_source(archive, target):
     return target / "studio-agent"
 
 
-def download_runtime(lock, arch, target, work):
+@contextmanager
+def cache_lock(cache_dir, name):
+    if cache_dir is None:
+        yield
+        return
+    import fcntl  # Only the Mac builder uses the shared cache.
+
+    cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(cache_dir / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+b") as stream:
+        deadline = time.monotonic() + CACHE_LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"кэш сборки занят: {name}") from None
+                time.sleep(0.25)
+        yield
+
+
+def copy_runtime(incoming, expected, output=None):
+    digest = hashlib.sha256()
+    size = 0
+    while block := incoming.read(1024 * 1024):
+        size += len(block)
+        if size > RUNTIME_MAX_BYTES:
+            return False
+        digest.update(block)
+        if output is not None:
+            output.write(block)
+    return digest.hexdigest() == expected
+
+
+def fetch_runtime(lock, arch, archive):
     triple = "aarch64" if arch == "arm64" else "x86_64"
     name = "cpython-{}+{}-{}-apple-darwin-install_only_stripped.tar.gz".format(
         lock["version"], lock["release"], triple)
-    archive = work / (arch + ".tar.gz")
     url = "https://github.com/astral-sh/python-build-standalone/releases/download/{}/{}".format(
         lock["release"], name)
-    digest = hashlib.sha256()
     with urllib.request.urlopen(url, timeout=60) as incoming, archive.open("wb") as output:
-        size = 0
-        while block := incoming.read(1024 * 1024):
-            size += len(block)
-            if size > 256 * 1024 * 1024:
-                raise ValueError("слишком большой runtime")
-            digest.update(block)
-            output.write(block)
-    if digest.hexdigest() != lock[arch]:
-        raise ValueError("не совпала SHA-256 runtime " + arch)
+        if not copy_runtime(incoming, lock[arch], output):
+            raise ValueError("не совпала SHA-256 или превышен размер runtime " + arch)
+
+
+@contextmanager
+def runtime_archive(lock, arch, work, cache_dir):
+    stamp = lock[arch]
+    if not re.fullmatch(r"[0-9a-f]{64}", stamp):
+        raise ValueError("неверный SHA-256 runtime " + arch)
+    if cache_dir is None:
+        archive = work / (arch + ".tar.gz")
+        fetch_runtime(lock, arch, archive)
+        with archive.open("rb") as stream:
+            yield stream
+        return
+    with cache_lock(cache_dir, f"runtime-{stamp}.lock"):
+        folder = cache_dir / "runtime"
+        archive = folder / (stamp + ".tar.gz")
+        if folder.is_symlink() or archive.is_symlink():
+            raise ValueError("ссылка в кэше runtime")
+        folder.mkdir(mode=0o700, exist_ok=True)
+        if archive.is_file():
+            with archive.open("rb") as stream:
+                if copy_runtime(stream, stamp):
+                    print("==> runtime из кэша " + arch, flush=True)
+                    stream.seek(0)
+                    yield stream
+                    return
+        with tempfile.TemporaryDirectory(prefix="incoming-", dir=folder) as temporary:
+            staged = Path(temporary) / "runtime.tar.gz"
+            fetch_runtime(lock, arch, staged)
+            os.replace(staged, archive)
+        with archive.open("rb") as stream:
+            yield stream
+
+
+def download_runtime(lock, arch, target, work, cache_dir=None):
     # Доверенный архив поставщика с закреплённой SHA-256; сохраняем относительные ссылки Python.
     folder = work / ("unpack-" + arch)
     folder.mkdir()
-    with tarfile.open(archive) as source:
-        source.extractall(folder)
+    with runtime_archive(lock, arch, work, cache_dir) as archive:
+        with tarfile.open(fileobj=archive) as source:
+            source.extractall(folder)
     shutil.move(str(folder / "python"), target)
     (target / ".studio-runtime-id").write_text(lock[arch] + "\n", encoding="ascii")
 
@@ -90,8 +159,78 @@ def filter_requirements(source, destination, arch):
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def wheelhouse_path(cache_dir, lock, arch, source):
+    inputs = [1, WHEEL_PLATFORM_PREFIX + arch, lock["version"], lock[arch]]
+    for name in ("requirements.txt", "constraints.txt"):
+        inputs.append(hashlib.sha256((source / name).read_bytes()).hexdigest())
+    stamp = hashlib.sha256(json.dumps(inputs).encode("ascii")).hexdigest()
+    return cache_dir / "wheels" / f"{arch}-{stamp}.zip"
+
+
+def cache_wheelhouse(wheels, path):
+    """Атомарно сохранить готовые колёса. Вызывается под блокировкой pip.lock."""
+    files = sorted(wheels.iterdir())
+    if not files or any(not WHEEL_NAME.fullmatch(file.name) or not file.is_file() or file.is_symlink()
+                        for file in files):
+        raise ValueError("неверные файлы колёс моста")
+    if path.parent.is_symlink() or path.is_symlink():
+        raise ValueError("ссылка в кэше колёс")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Заменяется целый проверяемый ZIP; другие сборки не увидят частичную запись.
+    with tempfile.TemporaryDirectory(prefix="incoming-", dir=path.parent) as temporary:
+        staged = Path(temporary) / path.name
+        with zipfile.ZipFile(staged, "w", strict_timestamps=False) as archive:
+            for file in files:
+                archive.write(file, file.name)
+        os.replace(staged, path)
+
+
+def restore_wheelhouse(path, wheels):
+    if path.parent.is_symlink() or path.is_symlink():
+        raise ValueError("ссылка в кэше колёс")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if (not members or len({m.filename.casefold() for m in members}) != len(members)
+                    or any(m.compress_type != zipfile.ZIP_STORED or not WHEEL_NAME.fullmatch(m.filename)
+                           for m in members)):
+                return False
+            with tempfile.TemporaryDirectory(prefix="wheels-", dir=wheels.parent) as temporary:
+                top = Path(temporary) / "wheelhouse"
+                archive.extractall(top)
+                os.replace(top, wheels)
+    except (FileNotFoundError, zipfile.BadZipFile, EOFError):
+        return False
+    return True
+
+
+def download_wheels(native, lock, arch, source, wheels, work, env, cache_dir):
+    wheels.parent.mkdir(parents=True, exist_ok=True)
+    # Оба pip используют один HTTP-кэш, доступ к нему на время загрузки сериализован.
+    with cache_lock(cache_dir, "pip.lock"):
+        cached = wheelhouse_path(cache_dir, lock, arch, source) if cache_dir is not None else None
+        if cached is not None and restore_wheelhouse(cached, wheels):
+            print("==> зависимости из кэша " + arch, flush=True)
+            return
+        if cache_dir is not None and (cache_dir / "pip").is_symlink():
+            raise ValueError("ссылка в кэше pip")
+        wheels.mkdir()
+        files = []
+        for name in ("requirements.txt", "constraints.txt"):
+            filtered = work / (arch + "-" + name)
+            run([native, __file__, "--filter-requirements", source / name, filtered, arch], env=env)
+            files.append(filtered)
+        print("==> зависимости " + arch, flush=True)
+        py_version = ".".join(lock["version"].split(".")[:2])
+        run([native, "-m", "pip", "download", "--only-binary=:all:", "--platform", WHEEL_PLATFORM_PREFIX + arch,
+             "--python-version", py_version, "--implementation", "cp", "--abi", "cp" + py_version.replace(".", ""),
+             "-r", files[0], "-c", files[1], "--dest", wheels], env=env)
+        if cached is not None:
+            cache_wheelhouse(wheels, cached)
+
+
 def build(archive, output, lock_path, work, launcher_output=None, signing_identity=None, capture_profile=None,
-          installer_identity=None):
+          installer_identity=None, cache_dir=None):
     scripts = work / "scripts"
     scripts.mkdir()
     source = unpack_source(archive, scripts / "source")
@@ -113,7 +252,7 @@ def build(archive, output, lock_path, work, launcher_output=None, signing_identi
     runtimes.mkdir()
     for arch in ("arm64", "x86_64"):
         print("==> runtime " + arch, flush=True)
-        download_runtime(lock, arch, runtimes / arch, work)
+        download_runtime(lock, arch, runtimes / arch, work, cache_dir)
     native = runtimes / platform.machine() / "bin/python3"
     # Native identity is shared by GUI, LaunchAgent and updater. It never execs Python.
     launchers = []
@@ -131,24 +270,14 @@ def build(archive, output, lock_path, work, launcher_output=None, signing_identi
         launcher_output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(launcher, launcher_output)
         launcher_output.chmod(0o755)
-    env = dict(os.environ, TMPDIR=str(work), PIP_CACHE_DIR=str(work / "pip-cache"),
+    pip_cache = work / "pip-cache" if cache_dir is None else cache_dir / "pip"
+    env = dict(os.environ, TMPDIR=str(work), PIP_CACHE_DIR=str(pip_cache),
                PYTHONDONTWRITEBYTECODE="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
     for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONPYCACHEPREFIX"):
         env.pop(name, None)
     run([native, "-c", "import tkinter, ssl, venv"], env=env)
     for arch in ("arm64", "x86_64"):
-        wheels = scripts / "wheels" / arch
-        wheels.mkdir(parents=True)
-        files = []
-        for name in ("requirements.txt", "constraints.txt"):
-            filtered = work / (arch + "-" + name)
-            run([native, __file__, "--filter-requirements", source / name, filtered, arch], env=env)
-            files.append(filtered)
-        print("==> зависимости " + arch, flush=True)
-        run([native, "-m", "pip", "download", "--only-binary=:all:", "--platform", "macosx_13_0_" + arch,
-             "--python-version", ".".join(lock["version"].split(".")[:2]), "--implementation", "cp",
-             "--abi", "cp" + "".join(lock["version"].split(".")[:2]),
-             "-r", files[0], "-c", files[1], "--dest", wheels], env=env)
+        download_wheels(native, lock, arch, source, scripts / "wheels" / arch, work, env, cache_dir)
     postinstall = scripts / "postinstall"
     postinstall.write_text('''#!/bin/sh
 set -eu
@@ -252,8 +381,10 @@ def remote(args, work):
     run([*ssh, "mkdir -p " + shlex.quote(folder)])
     try:
         run([*scp, args.archive, HERE / "build-agent-macos.py", args.lock, args.host + ":" + folder + "/"])
+        cache_dir = root / ".cache" / CACHE_NAME
         command = ["/usr/bin/python3", folder + "/build-agent-macos.py", "--archive", folder + "/" + args.archive.name,
-                   "--lock", folder + "/" + args.lock.name, "--output", folder + "/studio-agent-setup.pkg"]
+                   "--lock", folder + "/" + args.lock.name, "--output", folder + "/studio-agent-setup.pkg",
+                   "--cache-dir", str(cache_dir)]
         if getattr(args, 'launcher_output', None) is not None:
             command += ['--launcher-output', folder + '/studio-agent-macos']
         if getattr(args, 'signing_identity', None):
@@ -304,6 +435,7 @@ def main():
     parser.add_argument("--capture-profile", default=os.environ.get("STUDIO_MACOS_CAPTURE_PROFILE"))
     parser.add_argument("--installer-identity", default=os.environ.get("STUDIO_MACOS_INSTALLER_IDENTITY"))
     parser.add_argument("--lock", type=Path, default=HERE / "macos-runtime.json")
+    parser.add_argument("--cache-dir", type=Path, help="абсолютный путь к кэшу проекта на Mac (локальная сборка)")
     parser.add_argument("--host", default=os.environ.get("STUDIO_MACOS_BUILD_SSH"))
     parser.add_argument("--port", default=os.environ.get("STUDIO_MACOS_BUILD_PORT", "22"))
     parser.add_argument("--key", default=os.environ.get("STUDIO_MACOS_BUILD_KEY"))
@@ -315,6 +447,9 @@ def main():
         parser.error("нужны Developer ID Application и абсолютный путь профиля на Mac")
     if not args.host and sys.platform != "darwin":
         parser.error("нужен Mac: задайте STUDIO_MACOS_BUILD_SSH и STUDIO_MACOS_BUILD_ROOT в локальном профиле")
+    if args.cache_dir is not None:
+        if args.host or not args.cache_dir.is_absolute() or args.cache_dir.resolve() != args.cache_dir:
+            parser.error("задайте абсолютный путь без ссылок к кэшу проекта для локальной сборки")
     # Вызывающий deploy уже создал собственную папку .tmp; промежуточные файлы остаются рядом с ZIP.
     with tempfile.TemporaryDirectory(prefix="macos-pkg-", dir=args.archive.resolve().parent) as temporary:
         work = Path(temporary)
@@ -322,7 +457,7 @@ def main():
             remote(args, work)
         else:
             build(args.archive, args.output, args.lock, work, args.launcher_output, args.signing_identity,
-                  args.capture_profile, args.installer_identity)
+                  args.capture_profile, args.installer_identity, args.cache_dir)
 
 
 if __name__ == "__main__":

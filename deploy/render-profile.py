@@ -2,13 +2,11 @@
 import ipaddress
 import io
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 import re
 import sys
 import tarfile
-import tempfile
 from urllib.parse import SplitResult, urlsplit
-import zipfile
 
 
 TEMPLATES = {"deploy/install.sh", "deploy/studio-web.service",
@@ -131,41 +129,13 @@ def render(source, destination, environ):
                     outgoing.addfile(member)
 
 
-def render_agent(archive_path, environ):
-    replacements, _ = settings(environ)
-    origin = dict(replacements)["https://studio.example.com"]
-    changed = False
-    pending = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=archive_path.parent, suffix=".zip", delete=False) as temporary:
-            pending = Path(temporary.name)
-        with zipfile.ZipFile(archive_path) as incoming, zipfile.ZipFile(pending, "w") as outgoing:
-            for entry in incoming.infolist():
-                body = incoming.read(entry)
-                if entry.filename == "studio-agent/studio_agent/store.py":
-                    expected = b'"https://studio.example.com"'
-                    if body.count(expected) != 1:
-                        raise ValueError("Unexpected agent default server configuration")
-                    body = body.replace(expected, ('"' + origin + '"').encode("ascii"))
-                    changed = True
-                outgoing.writestr(entry, body)
-        if not changed:
-            raise ValueError("Agent configuration is missing")
-        pending.replace(archive_path)
-    finally:
-        if pending is not None:
-            pending.unlink(missing_ok=True)
-
-
 if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["--check"]:
             settings(os.environ)
-        elif len(sys.argv) == 3 and sys.argv[1] == "--agent":
-            render_agent(Path(sys.argv[2]), os.environ)
         elif not sys.argv[1:]:
             render(sys.stdin.buffer, sys.stdout.buffer, os.environ)
         else:
-            raise ValueError("Usage: render-profile.py [--check | --agent archive.zip]")
-    except (ValueError, tarfile.TarError, zipfile.BadZipFile) as error:
+            raise ValueError("Usage: render-profile.py [--check]")
+    except (ValueError, tarfile.TarError) as error:
         raise SystemExit(type(error).__name__ + ": invalid deployment profile or archive") from None

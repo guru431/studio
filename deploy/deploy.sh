@@ -104,40 +104,8 @@ cleanup() {
     if [ "$uploaded" = 1 ]; then "${SSH[@]}" "sudo rm -rf $IN" || true; fi
 }
 trap cleanup EXIT
-git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "$REV:agent" > "$package/studio-agent.zip"
-"$PYTHON" "$D/deploy/render-profile.py" --agent "$package/studio-agent.zip"
-git -C "$D" show "$REV:deploy/build-agent-installer.ps1" > "$package/build-agent-installer.ps1"
-git -C "$D" show "$REV:deploy/agent-installer.cs" > "$package/agent-installer.cs"
-git -C "$D" show "$REV:deploy/build-agent-macos.py" > "$package/build-agent-macos.py"
-git -C "$D" show "$REV:deploy/build-agent-linux.py" > "$package/build-agent-linux.py"
-"$PYTHON" "$package/build-agent-linux.py" --archive "$package/studio-agent.zip" --output "$package/studio-agent-setup.sh"
-git -C "$D" show "$REV:deploy/macos-runtime.json" > "$package/macos-runtime.json"
-echo "==> сборка автономного установщика macOS"
-"$PYTHON" "$package/build-agent-macos.py" --archive "$package/studio-agent.zip" \
-    --output "$package/studio-agent-setup.pkg" --lock "$package/macos-runtime.json" \
-    --launcher-output "$package/studio-agent-macos"
-"$PYTHON" - "$package/studio-agent.zip" "$package/studio-agent-macos" <<'PY'
-import hashlib
-import json
-import os
-from pathlib import Path
-import sys
-import zipfile
-
-with zipfile.ZipFile(sys.argv[1], "a") as archive:
-    assert "studio-agent/macos/studio-agent" not in archive.namelist()
-    archive.write(sys.argv[2], "studio-agent/macos/studio-agent")
-    if os.environ.get("STUDIO_MACOS_SIGNING_IDENTITY"):
-        pkg = Path(sys.argv[1]).with_name("studio-agent-setup.pkg")
-        with pkg.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        archive.writestr("studio-agent/macos/signed-package.json", json.dumps({"sha256": digest, "size": pkg.stat().st_size}))
-PY
-echo "==> сборка установщика Windows"
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-    -File "$(cygpath -w "$package/build-agent-installer.ps1")" \
-    -Archive "$(cygpath -w "$package/studio-agent.zip")" \
-    -Output "$(cygpath -w "$package/studio-agent-setup.exe")"
+git -C "$D" show "$REV:deploy/build-agent-bundle.py" > "$package/build-agent-bundle.py"
+"$PYTHON" "$package/build-agent-bundle.py" "$D" "$REV" "$package"
 
 echo "==> код ${REV:0:7} → $HOST:$R"
 # Чужие загрузки не трогаем независимо от возраста. Выход очищает только успешно созданную свою.

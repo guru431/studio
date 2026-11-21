@@ -82,18 +82,21 @@ export const agentInstallers = {
 
 export function agentDownload() {
   const command = el('code', { 'aria-live': 'polite' });
-  const copy = button(tr("Копировать"), { class: 'btn', hidden: true }, async () => {
+  const origin = el('code', { id: 'agent-install-origin' }, location.origin);
+  async function copyText(node, control) {
     try {
-      await navigator.clipboard.writeText(command.textContent);
-      copy.textContent = tr("Скопировано");
+      await navigator.clipboard.writeText(node.textContent);
+      control.textContent = tr("Скопировано");
     } catch {
       const range = document.createRange();
-      range.selectNodeContents(command);
+      range.selectNodeContents(node);
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
     }
-  });
+  }
+  const copy = button(tr("Копировать"), { class: 'btn', hidden: true }, () => copyText(command, copy));
+  const copyOrigin = button(tr("Копировать адрес"), { class: 'btn', id: 'agent-install-copy-origin' }, () => copyText(origin, copyOrigin));
   const getCommand = button(tr("Получить команду для Linux"), { class: 'btn' }, async () => {
     getCommand.disabled = true;
     copy.hidden = true;
@@ -119,7 +122,8 @@ export function agentDownload() {
     el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
       tr("Скачать мост для Linux (.sh)")),
     el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
-    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста.")),
+    el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик и вставьте этот адрес в поле «Адрес студии». В Linux получите команду и выполните её в терминале в течение 10 минут.")),
+    el('div', { class: 'row agent-install-command' }, origin, copyOrigin),
     getCommand, el('p', { class: 'agent-install-command' }, command), copy);
 }
 

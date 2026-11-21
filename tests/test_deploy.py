@@ -3,6 +3,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import shlex
 import sqlite3
@@ -390,21 +391,43 @@ def test_compose_keeps_the_container_restrictions_of_both_services():
 def test_deploy_builds_the_bridge_archive_from_the_studio_commit():
     """Мост и сервер собираются из одного HEAD; проверка всего компонента — до первого ssh."""
     code = uncommented(DEPLOY_SH)
-    assert 'git -C "$D" -c core.autocrlf=false archive --format=zip --prefix=studio-agent/ "$REV:agent"' in code
+    bundle = (DEPLOY / "build-agent-bundle.py").read_text(encoding="utf-8")
+    assert 'git(repo, "archive", "--format=zip", "--prefix=studio-agent/", f"{revision}:agent")' in bundle
     assert "for file in studio-agent.zip studio-agent-setup.exe studio-agent-setup.pkg studio-agent-setup.sh" in code
     assert "$IN/agent/$file" in code
     first_ssh = code.index('"${SSH[@]}" "sudo install -d')
     assert code.index('status --porcelain -- "${PARTS[@]}" agent') < first_ssh
     assert code.index('cat-file -e "$REV:agent/install.cmd"') < first_ssh
-    archive = code.index("archive --format=zip")
-    build = code.index('powershell.exe -NoProfile -NonInteractive')
-    assert archive < build < first_ssh
-    assert 'show "$REV:deploy/build-agent-installer.ps1"' in code
-    assert 'show "$REV:deploy/agent-installer.cs"' in code
-    assert 'show "$REV:deploy/build-agent-macos.py"' in code
-    assert 'show "$REV:deploy/macos-runtime.json"' in code
-    assert code.index('"$PYTHON" "$package/build-agent-macos.py"') < first_ssh
-    assert code.index('"$PYTHON" "$package/build-agent-linux.py"') < first_ssh
+    checkout = code.index('show "$REV:deploy/build-agent-bundle.py"')
+    build = code.index('"$PYTHON" "$package/build-agent-bundle.py" "$D" "$REV" "$package"')
+    assert checkout < build < first_ssh
+    assert 'git_file(repo, revision, f"deploy/{name}", work / name)' in bundle
+    assert 'render-profile.py" --agent' not in code
+
+
+def test_bundle_cache_rebuilds_after_an_artifact_changes(tmp_path, monkeypatch):
+    bundle = runpy.run_path(str(DEPLOY / "build-agent-bundle.py"))
+    prepare = bundle["prepare"]
+    calls = []
+
+    def build(repo, revision, work):
+        calls.append(revision)
+        for name in bundle["ARTIFACTS"]:
+            (work / name).write_bytes(f"{name}-{len(calls)}".encode())
+
+    for name in bundle["SIGNING"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(prepare.__globals__, "cache_key", lambda *_: "fingerprint")
+    monkeypatch.setitem(prepare.__globals__, "build", build)
+    for revision in ("first", "same-bridge", "corrupt"):
+        work = tmp_path / revision
+        work.mkdir()
+        if revision == "corrupt":
+            (tmp_path / ".cache/studio-agent-bundle/studio-agent-setup.pkg").write_bytes(b"bad")
+        prepare(tmp_path, revision, work)
+    assert calls == ["first", "corrupt"]
+    assert (tmp_path / "same-bridge/studio-agent-setup.pkg").read_bytes() == b"studio-agent-setup.pkg-1"
+    assert (tmp_path / "corrupt/studio-agent-setup.pkg").read_bytes() == b"studio-agent-setup.pkg-2"
 
 
 def test_deploy_resolves_the_revision_once_and_uploads_into_its_own_folder():
@@ -414,7 +437,7 @@ def test_deploy_resolves_the_revision_once_and_uploads_into_its_own_folder():
     gits = re.findall(r'git -C "\$D" .*', code)
     assert [g for g in gits if "HEAD" in g] == ["git -C \"$D\" rev-parse --verify 'HEAD^{commit}')"]
     assert all('"$REV' in g for g in gits if re.search(r" (show|archive|cat-file) ", g)), gits
-    assert len([g for g in gits if " archive " in g]) == 3 and 'args+=("--revision=$REV")' in code
+    assert len([g for g in gits if " archive " in g]) == 2 and 'args+=("--revision=$REV")' in code
     assert "IN=$R/.incoming-${REV:0:12}-$$-$RANDOM" in code and "sudo mkdir -m 0700 $IN" in code
     assert "$R/.incoming" not in code.replace("$R/.incoming-${REV", "") and "rm -rf $R/.incoming" not in code
     assert '"${SSH[@]}" "sudo bash $IN/deploy/$installer ${args[*]:-}"' in code
@@ -445,7 +468,7 @@ def test_deploy_cleanup_removes_only_the_folder_it_created(tmp_path, outcome):
         package = Path(directory) / "package"
         package.mkdir()
         setup = DEPLOY_SH[DEPLOY_SH.index("IN=$R/"):
-                          DEPLOY_SH.index('git -C "$D" -c core.autocrlf=false archive --format=zip')]
+                          DEPLOY_SH.index('git -C "$D" show "$REV:deploy/build-agent-bundle.py"')]
         create = DEPLOY_SH[DEPLOY_SH.index('echo "==> код '):
                            DEPLOY_SH.index('git -C "$D" -c core.autocrlf=false archive --format=tar')]
         script = ("set -euo pipefail\n"
@@ -1048,7 +1071,8 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     repo = tmp_path / "studio"
     (repo / "deploy").mkdir(parents=True)
     (repo / "deploy" / "deploy.sh").write_text(DEPLOY_SH, encoding="utf-8", newline="\n")
-    for name in ("build-agent-installer.ps1", "agent-installer.cs", "build-agent-linux.py", "render-profile.py"):
+    for name in ("build-agent-installer.ps1", "agent-installer.cs", "build-agent-linux.py", "render-profile.py",
+                 "build-agent-bundle.py"):
         shutil.copyfile(DEPLOY / name, repo / "deploy" / name)
     # Здесь проверяется доставка одного HEAD; тяжёлая сборка PKG имеет собственную приёмку на Mac.
     (repo / 'deploy/build-agent-macos.py').write_text(
@@ -1133,11 +1157,22 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
                 'sha256': hashlib.sha256(b'xar!fixture').hexdigest(), 'size': len(b'xar!fixture')}
         else:
             assert descriptor not in names
-        assert b'"https://studio.example.net"' in archive.read("studio-agent/studio_agent/store.py")
+        assert b'"https://studio.example.com"' in archive.read("studio-agent/studio_agent/store.py")
+        assert b'"https://studio.example.net"' not in archive.read("studio-agent/studio_agent/store.py")
         assert not any(n.startswith("studio-agent/tests/") or n.endswith("CLAUDE.md") for n in names)
         assert all(n.startswith("studio-agent/") for n in names)
         cmd = archive.read("studio-agent/install.cmd")
         assert cmd.count(b"\r\n") == cmd.count(b"\n") > 0
+    if not signed_pkg:
+        files = ("bridge.zip", "setup.exe", "setup.pkg", "setup.sh")
+        before = {name: (tmp_path / name).read_bytes() for name in files}
+        env["STUDIO_URL"] = "https://another.example.net:8443"
+        r = deploy()
+        assert r.returncode == 0, r.stderr
+        assert "общий комплект моста из кэша" in r.stdout
+        assert {name: (tmp_path / name).read_bytes() for name in files} == before
+        args = (tmp_path / "curl-args").read_text(encoding="utf-8").splitlines()
+        assert args[-1] == "https://another.example.net:8443/health"
     calls = (tmp_path / 'ssh-calls').read_bytes()
     override = tmp_path / 'md2pdf.py'
     override.write_bytes(b'# unexpected converter\n')

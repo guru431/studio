@@ -8319,6 +8319,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
     agents_loaded = "document.querySelector('#agents li')"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings"),
         ("eval", "link", AGENTS_DOWNLOAD),
+        ("eval", "origin", "document.getElementById('agent-install-origin').textContent"),
         ("eval", "notice", "document.querySelector('.settings .agent-install-note').textContent"),
         ("eval", "fits", NO_OVERFLOW), ("screenshot", str(tmp_path / "installer-settings-320.png")),
         *go("settings/code"), ("wait", agents_loaded),
@@ -8330,6 +8331,7 @@ def test_settings_root_has_agent_installer(browser, live, tmp_path):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["link"] == v["returned"] == [True, "/api/agent/download", "studio-agent-setup.exe", "Скачать мост для Windows (.exe)", 1]
+    assert v["origin"] == live.url
     assert v["nested"] and v["other"]
     assert v["notice"] == "Установите мост на компьютер, который хотите подключить к Студии."
     assert v["empty"] == "Компьютеров пока нет." and v["fits"] is True

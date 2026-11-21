@@ -7,7 +7,6 @@ import shlex
 import subprocess
 import sys
 import tarfile
-import zipfile
 
 import pytest
 import config
@@ -187,18 +186,6 @@ def test_remote_backend_changes_only_the_proxy_destination_and_retains_route_opt
 def test_hairpin_address_can_be_supplied_by_the_host(env, monkeypatch):
     monkeypatch.setenv("STUDIO_HAIRPIN_IP", "198.51.100.1")
     assert config.load().hairpin_ip == "198.51.100.1"
-
-
-def test_agent_package_receives_the_installation_server_and_retains_other_files(tmp_path):
-    archive_path = tmp_path / "agent.zip"
-    with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("studio-agent/studio_agent/store.py", 'url = "https://studio.example.com"\n')
-        archive.writestr("studio-agent/install.cmd", b"@echo off\r\n")
-    PROFILE.render_agent(archive_path, {"STUDIO_URL": "https://studio.example.net"})
-    with zipfile.ZipFile(archive_path) as archive:
-        assert archive.read("studio-agent/studio_agent/store.py") == b'url = "https://studio.example.net"\n'
-        assert archive.read("studio-agent/install.cmd") == b"@echo off\r\n"
-    assert list(tmp_path.iterdir()) == [archive_path]
 
 
 @pytest.mark.integration
