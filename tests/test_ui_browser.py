@@ -7972,7 +7972,10 @@ def photo_translated(login):
             put_files("#tl-photo-input", [("Вывеска.png", png_of(*TL_SIGN))]),
             ("wait", "!document.querySelector('#tl-chip').hidden"),
             ("click", "#tl-go"),
-            ("wait", f"{TL_DONE} && {TL_FITTED}")]
+            ("wait", f"{TL_DONE} && {TL_FITTED}"),
+            # картинка уже разобрана, но кадр под неё ещё не перестроен: ResizeObserver подгонит кегль к следующей
+            # отрисовке, а замер теста раньше неё увидел бы подгонку под прежний кадр
+            ("eval", "framed", "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
