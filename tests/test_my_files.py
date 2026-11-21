@@ -78,7 +78,7 @@ class FileServer:
                 if not path.startswith(base):
                     continue
                 head, _, rest = path[len(base):].partition("/")
-                if not head:
+                if not head or head == ".keep":          # метка пустой папки mkdir — не запись
                     continue
                 old = entries.get(head, {"name": head, "dir": bool(rest), "size": 0, "mtime": 1_700_000_000.5})
                 old["size"] += len(data or b"")

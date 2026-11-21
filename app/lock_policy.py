@@ -141,8 +141,10 @@ def blocks(request, uid: int, digest: str) -> bool:
     # отнесён к разделу, закрываемым или открытым явно — реестр в tests/test_lock_policy.py.
     # Корзина: список (`GET /api/trash`) прячет закрытые разделы сам, а «Вернуть» и «Удалить навсегда» любой
     # записи закрыты, пока заперт хоть один раздел — записи разных разделов на одном адресе; так же «Очистить
-    # корзину» и перенос неудачных из «Хранилища».
+    # корзину» и перенос неудачных из «Хранилища». «Мои файлы» на MCP (my_files.py) — результаты инструментов любых
+    # разделов в одной папке: закрыты, пока заперт хоть один раздел.
     return (path.startswith(("/api/me/export", "/api/media/archives", "/api/passkeys", "/api/admin", "/api/trash/",
+                             "/api/my-files",
                              "/api/me/sessions", "/api/me/security-events", "/api/me/access", "/api/me/email"))
             or path in ("/api/history", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
                         "/api/me/password-reset", "/api/me/storage/failed")

@@ -3,7 +3,8 @@ import { tr } from './i18n.js';
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/code,
- * #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/trash (trash.js), #/admin (только
+ * #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/trash (trash.js),
+ * #/myfiles (my-files.js; пункт меню виден, если у учётки есть сервер MCP с «Моими файлами»), #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -26,7 +27,7 @@ import { tr } from './i18n.js';
  * ленты — в учётке: вернувшись на экран, студия перечитывает профиль (их могли сменить на другом устройстве) —
  * тема меняется сразу, вид ленты — при следующем открытии раздела (открытый не пересобирается: набранное в нём цело).
  * Перечитанный профиль — событие `studio-me` на document: чат по нему перерисовывает кнопку «Интернет». */
-import { loadMe, me, watchSession } from './api.js';
+import { api, loadMe, me, watchSession } from './api.js';
 import { setupJobs } from './jobs.js';
 import { setupCodeActivity } from './code-activity.js';
 import { ensureSectionOpen, installLock } from './lock.js';
@@ -55,6 +56,7 @@ const LOADERS = {
   settings: () => import('./settings.js'),
   help: () => import('./help.js'),
   trash: () => import('./trash.js'),
+  myfiles: () => import('./my-files.js'),
   admin: () => import('./admin.js'),
 };
 /** Экраны оболочки: имя — из реестра разделов (sections-meta.js), загрузка — модуль раздела. */
@@ -279,11 +281,20 @@ function sectionKey(event) {
   location.hash = target.getAttribute('href');
 }
 
+/** «Мои файлы» в меню — только при сервере MCP с контрактом `studio/files` (GET /api/my-files/servers; каталоги
+ * серверов — из кэша сервера). Сбой проверки пункт не меняет. */
+function checkMyFiles() {
+  api('GET', '/api/my-files/servers').then((items) => {
+    document.getElementById('menu-my-files').hidden = !(Array.isArray(items) && items.length);
+  }).catch(() => {});
+}
+
 function openMenu(open) {
   if (open) {
     const version = document.getElementById('menu-version');
     version.textContent = pageVersion ? `Studio ${pageVersion}` : '';   // версия страницы, не перечитанного профиля
     version.hidden = !pageVersion;
+    checkMyFiles();
   }
   menu.hidden = !open;
   avatar.setAttribute('aria-expanded', String(open));
@@ -296,6 +307,7 @@ function setupMenu() {
   document.getElementById('menu-login').textContent = me.login;
   document.getElementById('menu-login').hidden = !me.name || me.name === me.login;
   document.getElementById('menu-admin').hidden = !me.is_admin;
+  checkMyFiles();
   avatar.addEventListener('click', (event) => {
     event.stopPropagation();
     openMenu(menu.hidden);
