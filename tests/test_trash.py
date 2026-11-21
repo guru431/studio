@@ -154,8 +154,21 @@ def make_transcript(s, uid: int) -> Made:
                                    "UPDATE transcripts SET name = 'lychee.m4a' WHERE id = ?"])
 
 
+def make_scan(s, uid: int) -> Made:
+    pdf = save(uid, b"%PDF- scan", "application/pdf", "deal.pdf")
+    page = save(uid, b"page png", "image/png", "p1.png")
+    state.DB.execute("INSERT INTO scans(id, user_id, model, name, source_media_id, origin, pages, done_pages, state,"
+                     " detail, created, finished, text) VALUES ('sc1', ?, 'hunyuan-ocr', 'quince.pdf', ?, 'section', 1, 1,"
+                     " 'done', 'готово', ?, ?, 'quince text')", (uid, pdf, T0, s.clock[0]))
+    state.DB.execute("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text) VALUES ('sc1', ?, 1, ?, 'done',"
+                     " 'quince text')", (uid, page))
+    return section_made(s, "sc1", [pdf, page], "/api/ocr", word="quince", href="ocr?id=sc1",
+                        touch_sql=["UPDATE scans SET name = 'quince 2.pdf' WHERE id = ?",
+                                   "UPDATE scans SET name = 'quince.pdf' WHERE id = ?"])
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan}
 
 
 def owner(s) -> int:

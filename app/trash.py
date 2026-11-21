@@ -29,6 +29,7 @@ import clock
 import images
 import lock_policy
 import mcp_files
+import ocr
 import operations
 import search
 import speeches
@@ -89,6 +90,9 @@ KINDS: dict[str, Kind] = {
     "transcripts": Kind("transcripts", "transcribe", transcripts.purge, lambda row: _head(row["name"], "Запись"),
                         "SELECT source_media_id FROM transcripts WHERE id = :id"
                         " UNION SELECT result_media_id FROM transcripts WHERE id = :id", search="transcribe"),
+    "scans": Kind("scans", "ocr", ocr.purge, lambda row: _head(row["name"], "Документ"),
+                  "SELECT source_media_id FROM scans WHERE id = :id UNION SELECT media_id FROM scan_pages WHERE scan_id = :id",
+                  search="ocr"),
 }
 
 
