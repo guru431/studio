@@ -9,6 +9,7 @@ import state
 from fake_bridge import FakeMachine
 from fakes import PNG_REAL, TOKEN as MODEL_KEY, WAV_FAKE
 from test_mcp import TOKEN, URL
+MCP_TOKEN = TOKEN                    # в тестах ниже имя TOKEN занято ключом шлюза
 from test_mcp_sections import service
 from test_ui_browser import (browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value,
                              code_online, code_requests, add_voice, add_gateway, open_new_chat, API, ANSWERED,
@@ -187,9 +188,17 @@ def test_unreachable_mcp_server_is_named_in_the_chat_answer_and_in_sections(brow
             ('eval', 'nav', "location.hash='#/settings'"), ('wait', "document.querySelector('.settings-nav')"),
             *open_new_chat(), ('wait', "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
             ('wait', f"{toggle} && !{toggle}.hidden"), ('click', '#mcp-toggle'),
-            ('wait', "document.querySelector('#chat-mcp-dialog input[type=checkbox]')"),
-            ('eval', 'pick', "document.querySelector('#chat-mcp-dialog input[type=checkbox]').click()"),
-            ('click', '#chat-mcp-save'), ('wait', f"{toggle}.textContent === 'MCP (1)'"),
+            # недоступный сервер окно показывает с его словами, включить его всё равно можно
+            ('wait', "document.querySelector('#chat-mcp-dialog .chat-mcp-error')"
+                     " && !document.querySelector('#chat-mcp-save').disabled"),
+            ('eval', 'down', "document.querySelector('#chat-mcp-dialog .chat-mcp-error').textContent"),
+            ('eval', 'pick', "document.querySelector('#chat-mcp-dialog .chat-mcp-error').closest('.chat-mcp-item')"
+                             ".querySelector('input.chat-mcp-server').click()"),
+            ('click', '#chat-mcp-save'), ('wait', "!document.querySelector('#chat-mcp-dialog')"),
+            # общие MCP прошлых тестов того же сервера включены в новом диалоге по умолчанию
+            ('eval', 'chip', f"""(async () => {{ const m = {API};
+              const shared = (await m.api('GET', '/api/mcp')).items.filter(s => s.shared && s.enabled).length;
+              return {toggle}.textContent === 'MCP (' + (1 + shared) + ')'; }})()"""),
             ('type', '#chat-input', 'Привет'), ('press', 'Enter'),
             ('wait', f"{ANSWERED} && {LAST_ANSWER}.querySelector('details.web-steps')"),
             ('eval', 'answer', f"{LAST_ANSWER}.querySelector('.md').textContent.trim()"),
@@ -206,6 +215,7 @@ def test_unreachable_mcp_server_is_named_in_the_chat_answer_and_in_sections(brow
     assert not result.get('failed'), result
     values = result['values']
     assert values['answer'] == 'Готово'
+    assert values['down'] == 'MCP недоступен или вернул неверный ответ' and values['chip'] is True
     assert values['badge'] == ['MCP: 1 — 1 ошибка', 'web-badge bad']
     assert values['summary'] == 'Вызовы инструментов (1)'
     assert values['step'] == 'MCP · Down — MCP недоступен или вернул неверный ответ'
@@ -306,7 +316,8 @@ def test_chat_mcp_selection_is_saved_for_the_current_dialog(browser, live):
         connection = client.post('/api/connections', json={'name':'Model','kind':'srvllm',
             'base_url':'http://10.77.1.15:4000','token':TOKEN,'sections':['chat']})
         assert connection.status_code == 201, connection.text
-        server = client.post('/api/mcp', json={'name':'Tools','url':'http://10.77.1.15:4000/mcp'})
+        # окно диалога читает каталог: мок MCP прошлых тестов на /mcp требует свой ключ
+        server = client.post('/api/mcp', json={'name':'Tools','url':URL,'token':MCP_TOKEN})
         sid = server.json()['id']
         created = client.post('/api/chats', json={'connection_id':connection.json()['id'],'model':'local-gemma-abl'})
         assert created.status_code == 201, created.text
@@ -315,7 +326,8 @@ def test_chat_mcp_selection_is_saved_for_the_current_dialog(browser, live):
         shared = client.get(f'/api/chats/{cid}').json()['chat']['mcp_ids']
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY),
             ('eval','nav',f"location.hash='#/chat/{cid}'"), ('wait', "document.querySelector('#mcp-toggle')?.hidden === false"),
-            ('click','#mcp-toggle'), ('wait', "document.querySelector('#chat-mcp-dialog')?.open"),
+            ('click','#mcp-toggle'), ('wait', f"document.querySelector('#chat-mcp-dialog')?.open && document.querySelector('#chat-mcp-{sid}')"
+                                              " && !document.querySelector('#chat-mcp-save').disabled"),
             ('click',f'#chat-mcp-{sid}'), ('click','#chat-mcp-save'),
             ('wait',"!document.querySelector('#chat-mcp-dialog') && document.querySelector('#mcp-toggle').textContent"
                     f" === 'MCP ({1 + len(shared)})'"),

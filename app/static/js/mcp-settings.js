@@ -3,7 +3,6 @@ import { api } from './api.js';
 import { tr } from './i18n.js';
 import { button, computerPin, el, field, openDialog, words } from './ui.js';
 
-const HINT = tr("Модель сможет вызывать инструменты выбранных серверов и передавать им данные диалога.");
 const input = (id, type = 'text', value = '') => el('input', { id, type, value, class: 'input', autocomplete: 'off' });
 const area = (id, text = '') => el('textarea', { id, class: 'input', rows: '4', spellcheck: 'false' }, text);
 // Сохранённое значение заголовка Studio (`GET /api/mcp/{id}` отдаёт null): не ASCII — настоящим значением не бывает.
@@ -98,8 +97,24 @@ export function accessPicker(groups, chosen) {
     checks.el, summary) };
 }
 
-/** Строка инструмента: «Как у подключения» (правила нет) / «Выбранным группам» / «Только администраторам». */
-function toolRow(groups, name, chosen, missing) {
+/** Политика инструмента (admin.py, `mcp_tool_policy`): «интернет» и «подтверждение» сильнее подсказок сервера;
+ * пустое значение — как у сервера. value() — { open_world: null | bool, confirm: null | 'always' | 'never' }. */
+function policySelects(name, rule = {}) {
+  const option = (value, text) => el('option', { value }, text);
+  const web = el('select', { class: 'input mcp-policy-web', 'aria-label': tr("Интернет для инструмента {0}", name) },
+    option('', tr("Интернет: как у сервера")), option('yes', tr("Интернет: да")), option('no', tr("Интернет: нет")));
+  const confirm = el('select', { class: 'input mcp-policy-confirm', 'aria-label': tr("Подтверждение для инструмента {0}", name) },
+    option('', tr("Подтверждение: как у сервера")), option('always', tr("Подтверждение: всегда")),
+    option('never', tr("Подтверждение: никогда")));
+  web.value = rule.open_world === true ? 'yes' : rule.open_world === false ? 'no' : '';
+  confirm.value = rule.confirm || '';
+  return { el: el('div', { class: 'mcp-policy' }, web, confirm),
+    value: () => ({ open_world: web.value ? web.value === 'yes' : null, confirm: confirm.value || null }) };
+}
+
+/** Строка инструмента: «Как у подключения» (правила нет) / «Выбранным группам» / «Только администраторам»;
+ * под ней — политика «интернет» и «подтверждение». */
+function toolRow(groups, name, chosen, missing, rule) {
   const select = el('select', { class: 'input access-tool-mode', 'aria-label': tr("Доступ к инструменту {0}", name) },
     el('option', { value: 'inherit' }, tr("Как у подключения")), el('option', { value: 'groups' }, tr("Выбранным группам")),
     el('option', { value: 'admins' }, tr("Только администраторам")));
@@ -112,14 +127,16 @@ function toolRow(groups, name, chosen, missing) {
     summary.textContent = select.value === 'inherit' ? '' : accessSummary(groups, value());
   }
   select.addEventListener('change', paint); paint();
-  return { name, value, el: el('li', { class: 'access-tool', 'data-tool': name },
+  const policy = policySelects(name, rule);
+  return { name, value, policy: policy.value, el: el('li', { class: 'access-tool', 'data-tool': name },
     el('div', { class: 'access-tool-head' }, el('code', {}, name),
       missing ? el('span', { class: 'tag access-missing' }, tr("нет у сервера")) : null),
-    select, checks.el, summary) };
+    select, checks.el, summary, policy.el) };
 }
 
-/* «Доступ» общего MCP: сервер и правила инструментов. Список — живой ответ «Проверить» плюс имена из правил,
- * которых у сервера сейчас нет; «Проверить» не ответил — правила всё равно показаны и сохраняются. */
+/* «Доступ» общего MCP: сервер, правила инструментов и их политика «интернет» / «подтверждение» (PUT …/policy после
+ * …/access). Список — живой ответ «Проверить» плюс имена из правил и политики, которых у сервера сейчас нет;
+ * «Проверить» не ответил — правила всё равно показаны и сохраняются. */
 function mcpAccessDialog(host, item, note) {
   const base = `/api/admin/shared/mcp/${item.id}`;
   const server = el('div', {}, el('p', { class: 'muted' }, tr("Загружаю…")));
@@ -130,24 +147,31 @@ function mcpAccessDialog(host, item, note) {
   const dialog = openDialog(host, { id: 'mcp-access-dialog', title: tr("Доступ: {0}", item.name), actions: [save], body: [server,
     el('h3', {}, tr("Инструменты")),
     el('p', { class: 'muted small' }, tr("Инструмент без своего правила доступен всем, кому открыто подключение.")),
+    el('p', { class: 'muted small' }, tr("«Интернет» и «Подтверждение» заменяют пометки самого сервера: инструмент с интернетом работает только при включённом «Интернете» диалога, с подтверждением — по умолчанию выключен в диалогах.")),
     status, list, fail] });
   let picker = null, rows = [];
   save.addEventListener('click', async () => {
     save.disabled = true; fail.textContent = '';
     const tools = Object.fromEntries(rows.filter(r => r.value() !== undefined).map(r => [r.name, r.value()]));
-    try { await api('PUT', `${base}/access`, { groups: picker.value(), tools }); dialog.close(); note.textContent = tr("Доступ сохранён"); }
-    catch (err) { fail.textContent = words(err); save.disabled = false; }
+    const policy = Object.fromEntries(rows.map(r => [r.name, r.policy()])
+      .filter(([, p]) => p.open_world !== null || p.confirm !== null));
+    try {
+      await api('PUT', `${base}/access`, { groups: picker.value(), tools });
+      await api('PUT', `${base}/policy`, { tools: policy });
+      dialog.close(); note.textContent = tr("Доступ сохранён");
+    } catch (err) { fail.textContent = words(err); save.disabled = false; }
   });
   const live = api('POST', `${base}/check`).then(({ tools }) => tools.filter(Boolean), err => {
     status.textContent = tr("Список инструментов сервера не получен: {0}. Правила показаны, их можно сохранить.", words(err));
     return null;
   });
-  Promise.all([api('GET', '/api/admin/groups'), api('GET', `${base}/access`), live]).then(([{ items: groups }, rules, tools]) => {
+  Promise.all([api('GET', '/api/admin/groups'), api('GET', `${base}/access`), api('GET', `${base}/policy`), live])
+    .then(([{ items: groups }, rules, policy, tools]) => {
     if (!dialog.open) return;
     picker = accessPicker(groups, rules.groups);
     server.replaceChildren(picker.el);
-    const names = [...new Set([...(tools || []), ...Object.keys(rules.tools)])];
-    rows = names.map(name => toolRow(groups, name, rules.tools[name], tools !== null && !tools.includes(name)));
+    const names = [...new Set([...(tools || []), ...Object.keys(rules.tools), ...Object.keys(policy.tools)])];
+    rows = names.map(name => toolRow(groups, name, rules.tools[name], tools !== null && !tools.includes(name), policy.tools[name]));
     list.replaceChildren(...(rows.length ? rows.map(r => r.el) : [el('li', { class: 'muted' }, tr("Инструментов нет"))]));
     save.disabled = false;
   }, err => { server.replaceChildren(); fail.textContent = words(err); });
@@ -256,21 +280,4 @@ export function agentMcpBlock(agents) {
     loadProjects();
   }).catch(err => { note.textContent = words(err); });
   return root;
-}
-
-export async function chooseMcp(host, ids, save) {
-  const { items } = await api('GET', '/api/mcp'); if (!host.isConnected) return;
-  const choices = items.map(item => {
-    const control = input(`chat-mcp-${item.id}`, 'checkbox'); control.checked = ids.includes(item.id); control.disabled = !item.enabled;
-    return { control, id: item.id, node: el('label', { class: 'check' }, control, item.name) };
-  });
-  const note = el('p', { class: 'error', 'aria-live': 'polite' });
-  const submit = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'chat-mcp-save' });
-  const dialog = openDialog(host, { id: 'chat-mcp-dialog', title: tr("Инструменты MCP"), body: [el('p', {}, HINT),
-    ...choices.map(c => c.node), el('a', { href: '#/settings/chat' }, tr("Настроить подключения MCP")), note], actions: [submit] });
-  submit.addEventListener('click', async () => {
-    submit.disabled = true;
-    try { await save(choices.filter(c => c.control.checked && !c.control.disabled).map(c => c.id)); dialog.close(); }
-    catch (err) { note.textContent = words(err); } finally { submit.disabled = false; }
-  });
 }
