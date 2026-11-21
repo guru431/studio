@@ -125,7 +125,7 @@ def test_turned_off_server_not_polled(studio):
     assert changed.status_code == 200 and changed.json()["mcp_ids"] == [] and changed.json()["mcp_off"] == [sid]
     studio.gw.chat_script = [["Готово"]]
     assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
-    assert calls == [] and "tools" not in studio.gw.chat_requests[-1]
+    assert calls == [] and offered(studio.gw.chat_requests[-1]) == []
     # явное включение снимает сервер из выключенных
     back = studio.c.patch(f"/api/chats/{cid}", json={"mcp_ids": [sid]}).json()
     assert back["mcp_ids"] == [sid] and back["mcp_off"] == []
@@ -356,7 +356,7 @@ def test_unreachable_default_server_does_not_block_turn(studio, monkeypatch):
     assert events[-1] == ("done", {"status": "done"})
     assert ("tool", {"kind": "mcp", "label": "Shared tools", "skipped": True}) in events
     assert [s["error"] for s in messages(studio, cid)[1]["tools"]] == ["MCP не ответил вовремя"] * 2
-    assert "tools" not in studio.gw.chat_requests[-1] and mcp_sources.CACHE == {}
+    assert offered(studio.gw.chat_requests[-1]) == [] and mcp_sources.CACHE == {}
 
 
 def test_default_servers_capped(studio, monkeypatch):
@@ -443,20 +443,24 @@ def test_open_world_only_with_internet_and_rechecked_midturn(studio):
                                                    "error": mcp_client.WEB_OFF}]
 
 
-def test_confirm_tools_not_in_default_set(studio):
+def test_confirm_tools_offered_and_paused_by_condition(studio):
+    """Спека 2026-11-21-studio-source-capabilities-design, п. 5: инструмент «с подтверждением» предлагается модели
+    всегда, а вызов, для которого выполнено условие, ждёт «Запустить» (tests/test_chat_pending.py)."""
     tools = [tool("lookup"), tool("translate", _meta={"studio/confirm": True}),
              tool("video", _meta={"studio/confirm": {"when": [{"arg": "seconds", "gt": 30}]}})]
     sid, calls, _ = setup(studio, tools=tools)
     cid = new_chat(studio)
-    studio.gw.chat_script = [["Готово"]]
-    sse(turn(studio, cid))
-    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: lookup"]
-    studio.c.patch(f"/api/chats/{cid}", json={"mcp_tools_on": {str(sid): ["translate"]}})
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 1))]}, ["Готово"]]
-    sse(turn(studio, cid, "Translate"))
-    assert offered(studio.gw.chat_requests[-2]) == ["Shared tools: lookup", "Shared tools: translate"]
-    assert ("tools/call", {"name": "translate", "arguments": {}}) in calls
-    assert messages(studio, cid)[-1]["tools"] == [{"kind": "mcp", "server": "Shared tools", "tool": "translate"}]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 2), seconds=10)]}, ["Готово"]]
+    events = sse(turn(studio, cid, "Short video"))
+    assert offered(studio.gw.chat_requests[0]) == ["Shared tools: lookup", "Shared tools: translate", "Shared tools: video"]
+    assert not any(name == "pending" for name, _ in events)
+    assert ("tools/call", {"name": "video", "arguments": {"seconds": 10}}) in calls
+    calls.clear()
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 2), seconds=60)]}, ["Готово"]]
+    events = sse(turn(studio, cid, "Long video"))
+    assert next(data for name, data in events if name == "pending")["tool"] == "video"
+    assert "tools/call" not in methods(calls)
+    assert messages(studio, cid)[-1]["pending"]["arguments"] == [["seconds", "60"]]
 
 
 def test_admin_tool_policy_overrides_server_hints(studio):
@@ -483,7 +487,7 @@ def test_admin_tool_policy_overrides_server_hints(studio):
     cid = new_chat(studio)
     studio.gw.chat_script = [["Готово"]]
     sse(turn(studio, cid))
-    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: search", "Shared tools: danger"]
+    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: search", "Shared tools: danger", "Shared tools: quiet"]
     marks = {t["name"]: (t["open_world"], t["confirm"])
              for t in studio.c.get("/api/mcp/catalog").json()["items"][0]["tools"]}
     assert marks == {"lookup": (True, False), "search": (False, False), "danger": (False, False),

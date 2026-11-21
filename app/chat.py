@@ -53,7 +53,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+import chat_pending
 import chat_system
+import chat_tools
 import clock
 import connections
 import cleaner_client as cleaner
@@ -137,8 +139,12 @@ TIME_WORDS = "ответ шёл слишком долго — обрезан"
 NO_ANSWER = "модель не ответила по найденному — переспросите"
 CUT_CONTEXT = "\n[обрезано: не помещается в контекст модели]"
 NO_ROOM = "не помещается в контекст модели"
-NO_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
+NO_WEB_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
 NO_MCP = "эта модель не поддерживает инструменты — отключите MCP или выберите другую модель"
+# встроенные инструменты (chat_tools) — в каждом ходе через сервер; шлюз отказал `tools` — один повтор без них и
+# метка на пару (id подключения, модель): NO_TOOLS_SEC её ходы идут без встроенных инструментов. Только память процесса
+NO_TOOLS: dict[tuple[int, str], float] = {}
+NO_TOOLS_SEC = 3600
 NO_EXA_KEY = "сначала задайте ключ Exa в Настройках → Ввод и интернет → Интернет"   # PATCH {web: true} без ключа — 409
 NO_THINKING = "эта модель не умеет рассуждать по кнопке"   # PATCH {thinking: true} не у роли local-* srvllm — 409
 # к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
@@ -362,13 +368,14 @@ def _alive(row) -> bool:
             and clock.NOW() - row["alive_at"] < ALIVE_SEC)
 
 
-def _message_out(row, atts: list, views: dict | None = None) -> dict:
+def _message_out(row, atts: list, views: dict | None = None, pending: dict | None = None) -> dict:
     """Сообщение для страницы; `tools` — шаги «Интернета» без текста для модели (web.public), `reasoning` и
     `reasoning_sec` — рассуждение ответа (у идущего — прочитанное; не было или скрыто — null), `ocr` — ход
     распознавания, которого ждёт идущий ответ (`{page, pages}`; не ждёт — null), `wait` — секунды ожидания карты
     идущим ответом (не ждёт — null), `error` — слова ответа-ошибки (`messages.error`; у строк до шага 35 — только
     «скан не распознан: …» из content). Слова, записанные и в content (скан, хранилище: прежний код читает их
-    оттуда), — не текст ответа: тогда content — пустой, модели ответ не уходил."""
+    оттуда), — не текст ответа: тогда content — пустой, модели ответ не уходил. `pending` — открытые паузы диалога
+    (`chat_pending.open_views`): у сообщения с паузой — ключ `pending`, карточка подтверждения или вопроса."""
     live = STREAMS.get(row["id"])
     steps = live.steps if live else json.loads(row["tools"] or "[]")
     reasoning, seconds = live.thought_out() if live else (row["reasoning"], row["reasoning_sec"])
@@ -378,14 +385,17 @@ def _message_out(row, atts: list, views: dict | None = None) -> dict:
         error = row["error"] or (row["content"] if row["content"].startswith(SCAN_FAILED) else None)
         if error is not None and content == error:
             content = ""
-    return {"id": row["id"], "role": row["role"], "content": content,
-            "cleaner_raw": row["cleaner_raw"],
-            "error": error,
-            "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
-            "live": _alive(row),
-            "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
-            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
-            "ocr": live.scan_state if live else None, "wait": live.waited() if live else None}
+    out = {"id": row["id"], "role": row["role"], "content": content,
+           "cleaner_raw": row["cleaner_raw"],
+           "error": error,
+           "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
+           "live": _alive(row),
+           "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
+           "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
+           "ocr": live.scan_state if live else None, "wait": live.waited() if live else None}
+    if pending and row["id"] in pending:
+        out["pending"] = pending[row["id"]]
+    return out
 
 
 def _attachment_out(a, scans: dict | None = None, sources: set | None = None, rescan: set | None = None) -> dict:
@@ -655,6 +665,10 @@ def _too_big(tokens: int, limit: int) -> HTTPException:
 
 #: «конец» круга, когда шлюз студии ответил 503 (`StreamTask._round`): не finish_reason модели
 BUSY = object()
+#: «конец» круга, когда шлюз отказал `tools`, а в запросе были только встроенные инструменты: повтор без них
+TOOLS_REFUSED = object()
+#: итог исполнения вызовов: ход встал на паузу (chat_pending.pause) и кончается статусом done
+PAUSED = object()
 
 
 @dataclass
@@ -726,6 +740,15 @@ class StreamTask:
     params: dict = field(default_factory=dict)
     #: куски 1–3 системного сообщения (chat_system.base) — ходу со сканом: контекст соберёт _await_scans
     system: str = field(default="", repr=False)
+    #: продолжение после паузы (chat_pending): payload паузы и ответ `{kind, action, answer}`; новый ход — None
+    resume: "dict | None" = field(default=None, repr=False)
+    paused: str | None = None    # id паузы, на которой ход кончился (chat_pending.pause)
+    rounds: int = 0              # кругов с исполненными вызовами
+    rest: list = field(default_factory=list, repr=False)   # вызовы круга после идущего — в payload паузы
+    index: int = 0               # номер идущего вызова в круге (CALLS_PER_ROUND)
+    confirmed: str | None = None   # id вызова, которому «Запустить» дано этой паузой
+    gone: dict = field(default_factory=dict, repr=False)   # id вызова продолжения → (сервер, инструмент), которых нет
+    builtin_off: bool = False    # встроенные инструменты не предлагать (шлюз их не принял, метка NO_TOOLS)
 
     def waited(self) -> "float | None":
         """Секунды ожидания карты для страницы; не ждём — None."""
@@ -882,12 +905,15 @@ class StreamTask:
             return {**{k: v for k, v in step.items() if k != "text"}, "error": NO_ROOM}
         return {**step, "text": step["text"][:room] + CUT_CONTEXT}
 
-    async def _round(self, payload: dict, offer: bool) -> "tuple[str | None, str | None, list[ToolCall], str]":
+    async def _round(self, payload: dict, offer: bool,
+                     builtin_only: bool = False) -> "tuple[str | None, str | None, list[ToolCall], str]":
         """Один запрос к модели потоком: (слова ошибки или None, finish_reason, вызовы инструментов по
         `index`, текст круга). Текст идёт пользователю дельтами (`_delta`). Отказ 400 о tools, когда запрос
-        впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_TOOLS (vLLM: «"auto" tool choice
-        requires…», LiteLLM называет `tools`); 400 с именем отправленного параметра профиля — profiles.REFUSED;
-        прочий 400 (контекст, картинка) — словами шлюза."""
+        впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_WEB_TOOLS (vLLM: «"auto" tool choice
+        requires…», LiteLLM называет `tools`); в запросе только встроенные инструменты (`builtin_only`) — 400 со
+        словом tool или признаком отказа profiles.REJECTED даёт TOOLS_REFUSED: повтор без них (_read_model);
+        400 с именем отправленного параметра профиля — profiles.REFUSED; прочий 400 (контекст, картинка) — словами
+        шлюза."""
         ending, calls, text = None, {}, ""
         try:
             async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
@@ -897,12 +923,16 @@ class StreamTask:
                     return None, BUSY, [], text                 # карта занята — ждать (_read)
                 if r.status_code != 200:
                     await r.aread()
+                    lowered = r.text.lower()
+                    if offer and builtin_only and r.status_code == 400 and (
+                            "tool" in lowered or any(marker in lowered for marker in profiles.REJECTED)):
+                        return None, TOOLS_REFUSED, [], text
                     no_tools = offer and r.status_code == 400 and re.search(
                         r"(?:tools?|tool[_ ]choice).{0,40}(?:not supported|unsupported|not enabled|requires)"
                         r"|(?:does not|doesn't|cannot) support (?:tools?|function calling)"
                         r"|(?:not supported|unsupported).{0,20}(?:tools?|tool[_ ]choice)", r.text.lower())
                     if no_tools:
-                        return NO_MCP if self.mcp and self.mcp.specs else NO_TOOLS, None, [], text
+                        return NO_MCP if self.mcp and self.mcp.specs else NO_WEB_TOOLS, None, [], text
                     refused = profiles.refusal(r.text, self.params) if r.status_code == 400 else None
                     if refused is not None:
                         log.info("чат %s: ответ %s — подключение не приняло параметр профиля", self.chat_id[:8],
@@ -984,10 +1014,8 @@ class StreamTask:
         row = state.DB.execute("SELECT web FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
         return row is not None and bool(row[0])
 
-    async def _tools(self, calls: list[ToolCall], text: str) -> "str | None":
-        """Вызовы круга — по порядку: событие `tool`, шаг в `steps` и в базу, ответ модели `role: tool` (и
-        вызову без исполнения: id пар должны сойтись). Сверх CALLS_PER_ROUND — шаг TOO_MANY; «Интернет»
-        выключили — шаг WEB_OFF, и tools дальше не идут. Итог — слова ошибки ответа (срок вышел) или None."""
+    async def _tools(self, calls: list[ToolCall], text: str) -> "str | object | None":
+        """Вызовы круга: в историю — сообщение модели с ними, затем исполнение (`_calls`)."""
         for n, c in enumerate(calls):
             c.id = c.id or f"call_{len(self.steps)}_{n}"
         # битые аргументы — не назад в запрос: vLLM их разбирает и ответил бы 400
@@ -995,15 +1023,43 @@ class StreamTask:
             {"id": c.id, "type": "function",
              "function": {"name": c.name, "arguments": c.arguments if web.args_of(c.arguments) is not None else "{}"}}
             for c in calls]})
-        for n, c in enumerate(calls):
+        return await self._calls(calls, 0)
+
+    async def _calls(self, calls: list[ToolCall], start: int) -> "str | object | None":
+        """Вызовы круга по порядку, `start` — номер первого в круге: событие `tool`, шаг в `steps` и в базу, ответ
+        модели `role: tool` (и вызову без исполнения: id пар должны сойтись). Сверх CALLS_PER_ROUND — шаг TOO_MANY;
+        «Интернет» выключили — шаг WEB_OFF, и tools дальше не идут. Инструмент MCP, чей вызов требует подтверждения
+        (`mcp_sources.confirm_needed`; не тот, что подтвердила эта пауза), и `ask_user` (chat_tools) ставят ход на
+        паузу (chat_pending.pause): итог PAUSED, остальные вызовы круга ждут в payload. Итог — слова ошибки ответа
+        (срок вышел), PAUSED или None."""
+        for i, c in enumerate(calls):
+            n = start + i
             if clock.NOW() > self.deadline:
                 return self._cut_time()
+            self.rest, self.index = calls[i + 1:], n
             kind = web.NAMES.get(c.name, "unknown")
-            if self.mcp and c.name in self.mcp.calls:
+            if c.id in self.gone:                    # продолжение: инструмента больше нет в наборе хода
+                server, tool = self.gone[c.id]
+                step = {"kind": "mcp", "server": server, "tool": tool, "error": chat_pending.GONE}
+            elif self.mcp and c.name in self.mcp.calls:
                 _, tool, server, _ = self.mcp.calls[c.name]
+                hint = self.mcp.confirm_hint(c.name)
+                if (n < CALLS_PER_ROUND and c.id != self.confirmed
+                        and mcp_sources.confirm_needed(hint, web.args_of(c.arguments))):
+                    await chat_pending.pause(self, "confirm", c, {
+                        "server": server, "tool": tool, "arguments": chat_pending.arguments_view(c.arguments),
+                        "question": hint["confirm"]["message"], "options": [], "allow_text": False})
+                    return PAUSED
                 self.put("tool", {"kind": "mcp", "label": f"{server} · {tool}"})
                 step = ({"kind": "mcp", "server": server, "tool": tool, "error": TOO_MANY}
                         if n >= CALLS_PER_ROUND else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
+            elif c.name in chat_tools.NAMES and not self.builtin_off:
+                if n >= CALLS_PER_ROUND:
+                    step = {"kind": "ask", "error": TOO_MANY}
+                else:
+                    step = await chat_tools.call(self, c)
+                    if self.paused:
+                        return PAUSED
             elif n >= CALLS_PER_ROUND:
                 step = {"kind": kind, **web.asked(kind, c.arguments), "error": TOO_MANY}
             elif kind == "unknown":                  # не инструмент «Интернета» и не MCP — не «Интернет выключен»
@@ -1018,6 +1074,33 @@ class StreamTask:
             self._step(step)
             self.messages.append({"role": "tool", "tool_call_id": c.id, "content": web.for_model(step)})
         return None
+
+    async def _resume(self) -> "str | object | None":
+        """Продолжение после паузы: вызов, на котором она стояла, — по ответу пользователя («Запустить» — исполнить
+        без нового вопроса; отказ и ответ на вопрос — шаг словами, chat_pending.resume_step), затем оставшиеся вызовы
+        круга. Инструменты MCP — по серверу и имени (`targets` паузы): каталог продолжения мог пронумеровать иначе,
+        а доступ, «Интернет» и выключение — убрать инструмент из набора: тогда шаг chat_pending.GONE без вызова."""
+        r = self.resume
+        self.rounds = r["rounds"]
+        names = {(session.sid, tool): name for name, (session, tool, _, _) in (self.mcp.calls.items() if self.mcp else ())}
+        calls = []
+        for raw in [r["call"], *r["rest"]]:
+            c = ToolCall(**raw)
+            target = r["targets"].get(c.name)
+            if target is not None:
+                found = names.get((target[0], target[1]))
+                if found is None:
+                    self.gone[c.id] = (target[2], target[1])
+                else:
+                    c.name = found
+            calls.append(c)
+        if r["action"] == "run":
+            self.confirmed = calls[0].id
+            return await self._calls(calls, r["index"])
+        step = chat_pending.resume_step(r["kind"], r["action"], r["answer"], r["view"])
+        self._step(step)
+        self.messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": web.for_model(step)})
+        return await self._calls(calls[1:], r["index"] + 1)
 
     def _step(self, step: dict) -> None:
         """Шаг ответа — в `steps` и сразу в `messages.tools`; в журнал — только вид и итог."""
@@ -1036,12 +1119,13 @@ class StreamTask:
         try:
             if not self.conn.cleaner:
                 await self.mcp.discover()
-                for server, words in self.mcp.failed:
+                # продолжение после паузы: эти шаги ответ уже записал до неё
+                for server, words in self.mcp.failed if self.resume is None else ():
                     self.put("tool", {"kind": "mcp", "label": server, "skipped": True})
                     self._step({"kind": "mcp", "server": server, "error": words})
                 # файлы диалога на серверы с пометкой `studio/chat-files` и согласием (mcp_files.sync)
                 notes, steps = await mcp_files.sync(self, self.mcp.found)
-                for step in steps:
+                for step in steps if self.resume is None else ():
                     self.put("tool", {"kind": "mcp", "label": step["server"], "skipped": True}
                              | ({"consent": step["consent"]} if "consent" in step else {}))
                     self._step(step)
@@ -1088,23 +1172,41 @@ class StreamTask:
                 return "Связь с Cleaner оборвалась: сохранена полученная часть"
             except TimeoutError:
                 return self._cut_time()
-        self.deadline, rounds = clock.NOW() + STREAM_TOTAL_SEC, 0
+        self.deadline = clock.NOW() + STREAM_TOTAL_SEC
+        key = (self.conn.id, self.model)
+        if clock.NOW() - NO_TOOLS.get(key, -math.inf) < NO_TOOLS_SEC:
+            self.builtin_off = True
+        retried = False
+        if self.resume is not None:
+            error = await self._resume()
+            if error is PAUSED:
+                return None
+            if error is not None:
+                return error
+            if self.content and not self.content[-1].isspace():   # текст до паузы и продолжение — не слитно
+                self._delta("\n\n")
         while True:
             if clock.NOW() > self.deadline:
                 return self._cut_time()
             if self.tools and not self._web_on():         # выключили на последнем вызове круга — круг без tools
                 self.tools = []
-            specs = web.specs(self.tools) + (self.mcp.specs if self.mcp else [])
-            offer = bool(specs) and rounds < TOOL_ROUNDS
+            extra = web.specs(self.tools) + (self.mcp.specs if self.mcp else [])
+            builtin = [] if self.builtin_off else chat_tools.specs(self)
+            specs = extra + builtin
+            offer = bool(specs) and self.rounds < TOOL_ROUNDS
             payload = {**self.params, "model": self.model, "messages": self._request(offer), "stream": True}
             if offer:
                 payload |= {"tools": specs, "tool_choice": "auto"}
             if self.thinking is not None:
                 payload["chat_template_kwargs"] = {"enable_thinking": self.thinking}
             # 400 на круге после вызовов — уже не «не умеет tools», а отказ шлюза его словами
-            error, ending, calls, text = await self._round(payload, offer and rounds == 0)
+            first = offer and self.rounds == 0 and self.resume is None
+            error, ending, calls, text = await self._round(payload, first, builtin_only=first and not extra)
             if error is not None:
                 return error
+            if ending is TOOLS_REFUSED:                  # шлюз не принял встроенные инструменты: один повтор без них
+                self.builtin_off = retried = True
+                continue
             if ending == BUSY:                           # 503: тот же круг заново после паузы
                 if not self.freed and sections.is_local(self.conn, self.model):
                     self.freed = True                    # первый раз — отпустить модели картинок и сразу повторить
@@ -1114,10 +1216,17 @@ class StreamTask:
                 if error is not None:
                     return error
                 continue
+            if retried:                                  # повтор без встроенных инструментов прошёл — метка на пару
+                retried = False
+                NO_TOOLS[key] = clock.NOW()
+                log.info("чат %s: ответ %s — шлюз не принял встроенные инструменты", self.chat_id[:8],
+                         self.message_id[:8])
             if not (offer and ending == "tool_calls" and calls):
                 break
-            rounds += 1
+            self.rounds += 1
             error = await self._tools(calls, text)
+            if error is PAUSED:
+                return None
             if error is not None:
                 return error
             if text and not text[-1].isspace():          # текст до вызовов и ответ — не слитно
@@ -1333,7 +1442,7 @@ async def _events(st: StreamTask, user_message_id: str, digest: "str | None" = N
             yield _sse("ocr", data)
         elif kind == "wait":
             yield _sse("wait", data if data is not None else {})
-        elif kind in ("replace", "cleaner"):
+        elif kind in ("replace", "cleaner", "pending"):
             yield _sse(kind, data)
         elif kind == "done":
             yield _sse("done", data)
@@ -1416,8 +1525,9 @@ async def get_chat(chat_id: str, request: Request):
         sources = {r[0] for r in state.DB.execute(
             f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
     views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
+    pending = chat_pending.open_views(chat_id)
     return {"chat": _chat_view(uid, row), "media": mcp_files.media_of(chat_id),
-            "messages": [_message_out(m, atts.get(m["id"], []), views) for m in _messages(chat_id)]}
+            "messages": [_message_out(m, atts.get(m["id"], []), views, pending) for m in _messages(chat_id)]}
 
 
 def _tool_names(raw: dict) -> dict:
@@ -1927,6 +2037,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                                  (chat_id,)).fetchone()
         if fresh is None:
             raise _gone()
+        chat_pending.supersede(chat_id)              # открытая пауза ответа больше не ждёт
         # куски 1–3 системного сообщения и параметры профиля — снимок на начало хода; профиль общего подключения
         # браузеру не уходит (его текст и параметры учётке не видны)
         profiled = conn if conn.proxied or not conn.shared else None

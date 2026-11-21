@@ -89,4 +89,4 @@ def test_context_error_mentioning_tools_keeps_its_real_reason(studio):
     events = sse(turn(studio, cid))
     assert events[-1][0] == "error"
     assert "Context length" in events[-1][1]["message"]
-    assert events[-1][1]["message"] != chat.NO_TOOLS
+    assert events[-1][1]["message"] != chat.NO_WEB_TOOLS

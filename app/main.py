@@ -34,6 +34,7 @@ import audio
 import auth
 import bridge
 import chat
+import chat_pending
 import mcp_client
 import mcp_files
 import mcp_sections
@@ -189,6 +190,7 @@ app.include_router(presets.router)          # раньше images: /api/images/p
 app.include_router(images.router)
 app.include_router(videos.router)
 app.include_router(chat.router)
+app.include_router(chat_pending.router)
 app.include_router(roles.router)
 app.include_router(mcp_client.router)
 app.include_router(mcp_sections.router)
