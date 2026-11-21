@@ -471,6 +471,26 @@ def test_trash_list_hides_locked_sections_and_actions_wait_for_unlock(s):
     assert s.c.delete("/api/trash/chats/c1").status_code == 423
 
 
+def test_scans_of_locked_chat_and_translation_stay_hidden_in_trash_and_heaviest(s):
+    """Ревью B1-M4: «Сканы» открыты, «Чат» и «Перевод» заперты — имена документов, заведённых ими
+    (`lock_policy.hidden_scans`), не видны ни в корзине, ни в «Самых тяжёлых записях»; свои сканы «Сканов» — видны."""
+    uid = owner(s)
+    for scid, origin in (("plain", "section"), ("plain-gone", "section"), ("of-chat", "chat"), ("of-chat-gone", "chat"),
+                         ("of-tl", "section"), ("of-tl-gone", "section")):
+        pdf = save(uid, b"%PDF- " + scid.encode(), "application/pdf", "deal.pdf")
+        state.DB.execute("INSERT INTO scans(id, user_id, model, name, source_media_id, origin, pages, done_pages, state,"
+                         " detail, created, finished, text) VALUES (?, ?, 'hunyuan-ocr', ?, ?, ?, 1, 1, 'done', '', ?, ?,"
+                         " '')", (scid, uid, f"{scid}.pdf", pdf, origin, T0, T0))
+    for tlid, scid in (("tl", "of-tl"), ("tl-gone", "of-tl-gone")):
+        state.DB.execute(TRANSLATION, (tlid, uid, "deal.pdf", None, scid, "s", "t", T0, T0))
+    state.DB.execute("UPDATE scans SET deleted = ? WHERE id LIKE '%-gone'", (T0,))
+    state.DB.execute("UPDATE users SET screen_lock = 1, screen_lock_sections = '[\"chat\", \"translate\"]' WHERE id = ?",
+                     (uid,))
+    state.DB.execute("UPDATE sessions SET seen = NULL WHERE user_id = ?", (uid,))
+    assert [i["id"] for i in s.c.get("/api/trash").json()] == ["plain-gone"]
+    assert [h["id"] for h in s.c.get("/api/me/storage").json()["heaviest"]] == ["plain"]
+
+
 def test_history_erase_and_empty_trash_need_password_and_count_failures(s):
     """«Удалить всю историю» и «Очистить корзину» — окончательно и только паролем учётки: та же проверка и паузы,
     что у выключения блокировки и смены пароля (`auth.confirm_password`), неудачи всех этих действий — в один счёт."""
