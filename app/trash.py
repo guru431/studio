@@ -37,6 +37,7 @@ import state
 import transcripts
 import translate
 import videos
+import voices
 
 TABLES = ("chats", "images", "videos", "speeches", "transcripts", "scans", "translations", "voices",
           "chat_media", "knowledge_bases", "kb_documents")
@@ -96,6 +97,8 @@ KINDS: dict[str, Kind] = {
                   search="ocr"),
     "translations": Kind("translations", "translate", translate.purge, lambda row: _head(row["name"], "Перевод"),
                          "SELECT source_media_id FROM translations WHERE id = :id", search="translate"),
+    "voices": Kind("voices", "speech", voices.purge, lambda row: _head(row["name"], "Голос"),
+                   "SELECT media_id FROM voices WHERE id = :id UNION SELECT media_id FROM voice_samples WHERE voice_id = :id"),
 }
 
 

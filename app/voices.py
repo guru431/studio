@@ -52,8 +52,10 @@ def _bad(code: str, message: str) -> HTTPException:
 
 
 def _row(user_id: int, voice_id: str):
+    """Свой голос не из корзины (`deleted`, trash.py), иначе 404: и озвучка голосом из корзины — «голос удалён»."""
     row = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
-                           " FROM voices v WHERE v.id = ? AND v.user_id = ?", (voice_id, user_id)).fetchone()
+                           " FROM voices v WHERE v.id = ? AND v.user_id = ? AND v.deleted IS NULL",
+                           (voice_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого голоса нет"})
     return row
@@ -157,7 +159,8 @@ async def create(request: Request):
 @router.get("")
 async def list_voices(request: Request):
     rows = state.DB.execute("SELECT v.*, (SELECT count(*) FROM voice_samples s WHERE s.voice_id = v.id) AS sample_count"
-                           " FROM voices v WHERE user_id = ? ORDER BY created, id", (request.state.user.id,))
+                           " FROM voices v WHERE user_id = ? AND deleted IS NULL ORDER BY created, id",
+                           (request.state.user.id,))
     # SQLite NOCASE only folds ASCII. Keep Cyrillic names and Ё in alphabetical order too.
     ordered = sorted(rows, key=lambda r: documents.nfc(r["name"]).casefold().replace("ё", "е"))
     return {"items": [_out(r) for r in ordered]}
@@ -512,13 +515,24 @@ async def probe(voice_id: str, body: ProbeIn, request: Request):
 
 @router.delete("/{voice_id}", status_code=204)
 async def delete_voice(voice_id: str, request: Request):
+    """Голос — в корзину (`deleted`, trash.py); образцы и их файлы — до `purge`."""
     uid = request.state.user.id
-    row = _row(uid, voice_id)
-    mids = {s[0] for s in state.DB.execute("SELECT media_id FROM voice_samples WHERE voice_id = ? AND user_id = ?",
-                                          (voice_id, uid))} | {row["media_id"]}
-    state.DB.execute("DELETE FROM voices WHERE id = ?", (voice_id,))
-    for mid in mids:
-        if not media.referenced(uid, mid):
-            await media.delete_async(uid, mid)
-    log.info("пользователь %d: голос %s удалён", uid, voice_id[:8])
+    _row(uid, voice_id)
+    state.DB.execute("UPDATE voices SET deleted = ? WHERE id = ?", (clock.NOW(), voice_id))
+    log.info("пользователь %d: голос %s в корзине", uid, voice_id[:8])
     return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно: голос, его образцы (каскадом) и их файлы, если на них больше никто не ссылается. Голоса уже
+    нет — ничего."""
+    row = state.DB.execute("SELECT media_id FROM voices WHERE id = ? AND user_id = ?", (item_id, user_id)).fetchone()
+    if row is None:
+        return
+    mids = {s[0] for s in state.DB.execute("SELECT media_id FROM voice_samples WHERE voice_id = ? AND user_id = ?",
+                                          (item_id, user_id))} | {row["media_id"]}
+    state.DB.execute("DELETE FROM voices WHERE id = ?", (item_id,))
+    for mid in mids:
+        if not media.referenced(user_id, mid):
+            await media.delete_async(user_id, mid)
+    log.info("пользователь %d: голос %s удалён", user_id, item_id[:8])
