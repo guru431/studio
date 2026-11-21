@@ -61,6 +61,7 @@ import connections
 import cleaner_client as cleaner
 import documents
 import images
+import knowledge
 import lock_policy
 import manage
 import media
@@ -473,15 +474,22 @@ def recover() -> None:
 
 # ---- контекст ------------------------------------------------------------------
 
-def _content(text: str, atts: list):
+def _content(text: str, atts: list, excerpts: "dict | None" = None):
     """Текст пользователя с документами перед ним; с картинками — части OpenAI: картинка — пока
-    только id media, данные ставит fill_photos. Код (`documents.LANG` по расширению имени) — блоком с языком."""
-    docs = "".join(f'<document name="{escape(a["name"], quote=True)}">\n{_fenced(a["name"], a["text"])}\n</document>\n\n'
-                   for a in atts if a["kind"] == "document")
+    только id media, данные ставит fill_photos. Код (`documents.LANG` по расширению имени) — блоком с языком.
+    Большое вложение (`excerpts`: id вложения → выдержки, knowledge.for_turn) — найденными кусками вместо текста."""
+    docs = "".join(_document(a, excerpts.get(a["id"]) if excerpts else None) for a in atts if a["kind"] == "document")
     pics = [a for a in atts if a["kind"] == "image"]
     if not pics:
         return docs + text
     return [{"type": "text", "text": docs + text}] + [{"type": "image_url", "media_id": a["media_id"]} for a in pics]
+
+
+def _document(a, cut: "str | None") -> str:
+    name = escape(a["name"], quote=True)
+    if cut is not None:
+        return f'<document name="{name}" excerpts="true">\n{cut}\n</document>\n\n'
+    return f'<document name="{name}">\n{_fenced(a["name"], a["text"])}\n</document>\n\n'
 
 
 def _fenced(name: str, text: str) -> str:
@@ -551,14 +559,15 @@ def _refused_turns(rows, model: "str | None") -> set[str]:
 
 
 def compose(chat_id: str, upto: str, model: "str | None" = None,
-            max_images: int = profiles.DEFAULT_MAX_IMAGES) -> list[dict]:
+            max_images: int = profiles.DEFAULT_MAX_IMAGES, excerpts: "dict | None" = None) -> list[dict]:
     """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
     пользователя подряд сливаются, картинок — не больше `max_images` на весь запрос. Найденное «Интернетом»
     (`messages.tools` ответа) — блоками web.history_block в начале сообщения пользователя перед этим ответом,
     без ролей `tool` и `tool_calls`. Вложения сообщения, на которое модель хода (`model`) ответила ошибкой без
     единого слова (`_refused_turns`), не уходят снова — пометкой REFUSED: иначе фото, отклонённое текстовой моделью,
     запирало бы диалог; «Ответить заново» удаляет ответ-ошибку и шлёт их, другая модель — тоже. Синхронно и без
-    файлов (идёт в транзакции хода): картинки — частями с id media, данные — fill_photos после COMMIT."""
+    файлов (идёт в транзакции хода): картинки — частями с id media, данные — fill_photos после COMMIT. Большие
+    вложения — выдержками `excerpts` (_content, knowledge.for_turn)."""
     atts = _attachments(chat_id)
     rows = _messages(chat_id)
     refused = _refused_turns(rows, model) - {upto}      # сообщение этого хода (и повтора) — со своими вложениями
@@ -570,7 +579,7 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
                     marks = "".join(REFUSED.format(a["name"]) + "\n" for a in atts.get(row["id"], []))
                     content = _content(marks + row["content"], [])
                 else:
-                    content = _content(row["content"], atts.get(row["id"], []))
+                    content = _content(row["content"], atts.get(row["id"], []), excerpts)
                 if out and out[-1]["role"] == "user":
                     out[-1]["content"] = _merge(out[-1]["content"], content)
                 else:
@@ -1378,7 +1387,11 @@ class StreamTask:
             raise
         finally:
             self.scan_state = None
-        composed = compose(self.chat_id, self.user_message_id, self.model, profiles.max_images(self.conn))
+        asked = state.DB.execute("SELECT content FROM messages WHERE id = ?", (self.user_message_id,)).fetchone()
+        excerpts, kb_block = await _knowledge(self.user_id, self.chat_id, asked["content"] if asked else "", [],
+                                              self.limit)
+        composed = _with_block(compose(self.chat_id, self.user_message_id, self.model, profiles.max_images(self.conn),
+                                       excerpts), kb_block)
         tokens = estimate_tokens(chat_system.wrap(self.system, composed))
         if self.limit is not None and tokens > self.limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", self.chat_id[:8], tokens)
@@ -1628,6 +1641,7 @@ async def get_chat(chat_id: str, request: Request):
     views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
     pending = chat_pending.open_views(chat_id)
     return {"chat": _chat_view(uid, row), "media": mcp_files.media_of(chat_id),
+            "knowledge": knowledge.chat_kbs(uid, chat_id),        # базы знаний диалога (чип «Знания»)
             "messages": [_message_out(m, atts.get(m["id"], []), views, pending) for m in _messages(chat_id)]}
 
 
@@ -1822,6 +1836,8 @@ async def upload_attachment(request: Request):
     att_id, chars = uuid.uuid4().hex, len(text or "")
     state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
                      " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)", (att_id, uid, kind, name, media_id, text, chars, clock.NOW()))
+    if text and estimate_tokens([{"role": "user", "content": text}]) > knowledge.INLINE_TOKENS:
+        knowledge.adopt(uid, att_id, name, text)     # большое — модели выдержками (knowledge.for_turn)
     out = {"id": att_id, "kind": kind, "name": name, "chars": chars, "media_id": media_id}
     if scan is not None:
         conn, model = reader
@@ -1981,6 +1997,26 @@ def _pending_scans(user_id: int, chat_id: str, atts: list) -> list[str]:
     return ocr.pending(user_id, ids)
 
 
+async def _knowledge(uid: int, chat_id: str, query: str, atts: list, limit: "int | None") -> tuple[dict, str]:
+    """Знания хода (knowledge.py): документ хода или истории длиннее knowledge.INLINE_TOKENS или больше контекста
+    модели (`limit`) — в куски (`knowledge.adopt`, повтор — тот же документ); итог — выдержки больших вложений и
+    блок `<knowledge>` баз диалога по сообщению хода `query`."""
+    edge = knowledge.INLINE_TOKENS if limit is None else min(knowledge.INLINE_TOKENS, limit - RESERVE_TOKENS)
+    history = state.DB.execute("SELECT a.* FROM attachments a JOIN messages m ON m.id = a.message_id"
+                               " WHERE m.chat_id = ? AND a.kind = 'document' AND a.text IS NOT NULL", (chat_id,)).fetchall()
+    for a in [*atts, *history]:
+        if a["kind"] == "document" and a["text"] and estimate_tokens([{"role": "user", "content": a["text"]}]) > edge:
+            knowledge.adopt(uid, a["id"], a["name"], a["text"])
+    return await knowledge.for_turn(uid, chat_id, query, [a["id"] for a in atts])
+
+
+def _with_block(messages: list[dict], block: str) -> list[dict]:
+    """Найденное в базах диалога — в начало сообщения пользователя хода (последнего в `messages`)."""
+    if block and messages and messages[-1]["role"] == "user":
+        messages[-1]["content"] = _prefix(block, messages[-1]["content"])
+    return messages
+
+
 def _title(text: str) -> str | None:
     lines = text.strip().splitlines()
     if not lines:
@@ -2104,6 +2140,12 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if not body.regenerate and not body.text.strip() and not atts:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     limit = await _limit(conn, model)
+    excerpts, kb_block = {}, ""
+    if not conn.cleaner:                             # Cleaner сверяет запрос с предпросмотром — без знаний
+        question = body.text if not body.regenerate else (state.DB.execute(
+            "SELECT content FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY created DESC, rowid DESC LIMIT 1",
+            (chat_id,)).fetchone() or {"content": ""})["content"]
+        excerpts, kb_block = await _knowledge(uid, chat_id, question, atts, limit)
     operations.check(uid)
     receipt = _turn_receipt(chat_id, body.request_id, body)
     if receipt is not None:
@@ -2188,7 +2230,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if scans:                                    # контекст и предел — после распознавания (_await_scans)
             messages, known = [], {}
         else:
-            messages = compose(chat_id, user_mid, model, profiles.max_images(conn))
+            messages = _with_block(compose(chat_id, user_mid, model, profiles.max_images(conn), excerpts), kb_block)
             known = _known_links(chat_id) if kinds else {}
             tokens = estimate_tokens(chat_system.wrap(system, messages))
             if limit is not None and tokens > limit - RESERVE_TOKENS:

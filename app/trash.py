@@ -33,6 +33,7 @@ import auth
 import chat
 import clock
 import images
+import knowledge
 import lock_policy
 import mcp_files
 import ocr
@@ -73,6 +74,7 @@ class Kind:
 
 
 HEAD = 80                                         # знаков текста записи в названии строки корзины
+NO_FILES = "SELECT NULL WHERE :id IS NULL"        # у записи нет файлов
 
 
 def _head(text: "str | None", fallback: str) -> str:
@@ -106,6 +108,13 @@ KINDS: dict[str, Kind] = {
                          "SELECT source_media_id FROM translations WHERE id = :id", search="translate"),
     "voices": Kind("voices", "speech", voices.purge, lambda row: _head(row["name"], "Голос"),
                    "SELECT media_id FROM voices WHERE id = :id UNION SELECT media_id FROM voice_samples WHERE voice_id = :id"),
+    # личные базы знаний и их документы (общие удаляет панель сразу); файлов нет — только куски текста.
+    # Документ базы в корзине вместе с базой — часть её строки
+    "knowledge_bases": Kind("knowledge_bases", "chat", knowledge.purge_base, lambda row: _head(row["name"], "База знаний"),
+                            NO_FILES),
+    "kb_documents": Kind("kb_documents", "chat", knowledge.purge_document, lambda row: _head(row["name"], "Документ"),
+                         NO_FILES, live=" AND (kb_id IS NULL OR kb_id IN"
+                                        " (SELECT id FROM knowledge_bases WHERE deleted IS NULL))"),
 }
 
 

@@ -311,23 +311,28 @@ def test_document_goes_in_full_before_the_question(studio):
 
 
 def test_too_big_document_is_refused_before_saving(studio):
+    """Документ больше контекста модель получает выдержками (knowledge.py, test_knowledge.py), а сообщение больше
+    контекста — 413 до записи хода, и вложение остаётся неотправленным."""
     gw = add_gateway(studio); cid = new_chat(studio)
-    doc = attach(studio, "book.txt", b"word " * 80_000, "text/plain")        # 400 тыс. знаков ≈ 133 тыс. токенов
-    r = turn(studio, cid, QUESTION, attachment_ids=[doc["id"]])
+    # предел модели вне CONTEXT — из списка моделей подключения
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny"]})
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"}).json()["model"] == "tiny"
+    studio.gw.models.append({"id": "tiny", "context_length": 8192})
+    doc = attach(studio, "note.txt", b"word " * 100, "text/plain")
+    r = turn(studio, cid, "а" * 30_000, attachment_ids=[doc["id"]])         # ≈ 10 тыс. токенов
     assert r.status_code == 413
     assert r.json()["detail"] == {"code": "context", "message": (
-        "Не помещается в контекст модели: ~133 тыс. токенов при пределе 131 тыс. "
+        "Не помещается в контекст модели: ~10 тыс. токенов при пределе 8 тыс. "
         "Уберите документ или начните новый диалог.")}
     assert messages(studio, cid) == [] and not studio.gw.chat_requests
     assert studio.c.get(f"/api/chats/{cid}").json()["chat"]["title"] is None
     unbound = state.DB.execute("SELECT message_id FROM attachments WHERE id = ?", (doc["id"],)).fetchone()
     assert unbound["message_id"] is None
-    # предел модели вне CONTEXT — из списка моделей подключения
-    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny"]})
-    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"}).json()["model"] == "tiny"
-    studio.gw.models.append({"id": "tiny", "context_length": 8192})
-    r = turn(studio, cid, "а" * 15_000)
-    assert r.status_code == 413 and "при пределе 8 тыс." in r.json()["detail"]["message"]
+    # документ больше контекста модели (400 тыс. знаков ≈ 133 тыс. токенов при 131 тыс.) — выдержками, ход проходит
+    assert studio.c.patch(f"/api/chats/{cid}", json={"model": "local-gemma-abl"}).status_code == 200
+    book = attach(studio, "book.txt", b"word " * 80_000, "text/plain")
+    sse(turn(studio, cid, QUESTION, attachment_ids=[book["id"]]))
+    assert '<document name="book.txt" excerpts="true">' in studio.gw.chat_requests[-1]["messages"][-1]["content"]
 
 
 def test_model_list_for_the_context_limit_is_remembered(studio):

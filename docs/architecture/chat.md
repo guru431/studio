@@ -449,6 +449,36 @@ Studio проксирует файлы через исходное подклю�
 Cleaner). Скан в чате, ожидание сканов ходом, повтор страниц — [ocr-translate.md](ocr-translate.md#сканы);
 вложение из расшифровки и подтверждение «уйдёт во внешний сервис» — [speech.md](speech.md).
 
+## Знания: большие вложения и базы знаний (спека 2026-11-21-studio-source-capabilities-design, п. 15, шаг схемы 58)
+
+`knowledge` — документы `kb_documents` (базы или большого вложения), куски `kb_chunks` (`knowledge.CHUNK_CHARS` (1500)
+знаков с перекрытием `knowledge.OVERLAP` (200), `knowledge.chunks`) и FTS5 `kb_fts` (триггеры сворачивают «ё», запрос —
+так же, `knowledge._match`: слова через OR, синтаксис FTS5 не проходит). Исходный файл базы не хранится — только куски.
+
+- **Источник** — только общее подключение через сервер: запись `knowledge_source` в settings (`knowledge.SOURCE_KEY`) — `{connection_id, embed_model,
+  rerank_model | null}`, панель «Знания» (`GET/PUT /api/admin/knowledge`, `knowledge.set_source`). Нет источника —
+  только BM25, документ сразу `ready`. С источником `knowledge.index` пишет куски сразу, векторы считает один
+  фоновый обработчик (`knowledge.kick`, при старте — `knowledge.resume`): `queued` → `ready` / `error` (куски остаются).
+  `knowledge.embed` — `POST <api>/embeddings` пачками по `knowledge.EMBED_BATCH` (64), float32 `array('f')` единичной
+  длины; `knowledge.rerank` — `POST <api>/rerank`. Смена подключения или модели эмбеддингов — векторы заново.
+- **Поиск** `knowledge.search` — BM25 топ-`knowledge.CANDIDATES` (30) ∪ векторы топ-30 → RRF → переранжирование →
+  `knowledge.TOP_K` (6) кусков `knowledge.Hit`. Отказ источника — без векторов или без переранжирования, не ошибка.
+- **Большое вложение**: текст длиннее `knowledge.INLINE_TOKENS` (30000) по `chat.estimate_tokens` (при загрузке,
+  `chat.upload_attachment`) или больше контекста модели хода (`chat._knowledge`) — документ с `attachment_id`
+  (`knowledge.adopt`); модель получает `<document name=… excerpts="true">` с кусками `[кусок N]`, найденными по
+  сообщению хода (`knowledge.for_turn`; ничего не нашлось — начало документа), вместо всего текста.
+- **Базы**: личные (`GET/POST /api/knowledge`, `DELETE /api/knowledge/{id}`, документы — `POST
+  /api/knowledge/{id}/documents` телом-файлом с `X-Studio-Name` до `documents.DOC_MAX`, `DELETE …/documents/{doc}`;
+  удаление — в корзину, виды `knowledge_bases` и `kb_documents`) и общие — из панели (`/api/admin/knowledge/bases…`,
+  удаление сразу) с группами `kb_rules` (нет строк — всем, строки — участникам групп, администратор — всегда;
+  `knowledge.set_access`). Чужие личные базы администратор не видит.
+- **В диалоге**: `PUT /api/chats/{chat_id}/knowledge {kb_ids}` (чип «Знания» поля ввода, `knowledge.js`); найденное в
+  базах диалога по сообщению хода — блоком `<knowledge>` в начало сообщения пользователя хода (`chat._with_block`,
+  в историю не пишется); встроенный инструмент `knowledge_search` (`chat_tools.KNOWLEDGE_SEARCH`, шаг `knowledge`),
+  когда у учётки есть базы или у диалога — большие вложения. Cleaner знаний не получает (запрос сверяется с
+  предпросмотром).
+- Журнал — id, коды и числа; тексты, запросы, имена документов, баз и моделей — никогда.
+
 ## Cleaner
 
 Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), клиент `app/cleaner_client.py`,

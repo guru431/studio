@@ -191,8 +191,32 @@ def make_voice(s, uid: int) -> Made:
     return section_made(s, "vo1", [first, second], "/api/voices")
 
 
+def knowledge_base(s) -> tuple[str, str]:
+    """Личная база знаний с документом (файлов у них нет — только куски текста): id базы и документа."""
+    kb = s.c.post("/api/knowledge", json={"name": "Плоды"}).json()["id"]
+    doc = s.c.post(f"/api/knowledge/{kb}/documents", content="Гранат и фейхоа.".encode(),
+                   headers={"x-studio-name": "plody.txt"}).json()["id"]
+    return kb, doc
+
+
+def make_knowledge_base(s, uid: int) -> Made:
+    kb, _ = knowledge_base(s)
+    return Made(kb, [], lambda: s.c.delete(f"/api/knowledge/{kb}"),
+                lambda: kb in {b["id"] for b in s.c.get("/api/knowledge").json()["items"]})
+
+
+def make_kb_document(s, uid: int) -> Made:
+    kb, doc = knowledge_base(s)
+
+    def visible():
+        return doc in {d["id"] for b in s.c.get("/api/knowledge").json()["items"] for d in b["documents"]}
+
+    return Made(doc, [], lambda: s.c.delete(f"/api/knowledge/{kb}/documents/{doc}"), visible)
+
+
 #: вид корзины → запись этого вида у учётки `uid` (раздел добавляет свою строку вместе со строкой trash.KINDS)
-MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation, "voices": make_voice}
+MAKE = {"chats": make_chat, "chat_media": make_chat_media, "images": make_image, "videos": make_video, "speeches": make_speech, "transcripts": make_transcript, "scans": make_scan, "translations": make_translation, "voices": make_voice,
+        "knowledge_bases": make_knowledge_base, "kb_documents": make_kb_document}
 
 
 def owner(s) -> int:
@@ -278,7 +302,7 @@ def test_purge_after_14_days_removes_files_once(s, kind, unlinks):
         assert not path.exists()
     assert index_rows(made.id) == []
     removed = len(unlinks)
-    assert removed and all(not on_loop for on_loop in unlinks)
+    assert bool(removed) == bool(made.files) and all(not on_loop for on_loop in unlinks)   # у базы знаний файлов нет
     assert s.c.portal.call(trash.purge_expired) == 0             # повтор — ни ошибок, ни новых удалений
     assert len(unlinks) == removed
     s.clock[0] += trash.PURGE_EVERY_SEC
