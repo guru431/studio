@@ -85,6 +85,11 @@ import { mcpStateWords } from './mcp-sections.js';
  * `vision` — «Убрать фото» и «Сменить модель», при MCP с `studio/chat-files` и согласием — какой сервер получит фото;
  * отправку не закрывает. Кольцо заполнения контекста открытого диалога — chat-context.js в `.composer-opts`.
  *
+ * «Разговор» (п. 13): значок #talk-toggle в поле ввода над микрофоном — круг chat-voice.js, его состояние — строка
+ * #talk-note под полем. Фраза уходит обычным ходом
+ * (`voiceTurn` → `submit`), его ответ помечен `job.voice`: `notify` отдаёт текст ответа в озвучку по мере `delta`.
+ * Другой диалог, уход из раздела и повторное нажатие круг останавливают.
+ *
  * Из поиска (#/chat/<id>?m=<id сообщения>): лента открывается не с конца, а с этого сообщения (`found`, `reveal`) —
  * верх у верха ленты и вспышка рамки `.msg-found`; длинные ответы выше дорисовываются кадрами, и место держится,
  * пока человек не тронул ленту. В адресе — только id. */
@@ -104,6 +109,7 @@ import { button, el, field, focusDesktop, openDialog, plural, words } from './ui
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 import { readAloud } from './speech-read.js';
+import { startConversation } from './chat-voice.js';
 import { NAMES } from './sections-meta.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
@@ -150,6 +156,10 @@ const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("
 const TOOL_MARKS = { youtube: '▶', mcp: '🧩' };   // значок идущего инструмента; прочие — интернет 🌐
 const THINK_TITLE = tr("Рассуждение: модель думает перед ответом, ход мысли виден");
 const THINK_NOTE = tr("С рассуждением модель реже ищет в интернете");   // замер 2026-10-22: 5 поисков из 10 против 10
+const TALK_TITLE = tr("Разговор: говорите — модель ответит голосом, текст останется в диалоге");
+// строка под полем по состоянию круга «Разговора» (chat-voice.js)
+const TALK_WORDS = { listening: tr("Разговор: слушаю"), hearing: tr("Разговор: слышу речь"), thinking: tr("Разговор: жду ответа"),
+  speaking: tr("Разговор: говорю") };
 
 const SAVE_DELAYS = [1000, 2000, 4000, 8000];   // повторы PUT ответа прямого подключения после обрыва связи
 
@@ -222,6 +232,10 @@ async function saveAnswer(chatId, message, body) {
 }
 
 function notify(job, final) {
+  if (job.voice) {                                 // ход «Разговора» (chat-voice.js): текст ответа — в озвучку
+    job.voice.update(job.message.content, final);
+    if (final) job.voice.resolve(job.message.status);
+  }
   if (screen) screen.refresh(job, final);
 }
 
@@ -644,6 +658,12 @@ function build(view, ctx) {
   const thinkToggle = el('button', { type: 'button', id: 'think-toggle', class: 'chip ctl-chip think-toggle', 'aria-pressed': 'false',
     'aria-label': tr("Рассуждение"), title: THINK_TITLE, hidden: true }, icon('bulb'),
   el('span', { class: 'toggle-word' }, tr("Рассуждение")));
+  // «Разговор» (chat-voice.js) — значок в поле ввода над микрофоном: нажат — круг идёт, его состояние — строкой под полем
+  const talkToggle = iconButton('talk', tr("Разговор"), { id: 'talk-toggle', class: 'icon-btn talk', 'aria-pressed': 'false',
+    title: TALK_TITLE, 'data-state': 'off' });
+  const talkNote = el('p', { class: 'talk-note muted small', id: 'talk-note', 'aria-live': 'polite', hidden: true });
+  let talking = null;          // stop() идущего «Разговора»
+  let voiceWait = null;        // { text, update, resolve } — ход «Разговора», что ждёт своего ответа
   const webNote = el('p', { class: 'web-note muted small', id: 'web-note', 'aria-live': 'polite' });
   // роль диалога (roles.js): у открытого — `role` сервера, у нового — черновик до создания
   const roles = roleChooser({ current: () => (chat ? chat.chat.role : draftRole),
@@ -670,7 +690,9 @@ function build(view, ctx) {
   const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle, ring.node), send, stop),
-    webNote);
+    webNote, talkNote);
+  const fieldTools = inputBox.box.querySelector('.field-tools');
+  fieldTools.insertBefore(talkToggle, fieldTools.querySelector('.mic'));
   let suggestKey = null;       // подсказки пустого экрана: { query, items } последнего запроса (items — когда пришли)
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
@@ -1110,6 +1132,49 @@ function build(view, ctx) {
   function paintThink() {
     thinkToggle.hidden = !thinkOk();
     thinkToggle.setAttribute('aria-pressed', String(thinkOn()));
+  }
+
+  /* «Разговор»: нажатие — круг chat-voice.js (звук разблокируется этим нажатием), ещё нажатие — стоп */
+  function switchTalk() {
+    if (talking) {
+      talking();
+      return;
+    }
+    notice.textContent = '';
+    try {
+      talking = startConversation({ send: voiceTurn, state: paintTalk,
+        failed: (text) => { notice.textContent = text; } });
+    } catch (err) {                                  // браузер без Web Audio
+      notice.textContent = words(err);
+    }
+  }
+
+  function paintTalk(state) {
+    if (state === 'off') talking = null;
+    talkToggle.dataset.state = state;
+    talkToggle.setAttribute('aria-pressed', String(state !== 'off'));
+    talkNote.hidden = state === 'off';
+    talkNote.textContent = TALK_WORDS[state] || '';
+  }
+
+  /* ход «Разговора» — обычный ход с текстом фразы; набранное в поле до него возвращается в поле. Итог — статус
+     ответа или false: хода не было (идёт другой ответ, отказ — словами в #chat-error) */
+  function voiceTurn(text, update) {
+    if (sending || jobs.has(chatId)) return Promise.resolve(false);
+    const typed = input.value;
+    input.value = text;
+    return new Promise((resolve) => {
+      const wait = { text, update, resolve };
+      voiceWait = wait;
+      submit(false).finally(() => {
+        if (voiceWait === wait) {
+          voiceWait = null;
+          resolve(false);
+        }
+        if (!input.value && typed) input.value = typed;
+        autosize();
+      });
+    });
   }
 
   async function switchThink() {
@@ -1805,6 +1870,7 @@ function build(view, ctx) {
     roles.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
+    if (talking) talking();                          // «Разговор» — у своего диалога, другой его останавливает
     const mine = ++opened;
     chatId = id;
     found = null;                                    // ?m= нового адреса ставит query() следом
@@ -2218,6 +2284,10 @@ function build(view, ctx) {
     if (chatId === id && externalOk) chat.chat.external = false;   // ответ этой модели — след подтверждения
     if (chatId === id && webOk) chat.chat.external_web = false;    // сервер записал время подтверждения
     loadList();
+    if (voiceWait && !regenerate && voiceWait.text === text) {   // ход «Разговора»: текст ответа — в озвучку
+      job.voice = voiceWait;
+      voiceWait = null;
+    }
     if (reply instanceof Response) {
       kick();                                      // ответ через сервер — в «В работе»
       readServer(job, reply);
@@ -2312,6 +2382,7 @@ function build(view, ctx) {
   backdrop.addEventListener('click', () => panel(false));
   webToggle.addEventListener('click', switchWeb);
   thinkToggle.addEventListener('click', switchThink);
+  talkToggle.addEventListener('click', switchTalk);
   scroller.addEventListener('scroll', () => {
     stick = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }, { passive: true });
@@ -2396,6 +2467,7 @@ function build(view, ctx) {
       else if (sid) fromScan(sid, query.get('ask') || 'discuss');
     },
     destroy() {
+      if (talking) talking();
       inputDraft.save();
       sharing.unmount();
       alive = false;

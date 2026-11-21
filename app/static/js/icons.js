@@ -50,6 +50,7 @@ export const ICONS = {
   bulb: '<path d="M9 18h6M10 21h4"/>'
     + '<path d="M12 3a6 6 0 00-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0012 3z"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  talk: '<path d="M3 5h11v8H7l-4 3z"/><path d="M17.5 8.5a3 3 0 0 1 0 4M20 6a6.5 6.5 0 0 1 0 9"/>',
   doc: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/>',
   text: '<path d="M5 6h14M5 12h14M5 18h9"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',

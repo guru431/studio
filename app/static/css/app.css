@@ -744,6 +744,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .composer .field-tools .mic.on { width: 28px; height: 40px; padding: var(--space-1); flex-direction: column; gap: 0; border-radius: var(--r-control); }
 .composer .mic-time { font-size: var(--fs-2xs); line-height: 12px; }
 .composer .attach.on { color: var(--accent); background: var(--accent-soft); }
+.composer .talk[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); border-radius: var(--r-control); }   /* «Разговор» идёт */
 .field-tools .chip { padding: 0 9px; font-size:var(--fs-xs); font-weight: 600; }
 /* поле с рамкой (.input: «Изменить», поиск) — рамка общая с колонкой значков; в поле раздела рамка — у .composer */
 .field-box:has(> .input) { padding: var(--space-1); border: 1px solid var(--field-border); border-radius: var(--r-control); background: var(--surface-1); }
@@ -1066,7 +1067,7 @@ video.msg-file-media { max-height: 320px; }
 #msg-file-dialog { width: min(800px, calc(100 * var(--vw) - 32px)); }
 
 /* «Интернет»: кнопка у скрепки, подсказка под полем, плашка над ответом, источники под ним */
-.web-note { margin: 0; }
+.web-note, .talk-note { margin: 0; }
 .web-note:empty { display: none; }
 .web-steps { font-size:var(--fs-sm); color: var(--text-2); }
 .web-steps summary { cursor: pointer; width: fit-content; }

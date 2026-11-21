@@ -19,6 +19,10 @@ import { tr } from './i18n.js';
  * lock.js): микрофон отпущен, done — null, звук никуда не уходит. Кнопка `owner` ушла со страницы
  * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null.
  *
+ * holdMic(owner) → release() — долгий владелец микрофона: «Разговор» чата (chat-voice.js). Пока он держит микрофон,
+ * startRecording отказывает словами `owner.words` (диктовка и образец голоса не стартуют), а cancelRecording()
+ * зовёт `owner.cancel()` — смена раздела, шторка и блокировка останавливают и его.
+ *
  * Язык распознавания (SPEECH_LANGUAGES, «Авто» — без поля): голосовой ввод берёт выбор устройства
  * (`dictationLanguage`, localStorage `studio-dictation-language`, настройки «Ввод и интернет») полем формы `language`. */
 import { api, loadMe, me } from './api.js';
@@ -40,21 +44,31 @@ export function setDictationLanguage(value) {
   if (value === 'auto') localStorage.removeItem(DICTATION_LANGUAGE);
   else localStorage.setItem(DICTATION_LANGUAGE, value);
 }
-const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+export const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
 const ICON = svg('mic');
 
 let active = null;       // { cancel() } — идущая запись (или ожидание разрешения) студии
+let holder = null;       // { cancel(), words } — долгий владелец микрофона (holdMic)
 // перезагрузка оборвала бы запись — автоматическую (refresh.js) идущая запись запрещает
-document.addEventListener('studio-before-auto-refresh', (event) => { if (active) event.preventDefault(); });
+document.addEventListener('studio-before-auto-refresh', (event) => { if (active || holder) event.preventDefault(); });
 
 function clock(sec) {
   const s = Math.max(0, Math.floor(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Отменить идущую запись: микрофон отпущен, её done — null. */
+/** Отменить идущую запись: микрофон отпущен, её done — null; долгий владелец (holdMic) останавливается. */
 export function cancelRecording() {
   if (active) active.cancel();
+  if (holder) holder.cancel();
+}
+
+/** Микрофон — долгому владельцу `{ cancel(), words }`: идущая запись отменяется, новые отказывают его словами.
+ * Итог — release(), чтобы отпустить. */
+export function holdMic(owner) {
+  cancelRecording();
+  holder = owner;
+  return () => { if (holder === owner) holder = null; };
 }
 
 /** Запись с микрофона до stop() или maxSec; null — отменили, пока браузер спрашивал разрешение.
@@ -63,6 +77,7 @@ export async function startRecording(maxSec, onTick, owner = null) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
     throw new Error(tr("Браузер не умеет записывать звук"));
   }
+  if (holder) throw new Error(holder.words);
   cancelRecording();
   let cancelled = false;
   const mine = { cancel() { cancelled = true; } };
