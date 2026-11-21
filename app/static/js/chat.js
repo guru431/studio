@@ -96,8 +96,10 @@ import { button, el, field, focusDesktop, openDialog, plural, words } from './ui
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 
-const ACCEPT = '.pdf,.docx,.txt,.md,image/*';
-const DOC_EXT = ['.pdf', '.docx', '.txt', '.md'];               // как documents.SUFFIXES
+const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
+  '.ini', '.log', '.py', '.js', '.ts', '.html', '.css', '.sql', '.sh', '.ps1'];   // как documents.SUFFIXES
+const ACCEPT = [...DOC_EXT, 'image/*'].join(',');
+const ATTACH_MAX = 10;           // как chat.ATTACH_MAX
 const PHOTO_EXT = ['.png', '.jpg', '.jpeg', '.jfif', '.webp'];    // фото сервер узнаёт и по первым байтам (chat._is_photo)
 const PHOTO_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 const DOC_MAX = 20 * 1024 * 1024;   // как documents.DOC_MAX
@@ -1748,7 +1750,7 @@ function build(view, ctx) {
     const ext = /\.[^.]*$/.exec(f.name.toLowerCase())?.[0] || '';
     const doc = DOC_EXT.includes(ext);
     const photo = !doc && (PHOTO_TYPES.includes(f.type) || PHOTO_EXT.includes(ext));
-    if (!doc && !photo && (ext || f.type)) return tr("поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP");
+    if (!doc && !photo && (ext || f.type)) return tr("поддерживаются PDF, DOCX, текстовые файлы и код, фото PNG, JPEG, WebP");
     if (photo && f.size > PHOTO_MAX) return tr("фото больше {0} МиБ", PHOTO_MAX >> 20);
     if (f.size > DOC_MAX) return tr("файл больше {0} МиБ", DOC_MAX >> 20);
     return '';
@@ -1820,6 +1822,10 @@ function build(view, ctx) {
     if (!regenerate && blocked()) return;
     if (!regenerate && atts.some((a) => a.unfit)) {   // слова — у чипа с выбора файла; диалог не создаётся
       notice.textContent = tr("Уберите неподходящие файлы");
+      return;
+    }
+    if (!regenerate && atts.length > ATTACH_MAX) {   // как 422 `attachments` сервера; диалог не создаётся
+      notice.textContent = tr("не больше {0} вложений в сообщении", ATTACH_MAX);
       return;
     }
     if (!externalOk && needsConsent(regenerate)) {
@@ -2169,6 +2175,7 @@ function build(view, ctx) {
     }
     file.value = '';
     dropWaiting();
+    if (atts.length > ATTACH_MAX) notice.textContent = tr("не больше {0} вложений в сообщении", ATTACH_MAX);
     paintAtts();
   });
   stop.addEventListener('click', async () => {

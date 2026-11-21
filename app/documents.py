@@ -2,7 +2,7 @@
 
 - PDF — текстовый слой pypdf (страницы через пустую строку); без слоя — отказ «это скан».
 - DOCX — `word/document.xml` из zip: абзацы `w:p`, текст `w:t`.
-- TXT и MD — UTF-16 со знаком порядка байтов или по доле нулевых байтов (`_utf16`; не декодируется — отказ),
+- TXT, MD, прочие текстовые файлы и код (`SUFFIXES` после DOCX) — UTF-16 со знаком порядка байтов или по доле нулевых байтов (`_utf16`; не декодируется — отказ),
   иначе UTF-8 (BOM снимается), иначе cp1251.
 - Имя и текст (и текст слоя каждой страницы PDF) — в NFC (`nfc`): иначе поиск не находит их по составным буквам.
 - Отказы — DocumentError со словами для человека; текст, имя файла и байты в журнал не идут:
@@ -26,7 +26,12 @@ import auth
 
 DOC_MAX = 20 * 1024 * 1024
 TEXT_MAX_CHARS = 2_000_000
-SUFFIXES = (".pdf", ".docx", ".txt", ".md")
+SUFFIXES = (".pdf", ".docx", ".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".toml",
+            ".ini", ".log", ".py", ".js", ".ts", ".html", ".css", ".sql", ".sh", ".ps1")
+#: язык блока кода, в который chat._content оборачивает текст документа с таким расширением; прочие — как есть
+LANG = {".json": "json", ".jsonl": "json", ".xml": "xml", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+        ".ini": "ini", ".py": "python", ".js": "javascript", ".ts": "typescript", ".html": "html", ".css": "css",
+        ".sql": "sql", ".sh": "bash", ".ps1": "powershell"}
 BODY_MAX = DOC_MAX + 128 * 1024
 NAME_MAX = 200
 # распакованный document.xml: дальше — zip-бомба, а не документ; ElementTree берёт памяти примерно
@@ -34,7 +39,7 @@ NAME_MAX = 200
 XML_MAX = 16 * 1024 * 1024
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
-UNSUPPORTED = "поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"   # фото принимает chat.upload_attachment
+UNSUPPORTED = "поддерживаются PDF, DOCX, текстовые файлы и код, фото PNG, JPEG, WebP"   # фото принимает chat.upload_attachment
 SCAN = "в PDF нет текстового слоя — это скан"
 BROKEN = "документ повреждён"
 TOO_LONG = "текст длиннее 2 млн знаков"

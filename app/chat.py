@@ -2,7 +2,7 @@
 контекста и ход диалога.
 
 1. Ход: сообщение пользователя и его вложения, сборка контекста (`compose`, картинок — не больше
-   MAX_IMAGES на весь запрос) и проверка предела модели — одной транзакцией без await внутри; не
+   предела подключения `profiles.max_images` на весь запрос) и проверка предела модели — одной транзакцией без await внутри; не
    помещается — 413 и в базе ничего нет.
 2. Подключение из списка администратора (`proxied`) — модель зовёт сервер. Запрос ведёт фоновая
    `StreamTask`: читает модель до конца и сохраняет ответ, даже если клиент ушёл; поток SSE
@@ -82,7 +82,8 @@ from image_upload import MAX_UPLOAD, UploadError, normalize_image
 
 PING_SEC = 15
 RESERVE_TOKENS = 4096
-MAX_IMAGES = 4
+ATTACH_MAX = 10                  # вложений в сообщении (фото и документы вместе)
+ATTACHMENTS = f"не больше {ATTACH_MAX} вложений в сообщении"
 CONTEXT = {"local-gemma-abl": 131072}
 TITLE_CHARS = 60
 
@@ -178,10 +179,18 @@ NO_PHOTO = "[фото недоступно: файла нет в хранили�
 REFUSED = "[вложение «{}» не передано: на это сообщение модель ответила ошибкой]"
 #: начала слов ошибки, при которой запрос до модели не дошёл: вложения хода — не причина отказа (compose)
 UNSENT = (SCAN_FAILED, STORAGE, GAVE_UP, CARD_BUSY.split("{")[0])
-DROPPED = f"[фото убрано из контекста: модели — не больше {MAX_IMAGES} картинок на запрос]"
+#: пометка вместо картинки сверх предела подключения (`profiles.max_images`): {} — предел
+DROPPED = "[фото убрано из контекста: модель принимает не больше {} картинок на запрос]"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+#: тип файла документа по расширению (`documents.SUFFIXES`); HTML и XML — text/plain: /api/media отдаёт файл
+#: с этим типом на адресе студии, и разметка из вложения не должна там открываться страницей
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".csv": "text/csv", ".tsv": "text/tab-separated-values", ".json": "application/json",
+            ".jsonl": "application/x-ndjson", ".xml": "text/plain", ".yaml": "application/yaml",
+            ".yml": "application/yaml", ".toml": "application/toml", ".ini": "text/plain", ".log": "text/plain",
+            ".py": "text/x-python", ".js": "text/javascript", ".ts": "text/plain", ".html": "text/plain",
+            ".css": "text/css", ".sql": "application/sql", ".sh": "application/x-sh", ".ps1": "text/plain"}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")
@@ -215,7 +224,7 @@ class CleanerRule(BaseModel):
 class TurnIn(BaseModel):
     request_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9_-]{16,64}$")
     text: str = Field("", max_length=TEXT_MAX)
-    attachment_ids: list[str] = Field(default_factory=list, max_length=32)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=ATTACH_MAX)  # больше — ATTACHMENTS (main)
     regenerate: bool = False
     external_ok: bool = False        # расшифровку — и нелокальной модели (человек подтвердил)
     web_ok: bool = False             # расшифровка в диалоге, а «Интернет» даёт Exa (человек подтвердил)
@@ -461,13 +470,22 @@ def recover() -> None:
 
 def _content(text: str, atts: list):
     """Текст пользователя с документами перед ним; с картинками — части OpenAI: картинка — пока
-    только id media, данные ставит fill_photos."""
-    docs = "".join(f'<document name="{escape(a["name"], quote=True)}">\n{a["text"]}\n</document>\n\n'
+    только id media, данные ставит fill_photos. Код (`documents.LANG` по расширению имени) — блоком с языком."""
+    docs = "".join(f'<document name="{escape(a["name"], quote=True)}">\n{_fenced(a["name"], a["text"])}\n</document>\n\n'
                    for a in atts if a["kind"] == "document")
     pics = [a for a in atts if a["kind"] == "image"]
     if not pics:
         return docs + text
     return [{"type": "text", "text": docs + text}] + [{"type": "image_url", "media_id": a["media_id"]} for a in pics]
+
+
+def _fenced(name: str, text: str) -> str:
+    """Текст документа-кода — в блоке ```<язык>; ограда длиннее любой серии обратных кавычек в тексте."""
+    lang = documents.LANG.get(PurePosixPath(name.lower()).suffix)
+    if lang is None:
+        return text
+    fence = "`" * max(3, max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
+    return f"{fence}{lang}\n{text}\n{fence}"
 
 
 def _merge(first, second):
@@ -491,10 +509,10 @@ def _prefix(block: str, content):
     return [{"type": "text", "text": block}, *content]
 
 
-def _cap_images(messages: list[dict]) -> None:
-    """Не больше MAX_IMAGES картинок на весь запрос (gemma-abl больше не примет): остаются самые
+def _cap_images(messages: list[dict], limit: int) -> None:
+    """Не больше `limit` картинок на весь запрос (предел подключения, `profiles.max_images`): остаются самые
     свежие, прежние — пометкой DROPPED, чтобы модель знала о пропуске; в истории диалога фото целы."""
-    left = MAX_IMAGES
+    left, dropped = limit, DROPPED.format(limit)
     for m in reversed(messages):
         if not isinstance(m["content"], list):
             continue
@@ -504,7 +522,7 @@ def _cap_images(messages: list[dict]) -> None:
                 if left:
                     left -= 1
                 else:
-                    p = {"type": "text", "text": DROPPED}
+                    p = {"type": "text", "text": dropped}
             parts.append(p)
         m["content"] = parts[::-1]
 
@@ -527,9 +545,10 @@ def _refused_turns(rows, model: "str | None") -> set[str]:
     return refused
 
 
-def compose(chat_id: str, upto: str, model: "str | None" = None) -> list[dict]:
+def compose(chat_id: str, upto: str, model: "str | None" = None,
+            max_images: int = profiles.DEFAULT_MAX_IMAGES) -> list[dict]:
     """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
-    пользователя подряд сливаются, картинок — не больше MAX_IMAGES на весь запрос. Найденное «Интернетом»
+    пользователя подряд сливаются, картинок — не больше `max_images` на весь запрос. Найденное «Интернетом»
     (`messages.tools` ответа) — блоками web.history_block в начале сообщения пользователя перед этим ответом,
     без ролей `tool` и `tool_calls`. Вложения сообщения, на которое модель хода (`model`) ответила ошибкой без
     единого слова (`_refused_turns`), не уходят снова — пометкой REFUSED: иначе фото, отклонённое текстовой моделью,
@@ -559,7 +578,7 @@ def compose(chat_id: str, upto: str, model: "str | None" = None) -> list[dict]:
                     out.append({"role": "assistant", "content": row["content"]})
         if row["id"] == upto:
             break
-    _cap_images(out)
+    _cap_images(out, max_images)
     return out
 
 
@@ -1327,7 +1346,7 @@ class StreamTask:
             raise
         finally:
             self.scan_state = None
-        composed = compose(self.chat_id, self.user_message_id, self.model)
+        composed = compose(self.chat_id, self.user_message_id, self.model, profiles.max_images(self.conn))
         tokens = estimate_tokens(chat_system.wrap(self.system, composed))
         if self.limit is not None and tokens > self.limit - RESERVE_TOKENS:
             log.info("чат %s: ход не помещается в контекст (~%d токенов)", self.chat_id[:8], tokens)
@@ -1874,8 +1893,6 @@ def _free_attachments(user_id: int, ids: list[str]) -> list:
         if row is None:
             raise _gone("вложения нет или оно уже отправлено")
         rows.append(row)
-    if sum(r["kind"] == "image" for r in rows) > MAX_IMAGES:
-        raise HTTPException(422, {"code": "images", "message": f"не больше {MAX_IMAGES} картинок в сообщении"})
     return rows
 
 
@@ -1937,7 +1954,7 @@ def _title(text: str) -> str | None:
     return lines[0].strip()[:TITLE_CHARS].rstrip() or None
 
 
-def _cleaner_messages(uid, chat_id, body, atts, model):
+def _cleaner_messages(uid, chat_id, body, atts, model, conn):
     if _pending_scans(uid, chat_id, atts):
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
     if any(a["kind"] == "document" and a["text"] is None for a in atts):
@@ -1947,13 +1964,15 @@ def _cleaner_messages(uid, chat_id, body, atts, model):
                             " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
     if body.regenerate and last is None:
         raise cleaner.refused("Нечего переспрашивать")
-    messages = compose(chat_id, last["id"], model) if last else []
+    limit = profiles.max_images(conn)
+    messages = compose(chat_id, last["id"], model, limit) if last else []
     if not body.regenerate:
         content = _content(body.text, atts)
         if messages and messages[-1]["role"] == "user":
             messages[-1]["content"] = _merge(messages[-1]["content"], content)
         else:
             messages.append({"role": "user", "content": content})
+        _cap_images(messages, limit)                 # фото этого хода — в тот же предел запроса
     # Cleaner — дата и роль диалога, профиля у него нет
     role = _role(uid, state.DB.execute("SELECT role_id FROM chats WHERE id = ?", (chat_id,)).fetchone()[0])
     return chat_system.wrap(chat_system.base(uid, None, role), messages)
@@ -1972,7 +1991,7 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     if not body.regenerate and not body.text.strip() and not atts:
         raise cleaner.refused("Пустое сообщение", 422)
-    messages = _cleaner_messages(uid, chat_id, body, atts, row["model"] or manage.DEFAULT_MODEL)
+    messages = _cleaner_messages(uid, chat_id, body, atts, row["model"] or manage.DEFAULT_MODEL, conn)
     preview, shown = await cleaner.prepare(conn, "chat", chat_id, row["model"], messages,
                                           [rule.model_dump() for rule in body.cleaner_rules], local=body.cleaner_local)
     operations.check(uid)
@@ -2066,7 +2085,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         fresh = _chat_row(uid, chat_id)
         if fresh["connection_id"] != conn.id or fresh["model"] != model:
             raise cleaner.refused("Модель диалога изменилась: проверьте запрос ещё раз")
-        messages = _cleaner_messages(uid, chat_id, body, atts, model)
+        messages = _cleaner_messages(uid, chat_id, body, atts, model, conn)
         preview = cleaner.take(body.cleaner_ticket, conn, chat_id, model, messages)
         if preview.route == "local":
             model = preview.local_model
@@ -2134,7 +2153,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         if scans:                                    # контекст и предел — после распознавания (_await_scans)
             messages, known = [], {}
         else:
-            messages = compose(chat_id, user_mid, model)
+            messages = compose(chat_id, user_mid, model, profiles.max_images(conn))
             known = _known_links(chat_id) if kinds else {}
             tokens = estimate_tokens(chat_system.wrap(system, messages))
             if limit is not None and tokens > limit - RESERVE_TOKENS:

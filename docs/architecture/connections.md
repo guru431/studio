@@ -80,7 +80,7 @@
 - Профиль подключения (`profiles`, шаг схемы 57, спека 2026-11-21-studio-source-foundation-design §2) — таблица
   `connection_profiles` по id подключения (удаление подключения уносит профиль триггером): системный текст до
   `profiles.TEXT_MAX` (8000 знаков, без NUL и одиночных суррогатов), параметры `profiles.Params` (null или нет поля —
-  не слать: `temperature` 0–2, `top_p` (0, 1], `top_k` целое 1–1000, `presence_penalty` −2…2, `max_tokens` 1…10⁶) и
+  не слать: `temperature` 0–2, `top_p` (0, 1], `top_k` целое 1–1000, `presence_penalty` −2…2, `max_tokens` 1…10⁶, `max_images` целое 1–32) и
   до `profiles.SUGGESTIONS_MAX` (12) подсказок (заголовок до 80, текст до 2000 знаков). Пустой профиль строку удаляет.
   Свой — `GET/PUT /api/connections/{id}/profile` (только владелец), общий — `GET/PUT
   /api/admin/shared/connections/{id}/profile` (только администратор); у Cleaner профиля нет — 422 `cleaner`.
@@ -90,6 +90,8 @@
   `max_tokens` — как `max_completion_tokens` при `capabilities.profile(conn) == "openai"` (как `checks.probe`), иначе
   `max_tokens`; `top_k` нестандартен — у профиля `openai` поле в окне выключено и при отправке отбрасывается, у
   `compatible`, `openrouter`, `srvllm`, `s06` уходит только явно заданный (подсказка «только vLLM и совместимые»).
+  `max_images` («Картинок в запросе») в запрос не уходит: это предел картинок на весь запрос хода
+  (`profiles.max_images`, без него — `profiles.DEFAULT_MAX_IMAGES` (4)), лишние — пометкой `chat.DROPPED` (`chat.compose`).
   «Пробный ответ» шлёт параметры профиля, кроме предела ответа. Отказ 400 распознаётся как отказ параметра, только
   если тело называет отправленный параметр **и** содержит признак отказа `profiles.REJECTED` («unknown»,
   «unsupported», «extra inputs are not permitted» …; `profiles.refusal`): одного имени мало — ошибка длины контекста

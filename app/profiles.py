@@ -7,7 +7,7 @@
 - У Cleaner профиля нет: 422 `cleaner`.
 - Параметры (`request_params`): `temperature`, `top_p`, `presence_penalty` — как есть; `max_tokens` — как
   `max_completion_tokens` у профиля `openai`; `top_k` нестандартен — у `openai` отбрасывается, у прочих — только
-  явно заданный. Отказ сервиса с именем отправленного параметра и признаком отказа (`REJECTED`) — слова
+  явно заданный; `max_images` — предел картинок запроса (`max_images`), в запрос не уходит. Отказ сервиса с именем отправленного параметра и признаком отказа (`REJECTED`) — слова
   `REFUSED` (`refusal`).
 - Журнал — только id: ни текста, ни параметров, ни подсказок.
 """
@@ -26,6 +26,7 @@ TEXT_MAX = 8000
 SUGGESTIONS_MAX = 12
 TITLE_MAX = 80
 SUGGESTION_TEXT_MAX = 2000
+DEFAULT_MAX_IMAGES = 4          # картинок на запрос, пока профиль не задал своё (gemma-abl больше не примет)
 #: слова отказа сервиса по параметру профиля: {0} — имя отправленного параметра
 REFUSED = "подключение не принимает параметр «{0}» — уберите его в профиле подключения"
 #: признаки отказа по параметру в ответе 400 (в нижнем регистре): OpenAI, vLLM/pydantic, LiteLLM
@@ -50,6 +51,7 @@ class Params(BaseModel):
     top_k: int | None = Field(None, ge=1, le=1000, strict=True)
     presence_penalty: float | None = Field(None, ge=-2, le=2, allow_inf_nan=False)
     max_tokens: int | None = Field(None, ge=1, le=1_000_000, strict=True)
+    max_images: int | None = Field(None, ge=1, le=32, strict=True)
 
 
 class Suggestion(BaseModel):
@@ -128,6 +130,12 @@ def request_params(conn: connections.Connection) -> dict:
     if "top_k" in saved and provider != "openai":
         out["top_k"] = saved["top_k"]
     return out
+
+
+def max_images(conn: connections.Connection) -> int:
+    """Картинок на весь запрос к подключению: `max_images` профиля, иначе DEFAULT_MAX_IMAGES."""
+    row = None if conn.cleaner else _row(conn.id)
+    return json.loads(row["params"]).get("max_images", DEFAULT_MAX_IMAGES) if row else DEFAULT_MAX_IMAGES
 
 
 def text_of(conn: connections.Connection) -> str:

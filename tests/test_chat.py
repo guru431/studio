@@ -11,6 +11,8 @@ import pytest
 from PIL import Image
 
 import chat
+import documents
+import profiles
 import state
 from conftest import T0, add_connection, add_gateway, make_user, signin
 from fakes import TOKEN
@@ -365,12 +367,9 @@ def test_model_list_for_the_context_limit_is_remembered(studio):
 
 def test_images_go_as_image_url_parts_up_to_four(studio):
     add_gateway(studio); cid = new_chat(studio)
-    pics = [attach(studio, f"photo{i}.jpg", png(), "image/jpeg") for i in range(5)]
+    pics = [attach(studio, f"photo{i}.jpg", png(), "image/jpeg") for i in range(4)]
     assert {p["kind"] for p in pics} == {"image"} and all(p["chars"] == 0 for p in pics)
-    r = turn(studio, cid, "Что на фото?", attachment_ids=[p["id"] for p in pics])
-    assert r.status_code == 422 and r.json()["detail"]["code"] == "images"
-    assert messages(studio, cid) == []
-    sse(turn(studio, cid, "Что на фото?", attachment_ids=[p["id"] for p in pics[:4]]))
+    sse(turn(studio, cid, "Что на фото?", attachment_ids=[p["id"] for p in pics]))
     (content,) = [m["content"] for m in studio.gw.chat_requests[0]["messages"][1:]]
     assert content[0] == {"type": "text", "text": "Что на фото?"}
     assert [part["type"] for part in content[1:]] == ["image_url"] * 4
@@ -391,25 +390,26 @@ def test_photo_is_recognized_by_content_and_refusals_name_photos(studio):
     Image.new("RGB", (8, 8)).save(gif, "GIF")
     for name, data in (("photo.gif", gif.getvalue()), ("IMG_0001.HEIC", b"\0\0\0\x18ftypheic")):
         r = studio.c.post("/api/attachments", files={"file": (name, data, "image/heic")})
-        assert r.status_code == 422 and r.json()["detail"]["message"] == "поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"
+        assert r.status_code == 422 and r.json()["detail"]["message"] == documents.UNSUPPORTED
 
 
 @pytest.mark.integration  # восемь файлов и два полных хода: > 1 с под нагрузкой набора
 def test_images_are_capped_across_the_whole_request(studio):
-    """Два хода по четыре фото с ответом между ними: предел MAX_IMAGES — на весь запрос, а не на
-    сообщение (аудит). Картинки — последнего хода, фото прежнего — пометкой, в истории — все."""
+    """Два хода по четыре фото с ответом между ними: предел подключения (`profiles.DEFAULT_MAX_IMAGES`) — на весь
+    запрос, а не на сообщение (аудит). Картинки — последнего хода, фото прежнего — пометкой, в истории — все."""
     add_gateway(studio); cid = new_chat(studio)
     for n in range(2):
         pics = [attach(studio, f"p{n}{i}.jpg", png(), "image/jpeg") for i in range(4)]
         sse(turn(studio, cid, f"Ход {n}", attachment_ids=[p["id"] for p in pics]))
     sent = studio.gw.chat_requests[1]["messages"][1:]
     assert [m["role"] for m in sent] == ["user", "assistant", "user"]
-    assert sent[0]["content"] == [{"type": "text", "text": "Ход 0"}] + [{"type": "text", "text": chat.DROPPED}] * 4
-    assert [p["type"] for p in sent[2]["content"]] == ["text"] + ["image_url"] * chat.MAX_IMAGES
+    dropped = {"type": "text", "text": chat.DROPPED.format(profiles.DEFAULT_MAX_IMAGES)}
+    assert sent[0]["content"] == [{"type": "text", "text": "Ход 0"}] + [dropped] * 4
+    assert [p["type"] for p in sent[2]["content"]] == ["text"] + ["image_url"] * profiles.DEFAULT_MAX_IMAGES
     assert [len(m["attachments"]) for m in messages(studio, cid)] == [4, 0, 4, 0]
     # прямое подключение получает тот же собранный контекст
     assert sum(p["type"] == "image_url" for m in chat.compose(cid, messages(studio, cid)[2]["id"])
-               if isinstance(m["content"], list) for p in m["content"]) == chat.MAX_IMAGES
+               if isinstance(m["content"], list) for p in m["content"]) == profiles.DEFAULT_MAX_IMAGES
 
 
 def test_direct_turn_returns_messages_and_accepts_the_answer(studio):
@@ -708,7 +708,7 @@ def _row(cid, mid, role, content, status, created):
 
 def test_compose_merges_user_messages_left_without_an_answer(studio):
     """Q1 → (остановлен до первого слова) → Q2: модели — одно сообщение пользователя, роли чередуются
-    (шаблоны Gemma иначе отказывают; ревью A2-I5). Картинок в слитом — не больше MAX_IMAGES."""
+    (шаблоны Gemma иначе отказывают; ревью A2-I5). Картинок в слитом — не больше предела `max_images`."""
     import media
     add_gateway(studio); cid = new_chat(studio)
     uid = state.DB.execute("SELECT user_id FROM chats WHERE id = ?", (cid,)).fetchone()[0]
@@ -730,8 +730,11 @@ def test_compose_merges_user_messages_left_without_an_answer(studio):
     assert [m["role"] for m in out] == ["user", "assistant", "user"]
     last = out[2]["content"]
     assert last[0] == {"type": "text", "text": "Что на них?"}
-    assert [p["type"] for p in last[1:]] == ["text", "text"] + ["image_url"] * chat.MAX_IMAGES
-    assert {p["text"] for p in last[1:3]} == {chat.DROPPED}
+    assert [p["type"] for p in last[1:]] == ["text", "text"] + ["image_url"] * profiles.DEFAULT_MAX_IMAGES
+    assert {p["text"] for p in last[1:3]} == {chat.DROPPED.format(profiles.DEFAULT_MAX_IMAGES)}
+    last = chat.compose(cid, "u5", max_images=1)[2]["content"]
+    assert [p["type"] for p in last[1:]] == ["text"] * 5 + ["image_url"]
+    assert {p["text"] for p in last[1:6]} == {chat.DROPPED.format(1)}
 
 
 def test_photo_refused_by_the_model_does_not_lock_the_dialog(studio):

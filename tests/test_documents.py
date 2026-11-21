@@ -106,7 +106,7 @@ def test_scanned_pdf_is_explained():
 
 def test_unknown_or_broken_files_are_refused():
     # чат принимает и фото: слова отказа называют их (02:F11)
-    assert refusal("program.exe", b"MZ...") == "поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"
+    assert refusal("program.exe", b"MZ...") == "поддерживаются PDF, DOCX, текстовые файлы и код, фото PNG, JPEG, WebP"
     assert refusal("no-suffix", b"text") == documents.UNSUPPORTED
     broken = "документ повреждён"
     assert refusal("x.pdf", b"garbage, not a pdf") == broken
