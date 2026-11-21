@@ -1,5 +1,7 @@
 """Owner sharing and fresh anonymous PIN entry in Firefox, Chromium and mobile WebKit."""
+import io
 import uuid
+import zipfile
 
 import httpx
 import pytest
@@ -216,4 +218,46 @@ def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, 
             pw.expect(page.locator('#chat-share-link')).not_to_be_visible()
     finally:
         bridge.stop()
+        client.close()
+
+
+def test_chat_menu_downloads_zip_archive(focus_browser, live):
+    """Пятый пункт меню обычного чата — архив ZIP: chat.md и список недоступных файлов MCP."""
+    client, cookie, cookies = owner(live)
+    cid = client.post('/api/chats', json={}).json()['id']
+    conn = db.connect(live.db_path)
+    tools = ('[{"kind":"mcp","server":"Shared","tool":"make","sid":999,"stamp":"s",'
+             '"files":[{"aid":"art_' + 'a' * 32 + '","mime":"image/png","name":"out.png"}]}]')
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,tools)"
+                 " VALUES(?,?,'assistant','Ответ в архиве','done','server',1,?)", (uuid.uuid4().hex, cid, tools))
+    conn.close()
+    try:
+        with focus_browser.new_context(extra_http_headers={'Cookie': cookie}, service_workers='block') as context:
+            if focus_browser.browser_type.name == 'firefox':
+                context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
+                                     'httpOnly': True, 'sameSite': 'Lax'} for key, value in cookies.items()])
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            # загрузку по ссылке браузер шлёт без extra_http_headers: ссылку ловим и читаем fetch, как выгрузку истории
+            page.add_init_script("HTMLAnchorElement.prototype.click = function () {"
+                                 " (window.clicked ||= []).push([this.getAttribute('href'), this.hasAttribute('download')]); }")
+            page.goto(live.url + '/#/chat/' + cid)
+            page.locator('#chat-share').click()
+            menu = page.locator('#chat-share-menu')
+            pw.expect(menu.locator('[data-action="zip"]')).to_be_visible()
+            assert menu.locator('[role="menuitem"]').all_text_contents() == [
+                'Поделиться ссылкой', 'Скачать PDF', 'Скачать выделенное в PDF', 'Скачать Markdown',
+                'Скачать архив ZIP с файлами']
+            menu.locator('[data-action="zip"]').click()
+            page.wait_for_function('() => window.clicked && window.clicked.length === 1')
+            href, download = page.evaluate('window.clicked[0]')
+            assert href.startswith('/api/chats/archive/') and download
+            data = page.evaluate("""async (href) => { const r = await fetch(href);
+                return [r.status, r.headers.get('content-type'), [...new Uint8Array(await r.arrayBuffer())]]; }""", href)
+            assert data[:2] == [200, 'application/zip']
+            archive = zipfile.ZipFile(io.BytesIO(bytes(data[2])))
+            assert sorted(archive.namelist()) == ['chat.md', 'missing.txt']
+            assert 'Ответ в архиве' in archive.read('chat.md').decode('utf-8')
+            assert archive.read('missing.txt').decode('utf-8') == 'out.png\n'
+    finally:
         client.close()

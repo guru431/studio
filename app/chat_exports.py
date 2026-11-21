@@ -1,21 +1,31 @@
-"""Owner-only Markdown/PDF downloads; PDF uses the shared md2pdf CLI, without network images."""
+"""Owner-only Markdown/PDF downloads; PDF uses the shared md2pdf CLI, without network images.
+
+The chat archive (`POST /api/chats/{chat_id}/archive` → token, `GET /api/chats/archive/{token}`) is one ZIP: chat.md
+(the same `markdown`), `files/` — attachment sources, dialog media and MCP result files (through
+`mcp_sections.relay`), the unavailable ones listed in missing.txt. Trash (`deleted`) stays out. The log gets ids and
+numbers only, never file names or paths."""
 import asyncio
 import contextlib
 import html
 from html.parser import HTMLParser
 import json
+import logging
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from typing import Literal
+import weakref
+import zlib
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field, model_validator
 
@@ -26,9 +36,14 @@ from chat_export_selection import CSS, TAGS, selection_html
 import claude_code
 import exports
 from exports import server_word, word
+import mcp_client
+import mcp_sections
+import mcp_sources
 import media
 import state
+import takeout
 
+log = logging.getLogger("studio")
 router = APIRouter()
 RUNNING: set[int] = set()
 PDF_SECONDS = 45
@@ -299,6 +314,10 @@ def render_pdf(text: str, *, selection: bool = False) -> bytes:
         _remove(root)
 
 
+def _stem(title: str, lang: str) -> str:
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", title).strip(' .')[:100] or word("Чат", lang)
+
+
 async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, check):
     uid = request.state.user.id
     if body.format == "pdf":
@@ -327,9 +346,8 @@ async def _file(snapshot: dict, body: ExportIn, request: Request, section: str, 
         raw = markdown(snapshot, body.lang).encode("utf-8")
     await check()
     chat_shares._owner_open(request, section)
-    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", snapshot["title"]).strip(' .')[:100] or word("Чат", body.lang)
     return Response(raw, media_type="application/pdf" if body.format == "pdf" else "text/markdown; charset=utf-8",
-                    headers={"Content-Disposition": media.disposition(stem + "." + body.format),
+                    headers={"Content-Disposition": media.disposition(_stem(snapshot["title"], body.lang) + "." + body.format),
                              "Cache-Control": "no-store"})
 
 
@@ -378,3 +396,203 @@ async def export_agent_chat(aid: int, pid: str, session_id: str, body: ExportIn,
         snapshot = {"title": body.title, "messages": []}
 
     return await _file(snapshot, body, request, "code", check)
+
+
+# ---- chat archive: one ZIP with chat.md and the files ---------------------------------------------------------
+
+ARCHIVE_MAX = 512 * 1024 * 1024
+#: token lifetime and per-user count — as the history export (takeout); one ZIP at a time with it (takeout.RUNNING)
+ARCHIVE_TTL_SEC = takeout.EXPORT_TTL_SEC
+#: token → (user_id, chat_id, lang, created)
+ARCHIVES: dict[str, tuple[int, str, str, float]] = {}
+ARCHIVE_BIG = {"code": "export_size", "message": "чат с файлами больше 512 МиБ — скачайте Markdown или PDF"}
+_NO_RANGE = SimpleNamespace(headers={})             # the archive always takes a result file whole
+_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
+
+
+class ArchiveIn(BaseModel):
+    lang: exports.Lang = "ru"
+
+
+def _clean(name, fallback: str) -> str:
+    """A file name for the archive: the last part of a path, without characters a file system refuses."""
+    plain = name.replace("\\", "/").rsplit("/", 1)[-1] if isinstance(name, str) else ""
+    return _UNSAFE.sub("_", plain).strip(" .")[:120] or fallback
+
+
+def _unique(plain: str, used: set) -> str:
+    stem, dot, ext = plain.rpartition(".")
+    if not stem:
+        stem, dot, ext = plain, "", ""
+    candidate, n = plain, 1
+    while candidate.lower() in used:
+        n += 1
+        candidate = f"{stem} ({n}){dot}{ext}"
+    used.add(candidate.lower())
+    return candidate
+
+
+def _plan(uid: int, chat_id: str, lang: str) -> tuple[str, bytes, list, list]:
+    """(title, chat.md, files on the share [(name, rel_path or None, size, created)], MCP result files
+    [(name, sid, stamp, aid, mime)]): 404 for a foreign or trashed chat, 413 above ARCHIVE_MAX of known bytes."""
+    with _export_size():
+        snapshot, _ = chat_shares.regular_snapshot(uid, chat_id)
+    text = markdown(snapshot, lang).encode("utf-8")
+    local = [tuple(row) for row in state.DB.execute(
+        "SELECT a.name, m.rel_path, m.size, a.created FROM attachments a JOIN messages g ON g.id = a.message_id"
+        " LEFT JOIN media m ON m.id = a.media_id AND m.user_id = a.user_id"
+        " WHERE g.chat_id = ? AND a.user_id = ? ORDER BY a.created, a.rowid", (chat_id, uid))]
+    local += [tuple(row) for row in state.DB.execute(
+        "SELECT c.name, m.rel_path, m.size, c.created FROM chat_media c"
+        " LEFT JOIN media m ON m.id = c.media_id AND m.user_id = c.user_id"
+        " WHERE c.chat_id = ? AND c.user_id = ? AND c.deleted IS NULL ORDER BY c.created, c.rowid", (chat_id, uid))]
+    results = []
+    for row in state.DB.execute("SELECT tools FROM messages WHERE chat_id = ? ORDER BY created, rowid", (chat_id,)):
+        try:
+            steps = json.loads(row["tools"] or "[]")
+        except ValueError:
+            continue
+        for step in steps if isinstance(steps, list) else ():
+            files = step.get("files") if isinstance(step, dict) else None
+            if isinstance(files, list):
+                results += [(f.get("name"), step.get("sid"), step.get("stamp"), f.get("aid"), f.get("mime"))
+                            for f in files if isinstance(f, dict)]
+    if len(text) + sum(item[2] or 0 for item in local) > ARCHIVE_MAX:
+        raise HTTPException(413, ARCHIVE_BIG)
+    return snapshot["title"], text, local, results
+
+
+async def _result(uid: int, sid, stamp, aid, mime, room: int):
+    """An MCP result file spooled to a local temporary file — (file, crc, size) — with the checks of
+    `mcp_files.result_file` (server open to the account and on, address and key unchanged); unavailable, gone on
+    the server or larger than `room` — None."""
+    if type(sid) is not int or not isinstance(aid, str) or not mcp_sections.ARTIFACT_ID.fullmatch(aid):
+        return None
+    try:
+        server = mcp_client.row(uid, sid)
+    except HTTPException:
+        return None
+    if not server["enabled"] or mcp_sources.stamp(server["secret_enc"]) != stamp:
+        return None
+    mime = mime if mime in mcp_sections.TICKET_MIME else "application/octet-stream"
+    spool = tempfile.TemporaryFile(dir=state.CFG.tmp_dir)
+    crc = size = 0
+    try:
+        response = await mcp_sections.relay(mcp_client.Session(server, uid=uid), aid, mime, _NO_RANGE)
+        if not isinstance(response, mcp_sections.ArtifactStream):
+            raise ConnectionError("unexpected answer")
+        try:
+            async for chunk in response.body_iterator:
+                size += len(chunk)
+                if size > room:
+                    raise ConnectionError("over the archive limit")
+                crc = zlib.crc32(chunk, crc)
+                spool.write(chunk)
+        finally:
+            await response.stack.aclose()
+    except (HTTPException, ConnectionError):
+        spool.close()
+        return None
+    except BaseException:
+        spool.close()
+        raise
+    spool.seek(0)
+    return spool, crc, size
+
+
+async def _archive(uid: int, chat_id: str, text: bytes, local: list, results: list, mark: object, digest: str):
+    out, now = media.ZipWriter(media.user_zone(uid)), clock.NOW()
+    used, missing, total = set(), [], len(text) + sum(item[2] or 0 for item in local)
+
+    def live() -> bool:                              # the session closed — stop, as the history export does
+        return state.DB.execute("SELECT 1 FROM sessions WHERE digest = ? AND user_id = ?",
+                                (digest, uid)).fetchone() is not None
+
+    async def put(name: str, created: float, f, crc: int, size: int):
+        with f:
+            yield out.entry("files/" + _unique(name, used), created, crc, size)
+            left = size
+            while left > 0:
+                block = await asyncio.to_thread(f.read, min(takeout.CHUNK, left))
+                if not block:
+                    raise OSError("file got shorter")
+                left -= len(block)
+                yield block
+
+    try:
+        yield out.entry("chat.md", now, zlib.crc32(text), len(text))
+        yield text
+        for name, rel, _, created in local:
+            plain = _clean(name, "file")
+            if rel is None:
+                missing.append(plain)
+                continue
+            if not live():
+                return
+            try:
+                f, crc, size, _ = await asyncio.to_thread(media.open_summed, state.CFG.media_dir / rel, takeout.CHUNK)
+            except FileNotFoundError:
+                await asyncio.to_thread(state.CFG.media_dir.stat)     # the share is gone — break off, not "missing"
+                missing.append(plain)
+                continue
+            async for piece in put(plain, created, f, crc, size):
+                yield piece
+        for name, sid, stamp, aid, mime in results:
+            plain = _clean(name, "result" + media.EXT.get(mime, ".bin"))
+            if not live():
+                return
+            spooled = await _result(uid, sid, stamp, aid, mime, ARCHIVE_MAX - total)
+            if spooled is None:
+                missing.append(plain)
+                continue
+            f, crc, size = spooled
+            total += size
+            async for piece in put(plain, now, f, crc, size):
+                yield piece
+        if missing:
+            listed = ("\n".join(missing) + "\n").encode("utf-8")
+            yield out.entry("missing.txt", now, zlib.crc32(listed), len(listed))
+            yield listed
+        yield out.end()
+        log.info("chat archive %s: %d files, %d missing", chat_id[:8], out.count - 1 - bool(missing), len(missing))
+    except OSError:
+        log.warning("chat archive %s: storage broke off reading", chat_id[:8])
+        raise media.StorageError("хранилище оборвало чтение") from None
+    finally:
+        takeout._release(uid, mark)
+
+
+@router.post("/api/chats/{chat_id}/archive")
+async def create_archive(chat_id: str, body: ArchiveIn, request: Request):
+    uid, now = request.state.user.id, clock.NOW()
+    _, _, local, _ = _plan(uid, chat_id, body.lang)
+    if any(item[1] for item in local):
+        await takeout._share_ready()
+    for token in [t for t, held in ARCHIVES.items() if now - held[3] > ARCHIVE_TTL_SEC]:
+        del ARCHIVES[token]
+    token = secrets.token_urlsafe(18)
+    ARCHIVES[token] = (uid, chat_id, body.lang, now)
+    for old in [t for t, held in ARCHIVES.items() if held[0] == uid][:-takeout.EXPORT_KEEP]:
+        del ARCHIVES[old]
+    return {"token": token}
+
+
+@router.get("/api/chats/archive/{token}")
+async def get_archive(token: str, request: Request):
+    uid = request.state.user.id
+    held = ARCHIVES.get(token)
+    if held is None or held[0] != uid or clock.NOW() - held[3] > ARCHIVE_TTL_SEC:
+        raise HTTPException(404, media.GONE)
+    title, text, local, results = _plan(uid, held[1], held[2])
+    if any(item[1] for item in local):
+        await takeout._share_ready()
+    # check and mark without an await between them: two downloads at once do not both pass
+    if uid in takeout.RUNNING:
+        raise HTTPException(409, takeout.BUSY)
+    mark = object()
+    takeout.RUNNING[uid] = mark
+    body = _archive(uid, held[1], text, local, results, mark, request.state.digest)
+    weakref.finalize(body, takeout._release, uid, mark)    # the answer never started — leaving memory drops the mark
+    return StreamingResponse(body, media_type="application/zip",
+                             headers={"Content-Disposition": media.disposition(_stem(title, held[2]) + ".zip"),
+                                      "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
