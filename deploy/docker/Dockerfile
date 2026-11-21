@@ -12,7 +12,9 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --no-create-home studio
 WORKDIR /opt/studio
 COPY requirements.txt constraints.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt yt-dlp==2026.10.26
+# yt-dlp with its `default` extra (yt-dlp-ejs) and deno, the JavaScript runtime YouTube now requires;
+# versions of deno and the extra's packages are in constraints.txt, raising yt-dlp — deploy-docker.md.
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt "yt-dlp[default]==2026.10.26" deno
 COPY app ./app
 COPY docs/guide.ru.md ./docs/guide.ru.md
 COPY deploy/md2pdf.py deploy/md2pdf.sha256 deploy/chromium-offline.sh ./deploy/
