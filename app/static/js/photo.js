@@ -122,8 +122,9 @@ function build(view, ctx) {
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const head = el('header', { class: 'head' }, el('h1', {}, tr("Фото")), selection.tools, el('span', { class: 'grow' }),
-    selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile));
+  // кнопки-значки шапки — одной группой справа: на 320 px она целиком уходит под заголовок
+  const head = el('header', { class: 'head' }, el('h1', {}, tr("Фото")), selection.tools,
+    el('div', { class: 'head-tools' }, selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile)));
 
   const sourceImg = el('img', { alt: tr("Исходное фото") });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
@@ -143,7 +144,7 @@ function build(view, ctx) {
   // в чипе — только имя формата («Портрет»), размеры — в меню
   const chipSize = chipMenu('chip-size', SIZES, () => size, (value) => { size = value; }, (label) => label.split(' ')[0]);
   const seriesName = el('span', { class: 'chip-name' }, '×1');
-  const chipSeries = el('button', { type: 'button', class: 'chip', id: 'chip-series',
+  const chipSeries = el('button', { type: 'button', class: 'chip ctl-chip', id: 'chip-series',
     title: tr("Серия: несколько вариантов подряд") }, seriesName);
   const series = seriesControl({ prefix: 'photo-series', canStrength: () => !mcp?.tool && isLustify() && !!source,
     canSeed: () => !mcp?.tool && (!choice || choice.kind === 'srvllm'), from: () => strength.value, max: seriesMax, onChange: () => {
@@ -155,7 +156,7 @@ function build(view, ctx) {
   popupPanel(chipSeries, seriesMenu, { label: tr("Серия картинок"), side: 'above' });
   const presets = presetChip({ host: () => root, snapshot, apply: applyPreset, say });
   const chipTranslate = el('button', { type: 'button', class: 'chip', id: 'photo-translate', hidden: true }, 'EN');
-  const chipUndo = el('button', { type: 'button', class: 'chip', id: 'photo-translate-undo', hidden: true,
+  const chipUndo = el('button', { type: 'button', class: 'chip ctl-chip', id: 'photo-translate-undo', hidden: true,
     title: tr("Вернуть промпт, каким он был до перевода") }, tr("Вернуть оригинал"));
   const go =el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
@@ -222,7 +223,7 @@ function build(view, ctx) {
   /* меню чипов и раздела */
   function chipMenu(id, initial, get, set, short = (label) => label) {
     const name = el('span', { class: 'chip-name' });
-    const chip = el('button', { type: 'button', class: 'chip', id }, name, icon('down', 'ico caret'));
+    const chip = el('button', { type: 'button', class: 'chip ctl-chip', id }, name, icon('down', 'ico caret'));
     const list = el('div', { class: 'chip-menu', id: `${id}-menu`, role: 'menu' });
     const chipPopup = popupMenu(chip, list, { side: 'above' });
     let options = [];
