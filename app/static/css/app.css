@@ -610,9 +610,15 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 #speech-over { margin: 0; }
 .speech .split-main { overflow: hidden; }
 .speech .sp-view { flex: 1; min-height: 0; overflow: auto; }
+.speech .tr-empty { font-size: var(--empty-font); }
 .sp-voice { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; }
 #speech-count { display: flex; align-items: center; min-height: var(--h-icon); }
 .sp-voice-hint { margin: 0; }
+/* голос сервиса — поле в рамке чипа (.ctl-chip): высота поля задана, и 16 px на касании (iOS) не растят чип */
+.sp-voice-field { cursor: text; }
+.sp-voice-field input { width: 12ch; min-width: 0; height: calc(var(--ctl-h) - 2 * var(--ctl-pad-y) - 2px); padding: 0; border: 0;
+  outline: none; background: none; color: inherit; font: inherit; line-height: 1; }
+.sp-voice-field:focus-within { border-color: var(--focus); }
 .tr-text { overflow-wrap: anywhere; line-height: 1.5; }
 /* «Сканы» (ocr.js): листалка и две колонки — картинка страницы и её текст; на телефоне — одна */
 .ocr-view { width: 100%; max-width: 1400px; margin: 0 auto; padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-6); }
