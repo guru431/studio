@@ -268,7 +268,7 @@ def job_finished(table: str, item_id: str) -> None:
     if table == "scans" and state.DB.execute("SELECT 1 FROM scans WHERE id = ? AND origin = 'chat'",
                                              (item_id,)).fetchone():
         return                                 # скан вложения: о нём скажет ответ чата (`chat_answered`)
-    row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ?"
+    row = state.DB.execute(f"SELECT j.user_id, j.state FROM {table} j WHERE j.id = ? AND j.deleted IS NULL"
                             " AND j.finished IS NOT NULL AND j.state IN ('done', 'error', 'failed')"
                             " AND EXISTS (SELECT 1 FROM users u WHERE u.id = j.user_id AND u.disabled = 0)"
                             " AND (EXISTS (SELECT 1 FROM push_subs p JOIN sessions s ON s.digest = p.digest"
@@ -283,7 +283,10 @@ def job_finished(table: str, item_id: str) -> None:
 
 
 def chat_answered(user_id: int, chat_id: str, message_id: str, ok: bool) -> None:
-    """Ответ чата через сервер кончился (готов или ошибка): как задание раздела — без содержимого, в диалог."""
+    """Ответ чата через сервер кончился (готов или ошибка): как задание раздела — без содержимого, в диалог.
+    Диалог в корзине — молча."""
+    if state.DB.execute("SELECT 1 FROM chats WHERE id = ? AND deleted IS NULL", (chat_id,)).fetchone() is None:
+        return
     notify_later(user_id, CHAT_NOTICES[0 if ok else 1], f"chat/{chat_id}", message_id, title=STUDIO, quiet=True)
 
 

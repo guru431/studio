@@ -521,7 +521,8 @@ class Tools:
         self.found = []                      # (строка сервера, сессия, каталог) ответивших серверов — mcp_files.sync
 
     def _chat(self):
-        return state.DB.execute("SELECT * FROM chats WHERE id=? AND user_id=?", (self.chat_id, self.uid)).fetchone()
+        return state.DB.execute("SELECT * FROM chats WHERE id=? AND user_id=? AND deleted IS NULL",
+                                (self.chat_id, self.uid)).fetchone()
 
     @staticmethod
     async def _list(session, timeout):

@@ -54,6 +54,30 @@ EMPTY = {"code": "input", "message": "введите слова или выбе�
 #: запроса прежний (FTS5 внешним циклом, иначе индекс search_docs_user)
 KNOWN = "+d.section IN ({})".format(", ".join(f"'{s}'" for s in TITLES))
 NFC_FLAG = "search:nfc"          # compose_once уже прошёл по этой базе
+#: записи корзины (`deleted`, trash.py) — мимо выдачи и моделей. Триггер `search_<таблица>_hide` убирает строки
+#: при переносе, но правка записи в корзине (задание кончилось после удаления, `*_au`) вставляет их снова —
+#: фильтр на чтении не зависит от триггеров. Параметры — user_id на каждый `?`; частичный индекс
+#: `<таблица>_trash` делает подзапросы дешёвыми
+TRASHED = " AND ".join(f"NOT (d.section = '{s}' AND d.item IN (SELECT id FROM {t} WHERE user_id = ?"
+                       " AND deleted IS NOT NULL))" for s, (t, _) in TITLES.items())
+#: строки индекса одной записи — те же выражения, что у триггеров и заполнения шага 13 (db.SEARCH_13); `?` — id
+_SCAN_BODY = db._TRANSCRIPT.replace("new.", "")
+ITEM_DOCS = {
+    "photo": ["SELECT 'photo', id, '', user_id, model, created, prompt FROM images WHERE id = ?"],
+    "video": ["SELECT 'video', id, '', user_id, model, created, prompt FROM videos WHERE id = ?"],
+    "chat": ["SELECT 'chat', id, 'title', user_id, model, created, title FROM chats WHERE id = ? AND title IS NOT NULL",
+             "SELECT 'chat', m.chat_id, m.id, c.user_id, m.model, m.created, m.content"
+             " FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.chat_id = ? AND m.status != 'streaming'",
+             "SELECT 'chat', m.chat_id, a.id, a.user_id, m.model, m.created,"
+             f" a.name || ' ' || substr(a.text, 1, {db.INDEX_CHARS}) FROM attachments a"
+             " JOIN messages m ON m.id = a.message_id WHERE m.chat_id = ? AND a.kind = 'document'"
+             " AND a.text IS NOT NULL"],
+    "transcribe": [f"SELECT 'transcribe', id, '', user_id, model, created, {_SCAN_BODY} FROM transcripts WHERE id = ?"],
+    "speech": ["SELECT 'speech', id, '', user_id, model, created, text FROM speeches WHERE id = ?"],
+    "ocr": [f"SELECT 'ocr', id, '', user_id, model, created, {_SCAN_BODY} FROM scans WHERE id = ?"],
+    "translate": [f"SELECT 'translate', id, '', user_id, model, created, {db._TRANSLATION.replace('new.', '')}"
+                  " FROM translations WHERE id = ?"],
+}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/search")
@@ -95,14 +119,37 @@ def _day(value: str) -> datetime:
 
 def reindex(conn) -> None:
     """Ремонт индекса: FTS5 заново из search_docs с той же заменой «ё», что у триггеров (db.YO), одной
-    транзакцией. Штатный 'rebuild' — никогда: он берёт тело как есть, и «елка» перестаёт находить «Ёлку»."""
+    транзакцией. Штатный 'rebuild' — никогда: он берёт тело как есть, и «елка» перестаёт находить «Ёлку».
+    Строки записей корзины (вставленные заново правкой записи) уходят из search_docs до 'delete-all': их
+    'delete' в триггере ещё попадает в прежний индекс, который затем стирается целиком."""
     conn.execute("BEGIN")
     try:
+        for section, (table, _) in TITLES.items():
+            conn.execute(f"DELETE FROM search_docs WHERE section = ? AND item IN"
+                         f" (SELECT id FROM {table} WHERE deleted IS NOT NULL)", (section,))
         conn.execute("INSERT INTO search(search) VALUES ('delete-all')")
         conn.execute(f"INSERT INTO search(rowid, body) SELECT id, {db.YO.format('body')} FROM search_docs")
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
+        raise
+
+
+def reindex_item(section: str, item_id: str) -> None:
+    """Строки индекса одной записи заново (её «Вернуть» из корзины): прежние — прочь (правка в корзине могла их
+    вставить), новые — теми же выражениями, что у триггеров (ITEM_DOCS), одной транзакцией; FTS держат триггеры
+    search_docs с заменой «ё» (db.YO). Запись в корзине или без раздела в индексе — ничего не вставляется."""
+    table = TITLES[section][0]
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("DELETE FROM search_docs WHERE section = ? AND item = ?", (section, item_id))
+        if state.DB.execute(f"SELECT 1 FROM {table} WHERE id = ? AND deleted IS NULL", (item_id,)).fetchone():
+            for select in ITEM_DOCS[section]:
+                state.DB.execute(f"INSERT INTO search_docs(section, item, part, user_id, model, created, body) {select}",
+                                 (item_id,))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
         raise
 
 
@@ -137,7 +184,8 @@ def compose_once(conn) -> int:
 
 def _title(section: str, item: str, user_id: int) -> str:
     table, column = TITLES[section]
-    row = state.DB.execute(f"SELECT {column} FROM {table} WHERE id = ? AND user_id = ?", (item, user_id)).fetchone()
+    row = state.DB.execute(f"SELECT {column} FROM {table} WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (item, user_id)).fetchone()
     text = " ".join(((row[0] if row is not None else None) or "").split())
     if not text:
         return "Новый диалог" if section == "chat" else ""
@@ -169,7 +217,7 @@ async def find(body: SearchIn, request: Request):
     terms = words(body.q)
     if not terms and not (body.section or body.model or body.since or body.until):
         raise HTTPException(400, EMPTY)
-    where, args = ["d.user_id = ?", KNOWN], [uid]
+    where, args = ["d.user_id = ?", KNOWN, TRASHED], [uid] * (1 + TRASHED.count("?"))
     hidden = sorted(lock_policy.hidden(request.state.digest))
     if hidden:
         where.append("d.section NOT IN (" + ",".join("?" for _ in hidden) + ")")
@@ -248,8 +296,9 @@ async def find(body: SearchIn, request: Request):
 async def models(request: Request):
     out: dict[str, list[str]] = {}
     hidden = lock_policy.hidden(request.state.digest)
-    for row in state.DB.execute("SELECT DISTINCT section, model FROM search_docs WHERE user_id = ? AND model IS NOT NULL"
-                                " ORDER BY section, model", (request.state.user.id,)):
+    for row in state.DB.execute("SELECT DISTINCT d.section, d.model FROM search_docs d WHERE d.user_id = ?"
+                                f" AND d.model IS NOT NULL AND {TRASHED} ORDER BY d.section, d.model",
+                                (request.state.user.id,) * (1 + TRASHED.count("?"))):
         if row["section"] not in TITLES or row["section"] in hidden:
             continue
         out.setdefault(row["section"], []).append(row["model"])

@@ -59,9 +59,9 @@ def _item(section: str, row, title: str, detail: str, href: str) -> dict:
 def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*",
           hidden: tuple[str, tuple] = ("", ())) -> tuple[list, list]:
     """Идущие и готовые после `after` строки таблицы истории пользователя; `hidden` — подзапрос id, которых
-    не показывать, и его аргументы (`lock_policy.hidden_scans`)."""
+    не показывать, и его аргументы (`lock_policy.hidden_scans`). Записи корзины (`deleted`) — мимо."""
     sub, sub_args = hidden
-    skip = f" AND id NOT IN ({sub})" if sub else ""
+    skip = " AND deleted IS NULL" + (f" AND id NOT IN ({sub})" if sub else "")
     marks = ", ".join("?" * len(running))
     going = state.DB.execute(f"SELECT {columns} FROM {table} WHERE user_id = ? AND state IN ({marks}){skip}"
                              " ORDER BY created DESC", (uid, *running, *sub_args)).fetchall()
@@ -161,7 +161,7 @@ def _chat_done(uid: int, after: float) -> list:
         return []
     marks = ", ".join("?" * len(mine))
     rows = state.DB.execute(f"SELECT m.id, m.created, c.title FROM messages m JOIN chats c ON c.id = m.chat_id"
-                            f" WHERE c.user_id = ? AND m.id IN ({marks})", (uid, *mine)).fetchall()
+                            f" WHERE c.user_id = ? AND c.deleted IS NULL AND m.id IN ({marks})", (uid, *mine)).fetchall()
     return [{"section": "chat", "id": row["id"], "state": mine[row["id"]][3],
              "title": f"Ответ · {row['title'] or 'новый диалог'}", "detail": "",
              "started": row["created"], "finished": mine[row["id"]][2], "href": f"chat/{mine[row['id']][1]}"}
@@ -171,7 +171,7 @@ def _chat_done(uid: int, after: float) -> list:
 def _chat(uid: int) -> list:
     """Идущие ответы через сервер своих диалогов (частичный индекс `messages_streaming`)."""
     rows = state.DB.execute("SELECT m.id, m.chat_id, m.created, c.title FROM messages m JOIN chats c ON c.id = m.chat_id"
-                            " WHERE c.user_id = ? AND m.status = 'streaming' AND m.via = 'server'"
+                            " WHERE c.user_id = ? AND c.deleted IS NULL AND m.status = 'streaming' AND m.via = 'server'"
                             " ORDER BY m.created DESC", (uid,)).fetchall()
     out = []
     for row in rows:

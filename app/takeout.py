@@ -39,6 +39,7 @@ import clock
 import db
 import media
 import state
+import trash
 import workspace
 
 #: порядок вкладок студии; Claude Code — в конце: отметки чатов (code) и история подключений (agents)
@@ -55,20 +56,25 @@ EXPORTS: dict[str, tuple[int, tuple[str, ...], float]] = {}
 #: user_id → метка идущей выгрузки: одна за раз (снимает конец генератора или его уход из памяти)
 RUNNING: dict[int, object] = {}
 #: раздел → (таблица, столбцы со ссылкой на media, условие); таблицы и столбцы — из кода
+#: Корзина (`deleted`, trash.py) не выгружается: ни записи, ни её файлы
+LIVE = " AND deleted IS NULL"
+_LIVE_CHATS = "SELECT id FROM chats WHERE deleted IS NULL"
 REFS = {
-    "chat": ("attachments", ("media_id",), " AND message_id IS NOT NULL"),
-    "photo": ("images", ("media_id", "source_media_id", "mask_media_id"), ""),
-    "video": ("videos", ("media_id", "source_media_id"), ""),
-    "transcribe": ("transcripts", ("source_media_id", "result_media_id"), ""),
-    "ocr": ("scans", ("source_media_id",), ""),
-    "speech": ("speeches", ("media_id",), ""),
-    "voices": ("voices", ("media_id",), ""),
-    "translate": ("translations", ("source_media_id",), ""),
+    "chat": ("attachments", ("media_id",),
+             f" AND message_id IN (SELECT id FROM messages WHERE chat_id IN ({_LIVE_CHATS}))"),
+    "photo": ("images", ("media_id", "source_media_id", "mask_media_id"), LIVE),
+    "video": ("videos", ("media_id", "source_media_id"), LIVE),
+    "transcribe": ("transcripts", ("source_media_id", "result_media_id"), LIVE),
+    "ocr": ("scans", ("source_media_id",), LIVE),
+    "speech": ("speeches", ("media_id",), LIVE),
+    "voices": ("voices", ("media_id",), LIVE),
+    "translate": ("translations", ("source_media_id",), LIVE),
 }
 #: вторые таблицы раздела с файлами — так же, со своим user_id (медиа диалога, фото страниц распознавания, образцы)
-MORE_REFS = {"chat": (("chat_media", ("media_id",), ""),),
-             "ocr": (("scan_pages", ("media_id",), ""),),
-             "voices": (("voice_samples", ("media_id",), ""),)}
+MORE_REFS = {"chat": (("chat_media", ("media_id",), f"{LIVE} AND chat_id IN ({_LIVE_CHATS})"),),
+             "ocr": (("scan_pages", ("media_id",), " AND scan_id IN (SELECT id FROM scans WHERE deleted IS NULL)"),),
+             "voices": (("voice_samples", ("media_id",),
+                         " AND voice_id IN (SELECT id FROM voices WHERE deleted IS NULL)"),)}
 STORAGE = {"code": "storage", "message": "хранилище недоступно"}
 BUSY = {"code": "busy", "message": "выгрузка уже идёт — дождитесь, пока она скачается"}
 
@@ -165,10 +171,10 @@ def _settings(user_id: int) -> dict | None:
 
 
 def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
-    chat = state.DB.execute("SELECT id, title, model, created, updated FROM chats WHERE id = ? AND user_id = ?",
-                            (chat_id, user_id)).fetchone()
+    chat = state.DB.execute("SELECT id, title, model, created, updated FROM chats WHERE id = ? AND user_id = ?"
+                            + LIVE, (chat_id, user_id)).fetchone()
     if chat is None:
-        return None                                        # удалён во время выгрузки
+        return None                                        # удалён (или в корзину) во время выгрузки
     attachments: dict[str, list] = {}
     for a in state.DB.execute(
             "SELECT id, message_id, kind, name, chars, text, media_id FROM attachments WHERE user_id = ?"
@@ -186,17 +192,19 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
     chat_media = [{"id": r["id"], "name": r["name"], "mime": r["mime"], "size": r["size"], "created": r["created"],
                    "file": files.get(r["media_id"])}
                   for r in state.DB.execute("SELECT id, name, mime, size, created, media_id FROM chat_media"
-                                            " WHERE chat_id = ? AND user_id = ? ORDER BY created, rowid",
+                                            " WHERE chat_id = ? AND user_id = ? AND deleted IS NULL"
+                                            " ORDER BY created, rowid",
                                             (chat_id, user_id))]
     return {**dict(chat), "messages": messages, "media": chat_media}
 
 
 def _pages(table: str, user_id: int):
     """Строки раздела страницами по PAGE — курсором (created, id) последней строки, без OFFSET: у записей
-    бывает одно время. Пустой раздел — одна пустая страница."""
+    бывает одно время. Пустой раздел — одна пустая страница. Корзина (`trash.TABLES`) — мимо."""
     where, args = "", ()
+    live = LIVE if table in trash.TABLES else ""
     while True:
-        rows = state.DB.execute(f"SELECT * FROM {table} WHERE user_id = ?{where} ORDER BY created, id LIMIT ?",
+        rows = state.DB.execute(f"SELECT * FROM {table} WHERE user_id = ?{live}{where} ORDER BY created, id LIMIT ?",
                                 (user_id, *args, PAGE)).fetchall()
         if rows or not args:
             yield rows
@@ -363,8 +371,8 @@ async def _stream(user_id: int, sections: tuple[str, ...], rows: list, mark: obj
             yield piece
         del settings
         if "chat" in sections:
-            ids = [r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? ORDER BY created, id",
-                                                     (user_id,))]
+            ids = [r["id"] for r in state.DB.execute("SELECT id FROM chats WHERE user_id = ? AND deleted IS NULL"
+                                                     " ORDER BY created, id", (user_id,))]
             counts["chats"] = 0
             for chat_id in ids:
                 chat = _chat(user_id, chat_id, files)
