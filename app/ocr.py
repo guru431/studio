@@ -379,8 +379,8 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     прежний. У документа из чата текст вложения до итога пуст — ход ждёт документ, как при первой загрузке;
     итог пересобирает его (`attachment_text`). Идёт — 409 `running`, нечего — 409 `nothing`, подключения нет —
     409 `no_connection`, очередь полна — 409 `busy`."""
-    row = state.DB.execute("SELECT state, connection_id, attachment_id FROM scans WHERE id = ? AND user_id = ?",
-                           (scan_id, user_id)).fetchone()
+    row = state.DB.execute("SELECT state, connection_id, attachment_id FROM scans WHERE id = ? AND user_id = ?"
+                           " AND deleted IS NULL", (scan_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
     if row["state"] not in TERMINAL:
@@ -422,8 +422,8 @@ def again(user_id: int, scan_id: str, conn, model: str) -> str:
     исходного PDF (и уже нарисованных PNG страниц) или фото страниц; ждут все страницы, кроме страниц текстового
     слоя. Прежний документ остаётся — их можно сравнить. Идёт — 409 `running`, файла нет — 404 `gone`, очередь
     полна — 409 `busy`."""
-    row = state.DB.execute("SELECT name, state, source_media_id FROM scans WHERE id = ? AND user_id = ?",
-                           (scan_id, user_id)).fetchone()
+    row = state.DB.execute("SELECT name, state, source_media_id FROM scans WHERE id = ? AND user_id = ?"
+                           " AND deleted IS NULL", (scan_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
     if row["state"] not in TERMINAL:
@@ -709,7 +709,8 @@ async def _runner(user_id: int) -> None:
 
 async def request_cancel(user_id: int, scan_id: str) -> str:
     """«Отменить»: ждущий — сразу `cancelled`; идущий — `cancelling` (раннер дождётся страницы). Итог — state."""
-    row = state.DB.execute("SELECT state FROM scans WHERE id = ? AND user_id = ?", (scan_id, user_id)).fetchone()
+    row = state.DB.execute("SELECT state FROM scans WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (scan_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
     if row["state"] == "queued":
@@ -830,7 +831,9 @@ PHOTO_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
 
 
 def _row(user_id: int, sid: str):
-    row = state.DB.execute(f"SELECT {COLUMNS} FROM scans WHERE id = ? AND user_id = ?", (sid, user_id)).fetchone()
+    """Свой документ не из корзины (`deleted`, trash.py), иначе 404."""
+    row = state.DB.execute(f"SELECT {COLUMNS} FROM scans WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (sid, user_id)).fetchone()
     if row is None:
         raise HTTPException(404, {"code": "gone", "message": "такого документа нет"})
     return row
@@ -939,7 +942,7 @@ async def list_scans(request: Request, before: "float | None" = None,
     uid = request.state.user.id
     closed, args = lock_policy.hidden_scans(uid, lock_policy.RESTRICTED.get())
     rows = db.page(state.DB, "scans", uid, before, before_id, limit, COLUMNS,
-                   f" AND id NOT IN ({closed})" if closed else "", args)
+                   " AND deleted IS NULL" + (f" AND id NOT IN ({closed})" if closed else ""), args)
     return {"items": [_out(r) for r in rows]}
 
 
@@ -1003,18 +1006,28 @@ async def retry_scan(sid: str, body: RetryIn, request: Request):
 
 @router.delete("/{sid}", status_code=204)
 async def delete(sid: str, request: Request):
-    """Строка (страницы — каскадом), затем файлы, на которые больше ничто не ссылается."""
+    """Кончившийся документ — в корзину (`deleted`, trash.py); строка, страницы и файлы — до `purge`."""
     uid = request.state.user.id
     row = _row(uid, sid)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
-    await remove(uid, row)
+    state.DB.execute("UPDATE scans SET deleted = ? WHERE id = ?", (clock.NOW(), sid))
+    log.info("ocr %s: в корзине", sid[:8])
     return Response(status_code=204)
+
+
+async def purge(user_id: int, item_id: str) -> None:
+    """Окончательно (`remove`); строки уже нет — ничего."""
+    row = state.DB.execute("SELECT id, source_media_id FROM scans WHERE id = ? AND user_id = ?",
+                           (item_id, user_id)).fetchone()
+    if row is not None:
+        await remove(user_id, row)
 
 
 async def remove(user_id: int, row) -> None:
     """Кончившийся документ (строка `scans` с `id` и `source_media_id`): строка (страницы — каскадом), затем
-    файлы, на которые больше ничто не ссылается. И удаление записи перевода с её сканом (translate.py)."""
+    файлы, на которые больше ничто не ссылается. И окончательное удаление записи перевода с её сканом
+    (`translate.purge`)."""
     sid = row["id"]
     files = {row["source_media_id"], *(p["media_id"] for p in _page_list(sid))} - {None}
     state.DB.execute("DELETE FROM scans WHERE id = ?", (sid,))
