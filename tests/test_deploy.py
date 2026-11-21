@@ -224,6 +224,13 @@ def test_apache_route_outlasts_the_whole_synchronous_speech_operation():
     assert voices.PROBE_BUDGET_SEC < _route_timeout(f"/api/voices/{'0' * 32}/probe")
 
 
+def test_apache_route_outlasts_the_folder_zip():
+    """B2-I2: «ZIP папки» отвечает, когда сервер MCP соберёт архив (до my_files.ZIP_SEC); общий маршрут 150 с
+    обрывал большие папки 502 Apache, пока служба ещё ждала сервер."""
+    import my_files
+    assert my_files.ZIP_SEC < _route_timeout("/api/my-files/1/zip")
+
+
 def test_voice_editor_uploads_fit_through_the_proxy():
     import voices
     voice, sample = "0" * 32, "1" * 32

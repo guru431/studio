@@ -62,6 +62,7 @@ ENTRIES_MAX = 10_000
 LINKS_MAX = 100                               # действующих ссылок учётки
 OPENED_MAX = 1024
 STORAGE_SEC = 5                               # опрос объёма для «Хранилища»
+ZIP_SEC = mcp.TIMEOUT * 10                    # «ZIP папки» ждёт сборки архива сервером (Apache: свой ProxyPass)
 FAILS = 30                                    # неудач `/f` с адреса за FAIL_SEC
 FAIL_SEC = 900
 COOKIE = "studio_file"
@@ -378,7 +379,7 @@ async def zip_files(sid: int, body: PathIn, request: Request):
     """ZIP папки или файла на сервере → `{url, size}`: адрес скачивания по ticket (Range — докачка)."""
     path = _path(body.path, root=True)
     async with _server(request, sid) as (session, _):
-        reply = await _post(session, "zip", {"path": path}, timeout=mcp.TIMEOUT * 10)
+        reply = await _post(session, "zip", {"path": path}, timeout=ZIP_SEC)
         zid = reply.get("id")
         if not isinstance(zid, str) or not ID_RE.fullmatch(zid):
             raise mcp.refused("MCP не вернул архив")
