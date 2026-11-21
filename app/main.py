@@ -39,6 +39,7 @@ import mcp_client
 import mcp_contracts
 import mcp_files
 import mcp_sections
+import memory
 import chat_exports
 import chat_shares
 import cleaner_client as cleaner
@@ -194,6 +195,7 @@ app.include_router(videos.router)
 app.include_router(chat.router)
 app.include_router(chat_pending.router)
 app.include_router(roles.router)
+app.include_router(memory.router)
 app.include_router(mcp_contracts.router)       # раньше mcp_client: /api/mcp/status — не id сервера
 app.include_router(mcp_client.router)
 app.include_router(mcp_sections.router)

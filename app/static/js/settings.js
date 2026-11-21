@@ -807,6 +807,62 @@ function exaBlock() {
     field(tr("Ключ Exa"), key, 'exa-key'), el('div', { class: 'row' }, save, remove, note));
 }
 
+/* Личная память чата (memory.py): выключатель `PATCH /api/me {memory_on}` — пока он выключен, модели не предлагаются
+ * memory_save / memory_forget и записи не уходят в системное сообщение; список — `GET /api/memory`, удаление записи
+ * и «Очистить всё» — `DELETE /api/memory[/{id}]`. Записи хранятся шифром и видны только владельцу. */
+function memoryBlock(host) {
+  const enabled = el('input', { type: 'checkbox', id: 'memory-enabled', checked: !!me?.memory_on });
+  const list = el('ul', { class: 'memory-items', id: 'memory-items' });
+  const note = status('memory-status');
+  const clear = button(tr("Очистить всё"), { class: 'btn btn-danger', id: 'memory-clear', hidden: true });
+  async function run(action) {
+    try {
+      await action();
+      await load();
+    } catch (err) {
+      say(note, words(err), 'error');
+      load().catch(() => {});                      // выключатель и список — как на сервере
+    }
+  }
+  async function load() {
+    const { on, items } = await api('GET', '/api/memory');
+    enabled.checked = on;
+    clear.hidden = !items.length;
+    list.replaceChildren(...(items.length ? items.map((item) => el('li', { class: 'memory-item', 'data-id': item.id },
+      el('span', { class: 'memory-text' }, message(item.text)), el('span', { class: 'muted small' }, dateOnly(item.created)),
+      button(tr("Удалить"), { class: 'btn btn-sm', 'aria-label': tr("Удалить запись памяти") }, () => run(async () => {
+        await api('DELETE', `/api/memory/${encodeURIComponent(item.id)}`);
+        say(note, tr("Запись удалена"), 'ok');
+      })))) : [el('li', { class: 'muted' }, tr("Записей пока нет"))]));
+  }
+  enabled.addEventListener('change', () => run(async () => {
+    enabled.disabled = true;
+    try {
+      const fresh = await api('PATCH', '/api/me', { memory_on: enabled.checked });
+      if (me) me.memory_on = fresh.memory_on;
+      say(note, fresh.memory_on ? tr("Память включена") : tr("Память выключена"), 'ok');
+    } finally {
+      enabled.disabled = false;
+    }
+  }));
+  clear.addEventListener('click', () => {
+    const yes = button(tr("Очистить"), { class: 'btn btn-danger solid', id: 'memory-clear-confirm' });
+    const dialog = openDialog(host, { id: 'memory-clear-dialog', title: tr("Очистить память?"), actions: [yes],
+      body: [el('p', {}, tr("Все записи памяти будут удалены без возможности вернуть."))] });
+    yes.addEventListener('click', () => run(async () => {
+      yes.disabled = true;
+      await api('DELETE', '/api/memory');
+      dialog.close();
+      say(note, tr("Память очищена"), 'ok');
+    }));
+  });
+  load().catch((err) => say(note, words(err), 'error'));
+  return el('section', { class: 'block', id: 'chat-memory-settings' }, el('h2', {}, tr("Память")),
+    el('label', { class: 'check' }, enabled, tr("Память: модель запоминает факты о вас между диалогами")),
+    el('p', { class: 'muted small' }, tr("Включённая память — короткие записи о вас, которые модель сама добавляет и удаляет; они уходят в каждый ход чата. Записи хранятся зашифрованными и видны только вам; «Удалить всю историю» их стирает.")),
+    list, el('div', { class: 'row' }, clear, note));
+}
+
 /* Push раздела «Claude Code» (спека 2026-10-28-studio-claude-code-design, 6.8): подписка этого устройства —
  * строка сервера у сессии (GET/POST/DELETE /api/me/push), флаг устройства localStorage `studio-push:<id учётки>`
  * (push-sync.js `pushFlag`) — только '1'; ключи и адрес подписки знают браузер и сервер, в localStorage их нет.
@@ -1609,7 +1665,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       panel.replaceChildren(back, note);
       return;
     }
-    panel.replaceChildren(back, sectionBlock(s), ...(other && s.id === 'chat' ? [rolesBlock(), chatMcpBlock()] : []),
+    panel.replaceChildren(back, sectionBlock(s), ...(other && s.id === 'chat' ? [rolesBlock(), chatMcpBlock(), memoryBlock(host)] : []),
       ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
   }
 

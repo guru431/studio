@@ -771,6 +771,11 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .notify-block > .push-check { margin-top: 14px; }
 .notify-block > #push-hint { margin: var(--space-3) 0 0; }
 .agents { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+/* личная память чата (settings.js memoryBlock) */
+.memory-items { list-style: none; margin: var(--space-3) 0 var(--space-4); padding: 0; display: flex; flex-direction: column;
+  gap: var(--space-3); }
+.memory-item { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+.memory-text { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
 .agent { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; min-width: 0; }
 .agent b { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .agent .agent-revoke { margin-left: auto; }
@@ -979,6 +984,19 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .msg-pending-args dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .msg-pending-actions, .msg-pending-own { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .msg-pending-own .input { flex: 1 1 12rem; min-width: 0; }
+/* план ответа (chat.js paintTodo, todo_write): отметка состояния — знаком перед шагом */
+.msg-todo:empty { display: none; }
+.chat-todo { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); border-radius: var(--r-control);
+  background: var(--surface-1); font-size: var(--fs-sm); min-width: 0; }
+.chat-todo-head { margin: 0 0 var(--space-2); font-weight: 600; }
+.chat-todo ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-1); }
+.chat-todo li { display: flex; gap: var(--space-2); overflow-wrap: anywhere; min-width: 0; }
+.chat-todo li::before { flex: none; width: 1.2em; text-align: center; }
+.chat-todo .todo-done { color: var(--text-2); text-decoration: line-through; }
+.chat-todo .todo-done::before { content: "✓"; text-decoration: none; }
+.chat-todo .todo-in_progress { font-weight: 600; }
+.chat-todo .todo-in_progress::before { content: "▸"; color: var(--accent); }
+.chat-todo .todo-pending::before { content: "○"; color: var(--text-2); }
 .msg-files { display: flex; flex-wrap: wrap; gap: var(--space-4); min-width: 0; }
 .msg-file { max-width: 100%; min-width: 0; }
 .msg-file-image { display: block; padding: 0; border: 1px solid var(--line); border-radius: var(--r-control); background: none;

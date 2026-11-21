@@ -332,7 +332,7 @@ def test_scan_made_by_a_protected_section_is_closed_everywhere(studio, closed):
 
 
 #: голова пути /api/<голова>/… → раздел: всё под ней закрывает защита этого раздела
-SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "images": "photo", "presets": "photo", "videos": "video",
+SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "images": "photo", "presets": "photo", "videos": "video",
                  "transcripts": "transcribe", "transcribe": "transcribe", "voices": "speech", "speeches": "speech",
                  "speech": "speech", "ocr": "ocr", "translate": "translate", "code": "code", "agents": "code"}
 #: прочие маршруты /api/* — явно. "closed" — закрыт любой частичной защитой (управление защитой, уведомлениями,

@@ -71,6 +71,7 @@ class MePatch(BaseModel):
     computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
     #: язык интерфейса устройства — его push и ntfy (только этой сессии; push-sync.js после смены языка)
     notify_lang: ntfy.Lang | None = None
+    memory_on: bool | None = None           # личная память «Чата» (memory.py); null — не трогать
 
     @field_validator("timezone")
     @classmethod
@@ -123,7 +124,7 @@ def _me(request: Request) -> dict:
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, timezone, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
                            " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions,"
-                           " password_reset, email, email_codes FROM users WHERE id = ?",
+                           " password_reset, email, email_codes, memory_on FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     views = json.loads(row["views"])
@@ -142,6 +143,7 @@ def _me(request: Request) -> dict:
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
             # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null
             "password_reset": row["password_reset"],
+            "memory_on": bool(row["memory_on"]),     # личная память «Чата» (memory.py)
             # языки push и ntfy этой сессии: страница сверяет их с языком интерфейса устройства
             "notify_langs": ntfy.session_langs(request.state.digest)}
 
@@ -189,6 +191,8 @@ async def patch_me(body: MePatch, request: Request):
         changes["code_defaults"] = json.dumps(stored)
     if "code_quick_actions" in sent:
         changes["code_quick_actions"] = json.dumps([action.model_dump() for action in body.code_quick_actions])
+    if body.memory_on is not None:
+        changes["memory_on"] = int(body.memory_on)
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE users SET {cols} WHERE id = ?", (*changes.values(), uid))

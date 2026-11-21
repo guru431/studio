@@ -59,6 +59,10 @@ EXEMPT_CONSTANTS = {
     'chat_pending.REFUSED': 'результат инструмента для модели',
     'chat_tools.NO_ANSWER': 'результат инструмента для модели',
     'chat.DUPLICATE': 'результат инструмента для модели',
+    'chat_system.MEMORY_HEAD': 'заголовок памяти для модели',
+    'chat_tools.TODO_SAVED': 'результат инструмента для модели',
+    'chat_tools.MEMORY_SAVED': 'результат инструмента для модели',
+    'chat_tools.MEMORY_FORGOTTEN': 'результат инструмента для модели',
 }
 
 #: функции, возвращающие слова для пользователя: (модуль, имя)

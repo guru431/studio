@@ -1,10 +1,20 @@
 """Встроенные инструменты чата, не из «Интернета» (`web.py`): их предлагает сервер в каждом ходе через сервер, кроме
-Cleaner (`chat.StreamTask._read_model`). Сейчас — `ask_user` (спека 2026-11-21-studio-source-capabilities-design,
-п. 17): вопрос пользователю кнопками; ход встаёт на паузу (`chat_pending.pause`), ответ продолжает тот же ответ.
-В журнал — ничего: вопрос и ответ пишет только шаг в `messages.tools`."""
+Cleaner (`chat.StreamTask._read_model`). Спека 2026-11-21-studio-source-capabilities-design:
+
+- `ask_user` (п. 17): вопрос пользователю кнопками; ход встаёт на паузу (`chat_pending.pause`), ответ продолжает
+  тот же ответ;
+- `todo_write` (п. 18): видимый план многошаговой работы — `messages.todo` ответа и событие SSE `todo`;
+- `memory_save` / `memory_forget` (п. 18): личная память (`memory`), только при `users.memory_on`.
+
+Новый инструмент: спецификация, строка в `KIND_OF`, ветка в `call`. В журнал — ничего: вопрос, ответ и план пишет
+только шаг в `messages.tools` и `messages.todo`, текст памяти — только `user_memory` шифром."""
 import json
 
+from fastapi import HTTPException
+
 import chat_pending
+import memory
+import state
 
 QUESTION_MAX = 500
 OPTIONS_MAX = 6
@@ -23,7 +33,45 @@ ASK_USER = {"type": "function", "function": {
         "allow_text": {"type": "boolean", "default": True, "description": "можно ли ответить своим текстом"}},
         "required": ["question"]}}}
 
-KIND_OF: dict[str, str] = {"ask_user": "ask"}     # вид шага `messages.tools` каждого встроенного инструмента
+TODO_MAX = 20
+TODO_TEXT_MAX = 200
+TODO_STATUSES = ("pending", "in_progress", "done")
+TODO_BAD = (f"неверные аргументы todo_write — нужен список items до {TODO_MAX} пунктов: text до {TODO_TEXT_MAX} знаков "
+            "и status pending, in_progress или done")
+TODO_SAVED = "План сохранён: пунктов — {0}. Пользователь видит его над ответом."
+
+TODO_WRITE = {"type": "function", "function": {
+    "name": "todo_write",
+    "description": ("Показать пользователю план многошаговой работы и отмечать ход: вызывай в начале такой работы и "
+                    "после каждого шага, каждый раз со всем списком. Простым вопросам план не нужен."),
+    "parameters": {"type": "object", "properties": {
+        "items": {"type": "array", "maxItems": TODO_MAX, "items": {"type": "object", "properties": {
+            "text": {"type": "string", "maxLength": TODO_TEXT_MAX, "description": "шаг на языке пользователя"},
+            "status": {"type": "string", "enum": list(TODO_STATUSES)}},
+            "required": ["text", "status"]}}},
+        "required": ["items"]}}}
+
+MEMORY_OFF = "память выключена пользователем"
+MEMORY_GONE = "такой записи памяти нет — номер из блока «Что известно о пользователе»"
+MEMORY_SAVED = "Запомнено."
+MEMORY_FORGOTTEN = "Запись удалена из памяти."
+
+MEMORY_SAVE = {"type": "function", "function": {
+    "name": "memory_save",
+    "description": ("Запомнить о пользователе устойчивый факт или предпочтение на будущие диалоги (имя, язык, стиль "
+                    "ответов, постоянные обстоятельства). Не записывай разовое, секреты, пароли и чужие данные."),
+    "parameters": {"type": "object", "properties": {
+        "text": {"type": "string", "maxLength": memory.ITEM_MAX, "description": "одна короткая запись"}},
+        "required": ["text"]}}}
+MEMORY_FORGET = {"type": "function", "function": {
+    "name": "memory_forget",
+    "description": "Удалить запись из памяти о пользователе — устаревшую или по его просьбе.",
+    "parameters": {"type": "object", "properties": {
+        "id": {"type": "string", "description": "номер записи в квадратных скобках из «Что известно о пользователе»"}},
+        "required": ["id"]}}}
+
+#: вид шага `messages.tools` каждого встроенного инструмента
+KIND_OF: dict[str, str] = {"ask_user": "ask", "todo_write": "todo", "memory_save": "memory", "memory_forget": "memory"}
 NAMES: set[str] = set(KIND_OF)
 KINDS: set[str] = set(KIND_OF.values())          # виды их шагов в `messages.tools`
 
@@ -34,8 +82,69 @@ def for_model(step: dict) -> str:
 
 
 def specs(task) -> list[dict]:
-    """Встроенные инструменты хода `task` (`chat.StreamTask`)."""
-    return [ASK_USER]
+    """Встроенные инструменты хода `task` (`chat.StreamTask`): вопрос и план — всегда, память — только при
+    `users.memory_on`."""
+    return [ASK_USER, TODO_WRITE] + ([MEMORY_SAVE, MEMORY_FORGET] if memory.enabled(task.user_id) else [])
+
+
+def _args(arguments: str) -> "dict | None":
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        return None
+    return args if isinstance(args, dict) else None
+
+
+def todo_items(arguments: str) -> "list[dict] | None":
+    """План из аргументов `todo_write` (`[{text, status}]`, текст без пробелов по краям) или None — неверные."""
+    args = _args(arguments)
+    items = args.get("items") if args is not None else None
+    if not isinstance(items, list) or len(items) > TODO_MAX:
+        return None
+    out = []
+    for item in items:
+        text = item.get("text") if isinstance(item, dict) else None
+        if (not isinstance(text, str) or not text.strip() or len(text) > TODO_TEXT_MAX
+                or item.get("status") not in TODO_STATUSES):
+            return None
+        out.append({"text": text.strip(), "status": item["status"]})
+    return out
+
+
+def _todo(task, call) -> dict:
+    """План ответа: в `messages.todo` идущего ответа и событием SSE `todo {items}` (блок плана над ответом)."""
+    items = todo_items(call.arguments)
+    if items is None:
+        return {"kind": "todo", "error": TODO_BAD}
+    state.DB.execute("UPDATE messages SET todo = ? WHERE id = ? AND status = 'streaming'",
+                     (json.dumps(items, ensure_ascii=False), task.message_id))
+    task.fresh = True
+    task.put("todo", {"items": items})
+    return {"kind": "todo", "text": TODO_SAVED.format(len(items))}
+
+
+def _memory(task, call) -> dict:
+    """`memory_save` / `memory_forget`: только при `users.memory_on`. Шаг текста записи не хранит (память — шифром),
+    `memory_forget` принимает номер из блока — первые знаки id своей записи."""
+    action = "save" if call.name == "memory_save" else "forget"
+    if not memory.enabled(task.user_id):
+        return {"kind": "memory", "action": action, "error": MEMORY_OFF}
+    args = _args(call.arguments) or {}
+    if action == "save":
+        text = args.get("text")
+        if not isinstance(text, str):
+            return {"kind": "memory", "action": action, "error": memory.INVALID["message"]}
+        try:
+            memory.save(task.user_id, text)
+        except HTTPException as exc:
+            return {"kind": "memory", "action": action, "error": exc.detail["message"]}
+        return {"kind": "memory", "action": action, "text": MEMORY_SAVED}
+    handle = args.get("id")
+    found = [item["id"] for item in memory.list_for(task.user_id)
+             if isinstance(handle, str) and len(handle.strip()) >= 6 and item["id"].startswith(handle.strip().lower())]
+    if len(found) != 1 or not memory.forget(task.user_id, found[0]):
+        return {"kind": "memory", "action": action, "error": MEMORY_GONE}
+    return {"kind": "memory", "action": action, "text": MEMORY_FORGOTTEN}
 
 
 def _ask_view(arguments: str) -> "dict | None":
@@ -60,6 +169,10 @@ def _ask_view(arguments: str) -> "dict | None":
 async def call(task, call) -> dict:
     """Вызов встроенного инструмента: шаг ответа. `ask_user` с верными аргументами ставит ход на паузу
     (`task.paused`): шаг даст ответ пользователя (`answer_step`)."""
+    if call.name == "todo_write":
+        return _todo(task, call)
+    if call.name in ("memory_save", "memory_forget"):
+        return _memory(task, call)
     view = _ask_view(call.arguments)
     if view is None:
         return {"kind": "ask", "error": BAD_ARGS}

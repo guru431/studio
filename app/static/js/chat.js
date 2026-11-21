@@ -279,6 +279,10 @@ async function readServer(job, response) {
         job.message.pending = data;
         notify(job, false);
       }
+      else if (event === 'todo' && data && Array.isArray(data.items)) {   // план ответа (todo_write) — блок над ним
+        job.message.todo = data.items;
+        notify(job, false);
+      }
       else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {
         job.scan = data;                           // ответ ждёт распознавания скана — плашка до первого текста
         notify(job, false);
@@ -487,12 +491,34 @@ function stepNode(s) {
   } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
   else if (s.kind === 'ask') li.append(s.question ? tr("Вопрос: «{0}»", s.question) : tr("Вопрос модели"));
   else if (s.kind === 'duplicate') li.append(tr("Повтор пропущен: {0}", s.tool));   // chat.DUPLICATE
+  else if (s.kind === 'todo') li.append(tr("План работы"));                        // chat_tools.TODO_WRITE
+  else if (s.kind === 'memory') li.append(s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
   else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${message(s.error)}`));
   return li;
 }
 
 const count = (n, forms) => `${n} ${plural(n, forms)}`;
+
+/* план ответа (`todo_write`, `messages.todo`): «План: N из M» и шаги с отметкой состояния; тот же план не
+   перерисовывается (`p.planKey`) — опрос и дельты текста его не пересоздают */
+const TODO_STATES = { done: tr("сделано"), in_progress: tr("в работе"), pending: tr("впереди") };
+
+function paintTodo(p, items) {
+  const list = Array.isArray(items) ? items.filter((i) => i && typeof i.text === 'string' && TODO_STATES[i.status]) : [];
+  const key = JSON.stringify(list);
+  if (key === p.planKey) return;
+  p.planKey = key;
+  if (!list.length) {
+    p.plan.replaceChildren();
+    return;
+  }
+  const done = list.filter((i) => i.status === 'done').length;
+  p.plan.replaceChildren(el('div', { class: 'chat-todo', role: 'group', 'aria-label': tr("План работы") },
+    el('p', { class: 'chat-todo-head' }, tr("План: {0} из {1}", done, list.length)),
+    el('ol', {}, ...list.map((i) => el('li', { class: `todo-${i.status}` },
+      el('span', { class: 'sr' }, `${TODO_STATES[i.status]}: `), i.text)))));
+}
 
 /* плашка над ответом: «🌐 Интернет (Exa): 2 поиска, 1 страница · ▶ YouTube: 1 ролик — 1 ошибка»; YouTube идёт
    не через Exa — своей частью, вызов несуществующего инструмента — «неверный вызов» */
@@ -506,7 +532,9 @@ function badgeText(steps) {
   if (of('mcp')) parts.push(`MCP: ${of('mcp')}`);
   if (of('ask')) parts.push(count(of('ask'), [tr("вопрос"), tr("вопроса"), tr("вопросов")]));   // ask_user (chat-pending.js)
   if (of('duplicate')) parts.push(count(of('duplicate'), [tr("повтор пропущен"), tr("повтора пропущено"), tr("повторов пропущено")]));
-  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && !['mcp', 'ask', 'duplicate'].includes(s.kind)).length;
+  if (of('todo')) parts.push(tr("план"));
+  if (of('memory')) parts.push(tr("память: {0}", of('memory')));
+  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && !['mcp', 'ask', 'duplicate', 'todo', 'memory'].includes(s.kind)).length;
   if (wrong) parts.push(count(wrong, [tr("неверный вызов"), tr("неверных вызова"), tr("неверных вызовов")]));
   const errors = steps.filter((s) => s.error).length;
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
@@ -1341,10 +1369,11 @@ function build(view, ctx) {
     });
     const consent = el('div', { class: 'msg-consents' });
     const pending = el('div', { class: 'msg-pending' });
+    const plan = el('div', { class: 'msg-todo' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, md, pending, resultFiles(chatId, m, root), consent, steps, meta, nowait, actions));
+      el('div', { class: 'msg-body' }, badge, think, plan, md, pending, resultFiles(chatId, m, root), consent, steps, meta, nowait, actions));
     parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '',
-      pending });
+      pending, plan, planKey: '' });
     paint(m);
     return node;
   }
@@ -1453,6 +1482,7 @@ function build(view, ctx) {
     paintBadge(p, m, job);
     paintThought(p, m, job);
     paintConsent(m);
+    paintTodo(p, m.todo);
     paintPending(p.pending, m.status !== 'streaming' && m.pending ? m.pending : null,
       (action, answer) => answerPending(m, action, answer));
     const displayed = String((m.cleaner_show_raw ? m.cleaner_raw : m.content) ?? '');
