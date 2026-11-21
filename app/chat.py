@@ -425,7 +425,7 @@ def _attachment_out(a, scans: dict | None = None, sources: set | None = None, re
     if rescan is not None and a["id"] in rescan:
         out["rescan"] = True
     if a["source_transcript_id"] is not None:
-        exists = (state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ?",
+        exists = (state.DB.execute("SELECT 1 FROM transcripts WHERE id = ? AND user_id = ? AND deleted IS NULL",
                                    (a["source_transcript_id"], a["user_id"])).fetchone() is not None
                   if sources is None else a["source_transcript_id"] in sources)
         out["source"] = {"transcript_id": a["source_transcript_id"], "exists": exists}
@@ -1592,7 +1592,7 @@ async def get_chat(chat_id: str, request: Request):
     if linked:
         marks = ",".join("?" * len(linked))
         sources = {r[0] for r in state.DB.execute(
-            f"SELECT id FROM transcripts WHERE user_id = ? AND id IN ({marks})", (uid, *linked))}
+            f"SELECT id FROM transcripts WHERE user_id = ? AND deleted IS NULL AND id IN ({marks})", (uid, *linked))}
     views = {a["id"]: _attachment_out(a, scans, sources, rescan) for a in all_atts}
     pending = chat_pending.open_views(chat_id)
     return {"chat": _chat_view(uid, row), "media": mcp_files.media_of(chat_id),
