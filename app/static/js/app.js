@@ -207,7 +207,7 @@ async function render() {
       notice('wait', err.message, 'empty')); }, unmount() {} };
   }
   if (mine !== renders) return;
-  cancelRecording();                            // запись голоса прежнего раздела не переживает его
+  cancelRecording({ section: true });           // запись голоса прежнего раздела не переживает его (встреча — переживает)
   if (current) current.module.unmount();
   view.replaceChildren();
   current = { section: route.section, module };
@@ -261,6 +261,27 @@ function buildRail() {
     group = s.group;
     rail.insertBefore(tab, spacer);
   }
+  meetingDot(rail, refresh);
+}
+
+/** «● Запись мм:сс» у рельса, пока идёт запись встречи (recorder.js, событие `studio-meeting`): смена раздела её не
+ * прерывает, точка ведёт обратно в «Расшифровку». На телефоне — плашкой над нижними вкладками. */
+function meetingDot(rail, before) {
+  const time = el('span', { class: 'rec-dot-time' });
+  const dot = el('a', { id: 'rec-dot', class: 'rec-dot', href: '#/transcribe', hidden: '' },
+    el('span', { class: 'rec-dot-mark', 'aria-hidden': 'true' }), el('span', {}, tr("Запись")), time);
+  rail.insertBefore(dot, before);
+  document.addEventListener('studio-meeting', ({ detail }) => {
+    dot.hidden = !detail;
+    if (!detail) return;
+    const s = Math.floor(detail.seconds);
+    const mmss = `${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    time.textContent = s >= 3600 ? `${Math.floor(s / 3600)}:${mmss}` : mmss;
+    dot.classList.toggle('paused', detail.paused);
+    const label = detail.paused ? tr("Запись на паузе · {0}", time.textContent) : tr("Идёт запись · {0}", time.textContent);
+    dot.setAttribute('aria-label', label);
+    dot.title = label;
+  });
 }
 
 /** Клавиши разделов на компьютере: Alt+1…8 — разделы в порядке рельса (реестр sections-meta.js), Alt+/ — «Поиск»;

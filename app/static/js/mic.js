@@ -19,9 +19,12 @@ import { tr } from './i18n.js';
  * lock.js): микрофон отпущен, done — null, звук никуда не уходит. Кнопка `owner` ушла со страницы
  * (закрыли окно, раздел перерисовался) — запись отменяется сама; отменённая до разрешения — null.
  *
- * holdMic(owner) → release() — долгий владелец микрофона: «Разговор» чата (chat-voice.js). Пока он держит микрофон,
- * startRecording отказывает словами `owner.words` (диктовка и образец голоса не стартуют), а cancelRecording()
- * зовёт `owner.cancel()` — смена раздела, шторка и блокировка останавливают и его.
+ * holdMic(owner) → release() — долгий владелец микрофона: «Разговор» чата (chat-voice.js), запись встречи
+ * «Расшифровки» (recorder.js). Пока он держит микрофон, startRecording отказывает словами `owner.words` (диктовка и
+ * образец голоса не стартуют). cancelRecording() владельца без `pause` («Разговор») останавливает — `owner.cancel()`;
+ * владельца с `pause()` (запись встречи) шторка и блокировка ставят на паузу, а смену раздела
+ * (`cancelRecording({ section: true })`, app.js) он переживает; его же нельзя перехватить: holdMic другого — отказ
+ * его словами.
  *
  * Язык распознавания (SPEECH_LANGUAGES, «Авто» — без поля): голосовой ввод берёт выбор устройства
  * (`dictationLanguage`, localStorage `studio-dictation-language`, настройки «Ввод и интернет») полем формы `language`. */
@@ -48,7 +51,7 @@ export const TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audi
 const ICON = svg('mic');
 
 let active = null;       // { cancel() } — идущая запись (или ожидание разрешения) студии
-let holder = null;       // { cancel(), words } — долгий владелец микрофона (holdMic)
+let holder = null;       // { cancel(), words, pause? } — долгий владелец микрофона (holdMic)
 // перезагрузка оборвала бы запись — автоматическую (refresh.js) идущая запись запрещает
 document.addEventListener('studio-before-auto-refresh', (event) => { if (active || holder) event.preventDefault(); });
 
@@ -57,15 +60,19 @@ function clock(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Отменить идущую запись: микрофон отпущен, её done — null; долгий владелец (holdMic) останавливается. */
-export function cancelRecording() {
+/** Отменить идущую запись: микрофон отпущен, её done — null; долгий владелец (holdMic) останавливается, а запись
+ * встречи (владелец с `pause`) встаёт на паузу. `section` — смена раздела: запись встречи её переживает. */
+export function cancelRecording({ section = false } = {}) {
   if (active) active.cancel();
-  if (holder) holder.cancel();
+  if (!holder) return;
+  if (!holder.pause) holder.cancel();
+  else if (!section) holder.pause();
 }
 
-/** Микрофон — долгому владельцу `{ cancel(), words }`: идущая запись отменяется, новые отказывают его словами.
- * Итог — release(), чтобы отпустить. */
+/** Микрофон — долгому владельцу `{ cancel(), words, pause? }`: идущая запись отменяется, новые отказывают его
+ * словами. Микрофон держит запись встречи — отказ её словами (Error). Итог — release(), чтобы отпустить. */
 export function holdMic(owner) {
+  if (holder && holder !== owner && holder.pause) throw new Error(holder.words);
   cancelRecording();
   holder = owner;
   return () => { if (holder === owner) holder = null; };

@@ -215,6 +215,11 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
   border-radius: var(--r-control); background: var(--success); color: var(--surface-1); font-size: var(--fs-2xs); font-weight: 700;
   line-height: 1.55em; text-align: center; font-variant-numeric: tabular-nums; }
 #rail .spacer { flex: 1; }
+/* идёт запись встречи (recorder.js, app.js meetingDot): «● Запись мм:сс» над значками рельса */
+#rail .rec-dot { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); width: 76px; padding: var(--space-2) 0;
+  border-radius: var(--r-control); color: var(--danger); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; text-decoration: none; }
+#rail .rec-dot.paused { color: var(--text-2); }
+.rec-dot-mark { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
 /* разделитель групп разделов (sections-meta.js group): Чат · Фото, Видео · Озвучка, Расшифровка · Сканы, Перевод · Агенты */
 #rail .tab.group-start { position: relative; margin-top: var(--space-4); }
 #rail .tab.group-start::before { content: ""; position: absolute; left: 24px; right: 24px;
@@ -372,6 +377,10 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
   .jobs-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 54px; }
   .search-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 96px; }
   .refresh-toggle { position: fixed; z-index: var(--z-nav-icons); top: calc(10px + env(safe-area-inset-top, 0px)); right: 138px; }
+  /* плашка — на верхней кромке нижних вкладок, между значками: поле ввода раздела не закрывает */
+  #rail .rec-dot { position: fixed; z-index: var(--z-nav-icons); left: 50%; bottom: calc(var(--tabs-h) - 10px); transform: translateX(-50%);
+    width: auto; flex-direction: row; gap: var(--space-2); padding: 1px var(--space-4); line-height: 1.4;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--surface-1); }
   .jobs-dot { border-color: var(--surface-3); }
   .jobs-panel { inset: auto 0 0 0; width: 100%; max-width: none; max-height: calc(80 * var(--dvh)); border-radius: var(--r-card) var(--r-card) 0 0;
     border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -457,7 +466,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .ctl-primary { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3); flex: none;
   min-height: var(--ctl-h); padding: var(--ctl-pad-y) var(--ctl-pad-x); border: 1px solid transparent; border-radius: var(--ctl-radius);
   background: var(--primary); color: var(--on-primary); font-size: var(--ctl-font); font-weight: 600; white-space: nowrap; }
-.ctl-primary svg.ico { width: 1lh; height: 1lh; }   /* высота — как у .pick-trigger: строка, отступы, рамка */
+.ctl-primary svg.ico, .split-toolbar .ctl-chip svg.ico { width: 1lh; height: 1lh; }   /* высота — как у .pick-trigger: строка, отступы, рамка */
 @media (hover: hover) { .ctl-primary:hover { filter: brightness(.94); } }
 .ctl-primary:disabled { opacity: .5; cursor: default; }
 .pick-menu { width: 280px; }
@@ -585,6 +594,13 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .tr-error:empty { display: none; }
 .tr-sending { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); margin: var(--space-4) var(--space-7) 0; }
 .tr-sending > p { margin: 0; }
+/* «Записать»: идущая запись встречи и оставшиеся на устройстве (transcribe.js) */
+.tr-rec { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); margin: var(--space-4) var(--space-7) 0; }
+.tr-rec > p { flex-basis: 100%; margin: 0; }
+.tr-rec > p:empty { display: none; }
+.tr-rec-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
+.rec-time { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tr-rec[data-state="recording"] .rec-time { color: var(--danger); }
 .tr-meta { margin: 0; }
 .tr-acts { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-start; }
 .tr-audio { width: 100%; }

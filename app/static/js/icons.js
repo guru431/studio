@@ -44,6 +44,7 @@ export const ICONS = {
   send: '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
   stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>',
   play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  pause: '<path d="M9 6v12M15 6v12"/>',
   save: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
   share: '<path d="M8 9H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2M12 15V3m-4 4 4-4 4 4"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
