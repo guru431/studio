@@ -186,15 +186,16 @@ UNSENT = (SCAN_FAILED, STORAGE, GAVE_UP, CARD_BUSY.split("{")[0])
 #: пометка вместо картинки сверх предела подключения (`profiles.max_images`): {} — предел
 DROPPED = "[фото убрано из контекста: модель принимает не больше {} картинок на запрос]"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
-#: тип файла документа по расширению (`documents.SUFFIXES`); HTML и XML — text/plain: /api/media отдаёт файл
-#: с этим типом на адресе студии, и разметка из вложения не должна там открываться страницей
+#: тип файла документа по расширению (`documents.SUFFIXES`); HTML, XML, JS и CSS — text/plain: /api/media отдаёт
+#: файл с этим типом на адресе студии, и разметка из вложения не должна там открываться страницей, а скрипт и стиль —
+#: подключаться ею (CSP `script-src 'self'`)
 DOC_MIME = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".csv": "text/csv", ".tsv": "text/tab-separated-values", ".json": "application/json",
             ".jsonl": "application/x-ndjson", ".xml": "text/plain", ".yaml": "application/yaml",
             ".yml": "application/yaml", ".toml": "application/toml", ".ini": "text/plain", ".log": "text/plain",
-            ".py": "text/x-python", ".js": "text/javascript", ".ts": "text/plain", ".html": "text/plain",
-            ".css": "text/css", ".sql": "application/sql", ".sh": "application/x-sh", ".ps1": "text/plain"}
+            ".py": "text/x-python", ".js": "text/plain", ".ts": "text/plain", ".html": "text/plain",
+            ".css": "text/plain", ".sql": "application/sql", ".sh": "application/x-sh", ".ps1": "text/plain"}
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api")

@@ -123,3 +123,13 @@ def test_cp1251_text_file_decoded(studio):
     sse(turn(studio, cid, "Итог?", attachment_ids=[att["id"]]))
     assert user_parts(studio) == f'<document name="отчёт.csv">\n{text}\n</document>\n\nИтог?'
     assert chat.DOC_MIME[".csv"] == "text/csv"
+
+
+def test_script_and_style_attachments_served_as_plain_text(studio):
+    """Вложение `.js` и `.css` /api/media отдаёт на адресе студии: исполняемым типом его могла бы подключить
+    страница (CSP `script-src 'self'`) — только text/plain, как `.html` и `.xml`."""
+    add_gateway(studio)
+    for name, data in (("app.js", b"alert(1)"), ("site.css", b"body{color:red}"), ("page.html", b"<b>x</b>")):
+        att = attach(studio, name, data)
+        r = studio.c.get(f"/api/media/{att['media_id']}")
+        assert r.status_code == 200 and r.headers["content-type"].split(";")[0] == "text/plain", name
