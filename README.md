@@ -41,12 +41,14 @@ The server runs on infrastructure you control. Connect local models through the 
 
 - Multiple conversations, model switching and persistent history grouped by day.
 - Streaming answers with Markdown, tables, syntax highlighting, copy, stop and regenerate.
-- Image attachments and PDF, DOCX, TXT and Markdown documents; scanned PDFs can pass through OCR before the model answers.
+- Up to 10 attachments per message: images, PDF, DOCX, text and code files; scanned PDFs can pass through OCR before the model answers, and large documents and **knowledge bases** reach the model as excerpts found for the question.
+- Tool-call confirmation and model questions as buttons under the answer, a work plan above the answer and optional personal **memory** across conversations.
+- Profile and MCP prompt suggestions, a context-usage ring and **Talk** mode: speak and hear the answer read aloud.
 - Optional reasoning controls for supported local models, with a collapsible reasoning history.
 - Optional web search and page reading through Exa, plus YouTube subtitles. Tool activity and saved sources show what was actually retrieved.
 - Send transcripts and recognized documents to a new chat with a prepared question, summary or task extraction prompt.
 - Server-routed answers continue after the page closes. Direct browser connections are also available for compatible chat endpoints.
-- Export complete conversations to **PDF or Markdown**, including agent tool steps where available.
+- Export complete conversations to **PDF or Markdown**, including agent tool steps where available, or a chat **ZIP** archive with its files.
 
 ### Images
 
@@ -74,11 +76,12 @@ The server runs on infrastructure you control. Connect local models through the 
 - Preview reference voices, listen to completed phrases while synthesis continues and download the final MP3.
 - Dictate into chat, media prompts, translation and search. Recognized text is inserted at the cursor for review before sending.
 - Voice input audio is processed without being saved as a recording in Studio history.
-- Gateway speech recognition is **Russian only** (the language is fixed in the request); gateway speech synthesis speaks Russian or English (chosen next to the voice). For other languages, use a compatible external service, which takes the language from the text or the recording.
+- Recognition language is Auto, Russian or English; gateway speech synthesis speaks Russian or English (chosen next to the voice). For other languages, use a compatible external service, which takes the language from the text or the recording.
+- Long texts are voiced in parts of one chat, with Play all and a single MP3; **Read aloud** a chat answer, translation or scan.
 
 ### Transcription
 
-- Upload common audio formats or video with audio, up to **200 MiB / 60 minutes**.
+- Upload common audio formats or video with audio, up to **200 MiB / 4 hours** (long ones in parts), or record a meeting right from the microphone with loss protection.
 - Speaker separation with gateway WhisperX (Russian recordings); compatible external transcription endpoints are also supported, including for other languages.
 - Timestamped utterances linked to the original player; click a line to play that moment.
 - Correct text, rename speakers and reset edits without rerunning recognition.
@@ -149,7 +152,8 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 - Per-device **Web Push** and optional **ntfy** delivery, including Android devices without Google services.
 - Installable PWA, touch layouts, keyboard navigation and configurable mobile bottom tabs.
 - Light, dark and system themes; four accent colors, text size, UI scale, compact density and account timezone.
-- Storage usage, history export, history deletion and an administrator backup/restore check.
+- Storage usage, a 14-day **trash** for deleted items, history export, password-confirmed history deletion and an administrator backup/restore check.
+- **My files** on MCP servers with one-day personal file links, and **Help** with the Studio guide and MCP server guides.
 - Daily consistent SQLite backups with retention. Media is stored separately; SQLite stays on local disk.
 
 ## Screenshots
