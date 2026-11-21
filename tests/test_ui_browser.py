@@ -1301,7 +1301,7 @@ def test_chat_refuses_unfit_files_at_once_and_drops_the_empty_chat(browser, live
                           " document.querySelector('#chat-input').value, document.querySelectorAll('#messages .msg').length]")])
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["chip"] == "Поддерживаются PDF, DOCX, TXT, MD и фото PNG, JPEG, WebP"
+    assert v["chip"] == "Поддерживаются PDF, DOCX, текстовые файлы и код, фото PNG, JPEG, WebP"
     assert v["refused"] == ["Уберите неподходящие файлы", "#/chat"]
     assert v["after"] == ["Документ повреждён", "Посмотри", 0]
     created = [s for s in r["sent"] if s == "POST /api/chats"]

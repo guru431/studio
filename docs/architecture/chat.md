@@ -251,7 +251,7 @@ MCP привязаны к запустившей инструмент учётк
 страница — блок `.msg-consent` «Передать» / «Не передавать» (`chat-files.js`); после «Передать» файлы уходят со
 следующим сообщением.
 
-`mcp_files.sync(task, servers)` — в `StreamTask._read` после отбора: `mcp_files.PER_TURN` (8) новейших вложений (кроме
+`mcp_files.sync(task, servers)` — в `StreamTask._read` после отбора: `mcp_files.PER_TURN` (10) новейших вложений (кроме
 отклонённых моделью ходов `chat._refused_turns`) и столько же медиа диалога; живая загрузка с тем же stamp моложе
 `mcp_files.UPLOAD_TTL_SEC` (72000 с) не повторяется (`mcp_uploads`, `mcp_media_uploads`); файл больше `max_bytes`
 сервера — заметка, без загрузки; на ход — не больше `mcp_files.SYNC_BYTES` (256 МиБ), новые загрузки начинаются в
@@ -399,11 +399,17 @@ Studio проксирует файлы через исходное подклю�
 
 ## Документы и сканы в чате
 
-`documents` — вложения чата (PDF, DOCX, TXT, MD до `documents.DOC_MAX`), текст — `documents.extract`; имена загрузок
-и тексты приводятся к NFC (`documents.nfc` в `documents.clean_name`, `documents.extract`, `documents.pdf_pages`).
+`documents` — вложения чата (PDF, DOCX, текстовые файлы и код `documents.SUFFIXES` до `documents.DOC_MAX`), текст —
+`documents.extract` (текст: UTF-16 по BOM или нулевым байтам, иначе UTF-8, иначе cp1251); код (`documents.LANG` по
+расширению) модель получает блоком ```` ```<язык> ```` внутри `<document>` (`chat._fenced`). Тип файла — `chat.DOC_MIME`
+(HTML и XML — `text/plain`: файл не открывается страницей на адресе студии). В сообщении — до `chat.ATTACH_MAX` (10)
+вложений, больше — 422 `attachments` (`chat.ATTACHMENTS`, `main.invalid_request`); картинок модели — не больше предела
+подключения (`profiles.max_images`) на весь запрос, прежние — пометкой `chat.DROPPED`, а MCP с согласием получает все
+(`mcp_files.PER_TURN`). Имена загрузок и тексты приводятся к NFC (`documents.nfc` в `documents.clean_name`, `documents.extract`, `documents.pdf_pages`).
 Фото (PNG, JPEG, WebP до `image_upload.MAX_UPLOAD`) — по расширению или по первым байтам (`chat._is_photo`: `.jfif`,
 фото без расширения); прочее — отказ `documents.UNSUPPORTED`, называющий и фото. Страница сверяет тип и размер при
-выборе файла: неподходящий — словами у чипа сразу, «Отправить» диалог не создаёт («Уберите неподходящие файлы»);
+выборе файла: неподходящий — словами у чипа сразу, «Отправить» диалог не создаёт («Уберите неподходящие файлы»,
+больше 10 вложений — «не больше 10 вложений в сообщении»);
 16 Мп и битый файл говорит сервер. Отправленное фото — миниатюра `?thumb=1`, нажатие — окно с ним и «Скачать»
 (`save.js`), документ — имя ссылкой `?download=1` (`GET /api/media/{id}`).
 Сообщения и названия чатов не нормализуются (набраны с клавиатуры; NFC задела бы ключ `request_id` и предпросмотр
