@@ -3260,7 +3260,20 @@ globalThis.StudioEnglish = Object.freeze({
   "Скачать «{0}»": "Download “{0}”",
   "Звук и видео диалога для MCP": "Chat audio and video for MCP",
   "Файлы диалога для MCP": "Chat files for MCP",
-  "больше {0} — предела MCP этого диалога": "larger than {0}, the MCP limit of this chat"
+  "больше {0} — предела MCP этого диалога": "larger than {0}, the MCP limit of this chat",
+  "Справка": "Help",
+  "Руководство": "Guide",
+  "занят": "busy",
+  "недоступен": "unavailable",
+  "в очереди {0}": "{0} queued",
+  "Файлы для инструментов сервера": "Files for the server's tools",
+  "Файл уходит в вашу папку на сервере MCP. Studio его не хранит и модели не передаёт.": "The file goes to your folder on the MCP server. Studio does not keep it or pass it to the model.",
+  "Загрузить": "Upload",
+  "Файл «{0}» убран": "File “{0}” removed",
+  "Файл «{0}» загружен": "File “{0}” uploaded",
+  "Файл должен быть непустым и не больше {0}": "The file must not be empty and must be at most {0}",
+  "загружен, {0}": "uploaded, {0}",
+  "не загружен": "not uploaded"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не расшифрованы: {1} из {2} — STUDIO_DATA_KEY не тот, что у копии",

@@ -53,6 +53,7 @@ import db
 import desktop
 import dictation
 import email_accounts
+import help as help_page
 import images
 import jobs
 import media
@@ -208,6 +209,7 @@ app.include_router(speeches.router)
 app.include_router(jobs.router)
 app.include_router(search.router)
 app.include_router(trash.router)
+app.include_router(help_page.router)
 app.include_router(takeout.router)
 app.include_router(agents.router)
 app.include_router(bridge.router)

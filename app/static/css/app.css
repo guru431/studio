@@ -320,6 +320,13 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
 .head .grow { flex: 1; }
 .head > :is(.select-btn, .photo-menu-wrap) { flex: none; }   /* узко — сжимается заголовок, а не кнопки */
 .mcp-tool { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
+/* состояние источника MCP (mcp_contracts, `studio/status`): точка у чипа MCP чата и у выбора «Студия/MCP» разделов */
+[data-mcp-state] { --mcp-state: var(--success); }
+[data-mcp-state="busy"] { --mcp-state: var(--warn); }
+[data-mcp-state="down"] { --mcp-state: var(--danger); }
+button[data-mcp-state]::after { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--mcp-state); }
+select[data-mcp-state] { padding-left: 24px; background-image: radial-gradient(circle, var(--mcp-state) 4px, transparent 4.5px);
+  background-repeat: no-repeat; background-size: 10px 10px; background-position: 9px center; }
 .mcp-run { flex: none; max-height: 40dvh; overflow: auto; padding: var(--space-4) var(--space-7); }
 .mcp-run > .status { margin: 0 0 var(--space-3); }
 .mcp-result { display: grid; gap: var(--space-4); }
@@ -1433,6 +1440,12 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .lock-pin-pad #lock-pin-back { background: none; border-color: transparent; font-size:var(--fs-3xl); }
 .lock-pin-pad #lock-pin-ok { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-size:var(--fs-xl);
   font-weight: 600; }
+/* «Справка» (help.js): выбор руководства, разделы руководства Studio кнопками, текст — .md */
+.help-page { gap: var(--space-5); }
+.help-page #help-status:empty { display: none; }
+.help-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.help-chips .chip { white-space: normal; text-align: left; }
+.help-text h2 { scroll-margin-top: var(--space-5); }
 /* «Поиск» (search.js): поле, чипы раздела, модель и период, выдача по дням */
 .search-page { gap: var(--space-5); }
 .search-chips, .search-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }

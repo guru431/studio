@@ -3,7 +3,7 @@ import { tr } from './i18n.js';
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/code,
- * #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/admin (только
+ * #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -53,6 +53,7 @@ const LOADERS = {
   code: () => import('./code.js'),
   search: () => import('./search.js'),
   settings: () => import('./settings.js'),
+  help: () => import('./help.js'),
   admin: () => import('./admin.js'),
 };
 /** Экраны оболочки: имя — из реестра разделов (sections-meta.js), загрузка — модуль раздела. */

@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { button, computerPin, el, field, openDialog, words } from './ui.js';
+import { byteSize } from './chat-files.js';
 
 const input = (id, type = 'text', value = '') => el('input', { id, type, value, class: 'input', autocomplete: 'off' });
 const area = (id, text = '') => el('textarea', { id, class: 'input', rows: '4', spellcheck: 'false' }, text);
@@ -177,6 +178,55 @@ function mcpAccessDialog(host, item, note) {
   }, err => { server.replaceChildren(); fail.textContent = words(err); });
 }
 
+/* Файлы пользователя сервера (`studio/user-files`, mcp_contracts.py): «Загрузить» и «Убрать» по каждому файлу,
+ * который объявил сервер. Файл уходит в личную папку на сервере MCP; Studio его не хранит и модели не передаёт.
+ * Сервер без контракта или не ответивший — блока нет. */
+function userFilesBlock(item) {
+  const base = `/api/mcp/${item.id}/user-files`;
+  const list = el('div', { class: 'mcp-user-file-list' });
+  const note = el('p', { class: 'status', 'aria-live': 'polite' });
+  const box = el('div', { class: 'mcp-user-files', 'data-mcp-user-files': String(item.id), hidden: true },
+    el('h3', {}, tr("Файлы для инструментов сервера")),
+    el('p', { class: 'muted small' }, tr("Файл уходит в вашу папку на сервере MCP. Studio его не хранит и модели не передаёт.")),
+    list, note);
+  function row(file) {
+    const picker = el('input', { type: 'file', class: 'sr', 'data-key': file.key, ...(file.accept ? { accept: file.accept } : {}) });
+    const upload = el('label', { class: 'btn' }, picker, tr("Загрузить"));
+    const remove = button(tr("Убрать"), { class: 'btn', hidden: !file.present }, () => run(async () => {
+      await api('DELETE', `${base}/${encodeURIComponent(file.key)}`);
+      note.textContent = tr("Файл «{0}» убран", file.title);
+    }));
+    picker.addEventListener('change', () => {
+      const chosen = picker.files[0];
+      picker.value = '';
+      if (!chosen) return;
+      if (!chosen.size || chosen.size > file.max_bytes) {
+        note.textContent = tr("Файл должен быть непустым и не больше {0}", byteSize(file.max_bytes));
+        return;
+      }
+      run(async () => {
+        await api('PUT', `${base}/${encodeURIComponent(file.key)}`, chosen,
+          { headers: { 'Content-Type': 'application/octet-stream' } });
+        note.textContent = tr("Файл «{0}» загружен", file.title);
+      });
+    });
+    return el('div', { class: 'row mcp-user-file', 'data-key': file.key }, el('b', {}, file.title),
+      el('span', { class: 'muted' }, file.present ? tr("загружен, {0}", byteSize(file.size)) : tr("не загружен")),
+      upload, remove);
+  }
+  async function run(action) {
+    note.textContent = '';
+    try { await action(); await load(); } catch (err) { note.textContent = words(err); }
+  }
+  async function load() {
+    const { items } = await api('GET', base);
+    list.replaceChildren(...items.map(row));
+    box.hidden = !items.length;
+  }
+  load().catch(() => {});
+  return box;
+}
+
 export function chatMcpBlock({ admin = false } = {}) {
   const base = admin ? '/api/admin/shared/mcp' : '/api/mcp';
   const list = el('div', { id: 'mcp-servers' }), note = el('p', { class: 'status', 'aria-live': 'polite' });
@@ -205,7 +255,7 @@ export function chatMcpBlock({ admin = false } = {}) {
             try { await api('DELETE', `${base}/${item.id}`); dialog.close(); await reload(); }
             finally { remove.disabled = false; }
           }));
-        })))));
+        })), !admin && item.enabled ? userFilesBlock(item) : null)));
     if (!items.length) list.append(el('p', { class: 'muted' }, tr("Подключений MCP пока нет")));
   }
   function edit(item) {

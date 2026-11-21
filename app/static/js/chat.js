@@ -3,6 +3,7 @@ import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
 import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
   uploadMedia } from './chat-files.js';
 import { paintPending } from './chat-pending.js';
+import { mcpStateWords } from './mcp-sections.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
  *
@@ -527,6 +528,7 @@ function build(view, ctx) {
   let draftMcp = null;         // MCP нового диалога (тело PATCH, chat-mcp.js); null — общие серверы по умолчанию
   let mcpServers = [];         // серверы MCP учётки (GET /api/mcp): счёт `MCP (n)` нового диалога
   let catalog = [];            // каталог MCP учётки (GET /api/mcp/catalog): `chat_files` — звук и видео в поле ввода
+  let mcpStatus = {};          // {sid: {state, queue, message}} серверов со `studio/status` — точка у чипа MCP
   let pendingMedia = [];       // звук и видео, что грузятся или не приняты: { name, mime, size, busy, error }
   let creating = null;         // идущее создание нового диалога (ensureChat)
   let draftThink = false;      // «Рассуждение» нового диалога — так же
@@ -803,7 +805,19 @@ function build(view, ctx) {
     const count = mcpCount();
     mcpToggle.textContent = count ? `MCP (${count})` : 'MCP';
     mcpToggle.setAttribute('aria-pressed', String(count > 0));
+    paintMcpState();
     paintMedia();
+  }
+
+  /* точка состояния у чипа MCP: худшее состояние действующих серверов со `studio/status` (GET /api/mcp/status) */
+  function paintMcpState() {
+    const ids = chat ? chat.chat.mcp_ids || [] : draftIds(draftMcp, mcpServers);
+    const known = ids.filter((id) => mcpStatus[id])
+      .map((id) => ({ ...mcpStatus[id], name: mcpServers.find((s) => s.id === id)?.name || 'MCP' }));
+    const worst = ['down', 'busy', 'ok'].find((state) => known.some((item) => item.state === state));
+    if (worst) mcpToggle.dataset.mcpState = worst;
+    else delete mcpToggle.dataset.mcpState;
+    mcpToggle.title = known.map((item) => `${item.name}: ${mcpStateWords(item)}`).join(' · ');
   }
 
   /* звук и видео диалога (как mcp_files.media_limit): через сервер, не Cleaner; серверы набора с `chat_files`, кроме
@@ -2187,6 +2201,10 @@ function build(view, ctx) {
     return api('GET', '/api/mcp/catalog').then((out) => {
       catalog = out.items;
       paintMedia();
+      return api('GET', '/api/mcp/status');
+    }).then((out) => {
+      mcpStatus = out;
+      paintMcpState();
     });
   }).catch(() => {});
 

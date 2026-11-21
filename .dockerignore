@@ -3,6 +3,8 @@
 !constraints.txt
 !app/
 !app/**
+!docs/
+!docs/guide.ru.md
 !deploy/
 !deploy/docker/
 !deploy/docker/**
