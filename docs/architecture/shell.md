@@ -214,7 +214,10 @@ Studio, с которой открыта страница; версию пере
   (`#menu-version`, `stale.pageVersion`, то же значение, что в настройках); `#avatar` с `aria-expanded` и `aria-label`
   «Профиль, тема и выход» (без `aria-haspopup`). Порядок: имя и логин → сегмент «Тема: Авто · Светлая · Тёмная»
   (радио `#menu-theme-{auto,light,dark}`), `#theme-save-status`, `#theme-save-retry` → размер шрифта и масштаб этого устройства → «Настройки» →
-  «Администрирование» (администратору) → разделитель → «Выйти». Esc закрывает и возвращает фокус аватару; закрывают
+  «Справка» (`#/help`, `help.js`) → «Корзина» (`#/trash`, `trash.js`) → «Мои файлы» (`#/myfiles`, `my-files.js`;
+  `#menu-my-files` виден, если у учётки есть сервер MCP с `studio/files`, [mcp-contracts](mcp-contracts.md)) →
+  «Администрирование» (администратору) → разделитель → «Выйти». Имена этих экранов — в `NAMES` реестра
+  `sections-meta.js`. Esc закрывает и возвращает фокус аватару; закрывают
   клик вне и уход фокуса Tab'ом.
 - `appearance.js` — **единственный источник темы и акцента**: `choose`, `retrySave`, `current`, `applyTheme`,
   `applyAccent`, `follow`, `setupAppearance`, событие `studio-appearance`; меню аватара и «Оформление» — два вида одного
