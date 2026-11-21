@@ -12,7 +12,7 @@
 (`chat_shares.public_guard`), чужой `Origin` — 403, все отказы — одинаковый 404 без имени файла, неудачи —
 `email_accounts.throttle` по адресу (FAILS за FAIL_SEC, потом 429 `file_locked`). `POST /f/open` выдаёт cookie
 `studio_file` (OPEN_SEC, только `/f/file`) со случайным id в памяти процесса; каждый запрос файла проверяет ссылку
-заново. В журнал — только id и числа: путей, имён и токенов там нет.
+заново. Ссылка ведёт к файлу, а не к пути: размер и mtime при создании сверяются на каждом входе (`_same_file`). В журнал — только id и числа: путей, имён и токенов там нет.
 """
 import asyncio
 import base64
@@ -416,9 +416,9 @@ async def create_link(sid: int, body: PathIn, request: Request):
         raise mcp.refused("Слишком много действующих ссылок — отзовите ненужные", "links", 409)
     token, lid, now = secrets.token_urlsafe(32), uuid.uuid4().hex, clock.NOW()
     state.DB.execute("INSERT INTO file_links(id, token_hash, user_id, server_id, stamp, path_enc, name_enc, size,"
-                     " created, expires) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                     " mtime, created, expires) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (lid, security.digest(token), uid, sid, stamp, security.encrypt(path).decode(),
-                      security.encrypt(entry["name"]).decode(), entry["size"], now, now + LINK_SEC))
+                      security.encrypt(entry["name"]).decode(), entry["size"], entry["mtime"], now, now + LINK_SEC))
     security_log.record(uid, "file_link_create", digest=request.state.digest, ip=auth.client_ip(request))
     log.info("пользователь %d: ссылка на файл %s, mcp %d", uid, lid[:8], sid)
     origin = auth.request_origin(request) or state.CFG.origin.rstrip("/")
@@ -490,6 +490,18 @@ def _resolve(row):
     return mcp.Session(item, uid=row["user_id"]), path, name
 
 
+async def _same_file(session, row, path):
+    """Ссылка ведёт к файлу, а не к пути: размер и mtime записи списка — те же, что при создании ссылки; файла
+    нет, он заменён другим или изменён — `_gone`."""
+    try:
+        entry = await _entry(session, path)
+    except HTTPException:
+        raise _gone() from None
+    if entry["size"] != row["size"] or entry["mtime"] != row["mtime"]:
+        raise _gone()
+    return entry
+
+
 async def _verified(body, request):
     chat_shares._same_origin(request)
     _attempt(request)
@@ -498,9 +510,7 @@ async def _verified(body, request):
     row = _live("l.token_hash", security.digest(body.token))
     session, path, name = _resolve(row)
     try:
-        entry = await _entry(session, path)
-    except HTTPException:
-        raise _gone() from None
+        entry = await _same_file(session, row, path)
     finally:
         await session.close()
     email_accounts.refund("file_link", _ip(request))
@@ -541,7 +551,13 @@ async def link_file(request: Request):
     held = OPENED.get(request.cookies.get(COOKIE, ""))
     if held is None or held[1] <= clock.NOW():
         raise _gone()
-    session, path, name = _resolve(_live("l.id", held[0]))
+    row = _live("l.id", held[0])
+    session, path, name = _resolve(row)
+    try:
+        await _same_file(session, row, path)
+    except BaseException:
+        await session.close()
+        raise
     try:
         return await _stream(session, "/files/content", {"X-Studio-Path": _b64(path)}, request, name, _gone)
     except HTTPException:                        # слова о MCP владельца получателю не нужны: любой отказ — `_gone`

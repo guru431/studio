@@ -196,6 +196,7 @@ export function mount(view) {
       }
     });
     fresh.replaceChildren(el('p', {}, tr("Ссылка на «{0}» действует до {1}. Она видна только сейчас — скопируйте её.", name, moment(made.expires))),
+      el('p', { class: 'muted small', id: 'myfiles-link-note' }, tr("Ссылка ведёт к этому файлу: если его заменить или изменить, она перестанет открываться — тогда создайте новую.")),
       el('div', { class: 'row' }, input, copy));
     fresh.hidden = false;
     await loadLinks();

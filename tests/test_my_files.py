@@ -38,6 +38,7 @@ class FileServer:
 
     def __init__(self, studio):
         self.folders, self.trashed, self.partial, self.seen = {}, {}, {}, []
+        self.mtimes = {}                         # путь → mtime записи списка (по умолчанию — общий)
         studio.gw.on["/mcp"] = self.rpc
         for path in ("list", "content", "upload", "mkdir", "delete", "trash", "restore", "zip", f"zip/{ZID}"):
             studio.gw.on[f"/files/{path}"] = self.files
@@ -80,7 +81,8 @@ class FileServer:
                 head, _, rest = path[len(base):].partition("/")
                 if not head or head == ".keep":          # метка пустой папки mkdir — не запись
                     continue
-                old = entries.get(head, {"name": head, "dir": bool(rest), "size": 0, "mtime": 1_700_000_000.5})
+                old = entries.get(head, {"name": head, "dir": bool(rest), "size": 0,
+                                         "mtime": self.mtimes.get(base + head, 1_700_000_000.5)})
                 old["size"] += len(data or b"")
                 entries[head] = old
             total = sum(len(d or b"") for d in folder.values())

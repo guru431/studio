@@ -645,6 +645,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Скопируйте ссылку из поля": "Copy the link from the field",
   "Собираю ZIP…": "Building ZIP…",
   "Ссылка на «{0}» действует до {1}. Она видна только сейчас — скопируйте её.": "The link to “{0}” works until {1}. It is shown only now — copy it.",
+  "Ссылка ведёт к этому файлу: если его заменить или изменить, она перестанет открываться — тогда создайте новую.": "The link points to this file: if it is replaced or changed, the link stops working — then create a new one.",
   "Ссылка на сутки": "One-day link",
   "Ссылка на сутки: {0}": "One-day link: {0}",
   "Ссылка открывает один файл без входа в Студию и действует сутки.": "A link opens one file without signing in to Studio and works for one day.",

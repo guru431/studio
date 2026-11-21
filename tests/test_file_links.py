@@ -161,6 +161,30 @@ def test_link_expired_revoked_stamp_changed_access_removed_file_gone_all_404(stu
     assert state.DB.execute("SELECT COUNT(*) FROM file_links").fetchone()[0] == 0
 
 
+def test_link_follows_the_file_replaced_or_changed_file_is_gone(studio):
+    """Ссылка ведёт к файлу, а не к пути: другой файл под тем же именем (другой размер) или изменённый (другой
+    mtime) — одинаковый 404 на всех маршрутах `/f`, и уже открытый файл тоже."""
+    member, sid, server = member_with_files(studio)
+    folder = server.folder(access.studio_user(member, sid))
+    token = make_link(studio, sid)["url"].split("#")[1]
+    gone = check(studio, secrets.token_urlsafe(32)).json()
+    assert opened(studio, token).status_code == 204
+    folder["Фото/кот.jpg"] = b"another private picture"
+    for response in (check(studio, token), opened(studio, token), studio.c.get("/f/file")):
+        assert response.status_code == 404 and response.json() == gone, response.text
+        public_headers(response)
+
+    # тот же размер, другое время изменения
+    token = make_link(studio, sid, "Фото/кот2.jpg")["url"].split("#")[1]
+    assert opened(studio, token).status_code == 204
+    assert studio.c.get("/f/file").status_code == 200
+    server.mtimes["Фото/кот2.jpg"] = 1_700_000_999.0
+    for response in (check(studio, token), opened(studio, token), studio.c.get("/f/file")):
+        assert response.status_code == 404 and response.json() == gone, response.text
+    server.mtimes.clear()
+    assert check(studio, token).status_code == 200
+
+
 def file_events(uid):
     return [(row["kind"], row["detail"]) for row in state.DB.execute(
         "SELECT kind, detail FROM security_events WHERE user_id = ? AND kind LIKE 'file_link%' ORDER BY id", (uid,))]
