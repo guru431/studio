@@ -375,6 +375,34 @@ def test_finished_jobs_skip_a_session_whose_page_is_on_screen(studio):
     assert [device.decrypt(r.content)["tag"] for r in studio.gw.push_requests] == ["t", "asleep", "hidden"]
 
 
+def test_trashed_job_and_chat_do_not_push(studio):
+    """Запись в корзине (`deleted`): ни готовность задания (`push.job_finished`), ни ответ чата
+    (`push.chat_answered`) уведомления не шлют; та же запись вне корзины — шлёт."""
+    from conftest import add_gateway
+    from test_chat import new_chat
+    from test_jobs import image
+
+    add_gateway(studio)
+    device = Device()
+    assert studio.c.post("/api/me/push", json=device.body()).status_code == 204
+    cid = new_chat(studio)
+    uid = state.DB.execute("SELECT user_id FROM chats WHERE id = ?", (cid,)).fetchone()[0]
+    image(uid, "trashed", state_="done", finished=T0)
+    state.DB.execute("UPDATE images SET deleted = ? WHERE id = 'trashed'", (T0,))
+    state.DB.execute("UPDATE chats SET deleted = ? WHERE id = ?", (T0, cid))
+    studio.c.portal.call(push.job_finished, "images", "trashed")
+    studio.c.portal.call(push.chat_answered, uid, cid, "m-trashed", True)
+    settle(studio)
+    assert studio.gw.push_requests == []
+
+    state.DB.execute("UPDATE images SET deleted = NULL WHERE id = 'trashed'")
+    state.DB.execute("UPDATE chats SET deleted = NULL WHERE id = ?", (cid,))
+    studio.c.portal.call(push.job_finished, "images", "trashed")
+    studio.c.portal.call(push.chat_answered, uid, cid, "m-back", True)
+    settle(studio)
+    assert sorted(device.decrypt(r.content)["tag"] for r in studio.gw.push_requests) == ["m-back", "trashed"]
+
+
 def test_scan_of_a_chat_attachment_does_not_push(studio):
     """FINDINGS 06:F5: скан вложения чата — часть хода; о нём говорит ответ чата, а не «распознавание готово»."""
     from test_jobs import scan
