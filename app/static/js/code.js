@@ -453,7 +453,8 @@ function enter(aid, pid) {
   const p = { key, aid, pid, naming: null, listing: null, loaded: false, items: [], info: new Map(), bar: null, files: null, git: null,
     repo: projectGit(aid, pid),
     chatBox: pane(false), filesBox: pane(true), gitBox: pane(true),
-    mirrorButton: el('button', { type: 'button', id: 'code-project-mirror', class: 'chip', hidden: true }, tr("Зеркало")),
+    mirrorButton: el('button', { type: 'button', id: 'code-project-mirror', class: 'chip', hidden: true }, tr("Зеркало"),
+      el('span', { class: 'code-mirror-count', 'aria-hidden': 'true', hidden: true })),
     accessButton: el('button', { type: 'button', id: 'code-project-access', class: 'chip',
       title: tr("Совместная работа"), 'aria-label': tr("Доступ к проекту"), hidden: true }, tr("Доступ")) };
   ui.views.insertBefore(p.accessButton, document.getElementById('code-tab-chat'));
@@ -542,6 +543,7 @@ async function plaque(p) {
     ui.placeShared.hidden = !p.shared;
     if (name && !agent.shared && !p.members) {
       p.mirrors = projectMirrors(ui.root, p.mirrorButton, p.aid, { pid: p.pid, name, capable: agent.project_mirror });
+      p.mirrors.refresh();
       p.mirrorButton.hidden = false;
       p.accessButton.setAttribute('aria-label', tr("Доступ к проекту · {0}", name));
       p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name }, (shared) => {
