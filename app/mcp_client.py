@@ -679,17 +679,18 @@ class Tools:
         rules = mcp_sources.policy(session.sid) if session.owner_id is None else {}
         return mcp_sources.effective(spec, rules.get(tool))
 
-    async def discover(self):
+    async def discover(self, *, web=None):
         """Каталоги серверов набора — из кэша (`mcp_sources.catalog`), без знакомства с сервером: его делает первый
         вызов. Холодный кэш: явные ждут каждый DISCOVER_SEC, серверы по умолчанию — все вместе
         `mcp_sources.DEFAULT_WAIT_SEC`; не успевший пропускается словами в `failed`. Отбор — группы доступа,
         выключенные в диалоге, «Интернет» (`_offered`) и UPLOAD «с подтверждением» без явного включения; сверх MAX_TOOLS — лишнее по порядку набора отбрасывается
-        заметкой, ход не отказывает."""
+        заметкой, ход не отказывает. `web` — «Интернет» вместо прочитанного из диалога (`web_tools`)."""
         chat = self._chat()
         if chat is None:
             return
         off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
-        web = bool(chat["web"]) and not chat["protected_used"]   # после защищённого источника — без веб-инструментов
+        if web is None:
+            web = bool(chat["web"]) and not chat["protected_used"]   # после защищённого источника — без веб-инструментов
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
         items = [enabled[sid] for sid in self.ids if sid in enabled]
         self.sessions = [Session(item, uid=self.uid) for item in items]
@@ -782,3 +783,15 @@ class Tools:
 
     async def close(self):
         await asyncio.gather(*(session.close() for session in self.sessions))
+
+
+async def web_tools(uid, row, conn) -> bool:
+    """Даст ли ход диалога `row` (строка `chats`) при «Интернете» хоть один веб-инструмент MCP (пометка
+    «интернет»): отбор и каталоги — как у хода (`Tools.discover`), холодный кэш — не дольше
+    `mcp_sources.DEFAULT_WAIT_SEC`. Ради них «Интернет» включается и без ключа Exa (`chat.patch_chat`)."""
+    tools = Tools(uid, row["id"], mcp_sources.dialog_servers(uid, row, conn), conn=conn)
+    try:
+        await tools.discover(web=True)
+        return bool(tools.open_world)
+    finally:
+        await tools.close()

@@ -1820,7 +1820,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
             raise cleaner.refused("Интернет недоступен в подключении Cleaner: поисковые запросы уходят отдельно")
         if body.web and row["protected_used"]:             # после защищённого источника — только выключить
             raise HTTPException(409, {"code": "protected", "message": PROTECTED_WEB})
-        if body.web and not web.has_exa_key(uid):            # без ключа «Интернет» не включается
+        # без ключа Exa «Интернет» — только ради веб-инструментов MCP диалога: встроенных ход без ключа не даст
+        if body.web and not web.has_exa_key(uid) and not await mcp_client.web_tools(uid, row, conn):
             raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})
         changes["web"] = int(body.web)
     if body.thinking is not None:

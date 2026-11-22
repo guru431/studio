@@ -9,10 +9,12 @@ import httpx
 import pytest
 
 import access
+import chat
 import chat_system
 import mcp_client
 import mcp_sources
 import state
+import web
 from conftest import add_connection, make_user, signin
 from test_access_groups import shared_tools
 from test_chat import messages, new_chat, sse, turn
@@ -441,6 +443,48 @@ def test_open_world_only_with_internet_and_rechecked_midturn(studio):
     assert calls == []                                 # ни знакомства, ни вызова
     assert messages(studio, cid)[-1]["tools"] == [{"kind": "mcp", "server": "Shared tools", "tool": "search",
                                                    "error": mcp_client.WEB_OFF}]
+
+
+def test_internet_without_exa_key_for_mcp_web_tools(studio):
+    """Находка 2026-11-22 (s06): без ключа Exa «Интернет» включается, если набор диалога даёт веб-инструмент MCP;
+    ход предлагает его и исполняет вызов, а встроенных инструментов и записки о поиске Studio — нет."""
+    sid, calls, _ = setup(studio, tools=[tool("lookup"), tool("search", annotations={"openWorldHint": True})])
+    cid = new_chat(studio)
+    changed = studio.c.patch(f"/api/chats/{cid}", json={"web": True})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["web"] is True and changed.json()["web_tools"] == []
+    calls.clear()
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 1))]}, ["Готово"]]
+    assert sse(turn(studio, cid, "Search"))[-1] == ("done", {"status": "done"})
+    request = studio.gw.chat_requests[-2]
+    assert offered(request) == ["Shared tools: lookup", "Shared tools: search"]
+    builtin = {spec["function"]["name"] for spec in web.specs(list(web.KINDS))}
+    assert builtin and not builtin & {t["function"]["name"] for t in request["tools"]}
+    assert chat.WEB_NOTE.split("{", 1)[0] not in request["messages"][0]["content"]
+    assert ("tools/call", {"name": "search", "arguments": {}}) in calls
+    assert messages(studio, cid)[-1]["tools"] == [{"kind": "mcp", "server": "Shared tools", "tool": "search"}]
+    assert "result-search" in json.dumps(studio.gw.chat_requests[-1]["messages"], ensure_ascii=False)
+
+
+def test_internet_without_exa_key_refused_without_mcp_web_tools(studio):
+    """Без ключа и без доступного веб-инструмента MCP (нет пометки, выключен в диалоге, закрыт защищённым
+    источником) — прежние отказы."""
+    sid, _, _ = setup(studio, tools=[tool("lookup"), tool("search", annotations={"openWorldHint": True})])
+    cid = new_chat(studio)
+    off = studio.c.patch(f"/api/chats/{cid}", json={"mcp_tools_off": {str(sid): ["search"]}})
+    assert off.status_code == 200
+    refused = studio.c.patch(f"/api/chats/{cid}", json={"web": True})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "no_exa_key"
+    assert studio.c.patch(f"/api/chats/{cid}", json={"mcp_tools_off": {}}).status_code == 200
+    state.DB.execute("UPDATE chats SET protected_used = 1 WHERE id = ?", (cid,))
+    refused = studio.c.patch(f"/api/chats/{cid}", json={"web": True})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "protected"
+    plain = new_chat(studio)
+    server(studio, tools=[tool("lookup")])
+    mcp_sources.CACHE.clear()
+    refused = studio.c.patch(f"/api/chats/{plain}", json={"web": True})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "no_exa_key"
+    assert view(studio, plain)["web"] is False
 
 
 def test_confirm_tools_offered_and_paused_by_condition(studio):
