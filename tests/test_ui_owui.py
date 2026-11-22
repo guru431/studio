@@ -1,5 +1,6 @@
 """«Open WebUI» в браузере: панель учёток и дерево чатов. Студия — живая (`live_app.py`), за ней поддельный Open WebUI
 (`fake_owui.py`: REST — через шлюз теста, сокет — в памяти). Chromium (Edge/Chrome) и WebKit, 320 и 1280 px."""
+import asyncio
 import json
 import re
 import ssl
@@ -58,11 +59,19 @@ def allow(live, entry):
 
 @pytest.fixture
 def fake(live, monkeypatch):
-    """Поддельный Open WebUI за живой студией: REST — на `FakeOwui.ENTRY` у шлюза, сокет — `owui_link.CONNECT`."""
+    """Поддельный Open WebUI за живой студией: REST — на `FakeOwui.ENTRY` у шлюза, сокет — `owui_link.CONNECT`.
+    Сокет живёт в цикле событий службы: тест шлёт события через `fake.later(fn, *args)` (call_soon_threadsafe)."""
     found = FakeOwui()
+    loops = []
+
+    async def connect(target, headers):
+        loops.append(asyncio.get_running_loop())
+        return await found.socket_connect(target, headers)
+
+    found.later = lambda fn, *args: loops[-1].call_soon_threadsafe(fn, *args)
     live.gw.hosts[FakeOwui.ENTRY] = found.handler
     allow(live, FakeOwui.ENTRY)
-    monkeypatch.setattr(owui_link, "CONNECT", found.socket_connect)
+    monkeypatch.setattr(owui_link, "CONNECT", connect)
     return found
 
 
@@ -287,6 +296,45 @@ def test_relogin_state_offers_password(owui_browser, live, fake, width):
         assert call(live, cookie, "GET", "/api/owui/accounts").json() == []
         assert fake.revoked                                                  # сессия Open WebUI отозвана
         pw.expect(page).to_have_url(re.compile(r"#/owui$"))
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_events_update_the_tree(owui_browser, live, fake, width):
+    """События сокета Open WebUI через SSE студии: идёт ответ, пауза, новое название, конец, новый чат; отзыв сессии
+    в самом Open WebUI — `link relogin` и поле пароля, после входа — новый поток."""
+    cookie = session(live, f"owui-events-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    calm = fake.add_chat("Calm", updated_at=300)
+    fake.add_chat("Other", updated_at=200)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}") as page:
+        show_panel(page)
+        row = page.locator(f".owui-chat[data-chat='{calm}']")
+        pw.expect(row).to_be_visible()
+        until(page, lambda: fake.socket is not None and fake.socket.user is not None)
+        fake.later(fake.emit_event, calm, None, {"type": "chat:active", "data": {"active": True}})
+        pw.expect(row.locator(".owui-chat-active")).to_have_count(1)
+        fake.later(fake.emit_event, calm, "m1", {"type": "chat:active", "data": {"active": True, "pending_approval": True}})
+        pw.expect(row.locator(".owui-chat-pending")).to_have_text("ждёт решения")
+        pw.expect(row.locator(".owui-chat-active")).to_have_count(0)
+        fake.later(fake.emit_event, calm, None, {"type": "chat:title", "data": {"title": "Renamed by model"}})
+        pw.expect(row.locator(".owui-chat-title")).to_have_text("Renamed by model")
+        fake.later(fake.emit_event, calm, None, {"type": "chat:active", "data": {"active": False}})
+        pw.expect(row.locator(".owui-chat-pending, .owui-chat-active")).to_have_count(0)
+        fresh = fake.add_chat("Fresh", updated_at=10_000)
+        fake.later(fake.emit_event, None, None, {"type": "chat:list", "data": {"chat_id": fresh}})
+        pw.expect(page.locator(f".owui-chat[data-chat='{fresh}']")).to_be_visible()
+
+        fake.revoke_all()                                                    # сессию «Studio» отозвали в Open WebUI
+        fake.expire_tokens()
+        fake.later(fake.drop)
+        pw.expect(page.locator("#owui-relogin")).to_be_visible()
+        pw.expect(page.locator(".owui-state")).to_have_class(re.compile(r"\brelogin\b"))
+        page.locator("#owui-relogin-password").fill(FakeOwui.PASSWORD)
+        page.locator("#owui-relogin-submit").click()
+        pw.expect(page.locator(f".owui-chat[data-chat='{fresh}']")).to_be_visible()
+        until(page, lambda: len(page.events) == 2)                          # после входа — новый поток
         assert fits(page)
         assert not page.problems, page.problems
 

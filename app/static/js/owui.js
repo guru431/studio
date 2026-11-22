@@ -79,7 +79,8 @@ function panelOpen(open) {
 const phone = () => matchMedia('(max-width: 760px)').matches;
 
 function onKey(event) {
-  if (event.key === 'Escape' && !event.defaultPrevented && ui?.root.classList.contains('panel-open')) panelOpen(false);
+  if (event.key === 'Escape' && !event.defaultPrevented && ui?.root.classList.contains('panel-open')
+      && !document.querySelector('dialog[open]')) panelOpen(false);   // Escape окна закрывает только окно
 }
 
 function empty(text, action = null) {
@@ -127,6 +128,14 @@ function pause(ms, signal) {
 }
 
 async function run(current) {
+  try {
+    await follow(current);
+  } finally {
+    if (stream === current) stream = null;     // поток кончился сам: следующий показ учётки откроет новый
+  }
+}
+
+async function follow(current) {
   const { signal } = current.controller;
   let tries = 0;
   while (!signal.aborted) {
