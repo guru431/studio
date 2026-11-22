@@ -295,6 +295,26 @@ def test_link_deeply_nested_listing_is_the_uniform_404(studio):
         public_headers(response)
 
 
+def test_link_check_and_open_with_the_server_unreachable_are_the_uniform_404(studio):
+    """Сервер MCP недоступен на `/files/list` (`mcp_contracts.call` → HTTPException → `_same_file`): `/f/check` и
+    `/f/open` — тот же 404 «ссылка недоступна» без слов о MCP, cookie не выдаётся; сервер вернулся — ссылка жива."""
+    member, sid, server = member_with_files(studio)
+    token = make_link(studio, sid)["url"].split("#")[1]
+    gone = check(studio, secrets.token_urlsafe(32)).json()
+    async def down(request):
+        raise httpx.ConnectError("down")
+
+    studio.gw.on["/files/list"] = down
+    anonymous(studio)
+    for response in (check(studio, token), opened(studio, token)):
+        assert response.status_code == 404, response.text
+        assert response.json() == gone and "MCP" not in response.text
+        assert my_files.COOKIE not in response.headers.get("set-cookie", "")
+        public_headers(response)
+    studio.gw.on["/files/list"] = server.files
+    assert check(studio, token).status_code == 200 and opened(studio, token).status_code == 204
+
+
 def test_link_file_refusals_of_the_server_are_the_uniform_404(studio, monkeypatch):
     """B2-M2: отказ сервера (5xx, недоступен) или нерасшифрованный ключ MCP на `/f/file` отвечал 409 словами о
     настройке MCP владельца — анонимный получатель видит только одинаковый 404 «ссылка недоступна»."""
