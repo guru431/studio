@@ -44,6 +44,7 @@ import my_files
 import chat_exports
 import chat_shares
 import cleaner_client as cleaner
+import cleaner_route
 import checks
 import claude_code
 import code_usage
@@ -111,6 +112,7 @@ async def lifespan(_app):
     state.DB = db.connect(state.CFG.db_path)
     db.migrate(state.DB)
     access.forward()                             # ключи и включённость общего после отката на шаг 55 — обратно
+    cleaner_route.forward()                      # ключи подключений через Cleaner после отката на шаг 63 — обратно
     trash.forward()                              # защищённые MCP после отката на шаг 57 — обратно
     chat_shares.seal()                          # снимки ссылок открытым текстом (до шага 37, откат) — шифром
     chat_shares.disown()                         # ссылки участников на чужие компьютеры (прежний код, откат) — прочь

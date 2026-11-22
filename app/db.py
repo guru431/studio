@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 63
+VERSION = 64
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -925,6 +925,17 @@ CREATE INDEX owui_accounts_user ON owui_accounts(user_id);
 """
 SCHEMA += OWUI_63
 
+#: внешние модели через шлюз Cleaner (cleaner_route.py): `connections.via_cleaner` — переключатель «Через Cleaner»,
+#: `messages.cleaner_request` — «<id чата Cleaner>/<id запроса>» последнего запроса хода («Что получила модель»).
+#: Прежний код столбцов не знает и отправил бы ход такого подключения провайдеру напрямую — перед откатом
+#: `cleaner_route.ROLLBACK_64` прячет ключи этих подключений в `cleaner_rollback` (в обычной работе пуста), после
+#: возврата вперёд `cleaner_route.FORWARD_64` возвращает.
+CLEANER_ROUTE_64 = """ALTER TABLE connections ADD COLUMN via_cleaner INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN cleaner_request TEXT;
+CREATE TABLE cleaner_rollback(connection_id INTEGER PRIMARY KEY, token_enc BLOB NOT NULL);
+"""
+SCHEMA += CLEANER_ROUTE_64
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1053,6 +1064,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     62: MCP_DEFAULT_62,
     # учётки Open WebUI
     63: OWUI_63,
+    # внешние модели через шлюз Cleaner
+    64: CLEANER_ROUTE_64,
 }
 
 

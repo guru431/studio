@@ -40,7 +40,7 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.OWUI_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
+        conn.executescript(db.SCHEMA.removesuffix(db.CLEANER_ROUTE_64).removesuffix(db.OWUI_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
                            .removesuffix(db.TRANSCRIPT_PLAYBACK_60)
                            .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
@@ -351,6 +351,36 @@ def test_step_62_marks_shared_mcp_dialog_default_and_previous_writer_works(env):
         conn.execute(add, ("previous",))
         assert [tuple(r) for r in conn.execute("SELECT name, dialog_default FROM mcp_servers ORDER BY id")] == [
             ("before", 1), ("previous", 1)]
+
+
+def test_step_64_adds_cleaner_route_columns_and_previous_writer_works(env):
+    """Шаг 64: `connections.via_cleaner` и `messages.cleaner_request` — прежние строки и вставка прежнего кода
+    (своим списком столбцов) получают умолчания; таблица отката пуста."""
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 63)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        add = ("INSERT INTO connections(user_id,name,kind,base_url,token_enc,sections,created,server_only,cleaner,s06)"
+               " VALUES(1,?,'openai','https://x.test/v1',x'00','[]',0,1,0,0)")
+        conn.execute(add, ("before",))
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'t',0,0)")
+        conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('m1','c','user','hi','done','server',0)")
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        columns = {t: {r[1]: r for r in conn.execute(f"PRAGMA table_info({t})")} for t in ("connections", "messages")}
+        assert columns["connections"]["via_cleaner"][2:5] == ("INTEGER", 1, "0")        # NOT NULL DEFAULT 0
+        assert "cleaner_request" in columns["messages"]
+
+        conn.execute(add, ("previous",))                                              # прежний код
+        conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('m2','c','user','hi','done','server',0)")
+        assert [tuple(r) for r in conn.execute("SELECT name, via_cleaner FROM connections ORDER BY id")] == [
+            ("before", 0), ("previous", 0)]
+        assert [r[0] for r in conn.execute("SELECT cleaner_request FROM messages")] == [None, None]
+        assert conn.execute("SELECT count(*) FROM cleaner_rollback").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):
