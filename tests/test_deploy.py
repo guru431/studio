@@ -232,6 +232,14 @@ def test_apache_route_outlasts_the_folder_zip():
     assert my_files.ZIP_SEC < _route_timeout("/api/my-files/1/zip")
 
 
+def test_apache_route_outlasts_the_speech_chat_mp3():
+    """«Скачать одним mp3» чата озвучки (`GET /api/speeches/chats/<id>/audio`) склеивает записи в том же запросе:
+    записи разных моделей ffmpeg перекодирует до audio.TIMEOUT_SEC — общий маршрут 150 с оборвал бы длинный чат 502."""
+    import audio
+    assert audio.TIMEOUT_SEC < _route_timeout(f"/api/speeches/chats/{'0' * 32}/audio")
+    assert _route_timeout("/api/speeches") == 150 and _route_timeout("/api/speeches/read") == 150
+
+
 def test_voice_editor_uploads_fit_through_the_proxy():
     import voices
     voice, sample = "0" * 32, "1" * 32

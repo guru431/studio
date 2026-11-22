@@ -220,7 +220,10 @@ SQL — как у шага 16 ниже.
   Так же `ProxyPass /api/videos` (330 с): создание ролика отвечает после шлюза — исходник на шару,
   задание, поиск потерянного ответа и снятие у шлюза подряд дольше общих 150 с. И `ProxyPass /api/my-files/`
   (330 с): «ZIP папки» ждёт сборки архива сервером MCP до `my_files.ZIP_SEC` (300 с), сверяет
-  `test_apache_route_outlasts_the_folder_zip`.
+  `test_apache_route_outlasts_the_folder_zip`. И `ProxyPass /api/speeches/chats/` (930 с): «Скачать одним mp3» чата
+  озвучки склеивает записи в том же запросе, перекодирование ffmpeg — до `audio.TIMEOUT_SEC` (900), сверяет
+  `test_apache_route_outlasts_the_speech_chat_mp3`. nginx контейнера ждёт ответа не меньше самого долгого маршрута
+  Apache (`proxy_read_timeout`, сверяет `test_nginx_passes_every_body_and_wait_that_apache_passes`).
 - `LimitRequestBody` vhost не меньше пределов службы (документ, картинка ролика и фото «Фото» — 20 МиБ,
   тело фото — до 2×10 МиБ) — сверяет `test_apache_lets_through_the_largest_body_the_studio_accepts`; образец голоса
   (`voices.AUDIO_MAX`, 32 МиБ) — свой `LocationMatch` на все маршруты, что его принимают (редактор и прямые

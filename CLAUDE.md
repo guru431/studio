@@ -259,8 +259,9 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 Полные формулировки — в «Ловушках» файлов docs/architecture.
 
 - Apache: `ProxyPass` — на имя `studio-backend`, не `localhost`; `/api/chats/` и `/api/code/` (600 с, `flushpackets=on`,
-  `no-gzip`), `/api/videos` (330 с), `/api/my-files/` (330 с, ZIP папки — `my_files.ZIP_SEC`) и `/api/agent/link` (`upgrade=websocket timeout=300`) — раньше общего `ProxyPass /`;
-  `LimitRequestBody` не меньше пределов службы. Сверяет `tests/test_deploy.py`.
+  `no-gzip`), `/api/videos` (330 с), `/api/my-files/` (330 с, ZIP папки — `my_files.ZIP_SEC`), `/api/speeches/chats/`
+  (930 с, один mp3 чата — `audio.TIMEOUT_SEC`) и `/api/agent/link` (`upgrade=websocket timeout=300`) — раньше общего `ProxyPass /`;
+  `LimitRequestBody` не меньше пределов службы; ожидание nginx контейнера — не меньше самого долгого маршрута. Сверяет `tests/test_deploy.py`.
 - SQLite — только локальный диск (на CIFS портится); копия на шару — готовым файлом. `studio-backup.service` — те же
   `User`/`Group`/`StateDirectory`, что у службы.
 - Карта одна: отмена задания запрос к шлюзу не обрывает (`release_after_cancel`); аренда модели картинок 600 с — перед
