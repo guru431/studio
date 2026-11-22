@@ -13,9 +13,10 @@ import knowledge
 import sections
 import security
 import state
+import translate_text
 import upstream
 from conftest import add_connection, add_gateway, make_user, signin
-from fakes import FakeCleanerGateway
+from fakes import FakeCleanerGateway, FakeGateway
 from test_chat import attach, new_chat, sse, turn
 from test_chat_pending import answer, pending_of
 from test_chat_web import call
@@ -342,3 +343,53 @@ def test_internal_knowledge_source_still_works_when_forced(forced_studio):
     hits = find(s, uid, "пёс", kb_ids=(kb,))
     assert hits and len(s.embeds) == 1 and s.reranks
     assert knowledge.vectors_for(conn_of(s.ext))                          # внутренний источник — и диалогу через Cleaner
+
+
+# ---- флажок и переключатель действуют на идущую работу ------------------------------------------
+
+@pytest.fixture
+def direct_studio(studio):
+    """Внешнее подключение на публичном IP из списка (`studio.ext`, ключ FakeGateway — сервер ходит к нему сам) в
+    «Чате» и «Переводе» с моделью gpt-x; Cleaner настроен, флажок выключен. `studio.flip()` — первый запрос
+    провайдеру включает флажок (администратор — посреди работы) и отвечает как обычно."""
+    allow(*CLEANER_HOSTS, *ELSEWHERE)
+    studio.ext = add_connection(studio, base_url=PROVIDER, token=FakeGateway.TOKEN, sections=["chat", "translate"],
+                                chat_models=("gpt-x",))
+    sections.set_models(owner_id(), "translate", studio.ext, ["gpt-x"])
+    gw = FakeCleanerGateway(KEY)
+    for host in CLEANER_HOSTS:
+        studio.gw.hosts[host] = gw.handler
+    studio.cleaner = gw
+    settings(studio)
+
+    def flip():
+        async def chat(request: httpx.Request) -> httpx.Response:
+            if not cleaner_route.forced():
+                cleaner_route.save_settings(cleaner_route.SettingsIn(base_url=ADDRESS, forced=True))
+            return await studio.gw.builtin(request)
+        studio.gw.on["/v1/chat/completions"] = chat
+    studio.flip = flip
+    yield studio
+    assert gw.turns == []                                                 # снимок до флажка в Cleaner тоже не пошёл
+
+
+def test_flag_stops_a_running_translation_before_the_next_chunk(direct_studio, monkeypatch):
+    s = direct_studio
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    s.gw.chat_script = [["Первый."], ["Второй."], ["Третий."]]
+    s.flip()
+    r = post(s, "First one is here.\n\nSecond one is here.\n\nThird one is here.", connection_id=s.ext, model="gpt-x")
+    assert r.status_code == 202, r.text
+    row = wait_row(s, r.json()["id"])
+    assert row["state"] == "error" and "через Cleaner изменился" in row["detail"], row["detail"]
+    assert [b["messages"][-1]["content"] for b in s.gw.chat_requests] == ["First one is here."]   # второго куска нет
+
+
+def test_flag_stops_the_next_tool_round_of_a_running_turn(direct_studio):
+    s = direct_studio
+    chat_id = new_chat(s, connection_id=s.ext, model="gpt-x")
+    s.gw.chat_script = [{"tool_calls": [call("todo_write", items=[{"text": "Шаг", "status": "pending"}])]}, ["Готово"]]
+    s.flip()
+    events = sse(turn(s, chat_id, "Секрет", external_ok=True))
+    assert events[-1][0] == "error" and "через Cleaner изменился" in json.dumps(events[-1][1], ensure_ascii=False), events
+    assert len(s.gw.chat_requests) == 1                                   # результат инструмента провайдеру не ушёл

@@ -48,14 +48,18 @@ class ConnectionChanged(UpstreamRefused):
     """Подключение удалили или сменили его вид или адрес после того, как задание взяло снимок:
     ключ не отдан (connections.token) — новый ключ ушёл бы прежнему адресу."""
 
-    def __init__(self, conn, deleted: bool):
+    def __init__(self, conn, deleted: bool, route: bool = False):
         super().__init__(f"подключение {conn.id}: {'удалено' if deleted else 'изменено'}", "changed")
         self.deleted = deleted
+        #: сменился маршрут через Cleaner (переключатель или флажок администратора) после снимка
+        self.route = route
 
 
 def refused_words(e: UpstreamRefused, conn) -> str:
     """Отказ до отправки — словами для пользователя; каждая причина — своими."""
     if isinstance(e, ConnectionChanged):
+        if e.route:
+            return f"маршрут подключения «{conn.name}» через Cleaner изменился — данные не отправлены, запустите заново"
         return (f"подключение «{conn.name}» удалено из профиля" if e.deleted
                 else f"подключение «{conn.name}» изменено — запустите заново")
     if e.reason == "token":

@@ -162,7 +162,8 @@ def get(user_id: int | None, conn_id: int, *, own: bool = False, gate: bool = Tr
 def token(conn: Connection) -> str:
     """Токен — только той строке, что в снимке `conn`: задание держит снимок, а ключ читается свежим.
     Строку удалили (или id занят чужой) — ConnectionChanged(deleted); сменились вид или адрес —
-    ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно."""
+    ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно. Маршрут через
+    Cleaner (`cleaner_route.routes`) сейчас не тот, что в снимке (`routed`), — ConnectionChanged(route)."""
     row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner, s06, via_cleaner FROM connections WHERE id = ?",
                            (conn.id,)).fetchone()
     if row is None or row["user_id"] != conn.owner_id:
@@ -170,6 +171,10 @@ def token(conn: Connection) -> str:
     if (row["kind"] != conn.kind or bool(row["cleaner"]) != conn.cleaner or bool(row["s06"]) != conn.s06
             or bool(row["via_cleaner"]) != conn.via_cleaner or _address(row["base_url"]) != _address(conn.base_url)):
         raise upstream.ConnectionChanged(conn, deleted=False)
+    # маршрут — по свежим флажку администратора и списку: снимок задания, взятый до включения флажка, ключ провайдеру
+    # мимо Cleaner не понесёт, а взятый до выключения — в Cleaner (работа, идущая при смене, отказывает словами)
+    if cleaner_route.routes(conn) != conn.routed:
+        raise upstream.ConnectionChanged(conn, deleted=False, route=True)
     try:
         return security.decrypt(row["token_enc"])
     except InvalidToken:
