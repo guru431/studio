@@ -155,7 +155,9 @@ function dictationReady() {
   return me?.capabilities?.dictation !== false;
 }
 
-export function attachMic(field, host) {
+/* `dialog()` — подключение диалога, в чьё поле идёт текст (поле чата): сервер не отдаст звук внешней модели голосового
+ * ввода мимо Cleaner, если диалог идёт через Cleaner (cleaner_route.refuse_dialog_speech). */
+export function attachMic(field, host, { dialog = null } = {}) {
   const button = el('button', { type: 'button', class: 'icon-btn mic', 'aria-label': tr("Голосовой ввод"), title: tr("Голосовой ввод") });
   // «×» рядом с идущей записью или распознаванием: отменить без распознавания (встаёт за микрофоном при первом показе)
   const cancel = el('button', { type: 'button', class: 'icon-btn mic-cancel', hidden: true }, icon('x'));
@@ -252,6 +254,8 @@ export function attachMic(field, host) {
       body.append('audio', blob, recordingName(blob));
       const language = dictationLanguage();
       if (language !== 'auto') body.append('language', language);
+      const conn = dialog?.();
+      if (conn != null) body.append('connection_id', String(conn));
       const { text } = await api('POST', '/api/dictation', body, { signal });
       if (!button.isConnected) return;                 // поле уже убрали
       const at = field.value === value ? caret

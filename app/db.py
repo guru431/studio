@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 65
+VERSION = 66
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -963,6 +963,29 @@ CREATE INDEX owui_accounts_user ON owui_accounts(user_id);
 """
 SCHEMA += OWUI_65
 
+#: внешние модели через шлюз Cleaner (cleaner_route.py): `connections.via_cleaner` — переключатель «Через Cleaner»,
+#: `messages.cleaner_request` — «<id чата Cleaner>/<id запроса>» последнего запроса хода («Что получила модель»).
+#: Прежний код столбцов не знает и отправил бы ход такого подключения провайдеру напрямую — перед откатом
+#: `cleaner_route.ROLLBACK_66` прячет ключи этих подключений в `cleaner_rollback` (в обычной работе пуста), после
+#: возврата вперёд `cleaner_route.FORWARD_66` возвращает.
+#: Контекст нового вида (чат Cleaner диалога через шлюз, служебный ключ — заголовком `X-Cleaner-Key`) отмечен строкой
+#: `cleaner_route_contexts` — своей таблицей: прежний код вставляет в `cleaner_contexts` без списка столбцов.
+#: Триггер удаления переносит отметку в `cleaner_deletions.route`, по ней очередь шлёт ключ нужным заголовком.
+CLEANER_ROUTE_66 = """ALTER TABLE connections ADD COLUMN via_cleaner INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN cleaner_request TEXT;
+CREATE TABLE cleaner_rollback(connection_id INTEGER PRIMARY KEY, token_enc BLOB NOT NULL);
+CREATE TABLE cleaner_route_contexts(id TEXT PRIMARY KEY);
+ALTER TABLE cleaner_deletions ADD COLUMN route INTEGER NOT NULL DEFAULT 0;
+DROP TRIGGER IF EXISTS cleaner_context_delete;
+CREATE TRIGGER cleaner_context_delete BEFORE DELETE ON cleaner_contexts BEGIN
+  INSERT OR IGNORE INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, route)
+     VALUES(old.id, old.user_id, old.remote_id, old.base_url, old.token_enc, old.created,
+            EXISTS(SELECT 1 FROM cleaner_route_contexts WHERE id = old.id));
+  DELETE FROM cleaner_route_contexts WHERE id = old.id;
+END;
+"""
+SCHEMA += CLEANER_ROUTE_66
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1095,6 +1118,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     64: CODE_64,
     # учётки Open WebUI
     65: OWUI_65,
+    # внешние модели через шлюз Cleaner
+    66: CLEANER_ROUTE_66,
 }
 
 

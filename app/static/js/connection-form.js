@@ -17,7 +17,7 @@ const KINDS = {
   openai: { label: tr("OpenAI-совместимый"), placeholder: tr("адрес API, https, оканчивается на /v1") },
   srvllm: { label: tr("Шлюз srvllm"), placeholder: tr("адрес шлюза, http, IP и порт, без пути") },
   s06: { label: tr("Шлюз s06 · Qwen, WhisperX, PaddleOCR"), placeholder: tr("адрес шлюза, IP и порт, без пути /v1") },
-  cleaner: { label: tr("Cleaner · очистка данных"), placeholder: tr("адрес Cleaner, HTTPS, IP и порт, без пути") },
+  cleaner: { label: tr("Cleaner (своя учётка Cleaner)"), placeholder: tr("адрес Cleaner, HTTPS, IP и порт, без пути") },
 };
 /** Разделы подключений (без «Агентов» и «Open WebUI» — модели им сообщают мост и сервер Open WebUI) в порядке рельса
  * и голосовой ввод. */

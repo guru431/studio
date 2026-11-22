@@ -74,6 +74,11 @@ minor для возможностей, major для несовместимых �
   (`api.exa.ai`, YouTube через yt-dlp — правила в [chat.md](docs/architecture/chat.md))
   и в `push.py` (`push.HOSTS`). Ключ Exa — свой у учётки, шифром. Почта учётки — на сервер SMTP, заданный
   администратором в панели или переменными окружения (в том числе частный адрес `connect_ip`, [email-accounts](docs/architecture/email-accounts.md)).
+  Подключение через Cleaner (`cleaner_route.routes`: переключатель «Через Cleaner» или принудительный режим) — не
+  исключение: сервер ходит только к Cleaner (его адрес — в списке), а данные доходят до провайдера, которого в списке
+  нет, через Cleaner и его проверки (только публичные https-адреса, соединение с проверенным адресом). Частные
+  IP-адреса списка — внутренние (`cleaner_route.is_external`, и для шлюзов s06 и srvllm: флажок и вид внутренним не
+  делают): шлюзы в облачные модели в список не добавлять.
 - **Защищённый источник MCP** (`mcp_servers.protected`, только общий сервер): после его успешного вызова диалог
   навсегда без «Интернета» (`chats.protected_used`), веб-инструменты MCP снимаются в том же ходе, вызов с адресом
   в аргументах (`mcp_client.has_url`: и без схемы — `evil.com/x`, IPv4, `xn--`) — отказ без запроса. Мимо хода тоже
@@ -113,7 +118,7 @@ minor для возможностей, major для несовместимых �
 | Ядро | `main` (lifespan: `db.migrate`, `chat_shares.seal`, `sections.adopt`, `search.compose_once`, фоновые задачи), `db`, `config` (`config.REQUIRED`), `state`, `clock` (часы — `clock.NOW`, паузы — `clock.SLEEP`), `operations` (барьер создания истории), `security` (Fernet `STUDIO_DATA_KEY`), `static_assets`, `release` (версия Studio), `i18n_words` (слова сервера по-английски для выгрузок, как `StudioI18n.message`), `manage` (`create-admin`, `backup`, `verify-backup`) | [shell](docs/architecture/shell.md) |
 | Вход и защита | `auth`, `account_profile`, `screenlock`, `lock_policy`, `account`, `session_devices`, `security_log`, `admin` | [security-lock](docs/architecture/security-lock.md) |
 | Почта учётки | `email_accounts`, `account_mail`: обязательный email, приглашения, восстановление, коды входа | [email-accounts](docs/architecture/email-accounts.md) |
-| Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities`, `access` (группы доступа к общему), `profiles` (профиль подключения: системный текст, параметры запроса, подсказки) | [connections](docs/architecture/connections.md) |
+| Подключения | `connections`, `sections`, `upstream`, `checks`, `capabilities`, `access` (группы доступа к общему), `cleaner_route` (внешние модели через шлюз Cleaner: настройки администратора, служебный ключ шифром), `profiles` (профиль подключения: системный текст, параметры запроса, подсказки) | [connections](docs/architecture/connections.md) |
 | Чат | `chat`, `chat_pending` (пауза хода: подтверждение инструмента, вопрос `ask_user`), `chat_tools` (встроенные инструменты хода), `chat_system` (системное сообщение: дата, профиль, роль, правила MCP), `roles` (роли диалога и их умолчания), `web`, `documents`, `cleaner_client`, `mcp_client` (подключения MCP, инструменты хода), `mcp_sources` (кэш каталогов MCP, пометки и политика инструментов, MCP диалога по умолчанию), `mcp_sections` (инструменты MCP разделов), `mcp_files` (файлы диалога на MCP с согласием, медиа диалога, файлы результатов), `mcp_contracts` (контракты Studio для любых MCP: возможности из `experimental`, файлы пользователя, состояние источника), `help` («Справка»: руководство Studio и руководства MCP), `memory` (личная память, шифром), `knowledge` (большие вложения и базы знаний: куски, BM25, эмбеддинги, переранжирование) | [chat](docs/architecture/chat.md), [mcp-contracts](docs/architecture/mcp-contracts.md) |
 | Ссылки и экспорт | `chat_shares`, `chat_exports`, `chat_export_selection`, `my_files` («Мои файлы» на серверах MCP, личная ссылка на файл на сутки и анонимный `/f`) | [sharing-export](docs/architecture/sharing-export.md), [mcp-contracts](docs/architecture/mcp-contracts.md) |
 | Фото, видео, файлы | `images`, `image_upload`, `videos`, `forms`, `chains`, `presets`, `media`, `takeout`, `history`, `trash` (корзина истории) | [media](docs/architecture/media.md) |
@@ -229,6 +234,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 63 | `mirror_groups`, `mirror_copies`, `mirror_pairs`, `mirror_legacy` — зеркала группой копий; строки `project_mirrors` переносит `mirror_groups.adopt` при старте | новые таблицы не читает: видит односторонние зеркала `project_mirrors` на момент обновления с прежними базами сравнения; копий, групп и синхронизаций нового кода не видит; после возврата вперёд его синхронизации не учтены (больше «локальных изменений»), отвязки и правки исключений тоже (отвязанное им зеркало снова видно — отвязать заново), а его новые зеркала `adopt` перенесёт | Не нужен |
 | 64 | `code_chats.engine` (deepseek) — пересборка с CHECK четырёх помощников, столбцы и `origin` сохраняются | движка нет в `claude_code.ACCESS`: чаты DSH, присланные мостом, из списка проекта исчезают целиком; без названия видны только открытые отметки без сессии на машине (новый чат до первого хода); история, ход и «Поделиться» при мосте на связи — 500 (словарь имён `require_engine` без `deepseek`, KeyError), без связи — 409 `offline`; `state` и ход с непустыми правами — 500 и без связи (`ACCESS[engine]`); закрыть и открыть отметку можно. Поднятый в «Приоритете агентов» DeepSeek Harness (`users.code_defaults`, не шаг схемы) — прежний код отвечает 422 `priority` на любое сохранение умолчаний, после возврата вперёд — то же («от 1 до 4») | `DELETE FROM code_chats WHERE engine = 'deepseek';` — сессии остаются на компьютерах; «Приоритет агентов» — пересохранить |
 | 65 | `owui_accounts` — учётки Open WebUI (адрес, кто подключён и постоянная сессия — шифром) | таблицу не читает: раздела нет; учётки сохраняются до возврата вперёд; удаление учётки Студии уносит их строки каскадом, но сессии «Studio» в Open WebUI не отзывает | Не нужен; оставшиеся сессии «Studio» можно отозвать в самом Open WebUI |
+| 66 | `connections.via_cleaner`, `messages.cleaner_request`, `cleaner_rollback` — подключения через Cleaner; `cleaner_route_contexts` и `cleaner_deletions.route` — контексты шлюза Cleaner (служебный ключ — заголовком `X-Cleaner-Key`) | прежний код не знает столбца: ход такого подключения ушёл бы провайдеру напрямую; принудительный режим не соблюдается; удаление контекстов шлюза прежний код шлёт ключом в `Authorization` — Cleaner отвечает 401, и очередь откладывает весь адрес Cleaner на час (и удаления прежнего вида на нём); строки ждут возврата вперёд | перед откатом выполнить `cleaner_route.ROLLBACK_66` через `sql`, как строку 56: ключи таких подключений сохраняются и портятся (прежний код: «токен не расшифрован»); администратор решает, отключать ли внешние подключения; вперёд — `cleaner_route.FORWARD_66` выполняется сам при старте службы (`cleaner_route.forward`; ключ, введённый заново прежним кодом, не затирается) |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.
@@ -243,8 +249,9 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
     .venv/Scripts/python -m pytest -q -m integration        # браузер (Edge/Chrome + node 22, Firefox, WebKit), PowerShell
     .venv/Scripts/python -m pytest -q -m manual             # живая приёмка после выкладки (команда — testing.md)
 
-- Точечно: s06 — `tests/test_s06.py` и соседи; Cleaner — `tests/test_cleaner.py`, сквозной — `-m integration
-  tests/test_cleaner_contract.py tests/test_ui_cleaner.py` (нужен `cleaner/.venv` или `CLEANER_TEST_REPO`). Полные
+- Точечно: s06 — `tests/test_s06.py` и соседи; Cleaner — `tests/test_cleaner.py` и `tests/test_cleaner_route*.py`,
+  `tests/test_cleaner_forced.py`, сквозной — `-m integration tests/test_cleaner_contract.py tests/test_ui_cleaner.py
+  tests/test_ui_cleaner_route.py` (нужен `cleaner/.venv` или `CLEANER_TEST_REPO`). Полные
   команды — [testing](docs/architecture/testing.md).
 - Документация: `tests/test_docs.py` (быстрый) сверяет `` `модуль.символ` `` в CLAUDE.md и `docs/architecture/*.md`
   с кодом (AST, без импорта), пары «`модуль.КОНСТАНТА` (значение)» и относительные ссылки. Значения констант в текст
@@ -295,7 +302,13 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
   состояния пар и накопленное «держал» нечитаемы — первые сравнения осторожнее (больше «локальных изменений»); идентификаторы `X-Studio-User` (`access.studio_user`)
   — новые: внешний MCP (например, мост с папками по людям) видит новых пользователей, их папки, задания и файлы потеряны;
   личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново; учётки Open WebUI — `relogin`
-  (`owui._out`, признак `reenter`), «Войти заново» с email и паролем.
+  (`owui._out`, признак `reenter`), «Войти заново» с email и паролем; настройки Cleaner администратора —
+  ввести заново (`cleaner_route.settings`, признак `reenter`; до этого принудительный режим выключен).
+- Подключение через Cleaner: `Connection.routed` ⇒ `proxied` (`connections._from_row`) — инструменты, «Интернет»,
+  знания и перевод идут прежними серверными путями, но запрос такого подключения — только через `cleaner_route`
+  (`stream`, `request`, `models`, `context`); прямой `upstream.request` с ним — отказ `cleaner` предохранителем
+  `upstream._cleaner_only`. Служебный ключ — только `X-Cleaner-Key`: `Authorization` — ключ провайдера. Контекст шлюза
+  отмечен отдельной таблицей `cleaner_route_contexts` (прежний код вставляет в `cleaner_contexts` без списка столбцов).
 - Модуль раздела — `claude_code.py`, не `code.py` (заслонил бы стандартный `code`, pytest — INTERNALERROR).
 - `ntfy` не импортирует `upstream` при загрузке (цикл main → bridge → push → ntfy); после правки цепочки импорта —
   `import main` на Python хоста (3.13).

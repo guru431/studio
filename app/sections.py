@@ -25,6 +25,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import access
+import cleaner_route
 import clock
 import connections
 import state
@@ -173,6 +174,7 @@ def resolve(user_id: int, section: str, connection_id: "int | None",
         conn = link.connection
     if (section in SERVER_ONLY and not conn.proxied) or connections.dropped(conn):
         raise _bad("server", unlisted(conn), 409)
+    cleaner_route.refuse_forced(conn, section, model)       # принудительный Cleaner: 409 `cleaner_forced`
     return conn, model
 
 
@@ -189,17 +191,22 @@ def _link_row(user_id: int | None, section: str, conn_id: int):
 
 
 def accepts(conn: "connections.Connection") -> list[str]:
-    """Разделы, которые подключение принимает по виду (Cleaner — только CLEANER, s06 — S06_CATALOG, иначе
+    """Разделы, которые подключение принимает по виду (Cleaner и подключение через Cleaner — только CLEANER, s06 — S06_CATALOG, иначе
     `connections.KINDS`); список разрешённых — отдельно (SERVER_ONLY). Страница по нему строит выбор «+ Адрес для раздела»."""
     kinds = S06_CATALOG if conn.s06 else connections.KINDS[conn.kind]
-    return [s for s in SECTIONS if s in kinds and (not conn.cleaner or s in CLEANER)]
+    return [s for s in SECTIONS if s in kinds and (not (conn.cleaner or conn.routed) or s in CLEANER)]
 
 
 def check_link(conn: "connections.Connection", section: str) -> None:
-    """Может ли подключение участвовать в разделе: вид (`accepts`) и, для раздела только через сервер, список."""
+    """Может ли подключение участвовать в разделе: принудительный Cleaner (внешнее — только чат и перевод, 409
+    `cleaner_forced`), вид (`accepts`) и, для раздела только через сервер, список."""
+    if section not in CLEANER:                  # роль srvllm связь не выбирает: её отказ — при запросе (`resolve`)
+        cleaner_route.refuse_forced(conn, section, "")
     if section not in accepts(conn):
         if conn.cleaner:
             raise _bad("kind", "Cleaner поддерживает чат и перевод")
+        if conn.routed:
+            raise _bad("kind", "через Cleaner работают чат и перевод")
         if conn.s06:
             raise _bad("kind", "шлюз s06 поддерживает чат, перевод, расшифровку, сканы и голосовой ввод")
         raise _bad("kind", f"раздел «{NAMES[section]}» — только через шлюз srvllm")

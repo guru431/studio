@@ -105,7 +105,10 @@ The server runs on infrastructure you control. Connect local models through the 
 - Display translated text **over the original photo**, switch to plain text or save the translated image.
 - Persistent history, copy, TXT/DOCX exports, translate again with another language/model and resume interrupted translations.
 - Separate queues for text and file/photo work, so a short paragraph can run alongside a long document.
-- Optional **Cleaner integration** for chat and translation with data cleaning; see the [user guide](docs/guide.ru.md#cleaner-чат-и-перевод-с-очисткой-данных).
+- Optional **Cleaner integration** for chat and translation with data cleaning: a "Via Cleaner" switch on a user's
+  own external model connection (the provider key stays in Studio; MCP tools, web search and knowledge keep working,
+  "What the model received" shows the cleaned request), an administrator flag that sends every external model
+  through Cleaner, and the older Cleaner connection with its own Cleaner account; see the [user guide](docs/guide.ru.md#cleaner-чат-и-перевод-с-очисткой-данных).
 
 ### Open WebUI
 

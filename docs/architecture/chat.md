@@ -606,3 +606,43 @@ Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), кл�
 прерывается; до `cleaner_client.PURGE_CALLS` (10) запросов на проход. `GET /api/me/storage` несёт
 `cleaner_stalled: [{base_url, count}]` — только свои строки с `retry_at > now`. Подробно —
 [docs/cleaner-integration.md](../cleaner-integration.md).
+
+Выше и в остальных частях этого файла «Cleaner» — прежний вид (`connections.cleaner`, своя учётка Cleaner).
+
+### Через Cleaner (шлюз Cleaner, `cleaner_route`)
+
+Подключение через Cleaner (`Connection.routed`, решение — `cleaner_route.routes`: переключатель
+`connections.via_cleaner` у внешнего `openai` или принудительный режим `cleaner_route.forced`) считается серверным
+(`routed` ⇒ `proxied`). Поэтому инструменты, «Интернет», знания, профиль и роль идут прежним путём хода через сервер,
+а в местах, где запрос уходил провайдеру, вызывается `cleaner_route`:
+
+- `chat.StreamTask._round` — `cleaner_route.stream` на `/chat/completions` с контекстом диалога
+  (`cleaner_route.context`, ресурс `chat`; берётся в `chat.create_turn` до записи хода, продолжение после паузы
+  `chat_pending` берёт его лениво). Заголовки — `cleaner_route.headers`: служебный ключ `X-Cleaner-Key`, ключ
+  провайдера снимка задания `Authorization` (`connections.token`), адрес `X-Cleaner-Upstream`, контекст
+  `X-Cleaner-Chat`. В `X-Cleaner-Hold-Tools` уходят `chat.StreamTask._held`: включённые виды `web.NAMES` и
+  MCP-инструменты с пометкой «интернет». Их аргументы Cleaner возвращает с заменами, остальные — оригиналами.
+- Заголовок ответа `x-cleaner-request` (`cleaner_route.REQUEST_HEADER`) каждого круга, дошедшего до провайдера (не
+  отказа самого Cleaner), перезаписывает `messages.cleaner_request` (`cleaner_route.request_value`: «<чат>/<запрос>»,
+  у общего подключения — ещё «/shared»). «Что получила модель» — `GET /api/chats/{id}/messages/{mid}/cleaner-sent`
+  (`chat.cleaner_sent` → `cleaner_route.sent`): владелец диалога (`chat._chat_row`), к Cleaner — только служебный
+  ключ; ответ общего подключения не администратору — без системной части (`cleaner_route._hide_system`: одна пометка
+  `hidden`, профиль администратора не виден). 404 Cleaner (журнал удалён за давностью или контекст удалён) — 410 `journal_gone`
+  (`cleaner_route.JOURNAL_GONE`). Поле `cleaner_sent` ответа — признак кнопки; ссылки и экспорт его не читают.
+- Картинки: `chat._max_images` — `chat.NO_IMAGES` (из истории — пометкой `chat.CLEANER_DROPPED`), новое вложение-картинка — 409
+  `cleaner_images` (`chat.CLEANER_IMAGES`). Предел контекста `chat._limit` — из `cleaner_route.models`.
+- Отказы: сам Cleaner (сообщение начинается с «Cleaner») — `cleaner_route.words` по коду и `error.code`
+  (`upstream`, `hold_tools`, `client_login`, `chat`, 429, 503, 502/504); ошибка провайдера, переданная как есть, —
+  `upstream.gateway_error` (`cleaner_route.failure`). Нет связи — `cleaner_route.down`, адрес Cleaner убран из
+  списка — `cleaner_route.UNLISTED`, не настроен — 503 `cleaner_unset`. Запроса провайдеру мимо Cleaner нет:
+  предохранитель `upstream._cleaner_only` (причина `cleaner`) не пускает routed-подключение ни на какой адрес,
+  кроме адреса Cleaner. 404 `chat` — `cleaner_route.forget`: следующий ход создаёт новый контекст.
+- Принудительный режим в чате: `cleaner_route.refuse_forced` в `chat.create_turn` и `chat_pending.answer_pending`
+  (облачная роль srvllm — 409 `cleaner_forced`). «Знания»: `knowledge.vectors_for` — диалог через Cleaner не отдаёт
+  текст внешнему источнику векторов; при флажке внешний источник выключен у всех (`knowledge.source_off`).
+- В `chat._chat_view` поле `routed` (тег «Cleaner» у выбора модели), `external` у такого диалога — `False`
+  (согласие на внешнюю модель не спрашивается: текст очищает Cleaner).
+- Журнал — «ход через Cleaner: код N» и id, без адресов, ключей и текста (`tests/test_cleaner_route_chat.py`).
+
+Перевод, модели, «Проверить» и «Пробный ответ» — [connections](connections.md); контексты, очередь удаления
+и настройки администратора — [docs/cleaner-integration.md](../cleaner-integration.md).

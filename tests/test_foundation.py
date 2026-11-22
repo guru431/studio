@@ -13,7 +13,7 @@ import state
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 65
+SCHEMA_VERSION = 66
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -43,7 +43,7 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.OWUI_65).removesuffix(db.CODE_64).removesuffix(db.MIRROR_GROUPS_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
+        conn.executescript(db.SCHEMA.removesuffix(db.CLEANER_ROUTE_66).removesuffix(db.OWUI_65).removesuffix(db.CODE_64).removesuffix(db.MIRROR_GROUPS_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
                            .removesuffix(db.TRANSCRIPT_PLAYBACK_60)
                            .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
@@ -387,6 +387,49 @@ def test_step_63_adds_mirror_groups_and_previous_writer_works(env):
         conn.execute("DELETE FROM users WHERE id = 1")
         for table in ("mirror_groups", "mirror_copies", "mirror_pairs", "project_mirrors"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_66_adds_cleaner_route_columns_and_previous_writer_works(env):
+    """Шаг 66: `connections.via_cleaner` и `messages.cleaner_request` — прежние строки и вставка прежнего кода
+    (своим списком столбцов) получают умолчания; таблица отката пуста."""
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 65)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        add = ("INSERT INTO connections(user_id,name,kind,base_url,token_enc,sections,created,server_only,cleaner,s06)"
+               " VALUES(1,?,'openai','https://x.test/v1',x'00','[]',0,1,0,0)")
+        conn.execute(add, ("before",))
+        conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('c',1,'t',0,0)")
+        conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('m1','c','user','hi','done','server',0)")
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        columns = {t: {r[1]: r for r in conn.execute(f"PRAGMA table_info({t})")} for t in ("connections", "messages")}
+        assert columns["connections"]["via_cleaner"][2:5] == ("INTEGER", 1, "0")        # NOT NULL DEFAULT 0
+        assert "cleaner_request" in columns["messages"]
+
+        conn.execute(add, ("previous",))                                              # прежний код
+        conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                     " VALUES('m2','c','user','hi','done','server',0)")
+        assert [tuple(r) for r in conn.execute("SELECT name, via_cleaner FROM connections ORDER BY id")] == [
+            ("before", 0), ("previous", 0)]
+        assert [r[0] for r in conn.execute("SELECT cleaner_request FROM messages")] == [None, None]
+        assert conn.execute("SELECT count(*) FROM cleaner_rollback").fetchone()[0] == 0
+
+        # контексты: прежний код вставляет без списка столбцов и ставит удаление своим списком — признак `route` 0;
+        # контекст с отметкой `cleaner_route_contexts` триггер переносит в очередь с `route` 1 и снимает отметку
+        context = "INSERT INTO cleaner_contexts VALUES (?, 1, 'chat', 'c', 1, ?, 'https://x.test', x'01', 0)"
+        conn.execute(context, ("old", "r-old"))
+        conn.execute(context.replace("'chat'", "'translate'"), ("new", "r-new"))
+        conn.execute("INSERT INTO cleaner_route_contexts(id) VALUES ('new')")
+        conn.execute("INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued)"
+                     " VALUES ('queued', 1, 'r-q', 'https://x.test', x'01', 0)")
+        conn.execute("DELETE FROM cleaner_contexts")
+        assert dict(conn.execute("SELECT id, route FROM cleaner_deletions").fetchall()) == {
+            "queued": 0, "old": 0, "new": 1}
+        assert conn.execute("SELECT count(*) FROM cleaner_route_contexts").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

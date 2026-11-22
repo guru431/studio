@@ -270,7 +270,9 @@ def test_connection_out_carries_only_a_hint(studio):
     items = studio.c.get("/api/connections").json()["items"]
     assert items == [{"id": cid, "name": "Облако", "kind": "openai", "base_url": "https://cloud.test/v1",
                       "sections": ["chat"], "proxied": False, "dropped": False, "token_hint": "…4567",
-                      "passport": None, "cleaner": False, "s06": False, "suggestions": [], "profile_set": False,
+                      "passport": None, "cleaner": False, "s06": False, "via_cleaner": False, "routed": False,
+                      "external": True, "cleaner_locked": False, "cleaner_offer": False, "suggestions": [],
+                      "profile_set": False,
                       "accepts": ["chat", "photo", "speech", "transcribe", "translate", "dictation"]}]
     cid = add_gateway(studio)
     gw = studio.c.get("/api/connections").json()["items"][1]
@@ -279,9 +281,10 @@ def test_connection_out_carries_only_a_hint(studio):
 
 @pytest.mark.parametrize("kind, s06, cleaner", [("openai", False, False), ("srvllm", False, False),
                                                 ("openai", True, False), ("openai", False, True)])
-def test_accepts_matches_check_link_kind_refusals(kind, s06, cleaner):
-    """«+ Адрес для раздела» предлагает подключение по `accepts`: ровно те разделы, где check_link не откажет видом."""
-    conn = types.SimpleNamespace(kind=kind, s06=s06, cleaner=cleaner, proxied=True)
+def test_accepts_matches_check_link_kind_refusals(studio, kind, s06, cleaner):
+    """«+ Адрес для раздела» предлагает подключение по `accepts`: ровно те разделы, где check_link не откажет видом.
+    База — для настроек Cleaner (`check_link` спрашивает принудительный режим)."""
+    conn = types.SimpleNamespace(kind=kind, s06=s06, cleaner=cleaner, routed=False, proxied=True)
     for section in sections.SECTIONS:
         try:
             sections.check_link(conn, section)

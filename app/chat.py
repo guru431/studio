@@ -60,6 +60,7 @@ import chat_tools
 import clock
 import connections
 import cleaner_client as cleaner
+import cleaner_route
 import documents
 import images
 import knowledge
@@ -191,6 +192,12 @@ REFUSED = "[вложение «{}» не передано: на это сооб�
 UNSENT = (SCAN_FAILED, STORAGE, GAVE_UP, CARD_BUSY.split("{")[0])
 #: пометка вместо картинки сверх предела подключения (`profiles.max_images`): {} — предел
 DROPPED = "[фото убрано из контекста: модель принимает не больше {} картинок на запрос]"
+#: подключение через Cleaner: вложенные картинки не отправляются (картинки истории — пометкой CLEANER_DROPPED)
+CLEANER_IMAGES = "Через Cleaner картинки не отправляются: уберите вложение-картинку"
+#: пометка вместо картинки истории в ходе через Cleaner (`_max_images` — NO_IMAGES)
+CLEANER_DROPPED = "[фото не отправлено: диалог идёт через Cleaner, картинки он не очищает]"
+#: предел картинок хода через Cleaner: ни одной, пометка — CLEANER_DROPPED
+NO_IMAGES = -1
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 #: тип файла документа по расширению (`documents.SUFFIXES`); HTML, XML, JS и CSS — text/plain: /api/media отдаёт
 #: файл с этим типом на адресе студии, и разметка из вложения не должна там открываться страницей, а скрипт и стиль —
@@ -345,7 +352,8 @@ def _chat_view(user_id: int, row) -> dict:
     out["local"] = conn is not None and sections.is_local(conn, model)
     out["dropped"] = conn is not None and connections.dropped(conn)
     out["cleaner"] = conn is not None and conn.cleaner
-    out["external"] = conn is not None and not conn.cleaner and not out["local"] and _needs_consent(
+    out["routed"] = conn is not None and conn.routed          # ход идёт через шлюз Cleaner (cleaner_route)
+    out["external"] = conn is not None and not conn.cleaner and not conn.routed and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
     out["web"] = bool(row["web"])
     out["proxied"] = conn is not None and conn.proxied
@@ -428,6 +436,8 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
             content = ""
     out = {"id": row["id"], "role": row["role"], "content": content,
            "cleaner_raw": row["cleaner_raw"],
+           # ход ушёл через шлюз Cleaner: у Cleaner можно спросить, что получила модель (`messages.cleaner_request`)
+           "cleaner_sent": bool(row["cleaner_request"]),
            "error": error,
            "status": row["status"], "via": row["via"], "model": row["model"], "created": row["created"],
            "live": _alive(row),
@@ -552,7 +562,7 @@ def _prefix(block: str, content):
 def _cap_images(messages: list[dict], limit: int) -> None:
     """Не больше `limit` картинок на весь запрос (предел подключения, `profiles.max_images`): остаются самые
     свежие, прежние — пометкой DROPPED, чтобы модель знала о пропуске; в истории диалога фото целы."""
-    left, dropped = limit, DROPPED.format(limit)
+    left, dropped = max(limit, 0), CLEANER_DROPPED if limit == NO_IMAGES else DROPPED.format(limit)
     for m in reversed(messages):
         if not isinstance(m["content"], list):
             continue
@@ -565,6 +575,12 @@ def _cap_images(messages: list[dict], limit: int) -> None:
                     p = {"type": "text", "text": dropped}
             parts.append(p)
         m["content"] = parts[::-1]
+
+
+def _max_images(conn: Connection) -> int:
+    """Картинок на запрос хода: подключение через Cleaner — ни одной (NO_IMAGES: картинки истории — пометкой
+    CLEANER_DROPPED), иначе предел профиля (`profiles.max_images`)."""
+    return NO_IMAGES if conn.routed else profiles.max_images(conn)
 
 
 def _refused_turns(rows, model: "str | None") -> set[str]:
@@ -719,19 +735,26 @@ async def _limit(conn: Connection, model: str) -> int | None:
     key = (conn.user_id, conn.id, conn.kind, conn.base_url)
     if key in LIMITS:
         return LIMITS[key][1].get(model)
-    try:
-        r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
-    except (httpx.HTTPError, upstream.UpstreamRefused):
-        return None
-    data = upstream.json_body(r).get("data") if r.is_success else None
-    if not isinstance(data, list):
-        return None
-    lengths = {}
-    for m in data:
-        if isinstance(m, dict) and isinstance(m.get("id"), str):
-            length = connections.context_size(m)
-            if length is not None:
-                lengths.setdefault(m["id"], length)
+    if conn.routed:                                  # список — только через Cleaner (`cleaner_route.models`)
+        try:
+            items = await cleaner_route.models(conn)
+        except HTTPException:
+            return None
+        lengths = {m["id"]: m["context_length"] for m in reversed(items) if "context_length" in m}
+    else:
+        try:
+            r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
+        except (httpx.HTTPError, upstream.UpstreamRefused):
+            return None
+        data = upstream.json_body(r).get("data") if r.is_success else None
+        if not isinstance(data, list):
+            return None
+        lengths = {}
+        for m in data:
+            if isinstance(m, dict) and isinstance(m.get("id"), str):
+                length = connections.context_size(m)
+                if length is not None:
+                    lengths.setdefault(m["id"], length)
     while len(LIMITS) >= CONTEXT_KEEP:
         del LIMITS[next(iter(LIMITS))]
     LIMITS[key] = (now, lengths)
@@ -844,6 +867,9 @@ class StreamTask:
     knowledge_cache: dict = field(default_factory=dict, repr=False)
     scan_state: dict | None = None   # ход распознавания для страницы ({page, pages}), пока ждём
     cleaner_preview: object = field(default=None, repr=False)
+    #: подключение через Cleaner (`conn.routed`): id чата Cleaner диалога (`cleaner_route.context`); продолжение после
+    #: паузы его не знает — первый круг спросит заново
+    cleaner_chat: str | None = None
     #: ждём карту (503 шлюза): (начало ожидания — для слов, начало отсчёта срока WAIT_MAX_SEC); не ждём — None
     card_wait: "tuple[float, float] | None" = None
     gave_up: bool = False        # «Не ждать»: отмена ожидания — ошибка GAVE_UP, а не «остановлено»
@@ -1035,16 +1061,39 @@ class StreamTask:
         requires…», LiteLLM называет `tools`); в запросе только встроенные инструменты (`builtin_only`) — 400 со
         словом tool или признаком отказа profiles.REJECTED даёт TOOLS_REFUSED: повтор без них (_read_model);
         400 с именем отправленного параметра профиля — profiles.REFUSED; прочий 400 (контекст, картинка) — словами
-        шлюза."""
+        шлюза. Подключение через Cleaner (`conn.routed`) — тот же запрос в шлюз Cleaner (`cleaner_route.stream`):
+        контекст диалога, веб-инструменты без восстановления (`_held`), id запроса Cleaner — в
+        `messages.cleaner_request`; отказ самого Cleaner — его словами (`cleaner_route.words`), обхода нет."""
         ending, calls, text = None, {}, ""
+        routed = self.conn.routed
+        timeout = httpx.Timeout(STREAM_READ_SEC, connect=30)
         try:
-            async with upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
-                                       timeout=httpx.Timeout(STREAM_READ_SEC, connect=30)) as r:
+            if routed:
+                if self.cleaner_chat is None:
+                    self.cleaner_chat = await cleaner_route.context(self.conn, "chat", self.chat_id)
+                opened = cleaner_route.stream(self.conn, "/chat/completions", remote=self.cleaner_chat,
+                                              hold=self._held(), json=payload, timeout=timeout)
+            else:
+                opened = upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
+                                         timeout=timeout)
+            async with opened as r:
+                if routed and r.status_code == 200:
+                    self._cleaner_request(r)
                 if r.status_code == 503 and self._card_gateway():
                     await r.aread()
                     return None, BUSY, [], text                 # карта занята — ждать (_read)
                 if r.status_code != 200:
                     await r.aread()
+                    own = cleaner_route.refusal(r) if routed else None
+                    if routed and own is None:                  # ошибка провайдера: запрос до него дошёл
+                        self._cleaner_request(r)
+                    if own is not None:                         # отказ самого Cleaner: провайдер запроса не получил
+                        log.info("чат %s: ответ %s — ход через Cleaner: код %d", self.chat_id[:8], self.message_id[:8],
+                                 r.status_code)
+                        if r.status_code == 404 and own[0] == "chat":       # контекст удалили в Cleaner
+                            cleaner_route.forget(self.conn, "chat", self.chat_id)
+                            self.cleaner_chat = None
+                        return cleaner_route.words(r), None, [], text
                     lowered = r.text.lower()
                     if offer and builtin_only and r.status_code == 400 and (
                             "tool" in lowered or any(marker in lowered for marker in profiles.REJECTED)):
@@ -1103,15 +1152,38 @@ class StreamTask:
                     if len(self.content) > ANSWER_MAX:
                         self.content = self.content[:ANSWER_MAX] + CUT_SIZE
                         return "ответ слишком длинный — обрезан", None, [], text
+        except HTTPException as exc:                 # контекст Cleaner не получен (cleaner_route.context)
+            return exc.detail["message"], None, [], text
         except upstream.UpstreamRefused as e:
+            if routed and e.reason not in ("changed", "token"):   # отказ адресу самого Cleaner
+                return cleaner_route.UNLISTED, None, [], text
             return upstream.refused_words(e, self.conn), None, [], text
         except httpx.TimeoutException:
+            if routed:
+                return f"Cleaner не ответил за {STREAM_READ_SEC} с", None, [], text
             return f"шлюз не ответил за {STREAM_READ_SEC} с", None, [], text
         except httpx.HTTPError as e:
+            if routed and isinstance(e, httpx.ConnectError):
+                return cleaner_route.DOWN, None, [], text
+            if routed:
+                return f"связь с Cleaner оборвалась: {type(e).__name__}", None, [], text
             return f"шлюз недоступен: {type(e).__name__}", None, [], text
         finally:
             self._think_end()
         return None, ending, [calls[i] for i in sorted(calls)], text
+
+    def _held(self) -> list[str]:
+        """Инструменты, чьи аргументы Cleaner отдаёт с заменами (`X-Cleaner-Hold-Tools`): «Интернет» хода (`web.NAMES`
+        включённых видов) и веб-инструменты MCP (пометка «интернет»): поиск уходит без настоящих данных."""
+        names = [name for name, kind in web.NAMES.items() if kind in self.tools]
+        return names + sorted(self.mcp.open_world if self.mcp else ())
+
+    def _cleaner_request(self, response: httpx.Response) -> None:
+        """id запроса Cleaner этого круга — у ответа «<чат Cleaner>/<запрос>»; последний круг перезаписывает прежний."""
+        found = response.headers.get(cleaner_route.REQUEST_HEADER, "")
+        if self.cleaner_chat and re.fullmatch(r"[0-9A-Za-z]{1,64}", found):
+            state.DB.execute("UPDATE messages SET cleaner_request = ? WHERE id = ?",
+                             (cleaner_route.request_value(self.cleaner_chat, found, self.conn), self.message_id))
 
     @staticmethod
     def _collect(calls: dict, tc: dict) -> None:
@@ -1464,8 +1536,9 @@ class StreamTask:
         finally:
             self.scan_state = None
         self.cut, _ = _excerpt_plan(self.user_id, self.chat_id, self.user_message_id, self.model,
-                                    profiles.max_images(self.conn), self.system, self.limit,
-                                    bool(knowledge.chat_kbs(self.user_id, self.chat_id)))
+                                    _max_images(self.conn), self.system, self.limit,
+                                    bool(knowledge.chat_kbs(self.user_id, self.chat_id)),
+                                    vectors=knowledge.vectors_for(self.conn))
         if self.tools:
             self.known = _known_links(self.chat_id)
         return await self._context()
@@ -2201,13 +2274,14 @@ def _plan_excerpts(docs: list, system: str, limit: "int | None", guess) -> tuple
 
 
 def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, system: str, limit: "int | None",
-                  kbs: bool) -> tuple[set, list[dict]]:
+                  kbs: bool, vectors: bool = True) -> tuple[set, list[dict]]:
     """Какие документы диалога модель хода получит выдержками, и сообщения для проверки контекста, где выдержки и блок
     баз диалога (`kbs`) — оценка EXCERPT_GUESS. Целиком — всё, что помещается в предел `limit` без RESERVE_TOKENS
     вместе с остальным запросом; не помещается — большие документы (длиннее knowledge.INLINE_TOKENS или самого
     предела) выдержками, с самого большого, пока не поместится; предел не известен — выдержками все, что длиннее
     knowledge.INLINE_TOKENS. Документы знаний вложений — по решению: выдержкам `knowledge.adopt`, целым —
-    `knowledge.release` (отметка «модель видит выдержки» у вложения — `knowledge.big_attachments`)."""
+    `knowledge.release` (отметка «модель видит выдержки» у вложения — `knowledge.big_attachments`); `vectors` False —
+    документ без векторов (`knowledge.vectors_for`)."""
     docs = _sent_documents(chat_id, upto, model)
     def guess(cut):
         return _with_block(compose(chat_id, upto, model, cap, dict.fromkeys(cut, EXCERPT_GUESS)),
@@ -2216,7 +2290,7 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
     cut, messages = _plan_excerpts(docs, system, limit, guess)
     for a in docs:
         if a["id"] in cut:
-            knowledge.adopt(uid, a["id"], a["name"], a["text"])
+            knowledge.adopt(uid, a["id"], a["name"], a["text"], vectors)
     knowledge.release([a["id"] for a in docs if a["id"] not in cut])
     return cut, messages
 
@@ -2228,8 +2302,9 @@ async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Con
     StreamTask.photos для payload паузы), системное сообщение. Не помещается — HTTPException 413; файл фото не
     прочитался — OSError."""
     asked = state.DB.execute("SELECT content FROM messages WHERE id = ?", (upto,)).fetchone()
-    excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache)
-    composed = _with_block(compose(chat_id, upto, model, profiles.max_images(conn), excerpts), block)
+    excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache,
+                                               knowledge.vectors_for(conn))
+    composed = _with_block(compose(chat_id, upto, model, _max_images(conn), excerpts), block)
     tokens = estimate_tokens(chat_system.wrap(system, composed))
     if limit is not None and tokens > limit - RESERVE_TOKENS:
         log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
@@ -2372,7 +2447,7 @@ async def estimate(chat_id: str, body: EstimateIn, request: Request):
         "SELECT * FROM attachments WHERE id = ? AND user_id = ? AND message_id IS NULL", (att_id, uid))
         if a["kind"] != "document" or a["text"] is not None]
     limit = await _limit(conn, model) if conn is not None else None
-    cap = profiles.max_images(conn) if conn is not None else profiles.DEFAULT_MAX_IMAGES
+    cap = _max_images(conn) if conn is not None else profiles.DEFAULT_MAX_IMAGES
     profiled = conn if conn is not None and (conn.proxied or not conn.shared) else None
     system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
     excerpts_enabled = conn is None or not conn.cleaner
@@ -2444,6 +2519,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     model = row["model"] or manage.DEFAULT_MODEL
+    cleaner_route.refuse_forced(conn, "chat", model)  # облачная роль srvllm при принудительном Cleaner — до записи хода
     if conn.shared:
         _chat_pair(uid, conn.id, model)
     edit = _edit_target(chat_id, body)
@@ -2453,6 +2529,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     if len(atts) + len(saved) > ATTACH_MAX:
         raise HTTPException(422, {"code": "attachments", "message": ATTACHMENTS})
+    if conn.routed and any(a["kind"] == "image" for a in [*atts, *saved]):
+        raise HTTPException(409, {"code": "cleaner_images", "message": CLEANER_IMAGES})
+    # контекст Cleaner диалога — до записи хода: Cleaner недоступен или не настроен — отказ, история не меняется
+    remote = await cleaner_route.context(conn, "chat", chat_id) if conn.routed else None
     limit = await _limit(conn, model)
     operations.check(uid)
     receipt = _turn_receipt(chat_id, body.request_id, body)
@@ -2479,7 +2559,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     scans = _pending_scans(uid, chat_id, atts, edit)
     if scans and via == "browser":
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
-    free = body.external_ok or sections.is_local(conn, model) or conn.cleaner
+    free = body.external_ok or sections.is_local(conn, model) or conn.cleaner or conn.routed
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
@@ -2555,8 +2635,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 messages = compose(chat_id, user_mid, model, profiles.max_images(conn))
                 knowledge.release(knowledge.big_attachments(chat_id))
             else:
-                cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, profiles.max_images(conn), system,
-                                              limit, kbs)
+                cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, _max_images(conn), system,
+                                              limit, kbs, vectors=knowledge.vectors_for(conn))
             search = bool(cut) or kbs
             known = _known_links(chat_id) if kinds else {}
             tokens = estimate_tokens(chat_system.wrap(system, messages))
@@ -2610,7 +2690,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         log.info("чат %s: ход %s остановлен до запроса к модели", chat_id[:8], answer_id[:8])
         return StreamingResponse(_ended(user_mid, answer_id, answer["status"]), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
-    log.info("чат %s: ход %s, %s", chat_id[:8], answer_id[:8], via)
+    log.info("чат %s: ход %s, %s%s", chat_id[:8], answer_id[:8], via, " через Cleaner" if conn.routed else "")
     if not conn.proxied:
         return {"user_message_id": user_mid, "assistant_message_id": answer_id,
                 "url": connections.chat_url(conn), "model": model, "messages": messages, "params": params}
@@ -2620,7 +2700,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                     system=system,
                     thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
                     scans=scans, user_message_id=user_mid, cleaner_preview=preview, photos=refs, cut=cut,
-                    search=search)
+                    search=search, cleaner_chat=remote)
     STREAMS[answer_id] = st
     st.task = asyncio.create_task(st.run())
     return _EventStream(st, user_mid, getattr(request.state, "digest", None))
@@ -2644,6 +2724,21 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже сохранён"})
     log.info("чат %s: ответ %s от браузера — %s", chat_id[:8], message_id[:8], body.status)
     return {"id": message_id, "status": body.status}
+
+
+@router.get("/chats/{chat_id}/messages/{message_id}/cleaner-sent")
+async def cleaner_sent(chat_id: str, message_id: str, request: Request):
+    """«Что получила модель»: сообщения последнего запроса хода через Cleaner со стороны провайдера (с заменами) —
+    у Cleaner по `messages.cleaner_request` (`cleaner_route.sent`). Чужой диалог, ответ без запроса Cleaner — 404;
+    журнал Cleaner удалён — 410 `journal_gone`. Текст не хранится в Studio и не попадает в ссылки и экспорт. Ответ
+    общего подключения учётке без прав администратора — без системной части: в ней профиль администратора."""
+    user = request.state.user
+    _chat_row(user.id, chat_id)
+    row = state.DB.execute("SELECT cleaner_request FROM messages WHERE id = ? AND chat_id = ? AND role = 'assistant'",
+                           (message_id, chat_id)).fetchone()
+    if row is None or not row["cleaner_request"]:
+        raise _gone("такого сообщения нет")
+    return await cleaner_route.sent(row["cleaner_request"], admin=bool(user.is_admin))
 
 
 @router.post("/chats/{chat_id}/messages/{message_id}/alive", status_code=204)

@@ -16,6 +16,10 @@
 - «Пробный ответ» (`POST …/probe`, браузером — полем `probes` того же PUT) — единственная тратящая проба:
   одно короткое сообщение отмеченной модели чата не-srvllm подключения, с параметрами профиля (profiles.py)
   без его предела ответа; отказ 400 с именем параметра — слова `profiles.REFUSED`.
+- Подключение через Cleaner (`conn.routed`): всё — только через шлюз Cleaner, провайдеру мимо него запросов нет.
+  Проверка — две строки паспорта: список моделей `GET /agent/openai/v1/models` (ключ провайдера и его адрес в
+  заголовках) и самопроверка Cleaner `…/cleaner/check` (ключ, слои, провайдер); «Пробный ответ» — в своём контексте
+  Cleaner подключения (`cleaner_route.context`, ресурс `probe`). Отказы Cleaner — его словами (`cleaner_route.words`).
 - Журнал — только id и итог одним словом: ни адреса, ни моделей, ни слов сервиса.
 """
 import logging
@@ -27,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import capabilities
+import cleaner_route
 import clock
 import connections
 import profiles
@@ -62,6 +67,8 @@ def _down(e: httpx.HTTPError, seconds: int = CHECK_TIMEOUT_SEC) -> str:
 def refused_words(e: upstream.UpstreamRefused, conn) -> str:
     if isinstance(e, upstream.ConnectionChanged):
         return "подключение удалено — откройте заново" if e.deleted else "подключение изменено — откройте заново"
+    if conn.routed:                                      # отказ адресу самого Cleaner
+        return cleaner_route.unreachable(e, conn)
     return upstream.refused_words(e, conn)
 
 
@@ -101,6 +108,55 @@ async def _route(conn, url: str) -> "tuple[dict, httpx.Response | None]":
         return row | {"reach": {"ok": False, "words": _down(e)}, "key": None}, None
     return row | {"ms": _ms(start), "status": r.status_code, "reach": {"ok": True, "words": "отвечает"},
                   "key": key_of(r)}, r
+
+
+def _routed_key(r: httpx.Response, conn) -> dict:
+    """Ключ провайдера по ответу Cleaner: отказ самого Cleaner (его ключи, адрес) — его словами, не «токен не принят»."""
+    if cleaner_route.refusal(r) is not None and r.status_code != 200:
+        return {"state": "unknown", "code": r.status_code, "words": cleaner_route.words(r)[:WORDS_MAX]}
+    return key_of(r)
+
+
+async def _routed(conn, path: str) -> "tuple[dict, httpx.Response | None]":
+    """Строка паспорта подключения через Cleaner: `GET` шлюза агентов с ключом и адресом провайдера. Не настроенный
+    или недоступный Cleaner — строка «не отвечает» его словами."""
+    row = _row(cleaner_route.AGENT_PATH + path)
+    start = clock.NOW()
+    try:
+        r = await cleaner_route.request(conn, "GET", path, timeout=CHECK_TIMEOUT_SEC)
+    except HTTPException as e:
+        return row | {"reach": {"ok": False, "words": e.detail["message"]}, "key": None}, None
+    except upstream.UpstreamRefused as e:
+        return row | {"reach": {"ok": False, "words": refused_words(e, conn)}, "key": None}, None
+    except httpx.HTTPError as e:
+        return row | {"reach": {"ok": False, "words": cleaner_route.down(e, CHECK_TIMEOUT_SEC)}, "key": None}, None
+    return row | {"ms": _ms(start), "status": r.status_code, "reach": {"ok": True, "words": "отвечает"},
+                  "key": _routed_key(r, conn)}, r
+
+
+def _layers(row: dict, r: "httpx.Response | None") -> None:
+    """Самопроверка Cleaner `{ok, checks[{name, ok}]}`: не пройденные проверки — слова строки `reach`."""
+    if r is None:
+        return
+    if r.status_code != 200:
+        row["reach"] = {"ok": False, "words": cleaner_route.words(r)[:WORDS_MAX]}
+    else:
+        body = upstream.json_body(r)
+        failed = [str(c.get("name"))[:32] for c in body.get("checks") or [] if isinstance(c, dict) and c.get("ok") is False]
+        if body.get("ok") is False or failed:
+            row["reach"] = {"ok": False, "words": f"Cleaner: не пройдено — {', '.join(failed[:8]) or '?'}"}
+    row["key"] = None                         # ключ провайдера показывает строка списка моделей
+
+
+async def _check_routed(conn, snap: tuple) -> dict:
+    models_row, r = await _routed(conn, "/models")
+    listed = _listed(models_row, r)
+    layers_row, r2 = await _routed(conn, "/cleaner/check")
+    _layers(layers_row, r2)
+    ids = None if listed is None else [m["id"] for m in listed]
+    models = capabilities.models(capabilities.profile(conn), listed or [], None, MODELS_MAX)
+    return _save(conn, snap, passport(conn, "server", [models_row, layers_row], models, _probes(snap)),
+                 found_of(conn, ids, None, ids))
 
 
 def _listed(row: dict, r: "httpx.Response | None") -> "list[dict] | None":
@@ -170,6 +226,8 @@ async def check(conn) -> dict:
         return _save(conn, snap, passport(conn, "server", routes, [], _probes(snap)), {})
     if not conn.proxied:
         raise HTTPException(409, {"code": "direct", "message": "прямое подключение проверяет браузер"})
+    if conn.routed:
+        return await _check_routed(conn, snap)
     urls = _urls(conn)
     first, r = await _route(conn, urls[0])
     listed = _listed(first, r)
@@ -256,8 +314,18 @@ async def probe(conn, model: str) -> dict:
     body = {"model": model, "messages": [{"role": "user", "content": PROBE_TEXT}], **params,
             "max_tokens": PROBE_TOKENS, "stream": False}
     start = clock.NOW()
+
+    async def send(payload: dict) -> httpx.Response:
+        if conn.routed:                                  # свой контекст Cleaner у подключения, провайдеру мимо — нет
+            return await cleaner_route.request(conn, "POST", "/chat/completions", remote=remote, json=payload,
+                                               timeout=PROBE_TIMEOUT_SEC)
+        return await upstream.request(conn, "POST", connections.chat_url(conn), json=payload, timeout=PROBE_TIMEOUT_SEC)
+
+    remote = None
     try:
-        r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
+        if conn.routed:
+            remote = await cleaner_route.context(conn, "probe", str(conn.id))
+        r = await send(body)
         error = upstream.json_body(r).get('error')
         error = error if isinstance(error, dict) else {}
         reason = str(error.get('message') or '')
@@ -267,16 +335,23 @@ async def probe(conn, model: str) -> dict:
         if r.status_code == 400 and replace_parameter:
             # модели рассуждений OpenAI: max_tokens не принимают — один повтор
             body = {k: v for k, v in body.items() if k != "max_tokens"} | {"max_completion_tokens": PROBE_TOKENS}
-            r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=PROBE_TIMEOUT_SEC)
+            r = await send(body)
+    except HTTPException as e:                           # Cleaner не настроен или не создал контекст: данные не отправлены
+        result = {"ok": False, "ms": None, "words": str(e.detail["message"])[:WORDS_MAX]}
     except upstream.UpstreamRefused as e:
         result = {"ok": False, "ms": None, "words": refused_words(e, conn)}
     except httpx.HTTPError as e:
-        result = {"ok": False, "ms": None, "words": _down(e, PROBE_TIMEOUT_SEC).replace("не отвечает", "не ответила")}
+        result = {"ok": False, "ms": None, "words": cleaner_route.down(e, PROBE_TIMEOUT_SEC) if conn.routed
+                  else _down(e, PROBE_TIMEOUT_SEC).replace("не отвечает", "не ответила")}
     else:
         ms = _ms(start)
-        refused = profiles.refusal(r.text, params) if r.status_code == 400 else None
+        own = cleaner_route.refusal(r) if conn.routed and r.status_code != 200 else None
+        if own is not None and r.status_code == 404 and own[0] == "chat":
+            cleaner_route.forget(conn, "probe", str(conn.id))          # контекст удалили в Cleaner: следующий — новый
+        refused = profiles.refusal(r.text, params) if r.status_code == 400 and own is None else None
         result = {"ok": r.status_code == 200, "ms": ms,
-                  "words": f"ответила за {ms} мс" if r.status_code == 200 else (refused or _refusal(r))[:WORDS_MAX]}
+                  "words": f"ответила за {ms} мс" if r.status_code == 200
+                  else (cleaner_route.words(r) if own is not None else refused or _refusal(r))[:WORDS_MAX]}
     result |= {"at": clock.NOW(), "source": "server"}
     built = _with_probes(conn, snap, "server", {model: result})
     if not connections.save_passport(snap, built):

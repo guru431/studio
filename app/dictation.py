@@ -16,6 +16,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+import cleaner_route
 import clock
 import forms
 import sections
@@ -63,12 +64,18 @@ async def dictate(request: Request):
         language = speech.language_of(fields.get("language"))
     except ValueError:
         raise HTTPException(422, {"code": "input", "message": "язык ввода — Авто, русский или английский"}) from None
-    return {"text": await recognize(uid, data, mime, name, language)}
+    dialog = fields.get("connection_id") or ""
+    if dialog and not (dialog.isascii() and dialog.isdigit() and len(dialog) <= 18):
+        raise HTTPException(422, {"code": "input", "message": "подключение диалога — число"})
+    return {"text": await recognize(uid, data, mime, name, language, dialog=int(dialog) if dialog else None)}
 
 
-async def recognize(uid: int, data: bytes, mime: str, name: str, language: "str | None" = None) -> str:
-    """Распознать запись моделью голосового ввода, с теми же сроком и отказами для образца голоса."""
+async def recognize(uid: int, data: bytes, mime: str, name: str, language: "str | None" = None, *,
+                    dialog: "int | None" = None) -> str:
+    """Распознать запись моделью голосового ввода, с теми же сроком и отказами для образца голоса. `dialog` —
+    подключение диалога, в чьё поле идёт текст: через Cleaner — внешняя модель отказывает до отправки звука."""
     conn, model = sections.resolve(uid, "dictation", None, None)
+    cleaner_route.refuse_dialog_speech(uid, dialog, conn)
     try:
         text = await asyncio.wait_for(_recognize(conn, model, data, mime, name, language), BUDGET_SEC)
     except TimeoutError:

@@ -30,6 +30,7 @@ import auth
 import account_mail
 import bridge
 import chat
+import cleaner_route
 import clock
 import connections
 import email_accounts
@@ -87,6 +88,21 @@ async def save_smtp_settings(body: account_mail.Settings):
 @router.post("/smtp/check")
 async def check_smtp_settings():
     return await account_mail.check()
+
+
+@router.get("/cleaner")
+async def cleaner_settings():
+    return cleaner_route.public_settings()
+
+
+@router.put("/cleaner")
+async def save_cleaner_settings(body: cleaner_route.SettingsIn):
+    return cleaner_route.save_settings(body)
+
+
+@router.post("/cleaner/check")
+async def check_cleaner_settings():
+    return await cleaner_route.check()
 
 
 USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
@@ -462,8 +478,9 @@ class KnowledgeAccessIn(BaseModel):
 
 @router.get("/knowledge")
 async def get_knowledge():
-    """Источник эмбеддингов (`settings.knowledge_source`; null — только BM25) и общие базы с группами."""
-    return {"source": knowledge.source(), "bases": knowledge.shared_bases()}
+    """Источник эмбеддингов (`settings.knowledge_source`; null — только BM25), признак «источник внешний и не
+    используется: Cleaner обязателен» (`knowledge.source_off`) и общие базы с группами."""
+    return {"source": knowledge.source(), "source_off": knowledge.source_off(), "bases": knowledge.shared_bases()}
 
 
 @router.put("/knowledge")

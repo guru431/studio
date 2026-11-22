@@ -135,12 +135,15 @@ export function knowledgeAdminBlock(host) {
   const embed = el('input', { class: 'input', id: 'kb-source-embed', maxlength: '200', placeholder: 'bge-m3' });
   const rerank = el('input', { class: 'input', id: 'kb-source-rerank', maxlength: '200', placeholder: 'bge-reranker-v2-m3' });
   const sourceNote = el('p', { class: 'status', id: 'kb-source-status', 'aria-live': 'polite' });
+  const sourceOff = el('p', { class: 'status error', id: 'kb-source-off', hidden: true },
+    tr("Cleaner обязателен для внешних моделей: этот источник внешний и не используется — индексация и поиск у всех только по словам (BM25)."));
   const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'kb-source-save' }, async () => {
     save.disabled = true;
     try {
       const id = conn.value ? Number(conn.value) : null;
-      await api('PUT', '/api/admin/knowledge', { connection_id: id, embed_model: embed.value,
+      const out = await api('PUT', '/api/admin/knowledge', { connection_id: id, embed_model: embed.value,
         rerank_model: rerank.value.trim() || null });
+      sourceOff.hidden = !out.source_off;
       say(sourceNote, tr("Сохранено"), 'ok');
     } catch (err) {
       say(sourceNote, words(err), 'error');
@@ -199,8 +202,9 @@ export function knowledgeAdminBlock(host) {
 
   async function reload() {
     try {
-      const [{ source, bases }, { items }] = await Promise.all([api('GET', '/api/admin/knowledge'),
+      const [{ source, source_off: off, bases }, { items }] = await Promise.all([api('GET', '/api/admin/knowledge'),
         api('GET', '/api/admin/shared/connections')]);
+      sourceOff.hidden = !off;
       conn.replaceChildren(el('option', { value: '' }, tr("Нет — только поиск по словам")),
         ...items.filter((c) => c.proxied).map((c) => el('option', { value: String(c.id) }, c.name)));
       conn.value = source ? String(source.connection_id) : '';
@@ -216,7 +220,7 @@ export function knowledgeAdminBlock(host) {
   return el('section', { class: 'block', id: 'admin-knowledge' }, el('h2', {}, tr("Знания")),
     el('p', { class: 'muted' }, tr("Эмбеддинги и переранжирование для поиска по большим вложениям и базам знаний. Без источника работает поиск по словам.")),
     field(tr("Общее подключение"), conn), field(tr("Модель эмбеддингов"), embed),
-    field(tr("Модель переранжирования (необязательно)"), rerank), el('div', { class: 'row' }, save, sourceNote),
+    field(tr("Модель переранжирования (необязательно)"), rerank), el('div', { class: 'row' }, save, sourceNote), sourceOff,
     el('h3', {}, tr("Общие базы знаний")),
     el('p', { class: 'muted small' }, tr("По умолчанию доступны всем; ограничить группами — кнопка «Доступ». Администратор видит все общие базы.")),
     createForm('kb-shared-name', async (name) => {

@@ -9,12 +9,14 @@ import { tr } from './i18n.js';
  * значок «очистить» оставался бы у пустого поля. Нажатие «очистить» — пустое поле, событие `input` (раздел
  * пересчитает высоту, счётчик, поиск), фокус в поле; у поля только для чтения (перевод «EN») — ничего.
  * `painted()` раздела зовётся после каждой такой сверки (чат прячет «Разговор», пока в поле текст).
+ * `dialog()` — подключение диалога для микрофона (attachMic): поле чата.
  * error — место ошибки микрофона под рамкой: его ставит раздел. */
 import { icon } from './icons.js';
 import { attachMic } from './mic.js';
 import { el } from './ui.js';
 
-export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false, painted = null } = {}) {
+export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false, painted = null,
+  dialog = null } = {}) {
   const error = el('div', { class: 'field-error' });
   const column = el('div', { class: 'field-tools' });
   const shown = [...tools];
@@ -34,7 +36,7 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   }
   if (attach) column.append(attach);
   column.append(...tools);
-  if (mic) column.append(attachMic(field, error));
+  if (mic) column.append(attachMic(field, error, { dialog }));
   const paint = () => {
     for (const node of shown) node.hidden = !field.value;
     if (fit && field.tagName === 'TEXTAREA' && field.rows === 1 && field.isConnected) {

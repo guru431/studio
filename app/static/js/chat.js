@@ -368,6 +368,15 @@ async function tokenFor(connId, url) {
   return fresh.token;
 }
 
+/* замены Cleaner по типам строкой («Люди: 2 · Почта: 1») — предпросмотр прежнего вида и «Что получила модель» */
+function cleanerCounts(counts) {
+  const typeNames = { PERSON: tr("Люди"), ORG: tr("Организации"), ADDRESS: tr("Адреса"), EMAIL: tr("Почта"), PHONE: tr("Телефоны"),
+    BIRTHDATE: tr("Даты рождения"), PASSPORT: tr("Паспорта"), INN: tr("ИНН"), SNILS: tr("СНИЛС"), OGRN: tr("ОГРН"), KPP: tr("КПП"),
+    OMS: tr("Полисы"), CARD: tr("Карты"), BANK_ACCOUNT: tr("Счета"), SECRET: tr("Секреты"), ACCOUNT: tr("Учётные записи"),
+    IP: 'IP', MAC: 'MAC', HOST: tr("Узлы"), DOMAIN: tr("Домены"), SID: 'SID', DN: 'LDAP', TERM: tr("Термины") };
+  return Object.entries(counts || {}).map(([type, count]) => `${typeNames[type] || type}: ${count}`).join(' · ');
+}
+
 /* признаки отказа по параметру в ответе 400 — как profiles.REJECTED (сверяет tests/test_connection_profiles.py) */
 const REJECTED = ['unknown', 'unsupported', 'unrecognized', 'not supported', 'extra fields not permitted',
   'extra inputs are not permitted', 'unexpected keyword'];
@@ -645,6 +654,9 @@ function build(view, ctx) {
   const models = popupMenu(chip, modelMenu, { fill: fillModels, side: 'above' });
   const connName = el('span', { class: 'chat-conn sr' });
   const modelWrap = el('div', { class: 'model-wrap' }, chip, connName, modelMenu);
+  // диалог через шлюз Cleaner (`routed`, cleaner_route.routes): признак рядом с выбором модели
+  const routedTag = el('span', { class: 'tag server chat-routed', id: 'chat-routed', hidden: true, title: tr("Диалог идёт через Cleaner") },
+    el('span', { 'aria-hidden': 'true' }, 'Cleaner'), el('span', { class: 'sr' }, tr("Диалог идёт через Cleaner")));
   const head = el('header', { class: 'head chat-head' }, toggle, el('h1', {}, NAMES.chat), el('span', { class: 'grow' }));
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
@@ -698,7 +710,8 @@ function build(view, ctx) {
     failed: (err) => { notice.textContent = words(err); } });
   // «Разговор» уступает место «очистить», пока в поле текст (идущий — виден всегда): колонка — три значка, рамка
   // пустого поля не растёт с первой буквой
-  const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; } });
+  const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
+    dialog: () => chosen().connection_id });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
   const editNote = el('div', { class: 'chat-edit-note', hidden: true },
     el('span', {}, tr("Правка сообщения. После отправки последующие сообщения будут удалены.")),
@@ -708,7 +721,7 @@ function build(view, ctx) {
   let passportKey = '';
   const ring = contextRing(estimateContext);
   const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, editNote, inputBox.box, inputBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, roles.chip, roles.menu, webToggle, mcpToggle,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle, ring.node), send, stop),
     webNote, talkNote);
   const fieldTools = inputBox.box.querySelector('.field-tools');
@@ -875,6 +888,7 @@ function build(view, ctx) {
       : tr("адрес подключения убран из списка администратора");
     chip.title = connName.textContent;
     droppedNote = dropped ? connName.textContent : '';     // в шапке подключения больше нет: отказ — строкой над лентой
+    routedTag.hidden = !(chat ? chat.chat.routed : link?.connection.routed);
     paintGuard();
     paintThink();
     paintWeb();
@@ -1173,7 +1187,7 @@ function build(view, ctx) {
     }
     notice.textContent = '';
     try {
-      talking = startConversation({ send: voiceTurn, state: paintTalk,
+      talking = startConversation({ send: voiceTurn, state: paintTalk, dialog: () => chosen().connection_id,
         failed: (text) => { notice.textContent = text; } });
     } catch (err) {                                  // браузер без Web Audio
       notice.textContent = words(err);
@@ -1538,6 +1552,38 @@ function build(view, ctx) {
     });
   }
 
+  /* «Что получила модель» ответа через шлюз Cleaner: последний запрос хода со стороны провайдера — с заменами.
+     Studio текст не хранит, а просит у Cleaner (cleaner_route.sent); окно — только текстом, без разметки */
+  function cleanerSent(m) {
+    return button(tr("Что получила модель"), { class: 'btn btn-sm msg-cleaner-sent' }, async (event) => {
+      const own = event.currentTarget;
+      own.disabled = true;
+      try {
+        const sent = await api('GET', `/api/chats/${chatId}/messages/${encodeURIComponent(m.id)}/cleaner-sent`);
+        const roles = { user: tr("Пользователь"), assistant: tr("Помощник"), tool: tr("Инструмент") };
+        // системная часть общего подключения учётке не показывается (`hidden`): в ней профиль администратора
+        const items = sent.messages.map((x) => (x.hidden
+          ? el('p', { class: 'muted small cleaner-sent-hidden' }, tr("Системная часть общего подключения скрыта"))
+          : x.role === 'system'
+          ? el('details', {}, el('summary', {}, tr("Инструкция модели")), el('pre', {}, x.content))
+          : el('section', {}, el('b', {}, roles[x.role] || x.role), el('pre', {}, x.content))));
+        // отказ Cleaner до провайдера: в журнале запроса нет сообщений
+        if (!items.length) items.push(el('p', { class: 'muted small' }, tr("До провайдера запрос не дошёл.")));
+        const counts = cleanerCounts(sent.counts);
+        openDialog(root, { id: 'cleaner-sent-dialog', title: tr("Что получила модель"), cancelText: tr("Закрыть"), body: [
+          el('p', {}, counts ? tr("Замены: {0}", counts) : tr("Автоматических замен нет.")),
+          sent.tools ? el('p', { class: 'muted small' }, tr("Описаний инструментов: {0}", sent.tools)) : null,
+          el('div', { class: 'cleaner-preview-text cleaner-sent-text' }, ...items),
+          el('p', { class: 'muted small' }, tr("Последний запрос хода так, как его получил провайдер: с заменами Cleaner. Studio этот текст не хранит.")),
+        ].filter(Boolean) });
+      } catch (err) {
+        notice.textContent = words(err);
+      } finally {
+        own.disabled = false;
+      }
+    });
+  }
+
   function closeEdit() {
     if (!editing) return;
     input.value = editing.previous;
@@ -1776,7 +1822,7 @@ function build(view, ctx) {
     p.meta.textContent = text;
     p.meta.className = `msg-meta${kind}`;
     p.model.hidden = !m.model || m.status === 'streaming';
-    if (!p.model.hidden) p.model.textContent = m.cleaner_raw != null || m.cleanerTurn
+    if (!p.model.hidden) p.model.textContent = m.cleaner_raw != null || m.cleanerTurn || m.cleaner_sent
       ? tr("{0} · через Cleaner", m.model) : m.model;
     p.actions.replaceChildren();
     if (m.status === 'streaming' && (job || m.via !== 'browser' || m.live)) return;   // «прервано» можно переспросить
@@ -1813,6 +1859,7 @@ function build(view, ctx) {
     if (m.cleaner_raw != null) p.actions.append(button(m.cleaner_show_raw ? tr("Восстановленный ответ") : tr("Ответ модели"),
       { class: 'btn btn-sm msg-cleaner-view' }, () => { m.cleaner_show_raw = !m.cleaner_show_raw; paint(m); }));
     if (chat?.chat.cleaner && m.content) p.actions.append(cleanerCopy(m));
+    if (m.cleaner_sent && m.id) p.actions.append(cleanerSent(m));
     if (p.last) p.actions.append(button(tr("Ответить заново"), { class: 'btn btn-sm msg-retry' }, () => submit(true)));
   }
 
@@ -2294,11 +2341,7 @@ function build(view, ctx) {
           const content = el('div', { class: 'cleaner-preview-text' }, ...shown.messages.map((m) =>
             m.role === 'system' ? el('details', {}, el('summary', {}, tr("Инструкция модели")), el('pre', {}, m.content))
               : el('section', {}, el('b', {}, m.role === 'user' ? tr("Пользователь") : tr("Помощник")), el('pre', {}, m.content))));
-          const typeNames = { PERSON: tr("Люди"), ORG: tr("Организации"), ADDRESS: tr("Адреса"), EMAIL: tr("Почта"), PHONE: tr("Телефоны"),
-            BIRTHDATE: tr("Даты рождения"), PASSPORT: tr("Паспорта"), INN: tr("ИНН"), SNILS: tr("СНИЛС"), OGRN: tr("ОГРН"), KPP: tr("КПП"),
-            OMS: tr("Полисы"), CARD: tr("Карты"), BANK_ACCOUNT: tr("Счета"), SECRET: tr("Секреты"), ACCOUNT: tr("Учётные записи"),
-            IP: 'IP', MAC: 'MAC', HOST: tr("Узлы"), DOMAIN: tr("Домены"), SID: 'SID', DN: 'LDAP', TERM: tr("Термины") };
-          const counts = Object.entries(shown.counts || {}).map(([type, count]) => `${typeNames[type] || type}: ${count}`).join(' · ');
+          const counts = cleanerCounts(shown.counts);
           const fragment = el('input', { class: 'input', id: 'cleaner-fragment', maxlength: '2000',
             placeholder: tr("Фрагмент исходного текста"), autocomplete: 'off' });
           const type = el('select', { class: 'input', id: 'cleaner-type' }, ...Object.entries({

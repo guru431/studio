@@ -58,6 +58,27 @@
   полем `accepts` — выбор уже заведённых в «+ Адрес для раздела» показывает только подходящие разделу. Связи Cleaner,
   успевшие появиться до запрета (или созданные прежним кодом после отката), убирает при каждом запуске
   `sections.drop_cleaner_strays()` — с `_settle` умолчаний и прежним столбцом `connections.sections`.
+- Через Cleaner (`cleaner_route`, шаг схемы 66, [docs/cleaner-integration.md](../cleaner-integration.md)). Настройки
+  администратора — один JSON шифром в `settings` (`cleaner_route.SETTINGS_KEY`): адрес Cleaner только из списка
+  разрешённых, служебный ключ (наружу — только `key_set`), флажок `forced`; не расшифровались — пустые с `reenter`,
+  принудительный режим выключен (`cleaner_route.forced`). Внешнее подключение — `cleaner_route.is_external`: всё,
+  кроме прежнего Cleaner и подключения (`openai`, s06, srvllm) из списка с IP-литералом не из `is_global`; внешний
+  шлюз s06 или srvllm через Cleaner не идёт — при флажке отказ во всех разделах (`cleaner_route.FORCED_GATEWAY`). Переключатель
+  `connections.via_cleaner` — только у внешних `openai` и только с разделами `sections.CLEANER` (иначе 422
+  `via_cleaner`); при флажке PATCH переключателя внешнего подключения — 422 (заблокирован), сохранённое значение
+  возвращается снятием флажка. `connections._from_row` ставит `routed` и `proxied`, если `cleaner_route.routes`:
+  такое подключение ходит через сервер и без адреса провайдера в списке, `/token` — 403, правка переключателя
+  ключа не требует, смена флажка обнуляет паспорт. `connections.out` отдаёт `via_cleaner`, `routed`, `external`,
+  `cleaner_locked` (заблокирован флажком) и `cleaner_offer` (показать переключатель: внешний `openai`, не s06, при
+  настроенном Cleaner или уже включённый). У routed `sections.accepts` — только `sections.CLEANER`. Принудительный
+  режим в остальных разделах — `cleaner_route.refuse_forced` в `sections.resolve` (все входы разделов, 409
+  `cleaner_forced`) и `sections.check_link` (новая связь внешнего подключения вне чата и перевода). Через Cleaner
+  идут и «Обновить модели» (`connections.fetch_models` → `cleaner_route.models`), «Проверить» (`checks._check_routed`:
+  строки `/agent/openai/v1/models` и `/agent/openai/v1/cleaner/check`), «Пробный ответ» (свой контекст, ресурс
+  `probe`) и «Перевод» (`translate._remote`: один контекст на запись; `translate_text.ContextLost` — контекст забыт,
+  «Продолжить» создаёт новый). Предохранитель `upstream._cleaner_only` в `upstream._prepare`, `upstream.fetch_certificate`
+  и `upstream.ws_target` отказывает routed-подключению (`UpstreamRefused`, причина `cleaner`) на любом адресе,
+  кроме адреса Cleaner, до всякого ввода-вывода.
 - Проверка подключения — `checks.py` (спека 2026-10-21-studio-connection-check-design): паспорт —
   `connections.passport` (JSON: строки `routes` по запросам, модели с возможностями и источником —
   `capabilities.py`, пробы), обнуляется сменой адреса, вида или токена; зеркала панели его убирают.

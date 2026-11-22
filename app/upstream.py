@@ -36,7 +36,8 @@ NAME_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[
 
 class UpstreamRefused(Exception):
     """Запрос не отправлен. `reason`: `unlisted` — адреса нет в списке администратора, `internal` — имя из
-    списка разрешается во внутренний адрес, `changed` — подключение сменили после снимка."""
+    списка разрешается во внутренний адрес, `changed` — подключение сменили после снимка, `cleaner` — подключение
+    через Cleaner просит адрес не Cleaner: текст пользователя провайдеру мимо Cleaner не уходит."""
 
     def __init__(self, message: str, reason: str = "unlisted"):
         super().__init__(message)
@@ -47,18 +48,24 @@ class ConnectionChanged(UpstreamRefused):
     """Подключение удалили или сменили его вид или адрес после того, как задание взяло снимок:
     ключ не отдан (connections.token) — новый ключ ушёл бы прежнему адресу."""
 
-    def __init__(self, conn, deleted: bool):
+    def __init__(self, conn, deleted: bool, route: bool = False):
         super().__init__(f"подключение {conn.id}: {'удалено' if deleted else 'изменено'}", "changed")
         self.deleted = deleted
+        #: сменился маршрут через Cleaner (переключатель или флажок администратора) после снимка
+        self.route = route
 
 
 def refused_words(e: UpstreamRefused, conn) -> str:
     """Отказ до отправки — словами для пользователя; каждая причина — своими."""
     if isinstance(e, ConnectionChanged):
+        if e.route:
+            return f"маршрут подключения «{conn.name}» через Cleaner изменился — данные не отправлены, запустите заново"
         return (f"подключение «{conn.name}» удалено из профиля" if e.deleted
                 else f"подключение «{conn.name}» изменено — запустите заново")
     if e.reason == "token":
         return f"токен подключения «{conn.name}» не удалось расшифровать — введите его заново"
+    if e.reason == "cleaner":
+        return f"подключение «{conn.name}» идёт только через Cleaner — запрос провайдеру не отправлен"
     if e.reason == "internal":
         return f"имя адреса подключения «{conn.name}» разрешается во внутренний адрес — сервер туда не ходит"
     return f"адрес подключения «{conn.name}» убран из списка администратора"
@@ -165,7 +172,20 @@ async def _pinned(conn, url: httpx.URL) -> httpx.URL:
     return url.copy_with(host=addresses[0])
 
 
+def _cleaner_only(conn, url) -> None:
+    """Предохранитель последней линии: подключение через Cleaner (`routed`) — только на адрес Cleaner из настроек
+    (схема, хост, порт). Любой путь кода, что по ошибке понесёт ему адрес провайдера, получает отказ до ввода-вывода."""
+    if not getattr(conn, "routed", False):
+        return
+    import cleaner_route                       # цикл: cleaner_route → connections → upstream
+    base, parsed = _parse(cleaner_route.settings()["base_url"] or None), _parse(url)
+    if base is None or parsed is None or (parsed.scheme, parsed.host, parsed.port or DEFAULT_PORTS.get(parsed.scheme)) != (
+            base.scheme, base.host, base.port or DEFAULT_PORTS.get(base.scheme)):
+        raise UpstreamRefused(f"подключение {conn.id}: идёт только через Cleaner", "cleaner")
+
+
 async def _prepare(conn, url, kw: dict, keyless: bool = False, auth: str | None = None) -> tuple[httpx.URL, dict]:
+    _cleaner_only(conn, url)
     parsed = _listed(conn, url)
     headers = dict(kw.pop("headers", None) or {})
     if not keyless:
@@ -221,6 +241,7 @@ def pinned_context(pem: str) -> ssl.SSLContext:
 async def fetch_certificate(conn, url: str) -> bytes:
     """DER сертификата https-сервера рукопожатием без проверки — показать отпечаток владельцу. Адрес — по тем
     же правилам списка и имени (отказ до всякого ввода-вывода); данные по соединению не идут."""
+    _cleaner_only(conn, url)
     parsed = _listed(conn, url)
     if parsed.scheme != "https":
         raise ValueError("сертификат есть только у https")
@@ -253,6 +274,7 @@ class WsTarget:
 async def ws_target(conn, url: str) -> WsTarget:
     """Цель `ws://`/`wss://` для `http://`/`https://` адреса — по тем же правилам списка и имени, что у
     запросов; `wss` — с доверенным сертификатом учётки или системными корнями."""
+    _cleaner_only(conn, url)
     parsed = _listed(conn, url)
     name = parsed.raw_host.decode("ascii") if named(parsed) else None
     host_header = _host_header(parsed)

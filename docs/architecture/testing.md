@@ -5,8 +5,8 @@
 s06: `.venv/Scripts/python -m pytest -q -n0 tests/test_s06.py tests/test_foundation.py tests/test_connections.py tests/test_sections.py tests/test_speech.py tests/test_ocr.py`;
 настройки 320/1280: `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_ui_s06.py`.
 
-Cleaner: `.venv/Scripts/python -m pytest -q -n0 tests/test_cleaner.py`; сквозной контракт двух
-приложений и браузер 320/1280: `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_cleaner_contract.py tests/test_ui_cleaner.py`.
+Cleaner: `.venv/Scripts/python -m pytest -q -n0 tests/test_cleaner.py tests/test_cleaner_route.py tests/test_cleaner_route_chat.py tests/test_cleaner_route_tasks.py tests/test_cleaner_forced.py`; сквозной контракт двух
+приложений (прежний вид и ключ `client`) и браузер 320/1280: `.venv/Scripts/python -m pytest -q -n0 -m integration tests/test_cleaner_contract.py tests/test_ui_cleaner.py tests/test_ui_cleaner_route.py`.
 Нужен соседний `cleaner/.venv` или `CLEANER_TEST_REPO`; провайдер синтетический, внешней сети нет.
 
 Контракт — `local-config/cron/project-registry.json::studio.tests`: `main` (корень, среда `.venv`) и `agent`
