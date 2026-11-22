@@ -1,7 +1,7 @@
 # CLAUDE.md — компонент agent проекта studio
 
 Мост Windows/macOS/Linux к студии `https://studio.example.com`: держит исходящий канал WebSocket к студии и отдаёт ей локальные
-Claude Code, Codex и OpenCode владельца — проекты, чаты, ход с карточками разрешений, файлы, git — строго по протоколу
+Claude Code, Codex, OpenCode и DeepSeek Harness владельца — проекты, чаты, ход с карточками разрешений, файлы, git — строго по протоколу
 версии 1. Как ставить и пользоваться — [README.md](README.md); устройство подробно, решения плана и таблица
 capability → версия моста — [docs/architecture/agent-bridge.md](../docs/architecture/agent-bridge.md).
 
@@ -30,6 +30,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Безопасность на машине | `dpapi`, `pin` (`PinStore`, `OpenSessions`), `store` (`config.json`, `key.bin`, `choices.json`), `journal` (`agent.log`), `single` (мьютекс), `enroll`, `setup`, `autostart` |
 | Claude Code | `cli` (`claude.exe`, версия, модели, окружение), `claude_sdk` (клиент SDK без окон консоли), `sessions` (чаты, история, `fit`), `turns` (`Runner`: ход, карточки, остановка), `branches`, `subagents` |
 | Codex, OpenCode | `codex`, `codex_rpc`, `codex_progress`, `acp` (общая основа помощников ACP: процесс, сессии, ход, карточки), `opencode`, `opencode_rpc`, `opencode_events` (метки детей и статусы), `opencode_native` (ветки перед сообщением и дети через защищённый loopback API), `chrome` (Chrome DevTools MCP), `permissions`, `jobs` (Job Object) |
+| DeepSeek Harness | `deepseek` (`DeepSeekRunner` поверх `acp`: `session/resume`, права только у нового чата, пробные сессии во временном хранилище), `deepseek_rpc` (установки npm, Python-пакета и Desktop, запуск `--profile acp`), `deepseek_settings` (наложение профиля Web/Desktop `--patch`, `sweep`), `deepseek_history` (история из файлов сессий v4, `.jsonl[.zstd]`), `deepseek_usage` (баланс DeepSeek) |
 | Ход: ввод и вывод | `timeline`, `image_input`, `attachments`, `diffs`, `discovery` |
 | Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `desktop`, `desktop_native` (Windows), `desktop_macos` (macOS) |
@@ -115,6 +116,13 @@ studio). Команды ниже — из `agent/`, с отдельной сре
 инструментов; после проверки удаляется только созданная ею сессия. `tests/test_opencode.py` и `test_opencode_rpc.py`
 проверяют ACP без CLI и квоты.
 
+`tests/test_deepseek_live.py` — один короткий ответ настоящего DeepSeek Harness, затем история из файлов сессий, чаты и
+состояние: `.venv/Scripts/python -m pytest tests/test_deepseek_live.py -q -m manual --durations=5`. Временные проект и
+`DSH_HOME`; провайдер — сторонний OpenAI-совместимый из окружения теста: `DSH_LIVE_BASE_URL`, `DSH_LIVE_MODEL`,
+`DSH_LIVE_API_KEY` (ключ только окружением, DSH читает его по `apiKeyEnv`), `DSH_TEST_PACKAGE` — каталог пакета
+`@deepseek-ai/dsh`, если DSH не установлен глобально. Без переменных — пропуск. Node DSH не принимает самоподписанный
+сертификат без имени адреса — такому шлюзу нужен его HTTP-порт частной сети.
+
 `timeout = 30`, `asyncio_mode = auto`; pytest-xdist нет — набор идёт одним процессом.
 Временный корень — `.tmp/.pytest_cache/agent` внутри корня Studio (вне синхронизации), успешные временные каталоги удаляются; явные `--basetemp`
 и `PYTEST_DEBUG_TEMPROOT` сохраняются. Изоляция и два одновременных прогона — `tests/test_tmp_isolation.py`.
@@ -180,4 +188,8 @@ studio). Команды ниже — из `agent/`, с отдельной сре
   карточка ждёт ответа.
 - stderr `claude.exe` отбрасывается (`cli._drop`): в нём пути и тексты.
 - Сессии Claude Code пишутся в настоящий `~/.claude/projects` (по пути проекта) — у тестов с настоящим CLI тоже.
-- `claude.exe` не в Job Object (`jobs`): его фоновые задачи переживают ход; `codex app-server` и `opencode acp` — в нём.
+- `claude.exe` не в Job Object (`jobs`): его фоновые задачи переживают ход; `codex app-server`, `opencode acp` и `dsh --profile acp` — в нём.
+- Файлы DeepSeek Harness (`$DSH_HOME/profiles`, `cordis.patch.yml`, `.credentials.yaml`, `sessions/`) мост только
+  читает; каталог моделей — пробной сессией с хранилищами во временном каталоге моста (у ACP DSH сессия
+  материализуется сразу); наложение — временный JSON `<мост>/deepseek/overlay-*`, остатки стирает `deepseek_settings.sweep`
+  при старте ядра. Сам DSH при запуске создаёт `profiles/acp/` и `.anonymous-user-id` в `DSH_HOME`.

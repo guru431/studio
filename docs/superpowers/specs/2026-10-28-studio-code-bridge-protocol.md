@@ -140,6 +140,22 @@ effort — `[A-Za-z0-9._-]{1,64}`, включая `default`. Каталог пр
 разрешения, сохраняя запреты CLI; null сохраняет прежний выбор. Старому мосту без каталога сервер
 не шлёт такие просьбы: HTTP 409 `unsupported`.
 
+Добавка v1 от 2026-11-22 (studio-agent 0.46.0): необязательный `hello.deepseek` —
+`{version, models, efforts, defaults?, settings}` четвёртого помощника, DeepSeek Harness. Пределы — как у
+`hello.opencode`, но id модели — строка JSON-массива `["<провайдер>","<модель>"]`, каждая часть 1–150 знаков без
+`"`, `\` и управляющих (до 307 знаков; `model` в `state`, `turn` и умолчаниях — до 310). Усилие — значения ACP
+`reasoning_effort` модели; «Provider default» (`""`) не передаётся, вместо него null. `settings` обязателен:
+`{profile: "web"|"desktop"|null, applied: [имя], skipped: [{name, reason}]}` — итог наложения профиля DSH, до 100
+строк по ≤ 100 знаков, `reason` — `unknown|acp_own|env_key|unreadable`; только имена строк, без значений.
+`engine: deepseek` — в `chats`, `history`, `history_image`, `turn`, `state`, `answer`, `stop`, `steer` (очередь до
+конца ответа, как OpenCode), `mcp_get`/`mcp_save`, `usage`, `software_update`. `turn.access` и `state.access` —
+`default|read-only|workspace-write|danger-full-access`; права действуют только при создании сессии: ответ
+`state` чата с сессией несёт `settings.access_fixed: true` и права при создании, `turn` с другими правами —
+`done` с ошибкой и `not_started`. `state.settings.overlay` и событие `settings` повторяют сводку `settings`.
+Сессия, открытая в DeepSeek Harness Web/Desktop, — отказ `writer_active` (HTTP 409) у `state` и `done.code:
+writer_active` с `not_started` и `unsent` у `turn`; копии нет. `chat_fork`, `subagents`, `subagent_history` —
+`unsupported`. Без `hello.deepseek` сервер такие просьбы не шлёт: HTTP 409 `unsupported`.
+
 Добавка той же версии: событие `activity {state, tool?}` и необязательное `snapshot.activity`
 хранят стадию `thinking|tool|responding|waiting`. `tool` — только имя текущего инструмента,
 без текста рассуждений. Открытые карточки имеют приоритет `waiting`; итог хода — прежний `done`.
@@ -300,6 +316,10 @@ Windows `\\` принимается как разделитель только �
 каталог визуализаций и вложенные пути не могут быть junction/symlink. Требуется открытая
 PIN-сессия, повторная проверка после чтения. Это не расширяет допустимые пути `read/raw/save`.
 
+`history.notice` (0.46.0, только `engine: deepseek`): необязательное `"unsupported_format"` — файл сессии DeepSeek
+Harness незнакомой версии формата или повреждён; `items` пусты, `total: 0`, ход в том же чате работает. Файл
+больше предела чтения моста — отказ `too_large`.
+
 - `chats`: `title` — `custom_title`, иначе `summary`, иначе начало `first_prompt` (до 120 знаков);
   `created`, `modified` — секунды Unix; `tag` — метка SDK (`studio` у начатых студией) или `null`;
   `running` — идёт ли ход; `asking` — ждёт ли ход ответа на запрос. По `modified` — новые сверху; не
@@ -434,7 +454,7 @@ PIN-сессия, повторная проверка после чтения. �
 
 ## 9. Лимиты и статистика подписок
 
-Необязательное `hello.subscription_usage: true` объявляет просьбу `usage` с `engine: claude|codex|opencode`
+Необязательное `hello.subscription_usage: true` объявляет просьбу `usage` с `engine: claude|codex|opencode|deepseek`
 и необязательным `refresh: bool`. Она не требует проекта или чата, но требует открытую PIN-сессию,
 как остальные просьбы. HTTP: `GET /api/code/agents/<aid>/usage?engine=codex&refresh=false`;
 владелец компьютера и экранная блокировка проверяются обычными защитами сервера.
@@ -499,6 +519,16 @@ HTTP разрешён только для IP частной сети/loopback, H
 Перенаправления запрещены; тело ответа ограничено, таймаут чтения — 12 с. Ключи не уходят в Студию.
 Неподдерживаемый провайдер, отсутствие ключа и сбои дают неизвестные значения с объяснением;
 статистика токенов подписки Go остаётся недоступной. Прежние мосты возвращают общую заглушку.
+
+Мост ≥ 0.46.0 объявляет `hello.deepseek_usage: true`: просьба `usage` с `engine: deepseek` и необязательным
+`model` из каталога DeepSeek Harness (кэш — по модели). Окон лимита у DeepSeek нет: `five_hour`, `seven_day`,
+`monthly` — `available: false` с причиной, `links: []` (ссылку «Баланс DeepSeek» добавляет сервер). Новое
+необязательное поле `balance: {available, items: [{currency, total, granted, topped_up}], reason?}` — остаток
+`GET https://api.deepseek.com/user/balance` (`is_available`, `balance_infos[]`): валюта до 8 знаков, суммы ≥ 0 или
+null, до 10 строк; `reason` — объяснение, почему баланса нет. Запрос идёт только при провайдере
+`deepseek-official` у модели (без `model` — умолчание DSH) и `DEEPSEEK_BASE_URL` моста пустом или официальном;
+ключ — `DEEPSEEK_API_KEY` окружения моста или `refs` из `$DSH_HOME/.credentials.yaml`, наружу — только в этот
+запрос, без перенаправлений, тело ≤ 64 КиБ, 12 с. Верхний `available` — ответ получен и разобран.
 
 Только нормализованные числа, безопасные подписи и заранее заданные ссылки уходят в студию.
 Мост кэширует результат по помощнику 60 секунд в памяти, одновременно пришедшие просьбы объединяются.
@@ -889,16 +919,19 @@ HTTP-сервер поддерживает `?refresh=true`, для списка 
 
 - `software_versions`: необязательное `refresh: bool`, по умолчанию false. Без refresh установленные версии
   кэшируются до минуты, сведения о выпусках — до десяти минут; при обновлении возвращается текущий снимок.
-- `software_update`: `software: "codex"|"claude"|"opencode"`. Команда и целевая версия выбираются мостом
+- `software_update`: `software: "codex"|"claude"|"opencode"|"deepseek"`. Команда и целевая версия выбираются мостом
   из проверенного источника установленного пакета; произвольных адресов/команд/версий в просьбе нет.
 - `software_update_cancel`: отменяет только ожидание; уже идущий установщик кнопкой не прерывается.
 
-Ответ всех операций: `{items: [...], update: {tool: null|"codex"|"claude"|"opencode", state}}`.
+Ответ всех операций: `{items: [...], update: {tool: null|"codex"|"claude"|"opencode"|"deepseek", state}}`.
 Строка items: `{id, installed: bool, version: string|null, cli_version: string|null, latest: string|null,
 source: "npm"|"vscode"|"native"|"sdk"|"homebrew", update_available: bool, can_update: bool,
 reason: null|"not_installed"|"bridge"|"manager"|"manual"|"check"}`.
 Для VS Code version/latest — версии расширения, cli_version — вложенного CLI; для npm — версии пакета.
 latest — стабильный выпуск. Предварительные установленные CLI показываются без потери суффикса и не понижаются.
+С моста 0.46.0 строка `deepseek` (DeepSeek Harness): npm `@deepseek-ai/dsh` — `source: "npm"`, `latest` — тег
+`latest` npm даже для предварительного выпуска (у DSH он сейчас такой), сравнение предварительных выпусков — по
+полям semver; Python-пакет и Desktop — `source: "native"`, `reason: "manual"`. `software: "all"` включает и её.
 
 Состояния: `idle`, `waiting`, `updating`, `done`, `error`, `cancelled`. Начало немедленно возвращает waiting,
 фоновая задача ждёт все ходы и ранее начатые просьбы/пробы. Новые ходы получают busy; при установке запросы
@@ -927,6 +960,10 @@ backend также получают busy. Таймаут установщика 
 запертые компьютеры. Старым мостам и участникам совместного проекта она не отправляется;
 ошибка сохраняет прежний каталог. Codex читает модели коротким app-server и закрывает его
 при любом исходе, не затрагивая постоянный клиент истории и процессы ходов.
+
+Мост 0.46.0 с `hello.deepseek_models: true` принимает ту же просьбу с `engine: "deepseek"` и возвращает
+`{deepseek: {...}}` в форме `hello.deepseek` (вместе со сводкой `settings`). Каталог DeepSeek Harness читается
+пробной сессией без prompt с хранилищами во временном каталоге моста: в списке чатов и в `$DSH_HOME` она не остаётся.
 
 ## 23. Зеркало проекта (мост 0.39.0)
 

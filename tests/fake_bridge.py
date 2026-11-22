@@ -333,7 +333,7 @@ class FakeMachine:
 
     @staticmethod
     def _forkable(req):
-        if req.get('engine') == 'deepseek':      # у DSH нет ветки чата и подагентов (мост 0.45.0)
+        if req.get('engine') == 'deepseek':      # у DSH нет ветки чата и подагентов (мост 0.46.0)
             raise Refused('unsupported')
 
     def _op_subagents(self, req, events):

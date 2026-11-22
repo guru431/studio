@@ -84,10 +84,11 @@ Keychain, LaunchAgent, установка и платформенные огра
 С 0.28.0 `hello.mcp` даёт владельцу Настройки → Агенты → MCP агентов. Для выбранных
 компьютера, проекта и движка доступны формы stdio (команда, отдельные аргументы,
 окружение), HTTP и SSE (URL, Bearer-токен и заголовки). Codex поддерживает stdio и HTTP;
-OpenCode проверяет объявленные ACP-возможности транспорта.
+OpenCode проверяет объявленные ACP-возможности транспорта; DeepSeek Harness — stdio и HTTP (при
+`mcpCapabilities.http`), SSE отклоняет `mcp.validate`.
 `mcp_get` и `mcp_save` доступны только открытой сессии владельца компьютера;
 участнику совместного проекта настройки и ключи не выдаются. Серверные маршруты —
-GET/PUT `/api/code/agents/{aid}/projects/{pid}/mcp?engine=claude|codex|opencode`.
+GET/PUT `/api/code/agents/{aid}/projects/{pid}/mcp?engine=claude|codex|opencode|deepseek`.
 
 Файлы настроек — под DPAPI в каталоге моста, отдельно для настоящего пути проекта
 и движка. Проектные файлы и глобальные настройки CLI не меняются. Изменения вступают
@@ -96,7 +97,9 @@ GET/PUT `/api/code/agents/{aid}/projects/{pid}/mcp?engine=claude|codex|opencode`
 disconnect до освобождения хода. Вложения хода с 0.42.0 — в `<каталог моста>/attachments/studio-attachments-*`.
 Ход оборвался падением моста или выключением компьютера — оба остатка при следующем старте ядра, до первого хода,
 стирают `mcp.sweep` и `attachments.sweep`. Codex получает config в thread/start и thread/resume
-по stdin JSON-RPC, OpenCode — mcpServers в session/new, session/load и session/fork.
+по stdin JSON-RPC, OpenCode — mcpServers в session/new, session/load и session/fork, DeepSeek Harness — в
+session/new и session/resume. Наложение настроек DeepSeek Harness (`<каталог моста>/deepseek/overlay-*`) после
+падения стирает `deepseek_settings.sweep` там же, до первого хода.
 
 Необязательные поля `hello` (и другие добавки v1): с какой версии мост их объявляет, где контракт. Без capability
 сервер такие просьбы не шлёт (HTTP 409 `unsupported`), страница скрывает кнопки. Версия моста —
@@ -104,7 +107,7 @@ disconnect до освобождения хода. Вложения хода с 
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
-| 0.46.0 | `hello.deepseek` (каталог `{version, models, efforts, defaults, settings}`), `hello.deepseek_models` (`models`, `engine: deepseek`), `hello.deepseek_usage` (баланс) — DeepSeek Harness, четвёртый помощник; ветвление и подагенты — `unsupported` | §22 |
+| 0.46.0 | `hello.deepseek` (каталог `{version, models, efforts, defaults, settings}`), `hello.deepseek_models` (`models`, `engine: deepseek`), `hello.deepseek_usage` (баланс) — DeepSeek Harness, четвёртый помощник ([ниже](#deepseek-harness-0460)); `usage.balance`, `history.notice`, отказ `writer_active`; ветвление и подагенты — `unsupported` | §2.2, §4, §9, §21, §22 |
 | 0.45.0 | `hello.mirror_groups` — группы копий: `root`/`folder` в `mirror_identity`, причины пропуска `reasons`; база SQLite с журналом — пропуск, а не отказ | §23.3 |
 | 0.44.0 | `hello.git_compare` — сравнение выбранного изменённого текстового файла с HEAD, только владельцу | §4 |
 | 0.42.0 | `hello.account_disabled` — закрытие 4403 «учётка отключена»: ходы прерваны, открытые сессии прочь, переподключение с паузами; прежним мостам отключение — 4401; отказ `git` — `git_unavailable` (нет git, `safe.directory`, сбой при своём `.git`; без capability); `agent_update_status.message` в `failed` — итог прошлого перехода; при `welcome.pending_asks` кадр `completions` несёт и открытые карточки, возникшие без канала (`permission|question`) | §2, §4, §18 |
@@ -159,6 +162,76 @@ disconnect до освобождения хода. Вложения хода с 
 | 0.34.0 | `project_summary` по флагу `code_size` возвращает размер исходников в байтах | §10.1 |
 | 0.36.0 | Сводка сообщает `code_size_version: 2`, список проектов возвращает последний успешный размер | §10.1 |
 | 0.38.0 | `hello.terminal` (только Linux) — `terminal_info`, команда SSH и веб-консоль ([ниже](#терминал-linux)) | — |
+
+## DeepSeek Harness (0.46.0)
+
+Четвёртый помощник `engine: deepseek` — DeepSeek Harness (DSH, npm `@deepseek-ai/dsh`, «developer preview»).
+Спека — [2026-11-22-studio-deepseek-harness-design](../superpowers/specs/2026-11-22-studio-deepseek-harness-design.md),
+итоги живой пробы DSH 0.2.2-rc.5 (D1–D6) — [отчёт](../reports/2026-11-22-deepseek-harness-probe.md).
+
+- **Общая основа ACP.** `acp.AcpRunner` — выделенная из OpenCode часть: процесс ACP по stdio в Job Object, ход,
+  поток, карточки `session/request_permission`, остановка, очередь уточнений, модель и усилие, контекст. OpenCode
+  (`opencode.OpenCodeRunner`) и DSH (`deepseek.DeepSeekRunner`) — точки расширения поверх неё: запуск,
+  открытие сессии (`session/load` и `session/resume`), источник истории (replay и файлы), набор возможностей.
+- **Установки** — `deepseek_rpc.find_installs`: npm (Windows — `node.exe` из PATH и `lib/bin.js` пакета, обёртки
+  `.cmd`/`.ps1` не исполняются; POSIX — `dsh` из PATH, только если ссылка ведёт внутрь пакета `@deepseek-ai/dsh`),
+  Python-пакет `deepseek-harness-sdk` (его одиночный исполняемый файл среды, `DSH_HOME` задаётся явно) и Desktop
+  (Windows — `InstallLocation` из `HKCU\…\Uninstall`, запуск Electron с `ELECTRON_RUN_AS_NODE=1` и `cli.js` из
+  архива приложения (`resources/…asar`); macOS — `DeepSeek Harness.app`; Linux — не ищется: AppImage). Чужой `dsh` (distributed shell) не
+  запускается. Node, не подходящий `engines` пакета, — установка «не готова» (`reason: node`), в `hello` нет
+  `deepseek`, отказ называет причину. Desktop и Python-пакет описаны по исходникам и колёсам, живьём на этой машине
+  не запускались (сеть до `download.deepseek.com` закрыта).
+- **Наложение настроек** — `deepseek_settings.build`. Источник — патч профиля `web` или `desktop` из `DSH_HOME`
+  (`deepseek_settings.source`: изменённый последним), установка — того же приложения (`deepseek_rpc.pick`: более
+  новая версия DSH при записи переводит файлы сессий в новый формат). YAML разбирает `js-yaml` самой установки
+  (Node, текст — stdin, без shell; `!!js` — маркер без вычисления), PyYAML не нужен. Перевод строк — по таблице
+  пробы: `llm-pi-ai`, `llm-deepseek*` как есть; `agent-default-model` — как есть и строкой `acp` с `provider/model`
+  (сессии ACP берут модель оттуда); `mcp-manager` — вставкой целой записи; `permission` — только `defaultPreset`
+  с `presets` бандла `dsh-base` (и не пишется при явных правах чата). Незнакомые строки, строки web-app, `!!js`,
+  строки, которые человек задал в своём `profiles/acp`, провайдер с `apiKeyEnv`, которого нет ни в
+  `.credentials.yaml`, ни в окружении моста, ни в `$DSH_HOME/.env`, — в сводку «не применено» (`skipped`: имя строки
+  и код причины из `deepseek_settings.REASONS`, без значений). Наложение — JSON `<мост>/deepseek/overlay-*.json`
+  (`--patch`), удаляется после `disconnect`, остатки — `deepseek_settings.sweep` при старте ядра. Сводка
+  (`profile`, `applied`, `skipped`) — в `hello.deepseek.settings` и `state.settings.overlay`. У Python-пакета нет
+  Node для разбора — источник получает `unreadable`.
+- **Каталог** — пробная `session/new` → `session/set_config_option` → `session/close` без prompt; ACP DSH
+  материализует сессию сразу (D4), поэтому пробный процесс получает в наложении корни хранилищ сессий и проекций
+  во временном каталоге моста (`overlay-scratch-*`): в `session/list` и `$DSH_HOME` пробы не попадают. Так же идёт
+  предпросмотр выбора в `state`. Значение модели — строка JSON-массива `["<провайдер>","<модель>"]`
+  (`deepseek.MODEL_ID`; сервер сверяет той же регуляркой в `app/bridge.py`), усилие — ACP `reasoning_effort`; «Provider default»
+  (`""`) — как отсутствие выбора. Версия — `dsh --version` (`deepseek_rpc.version`): `agentInfo.version` ACP DSH — «0.0.1».
+  Любой запуск `dsh --profile acp` сам создаёт в `DSH_HOME` заготовку `profiles/acp/` и `.anonymous-user-id`.
+- **Чаты и продолжение.** `session/list` с `cwd` проекта; UUID студии ↔ id DSH (UUID или `session-<uuid>`) — в
+  `deepseek-chats.json`, выбор — `deepseek/choices.json`. Названий `session/list` не даёт — внешние чаты без названия.
+  Продолжение — `session/resume` (без replay). Сессия занята другим процессом (`-32603`, `data.details` «already
+  owned by an active write handle»; DSH Web держит чат до выхода из приложения) — отказ `writer_active` со словами
+  `deepseek.WRITER`, в ходе — `done` с `code: writer_active`, `not_started` и очередью в `unsent`; сервер отвечает 409.
+- **История** — файлы сессий (`deepseek_history.locate`, `deepseek_history.read`): `sessions/--<ключ cwd>--/<id>/
+  session.v4.jsonl[.zstd]`, наибольшая `vN`, `cwd` заголовка сверяется с проектом; реплики человека —
+  `source.kind: user`, ответ — подряд идущие `assistant/message`, шаги — `tool-call`/`tool/result`. Индекс историй —
+  ревизия `(mtime_ns, size)` файла, процесс ACP не запускается. Незнакомая версия формата или битый файл — пустая
+  страница с `notice: "unsupported_format"`, ход в том же чате работает; файл больше `deepseek_history.READ_MAX` —
+  `too_large`. zstd — `compression.zstd` (Python 3.14) или пакет `zstandard` (`python_version < "3.14"`).
+  Картинки истории — из `$DSH_HOME/attachments/v1/objects` по sha256.
+- **Права** — `permissions.DEEPSEEK`: `default` (пресет из настроек DSH), `read-only`, `workspace-write`,
+  `danger-full-access` — `DSH_PERMISSION_MODE` процессу. Переменная действует только на создаваемую сессию (D3):
+  у чата с сессией `state` даёт `access_fixed: true` и права при создании, ход с другими правами — отказ
+  `deepseek.FIXED` до запуска процесса. Карточки несут только `toolCall.toolCallId` — имя и аргументы берутся из шага.
+- **Картинки** — блоками ACP; `-32602` про картинки (соединение или модель их не объявили) — слова
+  `deepseek.IMAGES`, не тело ошибки. Уточнения — очередью до конца ответа (`QUEUE_ONLY` страницы).
+- **Баланс** — `deepseek_usage.read`: `GET https://api.deepseek.com/user/balance` (`limits.HOSTS`), без перенаправлений,
+  тело ≤ 64 КиБ, 12 с, кэш `subscription.UsageCache` 60 с по `(engine, model)`. Ключ — `DEEPSEEK_API_KEY` окружения
+  моста или `refs` `.credentials.yaml`; запрос только при провайдере `deepseek-official` текущей модели и
+  `DEEPSEEK_BASE_URL` пустом или официальном (`deepseek_usage.eligible`), иначе `balance.reason`. Окна лимита —
+  `available: false`. Ключ наружу — только в этот запрос.
+- **Нет у DSH:** ветвления, подагентов, удаления чатов, режимов, slash-команд, дополнительных каталогов —
+  `chat_fork`, `subagents`, `subagent_history` отвечают `unsupported` (сервер — 409 до моста).
+- **Программы** — `software` (`_inspect_deepseek`): npm-установка — `source: npm`, «последняя версия» — тег `latest`
+  npm, и предварительный выпуск (`software.INSTALLED_VERSION`, сравнение по полям semver в `software.newer`);
+  Python-пакет и Desktop — `native`, `reason: manual`.
+- Проверки: `agent/tests/test_deepseek*.py` (подставной ACP-процесс на фикстурах пробы `agent/tests/fixtures/deepseek/`),
+  `test_acp.py`, весь набор OpenCode без изменения ожиданий; сервер — `tests/test_deepseek.py`, браузер —
+  `tests/test_ui_deepseek.py` (320/1280 px); живой — `agent/tests/test_deepseek_live.py` (`manual`).
 
 ## OpenCode 2.x (0.26.0)
 
@@ -271,7 +344,7 @@ disconnect до освобождения хода. Вложения хода с 
 - `codex.CodexRunner.chats(project, refresh=False)`: при `refresh` — фоновый полный обход отдельным app-server, не чаще
   `codex.SCAN_EVERY_SEC` (600) с на проект; результат только в памяти, сбрасывается при `close`; найденные вне индекса
   сессии добавляются к следующим спискам (кэш 20 с). `agent.Agent._op_chats` передаёт `refresh` только Codex.
-- `jobs.attach(pid)` / `jobs.Job.close()`: `KILL_ON_JOB_CLOSE | BREAKAWAY_OK`; `codex app-server` и `opencode acp` —
+- `jobs.attach(pid)` / `jobs.Job.close()`: `KILL_ON_JOB_CLOSE | BREAKAWAY_OK`; `codex app-server`, `opencode acp` и `dsh --profile acp` —
   в своём Job Object, закрытие при `disconnect` или падении моста гасит MCP-серверы и шеллы. `claude.exe` намеренно
   не охвачен (job пришлось бы закрывать внутри SDK; фоновые задачи `run_in_background` Claude переживают ход).
 - Фоновые просьбы: `hello.passive_requests` и необязательное `req.passive: bool` (§16) — проверка срока PIN без
@@ -458,6 +531,10 @@ Studio использует отдельный CLI в новых ходах. М�
 установка Claude в каталоге его версий использует штатный `claude update`. На macOS версии читаются
 из канала нативных выпусков Anthropic. CLI внутри OpenCode.app
 обнаруживается, но самостоятельно не обновляется: менять вложенный файл подписанного приложения нельзя.
+С 0.46.0 в списке и DeepSeek Harness: установки — те же, что у ходов (`deepseek_rpc.find_installs`, порядок npm,
+Python-пакет, Desktop); npm-пакет `@deepseek-ai/dsh` обновляется `npm install --global` своего префикса до тега
+`latest`, даже предварительного выпуска (так у DSH сейчас); Python-пакет и Desktop — `reason: manual`
+(Desktop обновляется сам). «Обновить все агенты» включает и его.
 
 Обновление доступно только владельцу после PIN и CSRF. `software_update` принимает только имя из фиксированного
 списка, версию/команду/пакет выбирает мост. Фоновая задача ждёт все ходы и начатые просьбы/пробы каталогов,

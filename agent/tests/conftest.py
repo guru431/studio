@@ -18,6 +18,7 @@ DELIBERATE_SKIPS = (
     "нет свободной буквы диска",
     "нужен распакованный PKG",
     "could not import 'winreg'",         # модуль только Windows
+    "DSH_LIVE_BASE_URL, DSH_LIVE_MODEL и DSH_LIVE_API_KEY не заданы",  # живая проба DSH без провайдера
 )
 
 
