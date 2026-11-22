@@ -176,6 +176,33 @@ def test_link_expired_revoked_stamp_changed_access_removed_file_gone_all_404(stu
     assert state.DB.execute("SELECT COUNT(*) FROM file_links").fetchone()[0] == 0
 
 
+def test_link_of_a_protected_source_refused_and_old_link_is_the_uniform_404(studio):
+    """Файл защищённого источника (`mcp_servers.protected`) ссылкой не выдаётся: создание — 409 `protected`, ссылка,
+    созданная до флажка, — тот же 404 на `/f/check`, `/f/open` и `/f/file`; владелец по-прежнему видит и скачивает."""
+    member, sid, server = member_with_files(studio)
+    session = dict(studio.c.cookies)
+    token = make_link(studio, sid)["url"].split("#")[1]
+    assert opened(studio, token).status_code == 204
+    assert studio.c.get("/f/file").status_code == 200
+    unknown = check(studio, secrets.token_urlsafe(32)).json()
+    state.DB.execute("UPDATE mcp_servers SET protected = 1 WHERE id = ?", (sid,))
+    assert studio.c.get("/f/file").status_code == 404                # открытый файл закрыт тем же запросом
+    for response in (check(studio, token), opened(studio, token)):
+        assert response.status_code == 404 and response.json() == unknown
+        public_headers(response)
+    studio.c.cookies.clear()
+    studio.c.cookies.update(session)
+    assert upload(studio, sid, "Фото/новый.jpg", PHOTO).json()["done"] is True
+    refused = studio.c.post(f"/api/my-files/{sid}/links", json={"path": "Фото/новый.jpg"})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "protected"
+    assert state.DB.execute("SELECT COUNT(*) FROM file_links").fetchone()[0] == 1
+    assert [s["protected"] for s in studio.c.get("/api/my-files/servers").json()] == [True]
+    names = [e["name"] for e in studio.c.post(f"/api/my-files/{sid}/list", json={"path": "Фото"}).json()["entries"]]
+    assert sorted(names) == ["кот.jpg", "новый.jpg"]
+    ticket = studio.c.post(f"/api/my-files/{sid}/ticket", json={"path": "Фото/кот.jpg"}).json()["url"]
+    assert studio.c.get(ticket).content == PHOTO
+
+
 def test_link_follows_the_file_replaced_or_changed_file_is_gone(studio):
     """Ссылка ведёт к файлу, а не к пути: другой файл под тем же именем (другой размер) или изменённый (другой
     mtime) — одинаковый 404 на всех маршрутах `/f`, и уже открытый файл тоже."""

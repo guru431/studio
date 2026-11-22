@@ -678,6 +678,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Открыть корзину: {0}": "Open trash: {0}",
   "в корзине — недоступна": "in the trash — unavailable",
   "защищённые данные — недоступна": "protected data — unavailable",
+  "Сервер MCP — защищённый источник: ссылкой на его файл поделиться нельзя": "This MCP server is a protected source, so its files cannot be shared by link",
   "Очистить корзину": "Empty trash",
   "Очистить корзину?": "Empty the trash?",
   "Очистить навсегда": "Delete forever",

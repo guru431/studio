@@ -12,7 +12,10 @@
 (`chat_shares.public_guard`), чужой `Origin` — 403, все отказы — одинаковый 404 без имени файла, неудачи —
 `email_accounts.throttle` по адресу (FAILS за FAIL_SEC, потом 429 `file_locked`). `POST /f/open` выдаёт cookie
 `studio_file` (OPEN_SEC, только `/f/file`) с зашифрованными id ссылки и временем выдачи; каждый запрос файла проверяет ссылку
-заново. Ссылка ведёт к файлу, а не к пути: размер и mtime при создании сверяются на каждом входе (`_same_file`). В журнал — только id и числа: путей, имён и токенов там нет.
+заново. Ссылка ведёт к файлу, а не к пути: размер и mtime при создании сверяются на каждом входе (`_same_file`).
+Файлы защищённого источника (`mcp_servers.protected`) ссылкой не выдаются: создание — 409 `protected`, прежняя ссылка
+сервера, ставшего защищённым, — тот же 404 на каждом входе (`_resolve`). В журнал — только id и числа: путей, имён и
+токенов там нет.
 """
 import asyncio
 import base64
@@ -72,6 +75,7 @@ RANGE_RE = re.compile(r"bytes (\d{1,15})-(\d{1,15})/(\d{1,15})")
 EMPTY_RANGE = "bytes */0"
 GONE = "Ссылка недоступна"
 UNAVAILABLE = "Файл недоступен"
+PROTECTED = "Сервер MCP — защищённый источник: ссылкой на его файл поделиться нельзя"
 
 class PathIn(BaseModel):
     path: str = Field(default="", max_length=PATH_MAX)
@@ -259,9 +263,11 @@ async def _declared(uid):
 
 @router.get("/servers")
 async def servers(request: Request):
-    """[{sid, name, max_upload, chunk}] серверов учётки с «Моими файлами»; кусок — не больше CHUNK."""
+    """[{sid, name, max_upload, chunk, protected}] серверов учётки с «Моими файлами»; кусок — не больше CHUNK;
+    `protected` — защищённый источник: ссылки на файл нет (`create_link` — 409 `protected`)."""
     return [{"sid": item["id"], "name": item["name"], "max_upload": files["max_upload"],
-             "chunk": min(files["chunk"], CHUNK)} for item, files in await _declared(request.state.user.id)]
+             "chunk": min(files["chunk"], CHUNK), "protected": bool(item["protected"])}
+            for item, files in await _declared(request.state.user.id)]
 
 
 async def storage(uid) -> list:
@@ -403,9 +409,13 @@ def _plain(value):
 
 @router.post("/{sid}/links")
 async def create_link(sid: int, body: PathIn, request: Request):
-    """Ссылка на файл на LINK_SEC: `{id, url: "https://<хост>/f#<token>", expires}`."""
+    """Ссылка на файл на LINK_SEC: `{id, url: "https://<хост>/f#<token>", expires}`. Файл защищённого источника
+    (`mcp_servers.protected`) — 409 `protected`: его данные не уходят из Студии ссылкой, свои файлы владелец
+    по-прежнему смотрит и скачивает."""
     uid = request.state.user.id
     path = _path(body.path)
+    if mcp.row(uid, sid)["protected"]:
+        raise mcp.refused(PROTECTED, "protected", 409)
     async with _server(request, sid) as (session, _):
         entry = await _entry(session, path)
         stamp = mcp_sources.stamp(session.stamp)
@@ -474,8 +484,8 @@ def _live(clause, value):
 
 
 def _resolve(row):
-    """(Session владельца, путь, имя) действующей ссылки: сервер открыт владельцу, включён, адрес и ключ — те
-    же (`stamp`); иначе `_gone`."""
+    """(Session владельца, путь, имя) действующей ссылки: сервер открыт владельцу, включён, не стал защищённым
+    источником (`mcp_servers.protected`), адрес и ключ — те же (`stamp`); иначе `_gone`."""
     if row is None:
         raise _gone()
     try:
@@ -483,7 +493,8 @@ def _resolve(row):
     except HTTPException:
         raise _gone() from None
     path, name = _plain(row["path_enc"]), _plain(row["name_enc"])
-    if not item["enabled"] or mcp_sources.stamp(item["secret_enc"]) != row["stamp"] or not path or not name:
+    if (not item["enabled"] or item["protected"] or mcp_sources.stamp(item["secret_enc"]) != row["stamp"]
+            or not path or not name):
         raise _gone()
     return mcp.Session(item, uid=row["user_id"]), path, name
 

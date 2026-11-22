@@ -13,6 +13,7 @@ import { button, el, field, openDialog, words } from './ui.js';
 
 const RETRIES = 3;                           // попыток одного куска при обрыве связи
 const RETRY_STATUS = [0, 502, 503, 504];
+const PROTECTED = tr("Сервер MCP — защищённый источник: ссылкой на его файл поделиться нельзя");   // как my_files.PROTECTED
 let controller = null;
 
 const moment = (ts) => dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -111,7 +112,9 @@ export function mount(view) {
       actions.append(
         button(tr("Скачать"), { class: 'btn btn-sm myfiles-download', 'aria-label': tr("Скачать: {0}", entry.name) },
           () => act(async () => fetchFile((await api('POST', `${base()}/ticket`, { path }, { signal })).url, entry.name))),
-        button(tr("Ссылка на сутки"), { class: 'btn btn-sm myfiles-share', 'aria-label': tr("Ссылка на сутки: {0}", entry.name) },
+        // защищённый источник: ссылки на его файл нет (сервер ответил бы 409 `protected`), скачать можно
+        button(tr("Ссылка на сутки"), { class: 'btn btn-sm myfiles-share', 'aria-label': tr("Ссылка на сутки: {0}", entry.name),
+          disabled: server()?.protected || null, title: server()?.protected ? PROTECTED : null },
           () => act(() => share(path, entry.name))));
     }
     actions.append(button(tr("Удалить"), { class: 'btn btn-sm btn-danger', 'aria-label': tr("Удалить: {0}", entry.name) },

@@ -168,7 +168,8 @@ def test_list_download_range_upload_chunks_delete_restore_zip_proxy_with_studio_
 
     servers = studio.c.get("/api/my-files/servers")
     assert servers.status_code == 200, servers.text
-    assert servers.json() == [{"sid": sid, "name": "Shared tools", "max_upload": 2 << 30, "chunk": my_files.CHUNK}]
+    assert servers.json() == [{"sid": sid, "name": "Shared tools", "max_upload": 2 << 30, "chunk": my_files.CHUNK,
+                               "protected": False}]
 
     data = "Отчёт за ноябрь\n".encode() * 100
     first = upload(studio, sid, "docs/отчёт.txt", data[:600], total=len(data))
