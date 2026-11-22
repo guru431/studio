@@ -186,7 +186,7 @@ async function follow(current) {
     } catch (err) {
       if (signal.aborted) return;
       if (err?.code === 'relogin') {                                  // ей нужен вход заново
-        panel?.relogin(current.aid);
+        dispatch(current.aid, 'link', { state: 'relogin' });
         return;
       }
       if (err?.status === 404) return;                                // учётку удалили

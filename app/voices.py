@@ -308,6 +308,15 @@ def _retire_samples(uid: int, media_ids) -> None:
     state.DB.executemany("DELETE FROM media WHERE id = ?", [(mid,) for mid, _ in rows])
 
 
+def _archive_recording(sample, now: float) -> None:
+    """Сохранить заменяемую запись отдельным образцом в корзине, оставив id живого образца на месте."""
+    archived = uuid.uuid4().hex
+    state.DB.execute("INSERT INTO voice_samples VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (archived, sample["voice_id"], sample["user_id"], sample["ref_text"], sample["media_id"],
+                      sample["duration"], now))
+    state.DB.execute("INSERT INTO voice_sample_trash(id, deleted) VALUES (?, ?)", (archived, now))
+
+
 @router.post("/discard-samples", status_code=204)
 async def discard_samples(body: DraftsIn, request: Request):
     uid = request.state.user.id
@@ -365,6 +374,8 @@ async def save_batch(body: BatchIn, request: Request, voice_id: str = Path(patte
                 raise changed
         for sid, text, mid, duration, created in plan:
             if sid in old:
+                if old[sid]["media_id"] != mid:
+                    _archive_recording(old[sid], clock.NOW())
                 state.DB.execute("UPDATE voice_samples SET ref_text = ?, media_id = ?, duration = ? WHERE id = ?",
                                  (text, mid, duration, sid))
             elif not creating or sid != voice_id:
@@ -377,7 +388,6 @@ async def save_batch(body: BatchIn, request: Request, voice_id: str = Path(patte
             now = clock.NOW()
             state.DB.executemany("INSERT INTO voice_sample_trash(id, deleted) VALUES (?, ?)",
                                  [(sid, now) for sid in old.keys() - {s[0] for s in plan}])
-        _retire_samples(uid, {s["media_id"] for s in samples} - {s[2] for s in plan})
     log.info("пользователь %d: голос %s сохранён", uid, voice_id[:8])
     return _out(_row(uid, voice_id))
 
@@ -426,6 +436,7 @@ async def _save_sample(voice_id: str, request: Request, sample_id: str | None = 
                 sample = _sample_row(uid, voice_id, sample_id)
                 if sample["media_id"] != previous["media_id"]:
                     raise HTTPException(409, {"code": "changed", "message": "образец изменён — откройте голос ещё раз"})
+                _archive_recording(sample, clock.NOW())
                 state.DB.execute("UPDATE voice_samples SET media_id = ?, ref_text = ?, duration = ? WHERE id = ?",
                                  (mid, text, duration, sample_id))
                 if current["media_id"] == previous["media_id"]:
@@ -439,8 +450,6 @@ async def _save_sample(voice_id: str, request: Request, sample_id: str | None = 
     except BaseException:
         await media.delete_async(uid, mid)
         raise
-    if previous is not None and not media.referenced(uid, previous["media_id"]):
-        await media.delete_async(uid, previous["media_id"])
     log.info("пользователь %d: образец голоса %s сохранён", uid, voice_id[:8])
     return {"id": sample_id, "text": text, "duration": duration}
 

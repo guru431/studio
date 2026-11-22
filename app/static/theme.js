@@ -2,21 +2,13 @@
  * потом ставит appearance.js, и они главнее. Шрифт, масштаб и плотность — настройки этого устройства, только
  * отсюда и из «Настройки → Оформление». Скрипт обычный, не модуль: исполняется сразу, в <head>. */
 (function () {
+  var theme = 'dark';
   try {
+    var savedTheme = localStorage.getItem('studio-theme');
+    if (savedTheme === 'light' || savedTheme === 'auto') theme = savedTheme;
     var accent = localStorage.getItem('studio-accent');     // ACCENTS в appearance.js; оранжевый — без атрибута
     if (accent === 'blue' || accent === 'violet' || accent === 'rose') document.documentElement.dataset.accent = accent;
     if (localStorage.getItem('studio-density') === 'compact') document.documentElement.dataset.density = 'compact';
-    var theme = localStorage.getItem('studio-theme');
-    if (theme === 'dark' || theme === 'light') {
-      document.documentElement.dataset.theme = theme;
-      // Профиль ещё не пришёл (медленная сеть, офлайн): строка состояния и подсветка кода — по выбранной теме,
-      // а не по устройству. Цвета — как THEME_COLORS в appearance.js; после профиля их снова ставит appearance.js applyTheme.
-      var color = theme === 'dark' ? '#1b1b1b' : '#fbfaf7';
-      document.querySelectorAll('meta[name="theme-color"]').forEach(function (meta) { meta.content = color; });
-      var paper = document.getElementById('hl-paper'), graphite = document.getElementById('hl-graphite');
-      if (paper) paper.media = theme === 'light' ? 'all' : 'not all';
-      if (graphite) graphite.media = theme === 'dark' ? 'all' : 'not all';
-    }
     var font = Number(localStorage.getItem('studio-font-size')) || 100;
     var scale = Number(localStorage.getItem('studio-ui-scale')) || 100;
     // сенсорный экран: мельче 75% цели касания и текст становятся неразличимы (appearance.js — тот же предел)
@@ -27,7 +19,16 @@
       document.documentElement.style.zoom = String(scale / 100);
     }
   } catch (e) {
-    // хранилище закрыто (приватный режим) — тема по настройке устройства
+    // Хранилище закрыто (приватный режим) — действует тема по умолчанию.
+  }
+  if (theme !== 'auto') {
+    document.documentElement.dataset.theme = theme;
+    // До ответа профиля строка состояния и подсветка кода следуют локальному выбору темы.
+    var color = theme === 'dark' ? '#1b1b1b' : '#fbfaf7';
+    document.querySelectorAll('meta[name="theme-color"]').forEach(function (meta) { meta.content = color; });
+    var paper = document.getElementById('hl-paper'), graphite = document.getElementById('hl-graphite');
+    if (paper) paper.media = theme === 'light' ? 'all' : 'not all';
+    if (graphite) graphite.media = theme === 'dark' ? 'all' : 'not all';
   }
   // Start the shell and selected section in parallel, before their import waterfall.
   // This downloads public modules; it does not execute the section or read its API.

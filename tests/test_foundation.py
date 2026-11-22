@@ -13,7 +13,7 @@ import state
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 66
+SCHEMA_VERSION = 68
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -43,11 +43,7 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.CLEANER_ROUTE_66).removesuffix(db.OWUI_65).removesuffix(db.CODE_64).removesuffix(db.MIRROR_GROUPS_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
-                           .removesuffix(db.TRANSCRIPT_PLAYBACK_60)
-                           .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
-                           .removesuffix(db.ACCESS_56)
-                           .removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
+        install_schema(conn, 54)
         conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
         model = ("INSERT INTO connections(id,user_id,name,kind,base_url,token_enc,sections,created,server_only)"
                  " VALUES(?,?,'models','openai','https://x.test/v1',x'00','[]',0,1)")
@@ -430,6 +426,36 @@ def test_step_66_adds_cleaner_route_columns_and_previous_writer_works(env):
         assert dict(conn.execute("SELECT id, route FROM cleaner_deletions").fetchall()) == {
             "queued": 0, "old": 0, "new": 1}
         assert conn.execute("SELECT count(*) FROM cleaner_route_contexts").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_67_preserves_existing_translation_cleaner_provenance(env):
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 66)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        conn.executemany("INSERT INTO translations(id,user_id,kind,model,source_lang,target_lang,name,state,detail,created)"
+                         " VALUES(?,1,'text','model','en','ru','translation','done','',0)", [("routed",), ("direct",)])
+        conn.execute("INSERT INTO cleaner_contexts VALUES ('c',1,'translate','routed',2,'r','https://x.test',x'01',0)")
+        db.migrate(conn)
+        conn.execute("DELETE FROM cleaner_contexts WHERE id = 'c'")
+        assert dict(conn.execute("SELECT id, cleaner_used FROM translations")) == {"routed": 1, "direct": None}
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_68_adds_open_webui_drafts_to_existing_accounts(env):
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 67)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        conn.execute("INSERT INTO owui_accounts(id,user_id,label,base_url,who_enc,secret_enc,created)"
+                     " VALUES(2,1,'Server','https://example.com',x'00',x'01',0)")
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        assert conn.execute("SELECT id FROM owui_accounts").fetchone()[0] == 2
+        conn.execute("INSERT INTO owui_file_drafts VALUES(2,'draft')")
+        conn.execute("DELETE FROM owui_accounts WHERE id = 2")
+        assert conn.execute("SELECT count(*) FROM owui_file_drafts").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

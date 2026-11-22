@@ -143,12 +143,16 @@ async def _resolve(host: str, port: int) -> list[str]:
 #: разрешение имени (хост, порт) → адреса; тесты подменяют
 RESOLVE = _resolve
 
+NAT64_PREFIXES = (ipaddress.IPv6Network("64:ff9b::/96"), ipaddress.IPv6Network("64:ff9b:1::/48"))
+
 
 def _public(address: str) -> bool:
     try:
-        return ipaddress.ip_address(address).is_global
+        ip = ipaddress.ip_address(address)
     except ValueError:                 # адрес с зоной (fe80::1%eth0) и прочее нераспознанное
         return False
+    # За стандартными префиксами трансляции могут стоять внутренние IPv4-адреса.
+    return ip.is_global and not any(ip in prefix for prefix in NAT64_PREFIXES)
 
 
 def _listed(conn, url) -> httpx.URL:

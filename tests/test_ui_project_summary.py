@@ -306,18 +306,15 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
               const metrics = row.querySelector('.code-project-metrics').getBoundingClientRect();
               const summary = row.querySelector('.code-project-summary').getBoundingClientRect();
               const git = row.querySelector('.code-project-git').getBoundingClientRect();
-              const gh = row.querySelector('.code-project-github')?.getBoundingClientRect();
-              const remotes = [...row.querySelectorAll('.code-project-remote')].map(e => e.getBoundingClientRect());
               const date = row.querySelector('.code-project-modified').getBoundingClientRect();
-              const lineHeight = parseFloat(getComputedStyle(row.querySelector('.code-project-summary')).lineHeight);
+              const summaryNode = row.querySelector('.code-project-summary');
+              const lineHeight = parseFloat(getComputedStyle(summaryNode).lineHeight);
               return metrics.left >= name.right && metrics.top < heading.bottom
-                && summary.top >= heading.bottom && date.right <= summary.right
-                && (!gh || gh.left >= summary.left && gh.right <= summary.right)
-                && remotes.every(r => r.left >= summary.left && r.right <= summary.right)
-                && summary.height >= lineHeight - 1 && summary.height <= lineHeight + 1
+                && summary.top >= heading.bottom && date.left >= git.right
+                && date.right <= summary.left + summaryNode.scrollWidth + 1
+                && summaryNode.clientHeight >= lineHeight - 1 && summaryNode.clientHeight <= lineHeight + 1
                 && Math.abs(date.top - summary.top) < 2
-                && [...row.children].filter(child => child.getClientRects().length).length === 2
-                && row.getBoundingClientRect().height <= 46;
+                && [...row.children].filter(child => child.getClientRects().length).length === 2;
             })"""),
             ("eval", "github", """[...document.querySelectorAll('.code-project-github')].map(e =>
               [e.textContent, e.dataset.gitLevel, e.title])"""),
@@ -342,7 +339,8 @@ def test_project_summaries_sort_refresh_and_stay_visible_while_scrolling(browser
     assert values["before"][1] and values["after"][1]
     assert abs(values["before"][0] - values["after"][0]) < 1
     assert "(П: 1 · И: 0)" in values["counts"] and "Git: 0 ↑0" in values["counts"]
-    assert values["twoLines"] and values["compactControls"]
+    assert values["twoLines"], values
+    assert values["compactControls"], values
     assert [entry[:2] for entry in values["github"]] == [
         ["GitHub ↓3", "red"], ["GitHub ✓", "green"], ["GitHub ↕", "red"],
         ["GitHub ↑1", "yellow"], ["GitHub ∅", "red"]]

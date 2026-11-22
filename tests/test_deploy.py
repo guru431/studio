@@ -1146,6 +1146,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     env = {**os.environ, "PROBE": tmp_path.as_posix(), "STUDIO_SSH": "nobody@192.0.2.1",
            "STUDIO_SSH_KEY": (tmp_path / "no-key").as_posix(),
            "STUDIO_URL": "https://studio.example.net",
+           "PYTHONIOENCODING": "utf-8",
            "STUDIO_PYTHON": Path(sys.executable).as_posix()}
     env.pop('STUDIO_MD2PDF_SOURCE', None)
     env.pop('STUDIO_TLS_CERT', None)

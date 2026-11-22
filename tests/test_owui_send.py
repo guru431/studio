@@ -226,12 +226,22 @@ def test_send_after_revoke_is_409_relogin(setup):
 def test_resolve_answer_and_reject(setup):
     s, fake, aid, _ = setup
     chat = talk(fake)
-    answers = {"q1": {"type": "option", "option_index": 0, "label": "Yes", "description": "Do it"},
+    label, description = "Yes" * 100, "Do it" * 450
+    fake.chats[chat]["messages"]["a1"]["output"] = [{
+        "type": "function_call", "name": "ask_user", "call_id": "k1", "status": "pending", "arguments": {
+            "questions": [
+                {"id": "q1", "question": "Do it?", "options": [{"label": label, "description": description}]},
+                {"id": "q2", "question": "How?", "options": []},
+            ],
+        },
+    }]
+    answers = {"q1": {"type": "option", "option_index": 0, "label": "display label", "description": "display description"},
                "q2": {"type": "other", "text": "my own words"}}
     url = f"{BASE}/{aid}/chats/{chat}/resolve"
     r = s.c.post(url, json={"message_id": "a1", "call_id": "k1", "action": "answer", "answers": answers})
     assert r.status_code == 204, r.text
-    assert fake.resolved[-1] == (chat, "a1", {"call_id": "k1", "action": "answer", "answers": answers})
+    expected = {**answers, "q1": {**answers["q1"], "label": label, "description": description}}
+    assert fake.resolved[-1] == (chat, "a1", {"call_id": "k1", "action": "answer", "answers": expected})
     assert owui_link.LINKS[aid].turns == {"a1": chat}                     # после решения ответ снова идёт
     again = s.c.post(url, json={"message_id": "a1", "call_id": "k1", "action": "answer", "answers": answers})
     assert again.status_code == 409 and again.json()["detail"]["code"] == "resolved"
@@ -240,6 +250,8 @@ def test_resolve_answer_and_reject(setup):
     assert s.c.post(url, json={"message_id": "a1", "call_id": "k3", "action": "answer"}).status_code == 422
     assert s.c.post(url, json={"message_id": "a1", "call_id": "k3", "action": "answer",
                                "answers": {"q1": {"type": "file", "path": "/etc"}}}).status_code == 422
+    assert s.c.post(url, json={"message_id": "a1", "call_id": "k1", "action": "answer",
+                               "answers": {**answers, "q1": {"type": "option", "option_index": 1}}}).status_code == 422
     assert len(fake.resolved) == 2
 
 
@@ -286,6 +298,27 @@ def test_upload_waits_for_processing_and_limits_size(setup, monkeypatch):
     assert [f["id"] for f in sent["files"]] == [body["id"]]
     assert s.c.post(f"{BASE}/{aid}/chats", json={"model": "m1", "text": "x", "files": ["missing"]}).status_code == 404
     assert s.c.post(f"{BASE}/{aid}/files", content=b"", headers={"X-Studio-Name": "e.txt"}).status_code == 422
+
+
+def test_only_unsent_studio_uploads_can_be_discarded(setup):
+    s, fake, aid, _ = setup
+    url = f"{BASE}/{aid}/files"
+
+    def upload(name):
+        response = s.c.post(url, content=b"attachment", headers={"X-Studio-Name": name, "Content-Type": "image/png"})
+        assert response.status_code == 200, response.text
+        return response.json()["id"]
+
+    fake.add_file("external", b"same upstream account", "image/png")
+    assert s.c.delete(f"{url}/external").status_code == 404
+    discarded = upload("discard.png")
+    assert s.c.delete(f"{url}/{discarded}").status_code == 204
+    assert discarded not in fake.files
+    sent = upload("keep.png")
+    assert s.c.post(f"{BASE}/{aid}/chats", json={"model": "m1", "text": "see", "files": [sent]}).status_code == 201
+    assert s.c.delete(f"{url}/{sent}").status_code == 404
+    assert set(fake.files) == {"external", sent}
+    assert [r.url.path for r in fake.requests if r.method == "DELETE"] == [f"/api/v1/files/{discarded}"]
 
 
 def test_events_stream_relays_normalized_events(setup, monkeypatch):

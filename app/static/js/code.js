@@ -170,6 +170,7 @@ function projectName(p) {
     p.naming = projectsOf(p.aid).then((items) => {
       const project = items.find((x) => x.pid === p.pid);
       p.shared = !!project?.shared;
+      p.memberCount = project?.member_count ?? 0;
       p.dir = typeof project?.dir === 'string' ? project.dir : null;   // ссылки на файлы в ответах (мост ≥ 0.41.0)
       return project?.name || null;
     });
@@ -456,7 +457,8 @@ function enter(aid, pid) {
     mirrorButton: el('button', { type: 'button', id: 'code-project-mirror', class: 'chip', hidden: true }, tr("Зеркало"),
       el('span', { class: 'code-mirror-count', 'aria-hidden': 'true', hidden: true })),
     accessButton: el('button', { type: 'button', id: 'code-project-access', class: 'chip',
-      title: tr("Совместная работа"), 'aria-label': tr("Доступ к проекту"), hidden: true }, tr("Доступ")) };
+      title: tr("Совместная работа"), 'aria-label': tr("Доступ к проекту"), hidden: true }, tr("Доступ"),
+      el('span', { class: 'code-access-count', 'aria-hidden': 'true', hidden: true })) };
   ui.views.insertBefore(p.accessButton, document.getElementById('code-tab-chat'));
   ui.views.insertBefore(p.mirrorButton, p.accessButton);
   const cached = chatLists.get(cacheKey(p));
@@ -545,11 +547,22 @@ async function plaque(p) {
       p.mirrors = projectMirrors(ui.root, p.mirrorButton, p.aid, { pid: p.pid, name, capable: agent.project_mirror });
       p.mirrors.refresh();
       p.mirrorButton.hidden = false;
-      p.accessButton.setAttribute('aria-label', tr("Доступ к проекту · {0}", name));
-      p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name }, (shared) => {
+      const badge = p.accessButton.querySelector('.code-access-count');
+      const paintAccess = (count) => {
+        badge.textContent = count ? String(count) : '';
+        badge.hidden = !count;
+        p.accessButton.setAttribute('aria-label', count ? tr("Доступ к проекту · {0} · участников: {1}", name, count)
+          : tr("Доступ к проекту · {0}", name));
+      };
+      paintAccess(p.memberCount);
+      p.members = projectMembers(ui.root, p.accessButton, p.aid, { pid: p.pid, name }, (count) => {
+        if (count === p.memberCount) return;
+        p.memberCount = count;
+        lists.delete(String(p.aid));
+        paintAccess(count);
+        const shared = count > 0;
         if (p.shared === shared) return;
         p.shared = shared;
-        lists.delete(String(p.aid));
         panel.sharing(p.aid, p.pid, shared);
         if (proj === p) ui.placeShared.hidden = !shared;
       });

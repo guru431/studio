@@ -64,7 +64,7 @@ def code(r) -> str:
 def test_me_carries_csrf_and_profile(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     me = studio.c.get("/api/me").json()
-    assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "auto"
+    assert me["login"] == "owner" and me["is_admin"] and len(me["csrf"]) >= 32 and me["theme"] == "dark"
     assert me["capabilities"] == dict.fromkeys(sections.SECTIONS, False) and me["views"] == {}
     assert me["screen_lock"] is False and me["exa_key"] is False and me["pin"] is False
     assert me["timezone"] == "Europe/Moscow"
@@ -91,9 +91,9 @@ def test_timezone_is_persisted_per_account_without_changing_other_preferences(st
 @pytest.mark.parametrize('value', [None, '', 'Mars/Olympus', '../Europe/Moscow', 3, 'x' * 101])
 def test_invalid_timezone_leaves_the_profile_unchanged(studio, value):
     make_user(studio, 'owner'); signin(studio, 'owner')
-    assert studio.c.patch('/api/me', json={'timezone': value, 'theme': 'dark'}).status_code == 422
+    assert studio.c.patch('/api/me', json={'timezone': value, 'theme': 'light'}).status_code == 422
     profile = studio.c.get('/api/me').json()
-    assert (profile['timezone'], profile['theme']) == ('Europe/Moscow', 'auto')
+    assert (profile['timezone'], profile['theme']) == ('Europe/Moscow', 'dark')
 
 
 def test_code_defaults_are_separate_per_user_engine_and_partial_patch(studio):
@@ -205,9 +205,9 @@ def test_accent_is_kept_per_account_inside_views_and_validated(studio):
     me = studio.c.get("/api/me").json()
     assert me["accent"] == "orange" and me["views"] == {}
     for bad in ("pink", "", None, 3, "Blue"):
-        r = studio.c.patch("/api/me", json={"accent": bad, "theme": "dark"})
+        r = studio.c.patch("/api/me", json={"accent": bad, "theme": "light"})
         assert r.status_code == 422 and code(r) == "accent", bad
-    assert studio.c.get("/api/me").json()["theme"] == "auto"
+    assert studio.c.get("/api/me").json()["theme"] == "dark"
     me = studio.c.patch("/api/me", json={"accent": "blue", "views": {"photo": "table"}}).json()
     assert (me["accent"], me["views"]) == ("blue", {"photo": "table"})
     me = studio.c.patch("/api/me", json={"views": {"video": "tiles"}}).json()
@@ -516,11 +516,14 @@ def test_granting_and_revoking_admin_rights_is_in_the_users_security_log(studio,
     assert "bob" not in caplog.text
 
 
-def test_deleting_a_user_removes_rows_and_files(studio, env):
+@pytest.mark.parametrize("disabled", [False, True])
+def test_deleting_a_user_removes_rows_and_files(studio, env, disabled):
     make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
     path = add_history(studio, env, bob)
     session, _ = auth.create_session(bob)
     assert path.exists() and history_rows(bob) == len(HISTORY)
+    if disabled:
+        assert studio.c.patch(f"/api/admin/users/{bob}", json={"disabled": True}).status_code == 200
     assert studio.c.delete(f"/api/admin/users/{bob}").status_code == 200
     assert not path.exists() and history_rows(bob) == 0
     assert state.DB.execute("SELECT COUNT(*) FROM users WHERE id = ?", (bob,)).fetchone()[0] == 0

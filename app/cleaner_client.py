@@ -243,13 +243,12 @@ def _pause(row) -> float:
     return min(max(clock.NOW() - row["queued"], RETRY_MIN_SEC), RETRY_MAX_SEC)
 
 
-def _drop_key(base_url: str, token: str) -> int:
-    """Строки шлюза Cleaner (`route`) этого адреса со снимком ключа `token` — из очереди: Cleaner его отверг (401/403:
-    ключ отозван после смены, у владельца нет роли), а повторы этим ключом включили бы паузу Cleaner на весь адрес
-    Studio. Контексты остаются в Cleaner — их удаляет администратор в интерфейсе Cleaner."""
+def _drop_key(base_url: str, route: int, token: str) -> int:
+    """Снять строки этого адреса и вида авторизации со снимком отвергнутого ключа: повторы включили бы паузу
+    Cleaner на весь адрес Studio. Контексты остаются в Cleaner — их удаляют в интерфейсе Cleaner."""
     gone = []
-    for row in state.DB.execute("SELECT id, token_enc FROM cleaner_deletions WHERE route = 1 AND base_url = ?",
-                                (base_url,)).fetchall():
+    for row in state.DB.execute("SELECT id, token_enc FROM cleaner_deletions WHERE route = ? AND base_url = ?",
+                                (route, base_url)).fetchall():
         try:
             if security.decrypt(row["token_enc"]) == token:
                 gone.append(row["id"])
@@ -263,10 +262,8 @@ def _drop_key(base_url: str, token: str) -> int:
 
 async def purge():
     """Любая неудача откладывает строку (`retry_at`), так что недоступный адрес не держит голову очереди;
-    сбой сети, отказ списка, 429 и 401/403 строки прежнего вида откладывают весь адрес, и прочие его строки в проходе не
-    запрашиваются. 401/403 строки шлюза Cleaner (`route`) снимает из очереди все строки адреса с тем же снимком ключа
-    (`_drop_key`): этим ключом больше не ходим, Cleaner после пяти неверных ключей подряд держит паузу для всего адреса
-    Studio. Прочие строки идут в том же проходе (выборка повторяется)."""
+    сбой сети, отказ списка, 429 и 403 строки прежнего вида откладывают весь адрес. При 401 (а для шлюза и 403)
+    снимаются строки с отвергнутым ключом (`_drop_key`), прочие строки идут в том же проходе."""
     postponed, refused, calls = set(), set(), 0
 
     def later(row, seconds, whole_address=False):
@@ -294,7 +291,8 @@ async def purge():
             except (InvalidToken, ValueError):
                 later(row, REFUSED_SEC)
                 continue
-            if (row["base_url"], token) in refused:      # строки этого ключа уже сняты
+            credential = row["base_url"], row["route"], token
+            if credential in refused:      # строки этого ключа уже сняты
                 continue
             calls += 1
             # контекст шлюза Cleaner (`route`): служебный ключ — только в X-Cleaner-Key, `Authorization` там — провайдера
@@ -315,13 +313,13 @@ async def purge():
                 continue
             if response.status_code in (204, 404):
                 state.DB.execute("DELETE FROM cleaner_deletions WHERE id = ?", (row["id"],))
-            elif row["route"] and response.status_code in (401, 403):
-                refused.add((row["base_url"], token))
+            elif response.status_code == 401 or (row["route"] and response.status_code == 403):
+                refused.add(credential)
                 log.warning("Cleaner: ключ удаления отвергнут (%d) — из очереди снято контекстов: %d",
-                            response.status_code, _drop_key(row["base_url"], token))
+                            response.status_code, _drop_key(*credential))
                 again = True                             # выборка без снятых строк: строки других ключей — в этом проходе
                 break
-            elif response.status_code in (401, 403, 429):
+            elif response.status_code in (403, 429):
                 # Cleaner throttles bad keys by source address. Do not lock out active Studio users
                 # by repeatedly retrying revoked cleanup credentials on the same host.
                 later(row, 3600, whole_address=True)

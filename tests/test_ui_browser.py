@@ -71,13 +71,13 @@ def test_login_shell_and_theme(browser, live, width):
         ("eval", "sw", "navigator.serviceWorker.getRegistration().then(r => !!r)"),
         ("eval", "hash", "location.hash"),
         ("eval", "current", "document.querySelector('#rail a[aria-current=page]').dataset.section"),
-        ("eval", "theme", "document.documentElement.hasAttribute('data-theme')")],
+        ("eval", "theme", "document.documentElement.dataset.theme")],
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     assert not r["values"]["overflow"] and r["values"]["sw"]
     assert r["values"]["tabsAtBottom"] == (width == 390)
     assert r["values"]["hash"] == "#/chat" and r["values"]["current"] == "chat"
-    assert r["values"]["theme"] is False                       # тема «auto» — по настройке устройства
+    assert r["values"]["theme"] == "dark"
     assert not problems(r), problems(r)
 
 
@@ -111,7 +111,7 @@ def test_theme_segment_in_the_profile_menu(browser, live, width):
     """Тема — сегмент «Авто · Светлая · Тёмная» сразу под именем (в шапке кнопки нет): выбор меняет тему, пишет её
     в учётку и оставляет меню открытым; после перезагрузки тема та же; «Авто» возвращает тему устройства."""
     login = f"toggle{width}"
-    live.add_user(login)
+    live.add_user(login, theme="auto")
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
         ("eval", "shownClosed", "document.querySelector('#menu-theme').getBoundingClientRect().width > 0"),
         ("click", "#avatar"), ("wait", MENU_OPEN),
@@ -131,7 +131,8 @@ def test_theme_segment_in_the_profile_menu(browser, live, width):
         ("click", theme_option("light")), ("wait", "document.documentElement.dataset.theme === 'light'"),
         ("eval", "inside", MENU_INSIDE),
         ("click", theme_option("auto")), ("wait", "!document.documentElement.hasAttribute('data-theme')"),
-        ("idle",), ("eval", "savedAuto", "fetch('/api/me').then(r => r.json()).then(m => m.theme)")],
+        ("idle",), ("eval", "savedAuto", "fetch('/api/me').then(r => r.json()).then(m => m.theme)"),
+        ("eval", "cachedAuto", "localStorage.getItem('studio-theme')")],
         width=width, mobile=width < 760)
     assert not r.get("failed"), r
     v = r["values"]
@@ -139,7 +140,7 @@ def test_theme_segment_in_the_profile_menu(browser, live, width):
     assert v["place"] == ["menu", "menu-who", "FIELDSET", ["Авто", "Светлая", "Тёмная"], "Тема · вся учётка"]
     assert v["before"] == "auto" and v["after"] == "dark" and v["stillOpen"] is True
     assert v["saved"] == v["kept"] == v["keptChecked"] == "dark" and v["status"] == "Оформление сохранено для учётки."
-    assert v["inside"] and v["savedAuto"] == "auto"
+    assert v["inside"] and v["savedAuto"] == v["cachedAuto"] == "auto"
     assert not problems(r), problems(r)
 
 
@@ -761,11 +762,11 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["securityCurrent"] == "security"
     assert v["security"] == ["Электронная почта", "Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
                              "Журнал безопасности"]
-    assert v["appearance"] == ["Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
+    assert v["appearance"] == ["Имя в Студии", "Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
     assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
                            "Это устройство — в других браузерах и на других устройствах свой выбор.",
                            "Это устройство — этот браузер и учётка.", "Вся учётка — на всех ваших устройствах."]
-    assert v["notifications"] == ["Уведомления", "ntfy"] and v["data"] == ["Хранилище", "История"]
+    assert v["notifications"] == ["Уведомления", "ntfy"] and v["data"] == ["Хранилище", "История", "Учётка"]
     assert v["cleaner"] == "Очистка данных · Cleaner"
     assert v["draft"] == "unsaved-key" and v["saved"] == "whisperx"
     assert not problems(r), problems(r)
@@ -877,7 +878,7 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("eval", "deleteLocked", "document.querySelector('#delete-confirm').disabled"),
         ("type", "#delete-dialog [name=confirm]", login),
         ("wait", "!document.querySelector('#delete-confirm').disabled"),
-        ("click", "#delete-confirm"), ("wait", f"!document.querySelector('{rid}')"),
+        ("click", "#delete-confirm"), ("wait", f"document.querySelector('#user-add') && !document.querySelector('{rid}')"),
         # список разрешённых адресов
         ("type", "#allow-entry", "gw:4000"), ("click", "#allow-add"),
         ("eval", "unsaved", "document.querySelector('#allow-status').textContent"),     # до «Сохранить»
@@ -2398,6 +2399,7 @@ def test_photo_description_asks_before_replacing_the_prompt(browser, live):
     try:
         r = browser.drive(live.url + "/", [*photo_screen(login),
             ("type", "#photo-prompt", "мой промпт"), big,
+            ("wait", "document.querySelector('#photo-error').textContent === 'Фото больше 20 МиБ'"),
             ("eval", "tooBig", f"[document.querySelector('#photo-error').textContent, {is_open('#describe-dialog')}]"),
             put_file("#describe-file", png_of(64, 48, "blue"), "source.png"),
             ("wait", "document.querySelector('#describe-text')?.value === 'a red boat'"),
@@ -5808,7 +5810,8 @@ def test_lock_settings_add_list_and_remove_a_key(browser, live):
         ("click", "#passkeys .passkey-delete"), ("wait", "document.querySelectorAll('#passkeys .passkey').length === 0"),
         ("click", "#lock-enabled"), ("wait", "document.querySelector('#lock-off').getClientRects().length > 0"),
         ("type", "#lock-off-password", "password-123"), ("click", "#lock-off"), server_lock_is(False),
-        ("eval", "after", "document.querySelector('#lock-enabled').checked")], **PHONE)
+        ("eval", "after", "document.querySelector('#lock-enabled').checked")], **PHONE,
+        init="Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (iPhone)' })")
     assert not r.get("failed"), r
     v = r["values"]
     assert v["before"] is False and v["after"] is False
@@ -5867,14 +5870,18 @@ def test_lock_settings_do_not_send_an_empty_password(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_add_key_is_absent_on_a_computer(browser, live):
+def test_add_key_is_hidden_without_a_platform_authenticator(browser, live):
     login = "lockpc"
     live.add_user(login)
-    r = browser.drive(live.url + "/", [*lock_settings(login),
-        ("eval", "found", "['#lock-enabled', '#passkeys', '#passkey-add', '#passkey-password']"
-                          ".map(s => !!document.querySelector(s))")], width=1280)
+    init = """PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => {
+      window.platformChecked = true;
+      return false;
+    };"""
+    r = browser.drive(live.url + "/", [*lock_settings(login), ("wait", "window.platformChecked"),
+        ("eval", "visible", "['#lock-enabled', '#passkeys', '#passkey-add', '#passkey-password']"
+                            ".map(s => !!document.querySelector(s)?.getClientRects().length)")], width=1280, init=init)
     assert not r.get("failed"), r
-    assert r["values"]["found"] == [True, True, False, False]
+    assert r["values"]["visible"] == [True, True, False, False]
     assert not problems(r), problems(r)
 
 
@@ -7786,9 +7793,8 @@ REFRESH_VETO = "!document.dispatchEvent(new Event('studio-before-auto-refresh', 
 
 
 def test_translate_keeps_typed_text_while_a_record_is_open(browser, live, translator):
-    """05:F12: набранный и не отправленный текст не пропадает, когда открыли запись истории: он — черновик
-    (переживает смену раздела и запрещает автоперезагрузку), «Новый перевод» возвращает его в поле и защиту не
-    снимает; второй «Новый перевод» — пустое поле, защиты нет."""
+    """05:F12: открытая запись и черновик переживают смену раздела. «Новый перевод» возвращает
+    черновик с защитой от автоперезагрузки. Повторное нажатие очищает поле и снимает защиту."""
     live.add_user("tl-typed")
     translator.chat_script = [["Bonjour"]]
     field = "document.querySelector('#tl-input').value"
@@ -7799,8 +7805,7 @@ def test_translate_keeps_typed_text_while_a_record_is_open(browser, live, transl
         *open_row,
         ("eval", "opened", f"[{field}, {REFRESH_VETO}]"),
         *go("chat"), ("wait", "document.querySelector('#chat-input')"),
-        *go("translate"), ("wait", f"{TL_DONE} && {field} === 'Мой черновик'"),
-        *open_row,
+        *go("translate"), ("wait", f"{TL_DONE} && {TL_OUTPUT} === 'Bonjour' && {field} === 'Привет'"),
         ("click", "#tl-new"),
         ("eval", "fresh", f"[{field}, {TL_OUTPUT}, {REFRESH_VETO}]"),
         ("click", "#tl-new"),
@@ -8623,9 +8628,10 @@ def test_code_empty_offers_agent_download(browser, live):
           return [a.tagName, a.getAttribute('href'), a.hasAttribute('download'), a.textContent,
             document.querySelectorAll('#agent-download').length]; })()"""),
         ("eval", "texts", "[...document.querySelectorAll('#code-empty .agent-download p:not(.agent-install-command)')].map((p) => p.textContent)"),
-        ("click", "#code-empty .agent-download button"),
-        ("wait", "document.querySelector('#code-empty .agent-install-command code')?.textContent.includes('curl -fsS')"),
-        ("eval", "command", "document.querySelector('#code-empty .agent-install-command code').textContent"),
+        ("eval", "origin", "document.querySelector('#code-empty .row.agent-install-command code').textContent"),
+        ("click", "#code-empty .agent-download > button:not([hidden])"),
+        ("wait", "document.querySelector('#code-empty p.agent-install-command code')?.textContent.includes('curl -fsS')"),
+        ("eval", "command", "document.querySelector('#code-empty p.agent-install-command code').textContent"),
         ("eval", "macos", "(() => {const a=document.querySelector('#agent-download-macos'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "linux", "(() => {const a=document.querySelector('#agent-download-linux'); return [a.getAttribute('href'), a.download]})()"),
         ("eval", "badge", "!!document.querySelector('#code-empty .badge svg')"),
@@ -8637,7 +8643,8 @@ def test_code_empty_offers_agent_download(browser, live):
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
     assert v["texts"] == ["Установите мост на компьютер, который хотите подключить к Студии.",
                           "Нужны Claude Code, Codex, OpenCode или DeepSeek Harness. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
-                          "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста."]
+                          "В Windows и macOS откройте установщик и вставьте этот адрес в поле «Адрес студии». В Linux получите команду и выполните её в терминале в течение 10 минут."]
+    assert v["origin"] == live.url
     assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True
     assert not problems(r), problems(r)
@@ -8652,8 +8659,8 @@ def test_code_panel_offers_installers_when_a_computer_is_already_enrolled(browse
         ("wait", "document.querySelector('#code-agents li[data-id]')"), ("click", "#code-add-agent"),
         ("wait", f"document.querySelector('{selector}')"),
         ("eval", "links", f"[...document.querySelectorAll('{selector} a[download]')].map(a => a.download)"),
-        ("click", f"{selector} .agent-download button"),
-        ("wait", f"document.querySelector('{selector} code')?.textContent.includes('curl -fsS')")])
+        ("click", f"{selector} .agent-download > button:not([hidden])"),
+        ("wait", f"document.querySelector('{selector} p.agent-install-command code')?.textContent.includes('curl -fsS')")])
     assert not r.get("failed"), r
     assert r["values"]["links"] == ["studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh"]
     assert not problems(r), problems(r)
@@ -11293,15 +11300,22 @@ def test_code_twenty_first_tab_pushes_out_the_leftmost(browser, live):
     aid, sb = code_online(live, login, machine)
     opens = "(async () => { for (const chat of %s) await %s.api('PATCH', '/api/code/workspace'," \
             " { op: 'open', aid: %d, pid: '%s', chat }); return true; })()" % (json.dumps(chats[:20]), API, aid, pid("alpha"))
+    wheel = """(() => {
+        const bar = document.querySelector('#code-tabbar');
+        const before = bar.scrollLeft;
+        const event = new WheelEvent('wheel', { deltaY: -120, cancelable: true });
+        bar.dispatchEvent(event);
+        return before > 0 && bar.scrollLeft < before && event.defaultPrevented;
+    })()"""
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "opens", opens), *go("code"),
             code_tab_ready(chats[19]), ("eval", "before", "document.querySelectorAll('#code-tabbar .code-tab').length"),
-            *code_from_menu(chats[20]), ("eval", "tabs", CODE_TABS)], width=1280)
+            ("eval", "wheel", wheel), *code_from_menu(chats[20]), ("eval", "tabs", CODE_TABS)], width=1280)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["before"] == 20 and [t[0] for t in v["tabs"]] == chats[1:]
+    assert v["before"] == 20 and v["wheel"] and [t[0] for t in v["tabs"]] == chats[1:]
     assert v["tabs"][-1] == [chats[20], "Сессия 20", "true"]
     assert not problems(r), problems(r)
 

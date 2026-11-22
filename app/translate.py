@@ -175,10 +175,10 @@ def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang:
     state.DB.execute("BEGIN")
     try:
         state.DB.execute("INSERT INTO translations(id, user_id, kind, connection_id, model, source_lang, target_lang,"
-                         " name, source_media_id, scan_id, source, parts, state, detail, created)"
-                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                         " name, source_media_id, scan_id, source, parts, state, detail, created, cleaner_used)"
+                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
                          (tid, user_id, kind, conn.id, model, source_lang, target_lang, name, source_media_id,
-                          scan_id, source, len(rows), QUEUED, now))
+                          scan_id, source, len(rows), QUEUED, now, int(conn.cleaner or conn.routed)))
         state.DB.executemany("INSERT INTO translation_parts(translation_id, n, source, sep, box, state)"
                              " VALUES (?, ?, ?, ?, ?, 'waiting')",
                              [(tid, n, *row) for n, row in enumerate(rows, 1)])
@@ -635,7 +635,9 @@ async def run(job: Job) -> None:
     try:
         try:
             job.stage, job.stage_at = "готовлю", clock.NOW()
-            state.DB.execute("UPDATE translations SET state = 'working', detail = ? WHERE id = ?", (job.stage, job.id))
+            state.DB.execute("UPDATE translations SET state = 'working', detail = ?,"
+                             " cleaner_used = CASE WHEN ? THEN 1 ELSE cleaner_used END WHERE id = ?",
+                             (job.stage, job.conn.cleaner or job.conn.routed, job.id))
             outcome = ("done", await _translate(job, row) or DONE)
             log.info("перевод %s: готово", job.id[:8])
         except _Cancelled:

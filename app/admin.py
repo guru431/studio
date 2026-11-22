@@ -97,7 +97,11 @@ async def cleaner_settings():
 
 @router.put("/cleaner")
 async def save_cleaner_settings(body: cleaner_route.SettingsIn):
-    return cleaner_route.save_settings(body)
+    was_forced = cleaner_route.forced()
+    settings = cleaner_route.save_settings(body)
+    if was_forced and not settings["forced"]:
+        knowledge.queue_missing_vectors()
+    return settings
 
 
 @router.post("/cleaner/check")
@@ -246,7 +250,7 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
 async def delete_user(uid: int, admin: auth.User = Depends(auth.require_admin)):
     _self(admin, uid)
     _user_out(uid)
-    pending = await account.delete_user_data(uid)
+    pending = await account.delete_user_data(uid, allow_disabled=True)
     log.info("администратор %d: пользователь %d удалён вместе с историей, файлов в очереди удаления — %d",
              admin.id, uid, pending)
     return {"pending_files": pending}

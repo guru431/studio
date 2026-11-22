@@ -35,10 +35,10 @@ def _epoch(user_id: int) -> _Epoch:
     return epoch
 
 
-def check(user_id: int) -> None:
-    """Call after the final await, before inserting user history or publishing media."""
+def check(user_id: int, *, allow_disabled: bool = False) -> None:
+    """Check before writing user data. Only administrative deletion accepts an inactive target."""
     user = state.DB.execute("SELECT disabled FROM users WHERE id = ?", (user_id,)).fetchone()
-    if user is None or user["disabled"]:
+    if user is None or (user["disabled"] and not allow_disabled):
         raise HTTPException(401, {"code": "login", "message": "нужен вход"})
     epoch = _epoch(user_id)
     current = _CURRENT.get()

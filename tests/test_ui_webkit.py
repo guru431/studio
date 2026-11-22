@@ -453,10 +453,19 @@ def test_project_opens_by_tapping_empty_area_of_either_line(iphone):
         row = page.locator(f'#code-projects li[data-pid="{pid(name)}"] .code-project')
         row.scroll_into_view_if_needed()
         position = row.evaluate("""(row, line) => {
-          const r=row.getBoundingClientRect(), band=row.querySelector('.code-project-'+line).getBoundingClientRect();
-          return {x:r.width-4, y:band.top-r.top+band.height/2};
+          const band = row.querySelector('.code-project-' + line).getBoundingClientRect();
+          const heading = line === 'heading';
+          const left = row.querySelector(heading ? '.code-project-metrics' : '.code-project-modified')
+            .getBoundingClientRect().right;
+          const right = heading ? row.querySelector('.code-project-pin').getBoundingClientRect().left : band.right;
+          // WebKit can snap a tap at the edge of the gap to a nearby link or pin.
+          const x = Math.round((left + right) / 2);
+          const y = Math.round(band.top + band.height / 2);
+          const target = document.elementFromPoint(x, y);
+          return left < right && row.contains(target) && !target.closest('a, button') ? [x, y] : null;
         }""", line)
-        row.tap(position=position)
+        assert position is not None, line
+        page.touchscreen.tap(*position)
         pw.expect(page.locator('.code-place-project')).to_have_text(name)
         fits(page)
     assert not any(r['op'] == 'turn' for r in page.studio_machine.requests)

@@ -103,14 +103,16 @@ def _owner(request, aid, pid, background=False):
 
 def _copy(cid):
     """Копия с именем её компьютера."""
-    return state.DB.execute("SELECT c.*, a.name AS computer FROM mirror_copies c JOIN agents a ON a.id=c.agent"
+    return state.DB.execute(f"SELECT {mirror_groups.COPY_COLUMNS}, a.name AS computer FROM mirror_copies c"
+                            " JOIN agents a ON a.id=c.agent"
                             " WHERE c.id=?", (cid,)).fetchone()
 
 
 def _at(agent, root, name, project=None):
     """Копия папки `root`/`name` (или проекта `project`) компьютера `agent`."""
     return state.DB.execute(
-        "SELECT * FROM mirror_copies WHERE agent=? AND (root=? AND name_key=? OR project=?) ORDER BY id LIMIT 1",
+        f"SELECT {mirror_groups.COPY_COLUMNS} FROM mirror_copies c"
+        " WHERE agent=? AND (root=? AND name_key=? OR project=?) ORDER BY id LIMIT 1",
         (agent, root, mirror_groups.name_key(name), project)).fetchone()
 
 

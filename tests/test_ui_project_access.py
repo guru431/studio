@@ -48,9 +48,10 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             list_badge = page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-shared')
             header_badge = page.locator('#code-project-shared')
             expect(list_badge).to_have_attribute('hidden', '')
-            assert page.locator('#code-projects button').count() == 0
+            expect(page.locator('#code-projects .code-project-pin')).to_have_count(2)
             page.locator(f'li[data-pid="{pid("alpha")}"] .code-project-name').click()
             button = page.locator('#code-project-access')
+            access_count = button.locator('.code-access-count')
             button.wait_for()
             assert page.locator('.code-views > button').all_text_contents() == ['Git', 'Файлы', 'Зеркало', 'Доступ', 'Чат']
             initial_hash = page.url
@@ -58,6 +59,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             popup = page.locator('.project-members:popover-open')
             popup.get_by_text('Доступ есть только у владельца').wait_for()
             expect(header_badge).to_be_hidden()
+            expect(access_count).to_be_hidden()
             if width == 320:
                 assert page.evaluate('document.activeElement?.getAttribute("placeholder")') != 'Логин или email пользователя Студии'
             page.screenshot(path=str(tmp_path / f'access-{engine}-{width}.png'))
@@ -71,6 +73,9 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             popup.get_by_role('button', name='Дать доступ', exact=True).click()
             popup.get_by_text('Доступ предоставлен', exact=True).wait_for()
             expect(header_badge).to_be_visible()
+            expect(access_count).to_be_visible()
+            expect(access_count).to_have_text('1')
+            expect(button).to_have_accessible_name('Доступ к проекту · alpha · участников: 1')
             expect(list_badge).not_to_have_attribute('hidden', '')
             expect(page.locator(f'li[data-pid="{pid("private")}"] .code-project-shared')).to_have_attribute('hidden', '')
             assert page.url == initial_hash
@@ -79,6 +84,7 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             assert button.evaluate('(node) => node === document.activeElement')
             page.reload()
             expect(header_badge).to_be_visible()
+            expect(access_count).to_have_text('1')
             expect(list_badge).not_to_have_attribute('hidden', '')
             button.press('Enter')
             popup.get_by_role('button', name=f'Отозвать доступ · {friend}').wait_for()
@@ -122,6 +128,8 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
                 popup.get_by_role('button', name=f'Отозвать доступ · {friend}').click()
                 popup.get_by_text('Доступ отозван', exact=True).wait_for()
                 expect(header_badge).to_be_hidden()
+                expect(access_count).to_be_hidden()
+                expect(button).to_have_accessible_name('Доступ к проекту · alpha')
                 expect(list_badge).to_have_attribute('hidden', '')
                 member_page.reload()
                 member_page.locator('html[data-ready="1"]').wait_for(state='attached')

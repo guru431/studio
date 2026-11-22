@@ -24,7 +24,7 @@ def protected(studio, monkeypatch):
     cleaner.TICKETS.clear()
     cleaner.LOCKS.clear()
     sent, deleted, prepared = [], [], []
-    remote = SimpleNamespace(sent=sent, deleted=deleted, prepared=prepared, down=False, revoked=False, local=[],
+    remote = SimpleNamespace(sent=sent, deleted=deleted, prepared=prepared, down=False, local=[],
                              answer=None)
     original = studio.gw.handler
 
@@ -68,7 +68,7 @@ def protected(studio, monkeypatch):
                                             "sanitized": json.loads(request.content)["text"].replace(EMAIL, "<EMAIL_1>")})
         if request.method == "DELETE":
             deleted.append((str(request.url), request.headers["authorization"]))
-            return httpx.Response(401 if remote.revoked else 204)
+            return httpx.Response(204)
         if path.endswith("/stop"):
             return httpx.Response(204)
         raise AssertionError(path)
@@ -289,17 +289,23 @@ def test_cleaned_copy_contains_document_and_does_not_call_model(protected):
     assert len(remote.sent) == 1
 
 
-def test_revoked_cleanup_key_is_backed_off_and_pending_is_visible(protected):
+def test_revoked_personal_cleanup_key_leaves_other_keys_at_the_same_address(protected, monkeypatch, caplog):
     studio, remote = protected
-    cid = new_chat(studio)
-    preview(studio, cid)
-    studio.c.delete(f"/api/chats/{cid}")
-    studio.c.request("DELETE", f"/api/trash/chats/{cid}", json={"password": "password-123"})     # контекст Cleaner — при окончательном удалении, не в корзину
-    remote.revoked = True
+    address = "http://10.77.1.15:4000"
+    queue_deletion(remote.uid, address, studio.clock[0] - 60, token="ck_revoked", n=10)
+    queue_deletion(remote.uid, address, studio.clock[0] - 20, token="ck_current")
+    seen = []
+
+    def handler(request):
+        key = request.headers["Authorization"]
+        seen.append(key)
+        return httpx.Response(401 if key == "Bearer ck_revoked" else 204)
+
+    monkeypatch.setattr(state.HTTP._transport, "handler", handler)
     studio.c.portal.call(cleaner.purge)
-    studio.c.portal.call(cleaner.purge)
-    assert len(remote.deleted) == 1
-    assert studio.c.get("/api/me/storage").json()["cleaner_pending"] == 1
+    assert seen == ["Bearer ck_revoked", "Bearer ck_current"]
+    assert studio.c.get("/api/me/storage").json().get("cleaner_pending", 0) == 0
+    assert "из очереди снято контекстов: 10" in caplog.text and "ck_revoked" not in caplog.text
 
 
 def queue_deletion(uid, base_url, queued, token="ck_synthetic", n=1):

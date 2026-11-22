@@ -102,6 +102,15 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
   }
 
   add.addEventListener('click', choose);
+  bar.addEventListener('wheel', (event) => {
+    const limit = bar.scrollWidth - bar.clientWidth;
+    if (!event.deltaY || event.deltaX || event.ctrlKey || event.shiftKey || limit <= 0) return;
+    const step = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? bar.clientWidth : 1;
+    const next = Math.max(0, Math.min(limit, bar.scrollLeft + event.deltaY * step));
+    if (next === bar.scrollLeft) return;
+    event.preventDefault();
+    bar.scrollLeft = next;
+  }, { passive: false });
 
   /* ---- перетаскивание: узел едет по ряду сразу, порядок уходит в рабочее место при отпускании ---- */
   let drag = null;          // { chat, node, id, x, y, touch, timer, active }
@@ -191,6 +200,7 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
     const chat = focused && bar.contains(focused) ? focused.dataset.chat : null;
     const index = state.tabs.indexOf(chat);
     const adding = document.activeElement === add;
+    const revealActive = state.active !== next.active || (!state.loaded && next.loaded);
     state = next;
     add.setAttribute('aria-expanded', String(!!next.choosing));
     const orderChanged = [...bar.querySelectorAll('.code-tab')].map((n) => n.dataset.chat).join(',') !== next.tabs.join(',');
@@ -216,6 +226,6 @@ export function tabBar(host, { pick, close, add: choose, move = () => {} }) {
       const target = next.tabs.includes(chat) ? next.tabs.indexOf(chat) : Math.min(index, next.tabs.length - 1);
       (bar.querySelectorAll('.code-tab')[target] || add).focus({ preventScroll: true });
     } else if (adding) add.focus({ preventScroll: true });
-    reveal();
+    if (revealActive || orderChanged) reveal();
   }
 }

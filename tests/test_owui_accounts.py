@@ -193,6 +193,8 @@ def test_pinned_certificate_failing_verification_is_not_offered_again(tls, monke
         return httpx.AsyncClient(transport=httpx.MockTransport(expired))
 
     monkeypatch.setattr(state, "pinned_http", broken)
+    first = connect(s, url=HTTPS_URL, label="new", cert_sha256=fingerprint(der))
+    assert first.status_code == 502 and first.json()["detail"]["code"] == "owui_certificate"
     owui_tokens.TOKENS.clear()
     r = s.c.get(f"/api/owui/accounts/{aid}/tree")
     assert r.status_code == 502 and r.json()["detail"]["code"] == "owui_certificate"

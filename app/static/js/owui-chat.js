@@ -9,12 +9,12 @@ import { tr } from './i18n.js';
  *   строкой «элемент <тип>»; пауза — карточка owui-pending.js;
  * - поток — события SSE учётки (owui.js зовёт event): `delta` дописывает текст или рассуждение, `item` — плашку
  *   инструмента (куски ответа, которого лента ещё не знает, ждут его), `done` / `pending` / `active` — перечитать чат,
- *   `link up` — только после `link down` или обрыва потока (`lost` от owui.js): `up` новой подписки чат не читает
+ *   `link up` — после `down`, `relogin` или обрыва потока (`lost` от owui.js): первое `up` чат не читает
  *   (пропущенные куски потока не восстанавливаются: итог — из сохранённого чата), `title` — название,
  *   `queued` — «в очереди»;
  * - поле ввода: модель — picker.js (GET …/models; у открытого чата — модель чата, у нового — `default`), вложения —
  *   POST …/files (до FILE_MAX, не больше FILES_MAX; файл, который Open WebUI не обработал, — с предупреждением;
- *   вложение убрали из поля или ушли из чата до конца загрузки — запрос обрывается),
+ *   убранное до отправки вложение удаляется после окончания загрузки),
  *   «Отправить» (новый чат — POST …/chats, затем created(chat); открытый — POST …/messages с parent_id последнего
  *   сообщения), «Остановить» (POST …/stop) — пока в чате идёт ответ; ответ сервера `queued` — «в очереди».
  * Тексты пользователя, ответы модели, названия чатов и слова Open WebUI — только textContent/разметкой, без перевода. */
@@ -43,7 +43,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   let sending = false;
   let picked = false;              // модель выбрана человеком: перечитывание чата её не сбрасывает
   let queued = [];                 // сообщения, которые Open WebUI поставил в очередь: { text }
-  let attachments = [];            // { name, kind, id?, uploading, failed, error }
+  let attachments = [];            // { name, kind, id?, request?, uploading, removing?, failed, error }
   let gone = false;
   let failed = false;              // чтение чата или моделей не удалось: retry() повторит
   let loaded = !chatId;            // открытый чат прочитан хотя бы раз (до того — без «пока нет сообщений»)
@@ -311,17 +311,39 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
 
   /* ---- вложения ---- */
 
+  async function discard(item, unlock = false) {
+    await item.request;             // id известен только после завершения загрузки
+    if (!item.id) return;
+    try {
+      await api('DELETE', fileUrl(item.id), undefined, { keepalive: true, unlock });
+    } catch (err) {
+      if (err?.status !== 404) throw err;     // мог уйти в сообщение после обрыва запроса отправки
+    }
+  }
+
+  async function removeAttachment(item) {
+    if (sending || item.removing) return;
+    item.removing = true;
+    paintChips();
+    sync();
+    try {
+      await discard(item, true);
+      attachments = attachments.filter((x) => x !== item);
+    } catch (err) {
+      if (!gone) notice.textContent = words(err);
+    } finally {
+      item.removing = false;
+      if (!gone) { paintChips(); sync(); }
+    }
+  }
+
   function paintChips() {
     chips.replaceChildren(...attachments.map((a) => {
       const state = a.uploading ? tr("загружается…") : a.error ? a.error
         : a.failed ? tr("Open WebUI не обработал файл: модель может его не увидеть") : '';
-      const remove = iconButton('x', tr("Убрать вложение"), { class: 'icon-btn owui-att-remove' });
-      remove.addEventListener('click', () => {
-        a.controller?.abort();          // загрузка ещё идёт — оборвать
-        attachments = attachments.filter((x) => x !== a);
-        paintChips();
-        sync();
-      });
+      const remove = iconButton('x', tr("Убрать вложение"), { class: 'icon-btn owui-att-remove',
+        disabled: !!a.removing || sending });
+      remove.addEventListener('click', () => removeAttachment(a));
       return el('span', { class: `att-chip owui-att${a.error || a.failed ? ' bad' : ''}`, 'data-state':
         a.uploading ? 'uploading' : a.error ? 'error' : a.failed ? 'failed' : 'ready' },
       icon(a.kind === 'image' ? 'photo' : 'file'), el('span', { class: 'att-name' }, a.name),
@@ -330,6 +352,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   }
 
   function attach(list) {
+    if (sending) return;
     for (const f of list) {
       if (attachments.length >= FILES_MAX) {
         notice.textContent = tr("Не больше {0} вложений в сообщении", FILES_MAX);
@@ -342,18 +365,16 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
       else item.uploading = true;
       attachments.push(item);
       if (!item.uploading) continue;
-      item.controller = new AbortController();
-      api('POST', `${base}/files`, f, { signal: item.controller.signal, headers: {
+      item.request = api('POST', `${base}/files`, f, { headers: {
         'x-studio-name': encodeURIComponent(f.name), 'content-type': f.type || 'application/octet-stream' } })
         .then((out) => {
           item.id = out.id;
           item.kind = out.kind === 'image' ? 'image' : 'file';
           item.failed = out.failed === true;
         })
-        .catch((err) => { if (err?.name !== 'AbortError') item.error = words(err); })
+        .catch((err) => { item.error = words(err); })
         .finally(() => {
           item.uploading = false;
-          item.controller = null;
           if (!gone) { paintChips(); sync(); }
         });
     }
@@ -369,10 +390,11 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   /* ---- отправка, стоп, пауза ---- */
 
   function sync() {
-    const uploading = attachments.some((a) => a.uploading);
-    send.disabled = sending || uploading || !select.value;
+    const pending = attachments.some((a) => a.uploading || a.removing);
+    send.disabled = sending || pending || !select.value;
     stop.hidden = !chat || !active;
     input.readOnly = sending;
+    file.disabled = sending;
   }
 
   const localUser = (text, files) => ({ id: `local-${++localIds}`, role: 'user', text, files, tools: [], other: [],
@@ -384,12 +406,13 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     if (sending) return;
     const text = input.value;
     const ready = attachments.filter((a) => a.id);
-    if (attachments.some((a) => a.uploading)) return;
+    if (attachments.some((a) => a.uploading || a.removing)) return;
     if (!text.trim() && !ready.length) { input.focus(); return; }
     const model = select.value;
     if (!model) return;
     sending = true;
     notice.textContent = '';
+    paintChips();
     sync();
     const files = ready.map((a) => ({ id: a.id, name: a.name, kind: a.kind }));
     try {
@@ -424,7 +447,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
       if (!gone) notice.textContent = words(err);
     } finally {
       sending = false;
-      if (!gone) sync();
+      if (!gone) { paintChips(); sync(); }
     }
   }
 
@@ -509,8 +532,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     if (type === 'link') {
       const before = link;
       link = data.state;
-      // после обрыва потока или соединения — сохранённый чат; `up` новой подписки — нет: чат только что прочитан
-      if (data.state === 'up' && chat && (lost || before === 'down')) {
+      if (data.state === 'up' && chat && (lost || before === 'down' || before === 'relogin')) {
         lost = false;
         scheduleReload();
       }
@@ -564,7 +586,9 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     retry,
     unmount() {
       gone = true;
-      for (const a of attachments) a.controller?.abort();   // ушли из чата — загрузки не нужны
+      if (!sending) {
+        for (const a of attachments) if (!a.removing) discard(a).catch(() => {});
+      }
       clearTimeout(reloadTimer);
       cancelAnimationFrame(paintFrame);
       modelPick.unmount();

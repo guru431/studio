@@ -59,7 +59,7 @@ export function applyTheme(theme) {
   const fixed = theme === 'dark' || theme === 'light';
   if (fixed) root.dataset.theme = theme;
   else delete root.dataset.theme;
-  store(THEME_KEY, fixed ? theme : null);
+  store(THEME_KEY, fixed ? theme : 'auto');
   const [light, dark] = document.querySelectorAll('meta[name="theme-color"]');
   if (light) light.content = fixed ? THEME_COLORS[theme] : THEME_COLORS.light;
   if (dark) dark.content = fixed ? THEME_COLORS[theme] : THEME_COLORS.dark;

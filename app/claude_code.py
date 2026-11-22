@@ -428,6 +428,8 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
                 key = "pid" if op == "projects" else "project"
                 data = {**data, "items": [i for i in data.get("items", [])
                         if isinstance(i, dict) and i.get(key) in allowed]}
+            elif op == "state":
+                data = _without_overlay(data)
         return data
     except bridge.Offline:
         error = _refuse(409, "offline", "компьютер не на связи")
@@ -512,9 +514,11 @@ async def open_without_pin(request: Request, agent, call):
 async def projects(aid: int, request: Request):
     owner = own_agent(request, aid, shared=True)["user_id"] == request.state.user.id
     items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
-    shared = {r[0] for r in state.DB.execute("SELECT DISTINCT project FROM project_members WHERE agent_id = ?", (aid,))}
+    shared = dict(state.DB.execute("SELECT project, count(*) FROM project_members WHERE agent_id = ?"
+                                  " GROUP BY project", (aid,)))
     # `dir` — настоящий путь папки для ссылок на файлы (протокол §5): только владельцу, как `projects_root`.
     return {"items": [{"pid": i["pid"], "name": i["name"], "shared": i["pid"] in shared,
+                       **({"member_count": shared[i["pid"]]} if owner and i["pid"] in shared else {}),
                        **({"dir": folder} if owner and isinstance(folder := i.get("dir"), str)
                           and 0 < len(folder) <= PATH_MAX and not re.search(r"[\x00-\x1f\x7f]", folder) else {}),
                        **({"last_code_bytes": size} if type(size := i.get("last_code_bytes")) is int and size >= 0 else {})}
@@ -1030,6 +1034,14 @@ def _opencode_settings(aid, engine, body):
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
+def _without_overlay(data: dict) -> dict:
+    """Проекция для участника: та же очередь событий может читаться владельцем."""
+    result = {k: v for k, v in data.items() if k != "overlay"}
+    if isinstance(settings := result.get("settings"), dict):
+        result["settings"] = {k: v for k, v in settings.items() if k != "overlay"}
+    return result
+
+
 def _sse(event: str, data: dict) -> str:
     """Строка SSE; данные — ASCII-JSON (одинокий суррогат из JSON моста уронил бы поток), NaN — ValueError."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True, allow_nan=False)}\n\n"
@@ -1071,7 +1083,8 @@ async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, d
         yield _sse("closed", {})
         return
     if first is not None:
-        yield _sse(*first)
+        k, data = first
+        yield _sse(k, _without_overlay(data) if access is not None else data)
     waiting, checked = live, clock.NOW()
     while True:
         try:
@@ -1093,7 +1106,8 @@ async def _events(q: bridge.Watch, first: tuple[str, dict] | None, live: bool, d
         if waiting and k not in ("snapshot", "done"):
             continue
         try:
-            line = _sse(k, {name: value for name, value in e.items() if name != "k"})
+            data = {name: value for name, value in e.items() if name != "k"}
+            line = _sse(k, _without_overlay(data) if access is not None and k in ("settings", "snapshot") else data)
         except (ValueError, RecursionError):          # NaN или Infinity в событии моста — не JSON
             if k != "done":
                 continue

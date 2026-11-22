@@ -260,9 +260,10 @@ def _ensure_admin(conn, login: str, password: str, email: str | None = None) -> 
             print("для первого администратора нужен STUDIO_ADMIN_EMAIL", file=sys.stderr)
             return 2
         try:
-            conn.execute("INSERT INTO users(id, login, name, pw_hash, is_admin, created, email)"
-                         " VALUES (?, ?, ?, ?, 1, ?, ?)", (db.next_user_id(conn), login, login,
-                                                           security.hash_password(password), clock.NOW(), email))
+            conn.execute("INSERT INTO users(id, login, name, pw_hash, is_admin, created, email, theme)"
+                         " VALUES (?, ?, ?, ?, 1, ?, ?, ?)", (db.next_user_id(conn), login, login,
+                                                           security.hash_password(password), clock.NOW(), email,
+                                                           db.DEFAULT_THEME))
         except sqlite3.IntegrityError:
             print("логин или почта уже используются", file=sys.stderr)
             return 2

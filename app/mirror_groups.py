@@ -53,22 +53,25 @@ def name_key(name: str) -> str:
     return security.digest(name.casefold())
 
 
+COPY_COLUMNS = "c.id, c.grp, c.agent, c.project, c.root, c.name_key, c.location"
+
+
 def find(aid: int, pid: str) -> sqlite3.Row | None:
-    return state.DB.execute("SELECT * FROM mirror_copies WHERE agent=? AND project=? ORDER BY id LIMIT 1",
+    return state.DB.execute(f"SELECT {COPY_COLUMNS} FROM mirror_copies c WHERE agent=? AND project=? ORDER BY id LIMIT 1",
                             (aid, pid)).fetchone()
 
 
 def get(cid: int) -> sqlite3.Row | None:
-    return state.DB.execute("SELECT * FROM mirror_copies WHERE id=?", (cid,)).fetchone()
+    return state.DB.execute(f"SELECT {COPY_COLUMNS} FROM mirror_copies c WHERE id=?", (cid,)).fetchone()
 
 
 def members(grp: int) -> list[sqlite3.Row]:
-    return state.DB.execute("SELECT c.*, a.name AS computer FROM mirror_copies c JOIN agents a ON a.id=c.agent"
+    return state.DB.execute(f"SELECT {COPY_COLUMNS}, a.name AS computer FROM mirror_copies c JOIN agents a ON a.id=c.agent"
                             " WHERE c.grp=? ORDER BY c.id", (grp,)).fetchall()
 
 
 def unlocated(aid: int) -> list[sqlite3.Row]:
-    return state.DB.execute("SELECT * FROM mirror_copies WHERE agent=? AND (project IS NULL OR root IS NULL)"
+    return state.DB.execute(f"SELECT {COPY_COLUMNS} FROM mirror_copies c WHERE agent=? AND (project IS NULL OR root IS NULL)"
                             " ORDER BY id", (aid,)).fetchall()
 
 

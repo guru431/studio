@@ -281,8 +281,15 @@ def test_external_knowledge_source_is_off_when_forced(forced_studio):
     assert {h.doc_name for h in hits} == {"пароли.txt", "море.txt"}
     assert s.embeds == [] and s.reranks == []                             # ни вектора запроса, ни переранжирования
     assert state.DB.execute("SELECT count(*) FROM kb_chunks WHERE vector IS NOT NULL").fetchone()[0] == 1
+    chat_id = new_chat(s, connection_id=s.ext, model="gpt-x")
+    attachment = attach(s, "отчёт.txt", big_text("Пароль от сейфа.").encode(), "text/plain")
+    assert sse(turn(s, chat_id, "Что в отчёте?", attachment_ids=[attachment["id"]]))[-1][0] == "done"
+    assert s.embeds == []
     settings(s, forced=False)
     assert s.c.get("/api/admin/knowledge").json()["source_off"] is False
+    settle(s)
+    assert len(s.embeds) == 1
+    assert state.DB.execute("SELECT count(*) FROM kb_chunks WHERE vector IS NOT NULL").fetchone()[0] == 2
 
 
 def test_routed_dialog_skips_an_external_knowledge_source(cleaner_gw):

@@ -88,8 +88,8 @@ def keep_active_admin(uid: int) -> None:
         raise HTTPException(409, {"code": "last_admin", "message": "Нужен хотя бы один активный администратор."})
 
 
-async def delete_user_data(uid: int) -> int:
-    operations.check(uid)
+async def delete_user_data(uid: int, *, allow_disabled: bool = False) -> int:
+    operations.check(uid, allow_disabled=allow_disabled)
     keep_active_admin(uid)
     with operations.barrier(uid):
         state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (uid,))

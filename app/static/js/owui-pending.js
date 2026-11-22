@@ -14,12 +14,6 @@ import { button, el, words } from './ui.js';
 
 /** Свой ответ на вопрос — до 4000 знаков (owui.OtherAnswer). */
 const OWN_MAX = 4000;
-/** Пределы выбранного варианта (owui.OptionAnswer): подпись и пояснение уходят обрезанными, варианты дальше
- *  OPTION_LAST не показываются — иначе выбор такого варианта давал бы 422. */
-const LABEL_MAX = 200;
-const TEXT_MAX = 2000;
-const OPTION_LAST = 16;
-
 function questionCard(card, pending, choose) {
   const questions = Array.isArray(pending.questions) ? pending.questions : [];
   const answers = new Map();             // id вопроса → ответ в форме Open WebUI
@@ -42,13 +36,12 @@ function questionCard(card, pending, choose) {
         node.setAttribute('aria-pressed', String(chosen?.type === 'option' && chosen.option_index === Number(node.dataset.index)));
       }
     };
-    (Array.isArray(q.options) ? q.options.slice(0, OPTION_LAST + 1) : []).forEach((option, index) => {
+    (Array.isArray(q.options) ? q.options : []).forEach((option, index) => {
       const node = el('button', { type: 'button', class: 'btn btn-sm pending-option owui-option', 'aria-pressed': 'false',
         'data-index': String(index) }, el('span', { class: 'owui-option-label' }, option.label || ''),
       option.description ? el('span', { class: 'owui-option-text' }, option.description) : null);
       node.addEventListener('click', () => {
-        answers.set(q.id, { type: 'option', option_index: index, label: String(option.label || '').slice(0, LABEL_MAX),
-          description: String(option.description || '').slice(0, TEXT_MAX) });
+        answers.set(q.id, { type: 'option', option_index: index });
         if (own) own.value = '';
         mark();
         ready();

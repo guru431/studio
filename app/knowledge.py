@@ -327,6 +327,17 @@ def resume() -> None:
         kick()
 
 
+def queue_missing_vectors() -> None:
+    """После отключения обязательного Cleaner дополнить индексы баз. Вложения диалогов не переотправляем."""
+    if _source_conn() is None:
+        return
+    count = state.DB.execute("UPDATE kb_documents SET state = 'queued' WHERE state = 'ready' AND attachment_id IS NULL"
+                             " AND EXISTS ("
+                             "SELECT 1 FROM kb_chunks WHERE doc_id = kb_documents.id AND vector IS NULL)").rowcount
+    if count:
+        kick()
+
+
 async def settle() -> None:
     """Дождаться обработчика векторов (тесты)."""
     while WORKER and not WORKER[0].done():

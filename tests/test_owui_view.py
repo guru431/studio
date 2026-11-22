@@ -123,6 +123,15 @@ def test_pending_question_and_approval():
     assert owui_view.branch(chat([user("u1"), stale], "a4"))["messages"][1]["pending"] is None
 
 
+def test_long_question_options_fit_the_resolve_request():
+    label, description = "label " * 80, "description " * 300
+    args = {"questions": [{"id": "q1", "question": "Which?",
+                           "options": [{"label": label, "description": description}]}]}
+    asking = answer("a1", "u1", [call_item("fc_q", "ask_user", args, status="pending")], done=False)
+    shown = owui_view.branch(chat([user("u1"), asking], "a1"))["messages"][1]["pending"]["questions"][0]["options"][0]
+    assert shown == {"label": label[:199] + "…", "description": description[:1999] + "…"}
+
+
 def test_broken_question_stays_visible_without_pause_card():
     msg = owui_view.branch(chat([user("u1"), answer("a1", "u1", [call_item("fc_q", "ask_user", "{not json", "pending")],
                                                    done=False)], "a1"))["messages"][1]

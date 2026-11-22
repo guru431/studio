@@ -38,7 +38,7 @@ export function projectMembers(host, trigger, aid, project, onChange) {
       return el('li', {}, el('span', {}, user.login + (user.disabled ? tr(" · заблокирован") : '')), remove);
     }));
     if (!data.items.length) list.append(el('li', { class: 'muted' }, tr("Доступ есть только у владельца")));
-    onChange(data.items.length > 0);
+    onChange(data.items.length);
   }
   async function change(action, message) {
     if (busy || !alive) return;

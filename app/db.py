@@ -5,7 +5,8 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 66
+VERSION = 68
+DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -524,11 +525,11 @@ ALTER TABLE code_chats_23 RENAME TO code_chats;
 CREATE INDEX code_chats_user ON code_chats(user_id, created);
 """
 
-SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + """
+SCHEMA = SECTION_TABLES + SPEECH_TABLES + PASSKEY_TABLES + PURGE_TABLES + f"""
 CREATE TABLE users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE, name TEXT NOT NULL, pw_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
-      theme TEXT NOT NULL DEFAULT 'auto', default_connection_id INTEGER, default_model TEXT,
-      created REAL NOT NULL, views TEXT NOT NULL DEFAULT '{}', screen_lock INTEGER NOT NULL DEFAULT 0);
+      theme TEXT NOT NULL DEFAULT '{DEFAULT_THEME}', default_connection_id INTEGER, default_model TEXT,
+      created REAL NOT NULL, views TEXT NOT NULL DEFAULT '{{}}', screen_lock INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE sessions(digest TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
          csrf TEXT NOT NULL, expires REAL NOT NULL, renewed REAL NOT NULL, mobile INTEGER NOT NULL DEFAULT 0,
          seen REAL);
@@ -986,6 +987,21 @@ END;
 """
 SCHEMA += CLEANER_ROUTE_66
 
+#: Признак сохраняется вместе с переводом, даже если контекст Cleaner или подключение удалят.
+TRANSLATE_CLEANER_67 = """ALTER TABLE translations ADD COLUMN cleaner_used INTEGER;
+UPDATE translations SET cleaner_used = 1 WHERE EXISTS (
+    SELECT 1 FROM cleaner_contexts c WHERE c.resource = 'translate' AND c.item_id = translations.id
+    AND c.user_id = translations.user_id);
+"""
+SCHEMA += TRANSLATE_CLEANER_67
+
+#: Загруженные Студией файлы до отправки. Обычные файлы и вложения отправленного сообщения удалить через Студию нельзя.
+OWUI_DRAFTS_68 = """CREATE TABLE owui_file_drafts(
+    account_id INTEGER NOT NULL REFERENCES owui_accounts(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL, PRIMARY KEY(account_id, file_id));
+"""
+SCHEMA += OWUI_DRAFTS_68
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1120,6 +1136,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     65: OWUI_65,
     # внешние модели через шлюз Cleaner
     66: CLEANER_ROUTE_66,
+    67: TRANSLATE_CLEANER_67,
+    68: OWUI_DRAFTS_68,
 }
 
 

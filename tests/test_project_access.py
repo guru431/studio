@@ -44,10 +44,11 @@ def test_project_shared_flag_tracks_grants_until_last_member_is_removed(studio):
     other = make_user(studio, "another")
     assert studio.c.post(base, json={"login": "another"}).status_code == 201
     assert [{k: v for k, v in i.items() if k != "dir"} for i in studio.c.get(url(aid, "projects")).json()["items"]] == [
-        {"pid": ALPHA, "name": "alpha", "shared": True},
+        {"pid": ALPHA, "name": "alpha", "shared": True, "member_count": 2},
         {"pid": BETA, "name": "beta", "shared": False}]
     assert studio.c.delete(base + f"/{member}").status_code == 204
-    assert studio.c.get(url(aid, "projects")).json()["items"][0]["shared"] is True
+    item = studio.c.get(url(aid, "projects")).json()["items"][0]
+    assert item["shared"] and item["member_count"] == 1
     assert studio.c.delete(base + f"/{other}").status_code == 204
     assert not any(item["shared"] for item in studio.c.get(url(aid, "projects")).json()["items"])
 
@@ -281,6 +282,26 @@ def test_stream_rechecks_membership_before_first_and_queued_events(studio):
         assert "event: closed" in await anext(stream)
         await stream.aclose()
     asyncio.run(run())
+
+
+def test_deepseek_profile_overlay_is_only_sent_to_the_computer_owner(studio):
+    aid, machine, _, _, _ = share(studio)
+    overlay = {"applied": ["owner-profile-row"]}
+    settings = {"access_fixed": True, "overlay": overlay}
+    machine._op_state = lambda req, events: {"settings": settings}
+    path = url(aid, "projects", ALPHA, "chats", A)
+    for login, owner in (("friend", False), ("owner", True)):
+        signin(studio, login)
+        if owner:
+            assert studio.c.post(url(aid, "open"), json={"pin": "2468"}).status_code == 204
+        state_response = studio.c.post(f"{path}/state", json={})
+        assert state_response.status_code == 200 and state_response.json()["settings"]["access_fixed"]
+        assert ("owner-profile-row" in state_response.text) == owner
+        machine.script = [{"k": "settings", **settings}, {"k": "snapshot", "settings": settings}, DONE]
+        stream = studio.c.post(f"{path}/turn", json={"text": "Привет"})
+        assert stream.status_code == 200 and "event: settings" in stream.text and "event: snapshot" in stream.text
+        assert stream.text.count("owner-profile-row") == (2 if owner else 0)
+    assert settings["overlay"] == overlay
 
 
 def test_access_check_is_scoped_even_when_another_project_is_shared(studio):

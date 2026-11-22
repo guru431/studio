@@ -563,9 +563,14 @@ function waitOpen(lockNow = null, knownState = null, forced = false) {
 function reloadMedia() {
   for (const node of document.querySelectorAll('img, video, audio')) {
     const src = node.getAttribute('src') || '';
-    if (!src.startsWith('/api/media/') && !src.startsWith('/api/owui/')) continue;
+    const path = src.startsWith(location.origin + '/') ? src.slice(location.origin.length) : src;
+    if (!path.startsWith('/api/media/') && !path.startsWith('/api/owui/')) continue;
     if (node instanceof HTMLImageElement) {
-      if (node.complete && node.naturalWidth === 0) node.src = node.getAttribute('src');
+      if (node.complete && node.naturalWidth === 0) {
+        const retry = new URL(path, location.origin);
+        retry.searchParams.set('_studio_retry', String(Date.now()));
+        node.src = retry.href;
+      }
     } else if (node.error) node.load();
   }
 }

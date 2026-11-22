@@ -639,6 +639,27 @@ def _dialog_of(uid: int, origin_id: str) -> "tuple[int | None, bool]":
     return (row["connection_id"] if row is not None else None), bool(answer is not None and answer["cleaner_request"])
 
 
+def _translation_used_cleaner(uid: int, origin_id: str) -> bool:
+    row = state.DB.execute("SELECT connection_id, cleaner_used, EXISTS (SELECT 1 FROM cleaner_contexts c"
+                           " WHERE c.resource = 'translate' AND c.item_id = t.id AND c.user_id = t.user_id) AS has_context"
+                           " FROM translations t WHERE id = ? AND user_id = ?",
+                           (origin_id, uid)).fetchone()
+    if row is None:
+        return False
+    if row["has_context"]:
+        return True
+    if row["cleaner_used"] is not None:
+        return bool(row["cleaner_used"])
+    # Старые записи без сохранённого контекста сверяем с подключением, пока оно доступно.
+    if row["connection_id"] is None:
+        return False
+    try:
+        connection = connections.get(uid, row["connection_id"], gate=False)
+    except HTTPException:
+        return False
+    return connection.cleaner or connection.routed
+
+
 @router.post("/read", status_code=202)
 async def read(body: ReadIn, request: Request):
     """«Прочитать» ответ чата, перевод или скан (п. 6 шапки) — новым чатом озвучки → `{chat_id}`."""
@@ -649,6 +670,10 @@ async def read(body: ReadIn, request: Request):
     if body.origin.kind == "chat":                # ответ диалога через Cleaner — восстановленный текст: не мимо Cleaner
         dialog, routed = _dialog_of(uid, body.origin.id)
         cleaner_route.refuse_dialog_speech(uid, dialog, conn, routed=routed)
+    if (body.origin.kind == "translate" and cleaner_route.is_external(conn)
+            and _translation_used_cleaner(uid, body.origin.id)):
+        raise HTTPException(409, {"code": "cleaner_translate", "message":
+                            "перевод сделан через Cleaner, а модель речи внешняя — выберите внутреннюю модель речи"})
     voice, name = _read_voice(uid, conn, model)
     _room(uid, None)
     sid = _enqueue(uid, conn, model, voice, name, _read_language(conn, text), text)

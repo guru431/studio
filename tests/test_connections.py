@@ -105,7 +105,7 @@ def test_named_request_goes_to_the_checked_address(studio, monkeypatch):
 
 
 @pytest.mark.parametrize("addrs", [["10.0.0.7"], ["93.184.216.34", "127.0.0.1"], ["100.64.1.1"], ["169.254.1.1"],
-                                   ["::1"], ["fd00::1"], []])
+                                   ["::1"], ["fd00::1"], ["64:ff9b::192.0.2.1"], ["64:ff9b:1::192.0.2.1"], []])
 def test_named_host_that_resolves_inside_is_refused_before_any_io(studio, monkeypatch, addrs):
     named_list("api.cloud.test:443")
     async def resolve(host, port): return addrs

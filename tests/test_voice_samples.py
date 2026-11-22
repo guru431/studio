@@ -69,13 +69,18 @@ def test_edit_select_replace_and_remove_samples(studio, fake_audio):
     voice = studio.c.get(f"/api/voices/{vid}").json()
     assert voice["name"] == "Новое имя" and voice["duration"] == 60
     assert voice["text"] == "Новая запись" and voice["sample_count"] == 3
-    assert state.DB.execute("SELECT 1 FROM media WHERE id = ?", (old_mid,)).fetchone() is None
+    archived, = trash_of(studio)
+    assert studio.c.get(f"/api/media/{old_mid}").status_code == 200
+    assert studio.c.post(f"/api/trash/voice_samples/{archived['id']}/restore").status_code == 204
+    recovered = studio.c.get(f"/api/voices/{vid}").json()["samples"]
+    assert any(s["media_id"] == old_mid and s["text"] == "Исправлено" for s in recovered)
+    assert studio.c.delete(f"/api/voices/{vid}/samples/{archived['id']}").status_code == 204
     assert studio.c.delete(f"/api/voices/{vid}/samples/{second}").status_code == 204
     assert studio.c.delete(f"/api/voices/{vid}/samples/{third}").status_code == 204
     assert studio.c.delete(f"/api/voices/{vid}/samples/{vid}").status_code == 422
     assert studio.c.get(f"/api/voices/{vid}").json()["samples"][0]["active"]
     assert studio.c.delete(f"/api/voices/{vid}").status_code == 204
-    assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 3     # в корзине — образцы на месте
+    assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 4     # в корзине — образцы на месте
     assert studio.c.request("DELETE", f"/api/trash/voices/{vid}", json={"password": "password-123"}).status_code == 204
     assert state.DB.execute("SELECT count(*) FROM voice_samples").fetchone()[0] == 0
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
@@ -273,3 +278,21 @@ def test_batch_changes_voice_only_after_all_uploads_are_valid(studio, fake_audio
     assert after["sample_count"] == 2 and after["text"] == "Новый" and after["name"] == edit["name"]
     assert {sample["text"] for sample in after["samples"]} == {"Правка", "Новый"}
     assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 3        # убранный образец — в корзине
+
+
+def test_batch_replacement_preserves_the_previous_wav(studio, fake_audio):
+    add_gateway(studio)
+    fake_audio.duration = 8
+    vid = create(studio, text="Первая запись").json()["id"]
+    path = f"/api/voices/{vid}"
+    before = studio.c.get(path).json()
+    token = studio.c.post("/api/voices/prepare-sample", files=SAMPLE).json()["upload"]
+    edit = {"name": before["name"], "revision": before["revision"], "selected": 0,
+            "samples": [{"id": vid, "upload": token, "text": "Замена"}]}
+    assert studio.c.put(f"{path}/batch", json=edit).status_code == 200
+    archived, = trash_of(studio)
+    assert studio.c.post(f"/api/trash/voice_samples/{archived['id']}/restore").status_code == 204
+    after = studio.c.get(path).json()
+    assert after["text"] == "Замена" and after["sample_count"] == 2
+    old = next(sample for sample in after["samples"] if sample["id"] == archived["id"])
+    assert old["media_id"] == before["samples"][0]["media_id"] and old["text"] == "Первая запись"

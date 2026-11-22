@@ -4,11 +4,14 @@
 import json
 import logging
 
+import httpx
+
 import cleaner_route
 import sections
 import state
 import translate_text
-from test_cleaner_route_chat import KEY, PROVIDER, cleaner_gw, settings  # noqa: F401 — фикстура
+from conftest import add_connection
+from test_cleaner_route_chat import KEY, PROVIDER, allow, cleaner_gw, settings  # noqa: F401 — фикстура
 from test_translate import THREE, owner_of, parts_of, start, wait_row
 
 MODEL = "gpt-x"
@@ -61,6 +64,31 @@ def test_detect_goes_through_cleaner(cleaner_gw):
     assert "stream" not in detect and detect["messages"][-1]["content"] == "Hello there."    # определение — без потока
     assert [t.headers["x-cleaner-chat"] for t in gw.turns] == [gw.chats[0]] * 2 and len(gw.chats) == 1
     assert all(t.headers["x-cleaner-upstream"] == PROVIDER for t in gw.turns) and chunk["stream"] is True
+
+
+def test_read_refuses_external_speech_for_a_translation_restored_by_cleaner(cleaner_gw):
+    s, gw = cleaner_gw
+    translating(s, gw)
+    gw.script = [["Привет."]]
+    row = translate(s, gw, "Hello there.")
+    assert row["state"] == "done"
+    uid = owner_of(gw.conn_id)
+    assert s.c.delete(f"/api/connections/{gw.conn_id}").status_code == 204
+    assert contexts() == []
+    allow("8.8.8.8:443")
+    hits = []
+
+    async def speech(request):
+        hits.append(request.url.path)
+        return httpx.Response(500)
+
+    s.gw.hosts["8.8.8.8:443"] = speech
+    ext = add_connection(s, base_url="https://8.8.8.8/v1", sections=["speech"], name="voice")
+    sections.set_models(uid, "speech", ext, ["tts-1"])
+    response = s.c.post("/api/speeches/read", json={"text": row["text"],
+                                                  "origin": {"kind": "translate", "id": row["id"]}})
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "cleaner_translate"
+    assert not hits and state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
 
 
 def test_models_refresh_goes_through_cleaner(cleaner_gw):

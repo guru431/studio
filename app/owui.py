@@ -36,6 +36,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, replace
 from typing import Annotated, Literal
 from urllib.parse import unquote
+from weakref import WeakValueDictionary
 
 import httpx
 from cryptography import x509
@@ -101,6 +102,8 @@ MIME = re.compile(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,
 
 #: uid Студии → моменты неудачных входов (и идущих попыток) по `clock.NOW`
 FAILS: dict[int, list[float]] = {}
+#: Отправка с вложениями и удаление черновика одной учётки не должны идти одновременно.
+FILE_LOCKS: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
 NOT_FOUND = {"code": "not_found", "message": "такой учётки Open WebUI нет"}
 OFFLINE = {"code": "owui_offline", "message": "Open WebUI не отвечает"}
@@ -188,9 +191,10 @@ class OptionAnswer(BaseModel):
     """Выбранный вариант вопроса `ask_user` — как его шлёт `AskUserCard.svelte` Open WebUI 0.13."""
     model_config = ConfigDict(extra="forbid")
     type: Literal["option"]
-    option_index: int = Field(ge=0, le=16)
-    label: str = Field(max_length=200)
-    description: str = Field(max_length=2000)
+    option_index: int = Field(ge=0, le=owui_view.OPTION_INDEX_MAX, strict=True)
+    # Старые страницы присылают обе строки. В Open WebUI уходят исходные строки выбранного варианта.
+    label: str | None = Field(default=None, max_length=owui_view.OPTION_LABEL_MAX)
+    description: str | None = Field(default=None, max_length=owui_view.OPTION_DESCRIPTION_MAX)
 
 
 class OtherAnswer(BaseModel):
@@ -450,7 +454,8 @@ async def _config_trusting(acc, sha256: str | None) -> Account:
         if not _untrusted(e) or acc.cert_pem:
             raise
         acc = replace(acc, cert_pem=await _confirm(acc, sha256))
-        version = await _config(acc)
+        async with _errors(acc):
+            version = await _config(acc)
     return replace(acc, version=version)
 
 
@@ -748,7 +753,20 @@ async def _chat_files(acc, chat: str | None, parent: str | None) -> list[dict]:
     return _view(acc, lambda raw: owui_view.chat_files(raw, parent), _ok(acc, response, dict))
 
 
-async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tuple[str | None, str, bool]:
+def _file_lock(aid: int) -> asyncio.Lock:
+    return FILE_LOCKS.setdefault(aid, asyncio.Lock())
+
+
+async def _send(acc, body: SendIn, chat: str | None, parent: str | None, request: Request) -> tuple[str | None, str, bool]:
+    if not body.files:
+        return await _send_turn(acc, body, chat, parent, request)
+    async with _file_lock(acc.id):
+        auth.recheck(request)
+        return await _send_turn(acc, body, chat, parent, request)
+
+
+async def _send_turn(acc, body: SendIn, chat: str | None, parent: str | None,
+                     request: Request) -> tuple[str | None, str, bool]:
     """Серверный ход Open WebUI 0.13 (`main.py::chat_completion`): сообщение и ответ с id Студии, `session_id` сокета
     Студии (без него Open WebUI не включает встроенные инструменты), историю Open WebUI берёт из своей базы.
     `files` — прежние документы чата и новые вложения-не-картинки, без повторов (как страница Open WebUI 0.13.4).
@@ -797,8 +815,14 @@ async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tu
     params = ui.get("params") if isinstance(ui.get("params"), dict) else {}
     if params.get("tool_approval_mode") in APPROVAL_MODES:            # `full` Студия не шлёт никогда
         payload["params"] = {"tool_approval_mode": params["tool_approval_mode"]}
+    auth.recheck(request)
     owui_link.track(acc, chat or "", answer_id)                        # события ответа идут сразу за ответом POST
     try:
+        # По сетевой ошибке нельзя узнать, добавил ли Open WebUI сообщение. Сразу снимаем право удалить его файлы.
+        if items:
+            placeholders = ", ".join("?" for _ in items)
+            state.DB.execute(f"DELETE FROM owui_file_drafts WHERE account_id = ? AND file_id IN ({placeholders})",
+                             (acc.id, *(item["id"] for item in items)))
         response = await call(acc, "POST", "/api/chat/completions", json=payload)
         _cut_status(acc, response, NO_CHAT)
         result = _ok(acc, response, dict)
@@ -825,7 +849,7 @@ async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tu
 @router.post("/accounts/{aid}/chats", status_code=201)
 async def new_chat(aid: int, body: SendIn, request: Request):
     acc = load(request.state.user.id, aid)
-    chat, message_id, _ = await _send(acc, body, None, None)
+    chat, message_id, _ = await _send(acc, body, None, None, request)
     return {"chat_id": chat, "message_id": message_id}
 
 
@@ -833,7 +857,7 @@ async def new_chat(aid: int, body: SendIn, request: Request):
 async def send_message(aid: int, chat: str, body: ContinueIn, request: Request):
     acc = load(request.state.user.id, aid)
     chat = _owui_id(chat, NO_CHAT)
-    _, message_id, queued = await _send(acc, body, chat, _owui_id(body.parent_id, NO_CHAT))
+    _, message_id, queued = await _send(acc, body, chat, _owui_id(body.parent_id, NO_CHAT), request)
     return {"message_id": message_id, "queued": queued}
 
 
@@ -849,6 +873,31 @@ async def stop(aid: int, chat: str, request: Request):
     return Response(status_code=204)
 
 
+async def _resolve_answers(acc, chat: str, message_id: str, call_id: str,
+                           submitted: dict[str, OptionAnswer | OtherAnswer]) -> dict:
+    response = await call(acc, "GET", f"/api/v1/chats/{chat}")
+    _cut_status(acc, response, NO_CHAT)
+    questions = _view(acc, lambda raw: owui_view.call_questions(raw, message_id, call_id), _ok(acc, response, dict))
+    by_id = {q["id"]: q for q in questions}
+    answers = {}
+    for key, answer in submitted.items():
+        question = by_id.get(key)
+        if not question:
+            raise HTTPException(422, ANSWERS)
+        if isinstance(answer, OptionAnswer):
+            index = answer.option_index
+            if index >= len(question["options"]):
+                raise HTTPException(422, ANSWERS)
+            answers[key] = {"type": "option", "option_index": index, **question["options"][index]}
+        elif question["allow_other"]:
+            answers[key] = answer.model_dump()
+        else:
+            raise HTTPException(422, ANSWERS)
+    if answers.keys() != by_id.keys() or not answers:
+        raise HTTPException(422, ANSWERS)
+    return answers
+
+
 @router.post("/accounts/{aid}/chats/{chat}/resolve", status_code=204)
 async def resolve(aid: int, chat: str, body: ResolveIn, request: Request):
     """Решение паузы — `resolve` Open WebUI 0.13 (`utils/tool_approval.py`): `approve` и `reject` — подтверждение
@@ -860,7 +909,7 @@ async def resolve(aid: int, chat: str, body: ResolveIn, request: Request):
         raise HTTPException(422, ANSWERS)
     payload: dict = {"call_id": body.call_id, "action": body.action}
     if body.answers is not None:
-        payload["answers"] = {key: answer.model_dump() for key, answer in body.answers.items()}
+        payload["answers"] = await _resolve_answers(acc, chat, message_id, body.call_id, body.answers)
     await owui_link.ensure(acc)                                        # события продолжения — через сокет Студии
     owui_link.track(acc, chat, message_id)
     try:
@@ -894,6 +943,37 @@ async def _upload_body(request: Request) -> bytes:
     return bytes(raw)
 
 
+async def _delete_remote_file(acc, file_id: str) -> None:
+    if file_id.lower() == "all":             # служебный маршрут Open WebUI, не идентификатор файла
+        raise HTTPException(404, NO_FILE)
+    response = await call(acc, "DELETE", f"/api/v1/files/{file_id}")
+    if response.status_code != 404:    # при повторе файл уже может быть удалён
+        _cut_status(acc, response, NO_FILE)
+        if not response.is_success:
+            raise shape_error(acc)
+
+
+async def _cleanup_upload(acc, file_id: str) -> None:
+    try:
+        await _delete_remote_file(acc, file_id)
+    except HTTPException as error:
+        log.info("owui %d: не удалось убрать незавершённую загрузку (код %d)", acc.id, error.status_code)
+
+
+@router.delete("/accounts/{aid}/files/{fid}", status_code=204)
+async def discard_file(aid: int, fid: str, request: Request):
+    acc = load(request.state.user.id, aid)
+    fid = _owui_id(fid, NO_FILE)
+    args = (aid, fid)
+    async with _file_lock(aid):
+        auth.recheck(request)
+        if not state.DB.execute("SELECT 1 FROM owui_file_drafts WHERE account_id = ? AND file_id = ?", args).fetchone():
+            raise HTTPException(404, NO_FILE)
+        await _delete_remote_file(acc, fid)
+        state.DB.execute("DELETE FROM owui_file_drafts WHERE account_id = ? AND file_id = ?", args)
+    return Response(status_code=204)
+
+
 @router.post("/accounts/{aid}/files")
 async def upload(aid: int, request: Request):
     """Вложение: тело — сам файл до `FILE_MAX`, имя — заголовком `X-Studio-Name` (как `documents`), тип —
@@ -914,20 +994,31 @@ async def upload(aid: int, request: Request):
         raise HTTPException(413, TOO_LARGE)
     _cut_status(acc, response, NO_FILE)
     file_id = _ok(acc, response, dict).get("id")
-    if not isinstance(file_id, str) or not OWUI_ID.fullmatch(file_id):
+    if (not isinstance(file_id, str) or not OWUI_ID.fullmatch(file_id) or not file_id.strip(".")
+            or file_id.lower() == "all"):
         log.warning("owui %d: ответ загрузки без id", acc.id)
         raise shape_error(acc)
-    deadline, stage = clock.NOW() + FILE_WAIT_SEC, "completed"
-    while not image:
-        status = await call(acc, "GET", f"/api/v1/files/{file_id}/process/status")
-        _cut_status(acc, status, NO_FILE)
-        stage = _ok(acc, status, dict).get("status")
-        if stage in ("completed", "failed"):
-            break
-        if clock.NOW() >= deadline:
-            log.info("owui %d: файл не обработан за %d с", acc.id, FILE_WAIT_SEC)
-            raise HTTPException(504, FILE_SLOW)
-        await clock.SLEEP(FILE_POLL_SEC)
+    try:
+        deadline, stage = clock.NOW() + FILE_WAIT_SEC, "completed"
+        while not image:
+            status = await call(acc, "GET", f"/api/v1/files/{file_id}/process/status")
+            _cut_status(acc, status, NO_FILE)
+            stage = _ok(acc, status, dict).get("status")
+            if stage in ("completed", "failed"):
+                break
+            if clock.NOW() >= deadline:
+                log.info("owui %d: файл не обработан за %d с", acc.id, FILE_WAIT_SEC)
+                raise HTTPException(504, FILE_SLOW)
+            await clock.SLEEP(FILE_POLL_SEC)
+        auth.recheck(request)
+    except HTTPException:
+        await _cleanup_upload(acc, file_id)
+        raise
+    if await request.is_disconnected():
+        await _cleanup_upload(acc, file_id)
+        return Response(status_code=204)
+    _row(acc.user_id, aid)
+    state.DB.execute("INSERT OR IGNORE INTO owui_file_drafts(account_id, file_id) VALUES (?, ?)", (aid, file_id))
     log.info("owui %d: файл загружен, байт %d%s", acc.id, len(data), ", обработка не удалась" if stage == "failed" else "")
     found = {"id": file_id, "name": name, "kind": "image" if image else "file"}
     return {**found, "failed": True} if stage == "failed" else found
@@ -1017,6 +1108,7 @@ async def connect(body: ConnectIn, request: Request):
     with _attempt(uid):
         async with _errors(target):
             target = await _config_trusting(target, body.cert_sha256)
+        async with _errors(target):
             found = await _signin(target, body.email, body.password)
             if _duplicate(uid, base, found["id"]):
                 raise HTTPException(409, EXISTS)

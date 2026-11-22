@@ -23,6 +23,9 @@ RESULT_MAX = 2000
 ARGS_MAX = 2000
 #: предел длины типа неизвестного элемента, знаков
 TYPE_MAX = 64
+OPTION_LABEL_MAX = 200
+OPTION_DESCRIPTION_MAX = 2000
+OPTION_INDEX_MAX = 16
 #: статусы вызова, в которых ответ ждёт решения (`pause_for_tool_approval` ставит `pending`, прежние версии — `requires_approval`)
 PAUSED = ("pending", "requires_approval")
 KNOWN = ("reasoning", "message", "function_call", "function_call_output")
@@ -127,7 +130,7 @@ def _seconds(item: dict) -> int | None:
     return int(max(0, ended - started)) if started is not None and ended is not None else None
 
 
-def _questions(arguments) -> dict | None:
+def _questions(arguments, *, display: bool = True) -> dict | None:
     """Вопросы `ask_user` (`utils/ask_user.py::normalize_ask_user_request`); не разобралось — `None`."""
     if isinstance(arguments, str):
         try:
@@ -145,6 +148,10 @@ def _questions(arguments) -> dict | None:
             return None
         options = [{"label": _str(o.get("label")) or "", "description": _str(o.get("description")) or ""}
                    for o in raw["options"] if isinstance(o, dict)]
+        if display:
+            options = [{"label": _cut(o["label"], OPTION_LABEL_MAX),
+                        "description": _cut(o["description"], OPTION_DESCRIPTION_MAX)}
+                       for o in options[:OPTION_INDEX_MAX + 1]]
         questions.append({"id": raw["id"], "header": _str(raw.get("header")) or "", "question": raw["question"],
                           "options": options, "allow_other": raw.get("allow_other", allow_other) is not False})
     return {"questions": questions, "allow_other": allow_other}
@@ -270,6 +277,20 @@ def branch(raw_chat: dict) -> dict:
     return {"id": chat_id, "title": _str(raw_chat.get("title")) or _str(chat.get("title")) or "",
             "models": [m for m in models if isinstance(m, str)] if isinstance(models, list) else [],
             "folder_id": _str(raw_chat.get("folder_id")), "messages": found}
+
+
+def call_questions(raw_chat: dict, message_id: str, call_id: str) -> list[dict]:
+    """Вопросы указанного вызова из сохранённого ответа, независимо от текущей ветки чата."""
+    chat = _dict(_dict(raw_chat, "chat").get("chat"), "chat body")
+    messages = _dict(_dict(chat.get("history"), "history").get("messages"), "messages")
+    message = messages.get(message_id)
+    output = message.get("output") if isinstance(message, dict) else None
+    for call in output if isinstance(output, list) else ():
+        if (isinstance(call, dict) and call.get("type") == "function_call" and call.get("name") == "ask_user"
+                and (call.get("call_id") or call.get("id")) == call_id):
+            found = _questions(call.get("arguments"), display=False)
+            return found["questions"] if found else []
+    return []
 
 
 def chat_files(raw_chat: dict, parent: str) -> list[dict]:

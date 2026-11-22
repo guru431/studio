@@ -124,8 +124,9 @@ def opened(browser, live, cookie, width, path, **options):
 
 def show_panel(page):
     """Телефон: панель выезжает по ☰ (на компьютере она видна всегда)."""
-    if page.viewport_size["width"] < 760 and not page.locator("#owui-panel").is_visible():
-        page.locator("#owui-panel-toggle").click()
+    toggle = page.locator("#owui-panel-toggle")
+    if page.viewport_size["width"] < 760 and toggle.get_attribute("aria-expanded") == "false":
+        toggle.click()
         pw.expect(page.locator("#owui-panel")).to_be_visible()
 
 
@@ -334,7 +335,8 @@ def test_events_update_the_tree(owui_browser, live, fake, width):
     в самом Open WebUI — `link relogin` и поле пароля, после входа — новый поток."""
     cookie = session(live, f"owui-events-{owui_browser.browser_type.name}-{width}")
     aid = connected(live, cookie)
-    calm = fake.add_chat("Calm", updated_at=300)
+    calm = fake.add_chat("Calm", updated_at=300,
+                         messages=talk({"id": "a1", "done": True, "content": "Before relogin"}))
     fake.add_chat("Other", updated_at=200)
     with opened(owui_browser, live, cookie, width, f"owui/{aid}") as page:
         show_panel(page)
@@ -365,15 +367,21 @@ def test_events_update_the_tree(owui_browser, live, fake, width):
         fake.later(fake.emit_event, None, None, {"type": "chat:list", "data": {"chat_id": fresh}})
         pw.expect(page.locator(f".owui-chat[data-chat='{fresh}']")).to_be_visible()
 
+        row.click()
+        answer = page.locator(".owui-msg.assistant .md")
+        pw.expect(answer).to_have_text("Before relogin")
+        show_panel(page)
         fake.revoke_all()                                                    # сессию «Studio» отозвали в Open WebUI
         fake.expire_tokens()
         fake.later(fake.drop)
         pw.expect(page.locator("#owui-relogin")).to_be_visible()
         pw.expect(page.locator(".owui-state")).to_have_class(re.compile(r"\brelogin\b"))
+        fake.chats[calm]["messages"]["a1"]["content"] = "Updated during relogin"
         page.locator("#owui-relogin-password").fill(FakeOwui.PASSWORD)
         page.locator("#owui-relogin-submit").click()
         pw.expect(page.locator(f".owui-chat[data-chat='{fresh}']")).to_be_visible()
         until(page, lambda: len(page.events) == 2)                          # после входа — новый поток
+        pw.expect(answer).to_have_text("Updated during relogin")
         assert fits(page)
         assert not page.problems, page.problems
 
@@ -581,10 +589,28 @@ def test_attach_image(owui_browser, live, fake, width):
     chat = fake.add_chat("Pictures", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "Send it"}))
     cookie = session(live, f"owui-attach-{owui_browser.browser_type.name}-{width}")
     aid = connected(live, cookie)
-    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}", service_workers="block") as page:
         pw.expect(page.locator(".owui-msg.assistant .md")).to_have_text("Send it")
-        page.set_input_files("#owui-attach", files=[{"name": "boat.png", "mimeType": "image/png", "buffer": PNG}])
         chip = page.locator(".owui-att")
+        page.set_input_files("#owui-attach", files=[{"name": "discard.png", "mimeType": "image/png", "buffer": PNG}])
+        pw.expect(chip).to_have_attribute("data-state", "ready")
+        discarded = next(fid for fid, name in fake.file_names.items() if name == "discard.png")
+        chip.locator(".owui-att-remove").click()
+        pw.expect(chip).to_have_count(0)
+        assert discarded not in fake.files
+        uploads = []
+        upload_route = f"**/api/owui/accounts/{aid}/files"
+        page.route(upload_route, lambda route: uploads.append(route))
+        page.set_input_files("#owui-attach", files=[{"name": "remove-while-uploading.png", "mimeType": "image/png",
+                                                     "buffer": PNG}])
+        pw.expect(chip).to_have_attribute("data-state", "uploading")
+        chip.locator(".owui-att-remove").click()
+        until(page, lambda: uploads)
+        uploads[0].continue_()
+        page.unroute(upload_route)
+        pw.expect(chip).to_have_count(0)
+        assert "remove-while-uploading.png" not in fake.file_names.values()
+        page.set_input_files("#owui-attach", files=[{"name": "boat.png", "mimeType": "image/png", "buffer": PNG}])
         pw.expect(chip).to_have_count(1)
         pw.expect(chip).to_have_attribute("data-state", "ready")
         pw.expect(chip.locator(".att-name")).to_have_text("boat.png")
@@ -744,11 +770,15 @@ def test_stream_comes_back_after_the_screen_lock(owui_browser, live, fake, monke
     учётки снова открыт, куски и `done` доходят до ленты."""
     monkeypatch.setattr(owui, "CHECK_SEC", 0)                             # блокировку поток видит на первом событии
     fake.add_model("m1", "Model One")
-    chat = fake.add_chat("Locked", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "Ready"}))
+    fake.add_file("locked-image", PNG, "image/png")
+    chat = fake.add_chat("Locked", models=["m1"], messages=talk({
+        "id": "a1", "done": True, "content": "Ready\n\n![Picture](/api/v1/files/locked-image/content)"}))
     cookie = session(live, f"owui-lock-{owui_browser.browser_type.name}-{width}")
     aid = connected(live, cookie)
     with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
-        pw.expect(page.locator(".owui-msg.assistant[data-id='a1'] .md")).to_have_text("Ready")
+        first = ".owui-msg.assistant[data-id='a1'] .md"
+        pw.expect(page.locator(first)).to_have_text("Ready")
+        loaded_image(page, f"{first} img")
         socket_ready(page, fake)
         page.locator("#owui-input").fill("Write a story")
         page.locator("#owui-send").click()
@@ -763,11 +793,23 @@ def test_stream_comes_back_after_the_screen_lock(owui_browser, live, fake, monke
         delta(fake, chat, message, " lost")                               # вместо куска — `closed`
         until(page, lambda: watchers(aid) == 0)
         page.locator("#lock[open]").wait_for()
+        img = page.locator(f"{first} img")
+        img.evaluate("""img => {
+          img.dataset.retried = 'original';
+          img.src += '?during-lock';
+        }""")
+        page.wait_for_function("""() => {
+          const img = document.querySelector('img[data-retried]');
+          return img?.complete && img.naturalWidth === 0;
+        }""")
         if page.locator("#lock-use-password").is_visible():
             page.locator("#lock-use-password").click()
         page.locator("#lock-password").fill(PASSWORD)
-        page.locator("#lock-password-go").click()
+        with page.expect_response(lambda r: "locked-image?during-lock=" in r.url and "_studio_retry=" in r.url
+                                  and r.status == 200):
+            page.locator("#lock-password-go").click()
         page.locator("#lock[open]").wait_for(state="detached")
+        loaded_image(page, f"{first} img")
         until(page, lambda: watchers(aid) == 1)                         # поток учётки открылся снова
         socket_ready(page, fake)
         delta(fake, chat, message, " upon")

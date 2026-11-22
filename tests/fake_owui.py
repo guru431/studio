@@ -309,6 +309,15 @@ class FakeOwui:
             return self._create_session(request)
         if path.startswith("/api/v1/auths/sessions/") and method == "DELETE":
             return self._revoke(request, path.rsplit("/", 1)[1])
+        if path.startswith("/api/v1/files/") and method == "DELETE":
+            if not self._caller_valid(request):
+                return httpx.Response(401, json={"detail": "Not authenticated"})
+            file_id = path.removeprefix("/api/v1/files/")
+            if self.files.pop(file_id, None) is None:
+                return httpx.Response(404, json={"detail": "Not Found"})
+            self.file_names.pop(file_id, None)
+            self.file_status.pop(file_id, None)
+            return httpx.Response(200, json={"message": "File deleted successfully"})
         if method == "GET" and (path.startswith(("/api/v1/chats/", "/api/v1/folders/", "/api/v1/files/", "/api/tasks/chat/"))
                                 or path == "/api/models"):
             if not self._caller_valid(request):
