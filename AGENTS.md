@@ -38,7 +38,7 @@
 
 ## Команды
 
-- Мост Windows/macOS/Linux для Claude Code, Codex и OpenCode — компонент [agent/](agent/README.md), его правила — [agent/CLAUDE.md](agent/CLAUDE.md).
+- Мост Windows/macOS/Linux для Claude Code, Codex, OpenCode и DeepSeek Harness — компонент [agent/](agent/README.md), его правила — [agent/CLAUDE.md](agent/CLAUDE.md).
   Наборы тестов `main` и `agent` объявлены вместе в `local-config/cron/project-registry.json::studio.tests`.
 - Тесты: `.venv/Scripts/python -m pytest -q` (быстрый набор, 10 процессов pytest-xdist; один
   тест без параллели — `-n0`), `-m integration` (браузер, PowerShell — одним процессом по очереди),

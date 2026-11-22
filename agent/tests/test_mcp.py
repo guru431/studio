@@ -42,6 +42,25 @@ def test_invalid_configuration_is_refused(item):
         mcp.validate({'mcpServers': {'test': item}}, 'claude')
 
 
+def test_deepseek_refuses_sse_and_adapts_stdio_and_http(home, tmp_path):
+    sse = {'mcpServers': {'events': {'type': 'sse', 'url': 'https://mcp.example.com/sse'}}}
+    with pytest.raises(Refused) as error:
+        mcp.validate(sse, 'deepseek')
+    assert error.value.code == 'invalid' and 'SSE' in error.value.message
+    assert mcp.validate(sse, 'opencode') == sse
+    mcp.save(home, tmp_path, 'deepseek', CONFIG)
+    assert mcp.load(home, tmp_path, 'deepseek') == CONFIG and mcp.load(home, tmp_path, 'opencode') == {'mcpServers': {}}
+    with pytest.raises(Refused, match='unsupported'):
+        mcp.deepseek(CONFIG, {})
+    servers = mcp.deepseek(CONFIG, {'agentCapabilities': {'mcpCapabilities': {'http': True}}})
+    assert servers == [{'name': 'local', 'command': 'python', 'args': ['-m', 'example'],
+                        'env': [{'name': 'KEY', 'value': 'secret'}]},
+                       {'name': 'remote', 'type': 'http', 'url': 'https://mcp.example.com/mcp',
+                        'headers': [{'name': 'Authorization', 'value': 'Bearer private'}]}]
+    disabled = {'mcpServers': {'local': {**CONFIG['mcpServers']['local'], 'disabled': True}}}
+    assert mcp.deepseek(disabled, {}) == []
+
+
 async def test_owner_only_mcp_ops_require_open_computer(agent, root):
     pid = projects.pid('demo')
     assert (await agent.handle(req('mcp_get', project=pid)))[0]['code'] == 'closed'

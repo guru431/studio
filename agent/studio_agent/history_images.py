@@ -1,6 +1,8 @@
 """Изображения истории: только ссылки в странице, байты — отдельной защищённой просьбой."""
 
 import base64
+import hashlib
+import re
 from collections import OrderedDict
 from pathlib import Path
 
@@ -57,13 +59,36 @@ def references(content):
     return [reference(index) for index, _ in enumerate(blocks(content))]
 
 
-def payload(content, index, engine, project):
-    """Индекс относится только к изображениям выбранного сообщения; URL никогда не загружаются."""
+def _deepseek(block, root):
+    """Вложение DeepSeek Harness — по sha256 из хранилища `<DSH_HOME>/attachments/v1/objects`; только чтение."""
+    attachment = block.get("attachment")
+    digest = attachment.get("attachmentId") if isinstance(attachment, dict) else None
+    match = re.fullmatch(r"sha256:([0-9a-f]{64})", digest) if isinstance(digest, str) else None
+    if match is None or root is None:
+        raise Refused("unsupported", "В истории нет сохранённых байтов изображения")
+    name = match.group(1)
+    try:
+        with (Path(root) / "attachments" / "v1" / "objects" / name[:2] / name).open("rb") as source:
+            raw = source.read(image_input.FILE_MAX + 1)
+    except OSError:
+        raise Refused("unsupported", "В истории нет сохранённых байтов изображения") from None
+    if len(raw) > image_input.FILE_MAX:
+        raise Refused("too_large", "Изображение больше 10 МиБ")
+    if hashlib.sha256(raw).hexdigest() != name:
+        raise Refused("unsupported", "В истории нет сохранённых байтов изображения")
+    return {"mime": image_input.mime_of(raw), "data": base64.b64encode(raw).decode("ascii")}
+
+
+def payload(content, index, engine, project, *, root=None):
+    """Индекс относится только к изображениям выбранного сообщения; URL никогда не загружаются.
+    `root` — `DSH_HOME` для вложений DeepSeek Harness."""
     images = blocks(content)
     if type(index) is not int or not 0 <= index < len(images):
         raise Refused("not_found", "Изображение отсутствует в сообщении")
     block = images[index]
-    if engine == "claude":
+    if engine == "deepseek":
+        result = _deepseek(block, root)
+    elif engine == "claude":
         source = block.get("source")
         if not isinstance(source, dict) or source.get("type") != "base64":
             raise Refused("unsupported", "В истории нет сохранённых байтов изображения")

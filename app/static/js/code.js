@@ -658,6 +658,7 @@ function sessions(mine, p, status) {
     worktrees: !!p.worktrees,
     worktreeOpened: async () => { lists.delete(String(p.aid)); await panel.select(p.aid); },
     created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode,
+    deepseek: !!p.deepseek,
     failed: (err) => {
       if (mine === gen) failed(err, p.aid, status);
     } });
@@ -867,6 +868,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   p.chatSearch = !!agent?.chat_search;
   p.worktrees = !!agent?.worktrees;
   p.opencode = agent?.opencode || null;
+  p.deepseek = agent?.deepseek || null;
   p.offline = !!agent && !agent.online;
   p.canStart = false;
   if (agent && id) {

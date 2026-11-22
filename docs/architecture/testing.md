@@ -19,7 +19,7 @@ Cleaner: `.venv/Scripts/python -m pytest -q -n0 tests/test_cleaner.py`; скво
 
 Строгий режим полного уровня — `STUDIO_TESTS_STRICT=1` в окружении команд полного уровня обоих наборов:
 пропуск теста или модуля (`pytest.skip`, `importorskip`) становится отказом — нет bash, PowerShell, git, node,
-браузера, движка Playwright той же версии, CLI Codex/OpenCode или соседнего Cleaner. Пропуском остаются метки
+браузера, движка Playwright той же версии, CLI Codex/OpenCode/DeepSeek Harness или соседнего Cleaner. Пропуском остаются метки
 `skip`/`skipif` (платформа объявлена заранее), xfail и причины из `DELIBERATE_SKIPS` своего `conftest.py`:
 эмуляция, которой нет у движка, WAV в WebKit на Windows, права на символические ссылки, живая приёмка без
 реквизитов. Логика — `tools/pytest_support.py` (`strict_skip`), проверки — `tests/test_strict_skips.py`; новый
@@ -193,6 +193,12 @@ executor в очереди без пробуждения и подвешивал
 завершении хода, без отдельного короткого таймаута на файловые операции в потоке. Общий срок pytest остаётся
 ограничением зависания; управляемая задержка записи и завершение без карточки проверяются в
 `agent/tests/test_turn_events.py`.
+DeepSeek Harness в быстром наборе моста — подставной ACP-процесс и файлы сессий на фикстурах живой пробы
+(`agent/tests/fixtures/deepseek/`, без ключей и путей), подставные `winreg`, Node и `js-yaml`; настоящий `js-yaml`
+установки — `integration` `agent/tests/test_deepseek_settings.py` с `DSH_TEST_PACKAGE`. Настоящий DSH — только
+`manual` `agent/tests/test_deepseek_live.py`: временные проект и `DSH_HOME`, провайдер из окружения теста
+(`DSH_LIVE_BASE_URL`, `DSH_LIVE_MODEL`, ключ `DSH_LIVE_API_KEY` только окружением); без них — осознанный пропуск.
+Сценарии страницы — `tests/test_ui_deepseek.py` (320/1280 px).
 Сценарии отмены записи медиа выполняются через portal работающего TestClient. Фикстура `write_gate` в
 `tests/test_media.py` удерживает I/O до явного разрешения: автоматический выход по пятисекундному сроку
 позволял сохранению завершиться раньше проверки отмены. При ошибке теста затвор открывается до закрытия

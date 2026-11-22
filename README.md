@@ -19,7 +19,7 @@
   <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-your_server-c45100">
   <img alt="FastAPI" src="https://img.shields.io/badge/backend-FastAPI-009688">
   <img alt="Installable PWA" src="https://img.shields.io/badge/web-installable_PWA-5265a2">
-  <img alt="Claude Code, Codex and OpenCode" src="https://img.shields.io/badge/agents-Claude_Code_·_Codex_·_OpenCode-555">
+  <img alt="Claude Code, Codex, OpenCode and DeepSeek Harness" src="https://img.shields.io/badge/agents-Claude_Code_·_Codex_·_OpenCode_·_DeepSeek_Harness-555">
 </p>
 
 ![Studio coding workspace: project navigation, agent steps, code and chat controls](docs/screenshots/agents.png)
@@ -107,7 +107,7 @@ The server runs on infrastructure you control. Connect local models through the 
 - Separate queues for text and file/photo work, so a short paragraph can run alongside a long document.
 - Optional **Cleaner integration** for chat and translation with data cleaning; see the [user guide](docs/guide.ru.md#cleaner-чат-и-перевод-с-очисткой-данных).
 
-### Agents: Claude Code, Codex and OpenCode
+### Agents: Claude Code, Codex, OpenCode and DeepSeek Harness
 
 Use installed coding agents on your own Windows, macOS or Linux computers from a desktop browser or phone.
 
@@ -120,6 +120,7 @@ Use installed coding agents on your own Windows, macOS or Linux computers from a
 - Save reusable quick actions and choose the preferred agent order and defaults for new chats.
 - Search project files with **@file** suggestions and search local agent conversation content through the bridge.
 - Fork supported Claude/Codex conversations, inspect available subagent sessions and create **Git worktrees** as separate projects.
+- DeepSeek Harness (npm CLI, Python package or Desktop) runs with the models, providers, MCP servers and memory from its own Web or Desktop profile; Studio lists any profile settings it could not apply and shows the DeepSeek balance for the official provider. A chat open in DeepSeek Harness on the computer cannot be continued from Studio until that app is closed; there is no forking, subagent tree or chat deletion, and access is chosen when the chat is created.
 - Browse and edit files, preview Markdown/PDF/images, create folders, rename, move and delete. Conflict checks protect against overwriting a file changed on the computer.
 - Inspect Git changes and diffs, branch/upstream status, unpushed commits, configured remotes and public GitHub synchronization.
 - Ask the current agent to validate, commit, push or deploy through project-aware Git actions; these run as agent tasks under its permissions.
@@ -183,7 +184,7 @@ Studio is the application layer. Models and inference services are configured se
 | Server | Linux, Docker Compose and systemd; the supplied production profile also uses an Apache HTTPS reverse proxy |
 | Data | Local disk for SQLite; the supplied Docker profile expects a mounted CIFS share for media |
 | Models | srvllm gateway for the complete local media/OCR workflow; OpenAI-compatible endpoints for supported individual tasks |
-| Coding agents | Windows, macOS or Linux computer, Studio bridge and at least one installed, authenticated Claude Code, Codex or OpenCode CLI |
+| Coding agents | Windows, macOS or Linux computer, Studio bridge and at least one installed, authenticated Claude Code, Codex or OpenCode CLI, or DeepSeek Harness |
 | Optional services | Exa for chat web tools, Web Push or an HTTPS ntfy server for notifications, Cleaner for data cleaning |
 | Deployment workstation | Windows with Git Bash, the project `.venv` and `powershell.exe` (builds the bridge EXE); a Mac reachable over SSH (builds the macOS PKG); the `md2pdf.py` converter (below) |
 
@@ -232,7 +233,7 @@ flowchart LR
     APP --> MEDIA[("Media storage")]
     APP --> MODELS["srvllm / allowed model services"]
     APP <-->|WebSocket| BRIDGE["Windows / macOS / Linux bridge"]
-    BRIDGE --> CLI["Claude Code / Codex / OpenCode"]
+    BRIDGE --> CLI["Claude Code / Codex / OpenCode / DeepSeek Harness"]
     BRIDGE --> PROJECTS["Local projects, files and Git"]
 ```
 

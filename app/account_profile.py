@@ -44,8 +44,8 @@ router = APIRouter(prefix="/api")
 
 
 class CodeChoice(BaseModel):
-    priority: StrictInt | None = Field(None, ge=1, le=3)
-    model: str | None = Field(None, pattern=r"^[A-Za-z0-9._:\[\]/@+-]{1,300}$")
+    priority: StrictInt | None = Field(None, ge=1, le=4)
+    model: str | None = Field(None, max_length=310)  # вид — по помощнику (`MePatch._code_defaults`)
     effort: str | None = Field(None, pattern=r"^[A-Za-z0-9._-]{1,64}$")
     access: Literal["default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk",
                     "read-only", "workspace-write", "danger-full-access"] | None = None
@@ -69,7 +69,7 @@ class MePatch(BaseModel):
     accent: object = None                   # проверка — по ACCENTS в patch_me: отказ — 422 `accent`
     timezone: str | None = Field(None, min_length=1, max_length=100)
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
-    code_defaults: dict[Literal["claude", "codex", "opencode"], CodeChoice] | None = None
+    code_defaults: dict[Literal["claude", "codex", "opencode", "deepseek"], CodeChoice] | None = None
     code_quick_actions: list[CodeQuickAction] = Field(default_factory=list, max_length=20)
     computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
     #: язык интерфейса устройства — его push и ntfy (только этой сессии; push-sync.js после смены языка)
@@ -92,15 +92,16 @@ class MePatch(BaseModel):
         if value is None or any(engine == "claude" and choice.effort not in
                                (None, "low", "medium", "high", "xhigh", "max") for engine, choice in value.items()):
             raise ValueError("code_defaults")
+        import bridge
+        import claude_code
+
+        models = {"opencode": bridge.OPENCODE_MODEL_ID, "deepseek": bridge.DEEPSEEK_MODEL_ID}
         for engine, choice in value.items():
-            if engine != "opencode" and choice.model is not None and not re.fullmatch(r"[A-Za-z0-9._:\[\]-]{1,100}", choice.model):
+            if choice.model is not None and not (models.get(engine) or bridge.MODEL_ID).fullmatch(choice.model):
                 raise ValueError("model")
             if engine == "codex" and choice.effort not in (None, "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
                 raise ValueError("effort")
-            allowed = {"codex": ("read-only", "workspace-write", "danger-full-access"),
-                       "claude": ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk"),
-                       "opencode": ("default", "auto")}[engine]
-            if choice.access is not None and choice.access not in allowed:
+            if choice.access is not None and choice.access not in claude_code.ACCESS[engine]:
                 raise ValueError("access")
         return value
 
@@ -194,9 +195,11 @@ async def patch_me(body: MePatch, request: Request):
         stored = json.loads(state.DB.execute("SELECT code_defaults FROM users WHERE id = ?", (uid,)).fetchone()[0])
         for engine, choice in body.code_defaults.items():
             stored[engine] = {**stored.get(engine, {}), **choice.model_dump(exclude_unset=True)}
-        priorities = [stored.get(engine, {}).get("priority") for engine in ("claude", "codex", "opencode")]
-        if any(value is not None for value in priorities) and set(priorities) != {1, 2, 3}:
-            raise HTTPException(422, {"code": "priority", "message": "укажите разный приоритет от 1 до 3 для каждого агента"})
+        priorities = [stored.get(engine, {}).get("priority") for engine in ("claude", "codex", "opencode", "deepseek")]
+        # прежний порядок трёх без DeepSeek Harness остаётся верным: он — последним
+        if (any(value is not None for value in priorities) and set(priorities) != {1, 2, 3, 4}
+                and not (priorities[3] is None and set(priorities[:3]) == {1, 2, 3})):
+            raise HTTPException(422, {"code": "priority", "message": "укажите разный приоритет от 1 до 4 для каждого агента"})
         changes["code_defaults"] = json.dumps(stored)
     if "code_quick_actions" in sent:
         changes["code_quick_actions"] = json.dumps([action.model_dump() for action in body.code_quick_actions])

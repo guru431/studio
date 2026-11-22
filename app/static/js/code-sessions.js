@@ -19,12 +19,14 @@ import { el } from './ui.js';
 import { worktreeView } from './code-worktrees.js';
 
 const UNTITLED = tr("Новый чат");
+/** Короткие подписи кнопок нового чата: четыре кнопки в ряд помещаются и на 320 px. */
+const SHORT = { claude: 'Claude', deepseek: 'DeepSeek' };
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
+export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, deepseek = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
   let found = Array.isArray(items) ? items : null;
@@ -97,12 +99,12 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
   const startersRow = starts ? el('div', { class: 'code-chat-starters', role: 'group', 'aria-label': tr("Новый чат") }) : null;
   if (starts) {
-    const starters = engineOrder(me?.code_defaults).filter((engine) => engine === 'claude'
-      || (engine === 'codex' ? codex : opencode)).map((engine) => {
+    const offered = { claude: true, codex, opencode, deepseek };
+    const starters = engineOrder(me?.code_defaults).filter((engine) => offered[engine]).map((engine) => {
       const id = engine === 'claude' ? 'code-new-chat' : `code-new-${engine}`;
       const label = tr("Новый чат {0}", ENGINE_NAMES[engine]);
       const add = el('button', { type: 'button', id, class: 'code-chat-link code-new-chat', title: label,
-        'aria-label': label }, engine === 'claude' ? 'Claude' : ENGINE_NAMES[engine]);
+        'aria-label': label }, SHORT[engine] || ENGINE_NAMES[engine]);
       add.addEventListener('click', () => busy(add, async () => {
         const { chat } = await api('POST', engine === 'claude' ? base : `${base}?engine=${engine}`);
         if (alive) created(chat, engine);

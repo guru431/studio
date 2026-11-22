@@ -329,7 +329,7 @@ def test_new_chat_writes_a_row_and_an_event_but_not_the_bridge(studio):
     assert len(m.requests) == before
 
 
-@pytest.mark.parametrize("engine", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("engine", ["claude", "codex", "opencode", "deepseek"])
 def test_new_chat_keeps_studio_origin_before_the_bridge_tag(studio, engine):
     """Первый ход ещё не записал метку: происхождение сохраняется после обновления и закрытия чата."""
     aid, machine, link = setup(studio)

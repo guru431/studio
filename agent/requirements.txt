@@ -9,3 +9,5 @@ pyobjc-framework-ScreenCaptureKit==13.0; sys_platform == "darwin"
 cryptography==50.0.2; sys_platform != "darwin" or platform_machine != "x86_64"
 # 48.x — последняя ветка с готовыми колёсами macOS Intel; Rust для установки не нужен.
 cryptography==48.0.1; sys_platform == "darwin" and platform_machine == "x86_64"
+# История DeepSeek Harness читается из его сжатых файлов сессий; Python 3.14+ распаковывает сам (compression.zstd).
+zstandard==0.25.0; python_version < "3.14"

@@ -346,7 +346,7 @@ exec "$app/Contents/Resources/runtime/$arch/bin/python3" -I -B \\
     resources = work / "resources"
     resources.mkdir()
     for name, body in {
-        "welcome": "<h1>Studio Agent</h1><p>Мост Claude Code, Codex и OpenCode для Studio.</p>"
+        "welcome": "<h1>Studio Agent</h1><p>Мост Claude Code, Codex, OpenCode и DeepSeek Harness для Studio.</p>"
                    "<p>Установщик содержит Python и все зависимости для Intel и Apple Silicon. Интернет для установки не нужен.</p>"
                    "<p>Перед повторной установкой дождитесь завершения заданий и выйдите из моста через меню.</p>",
         "conclusion": "<h1>Мост установлен</h1><p>В окне Studio Agent войдите в свою учётную запись Studio.</p>"

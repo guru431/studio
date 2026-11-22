@@ -83,7 +83,7 @@ PID_RE = re.compile(r"[0-9a-f]{16}")
 STATUS = {"closed": 409, "pin": 403, "pin_locked": 403, "pin_needed": 409, "not_found": 404, "outside": 403,
           "too_large": 413, "binary": 415, "conflict": 409, "busy": 409, "running": 409, "idle": 409, "gone": 410,
           "not_git": 409, "git_unavailable": 409, "invalid": 422, "read_only": 409, "unsupported": 409, "owned": 409, "exists": 409,
-          "desktop_disabled": 409, "desktop_unavailable": 409}
+          "desktop_disabled": 409, "desktop_unavailable": 409, "writer_active": 409}
 PIN_MAX = 64
 TEXT_MAX = 100_000
 IMAGE_MAX = 10 * 1024 * 1024
@@ -111,7 +111,8 @@ NO_MODEL = "такой модели нет на компьютере"
 NO_EFFORT = "такого усилия нет на компьютере"
 ACCESS = {"codex": ("read-only", "workspace-write", "danger-full-access"),
           "claude": ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk"),
-          "opencode": ("default", "auto")}
+          "opencode": ("default", "auto"),
+          "deepseek": ("default", "read-only", "workspace-write", "danger-full-access")}
 
 
 class Open(BaseModel):
@@ -175,7 +176,7 @@ class TurnAttachment(BaseModel):
 
 
 class ChatSettings(BaseModel):
-    model: str | None = Field(None, max_length=300)
+    model: str | None = Field(None, max_length=310)
     effort: str | None = Field(None, max_length=64)
     agent_mode: str | None = Field(None, min_length=1, max_length=100, pattern=r'^[^\x00-\x1f]+$')
     additional_directories: list[str] | None = Field(None, max_length=8)
@@ -462,7 +463,7 @@ def chat_engine(request: Request, aid: int, chat: str | None = None) -> str:
 def require_engine(aid: int, engine: str) -> None:
     link = bridge.LINKS.get(aid)
     if link is not None and engine not in link.hello:
-        name = {"codex": "Codex", "opencode": "OpenCode"}[engine]
+        name = {"codex": "Codex", "opencode": "OpenCode", "deepseek": "DeepSeek Harness"}[engine]
         raise _refuse(409, "unsupported", f"обновите мост и установите {name} на компьютере")
 
 
@@ -621,7 +622,8 @@ class McpSettings(BaseModel):
 
 
 @router.get("/agents/{aid}/projects/{pid}/mcp")
-async def mcp_settings(aid: int, pid: str, request: Request, engine: Literal["claude", "codex", "opencode"] = "claude"):
+async def mcp_settings(aid: int, pid: str, request: Request,
+                       engine: Literal["claude", "codex", "opencode", "deepseek"] = "claude"):
     project_access.owner(request, aid)
     check_pid(pid)
     require_capability(aid, "mcp")
@@ -630,7 +632,7 @@ async def mcp_settings(aid: int, pid: str, request: Request, engine: Literal["cl
 
 @router.put("/agents/{aid}/projects/{pid}/mcp")
 async def save_mcp_settings(aid: int, pid: str, body: McpSettings, request: Request,
-                            engine: Literal["claude", "codex", "opencode"] = "claude"):
+                            engine: Literal["claude", "codex", "opencode", "deepseek"] = "claude"):
     project_access.owner(request, aid)
     check_pid(pid)
     require_capability(aid, "mcp")
@@ -684,7 +686,7 @@ async def software_update(aid: int, tool: str, request: Request):
 
     own_agent(request, aid)
     require_capability(aid, 'software_versions')
-    if tool not in ('claude', 'codex', 'opencode', 'all'):
+    if tool not in ('claude', 'codex', 'opencode', 'deepseek', 'all'):
         raise _refuse(422, 'invalid', 'неизвестная программа')
     if tool == 'all':
         require_capability(aid, 'software_update_all')
@@ -798,14 +800,22 @@ async def worktree_create(aid: int, pid: str, body: WorktreeName, request: Reque
     return _relay(await ask(request, aid, "worktree_create", project=pid, query=body.name))
 
 
+def _forkable(aid: int, engine: str) -> None:
+    """Ветка чата и подагенты: у OpenCode — с `opencode_features`; у DeepSeek Harness их нет (мост ответил бы
+    `unsupported`) — 409 до моста."""
+    if engine == "deepseek":
+        raise _refuse(409, "unsupported", "DeepSeek Harness не поддерживает ветки чата и подагентов")
+    if engine == 'opencode':
+        require_capability(aid, 'opencode_features')
+
+
 @router.get("/agents/{aid}/projects/{pid}/chats/{chat}/subagents")
 async def subagents(aid: int, pid: str, chat: str, request: Request):
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
     require_capability(aid, "subagents")
-    if chat_engine(request, aid, chat) == 'opencode':
-        require_capability(aid, 'opencode_features')
+    _forkable(aid, chat_engine(request, aid, chat))
     return _relay(await ask(request, aid, "subagents", project=pid, chat=chat))
 
 
@@ -815,8 +825,7 @@ async def subagent_history(aid: int, pid: str, chat: str, body: SubagentId, requ
     check_pid(pid)
     check_chat(chat)
     require_capability(aid, "subagents")
-    if chat_engine(request, aid, chat) == 'opencode':
-        require_capability(aid, 'opencode_features')
+    _forkable(aid, chat_engine(request, aid, chat))
     return _relay(await ask(request, aid, "subagent_history", project=pid, chat=chat, request_id=body.request_id))
 
 
@@ -827,8 +836,7 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
     check_chat(chat)
     require_capability(aid, "chat_fork")
     engine = chat_engine(request, aid, chat)
-    if engine == 'opencode':
-        require_capability(aid, 'opencode_features')
+    _forkable(aid, engine)
     now = clock.NOW()
     recent = NEW_CHATS.setdefault(aid, deque())
     while recent and now - recent[0] >= 60:

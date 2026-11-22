@@ -1,4 +1,4 @@
-"""MCP проекта: настройки владельца под DPAPI, адаптеры трёх движков.
+"""MCP проекта: настройки владельца под DPAPI, адаптеры четырёх движков.
 
 Конфиг не попадает в репозиторий проекта и не меняет настройки установленных CLI.
 Чтение и запись вызываются из рабочего потока; имена/секреты в журнал не идут.
@@ -18,7 +18,7 @@ from .errors import Refused
 
 MAX_BYTES = 64 * 1024
 MAX_SERVERS = 32
-ENGINES = ("claude", "codex", "opencode")
+ENGINES = ("claude", "codex", "opencode", "deepseek")
 NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
@@ -67,6 +67,8 @@ def validate(config, engine):
                 raise Refused("invalid", "Для HTTP/SSE задайте URL без пароля и headers (объект строк)")
             if engine == "codex" and kind == "sse":
                 raise Refused("invalid", "Codex поддерживает stdio и HTTP; для SSE выберите другой движок")
+            if engine == "deepseek" and kind == "sse":
+                raise Refused("invalid", "DeepSeek Harness поддерживает stdio и HTTP; для SSE выберите другой движок")
     raw = json.dumps(config, ensure_ascii=True, allow_nan=False).encode("utf-8")
     if len(raw) > MAX_BYTES:
         raise Refused("too_large", "Настройки MCP больше 64 КиБ")
@@ -184,5 +186,23 @@ def opencode(config, info):
             if capabilities.get(kind) is not True:
                 raise Refused("unsupported", "Эта версия OpenCode не поддерживает выбранный транспорт MCP")
             result.append({"name": name, "type": kind, "url": item["url"],
+                           "headers": [{"name": k, "value": v} for k, v in item.get("headers", {}).items()]})
+    return result
+
+
+def deepseek(config, info):
+    """`mcpServers` ACP для `session/new` и `session/resume` DeepSeek Harness: stdio и HTTP (SSE отклоняет `validate`)."""
+    capabilities = info.get("agentCapabilities", {}).get("mcpCapabilities", {})
+    result = []
+    for name, item in config["mcpServers"].items():
+        if item.get("disabled"):
+            continue
+        if item.get("type", "http" if "url" in item else "stdio") == "stdio":
+            result.append({"name": name, "command": item["command"], "args": item.get("args", []),
+                           "env": [{"name": k, "value": v} for k, v in item.get("env", {}).items()]})
+        else:
+            if capabilities.get("http") is not True:
+                raise Refused("unsupported", "Эта версия DeepSeek Harness не поддерживает MCP по HTTP")
+            result.append({"name": name, "type": "http", "url": item["url"],
                            "headers": [{"name": k, "value": v} for k, v in item.get("headers", {}).items()]})
     return result

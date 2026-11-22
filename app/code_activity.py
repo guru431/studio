@@ -44,7 +44,7 @@ async def session_activity(request: Request, aid: int, data: dict, *, passive: b
                     continue
                 title = session.get("title")
                 item["title"] = title[:500] if isinstance(title, str) else None
-                if not item["running"] and session.get("engine") in ("claude", "codex", "opencode"):
+                if not item["running"] and session.get("engine") in ("claude", "codex", "opencode", "deepseek"):
                     item["engine"] = session["engine"]
         except HTTPException as error:
             if error.detail.get("code") in ("closed", "offline"):

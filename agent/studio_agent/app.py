@@ -11,9 +11,10 @@ import re
 import threading
 from pathlib import Path
 
-from . import attachments, autostart, cli, enroll, host, mcp, setup, store, theme, update_helper, updater
+from . import attachments, autostart, cli, deepseek_settings, enroll, host, mcp, setup, store, theme, update_helper, updater
 from .claude_sdk import ClaudeSDKClient
 from .codex import CodexRunner
+from .deepseek import DeepSeekRunner
 from .opencode import OpenCodeRunner
 from .agent import Agent, read_has_pin
 from .link import Link
@@ -66,7 +67,8 @@ class Controller:
 
     def __init__(self, h: Path, *, link_factory=Link, sdk_factory=ClaudeSDKClient, find_cli=cli.find_cli,
                  cli_version=cli.cli_version, probe=cli.probe, enroll_fn=enroll.enroll, unenroll_fn=enroll.unenroll,
-                 autostart=autostart, sleep=asyncio.sleep, codex_factory=CodexRunner, opencode_factory=OpenCodeRunner):
+                 autostart=autostart, sleep=asyncio.sleep, codex_factory=CodexRunner, opencode_factory=OpenCodeRunner,
+                 deepseek_factory=DeepSeekRunner):
         self.h = h
         self._link_factory = link_factory
         self._sdk_factory = sdk_factory
@@ -79,8 +81,10 @@ class Controller:
         self._sleep = sleep
         self._codex_factory = codex_factory
         self._opencode_factory = opencode_factory
+        self._deepseek_factory = deepseek_factory
         self.codex = None
         self.opencode = None
+        self.deepseek = None
         self.state = "connecting" if _configured(store.migrate_config(h), store.load_key(h)) else "setup"
         self._subscribers = []
         self._login_subscribers = []
@@ -89,7 +93,7 @@ class Controller:
         self._activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False}
         self._quit_when_idle = False
         self._idle_quit_posted = False
-        self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex", "opencode")}
+        self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex", "opencode", "deepseek")}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self.agent: Agent | None = None
@@ -164,8 +168,8 @@ class Controller:
         elif self._loop is not None:
             self._loop.call_soon_threadsafe(self._quit.set)
 
-    def _set_backend(self, name: str, status: str, models: int = 0) -> None:
-        value = {"status": status, "models": models}
+    def _set_backend(self, name: str, status: str, models: int = 0, reason: str | None = None) -> None:
+        value = {"status": status, "models": models, **({"reason": reason} if reason else {})}
         if self._backends[name] == value:
             return
         self._backends = {**self._backends, name: value}
@@ -517,7 +521,8 @@ class Controller:
         repaired = await asyncio.to_thread(store.repair_acl, self.h)  # Windows: DACL 0o700 прежних версий
         if repaired:
             log.info("права каталога моста исправлены: %d", repaired)
-        stale = await asyncio.to_thread(lambda: mcp.sweep(self.h) + attachments.sweep(self.h))  # до первого хода
+        stale = await asyncio.to_thread(lambda: mcp.sweep(self.h) + attachments.sweep(self.h)
+                                       + deepseek_settings.sweep(self.h))  # до первого хода
         if stale:
             log.info("уборка после прошлого запуска: %d", stale)
         path = await asyncio.to_thread(self._find_cli)
@@ -533,10 +538,16 @@ class Controller:
             await asyncio.to_thread(choices_home.mkdir, parents=True, exist_ok=True)
             self.opencode = self._opencode_factory(lambda f: agent.emit(f), home=self.h,
                                                    choices=store.Choices(choices_home))
+        if self._deepseek_factory is not None:
+            choices_home = self.h / "deepseek"
+            await asyncio.to_thread(choices_home.mkdir, parents=True, exist_ok=True)
+            self.deepseek = self._deepseek_factory(lambda f: agent.emit(f), home=self.h,
+                                                   choices=store.Choices(choices_home))
         pins = PinStore(self.h)
         has_pin = await asyncio.to_thread(read_has_pin, pins)  # DPAPI — не на цикле
         agent = self.agent = Agent(store.load_config(self.h), pins, self.runner, cc_version=version,
-                                   models=[], efforts=[], has_pin=has_pin, codex=self.codex, opencode=self.opencode)
+                                   models=[], efforts=[], has_pin=has_pin, codex=self.codex, opencode=self.opencode,
+                                   deepseek=self.deepseek)
         if host.LINUX and not host.MACOS:
             from . import desktop_linux
             agent.desktop.capable = await asyncio.to_thread(desktop_linux.available)
@@ -578,11 +589,11 @@ class Controller:
     def _update_active(self) -> bool:
         return (self.agent is not None and (self.agent.desktop.status()["active"] or self.agent.software.busy
                                             or self.agent.mirror_active or self.agent.restart_blocking_requests > 0)
-                or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode)))
+                or any(backend is not None and backend.live() for backend in (self.runner, self.codex, self.opencode, self.deepseek)))
 
     def _update_holds(self) -> dict:
         """Что держит ожидание обновления (`_update_active`) — только числа и признак, для Студии."""
-        live = [waiting for backend in (self.runner, self.codex, self.opencode) if backend is not None
+        live = [waiting for backend in (self.runner, self.codex, self.opencode, self.deepseek) if backend is not None
                 for waiting in backend.live().values()]
         return {"tasks": len(live), "asking": sum(bool(waiting) for waiting in live),
                 "desktop": bool(self.agent is not None and self.agent.desktop.status()["active"]),
@@ -599,7 +610,7 @@ class Controller:
             self._loop.call_soon_threadsafe(cancel)
 
     def _refresh_activity(self):
-        live = [waiting for backend in (self.runner, self.codex, self.opencode) if backend is not None
+        live = [waiting for backend in (self.runner, self.codex, self.opencode, self.deepseek) if backend is not None
                 for waiting in backend.live().values()]
         active = self.agent is not None and self.agent.desktop.status()["active"]
         update = getattr(self.agent, "updater", None)
@@ -655,7 +666,7 @@ class Controller:
             if not self._probed:
                 await self._refresh_models()
             self.runner.reopen()  # после отвязки, отзыва, замены — новый канал снова принимает ходы
-            for backend in (self.codex, self.opencode):
+            for backend in (self.codex, self.opencode, self.deepseek):
                 if backend is not None:
                     backend.reopen()
             gen = self._gen
@@ -693,7 +704,7 @@ class Controller:
             self.agent.open.clear()
 
     async def _close_runners(self, **kwargs):
-        await asyncio.gather(*(backend.close(**kwargs) for backend in (self.runner, self.codex, self.opencode)
+        await asyncio.gather(*(backend.close(**kwargs) for backend in (self.runner, self.codex, self.opencode, self.deepseek)
                                if backend is not None))
 
     async def _drop_link(self) -> None:
@@ -746,7 +757,7 @@ class Controller:
         if models:
             self.agent.set_models(models, efforts)
             self._probed = True
-        for name in ("codex", "opencode"):
+        for name in ("codex", "opencode", "deepseek"):
             backend = getattr(self, name)
             if backend is None:
                 self._set_backend(name, "unavailable")
@@ -754,7 +765,8 @@ class Controller:
             self._set_backend(name, "checking")
             previous = backend.catalog
             ready = await backend.probe(self.agent.cfg.projects_root)
-            self._set_backend(name, "ready" if ready else "unavailable", len(backend.catalog["models"]) if ready else 0)
+            self._set_backend(name, "ready" if ready else "unavailable", len(backend.catalog["models"]) if ready else 0,
+                              None if ready else getattr(backend, "unavailable", None))
             changed = changed or previous != backend.catalog
         log.info("модели Claude Code: %d", len(models))
         return changed
