@@ -25,6 +25,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import access
+import cleaner_route
 import clock
 import connections
 import state
@@ -173,6 +174,7 @@ def resolve(user_id: int, section: str, connection_id: "int | None",
         conn = link.connection
     if (section in SERVER_ONLY and not conn.proxied) or connections.dropped(conn):
         raise _bad("server", unlisted(conn), 409)
+    cleaner_route.refuse_forced(conn, section, model)       # принудительный Cleaner: 409 `cleaner_forced`
     return conn, model
 
 
@@ -196,7 +198,10 @@ def accepts(conn: "connections.Connection") -> list[str]:
 
 
 def check_link(conn: "connections.Connection", section: str) -> None:
-    """Может ли подключение участвовать в разделе: вид (`accepts`) и, для раздела только через сервер, список."""
+    """Может ли подключение участвовать в разделе: принудительный Cleaner (внешнее — только чат и перевод, 409
+    `cleaner_forced`), вид (`accepts`) и, для раздела только через сервер, список."""
+    if section not in CLEANER:                  # роль srvllm связь не выбирает: её отказ — при запросе (`resolve`)
+        cleaner_route.refuse_forced(conn, section, "")
     if section not in accepts(conn):
         if conn.cleaner:
             raise _bad("kind", "Cleaner поддерживает чат и перевод")

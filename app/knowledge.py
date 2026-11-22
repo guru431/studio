@@ -7,6 +7,9 @@
   rerank_model | null}`, панель администратора). Нет источника — только BM25, всё работает: документ сразу `ready`.
   С источником `index` пишет куски сразу (BM25 находит их тотчас), а векторы считает фоновый обработчик (`kick`):
   `queued` → `ready` или `error` (куски остаются — BM25 работает). Смена модели эмбеддингов — векторы заново.
+- Cleaner (cleaner_route.py): внешний источник при принудительном режиме не используется вовсе (`_source_conn`, у всех
+  только BM25, панель предупреждает — `source_off`); диалог через Cleaner не отдаёт внешнему источнику ни запроса, ни
+  кусков на переранжирование, ни своих больших вложений (`vectors_for`).
 - `embed` — `POST <api>/embeddings` пачками по EMBED_BATCH, вектор — float32 `array('f')` единичной длины (близость —
   скалярное произведение); `rerank` — `POST <api>/rerank {model, query, documents}` → `results[{index,
   relevance_score}]`. Отказ источника при поиске — без векторов или без переранжирования, не ошибка.
@@ -40,6 +43,7 @@ from pydantic import BaseModel, Field
 
 import access
 import auth
+import cleaner_route
 import clock
 import connections
 import documents
@@ -155,13 +159,46 @@ def _shared(conn_id: int):
 
 
 def _source_conn() -> "tuple[dict, object] | None":
+    """Источник, которым можно пользоваться. Внешний адрес при принудительном Cleaner (или общее подключение с
+    переключателем «Через Cleaner») — `routed`: эмбеддинги и переранжирование Cleaner не проводит, и мимо него текст
+    не уходит — у всех только BM25."""
     src = source()
     if src is None:
         return None
     conn = _shared(src["connection_id"])
-    if conn is None or not conn.proxied:
+    if conn is None or not conn.proxied or conn.routed:
         return None
     return src, conn
+
+
+def source_off() -> bool:
+    """Источник задан, но не используется: он внешний, а Cleaner обязателен (панель предупреждает)."""
+    src = source()
+    conn = _shared(src["connection_id"]) if src is not None else None
+    return conn is not None and conn.routed
+
+
+def vectors_for(conn) -> bool:
+    """Векторы и переранжирование в ходе диалога: диалог через Cleaner (`conn.routed`) внешнему источнику текста не
+    отдаёт — ни запроса, ни кусков на переранжирование, ни своих больших вложений; внутренний источник — можно."""
+    if not conn.routed:
+        return True
+    found = _source_conn()
+    return found is None or not cleaner_route.is_external(found[1])
+
+
+def _routed_attachment(doc_id: str) -> bool:
+    """Документ — большое вложение диалога, чьё подключение идёт через Cleaner (подключение — по `chats`, без групп
+    доступа: вложение уже в диалоге)."""
+    row = state.DB.execute(
+        "SELECT c.user_id, c.connection_id FROM kb_documents d JOIN attachments a ON a.id = d.attachment_id"
+        " JOIN messages m ON m.id = a.message_id JOIN chats c ON c.id = m.chat_id WHERE d.id = ?", (doc_id,)).fetchone()
+    if row is None or row["connection_id"] is None:
+        return False
+    try:
+        return connections.get(row["user_id"], row["connection_id"], gate=False).routed
+    except HTTPException:
+        return False
 
 
 def _pack(values) -> bytes:
@@ -229,13 +266,14 @@ async def rerank(query: str, docs: list[str]) -> list[float]:
 
 # ---- индекс ---------------------------------------------------------------------
 
-def index(doc_id: str, text: str) -> None:
+def index(doc_id: str, text: str, vectors: bool = True) -> None:
     """Куски документа — сразу (BM25 находит их тотчас); векторы — фоновый обработчик (`kick`): `queued` →
-    `ready` / `error`. Без источника — сразу `ready`."""
+    `ready` / `error`. Без источника (или `vectors` False — вложение диалога через Cleaner при внешнем источнике) —
+    сразу `ready`."""
     parts = chunks(text)
     state.DB.executemany("INSERT INTO kb_chunks(doc_id, n, text) VALUES (?, ?, ?)",
                          [(doc_id, n, part) for n, part in enumerate(parts, 1)])
-    queued = source() is not None
+    queued = vectors and _source_conn() is not None
     state.DB.execute("UPDATE kb_documents SET state = ? WHERE id = ?", ("queued" if queued else "ready", doc_id))
     log.info("знания: документ %s — кусков %d", doc_id[:8], len(parts))
     if queued:
@@ -261,7 +299,11 @@ async def _drain() -> None:
 async def _vectors(doc_id: str) -> None:
     """Векторы кусков документа пачками; документ удалили — пачки пишутся мимо, обработчик идёт дальше."""
     try:
-        if source() is None:
+        found = _source_conn()
+        if found is None:
+            raise SourceError("none")
+        # вложение диалога через Cleaner внешнему источнику не уходит и при пересчёте после смены источника
+        if cleaner_route.is_external(found[1]) and _routed_attachment(doc_id):
             raise SourceError("none")
         while True:
             rows = state.DB.execute("SELECT id, text FROM kb_chunks WHERE doc_id = ? AND vector IS NULL ORDER BY n"
@@ -415,7 +457,7 @@ def _nearest(query: bytes, rows: list) -> list[int]:
 async def _vector(query: str, docs: dict, cache: dict) -> list[int]:
     """Куски по близости векторов; нет источника или векторов — []. Вектор запроса — один на ход (`cache`: по
     тексту запроса); источник в этом ходе уже отказал (`cache["down"]`) — не спрашивается."""
-    if source() is None or cache.get("down"):
+    if _source_conn() is None or cache.get("down"):
         return []
     rows = state.DB.execute("SELECT id, vector FROM kb_chunks WHERE vector IS NOT NULL"
                             " AND doc_id IN (SELECT value FROM json_each(?))", (json.dumps(list(docs)),)).fetchall()
@@ -432,11 +474,12 @@ async def _vector(query: str, docs: dict, cache: dict) -> list[int]:
     return await asyncio.to_thread(_nearest, cache[key], [(r[0], r[1]) for r in rows])
 
 
-async def _search(uid: int, query: str, docs: dict, k: int, cache: dict) -> list[Hit]:
+async def _search(uid: int, query: str, docs: dict, k: int, cache: dict, vectors: bool = True) -> list[Hit]:
+    """`vectors` False — только BM25: ни вектора запроса, ни переранжирования (`vectors_for`)."""
     if not docs or not query.strip():
         return []
     fused: dict[int, float] = {}
-    for ranked in (_bm25(query, docs), await _vector(query, docs, cache)):
+    for ranked in (_bm25(query, docs), await _vector(query, docs, cache) if vectors else []):
         for rank, chunk_id in enumerate(ranked):
             fused[chunk_id] = fused.get(chunk_id, 0.0) + 1 / (RRF_K + rank + 1)
     best = sorted(fused, key=fused.get, reverse=True)[:CANDIDATES]
@@ -445,8 +488,8 @@ async def _search(uid: int, query: str, docs: dict, k: int, cache: dict) -> list
     rows = {r["id"]: r for r in state.DB.execute(
         "SELECT id, doc_id, n, text FROM kb_chunks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(best),))}
     found = [(rows[i], fused[i]) for i in best if i in rows]
-    src = source()
-    if src and src.get("rerank_model") and len(found) > 1 and not cache.get("down"):
+    src = _source_conn() if vectors else None
+    if src and src[0].get("rerank_model") and len(found) > 1 and not cache.get("down"):
         try:
             scores = await rerank(query, [row["text"] for row, _ in found])
             found = sorted(((row, s) for (row, _), s in zip(found, scores)), key=lambda x: x[1], reverse=True)
@@ -457,10 +500,11 @@ async def _search(uid: int, query: str, docs: dict, k: int, cache: dict) -> list
 
 
 async def search(uid: int, query: str, *, kb_ids=(), attachment_ids=(), k: int = TOP_K,
-                 cache: "dict | None" = None) -> list[Hit]:
+                 cache: "dict | None" = None, vectors: bool = True) -> list[Hit]:
     """Куски документов видимых баз `kb_ids` и больших вложений учётки `attachment_ids` по запросу: BM25 топ-30 ∪
-    векторы топ-30 → RRF → переранжирование; не больше `k`. `cache` — общий на ход (отказ источника, векторы)."""
-    return await _search(uid, query, _scope(uid, kb_ids, attachment_ids), k, {} if cache is None else cache)
+    векторы топ-30 → RRF → переранжирование; не больше `k`. `cache` — общий на ход (отказ источника, векторы);
+    `vectors` False — только BM25 (`vectors_for`)."""
+    return await _search(uid, query, _scope(uid, kb_ids, attachment_ids), k, {} if cache is None else cache, vectors)
 
 
 def render(hits: list[Hit]) -> str:
@@ -486,10 +530,10 @@ def _head(doc_id: str, name: str, k: int) -> list[Hit]:
 
 
 async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
-                   cache: "dict | None" = None) -> tuple[dict[str, str], str]:
+                   cache: "dict | None" = None, vectors: bool = True) -> tuple[dict[str, str], str]:
     """Знания хода по его сообщению `query`: выдержки вложений `attachment_ids`, которые модель получает выдержками
     (`adopt`; id вложения → текст выдержек), и блок найденного в базах диалога (пусто — баз нет или ничего не
-    нашлось). `cache` — общий на ход (`_vector`, отказ источника)."""
+    нашлось). `cache` — общий на ход (`_vector`, отказ источника); `vectors` False — только BM25 (`vectors_for`)."""
     cache = {} if cache is None else cache
     out = {}
     for att_id in attachment_ids:
@@ -497,25 +541,26 @@ async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
                                (att_id,)).fetchone()
         if row is None:
             continue
-        hits = await _search(uid, query, {row["id"]: row["name"]}, TOP_K, cache) or _head(row["id"], row["name"], TOP_K)
+        hits = (await _search(uid, query, {row["id"]: row["name"]}, TOP_K, cache, vectors)
+                or _head(row["id"], row["name"], TOP_K))
         out[att_id] = excerpts(hits)
     kbs = chat_kbs(uid, chat_id)
-    found = await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache) if kbs else []
+    found = await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache, vectors) if kbs else []
     if out or found:
         log.info("знания: чат %s — выдержек вложений %d, кусков баз %d", chat_id[:8], len(out), len(found))
     return out, block(found)
 
 
-def adopt(uid: int, att_id: str, name: str, text: str) -> str:
+def adopt(uid: int, att_id: str, name: str, text: str, vectors: bool = True) -> str:
     """Вложение, которое ход отдаёт модели выдержками, — документ знаний (повтор — тот же документ). Итог — id
-    документа."""
+    документа. `vectors` False — без векторов (диалог через Cleaner при внешнем источнике, `vectors_for`)."""
     row = state.DB.execute("SELECT id FROM kb_documents WHERE attachment_id = ?", (att_id,)).fetchone()
     if row is not None:
         return row["id"]
     doc_id = uuid.uuid4().hex
     state.DB.execute("INSERT INTO kb_documents(id, attachment_id, user_id, name, chars, state, created)"
                      " VALUES (?, ?, ?, ?, ?, 'queued', ?)", (doc_id, att_id, uid, name, len(text), clock.NOW()))
-    index(doc_id, text)
+    index(doc_id, text, vectors)
     log.info("знания: вложение %s — документ %s", att_id[:8], doc_id[:8])
     return doc_id
 

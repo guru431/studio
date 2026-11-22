@@ -149,6 +149,34 @@ def routes(conn: "connections.Connection") -> bool:
     return conn.via_cleaner or forced()
 
 
+#: принудительный режим: внешнее подключение в разделе, где Cleaner не работает (звук, картинки)
+FORCED_SECTION = "администратор требует Cleaner для внешних моделей; этот раздел через Cleaner не работает"
+#: принудительный режим: облачная роль шлюза srvllm в «Чате» и «Переводе» (Cleaner не ходит на частные адреса)
+FORCED_SRVLLM = "администратор требует Cleaner; облачные роли srvllm через Cleaner пока не работают"
+
+
+def forced_refusal(conn: "connections.Connection", section: str, model: str) -> "str | None":
+    """Слова отказа принудительного режима или None. Внешнее подключение вне чата и перевода (`sections.CLEANER`) —
+    отказ: звук и картинки Cleaner не очищает. Шлюз srvllm в чате и переводе — отказ облачной роли (не `local-*`,
+    `sections.is_local`): Cleaner ходит только на публичные адреса, а srvllm — частный. Внешнее подключение в чате и
+    переводе идёт через Cleaner (`routes`), внутреннее — как обычно."""
+    if not forced():
+        return None
+    import sections                           # цикл: sections → connections → cleaner_route
+    if section not in sections.CLEANER:
+        return FORCED_SECTION if is_external(conn) else None
+    if conn.kind == "srvllm" and not sections.is_local(conn, model):
+        return FORCED_SRVLLM
+    return None
+
+
+def refuse_forced(conn: "connections.Connection", section: str, model: str) -> None:
+    """409 `cleaner_forced` словами `forced_refusal`, если принудительный режим этот запрос не пускает."""
+    message = forced_refusal(conn, section, model)
+    if message is not None:
+        raise HTTPException(409, {"code": "cleaner_forced", "message": message})
+
+
 def _bad(code: str, message: str) -> HTTPException:
     return HTTPException(422, {"code": code, "message": message})
 

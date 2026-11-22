@@ -478,8 +478,9 @@ class KnowledgeAccessIn(BaseModel):
 
 @router.get("/knowledge")
 async def get_knowledge():
-    """Источник эмбеддингов (`settings.knowledge_source`; null — только BM25) и общие базы с группами."""
-    return {"source": knowledge.source(), "bases": knowledge.shared_bases()}
+    """Источник эмбеддингов (`settings.knowledge_source`; null — только BM25), признак «источник внешний и не
+    используется: Cleaner обязателен» (`knowledge.source_off`) и общие базы с группами."""
+    return {"source": knowledge.source(), "source_off": knowledge.source_off(), "bases": knowledge.shared_bases()}
 
 
 @router.put("/knowledge")

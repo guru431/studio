@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 import auth
 import chat
 import chat_tools
+import cleaner_route
 import clock
 import connections
 import manage
@@ -230,6 +231,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     if (conn is None or conn.id != payload["conn_id"] or model != payload["model"] or not conn.proxied
             or conn.cleaner):
         raise _changed()
+    cleaner_route.refuse_forced(conn, "chat", model)  # пауза до принудительного Cleaner: облачная роль srvllm — отказ
     if conn.shared:
         chat._chat_pair(uid, conn.id, model)
     limit = await chat._limit(conn, model)

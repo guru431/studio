@@ -280,8 +280,9 @@ def test_connection_out_carries_only_a_hint(studio):
 
 @pytest.mark.parametrize("kind, s06, cleaner", [("openai", False, False), ("srvllm", False, False),
                                                 ("openai", True, False), ("openai", False, True)])
-def test_accepts_matches_check_link_kind_refusals(kind, s06, cleaner):
-    """«+ Адрес для раздела» предлагает подключение по `accepts`: ровно те разделы, где check_link не откажет видом."""
+def test_accepts_matches_check_link_kind_refusals(studio, kind, s06, cleaner):
+    """«+ Адрес для раздела» предлагает подключение по `accepts`: ровно те разделы, где check_link не откажет видом.
+    База — для настроек Cleaner (`check_link` спрашивает принудительный режим)."""
     conn = types.SimpleNamespace(kind=kind, s06=s06, cleaner=cleaner, routed=False, proxied=True)
     for section in sections.SECTIONS:
         try:

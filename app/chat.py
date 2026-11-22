@@ -1530,7 +1530,8 @@ class StreamTask:
             self.scan_state = None
         self.cut, _ = _excerpt_plan(self.user_id, self.chat_id, self.user_message_id, self.model,
                                     _max_images(self.conn), self.system, self.limit,
-                                    bool(knowledge.chat_kbs(self.user_id, self.chat_id)))
+                                    bool(knowledge.chat_kbs(self.user_id, self.chat_id)),
+                                    vectors=knowledge.vectors_for(self.conn))
         if self.tools:
             self.known = _known_links(self.chat_id)
         return await self._context()
@@ -2266,13 +2267,14 @@ def _plan_excerpts(docs: list, system: str, limit: "int | None", guess) -> tuple
 
 
 def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, system: str, limit: "int | None",
-                  kbs: bool) -> tuple[set, list[dict]]:
+                  kbs: bool, vectors: bool = True) -> tuple[set, list[dict]]:
     """Какие документы диалога модель хода получит выдержками, и сообщения для проверки контекста, где выдержки и блок
     баз диалога (`kbs`) — оценка EXCERPT_GUESS. Целиком — всё, что помещается в предел `limit` без RESERVE_TOKENS
     вместе с остальным запросом; не помещается — большие документы (длиннее knowledge.INLINE_TOKENS или самого
     предела) выдержками, с самого большого, пока не поместится; предел не известен — выдержками все, что длиннее
     knowledge.INLINE_TOKENS. Документы знаний вложений — по решению: выдержкам `knowledge.adopt`, целым —
-    `knowledge.release` (отметка «модель видит выдержки» у вложения — `knowledge.big_attachments`)."""
+    `knowledge.release` (отметка «модель видит выдержки» у вложения — `knowledge.big_attachments`); `vectors` False —
+    документ без векторов (`knowledge.vectors_for`)."""
     docs = _sent_documents(chat_id, upto, model)
     def guess(cut):
         return _with_block(compose(chat_id, upto, model, cap, dict.fromkeys(cut, EXCERPT_GUESS)),
@@ -2281,7 +2283,7 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
     cut, messages = _plan_excerpts(docs, system, limit, guess)
     for a in docs:
         if a["id"] in cut:
-            knowledge.adopt(uid, a["id"], a["name"], a["text"])
+            knowledge.adopt(uid, a["id"], a["name"], a["text"], vectors)
     knowledge.release([a["id"] for a in docs if a["id"] not in cut])
     return cut, messages
 
@@ -2293,7 +2295,8 @@ async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Con
     StreamTask.photos для payload паузы), системное сообщение. Не помещается — HTTPException 413; файл фото не
     прочитался — OSError."""
     asked = state.DB.execute("SELECT content FROM messages WHERE id = ?", (upto,)).fetchone()
-    excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache)
+    excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache,
+                                               knowledge.vectors_for(conn))
     composed = _with_block(compose(chat_id, upto, model, _max_images(conn), excerpts), block)
     tokens = estimate_tokens(chat_system.wrap(system, composed))
     if limit is not None and tokens > limit - RESERVE_TOKENS:
@@ -2509,6 +2512,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     model = row["model"] or manage.DEFAULT_MODEL
+    cleaner_route.refuse_forced(conn, "chat", model)  # облачная роль srvllm при принудительном Cleaner — до записи хода
     if conn.shared:
         _chat_pair(uid, conn.id, model)
     edit = _edit_target(chat_id, body)
@@ -2625,7 +2629,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 knowledge.release(knowledge.big_attachments(chat_id))
             else:
                 cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, _max_images(conn), system,
-                                              limit, kbs)
+                                              limit, kbs, vectors=knowledge.vectors_for(conn))
             search = bool(cut) or kbs
             known = _known_links(chat_id) if kinds else {}
             tokens = estimate_tokens(chat_system.wrap(system, messages))
