@@ -120,6 +120,51 @@ def test_place_merges_two_rows_of_one_folder_and_their_groups(studio):
     assert count("mirror_pairs") == 1
 
 
+def test_place_keeps_the_row_whose_address_was_just_used_when_both_have_one(studio):
+    """Две строки одной папки (тот же `pid`) с разными адресами — после смены папок проектов: остаётся строка, по
+    адресу которой только что сравнивали, а не старая."""
+    uid, (a, b) = computers(studio, "A", "B")
+    g = mg.create_group(uid)
+    ca = mg.add(g, a, "p", None, None, None)
+    stale = mg.add(g, b, "q", OTHER_ROOT, "P", "/old")
+    fresh = mg.add(g, b, None, ROOT, "P", "/new")
+    with mg.transaction():
+        assert mg.place(fresh, project="q") == fresh
+    assert [row["id"] for row in mg.members(g)] == [ca, fresh]
+    assert mg.location(mg.get(fresh)) == {"name": "P", "folder": "/new"} and mg.get(fresh)["project"] == "q"
+    assert stale not in {row["id"] for row in mg.members(g)}
+
+
+def test_exclusions_of_a_group_that_is_gone_are_not_an_empty_list(studio):
+    """Пустой список вместо исключений исчезнувшей группы дал бы мосту удалить исключённое в копии."""
+    from fastapi import HTTPException
+    import project_mirrors
+    uid, _ = computers(studio, "A")
+    g = mg.create_group(uid)
+    state.DB.execute("DELETE FROM mirror_groups WHERE id=?", (g,))
+    with pytest.raises(LookupError):
+        mg.exclusions(g)
+    with pytest.raises(HTTPException) as error:
+        project_mirrors._exclude(g, ())
+    assert error.value.status_code == 404 and error.value.detail["gone"] is True
+
+
+def test_adopt_skips_a_broken_row_without_stopping_and_drops_empty_groups(studio, caplog):
+    uid, (a, b, c) = computers(studio, "A", "B", "C")
+    empty = mg.create_group(uid)                                   # все компьютеры группы отозваны
+    broken = state.DB.execute(
+        "INSERT INTO project_mirrors(source, project, destination, root, name_key, location) VALUES(?,?,?,?,?,?)",
+        (a, "p", b, ROOT, mg.name_key("Proj"), security.encrypt('"not an object"'))).lastrowid
+    legacy(a, "q", c, ROOT, "Secret", "/home/u/Secret")
+    with caplog.at_level(logging.INFO, logger="studio"):
+        assert mg.adopt() == 1
+    assert "Secret" not in caplog.text and "AttributeError" in caplog.text
+    assert state.DB.execute("SELECT 1 FROM mirror_legacy WHERE id=?", (broken,)).fetchone() is None
+    assert mg.find(a, "p") is None and mg.find(a, "q") is not None   # строка с ошибкой откатилась целиком
+    assert state.DB.execute("SELECT 1 FROM mirror_groups WHERE id=?", (empty,)).fetchone() is None
+    assert mg.adopt() == 0                                          # следующий запуск пробует снова
+
+
 def test_clashes_block_merging_groups_with_copies_on_one_computer(studio):
     uid, (a, b, c) = computers(studio, "A", "B", "C")
     g1, g2 = mg.create_group(uid), mg.create_group(uid)

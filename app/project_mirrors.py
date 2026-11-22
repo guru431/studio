@@ -47,6 +47,8 @@ BAD_PROJECT = "мост вернул неверные сведения о про
 BAD_DESTINATION = "мост вернул неверное назначение зеркала"
 NOT_FOUND = "зеркало проекта не найдено"
 BUSY = "дождитесь окончания передачи зеркала"
+#: отказ моста без `hello.mirror_groups` (до 0.45.0) при открытой базе SQLite в проекте
+OLD_SQLITE = "обнаружена открытая база SQLite — закройте её и повторите операцию"
 
 
 class Destination(BaseModel):
@@ -173,11 +175,14 @@ def _where(row):
 
 def _exclude(grp, agents):
     """Постоянные исключения группы: оба моста пары обязаны их понимать — иначе прежний мост назначения увидел бы
-    исключённое как лишнее и удалил бы его в копии."""
+    исключённое как лишнее и удалил бы его в копии. Группы уже нет (последнюю другую копию отвязали, компьютер
+    отозван, пока передача ждала очереди) — 404 `gone`."""
     try:
         exclude = mirror_groups.exclusions(grp)
     except InvalidToken:
         raise code._refuse(409, "reenter", REENTER) from None
+    except LookupError:
+        raise _gone() from None
     if exclude:
         for aid in agents:
             code.require_capability(aid, EXCLUDE_CAP)
@@ -233,8 +238,23 @@ async def _ask(request, aid, op, *, timeout=180, background=False, **args):
     return await code.ask(request, aid, op, quiet=True, reply_timeout=timeout, while_locked=background, **args)
 
 
+async def _listed(request, aid, op, **args):
+    """Список файлов копии (`mirror_scan`, `mirror_destination`). Мост без `hello.mirror_groups` при открытой базе
+    SQLite отказывает во всём списке (`OLD_SQLITE`) — окно просит обновить мост этого компьютера: новый мост такую
+    базу пропускает."""
+    try:
+        return await _ask(request, aid, op, **args)
+    except HTTPException as error:
+        if error.detail.get("code") != "busy" or error.detail.get("message") != OLD_SQLITE or _groups(aid):
+            raise
+        name = state.DB.execute("SELECT name FROM agents WHERE id=?", (aid,)).fetchone()[0]
+        raise code._refuse(409, "unsupported",
+                           f"Обновите мост на компьютере «{name}», чтобы он пропускал открытые базы SQLite") from None
+
+
 def _entries(data, *, missing=False, reasons=None):
-    """Список файлов моста. Пропуск с причиной из `SKIP_REASONS` становится обычным `SKIP`, причина — в `reasons[путь]`."""
+    """Список файлов моста. Любой пропуск (`kind == "skip"`, причина — короткая строка) становится обычным `SKIP`:
+    будущий мост с новой причиной не ломает сравнение; известная причина из `SKIP_REASONS` — в `reasons[путь]`."""
     entries = data.get("entries")
     if entries is None and missing and "entries" in data:
         return None
@@ -244,8 +264,8 @@ def _entries(data, *, missing=False, reasons=None):
         if not path or path.startswith("/") or len(path) > code.PATH_MAX or not isinstance(info, list) or len(info) != 4:
             raise code._refuse(502, "bridge", "мост вернул неверный список файлов")
         kind, value, size, mode = info
-        if kind == "skip" and value in SKIP_REASONS and size == 0 and mode == 0:
-            if reasons is not None:
+        if kind == "skip" and isinstance(value, str) and len(value) <= 32 and size == 0 and mode == 0:
+            if reasons is not None and value in SKIP_REASONS:
                 reasons[path] = value
             entries[path] = info = SKIP
         valid = (info in (DIR, SKIP) or
@@ -579,9 +599,9 @@ async def _compare(request, mine, other, background=False):
     pair = mirror_groups.pair(mine["id"], other["id"])
     held = mirror_groups.held(mine["id"])
     source, target = await asyncio.gather(
-        _ask(request, aid, "mirror_scan", project=pid, background=background, **exclude, **_reasons(aid)),
-        _ask(request, destination, "mirror_destination", background=background, **to, **exclude,
-             **_reasons(destination)))
+        _listed(request, aid, "mirror_scan", project=pid, background=background, **exclude, **_reasons(aid)),
+        _listed(request, destination, "mirror_destination", background=background, **to, **exclude,
+                **_reasons(destination)))
     project = _pid(target)
     _private_destination(destination, project)
     link, from_link = bridge.LINKS.get(destination), bridge.LINKS.get(aid)
@@ -610,7 +630,8 @@ async def _compare(request, mine, other, background=False):
     if other["project"] != project:
         with mirror_groups.transaction():
             if mirror_groups.get(other["id"]) is not None:
-                mirror_groups.place(other["id"], project=project)
+                # Слияние строк одной папки может оставить другую строку: пара после передачи — на неё.
+                comparison = comparison._replace(copy=mirror_groups.place(other["id"], project=project))
     return comparison
 
 

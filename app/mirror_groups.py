@@ -93,8 +93,12 @@ def add(grp: int, agent: int, project: str | None, root: str | None, name: str |
 
 
 def exclusions(grp: int) -> list[str]:
-    blob = state.DB.execute("SELECT exclude FROM mirror_groups WHERE id=?", (grp,)).fetchone()[0]
-    return json.loads(security.decrypt(blob)) if blob is not None else []
+    """Исключения группы; группы нет (удалили, пока шла передача) — `LookupError`: пустой список вместо прежнего
+    дал бы мосту удалить исключённое в копии."""
+    row = state.DB.execute("SELECT exclude FROM mirror_groups WHERE id=?", (grp,)).fetchone()
+    if row is None:
+        raise LookupError(grp)
+    return json.loads(security.decrypt(row[0])) if row[0] is not None else []
 
 
 def set_exclusions(grp: int, paths: list[str]) -> None:
@@ -277,7 +281,8 @@ def _merge_copies(keep, drop):
 def place(cid: int, *, project: str | None = None, root: str | None = None, name: str | None = None,
           folder: str | None = None) -> int:
     """Дописать известное о копии. Та же папка уже есть другой строкой того же компьютера (тот же `project` или
-    тот же адрес) — строки сливаются; возвращается id оставшейся."""
+    тот же адрес) — строки сливаются; возвращается id оставшейся. Остаётся строка `cid`, если её адрес известен
+    (он свежее: им только что пользовались), иначе — другая."""
     row = get(cid)
     if row is None:
         raise LookupError(cid)
@@ -288,7 +293,7 @@ def place(cid: int, *, project: str | None = None, root: str | None = None, name
             " ORDER BY id LIMIT 1", (row["agent"], row["id"], project, root, key)).fetchone()
         if duplicate is None:
             break
-        keep, drop = (row, duplicate) if row["root"] is not None and duplicate["root"] is None else (duplicate, row)
+        keep, drop = (row, duplicate) if row["root"] is not None else (duplicate, row)
         _merge_copies(keep, drop)
         row = get(keep["id"])
     if project is not None:
@@ -299,47 +304,68 @@ def place(cid: int, *, project: str | None = None, root: str | None = None, name
     return row["id"]
 
 
-def adopt() -> int:
-    """Строки `project_mirrors`, ещё не перенесённые (прежний код, в том числе после отката), — в группы."""
+def _adopt_row(row) -> int:
+    """Одна строка `project_mirrors` — в группу; число отброшенных лишних исключений."""
     dropped = 0
+    source = find(row["source"], row["project"])
+    if source is None:
+        grp = create_group(row["user_id"])
+        sid = add(grp, row["source"], row["project"], None, None, None)
+    else:
+        grp, sid = source["grp"], source["id"]
+    try:
+        data = json.loads(security.decrypt(row["location"]))
+        exclude = data.pop("exclude", None) or []
+        blob = security.encrypt(_json(data))
+    except InvalidToken:
+        blob, exclude = row["location"], []
+    if exclude:
+        try:
+            joined = list(dict.fromkeys(exclusions(grp) + exclude))
+        except InvalidToken:
+            joined = []
+        dropped += max(0, len(joined) - EXCLUDE_MAX)
+        if joined:
+            set_exclusions(grp, joined[:EXCLUDE_MAX])
+    target = state.DB.execute("SELECT * FROM mirror_copies WHERE agent=? AND root=? AND name_key=?",
+                              (row["destination"], row["root"], row["name_key"])).fetchone()
+    if target is None:
+        did = state.DB.execute(
+            "INSERT INTO mirror_copies(grp, agent, root, name_key, location) VALUES(?,?,?,?,?)",
+            (grp, row["destination"], row["root"], row["name_key"], blob)).lastrowid
+    else:
+        merge(grp, target["grp"])
+        did = target["id"]
+    a, b = sorted((sid, did))
+    state.DB.execute("INSERT OR IGNORE INTO mirror_pairs(a, b, state_a, state_b, synced) VALUES(?,?,?,?,?)",
+                     (a, b, *((None, row["baseline"]) if a == sid else (row["baseline"], None)), row["synced"]))
+    state.DB.execute("INSERT INTO mirror_legacy(id) VALUES(?)", (row["id"],))
+    return dropped
+
+
+def adopt() -> int:
+    """При запуске: строки `project_mirrors`, ещё не перенесённые (прежний код, в том числе после отката), — в группы;
+    группы без копий (все компьютеры группы отозваны) удаляются. Строка, перенос которой упал, откатывается к своей
+    точке сохранения и не отмечается — запуск службы идёт дальше, следующий запуск попробует снова; в журнал — числа
+    и имена типов ошибок. Число перенесённых строк."""
+    moved = dropped = 0
+    failed = []
     with transaction():
         rows = state.DB.execute(
             "SELECT m.*, a.user_id FROM project_mirrors m JOIN agents a ON a.id=m.source"
             " WHERE m.id NOT IN (SELECT id FROM mirror_legacy) ORDER BY m.id").fetchall()
         for row in rows:
-            source = find(row["source"], row["project"])
-            if source is None:
-                grp = create_group(row["user_id"])
-                sid = add(grp, row["source"], row["project"], None, None, None)
-            else:
-                grp, sid = source["grp"], source["id"]
+            state.DB.execute("SAVEPOINT adopt_row")
             try:
-                data = json.loads(security.decrypt(row["location"]))
-                exclude = data.pop("exclude", None) or []
-                blob = security.encrypt(_json(data))
-            except InvalidToken:
-                blob, exclude = row["location"], []
-            if exclude:
-                try:
-                    joined = list(dict.fromkeys(exclusions(grp) + exclude))
-                except InvalidToken:
-                    joined = []
-                dropped += max(0, len(joined) - EXCLUDE_MAX)
-                if joined:
-                    set_exclusions(grp, joined[:EXCLUDE_MAX])
-            target = state.DB.execute("SELECT * FROM mirror_copies WHERE agent=? AND root=? AND name_key=?",
-                                      (row["destination"], row["root"], row["name_key"])).fetchone()
-            if target is None:
-                did = state.DB.execute(
-                    "INSERT INTO mirror_copies(grp, agent, root, name_key, location) VALUES(?,?,?,?,?)",
-                    (grp, row["destination"], row["root"], row["name_key"], blob)).lastrowid
-            else:
-                merge(grp, target["grp"])
-                did = target["id"]
-            a, b = sorted((sid, did))
-            state.DB.execute("INSERT OR IGNORE INTO mirror_pairs(a, b, state_a, state_b, synced) VALUES(?,?,?,?,?)",
-                             (a, b, *((None, row["baseline"]) if a == sid else (row["baseline"], None)), row["synced"]))
-            state.DB.execute("INSERT INTO mirror_legacy(id) VALUES(?)", (row["id"],))
-    if rows:
-        log.info("зеркала: перенесено строк %d, лишних исключений %d", len(rows), dropped)
-    return len(rows)
+                dropped += _adopt_row(row)
+                moved += 1
+            except Exception as error:  # данные прежнего кода не должны останавливать запуск всей Студии
+                state.DB.execute("ROLLBACK TO adopt_row")
+                failed.append(type(error).__name__)
+            state.DB.execute("RELEASE adopt_row")
+        state.DB.execute("DELETE FROM mirror_groups WHERE id NOT IN (SELECT grp FROM mirror_copies)")
+    if moved:
+        log.info("зеркала: перенесено строк %d, лишних исключений %d", moved, dropped)
+    if failed:
+        log.warning("зеркала: не перенесено строк %d (%s)", len(failed), ", ".join(sorted(set(failed))))
+    return moved

@@ -239,8 +239,12 @@ def test_skip_reasons_are_recorded_and_normalized():
                        reasons=reasons)
     assert entries == {"x.db": SKIP, "x.db-wal": SKIP}
     assert reasons == {"x.db": "sqlite", "x.db-wal": "sqlite-journal"}
-    with pytest.raises(HTTPException):
-        _entries({"entries": {"x": ["skip", "other", 0, 0]}})
+    # Причина будущего моста — тоже пропуск, без подписи; не строка или длинная — неверный список.
+    reasons = {}
+    assert _entries({"entries": {"x": ["skip", "other", 0, 0]}}, reasons=reasons) == {"x": SKIP} and reasons == {}
+    for bad in (["skip", 1, 0, 0], ["skip", "x" * 33, 0, 0], ["skip", "other", 1, 0]):
+        with pytest.raises(HTTPException):
+            _entries({"entries": {"x": bad}})
 
 
 def test_windows_source_preserves_posix_executable_flags():
@@ -692,6 +696,29 @@ def test_open_sqlite_database_is_skipped_with_a_reason_in_the_comparison(studio,
         assert [frame for frame in first.requests if frame["op"] == "mirror_scan"][-1]["reasons"] is True
     finally:
         database.close()
+
+
+def test_old_bridge_refusing_an_open_sqlite_database_asks_to_update_that_computer(studio, computers):
+    """Мост без `mirror_groups` при открытой базе SQLite отказывает во всём списке: окно просит обновить мост этого
+    компьютера, а не показывает сырой отказ. Тот же отказ нового моста (его быть не должно) — как есть."""
+    import project_mirrors
+    source, first, second = computers
+    a, b = signed_in(studio, first, second)
+    client = studio.c
+    root = mirror.projects.list_roots(second.roots)[1]
+    url = mirrors(a, pid(source.name))
+    created = client.post(url, json={"destination": b, "root": root["id"], "name": source.name})
+    assert created.status_code == 201, created.text
+
+    def refuse(req, events):
+        raise AgentRefused("busy", project_mirrors.OLD_SQLITE)
+    second._op_mirror_destination = refuse
+    for groups, code, words in ((False, "unsupported", "компьютере «Destination»"), (True, "busy", "SQLite")):
+        second.groups = groups
+        connect(studio, b, second)
+        assert client.post(f"/api/code/agents/{b}/open", json={"pin": "2468"}).status_code == 204
+        refused = client.post(f"{url}/{created.json()['id']}/compare")
+        assert refused.json()["detail"]["code"] == code and words in refused.json()["detail"]["message"], refused.text
 
 
 def test_renamed_project_rejoins_its_group_replacing_the_former_copy(studio, computers, monkeypatch):

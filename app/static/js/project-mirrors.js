@@ -31,7 +31,8 @@ function progress(job) {
 function mark(item) {
   if (item.reenter) return tr("настройка недоступна");
   if (item.job?.state === 'running') return progress(item.job);
-  if (item.unknown) return tr("адрес копии уточнится, когда компьютер будет на связи");
+  if (item.unknown) return item.online ? tr("адрес копии уточнится при сравнении")
+    : tr("адрес копии уточнится, когда компьютер будет на связи");
   if (!item.online) return tr("не на связи");
   return item.synced ? tr("синхронизирована с этим компьютером · {0}", dateTime(item.synced)) : tr("ещё не синхронизировалась");
 }
@@ -43,15 +44,15 @@ export function projectMirrors(host, trigger, aid, project) {
   let mounted = true;
   let counting = 0;
 
-  /** Цифра на кнопке — число других копий группы, по списку без мостов; копии без адреса — один `locate`. */
+  /** Цифра на кнопке — число других копий группы, по списку без обращений к мостам. Копию, которой ещё не дописан
+   * `pid` (перенос прежних зеркал), находит `locate` при открытии окна — до того цифры у неё нет. */
   async function refresh() {
     if (!mounted) return;
     const mine = ++counting;
     let copies = 0;
     if (project.capable) {
       try {
-        let listing = await api('GET', url);
-        if (listing.pending && mounted) listing = await api('POST', `${url}/locate`);
+        const listing = await api('GET', url);
         copies = listing.items.length;
       } catch {
         copies = 0;
@@ -196,6 +197,9 @@ export function projectMirrors(host, trigger, aid, project) {
           } else if (err.code === 'exists' && err.detail?.former && !data.replace) {
             if (!window.confirm(tr("В группе уже есть прежняя копия этого компьютера — например, проект под прежним именем. Заменить её этим проектом? Файлы прежней папки останутся на компьютере."))) return null;
             data = { ...data, replace: true };
+          } else if (err.code === 'conflict' && err.detail?.computers?.length) {
+            // Слияние групп отклонено: назвать компьютеры, где копии есть в обеих группах.
+            throw new Error(tr("{0} · компьютеры: {1}", words(err), err.detail.computers.join(', ')));
           } else throw err;
         }
       }
@@ -519,8 +523,12 @@ export function projectMirrors(host, trigger, aid, project) {
       let stale = false;
       tell(tr("Сравниваю проект с копиями…"));
       for (const item of listing.items) {
-        if (item.reenter || item.unknown || !item.online || item.job?.state === 'running') {
-          note(item, tr("не вошла в отправку"));
+        // Копия с неизвестным адресом на связи входит: сравнение само допишет адрес (прежний мост — отказ с пометкой).
+        const skip = item.reenter ? tr("настройка недоступна — не вошла в отправку")
+          : !item.online ? tr("не на связи — не вошла в отправку")
+            : item.job?.state === 'running' ? tr("идёт передача — не вошла в отправку") : null;
+        if (skip) {
+          note(item, skip);
           continue;
         }
         try {

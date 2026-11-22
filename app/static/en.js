@@ -2198,11 +2198,15 @@ globalThis.StudioEnglish = Object.freeze({
   "синхронизирована с этим компьютером · {0}": "synced with this computer · {0}",
   "ещё не синхронизировалась": "not synced yet",
   "адрес копии уточнится, когда компьютер будет на связи": "the copy's location will be confirmed when the computer is online",
+  "адрес копии уточнится при сравнении": "the copy's location will be confirmed when you compare",
+  "{0} · компьютеры: {1}": "{0} · computers: {1}",
   "Список копий обновлён.": "The list of copies was refreshed.",
   "Исключения недоступны после смены ключа Студии — сохраните их заново.": "The exclusions are unavailable after the Studio key changed. Save them again.",
   "Сравниваю проект с копиями…": "Comparing the project with its copies…",
   "Отправляю изменения в копии…": "Sending changes to the copies…",
-  "не вошла в отправку": "not included in the send",
+  "настройка недоступна — не вошла в отправку": "settings unavailable · not included in the send",
+  "не на связи — не вошла в отправку": "offline · not included in the send",
+  "идёт передача — не вошла в отправку": "transfer in progress · not included in the send",
   "нужен PIN компьютера": "computer PIN required",
   "есть изменения, которых нет здесь — откройте сравнение": "has changes that are not here. Open the comparison",
   "совпадает": "matches",
@@ -2295,6 +2299,7 @@ globalThis.StudioEnglish = Object.freeze({
   "в группе уже есть прежняя копия этого компьютера": "the group already has a former copy on this computer",
   "в обеих группах есть копии на одном компьютере — отвяжите лишнюю": "both groups have copies on the same computer. Unlink the extra one",
   "Обновите мост на компьютере копии": "Update the bridge on the copy's computer",
+  "Обновите мост на компьютере «{0}», чтобы он пропускал открытые базы SQLite": "Update the bridge on “{0}” so it skips open SQLite databases",
   "настройки зеркала изменились — повторите": "mirror settings changed. Try again",
   "эта папка уже назначена зеркалом": "this folder is already a mirror",
   "найденная папка больше недоступна — обновите поиск": "the found folder is no longer available. Refresh the search",
@@ -3827,7 +3832,8 @@ globalThis.StudioEnglishMessages = Object.freeze([
   "{0} · Месяц",
   "Неделя · {0}",
   "{0} · {1} мин",
-  "{0} Мп"
+  "{0} Мп",
+  "Обновите мост на компьютере «{0}», чтобы он пропускал открытые базы SQLite"
 ]);
 /* Patterns whose bare slots carry user text (titles, prompts, file names): message() keeps their values as is. */
 globalThis.StudioEnglishVerbatim = Object.freeze([
