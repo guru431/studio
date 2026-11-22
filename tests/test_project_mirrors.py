@@ -193,17 +193,26 @@ def test_plan_accepts_a_copy_entry_the_source_held_before():
     from project_mirrors import _plan
     args = ({"f": F3}, {"f": F2}, {"f": F1})
     assert _plan(*args)[3] == 1
-    assert _plan(*args, held={"f": {tuple(F2[:3])}})[3] == 0
+    assert _plan(*args, held={"f": {tuple(F2)}})[3] == 0
 
 
 def test_plan_flags_a_newer_copy_entry_the_source_never_held():
     from project_mirrors import _plan
-    assert _plan({"f": F1}, {"f": F3}, {"f": F1}, held={"f": {tuple(F1[:3]), tuple(F2[:3])}})[3] == 1
+    assert _plan({"f": F1}, {"f": F3}, {"f": F1}, held={"f": {tuple(F1), tuple(F2)}})[3] == 1
+
+
+def test_plan_flags_an_executable_bit_set_in_the_copy_over_content_the_source_held():
+    from project_mirrors import _plan
+    executable = [*F2[:3], 1]
+    held = {"f": {tuple(F2)}}
+    assert _plan({"f": F3}, {"f": executable}, {"f": F1}, held=held)[3] == 1
+    # Новая запись сохраняет режим копии (у источника Windows режима нет) — бит не теряется.
+    assert _plan({"f": [*F3[:3], 1]}, {"f": executable}, {"f": F1}, held=held)[3] == 0
 
 
 def test_file_removed_in_the_copy_is_checked_only_against_the_pair_state():
     from project_mirrors import _plan
-    assert _plan({"f": F2}, {}, {"f": F1}, held={"f": {tuple(F1[:3])}})[3] == 1
+    assert _plan({"f": F2}, {}, {"f": F1}, held={"f": {tuple(F1)}})[3] == 1
 
 
 def test_local_changes_refusal_carries_a_flag_the_window_reads_instead_of_words():
@@ -563,15 +572,13 @@ def test_group_is_seen_from_every_copy_and_sends_from_any_of_them(studio, trio, 
     assert send(client, url_a, cb, b)["state"] == "done" and send(client, url_a, cc, c)["state"] == "done"
     clone_b, clone_c = Path(root_b["path"]) / source.name, Path(root_c["path"]) / source.name
     (clone_b / "notes.txt").write_bytes(b"edited on B\n")
-    # «Отправить во все копии»: сначала сравнения, потом передачи по очереди. Правило 3: в C версия A, которую
-    # B держал после синхронизации с A; передача в A перезапишет пару A–B, но план C в силе (дерево C то же).
-    plans = {}
-    for cid in (ca, cc):
-        plan = client.post(f"{url_b}/{cid}/compare").json()
-        assert plan["conflicts"] == 0
-        plans[cid] = plan["plan"]
+    # По одной копии, каждая — своим сравнением после передачи в предыдущую (так же — копия, бывшая не на связи во
+    # время «Отправить во все копии»). Пары B–C ещё нет; в C версия A, которую B держал после синхронизации с A.
+    # Передача B→A переписала состояние B в паре A–B, но накопленное B эту версию помнит (правило 3).
     for cid, agent in ((ca, a), (cc, c)):
-        job = send(client, url_b, cid, agent, plans[cid])
+        plan = client.post(f"{url_b}/{cid}/compare").json()
+        assert plan["conflicts"] == 0, plan
+        job = send(client, url_b, cid, agent, plan["plan"])
         assert job["state"] == "done", job
     assert (source / "notes.txt").read_bytes() == (clone_c / "notes.txt").read_bytes() == b"edited on B\n"
 

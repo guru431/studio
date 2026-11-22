@@ -73,6 +73,7 @@ ENCRYPTED_BACKUP_FIELDS = (
     ("mirrors", "сведения о зеркалах", "SELECT location FROM project_mirrors UNION ALL"
      " SELECT baseline FROM project_mirrors WHERE baseline IS NOT NULL UNION ALL"
      " SELECT location FROM mirror_copies WHERE location IS NOT NULL UNION ALL"
+     " SELECT held FROM mirror_copies WHERE held IS NOT NULL UNION ALL"
      " SELECT exclude FROM mirror_groups WHERE exclude IS NOT NULL UNION ALL"
      " SELECT state_a FROM mirror_pairs WHERE state_a IS NOT NULL UNION ALL"
      " SELECT state_b FROM mirror_pairs WHERE state_b IS NOT NULL"),

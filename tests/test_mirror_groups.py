@@ -109,6 +109,7 @@ def test_place_merges_two_rows_of_one_folder_and_their_groups(studio):
     assert mg.exclusions(group) == ["dist", ".venv"]
     moved = mg.pair(ag, bf)                                         # стороны перевёрнуты: ag > bf
     assert moved == ({"x": V1}, {"x": V2}, 1.0, moved.mark)
+    assert mg._kept(ag) == {"x": [V1], "y": [V1]}                   # накопленное обеих строк папки
 
     with mg.transaction():
         assert mg.place(bf, project="q") == bf
@@ -138,9 +139,41 @@ def test_held_returns_every_entry_the_copy_kept_in_any_pair(studio):
     cc = mg.add(g, c, None, ROOT, "P", "/p")
     mg.save(ca, cb, {"f": V1}, {"f": V1}, 1.0)
     mg.save(cc, ca, {}, {"f": V2, "d": SKIP}, 2.0)                  # ca — вторая сторона
-    assert mg.held(ca) == {"f": {tuple(V1[:3]), tuple(V2[:3])}}
-    assert mg.held(cb) == {"f": {tuple(V1[:3])}}
+    assert mg.held(ca) == {"f": {tuple(V1), tuple(V2)}}
+    assert mg.held(cb) == {"f": {tuple(V1)}}
     assert mg.held(cc) == {}
+
+
+def test_held_keeps_what_a_copy_held_after_a_later_sync_rewrites_its_pair_state(studio):
+    """B→A переписывает состояние B в паре A–B, но B по-прежнему «держал» версию A: она в накопленном B (шифром),
+    последние `HELD_MAX` различных записей на путь."""
+    uid, (a, b, c) = computers(studio, "A", "B", "C")
+    g = mg.create_group(uid)
+    ca = mg.add(g, a, "p", None, None, None)
+    cb = mg.add(g, b, None, ROOT, "P", "/p")
+    cc = mg.add(g, c, None, ROOT, "P", "/p")
+    mg.save(ca, cb, {"f": V1}, {"f": V1, "d": SKIP}, 1.0)          # A→B: B держит V1
+    mg.save(cb, ca, {"f": V2}, {"f": V2}, 2.0)                     # B→A: пара A–B переписана
+    assert mg.pair(cb, ca).state_x == {"f": V2}
+    assert mg.held(cb) == {"f": {tuple(V1), tuple(V2)}}
+    assert mg.held(ca) == {"f": {tuple(V1), tuple(V2)}} and mg.held(cc) == {}
+    blob = state.DB.execute("SELECT held FROM mirror_copies WHERE id=?", (cb,)).fetchone()[0]
+    assert json.loads(security.decrypt(blob)) == {"f": [V1, V2]}
+
+    versions = [["file", f"{n:064x}", n, 0] for n in range(mg.HELD_MAX + 2)]
+    for n, entry in enumerate(versions):
+        mg.save(cb, cc, {"f": entry}, {}, 3.0 + n)
+    assert mg._kept(cb) == {"f": versions[-mg.HELD_MAX:]}
+    assert mg.held(cb)["f"] == {tuple(entry) for entry in versions[-mg.HELD_MAX:]} | {tuple(V2)}  # V2 — пара A–B
+
+    # Первая сверка пополняет накопленное только когда записала пару; копии нет — ничего.
+    cd = mg.add(g, c, None, OTHER_ROOT, "P", "/q")
+    mg.seal(cd, ca, {"g": V1}, {"g": V1})
+    mg.seal(cd, ca, {"g": V2}, {"g": V2})
+    assert mg._kept(cd) == {"g": [V1]}
+    mg.remove(cd)
+    mg.save(ca, cd, {"h": V1}, {"h": V1}, 9.0)
+    assert "h" not in mg._kept(ca)
 
 
 def test_seal_writes_only_while_the_other_side_has_no_state(studio):

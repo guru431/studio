@@ -915,8 +915,9 @@ MCP_DEFAULT_62 = "ALTER TABLE mcp_servers ADD COLUMN dialog_default INTEGER NOT 
 SCHEMA += MCP_DEFAULT_62
 
 #: зеркала группой равноправных копий (mirror_groups.py): группа — исключения шифром, копия — папка компьютера
-#: (`project` — id проекта, `root` + `name_key` + `location` шифром — адрес; неизвестное — NULL), пара — состояния
-#: двух копий на их последнюю синхронизацию (шифром). Строки `project_mirrors` переносит `mirror_groups.adopt` при
+#: (`project` — id проекта, `root` + `name_key` + `location` шифром — адрес; неизвестное — NULL; `held` шифром —
+#: накопленные записи копии на её синхронизациях), пара — состояния двух копий на их последнюю синхронизацию
+#: (шифром). Строки `project_mirrors` переносит `mirror_groups.adopt` при
 #: старте, перенесённые — в `mirror_legacy`; сам `project_mirrors` не меняется. Прежний код новые таблицы не читает:
 #: видит свои односторонние зеркала с прежними базами, его новые строки `adopt` перенесёт после возврата вперёд
 MIRROR_GROUPS_63 = """CREATE TABLE mirror_groups(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -924,7 +925,7 @@ MIRROR_GROUPS_63 = """CREATE TABLE mirror_groups(id INTEGER PRIMARY KEY AUTOINCR
 CREATE TABLE mirror_copies(id INTEGER PRIMARY KEY AUTOINCREMENT,
     grp INTEGER NOT NULL REFERENCES mirror_groups ON DELETE CASCADE,
     agent INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
-    project TEXT, root TEXT, name_key TEXT, location BLOB, UNIQUE(agent, root, name_key));
+    project TEXT, root TEXT, name_key TEXT, location BLOB, held BLOB, UNIQUE(agent, root, name_key));
 CREATE INDEX mirror_copies_project ON mirror_copies(agent, project);
 CREATE INDEX mirror_copies_grp ON mirror_copies(grp);
 CREATE TABLE mirror_pairs(a INTEGER NOT NULL REFERENCES mirror_copies ON DELETE CASCADE,

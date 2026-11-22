@@ -2,7 +2,9 @@
 
 Группа — копии одного проекта у одного пользователя и их общие постоянные исключения (шифром). Копия — папка
 компьютера: `project` — id проекта на нём, `root` + `name_key` + `location` (шифром `{name, folder}`) — адрес для
-записи; неизвестное — NULL, дописывается `place`. Пара — состояния двух копий на их последнюю синхронизацию
+записи; неизвестное — NULL, дописывается `place`; `held` (шифром `{путь: [запись, …]}`) — накопленные записи копии на
+её синхронизациях, последние `HELD_MAX` на путь: правило 3 «уже держал» не теряет их, когда передача переписывает
+состояние копии в паре. Пара — состояния двух копий на их последнюю синхронизацию
 (шифром) и её время; стороны хранятся по возрастанию id (`a < b`), наружу — с точки зрения запрошенной копии.
 
 Функции, кроме `adopt`, без своих транзакций: записи вызывающий оборачивает в `transaction()`.
@@ -22,6 +24,7 @@ import state
 
 log = logging.getLogger("studio")
 EXCLUDE_MAX = 64
+HELD_MAX = 8  # накопленное «держал» копии: последних различных записей на путь
 
 
 class Pair(NamedTuple):
@@ -166,29 +169,58 @@ def synced(x: int, y: int) -> float | None:
     return row["synced"] if row is not None else None
 
 
+def _kept(cid) -> dict[str, list]:
+    """Накопленное копии `{путь: [запись, …]}` (новые — в конце); нет копии или нечитаемо (сменился ключ) — пусто."""
+    row = state.DB.execute("SELECT held FROM mirror_copies WHERE id=?", (cid,)).fetchone()
+    return (_state(row[0]) or {}) if row is not None else {}
+
+
+def _add(kept, path, entry):
+    if entry[0] != "skip":
+        versions = [item for item in kept.get(path, ()) if item != list(entry)]
+        kept[path] = [*versions, list(entry)][-HELD_MAX:]
+
+
+def _store(cid, kept):
+    state.DB.execute("UPDATE mirror_copies SET held=? WHERE id=?", (_seal(kept) if kept else None, cid))
+
+
+def _remember(cid, entries):
+    """Записи состояния копии на этой синхронизации — в её накопленное."""
+    if entries:
+        kept = _kept(cid)
+        for path, entry in entries.items():
+            _add(kept, path, entry)
+        _store(cid, kept)
+
+
 def held(x: int) -> dict[str, set[tuple]]:
-    """Записи (кроме пропущенных), которые копия `x` держала на момент любой из своих синхронизаций."""
+    """Записи `(вид, значение, размер, режим)` (кроме пропущенных), которые копия `x` держала на момент любой из своих
+    синхронизаций: накопленное копии и её состояния в парах (пары перенесённых зеркал накопленного не имеют)."""
     result = {}
+    for path, versions in _kept(x).items():
+        result.setdefault(path, set()).update(tuple(entry) for entry in versions)
     for row in state.DB.execute("SELECT * FROM mirror_pairs WHERE a=? OR b=?", (x, x)):
         entries = _state(_sides(row, x)[0]) or {}
         for path, entry in entries.items():
             if entry[0] != "skip":
-                result.setdefault(path, set()).add(tuple(entry[:3]))
+                result.setdefault(path, set()).add(tuple(entry))
     return result
 
 
-def _put(x, y, blob_x, blob_y, when, *, only_new=False):
-    """Пара из блобов; копии `x` или `y` нет — ничего. `only_new` — только если у `y` в паре ещё нет состояния."""
+def _put(x, y, blob_x, blob_y, when, *, only_new=False) -> bool:
+    """Пара из блобов; копии `x` или `y` нет — ничего. `only_new` — только если у `y` в паре ещё нет состояния.
+    Записано ли."""
     a, b, state_a, state_b = (x, y, blob_x, blob_y) if x < y else (y, x, blob_y, blob_x)
     if only_new:
         column = "state_b" if y == b else "state_a"
         update = f"state_a=excluded.state_a, state_b=excluded.state_b WHERE mirror_pairs.{column} IS NULL"
     else:
         update = "state_a=excluded.state_a, state_b=excluded.state_b, synced=excluded.synced"
-    state.DB.execute(
+    return state.DB.execute(
         "INSERT INTO mirror_pairs(a, b, state_a, state_b, synced) SELECT ?,?,?,?,?"
         " WHERE (SELECT count(*) FROM mirror_copies WHERE id IN (?, ?)) = 2"
-        f" ON CONFLICT(a, b) DO UPDATE SET {update}", (a, b, state_a, state_b, when, a, b))
+        f" ON CONFLICT(a, b) DO UPDATE SET {update}", (a, b, state_a, state_b, when, a, b)).rowcount > 0
 
 
 def _seal(value):
@@ -196,12 +228,17 @@ def _seal(value):
 
 
 def save(x: int, y: int, state_x: dict | None, state_y: dict | None, synced: float | None) -> None:
-    _put(x, y, _seal(state_x), _seal(state_y), synced)
+    """Синхронизация X → Y: оба состояния — в пару и в накопленное своей копии."""
+    if _put(x, y, _seal(state_x), _seal(state_y), synced):
+        _remember(x, state_x)
+        _remember(y, state_y)
 
 
 def seal(x: int, y: int, state_x: dict, state_y: dict) -> None:
     """Первая сверка совпадающих копий: записать, только если состояния `y` в паре ещё нет."""
-    _put(x, y, _seal(state_x), _seal(state_y), None, only_new=True)
+    if _put(x, y, _seal(state_x), _seal(state_y), None, only_new=True):
+        _remember(x, state_x)
+        _remember(y, state_y)
 
 
 def _later(new, old):
@@ -210,10 +247,17 @@ def _later(new, old):
 
 def _merge_copies(keep, drop):
     """Две строки одной папки — в одну: группы сливаются, пары `drop` переходят к `keep` (из двух пар с одной
-    третьей копией остаётся более поздняя), строка `drop` удаляется, недостающие поля `keep` — из неё."""
+    третьей копией остаётся более поздняя), накопленное `drop` — в накопленное `keep`, строка `drop` удаляется,
+    недостающие поля `keep` — из неё."""
     if keep["grp"] != drop["grp"]:
         merge(keep["grp"], drop["grp"])
     k, d = keep["id"], drop["id"]
+    if (dropped := _kept(d)):
+        kept = _kept(k)
+        for path, versions in dropped.items():
+            for entry in versions:
+                _add(kept, path, entry)
+        _store(k, kept)
     for row in state.DB.execute("SELECT * FROM mirror_pairs WHERE a=? OR b=?", (d, d)).fetchall():
         other = row["b"] if row["a"] == d else row["a"]
         if other == k:

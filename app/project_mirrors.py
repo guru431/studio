@@ -41,12 +41,6 @@ WINDOWS_BAD = set(':*?"<>|')
 EXTERNAL_GIT = "Папка использует внешний каталог Git. Выберите основной репозиторий или отдельный клон."
 TRANSFERS = {}  # id компьютера назначения → задача передачи
 RESULTS = {}  # (id текущей копии, id другой копии) → ход передачи
-# Токен плана → пути с локальным изменением на момент сравнения (последние `PLANS_MAX`). Отправка во все копии идёт
-# по очереди: передача в одну перезаписывает состояние текущей копии в той паре, и правило 3 для следующей копии
-# теряет то, что источник держал. Совпавший токен значит, что оба дерева и пара с тех пор не менялись, — решение
-# сравнения в силе.
-PLANS = {}
-PLANS_MAX = 64
 REENTER = "настройка зеркала недоступна после смены ключа — отвяжите зеркало и привяжите заново"
 CHANGED = "настройки зеркала изменились — повторите"
 BAD_PROJECT = "мост вернул неверные сведения о проекте"
@@ -273,9 +267,21 @@ def _source_entry(new, old):
     return new
 
 
+def _held(old, new, versions):
+    """Правило 3: запись копии `old` источник уже держал (`versions` — его записи по этому пути). Режим файла — часть
+    записи: тот же файл с другим режимом проходит, только если новая запись сохраняет режим копии (источник Windows
+    режима не знает и сохраняет его), — иначе замена молча сняла бы бит исполнения, поставленный в копии."""
+    if old is None or old[0] == "skip":
+        return False
+    if tuple(old) in versions:
+        return True
+    return (old[0] == "file" and new is not None and new[0] == "file" and new[3] == old[3]
+            and any(entry[:3] == tuple(old[:3]) for entry in versions))
+
+
 def _plan(source, destination, baseline, *, windows=False, held=None):
-    """`held` — `{путь: {(вид, значение, размер)}}`: что источник уже держал на момент своих синхронизаций
-    (`mirror_groups.held`). Запись копии из этого набора — не локальное изменение (правило 3)."""
+    """`held` — `{путь: {(вид, значение, размер, режим)}}`: что источник уже держал на момент своих синхронизаций
+    (`mirror_groups.held`). Запись копии из этого набора — не локальное изменение (правило 3, `_held`)."""
     held = held or {}
     target = destination or {}
     previous = baseline or {}
@@ -309,8 +315,7 @@ def _plan(source, destination, baseline, *, windows=False, held=None):
         deletion = old is not None and (new is None or old[0] != new[0])
         if deletion:
             remove.append(path)
-        conflict = old != previous.get(path) and not (
-            old is not None and old[0] != "skip" and tuple(old[:3]) in held.get(path, ()))
+        conflict = old != previous.get(path) and not _held(old, new, held.get(path, ()))
         conflicts += int(conflict)
         text = all(entry is None or entry[0] == "file" and entry[2] <= 128 * 1024 for entry in (old, new))
         keepable = old is not None and old[0] == "file"
@@ -648,9 +653,6 @@ async def _sync(request, mine, other, selected, progress):
         plan, to, exclude = comparison.result, comparison.to, comparison.exclude
         if plan["plan"] != selected.plan:
             raise code._refuse(409, "conflict", "проект или зеркало изменились — обновите сравнение")
-        if (conflicted := PLANS.get(selected.plan)) is not None:
-            plan = {**plan, "changes": [[path, kind, conflict and path in conflicted, *rest]
-                                        for path, kind, conflict, *rest in plan["changes"]]}
         updates, remove = await asyncio.to_thread(_selection, plan, selected, comparison.updates, comparison.remove)
         progress.update(bytes=0, total=sum(info[2] for info in updates.values()))
         if updates or remove or comparison.current is None:
@@ -835,10 +837,6 @@ async def get(aid: int, pid: str, cid: int, request: Request):
 async def compare(aid: int, pid: str, cid: int, request: Request):
     mine, other = _pair(request, aid, pid, cid)
     comparison = await _compare(request, mine, other)
-    PLANS.pop(comparison.result["plan"], None)
-    PLANS[comparison.result["plan"]] = {change[0] for change in comparison.result["changes"] if change[2]}
-    while len(PLANS) > PLANS_MAX:
-        PLANS.pop(next(iter(PLANS)))
     if (comparison.pair.state_y is None and comparison.current is not None
             and not comparison.updates and not comparison.remove):
         # Первая сверка совпадающих копий фиксирует оба состояния пары.
@@ -915,4 +913,3 @@ async def stop():
     await asyncio.gather(*tasks, return_exceptions=True)
     TRANSFERS.clear()
     RESULTS.clear()
-    PLANS.clear()

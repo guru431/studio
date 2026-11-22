@@ -377,7 +377,8 @@ def test_step_63_adds_mirror_groups_and_previous_writer_works(env):
 
         conn.execute("INSERT INTO mirror_groups(id,user_id,exclude) VALUES(1,1,x'00')")
         conn.execute("INSERT INTO mirror_copies(id,grp,agent,project) VALUES(1,1,1,'before')")
-        conn.execute("INSERT INTO mirror_copies(id,grp,agent,root,name_key,location) VALUES(2,1,2,'root','one',x'00')")
+        conn.execute("INSERT INTO mirror_copies(id,grp,agent,root,name_key,location,held)"
+                     " VALUES(2,1,2,'root','one',x'00',x'00')")
         conn.execute("INSERT INTO mirror_pairs(a,b,state_b,synced) VALUES(1,2,x'00',5)")
         conn.execute("INSERT INTO mirror_legacy(id) VALUES(1)")
         conn.execute("DELETE FROM users WHERE id = 1")
