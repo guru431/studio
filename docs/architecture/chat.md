@@ -4,8 +4,11 @@
 
 - `chat` — поток SSE. Дата — первый кусок системного сообщения `chat_system.base` каждого запроса (и прямого подключения):
   календарная дата в поясе учётки (`users.timezone`, по умолчанию Москва).
-- Предел контекста модели вне `CONTEXT` — `context_length` списка моделей подключения, запомненный в `chat.LIMITS` на
-  `CONTEXT_TTL_SEC` (неудача не запоминается).
+- Предел контекста модели вне `CONTEXT` — из списка моделей подключения, запомненный в `chat.LIMITS` на
+  `CONTEXT_TTL_SEC` (неудача не запоминается). Поле — первое годное (целое больше нуля) из `connections.CONTEXT_FIELDS`:
+  `context_length` (OpenRouter и подобные), `max_model_len` (vLLM), `max_input_tokens` (LiteLLM, шлюз s06) —
+  `connections.context_size`; им же `context_length` паспорта (`capabilities.model_entry`) и списка моделей
+  подключения (`connections.fetch_models`). Без предела нет ни кольца контекста (`/estimate`), ни проверки 413 `context`.
 - Причина отказа ответа словами — `messages.error` (шаг 35, `db.CHAT_35`): `chat._finish(..., error=)`;
   `chat._message_out` отдаёт `error` из столбца, у старых строк — по-прежнему «скан не распознан» из content; если слова
   совпадают с content (скан, «хранилище недоступно»), content отдаётся пустым. Тексты для скана/хранилища пишутся и в

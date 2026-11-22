@@ -10,6 +10,7 @@ import fnmatch
 
 import httpx
 
+import connections
 import images
 import videos
 
@@ -84,12 +85,12 @@ def _caps(names, source: str) -> list[dict]:
 
 
 def model_entry(raw) -> "dict | None":
-    """Модель из ответа `/models`: id, context_length, возможности по метаданным или по имени."""
+    """Модель из ответа `/models`: id, context_length (`connections.context_size`), возможности по метаданным или по имени."""
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not 0 < len(raw["id"]) <= ID_MAX:
         return None
     entry = {"id": raw["id"]}
-    if isinstance(raw.get("context_length"), int) and not isinstance(raw["context_length"], bool):
-        entry["context_length"] = raw["context_length"]
+    if (length := connections.context_size(raw)) is not None:
+        entry["context_length"] = length
     meta = from_metadata(raw)
     entry["caps"] = _caps(meta, "metadata") if meta is not None else _caps(by_name(raw["id"]), "name")
     return entry

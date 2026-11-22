@@ -72,6 +72,8 @@
   Пробы через сервер (`POST …/check`) — только `GET` через `upstream`: srvllm — `/v1/models` и
   `/slot/models`, openai — `models_url` и он же без ключа (`upstream.request(keyless=True)`),
   OpenRouter — `…/key`; ни генерации, ни release, ни `GET /slot/videos` (сторожит `test_checks.py`).
+  `context_length` модели в паспорте и в «Обновить модели» — `connections.context_size`: `context_length`,
+  `max_model_len` (vLLM) или `max_input_tokens` (LiteLLM), первое целое больше нуля.
   Прямое проверяет браузер (`passport.js`) → `PUT …/passport` (`source: browser`, пределы формы,
   возможности выводит сервер). «Пробный ответ» (`POST …/probe`) — единственная тратящая проба, у
   srvllm его нет. Адрес, убранный из списка, — `connections.dropped` (не прямое): «Проверить» и

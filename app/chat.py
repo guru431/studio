@@ -705,8 +705,8 @@ def estimate_tokens(messages: list[dict]) -> int:
 
 
 async def _limit(conn: Connection, model: str) -> int | None:
-    """Предел контекста модели: CONTEXT, иначе `context_length` списка моделей подключения через
-    сервер (запомненный в LIMITS на CONTEXT_TTL_SEC); не узнать — None (тогда без проверки)."""
+    """Предел контекста модели: CONTEXT, иначе предел из списка моделей подключения через сервер
+    (`connections.context_size`, запомненный в LIMITS на CONTEXT_TTL_SEC); не узнать — None (тогда без проверки)."""
     if model in CONTEXT:
         return CONTEXT[model]
     if not conn.proxied:
@@ -727,8 +727,8 @@ async def _limit(conn: Connection, model: str) -> int | None:
     lengths = {}
     for m in data:
         if isinstance(m, dict) and isinstance(m.get("id"), str):
-            length = m.get("context_length")
-            if isinstance(length, int) and not isinstance(length, bool) and length > 0:
+            length = connections.context_size(m)
+            if length is not None:
                 lengths.setdefault(m["id"], length)
     while len(LIMITS) >= CONTEXT_KEEP:
         del LIMITS[next(iter(LIMITS))]

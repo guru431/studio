@@ -186,6 +186,25 @@ def test_openai_metadata_and_name_guesses(studio):
     assert caps(models["tts-1"]) == {("tts", "name")} and caps(models["plain"]) == set()
 
 
+def test_passport_context_length_from_vllm_and_litellm_fields(studio):
+    """vLLM — `max_model_len`, LiteLLM — `max_input_tokens`: в паспорте и списке моделей — `context_length`."""
+    cid = add_connection(studio, base_url=GW + "/v1", token=FakeGateway.TOKEN)
+
+    async def listed(request):
+        return httpx.Response(200 if request.headers.get("authorization") else 401, json={"data": [
+            {"id": "vllm-model", "max_model_len": 262144}, {"id": "litellm-model", "max_input_tokens": 98304},
+            {"id": "bad-model", "max_model_len": True, "max_input_tokens": -1}]})
+    studio.gw.on["/v1/models"] = listed
+    models = by_id(check(studio, cid).json()["passport"])
+    assert models["vllm-model"]["context_length"] == 262144
+    assert models["litellm-model"]["context_length"] == 98304
+    assert "context_length" not in models["bad-model"]
+    items = {m["id"]: m for m in studio.c.get(f"/api/connections/{cid}/models").json()["items"]}
+    assert items["vllm-model"] == {"id": "vllm-model", "context_length": 262144}
+    assert items["litellm-model"] == {"id": "litellm-model", "context_length": 98304}
+    assert items["bad-model"] == {"id": "bad-model"}
+
+
 @pytest.mark.parametrize("model,want", [
     ("gpt-image-1", ("generate", "edit")), ("dall-e-3", ("generate", "edit")),
     ("whisper-1", ("transcribe", "dictation")), ("gpt-4o-transcribe", ("transcribe", "dictation")),

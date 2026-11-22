@@ -370,6 +370,33 @@ def test_model_list_for_the_context_limit_is_remembered(studio):
     assert len(chat.LIMITS) == 1
 
 
+@pytest.mark.parametrize("entry,limit", [
+    ({"id": "qwen-27b", "max_model_len": 262144}, 262144),                    # vLLM
+    ({"id": "qwen-27b", "max_input_tokens": 98304}, 98304),                   # LiteLLM
+    ({"id": "qwen-27b", "context_length": 4096, "max_model_len": 262144}, 4096),
+    ({"id": "qwen-27b", "context_length": True, "max_model_len": 0, "max_input_tokens": 98304}, 98304),
+])
+def test_context_limit_from_vllm_and_litellm_model_lists(studio, entry, limit):
+    """Найдено вживую 2026-11-22: vLLM шлёт предел полем `max_model_len`, LiteLLM — `max_input_tokens`, не
+    `context_length`; кольцо контекста (`/estimate`) и проверка 413 берут первое годное из connections.CONTEXT_FIELDS."""
+    gw = add_gateway(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "qwen-27b"]})
+    cid = new_chat(studio, connection_id=gw, model="qwen-27b")
+    studio.gw.models.append(entry)
+    r = studio.c.post(f"/api/chats/{cid}/estimate", json={"text": ""})
+    assert r.status_code == 200 and r.json()["limit"] == limit
+
+
+def test_too_long_turn_is_refused_by_vllm_max_model_len(studio):
+    gw = add_gateway(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "qwen-27b"]})
+    cid = new_chat(studio, connection_id=gw, model="qwen-27b")
+    studio.gw.models.append({"id": "qwen-27b", "max_model_len": 8192})
+    r = turn(studio, cid, "а" * 30_000)                                      # ≈ 10 тыс. токенов
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "context"
+    assert "при пределе 8 тыс." in r.json()["detail"]["message"] and not studio.gw.chat_requests
+
+
 def test_images_go_as_image_url_parts_up_to_four(studio):
     add_gateway(studio); cid = new_chat(studio)
     pics = [attach(studio, f"photo{i}.jpg", png(), "image/jpeg") for i in range(4)]

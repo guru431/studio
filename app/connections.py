@@ -178,6 +178,19 @@ def models_url(conn: Connection) -> str:
     return _api(conn) + "/models"
 
 
+#: поля предела контекста в записи `GET …/models` по порядку: OpenRouter и подобные, vLLM, LiteLLM
+CONTEXT_FIELDS = ("context_length", "max_model_len", "max_input_tokens")
+
+
+def context_size(raw: dict) -> int | None:
+    """Предел контекста модели из записи списка моделей: первое из CONTEXT_FIELDS — целое больше нуля."""
+    for name in CONTEXT_FIELDS:
+        value = raw.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
 def slot_url(conn: Connection, path: str) -> str:
     return f"{conn.base_url}/slot{path}"
 
@@ -459,7 +472,7 @@ def check_reachable(conn: Connection) -> None:
 
 
 async def fetch_models(conn: Connection) -> list[dict]:
-    """Модели подключения через сервер (`GET …/models`): `{"id"[, "context_length"]}`; прямое — 409,
+    """Модели подключения через сервер (`GET …/models`): `{"id"[, "context_length"]}` (предел — `context_size`); прямое — 409,
     его список берёт браузер; адрес убран из списка (или имя ведёт внутрь) — 409 `refused` словами;
     нет связи или отказ сервиса — 502 словами."""
     check_reachable(conn)
@@ -476,8 +489,8 @@ async def fetch_models(conn: Connection) -> list[dict]:
     for m in data if isinstance(data, list) else []:
         if isinstance(m, dict) and isinstance(m.get("id"), str):
             item = {"id": m["id"]}
-            if isinstance(m.get("context_length"), int):
-                item["context_length"] = m["context_length"]
+            if (length := context_size(m)) is not None:
+                item["context_length"] = length
             items.append(item)
     return items
 
