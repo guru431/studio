@@ -24,7 +24,7 @@ RUN_KEY = TEST_ROOT + r"\Run"  # настоящий Run установка в т
 IGNORED = ["tests/test_app.py", ".claude/claude-switch.ps1", "CLAUDE.md", "AGENTS.md", "FINDINGS.md",
            "FINDINGS-archive.md", "IDEAS.md", "pytest.ini", "requirements-dev.txt", ".gitignore", ".gitattributes"]
 SHIPPED = ["install.cmd", "install.ps1", "requirements.txt", "constraints.txt", "studio_agent.pyw", "README.md", "studio_agent/app.py",
-           "studio_agent/theme.py"]
+           "studio_agent/theme.py", "studio_agent/studio-agent.ico"]
 
 
 def git(*args: str, stdin: str | None = None) -> str:

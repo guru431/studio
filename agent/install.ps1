@@ -95,8 +95,8 @@ if (-not $NoVenv) {
 }
 
 if ($installed) {
-    # Ярлык «Studio Agent» в меню «Пуск» пользователя — та же команда и папка, что автозапуск (shortcut.target).
-    # Самообновление переводит его на новый выпуск; копия из git ярлык не ставит.
+    # Ярлык «Studio Agent» в меню «Пуск» пользователя — та же команда и папка, что автозапуск, и значок студии
+    # (shortcut.target). Самообновление переводит его на новый выпуск; копия из git ярлык не ставит.
     $menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
     New-Item -ItemType Directory -Force -Path $menu | Out-Null
     $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $menu 'Studio Agent.lnk'))
@@ -104,6 +104,7 @@ if ($installed) {
     $link.Arguments = '"{0}"' -f (Join-Path $repo 'studio_agent.pyw')
     $link.WorkingDirectory = $repo
     $link.Description = 'Studio Agent'
+    $link.IconLocation = '{0},0' -f (Join-Path $repo 'studio_agent\studio-agent.ico')
     $link.Save()
     Write-Host 'Ярлык «Studio Agent» — в меню «Пуск».'
 }

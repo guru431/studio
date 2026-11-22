@@ -42,6 +42,23 @@ def test_icon_without_dot_for_the_window():
     assert all(abs(a - b) <= 4 for a, b in zip(img.getpixel((16, 15))[:3], tray.STAR))
 
 
+def test_windows_shortcut_icon_is_the_studio_drawing():
+    """`studio-agent.ico` (`shortcut.ICON`) — тот же рисунок в каждом размере; после правки рисунка:
+    `python -c "from studio_agent import tray; tray.save_ico('studio_agent/studio-agent.ico')"`."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    from studio_agent import shortcut
+
+    with Image.open(Path(tray.__file__).parents[1] / shortcut.ICON) as ico:
+        assert ico.info["sizes"] == {(n, n) for n in tray.ICO_SIZES}
+        for n in tray.ICO_SIZES:
+            ico.size = (n, n)
+            ico.load()
+            assert ico.convert("RGBA").tobytes() == tray.icon(n).tobytes(), n
+
+
 def test_notice_only_for_first_online_and_studio_closing():
     assert tray.notice("online", True) == "Компьютер подключён к студии"
     assert tray.notice("online", False) is None

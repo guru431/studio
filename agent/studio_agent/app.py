@@ -24,6 +24,9 @@ from .turns import Runner
 log = logging.getLogger(__name__)
 
 TITLE = "Studio Agent"
+# Windows: свой AppUserModelID — панель задач группирует окна моста отдельно от Python (процесс — pythonw.exe) и
+# показывает значок окна студии, а не значок интерпретатора.
+APP_ID = "Studio.Agent"
 ALREADY = "Мост уже запущен"
 WORDS = {"setup": "не настроен", "connecting": "подключается…", "online": "на связи", "offline": "нет связи",
          "revoked": "компьютер отозван", "replaced": "ключ используется другим мостом",
@@ -790,6 +793,8 @@ def main(argv: list[str]) -> int:
 
     with contextlib.suppress(Exception):  # чёткие шрифты окна на экранах с масштабом
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    with contextlib.suppress(Exception):  # до первого окна: значок студии на панели задач
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     h = store.home()
     mutex = single.acquire()
     if mutex is None:

@@ -56,6 +56,15 @@ PIN — автозапуск и ярлык остаются. Проверки �
 `APPDATA`, фикстура `start_menu` conftest), `agent/tests/test_install.py` и `test_updater.py` (integration:
 ярлык `install.ps1` и автономного хелпера читается тем же `shortcut.read`).
 
+С 0.44.2 у ярлыка значок студии — `studio_agent/studio-agent.ico` копии (`shortcut.ICON`; рисунок `tray.save_ico` —
+тот же, что у `.icns` приложения macOS, файл сверяет `agent/tests/test_tray.py`), а не значок `pythonw.exe`. Ярлык
+прежней версии без значка `shortcut.ensure` переписывает, когда новая копия довершает переход
+(`update_helper.cleanup_started`); `install.ps1` ставит значок сам. Окна моста живут в процессе Python (venv-лаунчер
+запускает `pythonw.exe` базовой установки дочерним), и при группировке кнопок панель задач показывала значок Python:
+`app.main` до первого окна задаёт явный AppUserModelID `app.APP_ID`, и Windows берёт значок окна (`window.prepare`,
+`iconphoto`). Имя процесса в диспетчере задач и автозагрузке и заголовок уведомлений («Python») остаются — их сменил
+бы только свой исполняемый файл.
+
 С 0.33.2 режим Codex «Полный доступ» передаёт `approvalPolicy: on-request` и
 `approvalsReviewer: auto_review` при создании, возобновлении чата и каждом ходе.
 Команды, для которых Codex требует согласования, проходят автоматическую проверку.

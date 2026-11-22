@@ -20,6 +20,7 @@ GREEN, GREY, YELLOW, RED = (47, 158, 111), (143, 143, 143), (232, 168, 26), (220
 COLORS = {"online": GREEN, "connecting": GREY, "setup": GREY, "offline": YELLOW, "disabled": YELLOW, "revoked": RED,
           "replaced": RED}  # `disabled` без уведомления: повторяется на каждом переподключении, как `offline`
 SIZE = 64
+ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 256)  # ярлык и панель задач Windows при масштабе 100–200 %
 CANVAS = 512  # рисунок — в единицах viewBox студии
 DOT_R, DOT_RIM = 104, 26  # точка состояния и её белая обводка — в единицах CANVAS
 DOT_C = CANVAS - DOT_R - DOT_RIM - 4  # центр точки — правый нижний угол
@@ -78,6 +79,13 @@ def _canvas() -> Image.Image:
 def icon(size: int = SIZE) -> Image.Image:
     """Значок студии без точки (окно: `iconphoto`, шапка). Общий — не менять."""
     return _canvas().resize((size, size), Image.Resampling.LANCZOS)
+
+
+def save_ico(path) -> None:
+    """Значок студии `.ico` для ярлыка Windows (`shortcut.ICON`, как `.icns` приложения macOS): каждый размер —
+    своим уменьшением рисунка. Файл в репозитории пересобирается этой функцией, сверяет `test_tray.py`."""
+    icon(ICO_SIZES[-1]).save(path, format="ICO", sizes=[(n, n) for n in ICO_SIZES],
+                            append_images=[icon(n) for n in ICO_SIZES[:-1]])
 
 
 @functools.lru_cache(maxsize=None)

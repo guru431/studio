@@ -3,6 +3,7 @@
 import json
 import runpy
 import shutil
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -27,10 +28,22 @@ def releases(tmp_path, monkeypatch):
 
 
 def test_shortcut_runs_the_same_command_as_autostart(start_menu):
-    program, arguments, folder = shortcut.target(autostart.REPO)
+    program, arguments, folder, icon = shortcut.target(autostart.REPO)
     assert f'"{program}" {arguments}' == autostart.command()  # pythonw.exe — без окна консоли
     assert folder == str(autostart.REPO)
+    assert icon.endswith('.ico') and Path(icon).is_file()      # значок студии в копии, не значок Python
     assert shortcut.path() == start_menu / 'Studio Agent.lnk'
+
+
+def test_shortcut_of_an_older_version_gets_the_studio_icon(tmp_path, start_menu, monkeypatch):
+    """Ярлык до 0.44.2 — без значка: `ensure` (новая копия после `complete`) переписывает его."""
+    repo = tmp_path / 'release-abc'
+    full = shortcut.target
+    monkeypatch.setattr(shortcut, 'target', lambda r: full(r)[:3] + ('',))
+    shortcut.write(repo)
+    monkeypatch.setattr(shortcut, 'target', full)
+    assert shortcut.read() == full(repo)[:3] + ('',)
+    assert shortcut.ensure(repo) is True and shortcut.read() == shortcut.target(repo)
 
 
 def test_real_shortcut_is_written_read_and_moved_to_another_copy(tmp_path, start_menu):
