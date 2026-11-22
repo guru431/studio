@@ -22,11 +22,12 @@ class MirrorMachine(FakeMachine):
         self.platform = "win32"
         self.discovery = True
         self.exclusions = True
+        self.groups = True
 
     @property
     def hello(self):
         return {**super().hello, "project_mirror": True, "project_mirror_discovery": self.discovery,
-                "mirror_exclude": self.exclusions}
+                "mirror_exclude": self.exclusions, "mirror_groups": self.groups}
 
     def handle(self, req):
         try:
@@ -34,28 +35,31 @@ class MirrorMachine(FakeMachine):
         except AgentRefused as err:
             return {"t": "res", "id": req["id"], "ok": False, "code": err.code, "message": err.message}, []
 
+    def _project_path(self, project):
+        """Любой проект корней машины — источник: группа отправляет с любой своей копии."""
+        return mirror.projects.find_project(self.roots, project)
+
     def _op_project_roots(self, req, events):
         return {"items": mirror.projects.list_roots(self.roots)}
 
     def _op_mirror_identity(self, req, events):
-        return mirror.identity(self.roots, self.source)
+        return mirror.identity(self.roots, self._project_path(req["project"]))
 
     def _op_mirror_candidates(self, req, events):
         return mirror.candidates(self.roots, req["name"], req["repositories"])
 
     def _op_mirror_scan(self, req, events):
-        assert req["project"] == pid(self.source.name)
-        return mirror.scan(self.source, req.get("exclude") or ())
+        return mirror.scan(self._project_path(req["project"]), req.get("exclude") or (), req.get("reasons") is True)
 
     def _op_mirror_destination(self, req, events):
         return mirror.destination(self.roots, req["root"], req["name"], metadata_only=req.get("metadata_only"),
-                                  exclude=req.get("exclude") or ())
+                                  exclude=req.get("exclude") or (), reasons=req.get("reasons") is True)
 
     def _op_mirror_read(self, req, events):
-        return mirror.read(self.source, req["reads"])
+        return mirror.read(self._project_path(req["project"]), req["reads"])
 
     def _op_read(self, req, events):
-        return files.read_text(self.source, req["path"])
+        return files.read_text(self._project_path(req["project"]), req["path"])
 
     def _op_mirror_text(self, req, events):
         return files.read_text(mirror.target(self.roots, req["root"], req["name"]), req["path"])
@@ -80,6 +84,13 @@ def computers(tmp_path):
     for root in destinations:
         root.mkdir()
     return source, MirrorMachine([source.parent], source=source), MirrorMachine(destinations, pin="2468")
+
+
+@pytest.fixture
+def trio(computers, tmp_path):
+    """Три компьютера: `third` — без PIN, с одной папкой проектов."""
+    (tmp_path / "third").mkdir()
+    return (*computers, MirrorMachine([tmp_path / "third"]))
 
 
 @pytest.mark.integration  # Реальные деревья файлов, несколько полных циклов синхронизации.
