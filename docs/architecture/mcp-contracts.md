@@ -116,6 +116,10 @@ SameSite=Strict, Path=/f/file, `my_files.OPEN_SEC` (600), значение — �
 — файл заменён другим под тем же именем или изменён — тот же 404 (окно «Ссылка на сутки» об этом предупреждает);
 неудачи — `email_accounts.throttle` по адресу (`my_files.FAILS` (30) за `my_files.FAIL_SEC` (900)), потом
 429 `file_locked`; удачная проверка попытку возвращает. Все ответы — `no-store`, `no-referrer`, `noindex`.
+Файл защищённого источника (`mcp_servers.protected`, [chat](chat.md)) ссылкой не выдаётся: создание — 409 `protected`
+(`my_files.PROTECTED`), ссылка сервера, ставшего защищённым, — тот же 404 на `/f/check`, `/f/open` и `/f/file`
+(`my_files._resolve`, каждый запрос). Смотреть и скачивать свои файлы владелец может; `GET /api/my-files/servers`
+отдаёт `protected`, кнопка «Ссылка на сутки» на таком сервере выключена с причиной.
 
 ## `studio/user-files` — файлы пользователя
 
