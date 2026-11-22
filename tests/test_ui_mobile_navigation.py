@@ -130,7 +130,7 @@ def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme,
     values = r['values']
     assert values['services'] and not values['overflow'], values
     if width < 760:
-        assert values['remaining'] == ['video', 'speech', 'transcribe', 'ocr', 'translate']
+        assert values['remaining'] == ['video', 'speech', 'transcribe', 'ocr', 'translate', 'owui']
         assert values['activeLabel'] == 'Ещё: Расшифровка'
         assert not values['activeGeometry']['overlaps'] and all(
             label['inside'] and label['hit'] for label in values['activeGeometry']['labels']), values['activeGeometry']
@@ -139,7 +139,7 @@ def test_mobile_navigation_preferences_and_geometry(browser, live, width, theme,
         geometry = values['geometry']
         assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels']), geometry
     else:
-        assert values['desktop'] == 8 and values['moreHidden']
+        assert values['desktop'] == 9 and values['moreHidden']
 
 
 @pytest.mark.parametrize('width', [320, 393])
@@ -180,15 +180,15 @@ def test_mobile_navigation_switches_between_all_icons_and_more(browser, live, wi
         ('eval', 'savedCompact', f"localStorage.getItem('studio-mobile-nav-mode:{uid}')")], width=width, mobile=True)
     assert not r.get('failed'), (r.get('failed'), list(r.get('values', {})), r.get('log'))
     values = r['values']
-    assert values['allTabs'] == values['kept'] == ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'code']
+    assert values['allTabs'] == values['kept'] == ['chat', 'photo', 'video', 'speech', 'transcribe', 'ocr', 'translate', 'owui', 'code']
     assert values['mode'] == 'all' and values['moreHidden'] and not values['overflow'], values
     geometry = values['geometry']
     assert not geometry['overlaps'] and all(label['inside'] for label in geometry['labels']), geometry
-    assert [name for name, _ in values['names']] == ['Чат', 'Фото', 'Видео', 'Озвучка', 'Расшифровка', 'Сканы', 'Перевод', 'Агенты']
+    assert [name for name, _ in values['names']] == ['Чат', 'Фото', 'Видео', 'Озвучка', 'Расшифровка', 'Сканы', 'Перевод', 'Open WebUI', 'Агенты']
     assert all(shown for _, shown in values['names']), values['names']
     assert len({round(button['top']) for button in values['buttonRow']}) == 1
     assert len({round(button['iconTop']) for button in values['buttonRow']}) == 1
-    assert all(button['width'] >= width / 8 - 1 and button['height'] >= 44 for button in values['buttonRow'])
+    assert all(button['width'] >= width / 9 - 1 and button['height'] >= 44 for button in values['buttonRow'])
     assert values['compact'] == ['speech', 'transcribe', 'ocr', 'code'] and values['savedCompact'] == 'compact'
     assert values['focusBack'] == 'appearance-mobile-nav-open'
     assert values['moreActive'] == 'Ещё: Перевод'

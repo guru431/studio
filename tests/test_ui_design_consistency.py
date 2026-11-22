@@ -16,7 +16,7 @@ from test_ui_section_limits import GOOD, serve
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
-SECTIONS = ["code", "chat", "photo", "video", "speech", "transcribe", "ocr", "translate"]
+SECTIONS = ["code", "chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "owui"]
 WIDTHS, LANGS = [320, 390, 1280], ["ru", "en"]
 CHROMIUM = pytest.mark.parametrize("engine", ["chromium"], indirect=True)
 EVERY = {f"{width}-{lang}" for width in WIDTHS for lang in LANGS}
@@ -39,6 +39,7 @@ READY = {
     "transcribe": "document.querySelector('#transcribe-upload')",
     "ocr": "document.querySelector('#ocr-upload') && document.querySelectorAll('#ocr-model option').length > 1",
     "translate": "document.querySelector('#tl-input') && document.querySelectorAll('#tl-model option').length === 2",
+    "owui": "document.querySelector('#owui-empty #owui-connect-first')",
 }
 
 #: Замер открытого раздела: шапка, эталонная кнопка выбора, кнопки ряда управления, видимые системные выборы.
