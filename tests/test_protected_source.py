@@ -1,6 +1,10 @@
 """«Защищённый источник» MCP (спека 2026-11-21-studio-source-capabilities-design, п. 14): после успешного вызова
 инструмента такого общего сервера «Интернет» диалога выключается и больше не включается, веб-инструменты не
-предлагаются, а аргументы со ссылками отклоняются."""
+предлагаются, а аргументы со ссылками отклоняются. Данные источника не уходят из Студии и мимо хода: ссылки
+«Поделиться», экспорт и архив такого диалога, ссылки «Моих файлов» на защищённом сервере закрыты."""
+import json
+from urllib.parse import urlsplit
+
 import chat_tools
 import mcp_client
 import memory
@@ -12,6 +16,7 @@ from test_chat_pending import answer, pending_of
 from test_chat_web import EXA_KEY, call
 from test_mcp import URL as MCP_URL
 from test_mcp_dialog import methods, name_of, offered, setup, tool, view
+from test_takeout import download, unzip
 
 ALL = ["web_search", "read_page", "youtube_subtitles"]
 
@@ -159,6 +164,76 @@ def test_memory_not_written_after_protected(studio):
     assert memory.list_for(uid) == []
     assert sse(answer(studio, other, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     assert [i["text"] for i in memory.list_for(uid)] == ["любит краткость"]
+
+
+def protected_dialog(studio, sid, cid=None) -> str:
+    """Диалог, где вызов дошёл до защищённого сервера (`chats.protected_used`)."""
+    cid = cid or new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="79001234567")]}, ["Номер найден"]]
+    assert sse(turn(studio, cid, "Проверь номер"))[-1] == ("done", {"status": "done"})
+    assert flags(cid)[0] == 1
+    return cid
+
+
+def code_of(response, status=409) -> str:
+    assert response.status_code == status, response.text
+    return response.json()["detail"]["code"]
+
+
+def test_protected_chat_cannot_be_shared_or_exported(studio):
+    """Данные источника не уходят из Студии и мимо хода: ссылка «Поделиться» — 409, прежняя ссылка — «недоступна»
+    с того же мгновения и навсегда (как у чата в корзине), Markdown, PDF, выделенное и архив ZIP — 409."""
+    sid, _, _ = setup(studio)
+    protect(studio, sid)
+    cid = new_chat(studio)
+    studio.gw.chat_script = [["Обычный ответ"]]
+    assert sse(turn(studio, cid, "Привет"))[-1] == ("done", {"status": "done"})
+    made = studio.c.post(f"/api/chats/{cid}/share", json={"pin": "0123"})
+    assert made.status_code == 201, made.text
+    token = urlsplit(made.json()["url"]).fragment
+    opened = studio.c.post("/share/unlock", json={"token": token, "pin": "0123"})
+    assert opened.status_code == 200
+    access = opened.json()["access"]
+    early = studio.c.post(f"/api/chats/{cid}/archive", json={})
+    assert early.status_code == 200
+    protected_dialog(studio, sid, cid)
+    gone = studio.c.post("/share/unlock", json={"token": token, "pin": "0123"})
+    assert code_of(gone, 404) == "share_gone"
+    assert code_of(studio.c.post("/share/check", json={"access": access}), 404) == "share_gone"
+    shares = studio.c.get("/api/me/access").json()["shares"]
+    assert [(s["protected"], s["trashed"]) for s in shares] == [(True, False)]       # остаётся только отключить
+    assert code_of(studio.c.post(f"/api/chats/{cid}/share", json={"pin": "0123"})) == "protected"
+    for body in ({"format": "md"}, {"format": "pdf"}, {"format": "pdf", "selection": "<p>Номер найден</p>"}):
+        assert code_of(studio.c.post(f"/api/chats/{cid}/export", json=body)) == "protected"
+    assert code_of(studio.c.post(f"/api/chats/{cid}/archive", json={})) == "protected"
+    assert code_of(studio.c.get(f"/api/chats/archive/{early.json()['token']}")) == "protected"
+    assert [c["protected"] for c in studio.c.get("/api/chats").json()["items"]] == [True]
+    # навсегда: и «Вернуть» из корзины ссылку не оживит
+    assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
+    assert studio.c.post(f"/api/trash/chats/{cid}/restore").status_code == 204
+    assert code_of(studio.c.post("/share/unlock", json={"token": token, "pin": "0123"}), 404) == "share_gone"
+    # обычный диалог той же учётки — как прежде
+    other = new_chat(studio)
+    assert studio.c.post(f"/api/chats/{other}/export", json={"format": "md"}).status_code == 200
+    assert studio.c.post(f"/api/chats/{other}/share", json={"pin": "0123"}).status_code == 201
+
+
+def test_history_export_keeps_only_metadata_of_protected_chat(studio):
+    sid, _, _ = setup(studio)
+    protect(studio, sid)
+    plain = new_chat(studio)
+    studio.gw.chat_script = [["Обычный ответ"]]
+    assert sse(turn(studio, plain, "Привет"))[-1] == ("done", {"status": "done"})
+    cid = protected_dialog(studio, sid)
+    _, z = download(studio, ["chat"])
+    zf = unzip(z)
+    kept = json.loads(zf.read(f"chats/{cid}.json"))
+    assert kept["protected"] is True and kept["messages"] == [] and kept["media"] == []
+    assert {"id", "title", "model", "created", "updated"} <= kept.keys()
+    assert "79001234567" not in z.content.decode("utf-8", "replace")
+    assert "Номер найден" not in z.content.decode("utf-8", "replace")
+    assert [m["content"] for m in json.loads(zf.read(f"chats/{plain}.json"))["messages"]] == ["Привет", "Обычный ответ"]
+    assert "защищённых источников MCP не выгружаются" in zf.read("README.txt").decode("utf-8")
 
 
 def test_non_protected_dialog_unchanged(studio):

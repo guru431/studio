@@ -149,6 +149,8 @@ const EXTERNAL_NOTE = tr("Запись уйдёт во внешний серви
 const WEB_HINT = tr("Задайте ключ Exa в Настройках → Ввод и интернет → Интернет");
 // chats.protected_used: в диалоге сработал «Защищённый источник» MCP — сервер не включит «Интернет» (409 `protected`)
 const PROTECTED_HINT = tr("В этом диалоге сработал защищённый источник — «Интернет» здесь недоступен");
+// и «Поделиться», и экспорт такого диалога сервер отклонит (409 `protected`, chat.unprotected)
+const PROTECTED_SHARE = tr("В этом диалоге сработал защищённый источник — им нельзя поделиться и его нельзя скачать");
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
 const WEB_TITLE = tr("Интернет: поиск, страницы и субтитры YouTube");
 const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
@@ -720,7 +722,8 @@ function build(view, ctx) {
     const current = chat?.chat.id === chatId ? chat.chat : null;
     share.hidden = !current;
     sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
-      export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive` } : null);
+      export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive`,
+      blocked: current.protected ? PROTECTED_SHARE : null } : null);
   }
 
   /* выдвижная панель списка (≤ 760px) */
@@ -771,7 +774,9 @@ function build(view, ctx) {
     li.append(menu);
     popupMenu(more, menu, { align: 'end', fill: (close) => {
       const items = [
-        menuItem(tr("Поделиться чатом"), { attrs: { class: 'chat-share' }, onSelect: () => {
+        // сработал защищённый источник — поделиться нельзя (409 `protected`): пункт выключен, причина — в подсказке
+        menuItem(tr("Поделиться чатом"), { attrs: { class: 'chat-share', disabled: item.protected || null,
+          title: item.protected ? PROTECTED_SHARE : null }, onSelect: () => {
           close(); panel(false); shareDialog(root, `/api/chats/${item.id}/share`);
         } }),
         menuItem(tr("Переименовать"), { attrs: { class: 'chat-rename' }, onSelect: () => { close(); renameDialog(item); } }),

@@ -11,10 +11,14 @@ import { button, el, field, openDialog, plural, words } from './ui.js';
 
 
 /** Меню «Поделиться и экспортировать» — общий компонент menu.js: popover, стрелки, Escape только этого меню.
- * `archive` — пункт «архив ZIP с файлами» (обычный чат): POST `context.archive` → токен, загрузка — ссылкой по нему. */
+ * `archive` — пункт «архив ZIP с файлами» (обычный чат): POST `context.archive` → токен, загрузка — ссылкой по нему.
+ * `context.blocked` — причина словами, почему ни поделиться, ни скачать нельзя (сработал защищённый источник —
+ * сервер ответил бы 409 `protected`): кнопка выключена, причина — в подсказке. */
+const TRIGGER_TITLE = tr("Поделиться и экспортировать чат");
+
 export function shareMenu(host, { id, content = null, request = api, failed = () => {}, archive = false }) {
-  const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': tr("Поделиться и экспортировать чат"),
-    title: tr("Поделиться и экспортировать чат"), 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
+  const trigger = button('', { id, class: 'icon-btn chat-share-trigger', 'aria-label': TRIGGER_TITLE,
+    title: TRIGGER_TITLE, 'aria-haspopup': 'menu', 'aria-expanded': 'false', disabled: true });
   trigger.innerHTML = svg('share');   // константа icons.js
   const menu = el('div', { id: `${id}-menu`, class: 'chat-share-menu', role: 'menu', 'aria-label': tr("Поделиться чатом") });
   host.append(menu);
@@ -75,7 +79,7 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
       } finally {
         busy = false;
         controller = null;
-        trigger.disabled = !context;
+        trigger.disabled = !context || !!context.blocked;
         trigger.removeAttribute('aria-busy');
       }
     });
@@ -89,10 +93,10 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
   document.addEventListener('pointerdown', pointer, true);
   document.addEventListener('visibilitychange', clear);
   document.addEventListener('studio-code-clear', clear);
-  const popup = popupMenu(trigger, menu, { align: 'end', blocked: () => !context || busy });
+  const popup = popupMenu(trigger, menu, { align: 'end', blocked: () => !context || busy || !!context.blocked });
   return { button: trigger, set(value) {
     if (context?.share === value?.share && context?.export === value?.export && context?.title === value?.title
-      && context?.archive === value?.archive) return;
+      && context?.archive === value?.archive && context?.blocked === value?.blocked) return;
     close();
     host.querySelector('#chat-share-dialog')?.close();
     controller?.abort();
@@ -100,7 +104,9 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
     context = value;
     // без `share` — только экспорт: участник проекта видит чаты владельца, но ссылкой делится владелец
     items[0].hidden = !context?.share;
-    trigger.disabled = !context || busy;
+    trigger.disabled = !context || busy || !!context.blocked;
+    trigger.title = context?.blocked || TRIGGER_TITLE;
+    trigger.setAttribute('aria-label', context?.blocked ? `${TRIGGER_TITLE}: ${context.blocked}` : TRIGGER_TITLE);
   }, unmount() {
     clear();
     document.removeEventListener('selectionchange', capture);

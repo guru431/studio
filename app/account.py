@@ -275,7 +275,7 @@ async def access(request: Request):
         " WHERE a.user_id = ? ORDER BY a.name, m.project, u.login", (uid,)).fetchall()
     shares = state.DB.execute(
         "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, s.session_id, c.title, s.label, s.created,"
-        " s.expires, c.deleted IS NOT NULL AS trashed,"
+        " s.expires, c.deleted IS NOT NULL AS trashed, c.protected_used = 1 AS protected,"
         " s.views, s.viewed, s.fails FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
         " LEFT JOIN agents a ON a.id = s.agent_id WHERE s.user_id = ? AND (s.expires IS NULL OR s.expires > ?)"
         " ORDER BY s.created DESC", (uid, clock.NOW())).fetchall()
@@ -289,6 +289,8 @@ async def access(request: Request):
                         "chat_id": r["chat_id"], "computer_id": r["agent_id"], "session_id": r["session_id"],
                         # чат в корзине: ссылка получателю недоступна, после «Вернуть» откроется снова (trash.py)
                         "trashed": bool(r["trashed"]),
+                        # в чате сработал защищённый источник: ссылка недоступна навсегда (chat_shares.LIVE)
+                        "protected": bool(r["protected"]),
                         "computer": r["computer"], "project": r["project"],
                         **(_place(names, r["agent_id"], r["project"]) if r["agent_id"] else {}),
                         "created": r["created"], "expires": r["expires"], "views": r["views"], "viewed": r["viewed"],

@@ -194,7 +194,7 @@ async def _store(request: Request, body: ShareIn, snapshot: dict, expected, file
         _own_computer(request, source["agent_id"])
     _owner_open(request, "code" if source.get("agent_id") else "chat")
     if source.get("chat_id"):
-        chat._chat_row(request.state.user.id, source["chat_id"])
+        chat.unprotected(chat._chat_row(request.state.user.id, source["chat_id"]))
     current = _owned(request, **source)
     if (current["id"] if current else None) != (expected["id"] if expected else None):
         raise _refuse(409, "share_changed", "настройки ссылки изменились — откройте окно заново")
@@ -233,8 +233,9 @@ async def chat_share(chat_id: str, request: Request):
 
 
 def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tuple[dict, list[str]]:
-    """Снимок обычного чата; `reasoning=False` — без рассуждения модели (ссылка по умолчанию)."""
-    row = chat._chat_row(user_id, chat_id)
+    """Снимок обычного чата; `reasoning=False` — без рассуждения модели (ссылка по умолчанию). Диалог, где сработал
+    защищённый источник, — 409 `protected` (`chat.unprotected`): ни ссылки, ни экспорта, ни архива."""
+    row = chat.unprotected(chat._chat_row(user_id, chat_id))
     atts = chat._attachments(chat_id)
     files, messages = [], []
     for message in chat._messages(chat_id):
@@ -432,8 +433,10 @@ def _same_origin(request):
         raise _refuse(403, "origin", "откройте ссылку в браузере")
 
 
-#: ссылка обычного чата в корзине «недоступна», после «Вернуть» — снова открывается (строка и снимок — на месте)
-LIVE = " AND (s.chat_id IS NULL OR s.chat_id IN (SELECT id FROM chats WHERE deleted IS NULL))"
+#: ссылка обычного чата в корзине «недоступна», после «Вернуть» — снова открывается (строка и снимок — на месте);
+#: чата, где сработал защищённый источник (`chats.protected_used`), — «недоступна» с того же мгновения и навсегда
+LIVE = (" AND (s.chat_id IS NULL OR s.chat_id IN (SELECT id FROM chats WHERE deleted IS NULL"
+        " AND protected_used = 0))")
 
 
 def _public_share(token_hash):

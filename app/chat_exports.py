@@ -2,8 +2,9 @@
 
 The chat archive (`POST /api/chats/{chat_id}/archive` → token, `GET /api/chats/archive/{token}`) is one ZIP: chat.md
 (the same `markdown`), `files/` — attachment sources, dialog media and MCP result files (through
-`mcp_sections.relay`), the unavailable ones listed in missing.txt. Trash (`deleted`) stays out. The log gets ids and
-numbers only, never file names or paths."""
+`mcp_sections.relay`), the unavailable ones listed in missing.txt. Trash (`deleted`) stays out. A chat where a
+protected MCP source was used (`chats.protected_used`) is never exported: Markdown, PDF, selection and archive — 409
+`protected` (`chat.unprotected`). The log gets ids and numbers only, never file names or paths."""
 import asyncio
 import contextlib
 import html
@@ -369,11 +370,11 @@ async def export_chat(chat_id: str, body: ExportIn, request: Request):
         with _export_size():
             snapshot, _ = chat_shares.regular_snapshot(request.state.user.id, chat_id)
     else:
-        row = chat._chat_row(request.state.user.id, chat_id)
+        row = chat.unprotected(chat._chat_row(request.state.user.id, chat_id))
         snapshot = {"title": row["title"] or word("Чат", body.lang), "messages": []}
 
-    async def check():
-        chat._chat_row(request.state.user.id, chat_id)
+    async def check():                  # и после сборки PDF: защищённый источник мог сработать за это время
+        chat.unprotected(chat._chat_row(request.state.user.id, chat_id))
 
     return await _file(snapshot, body, request, "chat", check)
 
@@ -504,9 +505,10 @@ async def _archive(uid: int, chat_id: str, text: bytes, local: list, results: li
     out, now = media.ZipWriter(media.user_zone(uid)), clock.NOW()
     used, missing, total = set(), [], len(text) + sum(item[2] or 0 for item in local)
 
-    def live() -> bool:                              # the session closed — stop, as the history export does
-        return state.DB.execute("SELECT 1 FROM sessions WHERE digest = ? AND user_id = ?",
-                                (digest, uid)).fetchone() is not None
+    def live() -> bool:        # the session closed or a protected source was used meanwhile — stop (the ZIP stays cut)
+        return state.DB.execute("SELECT 1 FROM sessions WHERE digest = ? AND user_id = ? AND NOT EXISTS"
+                                " (SELECT 1 FROM chats WHERE id = ? AND protected_used = 1)",
+                                (digest, uid, chat_id)).fetchone() is not None
 
     async def put(name: str, created: float, f, crc: int, size: int):
         with f:

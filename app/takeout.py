@@ -60,7 +60,9 @@ RUNNING: dict[int, object] = {}
 #: раздел → (таблица, столбцы со ссылкой на media, условие); таблицы и столбцы — из кода
 #: Корзина (`deleted`, trash.py) не выгружается: ни записи, ни её файлы
 LIVE = " AND deleted IS NULL"
-_LIVE_CHATS = "SELECT id FROM chats WHERE deleted IS NULL"
+#: файлы диалогов — только тех, где не срабатывал защищённый источник MCP (`chats.protected_used`): такой диалог
+#: выгружается без сообщений, вложений и медиа (`_chat`), данные источника из Студии не уходят
+_LIVE_CHATS = "SELECT id FROM chats WHERE deleted IS NULL AND protected_used = 0"
 REFS = {
     "chat": ("attachments", ("media_id",),
              f" AND message_id IN (SELECT id FROM messages WHERE chat_id IN ({_LIVE_CHATS}))"),
@@ -90,7 +92,8 @@ README = """Выгрузка истории студии
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
   найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом), рассуждение модели (reasoning,
   reasoning_sec — секунды) и план работы (todo: шаги и их состояние), звук и видео диалога для MCP
-  (media: имя, тип, размер, ссылка на файл).
+  (media: имя, тип, размер, ссылка на файл). Диалоги с данными защищённых источников MCP не выгружаются:
+  у них только название, модель и время (protected: true), без сообщений, вложений и файлов.
 - images/0001.json, images/0002.json … — картинки страницами по 500: промпт, модель, размер, seed,
   цепочка промптов, файлы итога, исходника, маски.
 - videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
@@ -178,10 +181,13 @@ def _settings(user_id: int) -> dict | None:
 
 
 def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
-    chat = state.DB.execute("SELECT id, title, model, created, updated FROM chats WHERE id = ? AND user_id = ?"
-                            + LIVE, (chat_id, user_id)).fetchone()
+    chat = state.DB.execute("SELECT id, title, model, created, updated, protected_used FROM chats"
+                            " WHERE id = ? AND user_id = ?" + LIVE, (chat_id, user_id)).fetchone()
     if chat is None:
         return None                                        # удалён (или в корзину) во время выгрузки
+    meta = {key: chat[key] for key in ("id", "title", "model", "created", "updated")}
+    if chat["protected_used"]:                             # сработал защищённый источник — только сведения диалога
+        return {**meta, "protected": True, "messages": [], "media": []}
     attachments: dict[str, list] = {}
     for a in state.DB.execute(
             "SELECT id, message_id, kind, name, chars, text, media_id FROM attachments WHERE user_id = ?"
@@ -203,7 +209,7 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
                                             " WHERE chat_id = ? AND user_id = ? AND deleted IS NULL"
                                             " ORDER BY created, rowid",
                                             (chat_id, user_id))]
-    return {**dict(chat), "messages": messages, "media": chat_media}
+    return {**meta, "messages": messages, "media": chat_media}
 
 
 def _pages(table: str, user_id: int):

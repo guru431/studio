@@ -212,7 +212,9 @@ export function accessBlock(host) {
       : s.session_id ? `#/code/${s.computer_id}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session_id)}` : null;
     const info = el('div', { class: 'session-info' },
       el('div', { class: 'row' }, el('b', {}, title),
-        s.trashed ? el('span', { class: 'tag access-trashed' }, tr("в корзине — недоступна")) : null),
+        s.trashed ? el('span', { class: 'tag access-trashed' }, tr("в корзине — недоступна")) : null,
+        // сработал защищённый источник MCP — ссылка недоступна навсегда (chat_shares.LIVE); остаётся отключить
+        s.protected && !s.trashed ? el('span', { class: 'tag access-protected' }, tr("защищённые данные — недоступна")) : null),
       el('p', { class: 'muted small' }, facts),
       el('p', { class: 'muted small' }, tr("Создана {0}", moment(s.created))));
     return el('li', { class: 'agent session access-share', 'data-id': s.id }, info,

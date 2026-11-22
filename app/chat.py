@@ -159,6 +159,8 @@ NO_TOOLS_SEC = 3600
 NO_EXA_KEY = "сначала задайте ключ Exa в Настройках → Ввод и интернет → Интернет"   # PATCH {web: true} без ключа — 409
 #: PATCH {web: true} диалога, где сработал «Защищённый источник» MCP (`chats.protected_used`), — 409 `protected`
 PROTECTED_WEB = "в этом диалоге сработал защищённый источник — «Интернет» здесь не включается"
+#: ссылка «Поделиться», экспорт Markdown/PDF и архив ZIP такого диалога — 409 `protected` (`unprotected`)
+PROTECTED_OUT = "в этом диалоге сработал защищённый источник — им нельзя поделиться и его нельзя скачать"
 NO_THINKING = "эта модель не умеет рассуждать по кнопке"   # PATCH {thinking: true} не у роли local-* srvllm — 409
 # к системному сообщению даты, пока запрос несёт tools: без неё gemma-abl на «найди в интернете» отвечала по
 # памяти (проба 2026-10-21, спека раздел 8). Последняя фраза — против «я заглянула в интернет» без вызова: на
@@ -273,9 +275,18 @@ def _chat_row(user_id: int, chat_id: str):
     return row
 
 
+def unprotected(row):
+    """Диалог `_chat_row` без срабатывания защищённого источника (`chats.protected_used`), иначе 409 `protected`:
+    данные источника не уходят из Студии ни ссылкой «Поделиться», ни экспортом (chat_shares, chat_exports)."""
+    if row["protected_used"]:
+        raise HTTPException(409, {"code": "protected", "message": PROTECTED_OUT})
+    return row
+
+
 def _chat_out(row) -> dict:
+    # protected — сработал защищённый источник MCP: «Интернет» не включить, «Поделиться» и экспорт — 409
     return {"id": row["id"], "title": row["title"], "connection_id": row["connection_id"], "model": row["model"],
-            "updated": row["updated"]}
+            "updated": row["updated"], "protected": bool(row["protected_used"])}
 
 
 def _needs_consent(chat_id: str, model: str, via: str) -> bool:
@@ -336,7 +347,6 @@ def _chat_view(user_id: int, row) -> dict:
     out["external"] = conn is not None and not conn.cleaner and not out["local"] and _needs_consent(
         row["id"], model, "server" if conn.proxied else "browser")
     out["web"] = bool(row["web"])
-    out["protected"] = bool(row["protected_used"])   # сработал защищённый источник MCP: «Интернет» не включить
     out["proxied"] = conn is not None and conn.proxied
     out["web_tools"] = [] if out["cleaner"] else web.tools_for(conn, web.has_exa_key(user_id))
     out["external_web"] = out["web"] and "search" in out["web_tools"] and _needs_web_consent(
