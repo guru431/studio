@@ -92,6 +92,12 @@ class DeepSeekRunner(acp.AcpRunner):
         self.find_installs = find_installs
         self.environ = environ
         self._overview_cache = {}  # путь файла сессии → (ревизия, `deepseek_history.overview`)
+        self.unavailable = None  # причина последнего отказа запуска: `node` | `missing` | None
+
+    @property
+    def unavailable_message(self):
+        """Слова причины для отказов студии и карточки компьютера: DSH стоит, но Node старше нужного."""
+        return NODE if self.unavailable == "node" else None
 
     def _dsh_home(self):
         return deepseek_settings.dsh_home(self.environ)
@@ -99,14 +105,15 @@ class DeepSeekRunner(acp.AcpRunner):
     def _choose(self):
         installs = self.find_installs()
         home = self._dsh_home()
-        install = deepseek_rpc.pick(installs, deepseek_settings.source(home)) or deepseek_rpc.pick(installs, None)
-        return home, install, installs
+        return home, deepseek_rpc.choose(installs, deepseek_settings.source(home)), installs
 
     async def _connect(self, project, *, access=None):
         scratch = _SCRATCH.get()
         home, install, installs = await asyncio.to_thread(self._choose)
         if install is None:
-            raise Refused("unsupported", NODE if any(i.reason == "node" for i in installs) else MISSING)
+            self.unavailable = "node" if any(i.reason == "node" for i in installs) else "missing"
+            raise Refused("unsupported", NODE if self.unavailable == "node" else MISSING)
+        self.unavailable = None
         if _LIST.get() and scratch is None:
             overlay, summary = None, None
         else:

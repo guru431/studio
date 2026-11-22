@@ -117,6 +117,8 @@ def backend_row(status: dict | None) -> tuple[str, str]:
         return tr("Проверка…"), "muted"
     if status.get("status") == "ready":
         return tr("Доступен · моделей: {0}", status['models']), "ok"
+    if status.get("reason") == "node":  # DeepSeek Harness стоит, но Node.js старше нужного
+        return tr("Недоступен · нужен Node.js новее"), "warn"
     return tr("Недоступен"), "warn"
 
 

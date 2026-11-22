@@ -316,6 +316,11 @@ def pick(installs: list[Install], source: str | None) -> Install | None:
     return ready[0] if ready else None
 
 
+def choose(installs: list[Install], source: str | None) -> Install | None:
+    """Установка ходов (и карточки компьютера): пригодная профиля-источника, иначе любая пригодная."""
+    return pick(installs, source) or pick(installs, None)
+
+
 def version(install: Install) -> str:
     try:
         result = subprocess.run([*install.command, "--version"], capture_output=True, stdin=subprocess.DEVNULL,

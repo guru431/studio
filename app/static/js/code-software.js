@@ -7,7 +7,7 @@ const names = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', dee
 const reasons = {
   not_installed: 'Не установлено', bridge: 'Обновляется вместе с мостом',
   manager: 'Установщик не найден на компьютере', manual: 'Обновите программу на компьютере',
-  check: 'Не удалось проверить',
+  check: 'Не удалось проверить', node: 'Нужен Node.js новее установленного',
 };
 const states = {
   waiting: 'Обновление начнётся после завершения активных заданий', updating: 'Устанавливаю обновление…',

@@ -21,7 +21,7 @@ def software(data):
             'latest': version(item.get('latest')),
             'source': item.get('source') if item.get('source') in ('npm', 'vscode', 'native', 'sdk', 'homebrew') else None,
             'update_available': item.get('update_available') is True, 'can_update': item.get('can_update') is True,
-            'reason': item.get('reason') if item.get('reason') in ('not_installed', 'bridge', 'manager', 'manual', 'check') else None})
+            'reason': item.get('reason') if item.get('reason') in ('not_installed', 'bridge', 'manager', 'manual', 'check', 'node') else None})
     update = data.get('update') if isinstance(data.get('update'), dict) else {}
     results = update.get('results') if isinstance(update.get('results'), dict) else {}
     return {'items': items, 'update': {

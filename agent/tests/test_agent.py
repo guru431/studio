@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from fake_sdk import HOLD, FakeFactory, delta, result_ok
-from studio_agent import VERSION, files, limits, projects, sessions, store
+from studio_agent import VERSION, deepseek, files, limits, projects, sessions, store
 from studio_agent.agent import Agent
 from studio_agent.pin import PinStore
 from studio_agent.turns import Runner
@@ -644,6 +644,10 @@ async def test_hello_without_deepseek_when_not_installed(agent):
     await opened(agent)
     res = (await agent.handle(req("state", engine="deepseek", project=projects.pid("demo"), chat=CHAT)))[0]
     assert res["code"] == "unsupported" and res["message"] == "DeepSeek Harness не найден на компьютере"
+    # DSH стоит, но Node старше нужного — отказ называет причину (I3)
+    agent.deepseek = SimpleNamespace(catalog=None, unavailable_message=deepseek.NODE)
+    res = (await agent.handle(req("state", engine="deepseek", project=projects.pid("demo"), chat=CHAT)))[0]
+    assert res["code"] == "unsupported" and res["message"] == deepseek.NODE
 
 
 async def test_fork_and_subagents_for_deepseek_are_unsupported(agent):
@@ -688,6 +692,9 @@ async def test_models_refresh_for_deepseek_without_new_channel(agent):
     backend.probe.return_value = False
     res = (await agent.handle(req("models", engine="deepseek")))[0]
     assert res["code"] == "busy" and "DeepSeek Harness" in res["message"]
+    backend.unavailable_message = deepseek.NODE                  # проба не запустила DSH: Node старше нужного
+    res = (await agent.handle(req("models", engine="deepseek")))[0]
+    assert res["code"] == "unsupported" and res["message"] == deepseek.NODE
 
 
 async def test_deepseek_turn_shares_the_limit_and_activity(agent):

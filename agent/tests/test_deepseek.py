@@ -212,7 +212,10 @@ async def test_probe_with_unreadable_profile_still_keeps_sessions_out_of_dsh_hom
 async def test_probe_without_install_names_the_reason(runner):
     runner.find_installs = lambda: []
     assert not await runner.probe(runner.project)
+    assert (runner.unavailable, runner.unavailable_message) == ("missing", None)
     runner.find_installs = lambda: [deepseek_rpc.Install("npm", ("node", "bin.js"), reason="node")]
+    assert not await runner.probe(runner.project)
+    assert (runner.unavailable, runner.unavailable_message) == ("node", deepseek.NODE)   # I3: причина для студии
     with pytest.raises(Refused) as error:
         await runner._connect(runner.project)
     assert (error.value.code, error.value.message) == ("unsupported", deepseek.NODE)

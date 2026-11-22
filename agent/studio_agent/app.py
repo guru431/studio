@@ -168,8 +168,8 @@ class Controller:
         elif self._loop is not None:
             self._loop.call_soon_threadsafe(self._quit.set)
 
-    def _set_backend(self, name: str, status: str, models: int = 0) -> None:
-        value = {"status": status, "models": models}
+    def _set_backend(self, name: str, status: str, models: int = 0, reason: str | None = None) -> None:
+        value = {"status": status, "models": models, **({"reason": reason} if reason else {})}
         if self._backends[name] == value:
             return
         self._backends = {**self._backends, name: value}
@@ -765,7 +765,8 @@ class Controller:
             self._set_backend(name, "checking")
             previous = backend.catalog
             ready = await backend.probe(self.agent.cfg.projects_root)
-            self._set_backend(name, "ready" if ready else "unavailable", len(backend.catalog["models"]) if ready else 0)
+            self._set_backend(name, "ready" if ready else "unavailable", len(backend.catalog["models"]) if ready else 0,
+                              None if ready else getattr(backend, "unavailable", None))
             changed = changed or previous != backend.catalog
         log.info("модели Claude Code: %d", len(models))
         return changed

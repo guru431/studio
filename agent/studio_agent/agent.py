@@ -26,6 +26,12 @@ PIN_FIELD_MAX = 64
 ASK_KINDS = ("permission", "question")  # виды карточек, досылаемых после обрыва (протокол §18)
 NAMES = {"codex": "Codex", "opencode": "OpenCode", "deepseek": "DeepSeek Harness"}  # слова отказов о помощниках
 
+
+def _unavailable(backend) -> str | None:
+    """Слова причины недоступности помощника (`DeepSeekRunner.unavailable_message`: Node старше нужного)."""
+    message = getattr(backend, "unavailable_message", None)
+    return message if isinstance(message, str) else None
+
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
     "desktop_status": (), "desktop_start": (), "desktop_frame": (), "desktop_input": (),
@@ -397,7 +403,7 @@ class Agent:
             raise Refused("invalid")
         backend = self._runner(frame)
         if engine != "claude" and (backend is None or (backend.catalog is None and op != "models")):
-            raise Refused("unsupported", f"{NAMES[engine]} не найден на компьютере")
+            raise Refused("unsupported", _unavailable(backend) or f"{NAMES[engine]} не найден на компьютере")
         for name in OPS[op]:
             if name == "access" and not permissions.valid(engine, frame.get(name)):
                 raise Refused("invalid")
@@ -478,6 +484,8 @@ class Agent:
         backend = self._runner(frame)
         async with asyncio.timeout(24):
             if not await backend.probe(self.cfg.projects_root):
+                if message := _unavailable(backend):
+                    raise Refused("unsupported", message)
                 raise Refused("busy", f"Не удалось обновить модели {NAMES[engine]} — повторите позже")
         return {engine: backend.catalog}
 

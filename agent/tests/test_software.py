@@ -2,6 +2,7 @@
 import asyncio
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -42,6 +43,7 @@ def fake_dsh(monkeypatch, installs, version='0.2.2-rc.5'):
     monkeypatch.setattr(software.deepseek_rpc, 'find_installs', lambda: installs)
     monkeypatch.setattr(software.subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=0, stdout=version.encode()))
     monkeypatch.setattr(software, '_npm', lambda: ['node', 'npm-cli.js'])
+    monkeypatch.setattr(software.deepseek_settings, 'source', lambda home: None)  # профиль-источник не найден
 
 
 def test_deepseek_npm_prerelease_is_offered_as_update(monkeypatch, tmp_path):
@@ -80,6 +82,19 @@ def test_deepseek_not_installed_and_npm_wins_over_the_rest(monkeypatch, tmp_path
     assert (data['installed'], data['reason'], data['version']) == (False, 'not_installed', None)
     fake_dsh(monkeypatch, [deepseek_install(tmp_path / 'a', 'desktop'), deepseek_install(tmp_path / 'b')])
     assert software.inspect('deepseek')['source'] == 'npm'
+
+
+def test_deepseek_card_shows_the_install_turns_use_and_names_old_node(monkeypatch, tmp_path):
+    # Minor-2: источник — профиль Desktop, ходы идут Desktop — карточка показывает его, а не npm
+    installs = [deepseek_install(tmp_path / 'a', 'desktop'), deepseek_install(tmp_path / 'b')]
+    fake_dsh(monkeypatch, installs)
+    monkeypatch.setattr(software.deepseek_settings, 'source', lambda home: 'desktop')
+    assert (software.inspect('deepseek')['source'], software.inspect('deepseek')['reason']) == ('native', 'manual')
+    # I3: DSH стоит, но Node старше `engines` — причина `node`, а не «не установлено»; обновление DSH не предлагается
+    old = replace(deepseek_install(tmp_path / 'c'), reason='node')
+    fake_dsh(monkeypatch, [old])
+    data = software.inspect('deepseek')
+    assert (data['installed'], data['source'], data['reason']) == (True, 'npm', 'node')
 
 
 async def test_deepseek_update_closes_its_backend_and_installs_the_prerelease(monkeypatch, tmp_path):

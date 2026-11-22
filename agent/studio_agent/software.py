@@ -11,7 +11,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import cli, codex_rpc, deepseek_rpc, host, jobs, limits, opencode_rpc
+from . import cli, codex_rpc, deepseek_rpc, deepseek_settings, host, jobs, limits, opencode_rpc
 from .errors import Refused
 
 TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'opencode': 'opencode-ai',
@@ -161,17 +161,19 @@ def _bundled_claude():
 
 
 def _inspect_deepseek():
-    """Установка DeepSeek Harness, как её находят ходы: npm обновляется мостом, Python-пакет и Desktop — вручную."""
+    """Установка DeepSeek Harness, которой идут ходы (`deepseek_rpc.choose`): npm обновляется мостом, Python-пакет и
+    Desktop — вручную. Пригодной нет, а установка есть — она же с причиной `node` (Node.js старше нужного)."""
     order = ('npm', 'python', 'desktop')
     try:
         found = sorted(deepseek_rpc.find_installs(), key=lambda install: order.index(install.kind))
+        install = deepseek_rpc.choose(found, deepseek_settings.source(deepseek_settings.dsh_home()))
     except (OSError, ValueError):
-        found = []
+        found, install = [], None
     result = {'id': 'deepseek', 'installed': False, 'version': None, 'cli_version': None, 'source': 'native',
               'reason': 'not_installed', '_path': None, '_prefix': None, '_package': TOOLS['deepseek'], '_brew': None}
     if not found:
         return result
-    install = found[0]
+    install = install or found[0]
     path = (install.package_dir or Path(install.command[0])).resolve()
     cli_version = None
     try:
@@ -188,7 +190,8 @@ def _inspect_deepseek():
         installed = version(_manifest(path / 'package.json').get('version'))
     result.update(installed=True, version=installed or cli_version, cli_version=cli_version, source=source,
                   _path=path, _prefix=prefix)
-    result['reason'] = 'manager' if source == 'npm' and not _npm() else 'manual' if source == 'native' else None
+    result['reason'] = ('node' if install.reason == 'node' else 'manager' if source == 'npm' and not _npm()
+                        else 'manual' if source == 'native' else None)
     return result
 
 

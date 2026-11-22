@@ -1136,7 +1136,8 @@ Push о вопросе агента и окончании задания пол�
 остановка и индикатор контекста работают через локальный процесс OpenCode.
 
 **DeepSeek Harness** (studio-agent 0.46.0+). Мост сам находит установленный DeepSeek Harness: npm-пакет
-`@deepseek-ai/dsh` (нужен Node.js, подходящий пакету по `engines`; проверено на 0.2.2-rc.5), Python-пакет
+`@deepseek-ai/dsh` (нужен Node.js, подходящий пакету по `engines`, иначе «Программы» компьютера и окно моста пишут
+«Нужен Node.js новее установленного»; проверено на 0.2.2-rc.5), Python-пакет
 `deepseek-harness-sdk` или приложение DeepSeek Harness Desktop на Windows и macOS (команду «Manage dsh Command…»
 включать не нужно; на Linux Desktop выходит AppImage — мост его не ищет). Работу с Desktop на Windows живьём
 ещё не проверяли. Чужая программа `dsh` на Linux (distributed shell) не запускается. Кнопка «DeepSeek» на экране

@@ -331,6 +331,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Обновляется вместе с мостом": "Updated with the bridge",
   "Установщик не найден на компьютере": "Installer not found on this computer",
   "Обновите программу на компьютере": "Update this software on the computer",
+  "Нужен Node.js новее установленного": "Needs a newer Node.js than the installed one",
   "Обновление начнётся после завершения активных заданий": "The update will start after active tasks finish",
   "Устанавливаю обновление…": "Installing update…",
   "Обновление установлено, версия проверена": "Update installed and version verified",

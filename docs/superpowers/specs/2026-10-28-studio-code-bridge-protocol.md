@@ -926,12 +926,15 @@ HTTP-сервер поддерживает `?refresh=true`, для списка 
 Ответ всех операций: `{items: [...], update: {tool: null|"codex"|"claude"|"opencode"|"deepseek", state}}`.
 Строка items: `{id, installed: bool, version: string|null, cli_version: string|null, latest: string|null,
 source: "npm"|"vscode"|"native"|"sdk"|"homebrew", update_available: bool, can_update: bool,
-reason: null|"not_installed"|"bridge"|"manager"|"manual"|"check"}`.
+reason: null|"not_installed"|"bridge"|"manager"|"manual"|"check"|"node"}`.
 Для VS Code version/latest — версии расширения, cli_version — вложенного CLI; для npm — версии пакета.
 latest — стабильный выпуск. Предварительные установленные CLI показываются без потери суффикса и не понижаются.
 С моста 0.46.0 строка `deepseek` (DeepSeek Harness): npm `@deepseek-ai/dsh` — `source: "npm"`, `latest` — тег
 `latest` npm даже для предварительного выпуска (у DSH он сейчас такой), сравнение предварительных выпусков — по
 полям semver; Python-пакет и Desktop — `source: "native"`, `reason: "manual"`. `software: "all"` включает и её.
+Строка показывает установку, которой идут ходы (профиль-источник, затем npm → Python → Desktop); пригодной нет, а
+установка есть — `reason: "node"` (Node.js старше `engines` пакета, обновлением DSH не лечится); тогда и отказы
+`models` и просьб `deepseek` несут слова `deepseek.NODE`, а не «не найден».
 
 Состояния: `idle`, `waiting`, `updating`, `done`, `error`, `cancelled`. Начало немедленно возвращает waiting,
 фоновая задача ждёт все ходы и ранее начатые просьбы/пробы. Новые ходы получают busy; при установке запросы

@@ -89,6 +89,8 @@ def test_backend_rows_show_their_own_probe_result():
     assert window.backend_row({"status": "ready", "models": 12}) == ("Доступен · моделей: 12", "ok")
     # Сохранённый каталог не делает последнюю неудачную проверку успешной.
     assert window.backend_row({"status": "unavailable", "models": 12}) == ("Недоступен", "warn")
+    assert window.backend_row({"status": "unavailable", "models": 0, "reason": "node"}) == (
+        "Недоступен · нужен Node.js новее", "warn")
 
 
 def test_four_cli_status_rows():

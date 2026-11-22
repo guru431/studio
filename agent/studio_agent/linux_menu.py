@@ -194,7 +194,8 @@ def status(h):
         _yes(activity['desktop_active'])) + f" {s['display']}")
     for name, found in s["cli"].items():
         backend = s["backends"][name]
-        result = tr({"ready": "доступен", "checking": "проверка"}.get(backend["status"], "недоступен"))
+        result = tr({"ready": "доступен", "checking": "проверка"}.get(
+            backend["status"], "недоступен: нужен Node.js новее" if backend.get("reason") == "node" else "недоступен"))
         print(tr("{0}: CLI {1}, {2}, моделей {3}", name, _yes(found), result, backend['models']))
     return 0
 
