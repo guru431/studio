@@ -66,7 +66,7 @@ class Password(BaseModel):
 class ScreenLock(BaseModel):
     enabled: bool
     password: str | None = Field(default=None, max_length=PASSWORD_MAX)
-    sections: list[str] | None = Field(None, max_length=8)
+    sections: list[str] | None = Field(None, max_length=len(lock_policy.SECTIONS))
     timeout: StrictInt | None = Field(None, ge=0, le=86400)
 
     @field_validator("sections")

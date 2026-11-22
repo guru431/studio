@@ -62,6 +62,7 @@ import knowledge
 import media
 import ocr
 import ntfy
+import owui
 import presets
 import account_profile as profile
 import profiles
@@ -233,6 +234,7 @@ app.include_router(code_usage.router)
 app.include_router(code_activity.router)
 app.include_router(push.router)
 app.include_router(ntfy.router)
+app.include_router(owui.router)
 
 
 @app.exception_handler(RequestValidationError)

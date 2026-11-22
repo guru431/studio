@@ -321,6 +321,8 @@ def studio(env, schema_db, monkeypatch):
     import owui_tokens
     owui_tokens.TOKENS.clear()           # рабочие токены Open WebUI и блокировки обновления (ключ — id учётки той базы)
     owui_tokens.LOCKS.clear()
+    import owui
+    owui.FAILS.clear()                   # неудачи входа в Open WebUI (ключ — uid той базы)
     if not env.db_path.exists():
         env.db_path.write_bytes(schema_db)
     with TestClient(main.app, base_url="https://testserver",

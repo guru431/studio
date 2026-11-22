@@ -91,14 +91,18 @@ def _relogin(aid: int) -> Relogin:
     return Relogin()
 
 
-async def renew(acc, *, force: bool = False) -> str:
+async def renew(acc, *, force: bool = False, stale: str | None = None) -> str:
     """Обновить пару токенов под блокировкой учётки. Без `force` токен, обновлённый, пока ждали блокировку, берётся
-    как есть: параллельные вызовы дают одно обновление."""
+    как есть: параллельные вызовы дают одно обновление. `stale` — рабочий токен, который Open WebUI только что
+    отверг (401): обновлять, только если в памяти всё ещё он, — иначе его уже сменил параллельный вызов, и
+    берётся новый (ротация и предел сессий Open WebUI не тратятся на каждый отказ)."""
     async with LOCKS.setdefault(acc.id, asyncio.Lock()):
         if acc.state == "relogin":
             raise Relogin
         if not force and (token := _fresh(acc.id)):
             return token
+        if stale is not None and (current := TOKENS.get(acc.id)) and current[0] != stale:
+            return current[0]
         secret = load(acc.id)
         if secret.pending_request_id is None:
             secret.pending_request_id = uuid.uuid4().hex

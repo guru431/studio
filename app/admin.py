@@ -40,6 +40,7 @@ import mcp_client
 import mcp_sources
 import media
 import operations
+import owui
 import account_profile as profile
 import profiles
 import push
@@ -220,6 +221,7 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
         # мосты — 4403 (вернутся после «Включить»; прежние — 4401); смена пароля их не рвёт: ключ устройства
         # самостоятелен (спека 6.2)
         await bridge.drop_user(uid, disabled=True)
+        await owui.drop_user(uid, revoke=False)    # токены Open WebUI не обновлять; сессии — до «Включить»
         await history.stop_user(uid)          # отключённая учётка не держит карту и очередь шлюза
     return _user_out(uid)
 

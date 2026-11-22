@@ -3,7 +3,10 @@
 на `ENTRY`. Сроки токенов — по `clock.NOW`, как у настоящего. Сокет — в задаче 5.
 
 Здесь: `/api/config`, вход, постоянные сессии (создание, обновление с ротацией и восстановлением по `request_id`,
-отзыв). Чаты и папки только хранятся (`add_chat`, `add_folder`): их маршруты — в следующих задачах.
+отзыв), `GET /api/v1/auths/` (кто вошёл — проверка рабочего токена). Ответ входа — как у Open WebUI 0.13.4
+(`utils/auth.py::create_signin_response`): при `ENABLE_MFA` учётка не `admin`/`user` — 200 `{next_step: "pending"}`;
+нужен второй код — 200 `{next_step: "verify", challenge_token, expires_in}` без токена; без MFA роль `pending` —
+обычный ответ входа с `role: "pending"`; неверный пароль — 400 `{detail}`. Чаты и папки только хранятся (`add_chat`, `add_folder`): их маршруты — в следующих задачах.
 """
 import asyncio
 import itertools
@@ -43,6 +46,9 @@ class FakeOwui:
         self.user_id = "owui-user-1"
         self.name = "Owner"
         self.role = "user"
+        self.auth_sessions = True          # `features.auth_sessions` в `/api/config`
+        self.enable_mfa = False            # `ENABLE_MFA` сервера: учётка `pending` — `{next_step: "pending"}`
+        self.mfa_required = False          # вход паролем требует второй код: `{next_step: "verify", …}`
         self.requests: list[httpx.Request] = []
         self.refreshes = 0                 # ротации: новая пара выдана (повтор по `request_id` не считается)
         self.refresh_log: list[tuple[str, str]] = []     # (refresh_token, request_id) каждого запроса обновления
@@ -66,6 +72,15 @@ class FakeOwui:
         """Сервер отозвал все сессии: рабочие и долгие токены больше не принимаются."""
         for session in self._sessions.values():
             session["revoked"] = True
+
+    def expire_tokens(self) -> None:
+        """Рабочие токены и токены входа больше не принимаются (долгие токены сессий живы)."""
+        self._tokens.clear()
+
+    @property
+    def session_names(self) -> list[str]:
+        """Имена созданных входом сессий, по порядку (сессии `issue_session` — без имени)."""
+        return [s["name"] for s in self._sessions.values() if s.get("name") is not None]
 
     def add_chat(self, title: str = "Chat", *, folder_id: str | None = None, pinned: bool = False,
                  messages: list[dict] | None = None, chat_id: str | None = None) -> str:
@@ -107,8 +122,13 @@ class FakeOwui:
             raise httpx.ConnectError("нет соединения", request=request)
         method, path = request.method, request.url.path
         if path == "/api/config" and method == "GET":
-            return httpx.Response(200, json={"name": "Open WebUI", "version": self.version,
-                                             "features": {"auth_sessions": True}})
+            features = {"auth_sessions": True} if self.auth_sessions else {}
+            return httpx.Response(200, json={"name": "Open WebUI", "version": self.version, "features": features})
+        if path == "/api/v1/auths/" and method == "GET":
+            if not self._caller_valid(request):
+                return httpx.Response(401, json={"detail": "Not authenticated"})
+            return httpx.Response(200, json={"id": self.user_id, "email": self.EMAIL, "name": self.name,
+                                             "role": self.role})
         if path == "/api/v1/auths/signin" and method == "POST":
             return self._signin(request)
         if path == "/api/v1/auths/sessions/refresh" and method == "POST":
@@ -131,6 +151,11 @@ class FakeOwui:
         body = self._body(request)
         if body.get("email") != self.EMAIL or body.get("password") != self.PASSWORD:
             return httpx.Response(400, json={"detail": "Your email or password is incorrect"})
+        if self.enable_mfa and self.role not in ("admin", "user"):
+            return httpx.Response(200, json={"next_step": "pending"})
+        if self.mfa_required:
+            return httpx.Response(200, json={"next_step": "verify", "challenge_token": f"challenge-{uuid.uuid4().hex}",
+                                             "expires_in": 300})
         token = f"jwt-{uuid.uuid4().hex}"
         self._tokens[token] = (None, clock.NOW() + LOGIN_SEC)
         return httpx.Response(200, json={"token": token, "token_type": "Bearer", "id": self.user_id,
@@ -140,7 +165,9 @@ class FakeOwui:
     def _create_session(self, request: httpx.Request) -> httpx.Response:
         if not self._caller_valid(request):
             return httpx.Response(401, json={"detail": "Not authenticated"})
-        return httpx.Response(200, json=self._issue(f"session-{next(self._ids)}"))
+        issue = self._issue(f"session-{next(self._ids)}")
+        self._sessions[issue["session_id"]]["name"] = self._body(request).get("name")
+        return httpx.Response(200, json=issue)
 
     def _refresh(self, request: httpx.Request) -> httpx.Response:
         body = self._body(request)
