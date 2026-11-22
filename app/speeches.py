@@ -629,11 +629,14 @@ def _default_source(uid: int, code: str, message: str):
         raise
 
 
-def _dialog_connection(uid: int, origin_id: str) -> "int | None":
-    """Подключение диалога «Прочитать»: `origin.id` — id ответа или самого диалога учётки; чужое — None."""
+def _dialog_of(uid: int, origin_id: str) -> "tuple[int | None, bool]":
+    """«Прочитать» из чата: `origin.id` — id ответа или самого диалога учётки → (подключение диалога, ответ дан через
+    Cleaner — у него есть `messages.cleaner_request`, даже если диалог потом переключили); чужое — (None, False)."""
+    answer = state.DB.execute("SELECT m.cleaner_request FROM messages m JOIN chats c ON c.id = m.chat_id"
+                              " WHERE m.id = ? AND c.user_id = ?", (origin_id, uid)).fetchone()
     row = state.DB.execute("SELECT connection_id FROM chats WHERE user_id = ? AND (id = ? OR id ="
                            " (SELECT chat_id FROM messages WHERE id = ?))", (uid, origin_id, origin_id)).fetchone()
-    return row["connection_id"] if row is not None else None
+    return (row["connection_id"] if row is not None else None), bool(answer is not None and answer["cleaner_request"])
 
 
 @router.post("/read", status_code=202)
@@ -644,7 +647,8 @@ async def read(body: ReadIn, request: Request):
     text = _text_of(exports.md_plain(body.text), LONG_MAX)
     conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»")
     if body.origin.kind == "chat":                # ответ диалога через Cleaner — восстановленный текст: не мимо Cleaner
-        cleaner_route.refuse_dialog_speech(uid, _dialog_connection(uid, body.origin.id), conn)
+        dialog, routed = _dialog_of(uid, body.origin.id)
+        cleaner_route.refuse_dialog_speech(uid, dialog, conn, routed=routed)
     voice, name = _read_voice(uid, conn, model)
     _room(uid, None)
     sid = _enqueue(uid, conn, model, voice, name, _read_language(conn, text), text)

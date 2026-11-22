@@ -159,11 +159,13 @@ def get(user_id: int | None, conn_id: int, *, own: bool = False, gate: bool = Tr
     return _from_row(row, user_id)
 
 
-def token(conn: Connection) -> str:
+def token(conn: Connection, *, route: bool = True) -> str:
     """Токен — только той строке, что в снимке `conn`: задание держит снимок, а ключ читается свежим.
     Строку удалили (или id занят чужой) — ConnectionChanged(deleted); сменились вид или адрес —
     ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно. Маршрут через
-    Cleaner (`cleaner_route.routes`) сейчас не тот, что в снимке (`routed`), — ConnectionChanged(route)."""
+    Cleaner (`cleaner_route.routes`) сейчас не тот, что в снимке (`routed`), или флажок администратора включён, а
+    подключение внешнее и не через Cleaner (внешний шлюз s06 или srvllm), — ConnectionChanged(route): работа,
+    начатая до флажка, дальше не идёт. `route=False` — только подсказка ключа карточки (`out`), запроса нет."""
     row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner, s06, via_cleaner FROM connections WHERE id = ?",
                            (conn.id,)).fetchone()
     if row is None or row["user_id"] != conn.owner_id:
@@ -173,7 +175,8 @@ def token(conn: Connection) -> str:
         raise upstream.ConnectionChanged(conn, deleted=False)
     # маршрут — по свежим флажку администратора и списку: снимок задания, взятый до включения флажка, ключ провайдеру
     # мимо Cleaner не понесёт, а взятый до выключения — в Cleaner (работа, идущая при смене, отказывает словами)
-    if cleaner_route.routes(conn) != conn.routed:
+    if route and (cleaner_route.routes(conn) != conn.routed
+                  or (not conn.routed and cleaner_route.forced() and cleaner_route.is_external(conn))):
         raise upstream.ConnectionChanged(conn, deleted=False, route=True)
     try:
         return security.decrypt(row["token_enc"])
@@ -261,7 +264,7 @@ def out(conn: Connection, passport: bool = True) -> dict:
     hint = ""
     if not inherited:
         try:
-            secret = token(conn)
+            secret = token(conn, route=False)
             hint = "…" + secret[-4:] if len(secret) > 8 else "…"
         except upstream.UpstreamRefused as e:
             if e.reason != "token":

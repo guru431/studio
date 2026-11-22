@@ -393,3 +393,55 @@ def test_flag_stops_the_next_tool_round_of_a_running_turn(direct_studio):
     events = sse(turn(s, chat_id, "Секрет", external_ok=True))
     assert events[-1][0] == "error" and "через Cleaner изменился" in json.dumps(events[-1][1], ensure_ascii=False), events
     assert len(s.gw.chat_requests) == 1                                   # результат инструмента провайдеру не ушёл
+
+
+@pytest.fixture
+def named_gateway(studio, monkeypatch):
+    """Шлюз srvllm на имени из списка (внешний по правилу C1, сервер ходит к нему сам), Cleaner настроен, флажок
+    выключен. `studio.flip(path)` — первый запрос шлюзу по `path` включает флажок и отвечает как обычно."""
+    allow(*CLEANER_HOSTS, "gw.cloud.test:443")
+
+    async def resolve(host, port):
+        return ["93.184.216.34"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    studio.srv = add_gateway(studio)
+    state.DB.execute("UPDATE connections SET base_url = 'https://gw.cloud.test' WHERE id = ?", (studio.srv,))
+    gw = FakeCleanerGateway(KEY)
+    for host in CLEANER_HOSTS:
+        studio.gw.hosts[host] = gw.handler
+    settings(studio)
+
+    def flip(path):
+        async def hook(request: httpx.Request) -> httpx.Response:
+            if not cleaner_route.forced():
+                cleaner_route.save_settings(cleaner_route.SettingsIn(base_url=ADDRESS, forced=True))
+            return await studio.gw.builtin(request)
+        studio.gw.on[path] = hook
+    studio.flip = flip
+    yield studio
+    assert gw.turns == []
+
+
+def test_flag_stops_a_running_translation_on_an_external_gateway(named_gateway, monkeypatch):
+    s = named_gateway
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    s.gw.chat_script = [["Первый."], ["Второй."], ["Третий."]]
+    s.flip("/v1/chat/completions")
+    r = post(s, "First one is here.\n\nSecond one is here.\n\nThird one is here.", connection_id=s.srv,
+             model="local-gemma-abl")
+    assert r.status_code == 202, r.text
+    row = wait_row(s, r.json()["id"])
+    assert row["state"] == "error" and "через Cleaner изменился" in row["detail"], row["detail"]
+    assert [b["messages"][-1]["content"] for b in s.gw.chat_requests] == ["First one is here."]
+
+
+def test_flag_stops_a_queued_speech_on_an_external_gateway(named_gateway, fake_audio):
+    from test_speeches import LONG_A, LONG_B, voice, wait_sp
+    s = named_gateway
+    vid = voice(s, fake_audio)
+    s.flip("/speech/tts-qwen")
+    r = s.c.post("/api/speeches", json={"text": f"{LONG_A} {LONG_B}", "voice": vid, "connection_id": s.srv,
+                                        "model": "qwen3-tts"})
+    assert r.status_code == 202, r.text
+    item = wait_sp(s, r.json()["id"], {"done", "error"})
+    assert item["state"] == "error" and len(s.gw.tts_requests) == 1, item     # вторая фраза шлюзу не ушла

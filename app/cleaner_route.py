@@ -194,14 +194,20 @@ DIALOG_SPEECH = ("диалог идёт через Cleaner, а модель ре
                  " выберите внутреннюю модель речи")
 
 
-def refuse_dialog_speech(user_id: int, dialog_conn_id: "int | None", conn: "connections.Connection") -> None:
+def refuse_dialog_speech(user_id: int, dialog_conn_id: "int | None", conn: "connections.Connection", *,
+                         routed: bool = False) -> None:
     """409 `cleaner_dialog`, если речь диалога (`conn` — модель «Озвучки» или голосового ввода) внешняя, а подключение
-    диалога (`dialog_conn_id`) идёт через Cleaner. Чужое или удалённое подключение диалога — не отказ: диалог так не
-    идёт через Cleaner. Принудительный режим отказывает внешней речи и без диалога (`forced_refusal`)."""
-    if dialog_conn_id is None or not is_external(conn):
+    диалога (`dialog_conn_id`) идёт через Cleaner или текст — ответ, данный через Cleaner (`routed`). Подключение
+    диалога ищется и закрытым учётке группами доступа (`gate=False`): маршрут диалога от этого не меняется. Чужое или
+    удалённое — не отказ. Принудительный режим отказывает внешней речи и без диалога (`forced_refusal`)."""
+    if not is_external(conn):
+        return
+    if routed:
+        raise HTTPException(409, {"code": "cleaner_dialog", "message": DIALOG_SPEECH})
+    if dialog_conn_id is None:
         return
     try:
-        dialog = connections.get(user_id, dialog_conn_id)
+        dialog = connections.get(user_id, dialog_conn_id, gate=False)
     except HTTPException:
         return
     if dialog.routed:
