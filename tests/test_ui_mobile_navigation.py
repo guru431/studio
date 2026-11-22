@@ -86,7 +86,8 @@ def test_failed_theme_save_survives_profile_refresh(browser, live, failure):
         ('eval', 'savedAuto', "fetch('/api/me').then(r => r.json()).then(m => m.theme)"),
         ('eval', 'reload', 'location.reload()'), ('wait', READY),
         ('eval', 'restoredAuto', "document.querySelector('#menu-theme-auto').checked"
-                               " && localStorage.getItem('studio-theme') === null")], width=320, mobile=True)
+                               " && !document.documentElement.hasAttribute('data-theme')"
+                               " && localStorage.getItem('studio-theme') === 'auto'")], width=320, mobile=True)
     assert not r.get('failed'), r
     assert r['values']['changed'] == r['values']['afterRefresh'] == 'dark', r['values']
     assert 'Не удалось' in r['values']['status'], r['values']

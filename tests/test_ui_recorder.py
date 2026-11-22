@@ -22,7 +22,8 @@ FAKE_RECORDER = """(() => {
   v.setUint16(34, 8, true); put(36, 'data'); v.setUint32(40, n, true); new Uint8Array(buf, 44).fill(128);
   const wav = new Uint8Array(buf);
   window.recorders = []; window.recSlices = []; window.stopped = 0; window.locks = 0; window.unlocks = 0;
-  if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = async () => {
+  if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {} });
+  navigator.mediaDevices.getUserMedia = async () => {
     const track = { enabled: true, stop() { window.stopped += 1; } };
     return { getTracks: () => [track] };
   };
@@ -166,8 +167,7 @@ def test_another_tab_cannot_recover_or_delete_an_active_recording(focus_browser,
         context.add_init_script(FAKE_RECORDER)
         first = context.new_page()
         first.goto(live.url + "/f")
-        if not first.evaluate("() => !!navigator.locks && !!navigator.mediaDevices"):
-            pytest.skip("нет Web Locks или микрофона на HTTP localhost")
+        assert first.evaluate("() => !!navigator.locks")
         rid = first.evaluate(f"async () => (await {RECORDER}.startMeeting()).id")
         first.wait_for_function(f"async () => (await {PENDING}).length === 1")
         second = context.new_page()

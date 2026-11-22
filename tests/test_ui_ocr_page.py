@@ -185,7 +185,9 @@ def test_translate_shrinks_and_turns_the_photo_before_upload(browser, live, larg
           }; return true; })()"""),
         put_files("#tl-photo-input", [("IMG_1.jpg", large_rotated_photo)], mime="image/jpeg"),
         ("wait", "document.querySelector('#tl-chip:not([hidden])') && !document.querySelector('#tl-go').disabled"),
-        ("click", "#tl-go"), ("wait", "window.sentPhoto"), ("eval", "sentDims", "window.sentPhoto")])
+        ("click", "#tl-go"), ("wait", "window.sentPhoto"), ("eval", "sentDims", "window.sentPhoto"),
+        # Следующий тест подменяет ответы распознавания у общего подставного шлюза.
+        ("wait", "document.querySelector('.tl-row:is([data-state=done], [data-state=error])')")])
     assert not r.get("failed"), r
     width, height, size = r["values"]["sentDims"]
     assert (width, height) == (500, 2200) and size < len(large_rotated_photo)

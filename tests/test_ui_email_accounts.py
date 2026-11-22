@@ -14,7 +14,6 @@ from live_app import start_live_app
 
 pw = pytest.importorskip("playwright.sync_api")
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
-ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
@@ -42,7 +41,13 @@ def live(tmp_path_factory):
 
 
 @pytest.fixture
-def mail(monkeypatch):
+def mail(monkeypatch, live):
+    # Дорожка проходит все движки через один localhost, лимит сброса пароля общий по IP.
+    connection = db.connect(live.db_path)
+    try:
+        connection.execute("DELETE FROM email_limits")
+    finally:
+        connection.close()
     sent = []
 
     async def send(email, subject, body):
@@ -81,7 +86,7 @@ def fits(page):
 
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
-def test_invite_accept_recovery_and_email_settings(browser, live, mail, width):
+def test_invite_accept_recovery_and_email_settings(browser, live, mail, width, tmp_path):
     instance, engine = browser
     login = f"{engine}-{width}"
     email = login + "@example.com"
@@ -154,7 +159,7 @@ def test_invite_accept_recovery_and_email_settings(browser, live, mail, width):
         fits(page)
         page.emulate_media(color_scheme="dark")
         fits(page)
-        page.screenshot(path=str(ROOT / ".tmp" / "email-accounts" / f"settings-{engine}-{width}.png"), full_page=True)
+        page.screenshot(path=str(tmp_path / f"settings-{engine}-{width}.png"), full_page=True)
         page.goto(live.url + "/account/email")
         pw.expect(page.locator("#account-back")).to_have_text("Назад в Студию")
         pw.expect(page.locator("#account-logout button")).to_be_visible()
