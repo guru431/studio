@@ -11,8 +11,10 @@
 - Удаление — отзыв сессии (срок `REVOKE_SEC`, неудача не мешает), строка удаляется; удаление учётки Студии — то же
   для всех её строк (`drop_user`), отключение — только забыть рабочие токены.
 - `call` — запрос к Open WebUI рабочим токеном (`owui_tokens`), 401 — одно обновление и повтор.
+- Чтение (`owui_view`): дерево, страницы чатов, чаты папки, поиск (запрос — телом), модели, чат, файл потоком (`no-store`).
+  Неожиданная форма ответа — 502 `owui_shape`, недоступный Open WebUI — 503 `owui_offline`, остальная Студия работает.
 - Чужой и несуществующий id — одинаковый 404. Журнал — только id учётки Студии и строки учётки, коды и числа: ни
-  адреса, ни email, ни токенов.
+  адреса, ни email, ни токенов, ни id чатов.
 """
 import asyncio
 import hashlib
@@ -20,18 +22,19 @@ import json
 import logging
 import re
 import ssl
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, replace
 
 import httpx
 from cryptography import x509
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 import clock
 import owui_tokens
+import owui_view
 import screenlock
 import security
 import state
@@ -52,6 +55,10 @@ REVOKE_SEC = 5
 SESSION_NAME = "Studio"
 #: самая ранняя поддерживаемая версия Open WebUI
 MIN_VERSION = (0, 13)
+#: чаты папки Open WebUI отдаёт страницами; больше стольких страниц Студия за раз не читает
+FOLDER_PAGES_MAX = 10
+#: предел текста поиска, знаков
+SEARCH_MAX = 256
 
 #: uid Студии → моменты неудачных входов (и идущих попыток) по `clock.NOW`
 FAILS: dict[int, list[float]] = {}
@@ -68,6 +75,9 @@ EXISTS = {"code": "exists", "message": "эта учётка Open WebUI уже п
 OTHER_USER = {"code": "other_user", "message": "это другая учётка Open WebUI — подключите её отдельно"}
 BAD_URL = {"code": "url", "message": "адрес Open WebUI — со схемой http или https и хостом"}
 NO_LABEL = {"code": "label", "message": "подпись не может быть пустой"}
+NO_CHAT = {"code": "not_found", "message": "такого чата нет"}
+NO_FOLDER = {"code": "not_found", "message": "такой папки нет"}
+NO_FILE = {"code": "not_found", "message": "такого файла нет"}
 NO_CERT = {"code": "url", "message": "у адреса http нет сертификата"}
 HTTPS_ONLY = {"code": "unlisted", "message": "по имени сервер ходит только по https — укажите https-адрес"}
 CERT_WORDS = "сертификат сервера не подтверждён — сверьте отпечаток SHA-256 и подтвердите его"
@@ -106,6 +116,10 @@ class LabelIn(BaseModel):
 
 class CertificateIn(BaseModel):
     sha256: str = Field(max_length=128)
+
+
+class SearchIn(BaseModel):
+    text: str = Field(max_length=SEARCH_MAX)
 
 
 # ---- строки --------------------------------------------------------------------------------------------------------
@@ -378,6 +392,175 @@ async def drop_user(uid: int, *, revoke: bool = True) -> None:
         await asyncio.gather(*(_revoke(acc) for acc in accounts))
     for acc in accounts:
         owui_tokens.forget(acc.id)
+
+
+# ---- чтение --------------------------------------------------------------------------------------------------------
+
+#: id чата, папки и файла Open WebUI — в путь запроса только такие: без `/`, `?`, `%` и сегментов `.`/`..`
+OWUI_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+
+
+def _owui_id(value: str, missing: dict) -> str:
+    if not OWUI_ID.fullmatch(value) or not value.strip("."):
+        raise HTTPException(404, missing)
+    return value
+
+
+def _ok(acc, response: httpx.Response, kind: type):
+    """Тело ответа Open WebUI нужного вида (`list` или `dict`); 429 и 5xx — отказы Студии, всё прочее — `owui_shape`."""
+    _refused(acc, response)
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if response.status_code != 200 or not isinstance(body, kind):
+        log.warning("owui %d: ответ Open WebUI не той формы (код %d)", acc.id, response.status_code)
+        raise shape_error(acc)
+    return body
+
+
+def _view(acc, make, raw):
+    """Вид Студии из ответа Open WebUI; `owui_view.Shape` — 502 `owui_shape`."""
+    try:
+        return make(raw)
+    except owui_view.Shape as e:
+        log.warning("owui %d: форма ответа не сошлась (%s)", acc.id, e)
+        raise shape_error(acc) from None
+
+
+def _chats(acc, response: httpx.Response) -> list[dict]:
+    return [_view(acc, owui_view.chat_item, raw) for raw in _ok(acc, response, list)]
+
+
+@router.get("/accounts/{aid}/tree")
+async def tree(aid: int, request: Request):
+    acc = load(request.state.user.id, aid)
+    pinned, folders, chats = await asyncio.gather(
+        call(acc, "GET", "/api/v1/chats/pinned"), call(acc, "GET", "/api/v1/folders/"),
+        call(acc, "GET", "/api/v1/chats/", params={"page": 1}))
+    return {"pinned": _chats(acc, pinned),
+            # папки выключены на сервере или не разрешены учётке — дерево без них
+            "folders": [] if folders.status_code == 403 else
+            [_view(acc, owui_view.folder_item, raw) for raw in _ok(acc, folders, list)],
+            "chats": _chats(acc, chats)}
+
+
+@router.get("/accounts/{aid}/chats")
+async def chat_page(aid: int, request: Request, page: int = Query(1, ge=1, le=10000)):
+    acc = load(request.state.user.id, aid)
+    return {"chats": _chats(acc, await call(acc, "GET", "/api/v1/chats/", params={"page": page}))}
+
+
+@router.get("/accounts/{aid}/folders/{fid}/chats")
+async def folder_chats(aid: int, fid: str, request: Request):
+    acc = load(request.state.user.id, aid)
+    fid = _owui_id(fid, NO_FOLDER)
+    found: dict[str, dict] = {}
+    for page in range(1, FOLDER_PAGES_MAX + 1):
+        response = await call(acc, "GET", f"/api/v1/chats/folder/{fid}/list", params={"page": page})
+        fresh = [item for item in _chats(acc, response) if item["id"] not in found]
+        if not fresh:
+            break
+        found.update((item["id"], item) for item in fresh)
+    return {"chats": list(found.values())}
+
+
+@router.post("/accounts/{aid}/search")
+async def search(aid: int, body: SearchIn, request: Request):
+    acc = load(request.state.user.id, aid)
+    text = body.text.strip()
+    if not text:
+        return {"chats": []}
+    return {"chats": _chats(acc, await call(acc, "GET", "/api/v1/chats/search", params={"text": text}))}
+
+
+async def _last_model(acc, known: set[str]) -> str | None:
+    """Модель последнего чата учётки, если она ещё в списке; не вышло по любой причине — `None`."""
+    try:
+        latest = _chats(acc, await call(acc, "GET", "/api/v1/chats/", params={"page": 1}))
+        if not latest:
+            return None
+        response = await call(acc, "GET", f"/api/v1/chats/{_owui_id(latest[0]['id'], NO_CHAT)}")
+        chat_models = _view(acc, owui_view.branch, _ok(acc, response, dict))["models"]
+    except HTTPException:
+        return None
+    return chat_models[0] if chat_models and chat_models[0] in known else None
+
+
+@router.get("/accounts/{aid}/models")
+async def models(aid: int, request: Request):
+    acc = load(request.state.user.id, aid)
+    body = _ok(acc, await call(acc, "GET", "/api/models"), dict)
+    if not isinstance(body.get("data"), list):
+        log.warning("owui %d: список моделей не той формы", acc.id)
+        raise shape_error(acc)
+    found = [item for item in (_view(acc, owui_view.model_item, raw) for raw in body["data"]) if item]
+    default = await _last_model(acc, {item["id"] for item in found}) if found else None
+    return {"models": found, "default": default or (found[0]["id"] if found else None)}
+
+
+@router.get("/accounts/{aid}/chats/{chat}")
+async def chat_view(aid: int, chat: str, request: Request):
+    acc = load(request.state.user.id, aid)
+    chat = _owui_id(chat, NO_CHAT)
+    response = await call(acc, "GET", f"/api/v1/chats/{chat}")
+    if response.status_code in (401, 403, 404):        # Open WebUI на чужой и несуществующий чат отвечает 401
+        raise HTTPException(404, NO_CHAT)
+    view = _view(acc, owui_view.branch, _ok(acc, response, dict))
+    tasks = await call(acc, "GET", f"/api/tasks/chat/{chat}")
+    body = upstream.json_body(tasks) if tasks.status_code == 200 else {}
+    ids = body.get("task_ids")
+    return {**view, "active": bool(ids) if isinstance(ids, list) else False}
+
+
+class _Relay(StreamingResponse):
+    """Поток файла, закрывающий соединение с Open WebUI при любом конце ответа."""
+
+    def __init__(self, stack: AsyncExitStack, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stack = stack
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self.stack.aclose()
+
+
+async def _open(acc, path: str, stack: AsyncExitStack) -> httpx.Response:
+    """Потоковый `GET` рабочим токеном, как `call` (401 — одно обновление и повтор); соединение — в `stack`."""
+    url = acc.base_url + path
+    async with _errors(acc):
+        token = await owui_tokens.access(acc)
+        for attempt in (1, 2):
+            opened = AsyncExitStack()
+            response = await opened.enter_async_context(
+                upstream.stream(acc, "GET", url, auth=f"Bearer {token}", timeout=TIMEOUT_SEC))
+            if response.status_code != 401 or attempt == 2:
+                stack.push_async_callback(opened.aclose)
+                return response
+            await opened.aclose()
+            token = await owui_tokens.renew(acc, force=True, stale=token)
+
+
+@router.get("/accounts/{aid}/files/{fid}")
+async def file_content(aid: int, fid: str, request: Request):
+    acc = load(request.state.user.id, aid)
+    fid = _owui_id(fid, NO_FILE)
+    async with AsyncExitStack() as stack:
+        response = await _open(acc, f"/api/v1/files/{fid}/content", stack)
+        if response.status_code in (401, 403, 404):
+            raise HTTPException(404, NO_FILE)
+        _refused(acc, response)
+        if response.status_code != 200:
+            log.warning("owui %d: файл — код %d", acc.id, response.status_code)
+            raise shape_error(acc)
+        mime = response.headers.get("content-type", "application/octet-stream")
+        headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                   "Content-Security-Policy": "sandbox; default-src 'none'"}
+        if not mime.lower().startswith(("image/", "audio/", "video/")):       # страницу Студии файл не исполняет
+            headers["Content-Disposition"] = "attachment"
+        return _Relay(stack.pop_all(), response.aiter_bytes(), media_type=mime, headers=headers)
 
 
 # ---- маршруты ------------------------------------------------------------------------------------------------------
