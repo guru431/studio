@@ -183,7 +183,8 @@ def test_unconfigured_cleaner_refuses_in_words(cleaner_gw):
 
 
 @pytest.mark.parametrize("status, code, words", [(400, "upstream", "публичные https"), (429, None, "Cleaner занят"),
-                                                 (401, "client_login", "ключ"), (503, None, "очистк")])
+                                                 (401, "client_login", "ключ подключения"), (503, None, "очистк"),
+                                                 (403, "client_role", "больше не администратор")])
 def test_cleaner_refusals_in_words(cleaner_gw, status, code, words):
     s, gw = cleaner_gw
     chat_id = routed_chat(s, gw)
@@ -236,7 +237,7 @@ def test_history_images_are_dropped(cleaner_gw):
     assert s.c.patch(f"/api/chats/{chat_id}", json={"connection_id": gw.conn_id, "model": "gpt-x"}).status_code == 200
     assert sse(turn(s, chat_id, "А теперь?"))[-1] == ("done", {"status": "done"})
     raw = json.dumps(gw.bodies[0], ensure_ascii=False)
-    assert "image_url" not in raw and "data:image" not in raw and chat.DROPPED.format(0) in raw
+    assert "image_url" not in raw and "data:image" not in raw and chat.CLEANER_DROPPED in raw and "не больше 0" not in raw
 
 
 def test_forced_direct_connection_turn_is_server_side(cleaner_gw):
@@ -505,3 +506,25 @@ def test_cleaner_turn_never_reaches_the_log(cleaner_gw, caplog):
     for secret in ("Секретный", "секрет", "Привет из облака", "api.cloud.test", KEY, "cloud-key", "10.77.1.20",
                    gw.chats[0]):
         assert secret not in caplog.text, secret
+
+
+def test_context_refusals_and_too_many_held_tools_have_their_own_words(cleaner_gw):
+    """`/api/v1/chats` отвечает без `code`: 401 — служебный ключ, 403 — владелец без роли, у каждого свой код; веб-
+    инструментов больше предела Cleaner — отказ до запроса (обрезать нельзя: лишние получили бы оригиналы)."""
+    import cleaner_route
+    from fastapi import HTTPException
+    s, gw = cleaner_gw
+    for status, code in ((401, "cleaner_key"), (403, "cleaner_role")):
+        async def refuse(request, status=status):
+            return httpx.Response(status, json={"detail": "нет"})
+        s.gw.hosts["10.77.1.20:5464"] = refuse
+        response = turn(s, routed_chat(s, gw), "Привет")
+        assert response.status_code == 502 and response.json()["detail"]["code"] == code, response.text
+    assert response.json()["detail"]["message"] == cleaner_route.ROLE
+    conn = sections.connections.get(state.DB.execute("SELECT user_id FROM connections WHERE id = ?",
+                                                     (gw.conn_id,)).fetchone()[0], gw.conn_id)
+    with pytest.raises(HTTPException) as e:
+        cleaner_route.headers(conn, "ctx", [f"t{i}" for i in range(cleaner_route.HOLD_MAX + 1)])
+    assert e.value.status_code == 409 and e.value.detail["code"] == "hold_tools"
+    assert len(cleaner_route.headers(conn, "ctx", [f"t{i}" for i in range(cleaner_route.HOLD_MAX)])[
+        cleaner_route.HOLD_HEADER].split(",")) == cleaner_route.HOLD_MAX

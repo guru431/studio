@@ -629,7 +629,7 @@ Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), кл�
   ключ; ответ общего подключения не администратору — без системной части (`cleaner_route._hide_system`: одна пометка
   `hidden`, профиль администратора не виден). 404 Cleaner (журнал удалён за давностью или контекст удалён) — 410 `journal_gone`
   (`cleaner_route.JOURNAL_GONE`). Поле `cleaner_sent` ответа — признак кнопки; ссылки и экспорт его не читают.
-- Картинки: `chat._max_images` — 0 (из истории — пометкой `chat.DROPPED`), новое вложение-картинка — 409
+- Картинки: `chat._max_images` — `chat.NO_IMAGES` (из истории — пометкой `chat.CLEANER_DROPPED`), новое вложение-картинка — 409
   `cleaner_images` (`chat.CLEANER_IMAGES`). Предел контекста `chat._limit` — из `cleaner_route.models`.
 - Отказы: сам Cleaner (сообщение начинается с «Cleaner») — `cleaner_route.words` по коду и `error.code`
   (`upstream`, `hold_tools`, `client_login`, `chat`, 429, 503, 502/504); ошибка провайдера, переданная как есть, —

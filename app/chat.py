@@ -192,8 +192,12 @@ REFUSED = "[вложение «{}» не передано: на это сооб�
 UNSENT = (SCAN_FAILED, STORAGE, GAVE_UP, CARD_BUSY.split("{")[0])
 #: пометка вместо картинки сверх предела подключения (`profiles.max_images`): {} — предел
 DROPPED = "[фото убрано из контекста: модель принимает не больше {} картинок на запрос]"
-#: подключение через Cleaner: вложенные картинки не отправляются (картинки истории — пометкой DROPPED)
+#: подключение через Cleaner: вложенные картинки не отправляются (картинки истории — пометкой CLEANER_DROPPED)
 CLEANER_IMAGES = "Через Cleaner картинки не отправляются: уберите вложение-картинку"
+#: пометка вместо картинки истории в ходе через Cleaner (`_max_images` — NO_IMAGES)
+CLEANER_DROPPED = "[фото не отправлено: диалог идёт через Cleaner, картинки он не очищает]"
+#: предел картинок хода через Cleaner: ни одной, пометка — CLEANER_DROPPED
+NO_IMAGES = -1
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 #: тип файла документа по расширению (`documents.SUFFIXES`); HTML, XML, JS и CSS — text/plain: /api/media отдаёт
 #: файл с этим типом на адресе студии, и разметка из вложения не должна там открываться страницей, а скрипт и стиль —
@@ -558,7 +562,7 @@ def _prefix(block: str, content):
 def _cap_images(messages: list[dict], limit: int) -> None:
     """Не больше `limit` картинок на весь запрос (предел подключения, `profiles.max_images`): остаются самые
     свежие, прежние — пометкой DROPPED, чтобы модель знала о пропуске; в истории диалога фото целы."""
-    left, dropped = limit, DROPPED.format(limit)
+    left, dropped = max(limit, 0), CLEANER_DROPPED if limit == NO_IMAGES else DROPPED.format(limit)
     for m in reversed(messages):
         if not isinstance(m["content"], list):
             continue
@@ -574,9 +578,9 @@ def _cap_images(messages: list[dict], limit: int) -> None:
 
 
 def _max_images(conn: Connection) -> int:
-    """Картинок на запрос хода: подключение через Cleaner — ни одной (картинки истории — пометкой DROPPED), иначе
-    предел профиля (`profiles.max_images`)."""
-    return 0 if conn.routed else profiles.max_images(conn)
+    """Картинок на запрос хода: подключение через Cleaner — ни одной (NO_IMAGES: картинки истории — пометкой
+    CLEANER_DROPPED), иначе предел профиля (`profiles.max_images`)."""
+    return NO_IMAGES if conn.routed else profiles.max_images(conn)
 
 
 def _refused_turns(rows, model: "str | None") -> set[str]:

@@ -48,6 +48,9 @@ KEY_HEADER = "X-Cleaner-Key"
 UPSTREAM_HEADER = "X-Cleaner-Upstream"
 CHAT_HEADER = "X-Cleaner-Chat"
 HOLD_HEADER = "X-Cleaner-Hold-Tools"
+#: предел имён в `X-Cleaner-Hold-Tools` по контракту Cleaner; больше — отказ хода до запроса
+HOLD_MAX = 128
+HOLD_WORDS = "веб-инструментов хода больше, чем принимает Cleaner (128) — выключите часть MCP-серверов с пометкой «интернет»"
 #: заголовок ответа шлюза: id запроса Cleaner («Что получила модель»)
 REQUEST_HEADER = "x-cleaner-request"
 #: маршруты шлюза Chat Completions; контексты — `/api/v1/chats`
@@ -98,6 +101,10 @@ def _empty(**extra) -> dict:
     return {"base_url": "", "key": None, "forced": False, "reenter": False} | extra
 
 
+#: предупреждение «настройки не расшифровываются» уже записано (до перезапуска службы)
+_WARNED: list = []
+
+
 def settings() -> dict:
     """Настройки с расшифрованным ключом. Не расшифровываются (прежний `STUDIO_DATA_KEY`) — пустые, с `reenter`."""
     row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (SETTINGS_KEY,)).fetchone() \
@@ -107,7 +114,9 @@ def settings() -> dict:
     try:
         saved = json.loads(security.decrypt(row[0]))
     except InvalidToken:
-        log.warning("cleaner settings: not decryptable with the current data key")
+        if not _WARNED:                          # settings() зовут на каждую строку подключения — в журнал один раз
+            _WARNED.append(True)
+            log.warning("cleaner settings: not decryptable with the current data key")
         return _empty(reenter=True)
     return _empty() | {k: saved[k] for k in ("base_url", "key", "forced") if k in saved}
 
@@ -274,6 +283,8 @@ async def check() -> dict:
     except httpx.HTTPError:
         log.warning("cleaner check: unreachable")
         raise HTTPException(502, {"code": "cleaner", "message": "Cleaner недоступен"}) from None
+    if response.status_code == 403 and (refusal(response) or ("",))[0] == "client_role":
+        raise HTTPException(502, {"code": "cleaner_role", "message": ROLE})
     if response.status_code in (401, 403):
         raise HTTPException(502, {"code": "cleaner", "message": "Cleaner не принял служебный ключ"})
     if not response.is_success:
@@ -292,6 +303,11 @@ DOWN = "Cleaner недоступен: данные не отправлены"
 UNLISTED = "адрес Cleaner убран из списка разрешённых: данные не отправлены"
 CHANGED = "Диалог или настройки Cleaner изменились: отправьте запрос заново"
 BAD_ID = "Cleaner вернул неверный идентификатор контекста"
+#: 403 `client_role` (и 403 `/api/v1/chats`, где `code` нет): владелец служебного ключа лишился роли администратора
+ROLE = ("Cleaner: владелец служебного ключа больше не администратор Cleaner — верните ему роль или выпустите"
+        " служебный ключ у администратора Cleaner")
+#: 401 служебному ключу (`/api/v1/chats` отвечает без `code`)
+KEY_REFUSED = "Cleaner не принял служебный ключ — обратитесь к администратору"
 #: таблицы записей, у которых бывает контекст: ресурс → таблица (владелец — её `user_id`)
 PARENTS = {"chat": "chats", "translate": "translations", "probe": "connections"}
 #: ожидание контекста одной записи одним подключением: два хода не создают два чата Cleaner
@@ -320,6 +336,8 @@ def _headers(config: dict, conn: "connections.Connection", remote: "str | None",
     if remote is not None:
         out[CHAT_HEADER] = remote
     names = list(dict.fromkeys(hold))
+    if len(names) > HOLD_MAX:            # обрезать нельзя: аргументы лишних Cleaner восстановил бы оригиналами
+        raise HTTPException(409, {"code": "hold_tools", "message": HOLD_WORDS})
     if names:
         out[HOLD_HEADER] = ",".join(names)
     return out
@@ -373,9 +391,12 @@ def words(response: httpx.Response) -> str:
     if status == 400 and code == "hold_tools":
         return "Cleaner не принял список веб-инструментов хода — обратитесь к администратору"
     if status == 401 and code == "client_login":
-        return "Cleaner не принял ключи запроса (служебный ключ или ключ подключения) — обратитесь к администратору"
+        return ("Cleaner не принял ключи запроса: ключ подключения пустой или начинается с ck_, либо служебный ключ"
+                " не тот — проверьте ключ подключения или обратитесь к администратору")
+    if status == 403 and code == "client_role":
+        return ROLE
     if status in (401, 403):
-        return "Cleaner не принял служебный ключ — обратитесь к администратору"
+        return KEY_REFUSED
     if status == 404 and code == "chat":
         return "Cleaner не нашёл контекст диалога — отправьте запрос ещё раз"
     if status == 429 or (status == 503 and code == "busy"):
@@ -450,6 +471,11 @@ async def _create(config: dict) -> str:
         raise HTTPException(502, {"code": "cleaner", "message": DOWN}) from None
     if not response.is_success:
         log.info("cleaner: контекст не создан — код %d", response.status_code)
+        # `/api/v1/chats` отвечает простым `detail` без `code`: 401 — служебный ключ, 403 — владелец без роли
+        if response.status_code == 401:
+            raise HTTPException(502, {"code": "cleaner_key", "message": KEY_REFUSED})
+        if response.status_code == 403:
+            raise HTTPException(502, {"code": "cleaner_role", "message": ROLE})
         raise HTTPException(502, {"code": "cleaner", "message": words(response)})
     remote = upstream.json_body(response).get("id")
     if not isinstance(remote, str) or not remote.isascii() or not remote.isalnum() or len(remote) > 128:
@@ -486,11 +512,13 @@ async def context(conn: "connections.Connection", resource: str, item_id: str) -
                                  " VALUES (?, ?, ?, ?, ?, ?, 1)",
                                  (identifier, owner, remote, config["base_url"], security.encrypt(config["key"]), now))
                 raise HTTPException(409, {"code": "changed", "message": CHANGED})
-            state.DB.execute("INSERT INTO cleaner_contexts(id, user_id, resource, item_id, connection_id, remote_id,"
-                             " base_url, token_enc, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             (identifier, owner, resource, item_id, conn.id, remote, config["base_url"],
-                              security.encrypt(config["key"]), now))
-            state.DB.execute("INSERT INTO cleaner_route_contexts(id) VALUES (?)", (identifier,))
+            import sections                   # цикл: sections → connections → cleaner_route
+            with sections.transaction():      # контекст — только с отметкой: без неё очередь удаляла бы его не тем ключом
+                state.DB.execute("INSERT INTO cleaner_contexts(id, user_id, resource, item_id, connection_id, remote_id,"
+                                 " base_url, token_enc, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (identifier, owner, resource, item_id, conn.id, remote, config["base_url"],
+                                  security.encrypt(config["key"]), now))
+                state.DB.execute("INSERT INTO cleaner_route_contexts(id) VALUES (?)", (identifier,))
             log.info("cleaner: контекст для %s %s создан", resource, item_id[:8])
             return remote
     finally:
