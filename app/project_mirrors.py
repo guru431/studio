@@ -17,6 +17,7 @@ import auth
 import bridge
 import claude_code as code
 import clock
+import mirror_groups
 import project_access
 import security
 import state
@@ -27,7 +28,7 @@ CHUNK = 4 * 1024 * 1024
 MAX_ENTRIES = 150_000
 DISCOVERY_CAP = "project_mirror_discovery"
 EXCLUDE_CAP = "mirror_exclude"
-EXCLUDE_MAX = 64
+EXCLUDE_MAX = mirror_groups.EXCLUDE_MAX
 SKIP = ["skip", "", 0, 0]
 DIR = ["dir", "", 0, 0]
 SHA256 = re.compile(r"[0-9a-f]{64}")

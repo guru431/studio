@@ -514,6 +514,7 @@ def test_overlapping_backups_do_not_share_a_part_file(base, env, monkeypatch):
     ("mcp", "INSERT INTO mcp_servers(user_id,name,url,secret_enc) VALUES(1,'test','https://mcp.test',?)"),
     ("mirrors", "INSERT INTO project_mirrors(source,project,destination,root,name_key,location)"
                 " VALUES(1,'project',1,'root','copy',?)"),
+    ("mirrors", "INSERT INTO mirror_groups(user_id, exclude) VALUES(1, ?)"),
 ])
 def test_verify_detects_wrong_key_with_only_one_encrypted_setting(base, env, monkeypatch, category, statement):
     add_rows(base, tokens=0, files=())

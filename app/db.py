@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 62
+VERSION = 63
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -914,6 +914,27 @@ SCHEMA += VOICE_TRASH_61
 MCP_DEFAULT_62 = "ALTER TABLE mcp_servers ADD COLUMN dialog_default INTEGER NOT NULL DEFAULT 1;"
 SCHEMA += MCP_DEFAULT_62
 
+#: зеркала группой равноправных копий (mirror_groups.py): группа — исключения шифром, копия — папка компьютера
+#: (`project` — id проекта, `root` + `name_key` + `location` шифром — адрес; неизвестное — NULL), пара — состояния
+#: двух копий на их последнюю синхронизацию (шифром). Строки `project_mirrors` переносит `mirror_groups.adopt` при
+#: старте, перенесённые — в `mirror_legacy`; сам `project_mirrors` не меняется. Прежний код новые таблицы не читает:
+#: видит свои односторонние зеркала с прежними базами, его новые строки `adopt` перенесёт после возврата вперёд
+MIRROR_GROUPS_63 = """CREATE TABLE mirror_groups(id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, exclude BLOB);
+CREATE TABLE mirror_copies(id INTEGER PRIMARY KEY AUTOINCREMENT,
+    grp INTEGER NOT NULL REFERENCES mirror_groups ON DELETE CASCADE,
+    agent INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
+    project TEXT, root TEXT, name_key TEXT, location BLOB, UNIQUE(agent, root, name_key));
+CREATE INDEX mirror_copies_project ON mirror_copies(agent, project);
+CREATE INDEX mirror_copies_grp ON mirror_copies(grp);
+CREATE TABLE mirror_pairs(a INTEGER NOT NULL REFERENCES mirror_copies ON DELETE CASCADE,
+    b INTEGER NOT NULL REFERENCES mirror_copies ON DELETE CASCADE,
+    state_a BLOB, state_b BLOB, synced REAL, PRIMARY KEY(a, b), CHECK(a < b));
+CREATE INDEX mirror_pairs_b ON mirror_pairs(b);
+CREATE TABLE mirror_legacy(id INTEGER PRIMARY KEY);
+"""
+SCHEMA += MIRROR_GROUPS_63
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1040,6 +1061,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     61: VOICE_TRASH_61,
     # общий MCP: в диалоге по умолчанию или только вручную
     62: MCP_DEFAULT_62,
+    # зеркала группой копий: группы, копии, пары, перенесённые строки project_mirrors
+    63: MIRROR_GROUPS_63,
 }
 
 

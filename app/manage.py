@@ -71,7 +71,11 @@ ENCRYPTED_BACKUP_FIELDS = (
     ("mcp", "настройки MCP", "SELECT secret_enc FROM mcp_servers"),
     ("memory", "личная память чата", "SELECT text_enc FROM user_memory"),
     ("mirrors", "сведения о зеркалах", "SELECT location FROM project_mirrors UNION ALL"
-     " SELECT baseline FROM project_mirrors WHERE baseline IS NOT NULL"),
+     " SELECT baseline FROM project_mirrors WHERE baseline IS NOT NULL UNION ALL"
+     " SELECT location FROM mirror_copies WHERE location IS NOT NULL UNION ALL"
+     " SELECT exclude FROM mirror_groups WHERE exclude IS NOT NULL UNION ALL"
+     " SELECT state_a FROM mirror_pairs WHERE state_a IS NOT NULL UNION ALL"
+     " SELECT state_b FROM mirror_pairs WHERE state_b IS NOT NULL"),
     ("cleaner", "токены Cleaner", "SELECT token_enc FROM cleaner_contexts UNION ALL"
      " SELECT token_enc FROM cleaner_deletions"),
     ("notifications", "ключи уведомлений", "SELECT value FROM settings WHERE key = 'vapid' UNION ALL"
