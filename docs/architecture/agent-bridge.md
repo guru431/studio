@@ -216,7 +216,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   owned by an active write handle»; DSH Web держит чат до выхода из приложения) — отказ `writer_active` со словами
   `deepseek.WRITER`, в ходе — `done` с `code: writer_active`, `not_started` и очередью в `unsent`; сервер отвечает 409.
 - **История** — файлы сессий (`deepseek_history.locate`, `deepseek_history.read`): `sessions/--<ключ cwd>--/<id>/
-  session.v4.jsonl[.zstd]`, наибольшая `vN`, `cwd` заголовка сверяется с проектом (и `samefile`; не сводится — `notice`, не «нет чата»); реплики человека —
+  session.v4.jsonl[.zstd]`, наибольшая `vN`, `cwd` заголовка сверяется с проектом (и `samefile`; не сводится — `notice: "cwd_mismatch"`, не «нет чата»); реплики человека —
   `source.kind: user`, ответ — подряд идущие `assistant/message`, шаги — `tool-call`/`tool/result`. Индекс историй —
   ревизия `(mtime_ns, size)` файла, процесс ACP не запускается. Незнакомая версия формата или битый файл — пустая
   страница с `notice: "unsupported_format"`, ход в том же чате работает; файл больше `deepseek_history.READ_MAX` —

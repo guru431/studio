@@ -353,12 +353,14 @@ async def _history_images(request: Request, aid: int, pid: str, session_id: str,
 
 
 UNREADABLE = "Историю этой версии DeepSeek Harness студия пока не читает"
+OTHER_FOLDER = "Папка этого чата DeepSeek Harness не совпадает с проектом — историю студия не показывает"
 
 
 def unreadable(data) -> None:
     """Мост не прочёл историю (`notice`, DeepSeek Harness): пустой снимок не делаем — 409 со словами заметки."""
-    if isinstance(data, dict) and data.get("notice") == "unsupported_format":
-        raise _refuse(409, "history_unavailable", UNREADABLE)
+    notice = data.get("notice") if isinstance(data, dict) else None
+    if notice in ("unsupported_format", "cwd_mismatch"):
+        raise _refuse(409, "history_unavailable", OTHER_FOLDER if notice == "cwd_mismatch" else UNREADABLE)
 
 
 async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, title: str, *,

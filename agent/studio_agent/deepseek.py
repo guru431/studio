@@ -95,7 +95,7 @@ class DeepSeekRunner(acp.AcpRunner):
         self.environ = environ
         self._overview_cache = {}  # путь файла сессии → (ревизия, `deepseek_history.overview`)
         self.unavailable = None  # причина последнего отказа запуска: `node` | `missing` | None
-        self.base_urls = []  # явные `baseURL` строк `llm-deepseek` профиля (последнее наложение) — для баланса
+        self.base_urls = None  # явные `baseURL` строк `llm-deepseek` (последнее наложение); None — неизвестны
 
     @property
     def unavailable_message(self):
@@ -124,7 +124,7 @@ class DeepSeekRunner(acp.AcpRunner):
             overlay, summary = await asyncio.to_thread(
                 deepseek_settings.build, home, self.environ if self.environ is not None else os.environ,
                 self.home, install, scratch=scratch["root"] if scratch else None, access=access, notes=notes)
-            self.base_urls = notes.get("base_urls", [])
+            self.base_urls = notes.get("base_urls")  # None — профиль не разобран: адрес неизвестен
             if scratch is not None and overlay is None:
                 raise Refused("unsupported", FAILED)  # пробная сессия без своего хранилища попала бы к человеку
         process = _Process(self.rpc_factory(install, Path(project), access=access, overlay=overlay),
@@ -259,7 +259,8 @@ class DeepSeekRunner(acp.AcpRunner):
         except deepseek_history.Unsupported as e:
             if e.code == "too_large":
                 raise Refused("too_large") from None
-            return {"items": [], "start": 0, "total": 0, "engine": self.ENGINE, "notice": "unsupported_format"}
+            notice = "cwd_mismatch" if e.code == "cwd" else "unsupported_format"  # cwd сессии не сводится к проекту
+            return {"items": [], "start": 0, "total": 0, "engine": self.ENGINE, "notice": notice}
 
     async def history_image(self, project, chat, message_id, index):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
@@ -369,7 +370,8 @@ class DeepSeekRunner(acp.AcpRunner):
         if update.get("sessionUpdate") == "agent_message_chunk":
             content, message = update.get("content"), update.get("messageId")
             fresh = getattr(t, "dsh_fresh", False)  # первый ответ после отправленного уточнения — новое сообщение
-            if (t.feed.text and not fresh and (message is None or message != getattr(t, "dsh_message", None))
+            # без `messageId` (потоковая выдача) — куски одного сообщения, разделитель не ставится
+            if (t.feed.text and not fresh and message is not None and message != getattr(t, "dsh_message", None)
                     and isinstance(content, dict) and content.get("type") == "text" and content.get("text")):
                 update = {**update, "content": {**content, "text": "\n\n" + content["text"]}}
             t.dsh_message, t.dsh_fresh = message, False

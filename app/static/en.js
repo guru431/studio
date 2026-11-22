@@ -1804,7 +1804,7 @@ globalThis.StudioEnglish = Object.freeze({
   "профиль не читается": "the profile cannot be read",
   "Права заданы при создании чата": "Permissions were set when the chat was created",
   "Историю этой версии DeepSeek Harness студия пока не читает": "Studio cannot read the history of this DeepSeek Harness version yet",
-  "Проверить снова": "Check again",
+  "Папка этого чата DeepSeek Harness не совпадает с проектом — историю студия не показывает": "The folder of this DeepSeek Harness chat differs from the project, so Studio does not show its history",
   "Баланс": "Balance",
   "Баланс DeepSeek: {0} {1}": "DeepSeek balance: {0} {1}",
   "Баланс DeepSeek не сообщается": "DeepSeek balance is not reported",

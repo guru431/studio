@@ -346,13 +346,15 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
   // DeepSeek Harness: чат открыт в DSH Web/Desktop (отказ writer_active) — копии сессии нет, только закрыть там и повторить.
   const writerText = el('p');
-  const writerRetry = el('button', { type: 'button', id: 'code-writer-retry', class: 'btn btn-sm' }, tr("Проверить снова"));
+  const writerRetry = el('button', { type: 'button', id: 'code-writer-retry', class: 'btn btn-sm' }, tr("Понятно"));
   const writerNotice = el('div', { id: 'code-writer-notice', class: 'code-session-notice', hidden: true, role: 'status' },
     writerText, el('div', { class: 'code-session-actions' }, writerRetry));
   function writerActive(said) {
     writerText.textContent = said || tr("Чат открыт в DeepSeek Harness на компьютере — закройте DeepSeek Harness и повторите");
     writerNotice.hidden = false;
   }
+  // Просмотр чата блокировку DSH не проверяет (state читает файл сессии): занятость покажет только следующая отправка.
+  // Настройки перечитываются — отказ state прежнего моста (writer_active) иначе оставил бы отправку запертой.
   writerRetry.addEventListener('click', () => {
     writerNotice.hidden = true;
     loadState();
@@ -1635,7 +1637,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       historyCache.delete(key);
     }
     // Историю сессии мост не прочёл (формат DeepSeek Harness новее или старее моста): заметка, продолжение работает.
-    const unreadable = page.notice === 'unsupported_format';
+    // Сессия есть, но её папка не сводится к проекту (cwd_mismatch) — свои слова, не «версия».
+    const unreadable = page.notice === 'unsupported_format' || page.notice === 'cwd_mismatch';
+    if (unreadable) historyNotice.textContent = page.notice === 'cwd_mismatch'
+      ? tr("Папка этого чата DeepSeek Harness не совпадает с проектом — историю студия не показывает") : tr("Историю этой версии DeepSeek Harness студия пока не читает");
     historyNotice.hidden = !unreadable;
     if (first && !unreadable && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
     // Ответ идущего хода остаётся в конце ленты до снимка live (возврат на экран): иначе его текст мигает.

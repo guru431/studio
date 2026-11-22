@@ -305,7 +305,7 @@ class UsageCache:
             catalog, bases = getattr(backend, "catalog", None), getattr(backend, "base_urls", None)
             defaults = catalog.get("defaults") if isinstance(catalog, dict) else None
             default = defaults.get("model") if isinstance(defaults, dict) else None
-            bases = list(bases) if isinstance(bases, list) else []
+            bases = list(bases) if isinstance(bases, list) else None  # None — профиль не разобран
             return await asyncio.to_thread(lambda: deepseek_usage.read(model=model, default=default, bases=bases,
                                                                        now=lambda: now))
         from . import opencode_usage

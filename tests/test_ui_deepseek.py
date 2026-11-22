@@ -244,7 +244,7 @@ def test_history_notice_for_unsupported_format(browser, live, width):
 
 @pytest.mark.parametrize("width", [320, 1280])
 def test_writer_active_message_is_shown(browser, live, width, tmp_path):
-    """Отказ state (409 writer_active) — плашка со словами моста и «Проверить снова»; отказ хода — та же плашка,
+    """Отказ state (409 writer_active) — плашка со словами моста и «Понятно»; отказ хода — та же плашка,
     задание возвращено в поле."""
     login = f"ui-deepseek-writer-{width}"
     live.add_user(login)
@@ -283,7 +283,7 @@ def test_writer_active_message_is_shown(browser, live, width, tmp_path):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["state"] == v["turn"] == WRITER + "Проверить снова"
+    assert v["state"] == v["turn"] == WRITER + "Понятно"
     assert v["text"] == "Продолжи" and v["fits"]
     assert code_requests(machine, "turn")[0]["engine"] == "deepseek"
     assert not known_refusals(problems(r), 409), problems(r)

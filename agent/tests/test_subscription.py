@@ -293,3 +293,6 @@ async def test_deepseek_usage_gets_catalog_default_and_profile_base_urls(monkeyp
     await subscription.UsageCache(now=lambda: 0, wall=lambda: 1000).read("deepseek", "root", backend)
     assert seen[0]["model"] is None and seen[0]["default"] == '["deepseek-official","deepseek-v4-flash"]'
     assert seen[0]["bases"] == ["https://proxy.example"]
+    backend.base_urls = None                                   # профиль не разобран — адрес неизвестен (N2)
+    await subscription.UsageCache(now=lambda: 0, wall=lambda: 1000).read("deepseek", "root", backend)
+    assert seen[1]["bases"] is None

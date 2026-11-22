@@ -171,6 +171,7 @@ async def test_probe_builds_catalog_from_config_options_and_leaves_no_session(ru
     assert catalog["efforts"] == ["high", "off"]                 # из `reasoning_effort`, без «Provider default»
     assert catalog["defaults"] == {"model": TOOLS, "effort": None, "access": "default"}   # «Provider default» — без выбора
     assert catalog["version"] == "0.2.2-rc.5" and catalog["settings"]["profile"] == "web"
+    assert runner.base_urls == []                             # профиль разобран, своего адреса DeepSeek нет
     # хранилища пробной сессии — во временном каталоге моста, не в $DSH_HOME; после пробы его нет
     rows = runner.fake.clients[0].overlay_rows
     roots = [Path(row["config"]["root"]) for row in rows if row.get("id") in ("session-persistence-jsonl", "storage-json")]
@@ -201,6 +202,7 @@ async def test_probe_with_unreadable_profile_still_keeps_sessions_out_of_dsh_hom
         assert set(roots) == {"session-persistence-jsonl", "storage-json"}
         assert all(root.parent.parent == home / "deepseek" for root in roots.values())
         assert not (runner.dsh / "sessions").exists() and await runner.chats(runner.project) == before
+        assert runner.base_urls is None                       # N2: профиль не разобран — баланс не запрашивать
         await runner.close()
     # вторая линия: наложения нет — процесс не запускается
     monkeypatch.setattr(deepseek.deepseek_settings, "build", lambda *args, **kwargs: (None, {}))
@@ -394,7 +396,7 @@ async def test_history_with_other_spelling_of_cwd_is_a_notice_not_gone(runner):
     runner.aliases.put(runner.project, CHAT, SESSION)
     stored(runner, cwd=str(runner.project.parent / "elsewhere"))
     assert await runner.history(runner.project, CHAT, None, 100) == {
-        "items": [], "start": 0, "total": 0, "engine": "deepseek", "notice": "unsupported_format"}
+        "items": [], "start": 0, "total": 0, "engine": "deepseek", "notice": "cwd_mismatch"}
 
 
 async def test_history_too_large_is_refused(runner, monkeypatch):
@@ -428,13 +430,14 @@ def chunk(text, message):
 
 async def test_whole_messages_are_separated_like_history(runner):
     """Minor-9: DSH присылает сообщения целиком — между ними пустая строка, как в `deepseek_history`."""
-    runner.fake.extra = [chunk("Call MCP echo.", "m1"), chunk("Tool returned.", "m2")]
+    runner.fake.extra = [chunk("Call MCP echo.", "m1"), chunk("Tool returned.", "m2"),
+                         chunk(" A", None), chunk(" B", None)]   # N5: куски без `messageId` — без разделителя
     runner.start(runner.project, runner.pid, CHAT, "Начни", None, None)
     rid = await asking(runner)
     runner.answer(runner.pid, CHAT, rid, "allow", None, None)
     await runner._turns[CHAT].task
     text = "".join(e["text"] for e in events(runner, "text"))
-    assert text.startswith("Call MCP echo.\n\nTool returned.\n\nГотово")
+    assert text.startswith("Call MCP echo.\n\nTool returned. A B\n\nГотово")
 
 
 async def test_first_turn_refusals_come_before_session_new(runner):

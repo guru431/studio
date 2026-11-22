@@ -208,6 +208,11 @@ def test_share_and_export_of_unreadable_history_are_refused(studio):
                      studio.c.post(chat_url(aid, "export"), json={"format": "md"})):
         assert response.status_code == 409, response.text
         assert response.json()["detail"] == {"code": "history_unavailable", "message": chat_shares.UNREADABLE}
+    # N4: папка сессии не совпадает с проектом — свои слова
+    machine._op_history = lambda req, events: {"items": [], "start": 0, "total": 0, "engine": "deepseek",
+                                               "notice": "cwd_mismatch"}
+    response = studio.c.post(chat_url(aid, "share"), json={"pin": "0123"})
+    assert response.status_code == 409 and response.json()["detail"]["message"] == chat_shares.OTHER_FOLDER
     assert state.DB.execute("SELECT COUNT(*) FROM chat_shares").fetchone()[0] == 0
 
 

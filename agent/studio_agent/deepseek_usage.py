@@ -117,9 +117,11 @@ def eligible(model, environ=None, *, home=None, default=None, bases=()) -> str |
     """`None` — спрашивать можно; иначе причина (`provider`, `base_url`): ключ не уходит чужому сервису.
 
     Без модели — умолчание каталога (`default`). Адрес — явные `baseURL` строк `llm-deepseek` профиля (`bases`) и
-    `DEEPSEEK_BASE_URL` из всех мест, где его берёт DSH: хоть один не официальный — баланс не запрашивается."""
+    `DEEPSEEK_BASE_URL` из всех мест, где его берёт DSH: хоть один не официальный — баланс не запрашивается.
+    `bases=None` — профиль не разобран (Python-пакет, тайм-аут Node): провайдер не достоверен — `provider`.
+    `<cwd>/.env` не смотрится: `DEEPSEEK_BASE_URL` DSH из `.env` проекта не берёт (README `dsh-llm-deepseek`)."""
     env = os.environ if environ is None else environ
-    if _provider(model if model is not None else default) != OFFICIAL_PROVIDER:
+    if _provider(model if model is not None else default) != OFFICIAL_PROVIDER or bases is None:
         return "provider"
     home = deepseek_settings.dsh_home(env) if home is None else home
     values = [*bases, *_sources(home, env, BASE_NAME)]

@@ -120,6 +120,11 @@ def test_base_url_from_every_dsh_source_and_profile_blocks_key(tmp_path):
         (home / name).write_text(text, encoding="utf-8")
         opener = Opener(BODY)
         assert "свой адрес" in read(home, opener)["balance"]["reason"] and not opener.requests
+    # N2: профиль не разобран (`bases=None`) — провайдер не достоверен, ключ не уходит
+    opener = Opener(BODY)
+    data = deepseek_usage.read(model=OFFICIAL, bases=None, home=tmp_path, environ={"DEEPSEEK_API_KEY": "sk-test"},
+                               opener=opener, now=lambda: 1)
+    assert "официального провайдера" in data["balance"]["reason"] and not opener.requests
     opener = Opener(BODY)
     data = deepseek_usage.read(model=OFFICIAL, bases=["https://proxy.example/anthropic"], home=tmp_path,
                                environ={"DEEPSEEK_API_KEY": "sk-test"}, opener=opener, now=lambda: 1)

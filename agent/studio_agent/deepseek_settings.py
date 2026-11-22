@@ -373,7 +373,8 @@ def build(home: Path, environ: Mapping[str, str], private: Path, install: Instal
     `scratch` — пробный процесс каталога (D4): хранилища сессий и проекций — во временный каталог, без MCP.
     `access` — права чата: явные (`deepseek_rpc.ACCESS`) сильнее `defaultPreset` профиля, строка `permission`
     в файл не пишется. Ни `scratch`, ни `access` сводку не меняют. Файла нет, если записывать нечего.
-    `notes` — для моста, не для студии: `base_urls` — явные `baseURL` строк `llm-deepseek` (`deepseek_usage`).
+    `notes` — для моста, не для студии: `base_urls` — явные `baseURL` строк `llm-deepseek` (`deepseek_usage`);
+    ключа нет — патчи не разобраны и адрес неизвестен.
 
     Строки хранилищ `scratch` дописываются при любом исходе разбора профиля (нечитаемый файл, нет Node, тайм-аут):
     пробный процесс без них оставил бы свою сессию в списке человека (D4)."""
@@ -382,6 +383,9 @@ def build(home: Path, environ: Mapping[str, str], private: Path, install: Instal
     summary = _Summary(profile)
     rows = _profile_rows(home, profile, environ, install, summary, mcp=scratch is None,
                          permission=access not in ACCESS, run=run, notes=notes) if profile is not None else []
+    if profile is None and notes is not None and not any(
+            path.exists() for path in (home / "profiles" / "acp" / PATCH, home / PATCH)):
+        notes["base_urls"] = []  # патчей нет — своего адреса в них тоже нет; иначе неразобранное — неизвестно
     if scratch is not None:
         rows += [{"id": "session-persistence-jsonl", "config": {"root": str(Path(scratch) / "sessions")}},
                  {"id": "storage-json", "config": {"root": str(Path(scratch) / "storages")}}]

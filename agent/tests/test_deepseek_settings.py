@@ -193,8 +193,14 @@ def test_js_rows_explicit_access_and_scratch(tmp_path):
 
 
 def test_console_only_user_gets_no_overlay(tmp_path):
-    assert ds.build(tmp_path, {}, tmp_path / "bridge", INSTALL, run=None) == (
+    notes = {}
+    assert ds.build(tmp_path, {}, tmp_path / "bridge", INSTALL, run=None, notes=notes) == (
         None, {"profile": None, "applied": [], "skipped": []})
+    assert notes == {"base_urls": []}                         # патчей нет — своего адреса DeepSeek нет
+    (tmp_path / "cordis.patch.yml").write_text("- id: llm-deepseek\n", "utf-8")
+    notes = {}
+    ds.build(tmp_path, {}, tmp_path / "bridge", INSTALL, run=None, notes=notes)
+    assert notes == {}                                        # общий патч не разобран — адрес неизвестен (N2)
 
 
 def test_overlay_written_privately_and_swept(tmp_path):
