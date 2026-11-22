@@ -30,6 +30,13 @@ export function stateOf(source) {
     toolsOn: source.mcp_tools_on || {} };
 }
 
+/** Есть ли у набора `ids` по каталогу (`GET /api/mcp/catalog`) веб-инструмент («интернет», `open_world`), не
+ *  выключенный в диалоге, — как mcp_client.web_tools: ради него «Интернет» включается и без ключа Exa. */
+export function hasWebTools(catalog, ids, { toolsOff, toolsOn }) {
+  return catalog.some((s) => ids.includes(s.id) && s.state === 'ok' && s.tools.some((t) => t.open_world
+    && !(toolsOff[s.id] || []).includes(t.name) && (t.name !== UPLOAD || !t.confirm || (toolsOn[s.id] || []).includes(UPLOAD))));
+}
+
 /** Число действующих серверов черновика нового диалога (как mcp_sources.dialog_servers): явные плюс общие
  *  включённые, кроме выключенных в диалоге. `servers` — ответ `GET /api/mcp`. */
 export function draftCount(draft, servers) {

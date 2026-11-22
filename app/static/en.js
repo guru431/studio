@@ -822,6 +822,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Защищённый источник": "Protected source",
   "После первого успешного вызова инструмента этого сервера в диалоге выключаются «Интернет» и веб-инструменты, а вызовы со ссылками в аргументах отклоняются.": "After the first successful call to a tool of this server, Internet and web tools are turned off in the conversation, and calls with links in their arguments are refused.",
   "Интернет: поиск, страницы и субтитры YouTube": "Internet: search, pages and YouTube subtitles",
+  "Интернет: только веб-инструменты MCP — для поиска Studio задайте ключ Exa в Настройках": "Internet: MCP web tools only — set an Exa key in Settings for Studio's own search",
   "Запросы, составленные из расшифровки, могут уйти в Exa — отправить?": "Queries based on the transcript may be sent to Exa. Continue?",
   "Ищу": "Searching",
   "Читаю": "Reading",

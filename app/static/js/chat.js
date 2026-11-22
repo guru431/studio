@@ -1,5 +1,5 @@
 import { locale, message, tr } from './i18n.js';
-import { chooseDialogMcp, draftCount, draftOf, stateOf } from './chat-mcp.js';
+import { chooseDialogMcp, draftCount, draftOf, hasWebTools, stateOf } from './chat-mcp.js';
 import { knowledgeChip } from './knowledge.js';
 import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
   uploadMedia } from './chat-files.js';
@@ -48,8 +48,9 @@ import { mcpStateWords } from './mcp-sections.js';
  * `web` диалога (PATCH {web}); у нового диалога — в памяти до создания, затем тем же PATCH. Видна, если
  * подключение идёт через сервер (`proxied` диалога; у нового — подключения из чипа); без ключа Exa
  * (`me.exa_key`, оболочка перечитывает профиль при возвращении на экран — событие `studio-me`) выключена, не
- * нажата и с подсказкой WEB_HINT; 409 `no_exa_key` (ключ убрали в другой вкладке) — его слова, кнопка
- * выключена. Событие SSE `tool` — плашка над ответом с крутилкой («🌐 Ищу: …»), ответ с ходом
+ * нажата и с подсказкой WEB_HINT — если набор MCP диалога не даёт веб-инструментов («интернет» по каталогу):
+ * тогда кнопка включается ради них с подсказкой WEB_MCP_TITLE; 409 `no_exa_key` (ключ убрали в другой вкладке) —
+ * его слова, кнопка выключена. Событие SSE `tool` — плашка над ответом с крутилкой («🌐 Ищу: …»), ответ с ходом
  * перечитывается: над ним плашка из `tools` (спека 2026-10-22-studio-chat-tools-badge-reasoning, раздел 3) —
  * виды и числа вызовов, зелёная без ошибок и красная с ними, нажатие раскрывает «Источники» под ответом —
  * ссылки в новую вкладку без адреса студии. Ход, чьи
@@ -153,6 +154,8 @@ const PROTECTED_HINT = tr("В этом диалоге сработал защи�
 const PROTECTED_SHARE = tr("В этом диалоге сработал защищённый источник — им нельзя поделиться и его нельзя скачать");
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
 const WEB_TITLE = tr("Интернет: поиск, страницы и субтитры YouTube");
+// без ключа Exa: «Интернет» открывает только веб-инструменты MCP диалога (поиска Studio нет)
+const WEB_MCP_TITLE = tr("Интернет: только веб-инструменты MCP — для поиска Studio задайте ключ Exa в Настройках");
 const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
 const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры"), mcp: 'MCP' };   // строка хода по виду инструмента
 const TOOL_MARKS = { youtube: '▶', mcp: '🧩' };   // значок идущего инструмента; прочие — интернет 🌐
@@ -878,9 +881,17 @@ function build(view, ctx) {
   }
 
   /* «Интернет» (как web.tools_for): 'hidden' — прямое подключение, кнопки нет; 'nokey' — через сервер без
-   * ключа Exa, кнопка выключена с подсказкой; 'ready' — ход даст модели все инструменты. Путь — `proxied`
-   * открытого диалога или подключения из чипа нового, ключ — профиль (перечитывается при возвращении) */
+   * ключа Exa, кнопка выключена с подсказкой; 'ready' — ход даст модели все инструменты; 'mcp' — ключа нет, но
+   * набор MCP диалога даёт веб-инструменты (как mcp_client.web_tools): кнопка включается только ради них.
+   * Путь — `proxied` открытого диалога или подключения из чипа нового, ключ — профиль (перечитывается при возвращении) */
   function webState() {
+    const mode = webBase();
+    if (mode !== 'nokey') return mode;
+    const ids = chat ? chat.chat.mcp_ids || [] : draftIds(draftMcp, mcpServers);
+    return hasWebTools(catalog, ids, stateOf(chat ? chat.chat : draftMcp)) ? 'mcp' : 'nokey';
+  }
+
+  function webBase() {
     if (chat?.chat.cleaner || links.find((l) => l.connection.id === chosen().connection_id)?.connection.cleaner) return 'hidden';
     let proxied;
     if (chat) proxied = !!chat.chat.proxied;
@@ -898,7 +909,7 @@ function build(view, ctx) {
   }
 
   function webOn() {
-    return webState() === 'ready' && (chat ? !!chat.chat.web : draftWeb);
+    return ['ready', 'mcp'].includes(webState()) && (chat ? !!chat.chat.web : draftWeb);
   }
 
   function paintWeb() {
@@ -907,7 +918,7 @@ function build(view, ctx) {
     webToggle.hidden = mode === 'hidden';
     webToggle.disabled = mode === 'nokey' || mode === 'protected';
     webToggle.setAttribute('aria-pressed', String(webOn()));
-    webToggle.title = hint || WEB_TITLE;
+    webToggle.title = hint || (mode === 'mcp' ? WEB_MCP_TITLE : WEB_TITLE);
     webNote.textContent = hint || (webOn() && thinkOn() ? THINK_NOTE : '');
     const conn = links.find(l => l.connection.id === chosen().connection_id)?.connection;
     mcpToggle.hidden = chat ? !chat.chat.mcp_ok : !conn?.proxied || !!conn?.cleaner;
@@ -2242,7 +2253,7 @@ function build(view, ctx) {
       chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
       paintThink();
     }
-    if (draftWeb && webState() === 'ready') {    // «Интернет», включённый до создания диалога
+    if (draftWeb && ['ready', 'mcp'].includes(webState())) {   // «Интернет», включённый до создания диалога
       draftWeb = false;
       chat.chat = await api('PATCH', `/api/chats/${created.id}`, { web: true });
       paintWeb();
@@ -2537,7 +2548,7 @@ function build(view, ctx) {
     if (!items.some((s) => s.enabled)) return null;
     return api('GET', '/api/mcp/catalog').then((out) => {
       catalog = out.items;
-      paintMedia();
+      paintWeb();                                  // и звук с видео: веб-инструменты MCP открывают «Интернет» без ключа
       // состояние — только если его объявил хоть один сервер (`contracts.status`)
       return catalog.some((s) => s.contracts?.status) ? api('GET', '/api/mcp/status') : null;
     }).then((out) => {

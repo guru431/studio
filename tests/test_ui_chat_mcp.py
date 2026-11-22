@@ -145,6 +145,49 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
     assert not problems(result), result.get("log")
 
 
+WEB_TOGGLE = "document.querySelector('#web-toggle')"
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_internet_without_exa_key_opens_for_mcp_web_tools(browser, live, width):
+    """Находка 2026-11-22: без ключа Exa «Интернет» включается, когда набор MCP диалога даёт веб-инструмент; подсказка
+    — только веб-инструменты MCP; включённый до создания диалога уходит в него, и ход предлагает веб-инструмент."""
+    login = f"mcp-web-{width}"
+    sid = shared_server(live, f"Веб {width}", f"/mcp-web-{width}")
+    live.add_user(login)
+    mobile = width == 320
+    try:
+        steps = [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+            ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(mobile),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"
+                     f" && {WEB_TOGGLE} && !{WEB_TOGGLE}.hidden && !{WEB_TOGGLE}.disabled"),
+            ("eval", "before", f"[{WEB_TOGGLE}.getAttribute('aria-pressed'), {WEB_TOGGLE}.title,"
+                               " document.querySelector('#web-note').textContent]"),
+            ("click", "#web-toggle"), ("wait", f"{WEB_TOGGLE}.getAttribute('aria-pressed') === 'true'"),
+            ("type", "#chat-input", "Найди новости"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "created", chip_matches_view()),
+            ("eval", "after", f"[{WEB_TOGGLE}.getAttribute('aria-pressed'), {WEB_TOGGLE}.disabled]"),
+            ("eval", "composerFits", NO_OVERFLOW)]
+        result = browser.drive(live.url + "/", steps, width=width, mobile=mobile)
+    finally:
+        client = admin_client(live)
+        try:
+            client.delete(f"/api/admin/shared/mcp/{sid}")
+        finally:
+            client.close()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["before"] == ["false", "Интернет: только веб-инструменты MCP — для поиска Studio задайте ключ Exa"
+                                         " в Настройках", ""]
+    _, chat = values["created"]
+    assert chat["web"] is True and chat["web_tools"] == []
+    assert values["after"] == ["true", False] and values["composerFits"] is True
+    offered = [t["function"]["description"].split(". ", 1)[0] for t in live.gw.chat_requests[-1].get("tools", [])
+               if t["function"]["name"].startswith(f"mcp_{sid}_")]
+    assert f"Веб {width}: web_search" in offered
+    assert not problems(result), result.get("log")
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_admin_sets_tool_policy_in_the_access_dialog(browser, live, width):
     name = f"Политика {width}"
