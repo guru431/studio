@@ -20,7 +20,7 @@ def test_translate_reuses_the_scan_and_opens_the_translation(browser, live, tran
     translator.chat_script = [["Übersetzte Seite"]]
     before = len(live.gw.ocr_requests)
     r = browser.drive(live.url + "/", [*signin("ocrtranslate"), ("wait", READY), add_translator(), *go("ocr"),
-        put_files("#ocr-add input", [("Лист.png", photo("PNG"))]),
+        ("wait", "document.querySelector('#ocr-add input')"), put_files("#ocr-add input", [("Лист.png", photo("PNG"))]),
         ("wait", "document.querySelector('#ocr-translate')"), ("click", "#ocr-translate"),
         ("wait", "document.querySelector('#ocr-translate-target option[value=de]')"),
         ("eval", "target", "document.querySelector('#ocr-translate-target').value = 'de'"),
