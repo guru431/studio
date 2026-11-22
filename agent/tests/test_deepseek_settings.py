@@ -146,6 +146,13 @@ def test_unreadable_profile_yields_no_overlay_and_reason(tmp_path):
     python = Install("python", ("runtime.exe",), {}, "web")
     assert ds.build(home, {}, tmp_path / "bridge", python, run=None)[0] is None
     assert not (tmp_path / "bridge").exists()
+    # пробному процессу хранилища во временном каталоге — при любом исходе разбора (C1)
+    acp_big = dsh(tmp_path / "big", acp="#" * (ds.FILE_MAX + 1))
+    for where, install in ((home, python), (acp_big, INSTALL), (dsh(tmp_path / "broken", "- [\n"), INSTALL)):
+        path, summary = ds.build(where, {}, tmp_path / "bridge", install, run=node(parsed()), scratch=tmp_path / "s")
+        assert summary["applied"] == [] and summary["skipped"][0]["reason"] == "unreadable"
+        assert rows(path) == [{"id": "session-persistence-jsonl", "config": {"root": str(tmp_path / "s" / "sessions")}},
+                              {"id": "storage-json", "config": {"root": str(tmp_path / "s" / "storages")}}]
 
 
 def test_js_rows_explicit_access_and_scratch(tmp_path):

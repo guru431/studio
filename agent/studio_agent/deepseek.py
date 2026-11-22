@@ -32,9 +32,11 @@ IMAGES = "Выбранная модель DeepSeek Harness не принимае
 GONE = "нет такого чата"
 SCRATCH = "overlay-scratch-"  # временные хранилища пробных сессий; остатки после падения стирает `deepseek_settings.sweep`
 
-# Пробный процесс (каталог, предпросмотр): хранилища сессий во временном каталоге. Переменная контекста — у своей
-# задачи: ходы и список чатов, идущие одновременно, получают обычный процесс.
+# Вид процесса DSH: ход — с наложением; пробный (каталог, предпросмотр) — хранилища сессий во временном каталоге,
+# без MCP; список чатов — без наложения вовсе (`session/list` читает хранилище по умолчанию, MCP и провайдеры ему
+# не нужны). Переменные контекста — у своей задачи: ходы, идущие одновременно, получают процесс хода.
 _SCRATCH = contextvars.ContextVar("deepseek_scratch", default=None)
+_LIST = contextvars.ContextVar("deepseek_list", default=False)
 
 
 def _remove(path):
@@ -94,9 +96,14 @@ class DeepSeekRunner(acp.AcpRunner):
         home, install, installs = await asyncio.to_thread(self._choose)
         if install is None:
             raise Refused("unsupported", NODE if any(i.reason == "node" for i in installs) else MISSING)
-        overlay, summary = await asyncio.to_thread(
-            deepseek_settings.build, home, self.environ if self.environ is not None else os.environ,
-            self.home, install, scratch=scratch["root"] if scratch else None, access=access)
+        if _LIST.get() and scratch is None:
+            overlay, summary = None, None
+        else:
+            overlay, summary = await asyncio.to_thread(
+                deepseek_settings.build, home, self.environ if self.environ is not None else os.environ,
+                self.home, install, scratch=scratch["root"] if scratch else None, access=access)
+            if scratch is not None and overlay is None:
+                raise Refused("unsupported", FAILED)  # пробная сессия без своего хранилища попала бы к человеку
         process = _Process(self.rpc_factory(install, Path(project), access=access, overlay=overlay),
                            install, overlay, summary)
         try:
@@ -130,6 +137,13 @@ class DeepSeekRunner(acp.AcpRunner):
             self.catalog = {**self.catalog, "version": self.version, "settings": process.summary,
                             "defaults": _plain(self.catalog["defaults"])}
         return ready
+
+    async def chats(self, project):
+        token = _LIST.set(True)  # процесс списка запускается здесь и живёт до `close()` — без наложения
+        try:
+            return await super().chats(project)
+        finally:
+            _LIST.reset(token)
 
     async def _mcp(self, rpc, project):
         return await asyncio.to_thread(lambda: mcp.deepseek(mcp.load(store.home(), project, "deepseek"), rpc.info))

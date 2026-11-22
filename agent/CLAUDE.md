@@ -191,5 +191,6 @@ studio). Команды ниже — из `agent/`, с отдельной сре
 - `claude.exe` не в Job Object (`jobs`): его фоновые задачи переживают ход; `codex app-server`, `opencode acp` и `dsh --profile acp` — в нём.
 - Файлы DeepSeek Harness (`$DSH_HOME/profiles`, `cordis.patch.yml`, `.credentials.yaml`, `sessions/`) мост только
   читает; каталог моделей — пробной сессией с хранилищами во временном каталоге моста (у ACP DSH сессия
-  материализуется сразу); наложение — временный JSON `<мост>/deepseek/overlay-*`, остатки стирает `deepseek_settings.sweep`
-  при старте ядра. Сам DSH при запуске создаёт `profiles/acp/` и `.anonymous-user-id` в `DSH_HOME`.
+  материализуется сразу; строки хранилищ — при любом исходе разбора профиля, без них проба не запускается);
+  наложение — временный JSON `<мост>/deepseek/overlay-*`, остатки стирает `deepseek_settings.sweep` при старте ядра;
+  процесс списка чатов (`session/list`) — без наложения. Сам DSH при запуске создаёт `profiles/acp/` и `.anonymous-user-id` в `DSH_HOME`.

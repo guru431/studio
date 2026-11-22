@@ -196,8 +196,10 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   Node для разбора — источник получает `unreadable`.
 - **Каталог** — пробная `session/new` → `session/set_config_option` → `session/close` без prompt; ACP DSH
   материализует сессию сразу (D4), поэтому пробный процесс получает в наложении корни хранилищ сессий и проекций
-  во временном каталоге моста (`overlay-scratch-*`): в `session/list` и `$DSH_HOME` пробы не попадают. Так же идёт
-  предпросмотр выбора в `state`. Значение модели — строка JSON-массива `["<провайдер>","<модель>"]`
+  во временном каталоге моста (`overlay-scratch-*`): в `session/list` и `$DSH_HOME` пробы не попадают. Строки
+  хранилищ пишутся при любом исходе разбора профиля (`unreadable`, тайм-аут Node, Python-пакет); без наложения
+  пробный процесс не запускается. Так же идёт предпросмотр выбора в `state`. Процесс списка чатов (`session/list`)
+  запускается без наложения: MCP и провайдеры ему не нужны. Значение модели — строка JSON-массива `["<провайдер>","<модель>"]`
   (`deepseek.MODEL_ID`; сервер сверяет той же регуляркой в `app/bridge.py`), усилие — ACP `reasoning_effort`; «Provider default»
   (`""`) — как отсутствие выбора. Версия — `dsh --version` (`deepseek_rpc.version`): `agentInfo.version` ACP DSH — «0.0.1».
   Любой запуск `dsh --profile acp` сам создаёт в `DSH_HOME` заготовку `profiles/acp/` и `.anonymous-user-id`.

@@ -5,6 +5,7 @@ import copy
 import functools
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,12 @@ class FakeRpc:
     async def request(self, method, params, **kwargs):
         self.factory.calls.append((method, params))
         if method == "session/new":
+            # D4: ACP DSH сохраняет сессию сразу — в хранилище из наложения или в `$DSH_HOME/sessions`
+            root = next((Path(row["config"]["root"]) for row in self.overlay_rows or []
+                         if row.get("id") == "session-persistence-jsonl"), None)
+            root = root or (self.factory.dsh / "sessions" if self.factory.dsh else None)
+            if root is not None:
+                (root / "--demo--" / SESSION).mkdir(parents=True, exist_ok=True)
             return {"sessionId": SESSION, **copy.deepcopy(self.config)}
         if method == "session/set_config_option":
             data = fixture("set_config_option.json")
@@ -64,7 +71,10 @@ class FakeRpc:
             self.factory.closed.append(params["sessionId"])
             return {}
         if method == "session/list":
-            return {"sessions": [*({"sessionId": s, "cwd": str(self.factory.project)} for s in self.factory.listed),
+            stored = self.factory.dsh / "sessions" / "--demo--" if self.factory.dsh else None
+            listed = [*self.factory.listed, *(p.name for p in (stored.iterdir() if stored and stored.is_dir() else ())
+                                              if p.name not in self.factory.listed)]
+            return {"sessions": [*({"sessionId": s, "cwd": str(self.factory.project)} for s in listed),
                                  {"sessionId": "0f0f0f0f-0000-4000-8000-000000000000",
                                   "cwd": str(self.factory.project / "other")}]}
         if method == "session/resume":
@@ -103,6 +113,7 @@ class Factory:
         self.listed = [SESSION]
         self.busy = False
         self.prompt_error = None
+        self.dsh = None
 
     def __call__(self, install, cwd, *, access=None, overlay=None):
         rpc = FakeRpc(self, install, cwd, access, overlay)
@@ -122,7 +133,7 @@ def runner(home, tmp_path, monkeypatch):
                                      environ={"DSH_HOME": str(dsh_home)})
     runner.catalog = {"version": "test", "models": [], "efforts": []}
     runner.fake, runner.sent, runner.project, runner.pid = factory, sent, project, projects.pid(project.name)
-    runner.dsh = dsh_home
+    runner.dsh = factory.dsh = dsh_home
     return runner
 
 
@@ -152,6 +163,37 @@ async def test_probe_builds_catalog_from_config_options_and_leaves_no_session(ru
     assert not roots[0].parent.exists() and overlays(home) == [] and not (runner.dsh / "sessions").exists()
     assert not any("mcp-manager" in json.dumps(row) for row in rows)
     assert all(client.closed for client in runner.fake.clients)
+
+
+async def test_probe_with_unreadable_profile_still_keeps_sessions_out_of_dsh_home(runner, home, monkeypatch):
+    """C1: тайм-аут Node и установка без Node для разбора — профиль `unreadable`, а хранилища пробы всё равно
+    во временном каталоге; без наложения пробный процесс не запускается вовсе."""
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, deepseek_settings.PARSE_SEC)
+
+    python = deepseek_rpc.Install("python", ("runtime.exe",), {}, "web")
+    runner.fake.listed = []
+    for install, run in ((INSTALL, timeout), (python, None)):
+        runner.find_installs = lambda install=install: [install]
+        monkeypatch.setattr(deepseek.deepseek_settings, "build", functools.partial(deepseek_settings.build, run=run))
+        runner.catalog = {"version": "test", "models": [], "efforts": []}
+        before = await runner.chats(runner.project)
+        runner.catalog = None
+        assert await runner.probe(runner.project)
+        probe = runner.fake.clients[-1]
+        assert runner.catalog["settings"]["skipped"] == [{"name": "web", "reason": "unreadable"}]
+        roots = {row["id"]: Path(row["config"]["root"]) for row in probe.overlay_rows}
+        assert set(roots) == {"session-persistence-jsonl", "storage-json"}
+        assert all(root.parent.parent == home / "deepseek" for root in roots.values())
+        assert not (runner.dsh / "sessions").exists() and await runner.chats(runner.project) == before
+        await runner.close()
+    # вторая линия: наложения нет — процесс не запускается
+    monkeypatch.setattr(deepseek.deepseek_settings, "build", lambda *args, **kwargs: (None, {}))
+    clients = len(runner.fake.clients)
+    async with runner._scratch():
+        with pytest.raises(Refused, match="unsupported"):
+            await runner._connect(runner.project)
+    assert len(runner.fake.clients) == clients
 
 
 async def test_probe_without_install_names_the_reason(runner):
@@ -341,10 +383,11 @@ async def test_overlay_removed_after_disconnect(runner, home):
     runner.answer(runner.pid, CHAT, rid, "allow", None, None)
     await runner._turns[CHAT].task
     assert turn.closed and not Path(turn.overlay).exists() and overlays(home) == []
-    await runner.chats(runner.project)                        # процесс каталога держит наложение до close()
-    assert len(overlays(home)) == 1
+    await runner.chats(runner.project)                        # процесс списка — без наложения: ни MCP, ни провайдеров
+    listing = runner.fake.clients[-1]
+    assert listing.overlay is None and not listing.closed and overlays(home) == []
     await runner.close()
-    assert overlays(home) == []
+    assert listing.closed and overlays(home) == []
 
 
 async def test_journal_has_no_texts_or_paths(runner, caplog):

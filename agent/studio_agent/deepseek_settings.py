@@ -304,6 +304,47 @@ def _translate(entries, own: set[str], keys: Callable[[str], bool], presets: dic
     return rows
 
 
+def _profile_rows(home: Path, profile: str, environ: Mapping[str, str], install: Install | None, summary: _Summary,
+                  *, mcp: bool, permission: bool, run: Callable) -> list:
+    """Строки наложения из патча профиля-источника; не разбирается — пусто и причина в сводке."""
+    try:
+        text = _text(home / "profiles" / profile / PATCH)
+    except ValueError:
+        text = None
+    try:
+        acp_text = _text(home / "profiles" / "acp" / PATCH)
+    except ValueError:
+        summary.skip("acp", "unreadable")
+        return []
+    try:
+        credentials = _text(home / CREDENTIALS)
+    except ValueError:
+        credentials = None
+    texts = [text or "", acp_text or "", credentials or ""]
+    parsed = _parse(install, texts, environ, run) if text is not None else None
+    document = parsed[0][0] if parsed else _BROKEN
+    if document is _BROKEN or not isinstance(document, (list, type(None))):
+        summary.skip(profile, "unreadable")
+        return []
+    (_, own_doc, secrets_doc), presets = parsed
+    if own_doc is _BROKEN or not isinstance(own_doc, (list, type(None))):
+        summary.skip("acp", "unreadable")
+        return []
+    refs = secrets_doc.get("refs") if isinstance(secrets_doc, dict) else None
+    refs = refs if isinstance(refs, dict) else {}
+    dotenv = None
+
+    def keys(name: str) -> bool:
+        nonlocal dotenv
+        if isinstance(refs.get(name), str) and refs[name] or environ.get(name):
+            return True
+        if dotenv is None:
+            dotenv = _dotenv(home / ".env")
+        return name in dotenv
+
+    return _translate(_entries(document), _own(own_doc), keys, presets, summary, mcp=mcp, permission=permission)
+
+
 def build(home: Path, environ: Mapping[str, str], private: Path, install: Install | None, *,
           scratch: Path | None = None, access: str | None = None,
           run: Callable = subprocess.run) -> tuple[Path | None, dict]:
@@ -312,49 +353,15 @@ def build(home: Path, environ: Mapping[str, str], private: Path, install: Instal
     `install` — установка, чьим Node разбирается YAML (`deepseek_rpc.pick`); без пригодной — источник «unreadable».
     `scratch` — пробный процесс каталога (D4): хранилища сессий и проекций — во временный каталог, без MCP.
     `access` — права чата: явные (`deepseek_rpc.ACCESS`) сильнее `defaultPreset` профиля, строка `permission`
-    в файл не пишется. Ни `scratch`, ни `access` сводку не меняют. Файла нет, если записывать нечего."""
+    в файл не пишется. Ни `scratch`, ни `access` сводку не меняют. Файла нет, если записывать нечего.
+
+    Строки хранилищ `scratch` дописываются при любом исходе разбора профиля (нечитаемый файл, нет Node, тайм-аут):
+    пробный процесс без них оставил бы свою сессию в списке человека (D4)."""
     home = Path(home)
     profile = source(home)
     summary = _Summary(profile)
-    rows = []
-    if profile is not None:
-        try:
-            text = _text(home / "profiles" / profile / PATCH)
-        except ValueError:
-            text = None
-        try:
-            acp_text = _text(home / "profiles" / "acp" / PATCH)
-        except ValueError:
-            summary.skip("acp", "unreadable")
-            return None, summary.result()
-        try:
-            credentials = _text(home / CREDENTIALS)
-        except ValueError:
-            credentials = None
-        texts = [text or "", acp_text or "", credentials or ""]
-        parsed = _parse(install, texts, environ, run) if text is not None else None
-        document = parsed[0][0] if parsed else _BROKEN
-        if document is _BROKEN or not isinstance(document, (list, type(None))):
-            summary.skip(profile, "unreadable")
-            return None, summary.result()
-        (_, own_doc, secrets_doc), presets = parsed
-        if own_doc is _BROKEN or not isinstance(own_doc, (list, type(None))):
-            summary.skip("acp", "unreadable")
-            return None, summary.result()
-        refs = secrets_doc.get("refs") if isinstance(secrets_doc, dict) else None
-        refs = refs if isinstance(refs, dict) else {}
-        dotenv = None
-
-        def keys(name: str) -> bool:
-            nonlocal dotenv
-            if isinstance(refs.get(name), str) and refs[name] or environ.get(name):
-                return True
-            if dotenv is None:
-                dotenv = _dotenv(home / ".env")
-            return name in dotenv
-
-        rows = _translate(_entries(document), _own(own_doc), keys, presets, summary,
-                          mcp=scratch is None, permission=access not in ACCESS)
+    rows = _profile_rows(home, profile, environ, install, summary, mcp=scratch is None,
+                         permission=access not in ACCESS, run=run) if profile is not None else []
     if scratch is not None:
         rows += [{"id": "session-persistence-jsonl", "config": {"root": str(Path(scratch) / "sessions")}},
                  {"id": "storage-json", "config": {"root": str(Path(scratch) / "storages")}}]
