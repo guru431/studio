@@ -4,10 +4,12 @@
 import json
 import logging
 
+import httpx
 import pytest
 
 import chat
 import cleaner_client
+import sections
 import security
 import state
 from conftest import add_connection, add_gateway, make_user, signin
@@ -452,6 +454,44 @@ def test_sent_is_not_in_share_or_export(cleaner_gw):
     assert exported.status_code == 200 and "Позвони Ивану" in exported.text
     assert "<PERSON_1>" not in exported.text and "cleaner" not in exported.text.lower()
     assert len(gw.sent_reads) == reads                                       # ни ссылка, ни экспорт Cleaner не спрашивают
+
+
+def test_external_speech_is_refused_in_a_routed_dialog(cleaner_gw):
+    """«Прочитать», голосовой ввод и «Разговор» диалога через Cleaner внешней моделью речи отдали бы ей восстановленный
+    текст или звук мимо Cleaner — отказ словами до запроса; внутренней модели речи и диалогу не через Cleaner — можно."""
+    import cleaner_route
+    import connections
+    s, gw = cleaner_gw
+    allow("10.77.1.20:5464", "10.77.1.21:5464", "8.8.8.8:443")
+    hits = []
+
+    async def trap(request):
+        hits.append(request.url.path)
+        return httpx.Response(500)
+    s.gw.hosts["8.8.8.8:443"] = trap
+    uid = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (gw.conn_id,)).fetchone()[0]
+    ext = add_connection(s, base_url="https://8.8.8.8/v1", sections=["chat", "speech", "dictation"], name="voice")
+    sections.set_models(uid, "speech", ext, ["tts-1"])
+    sections.set_models(uid, "dictation", ext, ["whisper-1"])
+    chat_id = routed_chat(s, gw)
+    assert sse(turn(s, chat_id, "Позвони Ивану"))[-1][0] == "done"
+    answer_id = messages(s, chat_id)[-1]["id"]
+
+    def refused(response) -> bool:
+        return response.status_code == 409 and response.json()["detail"] == {
+            "code": "cleaner_dialog", "message": cleaner_route.DIALOG_SPEECH}
+    for origin in (answer_id, chat_id):
+        assert refused(s.c.post("/api/speeches/read", json={"text": "Привет из облака",
+                                                            "origin": {"kind": "chat", "id": origin}}))
+    assert refused(s.c.post("/api/speech/say", json={"text": "Привет из облака", "connection_id": gw.conn_id}))
+    assert refused(s.c.post("/api/dictation", files={"audio": ("voice.m4a", b"\x00" * 128, "audio/mp4")},
+                            data={"connection_id": str(gw.conn_id)}))
+    assert hits == [] and state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
+    # внутренняя модель речи (шлюз srvllm) и диалог не через Cleaner — без отказа
+    internal = connections.get(uid, add_gateway(s))
+    cleaner_route.refuse_dialog_speech(uid, gw.conn_id, internal)
+    cleaner_route.refuse_dialog_speech(uid, internal.id, connections.get(uid, ext))
+    cleaner_route.refuse_dialog_speech(uid, None, connections.get(uid, ext))
 
 
 def test_cleaner_turn_never_reaches_the_log(cleaner_gw, caplog):

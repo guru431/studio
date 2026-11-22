@@ -710,7 +710,8 @@ function build(view, ctx) {
     failed: (err) => { notice.textContent = words(err); } });
   // «Разговор» уступает место «очистить», пока в поле текст (идущий — виден всегда): колонка — три значка, рамка
   // пустого поля не растёт с первой буквой
-  const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; } });
+  const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
+    dialog: () => chosen().connection_id });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
   const editNote = el('div', { class: 'chat-edit-note', hidden: true },
     el('span', {}, tr("Правка сообщения. После отправки последующие сообщения будут удалены.")),
@@ -1186,7 +1187,7 @@ function build(view, ctx) {
     }
     notice.textContent = '';
     try {
-      talking = startConversation({ send: voiceTurn, state: paintTalk,
+      talking = startConversation({ send: voiceTurn, state: paintTalk, dialog: () => chosen().connection_id,
         failed: (text) => { notice.textContent = text; } });
     } catch (err) {                                  // браузер без Web Audio
       notice.textContent = words(err);

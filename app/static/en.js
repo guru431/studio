@@ -1031,6 +1031,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Cleaner отклонил запрос ({0})": "Cleaner rejected the request ({0})",
   "администратор требует Cleaner для внешних моделей; этот раздел через Cleaner не работает": "The administrator requires Cleaner for external models; this section does not work through Cleaner",
   "администратор требует Cleaner; облачные роли srvllm через Cleaner пока не работают": "The administrator requires Cleaner; srvllm cloud roles do not work through Cleaner yet",
+  "диалог идёт через Cleaner, а модель речи внешняя: текст или звук ушли бы мимо Cleaner — выберите внутреннюю модель речи": "This conversation goes through Cleaner, but the speech model is external: text or audio would bypass Cleaner. Choose an internal speech model",
+  "подключение диалога — число": "The conversation connection must be a number",
   "администратор требует Cleaner для внешних моделей; шлюз s06 или srvllm не на частном адресе из списка через Cleaner не работает": "The administrator requires Cleaner for external models; an s06 or srvllm gateway that is not on a private allowlisted address does not work through Cleaner",
   "адрес Cleaner — http(s)://хост[:порт], без пути, логина, ? и #": "Cleaner address: http(s)://host[:port], without a path, login, ? or #",
   "адрес Cleaner должен быть в списке разрешённых адресов": "The Cleaner address must be on the allowlist",

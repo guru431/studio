@@ -4,7 +4,8 @@ import { tr } from './i18n.js';
  *
  * startConversation(chat) → stop(). `chat`: send(text, update) — обычный ход диалога с этим текстом, `update(content,
  * final, replaced)` — по мере `delta` или `replace`; итог — статус ответа или false (хода не было: слова уже в диалоге); state(name) —
- * `listening`, `hearing`, `thinking`, `speaking`, `off`; failed(words) — слова под лентой.
+ * `listening`, `hearing`, `thinking`, `speaking`, `off`; failed(words) — слова под лентой; dialog() — подключение
+ * диалога: через Cleaner сервер не отдаёт звук и текст внешней модели речи (cleaner_route.refuse_dialog_speech).
  *
  * - Микрофон — владелец через mic.js `holdMic`: диктовка в это время не стартует, `cancelRecording()` (смена раздела,
  *   шторка, блокировка) останавливает разговор. Ещё стоп — кнопкой и Escape.
@@ -171,6 +172,8 @@ export function startConversation(chat) {
     body.append('audio', blob, recordingName(blob));
     const language = dictationLanguage();
     if (language !== 'auto') body.append('language', language);
+    const conn = chat.dialog?.();
+    if (conn != null) body.append('connection_id', String(conn));
     const { text } = await api('POST', '/api/dictation', body, { signal: controller.signal });
     return (text || '').trim();
   }
@@ -179,12 +182,16 @@ export function startConversation(chat) {
   async function say(text) {
     if (stopped) return null;
     try {
-      const response = await api('POST', '/api/speech/say', { text }, { signal: controller.signal });
+      const response = await api('POST', '/api/speech/say', { text, connection_id: chat.dialog?.() ?? null },
+        { signal: controller.signal });
       return await context.decodeAudioData(await response.arrayBuffer());
     } catch (err) {
       if (stopped || err?.name === 'AbortError') return null;
       if (err?.code === 'say_mcp') {
         chat.failed(NO_SOURCE);
+        stop();
+      } else if (err?.code === 'cleaner_dialog') {   // внешняя озвучка у диалога через Cleaner — до конца разговора
+        chat.failed(words(err));
         stop();
       } else if (err?.code !== 'text') chat.failed(words(err));
       return null;
@@ -268,7 +275,8 @@ export function startConversation(chat) {
         } catch (err) {
           if (stopped) break;
           chat.failed(words(err));
-          if (err?.code === 'no_model') break;      // модели голосового ввода нет — круг бесполезен
+          // модели голосового ввода нет или она внешняя у диалога через Cleaner — круг бесполезен
+          if (err?.code === 'no_model' || err?.code === 'cleaner_dialog') break;
           continue;
         }
         if (!text) {

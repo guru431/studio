@@ -42,6 +42,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 import audio
+import cleaner_route
 import clock
 import connections
 import db
@@ -118,6 +119,8 @@ class ReadIn(BaseModel):
 
 class SayIn(BaseModel):
     text: str = Field(max_length=SAY_MAX * 4)                   # с разметкой; предел — после `exports.md_plain`
+    #: подключение диалога «Разговора»: через Cleaner — внешняя озвучка отказывает (`cleaner_route.refuse_dialog_speech`)
+    connection_id: "int | None" = None
 
 
 @dataclass
@@ -626,6 +629,13 @@ def _default_source(uid: int, code: str, message: str):
         raise
 
 
+def _dialog_connection(uid: int, origin_id: str) -> "int | None":
+    """Подключение диалога «Прочитать»: `origin.id` — id ответа или самого диалога учётки; чужое — None."""
+    row = state.DB.execute("SELECT connection_id FROM chats WHERE user_id = ? AND (id = ? OR id ="
+                           " (SELECT chat_id FROM messages WHERE id = ?))", (uid, origin_id, origin_id)).fetchone()
+    return row["connection_id"] if row is not None else None
+
+
 @router.post("/read", status_code=202)
 async def read(body: ReadIn, request: Request):
     """«Прочитать» ответ чата, перевод или скан (п. 6 шапки) — новым чатом озвучки → `{chat_id}`."""
@@ -633,6 +643,8 @@ async def read(body: ReadIn, request: Request):
     operations.check(uid)
     text = _text_of(exports.md_plain(body.text), LONG_MAX)
     conn, model = _default_source(uid, "read_mcp", "озвучка — инструментом MCP раздела «Озвучка»")
+    if body.origin.kind == "chat":                # ответ диалога через Cleaner — восстановленный текст: не мимо Cleaner
+        cleaner_route.refuse_dialog_speech(uid, _dialog_connection(uid, body.origin.id), conn)
     voice, name = _read_voice(uid, conn, model)
     _room(uid, None)
     sid = _enqueue(uid, conn, model, voice, name, _read_language(conn, text), text)
@@ -647,6 +659,7 @@ async def say(body: SayIn, request: Request):
     uid = request.state.user.id
     text = _text_of(exports.md_plain(body.text), SAY_MAX)
     conn, model = _default_source(uid, "say_mcp", "для «Разговора» нужен источник озвучки через API")
+    cleaner_route.refuse_dialog_speech(uid, body.connection_id, conn)
     voice, _ = _read_voice(uid, conn, model)
     if uid in SAYING:
         raise HTTPException(429, {"code": "busy", "message": "предыдущая фраза ещё озвучивается"})

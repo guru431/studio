@@ -179,6 +179,26 @@ def forced_refusal(conn: "connections.Connection", section: str, model: str) -> 
     return None
 
 
+#: диалог через Cleaner: «Прочитать», голосовой ввод и «Разговор» внешней моделью речи отдали бы ей восстановленный
+#: текст или звук мимо Cleaner (спека 6.3: «в диалогах через Cleaner других путей нет»)
+DIALOG_SPEECH = ("диалог идёт через Cleaner, а модель речи внешняя: текст или звук ушли бы мимо Cleaner —"
+                 " выберите внутреннюю модель речи")
+
+
+def refuse_dialog_speech(user_id: int, dialog_conn_id: "int | None", conn: "connections.Connection") -> None:
+    """409 `cleaner_dialog`, если речь диалога (`conn` — модель «Озвучки» или голосового ввода) внешняя, а подключение
+    диалога (`dialog_conn_id`) идёт через Cleaner. Чужое или удалённое подключение диалога — не отказ: диалог так не
+    идёт через Cleaner. Принудительный режим отказывает внешней речи и без диалога (`forced_refusal`)."""
+    if dialog_conn_id is None or not is_external(conn):
+        return
+    try:
+        dialog = connections.get(user_id, dialog_conn_id)
+    except HTTPException:
+        return
+    if dialog.routed:
+        raise HTTPException(409, {"code": "cleaner_dialog", "message": DIALOG_SPEECH})
+
+
 def refuse_forced(conn: "connections.Connection", section: str, model: str) -> None:
     """409 `cleaner_forced` словами `forced_refusal`, если принудительный режим этот запрос не пускает."""
     message = forced_refusal(conn, section, model)
