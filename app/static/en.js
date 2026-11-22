@@ -1057,6 +1057,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Шлюз Cleaner для внешних моделей: текст уходит провайдеру с заменами чувствительных данных, ключ провайдера остаётся в Studio. Адрес Cleaner должен быть в списке разрешённых адресов.": "Cleaner gateway for external models: text reaches the provider with sensitive data replaced, and the provider key stays in Studio. The Cleaner address must be on the allowlist.",
   "Частные адреса из списка разрешённых считаются внутренними — не добавляйте туда шлюзы в облачные модели.": "Private addresses on the allowlist count as internal. Do not add gateways to cloud models there.",
   "Адрес Cleaner": "Cleaner address",
+  "адрес Cleaner, http(s), хост и порт, без пути": "Cleaner address, http(s), host and port, no path",
   "Служебный ключ": "Service key",
   "Cleaner для всех внешних моделей": "Cleaner for all external models",
   "Принудительный режим закрывает подключения моделей Studio: внешние идут только через Cleaner. Веб-инструменты в диалогах с внутренними моделями, внешние MCP-серверы и раздел «Open WebUI» он не затрагивает.": "Forced mode covers Studio model connections: external ones go only through Cleaner. It does not cover web tools in conversations with internal models, external MCP servers or the Open WebUI section.",

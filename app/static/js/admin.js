@@ -413,7 +413,7 @@ function chatSettingsBlock() {
  * флажок «Cleaner для всех внешних моделей» и проверка связи. Флажок — только при адресе и ключе. */
 function cleanerBlock() {
   const url = el('input', { class: 'input', id: 'cleaner-url', type: 'url', maxlength: '2048', autocomplete: 'off',
-    placeholder: 'https://cleaner.example.com' });
+    placeholder: tr("адрес Cleaner, http(s), хост и порт, без пути") });
   const key = el('input', { class: 'input', id: 'cleaner-key', type: 'password', maxlength: '512', autocomplete: 'new-password' });
   const forced = el('input', { type: 'checkbox', id: 'cleaner-forced' });
   const reenter = el('p', { class: 'error', id: 'cleaner-reenter', hidden: true },
