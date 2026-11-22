@@ -23,6 +23,10 @@ EXCLUDE_MAX = 64
 REPARSE = stat.FILE_ATTRIBUTE_REPARSE_POINT
 DIRECTORY = ["dir", "", 0, 0]
 SKIPPED = ["skip", "", 0, 0]
+SQLITE = "sqlite"
+SQLITE_JOURNAL = "sqlite-journal"
+SQLITE_MAGIC = b"SQLite format 3\x00"
+SQLITE_SUFFIXES = ("-wal", "-shm", "-journal")
 REMOTE_KEY = r"^remote\.(origin|github)\.url$"
 DISCOVERY_SEC = 20
 DISCOVERY_MAX = 100
@@ -87,8 +91,15 @@ def _repositories(project: Path) -> set[str]:
     return repositories
 
 
-def identity(project: Path) -> dict:
-    return {"name": project.name, "repositories": sorted(_repositories(project))[:16]}
+def identity(config, project: Path) -> dict:
+    """Имя и remotes проекта; `root`/`folder` — разрешённая папка проектов, если проект лежит прямо в ней."""
+    found = {"name": project.name, "repositories": sorted(_repositories(project))[:16]}
+    parent = os.path.normcase(os.path.realpath(project.parent))
+    for root in projects.list_roots(config):
+        if os.path.normcase(root["path"]) == parent:
+            found["root"], found["folder"] = root["id"], root["path"]
+            break
+    return found
 
 
 def valid_repositories(value) -> bool:
@@ -157,11 +168,11 @@ def _stat(path):
         return None
 
 
-def destination(config, root_id, name, *, metadata_only=False, exclude=()):
+def destination(config, root_id, name, *, metadata_only=False, exclude=(), reasons=False):
     path = target(config, root_id, name)
     if metadata_only:
         _standalone_git(path)
-    data = {"exists": _stat(path) is not None} if metadata_only else scan(path, exclude)
+    data = {"exists": _stat(path) is not None} if metadata_only else scan(path, exclude, reasons)
     return {**data, "pid": projects.project_id(config, path.parent, path.name), "folder": str(path.parent)}
 
 
@@ -200,14 +211,6 @@ def _entry(root, path, info):
         return DIRECTORY
     if not stat.S_ISREG(info.st_mode):
         return SKIPPED
-    if path.name.endswith(("-wal", "-shm", "-journal")):
-        suffix = next(suffix for suffix in ("-wal", "-shm", "-journal") if path.name.endswith(suffix))
-        db = path.with_name(path.name[:-len(suffix)]) if len(path.name) > len(suffix) else None
-        db_info = _stat(db) if db is not None else None
-        if db_info and stat.S_ISREG(db_info.st_mode) and not _reparse(db_info):
-            with db.open("rb") as stream:
-                if stream.read(16) == b"SQLite format 3\x00":
-                    raise Refused("busy", "обнаружена открытая база SQLite — закройте её и повторите операцию")
     with path.open("rb") as stream:
         opened = os.fstat(stream.fileno())
         # Windows fstat и lstat могут возвращать разные st_ctime для одного файла.
@@ -233,9 +236,48 @@ def valid_exclude(value) -> bool:
     return True
 
 
-def scan(root: Path, exclude=()) -> dict:
+def _plain(path):
+    """lstat обычного файла (не ссылки и не reparse), иначе None."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    return info if stat.S_ISREG(info.st_mode) and not _reparse(info) else None
+
+
+def _is_sqlite(path) -> bool:
+    if _plain(path) is None:
+        return False
+    try:
+        with path.open("rb") as stream:
+            return stream.read(len(SQLITE_MAGIC)) == SQLITE_MAGIC
+    except OSError:
+        return False
+
+
+def _size(path) -> int:
+    info = _plain(path)
+    return info.st_size if info else 0
+
+
+def _sqlite_skips(folder, names):
+    """Служебные файлы базы SQLite — всегда пропуск; сама база — если её `-wal` или `-journal` непуст."""
+    skips = {}
+    for name in names:
+        for suffix in SQLITE_SUFFIXES:
+            base = name[:-len(suffix)]
+            if (name.endswith(suffix) and base and base in names and _plain(folder / name) is not None
+                    and _is_sqlite(folder / base)):
+                skips[name] = SQLITE_JOURNAL
+                if suffix != "-shm" and _size(folder / name) > 0:
+                    skips[base] = SQLITE
+    return skips
+
+
+def scan(root: Path, exclude=(), reasons: bool = False) -> dict:
     """Все доступные обычные файлы и пустые папки, в том числе .git и gitignored. Исключённый путь — запись
-    «пропущен» без чтения и обхода: план его не переносит и в копии не удаляет."""
+    «пропущен» без чтения и обхода: план его не переносит и в копии не удаляет. Открытая база SQLite и её
+    служебные файлы — тоже пропуск; с `reasons` причина названа (`SQLITE`, `SQLITE_JOURNAL`)."""
     exclude = set(exclude or ())
     try:
         info = _stat(root)
@@ -250,25 +292,32 @@ def scan(root: Path, exclude=()) -> dict:
             folder = folders.pop()
             if folder.resolve(strict=True) != folder or _reparse(folder.lstat()):
                 raise Refused("outside")
-            with os.scandir(folder) as children:
-                for child in children:
-                    path = Path(child.path)
-                    relative = path.relative_to(root).as_posix()
-                    try:
-                        files._parts(relative)
-                        skip = relative in exclude
-                    except Refused:
-                        if len(relative) > files.limits.PATH_MAX:
-                            raise
-                        # Имя, которого протокол на этой ОС не принимает, — «пропущен», а не отказ всего обхода.
-                        skip = True
+            with os.scandir(folder) as listing:
+                children = list(listing)
+            sqlite = _sqlite_skips(folder, {child.name for child in children})
+            for child in children:
+                path = Path(child.path)
+                relative = path.relative_to(root).as_posix()
+                try:
+                    files._parts(relative)
+                    skip = relative in exclude
+                except Refused:
+                    if len(relative) > files.limits.PATH_MAX:
+                        raise
+                    # Имя, которого протокол на этой ОС не принимает, — «пропущен», а не отказ всего обхода.
+                    skip = True
+                if skip:
+                    entry = SKIPPED
+                elif child.name in sqlite:
+                    entry = ["skip", sqlite[child.name], 0, 0] if reasons else SKIPPED
+                else:
                     # DirEntry.stat на Windows может не заполнять inode и номер тома.
-                    entry = SKIPPED if skip else _entry(root, path, path.lstat())
-                    entries[relative] = entry
-                    if entry == DIRECTORY:
-                        folders.append(path)
-                    if len(entries) > ENTRY_MAX:
-                        raise Refused("too_large", "в проекте слишком много файлов для зеркала")
+                    entry = _entry(root, path, path.lstat())
+                entries[relative] = entry
+                if entry == DIRECTORY:
+                    folders.append(path)
+                if len(entries) > ENTRY_MAX:
+                    raise Refused("too_large", "в проекте слишком много файлов для зеркала")
         if len(serial(entries)) > MANIFEST_MAX:
             raise Refused("too_large", "список файлов проекта слишком велик для зеркала")
         return {"entries": entries, "name": root.name}

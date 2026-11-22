@@ -7,22 +7,53 @@ from studio_agent import mirror
 from studio_agent.errors import Refused
 
 
-def test_open_sqlite_is_not_copied_and_closed_database_is_included(tmp_path):
+def test_open_sqlite_database_and_its_journals_are_skipped_with_reasons(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
-    db = project / "data.db"
-    conn = sqlite3.connect(db)
+    conn = sqlite3.connect(project / "data.db")
     try:
-        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA wal_autocheckpoint=0")
         conn.execute("CREATE TABLE records(value)")
         conn.execute("INSERT INTO records VALUES(1)")
         conn.commit()
-        with pytest.raises(Refused) as refused:
-            mirror.scan(project)
-        assert refused.value.code == "busy"
+        plain = mirror.scan(project)["entries"]
+        assert plain["data.db"] == plain["data.db-wal"] == plain["data.db-shm"] == mirror.SKIPPED
+        named = mirror.scan(project, reasons=True)["entries"]
+        assert named["data.db"] == ["skip", "sqlite", 0, 0]
+        assert named["data.db-wal"] == named["data.db-shm"] == ["skip", "sqlite-journal", 0, 0]
     finally:
         conn.close()
-    assert mirror.scan(project)["entries"]["data.db"][0] == "file"
+    after = mirror.scan(project)["entries"]
+    assert after["data.db"][0] == "file" and "data.db-wal" not in after
+
+
+def test_empty_journal_does_not_hide_a_closed_database(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    with sqlite3.connect(project / "data.db") as conn:
+        conn.execute("CREATE TABLE records(value)")
+    conn.close()
+    (project / "data.db-journal").write_bytes(b"")
+    (project / "notes.log-wal").write_bytes(b"not a journal")   # рядом нет базы SQLite
+    (project / "notes.log").write_bytes(b"plain text")
+    entries = mirror.scan(project, reasons=True)["entries"]
+    assert entries["data.db"][0] == "file"
+    assert entries["data.db-journal"] == ["skip", "sqlite-journal", 0, 0]
+    assert entries["notes.log-wal"][0] == "file"
+
+
+def test_identity_names_the_projects_folder_of_the_project(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    (second / "app").mkdir(parents=True)
+    first.mkdir()
+    roots = [str(first), str(second)]
+    found = mirror.identity(roots, second / "app")
+    root = mirror.projects.list_roots(roots)[1]
+    assert found["name"] == "app" and found["root"] == root["id"] and found["folder"] == root["path"]
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    assert "root" not in mirror.identity(roots, outside)
 
 
 def test_failed_replacement_restores_previous_files_and_clears_staging(tmp_path, monkeypatch):
@@ -126,8 +157,9 @@ def test_remote_config_ignores_include_and_returns_only_repository_signatures(tm
         return subprocess.CompletedProcess(args, 0,
             b"remote.origin.url\nhttps://user:token@git.example.com/team/work.git\0", b"")
     monkeypatch.setattr(mirror.gitinfo, "run", git)
-    assert mirror.identity(project) == {
+    assert mirror.identity([tmp_path], project) == {
         "name": "demo", "repositories": [mirror._repository_id("https://git.example.com/team/work")],
+        "root": mirror.projects.list_roots([tmp_path])[0]["id"], "folder": os.path.realpath(tmp_path),
     }
 
 
