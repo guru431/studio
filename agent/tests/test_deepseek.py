@@ -131,10 +131,23 @@ def runner(home, tmp_path, monkeypatch):
     factory, sent = Factory(project), []
     runner = deepseek.DeepSeekRunner(sent.append, home=home, find_installs=lambda: [INSTALL], factory=factory,
                                      environ={"DSH_HOME": str(dsh_home)})
-    runner.catalog = {"version": "test", "models": [], "efforts": []}
+    runner.catalog = {"version": "test", "models": [], "efforts": [],
+                      "defaults": {"model": TOOLS, "effort": None, "access": "default"},
+                      "settings": {"profile": "web", "applied": ["llm-pi-ai"], "skipped": []}}
     runner.fake, runner.sent, runner.project, runner.pid = factory, sent, project, projects.pid(project.name)
     runner.dsh = factory.dsh = dsh_home
     return runner
+
+
+def stored(runner, session=SESSION, **header):
+    """Файл сессии фикстуры пробы в `$DSH_HOME/sessions` этого проекта."""
+    folder = runner.dsh / "sessions" / "--demo--" / session
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = (FIXTURES / "session.v4.jsonl").read_text("utf-8").splitlines()
+    first = {**json.loads(lines[0]), "id": session, "cwd": str(runner.project), **header}
+    path = folder / "session.v4.jsonl"
+    path.write_text("\n".join([json.dumps(first), *lines[1:]]) + "\n", "utf-8")
+    return path
 
 
 def events(runner, kind):
@@ -266,9 +279,56 @@ async def test_resume_of_busy_session_is_writer_active_and_returns_queue(runner,
     assert done["status"] == "error" and done["message"] == deepseek.WRITER and done["code"] == "writer_active"
     assert done["unsent"] == [{"id": "a" * 16, "text": "уточнение"}] and done["not_started"]
     assert not runner.fake.prompts
-    with pytest.raises(Refused) as error:
-        await runner.state(runner.project, CHAT)
-    assert (error.value.code, error.value.message) == ("writer_active", deepseek.WRITER)
+    # настройки занятого чата читаются из файла: просмотр не берёт блокировку записи (I1)
+    assert (await runner.state(runner.project, CHAT))["settings"]["access_fixed"]
+
+
+async def test_state_of_existing_chat_reads_session_file_and_never_resumes(runner):
+    """I1: `state` чата с сессией не возобновляет её (`session/resume` взял бы блокировку записи и мог дописать
+    файл человека): модель, усилие, контекст и права — из файла сессии, без процесса DSH."""
+    path = stored(runner)
+    runner.fake.busy = True                                   # чат открыт в DSH Web
+    external = (await runner.chats(runner.project))[0]["chat"]
+    before, clients = path.read_bytes(), len(runner.fake.clients)
+    state = await runner.state(runner.project, external)
+    assert "session/resume" not in [method for method, _ in runner.fake.calls]
+    assert len(runner.fake.clients) == clients and path.read_bytes() == before
+    settings = state["settings"]
+    assert (settings["model"], settings["effort"], settings["access"]) == (TOOLS, "high", "workspace-write")
+    assert settings["access_fixed"] and settings["overlay"] == runner.catalog["settings"]
+    assert (state["context"]["used"], state["context"]["limit"]) == (1212, 131072)
+    # незнакомый формат — умолчания каталога
+    (path.parent / "session.v9.jsonl").write_text(json.dumps({"type": "session", "version": 9}) + "\n", "utf-8")
+    settings = (await runner.state(runner.project, external))["settings"]
+    assert (settings["model"], settings["effort"], settings["access"]) == (TOOLS, None, "default")
+    assert len(runner.fake.clients) == clients
+    # права, которые ответил `state`, ход принимает (Minor-5: пресет из файла, а не «по настройкам DSH»)
+    (path.parent / "session.v9.jsonl").unlink()
+    runner.fake.busy = False
+    runner.start(runner.project, runner.pid, external, "Дальше", None, None, access="workspace-write")
+    rid = await asking(runner)
+    runner.answer(runner.pid, external, rid, "allow", None, None)
+    await runner._turns[external].task
+    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+async def test_chats_take_title_and_times_from_session_files(runner):
+    """I4: `session/list` DSH отдаёт только id и cwd — название и время берутся из файлов сессий."""
+    runner.fake.listed = [SESSION, WEB_SESSION]
+    path = stored(runner)
+    rows = {runner.aliases.load()[row["chat"]]["session"]: row for row in await runner.chats(runner.project)}
+    assert rows[SESSION]["title"] == "Ответь одним словом: г"
+    assert rows[SESSION]["created"] == 1795363689.603
+    assert rows[SESSION]["modified"] == path.stat().st_mtime_ns / 1e9
+    assert (rows[WEB_SESSION]["title"], rows[WEB_SESSION]["created"], rows[WEB_SESSION]["modified"]) == ("", None, None)
+    # файл изменился — название новое; повреждённый файл — строка без сведений, список не падает
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps({"type": "session/title", "seq": 99, "time": 1, "data": {"title": "Новое"}}) + "\n")
+    rows = {runner.aliases.load()[row["chat"]]["session"]: row for row in await runner.chats(runner.project)}
+    assert rows[SESSION]["title"] == "Новое"
+    path.write_text("мусор\n", "utf-8")
+    rows = {runner.aliases.load()[row["chat"]]["session"]: row for row in await runner.chats(runner.project)}
+    assert rows[SESSION]["title"] == ""
 
 
 async def test_access_sets_permission_env_only_for_presets(runner, home, monkeypatch):

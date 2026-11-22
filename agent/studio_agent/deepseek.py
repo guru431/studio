@@ -11,12 +11,14 @@
 import asyncio
 import contextlib
 import contextvars
+import json
 import os
 import re
 import uuid
 from pathlib import Path
 
-from . import acp, deepseek_history, deepseek_rpc, deepseek_settings, history_images, host, mcp, store
+from . import (acp, deepseek_history, deepseek_rpc, deepseek_settings, history_images, host, limits, mcp, permissions,
+               store)
 from .errors import Refused
 
 SESSION_ID = deepseek_history.SESSION_ID
@@ -42,6 +44,14 @@ _LIST = contextvars.ContextVar("deepseek_list", default=False)
 def _remove(path):
     with contextlib.suppress(OSError):
         Path(path).unlink()
+
+
+def _model(pair):
+    """`(провайдер, модель)` файла сессии → значение ACP `["<провайдер>","<модель>"]` (как `JSON.stringify` DSH)."""
+    if pair is None:
+        return None
+    value = json.dumps(list(pair), ensure_ascii=False, separators=(",", ":"))
+    return value if MODEL_ID.fullmatch(value) else None
 
 
 def _plain(values):
@@ -81,6 +91,7 @@ class DeepSeekRunner(acp.AcpRunner):
         self.home = Path(home)
         self.find_installs = find_installs
         self.environ = environ
+        self._overview_cache = {}  # путь файла сессии → (ревизия, `deepseek_history.overview`)
 
     def _dsh_home(self):
         return deepseek_settings.dsh_home(self.environ)
@@ -141,9 +152,39 @@ class DeepSeekRunner(acp.AcpRunner):
     async def chats(self, project):
         token = _LIST.set(True)  # процесс списка запускается здесь и живёт до `close()` — без наложения
         try:
-            return await super().chats(project)
+            items = await super().chats(project)
         finally:
             _LIST.reset(token)
+        # `session/list` DSH даёт только id и cwd: название и время — из файлов сессий (только чтение)
+        if items:
+            saved = await asyncio.to_thread(self.aliases.load)
+            targets = {item["chat"]: (saved.get(item["chat"]) or {}).get("session") for item in items}
+            found = await asyncio.to_thread(self._overviews, project, targets)
+            for item in items:
+                info = found.get(item["chat"]) or {}
+                item["title"] = item["title"] or info.get("title", "")[:200]
+                item["created"] = item["created"] or info.get("created")
+                item["modified"] = item["modified"] or info.get("modified")
+        return items
+
+    def _overviews(self, project, targets):
+        """Название, создание и изменение сессий по файлам; разобранное живёт до смены ревизии файла."""
+        home, out = self._dsh_home(), {}
+        if len(self._overview_cache) > 4 * limits.CHATS_MAX:
+            self._overview_cache.clear()
+        for chat, target in targets.items():
+            try:
+                path = deepseek_history.locate(home, project, target)
+                if path is None:
+                    continue
+                revision = deepseek_history.revision(path)
+                cached = self._overview_cache.get(path)
+                if cached is None or cached[0] != revision:
+                    cached = self._overview_cache[path] = (revision, deepseek_history.overview(path))
+                out[chat] = {**cached[1], "modified": revision[0] / 1e9}
+            except (deepseek_history.Unsupported, OSError):
+                continue
+        return out
 
     async def _mcp(self, rpc, project):
         return await asyncio.to_thread(lambda: mcp.deepseek(mcp.load(store.home(), project, "deepseek"), rpc.info))
@@ -216,25 +257,43 @@ class DeepSeekRunner(acp.AcpRunner):
         # Ход идёт в сессии: после него права чата закреплены (D3).
         return {**_plain(super()._settings(t, data)), "overlay": t.client.rpc.summary, "access_fixed": True}
 
+    async def _recorded(self, project, target):
+        """Настройки чата из файла его сессии (`deepseek_history.recorded`); нет файла, формат незнаком или файл
+        повреждён — `{}` (тогда действуют умолчания каталога)."""
+        try:
+            path = await asyncio.to_thread(deepseek_history.locate, self._dsh_home(), project, target)
+            return await asyncio.to_thread(deepseek_history.recorded, path) if path is not None else {}
+        except (deepseek_history.Unsupported, OSError):
+            return {}
+
+    @staticmethod
+    def _fixed(saved, recorded):
+        """Права чата с сессией: выбранные студией при создании, иначе `permission/preset` файла (D3)."""
+        for value in (saved.get("access"), recorded.get("preset")):
+            if value in deepseek_rpc.ACCESS:
+                return value
+        return "default"
+
     async def state(self, project, chat, model=None, effort=None, access=None, *, agent_mode=None,
                     additional_directories=None):
-        """Настройки без генерации. У чата с сессией права — как при создании (D3); выбор модели и усилия —
-        предпросмотром в пробной сессии временного хранилища: сессия человека не меняется."""
+        """Настройки без генерации. Чат с сессией не возобновляется: модель, усилие, контекст и права — из файла
+        сессии (права — как при создании, D3), варианты — из каталога пробы. Выбор модели и усилия — предпросмотром
+        в пробной сессии временного хранилища: сессия человека не меняется."""
         saved = await asyncio.to_thread(self.choices.details, chat)
         target = await asyncio.to_thread(self.aliases.target, project, chat)
         model, effort = model or saved.get("model"), effort or saved.get("effort")
+        context, recorded = saved.get("context"), {}
         if target is not None:
-            access = saved.get("access") or "default"
-        context = saved.get("context")
+            recorded = await self._recorded(project, target)
+            access = self._fixed(saved, recorded)
+            if found := permissions.context(recorded.get("used"), recorded.get("limit")):
+                context = {**(context or {}), **found}
         if target is not None and not (model or effort):
-            rpc = await self._connect(project)
-            try:
-                data = await self._open(rpc, project, target)
-                for update in self._updates(rpc, target):
-                    if update.get("sessionUpdate") == "usage_update":
-                        context = acp.context(update, context)
-            finally:
-                await rpc.disconnect()
+            defaults = (self.catalog or {}).get("defaults") or {}
+            chosen = _model(recorded.get("model"))
+            settings = {"model": chosen or defaults.get("model"),
+                        "effort": recorded.get("effort") if chosen else defaults.get("effort"), "access": access}
+            overlay = (self.catalog or {}).get("settings")
         else:
             async with self._scratch():
                 rpc, temporary = await self._connect(project, access=access if target is None else None), None
@@ -248,8 +307,8 @@ class DeepSeekRunner(acp.AcpRunner):
                             await self._discard(rpc, temporary)
                     finally:
                         await rpc.disconnect()
-        return {"settings": {**_plain(acp.settings(data, access, effort_key=self.EFFORT_KEY)), "commands": [],
-                             "additional_directories": [], "overlay": rpc.summary,
+            settings, overlay = acp.settings(data, access, effort_key=self.EFFORT_KEY), rpc.summary
+        return {"settings": {**_plain(settings), "commands": [], "additional_directories": [], "overlay": overlay,
                              **({"access_fixed": True} if target is not None else {})},
                 "context": context}
 
@@ -258,7 +317,9 @@ class DeepSeekRunner(acp.AcpRunner):
             if t.access is not None:
                 target = await asyncio.to_thread(self.aliases.target, t.project, t.chat)
                 saved = await asyncio.to_thread(self.choices.details, t.chat)
-                if target is not None and t.access != (saved.get("access") or "default"):
+                # страница шлёт права, которые ответил `state` (из файла сессии); прежний ответ — выбор студии
+                if (target is not None and t.access != (saved.get("access") or "default")
+                        and t.access != self._fixed(saved, await self._recorded(t.project, target))):
                     raise Refused("invalid", FIXED)
         except asyncio.CancelledError:
             await self._finish(t, False, None)

@@ -204,8 +204,13 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   (`""`) — как отсутствие выбора. Версия — `dsh --version` (`deepseek_rpc.version`): `agentInfo.version` ACP DSH — «0.0.1».
   Любой запуск `dsh --profile acp` сам создаёт в `DSH_HOME` заготовку `profiles/acp/` и `.anonymous-user-id`.
 - **Чаты и продолжение.** `session/list` с `cwd` проекта; UUID студии ↔ id DSH (UUID или `session-<uuid>`) — в
-  `deepseek-chats.json`, выбор — `deepseek/choices.json`. Названий `session/list` не даёт — внешние чаты без названия.
-  Продолжение — `session/resume` (без replay). Сессия занята другим процессом (`-32603`, `data.details` «already
+  `deepseek-chats.json`, выбор — `deepseek/choices.json`. Названий и времени `session/list` не даёт: название —
+  последнее `session/title` файла сессии, создание — `createdAt` заголовка, изменение — mtime файла
+  (`deepseek_history.overview`, разбор живёт до смены ревизии файла); файла нет — строка без них.
+  Продолжение — `session/resume` (без replay) — только в ходе. `state` сессию не возобновляет (resume взял бы
+  блокировку записи и мог дописать файл человека): модель, усилие, контекст и права — из файла
+  (`deepseek_history.recorded`: последний `model/selection`, `request/context`, `usage` ответа, `permission/preset`),
+  варианты и сводка наложения — из каталога пробы; незнакомый формат — умолчания каталога. Сессия занята другим процессом (`-32603`, `data.details` «already
   owned by an active write handle»; DSH Web держит чат до выхода из приложения) — отказ `writer_active` со словами
   `deepseek.WRITER`, в ходе — `done` с `code: writer_active`, `not_started` и очередью в `unsent`; сервер отвечает 409.
 - **История** — файлы сессий (`deepseek_history.locate`, `deepseek_history.read`): `sessions/--<ключ cwd>--/<id>/

@@ -96,11 +96,16 @@ def _lines(path):
             yield tail, False
 
 
-def _records(path):
-    """Записи файла: заголовок и события. Оборванная последняя строка отбрасывается, мусор внутри — `corrupt`."""
+def _records(path, marks=None):
+    """Записи файла: заголовок и события. Оборванная последняя строка отбрасывается, мусор внутри — `corrupt`.
+    `marks` — байтовые метки видов: строки событий без них не разбираются (быстрый просмотр сведений сессии)."""
+    first = True
     for line, whole in _lines(path):
         if not line.strip():
             continue
+        if marks is not None and not first and not any(mark in line for mark in marks):
+            continue
+        first = False
         try:
             record = json.loads(line)
         except (ValueError, RecursionError):
@@ -237,6 +242,76 @@ def _result(data, calls):
     step.update(acp.step_of({
         "toolCallId": step["id"], "status": "failed" if message.get("isError") is True else "completed",
         "content": [{"type": "content", "content": {"type": "text", "text": text}}]}, step))
+
+
+def _pair(data):
+    """`(провайдер, модель)` записи или None."""
+    if not isinstance(data, dict):
+        return None
+    provider, model = data.get("provider"), data.get("model")
+    return (provider, model) if isinstance(provider, str) and provider and isinstance(model, str) and model else None
+
+
+def _events(path, kinds, fold):
+    """Заголовок и `fold(вид, data)` для событий видов `kinds` — без разбора остальных строк."""
+    records = _records(path, tuple(kind.encode() for kind in kinds))
+    try:
+        header = _header(records)
+        for record in records:
+            if record.get("type") in kinds and isinstance(record.get("data"), dict):
+                fold(record["type"], record["data"])
+    except Unsupported:
+        raise
+    except (KeyError, TypeError, AttributeError, ValueError, RecursionError):
+        raise Unsupported("corrupt") from None
+    finally:
+        records.close()
+    return header
+
+
+def overview(path):
+    """Для списка чатов: `{"title", "created"}` — последнее `session/title` и `createdAt` заголовка (секунды).
+    Ошибки — `Unsupported`, как у `read`."""
+    found = {"title": ""}
+
+    def fold(kind, data):
+        if isinstance(data.get("title"), str):
+            found["title"] = data["title"]
+
+    created = _events(path, ("session/title",), fold).get("createdAt")
+    ok = type(created) in (int, float) and 0 < created < 1e15
+    return {"title": found["title"], "created": created / 1000 if ok else None}
+
+
+def recorded(path):
+    """Последние настройки сессии без её возобновления: `{"model": (провайдер, модель) | None, "effort",
+    "used", "limit", "preset"}`. Модель — последний `model/selection`, иначе `request/context`, иначе источник
+    ответа; усилие — `reasoningEffort` выбора; контекст — `request/context.contextWindow` и `usage` последнего
+    ответа; права — `permission/preset`. Ошибки — `Unsupported`, как у `read`."""
+    found = {"selection": None, "effort": None, "context": None, "source": None, "used": None, "limit": None,
+             "preset": None}
+
+    def fold(kind, data):
+        if kind == "model/selection" and (pair := _pair(data)):
+            effort = data.get("reasoningEffort")
+            found["selection"], found["effort"] = pair, effort if isinstance(effort, str) and effort else None
+        elif kind == "request/context":
+            found["context"] = _pair(data) or found["context"]
+            if type(data.get("contextWindow")) is int and data["contextWindow"] > 0:
+                found["limit"] = data["contextWindow"]
+        elif kind == "assistant/message":
+            message = data.get("message")
+            found["source"] = _pair(message.get("source") if isinstance(message, dict) else None) or found["source"]
+            spent = acp.usage(data.get("usage"))
+            if spent and "total" in spent:
+                found["used"] = spent["total"]
+        elif kind == "permission/preset" and isinstance(data.get("preset"), str):
+            found["preset"] = data["preset"]
+
+    _events(path, ("model/selection", "request/context", "assistant/message", "permission/preset"), fold)
+    return {"model": found["selection"] or found["context"] or found["source"],
+            "effort": found["effort"] if found["selection"] else None,
+            "used": found["used"], "limit": found["limit"], "preset": found["preset"]}
 
 
 def read(path, *, image_blocks=None):

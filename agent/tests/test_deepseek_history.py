@@ -81,6 +81,32 @@ def test_context_the_user_never_wrote_is_not_shown():
     assert not any(m["role"] == "user" and m["text"].startswith("[model") for m in history.read(RAW))
 
 
+def test_overview_and_recorded_settings_without_resume():
+    for path in (RAW, PACKED):
+        assert history.overview(path)["title"] == "Ответь одним словом: г"     # последнее `session/title`
+    assert history.overview(RAW)["created"] == 1795363689.603                 # `createdAt` заголовка, секунды
+    assert history.recorded(RAW) == {"model": ("srvllm", "stub-tools"), "effort": "high", "used": 1212,
+                                     "limit": 131072, "preset": "workspace-write"}
+    assert history.recorded(PACKED)["model"] == ("srvllm", "stub-tools")
+
+
+def test_recorded_falls_back_to_request_context_and_answer_source(tmp_path):
+    header = b'{"type":"session","version":4,"id":"x","createdAt":1,"cwd":"p"}\n'
+    answer = (b'{"type":"assistant/message","seq":2,"time":3,"data":{"message":{"content":[],'
+              b'"source":{"kind":"model","provider":"p1","model":"m1"}},"usage":{"totalTokens":40}}}\n')
+    context = b'{"type":"request/context","seq":1,"time":2,"data":{"provider":"p2","model":"m2","contextWindow":100}}\n'
+    path = put(tmp_path, "session.v4.jsonl", header + answer)
+    assert history.recorded(path) == {"model": ("p1", "m1"), "effort": None, "used": 40, "limit": None,
+                                      "preset": None}
+    path.write_bytes(header + answer + context)
+    assert history.recorded(path)["model"] == ("p2", "m2") and history.recorded(path)["limit"] == 100
+    assert history.overview(path) == {"title": "", "created": 0.001}
+    path.write_bytes(b'{"type":"session","version":9}\n')
+    for read in (history.recorded, history.overview):
+        with pytest.raises(history.Unsupported):
+            read(path)
+
+
 def test_unknown_format_version_is_unsupported(tmp_path):
     only = put(tmp_path, "session.v9.jsonl", b'{"type":"session","version":9,"id":"x"}\n')
     with pytest.raises(history.Unsupported) as error:
