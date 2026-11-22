@@ -11,13 +11,18 @@ https: при каждом запросе сервер разрешает его
 Ключ — только адресу своего снимка подключения: подключение, удалённое или сменившее вид или
 адрес после снимка, — ConnectionChanged до отправки (connections.token).
 Проверка — до всякого ввода-вывода; адрес разбирает тот же httpx.URL, по которому идёт запрос.
+Вызывающий без строки подключения (учётка Open WebUI) передаёт свой `Authorization` (`auth`) и доверенный
+сертификат (`cert_pem` → `pinned_context`); WebSocket и получение сертификата — по тем же правилам (`ws_target`,
+`fetch_certificate`).
 """
 import asyncio
 import ipaddress
 import json
 import re
 import socket
+import ssl
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import httpx
 
@@ -139,44 +144,124 @@ def _public(address: str) -> bool:
         return False
 
 
-async def _pinned(conn, url: httpx.URL, headers: dict, kw: dict) -> httpx.URL:
-    """Адрес имени, проверенный сейчас: запрос идёт на него, SNI и `Host` — имя."""
-    name = url.raw_host.decode("ascii")
-    addresses = await RESOLVE(name, url.port or DEFAULT_PORTS[url.scheme])
-    if not addresses or not all(_public(a) for a in addresses):
-        raise UpstreamRefused(f"подключение {conn.id}: имя разрешается во внутренний адрес", "internal")
-    headers["Host"] = name if url.port in (None, DEFAULT_PORTS[url.scheme]) else f"{name}:{url.port}"
-    kw["extensions"] = {**(kw.get("extensions") or {}), "sni_hostname": name}
-    return url.copy_with(host=addresses[0])
-
-
-async def _prepare(conn, url, kw: dict, keyless: bool = False) -> tuple[httpx.URL, dict]:
+def _listed(conn, url) -> httpx.URL:
     parsed = _parse(url)
     if parsed is None or not is_allowed(parsed):
         raise UpstreamRefused(f"подключение {conn.id}: адрес не из списка администратора")
+    return parsed
+
+
+def _host_header(url: httpx.URL) -> str:
+    host = url.raw_host.decode("ascii")
+    host = f"[{host}]" if ":" in host else host
+    return host if url.port in (None, DEFAULT_PORTS[url.scheme]) else f"{host}:{url.port}"
+
+
+async def _pinned(conn, url: httpx.URL) -> httpx.URL:
+    """Адрес имени, проверенный сейчас: соединение идёт на него, SNI и `Host` — имя."""
+    addresses = await RESOLVE(url.raw_host.decode("ascii"), url.port or DEFAULT_PORTS[url.scheme])
+    if not addresses or not all(_public(a) for a in addresses):
+        raise UpstreamRefused(f"подключение {conn.id}: имя разрешается во внутренний адрес", "internal")
+    return url.copy_with(host=addresses[0])
+
+
+async def _prepare(conn, url, kw: dict, keyless: bool = False, auth: str | None = None) -> tuple[httpx.URL, dict]:
+    parsed = _listed(conn, url)
     headers = dict(kw.pop("headers", None) or {})
     if not keyless:
-        headers["Authorization"] = f"Bearer {connections.token(conn)}"
+        headers["Authorization"] = auth if auth is not None else f"Bearer {connections.token(conn)}"
     kw.pop("follow_redirects", None)
     if named(parsed):
-        parsed = await _pinned(conn, parsed, headers, kw)
+        headers["Host"] = _host_header(parsed)
+        kw["extensions"] = {**(kw.get("extensions") or {}), "sni_hostname": parsed.raw_host.decode("ascii")}
+        parsed = await _pinned(conn, parsed)
     return parsed, {**kw, "headers": headers, "follow_redirects": False}
 
 
-async def request(conn, method: str, url: str, *, keyless: bool = False, **kw) -> httpx.Response:
-    """keyless — без заголовка `Authorization` (проверка: отдаёт ли сервис список без ключа); правила
-    списка и имени — те же."""
-    parsed, kw = await _prepare(conn, url, kw, keyless)
-    client = state.CLEANER_HTTP if getattr(conn, "cleaner", False) else state.HTTP
-    return await client.request(method, parsed, **kw)
+def _client(conn) -> httpx.AsyncClient:
+    """Клиент запроса: доверенный сертификат учётки — свой клиент, иначе Cleaner или общий."""
+    if getattr(conn, "cert_pem", None):
+        return state.pinned_http(conn.cert_pem)
+    return state.CLEANER_HTTP if getattr(conn, "cleaner", False) else state.HTTP
+
+
+async def request(conn, method: str, url: str, *, keyless: bool = False, auth: str | None = None,
+                  **kw) -> httpx.Response:
+    """keyless — без заголовка `Authorization` (проверка: отдаёт ли сервис список без ключа); auth — готовое
+    значение `Authorization` вызывающего (`connections.token` не зовётся); правила списка и имени — те же."""
+    parsed, kw = await _prepare(conn, url, kw, keyless, auth)
+    return await _client(conn).request(method, parsed, **kw)
 
 
 @asynccontextmanager
-async def stream(conn, method: str, url: str, *, keyless: bool = False, **kw):
-    parsed, kw = await _prepare(conn, url, kw, keyless)
-    client = state.CLEANER_HTTP if getattr(conn, "cleaner", False) else state.HTTP
-    async with client.stream(method, parsed, **kw) as response:
+async def stream(conn, method: str, url: str, *, keyless: bool = False, auth: str | None = None, **kw):
+    parsed, kw = await _prepare(conn, url, kw, keyless, auth)
+    async with _client(conn).stream(method, parsed, **kw) as response:
         yield response
+
+
+# ---- доверенный сертификат и WebSocket ---------------------------------------
+
+#: срок соединения и рукопожатия при получении сертификата, с
+CERT_FETCH_SEC = 10
+
+
+def pinned_context(pem: str) -> ssl.SSLContext:
+    """Якорь доверия — ровно этот сертификат (системные корни не грузятся), без проверки имени: сертификат
+    по IP часто без нужного SAN; частичная цепочка — сертификат сервера сам себе якорь."""
+    context = ssl.create_default_context(cadata=pem)
+    context.check_hostname = False
+    context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    return context
+
+
+async def fetch_certificate(conn, url: str) -> bytes:
+    """DER сертификата https-сервера рукопожатием без проверки — показать отпечаток владельцу. Адрес — по тем
+    же правилам списка и имени (отказ до всякого ввода-вывода); данные по соединению не идут."""
+    parsed = _listed(conn, url)
+    if parsed.scheme != "https":
+        raise ValueError("сертификат есть только у https")
+    name = parsed.raw_host.decode("ascii") if named(parsed) else None
+    if name:
+        parsed = await _pinned(conn, parsed)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    _, writer = await asyncio.wait_for(
+        asyncio.open_connection(parsed.host, parsed.port or 443, ssl=context, server_hostname=name),
+        CERT_FETCH_SEC)
+    try:
+        return writer.get_extra_info("ssl_object").getpeercert(binary_form=True)
+    finally:
+        writer.close()
+
+
+@dataclass(frozen=True)
+class WsTarget:
+    """Куда соединяться WebSocket: проверенный IP, SNI-имя и `Host` — имя адреса (для IP-записи SNI нет)."""
+    host: str
+    port: int
+    path: str
+    ssl: ssl.SSLContext | None
+    server_hostname: str | None
+    host_header: str
+
+
+async def ws_target(conn, url: str) -> WsTarget:
+    """Цель `ws://`/`wss://` для `http://`/`https://` адреса — по тем же правилам списка и имени, что у
+    запросов; `wss` — с доверенным сертификатом учётки или системными корнями."""
+    parsed = _listed(conn, url)
+    name = parsed.raw_host.decode("ascii") if named(parsed) else None
+    host_header = _host_header(parsed)
+    if name:
+        parsed = await _pinned(conn, parsed)
+    context = None
+    if parsed.scheme == "https":
+        pem = getattr(conn, "cert_pem", None)
+        context = pinned_context(pem) if pem else ssl.create_default_context()
+    path = parsed.raw_path.decode("ascii")
+    return WsTarget(host=parsed.host, port=parsed.port or DEFAULT_PORTS[parsed.scheme], path=path, ssl=context,
+                    server_hostname=name, host_header=host_header)
 
 
 # ---- отказы шлюза ------------------------------------------------------------

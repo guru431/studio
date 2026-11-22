@@ -155,6 +155,7 @@ async def lifespan(_app):
         cleaner.LOCKS.clear()
         if state.CLEANER_HTTP is not state.HTTP:
             await state.CLEANER_HTTP.aclose()
+        await state.close_pinned()
         await state.HTTP.aclose()
         state.DB.close()
 
