@@ -10,6 +10,10 @@
 - Смена вида, схемы, хоста, порта или пути адреса (или того, идёт ли подключение через сервер) —
   только с новым токеном: иначе ключ шлюза ушёл бы на другой адрес или в браузер. Снимок
   подключения у задания после такой смены (и после удаления) ключа не получает — token().
+- `via_cleaner` — переключатель «Через Cleaner» (только внешние `openai`, разделы чат и перевод); `routed` — ход
+  идёт через Cleaner (`cleaner_route.routes`: переключатель или принудительный режим). Такое подключение всегда
+  `proxied` (сервер зовёт только Cleaner, провайдера проверяет Cleaner), его токен браузеру не отдаётся. Смена
+  переключателя обнуляет паспорт и нового токена не требует.
 - Через сервер путь IP-адреса фиксирован: srvllm — без пути, openai — без пути или `/v1`; у имени
   из списка (публичный https-хост) путь любой.
 - srvllm — всегда через сервер: вне списка такое подключение не сохраняется.
@@ -27,7 +31,7 @@
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -36,6 +40,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
 import access
+import cleaner_route
 import clock
 import sections
 import security
@@ -67,6 +72,8 @@ class Connection:
     cleaner: bool = False
     s06: bool = False
     shared: bool = False
+    via_cleaner: bool = False
+    routed: bool = False
 
     @property
     def owner_id(self) -> int | None:
@@ -88,6 +95,7 @@ class ConnIn(BaseModel):
     token: str = Field(max_length=4096)
     cleaner: bool = False
     s06: bool = False
+    via_cleaner: bool = False
     sections: list[str] = Field(default_factory=list)
     _few = field_validator("sections")(classmethod(lambda cls, v: _few_sections(v)))
 
@@ -99,6 +107,7 @@ class ConnPatch(BaseModel):
     token: str | None = Field(None, max_length=4096)
     cleaner: bool | None = None
     s06: bool | None = None
+    via_cleaner: bool | None = None
     sections: list[str] | None = None
     _few = field_validator("sections")(classmethod(lambda cls, v: _few_sections(v)))
 
@@ -111,13 +120,16 @@ def _from_row(row, user_id: int | None) -> Connection:
     # раздел новее этого кода (откат после шага схемы с новым разделом) — не виден: PATCH без `sections`
     # иначе отказал бы 422 «разделы — …», а set_sections такие строки не трогает
     linked = frozenset(json.loads(row["linked"])) & frozenset(sections.SECTIONS)
-    return Connection(id=row["id"], user_id=user_id, name=row["name"], kind=row["kind"],
+    conn = Connection(id=row["id"], user_id=user_id, name=row["name"], kind=row["kind"],
                       base_url=row["base_url"], sections=linked,
                       proxied=upstream.is_allowed(row["base_url"]), server_only=bool(row["server_only"]),
-                      cleaner=bool(row["cleaner"]), s06=bool(row["s06"]), shared=row["user_id"] is None)
+                      cleaner=bool(row["cleaner"]), s06=bool(row["s06"]), shared=row["user_id"] is None,
+                      via_cleaner=bool(row["via_cleaner"]))
+    # подключение через Cleaner — всегда через сервер, даже если адреса провайдера нет в списке
+    return replace(conn, routed=True, proxied=True) if cleaner_route.routes(conn) else conn
 
 
-_COLS = ("id, user_id, name, kind, base_url, server_only, cleaner, s06,"
+_COLS = ("id, user_id, name, kind, base_url, server_only, cleaner, s06, via_cleaner,"
          " (SELECT json_group_array(l.section) FROM section_links l WHERE l.connection_id = connections.id) AS linked")
 
 
@@ -151,12 +163,12 @@ def token(conn: Connection) -> str:
     """Токен — только той строке, что в снимке `conn`: задание держит снимок, а ключ читается свежим.
     Строку удалили (или id занят чужой) — ConnectionChanged(deleted); сменились вид или адрес —
     ConnectionChanged: новый ключ не уходит прежнему адресу. Новый ключ тому же адресу — можно."""
-    row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner, s06 FROM connections WHERE id = ?",
+    row = state.DB.execute("SELECT user_id, kind, base_url, token_enc, cleaner, s06, via_cleaner FROM connections WHERE id = ?",
                            (conn.id,)).fetchone()
     if row is None or row["user_id"] != conn.owner_id:
         raise upstream.ConnectionChanged(conn, deleted=True)
     if (row["kind"] != conn.kind or bool(row["cleaner"]) != conn.cleaner or bool(row["s06"]) != conn.s06
-            or _address(row["base_url"]) != _address(conn.base_url)):
+            or bool(row["via_cleaner"]) != conn.via_cleaner or _address(row["base_url"]) != _address(conn.base_url)):
         raise upstream.ConnectionChanged(conn, deleted=False)
     try:
         return security.decrypt(row["token_enc"])
@@ -214,7 +226,7 @@ def passport_of(conn: Connection) -> dict | None:
 
 
 #: строка подключения, какой её видела проверка: id, владелец, вид, адрес и ключ (шифром)
-_SAME = "id = ? AND user_id IS ? AND kind = ? AND base_url = ? AND token_enc IS ? AND cleaner = ? AND s06 = ?"
+_SAME = "id = ? AND user_id IS ? AND kind = ? AND base_url = ? AND token_enc IS ? AND cleaner = ? AND s06 = ? AND via_cleaner = ?"
 
 
 def snapshot(conn: Connection) -> tuple:
@@ -223,7 +235,7 @@ def snapshot(conn: Connection) -> tuple:
     row = state.DB.execute("SELECT token_enc FROM connections WHERE id = ? AND user_id IS ?",
                            (conn.id, conn.owner_id)).fetchone()
     return (conn.id, conn.owner_id, conn.kind, conn.base_url, row["token_enc"] if row is not None else None,
-            int(conn.cleaner), int(conn.s06))
+            int(conn.cleaner), int(conn.s06), int(conn.via_cleaner))
 
 
 def passport_at(snap: tuple) -> dict | None:
@@ -253,7 +265,11 @@ def out(conn: Connection, passport: bool = True) -> dict:
     item = {"id": conn.id, "name": conn.name, "kind": conn.kind, "base_url": "" if inherited else conn.base_url,
             "sections": [s for s in sections.SECTIONS if s in conn.sections], "accepts": sections.accepts(conn),
             "proxied": conn.proxied,
-            "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner, "s06": conn.s06}
+            "dropped": dropped(conn), "token_hint": hint, "cleaner": conn.cleaner, "s06": conn.s06,
+            "via_cleaner": conn.via_cleaner, "routed": conn.routed}
+    external = cleaner_route.is_external(conn)
+    item["external"] = external
+    item["cleaner_locked"] = external and cleaner_route.forced()
     # profiles импортирует capabilities → images, а тот при загрузке берёт `connections.Connection`
     import profiles
     item["suggestions"] = profiles.suggestions_of(conn)
@@ -335,12 +351,14 @@ def create(user_id: int | None, body: ConnIn) -> dict:
         _check_s06(body.kind, base_url, body.cleaner)
     if body.cleaner:
         _check_cleaner(body.kind, base_url, wanted)
+    if body.via_cleaner:
+        _check_via_cleaner(body.kind, base_url, body.cleaner, body.s06, wanted)
     with sections.transaction():               # подключение — вместе со связями или никак
         cid = state.DB.execute(
-            "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only, cleaner, s06)"
-            " VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)",
+            "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only, cleaner, s06,"
+            " via_cleaner) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)",
             (user_id, name, body.kind, base_url, security.encrypt(secret), clock.NOW(),
-             int(upstream.is_allowed(base_url)), int(body.cleaner), int(body.s06))).lastrowid
+             int(upstream.is_allowed(base_url)), int(body.cleaner), int(body.s06), int(body.via_cleaner))).lastrowid
         sections.set_sections(user_id, cid, wanted)
     log.info("владелец %s: подключение %d создано", user_id, cid)
     return out(get(user_id, cid))
@@ -359,6 +377,16 @@ def _check_cleaner(kind: str, base_url: str, wanted: list[str]) -> None:
         raise _bad("cleaner", "адрес Cleaner должен быть в списке администратора; запросы идут только через сервер")
     if httpx.URL(base_url).path != "/":
         raise _bad("path", "адрес Cleaner — без пути /api/v1")
+
+
+def _check_via_cleaner(kind: str, base_url: str, cleaner: bool, s06: bool, wanted: list[str]) -> None:
+    """Переключатель «Через Cleaner»: только внешнее подключение вида openai и только чат и перевод."""
+    probe = Connection(0, None, "", kind, base_url, frozenset(), False, cleaner=cleaner, s06=s06)
+    if kind != "openai" or cleaner or s06 or not cleaner_route.is_external(probe):
+        raise _bad("via_cleaner", "«Через Cleaner» — только для внешних подключений вида openai;"
+                                  " внутренним (srvllm, s06, Cleaner, частный адрес из списка) он не нужен")
+    if set(wanted) - set(sections.CLEANER):
+        raise _bad("via_cleaner", "через Cleaner работают чат и перевод — уберите подключение из прочих разделов")
 
 
 def _check_s06(kind: str, base_url: str, cleaner: bool) -> None:
@@ -390,18 +418,29 @@ def patch(user_id: int | None, conn_id: int, body: ConnPatch) -> dict:
                     or not conn.cleaner):
         _check_cleaner(kind, base_url.strip().rstrip("/"), chosen)
     changes["cleaner"] = int(cleaner)
+    via = body.via_cleaner if body.via_cleaner is not None else conn.via_cleaner
+    if body.via_cleaner is not None and cleaner_route.forced() and cleaner_route.is_external(conn):
+        raise _bad("via_cleaner", "администратор требует Cleaner для внешних моделей: переключатель заблокирован")
     # вид и адрес прежние — адрес не перепроверяется: его могли убрать из списка (dropped), и тогда отказ
     # получало бы любое изменение, даже имя. Серверные разделы такому — только прежние, новых нет
     kept = kind == conn.kind and base_url.strip().rstrip("/") == conn.base_url
     changes["base_url"] = conn.base_url if kept else check_base_url(kind, base_url)
     changes["kind"] = kind
     proxied = upstream.is_allowed(changes["base_url"])
+    if via and (not conn.via_cleaner or not kept or cleaner != conn.cleaner or s06 != conn.s06
+                or not set(chosen) <= conn.sections):     # прежнее включённое не перепроверяется: адрес мог стать внутренним
+        _check_via_cleaner(kind, changes["base_url"], cleaner, s06, chosen)
+    changes["via_cleaner"] = int(via)
     if not kept or cleaner or body.token is not None:
         _check_shared(user_id, changes["base_url"], cleaner)
-    if not proxied and (set(chosen) - (conn.sections if kept else set())) & sections.SERVER_ONLY:
+    after = Connection(conn.id, conn.user_id, conn.name, kind, changes["base_url"], frozenset(chosen), proxied,
+                       cleaner=cleaner, s06=s06, shared=conn.shared, via_cleaner=via)
+    reachable = proxied or cleaner_route.routes(after)          # через Cleaner — серверные разделы чата и перевода открыты
+    if not reachable and (set(chosen) - (conn.sections if kept else set())) & sections.SERVER_ONLY:
         raise _bad("server", "адрес вне списка разрешённых — уберите подключение из разделов, кроме чата,"
                              " или попросите администратора внести адрес")
-    moved = (kind != conn.kind or cleaner != conn.cleaner or s06 != conn.s06 or proxied != conn.proxied
+    moved = (kind != conn.kind or cleaner != conn.cleaner or s06 != conn.s06
+             or proxied != upstream.is_allowed(conn.base_url)      # список, а не `conn.proxied`: переключатель ключ не меняет
              or _address(changes["base_url"]) != _address(conn.base_url))
     if "token" in sent and body.token is not None:
         changes["token_enc"] = security.encrypt(check_token(body.token))
@@ -409,7 +448,7 @@ def patch(user_id: int | None, conn_id: int, body: ConnPatch) -> dict:
     elif moved:                                  # прежний ключ — только прежнему адресу
         raise _bad("token", "новый адрес — введите токен заново")
     if ("token_enc" in changes or kind != conn.kind or cleaner != conn.cleaner or s06 != conn.s06
-            or changes["base_url"] != conn.base_url):
+            or via != conn.via_cleaner or changes["base_url"] != conn.base_url):
         changes["passport"] = None               # проверяли другой адрес, вид или ключ
     cols = ", ".join(f"{k} = ?" for k in changes)                    # имена — из кода выше, не из запроса
     with sections.transaction():

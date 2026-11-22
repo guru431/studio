@@ -7,8 +7,12 @@
   ключ — только заголовком `X-Cleaner-Key`.
 - Смена адреса или ключа отправляет контексты нового вида (чаты Cleaner обычных подключений) в очередь удаления
   `cleaner_deletions` со снимком прежнего адреса и ключа: триггер `cleaner_context_delete` делает это сам.
+- Внутреннее и внешнее подключение — `is_external`; подключение через Cleaner — `routes` (переключатель
+  `via_cleaner` или принудительный режим): такое подключение идёт через сервер (`Connection.routed`), а
+  `upstream._prepare` не пускает его никуда, кроме адреса Cleaner.
 - Журнал — только коды и числа: адресов и ключей в нём нет.
 """
+import ipaddress
 import json
 import logging
 import re
@@ -101,6 +105,28 @@ def forced() -> bool:
     """Принудительный режим: только при заданных адресе и ключе (после смены ключа сервера — выключен)."""
     config = settings()
     return bool(config["forced"] and config["base_url"] and config["key"])
+
+
+def is_external(conn: "connections.Connection") -> bool:
+    """Подключение, чьи данные могут уйти в облако. Внутреннее — только s06, srvllm, прежний Cleaner и `openai`,
+    чей адрес записан в списке администратора и чей узел — IP-литерал не из публичных. Всё прочее — внешнее:
+    любое имя, публичный IP, `localhost` и частный адрес не из списка. Частный адрес не доказывает, что за ним нет
+    прокси в облако: внутренним его делает только запись в списке."""
+    if conn.s06 or conn.cleaner or conn.kind == "srvllm":
+        return False
+    if not upstream.is_allowed(conn.base_url):
+        return True
+    try:
+        return ipaddress.ip_address(httpx.URL(conn.base_url).host).is_global
+    except ValueError:                    # имя, а не IP-литерал
+        return True
+
+
+def routes(conn: "connections.Connection") -> bool:
+    """Ход подключения идёт через Cleaner: внешний `openai`, у которого включён переключатель или принудительный режим."""
+    if conn.kind != "openai" or conn.cleaner or conn.s06 or not is_external(conn):
+        return False
+    return conn.via_cleaner or forced()
 
 
 def _bad(code: str, message: str) -> HTTPException:
