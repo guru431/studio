@@ -1,6 +1,8 @@
-"""«Open WebUI» в браузере: панель учёток и дерево чатов. Студия — живая (`live_app.py`), за ней поддельный Open WebUI
-(`fake_owui.py`: REST — через шлюз теста, сокет — в памяти). Chromium (Edge/Chrome) и WebKit, 320 и 1280 px."""
+"""«Open WebUI» в браузере: панель учёток и дерево чатов, лента чата, поток, отправка и пауза. Студия — живая
+(`live_app.py`), за ней поддельный Open WebUI (`fake_owui.py`: REST — через шлюз теста, сокет — в памяти).
+Chromium (Edge/Chrome) и WebKit, 320 и 1280 px."""
 import asyncio
+import base64
 import json
 import re
 import ssl
@@ -373,5 +375,310 @@ def test_phone_panel_slides_and_hides(owui_browser, live, fake, width):
         pw.expect(toggle).to_have_attribute("aria-expanded", "false")
         page.evaluate(f"location.hash = '#/owui/{aid}'")                    # без чата — панель выезжает сама
         pw.expect(panel).to_be_visible()
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+# ---- лента чата, поток, отправка, пауза -------------------------------------------------------------------------------
+
+#: PNG 1×1
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+
+
+def hide_panel(page):
+    """Телефон: без открытого чата панель выезжает сама — убрать её, чтобы писать в поле."""
+    if page.viewport_size["width"] < 760:
+        pw.expect(page.locator("#owui-panel")).to_be_visible()
+        page.keyboard.press("Escape")
+        pw.expect(page.locator("#owui-panel")).to_be_hidden()
+
+
+def socket_ready(page, fake):
+    until(page, lambda: fake.socket is not None and fake.socket.user is not None)
+
+
+def emit(fake, chat, message, kind, data):
+    fake.later(fake.emit_event, chat, message, {"type": kind, "data": data})
+
+
+def delta(fake, chat, message, text, kind="output_text"):
+    emit(fake, chat, message, "response:completion", {"type": f"response.{kind}.delta", "delta": text})
+
+
+def finished(fake, chat, message):
+    emit(fake, chat, message, "chat:completion", {"done": True})
+
+
+def talk(answer: dict, question="Hi") -> list[dict]:
+    """Ветка: вопрос пользователя `u1` и ответ `answer` (id и поля сохранённого сообщения Open WebUI)."""
+    return [{"id": "u1", "parentId": None, "role": "user", "content": question, "timestamp": 1},
+            {"parentId": "u1", "role": "assistant", "model": "m1", "timestamp": 2, **answer}]
+
+
+def loaded_image(page, selector):
+    page.wait_for_function("s => [...document.querySelectorAll(s)].some(img => img.complete && img.naturalWidth > 0)",
+                           arg=selector)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_open_chat_renders_text_reasoning_and_tools(owui_browser, live, fake, width):
+    fake.add_model("m1", "Model One")
+    fake.add_file("img-1", PNG, "image/png")
+    chat = fake.add_chat("Rendered", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "", "output": [
+        {"type": "reasoning", "content": [{"type": "output_text", "text": "Thinking about boats"}], "duration": 3},
+        {"type": "function_call", "call_id": "c1", "name": "web_search", "arguments": "{}", "status": "completed"},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "Found: a red boat"}],
+         "files": [{"type": "image", "id": "img-1", "name": "boat.png", "content_type": "image/png"}]},
+        {"type": "message", "content": [{"type": "output_text", "text": "A **red** boat\n\n- one\n- two"}]},
+        {"type": "mystery"}]}, question="Find the boat"))
+    cookie = session(live, f"owui-feed-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        pw.expect(page.locator(".owui-feed-title")).to_have_text("Rendered")
+        pw.expect(page.locator(".owui-msg.user .bubble")).to_have_text("Find the boat")
+        answer = page.locator(".owui-msg.assistant[data-id='a1']")
+        pw.expect(answer.locator(".md strong")).to_have_text("red")
+        pw.expect(answer.locator(".md li")).to_have_count(2)
+        think = answer.locator("details.owui-think")
+        pw.expect(think.locator("summary")).to_have_text("💭 Рассуждала 3 с")
+        pw.expect(think.locator(".think-text")).to_be_hidden()                # рассуждение свёрнуто
+        think.locator("summary").click()
+        pw.expect(think.locator(".think-text")).to_have_text("Thinking about boats")
+        tool = answer.locator(".owui-tool")
+        pw.expect(tool.locator(".owui-tool-name")).to_have_text("web_search")
+        pw.expect(tool.locator(".owui-tool-result")).to_be_hidden()
+        tool.locator("summary").click()
+        pw.expect(tool.locator(".owui-tool-result")).to_have_text("Found: a red boat")
+        pw.expect(answer.locator(".owui-other")).to_have_text("элемент mystery")
+        image = answer.locator(".msg-files img")
+        pw.expect(image).to_have_attribute("src", f"/api/owui/accounts/{aid}/files/img-1")
+        loaded_image(page, ".owui-msg.assistant .msg-files img")              # картинка — через сервер Студии
+        pw.expect(page.locator("#owui-model-pick")).to_have_attribute("title", re.compile("Model One"))
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_new_chat_streams_answer_and_appears_in_tree(owui_browser, live, fake, width):
+    fake.add_model("m1", "Model One")
+    cookie = session(live, f"owui-new-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}") as page:
+        hide_panel(page)
+        pw.expect(page.locator(".owui-feed-title")).to_have_text("Новый чат")
+        pw.expect(page.locator("#owui-model-pick")).to_have_attribute("title", re.compile("Model One"))
+        socket_ready(page, fake)
+        page.locator("#owui-input").fill("Hello model")
+        page.locator("#owui-send").click()
+        until(page, lambda: fake.completions)
+        body = fake.completions[-1]
+        (chat,) = fake.chats
+        message = body["id"]
+        assert body["model"] == "m1" and "chat_id" not in body and body["user_message"]["content"] == "Hello model"
+        pw.expect(page).to_have_url(re.compile(rf"#/owui/{aid}/{chat}$"))
+        pw.expect(page.locator(".owui-msg.user .bubble")).to_have_text("Hello model")
+        pw.expect(page.locator("#owui-input")).to_have_value("")
+        answer = page.locator(f".owui-msg.assistant[data-id='{message}']")
+        pw.expect(answer.locator(".msg-meta")).to_have_text("ответ идёт…")
+        pw.expect(page.locator("#owui-stop")).to_be_visible()
+        delta(fake, chat, message, "Pondering", kind="reasoning_text")
+        delta(fake, chat, message, "Hello")
+        delta(fake, chat, message, " world")
+        pw.expect(answer.locator(".owui-stream")).to_have_text("Hello world")
+        pw.expect(answer.locator("details.owui-think .think-text")).to_have_text("Pondering", use_inner_text=False)
+        emit(fake, chat, message, "response:completion", {"type": "response.output_item.added", "item": {
+            "type": "function_call", "call_id": "c9", "name": "calculator", "status": "in_progress"}})
+        pw.expect(answer.locator(".owui-tool .owui-tool-name")).to_have_text("calculator")
+
+        fake.chats[chat]["title"] = "Greeting"
+        emit(fake, None, None, "chat:list", {"chat_id": chat})
+        emit(fake, chat, None, "chat:title", "Greeting")
+        row = page.locator(f"#owui-chat-list .owui-chat[data-chat='{chat}']")
+        pw.expect(row).to_contain_text("Greeting")
+        pw.expect(row).to_have_attribute("aria-current", "page")
+        pw.expect(page.locator(".owui-feed-title")).to_have_text("Greeting")
+
+        fake.finish(chat, message, "Hello **world**")
+        finished(fake, chat, message)
+        pw.expect(answer.locator(".md strong")).to_have_text("world")
+        pw.expect(page.locator("#owui-stop")).to_be_hidden()
+        pw.expect(answer.locator(".msg-meta")).to_have_count(0)
+        assert len(page.events) == 1, page.events                             # одна подписка: учётка панели и ленты
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_continue_with_other_model(owui_browser, live, fake, width):
+    fake.add_model("m1", "Model One")
+    fake.add_model("m2", "Model Two")
+    chat = fake.add_chat("Talk", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "First answer"}))
+    cookie = session(live, f"owui-more-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        pw.expect(page.locator(".owui-msg.assistant[data-id='a1'] .md")).to_have_text("First answer")
+        pick = page.locator("#owui-model-pick")
+        pw.expect(pick).to_have_attribute("title", re.compile("Model One"))       # модель чата
+        pick.click()
+        page.locator("#owui-model-menu .pick-option", has_text="Model Two").click()
+        pw.expect(pick).to_have_attribute("title", re.compile("Model Two"))
+        page.locator("#owui-input").fill("And now?")
+        if width >= 760:
+            page.locator("#owui-input").press("Enter")
+        else:
+            page.locator("#owui-send").click()
+        until(page, lambda: fake.completions)
+        body = fake.completions[-1]
+        assert (body["model"], body["chat_id"], body["parent_id"]) == ("m2", chat, "a1")
+        assert body["user_message"]["content"] == "And now?"
+        pw.expect(page.locator(".owui-msg.user .bubble")).to_have_text(["Hi", "And now?"])
+        pw.expect(page.locator(f".owui-msg.assistant[data-id='{body['id']}'] .msg-meta")).to_have_text("ответ идёт…")
+        pw.expect(pick).to_have_attribute("title", re.compile("Model Two"))       # перечитывание выбор не сбросило
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_attach_image(owui_browser, live, fake, width):
+    fake.add_model("m1", "Model One")
+    chat = fake.add_chat("Pictures", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "Send it"}))
+    cookie = session(live, f"owui-attach-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        pw.expect(page.locator(".owui-msg.assistant .md")).to_have_text("Send it")
+        page.set_input_files("#owui-attach", files=[{"name": "boat.png", "mimeType": "image/png", "buffer": PNG}])
+        chip = page.locator(".owui-att")
+        pw.expect(chip).to_have_count(1)
+        pw.expect(chip).to_have_attribute("data-state", "ready")
+        pw.expect(chip.locator(".att-name")).to_have_text("boat.png")
+        fake.processing = ["failed"]                                         # Open WebUI не обработал документ
+        page.set_input_files("#owui-attach", files=[{"name": "notes.pdf", "mimeType": "application/pdf",
+                                                     "buffer": b"%PDF-1.4 broken"}])
+        pw.expect(chip).to_have_count(2)
+        pw.expect(chip.nth(1)).to_have_attribute("data-state", "failed")
+        pw.expect(chip.nth(1).locator(".att-state")).to_have_text(
+            "Open WebUI не обработал файл: модель может его не увидеть")
+        page.locator("#owui-input").fill("Look")
+        page.locator("#owui-send").click()
+        until(page, lambda: fake.completions)
+        sent = fake.completions[-1]["user_message"]["files"]
+        image_id = next(fid for fid, name in fake.file_names.items() if name == "boat.png")
+        assert [(f["name"], f["content_type"]) for f in sent] == [("boat.png", "image/png"),
+                                                                    ("notes.pdf", "application/pdf")]
+        assert sent[0]["id"] == image_id
+        pw.expect(chip).to_have_count(0)
+        mine = page.locator(".owui-msg.user").last
+        pw.expect(mine.locator(".bubble")).to_have_text("Look")
+        pw.expect(mine.locator("img")).to_have_attribute("src", f"/api/owui/accounts/{aid}/files/{image_id}")
+        loaded_image(page, ".owui-msg.user img")
+        pw.expect(mine.locator(".msg-file-link")).to_contain_text("notes.pdf")
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_pending_question_card_answers(owui_browser, live, fake, width):
+    fake.add_model("m1", "Model One")
+    questions = json.dumps({"allow_other": True, "questions": [
+        {"id": "q1", "header": "Color", "question": "Which color?", "allow_other": False,
+         "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cold"}]},
+        {"id": "q2", "question": "Anything else?", "options": [{"label": "No", "description": ""}]}]})
+    ask = fake.add_chat("Ask", models=["m1"], pending_approval=True, messages=talk({
+        "id": "a1", "done": False, "content": "",
+        "output": [{"type": "function_call", "call_id": "c1", "name": "ask_user", "arguments": questions,
+                    "status": "pending"}]}))
+    approve = fake.add_chat("Approve", models=["m1"], pending_approval=True, messages=talk({
+        "id": "a2", "done": False, "content": "",
+        "output": [{"type": "function_call", "call_id": "c2", "name": "delete_file",
+                    "arguments": '{"path": "x.txt"}', "status": "pending"}]}))
+    cookie = session(live, f"owui-pending-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{ask}") as page:
+        card = page.locator(".owui-pending[data-kind='question']")
+        pw.expect(card).to_be_visible()
+        pw.expect(card.locator(".owui-question")).to_have_count(2)
+        first, second = card.locator(".owui-question").nth(0), card.locator(".owui-question").nth(1)
+        pw.expect(first).to_contain_text("Which color?")
+        pw.expect(first.locator(".owui-option")).to_have_count(2)
+        pw.expect(first.locator(".owui-option").nth(1)).to_contain_text("cold")
+        pw.expect(first.locator(".pending-text")).to_have_count(0)            # свой текст не разрешён
+        reply = card.locator(".pending-reply")
+        pw.expect(reply).to_be_disabled()
+        socket_ready(page, fake)
+        first.locator(".owui-option", has_text="Blue").click()
+        pw.expect(first.locator(".owui-option", has_text="Blue")).to_have_attribute("aria-pressed", "true")
+        pw.expect(reply).to_be_disabled()                                    # второй вопрос ещё без ответа
+        reads = lambda: sum(r.url.path == f"/api/v1/chats/{ask}" for r in fake.requests)  # noqa: E731
+        before = reads()
+        emit(fake, ask, "a1", "chat:active", {"active": True, "pending_approval": True})
+        until(page, lambda: reads() > before)                                # лента перечитала чат
+        page.wait_for_timeout(100)
+        pw.expect(first.locator(".owui-option", has_text="Blue")).to_have_attribute("aria-pressed", "true")  # выбор цел
+        second.locator(".pending-text").fill("Make it shiny")
+        pw.expect(reply).to_be_enabled()
+        reply.click()
+        until(page, lambda: fake.resolved)
+        assert fake.resolved[-1] == (ask, "a1", {"call_id": "c1", "action": "answer", "answers": {
+            "q1": {"type": "option", "option_index": 1, "label": "Blue", "description": "cold"},
+            "q2": {"type": "other", "text": "Make it shiny"}}})
+        pw.expect(card).to_have_count(0)
+        pw.expect(page.locator(".owui-msg.assistant[data-id='a1'] .msg-meta")).to_have_text("ответ идёт…")
+
+        page.evaluate(f"location.hash = '#/owui/{aid}/{approve}'")
+        card = page.locator(".owui-pending[data-kind='approval']")
+        pw.expect(card.locator(".msg-pending-tool")).to_have_text("delete_file")
+        pw.expect(card.locator(".owui-args-text")).to_be_hidden()           # аргументы свёрнуты
+        card.locator(".owui-args summary").click()
+        pw.expect(card.locator(".owui-args-text")).to_have_text('{"path": "x.txt"}')
+        pw.expect(card.locator(".pending-run")).to_have_text("Разрешить")
+        pw.expect(card.locator(".pending-refuse")).to_have_text("Отклонить")
+        # решили в другом окне: вызов получил результат, Open WebUI продолжил ответ — карточка уходит
+        output = fake.chats[approve]["messages"]["a2"]["output"]
+        output[0]["status"] = "completed"
+        output.append({"type": "function_call_output", "call_id": "c2", "output": [{"type": "input_text", "text": "ok"}]})
+        socket_ready(page, fake)
+        emit(fake, approve, "a2", "chat:active", {"active": True})
+        pw.expect(card).to_have_count(0)
+        assert not [r for r in fake.resolved if r[0] == approve]
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_stop_ends_answer(owui_browser, live, fake, width):
+    fake.add_model("m1", "Model One")
+    chat = fake.add_chat("Long", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "Ready"}))
+    cookie = session(live, f"owui-stop-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        pw.expect(page.locator(".owui-msg.assistant .md")).to_have_text("Ready")
+        pw.expect(page.locator("#owui-stop")).to_be_hidden()
+        socket_ready(page, fake)
+        page.locator("#owui-input").fill("Write a long story")
+        page.locator("#owui-send").click()
+        until(page, lambda: fake.completions)
+        message = fake.completions[-1]["id"]
+        delta(fake, chat, message, "Once upon")
+        answer = page.locator(f".owui-msg.assistant[data-id='{message}']")
+        pw.expect(answer.locator(".owui-stream")).to_have_text("Once upon")
+
+        fake.queue_next = True                                               # пока идёт ответ — в очередь
+        page.locator("#owui-input").fill("Then a poem")
+        page.locator("#owui-send").click()
+        pw.expect(page.locator(".owui-msg-queued .bubble")).to_have_text("Then a poem")
+        pw.expect(page.locator(".owui-msg-queued")).to_contain_text("в очереди")
+        pw.expect(page.locator("#owui-queued")).to_be_visible()
+        fake.queue_next = False
+
+        stop = page.locator("#owui-stop")
+        pw.expect(stop).to_be_visible()
+        stop.click()
+        until(page, lambda: fake.stopped == [chat])
+        pw.expect(stop).to_be_hidden()
+        pw.expect(page.locator("#owui-send")).to_be_enabled()
+        fake.finish(chat, message, "Once upon")
+        finished(fake, chat, message)
+        pw.expect(answer.locator(".md")).to_have_text("Once upon")
+        pw.expect(answer.locator(".msg-meta")).to_have_count(0)
         assert fits(page)
         assert not page.problems, page.problems

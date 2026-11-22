@@ -15,7 +15,8 @@
 `add_chat`, `add_folder`, `add_model`, `add_file`; `raw_chat[id]` подменяет тело ответа `GET /api/v1/chats/{id}`.
 
 Отправка (формы — по Open WebUI v0.13.4, `main.py`, `utils/tool_approval.py`, `routers/files.py`):
-`POST /api/chat/completions` (тело — в `completions`; новый чат создаётся сам; `queue_next` — ответ `{queued: true}`),
+`POST /api/chat/completions` (тело — в `completions`; новый чат создаётся сам; сообщение и пустой ответ — в историю,
+`finish` — ответ готов; `queue_next` — ответ `{queued: true}`),
 `POST /api/tasks/chat/{id}/stop` (`stopped`), `POST /api/v1/chats/{id}/messages/{mid}/resolve` (`resolved`; повтор
 того же вызова — 409), `POST /api/v1/files/` (multipart, поле `file`), `GET /api/v1/files/{id}/process/status`
 (статусы по очереди из `processing`), `GET /api/v1/files/{id}`, `GET /api/v1/users/user/settings` (`{ui: user_settings}`).
@@ -400,6 +401,7 @@ class FakeOwui:
                 chat_id = self.add_chat("New Chat", models=[body.get("model")])
             elif chat_id not in self.chats:
                 return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
+            self._insert_turn(self.chats[chat_id], body)
             return httpx.Response(200, json={"status": True, "task_ids": [f"task-{next(self._ids)}"], "chat_id": chat_id})
         if path == "/api/v1/files/":
             return self._upload(request)
@@ -408,6 +410,7 @@ class FakeOwui:
             if stop[1] not in self.chats:
                 return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
             self.stopped.append(stop[1])
+            self.chats[stop[1]]["active"] = False
             return httpx.Response(200, json={"status": True, "message": "Stopped"})
         resolve = re.fullmatch(r"/api/v1/chats/([^/]+)/messages/([^/]+)/resolve", path)
         if resolve:
@@ -421,6 +424,26 @@ class FakeOwui:
             return httpx.Response(200, json={"status": True, "chat_id": chat_id, "message_id": message_id,
                                              "task_ids": [f"task-{next(self._ids)}"]})
         return httpx.Response(404, json={"detail": "Not Found"})
+
+    @staticmethod
+    def _insert_turn(chat: dict, body: dict) -> None:
+        """Как Open WebUI 0.13 при серверном ходе: сообщение пользователя и пустой ответ (`done: false`) — в историю
+        чата, ответ — текущий; в чате идёт ответ."""
+        user = body.get("user_message")
+        if not isinstance(user, dict) or not isinstance(user.get("id"), str) or not isinstance(body.get("id"), str):
+            return
+        chat["messages"][user["id"]] = {**user, "parentId": body.get("parent_id")}
+        chat["messages"][body["id"]] = {"id": body["id"], "parentId": user["id"], "childrenIds": [], "role": "assistant",
+                                        "content": "", "model": body.get("model"), "done": False,
+                                        "timestamp": int(clock.NOW())}
+        chat["current_id"] = body["id"]
+        chat["active"] = True
+
+    def finish(self, chat_id: str, message_id: str, text: str = "", **fields) -> None:
+        """Ответ закончен: текст, `done: true` и прочие поля сохранённого сообщения (`output`, `error` …)."""
+        chat = self.chats[chat_id]
+        chat["messages"][message_id].update({"content": text, "done": True, **fields})
+        chat["active"] = False
 
     def _upload(self, request: httpx.Request) -> httpx.Response:
         """multipart с полем `file` — как `routers/files.py::upload_file`: ответ сразу, обработка — потом."""

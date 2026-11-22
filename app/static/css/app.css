@@ -2445,6 +2445,42 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .owui-main { flex: 1; min-width: 0; display: flex; flex-direction: column; contain: inline-size; }
 .owui-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: var(--space-7); }
 .owui-feed-title { margin: 0; font-size: var(--fs-xl); overflow-wrap: anywhere; }
+/* лента чата (owui-chat.js): сообщения прокручиваются внутри, поле ввода — внизу */
+#view:has(.owui-chat-view) { overflow: hidden; }
+.owui-ws:has(.owui-chat-view) { flex: 1 1 0; min-height: 0; }
+.owui-body:has(.owui-chat-view) { padding: 0; }
+.owui-chat-view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.owui-chat-view .owui-feed-title { padding: var(--space-5) var(--space-7) 0; font-size: var(--fs-lg); }
+.owui-feed-title:empty { display: none; }
+.owui-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.owui-feed-list { width: 100%; max-width: 800px; min-height: 100%; margin: 0 auto; padding: var(--space-6) var(--space-7);
+  display: flex; flex-direction: column; gap: 18px; }
+.owui-feed-empty { margin: auto; text-align: center; }
+.owui-stream { white-space: pre-wrap; overflow-wrap: anywhere; }
+.owui-other { margin: 0; }
+.owui-tools { display: flex; flex-wrap: wrap; gap: var(--space-3); min-width: 0; }
+.owui-tool { display: inline-flex; align-items: center; gap: var(--space-3); max-width: 100%; min-width: 0; padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-1); font-size: var(--fs-sm); }
+details.owui-tool { display: block; }
+details.owui-tool[open] { flex-basis: 100%; }
+.owui-tool summary { display: flex; align-items: center; gap: var(--space-3); cursor: pointer; }
+.owui-tool[data-status="failed"] { border-color: var(--danger); }
+.owui-tool-name { font-weight: 600; overflow-wrap: anywhere; }
+.owui-tool-state { color: var(--text-2); }
+.owui-tool-result, .owui-args-text { margin: var(--space-3) 0 0; max-height: calc(40 * var(--dvh)); overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--fs-xs); }
+.owui-args summary { cursor: pointer; width: fit-content; color: var(--text-2); font-size: var(--fs-sm); }
+.owui-question { display: flex; flex-direction: column; gap: var(--space-2); }
+.owui-options { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.owui-option { flex-direction: column; align-items: flex-start; max-width: 100%; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.owui-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.owui-option-text { color: var(--text-2); font-size: var(--fs-xs); font-weight: 400; }
+.owui-pending-error:empty { display: none; }
+.owui-pending-error { margin: 0; font-size: var(--fs-sm); }
+.owui-msg-queued .bubble { color: var(--text-2); }
+.owui-queued, .owui-chat-error { margin: 0 var(--space-7); overflow-wrap: anywhere; }
+.owui-chat-error:empty { display: none; }
+.owui-att .att-state { white-space: normal; }
 .owui-panel-toggle, .owui-backdrop { display: none; }
 @media (hover: hover) { :is(.owui-account, .owui-chat, .owui-folder):hover { background: var(--surface-2); } }
 @media (pointer: coarse) { :is(.owui-account, .owui-chat, .owui-folder) { min-height: var(--h-touch); } }
@@ -2456,5 +2492,8 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
   .owui-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
   .owui-panel-toggle { display: inline-grid; margin-left: -6px; }
   .owui-body { padding: var(--space-6); }
+  .owui-chat-view .owui-feed-title { padding: var(--space-4) var(--space-6) 0; }
+  .owui-feed-list { padding: var(--space-5) var(--space-6); }
+  .owui-queued, .owui-chat-error { margin: 0 var(--space-6); }
 }
 @media (prefers-reduced-motion: reduce) { .owui-panel { transition: none !important; } }

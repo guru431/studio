@@ -3679,7 +3679,24 @@ globalThis.StudioEnglish = Object.freeze({
   "войдите заново": "sign in again",
   "ждёт решения": "awaiting decision",
   "идёт ответ": "answering",
-  "нет связи": "offline"
+  "нет связи": "offline",
+  "💭 Рассуждение": "💭 Reasoning",
+  "выполняется": "running",
+  "инструмент": "tool",
+  "Пустой результат": "Empty result",
+  "Ответ не получен": "No answer received",
+  "ответ идёт…": "answering…",
+  "ответ не закончен": "answer not finished",
+  "элемент {0}": "item {0}",
+  "В чате пока нет сообщений": "No messages in this chat yet",
+  "Новый чат: напишите первое сообщение": "New chat: write the first message",
+  "Сообщение в очереди: Open WebUI отправит его после текущего ответа": "Message queued: Open WebUI will send it after the current answer",
+  "загружается…": "uploading…",
+  "Open WebUI не обработал файл: модель может его не увидеть": "Open WebUI could not process the file: the model may not see it",
+  "Убрать вложение": "Remove attachment",
+  "Не больше {0} вложений в сообщении": "No more than {0} attachments per message",
+  "Разрешить инструмент?": "Allow the tool?",
+  "Аргументы": "Arguments"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "Open WebUI {0} ответил не так, как ожидает Студия",

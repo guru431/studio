@@ -10,11 +10,17 @@ import { tr } from './i18n.js';
  * учётка; адрес с несуществующей учёткой — к показанной. Нажатие на учётку меняет только панель (без открытого чата —
  * и адрес #/owui/<id> через replaceState, без перехода).
  *
- * Поток: одна SSE-подписка GET /api/owui/accounts/{id}/events на учётку, показанную в панели (учётке `relogin` — нет).
- * События раздаются панели и подписчикам listen(fn) — ленте чата: fn(type, data, aid). Поток кончился — новый с
- * растущей паузой; после `closed` (сессия кончилась или заперта) и `link relogin` — нет: панель попросит пароль. */
+ * Справа — лента чата и поле ввода (owui-chat.js): #/owui/<id>/<chat> — открытый чат, #/owui/<id> — новый чат; первое
+ * сообщение нового чата меняет адрес на его чат (replaceState) без пересоздания ленты.
+ *
+ * Поток: SSE-подписка GET /api/owui/accounts/{id}/events на учётку, показанную в панели, и на учётку открытой ленты —
+ * одна, если они совпадают, иначе две (не больше); учётке `relogin` — нет. События учётки панели — панели, события
+ * всех подписок — подписчикам listen(fn) (лента берёт события своей учётки): fn(type, data, aid). Поток кончился —
+ * новый с растущей паузой; после `closed` (сессия кончилась или заперта), `link relogin` и 404 — нет, пока панель
+ * не покажет учётку снова (после входа заново). */
 import { api } from './api.js';
 import { svg } from './icons.js';
+import { chatView } from './owui-chat.js';
 import { panelView } from './owui-panel.js';
 import { sectionName } from './sections-meta.js';
 import { readSSE } from './sse.js';
@@ -27,11 +33,14 @@ let ui = null;
 let panel = null;
 let user = null;
 let route = { aid: null, chat: null };
-let stream = null;                     // { aid, controller }
+const streams = new Map();             // id учётки → { aid, controller }
+const ended = new Set();               // учётки, чей поток кончился сам (relogin, 404, closed): без нового до показа
+let panelAid = null;                   // учётка панели, которой нужен поток (не `relogin`)
+let view = null;                       // лента справа (chatView) и её отписка: { chat, off }
 let settled = false;                   // первый адрес разобран: дальше показ учётки сам ведёт адрес
 const listeners = new Set();
 
-/** Подписка на события SSE показанной учётки (лента чата); ответ — отписка. */
+/** Подписка на события SSE учёток панели и ленты; ответ — отписка. */
 export function listen(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -89,28 +98,48 @@ function empty(text, action = null) {
   ui.body.replaceChildren(el('div', { id: 'owui-empty', class: 'empty' }, badge, el('p', {}, text), action));
 }
 
-/** Правая часть по адресу. Лента чата — следующий шаг плана (owui-chat.js); пока — название открытого чата. */
+function dropView() {
+  if (!view) return;
+  view.off();
+  view.chat.unmount();
+  view = null;
+  resync();
+}
+
+/** Первое сообщение нового чата: адрес — его чат, лента та же. */
+function created(aid, chat) {
+  if (!ui || route.aid !== aid) return;
+  replaceRoute({ aid, chat });
+  panel.here(aid, chat);
+}
+
+/** Правая часть по адресу: та же учётка и тот же чат — лента остаётся (поток не прерывается). */
 function paintRight() {
   const items = panel.accounts();
+  if (view && (!items.length || view.chat.account !== route.aid || view.chat.chat() !== route.chat)) dropView();
   if (!items.length) {
     const first = el('button', { type: 'button', id: 'owui-connect-first', class: 'btn btn-accent' }, tr("Подключить Open WebUI"));
     first.addEventListener('click', () => panel.connect());
     empty(tr("Подключите свой Open WebUI: адрес сервера, email и пароль. Пароль Studio не сохраняет."), first);
     return;
   }
-  if (!route.chat) {
+  if (route.aid === null) {
     empty(tr("Выберите чат слева или начните новый"));
     return;
   }
-  const title = panel.title(route.chat);
-  ui.body.replaceChildren(el('div', { id: 'owui-feed', class: 'owui-feed', 'data-account': route.aid, 'data-chat': route.chat },
-    title ? el('h2', { class: 'owui-feed-title' }, title) : null));
+  if (view) return;
+  ui.body.replaceChildren();
+  const aid = route.aid;
+  const chat = chatView(ui.body, { account: aid, chatId: route.chat, created: (id) => created(aid, id) });
+  const off = listen((type, data, from) => { if (from === aid) chat.event(type, data); });
+  view = { chat, off };
+  resync();
 }
 
 /* ---- поток ---- */
 
 function dispatch(aid, type, data) {
-  panel?.event(type, data);
+  if (aid === panel?.shown()) panel.event(type, data);
   for (const fn of listeners) {
     try {
       fn(type, data, aid);
@@ -131,7 +160,10 @@ async function run(current) {
   try {
     await follow(current);
   } finally {
-    if (stream === current) stream = null;     // поток кончился сам: следующий показ учётки откроет новый
+    if (streams.get(current.aid) === current) {   // поток кончился сам: следующий показ учётки откроет новый
+      streams.delete(current.aid);
+      if (!current.controller.signal.aborted) ended.add(current.aid);
+    }
   }
 }
 
@@ -158,19 +190,32 @@ async function follow(current) {
   }
 }
 
-function subscribe(aid) {
-  if (stream && stream.aid === aid) return;
-  stream?.controller.abort();
-  stream = null;
-  if (aid === null) return;
-  stream = { aid, controller: new AbortController() };
-  run(stream);
+/** Потоки — учётке панели и учётке ленты (не больше двух); прочие закрываются. */
+function resync() {
+  const wanted = new Set();
+  if (panelAid !== null && !ended.has(panelAid)) wanted.add(panelAid);
+  const feed = view?.chat.account ?? null;
+  const acc = feed === null ? null : panel?.accounts().find((a) => a.id === feed);
+  if (acc && acc.state !== 'relogin' && !ended.has(feed)) wanted.add(feed);
+  for (const [aid, current] of streams) {
+    if (wanted.has(aid)) continue;
+    current.controller.abort();
+    streams.delete(aid);
+  }
+  for (const aid of wanted) {
+    if (streams.has(aid)) continue;
+    const current = { aid, controller: new AbortController() };
+    streams.set(aid, current);
+    run(current);
+  }
 }
 
 /** Панель показала учётку (или учёток не осталось). */
 function opened(aid, acc) {
   if (!ui) return;
-  subscribe(acc && acc.state !== 'relogin' ? aid : null);
+  if (acc) ended.delete(aid);                  // показ учётки (и вход заново) снова открывает её поток
+  panelAid = acc && acc.state !== 'relogin' ? aid : null;
+  resync();
   if (aid === null) {
     route = { aid: null, chat: null };
     if (settled && location.hash !== '#/owui') history.replaceState(history.state, '', '#/owui');
@@ -181,11 +226,13 @@ function opened(aid, acc) {
   const gone = route.aid === null || !panel.accounts().some((a) => a.id === route.aid);   // учётку чата удалили
   if (gone || (!route.chat && route.aid !== aid)) {
     replaceRoute({ aid, chat: null });
+    paintRight();                             // новый чат — у показанной учётки
     if (gone) {
       panel.here(aid, null);
-      paintRight();
       if (phone()) panelOpen(true);         // чата нет: на телефоне — сразу дерево новой учётки
     }
+  } else if (acc && acc.state !== 'relogin' && view?.chat.account === aid) {
+    view.chat.retry();                        // вошли заново: лента дочитывает, что не прочиталось
   }
 }
 
@@ -250,8 +297,15 @@ export function update(ctx) {
 }
 
 export function unmount() {
-  stream?.controller.abort();
-  stream = null;
+  for (const current of streams.values()) current.controller.abort();
+  streams.clear();
+  ended.clear();
+  panelAid = null;
+  if (view) {
+    view.off();
+    view.chat.unmount();
+    view = null;
+  }
   panel?.unmount();
   panel = null;
   document.removeEventListener('keydown', onKey);
