@@ -46,8 +46,8 @@ OPS = {
     "project_create": ("root", "name"),
     "mirror_identity": ("project",),
     "mirror_candidates": ("name", "repositories"),
-    "mirror_scan": ("project", "exclude"),
-    "mirror_destination": ("root", "name", "metadata_only", "exclude"),
+    "mirror_scan": ("project", "exclude", "reasons"),
+    "mirror_destination": ("root", "name", "metadata_only", "exclude", "reasons"),
     "mirror_read": ("project",),
     "mirror_text": ("root", "name", "path"),
     "mirror_begin": ("root", "name", "ticket"),
@@ -184,7 +184,7 @@ class Agent:
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                  "git_compare": True,
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
-                 "project_mirror_discovery": True, "mirror_exclude": True,
+                 "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
                  "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
@@ -531,7 +531,7 @@ class Agent:
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
             return True
-        if name in ("refresh", "remote", "code_size", "metadata_only"):
+        if name in ("refresh", "remote", "code_size", "metadata_only", "reasons"):
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
@@ -623,17 +623,19 @@ class Agent:
         return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
 
     async def _op_mirror_identity(self, frame, after):
-        return await asyncio.to_thread(mirror.identity, await self._project(frame))
+        return await asyncio.to_thread(mirror.identity, self.cfg, await self._project(frame))
 
     async def _op_mirror_candidates(self, frame, after):
         return await asyncio.to_thread(mirror.candidates, self.cfg, frame["name"], frame["repositories"])
 
     async def _op_mirror_scan(self, frame, after):
-        return await asyncio.to_thread(mirror.scan, await self._project(frame), frame.get("exclude") or ())
+        return await asyncio.to_thread(mirror.scan, await self._project(frame), frame.get("exclude") or (),
+                                       frame.get("reasons") is True)
 
     async def _op_mirror_destination(self, frame, after):
         return await asyncio.to_thread(mirror.destination, self.cfg, frame["root"], frame["name"],
-                                       metadata_only=frame.get("metadata_only"), exclude=frame.get("exclude") or ())
+                                       metadata_only=frame.get("metadata_only"), exclude=frame.get("exclude") or (),
+                                       reasons=frame.get("reasons") is True)
 
     async def _op_mirror_read(self, frame, after):
         return await asyncio.to_thread(mirror.read, await self._project(frame), frame.get("reads"))
