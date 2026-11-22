@@ -237,26 +237,37 @@ RETRY_MAX_SEC = 3600
 #: Адрес убран из списка администратора или копия ключа не расшифровывается (сменён `STUDIO_DATA_KEY`):
 #: сам не пройдёт — раз в сутки.
 REFUSED_SEC = 86400
-#: Строка шлюза Cleaner (`route`), чей ключ Cleaner отверг (401/403: ключ отозван после смены, у владельца нет роли):
-#: откладывается только она — на ROUTE_REFUSED_SEC, удваивая паузу с каждым отказом; на ROUTE_REFUSALS-м отказе
-#: снимается (остаток удаляет администратор в интерфейсе Cleaner). Прочие строки адреса идут как обычно.
-ROUTE_REFUSED_SEC = 3600
-ROUTE_REFUSALS = 3
 
 
 def _pause(row) -> float:
     return min(max(clock.NOW() - row["queued"], RETRY_MIN_SEC), RETRY_MAX_SEC)
 
 
+def _drop_key(base_url: str, token: str) -> int:
+    """Строки шлюза Cleaner (`route`) этого адреса со снимком ключа `token` — из очереди: Cleaner его отверг (401/403:
+    ключ отозван после смены, у владельца нет роли), а повторы этим ключом включили бы паузу Cleaner на весь адрес
+    Studio. Контексты остаются в Cleaner — их удаляет администратор в интерфейсе Cleaner."""
+    gone = []
+    for row in state.DB.execute("SELECT id, token_enc FROM cleaner_deletions WHERE route = 1 AND base_url = ?",
+                                (base_url,)).fetchall():
+        try:
+            if security.decrypt(row["token_enc"]) == token:
+                gone.append(row["id"])
+        except (InvalidToken, ValueError):
+            continue
+    for start in range(0, len(gone), 500):
+        part = gone[start:start + 500]
+        state.DB.execute(f"DELETE FROM cleaner_deletions WHERE id IN ({','.join('?' * len(part))})", part)
+    return len(gone)
+
+
 async def purge():
     """Любая неудача откладывает строку (`retry_at`), так что недоступный адрес не держит голову очереди;
     сбой сети, отказ списка, 429 и 401/403 строки прежнего вида откладывают весь адрес, и прочие его строки в проходе не
-    запрашиваются. 401/403 строки шлюза Cleaner (`route`) откладывает только её (`ROUTE_REFUSED_SEC`, растущая пауза,
-    снятие после `ROUTE_REFUSALS` отказов); строки с тем же ключом на этом адресе в проходе не запрашиваются: Cleaner
-    после пяти неверных ключей подряд держит паузу для всего адреса Studio."""
-    rows = state.DB.execute("SELECT * FROM cleaner_deletions WHERE retry_at <= ? ORDER BY queued LIMIT ?",
-                            (clock.NOW(), PURGE_ROWS)).fetchall()
-    postponed, refused, calls, dropped = set(), set(), 0, 0
+    запрашиваются. 401/403 строки шлюза Cleaner (`route`) снимает из очереди все строки адреса с тем же снимком ключа
+    (`_drop_key`): этим ключом больше не ходим, Cleaner после пяти неверных ключей подряд держит паузу для всего адреса
+    Studio. Прочие строки идут в том же проходе (выборка повторяется)."""
+    postponed, refused, calls = set(), set(), 0
 
     def later(row, seconds, whole_address=False):
         if whole_address:
@@ -266,56 +277,56 @@ async def purge():
         else:
             state.DB.execute("UPDATE cleaner_deletions SET retry_at = ? WHERE id = ?", (clock.NOW() + seconds, row["id"]))
 
-    for row in rows:
-        if row["base_url"] in postponed:
-            continue
-        if calls >= PURGE_CALLS:
-            break
-        conn = connections.Connection(0, row["user_id"], "Cleaner", "openai", row["base_url"], frozenset(), True,
-                                      server_only=True, cleaner=True)
-        try:
-            token = security.decrypt(row["token_enc"])
-        except (InvalidToken, ValueError):
-            later(row, REFUSED_SEC)
-            continue
-        if (row["base_url"], token) in refused:      # этот ключ адрес только что отверг
-            continue
-        calls += 1
-        # контекст шлюза Cleaner (`route`): служебный ключ — только в X-Cleaner-Key, `Authorization` там — провайдера
-        key = {"X-Cleaner-Key": token} if row["route"] else {"Authorization": f"Bearer {token}"}
-        try:
-            response = await upstream.request(
-                conn, "DELETE", f'{row["base_url"]}/api/v1/chats/{row["remote_id"]}', keyless=True,
-                headers=key, timeout=httpx.Timeout(10),
-            )
-        except upstream.UpstreamRefused:
-            later(row, REFUSED_SEC, whole_address=True)
-            continue
-        except httpx.HTTPError:
-            later(row, _pause(row), whole_address=True)
-            continue
-        except ValueError:
-            later(row, _pause(row))
-            continue
-        if response.status_code in (204, 404):
-            state.DB.execute("DELETE FROM cleaner_deletions WHERE id = ?", (row["id"],))
-        elif row["route"] and response.status_code in (401, 403):
-            refused.add((row["base_url"], token))
-            count = row["refusals"] + 1
-            if count >= ROUTE_REFUSALS:
+    again = True
+    while again and calls < PURGE_CALLS:
+        again = False
+        rows = state.DB.execute("SELECT * FROM cleaner_deletions WHERE retry_at <= ? ORDER BY queued LIMIT ?",
+                                (clock.NOW(), PURGE_ROWS)).fetchall()
+        for row in rows:
+            if row["base_url"] in postponed:
+                continue
+            if calls >= PURGE_CALLS:
+                break
+            conn = connections.Connection(0, row["user_id"], "Cleaner", "openai", row["base_url"], frozenset(), True,
+                                          server_only=True, cleaner=True)
+            try:
+                token = security.decrypt(row["token_enc"])
+            except (InvalidToken, ValueError):
+                later(row, REFUSED_SEC)
+                continue
+            if (row["base_url"], token) in refused:      # строки этого ключа уже сняты
+                continue
+            calls += 1
+            # контекст шлюза Cleaner (`route`): служебный ключ — только в X-Cleaner-Key, `Authorization` там — провайдера
+            key = {"X-Cleaner-Key": token} if row["route"] else {"Authorization": f"Bearer {token}"}
+            try:
+                response = await upstream.request(
+                    conn, "DELETE", f'{row["base_url"]}/api/v1/chats/{row["remote_id"]}', keyless=True,
+                    headers=key, timeout=httpx.Timeout(10),
+                )
+            except upstream.UpstreamRefused:
+                later(row, REFUSED_SEC, whole_address=True)
+                continue
+            except httpx.HTTPError:
+                later(row, _pause(row), whole_address=True)
+                continue
+            except ValueError:
+                later(row, _pause(row))
+                continue
+            if response.status_code in (204, 404):
                 state.DB.execute("DELETE FROM cleaner_deletions WHERE id = ?", (row["id"],))
-                dropped += 1
+            elif row["route"] and response.status_code in (401, 403):
+                refused.add((row["base_url"], token))
+                log.warning("Cleaner: ключ удаления отвергнут (%d) — из очереди снято контекстов: %d",
+                            response.status_code, _drop_key(row["base_url"], token))
+                again = True                             # выборка без снятых строк: строки других ключей — в этом проходе
+                break
+            elif response.status_code in (401, 403, 429):
+                # Cleaner throttles bad keys by source address. Do not lock out active Studio users
+                # by repeatedly retrying revoked cleanup credentials on the same host.
+                later(row, 3600, whole_address=True)
             else:
-                state.DB.execute("UPDATE cleaner_deletions SET refusals = ?, retry_at = ? WHERE id = ?",
-                                 (count, clock.NOW() + ROUTE_REFUSED_SEC * 2 ** (count - 1), row["id"]))
-        elif response.status_code in (401, 403, 429):
-            # Cleaner throttles bad keys by source address. Do not lock out active Studio users
-            # by repeatedly retrying revoked cleanup credentials on the same host.
-            later(row, 3600, whole_address=True)
-        else:
-            later(row, _pause(row))
-    if dropped:
-        log.warning("Cleaner: удаление контекстов снято после %d отказов ключа: %d", ROUTE_REFUSALS, dropped)
+                later(row, _pause(row))
 
 
 def stalled(user_id: int) -> list[dict]:

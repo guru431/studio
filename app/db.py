@@ -933,14 +933,11 @@ SCHEMA += OWUI_63
 #: Контекст нового вида (чат Cleaner диалога через шлюз, служебный ключ — заголовком `X-Cleaner-Key`) отмечен строкой
 #: `cleaner_route_contexts` — своей таблицей: прежний код вставляет в `cleaner_contexts` без списка столбцов.
 #: Триггер удаления переносит отметку в `cleaner_deletions.route`, по ней очередь шлёт ключ нужным заголовком.
-#: `cleaner_deletions.refusals` — отказы ключа (401/403) строке нового вида: после `cleaner_client.ROUTE_REFUSALS` строка
-#: снимается (`cleaner_client.purge`); прежний код столбец не читает, вставляет строки своим списком столбцов.
 CLEANER_ROUTE_64 = """ALTER TABLE connections ADD COLUMN via_cleaner INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN cleaner_request TEXT;
 CREATE TABLE cleaner_rollback(connection_id INTEGER PRIMARY KEY, token_enc BLOB NOT NULL);
 CREATE TABLE cleaner_route_contexts(id TEXT PRIMARY KEY);
 ALTER TABLE cleaner_deletions ADD COLUMN route INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE cleaner_deletions ADD COLUMN refusals INTEGER NOT NULL DEFAULT 0;
 DROP TRIGGER IF EXISTS cleaner_context_delete;
 CREATE TRIGGER cleaner_context_delete BEFORE DELETE ON cleaner_contexts BEGIN
   INSERT OR IGNORE INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, route)

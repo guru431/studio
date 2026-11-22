@@ -282,18 +282,19 @@ def test_new_cleaner_address_makes_a_new_context(cleaner_gw):
     assert all(d[1]["x-cleaner-key"] == KEY and "authorization" not in d[1] for d in gw.deleted)
 
 
-def test_revoked_service_key_postpones_only_its_rows_and_drops_them(cleaner_gw, caplog):
-    """Ключ сменили и прежний сразу отозвали: 401 строки со старым ключом откладывает только её (растущая пауза), строки
-    нового ключа удаляются в том же проходе; на `cleaner_client.ROUTE_REFUSALS`-м отказе строка снимается, в журнале —
-    только число."""
+def test_revoked_service_key_drops_its_rows_after_one_refusal(cleaner_gw, caplog):
+    """Ключ сменили и прежний сразу отозвали, контекстов прежнего ключа — тысяча (больше окна прохода): первый 401
+    снимает из очереди все строки этого ключа, запрос с ним — один (иначе Cleaner поставил бы паузу на весь адрес Studio);
+    строка нового ключа удаляется в том же проходе; в журнале — только число."""
     s, gw = cleaner_gw
     caplog.set_level(logging.INFO, logger="studio")
-    old_chats = [routed_chat(s, gw), routed_chat(s, gw)]
-    for chat_id in old_chats:
-        sse(turn(s, chat_id, "Привет"))
-    stale = list(gw.chats)
+    old_key = security.encrypt(KEY)                                            # снимок один на все строки — как у очереди
+    state.DB.executemany("INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, route)"
+                         " VALUES (?, 1, ?, ?, ?, ?, 1)",
+                         [(f"old{i}", f"r{i:04d}", ADDRESS, security.encrypt(KEY) if i % 2 else old_key, i)
+                          for i in range(1000)])
     fresh = "ck_" + "b" * 43
-    settings(s, key=fresh)                                                     # оба контекста — в очередь со старым ключом
+    settings(s, key=fresh)
     gw.key = fresh                                                             # прежний ключ отозван в Cleaner
     chat_id = routed_chat(s, gw)
     sse(turn(s, chat_id, "Ещё"))
@@ -301,20 +302,12 @@ def test_revoked_service_key_postpones_only_its_rows_and_drops_them(cleaner_gw, 
     s.c.portal.call(chat.purge, uid, chat_id)
     new_ctx = gw.chats[-1]
     s.c.portal.call(cleaner_client.purge)
+    deletes = [r for r in gw.requests if r.method == "DELETE"]
+    assert [r.headers["x-cleaner-key"] for r in deletes] == [KEY, fresh]       # прежним ключом — один запрос
     assert [d[0] for d in gw.deleted] == [new_ctx]                             # очередь не встала
-    rows = {r["remote_id"]: r for r in state.DB.execute("SELECT * FROM cleaner_deletions")}
-    assert set(rows) == set(stale)
-    assert rows[stale[0]]["refusals"] == 1 and rows[stale[0]]["retry_at"] == s.clock[0] + cleaner_client.ROUTE_REFUSED_SEC
-    assert rows[stale[1]]["refusals"] == 0                                     # тот же ключ в проходе не запрашивался
-    tried = len([r for r in gw.requests if r.method == "DELETE"])
-    for _ in range(12):                                                        # паузы растут, на третьем отказе — снятие
-        s.c.portal.call(cleaner_client.purge)
-        s.clock[0] += cleaner_client.ROUTE_REFUSED_SEC
     assert state.DB.execute("SELECT count(*) FROM cleaner_deletions").fetchone()[0] == 0
-    refusals = len([r for r in gw.requests if r.method == "DELETE"]) - tried
-    assert refusals == 2 * cleaner_client.ROUTE_REFUSALS - 1                   # первый отказ — до цикла
-    assert f"снято после {cleaner_client.ROUTE_REFUSALS} отказов ключа: 1" in caplog.text
-    for secret in (*stale, KEY, fresh, "10.77.1.20"):
+    assert "из очереди снято контекстов: 1000" in caplog.text
+    for secret in ("r0000", KEY, fresh, "10.77.1.20"):
         assert secret not in caplog.text, secret
 
 
@@ -490,6 +483,10 @@ def test_external_speech_is_refused_in_a_routed_dialog(cleaner_gw):
     assert hits == [] and state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
     # внутренняя модель речи (шлюз srvllm) и диалог не через Cleaner — без отказа
     internal = connections.get(uid, add_gateway(s))
+    # диалог переключили на внутреннее подключение: ответ, данный через Cleaner, по-прежнему не читается внешней речью
+    assert s.c.patch(f"/api/chats/{chat_id}", json={"connection_id": internal.id, "model": "local-gemma-abl"}).status_code == 200
+    assert refused(s.c.post("/api/speeches/read", json={"text": "Привет из облака",
+                                                        "origin": {"kind": "chat", "id": answer_id}}))
     cleaner_route.refuse_dialog_speech(uid, gw.conn_id, internal)
     cleaner_route.refuse_dialog_speech(uid, internal.id, connections.get(uid, ext))
     cleaner_route.refuse_dialog_speech(uid, None, connections.get(uid, ext))
