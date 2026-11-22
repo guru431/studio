@@ -488,12 +488,34 @@ def _text_of(value) -> str:
     return value if isinstance(value, str) else ""
 
 
-async def sent(value: str) -> dict:
-    """«Что получила модель» по id запроса Cleaner ответа (`messages.cleaner_request`, «<чат>/<запрос>»): сообщения
-    со стороны провайдера — с заменами, число инструментов, замены по типам. Только служебным ключом, без ключа и
-    адреса провайдера. Cleaner запроса не знает (404: журнал или контекст удалён) — 410 `journal_gone`."""
-    remote, _, rid = value.partition("/")
-    if not (_ID.fullmatch(remote) and _ID.fullmatch(rid)):
+#: пометка `messages.cleaner_request` ответа общего подключения: его системная часть (профиль администратора) учётке
+#: не показывается — «текст и параметры профиля видит только администратор»
+SHARED_MARK = "shared"
+
+
+def request_value(remote: str, rid: str, conn: "connections.Connection") -> str:
+    """Значение `messages.cleaner_request`: «<чат>/<запрос>», у общего подключения — ещё «/shared»."""
+    return f"{remote}/{rid}" + (f"/{SHARED_MARK}" if conn.shared else "")
+
+
+def _hide_system(items: list[dict]) -> list[dict]:
+    """Системная часть общего подключения — одной пометкой `hidden` (страница пишет её словами), остальное — как есть."""
+    out: list[dict] = []
+    for item in items:
+        if item["role"] != "system":
+            out.append(item)
+        elif not (out and out[-1].get("hidden")):
+            out.append({"role": "system", "content": "", "hidden": True})
+    return out
+
+
+async def sent(value: str, *, admin: bool = False) -> dict:
+    """«Что получила модель» по id запроса Cleaner ответа (`messages.cleaner_request`, «<чат>/<запрос>[/shared]»):
+    сообщения со стороны провайдера — с заменами, число инструментов, замены по типам. Только служебным ключом, без
+    ключа и адреса провайдера. Ответ общего подключения не администратору — без системной части (`_hide_system`).
+    Cleaner запроса не знает (404: журнал или контекст удалён) — 410 `journal_gone`."""
+    remote, rid, *mark = value.split("/") + [""]
+    if not (_ID.fullmatch(remote) and _ID.fullmatch(rid)) or mark not in ([""], [SHARED_MARK, ""]):
         raise HTTPException(410, {"code": "journal_gone", "message": JOURNAL_GONE})
     config = settings()
     if not (config["base_url"] and config["key"]):
@@ -516,8 +538,10 @@ async def sent(value: str) -> dict:
     items = body.get("messages") if isinstance(body.get("messages"), list) else []
     counts = body.get("counts") if isinstance(body.get("counts"), dict) else {}
     tools = body.get("tools")
-    return {"messages": [{"role": _text_of(m.get("role")), "content": _text_of(m.get("content"))}
-                         for m in items if isinstance(m, dict)],
+    shown = [{"role": _text_of(m.get("role")), "content": _text_of(m.get("content"))} for m in items if isinstance(m, dict)]
+    if mark[0] == SHARED_MARK and not admin:
+        shown = _hide_system(shown)
+    return {"messages": shown,
             "tools": tools if isinstance(tools, int) and not isinstance(tools, bool) else 0,
             "counts": {k: v for k, v in counts.items()
                        if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)}}

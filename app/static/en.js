@@ -1068,6 +1068,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Что получила модель": "What the model received",
   "Диалог идёт через Cleaner": "This conversation goes through Cleaner",
   "Описаний инструментов: {0}": "Tool descriptions: {0}",
+  "Системная часть общего подключения скрыта": "The system part of the shared connection is hidden",
+  "До провайдера запрос не дошёл.": "The request did not reach the provider.",
   "Последний запрос хода так, как его получил провайдер: с заменами Cleaner. Studio этот текст не хранит.": "The last request of this turn as the provider received it, with Cleaner's replacements. Studio does not keep this text.",
   "Администратор требует Cleaner для всех внешних моделей: переключатель включён и заблокирован.": "The administrator requires Cleaner for all external models: the switch is on and locked.",
   "Текст уходит модели через Cleaner: чувствительные данные заменяются, ключ подключения остаётся в Studio. Только чат и перевод, без картинок.": "Text reaches the model through Cleaner: sensitive data is replaced, and the connection key stays in Studio. Chat and Translation only, no images.",

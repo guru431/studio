@@ -1073,14 +1073,17 @@ class StreamTask:
                 opened = upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
                                          timeout=timeout)
             async with opened as r:
-                if routed:
+                if routed and r.status_code == 200:
                     self._cleaner_request(r)
                 if r.status_code == 503 and self._card_gateway():
                     await r.aread()
                     return None, BUSY, [], text                 # карта занята — ждать (_read)
                 if r.status_code != 200:
                     await r.aread()
-                    if routed and (own := cleaner_route.refusal(r)) is not None:
+                    own = cleaner_route.refusal(r) if routed else None
+                    if routed and own is None:                  # ошибка провайдера: запрос до него дошёл
+                        self._cleaner_request(r)
+                    if own is not None:                         # отказ самого Cleaner: провайдер запроса не получил
                         log.info("чат %s: ответ %s — ход через Cleaner: код %d", self.chat_id[:8], self.message_id[:8],
                                  r.status_code)
                         if r.status_code == 404 and own[0] == "chat":       # контекст удалили в Cleaner
@@ -1176,7 +1179,7 @@ class StreamTask:
         found = response.headers.get(cleaner_route.REQUEST_HEADER, "")
         if self.cleaner_chat and re.fullmatch(r"[0-9A-Za-z]{1,64}", found):
             state.DB.execute("UPDATE messages SET cleaner_request = ? WHERE id = ?",
-                             (f"{self.cleaner_chat}/{found}", self.message_id))
+                             (cleaner_route.request_value(self.cleaner_chat, found, self.conn), self.message_id))
 
     @staticmethod
     def _collect(calls: dict, tc: dict) -> None:
@@ -2723,13 +2726,15 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
 async def cleaner_sent(chat_id: str, message_id: str, request: Request):
     """«Что получила модель»: сообщения последнего запроса хода через Cleaner со стороны провайдера (с заменами) —
     у Cleaner по `messages.cleaner_request` (`cleaner_route.sent`). Чужой диалог, ответ без запроса Cleaner — 404;
-    журнал Cleaner удалён — 410 `journal_gone`. Текст не хранится в Studio и не попадает в ссылки и экспорт."""
-    _chat_row(request.state.user.id, chat_id)
+    журнал Cleaner удалён — 410 `journal_gone`. Текст не хранится в Studio и не попадает в ссылки и экспорт. Ответ
+    общего подключения учётке без прав администратора — без системной части: в ней профиль администратора."""
+    user = request.state.user
+    _chat_row(user.id, chat_id)
     row = state.DB.execute("SELECT cleaner_request FROM messages WHERE id = ? AND chat_id = ? AND role = 'assistant'",
                            (message_id, chat_id)).fetchone()
     if row is None or not row["cleaner_request"]:
         raise _gone("такого сообщения нет")
-    return await cleaner_route.sent(row["cleaner_request"])
+    return await cleaner_route.sent(row["cleaner_request"], admin=bool(user.is_admin))
 
 
 @router.post("/chats/{chat_id}/messages/{message_id}/alive", status_code=204)

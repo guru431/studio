@@ -1560,9 +1560,14 @@ function build(view, ctx) {
       try {
         const sent = await api('GET', `/api/chats/${chatId}/messages/${encodeURIComponent(m.id)}/cleaner-sent`);
         const roles = { user: tr("Пользователь"), assistant: tr("Помощник"), tool: tr("Инструмент") };
-        const items = sent.messages.map((x) => (x.role === 'system'
+        // системная часть общего подключения учётке не показывается (`hidden`): в ней профиль администратора
+        const items = sent.messages.map((x) => (x.hidden
+          ? el('p', { class: 'muted small cleaner-sent-hidden' }, tr("Системная часть общего подключения скрыта"))
+          : x.role === 'system'
           ? el('details', {}, el('summary', {}, tr("Инструкция модели")), el('pre', {}, x.content))
           : el('section', {}, el('b', {}, roles[x.role] || x.role), el('pre', {}, x.content))));
+        // отказ Cleaner до провайдера: в журнале запроса нет сообщений
+        if (!items.length) items.push(el('p', { class: 'muted small' }, tr("До провайдера запрос не дошёл.")));
         const counts = cleanerCounts(sent.counts);
         openDialog(root, { id: 'cleaner-sent-dialog', title: tr("Что получила модель"), cancelText: tr("Закрыть"), body: [
           el('p', {}, counts ? tr("Замены: {0}", counts) : tr("Автоматических замен нет.")),

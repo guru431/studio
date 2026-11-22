@@ -622,10 +622,12 @@ Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), кл�
   провайдера снимка задания `Authorization` (`connections.token`), адрес `X-Cleaner-Upstream`, контекст
   `X-Cleaner-Chat`. В `X-Cleaner-Hold-Tools` уходят `chat.StreamTask._held`: включённые виды `web.NAMES` и
   MCP-инструменты с пометкой «интернет». Их аргументы Cleaner возвращает с заменами, остальные — оригиналами.
-- Заголовок ответа `x-cleaner-request` (`cleaner_route.REQUEST_HEADER`) каждого круга перезаписывает
-  `messages.cleaner_request` («<чат>/<запрос>»). «Что получила модель» — `GET /api/chats/{id}/messages/{mid}/cleaner-sent`
+- Заголовок ответа `x-cleaner-request` (`cleaner_route.REQUEST_HEADER`) каждого круга, дошедшего до провайдера (не
+  отказа самого Cleaner), перезаписывает `messages.cleaner_request` (`cleaner_route.request_value`: «<чат>/<запрос>»,
+  у общего подключения — ещё «/shared»). «Что получила модель» — `GET /api/chats/{id}/messages/{mid}/cleaner-sent`
   (`chat.cleaner_sent` → `cleaner_route.sent`): владелец диалога (`chat._chat_row`), к Cleaner — только служебный
-  ключ. 404 Cleaner (журнал удалён за давностью или контекст удалён) — 410 `journal_gone`
+  ключ; ответ общего подключения не администратору — без системной части (`cleaner_route._hide_system`: одна пометка
+  `hidden`, профиль администратора не виден). 404 Cleaner (журнал удалён за давностью или контекст удалён) — 410 `journal_gone`
   (`cleaner_route.JOURNAL_GONE`). Поле `cleaner_sent` ответа — признак кнопки; ссылки и экспорт его не читают.
 - Картинки: `chat._max_images` — 0 (из истории — пометкой `chat.DROPPED`), новое вложение-картинка — 409
   `cleaner_images` (`chat.CLEANER_IMAGES`). Предел контекста `chat._limit` — из `cleaner_route.models`.

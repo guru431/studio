@@ -189,7 +189,7 @@ def test_cleaner_refusals_in_words(cleaner_gw, status, code, words):
     events = sse(turn(s, chat_id, "Привет"))
     assert events[-1][0] == "error" and words in events[-1][1]["message"]
     answer = messages(s, chat_id)[-1]
-    assert words in answer["error"] and answer["cleaner_sent"]              # id запроса есть и у отказа
+    assert words in answer["error"] and not answer["cleaner_sent"]          # отказ Cleaner: провайдер запроса не получил
 
 
 def test_local_provider_is_refused_by_cleaner_in_words(cleaner_gw):
@@ -336,6 +336,47 @@ def test_sent_shows_the_cleaned_request_to_the_owner(cleaner_gw):
     user_id = messages(s, chat_id)[0]["id"]                                  # у вопроса запроса Cleaner нет
     assert sent_of(s, chat_id, user_id).status_code == 404
     assert sent_of(s, chat_id, "nope").status_code == 404
+
+
+def test_sent_hides_the_system_part_of_a_shared_connection(cleaner_gw):
+    """Профиль общего подключения видит только администратор: учётке окно показывает вместо системной части пометку
+    `hidden` (страница пишет её словами), остальное — как есть; администратору — всё."""
+    s, gw = cleaner_gw
+    allow("10.77.1.20:5464", "10.77.1.21:5464", "9.9.9.9:443")
+    s.gw.hosts["9.9.9.9:443"] = gw.provider
+    r = s.c.post("/api/admin/shared/connections", json={"name": "Shared cloud", "kind": "openai",
+                                                       "base_url": "https://9.9.9.9/v1", "token": "shared-key",
+                                                       "sections": ["chat"]})
+    assert r.status_code == 201, r.text
+    cid = r.json()["id"]
+    assert s.c.put(f"/api/admin/shared/sections/chat/links/{cid}", json={"models": ["gpt-x"]}).status_code == 200
+    profile = s.c.put(f"/api/admin/shared/connections/{cid}/profile", json={"system_text": "Тайна профиля"})
+    assert profile.status_code == 200, profile.text
+    assert s.c.patch(f"/api/admin/shared/connections/{cid}", json={"via_cleaner": True}).status_code == 200
+
+    def sent_turn() -> dict:
+        chat_id = new_chat(s, connection_id=cid, model="gpt-x")
+        assert sse(turn(s, chat_id, "Привет"))[-1] == ("done", {"status": "done"})
+        assert "Тайна профиля" in gw.bodies[-1]["messages"][0]["content"]          # провайдер профиль получил
+        response = sent_of(s, chat_id, messages(s, chat_id)[-1]["id"])
+        assert response.status_code == 200, response.text
+        return response.json()
+    shown = sent_turn()                                                         # администратор — всё
+    assert shown["messages"][0]["role"] == "system" and "Тайна профиля" in shown["messages"][0]["content"]
+    make_user(s, "member")
+    signin(s, "member")
+    shown = sent_turn()
+    assert shown["messages"][0] == {"role": "system", "content": "", "hidden": True}
+    assert [m["role"] for m in shown["messages"]].count("system") == 1
+    assert shown["messages"][-1] == {"role": "user", "content": "Привет"}
+    assert "Тайна профиля" not in json.dumps(shown, ensure_ascii=False)
+    own = add_connection(s, base_url="https://api.own.test/v1", sections=["chat"], chat_models=("gpt-x",), name="own")
+    assert s.c.patch(f"/api/connections/{own}", json={"via_cleaner": True}).status_code == 200
+    s.gw.hosts["api.own.test:443"] = gw.provider
+    chat_id = new_chat(s, connection_id=own, model="gpt-x")                     # своё подключение — системная часть видна
+    assert sse(turn(s, chat_id, "Привет"))[-1] == ("done", {"status": "done"})
+    mine = sent_of(s, chat_id, messages(s, chat_id)[-1]["id"]).json()
+    assert mine["messages"][0]["role"] == "system" and not mine["messages"][0].get("hidden")
 
 
 def test_sent_of_another_users_dialog_is_404(cleaner_gw):
