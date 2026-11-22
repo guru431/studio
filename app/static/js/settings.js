@@ -1138,8 +1138,8 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
 /** Что уносит «Удалить всю историю» (history._delete_all): записи разделов с историей — имена из реестра разделов —
  * с их файлами, образцы голосов, ссылки «Поделиться», личные базы знаний (общие остаются) и рабочее место «Агентов». */
 function wipeWhat() {
-  // «Open WebUI» истории в Studio не держит: его чаты — на сервере Open WebUI
-  const sections = RAIL_SECTIONS.filter((s) => s.id !== 'code' && s.id !== 'owui').map((s) => `«${s.name}»`).join(', ');
+  // «Агенты» и «Open WebUI» истории в Studio не держат (`history: false` реестра)
+  const sections = RAIL_SECTIONS.filter((s) => s.history !== false).map((s) => `«${s.name}»`).join(', ');
   return tr("Удалятся безвозвратно: вся история разделов {0} вместе с файлами, образцы голосов, все ссылки ", sections)
     + tr("«Поделиться», личные базы знаний с документами (и из корзины), а в разделе «{0}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, ", NAMES.code)
     + tr("Codex и OpenCode хранятся на компьютерах и останутся.");
@@ -1364,8 +1364,8 @@ function voicesBlock(host) {
 /* ---- разделы ---------------------------------------------------------------------- */
 
 /** Разделы — в порядке рельса; «Учётка» — личные группы. Прежние адреса — на новые места. */
-// порядок рельса — из реестра разделов; у «Open WebUI» настроек нет (учётки — в самом разделе)
-const RAIL_ORDER = RAIL_SECTIONS.map((s) => s.id).filter((id) => id !== 'owui');
+// порядок рельса — из реестра разделов; без страницы настроек (`settings: false`: учётки «Open WebUI» — в самом разделе)
+const RAIL_ORDER = RAIL_SECTIONS.filter((s) => s.settings !== false).map((s) => s.id);
 const ACCOUNT_IDS = ['appearance', 'security', 'notifications', 'data', 'input'];
 const OLD_IDS = { other: 'security', dictation: 'input' };
 const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает

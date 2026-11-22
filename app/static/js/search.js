@@ -21,14 +21,15 @@ import { dayKey, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
 import { HREF } from './jobs.js';
 import { svg } from './icons.js';
-import { NAMES, sectionPairs } from './sections-meta.js';
+import { historyPairs, NAMES } from './sections-meta.js';
 import { el, words } from './ui.js';
 import { modelLabel } from './models.js';
 
 export const SEARCH_PAUSE_MS = 300;
 const LIMIT = 30;
-/** Фильтр разделов: разделы с историей в порядке рельса («Агенты» — история на компьютере, поиск её не видит). */
-const SECTIONS = [['', tr("Все")], ...sectionPairs().filter(([id]) => id !== 'code')];
+/** Фильтр разделов: разделы с историей в Студии в порядке рельса (история «Агентов» — на компьютере, «Open WebUI» — на
+ * его сервере: поиск их не видит). */
+const SECTIONS = [['', tr("Все")], ...historyPairs()];
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
 const PERIODS = [[1, tr("Сегодня")], [7, tr("Неделя")], [30, tr("Месяц")]];

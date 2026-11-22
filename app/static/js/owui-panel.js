@@ -9,11 +9,15 @@ import { tr } from './i18n.js';
  *   «Доверять этому сертификату» (повтор с cert_sha256). Пароль живёт только в поле окна, окно закрылось — его нет;
  * - показ учётки (selected, иначе первая; нажатие на строку; select(aid)) меняет только панель и зовёт
  *   opened(aid, учётка) — owui.js держит SSE показанной учётки; учёток нет — opened(null, null);
- * - учётка `relogin` (или событие link relogin, или отказ relogin) — вместо дерева поле пароля (#owui-relogin);
+ * - учётка `relogin` (или событие link relogin, или отказ relogin) — вместо дерева поле пароля (#owui-relogin); email —
+ *   полем, если его не прочитать (`reenter` после смены ключа сервера) или сервер его спросил (422 `owui_email`);
+ *   пароль и email — не для менеджера паролей браузера (secret);
  * - дерево — GET …/tree: поиск (POST …/search, запрос — телом), «Новый чат», «Закреплённые», папки (раскрытие грузит
  *   GET …/folders/{fid}/chats), чаты без папки — страницы GET …/chats?page=N догружаются при прокрутке;
  *   точка у чата — идёт ответ, акцентная метка — ответ ждёт решения;
- * - event(type, data) — события SSE показанной учётки: list (дерево заново), title, active, pending, link;
+ * - event(type, data) — события SSE показанной учётки: list (дерево заново), title, active, pending, link; `lost` —
+ *   поток прерывался (owui.js), следующее `link up` читает дерево заново; relogin(aid) — учётке (и не показанной)
+ *   нужен вход заново;
  * - here(aid, chat) — открытый справа чат (aria-current); chose(aid, chat) — нажат чат или «Новый чат» (chat — null):
  *   телефон прячет панель, адрес меняет сама ссылка; title(chat) — название известного чата.
  * Названия чатов, подписи учёток и тексты сервера — только textContent и без перевода. */
@@ -21,7 +25,7 @@ import { api } from './api.js';
 import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
 import { dateOnly } from './time.js';
-import { button, el, field, openDialog, showError, words } from './ui.js';
+import { button, computerPin, el, field, openDialog, showError, words } from './ui.js';
 
 /** Страница чатов без папки у Open WebUI 0.13: короче — страниц больше нет. */
 const PAGE = 60;
@@ -33,6 +37,22 @@ const STATE_WORDS = { on: tr("на связи"), off: tr("нет связи"), r
 
 function clearErrors(form) {
   for (const p of form.querySelectorAll('.error[data-for]')) p.textContent = '';
+}
+
+/** Поле пароля Open WebUI — как PIN компьютера (ui.js computerPin): не password и вне <form>, у соседнего email —
+ *  autocomplete off. Иначе менеджер паролей сохранил бы пароль Open WebUI под адресом Студии (и подставил бы его во
+ *  вход Студии), а в это окно предложил бы сохранённый пароль Студии — и тот ушёл бы на чужой сервер. */
+function secret(attrs = {}) {
+  return computerPin({ name: 'password', inputmode: null, maxlength: '1024', ...attrs });
+}
+
+/** Enter в поле `box` — `go()` (вместо отправки <form>, которой здесь нет). */
+function onEnter(box, go) {
+  box.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    go();
+  });
 }
 
 function hostOf(url) {
@@ -58,6 +78,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
   let searchTimer = 0;
   let searchGen = 0;
   let reloginFor = null;           // поле пароля показано по просьбе («Переподключить») у учётки на связи
+  let lost = false;                // поток показанной учётки прерывался: следующее `link up` перечитывает дерево
 
   const list = el('ul', { id: 'owui-account-list', class: 'owui-account-list' });
   const connectButton = el('button', { type: 'button', id: 'owui-connect', class: 'btn-link owui-connect',
@@ -170,6 +191,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     clearTimeout(reloadTimer);
     known.clear();
     tree = null;
+    lost = false;                  // дерево читается заново
     treeBox.hidden = false;
     status.textContent = '';
     results.hidden = true;
@@ -191,12 +213,12 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     const label = el('input', { class: 'input', name: 'label', maxlength: '80', autocomplete: 'off' });
     const url = el('input', { class: 'input', name: 'url', type: 'url', inputmode: 'url', autocomplete: 'off',
       spellcheck: 'false', autocapitalize: 'off' });
-    const email = el('input', { class: 'input', name: 'email', type: 'email', autocomplete: 'username',
+    const email = el('input', { class: 'input', name: 'email', type: 'email', autocomplete: 'off',
       autocapitalize: 'off', spellcheck: 'false' });
-    const password = el('input', { class: 'input', name: 'password', type: 'password', autocomplete: 'current-password' });
+    const password = secret();
     const cert = el('div', { id: 'owui-cert', class: 'owui-cert', hidden: true });
     const fail = el('p', { id: 'owui-connect-error', class: 'error', 'aria-live': 'polite' });
-    const form = el('form', { id: 'owui-connect-form', class: 'owui-connect-form', novalidate: true },
+    const form = el('div', { id: 'owui-connect-form', class: 'owui-connect-form' },
       field(tr("Подпись"), label, 'label'),
       field(tr("Адрес сервера"), url, 'url'),
       el('p', { class: 'muted small owui-hint' }, tr("Адрес со схемой https или http, как в строке браузера.")),
@@ -204,8 +226,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
       field(tr("Пароль Open WebUI"), password, 'password'),
       el('p', { class: 'muted small owui-hint' }, tr("Пароль нужен только для входа: Studio его не сохраняет.")),
       cert, fail);
-    const submit = el('button', { type: 'submit', form: 'owui-connect-form', id: 'owui-connect-submit',
-      class: 'btn btn-accent' }, tr("Подключить"));
+    const submit = el('button', { type: 'button', id: 'owui-connect-submit', class: 'btn btn-accent' }, tr("Подключить"));
     const dialog = openDialog(host, { id: 'owui-connect-dialog', title: tr("Подключить Open WebUI"), body: [form],
       actions: [submit] });
     let trusted = null;                          // отпечаток, которому владелец доверился на шаге сертификата
@@ -234,7 +255,8 @@ export function panelView(host, { selected: first = null, chose, opened }) {
         submit.disabled = false;
       }
     };
-    form.addEventListener('submit', (event) => { event.preventDefault(); send(trusted); });
+    submit.addEventListener('click', () => send(trusted));
+    onEnter(form, () => send(trusted));
     label.focus();
   }
 
@@ -318,28 +340,34 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     tools.hidden = true;
     treeBody.hidden = true;
     const needed = stateOf(acc) === 'relogin';
-    const password = el('input', { class: 'input', name: 'password', type: 'password', autocomplete: 'current-password',
-      id: 'owui-relogin-password' });
-    const submit = el('button', { type: 'submit', class: 'btn btn-accent', id: 'owui-relogin-submit' }, tr("Войти"));
+    const password = secret({ id: 'owui-relogin-password' });
+    const submit = el('button', { type: 'button', class: 'btn btn-accent', id: 'owui-relogin-submit' }, tr("Войти"));
     const cancel = needed ? null : button(tr("Отмена"), { class: 'btn', id: 'owui-relogin-cancel' }, () => {
       reloginFor = null;
       show();
     });
-    const form = el('form', { id: 'owui-relogin', class: 'owui-relogin' },
+    // email Студия не прочитала (сменился ключ сервера: `reenter`) или сервер его спросил (422 `owui_email`) — поле
+    const email = el('input', { class: 'input', name: 'email', type: 'email', autocomplete: 'off', autocapitalize: 'off',
+      spellcheck: 'false', id: 'owui-relogin-email' });
+    const emailField = field(tr("Email в Open WebUI"), email, 'email');
+    const askEmail = acc.reenter === true || !acc.who?.email;
+    emailField.hidden = !askEmail;
+    const form = el('div', { id: 'owui-relogin', class: 'owui-relogin', role: 'group',
+      'aria-label': tr("Войти в Open WebUI заново") },
       el('p', {}, needed ? tr("Войдите в учётку Open WebUI заново: Studio больше не может продлить её сессию.")
         : tr("Войдите в учётку Open WebUI заново, чтобы обновить её сессию в Studio.")),
-      acc.who?.email ? el('p', { class: 'muted small owui-relogin-who' }, acc.who.email) : null,
-      el('input', { type: 'text', name: 'username', autocomplete: 'username', value: acc.who?.email || '', hidden: true,
-        tabindex: '-1', 'aria-hidden': 'true' }),
+      !askEmail && acc.who?.email ? el('p', { class: 'muted small owui-relogin-who' }, acc.who.email) : null,
+      emailField,
       field(tr("Пароль Open WebUI"), password, 'password'),
       el('div', { class: 'actions owui-relogin-actions' }, cancel, submit));
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
+    const go = async () => {
       if (submit.disabled) return;
       submit.disabled = true;
       clearErrors(form);
+      const body = { password: password.value };
+      if (!emailField.hidden) body.email = email.value.trim();
       try {
-        const fresh = await api('POST', `/api/owui/accounts/${acc.id}/login`, { password: password.value });
+        const fresh = await api('POST', `/api/owui/accounts/${acc.id}/login`, body);
         password.value = '';
         items = items.map((a) => a.id === fresh.id ? fresh : a);
         links.delete(fresh.id);
@@ -349,10 +377,18 @@ export function panelView(host, { selected: first = null, chose, opened }) {
         show();
         opened(fresh.id, fresh);
       } catch (err) {
-        showError(form, err, {}, 'password');
+        if (err.code === 'owui_email' && emailField.hidden) {
+          emailField.hidden = false;
+          form.querySelector('.owui-relogin-who')?.remove();
+          email.value = acc.who?.email || '';
+        }
+        showError(form, err, { owui_email: 'email' }, 'password');
         submit.disabled = false;
+        if (err.code === 'owui_email') email.focus();
       }
-    });
+    };
+    submit.addEventListener('click', go);
+    onEnter(form, go);
     relogin.replaceChildren(form);
     relogin.hidden = false;
   }
@@ -566,6 +602,10 @@ export function panelView(host, { selected: first = null, chose, opened }) {
 
   function event(type, data) {
     if (shown === null || !data || typeof data !== 'object') return;
+    if (type === 'lost') {             // поток учётки прервался (owui.js): события дерева могли пропасть
+      lost = true;
+      return;
+    }
     if (type === 'link') {
       const before = links.get(shown);
       if (data.state === 'relogin') {
@@ -575,7 +615,10 @@ export function panelView(host, { selected: first = null, chose, opened }) {
       if (data.state !== 'up' && data.state !== 'down') return;
       links.set(shown, data.state);
       paintAccounts();
-      if (data.state === 'up' && (before === 'down' || offline.has(shown))) scheduleReload();   // пропущенное — заново
+      if (data.state === 'up' && (before === 'down' || offline.has(shown) || lost)) {   // пропущенное — заново
+        lost = false;
+        scheduleReload();
+      }
       return;
     }
     if (type === 'list') {
@@ -590,7 +633,8 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     } else if (type === 'active') {
       if (!chat) { if (data.active) scheduleReload(); return; }
       chat.active = data.active === true;
-      chat.pending = false;          // пауза приходит следом отдельным событием pending
+      // пауза 0.13.4 кончается `active: false` — метка остаётся; `active: true` — решение принято, ответ продолжился
+      if (chat.active) chat.pending = false;
       repaintChat(chat);
     } else if (type === 'pending') {
       if (!chat) { scheduleReload(); return; }
@@ -618,6 +662,7 @@ export function panelView(host, { selected: first = null, chose, opened }) {
     accounts: () => items,
     select: (aid) => select(aid),
     here: markHere,
+    relogin: needRelogin,
     title: (chat) => known.get(chat)?.title ?? null,
     connect,
     event,

@@ -457,7 +457,7 @@ def _api_routes():
 
 def test_every_api_route_is_classified_for_partial_protection(studio):
     """Реестр: каждый маршрут /api/* — раздела (по голове пути), общий закрываемый, открытый, блокировки или
-    файла; и lock_policy.blocks ведёт себя так при защите любого одного раздела из восьми."""
+    файла; и lock_policy.blocks ведёт себя так при защите любого одного раздела из девяти."""
     from types import SimpleNamespace
     uid = owner(studio)
     digest = security.digest(studio.c.cookies[auth.COOKIE])

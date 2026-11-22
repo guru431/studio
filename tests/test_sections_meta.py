@@ -30,6 +30,22 @@ def test_rail_order_is_grouped_and_names_match_the_server():
     assert names["speech"] == "Озвучка" and names["ocr"] == "Сканы" and names["code"] == push.TITLE == "Агенты"
 
 
+def test_flags_say_which_sections_keep_history_and_settings():
+    """`history: false` — раздела нет в «Поиске» (фильтр без него, иначе 422 у `search.SearchIn`), в «Удалить всю
+    историю» и в разделах подключений; `settings: false` — нет страницы настроек. Исключения — только флагами реестра."""
+    import search
+    text = (JS / "sections-meta.js").read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^  \{ id: '(\w+)', (.*)$", text, re.M))
+    no_history = {sid for sid, rest in rows.items() if "history: false" in rest}
+    assert no_history == {"owui", "code"}
+    assert set(ORDER) - no_history == set(search.TITLES)
+    assert {sid for sid, rest in rows.items() if "settings: false" in rest} == {"owui"}
+    for name in ("search.js", "settings.js", "connection-form.js"):
+        assert "'owui'" not in (JS / name).read_text(encoding="utf-8"), name
+    for name in ("search.js", "connection-form.js"):
+        assert "!== 'code'" not in (JS / name).read_text(encoding="utf-8"), name
+
+
 def test_english_notification_words_match_the_interface_catalog():
     """push и ntfy на английском (язык подписки) говорят словами страницы: имя раздела «Агентов» и поводы —
     переводы en.js, как у локальных уведомлений jobs.js."""

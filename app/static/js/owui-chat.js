@@ -8,11 +8,13 @@ import { tr } from './i18n.js';
  *   плашками, у плашки с результатом — раскрытие; картинки и файлы — GET …/files/{fid}; неизвестный элемент —
  *   строкой «элемент <тип>»; пауза — карточка owui-pending.js;
  * - поток — события SSE учётки (owui.js зовёт event): `delta` дописывает текст или рассуждение, `item` — плашку
- *   инструмента (куски ответа, которого лента ещё не знает, ждут его), `done` / `pending` / `active` / `link up` —
- *   перечитать чат (пропущенные куски потока не восстанавливаются: итог — из сохранённого чата), `title` — название,
+ *   инструмента (куски ответа, которого лента ещё не знает, ждут его), `done` / `pending` / `active` — перечитать чат,
+ *   `link up` — только после `link down` или обрыва потока (`lost` от owui.js): `up` новой подписки чат не читает
+ *   (пропущенные куски потока не восстанавливаются: итог — из сохранённого чата), `title` — название,
  *   `queued` — «в очереди»;
  * - поле ввода: модель — picker.js (GET …/models; у открытого чата — модель чата, у нового — `default`), вложения —
- *   POST …/files (до FILE_MAX, не больше FILES_MAX; файл, который Open WebUI не обработал, — с предупреждением),
+ *   POST …/files (до FILE_MAX, не больше FILES_MAX; файл, который Open WebUI не обработал, — с предупреждением;
+ *   вложение убрали из поля или ушли из чата до конца загрузки — запрос обрывается),
  *   «Отправить» (новый чат — POST …/chats, затем created(chat); открытый — POST …/messages с parent_id последнего
  *   сообщения), «Остановить» (POST …/stop) — пока в чате идёт ответ; ответ сервера `queued` — «в очереди».
  * Тексты пользователя, ответы модели, названия чатов и слова Open WebUI — только textContent/разметкой, без перевода. */
@@ -28,6 +30,8 @@ import { el, words } from './ui.js';
 const FILE_MAX = 20 * 1024 * 1024;
 const FILES_MAX = 10;
 const RELOAD_MS = 250;
+/** Файл Open WebUI по пути его сервера (как owui_view.FILE_URL): относительный адрес в тексте разметки. */
+const OWUI_FILE = /(^|[\s("'<])\/api\/v1\/files\/([A-Za-z0-9_.:-]{1,128})\/content(?:\?[^\s)"'<>]*)?/g;
 
 let localIds = 0;
 
@@ -44,6 +48,8 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   let failed = false;              // чтение чата или моделей не удалось: retry() повторит
   let loaded = !chatId;            // открытый чат прочитан хотя бы раз (до того — без «пока нет сообщений»)
   let loadGen = 0;
+  let link = null;                 // последнее `link` учётки: up | down | relogin
+  let lost = false;                // поток учётки прерывался: следующее `link up` перечитывает чат
   let reloadTimer = 0;
   let paintFrame = 0;
   const dirty = new Set();         // id сообщений, ждущих перерисовки в следующем кадре
@@ -57,6 +63,8 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   const titleNode = el('h2', { class: 'owui-feed-title' });
   const feed = el('div', { class: 'owui-feed-list' });
   const scroller = el('div', { class: 'owui-messages', id: 'owui-messages' }, feed);
+  let follow = true;               // вид у последнего сообщения: перерисовка и дорисованная разметка докручивают вниз
+  scroller.addEventListener('scroll', () => { follow = nearBottom(); }, { passive: true });
   const notice = el('p', { class: 'error owui-chat-error', id: 'owui-chat-error', 'aria-live': 'polite' });
   const queuedNote = el('p', { class: 'muted small owui-queued', id: 'owui-queued', 'aria-live': 'polite', hidden: true });
   const chips = el('div', { class: 'att-chips', id: 'owui-atts' });
@@ -141,7 +149,11 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     }
     const body = el('div', { class: 'msg-body' });
     const md = el('div', { class: 'md' });
-    if (m.done && m.text) renderMarkdownInto(md, m.text, { valid: () => md.isConnected });
+    if (m.done && m.text) renderMarkdownInto(md, ownFiles(m.text), { valid: () => md.isConnected, update: (change) => {
+      const stick = follow;            // разметка дорисовывается после render(): вид у конца — докрутить
+      change();
+      if (stick) scroller.scrollTop = scroller.scrollHeight;
+    } });
     else if (m.text) md.append(el('div', { class: 'owui-stream' }, m.text));
     let pending = pendingBoxes.get(m.id);
     if (!pending) {
@@ -162,8 +174,12 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
   }
 
+  /** Файлы Open WebUI в тексте ответа (`/api/v1/files/<id>/content` — путь его сервера) — через сервер Студии, полным
+   *  адресом своего сайта: относительный путь markdown.js счёл бы путём файла компьютера и убрал бы ссылку. */
+  const ownFiles = (text) => text.replace(OWUI_FILE, (_, before, id) => `${before}${location.origin}${fileUrl(id)}`);
+
   function render() {
-    const stick = nearBottom();
+    const stick = follow;
     nodes.clear();
     for (const id of pendingBoxes.keys()) if (!messages.some((m) => m.id === id)) pendingBoxes.delete(id);
     feed.replaceChildren(...messages.map((m) => {
@@ -301,6 +317,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
         : a.failed ? tr("Open WebUI не обработал файл: модель может его не увидеть") : '';
       const remove = iconButton('x', tr("Убрать вложение"), { class: 'icon-btn owui-att-remove' });
       remove.addEventListener('click', () => {
+        a.controller?.abort();          // загрузка ещё идёт — оборвать
         attachments = attachments.filter((x) => x !== a);
         paintChips();
         sync();
@@ -325,16 +342,18 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
       else item.uploading = true;
       attachments.push(item);
       if (!item.uploading) continue;
-      api('POST', `${base}/files`, f, { headers: { 'x-studio-name': encodeURIComponent(f.name),
-        'content-type': f.type || 'application/octet-stream' } })
+      item.controller = new AbortController();
+      api('POST', `${base}/files`, f, { signal: item.controller.signal, headers: {
+        'x-studio-name': encodeURIComponent(f.name), 'content-type': f.type || 'application/octet-stream' } })
         .then((out) => {
           item.id = out.id;
           item.kind = out.kind === 'image' ? 'image' : 'file';
           item.failed = out.failed === true;
         })
-        .catch((err) => { item.error = words(err); })
+        .catch((err) => { if (err?.name !== 'AbortError') item.error = words(err); })
         .finally(() => {
           item.uploading = false;
+          item.controller = null;
           if (!gone) { paintChips(); sync(); }
         });
     }
@@ -435,7 +454,8 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     try {
       await api('POST', `${base}/chats/${encodeURIComponent(chat)}/resolve`, { message_id: id, ...decision });
     } catch (err) {
-      if (err?.code === 'resolved') { scheduleReload(); return; }     // решили в другом окне
+      // решили в другом окне: перечитанный чат уберёт карточку; та же пауза ещё в ответе — кнопки снова доступны
+      if (err?.code === 'resolved') scheduleReload();
       throw err;
     }
     const m = messages.find((x) => x.id === id);
@@ -482,8 +502,18 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
 
   function event(type, data) {
     if (gone || !data || typeof data !== 'object') return;
+    if (type === 'lost') {             // поток учётки прервался (owui.js): куски и события могли пропасть
+      lost = true;
+      return;
+    }
     if (type === 'link') {
-      if (data.state === 'up' && chat) scheduleReload();       // после обрыва — сохранённый чат
+      const before = link;
+      link = data.state;
+      // после обрыва потока или соединения — сохранённый чат; `up` новой подписки — нет: чат только что прочитан
+      if (data.state === 'up' && chat && (lost || before === 'down')) {
+        lost = false;
+        scheduleReload();
+      }
       return;
     }
     const id = typeof data.message_id === 'string' ? data.message_id : null;
@@ -534,6 +564,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     retry,
     unmount() {
       gone = true;
+      for (const a of attachments) a.controller?.abort();   // ушли из чата — загрузки не нужны
       clearTimeout(reloadTimer);
       cancelAnimationFrame(paintFrame);
       modelPick.unmount();
