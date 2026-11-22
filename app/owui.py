@@ -852,14 +852,18 @@ async def _upload_body(request: Request) -> bytes:
 async def upload(aid: int, request: Request):
     """Вложение: тело — сам файл до `FILE_MAX`, имя — заголовком `X-Studio-Name` (как `documents`), тип —
     `Content-Type`. Ответ — после обработки Open WebUI (`process/status`: `completed` или `failed`); `failed`
-    страница Open WebUI тоже прикладывает, с предупреждением — Студия отдаёт его признаком `failed`."""
+    страница Open WebUI тоже прикладывает, с предупреждением — Студия отдаёт его признаком `failed`. Картинку
+    страница Open WebUI грузит без обработки (`?process=false`) и не ждёт — так и здесь: её статус остаётся
+    `pending`, а обработка картинки как документа кончается `failed`."""
     acc = load(request.state.user.id, aid)
     data = await _upload_body(request)
     name = documents.clean_name(unquote(request.headers.get("x-studio-name", "")))
     mime = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if not MIME.fullmatch(mime):
         mime = "application/octet-stream"
-    response = await call(acc, "POST", "/api/v1/files/", files={"file": (name, data, mime)}, timeout=UPLOAD_SEC)
+    image = _raster(mime)
+    response = await call(acc, "POST", "/api/v1/files/?process=false" if image else "/api/v1/files/",
+                          files={"file": (name, data, mime)}, timeout=UPLOAD_SEC)
     if response.status_code == 413:
         raise HTTPException(413, TOO_LARGE)
     _cut_status(acc, response, NO_FILE)
@@ -867,8 +871,8 @@ async def upload(aid: int, request: Request):
     if not isinstance(file_id, str) or not OWUI_ID.fullmatch(file_id):
         log.warning("owui %d: ответ загрузки без id", acc.id)
         raise shape_error(acc)
-    deadline = clock.NOW() + FILE_WAIT_SEC
-    while True:
+    deadline, stage = clock.NOW() + FILE_WAIT_SEC, "completed"
+    while not image:
         status = await call(acc, "GET", f"/api/v1/files/{file_id}/process/status")
         _cut_status(acc, status, NO_FILE)
         stage = _ok(acc, status, dict).get("status")
@@ -879,7 +883,7 @@ async def upload(aid: int, request: Request):
             raise HTTPException(504, FILE_SLOW)
         await clock.SLEEP(FILE_POLL_SEC)
     log.info("owui %d: файл загружен, байт %d%s", acc.id, len(data), ", обработка не удалась" if stage == "failed" else "")
-    found = {"id": file_id, "name": name, "kind": "image" if _raster(mime) else "file"}
+    found = {"id": file_id, "name": name, "kind": "image" if image else "file"}
     return {**found, "failed": True} if stage == "failed" else found
 
 

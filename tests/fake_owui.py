@@ -457,7 +457,9 @@ class FakeOwui:
             file_id = str(uuid.uuid4())
             self.files[file_id] = (mime[1].decode() if mime else "application/octet-stream", data.removesuffix(b"\r\n"))
             self.file_names[file_id] = name
-            self.file_status[file_id] = list(self.processing)
+            # `?process=false` (картинки страницы Open WebUI): обработки нет, статус так и остаётся `pending`
+            unprocessed = request.url.params.get("process") == "false"
+            self.file_status[file_id] = ["pending"] if unprocessed else list(self.processing)
             self.uploads += 1
             return httpx.Response(200, json={"status": True, "id": file_id, "user_id": self.user_id, "filename": name,
                                              "meta": {"name": name, "content_type": self.files[file_id][0],

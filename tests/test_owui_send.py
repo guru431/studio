@@ -228,9 +228,15 @@ def test_upload_waits_for_processing_and_limits_size(setup, monkeypatch):
     assert body == {"id": body["id"], "name": "отчёт.txt", "kind": "file"}
     assert fake.files[body["id"]] == ("text/plain", b"report body") and fake.file_names[body["id"]] == "отчёт.txt"
     assert s.sleeps[sleeps:] == [owui.FILE_POLL_SEC, owui.FILE_POLL_SEC]  # ждал, пока Open WebUI обработает
+    sleeps = len(s.sleeps)
     picture = s.c.post(f"{BASE}/{aid}/files", content=b"\x89PNG", headers={"X-Studio-Name": "p.png",
                                                                           "Content-Type": "image/png"}).json()
-    assert picture["kind"] == "image"
+    # картинку страница Open WebUI грузит без обработки (`process=false`) и не ждёт: её статус так и остаётся
+    # `pending` — опрос ждал бы FILE_WAIT_SEC и отвечал 504 (живая приёмка 2026-11-22: обработка картинки — `failed`)
+    assert picture == {"id": picture["id"], "name": "p.png", "kind": "image"}
+    upload = next(r for r in reversed(fake.requests) if r.method == "POST" and r.url.path == "/api/v1/files/")
+    assert upload.url.params.get("process") == "false" and s.sleeps[sleeps:] == []
+    assert not any(r.url.path == f"/api/v1/files/{picture['id']}/process/status" for r in fake.requests)
     # вложения уходят с сообщением: картинка — только в сообщении, документ — ещё и в `files` запроса
     assert s.c.post(f"{BASE}/{aid}/chats", json={"model": "m1", "text": "see", "files": [body["id"], picture["id"]]}
                     ).status_code == 201
