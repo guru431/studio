@@ -10,9 +10,10 @@ import chat
 import cleaner_client
 import security
 import state
-from conftest import add_connection, add_gateway
+from conftest import add_connection, add_gateway, make_user, signin
 from fakes import FakeCleanerGateway
 from test_chat import attach, messages, new_chat, png, sse, turn
+from test_chat_shares import create as create_share, unlock as unlock_share
 from test_chat_pending import answer
 from test_chat_web import EXA_KEY, call
 from test_knowledge import big_text
@@ -290,6 +291,90 @@ def test_dialog_delete_queues_the_context(cleaner_gw):
     assert state.DB.execute("SELECT count(*) FROM cleaner_route_contexts").fetchone()[0] == 0
     s.c.portal.call(cleaner_client.purge)
     assert [d[0] for d in gw.deleted] == [gw.chats[0]] and queued() == []
+
+
+def test_toggle_is_offered_to_external_connections_while_cleaner_is_configured(cleaner_gw):
+    """Страница показывает переключатель по `cleaner_offer`: внешний `openai` при настроенном Cleaner; включённый —
+    и без адреса, чтобы его можно было выключить; внутреннему — никогда."""
+    s, gw = cleaner_gw
+    gateway = add_gateway(s)
+    other = add_connection(s, base_url="https://api.other.test/v1", sections=["chat"], name="other")
+
+    def offers():
+        return {c["id"]: c["cleaner_offer"] for c in s.c.get("/api/connections").json()["items"]}
+
+    assert offers() == {gw.conn_id: True, gateway: False, other: True}
+    settings(s, base_url="")
+    assert offers() == {gw.conn_id: True, gateway: False, other: False}
+
+
+def sent_of(s, chat_id, message_id):
+    return s.c.get(f"/api/chats/{chat_id}/messages/{message_id}/cleaner-sent")
+
+
+def masked_turn(s, gw) -> tuple[str, str]:
+    """Ход «Позвони Ивану» через Cleaner, который заменил имя на «<PERSON_1>»: (диалог, ответ)."""
+    gw.masks = {"Ивану": "<PERSON_1>"}
+    chat_id = routed_chat(s, gw)
+    assert sse(turn(s, chat_id, "Позвони Ивану"))[-1] == ("done", {"status": "done"})
+    return chat_id, messages(s, chat_id)[-1]["id"]
+
+
+def test_sent_shows_the_cleaned_request_to_the_owner(cleaner_gw):
+    s, gw = cleaner_gw
+    chat_id, answer_id = masked_turn(s, gw)
+    response = sent_of(s, chat_id, answer_id)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["messages"][-1] == {"role": "user", "content": "Позвони <PERSON_1>"}
+    assert body["counts"] == {"PERSON": 1} and isinstance(body["tools"], int)
+    assert response.headers["cache-control"] == "no-store"
+    read = gw.sent_reads[-1]
+    assert read.url.path == f"/agent/openai/v1/cleaner/chats/{gw.chats[0]}/requests/{1:032x}"
+    assert read.headers["x-cleaner-key"] == KEY                              # только служебный ключ
+    assert "authorization" not in read.headers and "x-cleaner-upstream" not in read.headers
+    user_id = messages(s, chat_id)[0]["id"]                                  # у вопроса запроса Cleaner нет
+    assert sent_of(s, chat_id, user_id).status_code == 404
+    assert sent_of(s, chat_id, "nope").status_code == 404
+
+
+def test_sent_of_another_users_dialog_is_404(cleaner_gw):
+    s, gw = cleaner_gw
+    chat_id, answer_id = masked_turn(s, gw)
+    reads = len(gw.sent_reads)
+    make_user(s, "friend")
+    signin(s, "friend")
+    response = sent_of(s, chat_id, answer_id)
+    assert response.status_code == 404 and response.json()["detail"]["code"] == "gone"
+    assert len(gw.sent_reads) == reads                                       # к Cleaner за чужим не ходили
+
+
+def test_sent_after_journal_gone_is_410(cleaner_gw):
+    s, gw = cleaner_gw
+    chat_id, answer_id = masked_turn(s, gw)
+    gw.journal.clear()                                                       # Cleaner удалил журнал за давностью
+    response = sent_of(s, chat_id, answer_id)
+    assert response.status_code == 410 and response.json()["detail"]["code"] == "journal_gone"
+    assert response.json()["detail"]["message"]
+    gw.chats.clear()                                                         # контекст удалили в Cleaner — тоже
+    assert sent_of(s, chat_id, answer_id).status_code == 410
+    gw.down = True
+    response = sent_of(s, chat_id, answer_id)
+    assert response.status_code == 502 and response.json()["detail"]["message"] == "Cleaner недоступен"
+
+
+def test_sent_is_not_in_share_or_export(cleaner_gw):
+    s, gw = cleaner_gw
+    chat_id, _ = masked_turn(s, gw)
+    reads = len(gw.sent_reads)
+    _, token = create_share(s, f"/api/chats/{chat_id}/share")
+    shown = unlock_share(s, token)
+    assert shown.status_code == 200
+    assert "<PERSON_1>" not in shown.text and "cleaner" not in shown.text.lower()
+    exported = s.c.post(f"/api/chats/{chat_id}/export", json={"format": "md"})
+    assert exported.status_code == 200 and "Позвони Ивану" in exported.text
+    assert "<PERSON_1>" not in exported.text and "cleaner" not in exported.text.lower()
+    assert len(gw.sent_reads) == reads                                       # ни ссылка, ни экспорт Cleaner не спрашивают
 
 
 def test_cleaner_turn_never_reaches_the_log(cleaner_gw, caplog):

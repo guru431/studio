@@ -2719,6 +2719,19 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
     return {"id": message_id, "status": body.status}
 
 
+@router.get("/chats/{chat_id}/messages/{message_id}/cleaner-sent")
+async def cleaner_sent(chat_id: str, message_id: str, request: Request):
+    """«Что получила модель»: сообщения последнего запроса хода через Cleaner со стороны провайдера (с заменами) —
+    у Cleaner по `messages.cleaner_request` (`cleaner_route.sent`). Чужой диалог, ответ без запроса Cleaner — 404;
+    журнал Cleaner удалён — 410 `journal_gone`. Текст не хранится в Studio и не попадает в ссылки и экспорт."""
+    _chat_row(request.state.user.id, chat_id)
+    row = state.DB.execute("SELECT cleaner_request FROM messages WHERE id = ? AND chat_id = ? AND role = 'assistant'",
+                           (message_id, chat_id)).fetchone()
+    if row is None or not row["cleaner_request"]:
+        raise _gone("такого сообщения нет")
+    return await cleaner_route.sent(row["cleaner_request"])
+
+
 @router.post("/chats/{chat_id}/messages/{message_id}/alive", status_code=204)
 async def answer_alive(chat_id: str, message_id: str, request: Request):
     """Признак жизни ответа, который читает браузер; ответ уже не идёт — 409, его вкладка перестаёт слать."""

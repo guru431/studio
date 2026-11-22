@@ -270,6 +270,9 @@ def out(conn: Connection, passport: bool = True) -> dict:
     external = cleaner_route.is_external(conn)
     item["external"] = external
     item["cleaner_locked"] = external and cleaner_route.forced()
+    # переключатель «Через Cleaner» на странице: внешний `openai`, пока Cleaner настроен (включённый — и без него,
+    # чтобы его можно было выключить)
+    item["cleaner_offer"] = external and conn.kind == "openai" and (conn.via_cleaner or cleaner_route.configured())
     # profiles импортирует capabilities → images, а тот при загрузке берёт `connections.Connection`
     import profiles
     item["suggestions"] = profiles.suggestions_of(conn)

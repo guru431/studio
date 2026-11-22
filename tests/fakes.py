@@ -402,6 +402,9 @@ class FakeCleanerGateway:
         self.checked: list[httpx.Request] = []       # запросы самопроверки `…/cleaner/check`
         self.check_body = {"ok": True, "checks": [{"name": "key", "ok": True, "detail": "ключ действует"},
                                                   {"name": "provider", "ok": True, "detail": "провайдер отвечает"}]}
+        self.masks: dict[str, str] = {}              # замены текста: оригинал → «<PERSON_1>» («Что ушло»)
+        self.journal: dict[tuple[str, str], dict] = {}   # (контекст, id запроса) → что ушло провайдеру
+        self.sent_reads: list[httpx.Request] = []    # запросы «Что ушло»
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -422,7 +425,37 @@ class FakeCleanerGateway:
             return self._turn(request)
         if path in ("/agent/openai/v1/models", "/agent/openai/v1/cleaner/check") and method == "GET":
             return self._read(request, path)
+        if path.startswith("/agent/openai/v1/cleaner/chats/") and method == "GET":
+            return self._sent(request, path)
         return httpx.Response(404)
+
+    def _sent(self, request: httpx.Request, path: str) -> httpx.Response:
+        """«Что ушло»: `…/cleaner/chats/{контекст}/requests/{id}` только служебным ключом; чужой или удалённый
+        контекст — 404 `chat`, нет записи журнала — 404 `journal_gone`."""
+        self.sent_reads.append(request)
+        if request.headers.get("x-cleaner-key") != self.key or "authorization" in request.headers:
+            return self._error(401, "auth")
+        _, _, rest = path.partition("/cleaner/chats/")
+        chat, _, rid = rest.partition("/requests/")
+        if chat not in self.chats:
+            return self._error(404, "chat")
+        if (chat, rid) not in self.journal:
+            return self._error(404, "journal_gone")
+        return httpx.Response(200, json=self.journal[(chat, rid)], headers={"cache-control": "no-store"})
+
+    def _masked(self, body: dict) -> dict:
+        """Запрос со стороны провайдера: текст сообщений с заменами `masks`, число инструментов, замены по типам."""
+        counts: dict[str, int] = {}
+        out = []
+        for message in body.get("messages", []):
+            content = message.get("content") if isinstance(message.get("content"), str) else ""
+            for real, fake in self.masks.items():
+                if (n := content.count(real)):
+                    content = content.replace(real, fake)
+                    kind = fake.strip("<>").rsplit("_", 1)[0]
+                    counts[kind] = counts.get(kind, 0) + n
+            out.append({"role": message.get("role"), "content": content})
+        return {"messages": out, "tools": len(body.get("tools") or []), "counts": counts}
 
     @staticmethod
     async def provider(request: httpx.Request) -> httpx.Response:
@@ -461,6 +494,7 @@ class FakeCleanerGateway:
         body = json.loads(request.content)
         self.bodies.append(body)
         rid = f"{len(self.turns):032x}"
+        self.journal[(request.headers["x-cleaner-chat"], rid)] = self._masked(body)
         if self.refuse is not None:
             return self._error(*self.refuse, rid=rid)
         if body.get("stream") is not True:           # без потока: один ответ JSON (проба)

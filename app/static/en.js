@@ -1048,6 +1048,7 @@ globalThis.StudioEnglish = Object.freeze({
   "через Cleaner работают чат и перевод": "Only Chat and Translation work through Cleaner",
   "подключение «{0}» идёт только через Cleaner — запрос провайдеру не отправлен": "Connection “{0}” goes only through Cleaner: the request was not sent to the provider",
   "подключение {0}: идёт только через Cleaner": "Connection {0} goes only through Cleaner",
+  "Cleaner уже не хранит этот запрос: журнал удалён": "Cleaner no longer keeps this request: its journal was deleted",
   "Вернуться": "Go back",
   "Запущенных сессий: {0}": "Running sessions: {0}",
   "ждут ответа: {0}": "awaiting reply: {0}",

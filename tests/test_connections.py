@@ -271,7 +271,8 @@ def test_connection_out_carries_only_a_hint(studio):
     assert items == [{"id": cid, "name": "Облако", "kind": "openai", "base_url": "https://cloud.test/v1",
                       "sections": ["chat"], "proxied": False, "dropped": False, "token_hint": "…4567",
                       "passport": None, "cleaner": False, "s06": False, "via_cleaner": False, "routed": False,
-                      "external": True, "cleaner_locked": False, "suggestions": [], "profile_set": False,
+                      "external": True, "cleaner_locked": False, "cleaner_offer": False, "suggestions": [],
+                      "profile_set": False,
                       "accepts": ["chat", "photo", "speech", "transcribe", "translate", "dictation"]}]
     cid = add_gateway(studio)
     gw = studio.c.get("/api/connections").json()["items"][1]

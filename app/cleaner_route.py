@@ -15,6 +15,8 @@
 - Внутреннее и внешнее подключение — `is_external`; подключение через Cleaner — `routes` (переключатель
   `via_cleaner` или принудительный режим): такое подключение идёт через сервер (`Connection.routed`), а
   `upstream._prepare` не пускает его никуда, кроме адреса Cleaner.
+- «Что получила модель» (`sent`): Studio хранит у ответа только id запроса Cleaner (`messages.cleaner_request`),
+  текст с заменами просит у Cleaner служебным ключом.
 - Журнал — только коды и числа: адресов и ключей в нём нет.
 """
 import asyncio
@@ -467,6 +469,51 @@ async def context(conn: "connections.Connection", resource: str, item_id: str) -
     finally:
         if not lock.locked() and not getattr(lock, "_waiters", None):     # ждущего не оставить без замка
             LOCKS.pop(key, None)
+
+
+#: «Что получила модель»: Cleaner больше не хранит запрос (журнал удалён за давностью, контекст удалён)
+JOURNAL_GONE = "Cleaner уже не хранит этот запрос: журнал удалён"
+SENT_PATH = AGENT_PATH + "/cleaner/chats/{chat}/requests/{request}"
+_ID = re.compile(r"[0-9A-Za-z]{1,128}")
+
+
+def _text_of(value) -> str:
+    return value if isinstance(value, str) else ""
+
+
+async def sent(value: str) -> dict:
+    """«Что получила модель» по id запроса Cleaner ответа (`messages.cleaner_request`, «<чат>/<запрос>»): сообщения
+    со стороны провайдера — с заменами, число инструментов, замены по типам. Только служебным ключом, без ключа и
+    адреса провайдера. Cleaner запроса не знает (404: журнал или контекст удалён) — 410 `journal_gone`."""
+    remote, _, rid = value.partition("/")
+    if not (_ID.fullmatch(remote) and _ID.fullmatch(rid)):
+        raise HTTPException(410, {"code": "journal_gone", "message": JOURNAL_GONE})
+    config = settings()
+    if not (config["base_url"] and config["key"]):
+        raise _unset()
+    try:
+        response = await upstream.request(_gateway(config["base_url"]), "GET",
+                                          config["base_url"] + SENT_PATH.format(chat=remote, request=rid),
+                                          keyless=True, headers={KEY_HEADER: config["key"]}, timeout=CONTEXT_TIMEOUT)
+    except upstream.UpstreamRefused:
+        raise HTTPException(502, {"code": "cleaner", "message": "адрес Cleaner убран из списка разрешённых"}) from None
+    except httpx.HTTPError:
+        log.warning("cleaner sent: unreachable")
+        raise HTTPException(502, {"code": "cleaner", "message": "Cleaner недоступен"}) from None
+    if response.status_code == 404:
+        raise HTTPException(410, {"code": "journal_gone", "message": JOURNAL_GONE})
+    if not response.is_success:
+        log.info("cleaner sent: code %d", response.status_code)
+        raise HTTPException(502, {"code": "cleaner", "message": words(response)})
+    body = upstream.json_body(response)
+    items = body.get("messages") if isinstance(body.get("messages"), list) else []
+    counts = body.get("counts") if isinstance(body.get("counts"), dict) else {}
+    tools = body.get("tools")
+    return {"messages": [{"role": _text_of(m.get("role")), "content": _text_of(m.get("content"))}
+                         for m in items if isinstance(m, dict)],
+            "tools": tools if isinstance(tools, int) and not isinstance(tools, bool) else 0,
+            "counts": {k: v for k, v in counts.items()
+                       if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)}}
 
 
 def forget(conn: "connections.Connection", resource: str, item_id: str) -> None:
