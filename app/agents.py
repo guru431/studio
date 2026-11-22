@@ -189,7 +189,7 @@ async def list_agents(request: Request, refresh: bool = False):
 
         await asyncio.gather(*(_refresh_catalog(request, link, engine) for row in rows
             if row["user_id"] == request.state.user.id and (link := bridge.LINKS.get(row["id"])) is not None
-            for engine in ("codex", "opencode") if link.hello.get(engine + "_models")))
+            for engine in ("codex", "opencode", "deepseek") if link.hello.get(engine + "_models")))
         if not _session_open(request.state.digest):
             raise HTTPException(409, {"code": "closed", "message": "Сеанс Студии закрыт"})
     items = []
@@ -233,11 +233,12 @@ async def list_agents(request: Request, refresh: bool = False):
                       "usage_reset": hello.get("usage_reset", False),
                       "opencode_usage": hello.get("opencode_usage", False),
                       "opencode_features": hello.get("opencode_features", False),
-                      **{engine: hello[engine] for engine in ("codex", "opencode") if engine in hello}})
+                      "deepseek_usage": hello.get("deepseek_usage", False),
+                      **{engine: hello[engine] for engine in ("codex", "opencode", "deepseek") if engine in hello}})
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:
             items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
-                             computer_info=False, software_versions=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, worktrees=False, project_create=False)
+                             computer_info=False, software_versions=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False)
     return {"items": items}
 
 

@@ -12,8 +12,8 @@ def software(data):
             r'[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,48})?', value) else None
 
     items, seen = [], set()
-    for item in data.get('items', [])[:3] if isinstance(data.get('items'), list) else []:
-        if not isinstance(item, dict) or item.get('id') not in ('codex', 'claude', 'opencode') or item['id'] in seen:
+    for item in data.get('items', [])[:4] if isinstance(data.get('items'), list) else []:
+        if not isinstance(item, dict) or item.get('id') not in ('codex', 'claude', 'opencode', 'deepseek') or item['id'] in seen:
             continue
         seen.add(item['id'])
         items.append({'id': item['id'], 'installed': item.get('installed') is True,
@@ -25,10 +25,10 @@ def software(data):
     update = data.get('update') if isinstance(data.get('update'), dict) else {}
     results = update.get('results') if isinstance(update.get('results'), dict) else {}
     return {'items': items, 'update': {
-        'tool': update.get('tool') if update.get('tool') in ('claude', 'codex', 'opencode', 'all') else None,
+        'tool': update.get('tool') if update.get('tool') in ('claude', 'codex', 'opencode', 'deepseek', 'all') else None,
         'state': update.get('state') if update.get('state') in (
             'idle', 'waiting', 'updating', 'done', 'error', 'cancelled') else 'error',
-        **({'results': {tool: results[tool] for tool in ('claude', 'codex', 'opencode')
+        **({'results': {tool: results[tool] for tool in ('claude', 'codex', 'opencode', 'deepseek')
                         if results.get(tool) in ('done', 'error')}} if update.get('tool') == 'all' else {})}}
 
 

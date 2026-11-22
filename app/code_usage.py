@@ -52,8 +52,22 @@ class UsageStats(BaseModel):
     reason: str | None = Field(None, max_length=300)
 
 
+class BalanceItem(BaseModel):
+    currency: str = Field(min_length=1, max_length=8)
+    total: float | None = Field(None, ge=0, allow_inf_nan=False)
+    granted: float | None = Field(None, ge=0, allow_inf_nan=False)
+    topped_up: float | None = Field(None, ge=0, allow_inf_nan=False)
+
+
+class UsageBalance(BaseModel):
+    """Баланс DeepSeek по валютам (у DSH нет окон лимита); `reason` — почему его не узнать."""
+    available: bool
+    items: list[BalanceItem] = Field(max_length=10)
+    reason: str | None = Field(None, max_length=300)
+
+
 class Usage(BaseModel):
-    engine: Literal["claude", "codex", "opencode"]
+    engine: Literal["claude", "codex", "opencode", "deepseek"]
     available: bool
     source: str = Field(max_length=200)
     checked_at: float = Field(ge=0, allow_inf_nan=False)
@@ -62,13 +76,17 @@ class Usage(BaseModel):
     windows: list[UsageWindow] = Field(max_length=50)
     statistics: UsageStats
     message: str | None = Field(None, max_length=300)
+    balance: UsageBalance | None = None
 
 
 LINKS = {
     "claude": [{"label": "Использование Claude", "url": "https://claude.ai/settings/usage"}],
     "codex": [{"label": "Использование Codex", "url": "https://chatgpt.com/codex/settings/usage"}],
     "opencode": [{"label": "Провайдеры OpenCode", "url": "https://opencode.ai/docs/providers/"}],
+    "deepseek": [{"label": "Баланс DeepSeek", "url": "https://platform.deepseek.com/usage"}],
 }
+#: помощник → id модели, для которой мост считает лимиты, и признак такого моста в `hello`
+MODELS = {"opencode": (bridge.OPENCODE_MODEL_ID, "opencode_usage"), "deepseek": (bridge.DEEPSEEK_MODEL_ID, "deepseek_usage")}
 
 
 class ResetRequest(BaseModel):
@@ -98,14 +116,14 @@ async def usage(aid: int, request: Request, engine: str = "claude", refresh: boo
     claude_code.own_agent(request, aid)
     if engine not in LINKS:
         raise claude_code._refuse(422, "engine", "неверный помощник")
-    if model is not None and (engine != "opencode" or not bridge.OPENCODE_MODEL_ID.fullmatch(model)):
+    if model is not None and (engine not in MODELS or not MODELS[engine][0].fullmatch(model)):
         raise claude_code._refuse(422, "model", "неверная модель")
     link = bridge.LINKS.get(aid)
     if link is not None and not link.hello.get("subscription_usage"):
         raise claude_code._refuse(409, "unsupported", "обновите мост для просмотра лимитов")
     if engine != "claude":
         claude_code.require_engine(aid, engine)
-    extra = {"model": model} if model and link is not None and link.hello.get("opencode_usage") else {}
+    extra = {"model": model} if model and link is not None and link.hello.get(MODELS[engine][1]) else {}
     raw = await claude_code.ask(request, aid, "usage", engine=engine, refresh=refresh, **extra)
     try:
         value = Usage.model_validate(raw)

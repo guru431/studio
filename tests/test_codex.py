@@ -15,13 +15,16 @@ CATALOG = {"version": "codex-test", "models": [{"id": "codex-test", "label": "Co
            "efforts": ["minimal", "high", "ultra"]}
 
 
-@pytest.mark.parametrize("engine", ["opencode", "codex"])
+@pytest.mark.parametrize("engine", ["opencode", "codex", "deepseek"])
 def test_explicit_refresh_discovers_new_cli_without_reconnecting(studio, engine):
     aid, machine, link = setup(studio)
     machine.passive_requests = True
     link.hello = bridge.parse_hello({**machine.hello, engine + "_models": True})
     assert engine not in studio.c.get("/api/agents").json()["items"][0]
     catalog = {"version": "2.3.0", "models": [{"id": "model", "label": "Model"}], "efforts": []}
+    if engine == "deepseek":
+        catalog = {**catalog, "models": [{"id": '["provider","model"]', "label": "Model"}],
+                   "settings": {"profile": None, "applied": [], "skipped": []}}
     machine._op_models = lambda req, events: {engine: catalog}
     assert studio.c.get("/api/agents?refresh=true").json()["items"][0][engine] == catalog
     assert bridge.LINKS[aid] is link

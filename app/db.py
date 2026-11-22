@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 63
+VERSION = 64
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -936,6 +936,22 @@ CREATE TABLE mirror_legacy(id INTEGER PRIMARY KEY);
 """
 SCHEMA += MIRROR_GROUPS_63
 
+#: четвёртый помощник — DeepSeek Harness: CHECK `engine` шире, как CODE_23. На code_chats нет входящих FK, триггеров
+#: и видов; id, все столбцы (и `origin` шага 41), индекс и каскады сохраняются. Прежний код пишет свои движки
+CODE_64 = """CREATE TABLE code_chats_64(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       agent_id INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE, project TEXT NOT NULL, session_id TEXT NOT NULL,
+       state TEXT NOT NULL CHECK (state IN ('open','closed')), created REAL NOT NULL, updated REAL NOT NULL,
+       engine TEXT NOT NULL DEFAULT 'claude' CHECK (engine IN ('claude', 'codex', 'opencode', 'deepseek')),
+       origin TEXT NOT NULL DEFAULT 'other' CHECK (origin IN ('studio', 'other')),
+       UNIQUE (agent_id, session_id));
+INSERT INTO code_chats_64(id, user_id, agent_id, project, session_id, state, created, updated, engine, origin)
+SELECT id, user_id, agent_id, project, session_id, state, created, updated, engine, origin FROM code_chats;
+DROP TABLE code_chats;
+ALTER TABLE code_chats_64 RENAME TO code_chats;
+CREATE INDEX code_chats_user ON code_chats(user_id, created);
+"""
+SCHEMA += CODE_64
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1064,6 +1080,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     62: MCP_DEFAULT_62,
     # зеркала группой копий: группы, копии, пары, перенесённые строки project_mirrors
     63: MIRROR_GROUPS_63,
+    # четвёртый помощник «Агентов» — DeepSeek Harness
+    64: CODE_64,
 }
 
 
