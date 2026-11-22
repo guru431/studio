@@ -74,6 +74,10 @@ minor для возможностей, major для несовместимых �
   (`api.exa.ai`, YouTube через yt-dlp — правила в [chat.md](docs/architecture/chat.md))
   и в `push.py` (`push.HOSTS`). Ключ Exa — свой у учётки, шифром. Почта учётки — на сервер SMTP, заданный
   администратором в панели или переменными окружения (в том числе частный адрес `connect_ip`, [email-accounts](docs/architecture/email-accounts.md)).
+  Подключение через Cleaner (`cleaner_route.routes`: переключатель «Через Cleaner» или принудительный режим) — не
+  исключение: сервер ходит только к Cleaner (его адрес — в списке), а данные доходят до провайдера, которого в списке
+  нет, через Cleaner и его проверки (только публичные https-адреса, соединение с проверенным адресом). Частные
+  IP-адреса списка — внутренние (`cleaner_route.is_external`): шлюзы в облачные модели в список не добавлять.
 - **Защищённый источник MCP** (`mcp_servers.protected`, только общий сервер): после его успешного вызова диалог
   навсегда без «Интернета» (`chats.protected_used`), веб-инструменты MCP снимаются в том же ходе, вызов с адресом
   в аргументах (`mcp_client.has_url`: и без схемы — `evil.com/x`, IPv4, `xn--`) — отказ без запроса. Мимо хода тоже
@@ -242,8 +246,9 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
     .venv/Scripts/python -m pytest -q -m integration        # браузер (Edge/Chrome + node 22, Firefox, WebKit), PowerShell
     .venv/Scripts/python -m pytest -q -m manual             # живая приёмка после выкладки (команда — testing.md)
 
-- Точечно: s06 — `tests/test_s06.py` и соседи; Cleaner — `tests/test_cleaner.py`, сквозной — `-m integration
-  tests/test_cleaner_contract.py tests/test_ui_cleaner.py` (нужен `cleaner/.venv` или `CLEANER_TEST_REPO`). Полные
+- Точечно: s06 — `tests/test_s06.py` и соседи; Cleaner — `tests/test_cleaner.py` и `tests/test_cleaner_route*.py`,
+  `tests/test_cleaner_forced.py`, сквозной — `-m integration tests/test_cleaner_contract.py tests/test_ui_cleaner.py
+  tests/test_ui_cleaner_route.py` (нужен `cleaner/.venv` или `CLEANER_TEST_REPO`). Полные
   команды — [testing](docs/architecture/testing.md).
 - Документация: `tests/test_docs.py` (быстрый) сверяет `` `модуль.символ` `` в CLAUDE.md и `docs/architecture/*.md`
   с кодом (AST, без импорта), пары «`модуль.КОНСТАНТА` (значение)» и относительные ссылки. Значения констант в текст
@@ -292,7 +297,13 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
   ввести заново (`account_mail.settings`, признак `reenter`); зеркала проектов — «настройка недоступна», отвязать и
   привязать заново (`project_mirrors._item`, признак `reenter`); идентификаторы `X-Studio-User` (`access.studio_user`)
   — новые: внешний MCP (например, мост с папками по людям) видит новых пользователей, их папки, задания и файлы потеряны;
-  личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново.
+  личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново; настройки Cleaner администратора —
+  ввести заново (`cleaner_route.settings`, признак `reenter`; до этого принудительный режим выключен).
+- Подключение через Cleaner: `Connection.routed` ⇒ `proxied` (`connections._from_row`) — инструменты, «Интернет»,
+  знания и перевод идут прежними серверными путями, но запрос такого подключения — только через `cleaner_route`
+  (`stream`, `request`, `models`, `context`); прямой `upstream.request` с ним — отказ `cleaner` предохранителем
+  `upstream._cleaner_only`. Служебный ключ — только `X-Cleaner-Key`: `Authorization` — ключ провайдера. Контекст шлюза
+  отмечен отдельной таблицей `cleaner_route_contexts` (прежний код вставляет в `cleaner_contexts` без списка столбцов).
 - Модуль раздела — `claude_code.py`, не `code.py` (заслонил бы стандартный `code`, pytest — INTERNALERROR).
 - `ntfy` не импортирует `upstream` при загрузке (цикл main → bridge → push → ntfy); после правки цепочки импорта —
   `import main` на Python хоста (3.13).
