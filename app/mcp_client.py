@@ -63,6 +63,9 @@ class ServerIn(BaseModel):
     #: «Защищённый источник» (только общие): после успешного вызова его инструмента диалог без «Интернета»
     #: и ссылок в аргументах (`chat.StreamTask._calls`)
     protected: bool = False
+    #: «В диалоге по умолчанию» (смысл — только у общих): выключенный входит в диалог, только когда его включат там
+    #: (`chats.mcp_ids`, `mcp_sources.dialog_servers`)
+    dialog_default: bool = True
 
 
 def _gate(uid):
@@ -95,6 +98,7 @@ def public(item, uid=None):
            "enabled": bool(item["enabled"])}
     if shared:
         out["shared"] = True
+        out["dialog_default"] = bool(item["dialog_default"])
         if uid is None:                          # флажок — редактору администратора
             out["protected"] = bool(item["protected"])
     return out
@@ -175,15 +179,16 @@ def _save_values(uid, body, old=None):
         raise refused("Адрес общего MCP — без строки запроса. Передайте ключ в токене или HTTP-заголовке", "invalid", 422)
     if uid is not None and body.protected:
         raise refused("«Защищённый источник» — только у общих подключений MCP", "invalid", 422)
-    return (*_values(body, old), int(body.protected))
+    # у личного флажок не действует (он входит в диалог только явно) — хранится умолчание
+    return (*_values(body, old), int(body.protected), int(body.dialog_default or uid is not None))
 
 
 def create_for(uid, body):
     if state.DB.execute("SELECT count(*) FROM mcp_servers WHERE user_id IS ?", (uid,)).fetchone()[0] >= MAX_SERVERS:
         raise refused("Не больше 16 подключений MCP")
     values = _save_values(uid, body)
-    cursor = state.DB.execute("INSERT INTO mcp_servers(name,url,secret_enc,enabled,protected,user_id)"
-                              " VALUES(?,?,?,?,?,?)", (*values, uid))
+    cursor = state.DB.execute("INSERT INTO mcp_servers(name,url,secret_enc,enabled,protected,dialog_default,user_id)"
+                              " VALUES(?,?,?,?,?,?,?)", (*values, uid))
     return public(row(uid, cursor.lastrowid, own=True), uid)
 
 
@@ -196,8 +201,8 @@ def detail_for(uid, sid):
 
 def update_for(uid, sid, body):
     values = _save_values(uid, body, row(uid, sid, own=True))
-    state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=?,protected=? WHERE id=? AND user_id IS ?",
-                     (*values, sid, uid))
+    state.DB.execute("UPDATE mcp_servers SET name=?,url=?,secret_enc=?,enabled=?,protected=?,dialog_default=?"
+                     " WHERE id=? AND user_id IS ?", (*values, sid, uid))
     mcp_sources.forget(sid)
     return public(row(uid, sid, own=True), uid)
 
@@ -245,12 +250,15 @@ def _catalog_tool(item, tool, rules):
 async def catalog_for(uid, refresh=False):
     """Серверы учётки для окна MCP диалога: `state` — `off` (выключен, не опрашивается), `ok`, `error`
     (`message`); правила сервера, инструменты, открытые учётке группами (с пометками «интернет» и «с
-    подтверждением» после политики администратора), подсказки, объявленные контракты Studio (`contracts`:
+    подтверждением» после политики администратора), подсказки, у общих — `dialog_default` («В диалоге по умолчанию»;
+    false — сервер включают в диалоге вручную), объявленные контракты Studio (`contracts`:
     files, user_files, status — mcp_contracts). Опрос параллельно, каждый — до
     `mcp_sources.LIST_SEC`, из кэша; `refresh` — заново, если запись старше `mcp_sources.REFRESH_MIN_SEC`."""
 
     async def one(item):
         out = {"id": item["id"], "name": item["name"], "shared": item["user_id"] is None}
+        if out["shared"]:                            # без отметки — в диалог только вручную (`dialog_servers`)
+            out["dialog_default"] = bool(item["dialog_default"])
         empty = {"instructions": None, "tools": [], "prompts": []}
         if not item["enabled"]:
             return {**out, "state": "off", **empty}
@@ -555,7 +563,8 @@ def _prompt(item):
 
 TOOL_OFF = "Инструмент выключен в этом диалоге"
 WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
-TRIMMED = "Инструментов MCP больше 128 — часть этого сервера не предложена модели"
+#: заметка хода (шаг `note`, не ошибка): {0} — предел инструментов запроса (`profiles.max_tools`) или списка сервера
+TRIMMED = "Инструментов MCP больше {0} — часть этого сервера не предложена модели"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
 #: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED.
 #: URL_RE — явные адреса: любая схема `x://`, `www.`, адрес без схемы `//host`, IPv4 (и с портом или путём:
@@ -626,7 +635,8 @@ class Tools:
         self.uid, self.chat_id, self.conn = uid, chat_id, conn
         self.ids, self.explicit = list(ids), set(explicit)
         self.sessions, self.calls, self.specs = [], {}, []
-        self.failed = []                     # (имя сервера, слова) — сервер пропущен или урезан, ход идёт
+        self.failed = []                     # (имя сервера, слова) — сервер пропущен, ход идёт
+        self.notes = []                      # (имя сервера, слова) — список урезан пределом (TRIMMED), не ошибка
         self.instructions = []               # (имя сервера, правила) серверов, давших инструменты ходу
         self.found = []                      # (строка сервера, сессия, каталог) ответивших серверов — mcp_files.sync
         self.protected = set()               # id общих серверов набора с флажком «Защищённый источник»
@@ -683,12 +693,16 @@ class Tools:
         """Каталоги серверов набора — из кэша (`mcp_sources.catalog`), без знакомства с сервером: его делает первый
         вызов. Холодный кэш: явные ждут каждый DISCOVER_SEC, серверы по умолчанию — все вместе
         `mcp_sources.DEFAULT_WAIT_SEC`; не успевший пропускается словами в `failed`. Отбор — группы доступа,
-        выключенные в диалоге, «Интернет» (`_offered`) и UPLOAD «с подтверждением» без явного включения; сверх MAX_TOOLS — лишнее по порядку набора отбрасывается
-        заметкой, ход не отказывает. `web` — «Интернет» вместо прочитанного из диалога (`web_tools`)."""
+        выключенные в диалоге, «Интернет» (`_offered`) и UPLOAD «с подтверждением» без явного включения; сверх
+        предела запроса подключения (`profiles.max_tools`, без подключения — MAX_TOOLS) лишнее по порядку набора
+        отбрасывается заметкой в `notes` (TRIMMED), ход не отказывает. `web` — «Интернет» вместо прочитанного из
+        диалога (`web_tools`)."""
         chat = self._chat()
         if chat is None:
             return
         off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
+        import profiles                       # здесь, не при загрузке: profiles тянет разделы
+        cap = profiles.max_tools(self.conn) if self.conn is not None else MAX_TOOLS
         if web is None:
             web = bool(chat["web"]) and not chat["protected_used"]   # после защищённого источника — без веб-инструментов
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
@@ -714,7 +728,7 @@ class Tools:
                 gated = tool["name"] == UPLOAD and hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ())
                 if tool["name"] in off.get(item["id"], ()) or refusal is not None or gated:
                     continue
-                if len(self.calls) >= MAX_TOOLS:
+                if len(self.calls) >= cap:
                     trimmed += 1
                     continue
                 name = f"mcp_{item['id']}_{len(self.calls)}"
@@ -726,7 +740,7 @@ class Tools:
                     "parameters": tool["inputSchema"]}})
                 given += 1
             if trimmed or catalog.trimmed:
-                self.failed.append((item["name"], TRIMMED))
+                self.notes.append((item["name"], TRIMMED.format(cap if trimmed else MAX_TOOLS)))
             if given:
                 self.instructions.append((item["name"], catalog.instructions))
 

@@ -128,6 +128,8 @@ def _tool_line(step: dict, lang: str) -> list[str]:
         lines = ["- " + word("Инструмент", lang)]
     if error:
         lines[0] += " — " + _inline(server_word(error, lang) if isinstance(error, str) else error)
+    elif isinstance(step.get("note"), str):              # заметка хода (mcp_client.TRIMMED) — не ошибка
+        lines[0] += " — " + _inline(server_word(step["note"], lang))
     return lines
 
 

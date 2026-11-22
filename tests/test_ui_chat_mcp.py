@@ -85,7 +85,8 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
         ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"
                  f" && {TOGGLE} && !{TOGGLE}.hidden && {TOGGLE}.textContent !== 'MCP'"),
         ("eval", "draftChip", f"""(async () => {{ const m = {API};
-          const shared = (await m.api('GET', '/api/mcp')).items.filter(s => s.shared && s.enabled).length;
+          const shared = (await m.api('GET', '/api/mcp')).items
+            .filter(s => s.shared && s.enabled && s.dialog_default !== false).length;
           return {TOGGLE}.textContent === 'MCP (' + shared + ')'; }})()"""),
         # новый диалог: общий сервер и все его инструменты, и «с подтверждением», включены по умолчанию
         *open_dialog(sid), state(sid),
@@ -142,6 +143,61 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
     offered = [t["function"]["description"].split(". ", 1)[0] for r in live.gw.chat_requests
                for t in r.get("tools", []) if t["function"]["name"].startswith(f"mcp_{sid}_")]
     assert offered == [f"{name}: video_translate"]
+    assert not problems(result), result.get("log")
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_default_off_shared_server_is_switched_on_in_the_dialog(browser, live, width):
+    """Решение владельца 2026-11-22: общий MCP без «В диалоге по умолчанию» в новом диалоге не отмечен, с пометкой
+    «включается в диалоге вручную» и не в счёте чипа; отметка включает его в этом диалоге. Его список длиннее
+    `mcp_client.MAX_TOOLS` — под ответом заметка, а плашка ответа без ошибки."""
+    login, name, path = f"mcp-manual-{width}", f"Вручную {width}", f"/mcp-manual-{width}"
+    server(live, path, tools=[tool(f"t{n}") for n in range(129)])
+    client, sid = admin_client(live), None
+    try:
+        response = client.post("/api/admin/shared/mcp", json={"name": name, "url": HOST + path, "token": MCP_KEY,
+                                                              "dialog_default": False})
+        assert response.status_code == 201, response.text
+        sid = response.json()["id"]
+        live.add_user(login)
+        mobile = width == 320
+        badge = "document.querySelector('#messages .msg.assistant .web-badge')"
+        steps = [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+            ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(mobile),
+            ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"
+                     f" && {TOGGLE} && !{TOGGLE}.hidden"),
+            ("eval", "draftChip", f"""(async () => {{ const m = {API};
+              const shared = (await m.api('GET', '/api/mcp')).items
+                .filter(s => s.shared && s.enabled && s.dialog_default !== false).length;
+              return {TOGGLE}.textContent === (shared ? 'MCP (' + shared + ')' : 'MCP'); }})()"""),
+            *open_dialog(sid),
+            ("eval", "before", f"[{row(sid)}.querySelector('.chat-mcp-server').checked,"
+                               f" {row(sid)}.querySelector('.chat-mcp-manual')?.textContent]"),
+            ("eval", "serverOn", f"{row(sid)}.querySelector('.chat-mcp-server').click()"),
+            ("click", "#chat-mcp-save"), ("wait", f"!{is_open(DIALOG)}"),
+            ("type", "#chat-input", "Привет"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "created", chip_matches_view()),
+            ("wait", f"{badge} && !{badge}.hidden && !{badge}.classList.contains('busy')"),
+            ("eval", "badge", f"[{badge}.textContent, {badge}.classList.contains('bad')]"),
+            *reload_chat(), *open_dialog(sid), ("eval", "kept", f"{row(sid)}.querySelector('.chat-mcp-server').checked"),
+            ("eval", "dialogFits", f"document.querySelector('{DIALOG}').scrollWidth <= innerWidth && {NO_OVERFLOW}")]
+        result = browser.drive(live.url + "/", steps, width=width, mobile=mobile)
+    finally:
+        if sid is not None:                      # не мешать счёту общих серверов в соседних тестах
+            client.delete(f"/api/admin/shared/mcp/{sid}")
+        client.close()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert values["draftChip"] is True
+    assert values["before"] == [False, "включается в диалоге вручную"]
+    matches, chat = values["created"]
+    assert matches and chat["mcp_ids"][0] == sid
+    text, bad = values["badge"]
+    assert not bad and "ошибк" not in text and "заметк" in text, text
+    assert values["kept"] is True and values["dialogFits"] is True
+    offered = [t["function"]["description"].split(". ", 1)[0] for t in live.gw.chat_requests[-1].get("tools", [])
+               if t["function"]["name"].startswith(f"mcp_{sid}_")]
+    assert len(offered) == 128 and offered[0] == f"{name}: t0"
     assert not problems(result), result.get("log")
 
 

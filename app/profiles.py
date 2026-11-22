@@ -7,7 +7,8 @@
 - У Cleaner профиля нет: 422 `cleaner`.
 - Параметры (`request_params`): `temperature`, `top_p`, `presence_penalty` — как есть; `max_tokens` — как
   `max_completion_tokens` у профиля `openai`; `top_k` нестандартен — у `openai` отбрасывается, у прочих — только
-  явно заданный; `max_images` — предел картинок запроса (`max_images`), в запрос не уходит. Отказ сервиса с именем отправленного параметра и признаком отказа (`REJECTED`) — слова
+  явно заданный; `max_images` — предел картинок запроса (`max_images`), `max_tools` — предел инструментов MCP
+  запроса (`max_tools`: API в духе OpenAI не принимают больше 128 инструментов), оба в запрос не уходят. Отказ сервиса с именем отправленного параметра и признаком отказа (`REJECTED`) — слова
   `REFUSED` (`refusal`).
 - Журнал — только id: ни текста, ни параметров, ни подсказок.
 """
@@ -52,6 +53,7 @@ class Params(BaseModel):
     presence_penalty: float | None = Field(None, ge=-2, le=2, allow_inf_nan=False)
     max_tokens: int | None = Field(None, ge=1, le=1_000_000, strict=True)
     max_images: int | None = Field(None, ge=1, le=32, strict=True)
+    max_tools: int | None = Field(None, ge=1, le=256, strict=True)
 
 
 class Suggestion(BaseModel):
@@ -136,6 +138,14 @@ def max_images(conn: connections.Connection) -> int:
     """Картинок на весь запрос к подключению: `max_images` профиля, иначе DEFAULT_MAX_IMAGES."""
     row = None if conn.cleaner else _row(conn.id)
     return json.loads(row["params"]).get("max_images", DEFAULT_MAX_IMAGES) if row else DEFAULT_MAX_IMAGES
+
+
+def max_tools(conn: connections.Connection) -> int:
+    """Инструментов MCP на запрос хода к подключению (отбор — `mcp_client.Tools.discover`; встроенные и «Интернета»
+    идут сверх него): `max_tools` профиля, иначе `mcp_client.MAX_TOOLS`."""
+    import mcp_client                      # здесь, не при загрузке: mcp_client сам зовёт profiles в ходе
+    row = None if conn.cleaner else _row(conn.id)
+    return json.loads(row["params"]).get("max_tools", mcp_client.MAX_TOOLS) if row else mcp_client.MAX_TOOLS
 
 
 def text_of(conn: connections.Connection) -> str:

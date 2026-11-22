@@ -27,11 +27,12 @@ export function isMedia(file) {
   return /^(audio|video)\//.test(file.type || '');
 }
 
-/** Действующий набор MCP нового диалога (как mcp_sources.dialog_servers): явные плюс общие включённые, кроме
- *  выключенных в черновике; `servers` — ответ GET /api/mcp. */
+/** Действующий набор MCP нового диалога (как mcp_sources.dialog_servers): явные плюс общие включённые «в диалоге по
+ *  умолчанию», кроме выключенных в черновике; `servers` — ответ GET /api/mcp. */
 export function draftIds(draft, servers) {
   const { ids, off } = stateOf(draft);
-  const shared = servers.filter((s) => s.shared && s.enabled && !off.includes(s.id) && !ids.includes(s.id)).map((s) => s.id);
+  const shared = servers.filter((s) => s.shared && s.enabled && s.dialog_default !== false && !off.includes(s.id)
+    && !ids.includes(s.id)).map((s) => s.id);
   return [...ids, ...shared].slice(0, MAX_SERVERS);
 }
 

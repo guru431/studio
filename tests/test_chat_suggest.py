@@ -2,9 +2,11 @@
 из профиля подключения, затем `prompts` MCP диалога (не больше `chat.SUGGESTIONS_MAX`); оценка заполнения
 контекста — системное сообщение, история и вложения будущего хода."""
 import math
+from types import SimpleNamespace
 
 import chat
 import chat_system
+import chat_tools
 import connections
 import profiles
 import state
@@ -77,7 +79,10 @@ def test_estimate_counts_system_history_and_attachments(studio):
     conn = connections.get(uid, conn_id)
     empty = estimate()
     system_only = chat.estimate_tokens(chat_system.wrap(chat_system.base(uid, conn, None), [{"role": "user", "content": ""}]))
-    assert empty == {"tokens": system_only, "limit": chat.CONTEXT["local-gemma-abl"]}
+    # ход через сервер шлёт и описания встроенных инструментов (вопрос, план)
+    builtin = chat.spec_tokens(chat_tools.specs(SimpleNamespace(user_id=uid, chat_id=cid)))
+    assert builtin > 0
+    assert empty == {"tokens": system_only + builtin, "limit": chat.CONTEXT["local-gemma-abl"]}
 
     # системный текст профиля — в оценке
     assert studio.c.put(f"/api/connections/{conn_id}/profile", json={"system_text": "с" * 3000}).status_code == 200

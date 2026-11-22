@@ -19,6 +19,9 @@ const PARAMS = [
   { key: 'max_tokens', label: () => tr("Предел ответа, токенов"), min: 1, max: 1000000, step: '1', int: true },
   // в запрос не уходит: предел картинок на весь запрос (`profiles.max_images`), без него — 4
   { key: 'max_images', label: () => tr("Картинок в запросе"), min: 1, max: 32, step: '1', int: true },
+  // в запрос не уходит: предел инструментов MCP хода (`profiles.max_tools`), без него — 128 (API в духе OpenAI больше не
+  // принимают)
+  { key: 'max_tools', label: () => tr("Инструментов в запросе"), min: 1, max: 256, step: '1', int: true },
 ];
 
 function range(p) {

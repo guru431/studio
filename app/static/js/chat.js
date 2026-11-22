@@ -529,6 +529,7 @@ function stepNode(s) {
     : s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
   else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${message(s.error)}`));
+  else if (s.note) li.append(el('span', { class: 'muted web-note-step' }, ` — ${message(s.note)}`));   // mcp_client.TRIMMED
   else if (s.refused) li.append(el('span', { class: 'muted' }, ` — ${tr("Вызов отклонён")}`));
   return li;
 }
@@ -564,7 +565,10 @@ function badgeText(steps) {
   if (of('page')) exa.push(count(of('page'), [tr("страница"), tr("страницы"), tr("страниц")]));
   const parts = exa.length ? [tr("🌐 Интернет (Exa): {0}", exa.join(', '))] : [];
   if (of('youtube')) parts.push(`▶ YouTube: ${count(of('youtube'), [tr("ролик"), tr("ролика"), tr("роликов")])}`);
-  if (of('mcp')) parts.push(`MCP: ${of('mcp')}`);
+  // заметка MCP (`note`: список урезан пределом) — не вызов и не ошибка
+  const notes = steps.filter((s) => s.kind === 'mcp' && s.note && !s.error).length;
+  if (of('mcp') > notes) parts.push(`MCP: ${of('mcp') - notes}`);
+  if (notes) parts.push(count(notes, [tr("заметка MCP"), tr("заметки MCP"), tr("заметок MCP")]));
   if (of('ask')) parts.push(count(of('ask'), [tr("вопрос"), tr("вопроса"), tr("вопросов")]));   // ask_user (chat-pending.js)
   if (of('knowledge')) parts.push(tr("Знания: {0}", count(of('knowledge'), [tr("поиск"), tr("поиска"), tr("поисков")])));
   if (of('duplicate')) parts.push(count(of('duplicate'), [tr("повтор пропущен"), tr("повтора пропущено"), tr("повторов пропущено")]));

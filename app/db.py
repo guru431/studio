@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 61
+VERSION = 62
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -909,6 +909,11 @@ END;
 """
 SCHEMA += VOICE_TRASH_61
 
+#: общий MCP «В диалоге по умолчанию» (mcp_sources.dialog_servers): 0 — в диалог только вручную; прежний код столбец
+#: не читает — такие серверы снова действуют во всех диалогах
+MCP_DEFAULT_62 = "ALTER TABLE mcp_servers ADD COLUMN dialog_default INTEGER NOT NULL DEFAULT 1;"
+SCHEMA += MCP_DEFAULT_62
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1033,6 +1038,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     60: TRANSCRIPT_PLAYBACK_60,
     # корзина отдельных образцов голоса
     61: VOICE_TRASH_61,
+    # общий MCP: в диалоге по умолчанию или только вручную
+    62: MCP_DEFAULT_62,
 }
 
 

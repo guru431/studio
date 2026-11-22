@@ -31,7 +31,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 62
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,7 +40,8 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.VOICE_TRASH_61).removesuffix(db.TRANSCRIPT_PLAYBACK_60)
+        conn.executescript(db.SCHEMA.removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
+                           .removesuffix(db.TRANSCRIPT_PLAYBACK_60)
                            .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
                            .removesuffix(db.SHARED_55) + "PRAGMA user_version=54;")
@@ -80,7 +81,7 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 62
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -192,7 +193,7 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 62
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -310,7 +311,7 @@ def test_step_61_trashes_voice_samples_aside_and_previous_writer_works(env):
         conn.execute(voice, ("before", "before-audio"))
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 61
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 62
 
         # прежний код: голос (первый образец — триггером) и образец без списка столбцов
         conn.execute(voice, ("previous", "previous-audio"))
@@ -334,6 +335,22 @@ def test_step_61_trashes_voice_samples_aside_and_previous_writer_works(env):
         conn.execute("DELETE FROM users WHERE id = 1")
         assert conn.execute("SELECT count(*) FROM voice_sample_trash").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_62_marks_shared_mcp_dialog_default_and_previous_writer_works(env):
+    """Шаг 62: `mcp_servers.dialog_default` — прежние серверы и вставка прежнего кода (своим списком столбцов)
+    остаются «в диалоге по умолчанию»."""
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 61)
+        add = "INSERT INTO mcp_servers(name,url,secret_enc,enabled,protected,user_id) VALUES(?,'https://x.test/mcp',x'00',1,0,NULL)"
+        conn.execute(add, ("before",))
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 62
+        conn.execute(add, ("previous",))
+        assert [tuple(r) for r in conn.execute("SELECT name, dialog_default FROM mcp_servers ORDER BY id")] == [
+            ("before", 1), ("previous", 1)]
 
 
 def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):

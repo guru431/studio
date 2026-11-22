@@ -307,7 +307,7 @@ def test_catalog_survives_unexpected_server_error(studio, monkeypatch, caplog):
     response = studio.c.get("/api/mcp/catalog")
     assert response.status_code == 200
     items = {i["id"]: i for i in response.json()["items"]}
-    assert items[sid] == {"id": sid, "name": "Shared tools", "shared": True, "state": "error",
+    assert items[sid] == {"id": sid, "name": "Shared tools", "shared": True, "dialog_default": True, "state": "error",
                           "message": mcp_client.CATALOG_FAILED, "instructions": None, "tools": [], "prompts": []}
     assert items[other]["state"] == "ok" and items[other]["tools"]
     assert "private-secret-detail" not in caplog.text and "private-secret-detail" not in response.text
@@ -390,7 +390,7 @@ def test_tools_over_limit_trimmed_not_refused(studio, monkeypatch):
     assert events[-1] == ("done", {"status": "done"})
     assert offered(studio.gw.chat_requests[-1]) == ["Mine: c", "Mine: d", "Shared tools: a"]
     assert messages(studio, cid)[1]["tools"] == [{"kind": "mcp", "server": "Shared tools",
-                                                 "error": mcp_client.TRIMMED}]
+                                                 "note": mcp_client.TRIMMED.format(3)}]
 
 
 def test_server_over_tool_limit_trimmed_in_catalog_and_turn(studio, monkeypatch):
@@ -404,7 +404,7 @@ def test_server_over_tool_limit_trimmed_in_catalog_and_turn(studio, monkeypatch)
     assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
     assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: a", "Shared tools: b", "Shared tools: c"]
     assert messages(studio, cid)[1]["tools"] == [{"kind": "mcp", "server": "Shared tools",
-                                                 "error": mcp_client.TRIMMED}]
+                                                 "note": mcp_client.TRIMMED.format(3)}]
 
 
 def test_failing_prompts_keep_the_server_in_chat_and_catalog(studio):
@@ -536,3 +536,121 @@ def test_admin_tool_policy_overrides_server_hints(studio):
              for t in studio.c.get("/api/mcp/catalog").json()["items"][0]["tools"]}
     assert marks == {"lookup": (True, False), "search": (False, False), "danger": (False, False),
                      "quiet": (False, True)}
+
+
+# ---- решение владельца 2026-11-22: «В диалоге по умолчанию», предел инструментов подключения, оценка ----------
+
+def add_manual(studio, tools, prompts=None):
+    """Общий MCP «Manual» на /manual без отметки «В диалоге по умолчанию» (вход — администратором)."""
+    created = studio.c.post("/api/admin/shared/mcp", json={"name": "Manual", "url": HOST + "/manual", "token": MCP_KEY,
+                                                           "dialog_default": False})
+    assert created.status_code == 201 and created.json()["dialog_default"] is False, created.text
+    server(studio, "/manual", tools=tools, prompts=prompts)
+    return created.json()["id"]
+
+
+def test_default_off_shared_server_joins_only_when_switched_on(studio):
+    """Общий MCP без «В диалоге по умолчанию» не входит в новый диалог — ни в ход, ни в подсказки, ни в проверку
+    «Интернета» без ключа Exa; включённый в диалоге (`mcp_ids`) — предлагается; сервер по умолчанию — как прежде."""
+    sid, _, _ = setup(studio)
+    signin(studio, "admin")
+    manual = add_manual(studio, [tool("find", annotations={"openWorldHint": True})], prompts=[{"name": "brief"}])
+    signin(studio, "member")
+    listed = {i["id"]: i for i in studio.c.get("/api/mcp").json()["items"]}
+    assert listed[manual]["dialog_default"] is False and listed[sid]["dialog_default"] is True
+    catalog = {i["id"]: i for i in studio.c.get("/api/mcp/catalog").json()["items"]}
+    assert catalog[manual]["dialog_default"] is False and catalog[sid]["dialog_default"] is True
+
+    cid = new_chat(studio)
+    shown = view(studio, cid)
+    assert shown["mcp_ids"] == [sid]
+    fresh = studio.c.get("/api/chats/suggestions", params={"connection_id": shown["connection_id"]}).json()
+    assert [i for i in fresh if i["source"] == "mcp"] == []
+    refused = studio.c.patch(f"/api/chats/{cid}", json={"web": True})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "no_exa_key"
+    studio.gw.chat_script = [["Готово"]]
+    sse(turn(studio, cid))
+    assert offered(studio.gw.chat_requests[-1]) == ["Shared tools: lookup"]
+
+    on = studio.c.patch(f"/api/chats/{cid}", json={"mcp_ids": [manual]})
+    assert on.status_code == 200 and on.json()["mcp_ids"] == [manual, sid]
+    assert [i["server"] for i in studio.c.get("/api/chats/suggestions", params={"chat_id": cid}).json()
+            if i["source"] == "mcp"] == ["Manual"]
+    assert studio.c.patch(f"/api/chats/{cid}", json={"web": True}).status_code == 200
+    studio.gw.chat_script = [["Готово"]]
+    sse(turn(studio, cid))
+    assert offered(studio.gw.chat_requests[-1]) == ["Manual: find", "Shared tools: lookup"]
+    off = studio.c.patch(f"/api/chats/{cid}", json={"mcp_ids": []})
+    assert off.json()["mcp_ids"] == [sid]                       # снят — снова только сервер по умолчанию
+    assert view(studio, new_chat(studio))["mcp_ids"] == [sid]
+
+
+def test_admin_round_trips_dialog_default(studio):
+    sid, _, _ = setup(studio)
+    signin(studio, "admin")
+    path = f"/api/admin/shared/mcp/{sid}"
+    assert studio.c.get(path).json()["dialog_default"] is True
+    body = {"name": "Shared tools", "url": HOST + "/mcp"}
+    assert studio.c.put(path, json={**body, "dialog_default": False}).json()["dialog_default"] is False
+    assert studio.c.get(path).json()["dialog_default"] is False
+    assert studio.c.get("/api/admin/shared/mcp").json()["items"][0]["dialog_default"] is False
+    signin(studio, "member")
+    assert view(studio, new_chat(studio))["mcp_ids"] == []
+    signin(studio, "admin")
+    assert studio.c.put(path, json={**body, "dialog_default": True}).json()["dialog_default"] is True
+    # у личного флажок не действует: входит в диалог только явно, хранится умолчание
+    mine = studio.c.post("/api/mcp", json={"name": "Mine", "url": HOST + "/mine", "dialog_default": False})
+    assert mine.status_code == 201 and "dialog_default" not in mine.json()
+    assert state.DB.execute("SELECT dialog_default FROM mcp_servers WHERE id = ?", (mine.json()["id"],)).fetchone()[0] == 1
+
+
+def many_servers(studio, sizes):
+    """Общие серверы по `sizes` инструментов (вход — администратором): первый — «Shared tools» из setup на /mcp,
+    дальше S1…Sn."""
+    for n, size in enumerate(sizes):
+        if n:
+            add_shared(studio, f"S{n}", f"/s{n}")
+        server(studio, f"/s{n}" if n else "/mcp", tools=[tool(f"t{n}_{k}") for k in range(size)])
+
+
+def test_connection_max_tools_lifts_the_cap(studio):
+    """Профиль подключения `max_tools`: без него — 128 инструментов MCP и заметка (`note`, не ошибка) у урезанного
+    сервера; с 200 — все 168 инструментов четырёх серверов, без заметки (s06: 16 + 59 + 44 + 49)."""
+    setup(studio)
+    signin(studio, "admin")
+    many_servers(studio, [16, 59, 44, 49])
+    conn_id = state.DB.execute("SELECT id FROM connections WHERE user_id IS NULL").fetchone()[0]
+    signin(studio, "member")
+    cid = new_chat(studio)
+    studio.gw.chat_script = [["Готово"]]
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert len(offered(studio.gw.chat_requests[-1])) == mcp_client.MAX_TOOLS == 128
+    assert messages(studio, cid)[1]["tools"] == [{"kind": "mcp", "server": "S3", "note": mcp_client.TRIMMED.format(128)}]
+    signin(studio, "admin")
+    r = studio.c.put(f"/api/admin/shared/connections/{conn_id}/profile", json={"params": {"max_tools": 200}})
+    assert r.status_code == 200, r.text
+    signin(studio, "member")
+    studio.gw.chat_script = [["Готово"]]
+    assert sse(turn(studio, cid))[-1] == ("done", {"status": "done"})
+    assert len(offered(studio.gw.chat_requests[-1])) == 168
+    assert "max_tools" not in studio.gw.chat_requests[-1]
+    assert messages(studio, cid)[-1]["tools"] == []
+
+
+def test_estimate_counts_tool_specs_of_the_turn(studio):
+    """Оценка заполнения считает описания инструментов, которые ход отправит модели: MCP набора и встроенные."""
+    sid, _, _ = setup(studio, tools=[tool("lookup", description="x" * 3000)])
+    cid = new_chat(studio)
+    url = f"/api/chats/{cid}/estimate"
+    with_mcp = studio.c.post(url, json={"text": ""}).json()["tokens"]
+    assert studio.c.patch(f"/api/chats/{cid}", json={"mcp_off": [sid]}).status_code == 200
+    without = studio.c.post(url, json={"text": ""}).json()["tokens"]
+    assert with_mcp - without >= 1000
+    assert studio.c.patch(f"/api/chats/{cid}", json={"mcp_off": []}).status_code == 200
+    studio.gw.chat_script = [["Готово"]]
+    sse(turn(studio, cid))
+    sent = studio.gw.chat_requests[-1]["tools"]
+    mcp_specs = [s for s in sent if s["function"]["name"].startswith("mcp_")]
+    builtin = [s for s in sent if not s["function"]["name"].startswith("mcp_")]
+    assert mcp_specs and builtin
+    assert with_mcp - without == chat.spec_tokens(mcp_specs + builtin) - chat.spec_tokens(builtin)

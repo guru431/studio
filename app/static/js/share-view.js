@@ -86,6 +86,7 @@ function stepNode(s) {
   else if (s.kind === 'memory') li.append(s.action === 'forget' ? tr("Память: запись удалена") : tr("Память: запись добавлена"));
   else li.append(tr("Инструмент"));
   if (s.error) li.append(el('span', { class: 'error' }, ` — ${partText(s.error)}`));
+  else if (typeof s.note === 'string' && s.note) li.append(el('span', { class: 'muted' }, ` — ${partText(s.note)}`));
   return li;
 }
 

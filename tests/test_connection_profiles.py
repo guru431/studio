@@ -50,6 +50,8 @@ def test_own_profile_crud_and_limits(studio):
            {"params": {"temperature": 2.1}}, {"params": {"top_p": 0}}, {"params": {"top_k": 1.5}},
            {"params": {"top_k": True}}, {"params": {"top_k": 1001}}, {"params": {"presence_penalty": -3}},
            {"params": {"max_tokens": 0}}, {"params": {"max_tokens": 1_000_001}}, {"params": {"seed": 1}},
+           {"params": {"max_tools": 0}}, {"params": {"max_tools": 257}}, {"params": {"max_tools": "200"}},
+           {"params": {"max_tools": 200.0}}, {"params": {"max_tools": True}},
            {"suggestions": [{"title": "t", "text": "x"}] * 13}, {"suggestions": [{"title": "", "text": "x"}]},
            {"suggestions": [{"title": "t" * 81, "text": "x"}]}, {"suggestions": [{"title": "t", "text": "x" * 2001}]}]
     for body in bad:
@@ -104,6 +106,11 @@ def test_request_params_by_provider(studio):
     assert profiles.request_params(get(gateway)) == expected
     studio.c.put(f"/api/connections/{other}/profile", json={"params": {"temperature": 1}})
     assert profiles.request_params(get(other)) == {"temperature": 1}                  # top_k — только явно заданный
+    # предел инструментов MCP хода — не параметр запроса; без него — mcp_client.MAX_TOOLS
+    assert profiles.max_tools(get(other)) == 128
+    for value in (1, 256):
+        assert studio.c.put(f"/api/connections/{other}/profile", json={"params": {"max_tools": value}}).status_code == 200
+        assert profiles.max_tools(get(other)) == value and profiles.request_params(get(other)) == {}
 
 
 def test_cleaner_has_no_profile(studio):

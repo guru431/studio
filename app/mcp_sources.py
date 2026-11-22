@@ -187,15 +187,17 @@ def confirm_needed(hint, args) -> bool:
 
 def dialog_servers(uid, row, conn) -> list:
     """id действующих серверов диалога `row` (строка `chats`) по порядку: явно включённые (`mcp_ids`, только
-    ещё доступные — `mcp_client.present`), затем общие включённые и открытые учётке, кроме `mcp_off`, по id; не
-    больше `mcp_client.MAX_SERVERS`. Личные — только явно. Прямое подключение, Cleaner или диалог без
-    подключения — общие по умолчанию молча не действуют (явные проверяет 409 хода и PATCH)."""
+    ещё доступные — `mcp_client.present`), затем общие включённые, открытые учётке и отмеченные «В диалоге по
+    умолчанию» (`dialog_default`), кроме `mcp_off`, по id; не больше `mcp_client.MAX_SERVERS`. Личные и общие без
+    отметки — только явно. Прямое подключение, Cleaner или диалог без подключения — общие по умолчанию молча не
+    действуют (явные проверяет 409 хода и PATCH)."""
     explicit = mcp_client.present(uid, row["mcp_ids"])
     if conn is None or not conn.proxied or conn.cleaner:
         return explicit
     off = set(json.loads(row["mcp_off"]))
     defaults = [item["id"] for item in mcp_client.servers(uid, enabled_only=True)
-                if item["user_id"] is None and item["id"] not in off and item["id"] not in explicit]
+                if item["user_id"] is None and item["dialog_default"] and item["id"] not in off
+                and item["id"] not in explicit]
     return (explicit + defaults)[:mcp_client.MAX_SERVERS]
 
 

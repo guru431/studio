@@ -38,6 +38,10 @@ function editor(host, previous, { local = false, shared = false, save }) {
   const guarded = input('mcp-protected', 'checkbox'); guarded.checked = !!old.protected;
   const guard = shared ? el('div', {}, el('label', { class: 'check' }, guarded, tr("Защищённый источник")),
     el('p', { class: 'muted small' }, tr("После первого успешного вызова инструмента этого сервера в диалоге выключаются «Интернет» и веб-инструменты, а вызовы со ссылками в аргументах отклоняются."))) : null;
+  // «В диалоге по умолчанию» (mcp_client.ServerIn.dialog_default) — тоже только у общего сервера
+  const byDefault = input('mcp-dialog-default', 'checkbox'); byDefault.checked = old.dialog_default !== false;
+  const dialogDefault = shared ? el('div', {}, el('label', { class: 'check' }, byDefault, tr("В диалоге по умолчанию")),
+    el('p', { class: 'muted small' }, tr("Без отметки сервер не предлагается в новых диалогах: пользователь включает его в окне MCP диалога."))) : null;
   const remote = el('div', {}, field(tr("Адрес MCP"), url), field(tr("Токен Bearer"), token),
     el('label', { class: 'check' }, clear, tr("Удалить сохранённый токен")),
     field(tr("HTTP-заголовки (ИМЯ=значение, по одному на строку)"), headers),
@@ -51,7 +55,7 @@ function editor(host, previous, { local = false, shared = false, save }) {
   const note = el('p', { class: 'error', id: 'mcp-editor-status', 'aria-live': 'polite' });
   const submit = button(tr("Сохранить"), { type: 'submit', class: 'btn btn-accent', id: 'mcp-save' });
   const form = el('form', { id: 'mcp-form' }, field(tr("Имя сервера"), name), field(tr("Тип подключения"), type), remote,
-    ...(local ? [stdio] : []), el('label', { class: 'check' }, enabled, tr("Включено")), guard, note, submit);
+    ...(local ? [stdio] : []), el('label', { class: 'check' }, enabled, tr("Включено")), dialogDefault, guard, note, submit);
   const dialog = openDialog(host, { id: 'mcp-editor', title: tr("Подключение MCP"), body: [form] });
   form.addEventListener('submit', async event => {
     event.preventDefault(); submit.disabled = true; note.textContent = '';
@@ -65,7 +69,7 @@ function editor(host, previous, { local = false, shared = false, save }) {
           else if (auth && !clear.checked) value.headers[auth] = old.headers[auth];
         } else if (token.value || clear.checked) value.token = clear.checked ? '' : token.value;
       }
-      if (shared) value.protected = guarded.checked;
+      if (shared) Object.assign(value, { protected: guarded.checked, dialog_default: byDefault.checked });
       await save(name.value.trim(), value, enabled.checked); dialog.close();
     } catch (err) { note.textContent = words(err); }
     finally { submit.disabled = false; }
@@ -245,7 +249,8 @@ export function chatMcpBlock({ admin = false } = {}) {
     if (!root.isConnected) return;
     list.replaceChildren(...items.map(item => el('div', { class: 'block', 'data-mcp-id': item.id },
       el('b', {}, item.name), item.url ? el('p', { class: 'muted' }, item.url) : el('p', { class: 'muted' }, tr("Общее подключение")),
-      el('p', {}, item.enabled ? tr("Включено") : tr("Выключено")), item.shared && !admin ? null : el('div', { class: 'row' },
+      el('p', {}, item.enabled ? tr("Включено") : tr("Выключено")),
+      admin && item.dialog_default === false ? el('p', { class: 'muted small mcp-manual' }, tr("В диалог — вручную")) : null, item.shared && !admin ? null : el('div', { class: 'row' },
         button(tr("Изменить"), { class: 'btn' }, () => run(async () => edit(await api('GET', `${base}/${item.id}`)))),
         button(tr("Проверить"), { class: 'btn' }, event => run(async () => {
           const control = event.currentTarget; control.disabled = true;

@@ -86,7 +86,7 @@ def test_shared_mcp_uses_the_current_users_chat_and_keeps_result_tickets_private
 
     signin(studio, "member")
     assert studio.c.get("/api/mcp").json()["items"] == [
-        {"id": sid, "name": "Shared tools", "url": "", "enabled": True, "shared": True}]
+        {"id": sid, "name": "Shared tools", "url": "", "enabled": True, "shared": True, "dialog_default": True}]
     assert studio.c.get(f"{ADMIN}/mcp/{sid}").status_code == 403
     assert studio.c.get(f"/api/mcp/{sid}").status_code == 404
     assert studio.c.put(f"/api/mcp/{sid}", json=body).status_code == 404

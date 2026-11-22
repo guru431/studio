@@ -45,6 +45,7 @@ import logging
 import math
 import uuid
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from pathlib import PurePosixPath
 from typing import Literal
 
@@ -614,7 +615,8 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
                 else:
                     out.append({"role": "user", "content": content})
             else:
-                steps = json.loads(row["tools"] or "[]")
+                # заметка (`note`, урезанный список MCP) модели не нужна — у неё нет и текста
+                steps = [s for s in json.loads(row["tools"] or "[]") if "note" not in s]
                 if steps and out and out[-1]["role"] == "user":
                     out[-1]["content"] = _prefix(web.history_block(steps, _for_model), out[-1]["content"])
                 if row["content"]:
@@ -1286,7 +1288,7 @@ class StreamTask:
         state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
                          (json.dumps(self.steps, ensure_ascii=False), self.message_id))
         log.info("чат %s: ответ %s — шаг %s: %s", self.chat_id[:8], self.message_id[:8], step["kind"],
-                 "ошибка" if "error" in step else "ok")
+                 "ошибка" if "error" in step else "заметка" if "note" in step else "ok")
 
     async def _read(self) -> str | None:
         """Инструменты выбранных MCP (mcp_client.Tools.discover), затем ответ модели. Сервер, что не ответил, —
@@ -1303,6 +1305,10 @@ class StreamTask:
                 for server, words in self.mcp.failed if self.resume is None else ():
                     self.put("tool", {"kind": "mcp", "label": server, "skipped": True})
                     self._step({"kind": "mcp", "server": server, "error": words})
+                # список урезан пределом — заметка (`note`), не ошибка: ничего не сломалось
+                for server, words in self.mcp.notes if self.resume is None else ():
+                    self.put("tool", {"kind": "mcp", "label": server, "skipped": True})
+                    self._step({"kind": "mcp", "server": server, "note": words})
                 # файлы диалога на серверы с пометкой `studio/chat-files` и согласием (mcp_files.sync)
                 notes, steps = await mcp_files.sync(self, self.mcp.found)
                 for step in steps if self.resume is None else ():
@@ -2353,7 +2359,8 @@ class EstimateIn(BaseModel):
 @router.post("/chats/{chat_id}/estimate")
 async def estimate(chat_id: str, body: EstimateIn, request: Request):
     """Заполнение контекста будущим ходом: системное сообщение (куски 1–3, как у хода), история (`compose`), текст
-    и неотправленные вложения поля ввода — `estimate_tokens`; `limit` — предел модели (`_limit`) или None.
+    и неотправленные вложения поля ввода — `estimate_tokens`, плюс описания инструментов хода через сервер
+    (`_turn_specs`, `spec_tokens`); `limit` — предел модели (`_limit`) или None.
     Знания оцениваются без поиска и индексации, как до отправки хода."""
     uid = request.state.user.id
     row = _chat_row(uid, chat_id)
@@ -2388,7 +2395,30 @@ async def estimate(chat_id: str, body: EstimateIn, request: Request):
         _, messages = _plan_excerpts(docs, system, limit, guess)
     else:
         messages = guess(())
-    return {"tokens": estimate_tokens(chat_system.wrap(system, messages)), "limit": limit}
+    specs = await _turn_specs(uid, row, conn, model) if conn is not None and conn.proxied and not conn.cleaner else []
+    return {"tokens": estimate_tokens(chat_system.wrap(system, messages)) + spec_tokens(specs), "limit": limit}
+
+
+def spec_tokens(specs: list[dict]) -> int:
+    """Описания инструментов запроса в токенах — как `estimate_tokens`: знаки JSON / 3."""
+    return math.ceil(len(json.dumps(specs, ensure_ascii=False)) / 3) if specs else 0
+
+
+async def _turn_specs(uid: int, row, conn: Connection, model: str) -> list[dict]:
+    """Описания инструментов, которые ход через сервер диалога `row` отправил бы модели (для оценки заполнения):
+    «Интернет» (`web.tools_for`, как `create_turn`), MCP набора — отбор и каталоги как у хода (`mcp_client.Tools.discover`
+    с пределом подключения `profiles.max_tools`; холодный кэш — не дольше `mcp_sources.DEFAULT_WAIT_SEC`, как
+    `mcp_client.web_tools`) и встроенные (`chat_tools.specs`; без них, пока шлюз их недавно не принял — NO_TOOLS)."""
+    kinds = web.tools_for(conn, web.has_exa_key(uid)) if row["web"] and not row["protected_used"] else []
+    tools = mcp_client.Tools(uid, row["id"], mcp_sources.dialog_servers(uid, row, conn), conn=conn)
+    try:
+        await tools.discover()
+        specs = web.specs(kinds) + tools.specs
+    finally:
+        await tools.close()
+    if clock.NOW() - NO_TOOLS.get((conn.id, model), -math.inf) >= NO_TOOLS_SEC:
+        specs += chat_tools.specs(SimpleNamespace(user_id=uid, chat_id=row["id"]))
+    return specs
 
 
 @router.get("/chats/{chat_id}/turns/{request_id}")

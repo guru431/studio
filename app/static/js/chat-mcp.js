@@ -2,8 +2,9 @@ import { tr } from './i18n.js';
 /* MCP в диалоге (mcp_sources.py, спека 2026-11-21-studio-source-foundation-design §4 и §7a п. 2): окно
  * `#chat-mcp-dialog` с серверами учётки из `GET /api/mcp/catalog` («Обновить список» — `?refresh=1`).
  *
- * Сервер — переключатель `.chat-mcp-server`: общий включён по умолчанию, выключение пишет его в `mcp_off`; свой —
- * только вручную, в `mcp_ids`. Внутри `<details>` — инструменты с переключателями `.chat-mcp-tool`: выключенный —
+ * Сервер — переключатель `.chat-mcp-server`: общий включён по умолчанию, выключение пишет его в `mcp_off`; свой и
+ * общий без отметки администратора «В диалоге по умолчанию» (`dialog_default: false`, «включается в диалоге
+ * вручную») — только вручную, в `mcp_ids`. Внутри `<details>` — инструменты с переключателями `.chat-mcp-tool`: выключенный —
  * в `mcp_tools_off`; инструмент «с подтверждением» включён, как остальные (вызов ждёт «Запустить» в чате, chat-pending.js),
  * кроме загрузки файлов диалога `artifact_upload`: её Studio делает сама — по умолчанию выключена, включение пишет её в
  * `mcp_tools_on`.
@@ -37,17 +38,21 @@ export function hasWebTools(catalog, ids, { toolsOff, toolsOn }) {
     && !(toolsOff[s.id] || []).includes(t.name) && (t.name !== UPLOAD || !t.confirm || (toolsOn[s.id] || []).includes(UPLOAD))));
 }
 
+/** Общий сервер, который действует в диалоге без явного включения (отметка «В диалоге по умолчанию»). */
+export const byDefault = (s) => s.shared && s.dialog_default !== false;
+
 /** Число действующих серверов черновика нового диалога (как mcp_sources.dialog_servers): явные плюс общие
- *  включённые, кроме выключенных в диалоге. `servers` — ответ `GET /api/mcp`. */
+ *  включённые «в диалоге по умолчанию», кроме выключенных в диалоге. `servers` — ответ `GET /api/mcp`. */
 export function draftCount(draft, servers) {
   const { ids, off } = stateOf(draft);
-  const defaults = servers.filter((s) => s.shared && s.enabled && !off.includes(s.id) && !ids.includes(s.id));
+  const defaults = servers.filter((s) => byDefault(s) && s.enabled && !off.includes(s.id) && !ids.includes(s.id));
   return Math.min(ids.length + defaults.length, MAX_SERVERS);
 }
 
-/** Черновик из диалога сервера (первый ход не прошёл, диалог убран): общие серверы снова — по умолчанию. */
+/** Черновик из диалога сервера (первый ход не прошёл, диалог убран): общие серверы по умолчанию снова — по
+ *  умолчанию, включённые вручную остаются явными. */
 export function draftOf(view, servers) {
-  const shared = new Set(servers.filter((s) => s.shared).map((s) => s.id));
+  const shared = new Set(servers.filter(byDefault).map((s) => s.id));
   return { mcp_ids: (view.mcp_ids || []).filter((id) => !shared.has(id)), mcp_off: view.mcp_off || [],
     mcp_tools_off: view.mcp_tools_off || {}, mcp_tools_on: view.mcp_tools_on || {} };
 }
@@ -76,14 +81,14 @@ export function chooseDialogMcp(host, state, save) {
     if (!map.has(sid)) map.set(sid, new Set());
     return map.get(sid);
   };
-  const serverOn = (s) => s.state !== 'off' && (s.shared ? !off.has(s.id) : explicit.has(s.id));
+  const serverOn = (s) => s.state !== 'off' && (byDefault(s) ? !off.has(s.id) : explicit.has(s.id));
   // загрузку файлов диалога (`artifact_upload`) Studio делает сама, без карточки «Запустить»: «с подтверждением» она
   // по умолчанию выключена и включается явно (`mcp_tools_on`, mcp_files.py)
   const gated = (t) => t.confirm && t.name === UPLOAD;
   const toolOn = (s, t) => !named(toolsOff, s.id).has(t.name) && (!gated(t) || named(toolsOn, s.id).has(t.name));
 
   function setServer(s, on) {
-    if (s.shared) {
+    if (byDefault(s)) {
       if (on) off.delete(s.id);
       else off.add(s.id);
     } else if (on) explicit.add(s.id);
@@ -135,6 +140,7 @@ export function chooseDialogMcp(host, state, save) {
     return el('section', { class: 'chat-mcp-item', 'data-sid': String(s.id) },
       el('label', { class: 'check chat-mcp-head' }, control, el('b', { class: 'chat-mcp-name' }, s.name),
         s.shared ? el('span', { class: 'tag' }, tr("общий")) : null),
+      s.shared && !byDefault(s) ? el('p', { class: 'muted small chat-mcp-manual' }, tr("включается в диалоге вручную")) : null,
       s.state === 'error' ? el('p', { class: 'error small chat-mcp-error' }, words(s.message)) : null,
       s.state === 'off' ? el('p', { class: 'muted small' }, tr("Выключен в настройках подключения")) : null,
       s.trimmed ? el('p', { class: 'muted small chat-mcp-trimmed' }, tr("Сервер предлагает больше 128 инструментов — показаны первые 128")) : null,
@@ -163,8 +169,9 @@ export function chooseDialogMcp(host, state, save) {
   submit.addEventListener('click', async () => {
     if (submit.disabled) return;
     const known = new Map(items.map((s) => [s.id, s]));
-    // свой — в `mcp_ids`; общий там — только если сервер сейчас выключен (иначе он и так действует по умолчанию)
-    const ids = [...explicit].filter((id) => known.has(id) && (!known.get(id).shared || known.get(id).state === 'off'));
+    // свой и общий «вручную» — в `mcp_ids`; общий по умолчанию там — только если сервер сейчас выключен (иначе он и
+    // так действует по умолчанию)
+    const ids = [...explicit].filter((id) => known.has(id) && (!byDefault(known.get(id)) || known.get(id).state === 'off'));
     submit.disabled = true;
     fail.textContent = '';
     try {
