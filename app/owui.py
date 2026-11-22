@@ -14,6 +14,12 @@
 - `call` — запрос к Open WebUI рабочим токеном (`owui_tokens`), 401 — одно обновление и повтор.
 - Чтение (`owui_view`): дерево, страницы чатов, чаты папки, поиск (запрос — телом), модели, чат, файл потоком (`no-store`).
   Неожиданная форма ответа — 502 `owui_shape`, недоступный Open WebUI — 503 `owui_offline`, остальная Студия работает.
+- Отправка («Отправка» спеки): новый чат и продолжение — серверный ход `POST /api/chat/completions` с `session_id`
+  сокета Студии (`owui_link.ensure`), `tool_ids` и возможностями по умолчанию модели, как у страницы Open WebUI 0.13;
+  `params.tool_approval_mode` — только `APPROVAL_MODES` из настроек пользователя, `full` — никогда. Сообщение в чат,
+  где идёт ответ, Open WebUI ставит в очередь — наблюдателям `queued`. Стоп, решение паузы (`resolve`), вложения
+  (сырое тело до `FILE_MAX`, имя — `X-Studio-Name`, ответ — после обработки), SSE учётки (`owui_link.watch`, пинг —
+  `PING_SEC`, конец — с сессией Студии).
 - Чужой и несуществующий id — одинаковый 404. Журнал — только id учётки Студии и строки учётки, коды и числа: ни
   адреса, ни email, ни токенов, ни id чатов.
 """
@@ -23,17 +29,25 @@ import json
 import logging
 import re
 import ssl
+import uuid
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, replace
+from typing import Annotated, Literal
+from urllib.parse import unquote
 
 import httpx
 from cryptography import x509
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+import auth
+import chat as studio_chat
+import claude_code
 import clock
+import documents
+import lock_policy
 import owui_link
 import owui_tokens
 import owui_view
@@ -61,6 +75,25 @@ MIN_VERSION = (0, 13)
 FOLDER_PAGES_MAX = 10
 #: предел текста поиска, знаков
 SEARCH_MAX = 256
+#: предел текста сообщения, знаков — как у «Чата»
+TEXT_MAX = studio_chat.TEXT_MAX
+#: предел вложения, байт
+FILE_MAX = 20 * 1024 * 1024
+#: вложений в одном сообщении
+FILES_MAX = 10
+#: срок загрузки вложения в Open WebUI, с
+UPLOAD_SEC = 120
+#: обработку вложения Студия опрашивает раз в `FILE_POLL_SEC` и ждёт не дольше `FILE_WAIT_SEC`, с
+FILE_POLL_SEC = 1
+FILE_WAIT_SEC = 300
+#: пинг-комментарий SSE учётки без событий, с
+PING_SEC = 20
+#: SSE сверяет сессию Студии на событиях не чаще, с (и на каждом пинге)
+CHECK_SEC = 5
+#: режимы подтверждения инструментов (`params.tool_approval_mode`), которые Студия передаёт; `full` — никогда
+APPROVAL_MODES = ("ask", "auto")
+#: тип вложения в запрос загрузки — только такой, иначе `application/octet-stream`
+MIME = re.compile(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,127}")
 
 #: uid Студии → моменты неудачных входов (и идущих попыток) по `clock.NOW`
 FAILS: dict[int, list[float]] = {}
@@ -82,6 +115,14 @@ NO_FOLDER = {"code": "not_found", "message": "такой папки нет"}
 NO_FILE = {"code": "not_found", "message": "такого файла нет"}
 NO_CERT = {"code": "url", "message": "у адреса http нет сертификата"}
 HTTPS_ONLY = {"code": "unlisted", "message": "по имени сервер ходит только по https — укажите https-адрес"}
+EMPTY = {"code": "empty", "message": "пустое сообщение"}
+EMPTY_FILE = {"code": "empty", "message": "файл пустой"}
+TOO_LARGE = {"code": "too_large", "message": "вложение больше 20 МиБ"}
+NO_MODEL = {"code": "model", "message": "такой модели в Open WebUI нет"}
+REFUSED = {"code": "owui_refused", "message": "Open WebUI отклонил запрос"}
+RESOLVED = {"code": "resolved", "message": "это решение уже принято"}
+ANSWERS = {"code": "answers", "message": "ответы нужны только к вопросам модели"}
+FILE_SLOW = {"code": "file_slow", "message": "Open WebUI слишком долго обрабатывает файл — попробуйте позже"}
 CERT_WORDS = "сертификат сервера не подтверждён — сверьте отпечаток SHA-256 и подтвердите его"
 
 
@@ -122,6 +163,40 @@ class CertificateIn(BaseModel):
 
 class SearchIn(BaseModel):
     text: str = Field(max_length=SEARCH_MAX)
+
+
+class SendIn(BaseModel):
+    model: str = Field(min_length=1, max_length=256)
+    text: str = Field(max_length=TEXT_MAX)
+    files: list[str] = Field(default_factory=list, max_length=FILES_MAX)
+
+
+class ContinueIn(SendIn):
+    parent_id: str = Field(min_length=1, max_length=128)
+
+
+class OptionAnswer(BaseModel):
+    """Выбранный вариант вопроса `ask_user` — как его шлёт `AskUserCard.svelte` Open WebUI 0.13."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["option"]
+    option_index: int = Field(ge=0, le=16)
+    label: str = Field(max_length=200)
+    description: str = Field(max_length=2000)
+
+
+class OtherAnswer(BaseModel):
+    """Свой текст ответа на вопрос `ask_user` (`allow_other`)."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["other"]
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class ResolveIn(BaseModel):
+    message_id: str = Field(min_length=1, max_length=128)
+    call_id: str = Field(min_length=1, max_length=256)
+    action: Literal["approve", "reject", "answer"]
+    answers: dict[str, Annotated[OptionAnswer | OtherAnswer, Field(discriminator="type")]] | None = \
+        Field(default=None, max_length=16)
 
 
 # ---- строки --------------------------------------------------------------------------------------------------------
@@ -565,6 +640,314 @@ async def file_content(aid: int, fid: str, request: Request):
         if not mime.lower().startswith(("image/", "audio/", "video/")):       # страницу Студии файл не исполняет
             headers["Content-Disposition"] = "attachment"
         return _Relay(stack.pop_all(), response.aiter_bytes(), media_type=mime, headers=headers)
+
+
+# ---- отправка ------------------------------------------------------------------------------------------------------
+
+def _raster(mime) -> bool:
+    """Картинка, которую модель видит как картинку (как `isRasterImageContentType` страницы Open WebUI)."""
+    return isinstance(mime, str) and mime.startswith("image/") and "svg" not in mime
+
+
+def _cut_status(acc, response: httpx.Response, missing: dict) -> None:
+    """Общие отказы отправки: чата (файла) нет — 404; Open WebUI отверг запрос — 422 `owui_refused`."""
+    if response.status_code in (401, 403, 404):
+        raise HTTPException(404, missing)
+    _refused(acc, response)
+    if response.status_code in (400, 413, 422):
+        log.info("owui %d: Open WebUI отклонил запрос (код %d)", acc.id, response.status_code)
+        raise HTTPException(422, REFUSED)
+
+
+async def _attachment(acc, file_id: str) -> dict:
+    """Вложение сообщения в форме страницы Open WebUI 0.13 (`MessageInput.svelte`): `type: file`, `id`, `url` — id,
+    имя, тип, размер, `collection_name`. Файла нет или он чужой — 404."""
+    response = await call(acc, "GET", f"/api/v1/files/{_owui_id(file_id, NO_FILE)}")
+    _cut_status(acc, response, NO_FILE)
+    body = _ok(acc, response, dict)
+    meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+    name = meta.get("name") or body.get("filename") or file_id
+    return {"type": "file", "id": file_id, "url": file_id, "name": name if isinstance(name, str) else file_id,
+            "collection_name": meta.get("collection_name") or body.get("collection_name") or "",
+            "status": "uploaded", "size": meta.get("size"), "error": "", "content_type": meta.get("content_type")}
+
+
+def _features(config: dict, meta: dict, ui: dict) -> dict:
+    """Возможности хода — как их ставит страница Open WebUI 0.13 по умолчанию модели (`Chat.svelte`: `setDefaults`,
+    `getFeatures`): возможность включена на сервере, модель её умеет и она в `defaultFeatureIds` модели. Права
+    пользователя Open WebUI перепроверяет сам (`utils/middleware.py`). Чего Студия не включает: интерпретатор кода,
+    исполняемый в браузере собеседника (движок `pyodide` или пустой), и веб-поиск с подтверждением на странице."""
+    enabled = config.get("features") if isinstance(config.get("features"), dict) else {}
+    code = config.get("code") if isinstance(config.get("code"), dict) else {}
+    caps = meta.get("capabilities") if isinstance(meta.get("capabilities"), dict) else {}
+    defaults = meta.get("defaultFeatureIds") if isinstance(meta.get("defaultFeatureIds"), list) else []
+
+    def on(name: str) -> bool:
+        return bool(enabled.get(f"enable_{name}")) and caps.get(name, True) is not False and name in defaults
+
+    features: dict = {"voice": False}
+    for name, model_key in (("image_generation", "imageModelId"), ("video_generation", "videoModelId")):
+        chosen = meta.get(model_key)
+        features[name] = ({"model": chosen} if isinstance(chosen, str) and chosen else True) if on(name) else False
+    if code.get("interpreter_engine") not in (None, "", "pyodide"):
+        features["code_interpreter"] = on("code_interpreter")
+    always = ui.get("webSearch") == "always" and enabled.get("enable_web_search") and caps.get("web_search", True) is not False
+    features["web_search"] = bool((on("web_search") or always) and not enabled.get("enable_web_search_confirmation"))
+    if ui.get("memory") if ui.get("memory") is not None else enabled.get("enable_memories"):
+        features["memory"] = True
+    return features
+
+
+def _tool_ids(config: dict, meta: dict, ui: dict) -> list[str]:
+    """Инструменты модели (`info.meta.toolIds`, иначе выбранные пользователем `settings.tools`), как у страницы:
+    `server:*` — только при включённых серверах инструментов, прочие — при включённых инструментах."""
+    enabled = config.get("features") if isinstance(config.get("features"), dict) else {}
+    ids = meta.get("toolIds") if isinstance(meta.get("toolIds"), list) else ui.get("tools")
+    ids = [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+    return [i for i in ids if enabled.get("enable_tool_servers" if i.startswith("server:") else "enable_tools")]
+
+
+async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tuple[str | None, str, bool]:
+    """Серверный ход Open WebUI 0.13 (`main.py::chat_completion`): сообщение и ответ с id Студии, `session_id` сокета
+    Студии (без него Open WebUI не включает встроенные инструменты), историю Open WebUI берёт из своей базы.
+    → (id чата, id ответа, в очереди ли)."""
+    model = body.model.strip()
+    text = body.text
+    if not text.strip() and not body.files:
+        raise HTTPException(422, EMPTY)
+    sid = await owui_link.ensure(acc)
+    config_r, settings_r, models_r, *items = await asyncio.gather(
+        call(acc, "GET", "/api/config"), call(acc, "GET", "/api/v1/users/user/settings"),
+        call(acc, "GET", "/api/models"), *(_attachment(acc, file_id) for file_id in body.files))
+    config = _ok(acc, config_r, dict)
+    _refused(acc, settings_r)
+    settings = upstream.json_body(settings_r) if settings_r.status_code == 200 else {}
+    ui = settings.get("ui") if isinstance(settings.get("ui"), dict) else {}
+    listed = _ok(acc, models_r, dict).get("data")
+    raw = next((m for m in listed if isinstance(m, dict) and m.get("id") == model), None) \
+        if isinstance(listed, list) else None
+    if raw is None or model.startswith("agent:"):
+        raise HTTPException(422, NO_MODEL)
+    info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+    meta = info.get("meta") if isinstance(info.get("meta"), dict) else {}
+    message_id, answer_id = str(uuid.uuid4()), str(uuid.uuid4())
+    user_message = {"id": message_id, "parentId": parent, "childrenIds": [], "role": "user", "content": text,
+                    "timestamp": int(clock.NOW()), "models": [model]}
+    if items:
+        user_message["files"] = items
+    messages = [{"role": "user", "content": text}]
+    if isinstance(ui.get("system"), str) and ui["system"].strip():     # системный текст пользователя — как у страницы
+        messages.insert(0, {"role": "system", "content": ui["system"]})
+    payload = {"stream": True, "model": model, "messages": messages, "tool_ids": _tool_ids(config, meta, ui),
+               "features": _features(config, meta, ui), "session_id": sid, "id": answer_id, "parent_id": parent,
+               "user_message": user_message}
+    documents_only = [item for item in items if not _raster(item["content_type"])]
+    if documents_only:
+        payload["files"] = documents_only
+    if chat is None:
+        payload["background_tasks"] = {"title_generation": True}
+    else:
+        payload["chat_id"] = chat
+    params = ui.get("params") if isinstance(ui.get("params"), dict) else {}
+    if params.get("tool_approval_mode") in APPROVAL_MODES:            # `full` Студия не шлёт никогда
+        payload["params"] = {"tool_approval_mode": params["tool_approval_mode"]}
+    owui_link.track(acc, chat or "", answer_id)                        # события ответа идут сразу за ответом POST
+    try:
+        response = await call(acc, "POST", "/api/chat/completions", json=payload)
+        _cut_status(acc, response, NO_CHAT)
+        result = _ok(acc, response, dict)
+        if result.get("queued") is True:                               # в чате идёт ответ: Open WebUI взял в очередь
+            owui_link.untrack(acc.id, answer_id)
+            link = owui_link.LINKS.get(acc.id)
+            if link is not None:
+                link.publish({"type": "queued", "chat_id": chat})
+            log.info("owui %d: сообщение в очереди", acc.id)
+            return chat, answer_id, True
+        found = result.get("chat_id")
+        if chat is None and not (isinstance(found, str) and OWUI_ID.fullmatch(found)):
+            log.warning("owui %d: ответ отправки без чата", acc.id)
+            raise shape_error(acc)
+    except BaseException:
+        owui_link.untrack(acc.id, answer_id)
+        raise
+    chat = chat or found
+    owui_link.track(acc, chat, answer_id)
+    log.info("owui %d: сообщение отправлено, вложений %d", acc.id, len(items))
+    return chat, answer_id, False
+
+
+@router.post("/accounts/{aid}/chats", status_code=201)
+async def new_chat(aid: int, body: SendIn, request: Request):
+    acc = load(request.state.user.id, aid)
+    chat, message_id, _ = await _send(acc, body, None, None)
+    return {"chat_id": chat, "message_id": message_id}
+
+
+@router.post("/accounts/{aid}/chats/{chat}/messages")
+async def send_message(aid: int, chat: str, body: ContinueIn, request: Request):
+    acc = load(request.state.user.id, aid)
+    chat = _owui_id(chat, NO_CHAT)
+    _, message_id, queued = await _send(acc, body, chat, _owui_id(body.parent_id, NO_CHAT))
+    return {"message_id": message_id, "queued": queued}
+
+
+@router.post("/accounts/{aid}/chats/{chat}/stop", status_code=204)
+async def stop(aid: int, chat: str, request: Request):
+    acc = load(request.state.user.id, aid)
+    response = await call(acc, "POST", f"/api/tasks/chat/{_owui_id(chat, NO_CHAT)}/stop")
+    _cut_status(acc, response, NO_CHAT)
+    if response.status_code != 200:
+        log.warning("owui %d: остановка — код %d", acc.id, response.status_code)
+        raise shape_error(acc)
+    log.info("owui %d: ответ остановлен", acc.id)
+    return Response(status_code=204)
+
+
+@router.post("/accounts/{aid}/chats/{chat}/resolve", status_code=204)
+async def resolve(aid: int, chat: str, body: ResolveIn, request: Request):
+    """Решение паузы — `resolve` Open WebUI 0.13 (`utils/tool_approval.py`): `approve` и `reject` — подтверждение
+    инструмента, `answer` — ответы на вопросы `ask_user` (`{id вопроса: option | other}`, как `AskUserCard.svelte`).
+    Open WebUI сам продолжает ответ — Студия снова держит соединение до его итога. Уже решено — 409 `resolved`."""
+    acc = load(request.state.user.id, aid)
+    chat, message_id = _owui_id(chat, NO_CHAT), _owui_id(body.message_id, NO_CHAT)
+    if (body.action == "answer") != (body.answers is not None):
+        raise HTTPException(422, ANSWERS)
+    payload: dict = {"call_id": body.call_id, "action": body.action}
+    if body.answers is not None:
+        payload["answers"] = {key: answer.model_dump() for key, answer in body.answers.items()}
+    await owui_link.ensure(acc)                                        # события продолжения — через сокет Студии
+    owui_link.track(acc, chat, message_id)
+    try:
+        response = await call(acc, "POST", f"/api/v1/chats/{chat}/messages/{message_id}/resolve", json=payload)
+        if response.status_code == 409:
+            raise HTTPException(409, RESOLVED)
+        _cut_status(acc, response, NO_CHAT)
+        result = _ok(acc, response, dict)
+        if not result.get("task_ids"):                                 # ждут решения другие вызовы — ответ не идёт
+            owui_link.untrack(acc.id, message_id)
+    except BaseException:
+        owui_link.untrack(acc.id, message_id)
+        raise
+    log.info("owui %d: пауза решена (%s)", acc.id, body.action)
+    return Response(status_code=204)
+
+
+async def _upload_body(request: Request) -> bytes:
+    too_large = HTTPException(413, TOO_LARGE)
+    length = request.headers.get("content-length", "").strip()
+    if length.isdigit() and int(length) > FILE_MAX:
+        raise too_large
+    raw = bytearray()
+    async for piece in request.stream():
+        raw.extend(piece)
+        if len(raw) > FILE_MAX:
+            raise too_large
+    if not raw:
+        raise HTTPException(422, EMPTY_FILE)
+    auth.recheck(request)
+    return bytes(raw)
+
+
+@router.post("/accounts/{aid}/files")
+async def upload(aid: int, request: Request):
+    """Вложение: тело — сам файл до `FILE_MAX`, имя — заголовком `X-Studio-Name` (как `documents`), тип —
+    `Content-Type`. Ответ — после обработки Open WebUI (`process/status`: `completed` или `failed`); `failed`
+    страница Open WebUI тоже прикладывает, с предупреждением — Студия отдаёт его признаком `failed`."""
+    acc = load(request.state.user.id, aid)
+    data = await _upload_body(request)
+    name = documents.clean_name(unquote(request.headers.get("x-studio-name", "")))
+    mime = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if not MIME.fullmatch(mime):
+        mime = "application/octet-stream"
+    response = await call(acc, "POST", "/api/v1/files/", files={"file": (name, data, mime)}, timeout=UPLOAD_SEC)
+    if response.status_code == 413:
+        raise HTTPException(413, TOO_LARGE)
+    _cut_status(acc, response, NO_FILE)
+    file_id = _ok(acc, response, dict).get("id")
+    if not isinstance(file_id, str) or not OWUI_ID.fullmatch(file_id):
+        log.warning("owui %d: ответ загрузки без id", acc.id)
+        raise shape_error(acc)
+    deadline = clock.NOW() + FILE_WAIT_SEC
+    while True:
+        status = await call(acc, "GET", f"/api/v1/files/{file_id}/process/status")
+        _cut_status(acc, status, NO_FILE)
+        stage = _ok(acc, status, dict).get("status")
+        if stage in ("completed", "failed"):
+            break
+        if clock.NOW() >= deadline:
+            log.info("owui %d: файл не обработан за %d с", acc.id, FILE_WAIT_SEC)
+            raise HTTPException(504, FILE_SLOW)
+        await clock.SLEEP(FILE_POLL_SEC)
+    log.info("owui %d: файл загружен, байт %d%s", acc.id, len(data), ", обработка не удалась" if stage == "failed" else "")
+    found = {"id": file_id, "name": name, "kind": "image" if _raster(mime) else "file"}
+    return {**found, "failed": True} if stage == "failed" else found
+
+
+# ---- поток на страницу ---------------------------------------------------------------------------------------------
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True, allow_nan=False)}\n\n"
+
+
+def _watching(digest: str, uid: int, aid: int) -> bool:
+    """Сессия Студии жива, не заперта для раздела, учётка не отключена и учётка Open WebUI ещё есть."""
+    row = state.DB.execute("SELECT u.disabled, s.expires FROM sessions s JOIN users u ON u.id = s.user_id"
+                           " WHERE s.digest = ? AND s.user_id = ?", (digest, uid)).fetchone()
+    return (row is not None and not row["disabled"] and row["expires"] > clock.NOW()
+            and not lock_policy.locked(digest, "owui")
+            and state.DB.execute("SELECT 1 FROM owui_accounts WHERE id = ? AND user_id = ?", (aid, uid)).fetchone()
+            is not None)
+
+
+async def _events(q: asyncio.Queue, digest: str, uid: int, aid: int):
+    """События учётки строками SSE; без событий `PING_SEC` — `: ping`. Сессию поток сверяет на каждом пинге и на
+    событиях не чаще `CHECK_SEC`; сессия кончилась, заперта или учётку удалили — `closed` и конец. После
+    `link relogin` поток кончается: соединения больше нет, после входа заново страница откроет новый."""
+    checked = clock.NOW()
+    while True:
+        try:
+            event = await asyncio.wait_for(q.get(), PING_SEC)
+        except TimeoutError:
+            event = None
+        now = clock.NOW()
+        if event is None or now - checked >= CHECK_SEC:
+            checked = now
+            if not _watching(digest, uid, aid):
+                yield _sse("closed", {})
+                return
+        if event is None:
+            yield ": ping\n\n"
+            continue
+        try:
+            yield _sse(event["type"], {key: value for key, value in event.items() if key != "type"})
+        except (ValueError, RecursionError):                            # NaN в событии — не JSON
+            continue
+        if event["type"] == "link" and event.get("state") == "relogin":
+            return
+
+
+class _Watch(StreamingResponse):
+    """Поток SSE учётки для одного наблюдателя. Наблюдателя снимает сам ответ, а не finally генератора: отмена может
+    застать ответ до первого куска — как `claude_code._Watch`."""
+
+    def __init__(self, aid: int, q: asyncio.Queue, digest: str, uid: int):
+        super().__init__(_events(q, digest, uid, aid), media_type="text/event-stream",
+                         headers=claude_code.SSE_HEADERS)
+        self.aid, self.q = aid, q
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            owui_link.unwatch(self.aid, self.q)
+            await self.body_iterator.aclose()
+
+
+@router.get("/accounts/{aid}/events")
+async def events(aid: int, request: Request):
+    uid = request.state.user.id
+    acc = load(uid, aid)
+    return _Watch(aid, await owui_link.watch(acc), request.state.digest, uid)
 
 
 # ---- маршруты ------------------------------------------------------------------------------------------------------

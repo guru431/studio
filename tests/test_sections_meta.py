@@ -41,7 +41,7 @@ def test_english_notification_words_match_the_interface_catalog():
     assert push.TITLES == {"ru": push.TITLE, "en": english[push.TITLE]}
     assert push.STUDIO == {"ru": "Студия", "en": english["Студия"]}
     words = [*bridge.ASK_WORDS.values(), *bridge.DONE_WORDS.values(), admin.CHECK_NOTICE, admin.COPY_NOTICE,
-             *(text for _, *pair in push.JOB_NOTICES.values() for text in pair)]
+             *(text for _, *pair in push.JOB_NOTICES.values() for text in pair), push.DECISION_NOTICE]
     for text in words:
         assert english[text["ru"]] == text["en"], text
 

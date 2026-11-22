@@ -17,6 +17,8 @@ socket.io», «Поток на страницу»).
 - Открыто, пока есть наблюдатель или идёт ответ на сообщение из Студии (`track`: до `done`, ошибки, паузы или конца
   ответа в чате); без причин дольше `IDLE_CLOSE_SEC` — закрывается на ближайшем кадре сервера (пинг, не позже
   `pingInterval`) или перед попыткой переподключения. Молчание дольше `pingInterval + pingTimeout` — обрыв.
+- Итог, ошибка или пауза ответа из Студии — push владельцу (`push.notify_later`, `quiet`: сессиям на экране — нет):
+  слова `push.CHAT_NOTICES` / `push.DECISION_NOTICE`, заголовок `push.OWUI_TITLE`, ссылка `owui/<учётка>/<чат>`.
 - Адрес, сертификат, имя — через `upstream.ws_target`, как у REST; переадресации не выполняются.
 - Журнал — только id учётки, коды отказов, числа и имена классов исключений: ни адреса, ни токенов, ни id чатов.
 """
@@ -33,6 +35,7 @@ import clock
 import owui
 import owui_tokens
 import owui_view
+import push
 import state
 import upstream
 
@@ -305,10 +308,15 @@ class Link:
             self.publish(event)
 
     def _release(self, event: dict) -> None:
-        """Ответ из Студии кончился (итог, ошибка, пауза или конец ответа в чате) — он больше не держит сокет."""
+        """Ответ из Студии кончился (итог, ошибка, пауза или конец ответа в чате) — он больше не держит сокет.
+        Итог, ошибка и пауза такого ответа — push владельцу (вне экрана, без текста ответа и вопроса модели)."""
         kind = event["type"]
         if kind in ("done", "pending") and event.get("message_id") in self.turns:
-            del self.turns[event["message_id"]]
+            message_id = event["message_id"]
+            del self.turns[message_id]
+            words = push.DECISION_NOTICE if kind == "pending" else push.CHAT_NOTICES[0 if event["error"] is None else 1]
+            push.notify_later(self.acc.user_id, words, f"owui/{self.acc.id}/{event['chat_id']}", message_id,
+                              title=push.OWUI_TITLE, quiet=True)
         elif kind == "active" and not event["active"]:
             for message_id in [m for m, chat_id in self.turns.items() if chat_id == event["chat_id"]]:
                 del self.turns[message_id]
@@ -380,6 +388,13 @@ async def ensure(acc) -> str:
 def track(acc, chat_id: str, message_id: str) -> None:
     """Ответ на сообщение из Студии идёт: держать соединение до его итога, ошибки или паузы."""
     _link(acc).turns[message_id] = chat_id
+
+
+def untrack(aid: int, message_id: str) -> None:
+    """Ответа не будет (отправку отвергли, сообщение в очереди, решение не принято) — он не держит соединение."""
+    link = LINKS.get(aid)
+    if link is not None and link.turns.pop(message_id, None) is not None:
+        link._released()
 
 
 async def drop_account(aid: int) -> None:

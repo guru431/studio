@@ -14,6 +14,14 @@
 `GET /api/models` (`{data}`), `GET /api/tasks/chat/{id}` (`{task_ids}`), `GET /api/v1/files/{id}/content`. Данные —
 `add_chat`, `add_folder`, `add_model`, `add_file`; `raw_chat[id]` подменяет тело ответа `GET /api/v1/chats/{id}`.
 
+Отправка (формы — по Open WebUI v0.13.4, `main.py`, `utils/tool_approval.py`, `routers/files.py`):
+`POST /api/chat/completions` (тело — в `completions`; новый чат создаётся сам; `queue_next` — ответ `{queued: true}`),
+`POST /api/tasks/chat/{id}/stop` (`stopped`), `POST /api/v1/chats/{id}/messages/{mid}/resolve` (`resolved`; повтор
+того же вызова — 409), `POST /api/v1/files/` (multipart, поле `file`), `GET /api/v1/files/{id}/process/status`
+(статусы по очереди из `processing`), `GET /api/v1/files/{id}`, `GET /api/v1/users/user/settings` (`{ui: user_settings}`).
+`GET /api/config` с действующим токеном добавляет `features.enable_*` из `config_features` и
+`code.interpreter_engine`.
+
 Сокет (Engine.IO 4 через websocket, socket.io 5) — в памяти: `owui_link.CONNECT` → `socket_connect`. Как Open WebUI
 0.13.4 (`socket/main.py`, `always_connect=True`): пакет подключения принимается с любым токеном, сокет с
 действующим токеном — «вошедший» (`FakeSocket.user`); `user-join` меняет токен сокета. Тест управляет сервером:
@@ -23,6 +31,7 @@
 import asyncio
 import itertools
 import json
+import re
 import uuid
 
 import httpx
@@ -128,6 +137,18 @@ class FakeOwui:
         self.sockets: list[FakeSocket] = []
         self.ws_targets: list = []         # `upstream.WsTarget` каждого соединения сокета
         self.ws_headers: list[dict] = []
+        # отправка
+        self.completions: list[dict] = []  # тела `POST /api/chat/completions` по порядку
+        self.queue_next = False            # в чате идёт ответ: сообщение ставится в очередь
+        self.stopped: list[str] = []
+        self.resolved: list[tuple[str, str, dict]] = []    # (чат, ответ, тело) каждого принятого решения
+        self.user_settings: dict = {}      # `ui` настроек пользователя Open WebUI
+        self.config_features: dict = {}    # `features.enable_*` для вошедшего
+        self.interpreter_engine = "pyodide"
+        self.processing = ["completed"]    # статусы обработки нового файла по очереди опроса
+        self.file_names: dict[str, str] = {}
+        self.file_status: dict[str, list[str]] = {}
+        self.uploads = 0
 
     # ---- сокет ----
 
@@ -219,10 +240,11 @@ class FakeOwui:
         self.folders[folder_id] = {"id": folder_id, "name": name, "parent_id": parent_id}
         return folder_id
 
-    def add_model(self, model_id: str, name: str | None = None, **capabilities) -> None:
+    def add_model(self, model_id: str, name: str | None = None, meta: dict | None = None, **capabilities) -> None:
+        """Модель `/api/models`; `meta` — прочие поля `info.meta` (`toolIds`, `defaultFeatureIds` …)."""
         model = {"id": model_id, "name": name or model_id, "object": "model"}
-        if capabilities:
-            model["info"] = {"meta": {"capabilities": capabilities}}
+        if capabilities or meta:
+            model["info"] = {"meta": {**(meta or {}), **({"capabilities": capabilities} if capabilities else {})}}
         self.models.append(model)
 
     def add_file(self, file_id: str, content: bytes, content_type: str) -> None:
@@ -250,13 +272,27 @@ class FakeOwui:
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(0)             # как сеть: параллельные вызовы успевают дойти до блокировки
+        await request.aread()
         self.requests.append(request)
         if self.down:
             raise httpx.ConnectError("нет соединения", request=request)
         method, path = request.method, request.url.path
         if path == "/api/config" and method == "GET":
             features = {"auth_sessions": True} if self.auth_sessions else {}
-            return httpx.Response(200, json={"name": "Open WebUI", "version": self.version, "features": features})
+            body = {"name": "Open WebUI", "version": self.version, "features": features}
+            if self._caller_valid(request):
+                features.update(self.config_features)
+                body["code"] = {"engine": "pyodide", "interpreter_engine": self.interpreter_engine}
+            return httpx.Response(200, json=body)
+        if method == "POST" and (path in ("/api/chat/completions", "/api/v1/files/")
+                                 or path.startswith(("/api/tasks/chat/", "/api/v1/chats/"))):
+            if not self._caller_valid(request):
+                return httpx.Response(401, json={"detail": "Not authenticated"})
+            return self._send(request, path)
+        if path == "/api/v1/users/user/settings" and method == "GET":
+            if not self._caller_valid(request):
+                return httpx.Response(401, json={"detail": "Not authenticated"})
+            return httpx.Response(200, json={"ui": self.user_settings} if self.user_settings else None)
         if path == "/api/v1/auths/" and method == "GET":
             if not self._caller_valid(request):
                 return httpx.Response(401, json={"detail": "Not authenticated"})
@@ -329,12 +365,82 @@ class FakeOwui:
             if found is None:
                 return httpx.Response(404, json={"detail": "Not Found"})
             return httpx.Response(200, content=found[1], headers={"content-type": found[0]})
+        if path.startswith("/api/v1/files/") and path.endswith("/process/status"):
+            statuses = self.file_status.get(path.removeprefix("/api/v1/files/").removesuffix("/process/status"))
+            if statuses is None:
+                return httpx.Response(404, json={"detail": "Not Found"})
+            current = statuses.pop(0) if len(statuses) > 1 else statuses[0]
+            return httpx.Response(200, json={"status": current})
+        if path.startswith("/api/v1/files/"):
+            file_id = path.removeprefix("/api/v1/files/")
+            if file_id not in self.files:
+                return httpx.Response(404, json={"detail": "Not Found"})
+            mime, data = self.files[file_id]
+            name = self.file_names.get(file_id, file_id)
+            return httpx.Response(200, json={"id": file_id, "user_id": self.user_id, "filename": name,
+                                             "meta": {"name": name, "content_type": mime, "size": len(data)},
+                                             "data": {"status": self.file_status.get(file_id, ["completed"])[-1]}})
         chat_id = path.removeprefix("/api/v1/chats/")
         if chat_id in self.raw_chat:
             return httpx.Response(200, json=self.raw_chat[chat_id])
         if chat_id in self.chats:
             return httpx.Response(200, json=self._chat_response(self.chats[chat_id]))
         return httpx.Response(401, json={"detail": "We could not find what you're looking for :/"})
+
+    # ---- отправка ----
+
+    def _send(self, request: httpx.Request, path: str) -> httpx.Response:
+        if path == "/api/chat/completions":
+            body = self._body(request)
+            self.completions.append(body)
+            if self.queue_next:
+                return httpx.Response(200, json={"status": True, "queued": True, "chat_id": body.get("chat_id")})
+            chat_id = body.get("chat_id")
+            if chat_id is None:
+                chat_id = self.add_chat("New Chat", models=[body.get("model")])
+            elif chat_id not in self.chats:
+                return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
+            return httpx.Response(200, json={"status": True, "task_ids": [f"task-{next(self._ids)}"], "chat_id": chat_id})
+        if path == "/api/v1/files/":
+            return self._upload(request)
+        stop = re.fullmatch(r"/api/tasks/chat/([^/]+)/stop", path)
+        if stop:
+            if stop[1] not in self.chats:
+                return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
+            self.stopped.append(stop[1])
+            return httpx.Response(200, json={"status": True, "message": "Stopped"})
+        resolve = re.fullmatch(r"/api/v1/chats/([^/]+)/messages/([^/]+)/resolve", path)
+        if resolve:
+            chat_id, message_id = resolve[1], resolve[2]
+            body = self._body(request)
+            if chat_id not in self.chats:
+                return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
+            if any((c, m, b.get("call_id")) == (chat_id, message_id, body.get("call_id")) for c, m, b in self.resolved):
+                return httpx.Response(409, json={"detail": "Tool call has already been resolved."})
+            self.resolved.append((chat_id, message_id, body))
+            return httpx.Response(200, json={"status": True, "chat_id": chat_id, "message_id": message_id,
+                                             "task_ids": [f"task-{next(self._ids)}"]})
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    def _upload(self, request: httpx.Request) -> httpx.Response:
+        """multipart с полем `file` — как `routers/files.py::upload_file`: ответ сразу, обработка — потом."""
+        boundary = request.headers["content-type"].split("boundary=", 1)[1].encode()
+        for part in request.content.split(b"--" + boundary):
+            head, _, data = part.partition(b"\r\n\r\n")
+            if b'name="file"' not in head:
+                continue
+            name = re.search(rb'filename="([^"]*)"', head)[1].decode()
+            mime = re.search(rb"Content-Type: ([^\r\n]+)", head)
+            file_id = str(uuid.uuid4())
+            self.files[file_id] = (mime[1].decode() if mime else "application/octet-stream", data.removesuffix(b"\r\n"))
+            self.file_names[file_id] = name
+            self.file_status[file_id] = list(self.processing)
+            self.uploads += 1
+            return httpx.Response(200, json={"status": True, "id": file_id, "user_id": self.user_id, "filename": name,
+                                             "meta": {"name": name, "content_type": self.files[file_id][0],
+                                                      "size": len(self.files[file_id][1])},
+                                             "data": {"status": "pending"}})
+        return httpx.Response(422, json={"detail": "file required"})
 
     @staticmethod
     def _body(request: httpx.Request) -> dict:

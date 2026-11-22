@@ -1910,6 +1910,7 @@ globalThis.StudioEnglish = Object.freeze({
   "озвучка не получилась": "speech failed",
   "ответ готов": "answer ready",
   "ответ не получился": "answer failed",
+  "нужно ваше решение": "your decision is needed",
   "Отменить: {0}": "Cancel: {0}",
   "Открыть: {0}": "Open: {0}",
   "Картинка · {0}": "Image · {0}",
@@ -3637,7 +3638,14 @@ globalThis.StudioEnglish = Object.freeze({
   "Open WebUI ответил не так, как ожидает Студия": "Open WebUI answered in a way Studio does not expect",
   "Open WebUI {0} ответил не так, как ожидает Студия": "Open WebUI {0} answered in a way Studio does not expect",
   "Open WebUI {0} не поддерживается: нужна версия 0.13 или новее с постоянными сессиями": "Open WebUI {0} is not supported: version 0.13 or later with persistent sessions is required",
-  "адреса нет в списке разрешённых — попросите администратора добавить {0}": "the address is not in the allowed list. Ask an administrator to add {0}"
+  "адреса нет в списке разрешённых — попросите администратора добавить {0}": "the address is not in the allowed list. Ask an administrator to add {0}",
+  "файл пустой": "the file is empty",
+  "вложение больше 20 МиБ": "the attachment is larger than 20 MiB",
+  "такой модели в Open WebUI нет": "Open WebUI has no such model",
+  "Open WebUI отклонил запрос": "Open WebUI rejected the request",
+  "это решение уже принято": "this decision has already been made",
+  "ответы нужны только к вопросам модели": "answers are needed only for the model's questions",
+  "Open WebUI слишком долго обрабатывает файл — попробуйте позже": "Open WebUI is taking too long to process the file. Try again later"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "Open WebUI {0} ответил не так, как ожидает Студия",
