@@ -31,12 +31,25 @@ EFFORT_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 class RpcError(Exception):
     """Тело ошибки может содержать пути/тексты; в исключении только метод и код.
 
-    `transport` — канал с ACP оборвался; без него — ответ живого процесса."""
+    `transport` — канал с ACP оборвался; без него — ответ живого процесса. `owned` — сессию держит другой процесс
+    (DeepSeek Harness: `data.details` «already owned by an active write handle»); `image` — отказ параметров из-за
+    картинки в prompt. Из тела ошибки остаются только эти признаки."""
 
-    def __init__(self, *, method=None, code=None, not_found=False, transport=False):
+    def __init__(self, *, method=None, code=None, not_found=False, transport=False, owned=False, image=False):
         super().__init__()
         self.method, self.code, self.not_found = method, code if type(code) is int else None, not_found
-        self.transport = transport
+        self.transport, self.owned, self.image = transport, owned, image
+
+    @classmethod
+    def of(cls, method, error):
+        """Ошибка JSON-RPC `error` ответа на `method`: признаки без текста."""
+        error = error if isinstance(error, dict) else {}
+        message = str(error.get("message", "")).lower()
+        data = error.get("data") if isinstance(error.get("data"), dict) else {}
+        return cls(method=method, code=error.get("code"),
+                   not_found="not found" in message or "does not exist" in message,
+                   owned="already owned by an active write handle" in str(data.get("details", "")),
+                   image=error.get("code") == -32602 and "image" in message)
 
 
 class Client:
@@ -96,10 +109,7 @@ class Client:
                     self.inbox.put_nowait(frame)
                 elif (future := self.pending.get(frame.get("id"))) is not None and not future.done():
                     if "error" in frame:
-                        error = frame.get("error") or {}
-                        message = str(error.get("message", "")).lower()
-                        future.set_exception(RpcError(method=self.methods.get(frame.get("id")), code=error.get("code"),
-                            not_found="not found" in message or "does not exist" in message))
+                        future.set_exception(RpcError.of(self.methods.get(frame.get("id")), frame.get("error")))
                     else:
                         future.set_result(frame.get("result", {}))
         except (ValueError, OSError, RpcError, TypeError, AttributeError):
@@ -326,6 +336,7 @@ class AcpRunner(Runner):
     LABEL: str  # имя помощника в журнале и запасной версии
     SESSION_ID: re.Pattern
     EFFORT_KEY = "effort"  # id опции усилия в `configOptions`
+    MODEL_ID = MODEL_ID  # допустимые значения модели в каталоге
     ALIASES_FILE: str  # файл соответствий UUID студии → сессия в каталоге моста
     CHOICES_DIR: str  # каталог настроек чатов (`store.Choices`)
     NAMESPACE: uuid.UUID  # UUID студии для сессий, созданных вне студии
@@ -376,6 +387,14 @@ class AcpRunner(Runner):
     def _progress(self, t, update):
         pass
 
+    def _settings(self, t, data):
+        """Настройки хода для события `settings` из состояния `configOptions`."""
+        return settings(data, t.access, effort_key=self.EFFORT_KEY)
+
+    def _failure(self, t, error):
+        """Слова сбоя хода: отказ — его слова, остальное — `FAILED`."""
+        return error.message if isinstance(error, Refused) else self.FAILED
+
     # --- общее ---
 
     async def _steer_input(self, t, text, images, message_id):
@@ -396,7 +415,7 @@ class AcpRunner(Runner):
             data = await self._new(rpc, root)
             temporary = data["sessionId"]
             models = [{"id": row["value"], "label": str(row.get("name") or row["value"])[:100]}
-                      for row in values(options(data, "model")) if MODEL_ID.fullmatch(row["value"])][:500]
+                      for row in values(options(data, "model")) if self.MODEL_ID.fullmatch(row["value"])][:500]
             efforts = {row["value"] for row in values(options(data, self.EFFORT_KEY)) if EFFORT_ID.fullmatch(row["value"])}
             native = settings(data, effort_key=self.EFFORT_KEY)
             for model in models:
@@ -621,7 +640,7 @@ class AcpRunner(Runner):
             command_list = next((opencode_events.commands(u) for u in reversed(replay)
                                  if u.get('sessionUpdate') == 'available_commands_update'), [])
             data = await self._configure(rpc, target, data, model, effort, agent_mode)
-            t.settings = {**settings(data, t.access, effort_key=self.EFFORT_KEY), 'commands': command_list}
+            t.settings = {**self._settings(t, data), 'commands': command_list}
             self._send(t, {"k": "settings", **t.settings})
             await asyncio.to_thread(self.choices.update, t.chat, model=model, effort=effort, access=t.access,
                                     agent_mode=t.settings.get('agent_mode'), additional_directories=directories,
@@ -685,10 +704,10 @@ class AcpRunner(Runner):
         except asyncio.CancelledError:
             cancelled = True
         except Refused as e:
-            failure = e.message
+            failure = self._failure(t, e)
         except Exception as e:
             log.warning("ход %s: %s: %s", t.turn, self.LABEL, type(e).__name__)
-            failure = self.FAILED
+            failure = self._failure(t, e)
         finally:
             if prompt is not None:
                 if not prompt.done():
@@ -746,7 +765,7 @@ class AcpRunner(Runner):
                 t.context = current
                 self._send(t, {"k": "context", **current})
         elif kind == "config_option_update":
-            t.settings = {**(t.settings or {}), **settings(update, t.access, effort_key=self.EFFORT_KEY)}
+            t.settings = {**(t.settings or {}), **self._settings(t, update)}
             self._send(t, {"k": "settings", **t.settings})
         elif kind == 'available_commands_update':
             t.settings = {**(t.settings or {}), 'commands': opencode_events.commands(update)}

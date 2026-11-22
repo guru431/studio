@@ -3,10 +3,11 @@
 CLAUDE = ("default", "auto", "acceptEdits", "plan", "bypassPermissions", "dontAsk")
 CODEX = ("read-only", "workspace-write", "danger-full-access")
 OPENCODE = ("default", "auto")
+DEEPSEEK = ("default", "read-only", "workspace-write", "danger-full-access")
 
 
 def valid(engine, value):
-    allowed = {"claude": CLAUDE, "codex": CODEX, "opencode": OPENCODE}.get(engine, ())
+    allowed = {"claude": CLAUDE, "codex": CODEX, "opencode": OPENCODE, "deepseek": DEEPSEEK}.get(engine, ())
     return value is None or isinstance(value, str) and value in allowed
 
 
