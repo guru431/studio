@@ -2389,3 +2389,25 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 #code-project-none { margin:8px; }
 .code-project-read { align-self:flex-start; margin-top:2px; white-space:normal; }
 @media (pointer: coarse) { .code-project-read { min-height:calc(44px / var(--ui-scale, 1)); } }
+
+/* «Open WebUI» (owui.js): панель учёток и чатов слева, лента справа; телефон — панель выезжает по ☰, как у «Агентов» */
+.owui-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; width: 100%; max-width: 100%; }
+.owui-panel { width: calc(260px * var(--font-scale, 1)); flex: none; position: sticky; top: 0; height: calc(100 * var(--dvh)); align-self: flex-start;
+  display: flex; flex-direction: column; background: var(--surface-side); border-right: 1px solid var(--line); }
+.owui-accounts { flex: none; padding: var(--space-5) var(--space-4) var(--space-4); border-bottom: 1px solid var(--line); }
+.owui-tree { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2); }
+.owui-main { flex: 1; min-width: 0; display: flex; flex-direction: column; contain: inline-size; }
+.owui-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: var(--space-7); }
+.owui-panel-toggle, .owui-backdrop { display: none; }
+#owui-status { margin: var(--space-6) var(--space-7) 0; overflow-wrap: anywhere; }
+#owui-status:empty { display: none; }
+@media (max-width: 760px) {
+  .owui-panel { position: fixed; z-index: var(--z-drawer); top: 0; bottom: var(--tabs-h); left: 0; width: min(280px, calc(100 * var(--vw) - 12px)); height: auto; align-self: stretch;
+    padding-top: env(safe-area-inset-top, 0px); transform: translateX(-100%); visibility: hidden;
+    transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
+  .owui-ws.panel-open .owui-panel { transform: none; visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-2); }
+  .owui-backdrop { display: block; position: fixed; z-index: var(--z-backdrop); inset: 0 0 var(--tabs-h) 0; background: var(--backdrop); }
+  .owui-panel-toggle { display: inline-grid; margin-left: -6px; }
+  .owui-body { padding: var(--space-6); }
+}
+@media (prefers-reduced-motion: reduce) { .owui-panel { transition: none !important; } }

@@ -1,7 +1,7 @@
 # CLAUDE.md — studio
 
-Студия `https://studio.example.com` — многопользовательское приложение (PWA) с учётками, историей и восемью
-разделами (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты), плюс пакетные скрипты для Windows и Linux —
+Студия `https://studio.example.com` — многопользовательское приложение (PWA) с учётками, историей и девятью
+разделами (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Open WebUI, Агенты), плюс пакетные скрипты для Windows и Linux —
 клиенты API картинок и видео LLM-шлюза srvllm. Описание — [README.md](README.md) и [README.ru.md](README.ru.md),
 подробное руководство — [docs/guide.ru.md](docs/guide.ru.md); главная спека —
 [2026-10-19-studio-pwa-design](docs/superpowers/specs/2026-10-19-studio-pwa-design.md); как устроено по областям —

@@ -10,7 +10,7 @@ import sections
 
 STATIC = APP / "static"
 JS = STATIC / "js"
-ORDER = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
+ORDER = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "owui", "code"]
 
 
 def registry():
@@ -22,7 +22,7 @@ def registry():
 def test_rail_order_is_grouped_and_names_match_the_server():
     rows = registry()
     assert [sid for sid, _, _ in rows] == ORDER
-    assert [group for *_, group in rows] == [1, 2, 2, 3, 3, 4, 4, 5]
+    assert [group for *_, group in rows] == [1, 2, 2, 3, 3, 4, 4, 5, 5]
     names = {sid: name for sid, name, _ in rows}
     for sid, name in sections.NAMES.items():
         if sid in names:
@@ -88,7 +88,7 @@ def test_old_names_are_gone_from_the_interface():
             assert old not in text, (path.name, old)
 
 
-def test_login_and_manifest_describe_all_eight_sections():
+def test_login_and_manifest_describe_all_nine_sections():
     names = [name.lower() for _, name, _ in registry()]
     manifest = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
     login = (STATIC / "login.html").read_text(encoding="utf-8")

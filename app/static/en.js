@@ -1988,7 +1988,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Настроить нижнюю панель": "Customize bottom bar",
   "Нижняя панель": "Bottom bar",
   "3–4 раздела и «Ещё»": "3–4 sections and More",
-  "Все разделы · 8 иконок": "All sections · 8 icons",
+  "Все разделы · 9 иконок": "All sections · 9 icons",
   "Выберите 3–4 основных раздела": "Choose 3–4 main sections",
   "Стандартный порядок": "Default order",
   "Ещё: {0}": "More: {0}",
@@ -3230,7 +3230,7 @@ globalThis.StudioEnglish = Object.freeze({
   "неверные ключи подписки": "invalid subscription keys",
   "устройство не подтвердило ключ": "device did not verify the passkey",
   "ключ не подошёл — нажмите «Открыть» ещё раз": "passkey rejected. Click Open again",
-  "выберите всё приложение или хотя бы один из восьми разделов": "choose the whole app or at least one of the eight sections",
+  "выберите всё приложение или хотя бы один из девяти разделов": "choose the whole app or at least one of the nine sections",
   "укажите время ожидания": "specify a timeout",
   "PIN — от 4 до 8 цифр": "PIN must be 4–8 digits",
   "название ключа — по устройству": "passkey name is based on the device",
@@ -3399,7 +3399,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Студия скрыта": "Studio hidden",
   "Стереть": "Erase",
   "Студия — вход": "Studio — sign in",
-  "Чат, фото, видео, озвучка, расшифровка, сканы, перевод и агенты": "Chat, photos, video, speech, transcription, scans, translation and agents",
+  "Чат, фото, видео, озвучка, расшифровка, сканы, перевод, Open WebUI и агенты": "Chat, photos, video, speech, transcription, scans, translation, Open WebUI and agents",
   "Забыли пароль?": "Forgot password?",
   "Студия — учётная запись": "Studio — account",
   "К входу": "Back to sign in",
@@ -3645,7 +3645,12 @@ globalThis.StudioEnglish = Object.freeze({
   "Open WebUI отклонил запрос": "Open WebUI rejected the request",
   "это решение уже принято": "this decision has already been made",
   "ответы нужны только к вопросам модели": "answers are needed only for the model's questions",
-  "Open WebUI слишком долго обрабатывает файл — попробуйте позже": "Open WebUI is taking too long to process the file. Try again later"
+  "Open WebUI слишком долго обрабатывает файл — попробуйте позже": "Open WebUI is taking too long to process the file. Try again later",
+  "Open WebUI": "Open WebUI",
+  "Учётки и чаты Open WebUI": "Open WebUI accounts and chats",
+  "Выберите чат слева или начните новый": "Choose a chat on the left or start a new one",
+  "Подключите свой Open WebUI: адрес сервера, email и пароль. Пароль Studio не сохраняет.": "Connect your Open WebUI: server address, email and password. Studio does not store the password.",
+  "Open WebUI сейчас недоступен": "Open WebUI is unavailable right now"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "Open WebUI {0} ответил не так, как ожидает Студия",

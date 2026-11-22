@@ -28,7 +28,7 @@ Studio brings everyday AI tools and remote development into a single account. As
 
 The server runs on infrastructure you control. Connect local models through the **srvllm gateway** or use **OpenAI-compatible services** for supported tasks. The Windows/macOS/Linux bridge connects the agents already installed on your computers, using their existing accounts and project permissions.
 
-**Eight workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Agents.
+**Nine workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Open WebUI · Agents.
 
 > The interface supports Russian and English. Choose a language on the sign-in page or in **Settings → Appearance**; the choice is saved on this device. Studio Agent on the computer follows the system language (Russian, otherwise English; set `STUDIO_AGENT_LANG=ru|en` to override). Screenshots show the actual application with fictional demonstration data; no personal conversations or production credentials are included.
 

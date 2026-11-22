@@ -175,7 +175,7 @@ function visibleSection() {
   const parts = /^#\/([a-z]+)(?:\/([^/?]+))?/.exec(location.hash);
   if (!parts) return 'chat';
   // Настройки отдельного раздела содержат его подключения и модели; общие настройки доступны отдельно.
-  return parts[1] === 'settings' && ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'code'].includes(parts[2])
+  return parts[1] === 'settings' && ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'owui', 'code'].includes(parts[2])
     ? parts[2] : parts[1];
 }
 
@@ -772,7 +772,7 @@ export function installLock() {
     const view = document.getElementById('view');
     view.style.visibility = 'hidden';
     view.inert = true;
-    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'code'].find((s) => !guarded(s)) || 'settings';
+    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'owui', 'code'].find((s) => !guarded(s)) || 'settings';
     location.hash = `#/${next}`;
     screen.close();
     cover(false);
