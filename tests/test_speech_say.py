@@ -1,11 +1,16 @@
 """Короткая озвучка «Разговора» (п. 13 спеки 2026-11-21): POST /api/speech/say — фраза до speeches.SAY_MAX
 знаков звуком умолчания «Озвучки» через API-подключение; ничего не сохраняется — ни в историю, ни в журнал."""
 import asyncio
+import json
 import logging
 
+import httpx
+
 import speech
+import speeches
 import state
-from conftest import add_gateway, make_user, signin
+import upstream
+from conftest import add_connection, add_gateway, make_user, signin
 from fakes import WAV_FAKE
 from http_checks import on_http
 from test_speeches import voice
@@ -13,6 +18,47 @@ from test_speeches import voice
 
 def say(s, text):
     return s.c.post("/api/speech/say", json={"text": text})
+
+
+def external_tts(s, monkeypatch) -> tuple[int, list]:
+    """Умолчание «Озвучки» — внешний OpenAI-совместимый сервис `tts-1`; список его запросов `/v1/audio/speech`."""
+    add_gateway(s)
+    state.DB.execute("UPDATE settings SET value = '[\"10.77.1.15:4000\", \"voice.cloud.test:443\"]' WHERE key = 'allowlist'")
+    async def resolve(host, port): return ["93.184.216.34"]
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    cid = add_connection(s, base_url="https://voice.cloud.test/v1", token="k-1", sections=["speech"])
+    s.c.put(f"/api/sections/speech/links/{cid}", json={"models": ["tts-1"]})
+    assert s.c.put("/api/sections/speech/default", json={"connection_id": cid, "model": "tts-1"}).status_code == 200
+    seen = []
+    async def speak(q):
+        seen.append(q)
+        return httpx.Response(200, content=b"ID3mp3", headers={"content-type": "audio/mpeg"})
+    s.gw.on["/v1/audio/speech"] = speak
+    return cid, seen
+
+
+def test_say_of_a_new_account_uses_the_first_service_voice(studio, monkeypatch):
+    """Внешний сервис без прежней озвучки — первый голос speeches.SERVICE_VOICES; s06 — по-прежнему 409 `voice`."""
+    cid, seen = external_tts(studio, monkeypatch)
+    r = say(studio, "First phrase")
+    assert r.status_code == 200, r.text
+    assert r.content == b"ID3mp3" and r.headers["content-type"].startswith("audio/mpeg")
+    request, = seen
+    assert json.loads(request.content) == {"model": "tts-1", "input": "First phrase", "voice": speeches.SERVICE_VOICES[0],
+                                           "response_format": "mp3"}
+    state.DB.execute("UPDATE connections SET s06 = 1 WHERE id = ?", (cid,))
+    r = say(studio, "Second phrase")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "voice" and len(seen) == 1
+
+
+def test_page_service_voices_match_the_server():
+    """Подсказка голоса сервиса на странице (speech.js `SERVICE_VOICES`) — тот же список, что умолчание сервера."""
+    import re
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "app/static/js/speech.js").read_text(encoding="utf-8")
+    block = re.search(r"const SERVICE_VOICES = \[(.*?)\];", source, re.S)
+    assert block, "нет SERVICE_VOICES в speech.js"
+    assert tuple(re.findall(r"'([^']*)'", block.group(1))) == speeches.SERVICE_VOICES
 
 
 def test_say_speaks_with_the_speech_default_and_keeps_nothing(studio, fake_audio, caplog):

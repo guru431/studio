@@ -36,7 +36,7 @@ const PAGE = 60;
 const LONG_MAX = 200000;                            // speeches.LONG_MAX
 const PART_MAX = { srvllm: 2000, other: 4000 };     // speeches.TEXT_MAX, speeches.EXTERNAL_MAX
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
-const SERVICE_VOICES = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
+const SERVICE_VOICES = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];   // speeches.SERVICE_VOICES
 
 let screen = null;
 

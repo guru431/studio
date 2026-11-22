@@ -80,6 +80,9 @@ QUEUE_KEY = "COALESCE(queued, created)"
 #: фраза «Разговора» (п. 8 шапки): знаков без разметки и бюджет всей операции, секунд
 SAY_MAX = 1000
 SAY_BUDGET_SEC = 120
+#: голоса OpenAI-совместимой озвучки — подсказка поля страницы (speech.js); первый — голос «Прочитать» и «Разговора»
+#: внешнего сервиса, пока учётка им не озвучивала (у шлюза и s06 — без умолчания)
+SERVICE_VOICES = ("alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer")
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/speeches")
@@ -582,15 +585,18 @@ async def create(body: SpeechIn, request: Request):
 
 
 def _read_voice(uid: int, conn, model: str) -> tuple[str, str]:
-    """Голос чтения: последний у этой модели, для шлюза без него — первый личный образец."""
+    """Голос чтения: последний у этой модели; без него у шлюза — первый личный образец, у внешнего сервиса —
+    первый из SERVICE_VOICES (s06 — 409)."""
     completed = " AND state = 'done'" if conn.kind != "srvllm" else ""
     last = state.DB.execute(f"SELECT voice FROM speeches WHERE user_id = ? AND connection_id = ? AND model = ?"
                             f" AND deleted IS NULL{completed} ORDER BY {QUEUE_KEY} DESC, rowid DESC LIMIT 1",
                             (uid, conn.id, model)).fetchone()
     if conn.kind != "srvllm":
-        if last is None:
+        if last is not None:
+            return last["voice"], last["voice"]
+        if conn.s06:
             raise HTTPException(409, {"code": "voice", "message": "сначала озвучьте текст голосом этого сервиса"})
-        return last["voice"], last["voice"]
+        return SERVICE_VOICES[0], SERVICE_VOICES[0]
     if last is not None:
         found = state.DB.execute("SELECT name FROM voices WHERE id = ? AND user_id = ? AND deleted IS NULL",
                                  (last["voice"], uid)).fetchone()

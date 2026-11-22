@@ -317,8 +317,6 @@ def test_external_service_speaks_by_voice_name_in_one_request(studio, fake_audio
         seen.append(q)
         return httpx.Response(200, content=b"ID3mp3", headers={"content-type": "audio/mpeg"})
     studio.gw.on["/v1/audio/speech"] = speak
-    unconfigured = studio.c.post("/api/speech/say", json={"text": "First phrase"})
-    assert unconfigured.status_code == 409 and unconfigured.json()["detail"]["code"] == "voice" and not seen
     r = studio.c.post("/api/speeches", json={"text": f"{LONG_A} {LONG_B}", "voice": "narrator",
                                              "connection_id": cid, "model": "tts-1"})
     assert wait_sp(studio, r.json()["id"], {"done", "error"})["state"] == "done"
