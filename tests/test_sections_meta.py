@@ -10,7 +10,7 @@ import sections
 
 STATIC = APP / "static"
 JS = STATIC / "js"
-ORDER = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
+ORDER = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "owui", "code"]
 
 
 def registry():
@@ -22,12 +22,28 @@ def registry():
 def test_rail_order_is_grouped_and_names_match_the_server():
     rows = registry()
     assert [sid for sid, _, _ in rows] == ORDER
-    assert [group for *_, group in rows] == [1, 2, 2, 3, 3, 4, 4, 5]
+    assert [group for *_, group in rows] == [1, 2, 2, 3, 3, 4, 4, 5, 5]
     names = {sid: name for sid, name, _ in rows}
     for sid, name in sections.NAMES.items():
         if sid in names:
             assert names[sid] == name, sid
     assert names["speech"] == "Озвучка" and names["ocr"] == "Сканы" and names["code"] == push.TITLE == "Агенты"
+
+
+def test_flags_say_which_sections_keep_history_and_settings():
+    """`history: false` — раздела нет в «Поиске» (фильтр без него, иначе 422 у `search.SearchIn`), в «Удалить всю
+    историю» и в разделах подключений; `settings: false` — нет страницы настроек. Исключения — только флагами реестра."""
+    import search
+    text = (JS / "sections-meta.js").read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^  \{ id: '(\w+)', (.*)$", text, re.M))
+    no_history = {sid for sid, rest in rows.items() if "history: false" in rest}
+    assert no_history == {"owui", "code"}
+    assert set(ORDER) - no_history == set(search.TITLES)
+    assert {sid for sid, rest in rows.items() if "settings: false" in rest} == {"owui"}
+    for name in ("search.js", "settings.js", "connection-form.js"):
+        assert "'owui'" not in (JS / name).read_text(encoding="utf-8"), name
+    for name in ("search.js", "connection-form.js"):
+        assert "!== 'code'" not in (JS / name).read_text(encoding="utf-8"), name
 
 
 def test_english_notification_words_match_the_interface_catalog():
@@ -41,7 +57,7 @@ def test_english_notification_words_match_the_interface_catalog():
     assert push.TITLES == {"ru": push.TITLE, "en": english[push.TITLE]}
     assert push.STUDIO == {"ru": "Студия", "en": english["Студия"]}
     words = [*bridge.ASK_WORDS.values(), *bridge.DONE_WORDS.values(), admin.CHECK_NOTICE, admin.COPY_NOTICE,
-             *(text for _, *pair in push.JOB_NOTICES.values() for text in pair)]
+             *(text for _, *pair in push.JOB_NOTICES.values() for text in pair), push.DECISION_NOTICE]
     for text in words:
         assert english[text["ru"]] == text["en"], text
 
@@ -88,7 +104,7 @@ def test_old_names_are_gone_from_the_interface():
             assert old not in text, (path.name, old)
 
 
-def test_login_and_manifest_describe_all_eight_sections():
+def test_login_and_manifest_describe_all_nine_sections():
     names = [name.lower() for _, name, _ in registry()]
     manifest = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
     login = (STATIC / "login.html").read_text(encoding="utf-8")

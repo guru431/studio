@@ -175,7 +175,7 @@ function visibleSection() {
   const parts = /^#\/([a-z]+)(?:\/([^/?]+))?/.exec(location.hash);
   if (!parts) return 'chat';
   // Настройки отдельного раздела содержат его подключения и модели; общие настройки доступны отдельно.
-  return parts[1] === 'settings' && ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'code'].includes(parts[2])
+  return parts[1] === 'settings' && ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'owui', 'code'].includes(parts[2])
     ? parts[2] : parts[1];
 }
 
@@ -558,10 +558,12 @@ function waitOpen(lockNow = null, knownState = null, forced = false) {
   return waiting.promise;
 }
 
-/** Картинки и плееры /api/media/…, получившие 423 во время блокировки (они идут мимо api.js), — заново. */
+/** Картинки и плееры /api/media/… и файлы «Open WebUI» (/api/owui/…), получившие 423 во время блокировки (они идут
+ * мимо api.js), — заново. */
 function reloadMedia() {
   for (const node of document.querySelectorAll('img, video, audio')) {
-    if (!(node.getAttribute('src') || '').startsWith('/api/media/')) continue;
+    const src = node.getAttribute('src') || '';
+    if (!src.startsWith('/api/media/') && !src.startsWith('/api/owui/')) continue;
     if (node instanceof HTMLImageElement) {
       if (node.complete && node.naturalWidth === 0) node.src = node.getAttribute('src');
     } else if (node.error) node.load();
@@ -772,7 +774,7 @@ export function installLock() {
     const view = document.getElementById('view');
     view.style.visibility = 'hidden';
     view.inert = true;
-    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'code'].find((s) => !guarded(s)) || 'settings';
+    const next = ['chat', 'photo', 'video', 'transcribe', 'speech', 'ocr', 'translate', 'owui', 'code'].find((s) => !guarded(s)) || 'settings';
     location.hash = `#/${next}`;
     screen.close();
     cover(false);

@@ -28,7 +28,7 @@ Studio brings everyday AI tools and remote development into a single account. As
 
 The server runs on infrastructure you control. Connect local models through the **srvllm gateway** or use **OpenAI-compatible services** for supported tasks. The Windows/macOS/Linux bridge connects the agents already installed on your computers, using their existing accounts and project permissions.
 
-**Eight workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Agents.
+**Nine workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Open WebUI · Agents.
 
 > The interface supports Russian and English. Choose a language on the sign-in page or in **Settings → Appearance**; the choice is saved on this device. Studio Agent on the computer follows the system language (Russian, otherwise English; set `STUDIO_AGENT_LANG=ru|en` to override). Screenshots show the actual application with fictional demonstration data; no personal conversations or production credentials are included.
 
@@ -106,6 +106,14 @@ The server runs on infrastructure you control. Connect local models through the 
 - Persistent history, copy, TXT/DOCX exports, translate again with another language/model and resume interrupted translations.
 - Separate queues for text and file/photo work, so a short paragraph can run alongside a long document.
 - Optional **Cleaner integration** for chat and translation with data cleaning; see the [user guide](docs/guide.ru.md#cleaner-чат-и-перевод-с-очисткой-данных).
+
+### Open WebUI
+
+- Connect your own **Open WebUI 0.13+** accounts — several, on one server or on different ones — and use them from Studio on every device you sign in to.
+- Pinned chats, nested folders and other chats in a tree, with search by title; changes made in Open WebUI appear while the section is open.
+- Read the current branch with Markdown, folded reasoning, tool steps and attachments; continue a chat or start a new one with the model of your choice, attach files and images, and stop an answer.
+- Answers stream live; a model question or a tool approval appears as a card under the answer, with a push notification when Studio is not on screen.
+- Only the Studio server talks to Open WebUI: the password is never stored, session tokens stay on the server and conversations are not copied into Studio. The administrator adds the server address to the allowlist; a self-signed certificate is trusted by its fingerprint. See the [user guide](docs/guide.ru.md#open-webui).
 
 ### Agents: Claude Code, Codex, OpenCode and DeepSeek Harness
 
@@ -232,6 +240,7 @@ flowchart LR
     APP --> DB[("Local SQLite")]
     APP --> MEDIA[("Media storage")]
     APP --> MODELS["srvllm / allowed model services"]
+    APP <-->|REST + socket.io| OWUI["Open WebUI servers"]
     APP <-->|WebSocket| BRIDGE["Windows / macOS / Linux bridge"]
     BRIDGE --> CLI["Claude Code / Codex / OpenCode / DeepSeek Harness"]
     BRIDGE --> PROJECTS["Local projects, files and Git"]

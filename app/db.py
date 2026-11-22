@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 64
+VERSION = 65
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -952,6 +952,17 @@ CREATE INDEX code_chats_user ON code_chats(user_id, created);
 """
 SCHEMA += CODE_64
 
+#: учётки Open WebUI внутри учётки Студии (owui.py): кто подключён (`who_enc`) и постоянная сессия (`secret_enc`) —
+#: шифром `STUDIO_DATA_KEY`; пароль не хранится нигде. Прежний код таблицу не читает; учётка уходит с пользователем
+OWUI_65 = """CREATE TABLE owui_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       label TEXT NOT NULL, base_url TEXT NOT NULL, who_enc BLOB NOT NULL, secret_enc BLOB NOT NULL, cert_pem TEXT,
+       state TEXT NOT NULL DEFAULT 'ok' CHECK (state IN ('ok', 'relogin')), version TEXT,
+       created REAL NOT NULL, used REAL);
+CREATE INDEX owui_accounts_user ON owui_accounts(user_id);
+"""
+SCHEMA += OWUI_65
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1082,6 +1093,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     63: MIRROR_GROUPS_63,
     # четвёртый помощник «Агентов» — DeepSeek Harness
     64: CODE_64,
+    # учётки Open WebUI
+    65: OWUI_65,
 }
 
 

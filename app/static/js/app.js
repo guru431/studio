@@ -2,8 +2,8 @@ import { tr } from './i18n.js';
 /* Оболочка студии: профиль, тема, разделы по hash, меню аватара, значок «В работе» (jobs.js),
  * лупа «Поиска» (#search-open — ссылка на #/search, search.js), служебный работник.
  *
- * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/code,
- * #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/trash (trash.js),
+ * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/owui,
+ * #/owui/<id>[/<chat>] (owui.js), #/code, #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/trash (trash.js),
  * #/myfiles (my-files.js; пункт меню виден, если у учётки есть сервер MCP с «Моими файлами»), #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
@@ -51,6 +51,7 @@ const LOADERS = {
   transcribe: () => import('./transcribe.js'),
   ocr: () => import('./ocr.js'),
   translate: () => import('./translate.js'),
+  owui: () => import('./owui.js'),
   code: () => import('./code.js'),
   search: () => import('./search.js'),
   settings: () => import('./settings.js'),
@@ -124,7 +125,8 @@ function parse(hash) {
 function allowed({ section, id }) {
   const def = SECTIONS[section];
   return def && !(def.admin && !me.is_admin)
-    && (id === null || section === 'chat' || section === 'settings' || section === 'code');
+    && (id === null || section === 'chat' || section === 'settings' || section === 'code'
+      || section === 'owui');
 }
 
 function revealView() {
@@ -284,7 +286,7 @@ function meetingDot(rail, before) {
   });
 }
 
-/** Клавиши разделов на компьютере: Alt+1…8 — разделы в порядке рельса (реестр sections-meta.js), Alt+/ — «Поиск»;
+/** Клавиши разделов на компьютере: Alt+1…9 — разделы в порядке рельса (реестр sections-meta.js), Alt+/ — «Поиск»;
  * на macOS — Control+Option (Option+цифра там вводит символы). По event.code — работают и в русской раскладке.
  * Не срабатывают в открытом окне (dialog), при наборе IME, с Shift/Meta (и Ctrl вне macOS: Ctrl+Alt — это AltGr) и в
  * contenteditable. В обычном поле работают: Alt+цифра текста не вводит, а поле задания «Агентов» и «Чата» держит фокус.

@@ -63,6 +63,8 @@ import knowledge
 import media
 import ocr
 import ntfy
+import owui
+import owui_link
 import presets
 import account_profile as profile
 import profiles
@@ -152,11 +154,13 @@ async def lifespan(_app):
         await chat.stop_all()
         await project_mirrors.stop()
         await bridge.stop()
+        await owui_link.stop()
         await push.stop()
         cleaner.TICKETS.clear()
         cleaner.LOCKS.clear()
         if state.CLEANER_HTTP is not state.HTTP:
             await state.CLEANER_HTTP.aclose()
+        await state.close_pinned()
         await state.HTTP.aclose()
         state.DB.close()
 
@@ -234,6 +238,7 @@ app.include_router(code_usage.router)
 app.include_router(code_activity.router)
 app.include_router(push.router)
 app.include_router(ntfy.router)
+app.include_router(owui.router)
 
 
 @app.exception_handler(RequestValidationError)

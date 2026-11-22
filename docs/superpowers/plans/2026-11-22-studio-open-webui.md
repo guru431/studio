@@ -213,7 +213,7 @@ pytest (+ xdist), браузерные тесты через CDP (`integration`)
   - `test_connect_creates_account_without_storing_password` — 201/200, выдача без токенов; в базе нет пароля ни в одном
     столбце; Fake видит одну сессию с именем `"Studio"`.
   - `test_connect_refuses_unlisted_address` — 422 `unlisted`, к Fake ни одного запроса.
-  - `test_connect_maps_login_errors` — неверный пароль → 422 `login`; роль `pending` → 422 `pending`; ответ входа с
+  - `test_connect_maps_login_errors` — неверный пароль → 422 `owui_login`; роль `pending` → 422 `pending`; ответ входа с
     требованием MFA → 422 `mfa`; версия `0.12.9` или нет `auth_sessions` → 422 `unsupported`.
   - `test_login_failures_are_limited_per_studio_user` — 5 неверных паролей → шестой 429 `owui_locked` без запроса к
     Fake; через 900 с по часам — снова можно.

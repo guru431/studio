@@ -1,7 +1,7 @@
 # CLAUDE.md — studio
 
-Студия `https://studio.example.com` — многопользовательское приложение (PWA) с учётками, историей и восемью
-разделами (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты), плюс пакетные скрипты для Windows и Linux —
+Студия `https://studio.example.com` — многопользовательское приложение (PWA) с учётками, историей и девятью
+разделами (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Open WebUI, Агенты), плюс пакетные скрипты для Windows и Linux —
 клиенты API картинок и видео LLM-шлюза srvllm. Описание — [README.md](README.md) и [README.ru.md](README.ru.md),
 подробное руководство — [docs/guide.ru.md](docs/guide.ru.md); главная спека —
 [2026-10-19-studio-pwa-design](docs/superpowers/specs/2026-10-19-studio-pwa-design.md); как устроено по областям —
@@ -121,6 +121,7 @@ minor для возможностей, major для несовместимых �
 | Сканы и перевод | `ocr`, `ocr_render`, `translate`, `translate_text`, `translate_spot` | [ocr-translate](docs/architecture/ocr-translate.md) |
 | Поиск, задания, уведомления | `search`, `jobs`, `push`, `ntfy` | [search](docs/architecture/search.md), [notifications](docs/architecture/notifications.md) |
 | «Агенты» | `agents`, `agent_release`, `bridge`, `claude_code`, `workspace`, `code_activity`, `code_attention`, `code_usage`, `code_visualizations`, `code_actions`, `computer_info`, `desktop`, `terminal_links`, `project_access` (участники), `project_mirrors` (зеркала), `mirror_groups` (группы копий зеркал) | [agents](docs/architecture/agents.md), [agents-workspace](docs/architecture/agents-workspace.md), [project-collaboration](docs/architecture/project-collaboration.md) |
+| Open WebUI | `owui` (учётки Open WebUI), `owui_tokens` (постоянная сессия: долгий токен шифром, рабочий в памяти, обновление с ротацией), `owui_view` (ответы Open WebUI → вид Студии: ветка чата, элементы, пауза, события сокета), `owui_link` (соединение socket.io на учётку: события → SSE, отказ обратным вызовам, переподключение, закрытие по простою); страница — `owui.js`, `owui-panel.js` (учётки и дерево), `owui-chat.js` (лента и поле), `owui-pending.js` (карточка паузы) | [open-webui](docs/architecture/open-webui.md) |
 | Мост `agent/` | `studio_agent/*`, правила — [agent/CLAUDE.md](agent/CLAUDE.md) | [agent-bridge](docs/architecture/agent-bridge.md) |
 | Страница: общее | `app/static/js/`: `app.js` (роутер, рельс `buildRail`, `announce`), `sections-meta.js` (реестр разделов), `icons.js` (значки), `menu.js` (меню и панели), `appearance.js` (тема, акцент, плотность, шрифт, масштаб), `settings.js`, `account-security.js` (сессии, аварийный выход, журнал), `mobile-navigation.js`, `trash.js` («Корзина»), `my-files.js` («Мои файлы»), `help.js` («Справка»), `recorder.js` («Записать» встречу), `speech-read.js` («Прочитать»); `file-link.js` — страница `/f`; `theme.js` — до модулей | [shell](docs/architecture/shell.md), [security-lock](docs/architecture/security-lock.md) |
 | Страница: «Чат» | `chat.js`, `chat-pending.js` (карточка паузы хода), `chat-mcp.js`, `chat-files.js`, `chat-suggest.js` (подсказки), `chat-context.js` (кольцо контекста), `chat-voice.js` («Разговор»), `knowledge.js` (чип «Знания»), `chat-share.js`; `share-view.js` — страница `/share` | [chat](docs/architecture/chat.md), [sharing-export](docs/architecture/sharing-export.md) |
@@ -227,6 +228,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 | 62 | `mcp_servers.dialog_default` — общий MCP «В диалоге по умолчанию» | столбец не читает: общие серверы без отметки снова действуют во всех диалогах (и уже включённые вручную остаются в `mcp_ids`); редактор администратора флажка не показывает и при сохранении его не меняет | Не нужен. Если инструменты такого сервера не должны предлагаться по умолчанию — перед откатом выключить сервер в панели |
 | 63 | `mirror_groups`, `mirror_copies`, `mirror_pairs`, `mirror_legacy` — зеркала группой копий; строки `project_mirrors` переносит `mirror_groups.adopt` при старте | новые таблицы не читает: видит односторонние зеркала `project_mirrors` на момент обновления с прежними базами сравнения; копий, групп и синхронизаций нового кода не видит; после возврата вперёд его синхронизации не учтены (больше «локальных изменений»), отвязки и правки исключений тоже (отвязанное им зеркало снова видно — отвязать заново), а его новые зеркала `adopt` перенесёт | Не нужен |
 | 64 | `code_chats.engine` (deepseek) — пересборка с CHECK четырёх помощников, столбцы и `origin` сохраняются | движка нет в `claude_code.ACCESS`: чаты DSH, присланные мостом, из списка проекта исчезают целиком; без названия видны только открытые отметки без сессии на машине (новый чат до первого хода); история, ход и «Поделиться» при мосте на связи — 500 (словарь имён `require_engine` без `deepseek`, KeyError), без связи — 409 `offline`; `state` и ход с непустыми правами — 500 и без связи (`ACCESS[engine]`); закрыть и открыть отметку можно. Поднятый в «Приоритете агентов» DeepSeek Harness (`users.code_defaults`, не шаг схемы) — прежний код отвечает 422 `priority` на любое сохранение умолчаний, после возврата вперёд — то же («от 1 до 4») | `DELETE FROM code_chats WHERE engine = 'deepseek';` — сессии остаются на компьютерах; «Приоритет агентов» — пересохранить |
+| 65 | `owui_accounts` — учётки Open WebUI (адрес, кто подключён и постоянная сессия — шифром) | таблицу не читает: раздела нет; учётки сохраняются до возврата вперёд; удаление учётки Студии уносит их строки каскадом, но сессии «Studio» в Open WebUI не отзывает | Не нужен; оставшиеся сессии «Studio» можно отозвать в самом Open WebUI |
 
 Новый код строки незнакомых разделов не видит (`connections._from_row`, `search.KNOWN`) — откат со следующего нового
 раздела не даст 422 правки подключения и 500 поиска.
@@ -264,7 +266,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 
 Полные формулировки — в «Ловушках» файлов docs/architecture.
 
-- Apache: `ProxyPass` — на имя `studio-backend`, не `localhost`; `/api/chats/` и `/api/code/` (600 с, `flushpackets=on`,
+- Apache: `ProxyPass` — на имя `studio-backend`, не `localhost`; `/api/chats/`, `/api/code/` и `/api/owui/` (600 с, `flushpackets=on`,
   `no-gzip`), `/api/videos` (330 с), `/api/my-files/` (330 с, ZIP папки — `my_files.ZIP_SEC`), `/api/speeches/chats/`
   (930 с, один mp3 чата — `audio.TIMEOUT_SEC`) и `/api/agent/link` (`upgrade=websocket timeout=300`) — раньше общего `ProxyPass /`;
   `LimitRequestBody` не меньше пределов службы; ожидание nginx контейнера — не меньше самого долгого маршрута. Сверяет `tests/test_deploy.py`.
@@ -292,7 +294,8 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
   привязать заново (`project_mirrors._item`, признак `reenter`), исключения группы — сохранить заново (`exclude_reenter`),
   состояния пар и накопленное «держал» нечитаемы — первые сравнения осторожнее (больше «локальных изменений»); идентификаторы `X-Studio-User` (`access.studio_user`)
   — новые: внешний MCP (например, мост с папками по людям) видит новых пользователей, их папки, задания и файлы потеряны;
-  личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново.
+  личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново; учётки Open WebUI — `relogin`
+  (`owui._out`, признак `reenter`), «Войти заново» с email и паролем.
 - Модуль раздела — `claude_code.py`, не `code.py` (заслонил бы стандартный `code`, pytest — INTERNALERROR).
 - `ntfy` не импортирует `upstream` при загрузке (цикл main → bridge → push → ntfy); после правки цепочки импорта —
   `import main` на Python хоста (3.13).

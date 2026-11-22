@@ -44,6 +44,7 @@ import history
 import images
 import media
 import operations
+import owui
 import project_access
 import screenlock
 import security
@@ -95,6 +96,7 @@ async def delete_user_data(uid: int) -> int:
         auth.end_sessions(uid)
         email_accounts.revoke_invited_by(uid)
         await bridge.drop_user(uid)
+        await owui.drop_user(uid)
         await history.delete_all(uid)
         if not await images.settle_user(uid):
             log.warning("пользователь %d: задания картинок не кончились — карту освободит срок аренды", uid)

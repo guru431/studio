@@ -90,7 +90,7 @@ def alt(key, modifiers="Alt"):
 
 
 def test_alt_digits_open_sections_in_rail_order(browser, live):
-    """Alt+1…8 — разделы в порядке рельса, Alt+/ — «Поиск»; из поля ввода тоже. Ctrl+Alt (AltGr) и Shift+Alt, открытое
+    """Alt+1…9 — разделы в порядке рельса, Alt+/ — «Поиск»; из поля ввода тоже. Ctrl+Alt (AltGr) и Shift+Alt, открытое
     окно — мимо. У кнопок рельса — aria-keyshortcuts и подсказка."""
     r = browser.drive(live.url + "/", [*signin(), ("wait", READY),
         ("eval", "keys", "[...document.querySelectorAll('#rail a.tab')].map(a => [a.dataset.section,"
@@ -98,7 +98,8 @@ def test_alt_digits_open_sections_in_rail_order(browser, live):
         ("eval", "searchKeys", "[document.querySelector('#search-open').getAttribute('aria-keyshortcuts'),"
                                " document.querySelector('#search-open').title]"),
         alt("3"), ("wait", "document.title === 'Видео — Студия'"), ("eval", "video", HASH),
-        alt("8"), ("wait", "document.title === 'Агенты — Студия'"), ("eval", "code", HASH),
+        alt("8"), ("wait", "document.title === 'Open WebUI — Студия'"), ("eval", "owui", HASH),
+        alt("9"), ("wait", "document.title === 'Агенты — Студия'"), ("eval", "code", HASH),
         alt("Slash"), ("wait", "document.querySelector('#search-q')"),
         ("eval", "search", HASH),
         ("eval", "focus", "document.querySelector('#search-q').focus(), document.activeElement.id"),
@@ -111,11 +112,11 @@ def test_alt_digits_open_sections_in_rail_order(browser, live):
         alt("2"), ("wait", "document.title === 'Фото — Студия'"), ("eval", "photo", HASH)])
     assert not r.get("failed"), r
     v = r["values"]
-    order = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code"]
+    order = ["chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "owui", "code"]
     assert [row[0] for row in v["keys"]] == order
-    assert [row[1] for row in v["keys"]] == [f"Alt+{n}" for n in range(1, 9)]
+    assert [row[1] for row in v["keys"]] == [f"Alt+{n}" for n in range(1, 10)]
     assert v["keys"][0][2] == "Чат · Alt+1" and v["searchKeys"] == ["Alt+/", "Поиск · Alt+/"]
-    assert [v["video"], v["code"], v["search"]] == ["#/video", "#/code", "#/search"]
+    assert [v["video"], v["owui"], v["code"], v["search"]] == ["#/video", "#/owui", "#/code", "#/search"]
     assert v["focus"] == "search-q" and v["fromField"] == "#/chat"
     assert v["altGr"] == v["shifted"] == v["inDialog"] == "#/chat"
     assert v["photo"] == "#/photo"

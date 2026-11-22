@@ -29,6 +29,8 @@ DELIBERATE_SKIPS = (
     "STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required",
     "STUDIO_LIVE_VOICE (запись",
     "PowerShell and studio-batch.local.ps1 are required",
+    "OWUI_LIVE_URL, OWUI_LIVE_EMAIL and OWUI_LIVE_PASSWORD are required",
+    "the model answered without asking a question (ask_user)",
 )
 
 
@@ -318,6 +320,12 @@ def studio(env, schema_db, monkeypatch):
     clear_push()
     import mcp_sources
     mcp_sources.CACHE.clear()            # каталоги MCP прошлого теста (ключ — id сервера той базы)
+    import owui_tokens
+    owui_tokens.TOKENS.clear()           # рабочие токены Open WebUI и блокировки обновления (ключ — id учётки той базы)
+    owui_tokens.LOCKS.clear()
+    import owui
+    owui.FAILS.clear()                   # неудачи входа в Open WebUI (ключ — uid той базы)
+    clear_owui_links()
     if not env.db_path.exists():
         env.db_path.write_bytes(schema_db)
     with TestClient(main.app, base_url="https://testserver",
@@ -332,6 +340,20 @@ def studio(env, schema_db, monkeypatch):
     claude_code.NEW_CHATS.clear()
     clear_bridge()
     clear_push()
+    clear_owui_links()
+
+
+def clear_owui_links() -> None:
+    """Соединения Open WebUI — модульные (ключ — id учётки той базы); задачи прошлого цикла событий отменяются,
+    как у моста."""
+    import owui_link
+    for link in list(owui_link.LINKS.values()):
+        if not link.task.done():
+            try:
+                link.task.cancel()
+            except RuntimeError:
+                pass
+    owui_link.LINKS.clear()
 
 
 def clear_bridge() -> None:

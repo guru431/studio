@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Studio",
   "short_name": "Studio",
-  "description": "Chat, photos, video, speech, transcription, scans, translation and agents",
+  "description": "Chat, photos, video, speech, transcription, scans, translation, Open WebUI and agents",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

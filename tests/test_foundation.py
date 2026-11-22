@@ -12,6 +12,9 @@ import security
 import state
 from historical_schema import install_schema
 
+#: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
+SCHEMA_VERSION = 65
+
 
 def test_config_names_missing_variables_without_values(monkeypatch):
     for k in config.REQUIRED: monkeypatch.delenv(k, raising=False)
@@ -31,7 +34,7 @@ def test_config_refuses_a_bad_data_key_without_showing_it(env, monkeypatch):
 
 def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     conn = db.connect(env.db_path); db.migrate(conn); db.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 64
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -40,7 +43,7 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.CODE_64).removesuffix(db.MIRROR_GROUPS_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
+        conn.executescript(db.SCHEMA.removesuffix(db.OWUI_65).removesuffix(db.CODE_64).removesuffix(db.MIRROR_GROUPS_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
                            .removesuffix(db.TRANSCRIPT_PLAYBACK_60)
                            .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
@@ -81,7 +84,7 @@ def test_step_57_adds_profiles_roles_dialog_mcp_state_and_previous_writer_works(
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -193,7 +196,7 @@ def test_step_58_adds_pause_trash_links_knowledge_and_previous_writer_works(env)
         conn.execute("INSERT INTO chats(id,user_id,title,created,updated) VALUES('before',1,'Keep',0,0)")
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
 
         def columns(table):
             return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -311,7 +314,7 @@ def test_step_61_trashes_voice_samples_aside_and_previous_writer_works(env):
         conn.execute(voice, ("before", "before-audio"))
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
 
         # прежний код: голос (первый образец — триггером) и образец без списка столбцов
         conn.execute(voice, ("previous", "previous-audio"))
@@ -347,7 +350,7 @@ def test_step_62_marks_shared_mcp_dialog_default_and_previous_writer_works(env):
         conn.execute(add, ("before",))
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
         conn.execute(add, ("previous",))
         assert [tuple(r) for r in conn.execute("SELECT name, dialog_default FROM mcp_servers ORDER BY id")] == [
             ("before", 1), ("previous", 1)]
@@ -369,7 +372,7 @@ def test_step_63_adds_mirror_groups_and_previous_writer_works(env):
         conn.execute(mirror, ("before", "one"))
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 64
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"mirror_groups", "mirror_copies", "mirror_pairs", "mirror_legacy"} <= tables
         conn.execute(mirror, ("previous", "two"))                                       # прежний код

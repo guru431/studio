@@ -66,7 +66,7 @@ class Password(BaseModel):
 class ScreenLock(BaseModel):
     enabled: bool
     password: str | None = Field(default=None, max_length=PASSWORD_MAX)
-    sections: list[str] | None = Field(None, max_length=8)
+    sections: list[str] | None = Field(None, max_length=len(lock_policy.SECTIONS))
     timeout: StrictInt | None = Field(None, ge=0, le=86400)
 
     @field_validator("sections")
@@ -74,7 +74,7 @@ class ScreenLock(BaseModel):
     def valid_sections(cls, value):
         if value is None or not value or ("*" in value and value != ["*"]) or any(
                 section not in (*lock_policy.SECTIONS, "*") for section in value):
-            raise ValueError("выберите всё приложение или хотя бы один из восьми разделов")
+            raise ValueError("выберите всё приложение или хотя бы один из девяти разделов")
         return list(dict.fromkeys(value))
 
     @field_validator("timeout")

@@ -334,7 +334,8 @@ def test_scan_made_by_a_protected_section_is_closed_everywhere(studio, closed):
 #: голова пути /api/<голова>/… → раздел: всё под ней закрывает защита этого раздела
 SECTION_HEADS = {"chats": "chat", "mcp": "chat", "attachments": "chat", "roles": "chat", "memory": "chat", "knowledge": "chat", "images": "photo", "presets": "photo", "videos": "video",
                  "transcripts": "transcribe", "transcribe": "transcribe", "voices": "speech", "speeches": "speech",
-                 "speech": "speech", "ocr": "ocr", "translate": "translate", "code": "code", "agents": "code"}
+                 "speech": "speech", "ocr": "ocr", "translate": "translate", "code": "code", "agents": "code",
+                 "owui": "owui"}
 #: прочие маршруты /api/* — явно. "closed" — закрыт любой частичной защитой (управление защитой, уведомлениями,
 #: ключами, общие выгрузки), "open" — открыт (данные без истории или отфильтрованные по закрытым разделам),
 #: "lock" — запросы самой блокировки, "media" — по разделам файла, раздел — только при его защите.
@@ -456,7 +457,7 @@ def _api_routes():
 
 def test_every_api_route_is_classified_for_partial_protection(studio):
     """Реестр: каждый маршрут /api/* — раздела (по голове пути), общий закрываемый, открытый, блокировки или
-    файла; и lock_policy.blocks ведёт себя так при защите любого одного раздела из восьми."""
+    файла; и lock_policy.blocks ведёт себя так при защите любого одного раздела из девяти."""
     from types import SimpleNamespace
     uid = owner(studio)
     digest = security.digest(studio.c.cookies[auth.COOKIE])

@@ -77,7 +77,7 @@ def test_step_64_widens_engine_check_and_keeps_origin(env):
         before = [tuple(row) for row in conn.execute("SELECT * FROM code_chats ORDER BY id")]
         db.migrate(conn)
         db.migrate(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 64
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
         assert [tuple(row) for row in conn.execute("SELECT * FROM code_chats ORDER BY id")] == before
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute("SELECT name FROM sqlite_master WHERE name = 'code_chats_user'").fetchone() is not None

@@ -18,6 +18,7 @@ export const ICONS = {
   ocr: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/>'
     + '<path d="M8 9h8M8 12h8M8 15h5"/>',
   translate: '<path d="M4 7h7M7.5 5v2M5 15c2-2 4-5 4.5-8M6 11c1 2 3 3 5 4"/><path d="M13 20l3.5-8 3.5 8M14.2 17.5h4.6"/>',
+  owui: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.1M10 6.5h.1"/><path d="M8 14h8M8 17h5"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   jobs: '<path d="M4 7h16M4 12h10M4 17h7"/><path d="M15.5 16.5l2 2 3.5-4"/>',
   // оболочка и общие кнопки

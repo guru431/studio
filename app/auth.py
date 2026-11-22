@@ -74,7 +74,7 @@ SCREEN_LOCK_PATHS = frozenset({"/api/lock", "/api/lock/alive", "/api/lock/now", 
 #: Свой вход: логин/пароль для привязки, ключ устройства для обновления, пропуск сессии для установки Linux.
 OPEN_API = frozenset({"/api/agent/enroll", "/api/agent/package", "/api/agent/linux-installer"})
 #: Экраны страницы (app.js LOADERS; сверяет tests/test_sections_meta.py) — куда вернуться после входа.
-PAGE_SECTIONS = ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "code", "search", "settings",
+PAGE_SECTIONS = ("chat", "photo", "video", "speech", "transcribe", "ocr", "translate", "owui", "code", "search", "settings",
                  "help", "trash", "myfiles", "admin")
 #: Поле `next` входа — фрагмент маршрута страницы `#/<экран>[/<id>…][?<параметры>]`: только ASCII-буквы, цифры и
 #: `_ - = & .`; ни схемы, ни хоста, ни `//`, `\`, `%` и управляющих символов. Иное — на главную.
