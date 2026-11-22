@@ -13,6 +13,7 @@ import state
 from conftest import add_connection, add_gateway
 from fakes import FakeCleanerGateway
 from test_chat import attach, messages, new_chat, png, sse, turn
+from test_chat_pending import answer
 from test_chat_web import EXA_KEY, call
 from test_knowledge import big_text
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
@@ -138,6 +139,20 @@ def test_tool_round_reuses_the_context_and_stores_the_last_request(cleaner_gw):
     assert answer["content"] == "Готово" and stored_request(answer["id"]) == f"{gw.chats[0]}/{2:032x}"
     sse(turn(s, chat_id, "Ещё"))                                            # следующий ход — тот же контекст
     assert len(gw.chats) == 1 and gw.turns[-1].headers["x-cleaner-chat"] == gw.chats[0]
+
+
+def test_resume_after_a_pause_goes_through_the_same_context(cleaner_gw):
+    """Продолжение после паузы (chat_pending) контекста не знает: первый круг берёт тот же чат Cleaner диалога."""
+    s, gw = cleaner_gw
+    sid = shared_mcp(s, [tool("translate", _meta={"studio/confirm": True})])
+    chat_id = routed_chat(s, gw)
+    gw.script = [{"text": ["Сейчас."], "tool_calls": [call(f"mcp_{sid}_0", phrase="hello")]}, ["Готово."]]
+    events = sse(turn(s, chat_id, "Переведи"))
+    shown = next(data for name, data in events if name == "pending")
+    assert sse(answer(s, chat_id, shown["id"], "refuse"))[-1] == ("done", {"status": "done"})
+    assert len(gw.turns) == 2 and len(gw.chats) == 1
+    assert gw.turns[1].headers["x-cleaner-chat"] == gw.chats[0] and gw.bodies[1]["messages"][-1]["role"] == "tool"
+    assert messages(s, chat_id)[-1]["content"] == "Сейчас.\n\nГотово."
 
 
 def test_cleaner_down_refuses_without_touching_the_provider(cleaner_gw):
