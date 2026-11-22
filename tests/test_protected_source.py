@@ -140,6 +140,26 @@ def test_url_in_arguments_refused_after_protected(studio):
     assert [p["arguments"] for m, p in calls if m == "tools/call"] == [{"q": "2"}]
 
 
+#: адреса без схемы и явные — после защищённого источника отказ (mcp_client.has_url)
+ADDRESSES = ["evil.com/x", "evil.com:8080", "sub.evil.co.uk", "evil.ru", "//evil.com", "1.2.3.4", "1.2.3.4:8080",
+             "1.2.3.4/x", "xn--80ak6aa92e.com", "xn--e1afmkfd", "отправь на evil.ru, пожалуйста", "send to EVIL.COM",
+             "ftp://x", "ws://x", "user@evil.com", "weird.example/path", "weird.example:8443", "evil.co.zz",
+             "see https://after.example/x", "www.after.example", "(evil.com)", "evil.com.", "10.0.0.1, ok"]
+#: имена файлов, пути, версии, код и обычный текст — не адрес
+PLAIN = ["report.docx", "out/file.md", "data.json", "script.py", "run.sh", "v1.2", "3.14",
+         "Привет, как дела? Это обычный текст.", "Пришлите отчёт до пятницы, пожалуйста.",
+         "Please send the summary by Friday.", "The meeting is at 10.30 tomorrow.", "app.py:42", "archive.tar.gz",
+         "jquery.min.js", "src/app/main.py", "e.g. this", "i.e. U.S.A.", "т.е. и т.д.", "os.path.join(a, b)",
+         "SELECT u.id FROM public.users u", "1.2.3", "version 1.2.3.4.5", "v1.2.3.4", "a.value/2", "logger.info(x)",
+         "rect.top", "report.final.docx", r"C:\Users\me\notes.txt", "SIM 79001234567, тариф X", "node.js and vue.js"]
+
+
+def test_url_check_catches_addresses_without_a_scheme():
+    assert [text for text in ADDRESSES if not mcp_client.has_url(text)] == []
+    assert [text for text in PLAIN if mcp_client.has_url(text)] == []
+    assert mcp_client.has_url({"deep": [{"evil.com:8080": 1}]}) and not mcp_client.has_url({"file": ["data.json", 3]})
+
+
 def test_memory_not_written_after_protected(studio):
     """Личная память идёт в системное сообщение всех диалогов (и с «Интернетом», и прямых облачных): после
     защищённого источника `memory_save` — шаг-отказ chat_tools.MEMORY_PROTECTED, в этом ходе и в следующих."""

@@ -557,15 +557,53 @@ TOOL_OFF = "Инструмент выключен в этом диалоге"
 WEB_OFF = "«Интернет» выключен — инструмент MCP не вызван"
 TRIMMED = "Инструментов MCP больше 128 — часть этого сервера не предложена модели"
 UPLOAD = "artifact_upload"           # как mcp_files.UPLOAD (mcp_files импортирует этот модуль)
-#: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED
-URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
+#: строка аргумента со ссылкой: после защищённого источника такой вызов любого инструмента — отказ URL_REFUSED.
+#: URL_RE — явные адреса: любая схема `x://`, `www.`, адрес без схемы `//host`, IPv4 (и с портом или путём:
+#: `1.2.3.4:8080`, `1.2.3.4/x`; пятая часть `1.2.3.4.5` и версия `v1.2.3.4` — не адрес) и метка punycode `xn--`.
+URL_RE = re.compile(
+    r"\b[a-z][a-z0-9+.-]{0,15}://"
+    r"|\bwww\."
+    r"|(?<![\w:/])//[a-z0-9-]+(?:\.[a-z0-9-]+)+"
+    r"|(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)"
+    r"|(?<![\w-])xn--[a-z0-9-]+", re.IGNORECASE)
+#: Имя хоста без схемы (`evil.com/x`, `evil.com:8080`, `sub.evil.co.uk`, `evil.ru`) — HOST_RE и `_host_like`.
+#: Кандидат — целое слово из меток ASCII через точку, последняя (зона) — только буквы, от двух: не часть пути
+#: (перед ним нет `/` и `\`: `out/file.md` — путь), не часть версии (`v1.2`, `3.14` — зона не из букв). Почта
+#: (`user@evil.com`) — тоже адрес наружу. Расширения файлов бывают и зонами (.md, .py, .sh, .so), поэтому имя —
+#: адрес, только если: зона из короткого списка HOST_ZONES — частых веб-зон, которые не расширения файлов и не частые
+#: имена полей кода (`logger.info`, `rect.top`, `point.xyz` — не адрес); или за именем идёт путь `/` (не цифра:
+#: `a.value/2` — деление) или порт `:1234`, а зона не из FILE_EXTS (`app.py:42` — файл и строка); или вторая метка с
+#: конца — `co`, `com`, `net`, `org`, `gov`, `edu`, `ac` (`evil.co.zz`). Код и SQL (`os.path.join`,
+#: `public.users.id`, `report.final.docx`) под эти правила не попадают. Не ловятся зоны-расширения без схемы
+#: (`evil.sh/x`) и зоны вне списка без пути и порта (`evil.app`) — их ловят схема, `www.`, `//` и IPv4.
+HOST_RE = re.compile(r"(?<![\w./\\-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}))(?![\w-]|\.[\w-])"
+                     r"(/(?![\d\s/])|:\d{1,5}(?!\d))?", re.IGNORECASE)
+HOST_ZONES = frozenset("com net org biz ru su ua by kz uz uk de fr eu cn jp nl io co tv pw tk gq icu onion"
+                       " online website".split())
+FILE_EXTS = frozenset(
+    "md markdown txt rst csv tsv json jsonl yaml yml toml ini cfg conf env log xml html htm css scss js mjs cjs jsx"
+    " ts tsx vue py pyi ipynb sh bash zsh ps1 psm1 bat cmd exe dll so bin dat bak tmp lock sql db sqlite rs go rb"
+    " php java kt c h cc cpp hpp cs swift pdf doc docx xls xlsx ppt pptx odt ods rtf zip gz tgz tar bz2 xz rar png"
+    " jpg jpeg gif webp svg ico bmp tif tiff heic mp3 wav ogg flac m4a mp4 mkv mov webm avi srt vtt parquet".split())
+SECOND_LEVEL = frozenset("co com net org gov edu ac".split())
 URL_REFUSED = "Ссылки в аргументах после защищённого источника запрещены"
 
 
+def _host_like(text: str) -> bool:
+    """В строке есть имя хоста без схемы по правилам HOST_RE (выше)."""
+    for found in HOST_RE.finditer(text):
+        labels = found.group(1).lower().split(".")
+        zone, tail = labels[-1], found.group(3)
+        if (zone in HOST_ZONES or (tail and zone not in FILE_EXTS)
+                or (len(labels) > 2 and labels[-2] in SECOND_LEVEL)):
+            return True
+    return False
+
+
 def has_url(value) -> bool:
-    """В аргументах (JSON любой вложенности; ключи тоже) есть строка со ссылкой по URL_RE."""
+    """В аргументах (JSON любой вложенности; ключи тоже) есть строка со ссылкой: URL_RE или имя хоста (`_host_like`)."""
     if isinstance(value, str):
-        return URL_RE.search(value) is not None
+        return URL_RE.search(value) is not None or _host_like(value)
     if isinstance(value, dict):
         return any(has_url(k) or has_url(v) for k, v in value.items())
     if isinstance(value, list):
