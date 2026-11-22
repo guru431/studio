@@ -153,12 +153,18 @@ def _listing(aid, pid):
     return result
 
 
+def _gone():
+    """Копии (или группы) с этим id больше нет — отвязана или слита с другой строкой той же папки. Окно узнаёт
+    отказ по признаку `gone`, а не по словам (их переводит страница), и перечитывает список."""
+    return code._refuse(404, "not_found", NOT_FOUND, gone=True)
+
+
 def _pair(request, aid, pid, cid):
     """(текущая копия, другая копия `cid` той же группы); иначе 404."""
     _owner(request, aid, pid)
     mine, other = mirror_groups.find(aid, pid), _copy(cid)
     if mine is None or other is None or other["grp"] != mine["grp"] or other["id"] == mine["id"]:
-        raise code._refuse(404, "not_found", NOT_FOUND)
+        raise _gone()
     project_access.owner(request, other["agent"])
     return mine, other
 
@@ -369,7 +375,8 @@ def _selection(plan, selected, updates, remove):
         return path not in keep and path not in protected and all(parent not in keep for parent in _ancestors(path))
 
     if any(conflict and apply(path) for path, _, conflict, *_ in changes) and not selected.overwrite:
-        raise code._refuse(409, "conflict", "в зеркале есть локальные изменения")
+        # `local` — признак для окна («Отправить во все копии» помечает такую копию), слова переводит страница.
+        raise code._refuse(409, "conflict", "в зеркале есть локальные изменения", local=True)
     if keep:
         updates = {path: entry for path, entry in updates.items() if apply(path)}
         remove = [path for path in remove if apply(path)]
@@ -474,7 +481,7 @@ async def _address(request, other, background=False):
         cid = await _fill(request, other, background=background, timeout=25)
         other = _copy(cid) if cid is not None else None
         if other is None:
-            raise code._refuse(404, "not_found", NOT_FOUND)
+            raise _gone()
     return other, _where(other)
 
 
@@ -560,7 +567,7 @@ async def _compare(request, mine, other, background=False):
     aid, pid = mine["agent"], mine["project"]
     other, location = await _address(request, other, background)
     if other["grp"] != mine["grp"] or other["id"] == mine["id"]:
-        raise code._refuse(404, "not_found", NOT_FOUND)
+        raise _gone()
     destination = other["agent"]
     to = {"root": other["root"], "name": location["name"]}
     exclude = _exclude(mine["grp"], (aid, destination))
@@ -801,7 +808,7 @@ async def set_exclude(aid: int, pid: str, request: Request):
     _owner(request, aid, pid)
     mine = mirror_groups.find(aid, pid)
     if mine is None:
-        raise code._refuse(404, "not_found", NOT_FOUND)
+        raise _gone()
     body = await _body(request, Exclusions, 4096 + EXCLUDE_MAX * (code.PATH_MAX + 8))
     exclude = list(dict.fromkeys(code.check_path(path.strip("/")) for path in body.exclude if path.strip("/")))
     if any(path.split("/")[0] == ".git" for path in exclude):

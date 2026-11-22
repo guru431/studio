@@ -206,6 +206,16 @@ def test_file_removed_in_the_copy_is_checked_only_against_the_pair_state():
     assert _plan({"f": F2}, {}, {"f": F1}, held={"f": {tuple(F1[:3])}})[3] == 1
 
 
+def test_local_changes_refusal_carries_a_flag_the_window_reads_instead_of_words():
+    from fastapi import HTTPException
+    from project_mirrors import Sync, _plan, _selection
+    updates, remove, changes, conflicts, _ = _plan({"f": F2}, {"f": F3}, {"f": F1})
+    assert conflicts == 1
+    with pytest.raises(HTTPException) as error:
+        _selection({"changes": changes}, Sync(plan="0" * 64), updates, remove)
+    assert error.value.status_code == 409 and error.value.detail["local"] is True
+
+
 def test_source_state_keeps_the_previous_entry_for_paths_not_applied():
     from project_mirrors import _source_state
     raw = {"a": F2, "b": F2, "c": F3}
@@ -758,3 +768,8 @@ def test_group_sealed_with_a_former_key_lists_unlinks_and_rewrites_exclusions(st
     assert "exclude_reenter" not in rewritten.json()
     assert client.delete(f"{url}/{mid}").status_code == 204
     assert client.get(url).json() == {"copy": None, "items": [], "exclude": [], "pending": False}
+    # Окно узнаёт исчезнувшую копию по признаку `gone`, а не по словам (их переводит страница).
+    for method, suffix in (("post", "/compare"), ("get", ""), ("delete", "")):
+        gone = getattr(client, method)(f"{url}/{mid}{suffix}")
+        assert gone.status_code == 404 and gone.json()["detail"]["gone"] is True, suffix
+    assert client.put(url + "/exclude", json={"exclude": []}).json()["detail"]["gone"] is True

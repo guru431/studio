@@ -4,10 +4,10 @@ import { dateTime } from './time.js';
 import { computerPin, el, openDialog, words } from './ui.js';
 import { changeView } from './code-diff.js';
 
-/* Отказы сервера (`project_mirrors`), которые окно узнаёт по словам: копии с этим id больше нет (отвязана или её
- * строка слита с другой строкой той же папки) и передача, остановленная изменениями в копии. */
-const GONE = 'зеркало проекта не найдено';
-const LOCAL = 'в зеркале есть локальные изменения';
+/* Отказы сервера (`project_mirrors`) окно узнаёт по признакам, а не по словам (их переводит `ApiError`):
+ * `gone` — копии с этим id больше нет (отвязана или её строка слита с другой строкой той же папки), `local` —
+ * передача остановлена изменениями в копии. */
+const gone = (err) => err?.status === 404 && err.detail?.gone === true;
 
 function* parents(path) {
   while (path.includes('/')) {
@@ -121,8 +121,6 @@ export function projectMirrors(host, trigger, aid, project) {
       for (const node of [copies, groupActions, targetForm, pinSlot, state, foundList, exclusionsBox]) node.inert = busy;
       save.disabled = !roots.value;
     }
-
-    const gone = (err) => err?.status === 404 && err.message === GONE;
 
     async function work(run) {
       if (busy || signal.aborted) return;
@@ -555,7 +553,7 @@ export function projectMirrors(host, trigger, aid, project) {
             await request('POST', `${url}/${item.id}/sync`, { plan: data.plan, overwrite: false, keep: [] });
             const job = await follow(item);
             if (job?.state !== 'failed') note(item, tr("отправлено"));
-            else if (job.error?.message === LOCAL) note(item, tr("есть изменения, которых нет здесь — откройте сравнение"), true);
+            else if (job.error?.local === true) note(item, tr("есть изменения, которых нет здесь — откройте сравнение"), true);
             else note(item, words(job.error), true);
           } catch (err) {
             if (signal.aborted) throw err;

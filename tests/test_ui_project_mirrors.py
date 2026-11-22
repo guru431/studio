@@ -181,6 +181,39 @@ def test_mirror_group_is_seen_from_the_copy_and_sends_to_all(browser, live, trio
     assert (clone_c / "notes.txt").read_bytes() == b"edited on C\n"
 
 
+def test_mirror_dialog_refreshes_the_list_when_a_copy_is_gone_in_english(browser, live, trio):
+    """Копию отвязали в другой вкладке: «Compare» получает 404 с признаком `gone` и перечитывает список — и в
+    английском интерфейсе, где текст отказа переведён."""
+    login = "gone-mirror"
+    live.add_user(login)
+    source, first, second, third = trio
+    second.pin = None
+    roots = [mirror.projects.list_roots(machine.roots)[0] for machine in (first, second, third)]
+    machines = [code_online(live, login, machine, title)
+                for machine, title in ((first, "Source"), (second, "Laptop"), (third, "Third"))]
+    a, b, c = (aid for aid, _ in machines)
+    _, cb, cc = group(a, *((aid, pid(source.name), root, source.name) for aid, root in zip((a, b, c), roots)))
+    url = f"/api/code/agents/{a}/projects/{pid(source.name)}/mirrors/{cc}"
+    unlink = (f"fetch('/api/me').then(r => r.json()).then(m => fetch('{url}', {{ method: 'DELETE',"
+              " headers: { 'x-studio-csrf': m.csrf } })).then(r => r.status)")
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"code/{a}/{pid(source.name)}"),
+            ("wait", "document.querySelector('#code-project-mirror')?.hidden === false"),
+            ("click", "#code-project-mirror"),
+            ("wait", f"document.querySelectorAll('{COPIES} li[data-copy]').length === 2 && {IDLE}"),
+            ("eval", "unlinked", unlink),
+            ("click", f"{COPIES} li[data-copy='{cc}'] button"),
+            ("wait", f"document.querySelectorAll('{COPIES} li[data-copy]').length === 1 && {IDLE}"
+                     f" && document.querySelector('{PANEL} .status').textContent === 'The list of copies was refreshed.'"),
+            ("eval", "rows", f"[...document.querySelectorAll('{COPIES} li[data-copy]')].map((li) => li.dataset.copy)")],
+            init="localStorage.setItem('studio-language', 'en')", width=1280)
+    finally:
+        for _, link in machines:
+            link.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["unlinked"] == 204 and result["values"]["rows"] == [str(cb)]
+
+
 def test_mirror_dialog_finds_a_renamed_clone_and_preserves_a_selected_local_file(browser, live, computers):
     if not shutil.which("git"):
         pytest.skip("Git нужен для чтения .git/config")
