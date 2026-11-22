@@ -2,6 +2,7 @@
 import os
 import shlex
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -53,10 +54,40 @@ def switch_current(base: Path, stage: Path, expected: Path | None) -> None:
         pending.unlink(missing_ok=True)
 
 
-def systemctl(*args, check=True):
+def systemctl(*args, check=True, timeout=None):
+    env = dict(os.environ)
+    if not env.get("XDG_RUNTIME_DIR") and not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{os.geteuid()}"
+    if timeout is None:
+        timeout = 110 if args[0] == "start" else 15
     return subprocess.run(["systemctl", "--user", *args], stdin=subprocess.DEVNULL,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                          timeout=110 if args[0] == "start" else 15, check=check)
+                          env=env, timeout=timeout, check=check)
+
+
+def prepare_linger() -> bool:
+    uid = os.geteuid()
+    loginctl = ["/usr/bin/loginctl", "--no-ask-password"]
+    options = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    try:
+        status = subprocess.run([*loginctl, "show-user", "-p", "Linger", "--value", str(uid)], **options)
+        if status.stdout.strip() != b"yes":
+            command = [*loginctl, "enable-linger", str(uid)]
+            result = subprocess.run(command, **options)
+            if result.returncode and uid != 0:
+                result = subprocess.run(["/usr/bin/sudo", "-n", "--", *command], **options)
+            if result.returncode:
+                return False
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    # logind starts the user manager asynchronously when there is no login session.
+    deadline = time.monotonic() + 10
+    while systemctl("show", "--property=Version", check=False, timeout=2).returncode:
+        if time.monotonic() >= deadline:
+            raise OSError("Пользовательская служба systemd недоступна")
+        time.sleep(0.2)
+    return True
 
 
 def install_unit() -> None:
@@ -75,9 +106,11 @@ def install_unit() -> None:
     systemctl("daemon-reload")
 
 
-def enabled() -> bool:
+def enabled(*, offline=False) -> bool:
     try:
-        return systemctl("is-enabled", "--quiet", UNIT, check=False).returncode == 0
+        # The installer must also read an existing boot setting without a user manager.
+        flags = ("--root=/",) if offline else ()
+        return systemctl(*flags, "is-enabled", "--quiet", UNIT, check=False).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 

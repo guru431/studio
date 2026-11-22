@@ -58,8 +58,11 @@ def install(archive: Path, *, autostart: bool | None, start: bool):
             linux_dispatch.checked_launcher(pwd.getpwuid(0))
         (stage / "_update_result").write_text("complete", encoding="ascii")
         try:
-            enable = (old is None or linux_autostart.enabled()) if autostart is None else autostart
+            enable = (old is None or linux_autostart.enabled(offline=True)) if autostart is None else autostart
             if enable:
+                if start and not linux_autostart.prepare_linger():
+                    print("Не удалось включить работу между сеансами. Администратор может выполнить "
+                          f"loginctl enable-linger {os.geteuid()}.")
                 linux_autostart.set_enabled(True)
             elif start or linux_autostart.unit_file().exists():
                 linux_autostart.install_unit()

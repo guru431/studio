@@ -31,6 +31,81 @@ def test_installer_bundles_only_the_profiled_runtime(tmp_path):
         assert packed.read("studio_agent/linux_menu.py") == b"studio_agent/linux_menu.py"
 
 
+@pytest.mark.parametrize("autostart, start, linger_available, expected", [
+    (None, True, True, ["linger", ("enable", True), "start"]),
+    (None, True, False, ["linger", ("enable", True), "start"]),
+    (False, True, True, ["unit", ("enable", False), "start"]),
+    (None, False, True, [("enable", True)]),
+])
+def test_installer_prepares_linger_for_an_unattended_service(tmp_path, monkeypatch, capsys,
+                                                             autostart, start, linger_available, expected):
+    install = runpy.run_path(str(ROOT / "agent/install_linux.py"))["install"]
+    archive = tmp_path / "setup.sh"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("__main__.py", "")
+    calls = []
+
+    def prepare_linger():
+        calls.append("linger")
+        return linger_available
+
+    monkeypatch.setattr(linux_autostart.os, "geteuid", lambda: 1003, raising=False)
+    monkeypatch.setattr(linux_autostart.host, "install_home", lambda: tmp_path / "app")
+    monkeypatch.setattr(linux_service.single, "acquire", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(linux_autostart.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(linux_autostart, "install_launcher", lambda _: None)
+    monkeypatch.setattr(linux_autostart, "switch_current", lambda *args: None)
+    monkeypatch.setattr(linux_autostart, "prepare_linger", prepare_linger)
+    monkeypatch.setattr(linux_autostart, "install_unit", lambda: calls.append("unit"))
+    monkeypatch.setattr(linux_autostart, "set_enabled", lambda on: calls.append(("enable", on)))
+    monkeypatch.setattr(linux_autostart, "systemctl", lambda command, unit: calls.append(command))
+    install(archive, autostart=autostart, start=start)
+
+    assert calls == expected
+    assert ("loginctl enable-linger" in capsys.readouterr().out) == (not linger_available)
+
+
+def test_linger_waits_for_root_manager_without_a_session_environment(monkeypatch):
+    monkeypatch.setattr(linux_autostart.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    calls, sleeps = [], []
+    answers = iter([(1, b""), (0, b""), (1, b""), (0, b"")])
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[0] == "systemctl":
+            assert kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/0"
+        returncode, output = next(answers)
+        return SimpleNamespace(returncode=returncode, stdout=output)
+
+    monkeypatch.setattr(linux_autostart.subprocess, "run", run)
+    monkeypatch.setattr(linux_autostart.time, "sleep", sleeps.append)
+    assert linux_autostart.prepare_linger()
+    assert calls == [
+        ["/usr/bin/loginctl", "--no-ask-password", "show-user", "-p", "Linger", "--value", "0"],
+        ["/usr/bin/loginctl", "--no-ask-password", "enable-linger", "0"],
+        ["systemctl", "--user", "show", "--property=Version"],
+        ["systemctl", "--user", "show", "--property=Version"],
+    ]
+    assert len(sleeps) == 1
+
+
+def test_linger_sudo_fallback_targets_the_installing_user(monkeypatch):
+    monkeypatch.setattr(linux_autostart.os, "geteuid", lambda: 1003, raising=False)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=int(args[0] != "/usr/bin/sudo"), stdout=b"")
+
+    monkeypatch.setattr(linux_autostart.subprocess, "run", run)
+    monkeypatch.setattr(linux_autostart, "systemctl", lambda *a, **kw: SimpleNamespace(returncode=0))
+    assert linux_autostart.prepare_linger()
+    assert calls[-2] == ["/usr/bin/loginctl", "--no-ask-password", "enable-linger", "1003"]
+    assert calls[-1] == ["/usr/bin/sudo", "-n", "--", *calls[-2]]
+
+
 def test_supervisor_rolls_back_when_prepared_release_dies_before_ready(tmp_path, monkeypatch):
     old = tmp_path / "releases/release-old"
     stage = tmp_path / "releases/release-new"
