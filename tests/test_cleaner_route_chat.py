@@ -279,6 +279,42 @@ def test_new_cleaner_address_makes_a_new_context(cleaner_gw):
     assert all(d[1]["x-cleaner-key"] == KEY and "authorization" not in d[1] for d in gw.deleted)
 
 
+def test_revoked_service_key_postpones_only_its_rows_and_drops_them(cleaner_gw, caplog):
+    """Ключ сменили и прежний сразу отозвали: 401 строки со старым ключом откладывает только её (растущая пауза), строки
+    нового ключа удаляются в том же проходе; на `cleaner_client.ROUTE_REFUSALS`-м отказе строка снимается, в журнале —
+    только число."""
+    s, gw = cleaner_gw
+    caplog.set_level(logging.INFO, logger="studio")
+    old_chats = [routed_chat(s, gw), routed_chat(s, gw)]
+    for chat_id in old_chats:
+        sse(turn(s, chat_id, "Привет"))
+    stale = list(gw.chats)
+    fresh = "ck_" + "b" * 43
+    settings(s, key=fresh)                                                     # оба контекста — в очередь со старым ключом
+    gw.key = fresh                                                             # прежний ключ отозван в Cleaner
+    chat_id = routed_chat(s, gw)
+    sse(turn(s, chat_id, "Ещё"))
+    uid = state.DB.execute("SELECT user_id FROM chats WHERE id = ?", (chat_id,)).fetchone()[0]
+    s.c.portal.call(chat.purge, uid, chat_id)
+    new_ctx = gw.chats[-1]
+    s.c.portal.call(cleaner_client.purge)
+    assert [d[0] for d in gw.deleted] == [new_ctx]                             # очередь не встала
+    rows = {r["remote_id"]: r for r in state.DB.execute("SELECT * FROM cleaner_deletions")}
+    assert set(rows) == set(stale)
+    assert rows[stale[0]]["refusals"] == 1 and rows[stale[0]]["retry_at"] == s.clock[0] + cleaner_client.ROUTE_REFUSED_SEC
+    assert rows[stale[1]]["refusals"] == 0                                     # тот же ключ в проходе не запрашивался
+    tried = len([r for r in gw.requests if r.method == "DELETE"])
+    for _ in range(12):                                                        # паузы растут, на третьем отказе — снятие
+        s.c.portal.call(cleaner_client.purge)
+        s.clock[0] += cleaner_client.ROUTE_REFUSED_SEC
+    assert state.DB.execute("SELECT count(*) FROM cleaner_deletions").fetchone()[0] == 0
+    refusals = len([r for r in gw.requests if r.method == "DELETE"]) - tried
+    assert refusals == 2 * cleaner_client.ROUTE_REFUSALS - 1                   # первый отказ — до цикла
+    assert f"снято после {cleaner_client.ROUTE_REFUSALS} отказов ключа: 1" in caplog.text
+    for secret in (*stale, KEY, fresh, "10.77.1.20"):
+        assert secret not in caplog.text, secret
+
+
 def test_dialog_delete_queues_the_context(cleaner_gw):
     s, gw = cleaner_gw
     chat_id = routed_chat(s, gw)

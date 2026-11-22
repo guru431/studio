@@ -392,6 +392,7 @@ def test_step_64_adds_cleaner_route_columns_and_previous_writer_works(env):
         conn.execute("DELETE FROM cleaner_contexts")
         assert dict(conn.execute("SELECT id, route FROM cleaner_deletions").fetchall()) == {
             "queued": 0, "old": 0, "new": 1}
+        assert {r[0] for r in conn.execute("SELECT refusals FROM cleaner_deletions")} == {0}    # счёт отказов ключа
         assert conn.execute("SELECT count(*) FROM cleaner_route_contexts").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
