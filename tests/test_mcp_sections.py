@@ -20,7 +20,7 @@ PATH = f"/artifacts/{ARTIFACT}/content"
 
 
 def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False,
-            monkeypatch=None):
+            named_upload=False, monkeypatch=None):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -34,6 +34,9 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
              **dict.fromkeys(("artifact_upload", "job_status", "job_result", "internal_action"), ({}, []))}
     if uploads:
         tools.update(dict.fromkeys(("audio_transcribe", "document_read"), (params(artifact_id="string"), ["artifact_id"])))
+    if named_upload:
+        tools["artifact_upload"] = (params(data_base64="string", mime_type="string", name="string"),
+                                    ["data_base64", "mime_type"])
     if clone_models:
         tools["speech_synthesize"][0]["model"] = {"type": "string", "enum": ["qwen3-tts", "f5-tts"], "default": "qwen3-tts"}
     if limits:
@@ -116,6 +119,21 @@ def test_section_tools_discovered_for_owner_and_called_only_in_matching_section(
     assert base64.b64decode(reply.json()["files"][0]["base64"]) == image
     assert calls == [("image_generate", {"prompt": "private prompt"})]
     assert "private prompt" not in caplog.text and TOKEN not in caplog.text
+
+
+def test_section_upload_sends_the_file_name_only_to_a_server_that_takes_it(studio):
+    """Итоги называются по имени файла («Совещание — протокол.docx»), если `artifact_upload` принимает `name`."""
+    sid = add(studio)
+    route = f"/api/mcp-tools/transcribe/servers/{sid}/run"
+    payload = {"tool": "audio_transcribe", "files": {"artifact_id": {
+        "data": base64.b64encode(WAV_FAKE).decode(), "mime_type": "audio/wav", "name": "Совещание 22.11.wav"}}}
+    calls = service(studio.gw, uploads=True, named_upload=True)
+    assert studio.c.post(route, json=payload).status_code == 200
+    assert calls[0][0] == "artifact_upload" and calls[0][1]["name"] == "Совещание 22.11.wav"
+    calls.clear()
+    calls = service(studio.gw, uploads=True)
+    assert studio.c.post(route, json=payload).status_code == 200
+    assert calls[0][0] == "artifact_upload" and "name" not in calls[0][1]
 
 
 def test_video_job_upload_status_and_private_range_download(studio):

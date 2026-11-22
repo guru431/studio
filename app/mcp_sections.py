@@ -303,7 +303,16 @@ async def upload_artifact(session, data, mime, name=None):
     return {"id": aid, "path": path}
 
 
-async def upload(session, kind, file):
+def accepts_name(tools) -> bool:
+    """Схема `artifact_upload` сервера принимает `name` — как у файлов чата (`mcp_files.sync`): имя файла уходит только
+    такому серверу. По нему сервер называет итоги («Совещание — протокол.docx»), а не по номеру загрузки."""
+    upload_tool = next((t for t in tools if isinstance(t, dict) and t.get("name") == "artifact_upload"), None)
+    schema = upload_tool.get("inputSchema") if upload_tool else None
+    return isinstance(schema, dict) and isinstance(schema.get("properties"), dict) and "name" in schema["properties"]
+
+
+async def upload(session, kind, file, *, named=False):
+    name = file.name.strip() if named and isinstance(file.name, str) and file.name.strip() else None
     if file.media_id is not None:
         if kind != "image" or file.data is not None:
             raise mcp.refused("Выберите одно исходное фото", "invalid", 422)
@@ -329,7 +338,7 @@ async def upload(session, kind, file):
         mime = forms.audio_type(file.mime_type, file.name)
         if mime not in INLINE_MIME:
             raise mcp.refused("Выберите звуковой файл MCP", "invalid", 415)
-    return (await upload_artifact(session, data, mime))["id"]
+    return (await upload_artifact(session, data, mime, name))["id"]
 
 
 async def voice_arguments(session, section, tool, voice_id, files, args):
@@ -424,7 +433,9 @@ async def run(section: str, sid: int, request: Request):
         raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
     try:
         async with asyncio.timeout(DISCOVERY_TIMEOUT):
-            tools = list(supported(section, await session.tools(), uid=uid, sid=sid))
+            listed = await session.tools()
+        tools = list(supported(section, listed, uid=uid, sid=sid))
+        named = accepts_name(listed)
         tool = next((item for item in tools if item["name"] == body.tool), None)
         if tool is None:
             raise mcp.refused("Инструмент недоступен в этом разделе MCP")
@@ -440,7 +451,7 @@ async def run(section: str, sid: int, request: Request):
         else:
             check_bounds(tool, args)
             for key, file in body.files.items():
-                args[key] = await upload(session, tool["files"][key], file)
+                args[key] = await upload(session, tool["files"][key], file, named=named)
         check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)

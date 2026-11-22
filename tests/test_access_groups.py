@@ -462,8 +462,8 @@ def test_section_run_rechecks_access_after_upload(studio, monkeypatch):
     calls = service(studio.gw)
     upload = mcp_sections.upload
 
-    async def closing_upload(*args):                  # правило ставят, пока идёт загрузка файла
-        aid = await upload(*args)
+    async def closing_upload(*args, **kwargs):        # правило ставят, пока идёт загрузка файла
+        aid = await upload(*args, **kwargs)
         access.set_rule("mcp", sid, [])
         return aid
 
