@@ -13,6 +13,7 @@ import knowledge
 import sections
 import security
 import state
+import upstream
 from conftest import add_connection, add_gateway, make_user, signin
 from fakes import FakeCleanerGateway
 from test_chat import attach, new_chat, sse, turn
@@ -198,6 +199,46 @@ def test_forced_leaves_internal_connections_alone(forced_studio):
         assert cleaner_route.forced_refusal(conn, section, model) is None, (cid, section)
         assert not conn.routed and not items[cid]["cleaner_locked"] and not items[cid]["external"]
     assert items[s.ext]["cleaner_locked"] and items[s.ext]["routed"]
+
+
+def test_forced_refuses_s06_and_srvllm_on_a_listed_name(forced_studio, monkeypatch):
+    """Флажок s06 и вид srvllm выбирает пользователь: на имени из списка такой шлюз — внешний. Через Cleaner его не
+    провести (`routes` — только `openai`), поэтому при флажке — отказ во всех разделах, даже модели `local-*`."""
+    s = forced_studio
+    allow(*CLEANER_HOSTS, *ELSEWHERE, "gw.cloud.test:443")
+
+    async def resolve(host, port):
+        return ["8.8.8.8"]                                                # узел — ловушка провайдера
+    monkeypatch.setattr(upstream, "RESOLVE", resolve)
+    uid = owner_id()
+    settings(s, forced=False)
+    r = s.c.post("/api/connections", json={"name": "s06", "kind": "openai", "base_url": "https://gw.cloud.test",
+                                           "token": "s06-key", "s06": True, "sections": ["chat", "transcribe"]})
+    assert r.status_code == 201, r.text
+    s06 = r.json()["id"]
+    srv = add_connection(s, kind="srvllm", base_url="https://gw.cloud.test", token="srv-key", name="srv")
+    sections.set_models(uid, "chat", s06, ["qwen-27b"])
+    sections.set_models(uid, "transcribe", s06, ["whisperx"])
+    sections.set_models(uid, "chat", srv, ["local-x"])
+    sections.set_models(uid, "translate", srv, ["local-x"])
+    sections.set_models(uid, "photo", srv, ["flux"])
+    before = {cid: new_chat(s, connection_id=cid, model=model) for cid, model in ((s06, "qwen-27b"), (srv, "local-x"))}
+    settings(s, forced=True)
+    for cid, model in ((s06, "qwen-27b"), (srv, "local-x")):
+        assert refused(turn(s, before[cid], "Секрет"), cleaner_route.FORCED_GATEWAY), cid
+        assert refused(s.c.post("/api/chats", json={"connection_id": cid, "model": model}), cleaner_route.FORCED_GATEWAY)
+        assert state.DB.execute("SELECT count(*) FROM messages WHERE chat_id = ?", (before[cid],)).fetchone()[0] == 0
+    assert refused(post(s, "Hello.", connection_id=srv, model="local-x"), cleaner_route.FORCED_GATEWAY)
+    assert refused(use_section(s, "photo", srv), cleaner_route.FORCED_SECTION)
+    r = s.c.post("/api/transcripts", content=b"\x00" * 64,
+                 headers={"content-type": "audio/mp4", "x-studio-name": "a.m4a", "x-studio-connection": str(s06),
+                          "x-studio-model": "whisperx"})
+    assert refused(r, cleaner_route.FORCED_SECTION)
+    items = {i["id"]: i for i in s.c.get("/api/connections").json()["items"]}
+    for cid in (s06, srv):                                                # переключателя у шлюзов нет
+        assert items[cid]["external"] and not items[cid]["routed"]
+        assert not items[cid]["cleaner_offer"] and not items[cid]["cleaner_locked"]
+    assert s.gw.requests == [] and s.gw.chat_requests == [] and s.gw.asr_requests == [] and s.cleaner.turns == []
 
 
 def test_shared_external_connection_is_routed_and_locked(forced_studio):

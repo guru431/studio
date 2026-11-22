@@ -130,11 +130,12 @@ def forced() -> bool:
 
 
 def is_external(conn: "connections.Connection") -> bool:
-    """Подключение, чьи данные могут уйти в облако. Внутреннее — только s06, srvllm, прежний Cleaner и `openai`,
-    чей адрес записан в списке администратора и чей узел — IP-литерал не из публичных. Всё прочее — внешнее:
-    любое имя, публичный IP, `localhost` и частный адрес не из списка. Частный адрес не доказывает, что за ним нет
-    прокси в облако: внутренним его делает только запись в списке."""
-    if conn.s06 or conn.cleaner or conn.kind == "srvllm":
+    """Подключение, чьи данные могут уйти в облако. Внутреннее — прежний Cleaner (это сам Cleaner, 6.4) и любое
+    другое подключение (`openai`, шлюз s06, шлюз srvllm), чей адрес записан в списке администратора и чей узел —
+    IP-литерал не из публичных. Всё прочее — внешнее: любое имя, публичный IP, `localhost` и частный адрес не из
+    списка. Частный адрес не доказывает, что за ним нет прокси в облако: внутренним его делает только запись в
+    списке. Флажок s06 и вид srvllm выбирает пользователь — они внутренним не делают."""
+    if conn.cleaner:
         return False
     if not upstream.is_allowed(conn.base_url):
         return True
@@ -155,18 +156,24 @@ def routes(conn: "connections.Connection") -> bool:
 FORCED_SECTION = "администратор требует Cleaner для внешних моделей; этот раздел через Cleaner не работает"
 #: принудительный режим: облачная роль шлюза srvllm в «Чате» и «Переводе» (Cleaner не ходит на частные адреса)
 FORCED_SRVLLM = "администратор требует Cleaner; облачные роли srvllm через Cleaner пока не работают"
+#: принудительный режим: шлюз s06 или srvllm не на частном адресе из списка — внешний, а через Cleaner идёт только `openai`
+FORCED_GATEWAY = ("администратор требует Cleaner для внешних моделей; шлюз s06 или srvllm не на частном адресе"
+                  " из списка через Cleaner не работает")
 
 
 def forced_refusal(conn: "connections.Connection", section: str, model: str) -> "str | None":
     """Слова отказа принудительного режима или None. Внешнее подключение вне чата и перевода (`sections.CLEANER`) —
     отказ: звук и картинки Cleaner не очищает. Шлюз srvllm в чате и переводе — отказ облачной роли (не `local-*`,
     `sections.is_local`): Cleaner ходит только на публичные адреса, а srvllm — частный. Внешнее подключение в чате и
-    переводе идёт через Cleaner (`routes`), внутреннее — как обычно."""
+    переводе идёт через Cleaner (`routes`); внешний шлюз s06 или srvllm через Cleaner не провести — отказ при любой
+    модели; внутреннее — как обычно."""
     if not forced():
         return None
     import sections                           # цикл: sections → connections → cleaner_route
     if section not in sections.CLEANER:
         return FORCED_SECTION if is_external(conn) else None
+    if is_external(conn) and not routes(conn):
+        return FORCED_GATEWAY
     if conn.kind == "srvllm" and not sections.is_local(conn, model):
         return FORCED_SRVLLM
     return None

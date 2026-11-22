@@ -329,6 +329,13 @@ def provider_listed(monkeypatch):
     ("openai", "https://10.77.1.15:4000", True, {"s06": True}, False),
     ("openai", "https://10.77.1.20:5464", True, {"cleaner": True}, False),
     ("srvllm", "https://10.77.1.15:4000", True, {}, False),
+    # флажок s06 и вид srvllm выбирает пользователь: внутренним их делает только частный IP из списка
+    ("openai", "https://api.cloud.test", True, {"s06": True}, True),
+    ("openai", "https://8.8.8.8", True, {"s06": True}, True),
+    ("openai", "http://10.77.1.16:4000", False, {"s06": True}, True),
+    ("srvllm", "https://api.cloud.test", True, {}, True),
+    ("srvllm", "https://8.8.8.8", True, {}, True),
+    ("srvllm", "http://10.77.1.16:4000", False, {}, True),
 ])
 def test_internal_and_external(studio, kind, base_url, listed, flags, external):
     if listed:

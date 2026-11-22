@@ -62,13 +62,14 @@
   администратора — один JSON шифром в `settings` (`cleaner_route.SETTINGS_KEY`): адрес Cleaner только из списка
   разрешённых, служебный ключ (наружу — только `key_set`), флажок `forced`; не расшифровались — пустые с `reenter`,
   принудительный режим выключен (`cleaner_route.forced`). Внешнее подключение — `cleaner_route.is_external`: всё,
-  кроме s06, srvllm, прежнего Cleaner и `openai` из списка с IP-литералом не из `is_global`. Переключатель
+  кроме прежнего Cleaner и подключения (`openai`, s06, srvllm) из списка с IP-литералом не из `is_global`; внешний
+  шлюз s06 или srvllm через Cleaner не идёт — при флажке отказ во всех разделах (`cleaner_route.FORCED_GATEWAY`). Переключатель
   `connections.via_cleaner` — только у внешних `openai` и только с разделами `sections.CLEANER` (иначе 422
   `via_cleaner`); при флажке PATCH переключателя внешнего подключения — 422 (заблокирован), сохранённое значение
   возвращается снятием флажка. `connections._from_row` ставит `routed` и `proxied`, если `cleaner_route.routes`:
   такое подключение ходит через сервер и без адреса провайдера в списке, `/token` — 403, правка переключателя
   ключа не требует, смена флажка обнуляет паспорт. `connections.out` отдаёт `via_cleaner`, `routed`, `external`,
-  `cleaner_locked` (заблокирован флажком) и `cleaner_offer` (показать переключатель: внешний `openai` при
+  `cleaner_locked` (заблокирован флажком) и `cleaner_offer` (показать переключатель: внешний `openai`, не s06, при
   настроенном Cleaner или уже включённый). У routed `sections.accepts` — только `sections.CLEANER`. Принудительный
   режим в остальных разделах — `cleaner_route.refuse_forced` в `sections.resolve` (все входы разделов, 409
   `cleaner_forced`) и `sections.check_link` (новая связь внешнего подключения вне чата и перевода). Через Cleaner

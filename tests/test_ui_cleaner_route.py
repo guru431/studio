@@ -5,7 +5,6 @@
 провайдера — AssertionError."""
 import json
 
-import httpx
 import pytest
 
 import db
@@ -25,16 +24,7 @@ def cleaner(live):
     """Cleaner в списке разрешённых и на подменённом узле; самопроверка без провайдера отвечает пунктами."""
     gw = FakeCleanerGateway(KEY)
     gw.masks = {"Ивану": "<PERSON_1>"}
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/agent/openai/v1/cleaner/check" and "authorization" not in request.headers:
-            gw.checked.append(request)
-            if request.headers.get("x-cleaner-key") != gw.key:
-                return httpx.Response(401, json={"error": {"message": "Cleaner: ключ", "code": "auth"}})
-            return httpx.Response(200, json={"ok": True, "checks": [{"name": "key", "ok": True, "detail": "ключ действует"}]})
-        return await gw.handler(request)
-
-    live.gw.hosts["10.77.1.20:5464"] = handler
+    live.gw.hosts["10.77.1.20:5464"] = gw.handler
     live.gw.hosts["api.cloud.test:443"] = gw.provider
     connection = db.connect(live.db_path)
     connection.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'",

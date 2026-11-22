@@ -477,13 +477,22 @@ class FakeCleanerGateway:
         return None
 
     def _read(self, request: httpx.Request, path: str) -> httpx.Response:
-        """Список моделей провайдера и самопроверка: ключи и адрес провайдера проверяются как у хода."""
+        """Список моделей провайдера: ключи и адрес провайдера проверяются как у хода. Самопроверка — как у настоящего
+        Cleaner: служебного ключа в `X-Cleaner-Key` достаточно, ключ и адрес провайдера проверяются, только если
+        прислан `X-Cleaner-Upstream`."""
+        if path.endswith("/check"):
+            self.checked.append(request)
+            if "x-cleaner-upstream" in request.headers:
+                refused = self._login(request)
+            elif (request.headers.get("x-cleaner-key") != self.key
+                  or request.headers.get("authorization", "").partition(" ")[2].startswith("ck_")):
+                refused = self._error(401, "client_login")
+            else:
+                refused = None
+            return refused if refused is not None else httpx.Response(200, json=self.check_body)
         if (refused := self._login(request)) is not None:
             return refused
-        if path.endswith("/models"):
-            return httpx.Response(200, json={"object": "list", "data": self.models})
-        self.checked.append(request)
-        return httpx.Response(200, json=self.check_body)
+        return httpx.Response(200, json={"object": "list", "data": self.models})
 
     def _turn(self, request: httpx.Request) -> httpx.Response:
         if (refused := self._login(request)) is not None:
