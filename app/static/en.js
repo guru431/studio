@@ -2919,6 +2919,7 @@ globalThis.StudioEnglish = Object.freeze({
   "ответ ещё идёт в другой вкладке — дождитесь его": "response in progress in another tab. Wait for it",
   "нечего переспрашивать": "nothing to regenerate",
   "Эта отправка уже содержит другое сообщение": "this submission already contains a different message",
+  "Эта отправка уже содержит другой ответ": "this submission already contains a different answer",
   "Ответ этой отправки уже заменён или удалён": "this submission's response has already been replaced or deleted",
   "выберите подключение диалога": "choose a connection for this conversation",
   "пустое сообщение": "empty message",
