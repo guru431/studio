@@ -612,6 +612,7 @@ function build(view, ctx) {
   let failures = 0;
   let historyRead = null;
   let pendingTurn = null;      // request id and unsent draft: this view's memory only
+  let pendingAnswer = null;    // { signature, requestId } ответа на паузу: повтор того же ответа — с тем же id
   let editing = null;         // выбранное сообщение и снимок конца диалога
   let droppedNote = '';        // адрес подключения чипа убран из списка администратора — слова для #model-note
   const parts = new WeakMap(); // сообщение → его узлы в ленте
@@ -2380,15 +2381,22 @@ function build(view, ctx) {
     const id = chatId;
     const pending = m.pending;
     if (!id || !pending || jobs.has(id)) return;
+    // ответ потерян в сети — повтор того же ответа с тем же request_id сервер узнает (replayed), а не 409 pending_gone
+    const signature = JSON.stringify([id, pending.id, action, answer ?? null]);
+    if (pendingAnswer?.signature !== signature) pendingAnswer = { signature, requestId: crypto.randomUUID() };
     let reply;
     try {
       reply = await api('POST', `/api/chats/${id}/pending/${pending.id}`, {
-        action, ...(answer !== undefined ? { answer } : {}) });
+        request_id: pendingAnswer.requestId, action, ...(answer !== undefined ? { answer } : {}) });
     } catch (err) {
       if (chatId === id) {
         notice.textContent = words(err);
-        if (err.code === 'pending_gone' || err.code === 'connection_changed') reload();
+        if (['pending_gone', 'connection_changed', 'request_conflict'].includes(err.code)) reload();
       }
+      return;
+    }
+    if (reply.replayed) {                           // ответ уже принят: идущее сообщение — из выдачи диалога
+      if (chatId === id) { notice.textContent = ''; needsReload = true; await reload(); }
       return;
     }
     delete m.pending;

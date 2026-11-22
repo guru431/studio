@@ -7,11 +7,15 @@
 2. Ответ (`POST /api/chats/{chat_id}/pending/{pending_id}`): одна смена `resolved` (`WHERE resolved IS NULL`) — второй
    ответ и ответ позже PENDING_TTL_SEC получают 409 `pending_gone`; подключение диалога заново — сменилось — 409
    `connection_changed`. То же сообщение снова `streaming`, `chat.StreamTask` с `resume` продолжает цикл, ответ — поток
-   SSE, как у хода. Доступ, политика и «Интернет» перепроверяют каталог хода и `mcp_client.Tools.call`.
+   SSE, как у хода. Доступ, политика и «Интернет» перепроверяют каталог хода и `mcp_client.Tools.call`. Квитанция
+   `request_id` — в `chat_turn_requests` той же транзакцией, что смена `resolved`: повтор того же ответа (ответ потерян
+   в сети) — ответ повтора хода `{replayed: true, ...}`, страница перечитывает диалог и подхватывает идущее сообщение;
+   другой ответ с тем же id — 409 `request_conflict`.
 3. Новый ход диалога снимает открытую паузу (`supersede`, исход `superseded`), срок — `_expire`. Шаг вызова паузы
    пишется сразу (`waiting_step`): снятая без ответа пауза оставляет вопрос странице и модели следующих ходов.
 4. В журнал — только id и вид паузы: ни вопроса, ни аргументов, ни ответа."""
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -57,8 +61,27 @@ RESOLVE = "resolved = ?, payload = '', view = ''"
 
 
 class PendingIn(BaseModel):
+    request_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{16,64}$")     # квитанция ответа, как у хода (`_receipt`)
     action: Literal["run", "refuse", "answer"]
     answer: str | None = Field(None, max_length=ANSWER_MAX)
+
+
+def _fingerprint(pending_id: str, body: PendingIn) -> str:
+    raw = json.dumps(["pending", pending_id, body.action, body.answer], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _receipt(chat_id: str, pending_id: str, body: PendingIn) -> "dict | None":
+    """Повтор ответа после обрыва связи: квитанция в `chat_turn_requests` (та же, что у хода) — тот же ответ получает
+    ответ повтора хода (`{replayed, user_message_id, assistant_message_id}`), другой ответ с тем же id — 409
+    `request_conflict`."""
+    row = state.DB.execute("SELECT fingerprint FROM chat_turn_requests WHERE chat_id = ? AND request_id = ?",
+                           (chat_id, body.request_id)).fetchone()
+    if row is None:
+        return None
+    if row["fingerprint"] != _fingerprint(pending_id, body):
+        raise HTTPException(409, {"code": "request_conflict", "message": "Эта отправка уже содержит другой ответ"})
+    return {"replayed": True, **chat._turn_receipt(chat_id, body.request_id)}
 
 
 def arguments_view(arguments: str) -> list:
@@ -181,6 +204,8 @@ def _changed() -> HTTPException:
 async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request: Request):
     uid = request.state.user.id
     row = chat._chat_row(uid, chat_id)
+    if (receipt := _receipt(chat_id, pending_id, body)) is not None:
+        return receipt
     pending = state.DB.execute("SELECT * FROM chat_pending WHERE id = ? AND chat_id = ?", (pending_id, chat_id)).fetchone()
     if pending is None:
         raise _gone()
@@ -213,6 +238,8 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     if clock.NOW() - pending["created"] > PENDING_TTL_SEC:
         _expire(pending)
         raise _gone()
+    if (receipt := _receipt(chat_id, pending_id, body)) is not None:   # тот же ответ, пока ждали список моделей
+        return receipt
     # без await до COMMIT: второй ответ и новый ход не вклинятся
     state.DB.execute("BEGIN")
     try:
@@ -250,6 +277,8 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
         except web.ToolError:
             exa_key = None
         mcp_ids = mcp_sources.dialog_servers(uid, fresh, conn)
+        state.DB.execute("INSERT INTO chat_turn_requests VALUES (?, ?, ?, ?, ?)",
+                         (chat_id, body.request_id, _fingerprint(pending_id, body), user["id"] if user else "", mid))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")

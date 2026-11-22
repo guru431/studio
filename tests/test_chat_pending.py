@@ -17,10 +17,9 @@ from test_chat_ocr import on_loop
 from test_chat_web import call
 from test_mcp_dialog import methods, name_of, offered, setup, tool
 
-REQUEST = "pending-request-0001"
-
-
-def answer(studio, cid, pid, action, text=None, request_id=REQUEST):
+def answer(studio, cid, pid, action, text=None, request_id=None):
+    """Ответ на паузу; без `request_id` — свой у каждой пары «пауза + действие» (квитанция `chat_turn_requests`)."""
+    request_id = request_id or f"r-{pid}-{action}"
     body = {"request_id": request_id, "action": action} | ({"answer": text} if text is not None else {})
     return studio.c.post(f"/api/chats/{cid}/pending/{pid}", json=body)
 
@@ -87,6 +86,29 @@ def test_run_calls_once_and_answer_continues_same_message(studio):
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == "result-translate"
 
 
+def test_repeated_answer_replays_the_same_message(studio):
+    """Ответ «Запустить» потерян в сети, страница повторяет тот же `request_id`: повтор — ответ повтора хода
+    (`replayed`, то же сообщение), второго вызова MCP нет; другой ответ с тем же id — `request_conflict`, другой id
+    после ответа — `pending_gone`; без `request_id` — 422."""
+    sid, calls = confirm_setup(studio)
+    cid = new_chat(studio)
+    shown = pause_on(studio, cid, name_of(sid, 1), phrase="hello")
+    first = messages(studio, cid)
+    rid = "pending-retry-0001"
+    assert studio.c.post(f"/api/chats/{cid}/pending/{shown['id']}", json={"action": "run"}).status_code == 422
+    assert sse(answer(studio, cid, shown["id"], "run", request_id=rid))[-1] == ("done", {"status": "done"})
+    again = answer(studio, cid, shown["id"], "run", request_id=rid)
+    assert again.status_code == 200 and again.json() == {
+        "replayed": True, "user_message_id": first[0]["id"], "assistant_message_id": first[-1]["id"]}
+    assert [p["name"] for m, p in calls if m == "tools/call"] == ["translate"]
+    assert len(messages(studio, cid)) == 2
+    conflict = answer(studio, cid, shown["id"], "refuse", request_id=rid)
+    assert conflict.status_code == 409 and conflict.json()["detail"]["code"] == "request_conflict"
+    gone = answer(studio, cid, shown["id"], "run", request_id="pending-retry-0002")
+    assert gone.status_code == 409 and gone.json()["detail"]["code"] == "pending_gone"
+    assert [p["name"] for m, p in calls if m == "tools/call"] == ["translate"]
+
+
 def test_second_answer_and_late_answer_get_pending_gone(studio):
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
@@ -125,8 +147,7 @@ def test_pause_is_not_a_completed_job_and_deleted_chat_cannot_resume(studio, mon
     assert row["resolved"] is None and "tools/call" not in methods(calls)
 
     state.DB.execute("UPDATE chats SET deleted = NULL WHERE id = ?", (cid,))
-    response = studio.c.post(f"/api/chats/{cid}/pending/{shown['id']}", json={"action": "run"})
-    assert sse(response)[-1] == ("done", {"status": "done"})
+    assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     assert mid in chat.ANSWERED and len(notified) == 1 and notified[0][2:] == (mid, True)
 
 
