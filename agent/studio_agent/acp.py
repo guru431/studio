@@ -46,9 +46,10 @@ class RpcError(Exception):
         error = error if isinstance(error, dict) else {}
         message = str(error.get("message", "")).lower()
         data = error.get("data") if isinstance(error.get("data"), dict) else {}
+        details = str(data.get("details", "")).lower()  # DSH: `message: "Internal error"`, подробности — здесь
         return cls(method=method, code=error.get("code"),
-                   not_found="not found" in message or "does not exist" in message,
-                   owned="already owned by an active write handle" in str(data.get("details", "")),
+                   not_found=any(word in text for word in ("not found", "does not exist") for text in (message, details)),
+                   owned="already owned by an active write handle" in details,
                    image=error.get("code") == -32602 and "image" in message)
 
 

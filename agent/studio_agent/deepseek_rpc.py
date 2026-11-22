@@ -53,6 +53,18 @@ def _which(name: str, environ: Mapping[str, str]) -> Path | None:
     return Path(found) if found else None
 
 
+def _which_all(name: str, environ: Mapping[str, str]) -> list[Path]:
+    """Все `name` по PATH по порядку: на POSIX первым может стоять чужой `dsh` (distributed shell), а npm-DSH — дальше."""
+    found, seen = [], set()
+    first = _which(name, environ)
+    entries = (os.environ if environ is os.environ else environ).get("PATH", "")
+    for hit in [first, *(shutil.which(name, path=entry) for entry in entries.split(os.pathsep) if entry)]:
+        if hit is not None and (key := _key(Path(hit))) not in seen:
+            seen.add(key)
+            found.append(Path(hit))
+    return found
+
+
 def _node_version(node: Path) -> str:
     try:
         result = subprocess.run([str(node), "--version"], capture_output=True, stdin=subprocess.DEVNULL,
@@ -131,7 +143,7 @@ def _package_of(path: Path) -> Path | None:
     return None
 
 
-def _npm(package: Path, environ: Mapping[str, str]) -> Install | None:
+def _npm(package: Path, environ: Mapping[str, str], launcher: Path | None = None) -> Install | None:
     meta = _read_json(package / "package.json")
     bins = meta.get("bin")
     relative = bins.get("dsh") if isinstance(bins, dict) else bins if isinstance(bins, str) else None
@@ -140,7 +152,10 @@ def _npm(package: Path, environ: Mapping[str, str]) -> Install | None:
         return None
     engines = meta.get("engines")
     engines = engines.get("node") if isinstance(engines, dict) else ""
-    node = _which("node.exe" if not (host.MACOS or host.LINUX) else "node", environ)
+    name = "node.exe" if not (host.MACOS or host.LINUX) else "node"
+    # Node рядом с командой `dsh` (nvm, Homebrew: тот же `bin`), иначе первый по PATH
+    near = launcher.parent / name if launcher is not None else None
+    node = near if near is not None and near.is_file() else _which(name, environ)
     ready = node is not None and node_ok(_node_version(node), engines if isinstance(engines, str) else "")
     return Install("npm", (str(node or "node"), str(bin_js)), {}, "web", package, None if ready else "node")
 
@@ -157,7 +172,8 @@ def _npm_windows(environ: Mapping[str, str]) -> list[Install]:
     return _packages(roots, environ)
 
 
-def _packages(roots: list[Path], environ: Mapping[str, str]) -> list[Install]:
+def _packages(roots: list[Path], environ: Mapping[str, str], near: Mapping[Path, Path] | None = None) -> list[Install]:
+    """`near[корень]` — команда `dsh`, рядом с которой искать Node."""
     seen, found = set(), []
     for root in roots:
         package = root / PACKAGE
@@ -165,7 +181,7 @@ def _packages(roots: list[Path], environ: Mapping[str, str]) -> list[Install]:
         if key in seen or not package.is_dir():
             continue
         seen.add(key)
-        if install := _npm(package, environ):
+        if install := _npm(package, environ, (near or {}).get(root)):
             found.append(install)
     return found
 
@@ -291,15 +307,18 @@ def find_installs(*, environ: Mapping[str, str] | None = None, home: Path | None
     home = Path.home() if home is None else home
     npm, python = [], []
     if host.MACOS or host.LINUX:
-        if (launcher := _which("dsh", environ)) is not None:
+        roots, near = [], {}
+        for launcher in _which_all("dsh", environ):  # не только первый: чужой `dsh` может стоять раньше
             try:
                 resolved = launcher.resolve()
             except OSError:
                 resolved = launcher
             if (package := _package_of(resolved)) is not None:
-                npm = _packages([package.parent.parent], environ)
-            elif (install := _python(launcher, environ, home)) is not None:
+                roots.append(package.parent.parent)
+                near.setdefault(package.parent.parent, launcher)
+            elif not python and (install := _python(launcher, environ, home)) is not None:
                 python = [install]
+        npm = _packages(roots, environ, near)
     else:
         npm = _npm_windows(environ)
         if (launcher := _which("dsh.exe", environ)) is not None and (install := _python(launcher, environ, home)):
@@ -328,8 +347,9 @@ def version(install: Install) -> str:
                                 env={**os.environ, **install.env})
     except (OSError, subprocess.SubprocessError):
         return FALLBACK
-    text = result.stdout.decode("utf-8", "replace").strip()[:64] if result.returncode == 0 else ""
-    return text or FALLBACK
+    from . import software  # лениво: software импортирует этот модуль
+    found = software.version(result.stdout.decode("utf-8", "replace").strip()[:128]) if result.returncode == 0 else None
+    return found or FALLBACK  # в студию — только номер версии, не произвольный вывод
 
 
 class Client(acp.Client):

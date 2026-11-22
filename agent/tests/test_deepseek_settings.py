@@ -122,6 +122,25 @@ def test_rows_defined_in_users_acp_profile_are_not_overridden(tmp_path):
     assert "insert" not in json.dumps(written)
 
 
+def test_rows_of_the_shared_patch_are_not_overridden_and_base_urls_noted(tmp_path):
+    """Minor-4: общий `$DSH_HOME/cordis.patch.yml` в DSH сильнее патча профиля — `--patch` его строки не перекрывает.
+    Явный `baseURL` строки `llm-deepseek` — в `notes` для баланса (Minor-3), не в сводку студии."""
+    shared = "- id: agent-default-model\n- id: llm-deepseek\n"
+    shared_doc = [{"id": "agent-default-model", "config": {"provider": "deepseek-official", "model": "x"}},
+                  {"id": "llm-deepseek", "config": {"baseURL": "https://proxy.example/anthropic"}}]
+    home = dsh(tmp_path)
+    (home / "cordis.patch.yml").write_bytes(shared.encode())
+    notes = {}
+    path, summary = ds.build(home, {}, tmp_path / "bridge", INSTALL, run=node(parsed(**{shared: shared_doc})),
+                             notes=notes)
+    assert {"name": "agent-default-model", "reason": "acp_own"} in summary["skipped"]
+    assert "acp" not in [row.get("id") for row in rows(path)]
+    assert notes == {"base_urls": ["https://proxy.example/anthropic"]} and "proxy" not in json.dumps(summary)
+    (home / "cordis.patch.yml").write_bytes(b"- [\n")
+    _, summary = ds.build(home, {}, tmp_path / "bridge", INSTALL, run=node(parsed()))
+    assert summary["skipped"] == [{"name": "cordis.patch.yml", "reason": "unreadable"}]
+
+
 def test_provider_key_from_missing_env_var_is_skipped(tmp_path):
     home = dsh(tmp_path, credentials=None)
     path, summary = ds.build(home, {"PATH": "x"}, tmp_path / "bridge", INSTALL, run=node(parsed()))

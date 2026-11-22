@@ -302,6 +302,11 @@ class UsageCache:
             return codex_usage(raw, now)
         if engine == "deepseek":
             from . import deepseek_usage
-            return await asyncio.to_thread(lambda: deepseek_usage.read(model=model, now=lambda: now))
+            catalog, bases = getattr(backend, "catalog", None), getattr(backend, "base_urls", None)
+            defaults = catalog.get("defaults") if isinstance(catalog, dict) else None
+            default = defaults.get("model") if isinstance(defaults, dict) else None
+            bases = list(bases) if isinstance(bases, list) else []
+            return await asyncio.to_thread(lambda: deepseek_usage.read(model=model, default=default, bases=bases,
+                                                                       now=lambda: now))
         from . import opencode_usage
         return await asyncio.to_thread(opencode_usage.read, now, model=model)

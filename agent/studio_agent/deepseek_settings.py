@@ -10,7 +10,7 @@
 удаляет его после disconnect, остатки после падения стирает `sweep` при старте ядра.
 
 Причины: `unknown` — вид строки мосту незнаком; `acp_own` — строку задал сам человек в
-`profiles/acp/cordis.patch.yml` (`--patch` перекрыл бы её); `env_key` — ключ провайдера из переменной окружения,
+`profiles/acp/cordis.patch.yml` или в общем `$DSH_HOME/cordis.patch.yml` (`--patch` перекрыл бы её); `env_key` — ключ провайдера из переменной окружения,
 которой нет ни в `.credentials.yaml`, ни у процесса моста, ни в `$DSH_HOME/.env`; `unreadable` — файл или
 строка не разбирается (битый YAML, `!!js`, нет Node установки) или не переводится без вычислений."""
 
@@ -304,32 +304,50 @@ def _translate(entries, own: set[str], keys: Callable[[str], bool], presets: dic
     return rows
 
 
+def _base_urls(*documents) -> list[str]:
+    """Явные `baseURL` строк `llm-deepseek`: свой адрес DeepSeek — ключ на `api.deepseek.com` не отправлять."""
+    found = []
+    for document in documents:
+        for name, entry, inserted in _entries(document):
+            value = _config(entry).get("baseURL")
+            if not inserted and name == "llm-deepseek" and isinstance(value, str) and value.strip():
+                found.append(value.strip())
+    return found
+
+
 def _profile_rows(home: Path, profile: str, environ: Mapping[str, str], install: Install | None, summary: _Summary,
-                  *, mcp: bool, permission: bool, run: Callable) -> list:
-    """Строки наложения из патча профиля-источника; не разбирается — пусто и причина в сводке."""
+                  *, mcp: bool, permission: bool, run: Callable, notes: dict | None = None) -> list:
+    """Строки наложения из патча профиля-источника; не разбирается — пусто и причина в сводке. Строки, которые
+    человек задал в `profiles/acp` или общем `$DSH_HOME/cordis.patch.yml` (общий патч в DSH сильнее патча
+    профиля), не перекрываются: `acp_own`."""
     try:
         text = _text(home / "profiles" / profile / PATCH)
     except ValueError:
         text = None
-    try:
-        acp_text = _text(home / "profiles" / "acp" / PATCH)
-    except ValueError:
-        summary.skip("acp", "unreadable")
-        return []
+    own_texts = []
+    for name, path in (("acp", home / "profiles" / "acp" / PATCH), (PATCH, home / PATCH)):
+        try:
+            own_texts.append(_text(path) or "")
+        except ValueError:
+            summary.skip(name, "unreadable")
+            return []
     try:
         credentials = _text(home / CREDENTIALS)
     except ValueError:
         credentials = None
-    texts = [text or "", acp_text or "", credentials or ""]
+    texts = [text or "", *own_texts, credentials or ""]
     parsed = _parse(install, texts, environ, run) if text is not None else None
     document = parsed[0][0] if parsed else _BROKEN
     if document is _BROKEN or not isinstance(document, (list, type(None))):
         summary.skip(profile, "unreadable")
         return []
-    (_, own_doc, secrets_doc), presets = parsed
-    if own_doc is _BROKEN or not isinstance(own_doc, (list, type(None))):
-        summary.skip("acp", "unreadable")
-        return []
+    (_, own_doc, shared_doc, secrets_doc), presets = parsed
+    for name, doc in (("acp", own_doc), (PATCH, shared_doc)):
+        if doc is _BROKEN or not isinstance(doc, (list, type(None))):
+            summary.skip(name, "unreadable")
+            return []
+    if notes is not None:
+        notes["base_urls"] = _base_urls(document, own_doc, shared_doc)
     refs = secrets_doc.get("refs") if isinstance(secrets_doc, dict) else None
     refs = refs if isinstance(refs, dict) else {}
     dotenv = None
@@ -342,11 +360,12 @@ def _profile_rows(home: Path, profile: str, environ: Mapping[str, str], install:
             dotenv = _dotenv(home / ".env")
         return name in dotenv
 
-    return _translate(_entries(document), _own(own_doc), keys, presets, summary, mcp=mcp, permission=permission)
+    return _translate(_entries(document), _own(own_doc) | _own(shared_doc), keys, presets, summary,
+                      mcp=mcp, permission=permission)
 
 
 def build(home: Path, environ: Mapping[str, str], private: Path, install: Install | None, *,
-          scratch: Path | None = None, access: str | None = None,
+          scratch: Path | None = None, access: str | None = None, notes: dict | None = None,
           run: Callable = subprocess.run) -> tuple[Path | None, dict]:
     """Наложение для `dsh --profile acp --patch <файл>` и сводка `{"profile", "applied", "skipped"}`.
 
@@ -354,6 +373,7 @@ def build(home: Path, environ: Mapping[str, str], private: Path, install: Instal
     `scratch` — пробный процесс каталога (D4): хранилища сессий и проекций — во временный каталог, без MCP.
     `access` — права чата: явные (`deepseek_rpc.ACCESS`) сильнее `defaultPreset` профиля, строка `permission`
     в файл не пишется. Ни `scratch`, ни `access` сводку не меняют. Файла нет, если записывать нечего.
+    `notes` — для моста, не для студии: `base_urls` — явные `baseURL` строк `llm-deepseek` (`deepseek_usage`).
 
     Строки хранилищ `scratch` дописываются при любом исходе разбора профиля (нечитаемый файл, нет Node, тайм-аут):
     пробный процесс без них оставил бы свою сессию в списке человека (D4)."""
@@ -361,7 +381,7 @@ def build(home: Path, environ: Mapping[str, str], private: Path, install: Instal
     profile = source(home)
     summary = _Summary(profile)
     rows = _profile_rows(home, profile, environ, install, summary, mcp=scratch is None,
-                         permission=access not in ACCESS, run=run) if profile is not None else []
+                         permission=access not in ACCESS, run=run, notes=notes) if profile is not None else []
     if scratch is not None:
         rows += [{"id": "session-persistence-jsonl", "config": {"root": str(Path(scratch) / "sessions")}},
                  {"id": "storage-json", "config": {"root": str(Path(scratch) / "storages")}}]

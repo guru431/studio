@@ -39,6 +39,8 @@ SCRATCH = "overlay-scratch-"  # временные хранилища пробн
 # не нужны). Переменные контекста — у своей задачи: ходы, идущие одновременно, получают процесс хода.
 _SCRATCH = contextvars.ContextVar("deepseek_scratch", default=None)
 _LIST = contextvars.ContextVar("deepseek_list", default=False)
+# Ход: модель, усилие и картинки — проверка до `session/new` (сессию, созданную зря, ACP DSH уже не удалит).
+_TURN = contextvars.ContextVar("deepseek_turn", default=None)
 
 
 def _remove(path):
@@ -93,6 +95,7 @@ class DeepSeekRunner(acp.AcpRunner):
         self.environ = environ
         self._overview_cache = {}  # путь файла сессии → (ревизия, `deepseek_history.overview`)
         self.unavailable = None  # причина последнего отказа запуска: `node` | `missing` | None
+        self.base_urls = []  # явные `baseURL` строк `llm-deepseek` профиля (последнее наложение) — для баланса
 
     @property
     def unavailable_message(self):
@@ -117,9 +120,11 @@ class DeepSeekRunner(acp.AcpRunner):
         if _LIST.get() and scratch is None:
             overlay, summary = None, None
         else:
+            notes = {}
             overlay, summary = await asyncio.to_thread(
                 deepseek_settings.build, home, self.environ if self.environ is not None else os.environ,
-                self.home, install, scratch=scratch["root"] if scratch else None, access=access)
+                self.home, install, scratch=scratch["root"] if scratch else None, access=access, notes=notes)
+            self.base_urls = notes.get("base_urls", [])
             if scratch is not None and overlay is None:
                 raise Refused("unsupported", FAILED)  # пробная сессия без своего хранилища попала бы к человеку
         process = _Process(self.rpc_factory(install, Path(project), access=access, overlay=overlay),
@@ -206,6 +211,18 @@ class DeepSeekRunner(acp.AcpRunner):
             if e.not_found:
                 raise Refused("not_found", GONE) from None
             raise
+
+    async def _new(self, rpc, project, directories=None):
+        if (pending := _TURN.get()) is not None:
+            # Первый ход: отказ до `session/new` — пустая сессия у ACP DSH сохраняется сразу (D4), а удаления нет.
+            model, effort, images = pending
+            capabilities = (rpc.info.get("agentCapabilities") or {}).get("promptCapabilities") or {}
+            if images and capabilities.get("image") is False:  # по модели по умолчанию: prompt отказал бы -32602
+                raise Refused("invalid", IMAGES)
+            if (model is not None and model not in {row["id"] for row in self.models}
+                    or effort is not None and effort not in self.efforts):
+                raise Refused("invalid", UNAVAILABLE)
+        return await super()._new(rpc, project, directories)
 
     async def _discard(self, rpc, target):
         # Только пробная сессия этого вызова (во временном хранилище); сессии человека не закрываются отсюда.
@@ -336,7 +353,31 @@ class DeepSeekRunner(acp.AcpRunner):
             return
         except Exception:
             pass  # чтение соответствий повторит общий ход и назовёт сбой сам
-        await super()._run(t, text, model, effort, images)
+        try:
+            saved = await asyncio.to_thread(self.choices.details, t.chat)
+        except Exception:
+            saved = {}  # общий ход прочтёт выбор снова и назовёт сбой сам
+        token = _TURN.set((model or saved.get("model"), effort or saved.get("effort"), bool(images)))
+        try:
+            await super()._run(t, text, model, effort, images)
+        finally:
+            _TURN.reset(token)
+
+    def _notification(self, t, update):
+        # DSH присылает `agent_message_chunk` целыми сообщениями: между сообщениями — пустая строка, как в истории
+        # (`deepseek_history`), иначе «Call MCP echo.Tool returned.» склеивается.
+        if update.get("sessionUpdate") == "agent_message_chunk":
+            content, message = update.get("content"), update.get("messageId")
+            fresh = getattr(t, "dsh_fresh", False)  # первый ответ после отправленного уточнения — новое сообщение
+            if (t.feed.text and not fresh and (message is None or message != getattr(t, "dsh_message", None))
+                    and isinstance(content, dict) and content.get("type") == "text" and content.get("text")):
+                update = {**update, "content": {**content, "text": "\n\n" + content["text"]}}
+            t.dsh_message, t.dsh_fresh = message, False
+        super()._notification(t, update)
+
+    def _queued_sent(self, t, message_id):
+        t.dsh_fresh = True
+        super()._queued_sent(t, message_id)
 
     def _failure(self, t, error):
         if isinstance(error, Refused) and error.code == "writer_active":

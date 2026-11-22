@@ -174,7 +174,8 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   (`opencode.OpenCodeRunner`) и DSH (`deepseek.DeepSeekRunner`) — точки расширения поверх неё: запуск,
   открытие сессии (`session/load` и `session/resume`), источник истории (replay и файлы), набор возможностей.
 - **Установки** — `deepseek_rpc.find_installs`: npm (Windows — `node.exe` из PATH и `lib/bin.js` пакета, обёртки
-  `.cmd`/`.ps1` не исполняются; POSIX — `dsh` из PATH, только если ссылка ведёт внутрь пакета `@deepseek-ai/dsh`),
+  `.cmd`/`.ps1` не исполняются; POSIX — каждый `dsh` из PATH по порядку, только если ссылка ведёт внутрь пакета
+  `@deepseek-ai/dsh`, Node — сначала рядом с этой командой),
   Python-пакет `deepseek-harness-sdk` (его одиночный исполняемый файл среды, `DSH_HOME` задаётся явно) и Desktop
   (Windows — `InstallLocation` из `HKCU\…\Uninstall`, запуск Electron с `ELECTRON_RUN_AS_NODE=1` и `cli.js` из
   архива приложения (`resources/…asar`); macOS — `DeepSeek Harness.app`; Linux — не ищется: AppImage). Чужой `dsh` (distributed shell) не
@@ -188,7 +189,8 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   пробы: `llm-pi-ai`, `llm-deepseek*` как есть; `agent-default-model` — как есть и строкой `acp` с `provider/model`
   (сессии ACP берут модель оттуда); `mcp-manager` — вставкой целой записи; `permission` — только `defaultPreset`
   с `presets` бандла `dsh-base` (и не пишется при явных правах чата). Незнакомые строки, строки web-app, `!!js`,
-  строки, которые человек задал в своём `profiles/acp`, провайдер с `apiKeyEnv`, которого нет ни в
+  строки, которые человек задал в своём `profiles/acp` или в общем `$DSH_HOME/cordis.patch.yml` (`acp_own`),
+  провайдер с `apiKeyEnv`, которого нет ни в
   `.credentials.yaml`, ни в окружении моста, ни в `$DSH_HOME/.env`, — в сводку «не применено» (`skipped`: имя строки
   и код причины из `deepseek_settings.REASONS`, без значений). Наложение — JSON `<мост>/deepseek/overlay-*.json`
   (`--patch`), удаляется после `disconnect`, остатки — `deepseek_settings.sweep` при старте ядра. Сводка
@@ -201,7 +203,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   пробный процесс не запускается. Так же идёт предпросмотр выбора в `state`. Процесс списка чатов (`session/list`)
   запускается без наложения: MCP и провайдеры ему не нужны. Значение модели — строка JSON-массива `["<провайдер>","<модель>"]`
   (`deepseek.MODEL_ID`; сервер сверяет той же регуляркой в `app/bridge.py`), усилие — ACP `reasoning_effort`; «Provider default»
-  (`""`) — как отсутствие выбора. Версия — `dsh --version` (`deepseek_rpc.version`): `agentInfo.version` ACP DSH — «0.0.1».
+  (`""`) — как отсутствие выбора. Версия — номер из `dsh --version` (`deepseek_rpc.version`, иначе `deepseek_rpc.FALLBACK`): `agentInfo.version` ACP DSH — «0.0.1».
   Любой запуск `dsh --profile acp` сам создаёт в `DSH_HOME` заготовку `profiles/acp/` и `.anonymous-user-id`.
 - **Чаты и продолжение.** `session/list` с `cwd` проекта; UUID студии ↔ id DSH (UUID или `session-<uuid>`) — в
   `deepseek-chats.json`, выбор — `deepseek/choices.json`. Названий и времени `session/list` не даёт: название —
@@ -214,7 +216,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   owned by an active write handle»; DSH Web держит чат до выхода из приложения) — отказ `writer_active` со словами
   `deepseek.WRITER`, в ходе — `done` с `code: writer_active`, `not_started` и очередью в `unsent`; сервер отвечает 409.
 - **История** — файлы сессий (`deepseek_history.locate`, `deepseek_history.read`): `sessions/--<ключ cwd>--/<id>/
-  session.v4.jsonl[.zstd]`, наибольшая `vN`, `cwd` заголовка сверяется с проектом; реплики человека —
+  session.v4.jsonl[.zstd]`, наибольшая `vN`, `cwd` заголовка сверяется с проектом (и `samefile`; не сводится — `notice`, не «нет чата»); реплики человека —
   `source.kind: user`, ответ — подряд идущие `assistant/message`, шаги — `tool-call`/`tool/result`. Индекс историй —
   ревизия `(mtime_ns, size)` файла, процесс ACP не запускается. Незнакомая версия формата или битый файл — пустая
   страница с `notice: "unsupported_format"`, ход в том же чате работает; файл больше `deepseek_history.READ_MAX` —
@@ -225,11 +227,15 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
   у чата с сессией `state` даёт `access_fixed: true` и права при создании, ход с другими правами — отказ
   `deepseek.FIXED` до запуска процесса. Карточки несут только `toolCall.toolCallId` — имя и аргументы берутся из шага.
 - **Картинки** — блоками ACP; `-32602` про картинки (соединение или модель их не объявили) — слова
-  `deepseek.IMAGES`, не тело ошибки. Уточнения — очередью до конца ответа (`QUEUE_ONLY` страницы).
+  `deepseek.IMAGES`, не тело ошибки; у нового чата при `promptCapabilities.image: false` и модели или усилии
+  вне каталога — отказ до `session/new` (пустую сессию ACP DSH не удалить). Сообщения DSH приходят целиком — между
+  ними в ходе пустая строка, как в истории. Уточнения — очередью до конца ответа (`QUEUE_ONLY` страницы).
 - **Баланс** — `deepseek_usage.read`: `GET https://api.deepseek.com/user/balance` (`limits.HOSTS`), без перенаправлений,
-  тело ≤ 64 КиБ, 12 с, кэш `subscription.UsageCache` 60 с по `(engine, model)`. Ключ — `DEEPSEEK_API_KEY` окружения
-  моста или `refs` `.credentials.yaml`; запрос только при провайдере `deepseek-official` текущей модели и
-  `DEEPSEEK_BASE_URL` пустом или официальном (`deepseek_usage.eligible`), иначе `balance.reason`. Окна лимита —
+  тело ≤ 64 КиБ, 12 с, кэш `subscription.UsageCache` 60 с по `(engine, model)`. Ключ — `DEEPSEEK_API_KEY` в порядке
+  DSH: `refs` `.credentials.yaml`, окружение моста, `$DSH_HOME/.env`; запрос только при провайдере `deepseek-official`
+  текущей модели (без модели — умолчание каталога) и официальном адресе (`deepseek_usage.eligible`: https и хост
+  `api.deepseek.com`) во всех источниках — `DEEPSEEK_BASE_URL` из тех же трёх мест и явный `baseURL` строк
+  `llm-deepseek` профиля (`DeepSeekRunner.base_urls` из последнего наложения), иначе `balance.reason`. Окна лимита —
   `available: false`. Ключ наружу — только в этот запрос.
 - **Нет у DSH:** ветвления, подагентов, удаления чатов, режимов, slash-команд, дополнительных каталогов —
   `chat_fork`, `subagents`, `subagent_history` отвечают `unsupported` (сервер — 409 до моста).

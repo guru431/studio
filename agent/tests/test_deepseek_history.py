@@ -201,7 +201,17 @@ def test_locate_finds_the_session_of_this_project_only(tmp_path):
     home = tmp_path / "home"
     assert history.locate(home, project, SESSION) == path
     assert history.locate(home, project / ".." / "project", SESSION) == path
-    assert history.locate(home, tmp_path / "other", SESSION) is None        # чужой проект
+    with pytest.raises(history.Unsupported) as error:                         # cwd не сводится к проекту
+        history.locate(home, tmp_path / "other", SESSION)
+    assert error.value.code == "cwd"                                          # пояснение, не «нет такого чата»
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(project.parent, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pass
+    else:                                                                     # тот же каталог по ссылке
+        project.mkdir(parents=True, exist_ok=True)
+        assert history.locate(home, link / "project", SESSION) == path
     assert history.locate(home, project, "00000000-0000-4000-8000-000000000000") is None
     assert history.read(history.locate(home, project, SESSION))[0]["role"] == "user"
 

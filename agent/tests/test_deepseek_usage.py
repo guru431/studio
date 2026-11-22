@@ -81,21 +81,49 @@ def test_no_request_for_third_party_provider(tmp_path):
                                    "reason": "Баланс показывается только для официального провайдера DeepSeek"}
 
 
-def test_missing_model_means_dsh_default_provider(tmp_path):
+def test_missing_model_means_catalog_default_provider(tmp_path):
     opener = Opener(BODY)
-    assert read(tmp_path, opener, model=None)["available"] and len(opener.requests) == 1
+    data = deepseek_usage.read(model=None, default=OFFICIAL, home=tmp_path, environ={"DEEPSEEK_API_KEY": "sk-test"},
+                               opener=opener, now=lambda: 1)
+    assert data["available"] and len(opener.requests) == 1
+    # умолчание каталога — сторонний провайдер (или каталога нет): ключ не уходит
+    for default in ('["srvllm","stub-tools"]', None):
+        opener = Opener(BODY)
+        data = deepseek_usage.read(model=None, default=default, home=tmp_path,
+                                   environ={"DEEPSEEK_API_KEY": "sk-test"}, opener=opener, now=lambda: 1)
+        assert not opener.requests and "официального провайдера" in data["balance"]["reason"]
 
 
 def test_custom_base_url_blocks_key(tmp_path):
-    for base in ("https://proxy.example", "http://api.deepseek.com", "https://api.deepseek.com/v1"):
+    custom = "Задан свой адрес DeepSeek — баланс не запрашивается"
+    for base in ("https://proxy.example", "http://api.deepseek.com", "https://api.deepseek.com.evil.example",
+                 "https://user:pw@api.deepseek.com", "https://api.deepseek.com:8443"):
         opener = Opener(BODY)
         data = read(tmp_path, opener, environ={"DEEPSEEK_API_KEY": "sk-test", "DEEPSEEK_BASE_URL": base})
         assert not opener.requests
-        assert data["balance"]["reason"] == "Задан свой адрес DeepSeek — баланс не запрашивается"
-    for base in ("", "https://api.deepseek.com", "https://api.deepseek.com/"):
+        assert data["balance"]["reason"] == custom
+    for base in ("", "https://api.deepseek.com", "https://api.deepseek.com/", "https://api.deepseek.com/v1",
+                 "https://api.deepseek.com/anthropic"):
         opener = Opener(BODY)
         read(tmp_path, opener, environ={"DEEPSEEK_API_KEY": "sk-test", "DEEPSEEK_BASE_URL": base})
         assert len(opener.requests) == 1
+
+
+def test_base_url_from_every_dsh_source_and_profile_blocks_key(tmp_path):
+    """Minor-3: `DEEPSEEK_BASE_URL` из `.credentials.yaml` и `$DSH_HOME/.env`, явный `baseURL` строки
+    `llm-deepseek` профиля — ключ прокси не уходит на `api.deepseek.com`."""
+    sources = [(".credentials.yaml", "refs:\n  DEEPSEEK_BASE_URL: https://proxy.example\n"),
+               (".env", "export DEEPSEEK_BASE_URL='https://proxy.example'\n")]
+    for name, text in sources:
+        home = tmp_path / name.strip(".")
+        home.mkdir()
+        (home / name).write_text(text, encoding="utf-8")
+        opener = Opener(BODY)
+        assert "свой адрес" in read(home, opener)["balance"]["reason"] and not opener.requests
+    opener = Opener(BODY)
+    data = deepseek_usage.read(model=OFFICIAL, bases=["https://proxy.example/anthropic"], home=tmp_path,
+                               environ={"DEEPSEEK_API_KEY": "sk-test"}, opener=opener, now=lambda: 1)
+    assert "свой адрес" in data["balance"]["reason"] and not opener.requests
 
 
 def test_no_key_gives_reason(tmp_path):
@@ -110,7 +138,11 @@ def test_key_from_credentials_file(tmp_path):
         "version: 1\n\nrefs:\n  SRVLLM_API_KEY: sk-other\n  DEEPSEEK_API_KEY: 'sk-file'  # ключ\n"
         "records:\n  a/b: {}\n", encoding="utf-8")
     assert deepseek_usage.key(tmp_path, {}) == "sk-file"
-    assert deepseek_usage.key(tmp_path, {"DEEPSEEK_API_KEY": "sk-env"}) == "sk-env"
+    assert deepseek_usage.key(tmp_path, {"DEEPSEEK_API_KEY": "sk-env"}) == "sk-file"   # как у DSH: refs сильнее
+    assert deepseek_usage.key(tmp_path / "absent", {"DEEPSEEK_API_KEY": "sk-env"}) == "sk-env"
+    (tmp_path / "dotenv").mkdir()
+    (tmp_path / "dotenv" / ".env").write_text("DEEPSEEK_API_KEY=sk-dotenv\n", encoding="utf-8")
+    assert deepseek_usage.key(tmp_path / "dotenv", {}) == "sk-dotenv"
     opener = Opener(BODY)
     deepseek_usage.read(model=OFFICIAL, home=tmp_path, environ={}, opener=opener, now=lambda: 1)
     assert opener.requests[0][0].get_header("Authorization") == "Bearer sk-file"

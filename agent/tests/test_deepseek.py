@@ -39,7 +39,7 @@ class FakeRpc:
     def __init__(self, factory, install, cwd, access, overlay):
         self.factory, self.install, self.cwd, self.access, self.overlay = factory, install, cwd, access, overlay
         self.overlay_rows = json.loads(Path(overlay).read_text("ascii")) if overlay else None
-        self.info = fixture("initialize.json")
+        self.info = factory.info or fixture("initialize.json")
         self.inbox = asyncio.Queue()
         self.closed = False
         self.config = {k: v for k, v in fixture("session_new.json").items() if k != "sessionId"}
@@ -87,7 +87,7 @@ class FakeRpc:
                 raise acp.RpcError.of(method, self.factory.prompt_error)
             self.response = asyncio.get_running_loop().create_future()
             if len(self.factory.prompts) == 1:
-                for msg in BEFORE:
+                for msg in [*self.factory.extra, *BEFORE]:
                     self.inbox.put_nowait(msg)
             else:  # уточнения из очереди — короткий ответ без карточки
                 self.inbox.put_nowait({"method": "session/update", "params": {"sessionId": SESSION, "update": {
@@ -114,6 +114,8 @@ class Factory:
         self.busy = False
         self.prompt_error = None
         self.dsh = None
+        self.info = None
+        self.extra = []  # сообщения перед ходом фикстуры
 
     def __call__(self, install, cwd, *, access=None, overlay=None):
         rpc = FakeRpc(self, install, cwd, access, overlay)
@@ -387,6 +389,14 @@ async def test_history_reads_session_file_and_unsupported_format_gives_notice_an
     assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
 
 
+async def test_history_with_other_spelling_of_cwd_is_a_notice_not_gone(runner):
+    """Minor-6: сессия есть, а `cwd` заголовка не сводится к проекту — пояснение, а не «нет такого чата»."""
+    runner.aliases.put(runner.project, CHAT, SESSION)
+    stored(runner, cwd=str(runner.project.parent / "elsewhere"))
+    assert await runner.history(runner.project, CHAT, None, 100) == {
+        "items": [], "start": 0, "total": 0, "engine": "deepseek", "notice": "unsupported_format"}
+
+
 async def test_history_too_large_is_refused(runner, monkeypatch):
     runner.aliases.put(runner.project, CHAT, SESSION)
 
@@ -409,6 +419,48 @@ async def test_followup_during_answer_is_queued_until_end(runner):
     assert [p["prompt"] for p in runner.fake.prompts[1:]] == [[{"type": "text", "text": "И ещё"}]]
     assert [e["id"] for e in events(runner, "followup_sent")] == [result["id"]]
     assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+def chunk(text, message):
+    return {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+        "sessionUpdate": "agent_message_chunk", "messageId": message, "content": {"type": "text", "text": text}}}}
+
+
+async def test_whole_messages_are_separated_like_history(runner):
+    """Minor-9: DSH присылает сообщения целиком — между ними пустая строка, как в `deepseek_history`."""
+    runner.fake.extra = [chunk("Call MCP echo.", "m1"), chunk("Tool returned.", "m2")]
+    runner.start(runner.project, runner.pid, CHAT, "Начни", None, None)
+    rid = await asking(runner)
+    runner.answer(runner.pid, CHAT, rid, "allow", None, None)
+    await runner._turns[CHAT].task
+    text = "".join(e["text"] for e in events(runner, "text"))
+    assert text.startswith("Call MCP echo.\n\nTool returned.\n\nГотово")
+
+
+async def test_first_turn_refusals_come_before_session_new(runner):
+    """Minor-7: картинка при `promptCapabilities.image: false` и модель вне каталога — отказ до `session/new`:
+    пустую сессию ACP DSH сохранил бы сразу (D4), а удалить её нечем."""
+    info = fixture("initialize.json")
+    info["agentCapabilities"]["promptCapabilities"]["image"] = False
+    runner.fake.info = info
+    runner.start(runner.project, runner.pid, CHAT, "Что на картинке?", None, None,
+                 images=[{"mime": "image/png", "data": "cG5n"}])
+    await runner._turns[CHAT].task
+    assert runner.sent[-1]["e"]["message"] == deepseek.IMAGES
+    runner.fake.info = None
+    runner.start(runner.project, runner.pid, CHAT, "Привет", '["srvllm","gone"]', None)
+    await runner._turns[CHAT].task
+    assert runner.sent[-1]["e"]["message"] == deepseek.UNAVAILABLE
+    assert "session/new" not in [method for method, _ in runner.fake.calls] and not runner.fake.prompts
+    assert runner.aliases.target(runner.project, CHAT) is None
+
+
+def test_session_gone_is_recognized_in_dsh_details():
+    """Minor-8: DSH кладёт подробности в `data.details` при `message: "Internal error"`."""
+    error = acp.RpcError.of("session/resume", {"code": -32603, "message": "Internal error",
+                                               "data": {"details": f"session \"{SESSION}\" not found"}})
+    assert error.not_found and not error.owned
+    assert not acp.RpcError.of("session/resume", {"code": -32603, "message": "Internal error"}).not_found
 
 
 async def test_image_route_refusal_names_the_model(runner):

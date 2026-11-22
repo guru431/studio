@@ -1798,7 +1798,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Профиль DeepSeek Harness не найден — действуют общие настройки": "DeepSeek Harness profile not found. Shared settings apply",
   "Не применено:": "Not applied:",
   "неизвестный вид настройки": "unknown setting type",
-  "задано в профиле редактора (acp)": "set in the editor profile (acp)",
+  "задано в профиле acp или общем патче DSH": "set in the acp profile or the shared DSH patch",
   "ключ из переменной окружения недоступен мосту": "the key from an environment variable is not available to the bridge",
   "профиль не читается": "the profile cannot be read",
   "Права заданы при создании чата": "Permissions were set when the chat was created",

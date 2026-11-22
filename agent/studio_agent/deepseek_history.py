@@ -29,7 +29,7 @@ CALL_ID = re.compile(r".{1,200}", re.S)
 
 class Unsupported(Exception):
     """Историю прочитать нельзя: `code` — `format` (незнакомая версия или нет распаковщика), `corrupt`
-    (файл повреждён) или `too_large` (больше `READ_MAX`)."""
+    (файл повреждён), `too_large` (больше `READ_MAX`) или `cwd` (каталог сессии не сводится к проекту)."""
 
     def __init__(self, code):
         super().__init__(code)
@@ -130,13 +130,21 @@ def _header(records):
 
 
 def _same(a, b):
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+    """Тот же каталог: по написанию или по файловой системе (регистр macOS, ссылки)."""
+    if os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b)):
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return False
 
 
 def locate(home, project, session_id):
     """Файл истории сессии или None. Ищет только внутри `<home>/sessions`, id — по шаблону DSH (UUID, у сессий Web
     с `session-`); каталог ключа проекта не вычисляется, а проверяется `cwd` заголовка. Из файлов сессии берётся
-    наибольшая версия формата — незнакомую `read` отклонит как `Unsupported("format")`."""
+    наибольшая версия формата — незнакомую `read` отклонит как `Unsupported("format")`. Сессия есть, но `cwd`
+    заголовка не сводится к проекту — `Unsupported("cwd")`: история отвечает пояснением, а не «нет такого чата»."""
+    mismatch = False
     if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id):
         return None
     try:
@@ -164,8 +172,11 @@ def locate(home, project, session_id):
         finally:
             records.close()
         if isinstance(cwd, str) and not _same(cwd, str(project)):
+            mismatch = True
             continue
         return path
+    if mismatch:
+        raise Unsupported("cwd")
     return None
 
 

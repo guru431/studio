@@ -87,6 +87,30 @@ def test_foreign_dsh_is_rejected(tmp_path, monkeypatch):
     assert rpc.find_installs(environ={}, home=tmp_path) == []
 
 
+def test_npm_dsh_behind_a_foreign_one_is_found_with_its_own_node(tmp_path, monkeypatch):
+    """Minor-1: первым по PATH стоит чужой `dsh` — npm-DSH дальше всё равно найден; Node — из того же `bin`."""
+    platform(monkeypatch, "linux")
+    foreign = tmp_path / "usr/bin/dsh"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("#!/bin/sh\n", "utf-8")
+    folder = package(tmp_path / "nvm/lib")
+    launcher = tmp_path / "nvm/bin/dsh"
+    launcher.parent.mkdir(parents=True)
+    try:
+        launcher.symlink_to(folder / "lib/bin.js")
+    except OSError:  # ссылки без прав недоступны: проверяем сам путь внутри пакета
+        launcher = folder / "lib/bin.js"
+    node = launcher.parent / "node"
+    node.write_text("", "utf-8")
+    which(monkeypatch, dsh=foreign, node=tmp_path / "usr/bin/node")
+    monkeypatch.setattr(rpc.shutil, "which", lambda name, path=None: str(
+        {str(foreign.parent): foreign, str(launcher.parent): launcher}.get(path)) if path in (
+        str(foreign.parent), str(launcher.parent)) else None)
+    environ = {"PATH": f"{foreign.parent}{rpc.os.pathsep}{launcher.parent}"}
+    (found,) = rpc.find_installs(environ=environ, home=tmp_path)
+    assert found.package_dir.resolve() == folder.resolve() and found.command[0] == str(node)
+
+
 def test_foreign_dsh_exe_on_windows_is_rejected(tmp_path, monkeypatch):
     platform(monkeypatch, "win")
     foreign = tmp_path / "tools/Scripts/dsh.exe"
@@ -340,8 +364,12 @@ def test_version_reads_output_and_falls_back(monkeypatch):
 
     monkeypatch.setattr(rpc.subprocess, "run", run)
     assert rpc.version(install) == "0.2.2-rc.5" and seen == [(["rt", "--version"], "h")]
+    # в студию — только номер версии (Minor-10): произвольный вывод — запасное имя
     monkeypatch.setattr(rpc.subprocess, "run", lambda c, **k: subprocess.CompletedProcess(c, 0, b"x" * 100, b""))
-    assert rpc.version(install) == "x" * 64
+    assert rpc.version(install) == "DeepSeek Harness"
+    monkeypatch.setattr(rpc.subprocess, "run",
+                        lambda c, **k: subprocess.CompletedProcess(c, 0, b"dsh 0.2.3 /home/user/path\n", b""))
+    assert rpc.version(install) == "0.2.3"
     monkeypatch.setattr(rpc.subprocess, "run", lambda c, **k: subprocess.CompletedProcess(c, 1, b"boom", b""))
     assert rpc.version(install) == "DeepSeek Harness"
     monkeypatch.setattr(rpc.subprocess, "run", lambda c, **k: subprocess.CompletedProcess(c, 0, b"  \n", b""))

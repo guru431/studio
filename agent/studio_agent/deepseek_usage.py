@@ -5,15 +5,16 @@ import math
 import os
 import re
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from . import deepseek_settings, limits, subscription
 
 URL = f"https://{limits.HOSTS['deepseek']}/user/balance"
-OFFICIAL_BASE = "https://api.deepseek.com"
 OFFICIAL_PROVIDER = "deepseek-official"
 KEY_NAME = "DEEPSEEK_API_KEY"
+BASE_NAME = "DEEPSEEK_BASE_URL"
 BODY_LIMIT = 64 * 1024
 TIMEOUT = 12
 ITEMS = 20
@@ -31,9 +32,9 @@ REFS = re.compile(r"refs\s*:\s*(?:#.*)?")
 ENTRY = re.compile(r"[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*(.*)")
 
 
-def _refs_key(text: str) -> str | None:
-    """`refs.DEEPSEEK_API_KEY` из `.credentials.yaml`: файл DSH — `refs:` с парами `ИМЯ: ключ` на одну строку
-    (проба, фикстура `credentials.example.yml`); блоки, списки и якоря YAML не разбираются — тогда ключа «нет»."""
+def _refs_key(text: str, name: str = KEY_NAME) -> str | None:
+    """`refs.<name>` из `.credentials.yaml`: файл DSH — `refs:` с парами `ИМЯ: значение` на одну строку
+    (проба, фикстура `credentials.example.yml`); блоки, списки и якоря YAML не разбираются — тогда значения «нет»."""
     inside = False
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -42,7 +43,7 @@ def _refs_key(text: str) -> str | None:
             inside = REFS.fullmatch(line.rstrip()) is not None
             continue
         match = ENTRY.fullmatch(line.rstrip()) if inside else None
-        if match is None or match.group(1) != KEY_NAME:
+        if match is None or match.group(1) != name:
             continue
         value = match.group(2).strip()
         if value[:1] in ("\"", "'"):
@@ -54,26 +55,57 @@ def _refs_key(text: str) -> str | None:
     return None
 
 
-def key(home: Path, environ=None) -> str | None:
-    """Ключ DeepSeek: `DEEPSEEK_API_KEY` окружения моста, иначе `.credentials.yaml` из `DSH_HOME`."""
-    env = os.environ if environ is None else environ
-    value = (env.get(KEY_NAME) or "").strip()
-    if value:
-        return value if KEY.fullmatch(value) else None
+def _small(path: Path) -> str | None:
     try:
-        with (Path(home) / deepseek_settings.CREDENTIALS).open("rb") as stream:
+        with Path(path).open("rb") as stream:
             raw = stream.read(BODY_LIMIT + 1)
-        if len(raw) > BODY_LIMIT:
-            return None
-        return _refs_key(raw.decode("utf-8-sig"))
+        return raw.decode("utf-8-sig") if len(raw) <= BODY_LIMIT else None
     except (OSError, ValueError):
         return None
 
 
+def _dotenv(path: Path, name: str) -> str | None:
+    """Значение `name` из `$DSH_HOME/.env` (`ИМЯ=значение`, `export`, кавычки)."""
+    value = None
+    for line in (_small(path) or "").splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key_, sep, rest = line.partition("=")
+        if sep and key_.strip() == name:
+            value = rest.strip().strip("'\"") or None
+    return value
+
+
+def _sources(home: Path, env, name: str) -> list[str]:
+    """Значения переменной там, где их берёт DSH, по порядку: `refs` `.credentials.yaml`, окружение запуска,
+    `$DSH_HOME/.env`."""
+    text = _small(Path(home) / deepseek_settings.CREDENTIALS)
+    values = [_refs_key(text, name) if text is not None else None, env.get(name), _dotenv(Path(home) / ".env", name)]
+    return [value.strip() for value in values if isinstance(value, str) and value.strip()]
+
+
+def key(home: Path, environ=None) -> str | None:
+    """Ключ DeepSeek, как его берёт DSH: `refs.DEEPSEEK_API_KEY` `.credentials.yaml`, затем окружение моста,
+    затем `$DSH_HOME/.env`."""
+    env = os.environ if environ is None else environ
+    found = _sources(home, env, KEY_NAME)
+    return found[0] if found and KEY.fullmatch(found[0]) else None
+
+
+def _official(url: str) -> bool:
+    """Адрес официального API: схема https и хост `api.deepseek.com` (путь любой: `/anthropic`, `/v1`)."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme == "https" and parts.hostname == limits.HOSTS["deepseek"] and port in (None, 443)
+            and parts.username is None and parts.password is None)
+
+
 def _provider(model) -> str | None:
-    """Провайдер из значения модели DSH `["<провайдер>","<модель>"]`; без модели — умолчание DSH."""
-    if model is None:
-        return OFFICIAL_PROVIDER
+    """Провайдер из значения модели DSH `["<провайдер>","<модель>"]`."""
     try:
         value = json.loads(model) if isinstance(model, str) else None
     except ValueError:
@@ -81,13 +113,17 @@ def _provider(model) -> str | None:
     return value[0] if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str) else None
 
 
-def eligible(model, environ=None) -> str | None:
-    """`None` — спрашивать можно; иначе причина (`provider`, `base_url`): ключ не уходит чужому сервису."""
+def eligible(model, environ=None, *, home=None, default=None, bases=()) -> str | None:
+    """`None` — спрашивать можно; иначе причина (`provider`, `base_url`): ключ не уходит чужому сервису.
+
+    Без модели — умолчание каталога (`default`). Адрес — явные `baseURL` строк `llm-deepseek` профиля (`bases`) и
+    `DEEPSEEK_BASE_URL` из всех мест, где его берёт DSH: хоть один не официальный — баланс не запрашивается."""
     env = os.environ if environ is None else environ
-    if _provider(model) != OFFICIAL_PROVIDER:
+    if _provider(model if model is not None else default) != OFFICIAL_PROVIDER:
         return "provider"
-    base = (env.get("DEEPSEEK_BASE_URL") or "").strip().rstrip("/")
-    return None if base in ("", OFFICIAL_BASE) else "base_url"
+    home = deepseek_settings.dsh_home(env) if home is None else home
+    values = [*bases, *_sources(home, env, BASE_NAME)]
+    return None if all(_official(value) for value in values) else "base_url"
 
 
 def _opener(*handlers):
@@ -124,12 +160,13 @@ def _items(raw) -> list:
     return items
 
 
-def read(*, model=None, home=None, environ=None, opener=None, now=time.time) -> dict:
-    """Ответ `usage` для `deepseek`: окон нет, баланс — по валютам; сбой — причина в `balance.reason`."""
+def read(*, model=None, default=None, bases=(), home=None, environ=None, opener=None, now=time.time) -> dict:
+    """Ответ `usage` для `deepseek`: окон нет, баланс — по валютам; сбой — причина в `balance.reason`.
+    `default` — модель каталога по умолчанию, `bases` — `DeepSeekRunner.base_urls`."""
     env = os.environ if environ is None else environ
     home = deepseek_settings.dsh_home(env) if home is None else Path(home)
     balance = {"available": False, "items": []}
-    reason = eligible(model, env)
+    reason = eligible(model, env, home=home, default=default, bases=bases)
     token = None
     if reason is None:
         token = key(home, env)

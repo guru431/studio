@@ -281,3 +281,15 @@ async def test_deepseek_usage_is_cached_per_model(monkeypatch):
     assert calls == [first, second]
     await cache.read("deepseek", "root", model=first, refresh=True)
     assert calls == [first, second, first]
+
+
+async def test_deepseek_usage_gets_catalog_default_and_profile_base_urls(monkeypatch):
+    from types import SimpleNamespace
+    from studio_agent import deepseek_usage
+    seen = []
+    monkeypatch.setattr(deepseek_usage, "read", lambda **kwargs: seen.append(kwargs) or {"checked_at": 1})
+    backend = SimpleNamespace(catalog={"defaults": {"model": '["deepseek-official","deepseek-v4-flash"]'}},
+                              base_urls=["https://proxy.example"])
+    await subscription.UsageCache(now=lambda: 0, wall=lambda: 1000).read("deepseek", "root", backend)
+    assert seen[0]["model"] is None and seen[0]["default"] == '["deepseek-official","deepseek-v4-flash"]'
+    assert seen[0]["bases"] == ["https://proxy.example"]
