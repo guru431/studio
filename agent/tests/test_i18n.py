@@ -108,6 +108,20 @@ def test_linux_menu_status_translates_the_desktop_reason(language, monkeypatch):
     assert linux_menu.dispatch(ctrl, "status", None)["display"] == desktop_linux._REASONS[2]
 
 
+def test_english_status_line_of_the_fourth_helper(language, monkeypatch, capsys):
+    from studio_agent import linux_menu
+
+    status = {"version": "0.1.0", "studio": None, "state": "online", "url": "https://studio.example.com", "name": "pc",
+              "login": "ivanov", "id": "a1", "enrolled": True, "roots": [], "pin": "none", "autostart": False,
+              "max_turns": 12, "desktop": False, "display": "", "activity": {"tasks": 0, "waiting": 0,
+              "quit_when_idle": False, "desktop_active": False}, "cli": {"deepseek": True},
+              "backends": {"deepseek": {"status": "ready", "models": 3}}}
+    monkeypatch.setattr(linux_menu, "invoke", lambda h, op, value=None: status)
+    language("en")
+    linux_menu.status(None)
+    assert "deepseek: CLI yes, available, models 3" in capsys.readouterr().out
+
+
 def test_english_tray_window_and_errors(language):
     from studio_agent import enroll, setup, tray, window
 

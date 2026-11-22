@@ -155,14 +155,14 @@ function enginePriorityBlock(defaults) {
 function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
   const note = status('code-defaults-status');
   const rows = el('div', { id: 'code-defaults-rows' });
-  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, tr("Claude Code, Codex и OpenCode")),
+  const block = el('section', { class: 'block code-defaults-block' }, el('h2', {}, tr("Claude Code, Codex, OpenCode и DeepSeek Harness")),
     el('p', { class: 'muted small' }, tr("Модель, усилие и права для новых чатов на всех ваших устройствах. Начатые чаты сохраняют свой выбор. Показаны текущие настройки подключённого компьютера; в проекте они уточняются при открытии чата.")),
     rows, note);
 
   async function load() {
     try {
       const [{ items }, profile] = await Promise.all([agents(), loadMe()]);
-      const forms = ['codex', 'claude', 'opencode'].map((engine) => {
+      const forms = ['codex', 'claude', 'opencode', 'deepseek'].map((engine) => {
         const catalogs = items.filter((a) => a.online).map((a) => engine === 'claude' ? a : a[engine]).filter(Boolean);
         const models = new Map();
         const efforts = new Set();
@@ -176,7 +176,7 @@ function codeDefaultsBlock(agents = () => api('GET', '/api/agents')) {
         if (saved.effort) efforts.add(saved.effort);
         const prefix = `code-defaults-${engine}`;
         const model = el('select', { class: 'input', id: `${prefix}-model` },
-          el('option', { value: '' }, native.model || (catalogs.length ? tr("Не получено") : tr("Компьютер не на связи"))),
+          el('option', { value: '' }, (engine === 'deepseek' && models.get(native.model)) || native.model || (catalogs.length ? tr("Не получено") : tr("Компьютер не на связи"))),
           ...[...models].map(([id, label]) => el('option', { value: id }, label)));
         const effort = el('select', { class: 'input', id: `${prefix}-effort` },
           el('option', { value: '' }, effortLabel(native.effort)),
@@ -999,7 +999,7 @@ function pushBox() {
     }).catch((err) => say(note, words(err), 'error'));
   }
   return [el('label', { class: 'check push-check' }, box, tr("Push на этом устройстве")),
-    el('p', { class: 'muted small', id: 'push-hint' }, tr("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий. Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано, но факт и время им видны. На iPhone — только у студии, добавленной на экран «Домой».")), note];
+    el('p', { class: 'muted small', id: 'push-hint' }, tr("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода Claude Code, Codex, OpenCode или DeepSeek Harness, готовность и ошибки фоновых заданий. Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано, но факт и время им видны. На iPhone — только у студии, добавленной на экран «Домой».")), note];
 }
 
 /* Локальные уведомления (jobs.js) — запасной вариант без подписки; Web Push — для всех фоновых заданий и «Агентов». */
@@ -1132,7 +1132,7 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   }
 
   reload();
-  return el('section', { class: 'block agents-block' }, el('h2', {}, tr("Компьютеры (Claude Code, Codex и OpenCode)")),
+  return el('section', { class: 'block agents-block' }, el('h2', {}, tr("Компьютеры (Claude Code, Codex, OpenCode и DeepSeek Harness)")),
     list, note,
     el('h3', {}, tr("История подключений")), events, el('div', { class: 'row' }, more));
 }
@@ -1140,10 +1140,11 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
 /** Что уносит «Удалить всю историю» (history._delete_all): записи разделов с историей — имена из реестра разделов —
  * с их файлами, образцы голосов, ссылки «Поделиться», личные базы знаний (общие остаются) и рабочее место «Агентов». */
 function wipeWhat() {
-  const sections = RAIL_SECTIONS.filter((s) => s.id !== 'code').map((s) => `«${s.name}»`).join(', ');
+  // «Агенты» и «Open WebUI» истории в Studio не держат (`history: false` реестра)
+  const sections = RAIL_SECTIONS.filter((s) => s.history !== false).map((s) => `«${s.name}»`).join(', ');
   return tr("Удалятся безвозвратно: вся история разделов {0} вместе с файлами, образцы голосов, все ссылки ", sections)
     + tr("«Поделиться», личные базы знаний с документами (и из корзины), а в разделе «{0}» — вкладки, отметки чатов и непрочитанные завершения. Сами чаты Claude Code, ", NAMES.code)
-    + tr("Codex и OpenCode хранятся на компьютерах и останутся.");
+    + tr("Codex, OpenCode и DeepSeek Harness хранятся на компьютерах и останутся.");
 }
 
 function accountNameBlock() {
@@ -1365,7 +1366,8 @@ function voicesBlock(host) {
 /* ---- разделы ---------------------------------------------------------------------- */
 
 /** Разделы — в порядке рельса; «Учётка» — личные группы. Прежние адреса — на новые места. */
-const RAIL_ORDER = RAIL_SECTIONS.map((s) => s.id);                 // порядок рельса — из реестра разделов
+// порядок рельса — из реестра разделов; без страницы настроек (`settings: false`: учётки «Open WebUI» — в самом разделе)
+const RAIL_ORDER = RAIL_SECTIONS.filter((s) => s.settings !== false).map((s) => s.id);
 const ACCOUNT_IDS = ['appearance', 'security', 'notifications', 'data', 'input'];
 const OLD_IDS = { other: 'security', dictation: 'input' };
 const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает

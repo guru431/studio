@@ -29,6 +29,8 @@ DELIBERATE_SKIPS = (
     "STUDIO_ADMIN_LOGIN and STUDIO_ADMIN_PASSWORD are required",
     "STUDIO_LIVE_VOICE (запись",
     "PowerShell and studio-batch.local.ps1 are required",
+    "OWUI_LIVE_URL, OWUI_LIVE_EMAIL and OWUI_LIVE_PASSWORD are required",
+    "the model answered without asking a question (ask_user)",
 )
 
 

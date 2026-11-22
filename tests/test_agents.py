@@ -95,7 +95,7 @@ def test_agents_belong_to_their_user(studio):
                       "agent_version": None, "platform": None, "agent_update": False, "agent_update_cancel": False, "latest_version": None,
                       "projects_root": None, "created": items[0]["created"], "last_seen": None, "terminal": False,
                           "models": [], "efforts": [], "images": False, "chat_state": False, "defaults": {}, "chat_control": False,
-                              "attachments": False, "large_attachments": False, "project_activity": False, "subscription_usage": False, "usage_reset": False, "opencode_usage": False, "opencode_features": False, "computer_info": False, "software_versions": False, "software_update_all": False, "desktop": False,
+                              "attachments": False, "large_attachments": False, "project_activity": False, "subscription_usage": False, "usage_reset": False, "opencode_usage": False, "opencode_features": False, "deepseek_usage": False, "computer_info": False, "software_versions": False, "software_update_all": False, "desktop": False,
                               "project_summary": False, "metadata_cache": False, "visualizations": False, "visualization_images": False, "history_images": False, "file_stats": False, "file_operations": False, "file_suggestions": False,
                               "chat_search": False, "queue_edit": False, "chat_fork": False,
                               "subagents": False, "worktrees": False, "project_sharing": False, "project_create": False, "project_mirror": False, "mcp": False}]

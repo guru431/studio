@@ -121,7 +121,7 @@ export function agentDownload() {
       tr("Скачать мост для macOS (.pkg)")),
     el('a', { id: 'agent-download-linux', class: 'btn', href: agentInstallers.linux.href, download: agentInstallers.linux.file },
       tr("Скачать мост для Linux (.sh)")),
-    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
+    el('p', { class: 'muted small agent-download-needs' }, tr("Нужны Claude Code, Codex, OpenCode или DeepSeek Harness. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.")),
     el('p', { class: 'agent-download-steps' }, tr("В Windows и macOS откройте установщик и вставьте этот адрес в поле «Адрес студии». В Linux получите команду и выполните её в терминале в течение 10 минут.")),
     el('div', { class: 'row agent-install-command' }, origin, copyOrigin),
     getCommand, el('p', { class: 'agent-install-command' }, command), copy);

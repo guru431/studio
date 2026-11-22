@@ -2,6 +2,7 @@
 import asyncio
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -20,9 +21,100 @@ def item(tool='codex', **values):
 
 def manager(**kwargs):
     backend = SimpleNamespace(live=lambda: {}, close=AsyncMock())
-    agent = SimpleNamespace(runner=backend, codex=backend, opencode=backend, updater=None,
+    agent = SimpleNamespace(runner=backend, codex=backend, opencode=backend, deepseek=backend, updater=None,
                             local_exit_pending=False, _software_requests=0)
     return software.Software(agent, **kwargs)
+
+
+def deepseek_install(tmp_path, kind='npm', version='0.2.2-rc.5', **values):
+    from studio_agent import deepseek_rpc
+
+    if kind == 'npm':
+        package = tmp_path / 'node_modules/@deepseek-ai/dsh'
+        package.mkdir(parents=True)
+        (package / 'package.json').write_text(json.dumps({'name': '@deepseek-ai/dsh', 'version': version}))
+        return deepseek_rpc.Install('npm', ('node', str(package / 'lib/bin.js')), {}, 'web', package, None)
+    if kind == 'python':
+        return deepseek_rpc.Install('python', (str(tmp_path / 'venv/bin/python'),), {'DSH_HOME': str(tmp_path)}, 'web', None, None)
+    return deepseek_rpc.Install('desktop', (str(tmp_path / 'DeepSeek Harness.exe'), 'cli.js'), {}, 'desktop', tmp_path, None)
+
+
+def fake_dsh(monkeypatch, installs, version='0.2.2-rc.5'):
+    monkeypatch.setattr(software.deepseek_rpc, 'find_installs', lambda: installs)
+    monkeypatch.setattr(software.subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=0, stdout=version.encode()))
+    monkeypatch.setattr(software, '_npm', lambda: ['node', 'npm-cli.js'])
+    monkeypatch.setattr(software.deepseek_settings, 'source', lambda home: None)  # профиль-источник не найден
+
+
+def test_deepseek_npm_prerelease_is_offered_as_update(monkeypatch, tmp_path):
+    assert software.TOOLS['deepseek'] == '@deepseek-ai/dsh'
+    assert software.newer('0.2.2-rc.6', '0.2.2-rc.5') and not software.newer('0.2.2-rc.5', '0.2.2-rc.6')
+    assert software.newer('0.2.2', '0.2.2-rc.9') and not software.newer('0.2.2-rc.9', '0.2.2')
+    assert software.newer('0.2.2-rc.10', '0.2.2-rc.9') and software.newer('0.2.2-rc.1', '0.2.2-beta.7')
+    seen = []
+    monkeypatch.setattr(software, '_json', lambda request: seen.append(request) or {'version': '0.2.2-rc.6'})
+    assert software.latest('deepseek', 'npm', '@deepseek-ai/dsh') == '0.2.2-rc.6'
+    assert seen == ['https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest']
+    assert software.latest('codex', 'npm') is None  # у остальных пакетов предварительный выпуск не предлагается
+    fake_dsh(monkeypatch, [deepseek_install(tmp_path)])
+    data = software.inspect('deepseek')
+    assert (data['source'], data['version'], data['reason'], data['_prefix']) == ('npm', '0.2.2-rc.5', None, tmp_path)
+    command, _ = software.command(data, '0.2.2-rc.6')
+    assert command[:5] == ['node', 'npm-cli.js', 'install', '--global', '--prefix'] and '@deepseek-ai/dsh@0.2.2-rc.6' in command
+    with pytest.raises(ValueError):
+        software.command(data, '0.2.2-rc.6 & x')
+    with pytest.raises(ValueError):
+        software.command({**data, 'id': 'codex'}, '0.2.2-rc.6')
+
+
+@pytest.mark.parametrize('kind', ['python', 'desktop'])
+def test_deepseek_desktop_and_python_installs_are_manual(monkeypatch, tmp_path, kind):
+    fake_dsh(monkeypatch, [deepseek_install(tmp_path, kind)], version='DeepSeek Harness 0.2.2-rc.5')
+    data = software.inspect('deepseek')
+    assert (data['installed'], data['source'], data['reason'], data['version']) == (True, 'native', 'manual', '0.2.2-rc.5')
+    with pytest.raises(ValueError):
+        software.command(data, '0.2.2-rc.6')
+
+
+def test_deepseek_not_installed_and_npm_wins_over_the_rest(monkeypatch, tmp_path):
+    fake_dsh(monkeypatch, [])
+    data = software.inspect('deepseek')
+    assert (data['installed'], data['reason'], data['version']) == (False, 'not_installed', None)
+    fake_dsh(monkeypatch, [deepseek_install(tmp_path / 'a', 'desktop'), deepseek_install(tmp_path / 'b')])
+    assert software.inspect('deepseek')['source'] == 'npm'
+
+
+def test_deepseek_card_shows_the_install_turns_use_and_names_old_node(monkeypatch, tmp_path):
+    # Minor-2: источник — профиль Desktop, ходы идут Desktop — карточка показывает его, а не npm
+    installs = [deepseek_install(tmp_path / 'a', 'desktop'), deepseek_install(tmp_path / 'b')]
+    fake_dsh(monkeypatch, installs)
+    monkeypatch.setattr(software.deepseek_settings, 'source', lambda home: 'desktop')
+    assert (software.inspect('deepseek')['source'], software.inspect('deepseek')['reason']) == ('native', 'manual')
+    # I3: DSH стоит, но Node старше `engines` — причина `node`, а не «не установлено»; обновление DSH не предлагается
+    old = replace(deepseek_install(tmp_path / 'c'), reason='node')
+    fake_dsh(monkeypatch, [old])
+    data = software.inspect('deepseek')
+    assert (data['installed'], data['source'], data['reason']) == (True, 'npm', 'node')
+
+
+async def test_deepseek_update_closes_its_backend_and_installs_the_prerelease(monkeypatch, tmp_path):
+    fake_dsh(monkeypatch, [deepseek_install(tmp_path)])
+    installed = []
+
+    async def install(item, target):
+        installed.append(target)
+        (item['_path'] / 'package.json').write_text(json.dumps({'name': '@deepseek-ai/dsh', 'version': target}))
+
+    monkeypatch.setattr(software, 'install', install)
+    monkeypatch.setattr(software, 'latest', lambda *key: '0.2.2-rc.6')
+    manage = manager()
+    snapshot = await manage.read(True)
+    assert [i['id'] for i in snapshot['items']].count('deepseek') == 1
+    assert manage.items['deepseek']['can_update'] is True
+    manage.start('deepseek')
+    await manage.task
+    assert manage.state == 'done' and installed == ['0.2.2-rc.6']
+    manage.agent.deepseek.close.assert_awaited()
 
 
 def test_latest_uses_fixed_registry_and_filters_platform_and_prerelease(monkeypatch):
@@ -266,13 +358,13 @@ async def test_partial_lookup_failure_cache_and_unknown_installation(monkeypatch
         return '1.2.10'
     monkeypatch.setattr(software, 'latest', latest)
     data = await m.read()
-    assert [r['latest'] for r in data['items']] == ['1.2.10', None, '1.2.10']
+    assert [r['latest'] for r in data['items']] == ['1.2.10', None, '1.2.10', '1.2.10']
     assert not data['items'][1]['can_update']
     assert '_path' not in str(data) and 'private' not in str(data)
     await m.read()
-    assert len(calls) == 3
+    assert len(calls) == 4
     await m.read(True)
-    assert len(calls) == 6
+    assert len(calls) == 8
 
 
 @pytest.mark.parametrize('change', ['newer_version', 'source'])

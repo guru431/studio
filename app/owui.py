@@ -11,7 +11,9 @@
 - Удаление — соединение сокета закрывается (`owui_link`), отзыв сессии (срок `REVOKE_SEC`, неудача не мешает),
   строка удаляется; удаление учётки Студии — то же для всех её строк (`drop_user`), отключение — закрыть соединения
   и забыть рабочие токены.
-- `call` — запрос к Open WebUI рабочим токеном (`owui_tokens`), 401 — одно обновление и повтор.
+- `call` — запрос к Open WebUI рабочим токеном (`owui_tokens`); 401 отвергнутого токена (сверка `CHECK_PATH`) — одно
+  обновление и повтор, 401 ресурса (чужой и несуществующий чат) — без обновления.
+- Смена `STUDIO_DATA_KEY`: учётка в `relogin`, `_out` — признак `reenter`; вход заново берёт email из тела.
 - Чтение (`owui_view`): дерево, страницы чатов, чаты папки, поиск (запрос — телом), модели, чат, файл потоком (`no-store`).
   Неожиданная форма ответа — 502 `owui_shape`, недоступный Open WebUI — 503 `owui_offline`, остальная Студия работает.
 - Отправка («Отправка» спеки): новый чат и продолжение — серверный ход `POST /api/chat/completions` с `session_id`
@@ -90,6 +92,8 @@ FILE_WAIT_SEC = 300
 PING_SEC = 20
 #: SSE сверяет сессию Студии на событиях не чаще, с (и на каждом пинге)
 CHECK_SEC = 5
+#: проверка рабочего токена: кто вошёл (`GET`; 401 — токен отвергнут)
+CHECK_PATH = "/api/v1/auths/"
 #: режимы подтверждения инструментов (`params.tool_approval_mode`), которые Студия передаёт; `full` — никогда
 APPROVAL_MODES = ("ask", "auto")
 #: тип вложения в запрос загрузки — только такой, иначе `application/octet-stream`
@@ -101,7 +105,7 @@ FAILS: dict[int, list[float]] = {}
 NOT_FOUND = {"code": "not_found", "message": "такой учётки Open WebUI нет"}
 OFFLINE = {"code": "owui_offline", "message": "Open WebUI не отвечает"}
 RELOGIN = {"code": "relogin", "message": "войдите в учётку Open WebUI заново"}
-LOGIN = {"code": "login", "message": "неверный email или пароль Open WebUI"}
+LOGIN = {"code": "owui_login", "message": "неверный email или пароль Open WebUI"}
 PENDING = {"code": "pending", "message": "учётка Open WebUI ждёт одобрения администратора Open WebUI"}
 MFA = {"code": "mfa", "message": "вход со вторым кодом не поддерживается"}
 LOCKED = {"code": "owui_locked", "message": "слишком много неудачных входов в Open WebUI — попробуйте позже"}
@@ -123,6 +127,9 @@ REFUSED = {"code": "owui_refused", "message": "Open WebUI отклонил за�
 RESOLVED = {"code": "resolved", "message": "это решение уже принято"}
 ANSWERS = {"code": "answers", "message": "ответы нужны только к вопросам модели"}
 FILE_SLOW = {"code": "file_slow", "message": "Open WebUI слишком долго обрабатывает файл — попробуйте позже"}
+NEED_EMAIL = {"code": "owui_email", "message": "Студия не может прочитать email учётки Open WebUI — введите его"}
+PINNED_BROKEN = {"code": "owui_certificate", "message":
+                 "подтверждённый сертификат Open WebUI не проходит проверку (например, истёк) — обновите его на сервере"}
 CERT_WORDS = "сертификат сервера не подтверждён — сверьте отпечаток SHA-256 и подтвердите его"
 
 
@@ -151,6 +158,8 @@ class ConnectIn(BaseModel):
 
 class LoginIn(BaseModel):
     password: str = Field(max_length=screenlock.PASSWORD_MAX)
+    #: только когда сохранённый `who_enc` не читается (сменили `STUDIO_DATA_KEY`, признак `reenter`); иначе не нужен
+    email: str | None = Field(default=None, max_length=320)
 
 
 class LabelIn(BaseModel):
@@ -219,9 +228,10 @@ def load(uid: int, aid: int) -> Account:
 
 
 def _who(row) -> dict:
+    """Кто подключён: `owui_user_id`, `name`, `email`; не расшифровался (сменили `STUDIO_DATA_KEY`) — `{}`."""
     try:
         who = json.loads(security.decrypt(row["who_enc"]))
-    except (InvalidToken, TypeError, ValueError):          # сменили STUDIO_DATA_KEY: подпись без имени
+    except (InvalidToken, TypeError, ValueError):
         return {}
     return who if isinstance(who, dict) else {}
 
@@ -231,10 +241,12 @@ def _fingerprint(der: bytes) -> str:
 
 
 def _out(row) -> dict:
+    """Строка списка. `who_enc` не расшифровался — `reenter` и состояние `relogin`: вход заново спросит и email."""
     who = _who(row)
+    reenter = "owui_user_id" not in who
     return {"id": row["id"], "label": row["label"], "url": row["base_url"],
-            "who": {"name": who.get("name"), "email": who.get("email")}, "state": row["state"],
-            "version": row["version"],
+            "who": {"name": who.get("name"), "email": who.get("email")},
+            "state": "relogin" if reenter else row["state"], "reenter": reenter, "version": row["version"],
             "cert": _fingerprint(ssl.PEM_cert_to_DER_cert(row["cert_pem"])) if row["cert_pem"] else None}
 
 
@@ -311,14 +323,19 @@ def _certificate_info(der: bytes) -> dict:
     return info
 
 
-async def _confirm(acc, sha256: str | None) -> str:
-    """PEM сертификата сервера, если его отпечаток — `sha256`; иначе 409 `certificate` с отпечатком сервера."""
+async def _confirm(acc, sha256: str | None, pinned: str | None = None) -> str:
+    """PEM сертификата сервера, если его отпечаток — `sha256`; иначе 409 `certificate` с отпечатком сервера. Сервер
+    показал ровно закреплённый `pinned`, а проверку он не прошёл — 502 `owui_certificate`: подтверждать нечего, иначе
+    владелец подтверждал бы тот же отпечаток без конца."""
     try:
         der = await upstream.fetch_certificate(acc, acc.base_url)
     except upstream.UpstreamRefused as e:
         raise HTTPException(422, {"code": "unlisted", "message": upstream.refused_words(e, acc)}) from None
     except (OSError, TimeoutError):
         raise HTTPException(503, OFFLINE) from None
+    if pinned and der == ssl.PEM_cert_to_DER_cert(pinned):
+        log.info("owui %s: закреплённый сертификат не прошёл проверку", acc.id)
+        raise HTTPException(502, PINNED_BROKEN)
     info = _certificate_info(der)
     if not sha256 or _hex(sha256) != _hex(info["sha256"]):
         raise HTTPException(409, {"code": "certificate", "message": CERT_WORDS, **info})
@@ -336,7 +353,7 @@ async def _errors(acc):
         raise HTTPException(422, {"code": "unlisted", "message": upstream.refused_words(e, acc)}) from None
     except (httpx.HTTPError, owui_tokens.Unavailable, OSError, TimeoutError) as e:
         if _untrusted(e):
-            await _confirm(acc, None)          # без отпечатка — всегда 409 с отпечатком нынешнего сертификата
+            await _confirm(acc, None, acc.cert_pem)    # без отпечатка — всегда отказ: 409 с отпечатком нынешнего
         log.info("owui %s: Open WebUI недоступен (%s)", acc.id, type(e).__name__)
         raise HTTPException(503, OFFLINE) from None
 
@@ -351,14 +368,25 @@ def _refused(acc, response: httpx.Response) -> None:
 
 # ---- запросы к Open WebUI ------------------------------------------------------------------------------------------
 
+async def _rejected(acc, path: str, token: str) -> bool:
+    """401 — отказ токену, а не ресурсу. Open WebUI 0.13.4 на чужой и несуществующий чат тоже отвечает 401
+    (`routers/chats.py`): обновлять пару на каждый такой ответ — тратить ротацию и предел сессий Open WebUI на адрес.
+    Поэтому тот же токен сверяется `CHECK_PATH` (не под пределом сессий); 401 самого `CHECK_PATH` — уже отказ токену."""
+    if path == CHECK_PATH:
+        return True
+    check = await upstream.request(acc, "GET", acc.base_url + CHECK_PATH, auth=f"Bearer {token}", timeout=TIMEOUT_SEC)
+    return check.status_code == 401
+
+
 async def call(acc, method: str, path: str, *, timeout: float = TIMEOUT_SEC, **kw) -> httpx.Response:
-    """Запрос к Open WebUI учётки рабочим токеном. 401 — обновить токен (если его ещё не обновил параллельный
-    вызов) и повторить один раз. Отказы: 409 `relogin`, 422 `unlisted`, 409 `certificate`, 503 `owui_offline`."""
+    """Запрос к Open WebUI учётки рабочим токеном. 401 при отвергнутом токене (`_rejected`) — обновить токен (если
+    его ещё не обновил параллельный вызов) и повторить один раз; 401 ресурса возвращается как есть.
+    Отказы: 409 `relogin`, 422 `unlisted`, 409 `certificate`, 503 `owui_offline`."""
     url = acc.base_url + path
     async with _errors(acc):
         token = await owui_tokens.access(acc)
         response = await upstream.request(acc, method, url, auth=f"Bearer {token}", timeout=timeout, **kw)
-        if response.status_code == 401:
+        if response.status_code == 401 and await _rejected(acc, path, token):
             token = await owui_tokens.renew(acc, force=True, stale=token)
             response = await upstream.request(acc, method, url, auth=f"Bearer {token}", timeout=timeout, **kw)
         return response
@@ -440,7 +468,7 @@ def _attempt(uid: int):
     try:
         yield
     except HTTPException as e:
-        failed = isinstance(e.detail, dict) and e.detail.get("code") == "login"
+        failed = isinstance(e.detail, dict) and e.detail.get("code") == "owui_login"
         if failed:
             log.info("пользователь %d: вход в Open WebUI отклонён", uid)
         raise
@@ -607,7 +635,8 @@ class _Relay(StreamingResponse):
 
 
 async def _open(acc, path: str, stack: AsyncExitStack) -> httpx.Response:
-    """Потоковый `GET` рабочим токеном, как `call` (401 — одно обновление и повтор); соединение — в `stack`."""
+    """Потоковый `GET` рабочим токеном, как `call` (401 отвергнутого токена — одно обновление и повтор); соединение —
+    в `stack`."""
     url = acc.base_url + path
     async with _errors(acc):
         token = await owui_tokens.access(acc)
@@ -619,6 +648,8 @@ async def _open(acc, path: str, stack: AsyncExitStack) -> httpx.Response:
                 stack.push_async_callback(opened.aclose)
                 return response
             await opened.aclose()
+            if not await _rejected(acc, path, token):        # файла нет или он чужой: ответ уже закрыт, нужен код
+                return response
             token = await owui_tokens.renew(acc, force=True, stale=token)
 
 
@@ -707,18 +738,30 @@ def _tool_ids(config: dict, meta: dict, ui: dict) -> list[str]:
     return [i for i in ids if enabled.get("enable_tool_servers" if i.startswith("server:") else "enable_tools")]
 
 
+async def _chat_files(acc, chat: str | None, parent: str | None) -> list[dict]:
+    """Прежние документы чата для `files` продолжения (`owui_view.chat_files`); новый чат — `[]`. Open WebUI
+    перезаписывает `chat.files` присланным `files` и ищет по документам только в них (`main.py`, `middleware.py`)."""
+    if chat is None or parent is None:
+        return []
+    response = await call(acc, "GET", f"/api/v1/chats/{chat}")
+    _cut_status(acc, response, NO_CHAT)
+    return _view(acc, lambda raw: owui_view.chat_files(raw, parent), _ok(acc, response, dict))
+
+
 async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tuple[str | None, str, bool]:
     """Серверный ход Open WebUI 0.13 (`main.py::chat_completion`): сообщение и ответ с id Студии, `session_id` сокета
     Студии (без него Open WebUI не включает встроенные инструменты), историю Open WebUI берёт из своей базы.
+    `files` — прежние документы чата и новые вложения-не-картинки, без повторов (как страница Open WebUI 0.13.4).
     → (id чата, id ответа, в очереди ли)."""
     model = body.model.strip()
     text = body.text
     if not text.strip() and not body.files:
         raise HTTPException(422, EMPTY)
     sid = await owui_link.ensure(acc)
-    config_r, settings_r, models_r, *items = await asyncio.gather(
+    config_r, settings_r, models_r, previous, *items = await asyncio.gather(
         call(acc, "GET", "/api/config"), call(acc, "GET", "/api/v1/users/user/settings"),
-        call(acc, "GET", "/api/models"), *(_attachment(acc, file_id) for file_id in body.files))
+        call(acc, "GET", "/api/models"), _chat_files(acc, chat, parent),
+        *(_attachment(acc, file_id) for file_id in body.files))
     config = _ok(acc, config_r, dict)
     _refused(acc, settings_r)
     settings = upstream.json_body(settings_r) if settings_r.status_code == 200 else {}
@@ -741,9 +784,12 @@ async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tu
     payload = {"stream": True, "model": model, "messages": messages, "tool_ids": _tool_ids(config, meta, ui),
                "features": _features(config, meta, ui), "session_id": sid, "id": answer_id, "parent_id": parent,
                "user_message": user_message}
-    documents_only = [item for item in items if not _raster(item["content_type"])]
-    if documents_only:
-        payload["files"] = documents_only
+    files = {item["id"]: item for item in previous}
+    for item in items:
+        if not _raster(item["content_type"]):
+            files.setdefault(item["id"], item)
+    if files:
+        payload["files"] = list(files.values())
     if chat is None:
         payload["background_tasks"] = {"title_generation": True}
     else:
@@ -771,7 +817,7 @@ async def _send(acc, body: "SendIn", chat: str | None, parent: str | None) -> tu
         owui_link.untrack(acc.id, answer_id)
         raise
     chat = chat or found
-    owui_link.track(acc, chat, answer_id)
+    owui_link.rekey(acc.id, answer_id, chat)       # итог мог прийти раньше ответа POST: кончившийся ход не воскресить
     log.info("owui %d: сообщение отправлено, вложений %d", acc.id, len(items))
     return chat, answer_id, False
 
@@ -852,14 +898,18 @@ async def _upload_body(request: Request) -> bytes:
 async def upload(aid: int, request: Request):
     """Вложение: тело — сам файл до `FILE_MAX`, имя — заголовком `X-Studio-Name` (как `documents`), тип —
     `Content-Type`. Ответ — после обработки Open WebUI (`process/status`: `completed` или `failed`); `failed`
-    страница Open WebUI тоже прикладывает, с предупреждением — Студия отдаёт его признаком `failed`."""
+    страница Open WebUI тоже прикладывает, с предупреждением — Студия отдаёт его признаком `failed`. Картинку
+    страница Open WebUI грузит без обработки (`?process=false`) и не ждёт — так и здесь: её статус остаётся
+    `pending`, а обработка картинки как документа кончается `failed`."""
     acc = load(request.state.user.id, aid)
     data = await _upload_body(request)
     name = documents.clean_name(unquote(request.headers.get("x-studio-name", "")))
     mime = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if not MIME.fullmatch(mime):
         mime = "application/octet-stream"
-    response = await call(acc, "POST", "/api/v1/files/", files={"file": (name, data, mime)}, timeout=UPLOAD_SEC)
+    image = _raster(mime)
+    response = await call(acc, "POST", "/api/v1/files/?process=false" if image else "/api/v1/files/",
+                          files={"file": (name, data, mime)}, timeout=UPLOAD_SEC)
     if response.status_code == 413:
         raise HTTPException(413, TOO_LARGE)
     _cut_status(acc, response, NO_FILE)
@@ -867,8 +917,8 @@ async def upload(aid: int, request: Request):
     if not isinstance(file_id, str) or not OWUI_ID.fullmatch(file_id):
         log.warning("owui %d: ответ загрузки без id", acc.id)
         raise shape_error(acc)
-    deadline = clock.NOW() + FILE_WAIT_SEC
-    while True:
+    deadline, stage = clock.NOW() + FILE_WAIT_SEC, "completed"
+    while not image:
         status = await call(acc, "GET", f"/api/v1/files/{file_id}/process/status")
         _cut_status(acc, status, NO_FILE)
         stage = _ok(acc, status, dict).get("status")
@@ -879,7 +929,7 @@ async def upload(aid: int, request: Request):
             raise HTTPException(504, FILE_SLOW)
         await clock.SLEEP(FILE_POLL_SEC)
     log.info("owui %d: файл загружен, байт %d%s", acc.id, len(data), ", обработка не удалась" if stage == "failed" else "")
-    found = {"id": file_id, "name": name, "kind": "image" if _raster(mime) else "file"}
+    found = {"id": file_id, "name": name, "kind": "image" if image else "file"}
     return {**found, "failed": True} if stage == "failed" else found
 
 
@@ -997,20 +1047,30 @@ async def relogin(aid: int, body: LoginIn, request: Request):
     uid = request.state.user.id
     row = _row(uid, aid)
     acc, who = _account(row), _who(row)
+    known = who.get("owui_user_id")
+    email = (who.get("email") or "") if known else " ".join((body.email or "").split())
+    if not known and not email:                # сохранённое не читается: email спросить, неудачей входа это не считать
+        raise HTTPException(422, NEED_EMAIL)
     with _attempt(uid):
         async with _errors(acc):
             acc = await _config_trusting(acc, None)
-            found = await _signin(acc, who.get("email") or "", body.password)
-            if found["id"] != who.get("owui_user_id"):
+            found = await _signin(acc, email, body.password)
+            if known and found["id"] != known:
                 raise HTTPException(409, OTHER_USER)
+            if not known and _duplicate(uid, acc.base_url, found["id"], skip=aid):
+                raise HTTPException(409, EXISTS)
             issue = await _session(acc, found["token"])
     try:
         old = owui_tokens.load(aid).session_id
-    except (KeyError, InvalidToken, TypeError, ValueError):
+    except (KeyError, owui_tokens.Relogin):    # долгий токен не читается — прежнюю сессию не отозвать
         old = None
     async with owui_tokens.LOCKS.setdefault(aid, asyncio.Lock()):      # идущее обновление прежней пары — до записи
         now = clock.NOW()
         owui_tokens.save(aid, owui_tokens.Secret(issue["session_id"], issue["refresh_token"], None))
+        if not known:
+            fresh = {"owui_user_id": found["id"], "name": found.get("name"), "email": found.get("email")}
+            state.DB.execute("UPDATE owui_accounts SET who_enc = ? WHERE id = ?",
+                             (security.encrypt(json.dumps(fresh)), aid))
         owui_tokens.TOKENS[aid] = (issue["token"], now + owui_tokens.TOKEN_SEC)
         state.DB.execute("UPDATE owui_accounts SET state = 'ok', version = ?, used = ? WHERE id = ?",
                          (acc.version, now, aid))

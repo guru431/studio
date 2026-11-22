@@ -1,0 +1,23 @@
+{
+ "jsonrpc": "2.0",
+ "id": 0,
+ "method": "session/request_permission",
+ "params": {
+  "sessionId": "85219569-668b-433d-b4bf-853d2acbfa59",
+  "toolCall": {
+   "toolCallId": "call_probe_7"
+  },
+  "options": [
+   {
+    "optionId": "allow-once",
+    "name": "Allow once",
+    "kind": "allow_once"
+   },
+   {
+    "optionId": "reject-once",
+    "name": "Reject",
+    "kind": "reject_once"
+   }
+  ]
+ }
+}

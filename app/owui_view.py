@@ -8,6 +8,7 @@
 - `chat_item` — строка списка чатов; `folder_item`, `model_item` — папка и модель.
 - `branch` — текущая ветка чата: от `currentId` по `parentId`, не больше числа сообщений чата; цикл и пропавший
   родитель — конец ветки, не исключение. Ответ — `{id, title, models, folder_id, messages}`.
+- `chat_files` — прежние документы чата для `files` продолжения (Open WebUI перезаписывает ими `chat.files`).
 - Неожиданная форма (нет ключа, список вместо объекта, ветка без текущего сообщения) — `Shape`: маршрут превращает
   её в 502 `owui_shape`. Текст `Shape` — только слова кода, ничего из ответа Open WebUI.
 - Неизвестный элемент `output` — не ошибка: его тип попадает в `other`, страница показывает «элемент <тип>».
@@ -269,6 +270,30 @@ def branch(raw_chat: dict) -> dict:
     return {"id": chat_id, "title": _str(raw_chat.get("title")) or _str(chat.get("title")) or "",
             "models": [m for m in models if isinstance(m, str)] if isinstance(models, list) else [],
             "folder_id": _str(raw_chat.get("folder_id")), "messages": found}
+
+
+def chat_files(raw_chat: dict, parent: str) -> list[dict]:
+    """Документы чата (`chat.files` в `ChatResponse`), которые ещё есть в сообщениях ветки от `parent` к началу, — как
+    их отбирает страница Open WebUI 0.13.4 (`Chat.svelte`: `chatFiles` по `chatMessageFiles`). Элементы — как хранит
+    Open WebUI, без повторов по `id`. Нет `files` или они не списком — `[]`."""
+    chat = _dict(_dict(raw_chat, "chat").get("chat"), "chat body")
+    messages = _dict(_dict(chat.get("history"), "history").get("messages"), "messages")
+    used, seen, current = set(), set(), parent
+    for _ in range(len(messages)):
+        raw = messages.get(current) if current is not None else None
+        if not isinstance(raw, dict) or current in seen:
+            break
+        seen.add(current)
+        files = raw.get("files")
+        if isinstance(files, list):
+            used.update(f["id"] for f in files if isinstance(f, dict) and isinstance(f.get("id"), str))
+        current = _str(raw.get("parentId"))
+    stored = chat.get("files")
+    found: dict[str, dict] = {}
+    for item in stored if isinstance(stored, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"] in used:
+            found.setdefault(item["id"], item)
+    return list(found.values())
 
 
 # ---- события сокета -------------------------------------------------------------------------------------------------

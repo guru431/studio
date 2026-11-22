@@ -36,7 +36,7 @@ def test_language_choice_persists_across_login_sections_and_reload(browser, live
     ]
     sections = [('photo', 'Photos'), ('video', 'Video'), ('speech', 'Speech'),
                 ('transcribe', 'Transcription'), ('ocr', 'Scans'), ('translate', 'Translation'),
-                ('code', 'Agents'), ('search', 'Search'), ('settings', 'Settings'), ('admin', 'Administration')]
+                ('owui', 'Open WebUI'), ('code', 'Agents'), ('search', 'Search'), ('settings', 'Settings'), ('admin', 'Administration')]
     for section, name in sections:
         steps += [*go(section), ('wait', f"document.title === {json.dumps(name + ' — Studio')} && !document.querySelector('#view').inert"),
                   ('eval', f'overflow-{section}', 'document.documentElement.scrollWidth > innerWidth')]

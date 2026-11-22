@@ -1,9 +1,8 @@
 """Проверка расширений ACP OpenCode; содержимое остаётся только в памяти хода."""
 
-import math
 import re
 
-from . import events, permissions
+from . import events
 
 SESSION_ID = re.compile(r"ses_[A-Za-z0-9_-]{1,200}")
 
@@ -42,24 +41,6 @@ def commands(update):
     return [{'name': row['name'], 'description': events.clip(str(row.get('description') or ''), 300)}
             for row in rows[:100] if isinstance(row, dict) and isinstance(row.get('name'), str)
             and re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', row['name'])]
-
-
-def usage(raw):
-    if not isinstance(raw, dict):
-        return None
-    return permissions.token_usage({**raw, 'reasoningOutputTokens': raw.get('thoughtTokens')})
-
-
-def context(update, previous=None):
-    current = permissions.context(update.get('used'), update.get('size'))
-    if current is None:
-        return previous
-    current = {**(previous or {}), **current}
-    cost = update.get('cost')
-    if (isinstance(cost, dict) and type(cost.get('amount')) in (int, float)
-            and math.isfinite(cost['amount']) and cost['amount'] >= 0 and cost.get('currency') == 'USD'):
-        current['cost'] = {'amount': cost['amount'], 'currency': 'USD'}
-    return current
 
 
 def status(update):

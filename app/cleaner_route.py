@@ -1,4 +1,4 @@
-"""Шлюз Cleaner для внешних моделей (шаг схемы 64): настройки администратора и самопроверка.
+"""Шлюз Cleaner для внешних моделей (шаг схемы 66): настройки администратора и самопроверка.
 
 - Настройки — один JSON шифром `STUDIO_DATA_KEY` в `settings[SETTINGS_KEY]`: адрес Cleaner, служебный ключ и флажок
   «Cleaner для всех внешних моделей». Ключ в браузер не отдаётся; после смены `STUDIO_DATA_KEY` настройки не
@@ -62,11 +62,11 @@ CHECK_PATH = AGENT_PATH + "/cleaner/check"
 CHECK_TIMEOUT = httpx.Timeout(30, connect=10)
 URL_MAX = 2048
 
-#: Перед откатом на код схемы 63 (столбца `via_cleaner` он не знает и отправил бы ход такого подключения провайдеру
+#: Перед откатом на код схемы 65 (столбца `via_cleaner` он не знает и отправил бы ход такого подключения провайдеру
 #: напрямую), служба остановлена: ключ подключения через Cleaner сохраняется в `cleaner_rollback` и портится — прежний
 #: код отвечает «токен не расшифрован», прямой отправки нет. Повторный запуск сохранённое не затирает. Принудительный
 #: режим прежний код не соблюдает: администратор решает, отключать ли внешние подключения.
-ROLLBACK_64 = """BEGIN;
+ROLLBACK_66 = """BEGIN;
 INSERT OR IGNORE INTO cleaner_rollback(connection_id, token_enc)
   SELECT id, token_enc FROM connections WHERE via_cleaner = 1 AND token_enc != X'00';
 UPDATE connections SET token_enc = X'00' WHERE id IN (SELECT connection_id FROM cleaner_rollback);
@@ -75,7 +75,7 @@ COMMIT;
 
 #: После возврата вперёд (выполняет `forward` при старте службы): ключи из `cleaner_rollback`. Ключ, введённый заново
 #: прежним кодом, не затирается.
-FORWARD_64 = """BEGIN;
+FORWARD_66 = """BEGIN;
 UPDATE connections SET token_enc = (SELECT b.token_enc FROM cleaner_rollback b WHERE b.connection_id = connections.id)
  WHERE token_enc = X'00' AND id IN (SELECT connection_id FROM cleaner_rollback);
 DELETE FROM cleaner_rollback;
@@ -84,10 +84,10 @@ COMMIT;
 
 
 def forward() -> None:
-    """При старте службы: работает новый код — значит, мы снова впереди отката; `FORWARD_64`, если есть что вернуть."""
+    """При старте службы: работает новый код — значит, мы снова впереди отката; `FORWARD_66`, если есть что вернуть."""
     count = state.DB.execute("SELECT count(*) FROM cleaner_rollback").fetchone()[0]
     if count:
-        state.DB.executescript(FORWARD_64)
+        state.DB.executescript(FORWARD_66)
         log.info("cleaner: после отката возвращено ключей %d", count)
 
 

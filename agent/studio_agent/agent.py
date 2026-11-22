@@ -24,6 +24,13 @@ VERSION = re.compile(r"[0-9a-f]{64}")
 TURN_TEXT_MAX = 100_000
 PIN_FIELD_MAX = 64
 ASK_KINDS = ("permission", "question")  # виды карточек, досылаемых после обрыва (протокол §18)
+NAMES = {"codex": "Codex", "opencode": "OpenCode", "deepseek": "DeepSeek Harness"}  # слова отказов о помощниках
+
+
+def _unavailable(backend) -> str | None:
+    """Слова причины недоступности помощника (`DeepSeekRunner.unavailable_message`: Node старше нужного)."""
+    message = getattr(backend, "unavailable_message", None)
+    return message if isinstance(message, str) else None
 
 # Поля просьбы по op (кроме `open`); вид каждого поля — `Agent._field`.
 OPS = {
@@ -46,8 +53,8 @@ OPS = {
     "project_create": ("root", "name"),
     "mirror_identity": ("project",),
     "mirror_candidates": ("name", "repositories"),
-    "mirror_scan": ("project", "exclude"),
-    "mirror_destination": ("root", "name", "metadata_only", "exclude"),
+    "mirror_scan": ("project", "exclude", "reasons"),
+    "mirror_destination": ("root", "name", "metadata_only", "exclude", "reasons"),
     "mirror_read": ("project",),
     "mirror_text": ("root", "name", "path"),
     "mirror_begin": ("root", "name", "ticket"),
@@ -123,12 +130,13 @@ class Agent:
 
     def __init__(self, cfg: store.Config, pins: PinStore, runner: Runner, *, now: Callable[[], float] = host.awake_clock(),
                  cc_version: str, models: list[dict], efforts: list[str], has_pin: bool | None = None, codex=None,
-                 opencode=None, wall: Callable[[], float] = time.time):
+                 opencode=None, deepseek=None, wall: Callable[[], float] = time.time):
         self.cfg = cfg
         self.pins = pins
         self.runner = runner
         self.codex = codex
         self.opencode = opencode
+        self.deepseek = deepseek
         self.updater = None
         self._software_requests = 0
         self.restart_blocking_requests = 0
@@ -167,7 +175,7 @@ class Agent:
     def set_max_turns(self, value: int) -> None:
         """Общий предел и пределы помощников меняются вместе, уже идущие задания продолжаются."""
         self.cfg.max_turns = value
-        for backend in (self.runner, self.codex, self.opencode):
+        for backend in (self.runner, self.codex, self.opencode, self.deepseek):
             if backend is not None:
                 backend.max_turns = value
 
@@ -184,17 +192,18 @@ class Agent:
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                  "git_compare": True,
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
-                 "project_mirror_discovery": True, "mirror_exclude": True,
+                 "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
                  "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
-                 "codex_models": True, "opencode_models": self.opencode is not None}
+                 "codex_models": True, "opencode_models": self.opencode is not None,
+                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True}
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
             hello["defaults"] = defaults
-        for name in ("codex", "opencode"):
+        for name in ("codex", "opencode", "deepseek"):
             backend = getattr(self, name)
             if backend is not None and backend.catalog is not None:
                 hello[name] = backend.catalog
@@ -388,14 +397,13 @@ class Agent:
                 isinstance(frame["window"], str) and SESSION.fullmatch(frame["window"])):
             raise Refused("invalid")
         engine = frame.get("engine", "claude")
-        if engine not in ("claude", "codex", "opencode"):
+        if engine not in ("claude", "codex", "opencode", "deepseek"):
             raise Refused("invalid")
         if (op == "usage_reset" and engine != "codex") or (op == "models" and engine == "claude"):
             raise Refused("invalid")
         backend = self._runner(frame)
         if engine != "claude" and (backend is None or (backend.catalog is None and op != "models")):
-            label = "Codex" if engine == "codex" else "OpenCode"
-            raise Refused("unsupported", f"{label} не найден на компьютере")
+            raise Refused("unsupported", _unavailable(backend) or f"{NAMES[engine]} не найден на компьютере")
         for name in OPS[op]:
             if name == "access" and not permissions.valid(engine, frame.get(name)):
                 raise Refused("invalid")
@@ -476,8 +484,9 @@ class Agent:
         backend = self._runner(frame)
         async with asyncio.timeout(24):
             if not await backend.probe(self.cfg.projects_root):
-                name = "Codex" if engine == "codex" else "OpenCode"
-                raise Refused("busy", f"Не удалось обновить модели {name} — повторите позже")
+                if message := _unavailable(backend):
+                    raise Refused("unsupported", message)
+                raise Refused("busy", f"Не удалось обновить модели {NAMES[engine]} — повторите позже")
         return {engine: backend.catalog}
 
     async def _op_computer_info(self, frame, after):
@@ -524,14 +533,14 @@ class Agent:
         if name == "idempotency_key":
             return isinstance(value, str) and limits.CHAT_ID.fullmatch(value) is not None
         if name == 'software':
-            return value in ('claude', 'codex', 'opencode', 'all')
+            return value in ('claude', 'codex', 'opencode', 'deepseek', 'all')
         if name == "source":
             return visualizations.valid_source(value)
         if name == "operation":
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
             return True
-        if name in ("refresh", "remote", "code_size", "metadata_only"):
+        if name in ("refresh", "remote", "code_size", "metadata_only", "reasons"):
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
@@ -558,7 +567,7 @@ class Agent:
             return value is None or value in self.efforts
         if name == "access":
             return value is None or isinstance(value, str) and value in (
-                *permissions.CLAUDE, *permissions.CODEX, *permissions.OPENCODE)
+                *permissions.CLAUDE, *permissions.CODEX, *permissions.OPENCODE, *permissions.DEEPSEEK)
         if name == "version":
             if op == "queue_edit":
                 return type(value) is int and value >= 1
@@ -623,17 +632,19 @@ class Agent:
         return {"items": await asyncio.to_thread(projects.list_roots, self.cfg)}
 
     async def _op_mirror_identity(self, frame, after):
-        return await asyncio.to_thread(mirror.identity, await self._project(frame))
+        return await asyncio.to_thread(mirror.identity, self.cfg, await self._project(frame))
 
     async def _op_mirror_candidates(self, frame, after):
         return await asyncio.to_thread(mirror.candidates, self.cfg, frame["name"], frame["repositories"])
 
     async def _op_mirror_scan(self, frame, after):
-        return await asyncio.to_thread(mirror.scan, await self._project(frame), frame.get("exclude") or ())
+        return await asyncio.to_thread(mirror.scan, await self._project(frame), frame.get("exclude") or (),
+                                       frame.get("reasons") is True)
 
     async def _op_mirror_destination(self, frame, after):
         return await asyncio.to_thread(mirror.destination, self.cfg, frame["root"], frame["name"],
-                                       metadata_only=frame.get("metadata_only"), exclude=frame.get("exclude") or ())
+                                       metadata_only=frame.get("metadata_only"), exclude=frame.get("exclude") or (),
+                                       reasons=frame.get("reasons") is True)
 
     async def _op_mirror_read(self, frame, after):
         return await asyncio.to_thread(mirror.read, await self._project(frame), frame.get("reads"))
@@ -715,6 +726,8 @@ class Agent:
         return await asyncio.to_thread(worktrees.create, await self._project(frame), self.cfg, frame["query"])
 
     async def _op_chat_fork(self, frame, after):
+        if frame.get("engine") == "deepseek":
+            raise Refused("unsupported")
         project = await self._project(frame)
         runner = self._runner(frame)
         key = (frame.get("engine", "claude"), frame["chat"])
@@ -754,6 +767,8 @@ class Agent:
             raise
 
     async def _op_subagents(self, frame, after):
+        if frame.get("engine") == "deepseek":
+            raise Refused("unsupported")
         project = await self._project(frame)
         if frame.get("engine") == "codex":
             return await self.codex.subagents(project, frame["chat"])
@@ -763,6 +778,8 @@ class Agent:
                                        live=self.runner.children(frame["project"], frame["chat"]))
 
     async def _op_subagent_history(self, frame, after):
+        if frame.get("engine") == "deepseek":
+            raise Refused("unsupported")
         project = await self._project(frame)
         if frame.get("engine") == "codex":
             return await self.codex.subagent_history(project, frame["chat"], frame["request_id"])
@@ -785,7 +802,7 @@ class Agent:
                         catalog += await asyncio.wait_for(asyncio.to_thread(sessions.chats, project, self.runner.live()), 4)
                     except Exception:
                         complete = False
-                    for name in ("codex", "opencode"):
+                    for name in ("codex", "opencode", "deepseek"):
                         backend = getattr(self, name)
                         if backend is not None and backend.catalog is not None:
                             try:
@@ -806,7 +823,8 @@ class Agent:
 
     async def _op_activity(self, frame, after):
         items = []
-        for engine, runner in (("claude", self.runner), ("codex", self.codex), ("opencode", self.opencode)):
+        for engine, runner in (("claude", self.runner), ("codex", self.codex), ("opencode", self.opencode),
+                              ("deepseek", self.deepseek)):
             if runner is not None:
                 items.extend({**item, "engine": engine} for item in runner.activity())
         return {"items": items}
@@ -836,7 +854,7 @@ class Agent:
             except Exception as e:
                 log.warning("%s: сессии: %s", name, type(e).__name__)
                 return [], False
-        backends = [("claude", self.runner), ("codex", self.codex), ("opencode", self.opencode)]
+        backends = [("claude", self.runner), ("codex", self.codex), ("opencode", self.opencode), ("deepseek", self.deepseek)]
         parts = await asyncio.gather(*(read(name, backend) for name, backend in backends
                                       if backend is not None and (name == 'claude' or backend.catalog is not None)))
         return {"items": [item for rows, _ in parts for item in rows], "complete": all(ok for _, ok in parts)}
@@ -861,7 +879,7 @@ class Agent:
                                        index=self._histories)
 
     def _runner(self, frame):
-        return {"codex": self.codex, "opencode": self.opencode}.get(frame.get("engine"), self.runner)
+        return {"codex": self.codex, "opencode": self.opencode, "deepseek": self.deepseek}.get(frame.get("engine"), self.runner)
 
     async def _op_usage(self, frame, after):
         return await self._usage.read(frame.get("engine", "claude"), self.cfg.projects_root,
@@ -918,7 +936,8 @@ class Agent:
         # Между проверками и start нет await: ветвление резервирует исходный чат на всё копирование.
         if (frame.get("engine", "claude"), frame["chat"]) in self._forking:
             raise Refused("running", "Дождитесь завершения ветвления чата")
-        total = sum(len(backend.live()) for backend in (self.runner, self.codex, self.opencode) if backend is not None)
+        total = sum(len(backend.live()) for backend in (self.runner, self.codex, self.opencode, self.deepseek)
+                    if backend is not None)
         if frame["chat"] not in runner.live() and total >= self.cfg.max_turns:
             raise Refused("busy")
         return {"turn": runner.start(project, frame["project"], frame["chat"], frame["text"],

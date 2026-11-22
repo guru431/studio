@@ -3,6 +3,7 @@
 import logging
 import time
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -177,3 +178,32 @@ def test_offline_server_answers_503_quickly_and_studio_still_works(setup):
     assert time.perf_counter() - started < owui.TIMEOUT_SEC
     assert s.c.get("/api/me").status_code == 200
     assert s.c.get(BASE).status_code == 200
+
+
+def test_missing_chat_does_not_spend_token_rotation(setup):
+    """Ревью I1: Open WebUI 0.13.4 на чужой и несуществующий чат отвечает 401 — это не отказ токену: Студия сверяет
+    тот же токен `GET /api/v1/auths/` и пару не обновляет (ротация и предел сессий Open WebUI на адрес целы)."""
+    s, fake, aid = setup
+    for _ in range(10):
+        r = s.c.get(f"{BASE}/{aid}/chats/missing")
+        assert r.status_code == 404 and r.json()["detail"]["code"] == "not_found"
+    assert fake.refreshes == 0
+    fake.expire_tokens()                       # а отвергнутый токен — ровно одно обновление
+    assert s.c.get(f"{BASE}/{aid}/chats/missing").status_code == 404 and fake.refreshes == 1
+
+
+def test_silent_server_ends_in_503_within_request_limit(setup):
+    """Ревью M3: молчащий Open WebUI — каждый запрос со сроком не больше `owui.TIMEOUT_SEC`, истечение — 503
+    `owui_offline` (MockTransport сроки не соблюдает: молчание — его исключение)."""
+    s, fake, aid = setup
+    limits = []
+
+    async def silent(request):
+        limits.append(request.extensions["timeout"])
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    s.gw.hosts[FakeOwui.ENTRY] = silent
+    for path in ("tree", "models", "chats", "chats/c1", "files/f1", "folders/f/chats"):
+        r = s.c.get(f"{BASE}/{aid}/{path}")
+        assert r.status_code == 503 and r.json()["detail"]["code"] == "owui_offline", path
+    assert limits and all(0 < value <= owui.TIMEOUT_SEC for limit in limits for value in limit.values())

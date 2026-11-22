@@ -123,6 +123,7 @@ def test_vhost_is_public_and_streams_chat():
     assert v.index("ProxyPass /api/videos ") < v.index("ProxyPass / ")
     assert v.index("ProxyPass /api/agent/link ") < v.index("ProxyPass / ")
     assert v.index("ProxyPass /api/code/ ") < v.index("ProxyPass / ")
+    assert v.index("ProxyPass /api/owui/ ") < v.index("ProxyPass / ")
     assert "flushpackets=on" in v and "studio-backend" in v and "localhost" not in re.sub(r"^#.*$", "", v, flags=re.M)
 
 
@@ -142,6 +143,9 @@ def test_vhost_details():
     assert f"ProxyPass /api/code/ unix:{SOCK}|http://studio-backend/api/code/ timeout=600 flushpackets=on" in v
     assert f"ProxyPassReverse /api/code/ unix:{SOCK}|http://studio-backend/api/code/" in v
     assert 'SetEnvIf Request_URI "^/api/code/" no-gzip=1' in v
+    assert f"ProxyPass /api/owui/ unix:{SOCK}|http://studio-backend/api/owui/ timeout=600 flushpackets=on" in v
+    assert f"ProxyPassReverse /api/owui/ unix:{SOCK}|http://studio-backend/api/owui/" in v
+    assert 'SetEnvIf Request_URI "^/api/owui/" no-gzip=1' in v
     assert f"ProxyPass / unix:{SOCK}|http://studio-backend/ timeout=150" in v
     assert f"ProxyPassReverse / unix:{SOCK}|http://studio-backend/" in v
     assert 'RequestHeader set X-Forwarded-Proto "https"' in v
@@ -230,6 +234,16 @@ def test_apache_route_outlasts_the_folder_zip():
     обрывал большие папки 502 Apache, пока служба ещё ждала сервер."""
     import my_files
     assert my_files.ZIP_SEC < _route_timeout("/api/my-files/1/zip")
+
+
+def test_apache_route_carries_the_open_webui_stream_and_attachments():
+    """Раздел «Open WebUI»: поток учётки (SSE, `: ping` каждые owui.PING_SEC) и вложение, которое служба отдаёт после
+    загрузки в Open WebUI и ожидания обработки, — дольше общего маршрута 150 с; тело вложения проходит Apache."""
+    import owui
+    assert _route_timeout("/api/owui/accounts/1/events") == 600 > owui.PING_SEC
+    assert owui.UPLOAD_SEC + owui.FILE_WAIT_SEC < _route_timeout("/api/owui/accounts/1/files")
+    limit = int(re.search(r"^\s*LimitRequestBody (\d+)", uncommented(VHOST), re.M).group(1))
+    assert limit >= owui.FILE_MAX
 
 
 def test_apache_route_outlasts_the_speech_chat_mp3():

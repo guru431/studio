@@ -117,6 +117,46 @@ def test_continue_sends_only_the_new_message(setup):
                     json={"model": "m1", "text": "  ", "parent_id": "a1"}).status_code == 422
 
 
+def test_continue_keeps_earlier_chat_documents_in_files(setup):
+    """Ревью I2: Open WebUI 0.13.4 перезаписывает `chat.files` присланным `files` и ищет по документам только в них —
+    продолжение шлёт прежние документы чата (те, что есть в сообщениях ветки) и новые, без повторов, как страница."""
+    s, fake, aid, _ = setup
+    d1 = {"type": "file", "id": "d1", "url": "d1", "name": "old.pdf", "content_type": "application/pdf"}
+    gone = {"type": "file", "id": "gone", "url": "gone", "name": "x.pdf"}     # сообщения с ним уже нет в ветке
+    chat = fake.add_chat("Docs", models=["m1"], files=[d1, gone], messages=[
+        {"id": "u1", "parentId": None, "role": "user", "content": "read", "files": [d1], "timestamp": 1},
+        {"id": "a1", "parentId": "u1", "role": "assistant", "content": "ok", "done": True, "timestamp": 2}])
+    r = s.c.post(f"{BASE}/{aid}/chats/{chat}/messages", json={"model": "m1", "text": "more", "parent_id": "a1"})
+    assert r.status_code == 200, r.text
+    assert fake.completions[-1]["files"] == [d1]
+    fake.add_file("d2", b"new doc", "text/plain")
+    fake.add_file("p1", b"\x89PNG", "image/png")
+    r = s.c.post(f"{BASE}/{aid}/chats/{chat}/messages",
+                 json={"model": "m1", "text": "and this", "parent_id": "a1", "files": ["d2", "p1", "d2"]})
+    assert r.status_code == 200, r.text
+    assert [f["id"] for f in fake.completions[-1]["files"]] == ["d1", "d2"]   # картинка — только в сообщении
+    assert [f["id"] for f in fake.chats[chat]["files"]] == ["d1", "d2"]       # и страница Open WebUI их не теряет
+
+
+def test_early_end_of_answer_does_not_revive_the_turn(setup):
+    """Ревью M1: итог ответа пришёл раньше ответа POST — ход снят и после POST не возвращается."""
+    s, fake, aid, _ = setup
+    served = fake.handler
+
+    async def handler(request):
+        response = await served(request)
+        if request.url.path == "/api/chat/completions":
+            body = json.loads(request.content)
+            fake.emit_event(json.loads(response.content)["chat_id"], body["id"], ev("chat:completion", {"done": True}))
+            await until(lambda: body["id"] not in owui_link.LINKS[aid].turns, "итог разобран")
+        return response
+
+    s.gw.hosts[FakeOwui.ENTRY] = handler
+    r = s.c.post(f"{BASE}/{aid}/chats", json={"model": "m1", "text": "x"})
+    assert r.status_code == 201, r.text
+    assert owui_link.LINKS[aid].turns == {}
+
+
 def test_approval_mode_full_is_never_sent(setup):
     s, fake, aid, _ = setup
     seen = {}
@@ -228,9 +268,15 @@ def test_upload_waits_for_processing_and_limits_size(setup, monkeypatch):
     assert body == {"id": body["id"], "name": "отчёт.txt", "kind": "file"}
     assert fake.files[body["id"]] == ("text/plain", b"report body") and fake.file_names[body["id"]] == "отчёт.txt"
     assert s.sleeps[sleeps:] == [owui.FILE_POLL_SEC, owui.FILE_POLL_SEC]  # ждал, пока Open WebUI обработает
+    sleeps = len(s.sleeps)
     picture = s.c.post(f"{BASE}/{aid}/files", content=b"\x89PNG", headers={"X-Studio-Name": "p.png",
                                                                           "Content-Type": "image/png"}).json()
-    assert picture["kind"] == "image"
+    # картинку страница Open WebUI грузит без обработки (`process=false`) и не ждёт: её статус так и остаётся
+    # `pending` — опрос ждал бы FILE_WAIT_SEC и отвечал 504 (живая приёмка 2026-11-22: обработка картинки — `failed`)
+    assert picture == {"id": picture["id"], "name": "p.png", "kind": "image"}
+    upload = next(r for r in reversed(fake.requests) if r.method == "POST" and r.url.path == "/api/v1/files/")
+    assert upload.url.params.get("process") == "false" and s.sleeps[sleeps:] == []
+    assert not any(r.url.path == f"/api/v1/files/{picture['id']}/process/status" for r in fake.requests)
     # вложения уходят с сообщением: картинка — только в сообщении, документ — ещё и в `files` запроса
     assert s.c.post(f"{BASE}/{aid}/chats", json={"model": "m1", "text": "see", "files": [body["id"], picture["id"]]}
                     ).status_code == 201

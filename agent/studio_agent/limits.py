@@ -42,5 +42,6 @@ HOSTS = {
     "claude_releases": "downloads.claude.ai",      # версия Claude Code (macOS)
     "anthropic": "api.anthropic.com",              # лимиты подписки Claude, OAuth-токен Claude Code
     "opencode": "opencode.ai",                     # лимиты OpenCode Go, ключ OpenCode
+    "deepseek": "api.deepseek.com",                # баланс DeepSeek, ключ DeepSeek
     "github": "github.com",                        # анонимная проверка публичной копии проекта
 }

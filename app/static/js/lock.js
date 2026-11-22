@@ -558,10 +558,12 @@ function waitOpen(lockNow = null, knownState = null, forced = false) {
   return waiting.promise;
 }
 
-/** Картинки и плееры /api/media/…, получившие 423 во время блокировки (они идут мимо api.js), — заново. */
+/** Картинки и плееры /api/media/… и файлы «Open WebUI» (/api/owui/…), получившие 423 во время блокировки (они идут
+ * мимо api.js), — заново. */
 function reloadMedia() {
   for (const node of document.querySelectorAll('img, video, audio')) {
-    if (!(node.getAttribute('src') || '').startsWith('/api/media/')) continue;
+    const src = node.getAttribute('src') || '';
+    if (!src.startsWith('/api/media/') && !src.startsWith('/api/owui/')) continue;
     if (node instanceof HTMLImageElement) {
       if (node.complete && node.naturalWidth === 0) node.src = node.getAttribute('src');
     } else if (node.error) node.load();

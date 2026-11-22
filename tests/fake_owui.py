@@ -15,7 +15,8 @@
 `add_chat`, `add_folder`, `add_model`, `add_file`; `raw_chat[id]` подменяет тело ответа `GET /api/v1/chats/{id}`.
 
 Отправка (формы — по Open WebUI v0.13.4, `main.py`, `utils/tool_approval.py`, `routers/files.py`):
-`POST /api/chat/completions` (тело — в `completions`; новый чат создаётся сам; `queue_next` — ответ `{queued: true}`),
+`POST /api/chat/completions` (тело — в `completions`; новый чат создаётся сам; сообщение и пустой ответ — в историю,
+`finish` — ответ готов; `queue_next` — ответ `{queued: true}`),
 `POST /api/tasks/chat/{id}/stop` (`stopped`), `POST /api/v1/chats/{id}/messages/{mid}/resolve` (`resolved`; повтор
 того же вызова — 409), `POST /api/v1/files/` (multipart, поле `file`), `GET /api/v1/files/{id}/process/status`
 (статусы по очереди из `processing`), `GET /api/v1/files/{id}`, `GET /api/v1/users/user/settings` (`{ui: user_settings}`).
@@ -137,6 +138,7 @@ class FakeOwui:
         self.sockets: list[FakeSocket] = []
         self.ws_targets: list = []         # `upstream.WsTarget` каждого соединения сокета
         self.ws_headers: list[dict] = []
+        self.ping_ms = (25000, 20000)      # `pingInterval`, `pingTimeout` пакета открытия, мс
         # отправка
         self.completions: list[dict] = []  # тела `POST /api/chat/completions` по порядку
         self.queue_next = False            # в чате идёт ответ: сообщение ставится в очередь
@@ -161,8 +163,8 @@ class FakeOwui:
         self.ws_headers.append(dict(headers))
         sock = FakeSocket(self)
         self.sockets.append(sock)
-        sock.push("0" + json.dumps({"sid": f"eio-{next(self._ids)}", "upgrades": [], "pingInterval": 25000,
-                                    "pingTimeout": 20000, "maxPayload": 1000000}))
+        sock.push("0" + json.dumps({"sid": f"eio-{next(self._ids)}", "upgrades": [], "pingInterval": self.ping_ms[0],
+                                    "pingTimeout": self.ping_ms[1], "maxPayload": 1000000}))
         return sock
 
     @property
@@ -224,15 +226,16 @@ class FakeOwui:
     def add_chat(self, title: str = "Chat", *, folder_id: str | None = None, pinned: bool = False,
                  messages: list[dict] | None = None, current_id: str | None = None, models: list[str] | None = None,
                  chat_id: str | None = None, updated_at: int | None = None, active: bool = False,
-                 pending_approval: bool = False) -> str:
-        """Чат; `messages` — сообщения истории (`id`, `parentId`, …), текущее — `current_id` или последнее."""
+                 pending_approval: bool = False, files: list[dict] | None = None) -> str:
+        """Чат; `messages` — сообщения истории (`id`, `parentId`, …), текущее — `current_id` или последнее; `files` —
+        `chat.files` (документы, по которым Open WebUI ищет в ходе)."""
         chat_id = chat_id or f"chat-{next(self._ids)}"
         stamp = int(clock.NOW()) if updated_at is None else updated_at
         self.chats[chat_id] = {"id": chat_id, "title": title, "folder_id": folder_id, "pinned": pinned,
                                "messages": {m["id"]: m for m in messages or []},
                                "current_id": current_id or (messages[-1]["id"] if messages else None),
                                "models": models or [], "created_at": stamp, "updated_at": stamp, "active": active,
-                               "pending_approval": pending_approval}
+                               "pending_approval": pending_approval, "files": list(files or [])}
         return chat_id
 
     def add_folder(self, name: str = "Folder", *, folder_id: str | None = None, parent_id: str | None = None) -> str:
@@ -328,7 +331,7 @@ class FakeOwui:
     def _chat_response(self, chat: dict) -> dict:
         """`ChatResponse` с телом чата, как его хранит Open WebUI: `chat.history.messages` — словарь по id."""
         return {"id": chat["id"], "user_id": self.user_id, "title": chat["title"],
-                "chat": {"title": chat["title"], "models": chat["models"],
+                "chat": {"title": chat["title"], "models": chat["models"], "files": chat["files"],
                          "history": {"messages": chat["messages"], "currentId": chat["current_id"]}},
                 "updated_at": chat["updated_at"], "created_at": chat["created_at"], "share_id": None,
                 "archived": False, "pinned": chat["pinned"], "meta": {}, "variables": {},
@@ -400,6 +403,9 @@ class FakeOwui:
                 chat_id = self.add_chat("New Chat", models=[body.get("model")])
             elif chat_id not in self.chats:
                 return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
+            if body.get("files") is not None:          # как `main.py` 0.13.4: присланное перезаписывает `chat.files`
+                self.chats[chat_id]["files"] = body["files"]
+            self._insert_turn(self.chats[chat_id], body)
             return httpx.Response(200, json={"status": True, "task_ids": [f"task-{next(self._ids)}"], "chat_id": chat_id})
         if path == "/api/v1/files/":
             return self._upload(request)
@@ -408,6 +414,7 @@ class FakeOwui:
             if stop[1] not in self.chats:
                 return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
             self.stopped.append(stop[1])
+            self.chats[stop[1]]["active"] = False
             return httpx.Response(200, json={"status": True, "message": "Stopped"})
         resolve = re.fullmatch(r"/api/v1/chats/([^/]+)/messages/([^/]+)/resolve", path)
         if resolve:
@@ -422,6 +429,26 @@ class FakeOwui:
                                              "task_ids": [f"task-{next(self._ids)}"]})
         return httpx.Response(404, json={"detail": "Not Found"})
 
+    @staticmethod
+    def _insert_turn(chat: dict, body: dict) -> None:
+        """Как Open WebUI 0.13 при серверном ходе: сообщение пользователя и пустой ответ (`done: false`) — в историю
+        чата, ответ — текущий; в чате идёт ответ."""
+        user = body.get("user_message")
+        if not isinstance(user, dict) or not isinstance(user.get("id"), str) or not isinstance(body.get("id"), str):
+            return
+        chat["messages"][user["id"]] = {**user, "parentId": body.get("parent_id")}
+        chat["messages"][body["id"]] = {"id": body["id"], "parentId": user["id"], "childrenIds": [], "role": "assistant",
+                                        "content": "", "model": body.get("model"), "done": False,
+                                        "timestamp": int(clock.NOW())}
+        chat["current_id"] = body["id"]
+        chat["active"] = True
+
+    def finish(self, chat_id: str, message_id: str, text: str = "", **fields) -> None:
+        """Ответ закончен: текст, `done: true` и прочие поля сохранённого сообщения (`output`, `error` …)."""
+        chat = self.chats[chat_id]
+        chat["messages"][message_id].update({"content": text, "done": True, **fields})
+        chat["active"] = False
+
     def _upload(self, request: httpx.Request) -> httpx.Response:
         """multipart с полем `file` — как `routers/files.py::upload_file`: ответ сразу, обработка — потом."""
         boundary = request.headers["content-type"].split("boundary=", 1)[1].encode()
@@ -434,7 +461,9 @@ class FakeOwui:
             file_id = str(uuid.uuid4())
             self.files[file_id] = (mime[1].decode() if mime else "application/octet-stream", data.removesuffix(b"\r\n"))
             self.file_names[file_id] = name
-            self.file_status[file_id] = list(self.processing)
+            # `?process=false` (картинки страницы Open WebUI): обработки нет, статус так и остаётся `pending`
+            unprocessed = request.url.params.get("process") == "false"
+            self.file_status[file_id] = ["pending"] if unprocessed else list(self.processing)
             self.uploads += 1
             return httpx.Response(200, json={"status": True, "id": file_id, "user_id": self.user_id, "filename": name,
                                              "meta": {"name": name, "content_type": self.files[file_id][0],

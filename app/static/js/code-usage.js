@@ -3,7 +3,7 @@ import { locale, message, tr } from './i18n.js';
 import { api, me } from './api.js';
 import { dateTime } from './time.js';
 import { el, openDialog, words } from './ui.js';
-import { ENGINE_NAMES } from './code-options.js';
+import { ENGINE_NAMES, USAGE_BY_MODEL } from './code-options.js';
 
 const number = (n) => Number.isFinite(n) ? n.toLocaleString(locale()) : '—';
 const date = (n) => Number.isFinite(n) ? dateTime(n) : tr("Не сообщается");
@@ -34,17 +34,35 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
     title: tr("Лимиты и статистика подписки"), 'aria-label': tr("Лимиты и статистика подписки"), 'aria-haspopup': 'dialog',
     hidden: shared });
   const remainingText = el('b', { id: 'code-usage-remaining' }, '—');
-  button.append(el('span', {}, tr("Неделя")), remainingText);
+  // У DeepSeek Harness окон лимита нет: вместо недели — баланс DeepSeek по валютам (usage.balance).
+  const balanceMode = engine === 'deepseek';
+  const byModel = USAGE_BY_MODEL.has(engine);
+  button.append(el('span', {}, balanceMode ? tr("Баланс") : tr("Неделя")), remainingText);
   const content = el('div', { class: 'code-usage-content', 'aria-live': 'polite' });
   const close = el('button', { type: 'button', class: 'btn' }, tr("Закрыть"));
   const refresh = el('button', { type: 'button', class: 'btn', id: 'code-usage-refresh' }, tr("Обновить"));
   const reset = el('button', { type: 'button', class: 'btn', id: 'code-usage-reset', hidden: true }, tr("Использовать недельный сброс"));
   const result = el('p', { role: 'status', class: 'small', id: 'code-usage-reset-result' });
   const dialog = el('dialog', { id: 'code-usage-dialog', class: 'dialog code-usage-dialog',
-    'aria-labelledby': 'code-usage-title' }, el('h2', { id: 'code-usage-title' }, tr("{0} · подписка", ENGINE_NAMES[engine])),
+    'aria-labelledby': 'code-usage-title' }, el('h2', { id: 'code-usage-title' },
+    balanceMode ? tr("Баланс DeepSeek") : tr("{0} · подписка", ENGINE_NAMES[engine])),
   content, result, el('div', { class: 'actions' }, reset, refresh, close));
   host.append(dialog);
   close.addEventListener('click', () => dialog.close());
+  function paintBalance(balance) {
+    const items = balance?.available && Array.isArray(balance.items) ? balance.items : [];
+    const first = items.find((item) => Number.isFinite(item.total));
+    remainingText.textContent = first ? `${number(first.total)} ${first.currency}` : '—';
+    button.dataset.level = !first ? 'unknown' : first.total > 0 ? 'green' : 'red';
+    button.title = first ? tr("Баланс DeepSeek: {0} {1}", number(first.total), first.currency)
+      : tr("Баланс DeepSeek не сообщается");
+    button.setAttribute('aria-label', button.title);
+    return el('section', { class: 'code-balance', 'aria-label': tr("Баланс DeepSeek") }, ...(items.length
+      ? items.map((item) => el('div', { class: 'code-quota', 'data-currency': item.currency },
+        el('div', { class: 'code-quota-head' }, el('b', {}, item.currency), el('span', {}, number(item.total))),
+        el('p', { class: 'muted small' }, tr("Подарено: {0} · пополнено: {1}", number(item.granted), number(item.topped_up)))))
+      : [el('p', { class: 'muted' }, message(balance?.reason || tr("Баланс DeepSeek не сообщается")))]));
+  }
   function paint(data) {
     const week = (Array.isArray(data.windows) ? data.windows : []).find((w) => w.id === 'seven_day' || w.window_minutes === 10080);
     const remaining = week?.available && Number.isFinite(week.remaining_percent) ? week.remaining_percent : null;
@@ -53,7 +71,7 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
     button.title = remaining === null ? tr("Недельный лимит не сообщается · Подробности подписки")
       : tr("Недельный лимит: осталось {0}% · сброс: {1}", number(remaining), date(week.resets_at));
     button.setAttribute('aria-label', button.title);
-    const windows = (Array.isArray(data.windows) ? data.windows : []).map((w) => {
+    const windows = balanceMode ? [paintBalance(data.balance)] : (Array.isArray(data.windows) ? data.windows : []).map((w) => {
       const remaining = w.available && Number.isFinite(w.remaining_percent) ? w.remaining_percent : null;
       const meter = el('meter', { min: '0', max: '100', value: remaining ?? 0, hidden: remaining === null,
         'aria-label': tr("{0}: осталось {1}%", message(w.label), number(remaining)) });
@@ -109,8 +127,8 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
   /** passive — обновление после конца задания, не по действию владельца: срок PIN компьютера не продлевает. */
   async function load(fresh = false, passive = false) {
     if (shared) return;
-    const selectedModel = engine === 'opencode' ? model() : '';
-    if (engine === 'opencode' && selectedModel !== paintedModel) {
+    const selectedModel = byModel ? model() : '';
+    if (byModel && selectedModel !== paintedModel) {
       remainingText.textContent = '—';
       button.dataset.level = 'unknown';
       button.title = tr("Лимиты и статистика подписки");
@@ -134,10 +152,10 @@ export function usageView(host, { aid, engine, supported, shared = false, canRes
       const suffix = selectedModel ? `&model=${encodeURIComponent(selectedModel)}` : '';
       const data = await api('GET', `/api/code/agents/${aid}/usage?engine=${engine}&refresh=${fresh}${suffix}`, undefined,
         { signal: controller.signal, ...(passive ? { headers: { 'x-studio-passive': '1' } } : {}) });
-      if (alive && selectedModel === (engine === 'opencode' ? model() : '')) { paint(data); paintedModel = selectedModel; }
+      if (alive && selectedModel === (byModel ? model() : '')) { paint(data); paintedModel = selectedModel; }
       else if (alive) queuedLoad ??= { fresh: false, passive: true };
     } catch (err) {
-      if (alive && !controller.signal.aborted && selectedModel === (engine === 'opencode' ? model() : '')) {
+      if (alive && !controller.signal.aborted && selectedModel === (byModel ? model() : '')) {
         remainingText.textContent = '—';
         button.dataset.level = 'unknown';
         button.title = tr("Лимиты недоступны: {0}", words(err));

@@ -10,7 +10,7 @@ import { message, tr } from './i18n.js';
  * editConnection(host, base, initial, onSaved) — окно «Подключение»: `base` — '/api/connections'
  * своих или '/api/admin/users/<id>/connections' панели. */
 import { api } from './api.js';
-import { NAMES, sectionPairs } from './sections-meta.js';
+import { historyPairs, NAMES } from './sections-meta.js';
 import { button, el, field, openDialog, showError } from './ui.js';
 
 const KINDS = {
@@ -19,9 +19,9 @@ const KINDS = {
   s06: { label: tr("Шлюз s06 · Qwen, WhisperX, PaddleOCR"), placeholder: tr("адрес шлюза, IP и порт, без пути /v1") },
   cleaner: { label: tr("Cleaner (своя учётка Cleaner)"), placeholder: tr("адрес Cleaner, HTTPS, IP и порт, без пути") },
 };
-/** Разделы подключений (все, кроме «Агентов» — им модели сообщает мост) в порядке рельса и голосовой ввод. */
-export const SECTION_NAMES = { ...Object.fromEntries(sectionPairs().filter(([id]) => id !== 'code')),
-  dictation: NAMES.dictation };
+/** Разделы подключений (без «Агентов» и «Open WebUI» — модели им сообщают мост и сервер Open WebUI) в порядке рельса
+ * и голосовой ввод. */
+export const SECTION_NAMES = { ...Object.fromEntries(historyPairs()), dictation: NAMES.dictation };
 /** Все разделы шлюза для галочки «Добавить во все разделы» (= connections.KINDS.srvllm и sections.S06_CATALOG,
  * сверяет tests/test_connections.py). */
 export const GATEWAY_SECTIONS = {

@@ -58,7 +58,7 @@
   полем `accepts` — выбор уже заведённых в «+ Адрес для раздела» показывает только подходящие разделу. Связи Cleaner,
   успевшие появиться до запрета (или созданные прежним кодом после отката), убирает при каждом запуске
   `sections.drop_cleaner_strays()` — с `_settle` умолчаний и прежним столбцом `connections.sections`.
-- Через Cleaner (`cleaner_route`, шаг схемы 64, [docs/cleaner-integration.md](../cleaner-integration.md)). Настройки
+- Через Cleaner (`cleaner_route`, шаг схемы 66, [docs/cleaner-integration.md](../cleaner-integration.md)). Настройки
   администратора — один JSON шифром в `settings` (`cleaner_route.SETTINGS_KEY`): адрес Cleaner только из списка
   разрешённых, служебный ключ (наружу — только `key_set`), флажок `forced`; не расшифровались — пустые с `reenter`,
   принудительный режим выключен (`cleaner_route.forced`). Внешнее подключение — `cleaner_route.is_external`: всё,

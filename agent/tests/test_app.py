@@ -6,6 +6,8 @@ import json
 import pathlib
 import threading
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from claude_agent_sdk import PermissionResultDeny
@@ -101,7 +103,7 @@ def make(home):
 
     def build(result=None, probe=None, enroll_calls=None, sleep=forever, find_cli=lambda: None,
               cli_version=lambda p: "2.3.1", sdk=None, unenroll=lambda url, key: (204, True), welcomes=None,
-              order=None, codex_factory=None, opencode_factory=None):
+              order=None, codex_factory=None, opencode_factory=None, deepseek_factory=None):
         links, probes, probe_paths, unenrolls = [], [], [], []
 
         def link_factory(url, key, agent, on_state, on_welcome=None, on_disabled=None):
@@ -129,7 +131,7 @@ def make(home):
         ctrl = app.Controller(home, link_factory=link_factory, find_cli=find_cli, cli_version=cli_version,
                               probe=fake_probe, enroll_fn=fake_enroll, unenroll_fn=fake_unenroll,
                               autostart=FakeAutostart(), sleep=sleep, codex_factory=codex_factory,
-                              opencode_factory=opencode_factory, **extra)
+                              opencode_factory=opencode_factory, deepseek_factory=deepseek_factory, **extra)
         ctrl.links, ctrl.probes, ctrl.probe_paths, ctrl.unenrolls = links, probes, probe_paths, unenrolls
         made.append(ctrl)
         return ctrl
@@ -432,25 +434,27 @@ def test_catalogs_are_in_hello_and_revocation_stops_all_runners(make, configured
         def reopen(self):
             self.reopened += 1
 
-    ctrl = make(codex_factory=Backend, opencode_factory=Backend)
+    ctrl = make(codex_factory=Backend, opencode_factory=Backend, deepseek_factory=Backend)
     ctrl.start()
     until(lambda: ctrl.state == "online")
     assert ctrl.links[0].hello["codex"]["efforts"] == ["ultra"]
     assert ctrl.links[0].hello["opencode"]["efforts"] == ["ultra"]
+    assert ctrl.links[0].hello["deepseek"]["efforts"] == ["ultra"] and ctrl.links[0].hello["deepseek_models"] is True
+    assert ctrl.deepseek.choices.path == home / "deepseek" / store.CHOICES
     assert ctrl.codex.choices is ctrl.runner.choices
     assert ctrl.opencode.choices.path == home / "opencode" / store.CHOICES
     ctrl.opencode.choices.update("test-chat", access="default")
     assert ctrl.opencode.choices.details("test-chat")["access"] == "default"
     assert ctrl.runner.choices.details("test-chat") == {}
-    assert ctrl.codex.reopened == ctrl.opencode.reopened == 1
+    assert ctrl.codex.reopened == ctrl.opencode.reopened == ctrl.deepseek.reopened == 1
     ctrl._loop.call_soon_threadsafe(ctrl.links[0].end, "revoked")
-    until(lambda: ctrl.codex.closes and ctrl.opencode.closes)
-    assert ctrl.codex.closes == ctrl.opencode.closes == [{"hold": True}] and ctrl.runner._closing
+    until(lambda: ctrl.codex.closes and ctrl.opencode.closes and ctrl.deepseek.closes)
+    assert ctrl.codex.closes == ctrl.opencode.closes == ctrl.deepseek.closes == [{"hold": True}] and ctrl.runner._closing
     ctrl.quit()
-    assert ctrl.codex.closes[-1] == ctrl.opencode.closes[-1] == {"final": True}
+    assert ctrl.codex.closes[-1] == ctrl.opencode.closes[-1] == ctrl.deepseek.closes[-1] == {"final": True}
 
 
-@pytest.mark.parametrize("engine", ("codex", "opencode"))
+@pytest.mark.parametrize("engine", ("codex", "opencode", "deepseek"))
 def test_backend_statuses_are_independent_and_do_not_reuse_a_stale_success(make, configured, engine):
     class Backend:
         def __init__(self, *args, **kwargs):
@@ -473,20 +477,74 @@ def test_backend_statuses_are_independent_and_do_not_reuse_a_stale_success(make,
     ctrl.on_backends(changes.append)
     ctrl.start()
     until(lambda: ctrl.state == "online")
-    other = "opencode" if engine == "codex" else "codex"
+    others = {name: {"status": "unavailable", "models": 0} for name in ("codex", "opencode", "deepseek") if name != engine}
     assert ctrl.backend_status() == {"claude": {"status": "unavailable", "models": 0},
-                                     engine: {"status": "ready", "models": 1},
-                                     other: {"status": "unavailable", "models": 0}}
+                                     engine: {"status": "ready", "models": 1}, **others}
     backend = getattr(ctrl, engine)
     backend.ready = False
     asyncio.run_coroutine_threadsafe(ctrl._refresh_models(), ctrl._loop).result(5)
     assert backend.catalog is not None
     assert ctrl.backend_status() == {"claude": {"status": "ready", "models": 1},
-                                     engine: {"status": "unavailable", "models": 0},
-                                     other: {"status": "unavailable", "models": 0}}
+                                     engine: {"status": "unavailable", "models": 0}, **others}
     assert changes[-1] == ctrl.backend_status()
     changes[-1][engine]["status"] = "ready"
     assert ctrl.backend_status()[engine]["status"] == "unavailable"
+
+
+def test_controller_builds_four_backends_and_probes_deepseek(make, configured, home):
+    built, probed = [], []
+
+    class Backend:
+        def __init__(self, emit, home, choices):
+            self.catalog = None
+            self.choices = choices
+
+        async def probe(self, root):
+            probed.append(root)
+            self.catalog = {"version": "0.2.2-rc.5", "models": [{"id": "m", "label": "M"}], "efforts": [],
+                            "defaults": {}, "settings": {}}
+            return True
+
+        async def close(self, **kwargs):
+            pass
+
+        def reopen(self):
+            pass
+
+    def factory(emit, *, home, choices):
+        built.append(choices.path)
+        return Backend(emit, home, choices)
+
+    import inspect
+    assert inspect.signature(app.Controller).parameters["deepseek_factory"].default is app.DeepSeekRunner
+    ctrl = make(deepseek_factory=factory)
+    assert ctrl.backend_status()["deepseek"] == {"status": "checking", "models": 0}
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert built == [home / "deepseek" / store.CHOICES] and probed == [str(ctrl.agent.cfg.projects_root)]
+    assert ctrl.backend_status()["deepseek"] == {"status": "ready", "models": 1}
+    assert ctrl.links[0].hello["deepseek"]["version"] == "0.2.2-rc.5"
+    assert ctrl.agent.deepseek is ctrl.deepseek and ctrl.backend_status()["codex"]["status"] == "unavailable"
+
+
+def test_core_start_sweeps_deepseek_overlays(make, configured, home):
+    """Мост упал посреди хода: наложение с настройками провайдеров стирается до создания помощника."""
+    folder = home / "deepseek"
+    (folder / "overlay-scratch-a1").mkdir(parents=True)
+    (folder / "overlay-scratch-a1" / "storage.json").write_text("{}")
+    (folder / "overlay-0123456789abcdef.json").write_text('{"secret": 1}')
+    (folder / "keep.json").write_text("{}")
+    seen = []
+
+    def factory(emit, *, home, choices):
+        seen.append(sorted(p.name for p in (home / "deepseek").iterdir()))
+        return SimpleNamespace(catalog=None, choices=choices, probe=AsyncMock(return_value=False),
+                               close=AsyncMock(), reopen=Mock())
+
+    ctrl = make(deepseek_factory=factory)
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert seen == [["keep.json"]] and not list(folder.glob("overlay-*"))
 
 
 def test_theme_is_saved_without_restarting_the_link(make, configured, home, root):
@@ -513,16 +571,16 @@ def test_turn_limit_is_persistent_and_updates_all_runners_without_reconnecting(m
         async def probe(self, root):
             return False
 
-    ctrl = make(codex_factory=Backend, opencode_factory=Backend)
+    ctrl = make(codex_factory=Backend, opencode_factory=Backend, deepseek_factory=Backend)
     ctrl.set_max_turns(12)
     ctrl.start()
     until(lambda: ctrl.state == "online")
     link = ctrl.links[0]
     assert ctrl.agent.cfg.max_turns == 12
-    assert [backend.max_turns for backend in (ctrl.runner, ctrl.codex, ctrl.opencode)] == [12, 12, 12]
+    assert [backend.max_turns for backend in (ctrl.runner, ctrl.codex, ctrl.opencode, ctrl.deepseek)] == [12] * 4
     ctrl.set_max_turns(3)
     assert ctrl.agent.cfg.max_turns == 3
-    assert [backend.max_turns for backend in (ctrl.runner, ctrl.codex, ctrl.opencode)] == [3, 3, 3]
+    assert [backend.max_turns for backend in (ctrl.runner, ctrl.codex, ctrl.opencode, ctrl.deepseek)] == [3] * 4
     assert store.load_config(home).max_turns == 3
     assert ctrl.links == [link] and not link.stopped
     for value in (0, -1, True, 2.5, "8"):

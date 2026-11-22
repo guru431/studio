@@ -4,7 +4,8 @@ socket.io», «Поток на страницу»).
 Свой минимальный клиент: Engine.IO 4 только через websocket (пакет `websockets`), socket.io 5, пространство `/`.
 - Подключение: `GET /api/config` (версия — в `owui_accounts.version`; ниже 0.13 или без `features.auth_sessions` —
   `unsupported`), проверка рабочего токена `GET /api/v1/auths/` (Open WebUI 0.13 с `always_connect=True` принимает
-  сокет и с негодным токеном, только событий не шлёт — отозванную сессию видно лишь так), затем
+  сокет и с негодным токеном, только событий не шлёт — отозванную сессию видно лишь так; отвергнут и только что
+  выданный токен — `relogin`, без новой ротации на каждой попытке), затем
   `0{…}` ← открытие, `40{"token": …}` →, `40{"sid": …}` ←. `sid` — `session_id` отправки (`ensure`).
 - `2` → `3`. На каждом кадре сервера: рабочий токен (`owui_tokens.access` обновляет его за `REFRESH_AHEAD_SEC` до
   конца) сменился — `42["user-join", {"auth": {"token": …}}]`: так и обновление из REST-запроса доходит до сокета.
@@ -226,7 +227,9 @@ class Link:
             if version != acc.version:
                 state.DB.execute("UPDATE owui_accounts SET version = ? WHERE id = ?", (version, acc.id))
                 self.acc = acc = replace(acc, version=version)
-            check = await owui.call(acc, "GET", "/api/v1/auths/")
+            check = await owui.call(acc, "GET", owui.CHECK_PATH)
+            if check.status_code == 401:               # отвергнут и только что выданный токен: новых ротаций не тратить
+                raise owui_tokens.relogin(acc.id, "токен после обновления отвергнут")
             if check.status_code != 200:
                 log.info("owui %d: проверка токена — код %d", acc.id, check.status_code)
                 raise HTTPException(503, owui.OFFLINE)
@@ -388,6 +391,14 @@ async def ensure(acc) -> str:
 def track(acc, chat_id: str, message_id: str) -> None:
     """Ответ на сообщение из Студии идёт: держать соединение до его итога, ошибки или паузы."""
     _link(acc).turns[message_id] = chat_id
+
+
+def rekey(aid: int, message_id: str, chat_id: str) -> None:
+    """Ответ из Студии узнал свой чат (новый чат — из ответа POST). Ответ, чей итог, ошибка или пауза пришли раньше
+    ответа POST, уже снят `_release` — его не возвращать: иначе он держал бы соединение до следующего ответа в чате."""
+    link = LINKS.get(aid)
+    if link is not None and message_id in link.turns:
+        link.turns[message_id] = chat_id
 
 
 def untrack(aid: int, message_id: str) -> None:

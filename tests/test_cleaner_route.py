@@ -1,4 +1,4 @@
-"""Настройки шлюза Cleaner для внешних моделей: администратор, служебный ключ шифром, шаг схемы 64 и откат."""
+"""Настройки шлюза Cleaner для внешних моделей: администратор, служебный ключ шифром, шаг схемы 66 и откат."""
 import asyncio
 import json
 import logging
@@ -237,7 +237,7 @@ def test_check_when_cleaner_is_down_or_unlisted(studio, caplog):
     assert KEY not in caplog.text and "10.77.1.20" not in caplog.text
 
 
-# ---- шаг схемы 64 и откат ------------------------------------------------------------
+# ---- шаг схемы 66 и откат ------------------------------------------------------------
 
 def test_rollback_64_spoils_routed_tokens_and_forward_restores(studio, caplog):
     uid = make_user(studio, "owner")
@@ -249,26 +249,26 @@ def test_rollback_64_spoils_routed_tokens_and_forward_restores(studio, caplog):
     def token(cid):
         return state.DB.execute("SELECT token_enc FROM connections WHERE id = ?", (cid,)).fetchone()[0]
 
-    state.DB.executescript(cleaner_route.ROLLBACK_64)
+    state.DB.executescript(cleaner_route.ROLLBACK_66)
     with pytest.raises(InvalidToken):
         security.decrypt(token(routed))                                 # прежний код: «токен не расшифрован»
     assert security.decrypt(token(plain)) == "plain-key"
-    state.DB.executescript(cleaner_route.ROLLBACK_64)                   # повтор не затирает сохранённый ключ
-    state.DB.executescript(cleaner_route.FORWARD_64)
+    state.DB.executescript(cleaner_route.ROLLBACK_66)                   # повтор не затирает сохранённый ключ
+    state.DB.executescript(cleaner_route.FORWARD_66)
     assert security.decrypt(token(routed)) == "provider-key" and security.decrypt(token(plain)) == "plain-key"
     assert state.DB.execute("SELECT count(*) FROM cleaner_rollback").fetchone()[0] == 0
-    state.DB.executescript(cleaner_route.FORWARD_64)                    # повтор без строк ничего не меняет
+    state.DB.executescript(cleaner_route.FORWARD_66)                    # повтор без строк ничего не меняет
     assert security.decrypt(token(routed)) == "provider-key"
 
-    state.DB.executescript(cleaner_route.ROLLBACK_64)
+    state.DB.executescript(cleaner_route.ROLLBACK_66)
     state.DB.execute("UPDATE connections SET token_enc = ? WHERE id = ?", (security.encrypt("typed-again"), routed))
-    state.DB.executescript(cleaner_route.FORWARD_64)                    # ключ, введённый заново прежним кодом, остаётся
+    state.DB.executescript(cleaner_route.FORWARD_66)                    # ключ, введённый заново прежним кодом, остаётся
     assert security.decrypt(token(routed)) == "typed-again"
 
     caplog.set_level(logging.INFO, logger="studio")
     cleaner_route.forward()                                             # строк нет — ничего не делает и не пишет
     assert "после отката" not in caplog.text
-    state.DB.executescript(cleaner_route.ROLLBACK_64)
+    state.DB.executescript(cleaner_route.ROLLBACK_66)
     cleaner_route.forward()
     assert security.decrypt(token(routed)) == "typed-again"
     assert "после отката возвращено ключей 1" in caplog.text
@@ -281,7 +281,7 @@ def test_rollback_64_skips_a_token_already_spoiled_by_the_access_rollback(studio
     cid = state.DB.execute(
         "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only, via_cleaner)"
         " VALUES (?, 'routed', 'openai', 'https://api.cloud.test/v1', x'00', '[]', 0, 1, 1)", (uid,)).lastrowid
-    state.DB.executescript(cleaner_route.ROLLBACK_64)
+    state.DB.executescript(cleaner_route.ROLLBACK_66)
     assert state.DB.execute("SELECT count(*) FROM cleaner_rollback WHERE connection_id = ?", (cid,)).fetchone()[0] == 0
 
 

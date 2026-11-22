@@ -78,6 +78,10 @@ MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]-]{1,100}")
 OPENCODE_MODEL_ID = re.compile(r"[A-Za-z0-9._:\[\]/@+-]{1,300}")
 OPENCODE_EFFORT = re.compile(r"[A-Za-z0-9._-]{1,64}")
 OPENCODE_MODELS_MAX = 500
+#: модель DeepSeek Harness — строка JSON `["<провайдер>","<модель>"]`, как `deepseek.MODEL_ID` моста
+DEEPSEEK_MODEL_ID = re.compile(r'\["[^"\\\x00-\x1f]{1,150}","[^"\\\x00-\x1f]{1,150}"\]')
+#: почему мост не перенёс строку настроек DSH человека в наложение (`deepseek_settings` моста)
+DEEPSEEK_SKIPPED = ("unknown", "acp_own", "env_key", "unreadable")
 PID = re.compile(r"[0-9a-f]{16}")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -232,8 +236,9 @@ def parse_hello(frame: dict) -> dict:
             raise ProtocolError("hello")
         result["images"] = frame["images"]
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
-                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
-                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare"):
+                       "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "mirror_groups", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
+                       "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare",
+                       "deepseek_models", "deepseek_usage"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -275,6 +280,38 @@ def parse_hello(frame: dict) -> dict:
         if isinstance(catalog.get("defaults"), dict):
             result["opencode"]["defaults"] = {k: v for k, v in catalog["defaults"].items()
                 if k in ("model", "effort", "access") and (v is None or isinstance(v, str) and len(v) <= 300)}
+    if "deepseek" in frame:
+        result["deepseek"] = _deepseek(frame["deepseek"])
+    return result
+
+
+def _deepseek(catalog) -> dict:
+    """`hello.deepseek` — пределы `opencode`, свои id моделей и сводка настроек DSH человека (`settings`)."""
+    if not isinstance(catalog, dict):
+        raise ProtocolError("hello")
+    models, efforts, settings = catalog.get("models"), catalog.get("efforts"), catalog.get("settings")
+    if (not isinstance(models, list) or len(models) > OPENCODE_MODELS_MAX or not isinstance(efforts, list)
+            or len(efforts) > 100 or not all(isinstance(e, str) and OPENCODE_EFFORT.fullmatch(e) for e in efforts)
+            or not isinstance(settings, dict) or "profile" not in settings
+            or settings["profile"] not in ("web", "desktop", None)):
+        raise ProtocolError("hello")
+    applied, skipped = settings.get("applied"), settings.get("skipped")
+    if (not isinstance(applied, list) or len(applied) > 100 or not isinstance(skipped, list) or len(skipped) > 100
+            or not all(isinstance(row, dict) and row.get("reason") in DEEPSEEK_SKIPPED for row in skipped)):
+        raise ProtocolError("hello")
+    out_models = []
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("id"), str) or not DEEPSEEK_MODEL_ID.fullmatch(model["id"]):
+            raise ProtocolError("hello")
+        out_models.append({"id": model["id"], "label": _string(model.get("label"), 100)})
+    result = {"version": _string(catalog.get("version"), 64), "models": out_models,
+              "efforts": list(dict.fromkeys(efforts)),
+              "settings": {"profile": settings["profile"], "applied": [_string(name, 100) for name in applied],
+                           "skipped": [{"name": _string(row.get("name"), 100), "reason": row["reason"]}
+                                       for row in skipped]}}
+    if isinstance(catalog.get("defaults"), dict):
+        result["defaults"] = {k: v for k, v in catalog["defaults"].items()
+                              if k in ("model", "effort", "access") and (v is None or isinstance(v, str) and len(v) <= 310)}
     return result
 
 
