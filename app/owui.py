@@ -101,7 +101,7 @@ FAILS: dict[int, list[float]] = {}
 NOT_FOUND = {"code": "not_found", "message": "такой учётки Open WebUI нет"}
 OFFLINE = {"code": "owui_offline", "message": "Open WebUI не отвечает"}
 RELOGIN = {"code": "relogin", "message": "войдите в учётку Open WebUI заново"}
-LOGIN = {"code": "login", "message": "неверный email или пароль Open WebUI"}
+LOGIN = {"code": "owui_login", "message": "неверный email или пароль Open WebUI"}
 PENDING = {"code": "pending", "message": "учётка Open WebUI ждёт одобрения администратора Open WebUI"}
 MFA = {"code": "mfa", "message": "вход со вторым кодом не поддерживается"}
 LOCKED = {"code": "owui_locked", "message": "слишком много неудачных входов в Open WebUI — попробуйте позже"}
@@ -440,7 +440,7 @@ def _attempt(uid: int):
     try:
         yield
     except HTTPException as e:
-        failed = isinstance(e.detail, dict) and e.detail.get("code") == "login"
+        failed = isinstance(e.detail, dict) and e.detail.get("code") == "owui_login"
         if failed:
             log.info("пользователь %d: вход в Open WebUI отклонён", uid)
         raise

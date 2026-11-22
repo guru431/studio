@@ -2390,17 +2390,64 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .code-project-read { align-self:flex-start; margin-top:2px; white-space:normal; }
 @media (pointer: coarse) { .code-project-read { min-height:calc(44px / var(--ui-scale, 1)); } }
 
-/* «Open WebUI» (owui.js): панель учёток и чатов слева, лента справа; телефон — панель выезжает по ☰, как у «Агентов» */
+/* «Open WebUI» (owui.js, owui-panel.js): панель учёток и чатов слева, лента справа; телефон — панель выезжает по ☰, как у «Агентов» */
 .owui-ws { flex: 1 0 auto; display: flex; align-items: stretch; min-width: 0; width: 100%; max-width: 100%; }
 .owui-panel { width: calc(260px * var(--font-scale, 1)); flex: none; position: sticky; top: 0; height: calc(100 * var(--dvh)); align-self: flex-start;
   display: flex; flex-direction: column; background: var(--surface-side); border-right: 1px solid var(--line); }
-.owui-accounts { flex: none; padding: var(--space-5) var(--space-4) var(--space-4); border-bottom: 1px solid var(--line); }
-.owui-tree { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2); }
+.owui-accounts { flex: none; max-height: 40%; overflow-y: auto; padding: var(--space-5) var(--space-4) var(--space-4); border-bottom: 1px solid var(--line); }
+.owui-account-list, .owui-chats, .owui-folders, .owui-folder-body { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.owui-account-list { gap: var(--space-1); }
+.owui-account-row { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.owui-account { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-4); padding: 6px var(--space-4); border: 0;
+  border-radius: var(--r-control); background: none; color: var(--text-1); text-align: left; font-size: var(--fs-md); cursor: pointer; }
+.owui-account[aria-current="true"] { background: var(--surface-1); font-weight: 600; }
+.owui-state { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--success); }
+.owui-state.off { background: var(--line); }
+.owui-state.relogin { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 28%, transparent); }
+.owui-account-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.owui-account-label, .owui-account-host, .owui-chat-title, .owui-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owui-account-host { color: var(--text-2); font-size: var(--fs-2xs); font-weight: 400; }
+.owui-account-more { flex: none; width: 30px; height: 30px; }
+.owui-connect { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+.owui-connect .ico, .owui-new-chat .ico, .owui-folder .ico { width: 16px; height: 16px; flex: none; }
+.owui-tree { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-3); }
+.owui-tree-tools { display: flex; gap: var(--space-2); margin-bottom: var(--space-4); }
+.owui-search { flex: 1; min-width: 0; }
+.owui-new-chat { flex: none; display: inline-flex; align-items: center; gap: var(--space-1); text-decoration: none; }
+.owui-panel-status { margin: var(--space-2) var(--space-3); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.owui-panel-status:empty { display: none; }
+.owui-group { margin-bottom: var(--space-5); }
+.owui-group-head { margin: 0 0 var(--space-2); padding: 0 var(--space-3); color: var(--text-2); font-size: var(--fs-2xs); font-weight: 600; }
+.owui-chat, .owui-folder { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-width: 0; padding: var(--space-2) var(--space-3);
+  border: 0; border-radius: var(--r-control); background: none; color: var(--text-1); text-align: left; text-decoration: none;
+  font-size: var(--fs-sm); line-height: 1.3; cursor: pointer; }
+.owui-chat[aria-current="page"] { background: var(--surface-1); font-weight: 600; }
+.owui-chat-title, .owui-folder-name { flex: 1; }
+.owui-chat-active { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+/* «ждёт решения» — акцентом, как «ждёт ответа» у «Агентов»: ответ ждёт владельца */
+.owui-chat-pending { flex: none; padding: 0 var(--space-2); border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent);
+  font-size: var(--fs-2xs); font-weight: 600; white-space: nowrap; }
+.owui-folder .ico { color: var(--text-2); }
+.owui-folder[aria-expanded="true"] .ico { color: var(--accent); }
+.owui-folder-body { padding-left: var(--space-5); }
+.owui-folder-note { padding: var(--space-2) var(--space-3); overflow-wrap: anywhere; }
+.owui-more { margin: var(--space-2) var(--space-3); }
+.owui-relogin { padding: 0 var(--space-2); overflow-wrap: anywhere; }
+.owui-relogin .input, .owui-connect-form .input { width: 100%; }
+.owui-relogin-actions { display: flex; justify-content: flex-end; gap: var(--space-3); }
+.owui-hint { margin-top: calc(-1 * var(--space-4)); }
+.owui-cert { margin: var(--space-4) 0; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--r-menu); background: var(--surface-0);
+  overflow-wrap: anywhere; }
+.owui-cert-facts { margin: 0 0 var(--space-5); font-size: var(--fs-sm); }
+.owui-cert-facts dt { color: var(--text-2); font-size: var(--fs-xs); }
+.owui-cert-facts dd { margin: 0 0 var(--space-3); }
+.owui-cert-facts code { word-break: break-all; }
 .owui-main { flex: 1; min-width: 0; display: flex; flex-direction: column; contain: inline-size; }
 .owui-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: var(--space-7); }
+.owui-feed-title { margin: 0; font-size: var(--fs-xl); overflow-wrap: anywhere; }
 .owui-panel-toggle, .owui-backdrop { display: none; }
-#owui-status { margin: var(--space-6) var(--space-7) 0; overflow-wrap: anywhere; }
-#owui-status:empty { display: none; }
+@media (hover: hover) { :is(.owui-account, .owui-chat, .owui-folder):hover { background: var(--surface-2); } }
+@media (pointer: coarse) { :is(.owui-account, .owui-chat, .owui-folder) { min-height: var(--h-touch); } }
 @media (max-width: 760px) {
   .owui-panel { position: fixed; z-index: var(--z-drawer); top: 0; bottom: var(--tabs-h); left: 0; width: min(280px, calc(100 * var(--vw) - 12px)); height: auto; align-self: stretch;
     padding-top: env(safe-area-inset-top, 0px); transform: translateX(-100%); visibility: hidden;

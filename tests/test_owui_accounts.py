@@ -70,7 +70,7 @@ def test_connect_refuses_unlisted_address(setup):
 
 def test_connect_maps_login_errors(setup):
     s, fake, uid = setup
-    assert connect(s, password="wrong").json()["detail"]["code"] == "login"
+    assert connect(s, password="wrong").json()["detail"]["code"] == "owui_login"
     fake.role = "pending"                                       # без MFA: обычный ответ входа с ролью pending
     assert connect(s).json()["detail"]["code"] == "pending"
     fake.enable_mfa = True                                      # с MFA: {next_step: "pending"}
@@ -89,7 +89,7 @@ def test_connect_maps_login_errors(setup):
 def test_login_failures_are_limited_per_studio_user(setup):
     s, fake, uid = setup
     for _ in range(owui.LOGIN_FAILS):
-        assert connect(s, password="wrong").json()["detail"]["code"] == "login"
+        assert connect(s, password="wrong").json()["detail"]["code"] == "owui_login"
     asked = len(fake.requests)
     r = connect(s)
     assert r.status_code == 429 and r.json()["detail"]["code"] == "owui_locked"
@@ -198,7 +198,7 @@ def test_relogin_with_other_user_is_409_other_user(setup):
     assert r.status_code == 409 and r.json()["detail"]["code"] == "other_user"
     assert owui_tokens.load(aid) == second
     r = s.c.post(f"/api/owui/accounts/{aid}/login", json={"password": "wrong"})
-    assert r.status_code == 422 and r.json()["detail"]["code"] == "login"
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "owui_login"
 
 
 def test_label_can_be_changed(setup):
