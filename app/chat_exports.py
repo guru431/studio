@@ -389,7 +389,8 @@ async def export_agent_chat(aid: int, pid: str, session_id: str, body: ExportIn,
 
     async def check():
         claude_code.own_agent(request, aid)
-        await claude_code.ask(request, aid, "history", project=pid, chat=session_id, before=None, limit=1)
+        chat_shares.unreadable(await claude_code.ask(request, aid, "history", project=pid, chat=session_id,
+                                                     before=None, limit=1))
 
     if body.selection is None:
         with _export_size():

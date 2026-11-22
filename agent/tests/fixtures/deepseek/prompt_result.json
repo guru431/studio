@@ -1,0 +1,20 @@
+{
+ "end_turn": {
+  "stopReason": "end_turn"
+ },
+ "cancelled": {
+  "stopReason": "cancelled"
+ },
+ "image_refused_error": {
+  "code": -32602,
+  "message": "Invalid params: model \"stub-tools\" does not declare image input"
+ },
+ "image_not_advertised_error": {
+  "code": -32602,
+  "message": "Invalid params: inline image prompts were not advertised by this connection"
+ },
+ "set_config_option_unknown_value_error": {
+  "code": -32602,
+  "message": "Invalid params: unknown model option: [\"srvllm\", \"stub-tools\"]"
+ }
+}

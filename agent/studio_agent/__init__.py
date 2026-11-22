@@ -1,3 +1,3 @@
-"""Мост studio-agent: локальные Claude Code, Codex и OpenCode владельца для студии."""
+"""Мост studio-agent: локальные Claude Code, Codex, OpenCode и DeepSeek Harness владельца для студии."""
 
-VERSION = "0.44.2"
+VERSION = "0.46.0"

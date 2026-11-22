@@ -41,12 +41,13 @@ BODIES = {
     ("DELETE", "/api/code/agents/1/projects/1/members/1"): None,
     ("GET", "/api/code/agents/1/projects/1/mirrors"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/discover"): None,
+    ("POST", "/api/code/agents/1/projects/1/mirrors/locate"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors"): {"destination": 2, "root": "0" * 16, "name": "copy"},
     ("GET", "/api/code/agents/1/projects/1/mirrors/1"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/compare"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/diff"): {"path": "file.txt"},
     ("POST", "/api/code/agents/1/projects/1/mirrors/1/sync"): {"plan": "0" * 64},
-    ("PUT", "/api/code/agents/1/projects/1/mirrors/1/exclude"): {"exclude": [".venv"]},
+    ("PUT", "/api/code/agents/1/projects/1/mirrors/exclude"): {"exclude": [".venv"]},
     ("DELETE", "/api/code/agents/1/projects/1/mirrors/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/export"): {"format": "md"},
     ("GET", "/api/code/agents/1/projects/1/chats/1/share"): None,
@@ -328,7 +329,7 @@ def test_new_chat_writes_a_row_and_an_event_but_not_the_bridge(studio):
     assert len(m.requests) == before
 
 
-@pytest.mark.parametrize("engine", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("engine", ["claude", "codex", "opencode", "deepseek"])
 def test_new_chat_keeps_studio_origin_before_the_bridge_tag(studio, engine):
     """Первый ход ещё не записал метку: происхождение сохраняется после обновления и закрытия чата."""
     aid, machine, link = setup(studio)

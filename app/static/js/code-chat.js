@@ -1,5 +1,6 @@
 import { locale, message, tr } from './i18n.js';
 import { opencodeView } from './code-opencode.js';
+import { deepseekView } from './code-deepseek.js';
 /* Чат Claude Code (#/code/<aid>/<pid>/<chat>) — спека 2026-10-28-studio-claude-code-design 6.6 и 6.10,
  * протокол канала §4 (history, turn, watch, answer, stop) и §7 (события).
  *
@@ -18,7 +19,7 @@ import { opencodeView } from './code-opencode.js';
  *   или в VS Code, страница увидит; не дольше IDLE_POLL_FOR_SEC после действия владельца в чате — опрос
  *   продлевает открытость компьютера (протокол §3), и забытая вкладка держала бы его открытым вечно;
  * - во время хода — steer; чужое окно сначала забирает управление через claim. Codex/Claude получают
- *   уточнение в текущем клиенте, OpenCode — очередь до конца ответа. Отказ turn 409 running и 504 timeout — live;
+ *   уточнение в текущем клиенте, OpenCode и DeepSeek Harness — очередь до конца ответа (QUEUE_ONLY). Отказ turn 409 running и 504 timeout — live;
  * - offline (событие или 409, и у «Отправить») — «Компьютер пропал со связи — жду его» и live раз в RETRY_MS,
  *   пока страница видна; live без компьютера — поток ожидания (offline {wait: true}), его online открывает live
  *   сразу; ошибка загрузки истории — слова и «Повторить» (#code-reload) в строке статуса, сбой связи, моста
@@ -37,7 +38,7 @@ import { opencodeView } from './code-opencode.js';
  * только textContent и markdown.js. */
 import { api as request, me, unknownOutcome } from './api.js';
 import { icon } from './icons.js';
-import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel } from './code-options.js';
+import { ACCESS, ENGINE_NAMES, QUEUE_ONLY, USAGE_BY_MODEL, accessLabel, effortLabel } from './code-options.js';
 import { picker as choice } from './picker.js';
 import { enterSends, fieldBox } from './field.js';
 import { renderMarkdown, renderMarkdownInto, renderNodesInto } from './markdown.js';
@@ -158,6 +159,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
   const endpoint = (tail = '') => `${url}${tail}${engine !== 'claude' ? `?engine=${engine}` : ''}`;
   const assistant = ENGINE_NAMES[engine];
+  // Ветки чата: у DeepSeek Harness их нет, OpenCode — с мостом opencode_features.
+  const branching = !!agent?.chat_fork && engine !== 'deepseek' && (engine !== 'opencode' || !!agent?.opencode_features);
   const draftKey = `${aid}/${chat}`;
   const saved = savedDrafts()[draftKey];
   if (saved && !drafts.has(draftKey)) {
@@ -195,6 +198,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let claimTimer = null;
   let claiming = false;
   let historyEmpty = false;
+  let accessFixed = false;       // DeepSeek Harness: права чата заданы при создании (settings.access_fixed)
   const stepData = new WeakMap();
   const stepPaint = new WeakMap();
   let expandSteps = false;
@@ -224,6 +228,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const more = el('button', { type: 'button', id: 'code-more', class: 'btn btn-sm code-more', hidden: true },
     tr("Показать раньше"));
   const feed = el('div', { id: 'code-feed', class: 'code-feed' });
+  const historyNotice = el('p', { id: 'code-history-notice', class: 'code-shared-note', role: 'status', hidden: true },
+    tr("Историю этой версии DeepSeek Harness студия пока не читает"));
   const pictures = historyImages(scroller, feed, { api, endpoint, closed: () => closed() });
   const previous = el('button', { type: 'button', id: 'code-message-up', class: 'icon-btn',
     'aria-label': tr("Предыдущее моё сообщение"), title: tr("Предыдущее моё сообщение"), disabled: true });
@@ -338,6 +344,21 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const takeSession = el('button', { type: 'button', id: 'code-take-session', class: 'btn btn-sm' }, tr("Продолжить здесь"));
   const sessionNotice = el('div', { id: 'code-session-notice', class: 'code-session-notice', hidden: true, role: 'status' },
     sessionText, el('div', { class: 'code-session-actions' }, waitSession, takeSession));
+  // DeepSeek Harness: чат открыт в DSH Web/Desktop (отказ writer_active) — копии сессии нет, только закрыть там и повторить.
+  const writerText = el('p');
+  const writerRetry = el('button', { type: 'button', id: 'code-writer-retry', class: 'btn btn-sm' }, tr("Понятно"));
+  const writerNotice = el('div', { id: 'code-writer-notice', class: 'code-session-notice', hidden: true, role: 'status' },
+    writerText, el('div', { class: 'code-session-actions' }, writerRetry));
+  function writerActive(said) {
+    writerText.textContent = said || tr("Чат открыт в DeepSeek Harness на компьютере — закройте DeepSeek Harness и повторите");
+    writerNotice.hidden = false;
+  }
+  // Просмотр чата блокировку DSH не проверяет (state читает файл сессии): занятость покажет только следующая отправка.
+  // Настройки перечитываются — отказ state прежнего моста (writer_active) иначе оставил бы отправку запертой.
+  writerRetry.addEventListener('click', () => {
+    writerNotice.hidden = true;
+    loadState();
+  });
   const pick = (label, select) => {
     const view = choice(host, label, select);
     picks.set(select, view);
@@ -351,7 +372,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   host.dataset.engine = engine;
   scroller.append(
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
-    more, feed, quickActions);
+    more, historyNotice, feed, quickActions);
   // Плашка ожидающего вопроса над полем (D2): на узком экране карточка .code-ask часто вне ленты на экране.
   // Кнопки нажимают кнопки самой карточки — тот же ответ, те же блокировки (чужое окно, отправка).
   const askText = el('span', { class: 'code-ask-pin-text' });
@@ -388,7 +409,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const askObserver = new MutationObserver(paintAskPin);
   askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
   host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
-    el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, askPin, statusBar, form));
+    el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, writerNotice, askPin, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -397,15 +418,19 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   } });
   const openCode = opencodeView(form, text, { enabled: engine === 'opencode' && agent?.opencode_features,
     shared: agent?.shared, changed: () => loadState() });
-  if (agent?.chat_fork && (engine !== 'opencode' || agent?.opencode_features)) {
+  // Сводка наложения — настройки компьютера владельца: участнику совместного проекта её не показываем
+  const deepseek = engine === 'deepseek' && !agent?.shared ? deepseekView(form, agent?.deepseek?.settings) : null;
+  if (branching) {
     const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
       'aria-label': tr("Создать ветку чата"), title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") });
     copy.append(icon('fork'));
     copy.addEventListener('click', () => forkAt(null));
     actions.append(copy);
   }
-  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && (engine !== 'opencode' || agent?.opencode_features),
+  const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && engine !== 'deepseek'
+    && (engine !== 'opencode' || agent?.opencode_features),
     polling: () => running && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000 });
+  if (engine === 'deepseek') subtaskControl.button.hidden = true;     // у DeepSeek Harness подагентов нет
   const children = subtaskControl.button.disabled ? null : subtaskControl;
   const commands = commandsView(host, { stepNode, repaint: node => stepPaint.get(node)?.() });
   statusFixed.prepend(subtaskControl.button, commands.button, changedFiles.button);
@@ -439,15 +464,23 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function paintSettings(data) {
     openCode.settings(data);
+    if (engine === 'deepseek') {
+      // Права чата DeepSeek Harness закрепляются при создании: ход шлёт то же значение, что ответил state.
+      accessFixed = data.access_fixed === true;
+      if (accessFixed && ACCESS[engine][data.access]) access.value = data.access;
+      deepseek?.update(data.overlay, { fixed: accessFixed });
+    }
     const previousModel = effectiveModel;
     effectiveModel = typeof data.model === 'string' ? data.model : '';
-    if (engine === 'opencode' && previousModel !== effectiveModel) usage.refresh();
+    if (USAGE_BY_MODEL.has(engine) && previousModel !== effectiveModel) usage.refresh();
     context.settings(data);
-    model.options[0].textContent = typeof data.model === 'string' && data.model ? data.model : tr("Не получено");
+    // id модели DeepSeek Harness — JSON-массив «провайдер, модель»: на кнопке — подпись каталога.
+    const modelText = engine === 'deepseek' && models.find((m) => String(m.id) === data.model)?.label || data.model;
+    model.options[0].textContent = typeof data.model === 'string' && data.model ? modelText : tr("Не получено");
     model.title = typeof data.model === 'string' ? data.model : '';
     effort.options[0].textContent = effortLabel(data.effort);
     access.options[0].textContent = accessLabel(engine, data.access);
-    if (model.value && typeof data.model === 'string' && data.model) model.selectedOptions[0].textContent = data.model;
+    if (model.value && typeof data.model === 'string' && data.model) model.selectedOptions[0].textContent = modelText;
     paintPicks();
   }
 
@@ -491,6 +524,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       paintSettings({});
       settingsReady = !agent?.chat_state;
       if (err.code === 'closed') closed();
+      else if (err.code === 'writer_active') writerActive(words(err));
       else { stateError = words(err); showStatus(stateError); refreshAfterFailure(err); }
     } finally {
       if (stateRequest === own) {
@@ -846,7 +880,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const notice = taskNotice(m.text);
         if (notice) return notice;
       }
-      const branch = agent?.chat_fork && (engine !== 'opencode' || agent?.opencode_features) && m.forkable !== false && typeof m.id === 'string'
+      const branch = branching && m.forkable !== false && typeof m.id === 'string'
         ? el('button', { type: 'button', class: 'btn btn-sm code-fork', disabled: running,
           title: tr("Создать ветку до этого сообщения. Текст задания будет скопирован; вложения прикрепите заново.") }, tr("Продолжить иначе")) : null;
       branch?.addEventListener('click', () => forkAt(m.id));
@@ -912,15 +946,16 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function updateControls() {
     send.disabled = sending || adding || resolving || historyLoading || !settingsReady || foreign || external || queue.paused() || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
-    deliveryPick.hidden = !running || !agent?.queue_edit || engine === 'opencode';
+    deliveryPick.hidden = !running || !agent?.queue_edit || QUEUE_ONLY.has(engine);
     delivery.disabled = foreign || sending;
     queue.ownership(foreign || external);
     for (const button of host.querySelectorAll('.code-fork')) button.disabled = running || sending || resolving || historyLoading || !settingsReady;
     paintQuickActions();
     model.disabled = effort.disabled = access.disabled = resolving || historyLoading || running;
+    access.disabled ||= accessFixed;
     openCode.busy(resolving || historyLoading || running);
     paintPicks();
-    const label = running ? (engine === 'opencode' ? tr("Отправить после ответа") : tr("Отправить уточнение")) : tr("Отправить");
+    const label = running ? (QUEUE_ONLY.has(engine) ? tr("Отправить после ответа") : tr("Отправить уточнение")) : tr("Отправить");
     send.title = label;
     send.setAttribute('aria-label', label);
     send.querySelector('.go-label').textContent = label;
@@ -1242,7 +1277,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
     if (data.not_started) restoreInput();
     else acknowledgeInput();
-    if (data.code === 'writer_active') external = true;
+    if (data.code === 'writer_active' && engine === 'deepseek') {
+      writerActive(typeof data.message === 'string' && data.message ? message(data.message) : '');
+    } else if (data.code === 'writer_active') external = true;
     foreign = false;
     if (!external) waitingForRelease = false;
     paintText(true);
@@ -1259,7 +1296,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
       if (data.status === 'stopped') end = STOPPED;
-      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", message(data.message)) : tr("Ошибка");
+      // DeepSeek Harness: чат открыт в DSH — слова уже в плашке writer_active, второй строкой в ленте не повторяем
+      else if (data.status === 'error' && !(data.code === 'writer_active' && engine === 'deepseek')) {
+        end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", message(data.message)) : tr("Ошибка");
+      }
       if (end) {
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
@@ -1288,6 +1328,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     switch (event) {
       case 'turn':
         foreign = false;
+        writerNotice.hidden = true;
         setRunning(true);
         activeTools.clear();
         paintActivity('thinking');
@@ -1595,7 +1636,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       cacheBytes -= historyCache.get(key).bytes;
       historyCache.delete(key);
     }
-    if (first && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
+    // Историю сессии мост не прочёл (формат DeepSeek Harness новее или старее моста): заметка, продолжение работает.
+    // Сессия есть, но её папка не сводится к проекту (cwd_mismatch) — свои слова, не «версия».
+    const unreadable = page.notice === 'unsupported_format' || page.notice === 'cwd_mismatch';
+    if (unreadable) historyNotice.textContent = page.notice === 'cwd_mismatch'
+      ? tr("Папка этого чата DeepSeek Harness не совпадает с проектом — историю студия не показывает") : tr("Историю этой версии DeepSeek Harness студия пока не читает");
+    historyNotice.hidden = !unreadable;
+    if (first && !unreadable && !(Array.isArray(page.items) && page.items.length)) applyDefaults();    // чат без истории — новый
     // Ответ идущего хода остаётся в конце ленты до снимка live (возврат на экран): иначе его текст мигает.
     // Кончился, пока не смотрели, — live ответит idle, и он сам перечитает историю.
     const tail = turn && turn.node === feed.lastElementChild ? turn.node : null;
@@ -1608,7 +1655,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (tail) feed.append(tail);
     }
     paintChangedFiles();
-    historyEmpty = page.total === 0;
+    historyEmpty = page.total === 0 && !unreadable;
     paintQuickActions();
     followups.clear();
     const pending = pendingInputs.get(draftKey);
@@ -1795,6 +1842,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (err.code === 'closed') closed();
       else if (err.status === 404 && err.code === 'not_found') gone();
       else if (err.code === 'offline') waitForComputer();
+      else if (err.code === 'writer_active') writerActive(words(err));
       else {
         showStatus(words(err));
         // ход уже идёт (другая вкладка, VS Code) или, может быть, начат (компьютер не ответил вовремя) — смотреть его
@@ -1894,7 +1942,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   takeSession.addEventListener('click', () => claimSession(external));
 
   model.addEventListener('change', remember);
-  if (engine === 'opencode') model.addEventListener('change', () => usage.refresh());
+  if (USAGE_BY_MODEL.has(engine)) model.addEventListener('change', () => usage.refresh());
   effort.addEventListener('change', remember);
   access.addEventListener('change', remember);
   text.addEventListener('input', () => {

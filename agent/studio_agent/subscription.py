@@ -25,6 +25,7 @@ LINKS = {
     "claude": [{"label": "Использование Claude", "url": "https://claude.ai/settings/usage"}],
     "codex": [{"label": "Использование Codex", "url": "https://chatgpt.com/codex/settings/usage"}],
     "opencode": [{"label": "Провайдеры OpenCode", "url": "https://opencode.ai/docs/providers/"}],
+    "deepseek": [],  # ссылки для страницы ставит студия (`code_usage.LINKS`)
 }
 
 
@@ -274,7 +275,7 @@ class UsageCache:
         self.cached, self.pending = {}, {}
 
     async def read(self, engine, root, backend=None, *, refresh=False, model=None):
-        key = (engine, model if engine == "opencode" else None)
+        key = (engine, model if engine in ("opencode", "deepseek") else None)
         cached = self.cached.get(key)
         if not refresh and cached is not None and self.now() - cached[0] < TTL:
             return copy.deepcopy(cached[1])
@@ -299,5 +300,13 @@ class UsageCache:
         if engine == "codex":
             raw = await backend.subscription_usage(root)
             return codex_usage(raw, now)
+        if engine == "deepseek":
+            from . import deepseek_usage
+            catalog, bases = getattr(backend, "catalog", None), getattr(backend, "base_urls", None)
+            defaults = catalog.get("defaults") if isinstance(catalog, dict) else None
+            default = defaults.get("model") if isinstance(defaults, dict) else None
+            bases = list(bases) if isinstance(bases, list) else None  # None — профиль не разобран
+            return await asyncio.to_thread(lambda: deepseek_usage.read(model=model, default=default, bases=bases,
+                                                                       now=lambda: now))
         from . import opencode_usage
         return await asyncio.to_thread(opencode_usage.read, now, model=model)

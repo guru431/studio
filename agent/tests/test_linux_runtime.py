@@ -32,6 +32,31 @@ def test_linux_layout_cli_and_architecture(tmp_path, monkeypatch):
     assert opencode_rpc.find_cli() == tmp_path / "bin/opencode"
 
 
+def test_four_cli_status_rows(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from studio_agent import deepseek_rpc, linux_menu
+
+    cfg = SimpleNamespace(url="https://studio.example.com", name="pc", login="ivanov", agent_id="a1",
+                          projects_roots=[], max_turns=12, desktop_enabled=False)
+    ready = {"status": "ready", "models": 3}
+    ctrl = SimpleNamespace(config=lambda: cfg, studio_version="0.1.0", agent=None, state="offline", enrolled=True,
+                           pin_status=lambda: "none", autostart_enabled=lambda: False,
+                           activity_status=lambda: {"tasks": 0, "waiting": 0, "quit_when_idle": False, "desktop_active": False},
+                           backend_status=lambda: {name: dict(ready) for name in ("claude", "codex", "opencode", "deepseek")})
+    monkeypatch.setattr(linux_menu.host, "find_tool", lambda name: Path("/usr/bin") / name if name != "opencode" else None)
+    monkeypatch.setattr(deepseek_rpc, "find_installs", lambda: [object()])
+    status = linux_menu.dispatch(ctrl, "status", None)
+    assert status["cli"] == {"claude": True, "codex": True, "opencode": False, "deepseek": True}
+    monkeypatch.setattr(linux_menu, "invoke", lambda h, op, value=None: status)
+    linux_menu.status(None)
+    lines = [line for line in capsys.readouterr().out.splitlines() if "CLI" in line]
+    assert [line.split(":")[0] for line in lines] == ["claude", "codex", "opencode", "deepseek"]
+    assert lines[3].endswith("моделей 3") and "CLI да" in lines[3]
+    monkeypatch.setattr(deepseek_rpc, "find_installs", lambda: [])  # чужой `dsh` не в счёт
+    assert linux_menu.dispatch(ctrl, "status", None)["cli"]["deepseek"] is False
+
+
 def test_linux_update_uses_existing_global_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(host, "LINUX", True)
     modules = tmp_path / "lib/node_modules"

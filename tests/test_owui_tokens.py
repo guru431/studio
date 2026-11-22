@@ -1,4 +1,4 @@
-"""Учётки Open WebUI: таблица (шаг 63) и постоянная сессия — рабочий токен в памяти, обновление с ротацией,
+"""Учётки Open WebUI: таблица (шаг 65) и постоянная сессия — рабочий токен в памяти, обновление с ротацией,
 восстановление по `request_id`, `relogin`."""
 import asyncio
 import json
@@ -40,7 +40,7 @@ def setup(studio):
     return studio, fake, add_account(fake, user)
 
 
-def test_schema_has_owui_accounts_and_step_63(env):
+def test_schema_has_owui_accounts_and_step_65(env):
     def check(conn):
         cols = [r[1] for r in conn.execute("PRAGMA table_info(owui_accounts)")]
         assert cols == ["id", "user_id", "label", "base_url", "who_enc", "secret_enc", "cert_pem", "state",
@@ -58,14 +58,14 @@ def test_schema_has_owui_accounts_and_step_63(env):
         conn.execute("DELETE FROM users WHERE id = 1")                  # учётка уходит с пользователем
         assert conn.execute("SELECT count(*) FROM owui_accounts").fetchone()[0] == 0
 
-    assert db.VERSION >= 63 and db.STEPS[63] == db.OWUI_63
+    assert db.VERSION >= 65 and db.STEPS[65] == db.OWUI_65
     with closing(db.connect(env.db_path)) as conn:                      # новая база
         db.migrate(conn)
         check(conn)
     for suffix in ("", "-wal", "-shm"):
         env.db_path.with_name(env.db_path.name + suffix).unlink(missing_ok=True)
-    with closing(db.connect(env.db_path)) as conn:                      # база 62 после шага 63
-        install_schema(conn, 62)
+    with closing(db.connect(env.db_path)) as conn:                      # база 64 после шага 65
+        install_schema(conn, 64)
         assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name = 'owui_accounts'").fetchone()[0] == 0
         db.migrate(conn)
         check(conn)

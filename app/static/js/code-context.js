@@ -24,7 +24,9 @@ export function contextView(host, { chat, engine, project, messages }) {
     'aria-labelledby': 'code-context-title' }, el('h2', { id: 'code-context-title' }, tr("Сессия и контекст")), content,
   el('p', { class: 'muted small' }, engine === 'opencode'
     ? tr('Контекст — текущая заполненность окна. Токены накапливаются по завершённым запросам из Студии; запросы из других приложений в эту сумму не входят. Стоимость всей сессии сообщает OpenCode.')
-    : tr("Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.")),
+    : engine === 'deepseek'
+      ? tr("Контекст — текущая заполненность окна. Токены накапливаются по завершённым запросам из Студии; запросы из других приложений в эту сумму не входят.")
+      : tr("Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.")),
   el('div', { class: 'dialog-actions' }, close));
   host.append(dialog);
   const cacheRead = el('dd');
@@ -84,7 +86,7 @@ export function contextView(host, { chat, engine, project, messages }) {
       [tr("Занято токенов"), number(context?.used)],
       [tr("Свободно токенов"), number(context ? Math.max(0, context.limit - context.used) : null)],
       [tr("Заполнено"), Number.isFinite(context?.percent) ? `${number(context.percent)}%` : tr("Не сообщается")],
-      [engine === 'opencode' ? tr('Токены завершённых ходов Студии') : tr("Потрачено токенов за сессию"), number(usage.total)],
+      [engine === 'opencode' || engine === 'deepseek' ? tr('Токены завершённых ходов Студии') : tr("Потрачено токенов за сессию"), number(usage.total)],
       [tr("Входные токены"), number(usage.input)], [tr("Выходные токены"), number(usage.output)],
       [tr("Рассуждения, токенов"), number(usage.reasoning)],
       ...(engine === 'opencode' ? [[tr('Стоимость сессии, USD'), Number.isFinite(context?.cost?.amount)

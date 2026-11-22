@@ -167,6 +167,40 @@ def test_software_versions_update_progress_and_verified_result(browser, live, wi
 
 
 @pytest.mark.parametrize('width', [320, 1280])
+def test_deepseek_harness_row_in_software_versions(browser, live, width):
+    """Четвёртый помощник в «Программах»: имя, предварительный выпуск, ручное обновление Desktop/Python."""
+    login = f'software-deepseek-{width}'
+    live.add_user(login)
+    machine = computer()
+    machine.software_versions = True
+    machine.software_data = {'items': [
+        {'id': 'deepseek', 'installed': True, 'version': '0.1.0-rc.6', 'cli_version': '0.1.0-rc.6',
+         'latest': '0.1.0-rc.7', 'source': 'native', 'update_available': True, 'can_update': False, 'reason': 'manual'},
+        {'id': 'codex', 'installed': True, 'version': '1.2.3', 'cli_version': '1.2.3', 'latest': '1.2.3',
+         'source': 'npm', 'update_available': False, 'can_update': False, 'reason': None}],
+        'update': {'tool': None, 'state': 'idle'}}
+    aid, server = code_online(live, login, machine)
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', '!!document.querySelector("#code-projects li")'),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
+            ('wait', 'document.querySelectorAll("[data-software-update]").length === 2'),
+            ('eval', 'row', 'document.querySelector("[data-software-update=deepseek]").closest(".code-software-row").textContent'),
+            ('eval', 'disabled', 'document.querySelector("[data-software-update=deepseek]").disabled'),
+            ('eval', 'fits', FITS)], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    values = result['values']
+    for text in ('DeepSeek Harness', 'Установлено: 0.1.0-rc.6', 'Актуальная версия: 0.1.0-rc.7',
+                 'Обновите программу на компьютере'):
+        assert text in values['row'], values['row']
+    assert values['disabled'] and values['fits']
+    assert not any(req['op'] == 'software_update' for req in machine.requests)
+    assert not problems(result), problems(result)
+
+
+@pytest.mark.parametrize('width', [320, 1280])
 def test_computer_name_switches_projects_without_opening_info(browser, live, width):
     login = f'computer-select-{width}'
     live.add_user(login)

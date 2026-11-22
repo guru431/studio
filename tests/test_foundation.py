@@ -13,7 +13,7 @@ import state
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 63
+SCHEMA_VERSION = 65
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -43,7 +43,7 @@ def test_shared_integration_migration_preserves_personal_rows_and_sequences(env)
     from contextlib import closing
 
     with closing(db.connect(env.db_path)) as conn:
-        conn.executescript(db.SCHEMA.removesuffix(db.OWUI_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
+        conn.executescript(db.SCHEMA.removesuffix(db.OWUI_65).removesuffix(db.CODE_64).removesuffix(db.MIRROR_GROUPS_63).removesuffix(db.MCP_DEFAULT_62).removesuffix(db.VOICE_TRASH_61)
                            .removesuffix(db.TRANSCRIPT_PLAYBACK_60)
                            .removesuffix(db.CODE_PINS_59).removesuffix(db.REMAINING_58).removesuffix(db.CAPABILITIES_57)
                            .removesuffix(db.ACCESS_56)
@@ -354,6 +354,40 @@ def test_step_62_marks_shared_mcp_dialog_default_and_previous_writer_works(env):
         conn.execute(add, ("previous",))
         assert [tuple(r) for r in conn.execute("SELECT name, dialog_default FROM mcp_servers ORDER BY id")] == [
             ("before", 1), ("previous", 1)]
+
+
+def test_step_63_adds_mirror_groups_and_previous_writer_works(env):
+    """Шаг 63: группы копий зеркал, копии, пары и `mirror_legacy`; `project_mirrors` не меняется — прежний код
+    по-прежнему пишет в него; удаление учётки уносит группы, копии и пары каскадом."""
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 62)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        agent = ("INSERT INTO agents(id,user_id,name,key_hash,has_pin,projects_root,cc_version,created,last_seen)"
+                 " VALUES(?,1,?,?,0,'root','1',0,0)")
+        conn.execute(agent, (1, "A", "hash-a"))
+        conn.execute(agent, (2, "B", "hash-b"))
+        mirror = ("INSERT INTO project_mirrors(source,project,destination,root,name_key,location)"
+                  " VALUES(1,?,2,'root',?,x'00')")
+        conn.execute(mirror, ("before", "one"))
+        db.migrate(conn)
+        db.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"mirror_groups", "mirror_copies", "mirror_pairs", "mirror_legacy"} <= tables
+        conn.execute(mirror, ("previous", "two"))                                       # прежний код
+        assert conn.execute("SELECT count(*) FROM project_mirrors").fetchone()[0] == 2
+
+        conn.execute("INSERT INTO mirror_groups(id,user_id,exclude) VALUES(1,1,x'00')")
+        conn.execute("INSERT INTO mirror_copies(id,grp,agent,project) VALUES(1,1,1,'before')")
+        conn.execute("INSERT INTO mirror_copies(id,grp,agent,root,name_key,location,held)"
+                     " VALUES(2,1,2,'root','one',x'00',x'00')")
+        conn.execute("INSERT INTO mirror_pairs(a,b,state_b,synced) VALUES(1,2,x'00',5)")
+        conn.execute("INSERT INTO mirror_legacy(id) VALUES(1)")
+        conn.execute("DELETE FROM users WHERE id = 1")
+        for table in ("mirror_groups", "mirror_copies", "mirror_pairs", "project_mirrors"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):

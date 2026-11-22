@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from fake_sdk import HOLD, FakeFactory, delta, result_ok
-from studio_agent import VERSION, files, limits, projects, sessions, store
+from studio_agent import VERSION, deepseek, files, limits, projects, sessions, store
 from studio_agent.agent import Agent
 from studio_agent.pin import PinStore
 from studio_agent.turns import Runner
@@ -293,13 +293,14 @@ def test_hello(agent):
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                              "account_disabled": True, "git_compare": True,
-                             "project_mirror_discovery": True, "mirror_exclude": True,
+                             "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
                              **({'terminal': True} if host.platform_id() == 'linux' else {}),
                              "metadata_cache": True, "visualizations": True,
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True,
-                             "agent_update_cancel": False, "codex_models": True, "opencode_models": False}
+                             "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
+                             "deepseek_models": False, "deepseek_usage": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -611,6 +612,102 @@ async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, r
     backend.answer.assert_called_once_with(pid, CHAT, "1" * 16, "allow", None, None)
     assert (await agent.handle(req("stop", **frame)))[0]["ok"]
     backend.stop.assert_awaited_once_with(pid, CHAT)
+
+
+def deepseek_backend(model="[\"deepseek-official\",\"deepseek-v4\"]", **extra):
+    catalog = {"version": "0.2.2-rc.5", "models": [{"id": model, "label": "DeepSeek V4"}], "efforts": ["high"],
+               "defaults": {"model": model, "effort": None}, "settings": {"applied": [], "skipped": []}}
+    return SimpleNamespace(models=catalog["models"], efforts=catalog["efforts"], catalog=catalog,
+                           chats=AsyncMock(return_value=[{"chat": CHAT, "engine": "deepseek"}]),
+                           history=AsyncMock(return_value={"messages": []}),
+                           state=AsyncMock(return_value={"settings": {"model": model}}),
+                           live=Mock(return_value={}), activity=Mock(return_value=[]), start=Mock(return_value="turn-id"),
+                           probe=AsyncMock(return_value=True), max_turns=12, **extra)
+
+
+async def test_hello_declares_deepseek_catalog_and_flags(agent):
+    backend = deepseek_backend()
+    agent.deepseek = backend
+    hello = agent.hello()
+    assert hello["deepseek"] == backend.catalog and hello["deepseek"]["models"][0]["label"] == "DeepSeek V4"
+    assert hello["deepseek_models"] is True and hello["deepseek_usage"] is True
+    agent.set_max_turns(5)
+    assert backend.max_turns == 5
+
+
+async def test_hello_without_deepseek_when_not_installed(agent):
+    hello = agent.hello()
+    assert "deepseek" not in hello and hello["deepseek_models"] is False and hello["deepseek_usage"] is True
+    agent.deepseek = SimpleNamespace(catalog=None)  # проба не нашла DSH или Node старше требования
+    hello = agent.hello()
+    assert "deepseek" not in hello and hello["deepseek_models"] is True
+    await opened(agent)
+    res = (await agent.handle(req("state", engine="deepseek", project=projects.pid("demo"), chat=CHAT)))[0]
+    assert res["code"] == "unsupported" and res["message"] == "DeepSeek Harness не найден на компьютере"
+    # DSH стоит, но Node старше нужного — отказ называет причину (I3)
+    agent.deepseek = SimpleNamespace(catalog=None, unavailable_message=deepseek.NODE)
+    res = (await agent.handle(req("state", engine="deepseek", project=projects.pid("demo"), chat=CHAT)))[0]
+    assert res["code"] == "unsupported" and res["message"] == deepseek.NODE
+
+
+async def test_fork_and_subagents_for_deepseek_are_unsupported(agent):
+    agent.deepseek = deepseek_backend(fork_chat=AsyncMock(), subagents=AsyncMock(), subagent_history=AsyncMock())
+    await opened(agent)
+    frame = {"engine": "deepseek", "project": projects.pid("demo"), "chat": CHAT}
+    for op, extra in (("chat_fork", {"message_id": None}), ("subagents", {}), ("subagent_history", {"request_id": "1" * 16})):
+        res = (await agent.handle(req(op, **frame, **extra)))[0]
+        assert res["code"] == "unsupported", op
+    assert not agent.deepseek.fork_chat.called and not agent.deepseek.subagents.called
+
+
+async def test_chats_include_deepseek_rows(agent, root, monkeypatch):
+    backend = deepseek_backend()
+    agent.deepseek = backend
+    await opened(agent)
+    pid = projects.pid("demo")
+    res = (await agent.handle(req("chats", project=pid)))[0]
+    assert res["data"]["items"][-1]["engine"] == "deepseek" and res["data"]["complete"] is True
+    backend.chats.assert_awaited_once_with(root / "demo")
+    frame = {"engine": "deepseek", "project": pid, "chat": CHAT}
+    model = backend.models[0]["id"]
+    assert (await agent.handle(req("history", **frame, before=None, limit=20)))[0]["ok"]
+    backend.history.assert_awaited_once_with(root / "demo", CHAT, None, 20)
+    for access in ("default", "read-only", "workspace-write", "danger-full-access"):
+        res = (await agent.handle(req("turn", **frame, text="тест", model=model, effort="high", access=access)))[0]
+        assert res["ok"], access
+    assert (await agent.handle(req("turn", **frame, text="тест", model=model, access="auto")))[0]["code"] == "invalid"
+    # Поиск по чатам видит и DSH.
+    monkeypatch.setattr(sessions, "chats", lambda *args: [])
+    assert (await agent.handle(req("chat_search", project=pid, query="x")))[0]["ok"]
+    assert backend.chats.await_count == 2
+
+
+async def test_models_refresh_for_deepseek_without_new_channel(agent):
+    backend = deepseek_backend()
+    agent.deepseek = backend
+    await opened(agent)
+    res = (await agent.handle(req("models", engine="deepseek")))[0]
+    assert res["ok"] and res["data"] == {"deepseek": backend.catalog}
+    backend.probe.assert_awaited_once_with(agent.cfg.projects_root)
+    backend.probe.return_value = False
+    res = (await agent.handle(req("models", engine="deepseek")))[0]
+    assert res["code"] == "busy" and "DeepSeek Harness" in res["message"]
+    backend.unavailable_message = deepseek.NODE                  # проба не запустила DSH: Node старше нужного
+    res = (await agent.handle(req("models", engine="deepseek")))[0]
+    assert res["code"] == "unsupported" and res["message"] == deepseek.NODE
+
+
+async def test_deepseek_turn_shares_the_limit_and_activity(agent):
+    backend = deepseek_backend()
+    agent.deepseek = backend
+    await opened(agent)
+    agent.set_max_turns(1)
+    backend.live.return_value = {"other": False}
+    frame = {"engine": "deepseek", "project": projects.pid("demo"), "chat": CHAT}
+    assert (await agent.handle(req("turn", **frame, text="тест", model=None, effort=None)))[0]["code"] == "busy"
+    backend.activity.return_value = [{"project": frame["project"], "chat": "c"}]
+    items = (await agent.handle(req("activity")))[0]["data"]["items"]
+    assert [item["engine"] for item in items] == ["deepseek"]
 
 
 async def test_bad_fields_are_invalid(agent):

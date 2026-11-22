@@ -958,7 +958,7 @@ def test_history_wipe_clears_chats_and_feed(browser, live):
     # FINDINGS «Окно „Удалить всю историю“ обещает сохранить настройки, но удаляет голоса и многое другое»
     assert v["warning"].startswith("Удалятся безвозвратно: вся история разделов «Чат», «Фото», «Видео», «Озвучка»,"
                                    " «Расшифровка», «Сканы», «Перевод» вместе с файлами, образцы голосов, все ссылки")
-    assert v["warning"].endswith(" Сами чаты Claude Code, Codex и OpenCode хранятся на компьютерах и останутся.")
+    assert v["warning"].endswith(" Сами чаты Claude Code, Codex, OpenCode и DeepSeek Harness хранятся на компьютерах и останутся.")
     assert v["after"] == [0, 0] and v["conns"] == 1
     assert not problems(r), problems(r)
 
@@ -8251,7 +8251,7 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
         sb.stop()
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["title"] == "Компьютеры (Claude Code, Codex и OpenCode)"
+    assert v["title"] == "Компьютеры (Claude Code, Codex, OpenCode и DeepSeek Harness)"
     assert v["rows"] == [[home, "Домашний ПК", "не на связи", None, "Отозвать"],
                          [work, "Рабочий ПК", "на связи", "PIN", "Отозвать"]]
     assert v["first"][:3] == [["Рабочий ПК", "на связи", "127.0.0.1"], ["Рабочий ПК", "привязан", "127.0.0.1"],
@@ -8421,7 +8421,7 @@ def test_settings_push_toggle_subscribes_this_device(browser, live):
     v = r["values"]
     assert v["label"] == "Push на этом устройстве"
     assert v["hint"] == ("Приходят и при закрытой студии и погасшем экране: запрос разрешения, вопрос и конец хода"
-                         " Claude Code, Codex или OpenCode, готовность и ошибки фоновых заданий."
+                         " Claude Code, Codex, OpenCode или DeepSeek Harness, готовность и ошибки фоновых заданий."
                          " Идут через службу браузера (Apple, Google или Mozilla) — содержимое зашифровано,"
                          " но факт и время им видны."
                          " На iPhone — только у студии, добавленной на экран «Домой».")
@@ -8636,7 +8636,7 @@ def test_code_empty_offers_agent_download(browser, live):
     assert v["macos"] == ['/api/agent/download?platform=macos', 'studio-agent-setup.pkg']
     assert v["linux"] == ['/api/agent/download?platform=linux', 'studio-agent-setup.sh']
     assert v["texts"] == ["Установите мост на компьютер, который хотите подключить к Студии.",
-                          "Нужны Claude Code, Codex или OpenCode. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
+                          "Нужны Claude Code, Codex, OpenCode или DeepSeek Harness. Для Windows и Linux нужен Python 3.11+, для Linux также venv. Установщик macOS 13+ включает Python.",
                           "В Windows и macOS откройте установщик. В Linux получите команду и выполните её в терминале в течение 10 минут. После установки войдите в Студию через меню моста."]
     assert live.url + "/api/agent/linux-installer" in v["command"]
     assert v["badge"] is True and v["fits"] is True

@@ -62,6 +62,14 @@ def test_unavailable_external_lookup_uses_only_a_public_bridge_connection_ip(stu
     assert studio.c.get(path).json()['external_ip'] is None
 
 
+def test_software_keeps_the_old_node_reason_of_deepseek():
+    """DSH стоит, но Node.js старше нужного: причина `node` доходит до карточки компьютера, чужие коды — нет."""
+    import computer_info
+    row = {'id': 'deepseek', 'installed': True, 'version': '0.2.2-rc.5', 'source': 'npm', 'reason': 'node'}
+    data = computer_info.software({'items': [row, {**row, 'id': 'codex', 'reason': 'other'}]})
+    assert [item['reason'] for item in data['items']] == ['node', None]
+
+
 def test_software_routes_require_capability_pin_ownership_and_csrf(studio, caplog):
     aid, machine, link = setup(studio, pin='2468', opened=False)
     path = f'/api/code/agents/{aid}/software'

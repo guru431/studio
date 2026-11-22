@@ -122,6 +122,23 @@ def test_engine_priority_preserves_choices_and_is_separate_per_user(studio):
     assert studio.c.get('/api/me').json()['code_defaults']['opencode']['priority'] == 2
 
 
+def test_old_three_priorities_stay_valid_and_deepseek_goes_last(studio):
+    make_user(studio, 'owner'); signin(studio, 'owner')
+    old = {'codex': {'priority': 1}, 'claude': {'priority': 2}, 'opencode': {'priority': 3}}
+    assert studio.c.patch('/api/me', json={'code_defaults': old}).json()['code_defaults'] == old
+    model = '["deepseek-official","deepseek-chat"]'
+    saved = {'priority': 4, 'model': model, 'effort': 'high', 'access': 'workspace-write'}
+    response = studio.c.patch('/api/me', json={'code_defaults': {'deepseek': saved}})
+    assert response.status_code == 200 and response.json()['code_defaults'] == {**old, 'deepseek': saved}
+    first = {'deepseek': {'priority': 1}, 'codex': {'priority': 2}, 'claude': {'priority': 3}, 'opencode': {'priority': 4}}
+    assert studio.c.patch('/api/me', json={'code_defaults': first}).status_code == 200
+    for invalid in ({'deepseek': {'priority': 3}}, {'deepseek': {'priority': 5}}, {'deepseek': {'access': 'auto'}},
+                    {'deepseek': {'model': 'deepseek-chat'}}, {'codex': {'model': model}},
+                    {'opencode': {'model': model}}):
+        assert studio.c.patch('/api/me', json={'code_defaults': invalid}).status_code == 422
+    assert studio.c.get('/api/me').json()['code_defaults']['deepseek'] == {**saved, 'priority': 1}
+
+
 @pytest.mark.parametrize('priorities', [(1, 1, 3), (True, 2, 3), (0, 2, 3), (1, 2, 4), (1, None, 3)])
 def test_invalid_engine_priority_leaves_the_profile_unchanged(studio, priorities):
     make_user(studio, 'owner'); signin(studio, 'owner')

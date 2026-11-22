@@ -1,6 +1,6 @@
 # AGENTS.md — компонент agent проекта studio
 
-Мост Windows/macOS/Linux: отдаёт студии `studio.example.com` локальные Claude Code, Codex и OpenCode по протоколу v1. Часть репозитория studio.
+Мост Windows/macOS/Linux: отдаёт студии `studio.example.com` локальные Claude Code, Codex, OpenCode и DeepSeek Harness по протоколу v1. Часть репозитория studio.
 Общие правила — [../CLAUDE.md](../CLAUDE.md), устройство моста — [CLAUDE.md](CLAUDE.md), установка — [README.md](README.md).
 
 ## Ключевые файлы
@@ -11,6 +11,7 @@
 - Ядро: `studio_agent/link.py` (канал), `agent.py` (просьбы, PIN), `turns.py` (ход через Agent SDK), `app.py` (`Controller`)
 - Codex: `codex.py` (каталог, чаты, ходы), `codex_rpc.py` (локальный app-server по stdio); соответствие UUID — `codex-chats.json`.
 - OpenCode: `opencode.py`, `opencode_rpc.py` (ACP по stdio); соответствие UUID — `opencode-chats.json`, настройки — `opencode/choices.json`.
+- DeepSeek Harness: `deepseek.py` поверх общей основы ACP `acp.py`, установки — `deepseek_rpc.py`, наложение профиля Web/Desktop — `deepseek_settings.py`, история из файлов сессий — `deepseek_history.py`, баланс — `deepseek_usage.py`; соответствие UUID — `deepseek-chats.json`, настройки — `deepseek/choices.json`. Файлы DSH человека мост только читает. Живая проба — `tests/test_deepseek_live.py` (`manual`, провайдер из окружения).
 - Пределы — `studio_agent/limits.py`, слова отказов — `studio_agent/errors.py`
 - Сквозная проверка с живой студией — `tests/test_live_studio.py` (`manual`, тратит квоту)
 

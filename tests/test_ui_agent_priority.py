@@ -4,6 +4,7 @@ import pytest
 from fake_bridge import pid
 from test_codex import CATALOG as CODEX
 from test_ui_opencode import CATALOG as OPENCODE
+from test_deepseek import CATALOG as DEEPSEEK
 from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_free_machine, code_online, code_requests,
                              code_session, go, live, live_sql, problems, set_value, signin)
 
@@ -15,12 +16,16 @@ def test_priority_saved_in_settings_orders_starters_and_selects_git_agent(browse
     login = f'agent-priority-{width}'
     live.add_user(login)
     machine = code_free_machine()
-    machine.codex, machine.opencode = CODEX, OPENCODE
+    machine.codex, machine.opencode, machine.deepseek = CODEX, OPENCODE, DEEPSEEK
     machine.script = [{'k': 'text', 'text': 'Готово'}, {'k': 'done', 'status': 'done'}]
     aid, server = code_online(live, login, machine)
     try:
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/code'),
             ('wait', "document.querySelector('#code-engine-order-save')"),
+            ('wait', "document.querySelector('#code-defaults-deepseek-model')"),
+            ('eval', 'forms', "[...document.querySelectorAll('#code-defaults-rows select[id$=-model]')].map(s => s.id)"),
+            ('eval', 'native', "document.querySelector('#code-defaults-deepseek-model').options[0].textContent"),
+            ('eval', 'priorities', "[...document.querySelectorAll('#code-engine-order li')].map(li => li.dataset.engine)"),
             ('click', "#code-engine-order [data-engine=codex] .code-engine-up"),
             ('click', '#code-engine-order-save'),
             ('wait', "document.querySelector('#code-engine-order-status').textContent.includes('сохранён')"),
@@ -43,7 +48,10 @@ def test_priority_saved_in_settings_orders_starters_and_selects_git_agent(browse
     finally:
         server.stop()
     assert not result.get('failed'), result
-    assert result['values']['order'] == ['code-new-codex', 'code-new-chat', 'code-new-opencode']
+    assert result['values']['order'] == ['code-new-codex', 'code-new-chat', 'code-new-opencode', 'code-new-deepseek']
+    assert result['values']['forms'] == [f'code-defaults-{e}-model' for e in ('codex', 'claude', 'opencode', 'deepseek')]
+    assert result['values']['native'] == 'DeepSeek Chat'
+    assert result['values']['priorities'] == ['claude', 'codex', 'opencode', 'deepseek']
     assert result['values']['geometry'] and result['values']['engine'] == 'codex'
     [turn] = code_requests(machine, 'turn')
     assert turn['engine'] == 'codex' and turn['project'] == pid('alpha')

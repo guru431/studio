@@ -1,0 +1,45 @@
+{
+ "sessionId": "d893f69d-3f0f-40fc-8401-58614c9eee50",
+ "configOptions": [
+  {
+   "id": "model",
+   "name": "Model",
+   "category": "model",
+   "type": "select",
+   "currentValue": "[\"srvllm\",\"stub-tools\"]",
+   "options": [
+    {
+     "group": "srvllm",
+     "name": "srvllm",
+     "options": [
+      {
+       "value": "[\"srvllm\",\"stub-tools\"]",
+       "name": "Stub tools"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reasoning_effort",
+   "name": "Reasoning effort",
+   "category": "thought_level",
+   "type": "select",
+   "currentValue": "",
+   "options": [
+    {
+     "value": "",
+     "name": "Provider default"
+    },
+    {
+     "value": "off",
+     "name": "Off"
+    },
+    {
+     "value": "high",
+     "name": "High"
+    }
+   ]
+  }
+ ]
+}

@@ -514,12 +514,15 @@ def test_overlapping_backups_do_not_share_a_part_file(base, env, monkeypatch):
     ("mcp", "INSERT INTO mcp_servers(user_id,name,url,secret_enc) VALUES(1,'test','https://mcp.test',?)"),
     ("mirrors", "INSERT INTO project_mirrors(source,project,destination,root,name_key,location)"
                 " VALUES(1,'project',1,'root','copy',?)"),
+    ("mirrors", "INSERT INTO mirror_groups(user_id, exclude) VALUES(1, ?)"),
+    ("mirrors", "INSERT INTO mirror_copies(grp, agent, held) VALUES((SELECT min(id) FROM mirror_groups), 1, ?)"),
 ])
 def test_verify_detects_wrong_key_with_only_one_encrypted_setting(base, env, monkeypatch, category, statement):
     add_rows(base, tokens=0, files=())
     if category == "mirrors":
         base.execute("INSERT INTO agents(user_id,name,key_hash,has_pin,projects_root,cc_version,created,last_seen)"
                      " VALUES(1,'host','hash',0,'root','1',0,0)")
+        base.execute("INSERT INTO mirror_groups(user_id) VALUES(1)")  # без исключений: шифра в ней нет
     base.execute(statement, (security.encrypt("{}"),))
     backup_of(base, env, monkeypatch)
     assert manage.verify_backup()[category] == {"ok": 1, "failed": 0}

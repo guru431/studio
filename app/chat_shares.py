@@ -352,6 +352,17 @@ async def _history_images(request: Request, aid: int, pid: str, session_id: str,
         image.update(mime=mime, data=encoded)
 
 
+UNREADABLE = "Историю этой версии DeepSeek Harness студия пока не читает"
+OTHER_FOLDER = "Папка этого чата DeepSeek Harness не совпадает с проектом — историю студия не показывает"
+
+
+def unreadable(data) -> None:
+    """Мост не прочёл историю (`notice`, DeepSeek Harness): пустой снимок не делаем — 409 со словами заметки."""
+    notice = data.get("notice") if isinstance(data, dict) else None
+    if notice in ("unsupported_format", "cwd_mismatch"):
+        raise _refuse(409, "history_unavailable", OTHER_FOLDER if notice == "cwd_mismatch" else UNREADABLE)
+
+
 async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, title: str, *,
                          images: bool = False) -> dict:
     """Снимок агентского чата. `images` — ссылка «Поделиться»: картинки истории дочитываются у моста
@@ -360,6 +371,7 @@ async def agent_snapshot(request: Request, aid: int, pid: str, session_id: str, 
     pages, before, total_size, count = [], None, 0, 0
     while True:
         data = await claude_code.ask(request, aid, "history", project=pid, chat=session_id, before=before, limit=100)
+        unreadable(data)
         items, start = data.get("items"), data.get("start")
         if not isinstance(items, list) or type(start) is not int or start < 0 or (before is not None and start >= before):
             raise _refuse(502, "bridge", "мост ответил непонятно")

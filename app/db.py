@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 63
+VERSION = 65
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -914,16 +914,54 @@ SCHEMA += VOICE_TRASH_61
 MCP_DEFAULT_62 = "ALTER TABLE mcp_servers ADD COLUMN dialog_default INTEGER NOT NULL DEFAULT 1;"
 SCHEMA += MCP_DEFAULT_62
 
+#: зеркала группой равноправных копий (mirror_groups.py): группа — исключения шифром, копия — папка компьютера
+#: (`project` — id проекта, `root` + `name_key` + `location` шифром — адрес; неизвестное — NULL; `held` шифром —
+#: накопленные записи копии на её синхронизациях), пара — состояния двух копий на их последнюю синхронизацию
+#: (шифром). Строки `project_mirrors` переносит `mirror_groups.adopt` при
+#: старте, перенесённые — в `mirror_legacy`; сам `project_mirrors` не меняется. Прежний код новые таблицы не читает:
+#: видит свои односторонние зеркала с прежними базами, его новые строки `adopt` перенесёт после возврата вперёд
+MIRROR_GROUPS_63 = """CREATE TABLE mirror_groups(id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, exclude BLOB);
+CREATE TABLE mirror_copies(id INTEGER PRIMARY KEY AUTOINCREMENT,
+    grp INTEGER NOT NULL REFERENCES mirror_groups ON DELETE CASCADE,
+    agent INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE,
+    project TEXT, root TEXT, name_key TEXT, location BLOB, held BLOB, UNIQUE(agent, root, name_key));
+CREATE INDEX mirror_copies_project ON mirror_copies(agent, project);
+CREATE INDEX mirror_copies_grp ON mirror_copies(grp);
+CREATE TABLE mirror_pairs(a INTEGER NOT NULL REFERENCES mirror_copies ON DELETE CASCADE,
+    b INTEGER NOT NULL REFERENCES mirror_copies ON DELETE CASCADE,
+    state_a BLOB, state_b BLOB, synced REAL, PRIMARY KEY(a, b), CHECK(a < b));
+CREATE INDEX mirror_pairs_b ON mirror_pairs(b);
+CREATE TABLE mirror_legacy(id INTEGER PRIMARY KEY);
+"""
+SCHEMA += MIRROR_GROUPS_63
+
+#: четвёртый помощник — DeepSeek Harness: CHECK `engine` шире, как CODE_23. На code_chats нет входящих FK, триггеров
+#: и видов; id, все столбцы (и `origin` шага 41), индекс и каскады сохраняются. Прежний код пишет свои движки
+CODE_64 = """CREATE TABLE code_chats_64(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       agent_id INTEGER NOT NULL REFERENCES agents ON DELETE CASCADE, project TEXT NOT NULL, session_id TEXT NOT NULL,
+       state TEXT NOT NULL CHECK (state IN ('open','closed')), created REAL NOT NULL, updated REAL NOT NULL,
+       engine TEXT NOT NULL DEFAULT 'claude' CHECK (engine IN ('claude', 'codex', 'opencode', 'deepseek')),
+       origin TEXT NOT NULL DEFAULT 'other' CHECK (origin IN ('studio', 'other')),
+       UNIQUE (agent_id, session_id));
+INSERT INTO code_chats_64(id, user_id, agent_id, project, session_id, state, created, updated, engine, origin)
+SELECT id, user_id, agent_id, project, session_id, state, created, updated, engine, origin FROM code_chats;
+DROP TABLE code_chats;
+ALTER TABLE code_chats_64 RENAME TO code_chats;
+CREATE INDEX code_chats_user ON code_chats(user_id, created);
+"""
+SCHEMA += CODE_64
+
 #: учётки Open WebUI внутри учётки Студии (owui.py): кто подключён (`who_enc`) и постоянная сессия (`secret_enc`) —
 #: шифром `STUDIO_DATA_KEY`; пароль не хранится нигде. Прежний код таблицу не читает; учётка уходит с пользователем
-OWUI_63 = """CREATE TABLE owui_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,
+OWUI_65 = """CREATE TABLE owui_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,
        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
        label TEXT NOT NULL, base_url TEXT NOT NULL, who_enc BLOB NOT NULL, secret_enc BLOB NOT NULL, cert_pem TEXT,
        state TEXT NOT NULL DEFAULT 'ok' CHECK (state IN ('ok', 'relogin')), version TEXT,
        created REAL NOT NULL, used REAL);
 CREATE INDEX owui_accounts_user ON owui_accounts(user_id);
 """
-SCHEMA += OWUI_63
+SCHEMA += OWUI_65
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1051,8 +1089,12 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     61: VOICE_TRASH_61,
     # общий MCP: в диалоге по умолчанию или только вручную
     62: MCP_DEFAULT_62,
+    # зеркала группой копий: группы, копии, пары, перенесённые строки project_mirrors
+    63: MIRROR_GROUPS_63,
+    # четвёртый помощник «Агентов» — DeepSeek Harness
+    64: CODE_64,
     # учётки Open WebUI
-    63: OWUI_63,
+    65: OWUI_65,
 }
 
 

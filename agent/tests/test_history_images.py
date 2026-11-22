@@ -1,6 +1,7 @@
 """Изображения после повторного открытия: компактные ссылки и чтение только своего сообщения."""
 
 import base64
+import hashlib
 import json
 from unittest.mock import AsyncMock
 
@@ -69,6 +70,24 @@ def test_opencode_chunks_keep_stable_user_ids_and_image_indexes_without_inline_d
     assert [ref["index"] for ref in message["images"]] == [0, 1]
     assert PNG["data"] not in json.dumps(message)
     assert history_images.payload(blocks[message["id"]], 1, "opencode", tmp_path) == PNG
+
+
+def test_deepseek_attachment_is_read_by_digest_from_the_dsh_store_only(tmp_path):
+    raw = base64.b64decode(PNG["data"])
+    digest = hashlib.sha256(raw).hexdigest()
+    store = tmp_path / "attachments" / "v1" / "objects" / digest[:2]
+    store.mkdir(parents=True)
+    (store / digest).write_bytes(raw)
+    block = {"type": "image", "attachment": {"attachmentId": f"sha256:{digest}", "mediaType": "image/png"}}
+    assert history_images.payload([block], 0, "deepseek", tmp_path / "project", root=tmp_path) == PNG
+    for attachment in ({"attachmentId": "sha256:../../secret"}, {"attachmentId": "sha256:" + "0" * 64}, {}):
+        with pytest.raises(Refused, match="unsupported"):
+            history_images.payload([{"type": "image", "attachment": attachment}], 0, "deepseek", tmp_path, root=tmp_path)
+    (store / digest).write_bytes(raw + b"changed")             # содержимое не совпало с хэшем — не отдаём
+    with pytest.raises(Refused, match="unsupported"):
+        history_images.payload([block], 0, "deepseek", tmp_path, root=tmp_path)
+    with pytest.raises(Refused, match="unsupported"):
+        history_images.payload([block], 0, "deepseek", tmp_path)
 
 
 @pytest.mark.parametrize("url", ["https://example.com/private.png", "file:///private.png", "data:image/svg+xml;base64,PHN2Zy8+"])

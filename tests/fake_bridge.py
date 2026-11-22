@@ -66,6 +66,9 @@ class FakeMachine:
         self.codex = None
         self.codex_models = False
         self.opencode = None
+        self.deepseek = None                     # каталог DSH; без него мост — как до DeepSeek Harness
+        self.deepseek_models = False
+        self.deepseek_usage = False
         self.images = True
         self.history_images = False
         self.chat_state = True
@@ -129,10 +132,11 @@ class FakeMachine:
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "terminal", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
-                                           "software_update_all", "git_compare")
+                                           "software_update_all", "git_compare", "deepseek_models", "deepseek_usage")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
-                **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode))
+                **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode),
+                                                        ("deepseek", self.deepseek))
                    if catalog is not None}}
 
     # ---- просьбы ----------------------------------------------------------------
@@ -188,7 +192,8 @@ class FakeMachine:
         return self._op_agent_update_status(req, events)
 
     def _op_models(self, req, events):
-        return {"codex": self.codex}
+        engine = req.get("engine", "codex")
+        return {engine: getattr(self, engine)}
 
     def _op_computer_info(self, req, events):
         return self.computer_data
@@ -312,6 +317,7 @@ class FakeMachine:
                 "complete": True, "more": False}
 
     def _op_chat_fork(self, req, events):
+        self._forkable(req)
         _, project = self._project(req)
         source = self._chat(req)
         if req["chat"] in self.running:
@@ -325,7 +331,13 @@ class FakeMachine:
         project["chats"][child] = {**source, "title": "Ветка чата", "messages": json.loads(json.dumps(messages)), "tag": "studio"}
         return {"chat": child, "engine": req.get("engine", "claude"), "draft": draft}
 
+    @staticmethod
+    def _forkable(req):
+        if req.get('engine') == 'deepseek':      # у DSH нет ветки чата и подагентов (мост 0.46.0)
+            raise Refused('unsupported')
+
     def _op_subagents(self, req, events):
+        self._forkable(req)
         if req.get('engine') == 'opencode':
             _, project = self._project(req)
             if req['chat'] not in project.get('chats', {}):
@@ -336,6 +348,7 @@ class FakeMachine:
                           for key, value in row.get("children", {}).items()]}
 
     def _op_subagent_history(self, req, events):
+        self._forkable(req)
         row = self._chat(req)
         child = row.get("children", {}).get(req["request_id"])
         if child is None:
@@ -372,7 +385,8 @@ class FakeMachine:
         model = req.get("model") or (catalog.get("models") or [{"id": "codex-test"}])[0]["id"]
         return {"settings": {"model": req.get("model") or saved.get("model") or model,
                 "effort": req.get("effort") or saved.get("effort") or "high",
-                "access": req.get("access") or saved.get("access") or ("workspace-write" if engine == "codex" else "auto")},
+                "access": req.get("access") or saved.get("access") or
+                          {"codex": "workspace-write", "deepseek": "default"}.get(engine, "auto")},
                 "context": self.context}
 
     def _op_history(self, req, events):
@@ -424,7 +438,7 @@ class FakeMachine:
             raise Refused("idle", "хода нет")
         if run.get("owner") and run["owner"] != req.get("window"):
             raise Refused("owned", "задание выполняется в другом окне")
-        mode = 'queue' if req.get('engine') == 'opencode' or req.get('mode') == 'queue' else 'steer'
+        mode = 'queue' if req.get('engine') in ('opencode', 'deepseek') or req.get('mode') == 'queue' else 'steer'
         identifier = f"{len(run['followups']):016x}" if self.queue_edit else f"followup-{len(run['followups'])}"
         item = {"id": identifier, "text": req["text"], "mode": mode,
                 "position": {"text": len(run.get("text", "").encode("utf-16-le", errors="surrogatepass")) // 2,

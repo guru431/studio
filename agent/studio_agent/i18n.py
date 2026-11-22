@@ -136,6 +136,7 @@ EN = {
     "Доступен · моделей: {0}": "Available · models: {0}",
     "Доступен": "Available",
     "Недоступен": "Unavailable",
+    "Недоступен · нужен Node.js новее": "Unavailable · needs a newer Node.js",
     "Недоступно": "Unavailable",
     "Доступно {0} из {1} ГБ": "{0} of {1} GB available",
     # window: вход
@@ -271,6 +272,7 @@ EN = {
     "доступен": "available",
     "проверка": "checking",
     "недоступен": "unavailable",
+    "недоступен: нужен Node.js новее": "unavailable: needs a newer Node.js",
     "{0}: CLI {1}, {2}, моделей {3}": "{0}: CLI {1}, {2}, models {3}",
     "Компьютер привязан.": "Computer linked.",
     "Новый PIN (4–8 цифр): ": "New PIN (4–8 digits): ",
