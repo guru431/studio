@@ -107,6 +107,14 @@ The server runs on infrastructure you control. Connect local models through the 
 - Separate queues for text and file/photo work, so a short paragraph can run alongside a long document.
 - Optional **Cleaner integration** for chat and translation with data cleaning; see the [user guide](docs/guide.ru.md#cleaner-чат-и-перевод-с-очисткой-данных).
 
+### Open WebUI
+
+- Connect your own **Open WebUI 0.13+** accounts — several, on one server or on different ones — and use them from Studio on every device you sign in to.
+- Pinned chats, nested folders and other chats in a tree, with search by title; changes made in Open WebUI appear while the section is open.
+- Read the current branch with Markdown, folded reasoning, tool steps and attachments; continue a chat or start a new one with the model of your choice, attach files and images, and stop an answer.
+- Answers stream live; a model question or a tool approval appears as a card under the answer, with a push notification when Studio is not on screen.
+- Only the Studio server talks to Open WebUI: the password is never stored, session tokens stay on the server and conversations are not copied into Studio. The administrator adds the server address to the allowlist; a self-signed certificate is trusted by its fingerprint. See the [user guide](docs/guide.ru.md#open-webui).
+
 ### Agents: Claude Code, Codex and OpenCode
 
 Use installed coding agents on your own Windows, macOS or Linux computers from a desktop browser or phone.
@@ -231,6 +239,7 @@ flowchart LR
     APP --> DB[("Local SQLite")]
     APP --> MEDIA[("Media storage")]
     APP --> MODELS["srvllm / allowed model services"]
+    APP <-->|REST + socket.io| OWUI["Open WebUI servers"]
     APP <-->|WebSocket| BRIDGE["Windows / macOS / Linux bridge"]
     BRIDGE --> CLI["Claude Code / Codex / OpenCode"]
     BRIDGE --> PROJECTS["Local projects, files and Git"]
