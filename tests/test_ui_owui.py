@@ -136,6 +136,20 @@ def fits(page):
     return page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def no_password_manager(box):
+    """Пароль Open WebUI — не для менеджера паролей браузера (как PIN компьютера, ui.js computerPin): поле не password,
+    вне <form>, без autocomplete входа; email рядом — тоже без него. Иначе браузер сохранил бы пароль под адресом
+    Студии и предложил бы пароль Студии для чужого сервера."""
+    password = box.locator("[name=password]")
+    pw.expect(password).to_have_count(1)
+    assert box.evaluate("""box => {
+      const p = box.querySelector('[name=password]');
+      const login = [...box.querySelectorAll('input')].filter((i) => /username|password/.test(i.autocomplete));
+      return p.type === 'text' && p.autocomplete === 'off' && p.classList.contains('computer-pin') && !p.closest('form')
+        && !box.querySelector('input[type=password]') && login.length === 0;
+    }""")
+
+
 @pytest.mark.parametrize("width", [320, 1280])
 def test_connect_account_and_see_tree(owui_browser, live, fake, width):
     work = fake.add_folder("Work")
@@ -150,11 +164,12 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         pw.expect(page.locator("#owui-empty")).to_contain_text("Пароль Studio не сохраняет")
         page.locator("#owui-connect-first").click()
         dialog = page.locator("#owui-connect-dialog")
+        no_password_manager(dialog)
         dialog.locator("[name=label]").fill("s06 · рабочая")
         dialog.locator("[name=url]").fill(FakeOwui.URL)
         dialog.locator("[name=email]").fill(FakeOwui.EMAIL)
         dialog.locator("[name=password]").fill(FakeOwui.PASSWORD)
-        page.locator("#owui-connect-submit").click()
+        dialog.locator("[name=password]").press("Enter")                     # Enter в поле — как «Подключить»
         pw.expect(dialog).to_have_count(0)
         (account,) = call(live, cookie, "GET", "/api/owui/accounts").json()
         aid = account["id"]
@@ -207,6 +222,11 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         page.locator("#rail .tab[data-section=chat][aria-current=page]").wait_for(state="attached")
         page.evaluate("location.hash = '#/owui'")
         pw.expect(page).to_have_url(re.compile(rf"#/owui/{aid}/{chat_id}$"))  # последнее место
+
+        page.evaluate("location.hash = '#/search'")                          # «Поиск» чаты Open WebUI не охватывает
+        pw.expect(page.locator(".search-chips .chip[data-section=chat]")).to_have_count(1)
+        pw.expect(page.locator(".search-chips .chip[data-section=owui]")).to_have_count(0)
+        pw.expect(page.locator(".search-chips .chip[data-section=code]")).to_have_count(0)
         assert not page.problems, page.problems
 
 
@@ -267,12 +287,13 @@ def test_relogin_state_offers_password(owui_browser, live, fake, width):
         pw.expect(page.locator("#owui-search")).to_be_hidden()
         pw.expect(page.locator("#owui-relogin-cancel")).to_have_count(0)
         assert page.events == []                                             # учётке без входа поток не нужен
+        no_password_manager(page.locator("#owui-relogin"))
         page.locator("#owui-relogin-password").fill("wrong")
         page.locator("#owui-relogin-submit").click()
         pw.expect(page.locator("#owui-relogin .error[data-for=password]")).to_have_text(
             "Неверный email или пароль Open WebUI")
         page.locator("#owui-relogin-password").fill(FakeOwui.PASSWORD)
-        page.locator("#owui-relogin-submit").click()
+        page.locator("#owui-relogin-password").press("Enter")
         pw.expect(page.locator("#owui-relogin")).to_have_count(0)
         pw.expect(row.locator(".owui-state")).to_have_class(re.compile(r"\bon\b"))
         pw.expect(page.locator("#owui-chat-list .owui-chat")).to_have_text(["After relogin"])
@@ -317,11 +338,22 @@ def test_events_update_the_tree(owui_browser, live, fake, width):
         until(page, lambda: fake.socket is not None and fake.socket.user is not None)
         fake.later(fake.emit_event, calm, None, {"type": "chat:active", "data": {"active": True}})
         pw.expect(row.locator(".owui-chat-active")).to_have_count(1)
-        fake.later(fake.emit_event, calm, "m1", {"type": "chat:active", "data": {"active": True, "pending_approval": True}})
+        # пауза 0.13.4: снимок с вызовом в паузе, затем `active: false` — метка «ждёт решения» остаётся
+        fake.later(fake.emit_event, calm, "m1", {"type": "chat:completion", "data": {"output": [
+            {"type": "function_call", "call_id": "c1", "name": "delete_file", "status": "pending"}]}})
         pw.expect(row.locator(".owui-chat-pending")).to_have_text("ждёт решения")
         pw.expect(row.locator(".owui-chat-active")).to_have_count(0)
+        fake.later(fake.emit_event, calm, None, {"type": "chat:active", "data": {"active": False}})
         fake.later(fake.emit_event, calm, None, {"type": "chat:title", "data": {"title": "Renamed by model"}})
         pw.expect(row.locator(".owui-chat-title")).to_have_text("Renamed by model")
+        pw.expect(row.locator(".owui-chat-pending")).to_have_text("ждёт решения")
+        # форма пробы (`pending_approval` в `chat:active`) — тоже пауза
+        fake.later(fake.emit_event, calm, "m1", {"type": "chat:active", "data": {"active": True, "pending_approval": True}})
+        pw.expect(row.locator(".owui-chat-pending")).to_have_text("ждёт решения")
+        # решение принято: ответ продолжился, затем кончился
+        fake.later(fake.emit_event, calm, None, {"type": "chat:active", "data": {"active": True}})
+        pw.expect(row.locator(".owui-chat-active")).to_have_count(1)
+        pw.expect(row.locator(".owui-chat-pending")).to_have_count(0)
         fake.later(fake.emit_event, calm, None, {"type": "chat:active", "data": {"active": False}})
         pw.expect(row.locator(".owui-chat-pending, .owui-chat-active")).to_have_count(0)
         fresh = fake.add_chat("Fresh", updated_at=10_000)

@@ -3660,6 +3660,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Владелец": "Subject",
   "Войдите в учётку Open WebUI заново, чтобы обновить её сессию в Studio.": "Sign in to the Open WebUI account again to renew its session in Studio.",
   "Войдите в учётку Open WebUI заново: Studio больше не может продлить её сессию.": "Sign in to the Open WebUI account again: Studio can no longer renew its session.",
+  "Войти в Open WebUI заново": "Sign in to Open WebUI again",
   "Действия с учёткой": "Account actions",
   "Действия с учёткой · {0}": "Account actions · {0}",
   "Действует до": "Valid until",

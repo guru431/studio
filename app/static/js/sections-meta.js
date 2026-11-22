@@ -4,7 +4,10 @@ import { tr } from './i18n.js';
  * подключения. Порядок — группами: Чат · Фото, Видео · Озвучка, Расшифровка · Сканы, Перевод · Open WebUI, Агенты
  * (`group` — номер группы: на рельсе между группами тонкий разделитель). id — адрес (#/<id>) и раздел API,
  * не меняется при смене имени («Озвучка» — id `speech`). Имена совпадают с sections.NAMES сервера —
- * сверяет tests/test_sections_meta.py; словарь — docs/glossary.md. */
+ * сверяет tests/test_sections_meta.py; словарь — docs/glossary.md.
+ * `history: false` — история раздела не в Студии (чаты — на компьютерах или на сервере Open WebUI): раздела нет в
+ * «Поиске» (search.TITLES), в «Удалить всю историю» и в разделах подключений (моделей подключений у него нет);
+ * `settings: false` — у раздела нет страницы настроек. */
 
 export const SECTIONS = [
   { id: 'chat', name: tr("Чат"), group: 1, hint: tr("Чтобы писать в чат, выберите модель в настройках раздела «Чат»") },
@@ -15,8 +18,8 @@ export const SECTIONS = [
     hint: tr("Чтобы расшифровывать записи, выберите модель в настройках раздела «Расшифровка»") },
   { id: 'ocr', name: tr("Сканы"), group: 4, hint: tr("Чтобы распознавать сканы, выберите модель в настройках раздела «Сканы»") },
   { id: 'translate', name: tr("Перевод"), group: 4, hint: tr("Чтобы переводить, выберите модель в настройках раздела «Перевод»") },
-  { id: 'owui', name: tr("Open WebUI"), group: 5 },
-  { id: 'code', name: tr("Агенты"), group: 5 },
+  { id: 'owui', name: tr("Open WebUI"), group: 5, history: false, settings: false },
+  { id: 'code', name: tr("Агенты"), group: 5, history: false },
 ];
 
 /** Имена всех экранов оболочки: девять разделов и служебные (заголовок вкладки браузера, голосовой ввод в настройках). */
@@ -39,4 +42,9 @@ export function sectionName(id) {
 /** [id, имя] разделов в порядке рельса; `only` — оставить только эти id. */
 export function sectionPairs(only = null) {
   return SECTIONS.filter((s) => !only || only.includes(s.id)).map((s) => [s.id, s.name]);
+}
+
+/** [id, имя] разделов с историей в Студии (без `history: false`) в порядке рельса. */
+export function historyPairs() {
+  return SECTIONS.filter((s) => s.history !== false).map((s) => [s.id, s.name]);
 }
