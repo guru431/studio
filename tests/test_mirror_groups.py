@@ -120,6 +120,48 @@ def test_place_merges_two_rows_of_one_folder_and_their_groups(studio):
     assert count("mirror_pairs") == 1
 
 
+def test_adopted_base_stays_held_after_the_first_send_from_a_former_destination(studio):
+    """Прежние зеркала S→B и S→C с одной базой. С B — «Отправить во все»: B→S переписывает пару S–B, но база, которую
+    B держал, уходит в накопленное B — сравнение B→C (пары B–C нет) без ложного конфликта."""
+    from project_mirrors import _plan
+    _, (s, b, c) = computers(studio, "S", "B", "C")
+    baseline = security.encrypt(json.dumps({"f": V1}))
+    for destination in (b, c):
+        legacy(s, "p", destination, ROOT, "Proj", "/p", baseline=baseline, synced=1.0)
+    assert mg.adopt() == 2
+    cs, cb, cc = (row["id"] for row in mg.members(mg.find(s, "p")["grp"]))
+    mg.save(cb, cs, {"f": V2}, {"f": V2}, 2.0)                      # B→S
+    assert mg.pair(cb, cs).state_x == {"f": V2}
+    assert _plan({"f": V2}, {"f": V1}, None, held=mg.held(cb))[3] == 0
+    assert mg._kept(cs) == {"f": [V2]}                              # у S прежнего состояния в паре не было
+
+
+def test_held_drops_paths_the_copy_no_longer_has(studio):
+    uid, (a, b) = computers(studio, "A", "B")
+    g = mg.create_group(uid)
+    ca = mg.add(g, a, "p", None, None, None)
+    cb = mg.add(g, b, None, ROOT, "P", "/p")
+    mg.save(ca, cb, {"f": V1, "gone": V1}, {"f": V1, "gone": V1}, 1.0)
+    mg.save(ca, cb, {"f": V2}, {"f": V2}, 2.0)
+    assert mg._kept(ca) == mg._kept(cb) == {"f": [V1, V2]}
+    assert "gone" not in mg.held(ca)
+
+
+def test_merging_rows_keeps_the_states_of_the_pair_it_overwrites(studio):
+    uid, (a, c) = computers(studio, "A", "C")
+    g = mg.create_group(uid)
+    old = mg.add(g, a, "p", None, None, None)                      # строка без адреса
+    new = mg.add(g, a, None, ROOT, "P", "/p")                      # та же папка с адресом
+    cc = mg.add(g, c, None, ROOT, "C", "/c")
+    mg.save(new, cc, {"f": V2}, {"f": V2}, 2.0)
+    mg.save(old, cc, {"f": V1}, {"f": V1}, 3.0)                    # более поздняя — перезапишет пару new–cc
+    state.DB.execute("UPDATE mirror_copies SET held=NULL")         # только состояния пар
+    with mg.transaction():
+        assert mg.place(new, project="p") == new
+    assert mg.pair(new, cc)[:3] == ({"f": V1}, {"f": V1}, 3.0)
+    assert mg._kept(new) == {"f": [V1, V2]} and mg._kept(cc) == {"f": [V2]}
+
+
 def test_place_keeps_the_row_whose_address_was_just_used_when_both_have_one(studio):
     """Две строки одной папки (тот же `pid`) с разными адресами — после смены папок проектов: остаётся строка, по
     адресу которой только что сравнивали, а не старая."""

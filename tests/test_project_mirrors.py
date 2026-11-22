@@ -719,6 +719,13 @@ def test_old_bridge_refusing_an_open_sqlite_database_asks_to_update_that_compute
         assert client.post(f"/api/code/agents/{b}/open", json={"pin": "2468"}).status_code == 204
         refused = client.post(f"{url}/{created.json()['id']}/compare")
         assert refused.json()["detail"]["code"] == code and words in refused.json()["detail"]["message"], refused.text
+    # Добавление копии на компьютер с прежним мостом (до 0.40.0 — назначение со списком файлов) — тот же ответ.
+    second.groups = second.discovery = False
+    connect(studio, b, second)
+    assert client.post(f"/api/code/agents/{b}/open", json={"pin": "2468"}).status_code == 204
+    other_root = mirror.projects.list_roots(second.roots)[0]
+    refused = client.post(url, json={"destination": b, "root": other_root["id"], "name": source.name})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "unsupported", refused.text
 
 
 def test_renamed_project_rejoins_its_group_replacing_the_former_copy(studio, computers, monkeypatch):

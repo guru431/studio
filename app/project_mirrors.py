@@ -597,7 +597,7 @@ async def _compare(request, mine, other, background=False):
     to = {"root": other["root"], "name": location["name"]}
     exclude = _exclude(mine["grp"], (aid, destination))
     pair = mirror_groups.pair(mine["id"], other["id"])
-    held = mirror_groups.held(mine["id"])
+    held = mirror_groups.held_blobs(mine["id"])  # разбор — в потоке сравнения
     source, target = await asyncio.gather(
         _listed(request, aid, "mirror_scan", project=pid, background=background, **exclude, **_reasons(aid)),
         _listed(request, destination, "mirror_destination", background=background, **to, **exclude,
@@ -616,7 +616,8 @@ async def _compare(request, mine, other, background=False):
         entries = _portable(dict(raw), platform, source_platform)
         current = _entries(target, missing=True, reasons=reasons)
         updates, remove, changes, conflicts, skipped = _plan(entries, current, pair.state_y,
-                                                             windows=platform == "win32", held=held)
+                                                             windows=platform == "win32",
+                                                             held=mirror_groups.held_from(held))
         marker = pair.mark if pair.state_y is not None and (updates or remove) else None
         token = _digest([mine["id"], other["id"], pair.synced, marker, entries, current])
         result = {"plan": token, "exists": current is not None, "project": project,
@@ -665,6 +666,20 @@ def _states(comparison, updates, remove):
             _next_baseline(comparison.entries, comparison.current, comparison.pair.state_y, updates, remove))
 
 
+async def _record(x, y, state_x, state_y, synced, *, first=False):
+    """Записать синхронизацию X → Y (`first` — первая сверка совпадающих копий, `mirror_groups.seal`). Блобы чтутся и
+    пишутся на цикле событий, разбор и шифрование — в потоке; если за это время другая передача той же копии успела
+    записать своё — посчитать заново (последняя попытка — целиком на цикле)."""
+    for _ in range(3):
+        snap = mirror_groups.snapshot(x, y)
+        blobs = await asyncio.to_thread(mirror_groups.compute, snap, state_x, state_y)
+        with mirror_groups.transaction():
+            if mirror_groups.commit(x, y, snap, blobs, synced, only_new=first) is not None:
+                return
+    with mirror_groups.transaction():
+        (mirror_groups.seal(x, y, state_x, state_y) if first else mirror_groups.save(x, y, state_x, state_y, synced))
+
+
 async def _sync(request, mine, other, selected, progress):
     aid, pid, destination = mine["agent"], mine["project"], other["agent"]
     ticket = secrets.token_hex(16)
@@ -689,8 +704,8 @@ async def _sync(request, mine, other, selected, progress):
                     raise code._refuse(502, "bridge", "мост вернул неверный блок файла")
                 await _ask(request, destination, "mirror_chunk", ticket=ticket, chunks=chunks, background=True)
                 progress["bytes"] += sum(read[2] for read in reads)
-            latest = await _ask(request, aid, "mirror_scan", project=pid, background=True, **exclude,
-                                **_reasons(aid))
+            latest = await _listed(request, aid, "mirror_scan", project=pid, background=True, **exclude,
+                                   **_reasons(aid))
             fresh = await asyncio.to_thread(
                 lambda: _portable(_entries(latest), comparison.platform, comparison.source_platform))
             if fresh != comparison.entries:
@@ -701,8 +716,7 @@ async def _sync(request, mine, other, selected, progress):
                        updates=updates, remove=remove, background=True, **to, **exclude)
             started = False
         state_x, state_y = await asyncio.to_thread(_states, comparison, updates, remove)
-        with mirror_groups.transaction():
-            mirror_groups.save(mine["id"], comparison.copy, state_x, state_y, clock.NOW())
+        await _record(mine["id"], comparison.copy, state_x, state_y, clock.NOW())
         progress["state"] = "done"
     except HTTPException as error:
         progress.update(state="failed", error=error.detail)
@@ -804,7 +818,7 @@ async def create(aid: int, pid: str, request: Request):
         await _ask(request, aid, "mirror_read", project=pid, reads=[])
     metadata_only = _can_discover(body.destination)
     flags = {"metadata_only": True} if metadata_only else {}
-    target = await _ask(request, body.destination, "mirror_destination", root=body.root, name=body.name, **flags)
+    target = await _listed(request, body.destination, "mirror_destination", root=body.root, name=body.name, **flags)
     folder, project = target.get("folder"), _pid(target)
     if not isinstance(folder, str) or not 1 <= len(folder) <= 4096:
         raise code._refuse(502, "bridge", BAD_DESTINATION)
@@ -863,8 +877,7 @@ async def compare(aid: int, pid: str, cid: int, request: Request):
         # Первая сверка совпадающих копий фиксирует оба состояния пары.
         state_y = await asyncio.to_thread(_next_baseline, comparison.entries, comparison.current, None, {}, [])
         _owner(request, aid, pid)
-        with mirror_groups.transaction():
-            mirror_groups.seal(mine["id"], comparison.copy, comparison.raw, state_y)
+        await _record(mine["id"], comparison.copy, comparison.raw, state_y, None, first=True)
     return comparison.result
 
 
