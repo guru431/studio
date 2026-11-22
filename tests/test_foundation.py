@@ -380,6 +380,19 @@ def test_step_64_adds_cleaner_route_columns_and_previous_writer_works(env):
             ("before", 0), ("previous", 0)]
         assert [r[0] for r in conn.execute("SELECT cleaner_request FROM messages")] == [None, None]
         assert conn.execute("SELECT count(*) FROM cleaner_rollback").fetchone()[0] == 0
+
+        # контексты: прежний код вставляет без списка столбцов и ставит удаление своим списком — признак `route` 0;
+        # контекст с отметкой `cleaner_route_contexts` триггер переносит в очередь с `route` 1 и снимает отметку
+        context = "INSERT INTO cleaner_contexts VALUES (?, 1, 'chat', 'c', 1, ?, 'https://x.test', x'01', 0)"
+        conn.execute(context, ("old", "r-old"))
+        conn.execute(context.replace("'chat'", "'translate'"), ("new", "r-new"))
+        conn.execute("INSERT INTO cleaner_route_contexts(id) VALUES ('new')")
+        conn.execute("INSERT INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued)"
+                     " VALUES ('queued', 1, 'r-q', 'https://x.test', x'01', 0)")
+        conn.execute("DELETE FROM cleaner_contexts")
+        assert dict(conn.execute("SELECT id, route FROM cleaner_deletions").fetchall()) == {
+            "queued": 0, "old": 0, "new": 1}
+        assert conn.execute("SELECT count(*) FROM cleaner_route_contexts").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

@@ -76,6 +76,7 @@ WORD_FUNCTIONS = {
     ('translate', '_failed'), ('transcripts', '_busy'), ('mcp_client', '_list'), ('ocr', 'release_now'),
     ('chat', '_read_model'), ('chat', '_round'), ('chat', '_too_big'), ('admin', 'get_storage'),
     ('admin', '_taken'), ('sections', 'unlisted'), ('connections', '_gone'), ('chat_shares', 'public_guard'),
+    ('cleaner_route', 'words'),
 }
 
 #: тексты, которые нашёл сторож, но переводить не нужно: текст → причина

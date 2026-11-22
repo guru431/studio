@@ -271,10 +271,12 @@ async def purge():
             later(row, REFUSED_SEC)
             continue
         calls += 1
+        # контекст шлюза Cleaner (`route`): служебный ключ — только в X-Cleaner-Key, `Authorization` там — провайдера
+        key = {"X-Cleaner-Key": token} if row["route"] else {"Authorization": f"Bearer {token}"}
         try:
             response = await upstream.request(
                 conn, "DELETE", f'{row["base_url"]}/api/v1/chats/{row["remote_id"]}', keyless=True,
-                headers={"Authorization": f"Bearer {token}"}, timeout=httpx.Timeout(10),
+                headers=key, timeout=httpx.Timeout(10),
             )
         except upstream.UpstreamRefused:
             later(row, REFUSED_SEC, whole_address=True)

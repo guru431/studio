@@ -930,9 +930,21 @@ SCHEMA += OWUI_63
 #: Прежний код столбцов не знает и отправил бы ход такого подключения провайдеру напрямую — перед откатом
 #: `cleaner_route.ROLLBACK_64` прячет ключи этих подключений в `cleaner_rollback` (в обычной работе пуста), после
 #: возврата вперёд `cleaner_route.FORWARD_64` возвращает.
+#: Контекст нового вида (чат Cleaner диалога через шлюз, служебный ключ — заголовком `X-Cleaner-Key`) отмечен строкой
+#: `cleaner_route_contexts` — своей таблицей: прежний код вставляет в `cleaner_contexts` без списка столбцов.
+#: Триггер удаления переносит отметку в `cleaner_deletions.route`, по ней очередь шлёт ключ нужным заголовком.
 CLEANER_ROUTE_64 = """ALTER TABLE connections ADD COLUMN via_cleaner INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN cleaner_request TEXT;
 CREATE TABLE cleaner_rollback(connection_id INTEGER PRIMARY KEY, token_enc BLOB NOT NULL);
+CREATE TABLE cleaner_route_contexts(id TEXT PRIMARY KEY);
+ALTER TABLE cleaner_deletions ADD COLUMN route INTEGER NOT NULL DEFAULT 0;
+DROP TRIGGER IF EXISTS cleaner_context_delete;
+CREATE TRIGGER cleaner_context_delete BEFORE DELETE ON cleaner_contexts BEGIN
+  INSERT OR IGNORE INTO cleaner_deletions(id, user_id, remote_id, base_url, token_enc, queued, route)
+     VALUES(old.id, old.user_id, old.remote_id, old.base_url, old.token_enc, old.created,
+            EXISTS(SELECT 1 FROM cleaner_route_contexts WHERE id = old.id));
+  DELETE FROM cleaner_route_contexts WHERE id = old.id;
+END;
 """
 SCHEMA += CLEANER_ROUTE_64
 

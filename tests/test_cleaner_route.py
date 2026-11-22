@@ -146,8 +146,8 @@ def test_settings_change_is_logged_without_values(studio, caplog):
 
 
 def test_changing_address_or_key_queues_contexts_of_the_new_kind(studio):
-    """Контексты обычных подключений (`cleaner = 0`) уходят в очередь со снимком прежнего адреса и ключа; контекст
-    прежнего вида Cleaner (`cleaner = 1`, личный ключ) остаётся."""
+    """Контексты нового вида (отметка `cleaner_route_contexts`) уходят в очередь со снимком прежнего адреса и ключа и
+    признаком `route`; контекст прежнего вида Cleaner (личный ключ, без отметки) остаётся."""
     uid = make_user(studio, "owner")
     admin(studio)
     allow(studio, "10.77.1.20:5464", "10.77.1.21:5464")
@@ -158,21 +158,26 @@ def test_changing_address_or_key_queues_contexts_of_the_new_kind(studio):
     legacy = state.DB.execute(add, (uid, "legacy", security.encrypt("personal"), 1)).lastrowid
     context = "INSERT INTO cleaner_contexts VALUES (?, ?, 'chat', ?, ?, ?, ?, ?, 0)"
     state.DB.execute(context, ("ctx-new", uid, "c1", plain, "remote-new", ADDRESS, security.encrypt(KEY)))
+    state.DB.execute("INSERT INTO cleaner_route_contexts(id) VALUES ('ctx-new')")
     state.DB.execute(context, ("ctx-old", uid, "c2", legacy, "remote-old", "https://x.test", security.encrypt("personal")))
 
     save(studio, forced=True)                                             # адрес и ключ прежние — ничего не уходит
     assert state.DB.execute("SELECT count(*) FROM cleaner_deletions").fetchone()[0] == 0
     save(studio, base_url="https://10.77.1.21:5464")
-    rows = state.DB.execute("SELECT id, remote_id, base_url, token_enc FROM cleaner_deletions").fetchall()
-    assert [(r["id"], r["remote_id"], r["base_url"]) for r in rows] == [("ctx-new", "remote-new", ADDRESS)]
+    rows = state.DB.execute("SELECT id, remote_id, base_url, token_enc, route FROM cleaner_deletions").fetchall()
+    assert [(r["id"], r["remote_id"], r["base_url"], r["route"]) for r in rows] == [("ctx-new", "remote-new", ADDRESS, 1)]
     assert security.decrypt(rows[0]["token_enc"]) == KEY
     assert [r[0] for r in state.DB.execute("SELECT id FROM cleaner_contexts")] == ["ctx-old"]
+    assert state.DB.execute("SELECT count(*) FROM cleaner_route_contexts").fetchone()[0] == 0
 
     state.DB.execute(context, ("ctx-new2", uid, "c3", plain, "remote-new2", "https://10.77.1.21:5464",
                                security.encrypt(KEY)))
+    state.DB.execute("INSERT INTO cleaner_route_contexts(id) VALUES ('ctx-new2')")
     save(studio, base_url="https://10.77.1.21:5464", key="ck_" + "b" * 43)           # только ключ
     assert {r[0] for r in state.DB.execute("SELECT id FROM cleaner_deletions")} == {"ctx-new", "ctx-new2"}
     assert [r[0] for r in state.DB.execute("SELECT id FROM cleaner_contexts")] == ["ctx-old"]
+    state.DB.execute("DELETE FROM cleaner_contexts WHERE id = 'ctx-old'")             # прежний вид — без признака
+    assert state.DB.execute("SELECT route FROM cleaner_deletions WHERE id = 'ctx-old'").fetchone()[0] == 0
 
 
 # ---- самопроверка ------------------------------------------------------------------

@@ -378,6 +378,90 @@ class FakeGateway:
             {"b64_json": base64.b64encode(PNG_REAL).decode(), "seed": seed}]})
 
 
+class FakeCleanerGateway:
+    """Шлюз Cleaner для ключа `client` (контракт плана Cleaner 2026-11-22) на адресе Cleaner (`FakeGateway.hosts`):
+    `POST /api/v1/chats` (новый контекст), `DELETE /api/v1/chats/{id}`, `POST /agent/openai/v1/chat/completions`
+    (поток SSE Chat Completions; заголовок ответа `x-cleaner-request`). Ключ Cleaner — только `X-Cleaner-Key`, ключ
+    провайдера — `Authorization`, иначе 401 `client_login`; адрес провайдера не публичный https — 400 `upstream`.
+    `script` — ответы очередных ходов: list[str] — куски текста, dict {"text": [...], "tool_calls": [(имя,
+    аргументы JSON), …]}; пусто — `reply`. `refuse` — (код, error.code) отказа хода; `down` — нет соединения.
+    Узел провайдера тест отдаёт `provider` (AssertionError): Studio ходит только в Cleaner."""
+
+    def __init__(self, key: str):
+        self.key = key
+        self.requests: list[httpx.Request] = []      # все запросы к Cleaner по порядку
+        self.turns: list[httpx.Request] = []         # запросы хода
+        self.bodies: list[dict] = []                 # их тела
+        self.chats: list[str] = []                   # id созданных контекстов
+        self.deleted: list[tuple[str, dict]] = []    # (id, заголовки) удалённых
+        self.script: list = []
+        self.reply = ["Привет", " из облака"]
+        self.refuse: "tuple[int, str | None] | None" = None
+        self.down = False
+
+    async def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.down:
+            raise httpx.ConnectError("нет соединения", request=request)
+        path, method = request.url.path, request.method
+        if path == "/api/v1/chats" and method == "POST":
+            if request.headers.get("x-cleaner-key") != self.key:
+                return self._error(401, "auth")
+            self.chats.append(f"ctx{len(self.chats) + 1:04d}")
+            return httpx.Response(201, json={"id": self.chats[-1]})
+        if path.startswith("/api/v1/chats/") and method == "DELETE":
+            if request.headers.get("x-cleaner-key") != self.key or "authorization" in request.headers:
+                return self._error(401, "auth")
+            self.deleted.append((path.rsplit("/", 1)[1], dict(request.headers)))
+            return httpx.Response(204)
+        if path == "/agent/openai/v1/chat/completions" and method == "POST":
+            return self._turn(request)
+        return httpx.Response(404)
+
+    @staticmethod
+    async def provider(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"запрос провайдеру мимо Cleaner: {request.url.host}")
+
+    @staticmethod
+    def _error(status: int, code: "str | None", rid: "str | None" = None) -> httpx.Response:
+        body = {"error": {"message": f"Cleaner: отказ {status}", "type": "invalid_request_error", "code": code}}
+        return httpx.Response(status, json=body, headers={"x-cleaner-request": rid} if rid else {})
+
+    def _turn(self, request: httpx.Request) -> httpx.Response:
+        login = request.headers.get("authorization", "").partition(" ")[2]
+        if request.headers.get("x-cleaner-key") != self.key or not login or login.startswith("ck_"):
+            return self._error(401, "client_login")
+        upstream_url = httpx.URL(request.headers.get("x-cleaner-upstream", ""))
+        if upstream_url.scheme != "https" or upstream_url.host in ("localhost", "127.0.0.1") or upstream_url.host.startswith("10."):
+            return self._error(400, "upstream")
+        if request.headers.get("x-cleaner-chat") not in self.chats:
+            return self._error(404, "chat")
+        self.turns.append(request)
+        body = json.loads(request.content)
+        self.bodies.append(body)
+        rid = f"{len(self.turns):032x}"
+        if self.refuse is not None:
+            return self._error(*self.refuse, rid=rid)
+        step = self.script.pop(0) if self.script else self.reply
+        pieces, calls = (step.get("text", []), step.get("tool_calls", [])) if isinstance(step, dict) else (step, [])
+
+        def data(delta, ending=None):
+            chunk = {"choices": [{"index": 0, "delta": delta, "finish_reason": ending}]}
+            return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+
+        async def chunks():
+            for piece in pieces:
+                yield data({"content": piece})
+            for i, (name, arguments) in enumerate(calls):
+                yield data({"tool_calls": [{"index": i, "id": f"call-{len(self.turns)}-{i}", "type": "function",
+                                            "function": {"name": name, "arguments": arguments}}]})
+            yield data({}, "tool_calls" if calls else "stop")
+            yield b"data: [DONE]\n\n"
+
+        return httpx.Response(200, headers={"content-type": "text/event-stream", "x-cleaner-request": rid},
+                              content=chunks())
+
+
 class FakeCloud:
     """Облачный OpenAI-совместимый сервис для браузерных тестов: настоящий HTTP-сервер на `localhost`
     с CORS — прямое подключение зовёт сам браузер. `/v1/models` и потоковый `/v1/chat/completions`
