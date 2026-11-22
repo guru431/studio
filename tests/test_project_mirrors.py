@@ -38,7 +38,7 @@ class MirrorMachine(FakeMachine):
         return {"items": mirror.projects.list_roots(self.roots)}
 
     def _op_mirror_identity(self, req, events):
-        return mirror.identity(self.source)
+        return mirror.identity(self.roots, self.source)
 
     def _op_mirror_candidates(self, req, events):
         return mirror.candidates(self.roots, req["name"], req["repositories"])
@@ -172,6 +172,44 @@ def test_skipped_subtree_preserves_files_at_destination():
     target = {"link": mirror.DIRECTORY, "link/keep": original}
     updates, remove, _, conflicts, skipped = _plan(source, target, target)
     assert updates == {} and remove == [] and (conflicts, skipped) == (0, 2)
+
+
+F1, F2, F3 = (["file", c * 64, 3, 0] for c in "123")
+
+
+def test_plan_accepts_a_copy_entry_the_source_held_before():
+    from project_mirrors import _plan
+    args = ({"f": F3}, {"f": F2}, {"f": F1})
+    assert _plan(*args)[3] == 1
+    assert _plan(*args, held={"f": {tuple(F2[:3])}})[3] == 0
+
+
+def test_plan_flags_a_newer_copy_entry_the_source_never_held():
+    from project_mirrors import _plan
+    assert _plan({"f": F1}, {"f": F3}, {"f": F1}, held={"f": {tuple(F1[:3]), tuple(F2[:3])}})[3] == 1
+
+
+def test_file_removed_in_the_copy_is_checked_only_against_the_pair_state():
+    from project_mirrors import _plan
+    assert _plan({"f": F2}, {}, {"f": F1}, held={"f": {tuple(F1[:3])}})[3] == 1
+
+
+def test_source_state_keeps_the_previous_entry_for_paths_not_applied():
+    from project_mirrors import _source_state
+    raw = {"a": F2, "b": F2, "c": F3}
+    assert _source_state(raw, {"b": F1}, {"b", "c"}) == {"a": F2, "b": F1}
+
+
+def test_skip_reasons_are_recorded_and_normalized():
+    from fastapi import HTTPException
+    from project_mirrors import SKIP, _entries
+    reasons = {}
+    entries = _entries({"entries": {"x.db": ["skip", "sqlite", 0, 0], "x.db-wal": ["skip", "sqlite-journal", 0, 0]}},
+                       reasons=reasons)
+    assert entries == {"x.db": SKIP, "x.db-wal": SKIP}
+    assert reasons == {"x.db": "sqlite", "x.db-wal": "sqlite-journal"}
+    with pytest.raises(HTTPException):
+        _entries({"entries": {"x": ["skip", "other", 0, 0]}})
 
 
 def test_windows_source_preserves_posix_executable_flags():

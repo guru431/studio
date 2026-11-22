@@ -30,6 +30,7 @@ DISCOVERY_CAP = "project_mirror_discovery"
 EXCLUDE_CAP = "mirror_exclude"
 EXCLUDE_MAX = mirror_groups.EXCLUDE_MAX
 SKIP = ["skip", "", 0, 0]
+SKIP_REASONS = ("sqlite", "sqlite-journal")  # причина пропуска из моста (`hello.mirror_groups`)
 DIR = ["dir", "", 0, 0]
 SHA256 = re.compile(r"[0-9a-f]{64}")
 # Как `files.DEVICE` и `files.BAD_CHARS` моста (без `\`: его протокол не пропускает ни на одной ОС).
@@ -146,16 +147,21 @@ async def _ask(request, aid, op, *, timeout=180, background=False, **args):
     return await code.ask(request, aid, op, quiet=True, reply_timeout=timeout, while_locked=background, **args)
 
 
-def _entries(data, *, missing=False):
+def _entries(data, *, missing=False, reasons=None):
+    """Список файлов моста. Пропуск с причиной из `SKIP_REASONS` становится обычным `SKIP`, причина — в `reasons[путь]`."""
     entries = data.get("entries")
     if entries is None and missing and "entries" in data:
         return None
     if not isinstance(entries, dict) or len(entries) > MAX_ENTRIES:
         raise code._refuse(502, "bridge", "мост вернул неверный список файлов")
-    for path, info in entries.items():
+    for path, info in list(entries.items()):
         if not path or path.startswith("/") or len(path) > code.PATH_MAX or not isinstance(info, list) or len(info) != 4:
             raise code._refuse(502, "bridge", "мост вернул неверный список файлов")
         kind, value, size, mode = info
+        if kind == "skip" and value in SKIP_REASONS and size == 0 and mode == 0:
+            if reasons is not None:
+                reasons[path] = value
+            entries[path] = info = SKIP
         valid = (info in (DIR, SKIP) or
                  kind == "file" and isinstance(value, str) and SHA256.fullmatch(value) and
                  type(size) is int and 0 <= size < 2**63 and type(mode) is int and mode in (0, 1) or
@@ -175,7 +181,10 @@ def _source_entry(new, old):
     return new
 
 
-def _plan(source, destination, baseline, *, windows=False):
+def _plan(source, destination, baseline, *, windows=False, held=None):
+    """`held` — `{путь: {(вид, значение, размер)}}`: что источник уже держал на момент своих синхронизаций
+    (`mirror_groups.held`). Запись копии из этого набора — не локальное изменение (правило 3)."""
+    held = held or {}
     target = destination or {}
     previous = baseline or {}
     updates = {}
@@ -208,7 +217,8 @@ def _plan(source, destination, baseline, *, windows=False):
         deletion = old is not None and (new is None or old[0] != new[0])
         if deletion:
             remove.append(path)
-        conflict = old != previous.get(path)
+        conflict = old != previous.get(path) and not (
+            old is not None and old[0] != "skip" and tuple(old[:3]) in held.get(path, ()))
         conflicts += int(conflict)
         text = all(entry is None or entry[0] == "file" and entry[2] <= 128 * 1024 for entry in (old, new))
         keepable = old is not None and old[0] == "file"
@@ -282,6 +292,14 @@ def _selection(plan, selected, updates, remove):
     return updates, remove
 
 
+def _source_state(raw, previous, pending):
+    """Состояние источника пары: его манифест до приведения к платформе, а для путей, не применённых в копии
+    (`pending`), — прежняя запись пары, если она есть."""
+    result = {path: entry for path, entry in raw.items() if path not in pending}
+    result.update((path, previous[path]) for path in pending if previous and path in previous)
+    return result
+
+
 def _next_baseline(source, current, previous, updates, remove):
     current = current or {}
     confirmed = {path: entry for path, entry in (previous or {}).items() if path in source or path in current}
@@ -290,7 +308,7 @@ def _next_baseline(source, current, previous, updates, remove):
     for path in remove:
         confirmed.pop(path, None)
     confirmed.update(updates)
-    return security.encrypt(_json(confirmed))
+    return confirmed
 
 
 def _private_destination(aid, project):
@@ -470,7 +488,7 @@ async def _sync(request, row, selected, progress):
             await _ask(request, destination, "mirror_apply", ticket=ticket, expected=expected,
                        updates=updates, remove=remove, background=True, **to, **exclude)
             started = False
-        sealed = await asyncio.to_thread(_next_baseline, source, current, baseline, updates, remove)
+        sealed = security.encrypt(_json(await asyncio.to_thread(_next_baseline, source, current, baseline, updates, remove)))
         state.DB.execute("UPDATE project_mirrors SET baseline=?, synced=? WHERE id=?", (sealed, clock.NOW(), mid))
         progress["state"] = "done"
     except HTTPException as error:
@@ -555,7 +573,7 @@ async def compare(aid: int, pid: str, mid: int, request: Request):
     row = _row(request, aid, pid, mid)
     result, _, source, current, updates, remove, *_ = await _compare(request, row)
     if row["baseline"] is None and current is not None and not updates and not remove:
-        sealed = await asyncio.to_thread(_next_baseline, source, current, None, {}, [])
+        sealed = security.encrypt(_json(await asyncio.to_thread(_next_baseline, source, current, None, {}, [])))
         _row(request, aid, pid, mid)
         state.DB.execute("UPDATE project_mirrors SET baseline=? WHERE id=? AND baseline IS NULL", (sealed, mid))
     return result
