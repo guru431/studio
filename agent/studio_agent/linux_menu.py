@@ -10,7 +10,7 @@ import struct
 import subprocess
 from pathlib import Path
 
-from . import VERSION, app, enroll, host, linux_autostart, setup, single
+from . import VERSION, app, deepseek_rpc, enroll, host, linux_autostart, setup, single
 from .errors import Refused
 from .i18n import EN, tr
 
@@ -128,8 +128,8 @@ def dispatch(ctrl, op, value):
                 "enrolled": ctrl.enrolled, "roots": cfg.projects_roots, "pin": ctrl.pin_status(),
                 "autostart": ctrl.autostart_enabled(), "max_turns": cfg.max_turns,
                 "desktop": cfg.desktop_enabled, "display": tr(diagnostic()), "activity": ctrl.activity_status(),
-                "backends": ctrl.backend_status(), "cli": {name: bool(host.find_tool(name))
-                    for name in ("claude", "codex", "opencode")}}
+                "backends": ctrl.backend_status(), "cli": {**{name: bool(host.find_tool(name))
+                    for name in ("claude", "codex", "opencode")}, "deepseek": bool(deepseek_rpc.find_installs())}}
     if op == "enroll":
         return ctrl.apply_setup(value)
     if op == "folders":

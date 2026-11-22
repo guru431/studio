@@ -107,6 +107,10 @@ def pin_row(status: str | None) -> tuple[str, tuple[str, ...]]:
     return tr(PIN_WORDS[status]), PIN_BUTTONS[status]
 
 
+# Строки состояния помощников окна: ключ — как в `Controller.backend_status`.
+BACKENDS = (("claude", "Claude Code"), ("codex", "Codex"), ("opencode", "OpenCode"), ("deepseek", "DeepSeek Harness"))
+
+
 def backend_row(status: dict | None) -> tuple[str, str]:
     """Результат собственной проверки помощника; связь со студией этого статуса не определяет."""
     if not status or status.get("status") == "checking":
@@ -644,7 +648,7 @@ class MainWindow:
         helpers = ttk.Frame(box, style="Card.TFrame")
         helpers.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, self.px(8)))
         helpers.columnconfigure(1, weight=1)
-        for row, (key, label) in enumerate((("claude", "Claude Code"), ("codex", "Codex"), ("opencode", "OpenCode"))):
+        for row, (key, label) in enumerate(BACKENDS):
             ttk.Label(helpers, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=self.px(1))
             line = ttk.Frame(helpers, style="Card.TFrame")
             line.grid(row=row, column=1, sticky="e", padx=(self.px(20), 0))

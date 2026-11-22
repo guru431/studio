@@ -91,6 +91,12 @@ def test_backend_rows_show_their_own_probe_result():
     assert window.backend_row({"status": "unavailable", "models": 12}) == ("Недоступен", "warn")
 
 
+def test_four_cli_status_rows():
+    assert [key for key, _ in window.BACKENDS] == ["claude", "codex", "opencode", "deepseek"]
+    assert dict(window.BACKENDS)["deepseek"] == "DeepSeek Harness"
+    assert window.backend_row({"status": "unavailable", "models": 0}) == ("Недоступен", "warn")
+
+
 def test_texts_are_the_spec_words():
     assert window.TITLE == "Studio Agent" and window.NOT_LINKED == "Не подключён"
     assert window.NOTE_PASSWORD == "Пароль нужен один раз и на компьютере не хранится"

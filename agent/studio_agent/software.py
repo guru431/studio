@@ -11,10 +11,11 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import cli, codex_rpc, host, jobs, limits, opencode_rpc
+from . import cli, codex_rpc, deepseek_rpc, host, jobs, limits, opencode_rpc
 from .errors import Refused
 
-TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'opencode': 'opencode-ai'}
+TOOLS = {'codex': '@openai/codex', 'claude': '@anthropic-ai/claude-code', 'opencode': 'opencode-ai',
+         'deepseek': deepseek_rpc.PACKAGE}
 PACKAGES = {tool: (package,) for tool, package in TOOLS.items()}
 PACKAGES['opencode'] = ('opencode-ai', '@opencode/cli', '@opencode-ai/cli')
 EXTENSIONS = {'codex': 'openai.chatgpt', 'claude': 'anthropic.claude-code'}
@@ -38,8 +39,10 @@ def newer(left, right):
     if not left or not right:
         return False
     def key(value):
+        # Предварительные выпуски (`0.2.2-rc.5` < `0.2.2-rc.6` < `0.2.2`) сравниваются по полям, как в semver.
         core, _, pre = value.partition('-')
-        return (*map(int, core.split('.')), not bool(pre))
+        fields = tuple((0, int(part), '') if part.isdigit() else (1, 0, part) for part in pre.split('.')) if pre else ()
+        return (*map(int, core.split('.')), not bool(pre), fields)
     return key(left) > key(right)
 
 
@@ -89,7 +92,9 @@ def latest(tool, source, package=None):
         raise ValueError('package')
     data = _json(NPM + '/' + package.replace('/', '%2F') + '/latest')
     value = data.get('version')
-    return value if isinstance(value, str) and VERSION.fullmatch(value) else None
+    # У DeepSeek Harness пока только предварительные выпуски: тег `latest` указывает на `-rc.N`.
+    pattern = INSTALLED_VERSION if tool == 'deepseek' else VERSION
+    return value if isinstance(value, str) and pattern.fullmatch(value) else None
 
 
 def _manifest(path):
@@ -155,8 +160,42 @@ def _bundled_claude():
     return path.resolve() if path.is_file() else None
 
 
+def _inspect_deepseek():
+    """Установка DeepSeek Harness, как её находят ходы: npm обновляется мостом, Python-пакет и Desktop — вручную."""
+    order = ('npm', 'python', 'desktop')
+    try:
+        found = sorted(deepseek_rpc.find_installs(), key=lambda install: order.index(install.kind))
+    except (OSError, ValueError):
+        found = []
+    result = {'id': 'deepseek', 'installed': False, 'version': None, 'cli_version': None, 'source': 'native',
+              'reason': 'not_installed', '_path': None, '_prefix': None, '_package': TOOLS['deepseek'], '_brew': None}
+    if not found:
+        return result
+    install = found[0]
+    path = (install.package_dir or Path(install.command[0])).resolve()
+    cli_version = None
+    try:
+        done = subprocess.run([*install.command, '--version'], stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=4, creationflags=host.NO_WINDOW, env={**os.environ, **install.env})
+        if done.returncode == 0:
+            cli_version = version(done.stdout.decode('utf-8', 'replace').strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    source, installed, prefix = 'native', None, None
+    modules = path.parent.parent
+    if install.kind == 'npm' and modules.name == 'node_modules':
+        source, prefix = 'npm', _npm_prefix(modules)
+        installed = version(_manifest(path / 'package.json').get('version'))
+    result.update(installed=True, version=installed or cli_version, cli_version=cli_version, source=source,
+                  _path=path, _prefix=prefix)
+    result['reason'] = 'manager' if source == 'npm' and not _npm() else 'manual' if source == 'native' else None
+    return result
+
+
 def inspect(tool):
     """Тот же поиск exe, что у ходов; для расширения показываем также версию его пакета."""
+    if tool == 'deepseek':
+        return _inspect_deepseek()
     path = {'claude': cli.find_cli, 'codex': codex_rpc.find_cli, 'opencode': opencode_rpc.find_cli}[tool]()
     source, installed, prefix, package = 'native', None, None, TOOLS[tool]
     if path is None and tool == 'claude':
@@ -215,7 +254,8 @@ def inspect(tool):
 def command(item, target):
     """Ни shell, ни полученных с сервера адресов, пакетов или аргументов."""
     tool = item['id']
-    if tool not in TOOLS or not isinstance(target, str) or not VERSION.fullmatch(target):
+    if tool not in TOOLS or not isinstance(target, str) or not (
+            INSTALLED_VERSION if tool == 'deepseek' else VERSION).fullmatch(target):
         raise ValueError('target')
     env = dict(os.environ)
     if item['source'] == 'homebrew':
@@ -338,7 +378,8 @@ class Software:
         try:
             while (self.agent._software_requests or getattr(self.agent, "mirror_active", False) or
                     any(backend is not None and backend.live()
-                    for backend in (self.agent.runner, self.agent.codex, self.agent.opencode))):
+                    for backend in (self.agent.runner, self.agent.codex, self.agent.opencode,
+                                    self.agent.deepseek))):
                 await self.sleep(1)
             self.state = 'updating'
             failed = False
@@ -358,7 +399,8 @@ class Software:
             raise
 
     async def _update(self, tool, target, source, package):
-        backend = {'claude': self.agent.runner, 'codex': self.agent.codex, 'opencode': self.agent.opencode}[tool]
+        backend = {'claude': self.agent.runner, 'codex': self.agent.codex, 'opencode': self.agent.opencode,
+                   'deepseek': self.agent.deepseek}[tool]
         if backend is not None:
             await backend.close()
         item = await asyncio.to_thread(inspect, tool)
