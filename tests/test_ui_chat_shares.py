@@ -198,6 +198,44 @@ def test_reader_sees_built_in_steps_and_the_plan_like_the_chat(focus_browser, li
 
 
 @pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320)])
+def test_protected_chat_share_and_export_are_disabled_with_the_reason(focus_browser, live, mobile, width):
+    """Сработал защищённый источник (`chats.protected_used`): сервер отклонит ссылку и экспорт (409 `protected`),
+    страница выключает «Поделиться и экспортировать» и пункт «Поделиться чатом» строки с причиной в подсказке."""
+    if mobile and focus_browser.browser_type.name == 'firefox':
+        pytest.skip('Playwright не эмулирует мобильный Firefox')
+    client, cookie, cookies = owner(live)
+    cid = client.post('/api/chats', json={}).json()['id']
+    conn = db.connect(live.db_path)
+    conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                 " VALUES(?,?,'assistant','Данные источника','done','server',1)", (uuid.uuid4().hex, cid))
+    conn.execute('UPDATE chats SET title=?, protected_used=1 WHERE id=?', ('Защищённый чат', cid))
+    conn.close()
+    reason = 'В этом диалоге сработал защищённый источник — им нельзя поделиться и его нельзя скачать'
+    try:
+        options = {'viewport': {'width': width, 'height': 852}, 'is_mobile': mobile, 'has_touch': mobile}
+        with focus_browser.new_context(**options, extra_http_headers={'Cookie': cookie}, service_workers='block') as context:
+            if focus_browser.browser_type.name == 'firefox':
+                context.add_cookies([{'name': key, 'value': value, 'url': live.url, 'secure': True,
+                                     'httpOnly': True, 'sameSite': 'Lax'} for key, value in cookies.items()])
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(live.url + '/#/chat/' + cid)
+            pw.expect(page.get_by_text('Данные источника')).to_be_visible()
+            trigger = page.locator('#chat-share')
+            pw.expect(trigger).to_be_visible()
+            pw.expect(trigger).to_be_disabled()
+            pw.expect(trigger).to_have_attribute('title', reason)
+            if not mobile:
+                page.locator(f'.chat-item[data-id="{cid}"] .chat-more').click()
+                item = page.locator(f'.chat-item[data-id="{cid}"] .chat-share')
+                pw.expect(item).to_be_disabled()
+                pw.expect(item).to_have_attribute('title', reason)
+    finally:
+        client.delete('/api/chats/' + cid)
+        client.close()
+
+
+@pytest.mark.parametrize('mobile,width', [(False, 1280), (True, 320)])
 def test_agent_chat_sharing_uses_the_same_pin_flow(focus_browser, live, mobile, width):
     if mobile and focus_browser.browser_type.name == 'firefox':
         pytest.skip('Playwright не эмулирует мобильный Firefox')
