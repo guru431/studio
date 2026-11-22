@@ -1,0 +1,48 @@
+{
+ "configOptions": [
+  {
+   "id": "model",
+   "name": "Model",
+   "category": "model",
+   "type": "select",
+   "currentValue": "[\"srvllm\",\"stub-tools\"]",
+   "options": [
+    {
+     "group": "srvllm",
+     "name": "srvllm",
+     "options": [
+      {
+       "value": "[\"srvllm\",\"stub-tools\"]",
+       "name": "Stub tools"
+      },
+      {
+       "value": "[\"srvllm\",\"stub-vision\"]",
+       "name": "Stub vision"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reasoning_effort",
+   "name": "Reasoning effort",
+   "category": "thought_level",
+   "type": "select",
+   "currentValue": "high",
+   "options": [
+    {
+     "value": "",
+     "name": "Provider default"
+    },
+    {
+     "value": "off",
+     "name": "Off"
+    },
+    {
+     "value": "high",
+     "name": "High"
+    }
+   ]
+  }
+ ]
+}

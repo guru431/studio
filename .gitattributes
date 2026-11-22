@@ -7,3 +7,4 @@
 # Файлы выкладки — LF, в том числе Windows-сборщик (BOM сохранён для PowerShell 5.1).
 deploy/*.ps1 text eol=lf
 *.png binary
+*.zstd binary

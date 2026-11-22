@@ -1,0 +1,11 @@
+{
+ "jsonrpc": "2.0",
+ "id": 3,
+ "error": {
+  "code": -32603,
+  "message": "Internal error",
+  "data": {
+   "details": "session \"c09f9e7b-938a-4e9a-b283-a69cebd58558\" is already owned by an active write handle"
+  }
+ }
+}
