@@ -1,6 +1,7 @@
 """Учётки Open WebUI в Студии: подключение (список разрешённых, сертификат по отпечатку, версия, вход и его отказы,
 предел неудач), переподключение, подпись, удаление с отзывом сессии, `owui.call`, удаление учётки Студии, блокировка."""
 import asyncio
+import dataclasses
 import datetime
 import hashlib
 import logging
@@ -9,6 +10,7 @@ import ssl
 import httpx
 import pytest
 from cryptography import x509
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
@@ -49,8 +51,8 @@ def test_connect_creates_account_without_storing_password(setup):
     assert r.status_code == 201, r.text
     out = r.json()
     assert out == {"id": out["id"], "label": "s06 · work", "url": FakeOwui.URL,
-                   "who": {"name": fake.name, "email": FakeOwui.EMAIL}, "state": "ok", "version": "0.13.4",
-                   "cert": None}
+                   "who": {"name": fake.name, "email": FakeOwui.EMAIL}, "state": "ok", "reenter": False,
+                   "version": "0.13.4", "cert": None}
     assert fake.session_names == ["Studio"]
     (row,) = rows()
     for value in row:
@@ -176,6 +178,26 @@ def test_new_certificate_is_accepted_by_fingerprint(tls, monkeypatch):
     assert rows()[0]["cert_pem"] == ssl.DER_cert_to_PEM_cert(other)
 
 
+def test_pinned_certificate_failing_verification_is_not_offered_again(tls, monkeypatch):
+    """Ревью M2: сервер показывает ровно закреплённый сертификат, а проверку тот не проходит (истёк) — понятный
+    отказ 502 `owui_certificate`, а не 409 с тем же отпечатком без конца."""
+    s, fake, der, pinned = tls
+    aid = connect(s, url=HTTPS_URL, cert_sha256=fingerprint(der)).json()["id"]
+
+    def broken(pem):
+        async def expired(request):
+            try:
+                raise ssl.SSLCertVerificationError("certificate verify failed: certificate has expired")
+            except ssl.SSLCertVerificationError as e:
+                raise httpx.ConnectError("certificate verify failed", request=request) from e
+        return httpx.AsyncClient(transport=httpx.MockTransport(expired))
+
+    monkeypatch.setattr(state, "pinned_http", broken)
+    owui_tokens.TOKENS.clear()
+    r = s.c.get(f"/api/owui/accounts/{aid}/tree")
+    assert r.status_code == 502 and r.json()["detail"]["code"] == "owui_certificate"
+
+
 def test_duplicate_account_is_409_exists(setup):
     s, fake, uid = setup
     assert connect(s).status_code == 201
@@ -199,6 +221,30 @@ def test_relogin_with_other_user_is_409_other_user(setup):
     assert owui_tokens.load(aid) == second
     r = s.c.post(f"/api/owui/accounts/{aid}/login", json={"password": "wrong"})
     assert r.status_code == 422 and r.json()["detail"]["code"] == "owui_login"
+
+
+def test_changed_data_key_asks_to_sign_in_again_with_email(setup, monkeypatch):
+    """Ревью I3: после смены `STUDIO_DATA_KEY` (перезапуск: рабочих токенов в памяти нет) — `relogin`, а не 500;
+    вход заново спрашивает email, и его отсутствие не считается неудачей входа."""
+    s, fake, uid = setup
+    aid = connect(s).json()["id"]
+    monkeypatch.setattr(state, "CFG", dataclasses.replace(state.CFG, data_key=Fernet.generate_key().decode()))
+    owui_tokens.TOKENS.clear()
+    (out,) = s.c.get("/api/owui/accounts").json()
+    assert (out["reenter"], out["state"], out["who"]) == (True, "relogin", {"name": None, "email": None})
+    r = s.c.get(f"/api/owui/accounts/{aid}/tree")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "relogin"
+    assert rows()[0]["state"] == "relogin"
+    asked = len(fake.requests)
+    for _ in range(owui.LOGIN_FAILS + 1):
+        r = s.c.post(f"/api/owui/accounts/{aid}/login", json={"password": FakeOwui.PASSWORD})
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "owui_email"
+    assert len(fake.requests) == asked and not owui.FAILS.get(uid)
+    r = s.c.post(f"/api/owui/accounts/{aid}/login", json={"password": FakeOwui.PASSWORD, "email": FakeOwui.EMAIL})
+    assert r.status_code == 200, r.text
+    assert (r.json()["state"], r.json()["reenter"], r.json()["who"]["email"]) == ("ok", False, FakeOwui.EMAIL)
+    assert s.c.get(f"/api/owui/accounts/{aid}/tree").status_code == 200
+    assert s.c.delete(f"/api/owui/accounts/{aid}").status_code == 204
 
 
 def test_label_can_be_changed(setup):

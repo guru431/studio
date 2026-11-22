@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+import clock
 import connections
 import state
 import upstream
@@ -29,18 +30,25 @@ def conn(cert_pem=None):
     return SimpleNamespace(id=7, cleaner=False, cert_pem=cert_pem)
 
 
-def self_signed(name: str) -> tuple[str, str]:
-    """Самоподписанный сертификат как у `openssl req -x509` по умолчанию (PEM сертификата, PEM ключа)."""
+def self_signed(name: str, strict: bool = True) -> tuple[str, str]:
+    """Самоподписанный сертификат как у `openssl req -x509` по умолчанию (PEM сертификата, PEM ключа); `strict=False` —
+    `keyCertSign` без `CA:TRUE`, как у иных генераторов: строгую проверку RFC 5280 (OpenSSL 3.5) он не проходит."""
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
     ski = x509.SubjectKeyIdentifier.from_public_key(key.public_key())
-    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(datetime.datetime(2020, 1, 1)).not_valid_after(datetime.datetime(2099, 1, 1))
-            .add_extension(ski, critical=False)
-            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski), critical=False)
-            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-            .sign(key, hashes.SHA256()))
+    builder = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+               .serial_number(x509.random_serial_number())
+               .not_valid_before(datetime.datetime(2020, 1, 1)).not_valid_after(datetime.datetime(2099, 1, 1)))
+    if strict:
+        builder = (builder.add_extension(ski, critical=False)
+                   .add_extension(x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski), critical=False)
+                   .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True))
+    else:
+        builder = builder.add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
+                                                      key_encipherment=False, data_encipherment=False,
+                                                      key_agreement=False, key_cert_sign=True, crl_sign=False,
+                                                      encipher_only=False, decipher_only=False), critical=True)
+    cert = builder.sign(key, hashes.SHA256())
     key_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                 serialization.NoEncryption())
     return cert.public_bytes(serialization.Encoding.PEM).decode(), key_pem.decode()
@@ -85,6 +93,32 @@ def test_pinned_certificate_selects_its_own_client(studio, monkeypatch):
     assert state.pinned_http(pem) is state.pinned_http(pem)
 
 
+def test_evicted_pinned_client_closes_after_grace(studio, monkeypatch):
+    """Ревью M6: вытесненный из `state.PINNED` клиент может быть в работе у запроса другой учётки — закрывается через
+    `state.PINNED_GRACE_SEC`, а не сразу."""
+    monkeypatch.setattr(state, "PINNED_MAX", 1)
+
+    async def scenario():
+        release, waited = asyncio.Event(), []
+
+        async def sleep(seconds):
+            waited.append(seconds)
+            await release.wait()
+
+        monkeypatch.setattr(clock, "SLEEP", sleep)
+        first = state.pinned_http(self_signed("10.77.1.21")[0])
+        state.pinned_http(self_signed("10.77.1.22")[0])
+        await asyncio.sleep(0)
+        assert waited == [state.PINNED_GRACE_SEC] and not first.is_closed
+        release.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert first.is_closed and not state.RETIRED
+        await state.close_pinned()
+
+    asyncio.run(scenario())
+
+
 def test_ws_target_refuses_unlisted_and_private_names(studio, monkeypatch):
     allow("owui.example.com:443", "10.77.1.20:8080")
     for url in ["https://other.example.com" + SOCKET, "http://owui.example.com:443" + SOCKET,
@@ -114,9 +148,11 @@ def test_ws_target_pins_public_name(studio, public):
     assert t.ssl is None and t.server_hostname is None
 
 
-def test_pinned_context_accepts_only_its_certificate(studio, tmp_path):
-    pem, key = self_signed("10.77.1.21")
-    other, _ = self_signed("10.77.1.21")
+@pytest.mark.parametrize("strict", [True, False])
+def test_pinned_context_accepts_only_its_certificate(studio, tmp_path, strict):
+    """Ревью M2: и сертификат, не проходящий строгую проверку RFC 5280, принимается, если он — ровно закреплённый."""
+    pem, key = self_signed("10.77.1.21", strict)
+    other, _ = self_signed("10.77.1.21", strict)
     (tmp_path / "c.pem").write_text(pem)
     (tmp_path / "k.pem").write_text(key)
     server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -195,6 +196,49 @@ def test_reconnects_after_drop_and_tells_watchers(setup, caplog):
     secret = owui_tokens.load(acc.id)
     for leaked in (FakeOwui.ENTRY, "10.77.1.20", secret.refresh_token, owui_tokens.TOKENS[acc.id][0], "c1", "m1"):
         assert leaked not in log
+
+
+def test_silent_socket_counts_as_drop_and_reconnects(setup):
+    """Ревью M3: сервер молчит дольше `pingInterval + pingTimeout` из пакета открытия (здесь 20 мс вместо 45 с) —
+    соединение оборвано, наблюдателям `down`, переподключение с паузой."""
+    s, fake, acc = setup
+    fake.ping_ms = (10, 10)
+
+    async def scenario():
+        q = await owui_link.watch(acc)
+        for _ in range(2000):                                             # молчание — по настоящему времени
+            if len(fake.sockets) >= 2 and fake.sockets[0].closed:
+                break
+            await asyncio.sleep(0.001)
+        assert len(fake.sockets) >= 2 and fake.sockets[0].closed
+        assert links(drain(q))[:2] == ["up", "down"] and s.sleeps[0] == 1
+        await owui_link.drop_account(acc.id)
+
+    asyncio.run(scenario())
+
+
+def test_check_refusing_fresh_token_turns_link_into_relogin_without_more_rotations(setup):
+    """Ревью I1: проверка `GET /api/v1/auths/` отвергает и только что выданный токен — `relogin`, а не новая ротация
+    на каждой попытке переподключения."""
+    s, fake, acc = setup
+    served = fake.handler
+
+    async def handler(request):
+        if request.url.path == "/api/v1/auths/":
+            fake.requests.append(request)
+            return httpx.Response(401, json={"detail": "Not authenticated"})
+        return await served(request)
+
+    s.gw.hosts[FakeOwui.ENTRY] = handler
+
+    async def scenario():
+        q = await owui_link.watch(acc)
+        await until(lambda: acc.id not in owui_link.LINKS, "соединение закрыто")
+        assert links(drain(q)) == ["relogin"]
+
+    asyncio.run(scenario())
+    assert fake.refreshes == 2 and fake.sockets == []                    # рабочий токен в память + одно на отказ
+    assert state.DB.execute("SELECT state FROM owui_accounts WHERE id = ?", (acc.id,)).fetchone()[0] == "relogin"
 
 
 def test_revoked_session_turns_link_into_relogin(setup):

@@ -6,7 +6,8 @@
   Перед запросом в `secret_enc` пишется `pending_request_id`; после ответа — новая пара и пустой `pending_request_id`.
   Обрыв между ответом Open WebUI и записью: следующее обновление шлёт тот же `request_id` с прежним токеном, и
   Open WebUI возвращает ту же выдачу.
-- 401 на обновление — учётка в `relogin` (нужен пароль заново), рабочий токен забыт.
+- 401 на обновление или нечитаемый `secret_enc` (сменили `STUDIO_DATA_KEY`) — учётка в `relogin` (нужен пароль
+  заново), рабочий токен забыт.
 - Журнал — только id учётки и коды: адрес, токены и тексты ответов туда не пишутся.
 """
 import asyncio
@@ -16,6 +17,7 @@ import uuid
 from dataclasses import asdict, dataclass
 
 import httpx
+from cryptography.fernet import InvalidToken
 
 import clock
 import security
@@ -62,10 +64,14 @@ def save(aid: int, secret: Secret) -> None:
 
 
 def load(aid: int) -> Secret:
+    """Долгий токен учётки; не расшифровался (сменили `STUDIO_DATA_KEY`) — учётка в `relogin`, а не 500."""
     row = state.DB.execute("SELECT secret_enc FROM owui_accounts WHERE id = ?", (aid,)).fetchone()
     if row is None:
         raise KeyError(aid)
-    return Secret(**json.loads(security.decrypt(row["secret_enc"])))
+    try:
+        return Secret(**json.loads(security.decrypt(row["secret_enc"])))
+    except (InvalidToken, TypeError, ValueError):
+        raise relogin(aid, "сессия не расшифровалась") from None
 
 
 def forget(aid: int) -> None:
@@ -84,10 +90,11 @@ async def access(acc) -> str:
     return _fresh(acc.id) or await renew(acc)
 
 
-def _relogin(aid: int) -> Relogin:
+def relogin(aid: int, why: str) -> Relogin:
+    """Учётку — в `relogin` (нужен пароль заново), рабочий токен забыть; `why` — слова кода для журнала."""
     state.DB.execute("UPDATE owui_accounts SET state = 'relogin' WHERE id = ?", (aid,))
     forget(aid)
-    log.warning("owui %s: сессия отвергнута, нужен вход заново", aid)
+    log.warning("owui %s: %s, нужен вход заново", aid, why)
     return Relogin()
 
 
@@ -114,7 +121,7 @@ async def renew(acc, *, force: bool = False, stale: str | None = None) -> str:
         except httpx.HTTPError:
             raise Unavailable(None) from None
         if response.status_code == 401:
-            raise _relogin(acc.id)
+            raise relogin(acc.id, "сессия отвергнута")
         body = upstream.json_body(response)
         token, refresh = body.get("token"), body.get("refresh_token")
         if response.status_code != 200 or not isinstance(token, str) or not isinstance(refresh, str):

@@ -138,6 +138,7 @@ class FakeOwui:
         self.sockets: list[FakeSocket] = []
         self.ws_targets: list = []         # `upstream.WsTarget` каждого соединения сокета
         self.ws_headers: list[dict] = []
+        self.ping_ms = (25000, 20000)      # `pingInterval`, `pingTimeout` пакета открытия, мс
         # отправка
         self.completions: list[dict] = []  # тела `POST /api/chat/completions` по порядку
         self.queue_next = False            # в чате идёт ответ: сообщение ставится в очередь
@@ -162,8 +163,8 @@ class FakeOwui:
         self.ws_headers.append(dict(headers))
         sock = FakeSocket(self)
         self.sockets.append(sock)
-        sock.push("0" + json.dumps({"sid": f"eio-{next(self._ids)}", "upgrades": [], "pingInterval": 25000,
-                                    "pingTimeout": 20000, "maxPayload": 1000000}))
+        sock.push("0" + json.dumps({"sid": f"eio-{next(self._ids)}", "upgrades": [], "pingInterval": self.ping_ms[0],
+                                    "pingTimeout": self.ping_ms[1], "maxPayload": 1000000}))
         return sock
 
     @property
@@ -225,15 +226,16 @@ class FakeOwui:
     def add_chat(self, title: str = "Chat", *, folder_id: str | None = None, pinned: bool = False,
                  messages: list[dict] | None = None, current_id: str | None = None, models: list[str] | None = None,
                  chat_id: str | None = None, updated_at: int | None = None, active: bool = False,
-                 pending_approval: bool = False) -> str:
-        """Чат; `messages` — сообщения истории (`id`, `parentId`, …), текущее — `current_id` или последнее."""
+                 pending_approval: bool = False, files: list[dict] | None = None) -> str:
+        """Чат; `messages` — сообщения истории (`id`, `parentId`, …), текущее — `current_id` или последнее; `files` —
+        `chat.files` (документы, по которым Open WebUI ищет в ходе)."""
         chat_id = chat_id or f"chat-{next(self._ids)}"
         stamp = int(clock.NOW()) if updated_at is None else updated_at
         self.chats[chat_id] = {"id": chat_id, "title": title, "folder_id": folder_id, "pinned": pinned,
                                "messages": {m["id"]: m for m in messages or []},
                                "current_id": current_id or (messages[-1]["id"] if messages else None),
                                "models": models or [], "created_at": stamp, "updated_at": stamp, "active": active,
-                               "pending_approval": pending_approval}
+                               "pending_approval": pending_approval, "files": list(files or [])}
         return chat_id
 
     def add_folder(self, name: str = "Folder", *, folder_id: str | None = None, parent_id: str | None = None) -> str:
@@ -329,7 +331,7 @@ class FakeOwui:
     def _chat_response(self, chat: dict) -> dict:
         """`ChatResponse` с телом чата, как его хранит Open WebUI: `chat.history.messages` — словарь по id."""
         return {"id": chat["id"], "user_id": self.user_id, "title": chat["title"],
-                "chat": {"title": chat["title"], "models": chat["models"],
+                "chat": {"title": chat["title"], "models": chat["models"], "files": chat["files"],
                          "history": {"messages": chat["messages"], "currentId": chat["current_id"]}},
                 "updated_at": chat["updated_at"], "created_at": chat["created_at"], "share_id": None,
                 "archived": False, "pinned": chat["pinned"], "meta": {}, "variables": {},
@@ -401,6 +403,8 @@ class FakeOwui:
                 chat_id = self.add_chat("New Chat", models=[body.get("model")])
             elif chat_id not in self.chats:
                 return httpx.Response(404, json={"detail": "We could not find what you're looking for :/"})
+            if body.get("files") is not None:          # как `main.py` 0.13.4: присланное перезаписывает `chat.files`
+                self.chats[chat_id]["files"] = body["files"]
             self._insert_turn(self.chats[chat_id], body)
             return httpx.Response(200, json={"status": True, "task_ids": [f"task-{next(self._ids)}"], "chat_id": chat_id})
         if path == "/api/v1/files/":

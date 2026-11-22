@@ -3630,6 +3630,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Open WebUI временно не принимает вход — попробуйте позже": "Open WebUI is temporarily not accepting sign-ins. Try again later",
   "эта учётка Open WebUI уже подключена": "this Open WebUI account is already connected",
   "это другая учётка Open WebUI — подключите её отдельно": "this is a different Open WebUI account. Connect it separately",
+  "Студия не может прочитать email учётки Open WebUI — введите его": "Studio cannot read the Open WebUI account email. Enter it",
+  "подтверждённый сертификат Open WebUI не проходит проверку (например, истёк) — обновите его на сервере": "the confirmed Open WebUI certificate fails verification (for example, it has expired). Renew it on the server",
   "адрес Open WebUI — со схемой http или https и хостом": "the Open WebUI address needs the http or https scheme and a host",
   "подпись не может быть пустой": "the label cannot be empty",
   "у адреса http нет сертификата": "an http address has no certificate",

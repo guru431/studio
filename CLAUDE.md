@@ -291,7 +291,8 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
   ввести заново (`account_mail.settings`, признак `reenter`); зеркала проектов — «настройка недоступна», отвязать и
   привязать заново (`project_mirrors._item`, признак `reenter`); идентификаторы `X-Studio-User` (`access.studio_user`)
   — новые: внешний MCP (например, мост с папками по людям) видит новых пользователей, их папки, задания и файлы потеряны;
-  личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново.
+  личная память чата — `memory.UNREADABLE` вместо текста, удалить и записать заново; учётки Open WebUI — `relogin`
+  (`owui._out`, признак `reenter`), «Войти заново» с email и паролем.
 - Модуль раздела — `claude_code.py`, не `code.py` (заслонил бы стандартный `code`, pytest — INTERNALERROR).
 - `ntfy` не импортирует `upstream` при загрузке (цикл main → bridge → push → ntfy); после правки цепочки импорта —
   `import main` на Python хоста (3.13).

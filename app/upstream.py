@@ -208,10 +208,13 @@ CERT_FETCH_SEC = 10
 
 def pinned_context(pem: str) -> ssl.SSLContext:
     """Якорь доверия — ровно этот сертификат (системные корни не грузятся), без проверки имени: сертификат
-    по IP часто без нужного SAN; частичная цепочка — сертификат сервера сам себе якорь."""
+    по IP часто без нужного SAN; частичная цепочка — сертификат сервера сам себе якорь. Без `VERIFY_X509_STRICT`:
+    когда якорь — ровно этот сертификат, строгость RFC 5280 ничего не добавляет, а иной самоподписанный сертификат
+    (`keyCertSign` без `CA:TRUE`) отвергался бы при совпавшем отпечатке."""
     context = ssl.create_default_context(cadata=pem)
     context.check_hostname = False
     context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
     return context
 
 
