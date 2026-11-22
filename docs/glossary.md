@@ -88,7 +88,7 @@
 |---|---|
 | компьютер | машина владельца с мостом (`agents`); «на связи» / «не на связи» |
 | мост, Studio Agent | приложение `agent/` (`studio-agent`) для Windows, macOS и Linux; в отказах сервера и моста — только «мост» (не «агент»: агенты — помощники), с нужной версией, где она известна; в окне и трее — «Studio Agent» |
-| помощник, агент | Claude, Codex, OpenCode (`engine`); кнопки нового чата на экране «+» — «Claude», «Codex», «OpenCode» |
+| помощник, агент | Claude, Codex, OpenCode, DeepSeek Harness (`engine`: `claude`, `codex`, `opencode`, `deepseek`); кнопки нового чата на экране «+» — «Claude», «Codex», «OpenCode», «DeepSeek» (полное имя «DeepSeek Harness» — в подсказке кнопки и в остальном интерфейсе) |
 | проект | подпапка корня проектов моста (`pid`) |
 | сессия, чат | сессия CLI (`chat` UUID); вкладка — открытая сессия проекта |
 | PIN компьютера | PIN моста (4–8 цифр), отдельный от PIN приложения |

@@ -291,7 +291,7 @@ export function chatMcpBlock({ admin = false } = {}) {
 export function agentMcpBlock(agents) {
   const computers = el('select', { class: 'input', id: 'mcp-computer' }), projects = el('select', { class: 'input', id: 'mcp-project' });
   const engine = el('select', { class: 'input', id: 'mcp-engine' },
-    ...[['claude', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode']].map(([value, name]) => el('option', { value }, name)));
+    ...[['claude', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode'], ['deepseek', 'DeepSeek Harness']].map(([value, name]) => el('option', { value }, name)));
   const pin = computerPin({ id: 'mcp-pin' });
   const note = el('p', { class: 'status', 'aria-live': 'polite', id: 'agent-mcp-status' }), list = el('div', { id: 'agent-mcp-servers' });
   const add = button(tr("Добавить MCP"), { class: 'btn', id: 'agent-mcp-add', disabled: true }, () => edit());
