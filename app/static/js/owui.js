@@ -7,8 +7,8 @@ import { tr } from './i18n.js';
  * без открытого чата она выезжает сама, учёток нет — справа подсказка и «Подключить».
  *
  * Адрес: #/owui — последнее место (localStorage `studio-owui-place`: учётка Studio, id учётки и чата), нет его — первая
- * учётка; адрес с несуществующей учёткой — к показанной. Нажатие на учётку меняет только панель (без открытого чата —
- * и адрес #/owui/<id> через replaceState, без перехода).
+ * учётка; адрес с несуществующей учёткой — к показанной. Нажатие на учётку меняет только панель: лента или поле
+ * нового чата справа остаются (новый чат другой учётки — «Новый чат» её панели).
  *
  * Справа — лента чата и поле ввода (owui-chat.js): #/owui/<id>/<chat> — открытый чат, #/owui/<id> — новый чат; первое
  * сообщение нового чата меняет адрес на его чат (replaceState) без пересоздания ленты.
@@ -16,8 +16,10 @@ import { tr } from './i18n.js';
  * Поток: SSE-подписка GET /api/owui/accounts/{id}/events на учётку, показанную в панели, и на учётку открытой ленты —
  * одна, если они совпадают, иначе две (не больше); учётке `relogin` — нет. События учётки панели — панели, события
  * всех подписок — подписчикам listen(fn) (лента берёт события своей учётки): fn(type, data, aid). Поток кончился —
- * новый с растущей паузой; после `closed` (сессия кончилась или заперта), `link relogin` и 404 — нет, пока панель
- * не покажет учётку снова (после входа заново). */
+ * событие страницы `lost` (его сервер не шлёт: следующее `link up` перечитывает пропущенное) и новый поток с растущей
+ * паузой. `closed` (сессия кончилась или заперта) — такой же обрыв: на 423 api.js ждёт отпирания и повторяет запрос,
+ * на `login` уводит на вход. После `link relogin` (и отказа `relogin`) и 404 — нового потока нет, пока панель не
+ * покажет учётку снова (после входа заново); `relogin` любой учётки панель узнаёт сразу (точка «войдите заново»). */
 import { api } from './api.js';
 import { svg } from './icons.js';
 import { chatView } from './owui-chat.js';
@@ -34,7 +36,7 @@ let panel = null;
 let user = null;
 let route = { aid: null, chat: null };
 const streams = new Map();             // id учётки → { aid, controller }
-const ended = new Set();               // учётки, чей поток кончился сам (relogin, 404, closed): без нового до показа
+const ended = new Set();               // учётки, чей поток кончился сам (relogin, 404): без нового до показа
 let panelAid = null;                   // учётка панели, которой нужен поток (не `relogin`)
 let view = null;                       // лента справа (chatView) и её отписка: { chat, off }
 let settled = false;                   // первый адрес разобран: дальше показ учётки сам ведёт адрес
@@ -140,6 +142,7 @@ function paintRight() {
 
 function dispatch(aid, type, data) {
   if (aid === panel?.shown()) panel.event(type, data);
+  else if (type === 'link' && data?.state === 'relogin') panel?.relogin(aid);   // учётка ленты, не панели
   for (const fn of listeners) {
     try {
       fn(type, data, aid);
@@ -177,14 +180,19 @@ async function follow(current) {
       for await (const { event, data } of readSSE(response)) {
         if (signal.aborted) return;
         tries = 0;
-        if (event === 'closed' || (event === 'link' && data?.state === 'relogin')) end = true;
+        if (event === 'link' && data?.state === 'relogin') end = true;
         dispatch(current.aid, event, data);
       }
     } catch (err) {
       if (signal.aborted) return;
-      if (err?.status === 404 || err?.code === 'relogin') return;     // учётку удалили или ей нужен вход заново
+      if (err?.code === 'relogin') {                                  // ей нужен вход заново
+        panel?.relogin(current.aid);
+        return;
+      }
+      if (err?.status === 404) return;                                // учётку удалили
     }
     if (end || signal.aborted) return;
+    dispatch(current.aid, 'lost', {});                                // пропущенное перечитает следующее `link up`
     await pause(RETRY_MS[Math.min(tries, RETRY_MS.length - 1)], signal);
     tries += 1;
   }
@@ -223,14 +231,12 @@ function opened(aid, acc) {
     return;
   }
   if (!settled) return;                       // первый показ: адрес и последнее место разбирает apply
-  const gone = route.aid === null || !panel.accounts().some((a) => a.id === route.aid);   // учётку чата удалили
-  if (gone || (!route.chat && route.aid !== aid)) {
+  const gone = route.aid === null || !panel.accounts().some((a) => a.id === route.aid);   // учётку справа удалили
+  if (gone) {                                 // иначе нажатие на учётку меняет только панель
     replaceRoute({ aid, chat: null });
     paintRight();                             // новый чат — у показанной учётки
-    if (gone) {
-      panel.here(aid, null);
-      if (phone()) panelOpen(true);         // чата нет: на телефоне — сразу дерево новой учётки
-    }
+    panel.here(aid, null);
+    if (phone()) panelOpen(true);           // чата нет: на телефоне — сразу дерево новой учётки
   } else if (acc && acc.state !== 'relogin' && view?.chat.account === aid) {
     view.chat.retry();                        // вошли заново: лента дочитывает, что не прочиталось
   }

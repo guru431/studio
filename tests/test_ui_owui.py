@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import owui
 import owui_link
 import state
 import upstream
@@ -99,10 +100,11 @@ def connected(live, cookie, label="s06"):
 
 
 @contextmanager
-def opened(browser, live, cookie, width, path):
+def opened(browser, live, cookie, width, path, **options):
+    """`options` — параметры контекста (`service_workers="block"` — для `page.route` в WebKit)."""
     mobile = width < 760
     with browser.new_context(viewport={"width": width, "height": 800}, is_mobile=mobile, has_touch=mobile,
-                             extra_http_headers={"Cookie": cookie}) as context:
+                             extra_http_headers={"Cookie": cookie}, **options) as context:
         page = context.new_page()
         page.set_default_timeout(10000)
         page.problems = []
@@ -112,6 +114,9 @@ def opened(browser, live, cookie, width, path):
                 and not ("Failed to load resource" in message.text and any(c in message.text for c in EXPECTED))
                 else None)
         page.on("request", lambda request: page.events.append(request.url) if request.url.endswith("/events") else None)
+        page.asked = []                                                  # GET страницы к API Open WebUI (пути)
+        page.on("request", lambda request: page.asked.append(request.url.split("?")[0].replace(live.url, ""))
+                if request.method == "GET" and "/api/owui/" in request.url else None)
         page.goto(live.url + "/#/" + path)
         page.locator("html[data-ready='1']").wait_for(state="attached")
         yield page
@@ -712,5 +717,191 @@ def test_stop_ends_answer(owui_browser, live, fake, width):
         finished(fake, chat, message)
         pw.expect(answer.locator(".md")).to_have_text("Once upon")
         pw.expect(answer.locator(".msg-meta")).to_have_count(0)
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+# ---- поток после блокировки, две подписки, вход заново с email, прокрутка -------------------------------------------
+
+def chat_reads(page, aid, chat):
+    """Сколько раз страница читала чат (GET …/chats/{chat})."""
+    return page.asked.count(f"/api/owui/accounts/{aid}/chats/{chat}")
+
+
+def watchers(aid):
+    link = owui_link.LINKS.get(aid)
+    return len(link.watchers) if link else 0
+
+
+def at_bottom(page):
+    page.wait_for_function("""() => { const s = document.querySelector('#owui-messages');
+      return s.scrollHeight > s.clientHeight && s.scrollHeight - s.scrollTop - s.clientHeight < 80; }""", timeout=5000)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_stream_comes_back_after_the_screen_lock(owui_browser, live, fake, monkeypatch, width):
+    """Блокировка экрана: сервер закрывает поток (`closed`), повтор ждёт отпирания (423 — api.js), после отпирания поток
+    учётки снова открыт, куски и `done` доходят до ленты."""
+    monkeypatch.setattr(owui, "CHECK_SEC", 0)                             # блокировку поток видит на первом событии
+    fake.add_model("m1", "Model One")
+    chat = fake.add_chat("Locked", models=["m1"], messages=talk({"id": "a1", "done": True, "content": "Ready"}))
+    cookie = session(live, f"owui-lock-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        pw.expect(page.locator(".owui-msg.assistant[data-id='a1'] .md")).to_have_text("Ready")
+        socket_ready(page, fake)
+        page.locator("#owui-input").fill("Write a story")
+        page.locator("#owui-send").click()
+        until(page, lambda: fake.completions)
+        message = fake.completions[-1]["id"]
+        answer = page.locator(f".owui-msg.assistant[data-id='{message}']")
+        delta(fake, chat, message, "Once")
+        pw.expect(answer.locator(".owui-stream")).to_have_text("Once")
+        page.evaluate("""async () => { const m = await import('/static/js/api.js');
+          await m.api('POST', '/api/me/screen-lock', { enabled: true, timeout: 600 });
+          await m.api('POST', '/api/lock/now'); }""")
+        delta(fake, chat, message, " lost")                               # вместо куска — `closed`
+        until(page, lambda: watchers(aid) == 0)
+        page.locator("#lock[open]").wait_for()
+        if page.locator("#lock-use-password").is_visible():
+            page.locator("#lock-use-password").click()
+        page.locator("#lock-password").fill(PASSWORD)
+        page.locator("#lock-password-go").click()
+        page.locator("#lock[open]").wait_for(state="detached")
+        until(page, lambda: watchers(aid) == 1)                         # поток учётки открылся снова
+        socket_ready(page, fake)
+        delta(fake, chat, message, " upon")
+        pw.expect(answer.locator(".owui-stream")).to_contain_text("upon")
+        fake.finish(chat, message, "Once upon a time")
+        finished(fake, chat, message)
+        pw.expect(answer.locator(".md")).to_have_text("Once upon a time")
+        pw.expect(page.locator("#owui-stop")).to_be_hidden()
+        assert fits(page)
+        problems = [p for p in page.problems if "423" not in p]
+        assert not problems, problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_panel_and_feed_of_different_accounts_keep_two_streams(owui_browser, live, fake, width):
+    """Учётка панели ≠ учётке ленты: два потока; нажатие на учётку меняет только панель; лишний поток закрывается;
+    `relogin` учётки ленты видно в панели, хоть она и не показана."""
+    fake.add_model("m1", "Model One")
+    chat = fake.add_chat("Mine", models=["m1"], messages=talk({"id": "a1", "done": False, "content": "Part"}))
+    cookie = session(live, f"owui-two-{owui_browser.browser_type.name}-{width}")
+    first = connected(live, cookie, label="First")
+    fake.user_id = "owui-user-2"                                         # вторая учётка того же сервера
+    second = connected(live, cookie, label="Second")
+    with opened(owui_browser, live, cookie, width, f"owui/{first}/{chat}") as page:
+        stream = page.locator(".owui-msg.assistant[data-id='a1'] .owui-stream")
+        pw.expect(stream).to_have_text("Part")
+        show_panel(page)
+        rows = {aid: page.locator(f".owui-account-row[data-id='{aid}']") for aid in (first, second)}
+        rows[second].locator(".owui-account").click()
+        pw.expect(rows[second].locator(".owui-account")).to_have_attribute("aria-current", "true")
+        pw.expect(page).to_have_url(re.compile(rf"#/owui/{first}/{chat}$"))     # лента осталась
+        pw.expect(page.locator("#owui-feed")).to_have_attribute("data-account", str(first))
+        until(page, lambda: watchers(first) == 1 and watchers(second) == 1)
+        until(page, lambda: len([s for s in fake.sockets if not s.closed and s.user]) == 2)
+        delta(fake, chat, "a1", " more")
+        pw.expect(stream).to_have_text("Part more")                       # поток учётки ленты жив
+
+        rows[first].locator(".owui-account").click()                     # панель и лента — одна учётка
+        until(page, lambda: watchers(second) == 0 and watchers(first) == 1)
+        rows[second].locator(".owui-account").click()
+        until(page, lambda: watchers(first) == 1 and watchers(second) == 1)
+
+        fake.revoke_all()                                                # обе сессии отозваны в Open WebUI
+        fake.expire_tokens()
+        for sock in [s for s in fake.sockets if not s.closed]:
+            fake.later(sock.close_from_server)
+        for aid in (first, second):
+            pw.expect(rows[aid].locator(".owui-state")).to_have_class(re.compile(r"\brelogin\b"))
+        pw.expect(page.locator("#owui-relogin")).to_be_visible()
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_relogin_asks_email_when_needed(owui_browser, live, fake, width):
+    """Вход заново: 422 `owui_email` — появляется поле email (с известным email), повтор шлёт его; учётка `reenter`
+    (данные не читаются после смены ключа сервера) — поле email сразу и пустое."""
+    cookie = session(live, f"owui-email-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie, label="Работа")
+    live_sql(live, "UPDATE owui_accounts SET state = 'relogin' WHERE id = ?", (aid,))
+    sent = []
+
+    def login(route):
+        sent.append(json.loads(route.request.post_data))
+        if len(sent) == 1:
+            route.fulfill(status=422, content_type="application/json", body=json.dumps(
+                {"detail": {"code": "owui_email", "message": "укажите email учётки Open WebUI"}}))
+        else:
+            route.continue_()
+
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}", service_workers="block") as page:
+        page.route(f"**/api/owui/accounts/{aid}/login", login)
+        show_panel(page)
+        email = page.locator("#owui-relogin-email")
+        pw.expect(email).to_be_hidden()
+        pw.expect(page.locator(".owui-relogin-who")).to_have_text(FakeOwui.EMAIL)
+        page.locator("#owui-relogin-password").fill(FakeOwui.PASSWORD)
+        page.locator("#owui-relogin-submit").click()
+        pw.expect(email).to_be_visible()
+        pw.expect(email).to_have_value(FakeOwui.EMAIL)
+        pw.expect(page.locator("#owui-relogin .error[data-for=email]")).not_to_be_empty()
+        pw.expect(page.locator(".owui-relogin-who")).to_have_count(0)
+        page.locator("#owui-relogin-submit").click()
+        pw.expect(page.locator("#owui-relogin")).to_have_count(0)
+        assert sent == [{"password": FakeOwui.PASSWORD}, {"password": FakeOwui.PASSWORD, "email": FakeOwui.EMAIL}]
+
+        page.unroute(f"**/api/owui/accounts/{aid}/login")
+        live_sql(live, "UPDATE owui_accounts SET state = 'relogin' WHERE id = ?", (aid,))
+
+        def listing(route):
+            response = route.fetch()
+            route.fulfill(response=response, json=[{**a, "reenter": True} for a in response.json()])
+
+        page.route(re.compile(r".*/api/owui/accounts$"), listing)
+        page.reload()
+        page.locator("html[data-ready='1']").wait_for(state="attached")
+        pw.expect(page.locator("#owui-panel")).to_be_visible()             # чата нет: телефон выдвигает панель сам
+        pw.expect(email).to_be_visible()
+        pw.expect(email).to_have_value("")
+        pw.expect(page.locator(".owui-relogin-who")).to_have_count(0)
+        no_password_manager(page.locator("#owui-relogin"))
+        assert fits(page)
+        assert not page.problems, page.problems
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_long_chat_opens_at_the_end_and_rereads_after_reconnect(owui_browser, live, fake, width):
+    """Длинный чат открывается у последнего сообщения и после разметки (ответ длиннее 8000 знаков — воркер); картинка
+    Open WebUI в разметке — через сервер Студии; `link up` новой подписки чат не перечитывает, после обрыва — да."""
+    fake.add_model("m1", "Model One")
+    fake.add_file("img-1", PNG, "image/png")
+    messages, parent = [], None
+    for n in range(12):
+        messages += [{"id": f"u{n}", "parentId": parent, "role": "user", "content": f"Question {n}", "timestamp": 2 * n},
+                     {"id": f"a{n}", "parentId": f"u{n}", "role": "assistant", "model": "m1", "done": True,
+                      "timestamp": 2 * n + 1,
+                      "content": "\n\n".join(f"Paragraph {k} of **answer {n}**" for k in range(8))}]
+        parent = f"a{n}"
+    messages[-1]["content"] = "Last ![boat](/api/v1/files/img-1/content)\n\n" + "word " * 2000 + "\n\n**The end**"
+    chat = fake.add_chat("Long read", models=["m1"], messages=messages)
+    cookie = session(live, f"owui-scroll-{owui_browser.browser_type.name}-{width}")
+    aid = connected(live, cookie)
+    with opened(owui_browser, live, cookie, width, f"owui/{aid}/{chat}") as page:
+        last = page.locator(".owui-msg.assistant[data-id='a11']")
+        pw.expect(last.locator(".md strong").last).to_have_text("The end")
+        pw.expect(last.locator(".md img")).to_have_attribute("src", f"{live.url}/api/owui/accounts/{aid}/files/img-1")
+        loaded_image(page, ".owui-msg.assistant[data-id='a11'] .md img")
+        at_bottom(page)
+        socket_ready(page, fake)
+        page.wait_for_timeout(300)
+        assert chat_reads(page, aid, chat) == 1                          # `link up` подписки — без второго чтения
+        fake.later(fake.drop)                                            # обрыв сокета: down → up
+        until(page, lambda: chat_reads(page, aid, chat) == 2)
+        pw.expect(last.locator(".md strong").last).to_have_text("The end")
+        at_bottom(page)
         assert fits(page)
         assert not page.problems, page.problems
