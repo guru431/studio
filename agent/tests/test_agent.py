@@ -293,7 +293,7 @@ def test_hello(agent):
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                              "account_disabled": True, "git_compare": True,
-                             "project_mirror_discovery": True, "mirror_exclude": True,
+                             "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
                              **({'terminal': True} if host.platform_id() == 'linux' else {}),
                              "metadata_cache": True, "visualizations": True,
