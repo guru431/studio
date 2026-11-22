@@ -61,6 +61,8 @@ export { modelLabel };     // подписи моделей — models.js; ра�
 
 export const CORS = tr("Сервис не разрешает запросы из браузера (CORS) — подключите его через сервер");
 const SEARCH_FROM = 8;
+/* принудительный режим Cleaner (cleaner_route.forced): переключатель внешнего подключения включён и заблокирован */
+const cleanerLocked = () => tr("Администратор требует Cleaner для всех внешних моделей: переключатель включён и заблокирован.");
 
 
 /* ---- модели прямого подключения ------------------------------------------------ */
@@ -1525,6 +1527,30 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     });
   }
 
+  /* «Через Cleaner» в меню «⋯» подключения (cleaner_route.routes): внешнему `openai`, пока администратор настроил
+   * Cleaner (`cleaner_offer`). В принудительном режиме (`cleaner_locked`) включён и заблокирован — с пояснением. */
+  function cleanerSwitch(conn) {
+    if (!conn.cleaner_offer) return null;
+    const box = el('input', { type: 'checkbox', class: 'link-cleaner', checked: conn.via_cleaner || conn.cleaner_locked,
+      disabled: conn.cleaner_locked });
+    box.addEventListener('change', async () => {
+      box.disabled = true;
+      try {
+        await api('PATCH', `${connBase}/${conn.id}`, { via_cleaner: box.checked });
+        say(note, '');
+      } catch (err) {
+        box.checked = !box.checked;
+        box.disabled = false;
+        say(note, words(err), 'error');
+        return;
+      }
+      await changed();
+    });
+    return el('div', { class: 'link-cleaner-row' }, el('label', { class: 'check' }, box, tr("Через Cleaner")),
+      el('p', { class: 'muted small link-cleaner-note' }, conn.cleaner_locked ? cleanerLocked()
+        : tr("Текст уходит модели через Cleaner: чувствительные данные заменяются, ключ подключения остаётся в Studio. Только чат и перевод, без картинок.")));
+  }
+
   function linkCard(s, link) {
     const conn = link.connection;
     const inherited = conn.shared && !shared;
@@ -1571,7 +1597,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
         }
         await changed();
       }),
-      button(tr("Удалить подключение"), { class: 'btn btn-sm btn-danger link-delete' }, () => remove(conn)));
+      button(tr("Удалить подключение"), { class: 'btn btn-sm btn-danger link-delete' }, () => remove(conn)),
+      inherited ? null : cleanerSwitch(conn));
     const menu = button(icon('more'), { class: 'btn btn-sm link-menu', 'aria-label': tr("Ещё"), title: tr("Ещё"),
       'aria-expanded': 'false' }, () => {
       actions.hidden = !actions.hidden;
@@ -1606,16 +1633,18 @@ export function settingsView(host, { sections: base, connections: connBase, sect
           el('b', { class: 'link-name' }, conn.name),
           inherited ? null : el('span', { class: 'link-url' }, conn.base_url),
           el('span', { class: 'link-hint' },
-            conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner · очистка данных")) : null,
-            inherited ? el('span', { class: 'tag server' }, tr("Общее подключение")) :
-              el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
+            conn.cleaner ? el('span', { class: 'tag' }, tr("Cleaner (своя учётка Cleaner)")) : null,
+            inherited ? el('span', { class: 'tag server' }, tr("Общее подключение")) : null,
+            conn.routed ? el('span', { class: 'tag server link-routed' }, tr("через Cleaner"))
+              : inherited ? null : el('span', { class: `tag${conn.proxied ? ' server' : ''}` }, conn.proxied ? tr("через сервер") : tr("из браузера")),
             conn.profile_set && s.id === 'chat' ? el('span', { class: 'tag link-profile-set' }, tr("профиль")) : null,
             inherited ? null : tr(" ключ {0}", message(conn.token_hint)))),
         inherited ? null : el('div', { class: 'link-buttons' }, checkButton,
           button(tr("Обновить модели"), { class: 'btn btn-sm link-refresh' }, () => refresh(s, conn)),
           // общее подключение в панели администратора: кому из учёток оно доступно (группы, access.py)
           shared && access ? button(tr("Доступ"), { class: 'btn btn-sm link-access' }, () => access(conn)) : null, menu)),
-      passport, inherited ? null : actions, search,
+      passport, inherited ? null : actions,
+      inherited && conn.cleaner_locked ? el('p', { class: 'muted small link-cleaner-note' }, cleanerLocked()) : null, search,
       names.length ? box : el('p', { class: 'muted small' }, inherited ? tr("Нет доступных моделей")
         : tr("Нажмите «Обновить модели» и отметьте нужные")), manual);
   }

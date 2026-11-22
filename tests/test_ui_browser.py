@@ -448,7 +448,7 @@ def test_settings_add_a_cloud_address_to_chat(browser, live):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["kinds"] == ["OpenAI-совместимый", "Шлюз srvllm", "Шлюз s06 · Qwen, WhisperX, PaddleOCR",
-                          "Cleaner · очистка данных"]
+                          "Cleaner (своя учётка Cleaner)"]
     assert "/v1" in v["placeholder"]
     assert v["link"] == ["Облако", live.cloud.base_url, "из браузера"] and v["chatBefore"] is False
     assert v["default"] == [True, "cloud-chat", True] and not v["overflow"]

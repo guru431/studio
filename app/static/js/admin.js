@@ -409,6 +409,94 @@ function chatSettingsBlock() {
   };
 }
 
+/* «Cleaner» (cleaner_route): адрес шлюза Cleaner, служебный ключ (страница его не получает — только `key_set`),
+ * флажок «Cleaner для всех внешних моделей» и проверка связи. Флажок — только при адресе и ключе. */
+function cleanerBlock() {
+  const url = el('input', { class: 'input', id: 'cleaner-url', type: 'url', maxlength: '2048', autocomplete: 'off',
+    placeholder: 'https://cleaner.example.com' });
+  const key = el('input', { class: 'input', id: 'cleaner-key', type: 'password', maxlength: '512', autocomplete: 'new-password' });
+  const forced = el('input', { type: 'checkbox', id: 'cleaner-forced' });
+  const reenter = el('p', { class: 'error', id: 'cleaner-reenter', hidden: true },
+    tr("Ключ сервера сменился: введите адрес и служебный ключ Cleaner заново."));
+  const note = el('p', { class: 'status', id: 'cleaner-status', 'aria-live': 'polite' });
+  const checks = el('ul', { class: 'cleaner-checks', id: 'cleaner-checks' });
+  const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'cleaner-save' });
+  const check = button(tr("Проверить связь"), { class: 'btn', id: 'cleaner-check' });
+  let keySet = false;
+
+  function say(text, kind) {
+    note.textContent = text;
+    note.className = `status${kind ? ` ${kind}` : ''}`;
+  }
+
+  function paint(saved) {
+    url.value = saved.base_url;
+    key.value = '';
+    keySet = saved.key_set;
+    key.placeholder = keySet ? tr("задан — оставьте пустым, чтобы не менять") : 'ck_…';
+    forced.checked = saved.forced;
+    reenter.hidden = !saved.reenter;
+    ready();
+  }
+
+  // флажок и проверка — при адресе и ключе (cleaner_route.save_settings иначе отвечает 422)
+  function ready() {
+    const usable = !!url.value.trim() && (keySet || !!key.value.trim());
+    forced.disabled = !usable && !forced.checked;
+    check.disabled = !(keySet && url.value.trim());
+  }
+
+  async function load() {
+    try {
+      paint(await api('GET', '/api/admin/cleaner'));
+    } catch (err) {
+      say(words(err), 'error');
+    }
+  }
+
+  url.addEventListener('input', ready);
+  key.addEventListener('input', ready);
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    checks.replaceChildren();
+    try {
+      paint(await api('PUT', '/api/admin/cleaner', { base_url: url.value, key: key.value || null, forced: forced.checked }));
+      say(tr("Сохранено"), 'ok');
+    } catch (err) {
+      say(words(err), 'error');
+    } finally {
+      save.disabled = false;
+    }
+  });
+  check.addEventListener('click', async () => {
+    check.disabled = true;
+    checks.replaceChildren();
+    say(tr("Проверяю…"));
+    try {
+      const result = await api('POST', '/api/admin/cleaner/check');
+      // слова пунктов — от самого Cleaner (его язык), как есть
+      checks.replaceChildren(...result.checks.map((c) => el('li', { class: c.ok ? 'ok' : 'error' },
+        `${c.ok ? '✓' : '✗'} ${c.detail || c.name || ''}`)));
+      say(result.ok ? tr("Связь с Cleaner в порядке") : tr("Cleaner ответил, но не все проверки пройдены"), result.ok ? 'ok' : 'error');
+    } catch (err) {
+      say(words(err), 'error');
+    } finally {
+      ready();
+    }
+  });
+
+  return {
+    el: el('section', { class: 'block', id: 'admin-cleaner' }, el('h2', {}, 'Cleaner'),
+      el('p', { class: 'muted small' }, tr("Шлюз Cleaner для внешних моделей: текст уходит провайдеру с заменами чувствительных данных, ключ провайдера остаётся в Studio. Адрес Cleaner должен быть в списке разрешённых адресов.")),
+      el('p', { class: 'muted small', id: 'cleaner-private-note' }, tr("Частные адреса из списка разрешённых считаются внутренними — не добавляйте туда шлюзы в облачные модели.")),
+      reenter, field(tr("Адрес Cleaner"), url), field(tr("Служебный ключ"), key),
+      el('label', { class: 'check' }, forced, tr("Cleaner для всех внешних моделей")),
+      el('p', { class: 'muted small', id: 'cleaner-forced-note' }, tr("Принудительный режим закрывает подключения моделей Studio: внешние идут только через Cleaner. Веб-инструменты в диалогах с внутренними моделями, внешние MCP-серверы и раздел «Open WebUI» он не затрагивает.")),
+      el('div', { class: 'row' }, save, check, note), checks),
+    load,
+  };
+}
+
 /* «Хранилище»: шара (доступна — свободное место; недоступна или не отвечает — словами сервера), возраст
  * последней копии базы (старше `stale_sec` сервера — admin.COPY_STALE_SEC, тот же порог push о пропущенной
  * копии — красным) и очередь удаления числом. Чужих объёмов здесь нет. */
@@ -717,16 +805,18 @@ export function mount(view, ctx) {
   const users = usersBlock(root);
   const invitations = invitationsBlock(root);
   const allow = allowlistBlock();
+  const cleaner = cleanerBlock();
   const storage = storageBlock();
   const chatSettings = chatSettingsBlock();
   const groups = groupsBlock(root, users.reload);
-  root.append(invitations.el, users.el, allow.el, groups.el, sharedModelsBlock(root), chatSettings.el,
+  root.append(invitations.el, users.el, allow.el, cleaner.el, groups.el, sharedModelsBlock(root), chatSettings.el,
     chatMcpBlock({ admin: true }), knowledgeAdminBlock(root), roleDefaultsBlock(), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
   groups.reload();
   invitations.reload();
   allow.load();
+  cleaner.load();
   chatSettings.load();
   storage.load();
 }
