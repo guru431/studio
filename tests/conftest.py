@@ -318,6 +318,9 @@ def studio(env, schema_db, monkeypatch):
     clear_push()
     import mcp_sources
     mcp_sources.CACHE.clear()            # каталоги MCP прошлого теста (ключ — id сервера той базы)
+    import owui_tokens
+    owui_tokens.TOKENS.clear()           # рабочие токены Open WebUI и блокировки обновления (ключ — id учётки той базы)
+    owui_tokens.LOCKS.clear()
     if not env.db_path.exists():
         env.db_path.write_bytes(schema_db)
     with TestClient(main.app, base_url="https://testserver",

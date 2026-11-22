@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 62
+VERSION = 63
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
 MCP_43 = """CREATE TABLE mcp_servers(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -914,6 +914,17 @@ SCHEMA += VOICE_TRASH_61
 MCP_DEFAULT_62 = "ALTER TABLE mcp_servers ADD COLUMN dialog_default INTEGER NOT NULL DEFAULT 1;"
 SCHEMA += MCP_DEFAULT_62
 
+#: учётки Open WebUI внутри учётки Студии (owui.py): кто подключён (`who_enc`) и постоянная сессия (`secret_enc`) —
+#: шифром `STUDIO_DATA_KEY`; пароль не хранится нигде. Прежний код таблицу не читает; учётка уходит с пользователем
+OWUI_63 = """CREATE TABLE owui_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       label TEXT NOT NULL, base_url TEXT NOT NULL, who_enc BLOB NOT NULL, secret_enc BLOB NOT NULL, cert_pem TEXT,
+       state TEXT NOT NULL DEFAULT 'ok' CHECK (state IN ('ok', 'relogin')), version TEXT,
+       created REAL NOT NULL, used REAL);
+CREATE INDEX owui_accounts_user ON owui_accounts(user_id);
+"""
+SCHEMA += OWUI_63
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1040,6 +1051,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     61: VOICE_TRASH_61,
     # общий MCP: в диалоге по умолчанию или только вручную
     62: MCP_DEFAULT_62,
+    # учётки Open WebUI
+    63: OWUI_63,
 }
 
 

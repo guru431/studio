@@ -65,6 +65,7 @@ WAV_FAKE = _wav()
 SPEECH_ASR = ("/speech/asr", "/speech/transcriptions", "/speech/lite/transcriptions")
 RELEASES = ("/slot/images/release", "/slot/images/descriptions/release")
 EXA_HOST = "api.exa.ai"
+_PORTS = {"http": 80, "https": 443}
 #: образец ответа `POST /search` Exa (форма — живая проба 2026-10-21)
 EXA_SEARCH = {"requestId": "req-search", "results": [
     {"id": "https://www.python.org/downloads/", "title": "Download Python", "url": "https://www.python.org/downloads/",
@@ -84,6 +85,9 @@ class FakeGateway:
         #: путь → обработчик теста вместо встроенного (встроенный — `builtin`)
         self.on: dict[str, Callable[[httpx.Request], Awaitable[httpx.Response]]] = {}
         self.down = False
+        #: "хост:порт" запроса (из `request.url`) → обработчик теста вместо шлюза (поддельный Open WebUI):
+        #: проверяется до `requests`, `down`, `reply` и `on`; имя из списка до обработчика становится IP
+        self.hosts: dict[str, Callable[[httpx.Request], Awaitable[httpx.Response]]] = {}
         self.generations = []            # (тело или поля формы, заголовок авторизации, таймаут чтения) — и правки
         self.edits = []                  # (поля формы, фото) правок
         self.image_reply = None          # (код, тело) вместо картинки
@@ -162,6 +166,8 @@ class FakeGateway:
             if self.push_raise is not None:
                 raise self.push_raise("нет соединения", request=request)
             return httpx.Response(self.push_status)
+        if (host := self.hosts.get(f"{request.url.host}:{request.url.port or _PORTS[request.url.scheme]}")):
+            return await host(request)
         self.requests.append(request)
         if self.down:
             raise httpx.ConnectError("нет соединения", request=request)
