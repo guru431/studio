@@ -323,6 +323,7 @@ def studio(env, schema_db, monkeypatch):
     owui_tokens.LOCKS.clear()
     import owui
     owui.FAILS.clear()                   # неудачи входа в Open WebUI (ключ — uid той базы)
+    clear_owui_links()
     if not env.db_path.exists():
         env.db_path.write_bytes(schema_db)
     with TestClient(main.app, base_url="https://testserver",
@@ -337,6 +338,20 @@ def studio(env, schema_db, monkeypatch):
     claude_code.NEW_CHATS.clear()
     clear_bridge()
     clear_push()
+    clear_owui_links()
+
+
+def clear_owui_links() -> None:
+    """Соединения Open WebUI — модульные (ключ — id учётки той базы); задачи прошлого цикла событий отменяются,
+    как у моста."""
+    import owui_link
+    for link in list(owui_link.LINKS.values()):
+        if not link.task.done():
+            try:
+                link.task.cancel()
+            except RuntimeError:
+                pass
+    owui_link.LINKS.clear()
 
 
 def clear_bridge() -> None:

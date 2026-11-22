@@ -11,6 +11,7 @@
 - Неожиданная форма (нет ключа, список вместо объекта, ветка без текущего сообщения) — `Shape`: маршрут превращает
   её в 502 `owui_shape`. Текст `Shape` — только слова кода, ничего из ответа Open WebUI.
 - Неизвестный элемент `output` — не ошибка: его тип попадает в `other`, страница показывает «элемент <тип>».
+- `normalize` — событие `events` сокета Open WebUI → короткий набор событий Студии для SSE; неизвестное — `[]`.
 """
 import json
 import re
@@ -268,3 +269,74 @@ def branch(raw_chat: dict) -> dict:
     return {"id": chat_id, "title": _str(raw_chat.get("title")) or _str(chat.get("title")) or "",
             "models": [m for m in models if isinstance(m, str)] if isinstance(models, list) else [],
             "folder_id": _str(raw_chat.get("folder_id")), "messages": found}
+
+
+# ---- события сокета -------------------------------------------------------------------------------------------------
+
+DELTAS = {"response.output_text.delta": "text", "response.reasoning_text.delta": "reasoning"}
+
+
+def _paused(output) -> bool:
+    """В `output` есть вызов, ждущий решения: статус паузы и нет результата."""
+    items = [item for item in output if isinstance(item, dict)] if isinstance(output, list) else []
+    answered = {item.get("call_id") for item in items if item.get("type") == "function_call_output"}
+    return any(item.get("type") == "function_call" and item.get("status") in PAUSED
+               and (_str(item.get("call_id")) or _str(item.get("id"))) not in answered for item in items)
+
+
+def _response_event(chat_id: str, message_id: str | None, data: dict) -> list[dict]:
+    """Событие Responses API из потока ответа: кусок текста или рассуждения, вызов инструмента."""
+    kind = data.get("type")
+    if kind in DELTAS and isinstance(data.get("delta"), str):
+        return [{"type": "delta", "chat_id": chat_id, "message_id": message_id, "kind": DELTAS[kind],
+                 "text": data["delta"]}]
+    item = data.get("item")
+    if kind in ("response.output_item.added", "response.output_item.done") and isinstance(item, dict) \
+            and item.get("type") == "function_call" and item.get("hidden") is not True:
+        return [{"type": "item", "chat_id": chat_id, "message_id": message_id,
+                 "tool": {"call_id": _str(item.get("call_id")) or _str(item.get("id")) or "",
+                          "name": _str(item.get("name")) or "", "status": _str(item.get("status")) or ""}}]
+    return []
+
+
+def normalize(payload: dict) -> list[dict]:
+    """Событие `events` сокета Open WebUI (`{chat_id, message_id, data: {type, data}}`) → события Студии:
+    `list`, `title`, `active`, `delta` (`kind`: `text` | `reasoning`), `item`, `done` (`error` — `None` или слова),
+    `pending`. Неизвестное и не той формы — `[]`.
+
+    Пауза Open WebUI 0.13.4 (`utils/middleware.py::pause_for_tool_approval`) приходит как `chat:active {active: true}`
+    и снимок `chat:completion` без `done` с вызовом в статусе паузы; `pending_approval: true` в `chat:active` (так
+    видела проба) — тоже пауза. `queued` сокет не шлёт: его знает ответ на отправку."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return []
+    chat_id, message_id = _str(payload.get("chat_id")), _str(payload.get("message_id"))
+    kind, data = payload["data"].get("type"), payload["data"].get("data")
+    if isinstance(data, dict) and kind in ("response:completion", "chat:completion") \
+            and str(data.get("type", "")).startswith("response."):
+        return _response_event(chat_id, message_id, data) if chat_id else []
+    if kind == "chat:list":
+        data = data if isinstance(data, dict) else {}
+        chat_id = _str(data.get("chat_id")) or chat_id
+        return [{"type": "list", "chat_id": chat_id, "folder_id": _str(data.get("folder_id"))}]
+    if not chat_id:
+        return []
+    if kind == "chat:title":
+        title = data if isinstance(data, str) else _str(data.get("title")) if isinstance(data, dict) else None
+        return [{"type": "title", "chat_id": chat_id, "title": title}] if title is not None else []
+    if not isinstance(data, dict):
+        return []
+    if kind == "chat:active":
+        found = [{"type": "active", "chat_id": chat_id, "active": data.get("active") is True}]
+        if data.get("pending_approval") is True:
+            found.append({"type": "pending", "chat_id": chat_id, "message_id": message_id})
+        return found
+    if kind == "chat:message:error":
+        return [{"type": "done", "chat_id": chat_id, "message_id": message_id, "error": _error(data.get("error")) or ""}]
+    if kind == "chat:completion":
+        if data.get("error"):
+            return [{"type": "done", "chat_id": chat_id, "message_id": message_id, "error": _error(data["error"])}]
+        if data.get("done") is True:
+            return [{"type": "done", "chat_id": chat_id, "message_id": message_id, "error": None}]
+        if _paused(data.get("output")):
+            return [{"type": "pending", "chat_id": chat_id, "message_id": message_id}]
+    return []

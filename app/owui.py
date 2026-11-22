@@ -8,8 +8,9 @@
 - Неудачи входа (неверный пароль) — на учётку Студии: `LOGIN_FAILS` за `LOGIN_WINDOW_SEC`, дальше 429 `owui_locked`
   без запроса к Open WebUI: Студия не служит подбору паролей.
 - Переподключение — тот же адрес и та же учётка Open WebUI (другая — 409 `other_user`), прежняя сессия отзывается.
-- Удаление — отзыв сессии (срок `REVOKE_SEC`, неудача не мешает), строка удаляется; удаление учётки Студии — то же
-  для всех её строк (`drop_user`), отключение — только забыть рабочие токены.
+- Удаление — соединение сокета закрывается (`owui_link`), отзыв сессии (срок `REVOKE_SEC`, неудача не мешает),
+  строка удаляется; удаление учётки Студии — то же для всех её строк (`drop_user`), отключение — закрыть соединения
+  и забыть рабочие токены.
 - `call` — запрос к Open WebUI рабочим токеном (`owui_tokens`), 401 — одно обновление и повтор.
 - Чтение (`owui_view`): дерево, страницы чатов, чаты папки, поиск (запрос — телом), модели, чат, файл потоком (`no-store`).
   Неожиданная форма ответа — 502 `owui_shape`, недоступный Open WebUI — 503 `owui_offline`, остальная Студия работает.
@@ -33,6 +34,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 import clock
+import owui_link
 import owui_tokens
 import owui_view
 import screenlock
@@ -388,6 +390,8 @@ async def drop_user(uid: int, *, revoke: bool = True) -> None:
     """Учётку Студии удаляют (`revoke`) или отключают: сессии Open WebUI отозвать (каждую — не дольше `REVOKE_SEC`,
     параллельно), рабочие токены забыть. Строки при удалении уносит каскад `users`."""
     accounts = [_account(row) for row in state.DB.execute("SELECT * FROM owui_accounts WHERE user_id = ?", (uid,))]
+    for acc in accounts:
+        await owui_link.drop_account(acc.id)
     if revoke:
         await asyncio.gather(*(_revoke(acc) for acc in accounts))
     for acc in accounts:
@@ -654,6 +658,7 @@ async def accept_certificate(aid: int, body: CertificateIn, request: Request):
 async def delete_account(aid: int, request: Request):
     uid = request.state.user.id
     acc = load(uid, aid)
+    await owui_link.drop_account(aid)
     await _revoke(acc)
     owui_tokens.forget(aid)
     state.DB.execute("DELETE FROM owui_accounts WHERE id = ? AND user_id = ?", (aid, uid))

@@ -13,6 +13,12 @@
 `ChatResponse`; чужой и неизвестный — 401, как у настоящего), `GET /api/v1/folders/` (`folders_enabled = False` — 403),
 `GET /api/models` (`{data}`), `GET /api/tasks/chat/{id}` (`{task_ids}`), `GET /api/v1/files/{id}/content`. Данные —
 `add_chat`, `add_folder`, `add_model`, `add_file`; `raw_chat[id]` подменяет тело ответа `GET /api/v1/chats/{id}`.
+
+Сокет (Engine.IO 4 через websocket, socket.io 5) — в памяти: `owui_link.CONNECT` → `socket_connect`. Как Open WebUI
+0.13.4 (`socket/main.py`, `always_connect=True`): пакет подключения принимается с любым токеном, сокет с
+действующим токеном — «вошедший» (`FakeSocket.user`); `user-join` меняет токен сокета. Тест управляет сервером:
+`emit_event` (событие `events` вошедшим сокетам), `call` (событие с ожиданием ответа), `ping`, `drop` (обрыв со стороны
+сервера); `received` — кадры от клиента по порядку, `ws_targets` — куда соединялся клиент.
 """
 import asyncio
 import itertools
@@ -38,6 +44,56 @@ def attach(studio) -> "FakeOwui":
     state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'",
                      (json.dumps([*upstream.allowlist(), FakeOwui.ENTRY]),))
     return fake
+
+
+class FakeSocket:
+    """Соединение сокета со стороны сервера: `owui_link.Transport` для клиента."""
+
+    def __init__(self, fake: "FakeOwui"):
+        self.fake = fake
+        self.received: list[str] = []      # кадры клиента по порядку
+        self.closed = False
+        self.sid: str | None = None        # sid socket.io после пакета подключения
+        self.token: str | None = None
+        self._inbox: asyncio.Queue = asyncio.Queue()
+
+    @property
+    def user(self) -> str | None:
+        """Вошедший пользователь: подключение или `user-join` с действующим токеном."""
+        return self.fake._user_of(self.token) if self.sid else None
+
+    def push(self, frame: str) -> None:
+        self._inbox.put_nowait(frame)
+
+    def close_from_server(self) -> None:
+        self.closed = True
+        self._inbox.put_nowait(None)
+
+    async def recv(self) -> str:
+        frame = await self._inbox.get()
+        if frame is None:
+            self._inbox.put_nowait(None)
+            raise ConnectionResetError("соединение закрыто")
+        return frame
+
+    async def send(self, text: str) -> None:
+        await asyncio.sleep(0)
+        if self.closed:
+            raise ConnectionResetError("соединение закрыто")
+        self.received.append(text)
+        if text.startswith("40"):
+            auth = json.loads(text[2:] or "{}")
+            self.token = auth.get("token") if isinstance(auth, dict) else None
+            self.sid = f"sid-{next(self.fake._ids)}"
+            self.push("40" + json.dumps({"sid": self.sid}))
+        elif text.startswith("42"):
+            args = json.loads(text[2:])
+            if args[0] == "user-join" and isinstance(args[1], dict) and isinstance(args[1].get("auth"), dict):
+                self.token = args[1]["auth"].get("token")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._inbox.put_nowait(None)
 
 
 class FakeOwui:
@@ -69,6 +125,58 @@ class FakeOwui:
         self._tokens: dict[str, tuple[str | None, float]] = {}      # токен → (id сессии или None для входа, конец срока)
         self._sessions: dict[str, dict] = {}                         # id сессии → {"refresh", "revoked"}
         self._issued: dict[str, tuple[str, dict]] = {}               # request_id → (прежний refresh_token, выдача)
+        self.sockets: list[FakeSocket] = []
+        self.ws_targets: list = []         # `upstream.WsTarget` каждого соединения сокета
+        self.ws_headers: list[dict] = []
+
+    # ---- сокет ----
+
+    async def socket_connect(self, target, headers: dict) -> "FakeSocket":
+        """`owui_link.CONNECT`: новое соединение сокета; сервер сразу шлёт пакет открытия Engine.IO."""
+        await asyncio.sleep(0)
+        if self.down:
+            raise ConnectionRefusedError("нет соединения")
+        self.ws_targets.append(target)
+        self.ws_headers.append(dict(headers))
+        sock = FakeSocket(self)
+        self.sockets.append(sock)
+        sock.push("0" + json.dumps({"sid": f"eio-{next(self._ids)}", "upgrades": [], "pingInterval": 25000,
+                                    "pingTimeout": 20000, "maxPayload": 1000000}))
+        return sock
+
+    @property
+    def socket(self) -> "FakeSocket | None":
+        """Последнее открытое соединение."""
+        live = [s for s in self.sockets if not s.closed]
+        return live[-1] if live else None
+
+    @property
+    def received(self) -> list[str]:
+        return [frame for sock in self.sockets for frame in sock.received]
+
+    def _user_of(self, token) -> str | None:
+        entry = self._tokens.get(token) if isinstance(token, str) else None
+        if entry is None or entry[1] <= clock.NOW() or (entry[0] and self._sessions[entry[0]]["revoked"]):
+            return None
+        return self.user_id
+
+    def emit_event(self, chat_id: str | None, message_id: str | None, data: dict) -> None:
+        """Событие `events` `{chat_id, message_id, data}` в комнату пользователя: всем вошедшим сокетам."""
+        frame = "42" + json.dumps(["events", {"chat_id": chat_id, "message_id": message_id, "data": data}])
+        for sock in self.sockets:
+            if not sock.closed and sock.user:
+                sock.push(frame)
+
+    def call(self, name: str, data: dict, ack: int = 1) -> None:
+        """Событие с ожиданием ответа (socket.io `call`) последнему соединению: `42<ack>[name, data]`."""
+        self.socket.push(f"42{ack}" + json.dumps([name, data]))
+
+    def ping(self) -> None:
+        self.socket.push("2")
+
+    def drop(self) -> None:
+        """Сервер рвёт последнее соединение."""
+        self.socket.close_from_server()
 
     # ---- для тестов ----
 
