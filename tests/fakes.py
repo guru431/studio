@@ -398,6 +398,10 @@ class FakeCleanerGateway:
         self.reply = ["Привет", " из облака"]
         self.refuse: "tuple[int, str | None] | None" = None
         self.down = False
+        self.models = [{"id": "gpt-x"}, {"id": "gpt-y", "context_length": 64000}]   # `GET /agent/openai/v1/models`
+        self.checked: list[httpx.Request] = []       # запросы самопроверки `…/cleaner/check`
+        self.check_body = {"ok": True, "checks": [{"name": "key", "ok": True, "detail": "ключ действует"},
+                                                  {"name": "provider", "ok": True, "detail": "провайдер отвечает"}]}
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -416,6 +420,8 @@ class FakeCleanerGateway:
             return httpx.Response(204)
         if path == "/agent/openai/v1/chat/completions" and method == "POST":
             return self._turn(request)
+        if path in ("/agent/openai/v1/models", "/agent/openai/v1/cleaner/check") and method == "GET":
+            return self._read(request, path)
         return httpx.Response(404)
 
     @staticmethod
@@ -427,13 +433,28 @@ class FakeCleanerGateway:
         body = {"error": {"message": f"Cleaner: отказ {status}", "type": "invalid_request_error", "code": code}}
         return httpx.Response(status, json=body, headers={"x-cleaner-request": rid} if rid else {})
 
-    def _turn(self, request: httpx.Request) -> httpx.Response:
+    def _login(self, request: httpx.Request) -> "httpx.Response | None":
+        """Ключи запроса и адрес провайдера по контракту: отказ шлюза или None."""
         login = request.headers.get("authorization", "").partition(" ")[2]
         if request.headers.get("x-cleaner-key") != self.key or not login or login.startswith("ck_"):
             return self._error(401, "client_login")
         upstream_url = httpx.URL(request.headers.get("x-cleaner-upstream", ""))
         if upstream_url.scheme != "https" or upstream_url.host in ("localhost", "127.0.0.1") or upstream_url.host.startswith("10."):
             return self._error(400, "upstream")
+        return None
+
+    def _read(self, request: httpx.Request, path: str) -> httpx.Response:
+        """Список моделей провайдера и самопроверка: ключи и адрес провайдера проверяются как у хода."""
+        if (refused := self._login(request)) is not None:
+            return refused
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"object": "list", "data": self.models})
+        self.checked.append(request)
+        return httpx.Response(200, json=self.check_body)
+
+    def _turn(self, request: httpx.Request) -> httpx.Response:
+        if (refused := self._login(request)) is not None:
+            return refused
         if request.headers.get("x-cleaner-chat") not in self.chats:
             return self._error(404, "chat")
         self.turns.append(request)
@@ -442,6 +463,11 @@ class FakeCleanerGateway:
         rid = f"{len(self.turns):032x}"
         if self.refuse is not None:
             return self._error(*self.refuse, rid=rid)
+        if body.get("stream") is not True:           # без потока: один ответ JSON (проба)
+            text = "".join(self.script.pop(0) if self.script else self.reply)
+            return httpx.Response(200, headers={"x-cleaner-request": rid},
+                                  json={"choices": [{"index": 0, "message": {"role": "assistant", "content": text},
+                                                     "finish_reason": "stop"}]})
         step = self.script.pop(0) if self.script else self.reply
         pieces, calls = (step.get("text", []), step.get("tool_calls", [])) if isinstance(step, dict) else (step, [])
 

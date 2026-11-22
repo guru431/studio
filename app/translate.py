@@ -59,6 +59,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import chat
+import cleaner_route
 import clock
 import connections
 import db
@@ -281,12 +282,26 @@ async def _busy(job: Job, waited: "tuple[float, float] | None") -> tuple[float, 
     return shown, counted
 
 
+async def _remote(job: Job) -> "str | None":
+    """Контекст Cleaner записи (`cleaner_route.context`): весь перевод — один чат Cleaner, и кусок, и определение
+    языка. У подключения не через Cleaner — None. Не настроенный или недоступный Cleaner — отказ словами, запроса нет."""
+    if not job.conn.routed:
+        return None
+    try:
+        remote = await cleaner_route.context(job.conn, "translate", job.id)   # короткий запрос: не прерывается
+    except HTTPException as e:
+        raise translate_text.TranslateError(e.detail["message"]) from None
+    _check(job)
+    return remote
+
+
 async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = False, context: str = "") -> str:
     """Перевод текста одним запросом; 503 — ждать и повторять (остановка между попытками — сразу).
     Дельты дописываются к `job.live` после уже готового (половинка обрезанного куска); у нумерованного
     списка блоков (`blocks`) — нет: «[1] …» — не перевод для показа. `context` — конец перевода предыдущего
-    куска (`translate_text.tail`); через Cleaner — не идёт: это восстановленный им текст, а Cleaner проверяет
-    только то, что ему прислали как данные хода."""
+    куска (`translate_text.tail`); через прежний Cleaner (`conn.cleaner`) — не идёт: это восстановленный им текст,
+    а он проверяет только то, что ему прислали как данные хода. Подключение через Cleaner (`conn.routed`) — как
+    обычное: кусок идёт в шлюз Cleaner в контексте записи (`_remote`)."""
     head, waited = job.live, None
 
     def on_delta(piece: str) -> None:
@@ -315,8 +330,12 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
                 if not answer:
                     raise translate_text.TranslateError(translate_text.EMPTY)
                 return answer
+            remote = await _remote(job)
             return await _abortable(job, translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta,
-                                                              blocks=blocks, context=context))
+                                                              blocks=blocks, context=context, remote=remote))
+        except translate_text.ContextLost:
+            cleaner_route.forget(job.conn, "translate", job.id)       # следующий запрос создаст новый контекст
+            raise
         except translate_text.Busy:
             waited = await _busy(job, waited)
 
@@ -347,8 +366,9 @@ async def _languages(job: Job, row) -> tuple[str, str]:
             # Cleaner receives every model-bound text through its checked request API, including language detection.
             # The translation prompt already supports AUTO; do not send a separate unreviewed request.
             sample = row["source"] if row["scan_id"] is None else _PAGE_HEAD.sub("", row["source"])
+            remote = await _remote(job)
             origin = (None if job.conn.cleaner
-                      else await _abortable(job, translate_text.detect(job.conn, job.model, sample)))
+                      else await _abortable(job, translate_text.detect(job.conn, job.model, sample, remote)))
             state.DB.execute("UPDATE translations SET detected_lang = ? WHERE id = ?", (origin, job.id))
         origin = origin or translate_text.AUTO
     lang = row["result_lang"]

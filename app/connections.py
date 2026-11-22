@@ -515,6 +515,8 @@ async def fetch_models(conn: Connection) -> list[dict]:
     его список берёт браузер; адрес убран из списка (или имя ведёт внутрь) — 409 `refused` словами;
     нет связи или отказ сервиса — 502 словами."""
     check_reachable(conn)
+    if conn.routed:                                  # через Cleaner: провайдеру мимо него не ходим
+        return await cleaner_route.models(conn)
     try:
         r = await upstream.request(conn, "GET", models_url(conn))
     except upstream.UpstreamRefused as e:
@@ -523,7 +525,11 @@ async def fetch_models(conn: Connection) -> list[dict]:
         raise HTTPException(502, {"code": "upstream", "message": f"нет связи с подключением «{conn.name}»"}) from None
     if not r.is_success:
         raise HTTPException(502, {"code": "upstream", "message": upstream.gateway_error(r, conn)})
-    data = upstream.json_body(r).get("data")
+    return model_items(upstream.json_body(r).get("data"))
+
+
+def model_items(data) -> list[dict]:
+    """Записи `data` списка моделей — `{"id"[, "context_length"]}`; прочее пропускается."""
     items = []
     for m in data if isinstance(data, list) else []:
         if isinstance(m, dict) and isinstance(m.get("id"), str):

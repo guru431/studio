@@ -236,7 +236,7 @@ UNLISTED = "адрес Cleaner убран из списка разрешённы
 CHANGED = "Диалог или настройки Cleaner изменились: отправьте запрос заново"
 BAD_ID = "Cleaner вернул неверный идентификатор контекста"
 #: таблицы записей, у которых бывает контекст: ресурс → таблица (владелец — её `user_id`)
-PARENTS = {"chat": "chats", "translate": "translations"}
+PARENTS = {"chat": "chats", "translate": "translations", "probe": "connections"}
 #: ожидание контекста одной записи одним подключением: два хода не создают два чата Cleaner
 LOCKS: dict[tuple, asyncio.Lock] = {}
 
@@ -331,6 +331,43 @@ def words(response: httpx.Response) -> str:
     return f"Cleaner отклонил запрос ({status}): {message}" if message else f"Cleaner отклонил запрос ({status})"
 
 
+def failure(response: httpx.Response, conn: "connections.Connection") -> str:
+    """Отказ ответа шлюза словами: сам Cleaner — `words`, ошибка провайдера, которую шлюз передал как есть, — как у
+    обычного подключения (`upstream.gateway_error`)."""
+    return words(response) if refusal(response) is not None else upstream.gateway_error(response, conn)
+
+
+def down(e: httpx.HTTPError, seconds: "int | float") -> str:
+    """Нет связи с Cleaner словами: данные не отправлены."""
+    if isinstance(e, httpx.TimeoutException):
+        return f"Cleaner не ответил за {seconds:g} с"
+    if isinstance(e, httpx.ConnectError):
+        return DOWN
+    return f"связь с Cleaner оборвалась: {type(e).__name__}"
+
+
+def unreachable(e: upstream.UpstreamRefused, conn: "connections.Connection") -> str:
+    """Отказ до отправки словами: подключение сменили после снимка или ключ не расшифровался — как обычно; прочее —
+    адрес самого Cleaner убран из списка."""
+    return upstream.refused_words(e, conn) if e.reason in ("changed", "token") else UNLISTED
+
+
+async def models(conn: "connections.Connection") -> list[dict]:
+    """Список моделей подключения через Cleaner: `GET /agent/openai/v1/models` с ключом провайдера и его адресом;
+    результат — как `connections.fetch_models`. Отказы — 409 `refused` и 502 словами, провайдеру мимо Cleaner не идёт."""
+    try:
+        response = await request(conn, "GET", "/models", timeout=CONTEXT_TIMEOUT)
+    except upstream.UpstreamRefused as e:
+        raise HTTPException(409, {"code": "refused", "message": unreachable(e, conn)}) from None
+    except httpx.HTTPError as e:
+        log.warning("cleaner models: connection %d unreachable", conn.id)
+        raise HTTPException(502, {"code": "upstream", "message": down(e, CONTEXT_TIMEOUT.read)}) from None
+    if not response.is_success:
+        log.info("cleaner models: connection %d code %d", conn.id, response.status_code)
+        raise HTTPException(502, {"code": "upstream", "message": failure(response, conn)})
+    return connections.model_items(upstream.json_body(response).get("data"))
+
+
 def _owner(resource: str, item_id: str) -> "int | None":
     row = state.DB.execute(f"SELECT user_id FROM {PARENTS[resource]} WHERE id = ?", (item_id,)).fetchone()
     return row[0] if row is not None else None
@@ -364,7 +401,7 @@ async def _create(config: dict) -> str:
 
 
 async def context(conn: "connections.Connection", resource: str, item_id: str) -> str:
-    """id чата Cleaner записи (`resource` — `chat` или `translate`) для подключения через Cleaner. Строка
+    """id чата Cleaner записи (`resource` — `chat`, `translate` или `probe` — «Пробный ответ» подключения, запись — его id) для подключения через Cleaner. Строка
     `cleaner_contexts` хранит снимок адреса Cleaner и служебного ключа (шифром) и отмечена `cleaner_route_contexts`;
     повторно — та же, пока снимок совпадает с настройками. Иначе прежняя уходит в очередь удаления (триггер, со своим
     снимком), создаётся новая. Владелец — владелец записи: у общего подключения своей учётки нет."""

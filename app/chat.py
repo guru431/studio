@@ -731,19 +731,26 @@ async def _limit(conn: Connection, model: str) -> int | None:
     key = (conn.user_id, conn.id, conn.kind, conn.base_url)
     if key in LIMITS:
         return LIMITS[key][1].get(model)
-    try:
-        r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
-    except (httpx.HTTPError, upstream.UpstreamRefused):
-        return None
-    data = upstream.json_body(r).get("data") if r.is_success else None
-    if not isinstance(data, list):
-        return None
-    lengths = {}
-    for m in data:
-        if isinstance(m, dict) and isinstance(m.get("id"), str):
-            length = connections.context_size(m)
-            if length is not None:
-                lengths.setdefault(m["id"], length)
+    if conn.routed:                                  # список — только через Cleaner (`cleaner_route.models`)
+        try:
+            items = await cleaner_route.models(conn)
+        except HTTPException:
+            return None
+        lengths = {m["id"]: m["context_length"] for m in reversed(items) if "context_length" in m}
+    else:
+        try:
+            r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
+        except (httpx.HTTPError, upstream.UpstreamRefused):
+            return None
+        data = upstream.json_body(r).get("data") if r.is_success else None
+        if not isinstance(data, list):
+            return None
+        lengths = {}
+        for m in data:
+            if isinstance(m, dict) and isinstance(m.get("id"), str):
+                length = connections.context_size(m)
+                if length is not None:
+                    lengths.setdefault(m["id"], length)
     while len(LIMITS) >= CONTEXT_KEEP:
         del LIMITS[next(iter(LIMITS))]
     LIMITS[key] = (now, lengths)

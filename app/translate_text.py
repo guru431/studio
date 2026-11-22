@@ -23,14 +23,20 @@
    вызывающий.
 5. Снимок — фрагменты одним запросом: `numbered` строками «[n] текст», ответ — `parse_numbered`, а не
    вернулись все номера — None (вызывающий переводит по одному).
-6. В журнал модуль ничего не пишет: текст и языки исходника — данные пользователя.
+6. Подключение через Cleaner (`conn.routed`) — `remote`, id чата Cleaner записи (`cleaner_route.context`): и кусок, и
+   определение языка идут в шлюз Cleaner, весь перевод — в одном контексте, без инструментов. Отказ Cleaner — его
+   словами (`cleaner_route.failure`), «контекст не найден» — `ContextLost` (вызывающий забывает контекст), `Busy` нет:
+   карты у такого подключения нет. Провайдеру мимо Cleaner запросов нет.
+7. В журнал модуль ничего не пишет: текст и языки исходника — данные пользователя.
 """
 import json
 import re
 import unicodedata
 
 import httpx
+from fastapi import HTTPException
 
+import cleaner_route
 import connections
 import sections
 import upstream
@@ -130,6 +136,10 @@ class Busy(TranslateError):
 
 class Cut(TranslateError):
     """Ответ обрезан пределом длины модели (`finish_reason: length`)."""
+
+
+class ContextLost(TranslateError):
+    """Cleaner не знает контекст записи (404 `chat`): его удалили в Cleaner, следующий запрос создаст новый."""
 
 
 # ---- языки -------------------------------------------------------------------
@@ -313,13 +323,17 @@ def _code(content: str) -> "str | None":
     return codes[-1] if codes else None
 
 
-async def detect(conn, model: str, text: str) -> "str | None":
-    """Код языка первых DETECT_CHARS знаков — ответом модели без потока; отказ, ответ без кода из LANGS — None."""
+async def detect(conn, model: str, text: str, remote: "str | None" = None) -> "str | None":
+    """Код языка первых DETECT_CHARS знаков — ответом модели без потока; отказ, ответ без кода из LANGS — None.
+    `remote` — контекст Cleaner записи: запрос идёт в шлюз Cleaner (подключение через Cleaner)."""
     body = _body(conn, model, DETECT_PROMPT, text[:DETECT_CHARS], 0, 8)
+    timeout = httpx.Timeout(DETECT_SEC, connect=30)
     try:
-        r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body,
-                                   timeout=httpx.Timeout(DETECT_SEC, connect=30))
-    except (httpx.HTTPError, upstream.UpstreamRefused):
+        if remote is not None:
+            r = await cleaner_route.request(conn, "POST", "/chat/completions", remote=remote, json=body, timeout=timeout)
+        else:
+            r = await upstream.request(conn, "POST", connections.chat_url(conn), json=body, timeout=timeout)
+    except (httpx.HTTPError, upstream.UpstreamRefused, HTTPException):
         return None
     if r.status_code != 200:
         return None
@@ -331,18 +345,28 @@ async def detect(conn, model: str, text: str) -> "str | None":
 
 
 async def chunk(conn, model: str, text: str, source: str, target: str, on_delta, *, blocks: bool = False,
-                context: str = "") -> str:
+                context: str = "", remote: "str | None" = None) -> str:
     """Перевод одного куска потоком: каждая дельта `content` — в `on_delta`, итог — весь ответ без ограды
     (`unwrap`) и без повтора `context` в начале (`_without_echo`), в NFC. Конец — `finish_reason: stop` или
     `[DONE]` без иного; `length` — `Cut`, прочий (`content_filter`, `error`) и поток без конца (обрыв) — ошибка, а
-    не готовый перевод."""
+    не готовый перевод. `remote` — контекст Cleaner записи: кусок идёт в шлюз Cleaner (подключение через Cleaner)."""
     body = _body(conn, model, system_prompt(source, target, blocks, context), text, 0.2, MAX_TOKENS) | {"stream": True}
     answer, ending = "", None
+    routed = remote is not None
+    timeout = httpx.Timeout(READ_SEC, connect=30)
     try:
-        async with upstream.stream(conn, "POST", connections.chat_url(conn), json=body,
-                                   timeout=httpx.Timeout(READ_SEC, connect=30)) as r:
+        if routed:
+            opened = cleaner_route.stream(conn, "/chat/completions", remote=remote, json=body, timeout=timeout)
+        else:
+            opened = upstream.stream(conn, "POST", connections.chat_url(conn), json=body, timeout=timeout)
+        async with opened as r:
             if r.status_code != 200:
                 await r.aread()
+                if routed:
+                    own = cleaner_route.refusal(r)
+                    if r.status_code == 404 and own is not None and own[0] == "chat":
+                        raise ContextLost(cleaner_route.words(r))
+                    raise TranslateError(cleaner_route.failure(r, conn))
                 if r.status_code == 503:
                     raise Busy(upstream.message(r) or "карта занята")
                 raise TranslateError(upstream.gateway_error(r, conn))
@@ -374,11 +398,13 @@ async def chunk(conn, model: str, text: str, source: str, target: str, on_delta,
                     if isinstance(choice.get("finish_reason"), str) and choice["finish_reason"]:
                         ending = choice["finish_reason"]
     except upstream.UpstreamRefused as e:
-        raise TranslateError(upstream.refused_words(e, conn)) from None
-    except httpx.TimeoutException:
-        raise TranslateError(f"шлюз не ответил за {READ_SEC} с") from None
+        raise TranslateError(cleaner_route.unreachable(e, conn) if routed else upstream.refused_words(e, conn)) from None
+    except httpx.TimeoutException as e:
+        raise TranslateError(cleaner_route.down(e, READ_SEC) if routed else f"шлюз не ответил за {READ_SEC} с") from None
     except httpx.HTTPError as e:
-        raise TranslateError(f"шлюз недоступен: {type(e).__name__}") from None
+        raise TranslateError(cleaner_route.down(e, READ_SEC) if routed else f"шлюз недоступен: {type(e).__name__}") from None
+    except HTTPException as e:                   # Cleaner не настроен (`cleaner_route.stream`): данные не отправлены
+        raise TranslateError(e.detail["message"]) from None
     if ending == "length":
         raise Cut("ответ модели обрезан")
     if ending is None:
