@@ -1562,11 +1562,23 @@ function build(view, ctx) {
         const sent = await api('GET', `/api/chats/${chatId}/messages/${encodeURIComponent(m.id)}/cleaner-sent`);
         const roles = { user: tr("Пользователь"), assistant: tr("Помощник"), tool: tr("Инструмент") };
         // системная часть общего подключения учётке не показывается (`hidden`): в ней профиль администратора
-        const items = sent.messages.map((x) => (x.hidden
-          ? el('p', { class: 'muted small cleaner-sent-hidden' }, tr("Системная часть общего подключения скрыта"))
-          : x.role === 'system'
-          ? el('details', {}, el('summary', {}, tr("Инструкция модели")), el('pre', {}, x.content))
-          : el('section', {}, el('b', {}, roles[x.role] || x.role), el('pre', {}, x.content))));
+        const items = sent.messages.map((message) => {
+          if (message.hidden) {
+            return el('p', { class: 'muted small cleaner-sent-hidden' }, tr("Системная часть общего подключения скрыта"));
+          }
+          if (message.role === 'system') {
+            return el('details', {}, el('summary', {}, tr("Инструкция модели")), el('pre', {}, message.content));
+          }
+          const calls = message.tool_calls?.length
+            ? el('details', { class: 'cleaner-sent-calls' },
+              el('summary', {}, tr("Вызовы инструментов ({0})", message.tool_calls.length)),
+              el('pre', {}, JSON.stringify(message.tool_calls, null, 2))) : null;
+          const callId = message.tool_call_id
+            ? el('div', { class: 'muted small' }, tr("Идентификатор вызова: {0}", message.tool_call_id)) : null;
+          const role = roles[message.role] || message.role;
+          return el('section', {}, el('b', {}, message.name ? `${role} (${message.name})` : role),
+            callId, message.content ? el('pre', {}, message.content) : null, calls);
+        });
         // отказ Cleaner до провайдера: в журнале запроса нет сообщений
         if (!items.length) items.push(el('p', { class: 'muted small' }, tr("До провайдера запрос не дошёл.")));
         const counts = cleanerCounts(sent.counts);

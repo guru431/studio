@@ -50,6 +50,18 @@ DIALOG = "document.querySelector('#cleaner-sent-dialog[open]')"
 
 @pytest.mark.parametrize("width", [320, 1280])
 def test_cleaner_gateway_page(browser, live, cleaner, width):
+    masked = cleaner._masked
+
+    def tool_history(body):
+        sent = masked(body)
+        sent["messages"].extend([
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call-1", "function": {"name": "lookup", "arguments": '{"q":"<PERSON_1>"}'}}]},
+            {"role": "tool", "content": "Готово", "tool_call_id": "call-1", "name": "lookup"},
+        ])
+        return sent
+
+    cleaner._masked = tool_history
     mobile = width == 320
     card = f"document.querySelector('.link[data-conn=\"' + sessionStorage.cid + '\"]')"
     toggle = f"{card}.querySelector('.link-cleaner')"
@@ -114,6 +126,9 @@ def test_cleaner_gateway_page(browser, live, cleaner, width):
         ("eval", "sent", f"[{DIALOG}.querySelector('.cleaner-sent-text').textContent,"
                          f" {DIALOG}.querySelector('.cleaner-sent-text').innerHTML.includes('&lt;PERSON_1&gt;'),"
                          f" {DIALOG}.textContent.includes('Люди: 1')]"),
+        ("eval", "collapsed", f"!{DIALOG}.querySelector('.cleaner-sent-calls').open"),
+        ("click", ".cleaner-sent-calls summary"), ("wait", f"{DIALOG}.querySelector('.cleaner-sent-calls[open]')"),
+        ("eval", "toolCalls", f"JSON.parse({DIALOG}.querySelector('.cleaner-sent-calls pre').textContent)"),
         ("eval", "chatFits", NO_OVERFLOW),
         ("press", "Escape"), ("wait", f"!{DIALOG}"),
         call("cleanup", "'DELETE', '/api/connections/' + sessionStorage.cid"),
@@ -133,6 +148,8 @@ def test_cleaner_gateway_page(browser, live, cleaner, width):
     assert v["label"] == "gpt-x · через Cleaner"
     text, escaped, counts = v["sent"]
     assert "Позвони <PERSON_1>" in text and "Ивану" not in text and escaped and counts
+    assert v["collapsed"] and "Идентификатор вызова: call-1" in text and "Инструмент (lookup)" in text
+    assert json.loads(v["toolCalls"][0]["function"]["arguments"]) == {"q": "<PERSON_1>"}
     assert v["adminFits"] and v["settingsFits"] and v["chatFits"]
     assert cleaner.turns and cleaner.sent_reads and cleaner.checked
     assert all(r.headers["x-cleaner-key"] == KEY and "authorization" not in r.headers for r in cleaner.sent_reads)

@@ -563,6 +563,16 @@ def _hide_system(items: list[dict]) -> list[dict]:
     return out
 
 
+def _sent_message(message: dict) -> dict:
+    role = _text_of(message.get("role"))
+    shown: dict[str, object] = {"role": role, "content": _text_of(message.get("content"))}
+    if role == "assistant" and isinstance(message.get("tool_calls"), list):
+        shown["tool_calls"] = message["tool_calls"]
+    if role == "tool":
+        shown.update({key: message[key] for key in ("tool_call_id", "name") if isinstance(message.get(key), str)})
+    return shown
+
+
 async def sent(value: str, *, admin: bool = False) -> dict:
     """«Что получила модель» по id запроса Cleaner ответа (`messages.cleaner_request`, «<чат>/<запрос>[/shared]»):
     сообщения со стороны провайдера — с заменами, число инструментов, замены по типам. Только служебным ключом, без
@@ -592,7 +602,7 @@ async def sent(value: str, *, admin: bool = False) -> dict:
     items = body.get("messages") if isinstance(body.get("messages"), list) else []
     counts = body.get("counts") if isinstance(body.get("counts"), dict) else {}
     tools = body.get("tools")
-    shown = [{"role": _text_of(m.get("role")), "content": _text_of(m.get("content"))} for m in items if isinstance(m, dict)]
+    shown = [_sent_message(m) for m in items if isinstance(m, dict)]
     if mark[0] == SHARED_MARK and not admin:
         shown = _hide_system(shown)
     return {"messages": shown,

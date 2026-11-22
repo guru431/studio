@@ -1071,6 +1071,7 @@ globalThis.StudioEnglish = Object.freeze({
   "через Cleaner": "via Cleaner",
   "Через Cleaner": "Via Cleaner",
   "Что получила модель": "What the model received",
+  "Идентификатор вызова: {0}": "Call ID: {0}",
   "Диалог идёт через Cleaner": "This conversation goes through Cleaner",
   "Описаний инструментов: {0}": "Tool descriptions: {0}",
   "Системная часть общего подключения скрыта": "The system part of the shared connection is hidden",

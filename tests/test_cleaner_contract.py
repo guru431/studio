@@ -210,6 +210,9 @@ def test_real_cleaner_client_key_turn_tools_web_sent_and_delete(studio, cleaner_
     assert "user" in roles and roles[-1] == "tool", roles                    # результат инструмента — с заменами
     label = next(m["content"] for m in body["messages"] if m["role"] == "user").rsplit("почта ", 1)[1]
     assert label and label != CANARY and label in body["messages"][-1]["content"]
+    call, = body["messages"][-2]["tool_calls"]
+    assert call["function"]["name"] == tool and json.loads(call["function"]["arguments"]) == {"q": f"{tool}: почта {label}"}
+    assert body["messages"][-1]["tool_call_id"] == call["id"]
 
     # «Интернет»: аргументы веб-инструмента Cleaner отдаёт с заменами — в Exa уходит метка, а не почта
     web_chat = new_chat(studio, connection_id=cid, model="stub-model")
