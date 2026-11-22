@@ -76,7 +76,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 - **Внешние адреса** — кроме студии, только `limits.HOSTS` (без перенаправлений на другие адреса): `api64.ipify.org`
   (внешний IP, без данных); `registry.npmjs.org`, `marketplace.visualstudio.com`, `formulae.brew.sh`,
   `downloads.claude.ai` (версии программ: имя пакета); `api.anthropic.com` (лимиты Claude: OAuth-токен Claude Code);
-  `https://opencode.ai` (лимиты OpenCode Go: ключ OpenCode); `github.com` (публичная копия: `owner/repo`, без учётных данных).
+  `https://opencode.ai` (лимиты OpenCode Go: ключ OpenCode); `api.deepseek.com` (баланс DeepSeek: ключ DeepSeek, только при официальном провайдере и без своего `DEEPSEEK_BASE_URL`); `github.com` (публичная копия: `owner/repo`, без учётных данных).
   Плюс шлюз OpenCode из конфига пользователя (`opencode_usage.connection`) и штатные установщики CLI. Новый адрес — в
   константу и в перечни обоих CLAUDE.md: их и литералы `https://` кода сверяет `tests/test_docs.py`.
 - Блокирующее (файлы, scrypt, сессии SDK, git) — `asyncio.to_thread`: цикл держит пинги канала.

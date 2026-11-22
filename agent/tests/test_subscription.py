@@ -262,3 +262,22 @@ async def test_codex_old_cli_keeps_limits_when_usage_rpc_is_unsupported(home):
     assert list(raw) == ["account", "limits"]
     assert runner._usage_meta.calls == ["account/read", "account/rateLimits/read", "account/usage/read"]
     assert subscription.codex_usage(raw, 1000)["available"]
+
+
+async def test_deepseek_usage_is_cached_per_model(monkeypatch):
+    from studio_agent import deepseek_usage
+    calls = []
+
+    def fake(*, model=None, now=None, **kwargs):
+        calls.append(model)
+        return {"engine": "deepseek", "checked_at": now(), "model": model}
+
+    monkeypatch.setattr(deepseek_usage, "read", fake)
+    cache = subscription.UsageCache(now=lambda: 0, wall=lambda: 1000)
+    first, second = '["deepseek-official","deepseek-v4-flash"]', '["deepseek-official","deepseek-v4-pro"]'
+    assert (await cache.read("deepseek", "root", model=first))["checked_at"] == 1000
+    await cache.read("deepseek", "root", model=first)
+    await cache.read("deepseek", "root", model=second)
+    assert calls == [first, second]
+    await cache.read("deepseek", "root", model=first, refresh=True)
+    assert calls == [first, second, first]

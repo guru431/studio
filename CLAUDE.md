@@ -84,7 +84,7 @@ minor для возможностей, major для несовместимых �
 - **Мост ходит сам** (кроме студии) только на фиксированные HTTPS-адреса `agent/studio_agent/limits.py::HOSTS` (сверяет
   `tests/test_docs.py`): `api64.ipify.org` (внешний IP, без данных); `registry.npmjs.org`, `marketplace.visualstudio.com`,
   `formulae.brew.sh`, `downloads.claude.ai` (версии программ, `software.py`: имя пакета); `api.anthropic.com` (лимиты
-  подписки Claude — OAuth-токен Claude Code); `opencode.ai` (лимиты OpenCode Go — ключ OpenCode); `github.com`
+  подписки Claude — OAuth-токен Claude Code); `opencode.ai` (лимиты OpenCode Go — ключ OpenCode); `api.deepseek.com` (баланс DeepSeek — ключ DeepSeek, только при официальном провайдере и без своего `DEEPSEEK_BASE_URL`); `github.com`
   (анонимная проверка публичной копии: путь `owner/repo` из `origin`/`github`, без учётных данных). Ещё — шлюз
   OpenCode из конфига пользователя (https или `http://` частной сети) с его ключом; обновление CLI — штатные установщики.
 - **Путь к службе один — Apache debian**: приложение в Docker слушает только unix-сокет `/run/studio/web.sock`.
