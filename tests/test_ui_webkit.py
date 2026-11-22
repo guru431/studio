@@ -123,7 +123,7 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     page.locator("#code-projects li[data-pid]").first.wait_for()
     for theme in ('light', 'dark'):
         page.evaluate('theme => {document.documentElement.dataset.theme = theme;}', theme)
-        for section in ('video', 'speech', 'transcribe', 'ocr', 'translate'):
+        for section in ('video', 'speech', 'transcribe', 'ocr', 'translate', 'owui'):
             page.locator('#mobile-more').tap()
             link = page.locator(f'#mobile-section-links a[data-section="{section}"]')
             name = link.inner_text().strip()
@@ -137,7 +137,7 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     page.locator('#mobile-nav-mode-all').tap()
     page.locator('#mobile-nav-save').tap()
     pw.expect(page.locator('#mobile-sections')).not_to_be_visible()
-    pw.expect(page.locator('#rail a.tab:visible')).to_have_count(8)
+    pw.expect(page.locator('#rail a.tab:visible')).to_have_count(9)
     pw.expect(page.locator('#mobile-more')).not_to_be_visible()
     geometry = page.evaluate(NAV_GEOMETRY)
     assert not geometry['overlaps'] and all(label['inside'] for label in geometry['labels'])
@@ -145,7 +145,7 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     pw.expect(page.locator('#rail a[data-section=video]')).to_have_attribute('aria-current', 'page')
     page.reload()
     page.locator('#mobile-more').wait_for(state='attached')
-    pw.expect(page.locator('#rail a.tab:visible')).to_have_count(8)
+    pw.expect(page.locator('#rail a.tab:visible')).to_have_count(9)
     open_mobile_nav_editor(page)
     page.locator('#mobile-nav-mode-compact').tap()
     page.locator('#mobile-nav-save').tap()
