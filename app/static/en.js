@@ -1790,6 +1790,7 @@ globalThis.StudioEnglish = Object.freeze({
   "У DeepSeek нет окон лимита — расходуется баланс": "DeepSeek has no limit windows. The balance is spent instead",
   "DeepSeek Harness не поддерживает ветки чата и подагентов": "DeepSeek Harness does not support chat branches or subagents",
   "Баланс DeepSeek": "DeepSeek balance",
+  "Пополнить DeepSeek": "Top up DeepSeek",
   "По настройкам DeepSeek Harness": "Use DeepSeek Harness settings",
   "Правка в папке проекта": "Edit in the project folder",
   "Настройки DeepSeek Harness": "DeepSeek Harness settings",

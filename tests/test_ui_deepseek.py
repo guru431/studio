@@ -114,7 +114,7 @@ def test_settings_panel_lists_not_applied_items(browser, live, width, tmp_path):
     live.add_user(login)
     machine = machine_with()
     overlay = {"profile": "desktop", "applied": [],
-               "skipped": [{"name": "OPENAI_API_KEY", "reason": "env_key"}, {"name": "model", "reason": "acp_own"},
+               "skipped": [{"name": "llm-pi-ai:custom", "reason": "env_key"}, {"name": "model", "reason": "acp_own"},
                            {"name": "hooks", "reason": "unknown"}]}
     original = machine._op_state
 
@@ -142,7 +142,7 @@ def test_settings_panel_lists_not_applied_items(browser, live, width, tmp_path):
     v = r["values"]
     assert v["panel"].startswith("Настройки DeepSeek Harness") and "Настройки взяты из профиля Desktop" in v["panel"]
     assert "Не применено:" in v["panel"]
-    assert v["items"] == ["OPENAI_API_KEY — ключ из переменной окружения недоступен мосту",
+    assert v["items"] == ["llm-pi-ai:custom — ключ из переменной окружения недоступен мосту",
                           "model — задано в профиле acp или общем патче DSH", "hooks — неизвестный вид настройки"]
     assert v["fits"] and v["inside"]
     assert not known_refusals(problems(r), 409), problems(r)

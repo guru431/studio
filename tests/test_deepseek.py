@@ -20,7 +20,7 @@ MODEL = '["deepseek-official","deepseek-chat"]'
 CATALOG = {"version": "0.1.0-rc.6", "models": [{"id": MODEL, "label": "DeepSeek Chat"}], "efforts": ["high", "off"],
            "defaults": {"model": MODEL, "effort": None, "access": "default"},
            "settings": {"profile": "web", "applied": ["mcp-manager"],
-                        "skipped": [{"name": "OPENAI_API_KEY", "reason": "env_key"}]}}
+                        "skipped": [{"name": "llm-pi-ai:custom", "reason": "env_key"}]}}
 USAGE = {"engine": "deepseek", "available": True, "source": "api.deepseek.com", "checked_at": 1000, "cache_ttl": 60,
          "plan": None, "windows": [{"id": "five_hour", "label": "5 часов", "available": False,
                                     "reason": "У DeepSeek нет окон лимита — расходуется баланс"}],
@@ -54,6 +54,7 @@ def test_hello_deepseek_catalog_parsed_and_bad_rejected(studio):
                 {**CATALOG, "efforts": ["bad\neffort"]},
                 {key: value for key, value in CATALOG.items() if key != "settings"},
                 {**CATALOG, "settings": {**CATALOG["settings"], "profile": "console"}},
+                {**CATALOG, "settings": {"applied": [], "skipped": []}},           # без `profile` — не KeyError
                 {**CATALOG, "settings": {**CATALOG["settings"], "applied": ["x" * 101]}},
                 {**CATALOG, "settings": {**CATALOG["settings"], "applied": ["x"] * 101}},
                 {**CATALOG, "settings": {**CATALOG["settings"], "skipped": [{"name": "x", "reason": "other"}]}},
@@ -169,6 +170,7 @@ def test_usage_balance_passthrough_and_validation(studio):
     assert response.status_code == 200
     assert response.json()["balance"] == USAGE["balance"]
     assert response.json()["links"] == code_usage.LINKS["deepseek"]
+    assert [link["url"].rsplit("/", 1)[1] for link in code_usage.LINKS["deepseek"]] == ["usage", "top_up"]
     assert machine.requests[-1]["engine"] == "deepseek" and machine.requests[-1]["model"] == MODEL
     data["balance"] = {"available": False, "items": [], "reason": "На компьютере нет ключа DeepSeek"}
     assert studio.c.get(endpoint).json()["balance"] == data["balance"]
@@ -192,6 +194,21 @@ def test_history_notice_passthrough(studio):
     response = studio.c.get(chat_url(aid))
     assert response.status_code == 200 and response.json()["notice"] == "unsupported_format"
     assert sent(machine, "history")[-1]["engine"] == "deepseek"
+
+
+def test_share_and_export_of_unreadable_history_are_refused(studio):
+    """M4: мост не прочёл историю (`notice`) — не пустой снимок, а 409 со словами заметки."""
+    import chat_shares
+    aid, machine, link = setup(studio)
+    enable(machine, link)
+    external(machine, studio, aid)
+    machine._op_history = lambda req, events: {"items": [], "start": 0, "total": 0, "engine": "deepseek",
+                                               "notice": "unsupported_format"}
+    for response in (studio.c.post(chat_url(aid, "share"), json={"pin": "0123"}),
+                     studio.c.post(chat_url(aid, "export"), json={"format": "md"})):
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == {"code": "history_unavailable", "message": chat_shares.UNREADABLE}
+    assert state.DB.execute("SELECT COUNT(*) FROM chat_shares").fetchone()[0] == 0
 
 
 def test_share_link_of_deepseek_chat_keeps_its_engine(studio):
@@ -230,3 +247,16 @@ def test_mcp_settings_accept_deepseek(studio):
     machine._op_mcp_get = lambda req, events: {"config": {"mcpServers": {}}}
     response = studio.c.get(url(aid, "projects", ALPHA, "mcp") + "?engine=deepseek")
     assert response.status_code == 200 and machine.requests[-1]["engine"] == "deepseek"
+
+
+def test_member_does_not_see_owner_overlay_summary(studio):
+    """M5: сводка наложения (имена строк профиля владельца) — участнику совместного проекта не отдаётся."""
+    from conftest import signin
+    from test_project_access import share
+
+    aid, machine, link, _, _ = share(studio)
+    enable(machine, link)
+    assert studio.c.get("/api/agents").json()["items"][0]["deepseek"]["settings"] == CATALOG["settings"]
+    signin(studio, "friend")
+    catalog = studio.c.get("/api/agents").json()["items"][0]["deepseek"]
+    assert "settings" not in catalog and catalog["models"] == CATALOG["models"]

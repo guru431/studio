@@ -83,7 +83,8 @@ LINKS = {
     "claude": [{"label": "Использование Claude", "url": "https://claude.ai/settings/usage"}],
     "codex": [{"label": "Использование Codex", "url": "https://chatgpt.com/codex/settings/usage"}],
     "opencode": [{"label": "Провайдеры OpenCode", "url": "https://opencode.ai/docs/providers/"}],
-    "deepseek": [{"label": "Баланс DeepSeek", "url": "https://platform.deepseek.com/usage"}],
+    "deepseek": [{"label": "Баланс DeepSeek", "url": "https://platform.deepseek.com/usage"},
+                 {"label": "Пополнить DeepSeek", "url": "https://platform.deepseek.com/top_up"}],
 }
 #: помощник → id модели, для которой мост считает лимиты, и признак такого моста в `hello`
 MODELS = {"opencode": (bridge.OPENCODE_MODEL_ID, "opencode_usage"), "deepseek": (bridge.DEEPSEEK_MODEL_ID, "deepseek_usage")}

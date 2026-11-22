@@ -292,7 +292,8 @@ def _deepseek(catalog) -> dict:
     models, efforts, settings = catalog.get("models"), catalog.get("efforts"), catalog.get("settings")
     if (not isinstance(models, list) or len(models) > OPENCODE_MODELS_MAX or not isinstance(efforts, list)
             or len(efforts) > 100 or not all(isinstance(e, str) and OPENCODE_EFFORT.fullmatch(e) for e in efforts)
-            or not isinstance(settings, dict) or settings.get("profile") not in ("web", "desktop", None)):
+            or not isinstance(settings, dict) or "profile" not in settings
+            or settings["profile"] not in ("web", "desktop", None)):
         raise ProtocolError("hello")
     applied, skipped = settings.get("applied"), settings.get("skipped")
     if (not isinstance(applied, list) or len(applied) > 100 or not isinstance(skipped, list) or len(skipped) > 100

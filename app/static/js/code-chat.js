@@ -416,7 +416,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   } });
   const openCode = opencodeView(form, text, { enabled: engine === 'opencode' && agent?.opencode_features,
     shared: agent?.shared, changed: () => loadState() });
-  const deepseek = engine === 'deepseek' ? deepseekView(form, agent?.deepseek?.settings) : null;
+  // Сводка наложения — настройки компьютера владельца: участнику совместного проекта её не показываем
+  const deepseek = engine === 'deepseek' && !agent?.shared ? deepseekView(form, agent?.deepseek?.settings) : null;
   if (branching) {
     const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
       'aria-label': tr("Создать ветку чата"), title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") });
@@ -461,11 +462,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function paintSettings(data) {
     openCode.settings(data);
-    if (deepseek) {
+    if (engine === 'deepseek') {
       // Права чата DeepSeek Harness закрепляются при создании: ход шлёт то же значение, что ответил state.
       accessFixed = data.access_fixed === true;
       if (accessFixed && ACCESS[engine][data.access]) access.value = data.access;
-      deepseek.update(data.overlay, { fixed: accessFixed });
+      deepseek?.update(data.overlay, { fixed: accessFixed });
     }
     const previousModel = effectiveModel;
     effectiveModel = typeof data.model === 'string' ? data.model : '';
@@ -1293,7 +1294,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       for (const card of turn.asks.querySelectorAll('.code-ask')) card.remove();
       let end = null;
       if (data.status === 'stopped') end = STOPPED;
-      else if (data.status === 'error') end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", message(data.message)) : tr("Ошибка");
+      // DeepSeek Harness: чат открыт в DSH — слова уже в плашке writer_active, второй строкой в ленте не повторяем
+      else if (data.status === 'error' && !(data.code === 'writer_active' && engine === 'deepseek')) {
+        end = typeof data.message === 'string' && data.message ? tr("Ошибка: {0}", message(data.message)) : tr("Ошибка");
+      }
       if (end) {
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
