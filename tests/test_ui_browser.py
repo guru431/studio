@@ -2686,7 +2686,8 @@ def test_photo_layout_fits_390(browser, live):
     assert v["chips"] and v["sizeMenu"] and v["viewer"]
     assert v["sizes"] == ["Портрет 832×1216", "Квадрат 1024×1024", "Альбом 1216×832"]
     assert "Альбом" in v["sizeChip"]
-    assert v["actions"] == ["Изменить", "Создать видео", "Повторить с тем же seed", "Описать", "Скачать", "Удалить"]
+    assert v["actions"] == ["Изменить", "Создать видео", "Повторить с тем же seed", "Ещё варианты", "Описать", "В поле",
+                            "Скачать", "Поделиться", "Удалить"]
     assert not problems(r), problems(r)
 
 
@@ -4237,7 +4238,8 @@ def test_video_tiles_and_table_open_the_clip_in_the_viewer(browser, live, ready_
     assert v["tile"] == ["5 с", False, 6 if width == 1280 else 2]
     src, controls, meta, actions = v["viewer"]
     assert src.startswith("/api/media/") and controls and meta.startswith("Wan · 5 с · 576p · 32 к/с")
-    assert actions == ["Скачать", "Повторить", "Ещё варианты", "Удалить"] and v["inside"] and v["download"] == f"{src}?download=1"
+    assert actions == ["Скачать", "Поделиться", "Повторить", "Ещё варианты", "В поле", "Удалить"]
+    assert v["inside"] and v["download"] == f"{src}?download=1"
     params, seed, when = v["row"]
     assert params == "Wan · 5 с · 576p · 32 к/с" and seed.startswith("seed ") and re.fullmatch(r"\d\d:\d\d · \d+:\d\d", when)
     assert v["tableFits"] and v["kept"] == "table"

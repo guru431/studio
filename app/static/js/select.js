@@ -5,15 +5,17 @@ import { tr } from './i18n.js';
  * Вход в режим — «Выбрать» в шапке, долгое нажатие пальцем на карточку (она сразу отмечена) или
  * галочка, проступающая при наведении мышью. В режиме нажатие по карточке ставит и снимает отметку
  * (просмотр не открывается, ролик не играет: поверх карточки — слой CSS), Shift+щелчок отмечает
- * диапазон, кружок у дня — весь день, «Все» — всё подгруженное; Escape, «✕» и выполненное действие —
+ * диапазон, кружок у дня — весь день, «Все» — всё подгруженное, «Неудачные» — подгруженные с ошибкой и
+ * отменой (повторное нажатие их снимает); Escape, «✕» и выполненное действие —
  * выход. Отметки живут только у записей ленты: лента сменилась (onChange) — sync() снимает ушедшие.
  * «Все», «Скачать» и «Удалить» — на широком экране в шапке, на телефоне — панелью на месте поля.
  * «Скачать» — отмеченные с файлом (save.saveMany: ZIP, на iPhone — «Поделиться»); «Удалить» — после
  * одного подтверждения по одной, «Отмена» окна останавливает после текущей.
  *
- * createSelection({ section, nouns, selectable, mediaOf, remove, extraActions }): section — 'photo' |
+ * createSelection({ section, nouns, selectable, failed, mediaOf, remove, extraActions }): section — 'photo' |
  * 'video' (начало id); nouns — формы слова для plural (['картинку', 'картинки', 'картинок']);
- * selectable(item) — можно ли отметить; mediaOf(item) — media id файла или null; remove(item) —
+ * selectable(item) — можно ли отметить; failed(item) — неудачная или отменённая (кнопка «Неудачные»);
+ * mediaOf(item) — media id файла или null; remove(item) —
  * Promise удаления записи разделом (DELETE, «уже удалена» — успех, запись уходит из ленты);
  * extraActions — необязательные действия раздела [{ id, label, shown(items), run(items) }]: кнопка
  * рядом с «Скачать» видна, только пока shown(отмеченные в порядке ленты); run режим не закрывает
@@ -31,7 +33,7 @@ const PRESS_MS = 500;            // долгое нажатие
 const SLOP_PX = 10;              // сдвиг пальца, после которого это уже прокрутка
 const NARROW = '(max-width: 760px)';
 
-export function createSelection({ section, nouns, selectable, mediaOf, remove, extraActions = [] }) {
+export function createSelection({ section, nouns, selectable, failed, mediaOf, remove, extraActions = [] }) {
   const picked = new Set();      // id отмеченных (строки, как data-id)
   let selecting = false;
   let anchor = null;             // последняя отмеченная — начало диапазона Shift
@@ -54,6 +56,8 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
   const count = el('span', { class: 'select-count', id: `${section}-select-count`, 'aria-live': 'polite' });
   const tools = el('div', { class: 'select-tools' }, exitBtn, count);
   const allBtn = button(tr("Все"), { class: 'btn btn-sm', id: `${section}-select-all` });
+  const failedBtn = button(tr("Неудачные"), { class: 'btn btn-sm', id: `${section}-select-failed`,
+    title: tr("Отметить подгруженные записи с ошибкой и отменённые") });
   const downloadBtn = button(tr("Скачать"), { class: 'btn btn-sm', id: `${section}-select-download` });
   const deleteBtn = button(tr("Удалить"), { class: 'btn btn-sm btn-danger', id: `${section}-select-delete` });
   const extras = extraActions.map((a) => {
@@ -64,7 +68,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     });
     return { action: a, node: b };
   });
-  const actions = el('div', { class: 'select-actions' }, allBtn, ...extras.map((x) => x.node), downloadBtn, deleteBtn);
+  const actions = el('div', { class: 'select-actions' }, allBtn, failedBtn, ...extras.map((x) => x.node), downloadBtn, deleteBtn);
   const bar = el('div', { class: 'select-bar' });
   const narrow = matchMedia(NARROW);
 
@@ -107,6 +111,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
     count.textContent = note || tr("Выбрано {0}", picked.size);
     allBtn.textContent = full ? tr("Снять") : tr("Все");
     allBtn.disabled = busy || !all.length;
+    failedBtn.disabled = busy || !all.some(failed);
     deleteBtn.disabled = busy || !picked.size;
     for (const { action, node } of extras) node.hidden = busy || !action.shown(pickedItems());
     paintDownload();
@@ -205,6 +210,12 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
   function toggleAll() {
     const all = pickable();
     setMany(all, !(all.length && all.every((i) => picked.has(idOf(i)))));
+    paint();
+  }
+
+  function toggleFailed() {
+    const list = pickable().filter(failed);
+    setMany(list, !(list.length && list.every((i) => picked.has(idOf(i)))));
     paint();
   }
 
@@ -358,6 +369,7 @@ export function createSelection({ section, nouns, selectable, mediaOf, remove, e
   });
   exitBtn.addEventListener('click', () => { if (!busy) exit(); });
   allBtn.addEventListener('click', toggleAll);
+  failedBtn.addEventListener('click', toggleFailed);
   downloadBtn.addEventListener('click', downloadPicked);
   deleteBtn.addEventListener('click', deletePicked);
 

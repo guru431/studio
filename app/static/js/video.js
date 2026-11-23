@@ -16,7 +16,9 @@ import { message as serverMessage, tr } from './i18n.js';
  * #/video?id=<id> («Открыть» в «В работе», jobs.js): готовый — просмотр, иначе — его карточка; в уже
  * открытом разделе — update, без пересборки (промпт и фото-источник целы); созданный ролик зовёт
  * jobs.kick(). «Повторить» и «Ещё варианты» (2–4) у законченного ролика — POST /api/videos/<id>/repeat:
- * тот же кадр, промпт и параметры, новый seed. Текст сервера — только textContent. */
+ * тот же кадр, промпт и параметры, новый seed. «В поле» просмотра — кадр (source_media_id), описание фото,
+ * движение и параметры ролика в поле и чипы. Чип модели в шапке — отбор ленты GET /api/videos?model=;
+ * «Неудачные» режима выделения — select.js. Текст сервера — только textContent. */
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { menuItem, popupMenu } from './menu.js';
@@ -32,7 +34,7 @@ import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { sectionMcp } from './mcp-sections.js';
 import { button, el, openDialog, words } from './ui.js';
-import { tableHead, timeOf, viewSwitch } from './views.js';
+import { modelFilter, tableHead, timeOf, viewSwitch } from './views.js';
 import { viewerNavigation } from './viewer-navigation.js';
 
 const POLL_MS = 3000;
@@ -83,16 +85,17 @@ function build(view, ctx) {
   /* разметка */
   const feedBox = el('div', { id: 'video-feed', class: 'video-feed' });
   const selection = createSelection({ section: 'video', nouns: [tr("ролик"), tr("ролика"), tr("роликов")],
-    selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
-    remove: (item) => remove(item) });
+    selectable: (item) => !RUNNING.has(item.state), failed: (item) => item.state === 'failed' || item.state === 'cancelled',
+    mediaOf: (item) => (item.state === 'done' && item.media_id) || null, remove: (item) => remove(item) });
   const layout = viewSwitch('video', 'preview', (name) => {
     feedBox.dataset.view = name;
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
+  const feedModel = modelFilter('video', modelLabel, () => feed.reload());
   // кнопки-значки шапки — одной группой справа: на 320 px она целиком уходит под заголовок
   const head = el('header', { class: 'head' }, el('h1', {}, tr("Видео")), selection.tools,
-    el('div', { class: 'head-tools' }, selection.button, layout.node));
+    el('div', { class: 'head-tools' }, feedModel.node, selection.button, layout.node));
 
   const file = el('input', { type: 'file', id: 'video-file', class: 'sr', accept: ACCEPT });
   const pick = el('label', { class: 'icon-btn attach', id: 'video-pick', title: tr("Фото для ролика — выбрать с устройства") }, icon('clip'),
@@ -201,7 +204,7 @@ function build(view, ctx) {
     key: (item) => item.id,
     render: card,
     quiet: ['elapsed', 'progress', 'detail', 'chain'],      // ход, слова и время — таймер tick; цепочка — не в карточке
-    load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${pageQuery(last)}`)).items,
+    load: async (last) => (await api('GET', `/api/videos?limit=${PAGE}${modelQuery()}${pageQuery(last)}`)).items,
     empty: ctx.hint ? tr("Здесь появятся ваши ролики.") : tr("Здесь появятся ваши ролики. Выберите фото внизу и нажмите «Оживить»."),
     head: tableHead(['', tr("Промпт"), tr("Ролик"), 'Seed', tr("Время"), '']),
     onChange: () => {
@@ -211,6 +214,23 @@ function build(view, ctx) {
     dayTools: selection.dayTools,
   });
   selection.attach({ root, head, feedBox, feed, error });
+
+  /** Отбор ленты по модели (чип в шапке): параметр страниц ленты и перелистывания просмотра. */
+  function modelQuery() {
+    return feedModel.value ? `&model=${encodeURIComponent(feedModel.value)}` : '';
+  }
+
+  /** Новые ролики: модель другая, чем у отбора, — отбор снимается, лента заново (true); иначе — в начало ленты. */
+  function admit(list) {
+    for (const item of list) feedModel.add(item.model);
+    if (feedModel.value && list.some((item) => item.model !== feedModel.value)) {
+      feedModel.set(null);
+      feed.reload();
+      return true;
+    }
+    for (const item of list) feed.prepend(item);
+    return false;
+  }
 
   /* переход к записи из «В работе» (#/video?id=…): готовый — просмотр, иначе — его карточка в ленте;
    * ?id из адреса убирается: повторное «Открыть» снова сменит адрес */
@@ -235,7 +255,10 @@ function build(view, ctx) {
         openViewer(item);
       } else {
         focusId = item.id;
-        focusCard();
+        if (feedModel.value && item.model !== feedModel.value) {
+          feedModel.set(null);
+          feed.reload();                                // карточку найдёт onChange первой страницы
+        } else focusCard();
       }
     }, (err) => { if (alive) error.textContent = words(err); });
   }
@@ -445,7 +468,7 @@ function build(view, ctx) {
       const out = await api('POST', `/api/videos/${encodeURIComponent(item.id)}/repeat`, { count });
       kick();
       if (!alive) return;
-      for (const made of out.items) feed.prepend(made);
+      admit(out.items);
       if (serverMessage(out.message)) error.textContent = tr("Сделано {0} из {1}: {2}", out.items.length, count, serverMessage(out.message));
       after();
     } catch (err) {
@@ -479,6 +502,42 @@ function build(view, ctx) {
         dialog.close();
         after();
       }).catch((err) => { fail.textContent = words(err); });
+    });
+  }
+
+  /** «В поле»: кадр (тем же файлом истории), описание фото и движение, модель, длительность, качество и «плавно»
+   * ролика — в поле и чипы; свой непустой промпт заменяется после вопроса. Ничего не хранится. */
+  function toField(item, viewer) {
+    const parts = /^Описание исходного фото:\n([\s\S]*)\n\nДвижение в видео:\n([\s\S]*)$/.exec(item.prompt || '');
+    const motion = parts ? parts[2] : item.prompt || '';
+    const apply = () => {
+      viewer.close();
+      const same = [...modelPick.options].filter((o) => o.value.split(':').slice(1).join(':') === (item.model || 'wan'));
+      if (same.length) modelPick.value = (same.find((o) => o.value === modelPick.value) || same[0]).value;
+      if (QUALITIES.some(([value]) => value === item.quality)) quality = item.quality;
+      smooth = item.smooth;
+      chipSmooth.setAttribute('aria-pressed', String(smooth));
+      seconds.value = String(item.seconds);
+      setSource(item.source_media_id ? { mediaId: item.source_media_id, url: media(item.source_media_id, '?thumb=1'),
+        photoPrompt: parts ? parts[1] : '' } : null);
+      prompt.value = motion;
+      autosize();
+      paintPromptHint();
+      paintModel();
+      prompt.focus();
+    };
+    const own = prompt.value.trim();
+    if (!own || own === motion.trim()) {
+      apply();
+      return;
+    }
+    const replace = button(tr("Заменить"), { class: 'btn btn-accent', id: 'video-field-replace' });
+    const ask = openDialog(root, { id: 'video-field-dialog', title: tr("Заменить промпт?"),
+      body: [el('p', { class: 'muted small' }, tr("В поле уже есть промпт — промпт ролика встанет вместо него."))],
+      actions: [replace] });
+    replace.addEventListener('click', () => {
+      ask.close();
+      apply();
     });
   }
 
@@ -609,6 +668,7 @@ function build(view, ctx) {
             tr("Ролик"), api, { kind: 'videos' })),
           repeatButton(item, 'btn btn-sm act-repeat', () => dialog.close()),
           variantsButton(item, 'btn btn-sm act-variants', () => dialog.close()),
+          ctx.hint ? null : act(tr("В поле"), 'act-to-field', () => toField(item, dialog)),
           act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)))));
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
@@ -627,7 +687,7 @@ function build(view, ctx) {
     root.append(dialog);
     dialog.showModal();
     viewerNavigation(dialog, { item, items: feed.items(), section: 'videos', open: openViewer,
-      done: feedBox.dataset.feed === 'end', opener, gallery });
+      done: feedBox.dataset.feed === 'end', opener, gallery, query: modelQuery() });
     return dialog;
   }
 
@@ -755,7 +815,7 @@ function build(view, ctx) {
       const out = await api('POST', '/api/videos', body);
       draft.sent(value);                            // отправленный промпт черновиком не возвращается
       kick();
-      if (alive) feed.prepend(out);
+      if (alive) admit([out]);
     } catch (err) {
       error.textContent = words(err);
     } finally {

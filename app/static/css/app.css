@@ -1492,6 +1492,11 @@ label.chip { cursor: pointer; }
 /* ---- вид ленты фото и видео (views.js; data-view ленты): превью, плитка, таблица ---- */
 
 .view-pick { flex: none; }
+/* чип модели шапки (views.modelFilter): подпись сжимается до многоточия */
+.feed-model { flex: 0 1 auto; min-width: 0; }
+.feed-model[hidden] { display: none; }
+.feed-model .ctl-chip { max-width: 180px; }
+.feed-model .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .view-toggle { width: auto; grid-auto-flow: column; gap: var(--space-1); padding: 0 var(--space-3); }
 .view-toggle svg.caret { width: 12px; height: 12px; }
 .view-toggle[aria-expanded="true"] { background: var(--surface-2); color: var(--text-1); }
@@ -1549,7 +1554,7 @@ label.chip { cursor: pointer; }
 .select-btn svg.ico { width: 17px; height: 17px; }
 .select-tools, .select-actions, .select-bar { display: none; }
 [data-selecting] :is(.select-tools, .select-actions) { display: flex; align-items: center; gap: var(--space-4); }
-[data-selecting] .head :is(h1, .select-btn, .photo-menu-wrap) { display: none; }
+[data-selecting] .head :is(h1, .select-btn, .photo-menu-wrap, .feed-model) { display: none; }
 .select-tools .icon-btn svg.ico { width: 18px; height: 18px; }
 .select-count { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* долгое нажатие — выделение: без меню картинки iPhone, выделения текста и перетаскивания картинки (Chrome на

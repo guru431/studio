@@ -32,7 +32,10 @@ import { message as serverMessage, tr } from './i18n.js';
  * серии» без таймера, с «Отменить»); сравнение двух картинок (compare.js) — «Сравнить с исходником»
  * в просмотре и «Сравнить» в режиме выделения при двух отмеченных; «Варианты» в просмотре —
  * GET /api/images/<id>/variants. Параметры по модели — chain.js: силы нет у FLUX, seed — у внешнего
- * сервиса («Повторить с тем же seed» — просто «Повторить»). */
+ * сервиса («Повторить с тем же seed» — просто «Повторить»).
+ * «Ещё варианты» (просмотр и неудачная карточка) — 1–4 картинки телом «Повторить» без seed с серией по seed;
+ * «В поле» просмотра — промпт, модель, формат, сила и исходник записи (source_media_id) в поле и чипы. Чип модели
+ * в шапке — отбор ленты GET /api/images?model= (views.modelFilter); «Неудачные» режима выделения — select.js. */
 import { api } from './api.js';
 import { icon, iconButton } from './icons.js';
 import { menuItem, popupMenu, popupPanel } from './menu.js';
@@ -52,7 +55,7 @@ import { createSelection } from './select.js';
 import { SERIES_MAX, seriesControl } from './series.js';
 import { modelLabel } from './settings.js';
 import { button, el, field, openDialog, words } from './ui.js';
-import { tableHead, timeOf, viewSwitch } from './views.js';
+import { modelFilter, tableHead, timeOf, viewSwitch } from './views.js';
 import { viewerNavigation } from './viewer-navigation.js';
 
 const POLL_MS = 1500;
@@ -116,7 +119,8 @@ function build(view, ctx) {
   const menuPopup = popupMenu(toggle, menu, { align: 'end' });
   const feedBox = el('div', { id: 'photo-feed', class: 'photo-feed' });
   const selection = createSelection({ section: 'photo', nouns: [tr("картинку"), tr("картинки"), tr("картинок")],
-    selectable: (item) => !RUNNING.has(item.state), mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
+    selectable: (item) => !RUNNING.has(item.state), failed: (item) => item.state === 'error' || item.state === 'cancelled',
+    mediaOf: (item) => (item.state === 'done' && item.media_id) || null,
     remove: (item) => remove(item),
     // ровно две отмеченные с файлом — сравнение; режим выделения остаётся
     extraActions: [{ id: 'photo-select-compare', label: tr("Сравнить"),
@@ -128,9 +132,11 @@ function build(view, ctx) {
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
+  const feedModel = modelFilter('photo', (m) => NAMES[m] || m, () => feed.reload());
   // кнопки-значки шапки — одной группой справа: на 320 px она целиком уходит под заголовок
   const head = el('header', { class: 'head' }, el('h1', {}, tr("Фото")), selection.tools,
-    el('div', { class: 'head-tools' }, selection.button, layout.node, el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile)));
+    el('div', { class: 'head-tools' }, feedModel.node, selection.button, layout.node,
+      el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile)));
 
   const sourceImg = el('img', { alt: tr("Исходное фото") });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
@@ -186,7 +192,7 @@ function build(view, ctx) {
     key: (item) => item.id,
     render: card,
     quiet: ['elapsed', 'chain'],          // время идущей — таймер tick; цепочка — не в карточке
-    load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${pageQuery(last)}`)).items,
+    load: async (last) => (await api('GET', `/api/images?limit=${PAGE}${modelQuery()}${pageQuery(last)}`)).items,
     empty: ctx.hint ? tr("Здесь появятся ваши картинки.") : tr("Здесь появятся ваши картинки. Опишите картинку внизу и нажмите «Создать»."),
     head: tableHead(['', tr("Промпт"), tr("Модель"), tr("Размер"), 'Seed', tr("Время"), '']),
     onChange: () => {
@@ -196,6 +202,20 @@ function build(view, ctx) {
     dayTools: selection.dayTools,
   });
   selection.attach({ root, head, feedBox, feed, error });
+
+  /** Отбор ленты по модели (чип в шапке): параметр страниц ленты и перелистывания просмотра. */
+  function modelQuery() {
+    return feedModel.value ? `&model=${encodeURIComponent(feedModel.value)}` : '';
+  }
+
+  /** Записи другой модели в отобранную ленту не встают молча: отбор снимается, лента — заново. */
+  function unfilter(list) {
+    for (const item of list) feedModel.add(item.model);
+    if (!feedModel.value || list.every((item) => item.model === feedModel.value)) return false;
+    feedModel.set(null);
+    feed.reload();
+    return true;
+  }
 
   /* переход к записи из «В работе» (#/photo?id=…): готовая — просмотр, иначе — её карточка в ленте;
    * ?id из адреса убирается: повторное «Открыть» снова сменит адрес */
@@ -220,7 +240,7 @@ function build(view, ctx) {
         openViewer(item);
       } else {
         focusId = item.id;
-        focusCard();
+        if (!unfilter([item])) focusCard();
       }
     }, (err) => { if (alive) error.textContent = words(err); });
   }
@@ -278,10 +298,10 @@ function build(view, ctx) {
     status.className = `status photo-status${bad ? ' error' : ''}`;
   }
 
-  /* исходное фото */
-  function setSource(f) {
-    if (source) URL.revokeObjectURL(source.url);
-    source = f ? { file: f, url: URL.createObjectURL(f) } : null;
+  /* исходное фото: файл с устройства или файл истории (mediaId — «В поле» просмотра) */
+  function setSource(f, mediaId = null) {
+    if (source?.file) URL.revokeObjectURL(source.url);
+    source = f ? { file: f, url: URL.createObjectURL(f) } : mediaId ? { mediaId, url: media(mediaId, '?thumb=1') } : null;
     if (source) sourceImg.src = source.url;
     else sourceImg.removeAttribute('src');
     chipPhoto.classList.toggle('on', !!source);
@@ -393,7 +413,7 @@ function build(view, ctx) {
   function syncBusy() {
     const busy = isBusy();
     // «Повторить» неудачной и отменённой — в ленте: карточки перерисовываются, их кнопки ищутся на месте
-    for (const b of [go, ...gated, ...feedBox.querySelectorAll('.card-repeat')]) {
+    for (const b of [go, ...gated, ...feedBox.querySelectorAll('.card-repeat, .card-variants')]) {
       b.disabled = busy;
       b.title = busy ? tr("Дождитесь конца текущего задания") : '';
     }
@@ -599,7 +619,7 @@ function build(view, ctx) {
         CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(serverMessage(item.detail)))));
     } else {
       node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
-        el('span', { class: 'card-note-acts' }, repeatButton(item), deleteButton(item))));
+        el('span', { class: 'card-note-acts' }, repeatButton(item), variantsButton(item, 'btn-link'), deleteButton(item))));
     }
     if (layout.value === 'preview') {
       const [w, h] = String(item.size).split('x').map(Number);
@@ -622,6 +642,7 @@ function build(view, ctx) {
   async function adopt(ids) {
     try {
       const items = await Promise.all(ids.map((id) => api('GET', `/api/images/${id}`)));
+      if (unfilter(items)) return;                    // лента заново — новые записи придут первой страницей
       for (const item of items.reverse()) feed.prepend(item);
     } catch {
       feed.reload();
@@ -653,6 +674,10 @@ function build(view, ctx) {
     const picked = choice ? { model: choice.model, connection_id: choice.connection_id } : {};
     const many = withSource ? series.value() : null;
     if (!withSource || !source) return { prompt: text, size, ...picked, ...(many ? { series: many } : {}) };
+    if (source.mediaId) {
+      return { prompt: text, size, ...picked, source_media_id: source.mediaId,
+        ...(isLustify() ? { strength: Number(strength.value) } : {}), ...(many ? { series: many } : {}) };
+    }
     if (source.file.size > PHOTO_MAX) throw new Error(tr("Фото больше 20 МиБ"));
     const body = new FormData();
     for (const [k, v] of Object.entries({ prompt: text, size, ...picked })) body.append(k, String(v));
@@ -673,7 +698,7 @@ function build(view, ctx) {
       const many = series.value();
       const raw = prompt.value;
       mcp.run({ prompt: text || undefined, model: choice?.model, size: (sizes.find(([key]) => key === size) || sizes[0])[2],
-        strength: Number(strength.value), n: many?.count || 1 }, { files: { artifact_id: source?.file } }).then(ok => {
+        strength: Number(strength.value), n: many?.count || 1 }, { files: { artifact_id: source?.file || source } }).then(ok => {
         if (ok) draft.sent(raw);
         if (ok && many && mcp.has('n')) series.reset();
       });
@@ -709,6 +734,88 @@ function build(view, ctx) {
     return body;
   }
 
+  /** «Ещё варианты»: тело «Повторить» без seed (его выбирает студия) и серия по seed; правка кистью — по одному
+   * варианту (серии с маской сервер не принимает). Новые записи — в начало ленты (adopt). */
+  function chooseVariants(item, after = () => {}) {
+    const top = item.mask_media_id ? 1 : SERIES_MAX;
+    const count = el('select', { id: 'photo-variants-count', 'aria-label': tr("Сколько вариантов") },
+      ...Array.from({ length: top }, (_, i) => el('option', { value: String(i + 1) }, String(i + 1))));
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const go = button(tr("Сделать"), { class: 'btn btn-accent', id: 'photo-variants-go', disabled: isBusy() });
+    const dialog = openDialog(root, { id: 'photo-variants-dialog', title: tr("Ещё варианты"),
+      body: [el('p', {}, item.mask_media_id ? tr("Тот же промпт, модель, исходник и маска; seed — новый. Правка кистью — по одному варианту.")
+        : tr("Тот же промпт, модель, размер и исходник; seed у каждой картинки — новый.")),
+      el('label', {}, tr("Картинок: "), count), fail], actions: [go] });
+    go.addEventListener('click', async () => {
+      const body = repeatBody(item);
+      delete body.seed;
+      const n = Number(count.value);
+      if (n > 1) body.series = { count: n, vary: 'seed' };
+      go.disabled = true;
+      fail.textContent = '';
+      if (await create(body)) {
+        dialog.close();
+        after();
+      } else {
+        fail.textContent = error.textContent;
+        go.disabled = isBusy();
+      }
+    });
+  }
+
+  function variantsButton(item, cls, after) {
+    if (ctx.hint) return null;
+    const busy = isBusy();
+    return button(tr("Ещё варианты"), { class: `${cls} card-variants`, disabled: busy,
+      title: busy ? tr("Дождитесь конца текущего задания") : null }, () => chooseVariants(item, after));
+  }
+
+  /** «В поле»: промпт, модель, формат, сила и исходник записи (тем же файлом истории) — в поле и чипы; свой
+   * непустой промпт заменяется после вопроса. Ничего не хранится: значения — из открытой записи. */
+  function toField(item, viewer) {
+    const apply = () => {
+      viewer.close();
+      prompt.value = item.prompt;
+      autosize();
+      const same = choices.filter(([, , c]) => c.model === item.model);
+      if (same.length) {
+        choice = (same.find(([key]) => key === choiceKey(choice)) || same[0])[2];
+        chipModel.paint();
+        say('', false);
+      } else {
+        say(tr("модели «{0}» нет в разделе — выбрана текущая", modelLabel(item.model)), false);
+      }
+      const known = SIZES.find((s) => s[2] === item.size);
+      if (known) {
+        size = known[0];
+        chipSize.paint();
+      }
+      if (item.strength !== null && item.strength !== undefined) {
+        strength.value = String(item.strength);
+        strengthValue.textContent = Number(strength.value).toFixed(2);
+      }
+      choosing += 1;                                    // выбор файла в пути — устарел
+      preparingSource = false;
+      file.value = '';
+      setSource(null, item.source_media_id);
+      syncBusy();
+      prompt.focus();
+    };
+    const own = prompt.value.trim();
+    if (!own || own === item.prompt) {
+      apply();
+      return;
+    }
+    const replace = button(tr("Заменить"), { class: 'btn btn-accent', id: 'photo-field-replace' });
+    const ask = openDialog(root, { id: 'photo-field-dialog', title: tr("Заменить промпт?"),
+      body: [el('p', { class: 'muted small' }, tr("В поле уже есть промпт — промпт записи встанет вместо него."))],
+      actions: [replace] });
+    replace.addEventListener('click', () => {
+      ask.close();
+      apply();
+    });
+  }
+
   async function remove(item, dialogs = []) {
     try {
       await api('DELETE', `/api/images/${item.id}`);
@@ -742,14 +849,16 @@ function build(view, ctx) {
       act(tr("Описать"), 'act-describe', () => {
         dialog.close();
         describe({ mediaId: item.media_id });
-      })];
-    // без модели раздела «Изменить» и «Повторить» не начать — их нет; «Описать» решает шлюз раздела
+      }),
+      act(tr("Ещё варианты"), 'act-variants', () => chooseVariants(item, () => dialog.close()))];
+    // без модели раздела «Изменить», «Повторить», «Ещё варианты» и «В поле» не начать — их нет; «Описать» решает шлюз раздела
     const actions = el('div', { class: 'viewer-actions' }, ctx.hint ? null : starts[0],
       act(tr("Создать видео"), 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
       }),
-      ctx.hint ? null : starts[1], starts[2],
+      ctx.hint ? null : starts[1], ctx.hint ? null : starts[3], starts[2],
+      ctx.hint ? null : act(tr("В поле"), 'act-to-field', () => toField(item, dialog)),
       act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
       // ссылка «Поделиться» на картинку (chat_shares.ITEMS): картинка, промпт и модель
       act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
@@ -825,7 +934,7 @@ function build(view, ctx) {
     root.append(dialog);
     dialog.showModal();
     viewerNavigation(dialog, { item, items: feed.items(), section: 'images', open: openViewer,
-      done: feedBox.dataset.feed === 'end', opener, gallery });
+      done: feedBox.dataset.feed === 'end', opener, gallery, query: modelQuery() });
     return dialog;
   }
 
