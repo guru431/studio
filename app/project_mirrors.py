@@ -997,10 +997,14 @@ def _release(destination):
 async def _auto(request, mine, other, progress, place):
     destination = other["agent"]
     agent = state.DB.execute("SELECT id, name, user_id, has_pin FROM agents WHERE id=?", (destination,)).fetchone()
+    source = state.DB.execute("SELECT id, name, user_id, has_pin FROM agents WHERE id=?", (mine["agent"],)).fetchone()
     try:
-        if agent is None:
+        if agent is None or source is None:
             raise _gone()
-        comparison = await code.open_without_pin(request, agent, lambda: _compare(request, mine, other, background=True))
+        # закрылся за долгий ход (простой) компьютер без PIN — открыть именно его, и при запертой студии
+        comparison = await code.open_without_pin(request, source, lambda: code.open_without_pin(
+            request, agent, lambda: _compare(request, mine, other, background=True), while_locked=True),
+            while_locked=True)
     except HTTPException as error:
         progress.update(state="failed", error=error.detail)
         _release(destination)

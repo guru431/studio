@@ -888,6 +888,56 @@ def test_sync_after_turn_applies_only_clean_plans_and_tells_about_differences(st
     assert client.put(f"/api/code/mirrors/{own['copy']}/auto", json={"auto": "yes"}).status_code == 422
 
 
+def test_sync_after_turn_opens_the_closed_pinless_computer_while_the_studio_is_locked(studio, trio):
+    """Ход шёл долго, страница ушла, студия заперлась по таймеру, компьютер без PIN закрылся для сессии по простою:
+    синхронизация после хода открывает его сама (блокировка экрана не мешает) и отправляет изменения. Закрыт
+    компьютер копии — открывается он; закрыт компьютер-источник — он, а компьютер копии зря не открывается."""
+    import project_mirrors
+    from fake_bridge import emit
+    source, first, _, third = trio
+    a, b = signed_in(studio, first, third)
+    client = studio.c
+    root = mirror.projects.list_roots(third.roots)[0]
+    clone = Path(root["path"]) / source.name
+    shutil.copytree(source, clone)
+    project = pid(source.name)
+    url = mirrors(a, project)
+    mid = client.post(url, json={"destination": b, "root": root["id"], "name": source.name, "existing": True}).json()["id"]
+    assert client.post(f"{url}/{mid}/compare").json()["changes"] == []
+    assert client.put(f"/api/code/mirrors/{client.get(url).json()['copy']}/auto", json={"auto": True}).status_code == 200
+
+    def opens():
+        return [len([r for r in machine.requests if r["op"] == "open"]) for machine in (first, third)]
+
+    def locked_turn(text, closed):
+        (source / "notes.txt").write_bytes(text)
+        first.script = []                                       # ход идёт: `done` — позже
+        with client.stream("POST", f"/api/code/agents/{a}/projects/{project}/chats/{CHAT}/turn",
+                           json={"text": "x"}) as response:
+            assert response.status_code == 200
+            for line in response.iter_lines():
+                if line == "event: turn":
+                    break
+        state.DB.execute("UPDATE users SET screen_lock = 1, screen_lock_sections = '[\"code\"]'")
+        state.DB.execute("UPDATE sessions SET seen = 0")
+        closed.open_sessions.clear()
+        before = opens()
+        first.running.pop(CHAT, None)
+        emit(studio, bridge.LINKS[a], project, CHAT, {"k": "done", "status": "done"})
+
+        async def finish():
+            for task in list(project_mirrors.TRANSFERS.values()):
+                await task
+        client.portal.call(finish)
+        state.DB.execute("UPDATE users SET screen_lock = 0")
+        assert client.get(f"{url}/{mid}").json()["job"]["state"] == "done", client.get(f"{url}/{mid}").json()["job"]
+        assert (clone / "notes.txt").read_bytes() == text
+        return [after - was for after, was in zip(opens(), before)]
+
+    assert locked_turn(b"copy computer closed\n", third) == [0, 1]
+    assert locked_turn(b"source computer closed\n", first) == [1, 0]
+
+
 def test_all_mirrors_list_marks_a_vanished_project_and_unlinks_its_copy(studio, computers):
     """Общий список зеркал: компьютер → проект → остальные копии; папку проекта переименовали — «проекта больше
     нет», и копию снимают отсюда; чужой компьютер и исчезнувшая копия — 404."""

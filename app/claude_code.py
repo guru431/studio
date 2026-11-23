@@ -454,6 +454,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         status = STATUS.get(e.code)
         error = (_refuse(502, "bridge", "мост ответил непонятно") if status is None
                  else _refuse(status, e.code, e.message, **e.extra))
+        error.agent_id = aid               # чей отказ: `open_without_pin` открывает только этот компьютер
     if not _session_open(request.state.digest, while_locked):
         raise _refuse(409, "closed", "Сеанс Студии закрыт")
     if scope is not None:
@@ -509,18 +510,21 @@ async def open_agent(aid: int, body: Open, request: Request):
     return Response(status_code=204)
 
 
-async def open_without_pin(request: Request, agent, call):
-    """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` —
-    открыть его для сессии и повторить. Открытие пишет ту же строку `open` истории подключений, что `open_agent`:
-    след новой сессии не зависит от того, кто открыл компьютер первым. Чужой компьютер участника совместного
-    проекта не открывается: `open` — только владельцу. `agent` — строка с `id`, `name`, `user_id`, `has_pin`."""
+async def open_without_pin(request: Request, agent, call, *, while_locked: bool = False):
+    """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` этого
+    компьютера (`agent_id` отказа — `call()` может спрашивать и другие) — открыть его для сессии и повторить.
+    Открытие пишет ту же строку `open` истории подключений, что `open_agent`: след новой сессии не зависит от того,
+    кто открыл компьютер первым. Чужой компьютер участника совместного проекта не открывается: `open` — только
+    владельцу. `agent` — строка с `id`, `name`, `user_id`, `has_pin`; `while_locked` — как у `ask` (фоновое задание
+    при запертой студии: синхронизация после хода)."""
     try:
         return await call()
     except HTTPException as error:
-        if (error.detail.get("code") != "closed" or agent["has_pin"]
-                or agent["user_id"] != request.state.user.id):
+        if (error.detail.get("code") != "closed" or getattr(error, "agent_id", None) != agent["id"]
+                or agent["has_pin"] or agent["user_id"] != request.state.user.id):
             raise
-    await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, pin=None)
+    await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, while_locked=while_locked,
+              pin=None)
     _event(request, agent, "open")
     return await call()
 
