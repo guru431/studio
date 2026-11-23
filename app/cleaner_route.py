@@ -96,7 +96,7 @@ class SettingsIn(BaseModel):
     base_url: str = Field(max_length=URL_MAX)
     key: str | None = Field(default=None, max_length=512)
     forced: bool = False
-    web: bool = False
+    web: bool | None = None   # нет поля (старая вкладка панели) — флажок прежний, пока есть адрес и ключ
 
 
 def _empty(**extra) -> dict:
@@ -277,7 +277,8 @@ def save_settings(body: SettingsIn) -> dict:
         raise _bad("cleaner", "принудительный режим требует адрес и служебный ключ Cleaner")
     if body.web and not (base_url and key):
         raise _bad("cleaner", "веб только через Cleaner требует адрес и служебный ключ Cleaner")
-    config = {"base_url": base_url, "key": key, "forced": body.forced, "web": body.web}
+    web = body.web if body.web is not None else bool(previous["web"] and base_url and key)
+    config = {"base_url": base_url, "key": key, "forced": body.forced, "web": web}
     state.DB.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                      (SETTINGS_KEY, security.encrypt(json.dumps(config))))
     if (base_url, key) != (previous["base_url"], previous["key"]):

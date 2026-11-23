@@ -47,8 +47,13 @@ def test_flag_needs_cleaner_and_is_shown_to_the_page(studio):
     assert studio.c.get("/api/admin/cleaner").json() == {"base_url": ADDRESS, "key_set": True, "forced": False,
                                                          "web": True, "reenter": False}
     assert studio.c.get("/api/me").json()["cleaner_web"] is True
-    settings(studio)                                     # прежний вид запроса панели (без `web`) — выключен
+    settings(studio)                     # прежний вид запроса панели (старая вкладка, без `web`) флажок не меняет
+    assert studio.c.get("/api/me").json()["cleaner_web"] is True and cleaner_route.web_only()
+    settings(studio, web=False)
     assert studio.c.get("/api/me").json()["cleaner_web"] is False and not cleaner_route.web_only()
+    settings(studio, web=True)
+    r = studio.c.put("/api/admin/cleaner", json={"base_url": "", "key": None, "forced": False})
+    assert r.status_code == 200 and r.json()["web"] is False         # адрес снят — флажку не на чем держаться
 
 
 def test_dialog_not_through_cleaner_gets_no_web(flagged):

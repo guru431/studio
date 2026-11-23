@@ -61,7 +61,7 @@
 - Через Cleaner (`cleaner_route`, шаг схемы 66, [docs/cleaner-integration.md](../cleaner-integration.md)). Настройки
   администратора — один JSON шифром в `settings` (`cleaner_route.SETTINGS_KEY`): адрес Cleaner только из списка
   разрешённых, служебный ключ (наружу — только `key_set`), флажки `forced` и `web` (оба — только при адресе и
-  ключе); не расшифровались — пустые с `reenter`, принудительный режим (`cleaner_route.forced`) и «Веб и внешние
+  ключе; `PUT` без поля `web` — старая вкладка панели — флажок не меняет); не расшифровались — пустые с `reenter`, принудительный режим (`cleaner_route.forced`) и «Веб и внешние
   MCP — только через Cleaner» (`cleaner_route.web_only`; правила — [chat](chat.md), `mcp_sections.supported`)
   выключены. Внешнее подключение — `cleaner_route.is_external`: всё,
   кроме прежнего Cleaner и подключения (`openai`, s06, srvllm) из списка с IP-литералом не из `is_global`; внешний
