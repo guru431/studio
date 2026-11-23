@@ -60,8 +60,10 @@
   `sections.drop_cleaner_strays()` — с `_settle` умолчаний и прежним столбцом `connections.sections`.
 - Через Cleaner (`cleaner_route`, шаг схемы 66, [docs/cleaner-integration.md](../cleaner-integration.md)). Настройки
   администратора — один JSON шифром в `settings` (`cleaner_route.SETTINGS_KEY`): адрес Cleaner только из списка
-  разрешённых, служебный ключ (наружу — только `key_set`), флажок `forced`; не расшифровались — пустые с `reenter`,
-  принудительный режим выключен (`cleaner_route.forced`). Внешнее подключение — `cleaner_route.is_external`: всё,
+  разрешённых, служебный ключ (наружу — только `key_set`), флажки `forced` и `web` (оба — только при адресе и
+  ключе); не расшифровались — пустые с `reenter`, принудительный режим (`cleaner_route.forced`) и «Веб и внешние
+  MCP — только через Cleaner» (`cleaner_route.web_only`; правила — [chat](chat.md), `mcp_sections.supported`)
+  выключены. Внешнее подключение — `cleaner_route.is_external`: всё,
   кроме прежнего Cleaner и подключения (`openai`, s06, srvllm) из списка с IP-литералом не из `is_global`; внешний
   шлюз s06 или srvllm через Cleaner не идёт — при флажке отказ во всех разделах (`cleaner_route.FORCED_GATEWAY`). Переключатель
   `connections.via_cleaner` — только у внешних `openai` и только с разделами `sections.CLEANER` (иначе 422

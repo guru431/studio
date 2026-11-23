@@ -73,7 +73,7 @@ def test_me_carries_csrf_and_profile(studio):
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
                        "studio_version", "email", "email_codes", "code_quick_actions_default", "code_quick_actions_set", "notify_langs", "memory_on",
-                       "totp", "totp_backup_left", "login_notice"}
+                       "totp", "totp_backup_left", "login_notice", "cleaner_web"}
     assert me["password_reset"] is None and me["notify_langs"] == [] and me["memory_on"] is False
 
 

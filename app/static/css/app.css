@@ -2586,7 +2586,7 @@ details.owui-tool[open] { flex-basis: 100%; }
 .owui-pending-error:empty { display: none; }
 .owui-pending-error { margin: 0; font-size: var(--fs-sm); }
 .owui-msg-queued .bubble { color: var(--text-2); }
-.owui-queued, .owui-chat-error { margin: 0 var(--space-7); overflow-wrap: anywhere; }
+.owui-queued, .owui-chat-error, .owui-cleaner-note { margin: 0 var(--space-7); overflow-wrap: anywhere; }
 .owui-chat-error:empty { display: none; }
 .owui-att .att-state { white-space: normal; }
 .owui-panel-toggle, .owui-backdrop { display: none; }
@@ -2602,6 +2602,6 @@ details.owui-tool[open] { flex-basis: 100%; }
   .owui-body { padding: var(--space-6); }
   .owui-chat-view .owui-feed-title { padding: var(--space-4) var(--space-6) 0; }
   .owui-feed-list { padding: var(--space-5) var(--space-6); }
-  .owui-queued, .owui-chat-error { margin: 0 var(--space-6); }
+  .owui-queued, .owui-chat-error, .owui-cleaner-note { margin: 0 var(--space-6); }
 }
 @media (prefers-reduced-motion: reduce) { .owui-panel { transition: none !important; } }

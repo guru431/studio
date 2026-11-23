@@ -33,6 +33,7 @@ from pydantic import BaseModel
 import auth
 import chat
 import chat_system
+import cleaner_route
 import clock
 import documents
 import forms
@@ -151,16 +152,17 @@ def _fresh(f: dict, sid: int, stamp: str):
         " AND created > ?", (f["id"], sid, stamp, clock.NOW() - UPLOAD_TTL_SEC)).fetchone()
 
 
-def _blocked(item, found, row) -> "str | None":
+def _blocked(item, found, row, conn) -> "str | None":
     """Слова отказа, если `artifact_upload` сервера `item` (каталог `found`) не предлагается при нынешних
-    «Интернете» и явно включённых инструментах диалога `row` — та же классификация, что у хода
-    (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера); иначе None. `artifact_upload`
+    «Интернете» и явно включённых инструментах диалога `row` с подключением хода `conn` — та же классификация, что у
+    хода (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера; флажок «Веб только через
+    Cleaner» — `cleaner_route.web_allowed`); иначе None. `artifact_upload`
     в `found` есть: его пометка и делает сервер получателем (`limit_of`). Загрузку делает сама Studio, без карточки
     «Запустить»: «с подтверждением» — только явно включённая в диалоге (`mcp_tools_on`), иначе `CONFIRM`."""
     tool = upload_tool(found)
     rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
     _, on = mcp_sources.tool_state(row["mcp_tools_off"])
-    hint, refusal = mcp_client.Tools._offered(item, tool, rules, bool(row["web"]))
+    hint, refusal = mcp_client.Tools._offered(item, tool, rules, bool(row["web"]) and cleaner_route.web_allowed(conn))
     if refusal is None and hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ()):
         return CONFIRM
     return refusal
@@ -180,7 +182,7 @@ def _allowed(task, sid: int, stamp: str, found) -> bool:
         return False
     off, _ = mcp_sources.tool_state(row["mcp_tools_off"])
     return (sid in mcp_sources.dialog_servers(task.user_id, row, task.conn) and UPLOAD not in off.get(sid, ())
-            and _blocked(item, found, row) is None and _consent(row).get(str(sid)) == stamp)
+            and _blocked(item, found, row, task.conn) is None and _consent(row).get(str(sid)) == stamp)
 
 
 def _line(name: str, path: str, aid: str) -> str:
@@ -211,7 +213,7 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
     for item, session, found, limit in targets:
         sid, server, stamp = item["id"], item["name"], mcp_sources.stamp(item["secret_enc"])
         names = [f["name"] for f in files]
-        blocked = _blocked(item, found, row)
+        blocked = _blocked(item, found, row, task.conn)
         if blocked is not None:                  # «Интернет» выключен или загрузка — с подтверждением, не включена
             notes.append((BLOCKED_WEB if blocked == mcp_client.WEB_OFF else BLOCKED_CONFIRM).format(
                 chat_system.clean(server, 200)))
@@ -347,7 +349,7 @@ async def media_limit(uid: int, row) -> "int | None":
         try:
             found = await mcp_sources.catalog(session, mcp_sources.LIST_SEC)
             limit = limit_of(found)
-            return limit if limit is not None and _blocked(item, found, row) is None else None
+            return limit if limit is not None and _blocked(item, found, row, conn) is None else None
         except (HTTPException, TimeoutError):
             return None
         finally:

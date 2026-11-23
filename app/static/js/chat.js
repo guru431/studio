@@ -152,6 +152,9 @@ const EXTERNAL_NOTE = tr("Запись уйдёт во внешний серви
 const WEB_HINT = tr("Задайте ключ Exa в Настройках → Ввод и интернет → Интернет");
 // chats.protected_used: в диалоге сработал «Защищённый источник» MCP — сервер не включит «Интернет» (409 `protected`)
 const PROTECTED_HINT = tr("В этом диалоге сработал защищённый источник — «Интернет» здесь недоступен");
+// флажок администратора «Веб и внешние MCP — только через Cleaner» (`me.cleaner_web`, cleaner_route.web_allowed):
+// диалог не через Cleaner — сервер не даст ходу ни «Интернета», ни веб-инструментов MCP (PATCH — 409 `cleaner_web`)
+const CLEANER_WEB_HINT = tr("Администратор разрешил «Интернет» только в диалогах через Cleaner");
 // и «Поделиться», и экспорт такого диалога сервер отклонит (409 `protected`, chat.unprotected)
 const PROTECTED_SHARE = tr("В этом диалоге сработал защищённый источник — им нельзя поделиться и его нельзя скачать");
 const WEB_KINDS = ['search', 'page', 'youtube'];   // как web.KINDS: с ключом через сервер — все
@@ -972,7 +975,8 @@ function build(view, ctx) {
 
   /* «Интернет» (как web.tools_for): 'hidden' — прямое подключение, кнопки нет; 'nokey' — через сервер без
    * ключа Exa, кнопка выключена с подсказкой; 'ready' — ход даст модели все инструменты; 'mcp' — ключа нет, но
-   * набор MCP диалога даёт веб-инструменты (как mcp_client.web_tools): кнопка включается только ради них.
+   * набор MCP диалога даёт веб-инструменты (как mcp_client.web_tools): кнопка включается только ради них; 'cleaner' —
+   * флажок администратора «Веб только через Cleaner», а диалог не через Cleaner: кнопка выключена с подсказкой.
    * Путь — `proxied` открытого диалога или подключения из чипа нового, ключ — профиль (перечитывается при возвращении) */
   function webState() {
     const mode = webBase();
@@ -991,6 +995,8 @@ function build(view, ctx) {
     }
     if (!proxied) return 'hidden';
     if (chat?.chat.protected) return 'protected';
+    const routed = chat ? !!chat.chat.routed : !!links.find((l) => l.connection.id === chosen().connection_id)?.connection.routed;
+    if (me?.cleaner_web && !routed) return 'cleaner';
     return me && me.exa_key ? 'ready' : 'nokey';
   }
 
@@ -1004,9 +1010,9 @@ function build(view, ctx) {
 
   function paintWeb() {
     const mode = webState();
-    const hint = mode === 'nokey' ? WEB_HINT : mode === 'protected' ? PROTECTED_HINT : '';
+    const hint = { nokey: WEB_HINT, protected: PROTECTED_HINT, cleaner: CLEANER_WEB_HINT }[mode] || '';
     webToggle.hidden = mode === 'hidden';
-    webToggle.disabled = mode === 'nokey' || mode === 'protected';
+    webToggle.disabled = ['nokey', 'protected', 'cleaner'].includes(mode);
     webToggle.setAttribute('aria-pressed', String(webOn()));
     webToggle.title = hint || (mode === 'mcp' ? WEB_MCP_TITLE : WEB_TITLE);
     webNote.textContent = hint || (webOn() && thinkOn() ? THINK_NOTE : '');
@@ -1045,7 +1051,8 @@ function build(view, ctx) {
       if (!conn?.proxied || conn.cleaner) return null;
       ids = draftIds(draftMcp, mcpServers);
     }
-    const targets = mediaTargets(catalog, ids, stateOf(chat?.chat ?? draftMcp), chat ? !!chat.chat.web : webOn())
+    const targets = mediaTargets(catalog, ids, stateOf(chat?.chat ?? draftMcp),
+      chat ? !!chat.chat.web && webState() !== 'cleaner' : webOn())
       .filter((t) => decisions[String(t.id)] !== 'refused');
     if (!targets.length) return null;
     const allowed = targets.filter((t) => decisions[String(t.id)] === 'allowed');

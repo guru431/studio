@@ -1219,10 +1219,10 @@ class StreamTask:
         return TIME_WORDS
 
     def _web_on(self) -> bool:
-        """«Интернет» диалога ещё включён (кнопку могли нажать посреди ответа, диалог — удалить) и защищённый
-        источник в нём не срабатывал."""
+        """«Интернет» диалога ещё включён (кнопку могли нажать посреди ответа, диалог — удалить), защищённый
+        источник в нём не срабатывал и флажок «Веб только через Cleaner» ход пускает (`cleaner_route.web_allowed`)."""
         row = state.DB.execute("SELECT web, protected_used FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
-        return row is not None and bool(row[0]) and not row[1]
+        return row is not None and bool(row[0]) and not row[1] and cleaner_route.web_allowed(self.conn)
 
     def _protect(self) -> None:
         """Вызов дошёл до защищённого источника (`mcp_client.Tools.reached_protected`, итог любой): «Интернет»
@@ -1939,6 +1939,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
             raise cleaner.refused("Интернет недоступен в подключении Cleaner: поисковые запросы уходят отдельно")
         if body.web and row["protected_used"]:             # после защищённого источника — только выключить
             raise HTTPException(409, {"code": "protected", "message": PROTECTED_WEB})
+        if body.web and not cleaner_route.web_allowed(conn):   # флажок администратора: веб — только через Cleaner
+            raise HTTPException(409, {"code": "cleaner_web", "message": cleaner_route.WEB_ONLY})
         # без ключа Exa «Интернет» — только ради веб-инструментов MCP диалога: встроенных ход без ключа не даст
         if body.web and not web.has_exa_key(uid) and not await mcp_client.web_tools(uid, row, conn):
             raise HTTPException(409, {"code": "no_exa_key", "message": NO_EXA_KEY})

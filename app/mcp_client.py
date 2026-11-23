@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 import httpx
 
 import access
+import cleaner_route
 import mcp_sources
 import security
 import state
@@ -693,7 +694,8 @@ class Tools:
         """Каталоги серверов набора — из кэша (`mcp_sources.catalog`), без знакомства с сервером: его делает первый
         вызов. Холодный кэш: явные ждут каждый DISCOVER_SEC, серверы по умолчанию — все вместе
         `mcp_sources.DEFAULT_WAIT_SEC`; не успевший пропускается словами в `failed`. Отбор — группы доступа,
-        выключенные в диалоге, «Интернет» (`_offered`) и UPLOAD «с подтверждением» без явного включения; сверх
+        выключенные в диалоге, «Интернет» (`_offered`; при флажке «Веб только через Cleaner» — только ходу через
+        Cleaner, `cleaner_route.web_allowed`) и UPLOAD «с подтверждением» без явного включения; сверх
         предела запроса подключения (`profiles.max_tools`, без подключения — MAX_TOOLS) лишнее по порядку набора
         отбрасывается заметкой в `notes` (TRIMMED), ход не отказывает. `web` — «Интернет» вместо прочитанного из
         диалога (`web_tools`)."""
@@ -705,6 +707,7 @@ class Tools:
         cap = profiles.max_tools(self.conn) if self.conn is not None else MAX_TOOLS
         if web is None:
             web = bool(chat["web"]) and not chat["protected_used"]   # после защищённого источника — без веб-инструментов
+        web = web and cleaner_route.web_allowed(self.conn)          # флажок «Веб только через Cleaner»
         enabled = {item["id"]: item for item in servers(self.uid, enabled_only=True)}
         items = [enabled[sid] for sid in self.ids if sid in enabled]
         self.sessions = [Session(item, uid=self.uid) for item in items]
@@ -762,7 +765,8 @@ class Tools:
                 raise refused("Нет доступа к инструменту MCP")
             item = {"id": session.sid, "user_id": session.owner_id}
             rules = mcp_sources.policy(session.sid) if session.owner_id is None else {}
-            refusal = self._offered(item, spec, rules, bool(chat["web"]) and not chat["protected_used"])[1]
+            refusal = self._offered(item, spec, rules, bool(chat["web"]) and not chat["protected_used"]
+                                    and cleaner_route.web_allowed(self.conn))[1]
             if refusal is not None:
                 raise refused(refusal)
             args = json.loads(arguments) if arguments.strip() else {}   # инструмент без параметров: модели шлют ""

@@ -41,7 +41,7 @@ def test_admin_saves_cleaner_settings_and_key_never_returns(studio):
     allow(studio, "10.77.1.20:5464")
     response = save(studio)
     assert response.status_code == 200
-    assert response.json() == {"base_url": ADDRESS, "key_set": True, "forced": False, "reenter": False}
+    assert response.json() == {"base_url": ADDRESS, "key_set": True, "forced": False, "web": False, "reenter": False}
     assert KEY not in response.text + studio.c.get("/api/admin/cleaner").text
     raw = state.DB.execute("SELECT value FROM settings WHERE key = ?", (cleaner_route.SETTINGS_KEY,)).fetchone()[0]
     assert KEY.encode() not in raw and KEY in security.decrypt(raw)
@@ -51,7 +51,7 @@ def test_admin_saves_cleaner_settings_and_key_never_returns(studio):
 def test_empty_settings_before_first_save(studio):
     admin(studio)
     assert studio.c.get("/api/admin/cleaner").json() == {"base_url": "", "key_set": False, "forced": False,
-                                                          "reenter": False}
+                                                          "web": False, "reenter": False}
     assert not cleaner_route.configured() and not cleaner_route.forced()
 
 
@@ -103,7 +103,7 @@ def test_empty_key_keeps_the_previous(studio):
     allow(studio, "10.77.1.20:5464")
     save(studio)
     response = save(studio, key=None, forced=True)
-    assert response.json() == {"base_url": ADDRESS, "key_set": True, "forced": True, "reenter": False}
+    assert response.json() == {"base_url": ADDRESS, "key_set": True, "forced": True, "web": False, "reenter": False}
     assert cleaner_route.settings()["key"] == KEY
     assert save(studio, key="").json()["key_set"] is True and cleaner_route.settings()["key"] == KEY
 
@@ -116,7 +116,7 @@ def test_new_data_key_asks_to_reenter(studio):
     state.DB.execute("UPDATE settings SET value = ? WHERE key = ?",
                      (Fernet(Fernet.generate_key()).encrypt(b'{"forced": true}'), cleaner_route.SETTINGS_KEY))
     assert studio.c.get("/api/admin/cleaner").json() == {"base_url": "", "key_set": False, "forced": False,
-                                                          "reenter": True}
+                                                          "web": False, "reenter": True}
     assert not cleaner_route.configured() and not cleaner_route.forced()
     assert studio.c.post("/api/admin/cleaner/check").status_code == 503
     assert save(studio, key=None, forced=True).status_code == 422          # прежнего ключа нет
