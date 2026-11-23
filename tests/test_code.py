@@ -791,21 +791,21 @@ def test_cut_member_turn_keeps_the_member_as_push_addressee_until_the_bridge_ans
         async def call():
             return await gate
 
-        previous = bridge.initiated(2, A, member)
+        back = bridge.initiated(2, A, member)
         first = asyncio.ensure_future(claude_code._first(key, "turn", call()))
         await asyncio.sleep(0)
         first.cancel()                                 # обрыв запроса участника
         with pytest.raises(asyncio.CancelledError):
             await first
-        claude_code._turn_back(key, lambda: bridge.initiated(2, A, previous))
-        assert bridge.INITIATORS == {(2, A): member}
+        claude_code._turn_back(key, back)
+        assert {k: v.user_id for k, v in bridge.INITIATORS.items()} == {(2, A): member}
         if accepted:
             gate.set_result({"turn": "t-1"})
         else:
             gate.set_exception(RuntimeError("отказ"))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        return dict(bridge.INITIATORS)
+        return {k: v.user_id for k, v in bridge.INITIATORS.items()}
 
     assert asyncio.run(scenario()) == ({(2, A): member} if accepted else {})
 

@@ -300,6 +300,38 @@ def test_refused_turn_neither_drops_nor_installs_the_owner_turn_request(studio):
     assert bridge.TURN_REQUESTS[(aid, A)] is marker
 
 
+def test_turn_accepted_before_the_session_closed_is_not_rolled_back(studio, monkeypatch):
+    """E1: мост ход принял, а сессия Студии тем временем закрылась — ответ странице 409 `closed`, но ход идёт:
+    адресат push и отметка хода остаются этого хода, квитанция — тоже: повтор той же отправки из новой сессии
+    второй ход не начинает."""
+    from fake_bridge import emit
+    from test_code import ASK
+    aid, machine, link, member, _ = share(studio)
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a, **kw: pushed.append(uid))
+    monkeypatch.setattr(bridge, "watching", lambda *a: False)
+    signin(studio, "friend")
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    original = machine._op_turn
+
+    def accepted_then_logout(req, events):
+        result = original(req, events)
+        state.DB.execute("DELETE FROM sessions WHERE user_id = ?", (member,))
+        return result
+
+    machine._op_turn = accepted_then_logout
+    turn, body = url(aid, "projects", ALPHA, "chats", chat, "turn"), {"text": "x", "request_id": "r" * 16}
+    response = studio.c.post(turn, json=body)
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "closed"
+    assert isinstance(bridge.TURN_REQUESTS[(aid, chat)], bridge._MemberTurn)
+    emit(studio, link, ALPHA, chat, ASK)
+    assert pushed == [member]                                           # не владельцу: ход участника идёт
+    machine._op_turn = original
+    signin(studio, "friend")
+    response = studio.c.post(turn, json=body)
+    assert response.status_code == 200 and response.json()["repeat"] == "turn" and machine.turns == 1
+
+
 def test_turn_request_back_restores_only_while_the_record_is_its_own(monkeypatch):
     """Два хода одного чата ждут ответа моста, один принят, другой отказан: возврат отказанного прежнюю запись не
     ставит поверх записи принятого — ни старый запрос владельца на ход соавтора, ни наоборот."""
@@ -319,6 +351,32 @@ def test_turn_request_back_restores_only_while_the_record_is_its_own(monkeypatch
     monkeypatch.setattr(bridge, "TURN_REQUESTS", {})
     bridge.owner_turn(1, A, owner)()
     assert bridge.TURN_REQUESTS == {}
+
+
+def test_push_addressee_back_restores_only_while_the_record_is_its_own(monkeypatch):
+    """E2: два хода одного чата ждут ответа моста, один принят, другой отказан: возврат отказанного прежнего
+    адресата push не ставит поверх адресата принятого — ни участника на ход владельца, ни владельца на ход участника."""
+    def addressee():
+        started = bridge.INITIATORS.get((1, A))
+        return "none" if started is None else started.user_id
+
+    for first, second, accepted in ((None, 7, "second"), (7, None, "second"), (7, 8, "second"),
+                                    (None, 7, "first"), (7, None, "first"), (None, None, "second")):
+        monkeypatch.setattr(bridge, "INITIATORS", {})
+        bridge.initiated(1, A, 9)                                       # идёт ход участника 9
+        back_first = bridge.initiated(1, A, first)
+        mark_first = bridge.INITIATORS[(1, A)]
+        back_second = bridge.initiated(1, A, second)
+        mark_second = bridge.INITIATORS[(1, A)]
+        (back_first if accepted == "second" else back_second)()        # отказ одного из двух
+        assert bridge.INITIATORS[(1, A)] is (mark_second if accepted == "second" else mark_first)
+    monkeypatch.setattr(bridge, "INITIATORS", {})
+    bridge.initiated(1, A, 9)
+    bridge.initiated(1, A, None)()                                      # единственный ход отказан
+    assert addressee() == 9
+    monkeypatch.setattr(bridge, "INITIATORS", {})
+    bridge.initiated(1, A, 7)()
+    assert addressee() == "none"
 
 
 def test_role_changes_without_recreating_the_grant_and_is_journaled(studio):

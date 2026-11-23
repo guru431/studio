@@ -1115,7 +1115,9 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   }
 
   /** «Заменить компьютер»: прежний `agent` получает ключ выбранного нового — id, имя, доступы участников, зеркала и
-   * вкладки остаются у прежнего, его мост отключается, строка нового уходит (POST /api/agents/<id>/replace). */
+   * вкладки остаются у прежнего, его мост отключается, строка нового уходит (POST /api/agents/<id>/replace). Что
+   * уйдёт с новым — числами сервера для выбранного (GET /api/agents/<id>/replace?new_id=); ответ прежнего выбора
+   * после смены не рисуется. */
   function replace(agent, others) {
     const pick = el('select', { class: 'input', id: 'agent-replace-new' },
       ...others.map((a) => el('option', { value: String(a.id) }, a.name)));
@@ -1123,10 +1125,27 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
       autocomplete: 'current-password', maxlength: '1024' });
     const yes = button(tr("Заменить"), { class: 'btn btn-danger', id: 'agent-replace-confirm' });
     const fail = el('p', { class: 'error', role: 'status' });
+    const losses = el('p', { id: 'agent-replace-losses', hidden: true });
     const dialog = openDialog(host, { id: 'agent-replace-dialog', title: tr("Заменить компьютер?"), actions: [yes], body: [
       el('p', {}, tr("«{0}» получит ключ выбранного компьютера: id, имя, доступы участников, зеркала и вкладки останутся, а мост на прежнем компьютере отключится.", agent.name)),
-      el('p', { class: 'muted' }, tr("Строка нового компьютера уйдёт вместе с его вкладками и отметками чатов. Соответствия чатов перенесите командами моста export-chats и import-chats.")),
-      field(tr("Новый компьютер"), pick, pick.id), field(tr("Пароль учётки"), password, password.id), fail] });
+      el('p', { class: 'muted' }, tr("Строка нового компьютера уйдёт без возврата вместе с его вкладками, отметками чатов, выданными на нём доступами участников, его копиями зеркал и ссылками «Поделиться» на его чаты. У зеркал прежнего компьютера выключится отправка после хода, а первая сверка покажет различия как локальные изменения. Соответствия чатов перенесите командами моста export-chats и import-chats.")),
+      field(tr("Новый компьютер"), pick, pick.id), losses, field(tr("Пароль учётки"), password, password.id), fail] });
+    let asked = 0;
+    async function count() {
+      const mine = ++asked;
+      losses.hidden = true;
+      try {
+        const n = await api('GET', `/api/agents/${agent.id}/replace?new_id=${Number(pick.value)}`);
+        if (mine !== asked || !(n.members || n.mirrors || n.shares)) return;
+        losses.textContent = tr("С выбранным компьютером пропадут: доступов участникам — {0}, копий зеркал — {1}, ссылок «Поделиться» — {2}.",
+          n.members, n.mirrors, n.shares);
+        losses.hidden = false;
+      } catch (err) {
+        if (mine === asked) fail.textContent = words(err);
+      }
+    }
+    pick.addEventListener('change', count);
+    count();
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {

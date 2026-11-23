@@ -10,7 +10,7 @@ import bridge
 import security
 import state
 from conftest import login, make_user, signin
-from fake_bridge import FakeMachine, connect, enroll, settle
+from fake_bridge import FakeMachine, InProcessBridge, connect, enroll, settle
 
 IP = "10.77.48.5"
 
@@ -386,6 +386,74 @@ def test_replace_moves_the_new_key_to_the_old_computer_and_keeps_what_hangs_on_i
     assert link.sent[0]["agent_id"] == old and link.sent[0]["name"] == "Старый ПК"
     items = studio.c.get("/api/agents").json()["items"]
     assert [(i["id"], i["name"]) for i in items] == [(old, "Старый ПК"), (other, "Третий ПК")]
+
+
+def test_replace_forgets_what_the_old_computer_s_mirror_copies_knew(studio):
+    """Ревью R4b-1: копии `aid` описывали файлы прежней машины — после замены без «после хода», накопленного и
+    состояний пар, иначе первый ход нового компьютера молча перезапишет более новые файлы других копий."""
+    import mirror_groups
+    uid = make_user(studio, "owner")
+    old, _ = enroll(studio, name="Старый ПК")
+    new, _ = enroll(studio, name="Новый ПК")
+    other, _ = enroll(studio, name="Третий ПК")
+    grp = mirror_groups.create_group(uid)
+    mine, theirs, spare = (mirror_groups.add(grp, aid, "0123456789abcdef", "r", name, None)
+                           for aid, name in ((old, "a"), (other, "b"), (other, "c")))
+    state.DB.execute("UPDATE mirror_copies SET auto = 1")
+    files = {"README.md": ["file", "h", 1, 0]}
+    mirror_groups.save(mine, theirs, files, files, 5.0)
+    mirror_groups.save(theirs, spare, files, files, 6.0)
+    assert mirror_groups.held(mine)
+    signin(studio, "owner")
+    assert replace(studio, old, new).status_code == 200
+    copies = {r["id"]: (r["auto"], r["held"]) for r in state.DB.execute("SELECT id, auto, held FROM mirror_copies")}
+    assert copies[mine] == (0, None) and copies[theirs][0] == 1 and copies[spare][1] is not None
+    assert mirror_groups.pair(mine, theirs) == (None, None, None, None) and not mirror_groups.held(mine)
+    assert mirror_groups.pair(theirs, spare).synced == 6.0
+
+
+def test_replace_during_a_handshake_checks_the_key_not_only_the_id(studio):
+    """Ревью R4b-3: знакомство, начатое до замены, кончается после неё. Прежний ключ к строке `aid` уже не подходит —
+    4401, строка не перезаписана данными старой машины; мост нового с id `new` — 1012: ключ теперь у `aid`."""
+    uid = make_user(studio, "owner")
+    old, _ = enroll(studio, name="Старый ПК")
+    new, _ = enroll(studio, name="Новый ПК")
+    late_old = InProcessBridge(old, uid, "Старый ПК", FakeMachine(pin="1234"))
+    late_new = InProcessBridge(new, uid, "Новый ПК", FakeMachine())
+    signin(studio, "owner")
+    assert replace(studio, old, new).status_code == 200
+    for link in (late_old, late_new):
+        studio.c.portal.call(bridge.attach, link)
+    assert (late_old.closed_with, late_new.closed_with) == (bridge.CLOSE_AUTH, bridge.CLOSE_RESTART)
+    assert not bridge.LINKS and late_old.sent == late_new.sent == []
+    assert state.DB.execute("SELECT has_pin FROM agents WHERE id = ?", (old,)).fetchone()[0] == 0
+    assert connect(studio, old, FakeMachine()).sent[0]["agent_id"] == old     # с новым ключом — как прежний
+
+
+def test_replace_window_counts_what_goes_with_the_new_computer(studio):
+    """Ревью R4b-4: окно «Заменить» называет числами, что уйдёт каскадом со строкой нового: действующие выдачи
+    участникам, его копии зеркал, действующие ссылки «Поделиться» на его чаты; истёкшее не считается."""
+    import mirror_groups
+    uid = make_user(studio, "owner"); friend = make_user(studio, "friend")
+    old, _ = enroll(studio, name="Старый ПК")
+    new, _ = enroll(studio, name="Новый ПК")
+    for project, expires in (("a", None), ("b", 9e9), ("c", 1.0)):
+        state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created, role, expires)"
+                         " VALUES (?, ?, ?, 0, 'viewer', ?)", (new, project, friend, expires))
+    state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created, role) VALUES (?, 'a', ?, 0,"
+                     " 'viewer')", (old, friend))
+    mirror_groups.add(mirror_groups.create_group(uid), new, "0123456789abcdef", None, None, None)
+    for n, expires in enumerate((None, 1.0)):
+        state.DB.execute("INSERT INTO chat_shares(id, user_id, agent_id, project, session_id, engine, token_hash,"
+                         " token_enc, pin_hash, snapshot, created, expires) VALUES (?, ?, ?, 'p', ?, 'claude', ?,"
+                         " x'00', 'h', '', 0, ?)", (f"s{n}", uid, new, f"chat{n}", f"t{n}", expires))
+    signin(studio, "owner")
+    url = f"/api/agents/{old}/replace"
+    assert studio.c.get(url, params={"new_id": new}).json() == {"members": 2, "mirrors": 1, "shares": 1}
+    assert studio.c.get(f"/api/agents/{new}/replace", params={"new_id": old}).json() == {
+        "members": 1, "mirrors": 0, "shares": 0}
+    assert studio.c.get(url, params={"new_id": old}).status_code == 422
+    assert studio.c.get(url, params={"new_id": 999}).status_code == 404
 
 
 def test_replace_needs_two_own_distinct_computers(studio):

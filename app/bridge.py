@@ -106,10 +106,11 @@ class BridgeError(Exception):
 
 
 class Link:
-    """Канал одного компьютера. `pending` — просьбы, ждущие ответа: id → будущий кадр `res`."""
+    """Канал одного компьютера. `pending` — просьбы, ждущие ответа: id → будущий кадр `res`; `key_hash` — digest
+    ключа, которым канал вошёл (`attach` сверяет его со строкой: «Заменить» переносит ключ на другую строку)."""
 
-    def __init__(self, agent_id: int, user_id: int, name: str, ip: str | None = None):
-        self.agent_id, self.user_id, self.name, self.ip = agent_id, user_id, name, ip
+    def __init__(self, agent_id: int, user_id: int, name: str, ip: str | None = None, key_hash: str | None = None):
+        self.agent_id, self.user_id, self.name, self.ip, self.key_hash = agent_id, user_id, name, ip, key_hash
         self.hello: dict = {}
         self.pending: dict[str, asyncio.Future] = {}
 
@@ -123,8 +124,9 @@ class Link:
 class SocketLink(Link):
     """Канал поверх WebSocket; отправки — под замком: кадры разных просьб не перемежаются."""
 
-    def __init__(self, ws: WebSocket, agent_id: int, user_id: int, name: str, ip: str | None = None):
-        super().__init__(agent_id, user_id, name, ip)
+    def __init__(self, ws: WebSocket, agent_id: int, user_id: int, name: str, ip: str | None = None,
+                 key_hash: str | None = None):
+        super().__init__(agent_id, user_id, name, ip, key_hash)
         self.ws = ws
         self.lock = asyncio.Lock()
 
@@ -158,8 +160,8 @@ class Watch(asyncio.Queue):
 LINKS: dict[int, Link] = {}
 #: (agent_id, chat) → очереди наблюдателей чата
 WATCHERS: dict[tuple[int, str], set[Watch]] = {}
-#: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
-INITIATORS: dict[tuple[int, str], int] = {}
+#: (agent_id, chat) → кто начал идущий ход (`initiated`, `_Started`): участнику совместного проекта — push хода ему
+INITIATORS: dict[tuple[int, str], "_Started"] = {}
 INITIATORS_MAX = 10_000
 #: (agent_id, chat) → запрос последнего хода владельца в чате (`owner_turn`; ход участника — отметка `_MemberTurn`):
 #: после успешного `done` той же сессией идёт синхронизация зеркала (`project_mirrors.after_turn`). Очередь моста —
@@ -336,19 +338,25 @@ def _deepseek(catalog) -> dict:
 async def attach(link: Link) -> None:
     """Канал на связи: прежний канал компьютера закрывается 4409 (фоном — `welcome` новому сразу). Компьютер
     отозвали, пока шло знакомство, — 4401 и в `LINKS` его нет; учётка отключена (и до рукопожатия) —
-    `disabled_code`. `welcome` несёт логин учётки компьютера — мост показывает, под кем он на связи."""
+    `disabled_code`. Строка ищется по id и ключу канала: «Заменить» во время знакомства отдал ключ другой строке —
+    1012, мост переподключится и придёт с её id (прежний ключ к строке уже не подходит — 4401). `welcome` несёт
+    логин учётки компьютера — мост показывает, под кем он на связи."""
     hello = link.hello
     row = state.DB.execute(
         "UPDATE agents SET has_pin = ?, cc_version = ?, projects_root = ?, last_seen = ?, platform = COALESCE(?, platform)"
-        " WHERE id = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0)"
+        " WHERE id = ? AND key_hash = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0)"
         " RETURNING name, (SELECT login FROM users WHERE users.id = agents.user_id) AS login",
         (int(hello["has_pin"]), hello["cc_version"], hello["projects_root"], clock.NOW(),
-         hello.get("platform"), link.agent_id)).fetchone()
+         hello.get("platform"), link.agent_id, link.key_hash)).fetchone()
     if row is None:
-        disabled = state.DB.execute("SELECT 1 FROM agents a JOIN users u ON u.id = a.user_id"
-                                    " WHERE a.id = ? AND u.disabled = 1", (link.agent_id,)).fetchone()
-        log.warning("агент %d: %s до знакомства", link.agent_id, "учётка отключена" if disabled else "отозван")
-        await link.close(disabled_code(link) if disabled else CLOSE_AUTH)
+        owner = state.DB.execute("SELECT a.id, u.disabled FROM agents a JOIN users u ON u.id = a.user_id"
+                                 " WHERE a.key_hash = ?", (link.key_hash,)).fetchone()
+        if owner is not None and not owner["disabled"]:
+            log.info("агент %d: ключ перешёл к компьютеру %d до знакомства", link.agent_id, owner["id"])
+            await link.close(CLOSE_RESTART)
+            return
+        log.warning("агент %d: %s до знакомства", link.agent_id, "учётка отключена" if owner else "отозван")
+        await link.close(disabled_code(link) if owner else CLOSE_AUTH)
         return
     link.name = row["name"]
     old = LINKS.get(link.agent_id)
@@ -493,18 +501,34 @@ DONE_WORDS = {"done": {"ru": "ход окончен", "en": "turn completed"},
               "stopped": {"ru": "ход прерван", "en": "turn interrupted"}, "error": {"ru": "ошибка", "en": "error"}}
 
 
-def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
+class _Started:
+    """Запись `INITIATORS` одного хода: `user_id` участника или None (ход владельца). Своя на каждый ход — возврат
+    при отказе (`initiated`) узнаёт, что место всё ещё за этим ходом."""
+    __slots__ = ("user_id",)
+
+    def __init__(self, user_id: int | None):
+        self.user_id = user_id
+
+
+def initiated(agent_id: int, chat: str, user_id: int | None) -> Callable[[], None]:
     """Ход чата начинает участник `user_id`: ему — push карточек и конца этого хода; `None` — ход владельца
     (push по умолчанию — ему). Ставится до просьбы `turn`: быстрый `done` приходит раньше, чем зовущий получит
-    ответ. Возвращает прежнюю запись — её возвращают, если мост хода не принял. Только память: перезапуск
-    службы возвращает push владельцу."""
+    ответ. Возвращает возврат для хода, которого мост не принял: прежняя запись — только пока место за этим ходом,
+    как у `owner_turn` (адресата хода, принятого тем временем из другого запроса, отказ не подменяет). Только
+    память: перезапуск службы возвращает push владельцу."""
     key = (agent_id, chat)
     previous = INITIATORS.pop(key, None)
-    if user_id is not None:
-        INITIATORS[key] = user_id
-        while len(INITIATORS) > INITIATORS_MAX:
-            del INITIATORS[next(iter(INITIATORS))]
-    return previous
+    mine = INITIATORS[key] = _Started(user_id)
+    while len(INITIATORS) > INITIATORS_MAX:
+        del INITIATORS[next(iter(INITIATORS))]
+
+    def back() -> None:
+        if INITIATORS.get(key) is mine:
+            del INITIATORS[key]
+            if previous is not None:
+                INITIATORS[key] = previous
+
+    return back
 
 
 class _MemberTurn:
@@ -547,7 +571,8 @@ def _after_turn(link: Link, frame: dict) -> None:
 def _addressee(link: Link, frame: dict) -> int | None:
     """Кому push хода: начавшему его участнику, пока проект ему выдан (отозван — никому: владельцу о чужих ходах
     не шлём); нет записи — владельцу компьютера."""
-    member = INITIATORS.get((link.agent_id, frame["chat"]))
+    started = INITIATORS.get((link.agent_id, frame["chat"]))
+    member = started.user_id if started is not None else None
     if member is None:
         return link.user_id
     import project_access                # он импортирует этот модуль: на загрузке — кольцо
@@ -839,14 +864,14 @@ async def link_socket(ws: WebSocket):
     row = None
     if header.startswith("Bearer ") and len(header) > len("Bearer "):
         # и отключённой учётки: код закрытия ей выбирает `attach` по `hello` (`disabled_code`)
-        row = state.DB.execute("SELECT a.id, a.user_id, a.name FROM agents a WHERE a.key_hash = ?",
+        row = state.DB.execute("SELECT a.id, a.user_id, a.name, a.key_hash FROM agents a WHERE a.key_hash = ?",
                                (security.digest(header[len("Bearer "):]),)).fetchone()
     await ws.accept()
     if row is None:
         log.warning("канал: неизвестный ключ с %s", ip)
         await ws.close(CLOSE_AUTH)
         return
-    link = SocketLink(ws, row["id"], row["user_id"], row["name"], ip)
+    link = SocketLink(ws, row["id"], row["user_id"], row["name"], ip, row["key_hash"])
     try:
         try:
             link.hello = parse_hello(_frame(await asyncio.wait_for(ws.receive(), HELLO_SEC), link))

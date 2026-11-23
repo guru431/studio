@@ -343,24 +343,46 @@ class Replace(BaseModel):
     password: str = Field(max_length=1024)
 
 
+REPLACE_ROW = "SELECT id, name, key_hash, has_pin, projects_root, cc_version, last_seen, platform FROM agents" \
+              " WHERE id = ? AND user_id = ?"
+
+
+def _own_pair(uid: int, aid: int, new_id: int) -> None:
+    if new_id == aid:
+        raise HTTPException(422, {"code": "same", "message": "выберите новый компьютер"})
+    if any(state.DB.execute(REPLACE_ROW, (i, uid)).fetchone() is None for i in (aid, new_id)):
+        raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера"})
+
+
+@router.get("/api/agents/{aid}/replace")
+async def replace_losses(request: Request, aid: int, new_id: int):
+    """Что уйдёт каскадом со строкой нового компьютера при `replace` — для окна подтверждения: действующие выдачи
+    участникам, его копии в группах зеркал и действующие ссылки «Поделиться» на его чаты."""
+    _own_pair(request.state.user.id, aid, new_id)
+    now = clock.NOW()
+    count = lambda sql, *args: state.DB.execute(sql, args).fetchone()[0]    # noqa: E731
+    return {"members": count("SELECT COUNT(*) FROM project_members WHERE agent_id = ?"
+                             " AND (expires IS NULL OR expires > ?)", new_id, now),
+            "mirrors": count("SELECT COUNT(*) FROM mirror_copies WHERE agent = ?", new_id),
+            "shares": count("SELECT COUNT(*) FROM chat_shares WHERE agent_id = ?"
+                            " AND (expires IS NULL OR expires > ?)", new_id, now)}
+
+
 @router.post("/api/agents/{aid}/replace")
 async def replace(request: Request, aid: int, body: Replace):
     """«Заменить компьютер»: ключ своего нового компьютера `new_id` (уже привязанного) переходит к прежнему `aid`.
     У `aid` остаются id, имя, выдачи участников (с ролью и сроком), зеркала, вкладки и отметки чатов — всё, что
-    ссылается на id; прежний ключ отозван (канал прежнего моста — 4401). Строка нового уходит вместе со своими
-    вкладками и отметками, место учётки на нём переходит к `aid`; канал нового — 1012: мост переподключится тем же
-    ключом и придёт как `aid` (имя — из `welcome`). Пароль — `auth.confirm_password`. Шага схемы нет."""
+    ссылается на id (у копий зеркал — без «после хода» и прежних состояний пар); прежний ключ отозван (канал
+    прежнего моста — 4401). Строка нового уходит вместе со своими вкладками, отметками, выдачами, копиями зеркал и
+    ссылками (окно называет их числами — `replace_losses`), место учётки на нём переходит к `aid`; канал нового —
+    1012: мост переподключится тем же ключом и придёт как `aid` (имя — из `welcome`). Пароль —
+    `auth.confirm_password`. Шага схемы нет."""
     uid = request.state.user.id
-    mine = "SELECT id, name, key_hash, has_pin, projects_root, cc_version, last_seen, platform FROM agents" \
-           " WHERE id = ? AND user_id = ?"
-    if body.new_id == aid:
-        raise HTTPException(422, {"code": "same", "message": "выберите новый компьютер"})
-    if any(state.DB.execute(mine, (i, uid)).fetchone() is None for i in (aid, body.new_id)):
-        raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера"})
+    _own_pair(uid, aid, body.new_id)
     await auth.confirm_password(uid, body.password, "замена компьютера", digest=request.state.digest)
     state.DB.execute("BEGIN IMMEDIATE")      # после await — строки заново: их могли отозвать
     try:
-        old, new = (state.DB.execute(mine, (i, uid)).fetchone() for i in (aid, body.new_id))
+        old, new = (state.DB.execute(REPLACE_ROW, (i, uid)).fetchone() for i in (aid, body.new_id))
         if old is None or new is None:
             raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера"})
         for column in ("panel_id", "agent_id"):                                   # имена — из кода
@@ -370,6 +392,12 @@ async def replace(request: Request, aid: int, body: Replace):
                          " last_seen = ?, platform = COALESCE(?, platform) WHERE id = ?",
                          (new["key_hash"], new["has_pin"], new["projects_root"], new["cc_version"],
                           new["last_seen"], new["platform"], aid))
+        # копии зеркал `aid` описывают файлы прежней машины: без «после хода», накопленного и состояний пар первая
+        # сверка с новой машиной видит каждое различие как конфликт, а не обновление (как после смены ключа)
+        copies = "SELECT id FROM mirror_copies WHERE agent = ?"
+        state.DB.execute(f"UPDATE mirror_pairs SET state_a = NULL, state_b = NULL, synced = NULL"
+                         f" WHERE a IN ({copies}) OR b IN ({copies})", (aid, aid))
+        state.DB.execute("UPDATE mirror_copies SET auto = 0, held = NULL WHERE agent = ?", (aid,))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")

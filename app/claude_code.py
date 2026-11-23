@@ -224,9 +224,20 @@ def _expire_receipts() -> None:
             del RECEIPTS[key]
 
 
+def _accepted(error: BaseException | None) -> dict | None:
+    """Ответ моста, если отказ `ask` пришёл, когда мост просьбу уже принял (сеанс Студии заперт или закрыт, выдачу
+    сняли): ход идёт — квитанцию, адресата push и запись синхронизации не откатывают; иначе None."""
+    return getattr(error, "accepted", None)
+
+
+def _refused(t: asyncio.Future) -> bool:
+    """Просьба под квитанцией кончилась отказом моста (или отменой), а не принятым ходом."""
+    return t.cancelled() or t.exception() is not None and _accepted(t.exception()) is None
+
+
 async def _prior(key: tuple | None) -> tuple[str, dict] | None:
-    """Принятая раньше просьба с той же квитанцией — (op, ответ моста); идёт — ждёт её исхода; не было или
-    отказ — None."""
+    """Принятая раньше просьба с той же квитанцией — (op, ответ моста), и когда ответ запросу закрыл отказ сеанса
+    (`_accepted`); идёт — ждёт её исхода; не было или отказ моста — None."""
     while key is not None:
         _expire_receipts()
         held = RECEIPTS.get(key)
@@ -234,7 +245,9 @@ async def _prior(key: tuple | None) -> tuple[str, dict] | None:
             return None
         try:
             return held.op, await asyncio.shield(held.task)
-        except Exception:                           # отказ первой: квитанция снята, повтор просит мост сам
+        except Exception as error:                  # отказ первой: квитанция снята, повтор просит мост сам
+            if (data := _accepted(error)) is not None:
+                return held.op, data
             if RECEIPTS.get(key) is held:
                 del RECEIPTS[key]
     return None
@@ -248,25 +261,27 @@ def _first(key: tuple | None, op: str, call):
     held = RECEIPTS[key] = _Receipt(op, task)
 
     def failed(t: asyncio.Future) -> None:
-        if (t.cancelled() or t.exception() is not None) and RECEIPTS.get(key) is held:
+        if _refused(t) and RECEIPTS.get(key) is held:
             del RECEIPTS[key]
 
     task.add_done_callback(failed)
     return asyncio.shield(task)
 
 
-def _turn_back(key: tuple | None, undo) -> None:
-    """Ход не получил ответа: `undo()` возвращает поставленное до просьбы — прежнего адресата push
-    (`bridge.initiated`) и запись синхронизации после хода (`bridge.owner_turn`). Просьба под квитанцией, оборванная
-    только обрывом запроса, идёт дальше: возвращает лишь отказ моста — иначе push хода участника ушёл бы владельцу,
-    а принятый ход владельца остался бы без синхронизации."""
+def _turn_back(key: tuple | None, undo, error: BaseException | None = None) -> None:
+    """Ход не получил ответа (`error` — что прервало запрос): `undo()` возвращает поставленное до просьбы — прежнего
+    адресата push (`bridge.initiated`) и запись синхронизации после хода (`bridge.owner_turn`). Возвращает лишь
+    отказ моста: просьба под квитанцией, оборванная только обрывом запроса, идёт дальше, а ход, принятый мостом до
+    отказа сеанса (`_accepted`), идёт — иначе push хода участника ушёл бы владельцу, а принятый ход владельца
+    остался бы без синхронизации."""
     held = RECEIPTS.get(key) if key is not None else None
     if held is None:                               # без квитанции или отказ уже снял её
-        undo()
+        if _accepted(error) is None:
+            undo()
         return
 
     def back(t: asyncio.Future) -> None:
-        if t.cancelled() or t.exception() is not None:
+        if _refused(t):
             undo()
 
     if held.task.done():
@@ -434,10 +449,15 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
                                  **({"timeout": reply_timeout} if reply_timeout is not None else {}), **args)
         # The computer may finish its work after logout, expiry, disable or a screen lock.
         # Keeping that result on the computer does not authorize delivery to this request.
-        if not _session_open(request.state.digest, while_locked):
-            raise _refuse(409, "closed", "Сеанс Студии закрыт")
+        try:
+            if not _session_open(request.state.digest, while_locked):
+                raise _refuse(409, "closed", "Сеанс Студии закрыт")
+            if scope is not None:
+                project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
+        except HTTPException as error:
+            error.accepted = data          # мост просьбу уже принял: отказ — только про ответ запросу (`_accepted`)
+            raise
         if scope is not None:
-            project_access.agent(request.state.user.id, aid, pid, shared=pid is None)
             if op in ("projects", "activity"):
                 allowed = project_access.projects(request.state.user.id, aid)
                 key = "pid" if op == "projects" else "project"
@@ -1406,7 +1426,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                                 **({"images": images} if images else {}))))
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
-    previous = bridge.initiated(aid, chat, member)
+    initiator_back = bridge.initiated(aid, chat, member)
     # до просьбы, как `initiated`: зеркало после хода — той же сессией; ход участника зеркала не трогает;
     # не принят — запись идущего хода остаётся какой была
     owner_back = bridge.owner_turn(aid, chat, request if member is None else None)
@@ -1419,13 +1439,13 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                          **({"access": body.access} if body.access is not None else {}),
                                          **({"attachments": attachments} if attachments else {}),
                                          **({"images": images} if images else {})))
-    except BaseException:
+    except BaseException as error:
         bridge.unwatch(aid, chat, q)
 
         def undo() -> None:
-            bridge.initiated(aid, chat, previous)
+            initiator_back()
             owner_back()
-        _turn_back(key, undo)
+        _turn_back(key, undo, error)
         raise
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")
