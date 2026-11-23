@@ -3,7 +3,7 @@ import json
 
 import code_attention
 import state
-from test_code import A, ALPHA, chat_url, detail, setup, url
+from test_code import A, ALPHA, B, chat_url, detail, setup, url
 
 
 def _manage(studio):
@@ -26,12 +26,15 @@ def test_rename_goes_to_the_bridge_and_needs_the_capability(studio):
 
 
 def test_delete_only_a_studio_session_and_clean_tabs_and_unread(studio):
-    """Удаляется только сессия, начатая студией (`code_chats.origin`); мост удаляет её штатно, сервер — строку,
+    """Удаляется только сессия, начатая студией (`code_chats.origin` или метка моста); мост удаляет её штатно, сервер — строку,
     вкладки и отметку «непрочитано». «Новый чат» без хода (на машине сессии нет) тоже удаляется."""
     aid, machine, link = _manage(studio)
-    r = studio.c.delete(chat_url(aid))
+    r = studio.c.delete(url(aid, "projects", ALPHA, "chats", B))      # сессия терминала
     assert r.status_code == 409 and detail(r)["code"] == "not_studio"
     assert not any(q["op"] == "chat_delete" for q in machine.requests)
+    machine.projects["alpha"]["chats"][B]["tag"] = "studio"          # метка моста без строки — как «студия» списка
+    assert studio.c.delete(url(aid, "projects", ALPHA, "chats", B)).status_code == 204
+    assert B not in machine.projects["alpha"]["chats"]
     fresh = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
     uid = link.user_id
     state.DB.execute("INSERT INTO code_chats(user_id, agent_id, project, session_id, state, created, updated, engine, origin)"

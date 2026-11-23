@@ -10,23 +10,31 @@ import { tr } from './i18n.js';
  * - «Закрыть» / «Открыть» строки (.code-chat-state) — PATCH {state}, строка сразу на своём месте, затем reload()
  *   (свежий список): закрытый «Новый чат» без хода сервер не показывает — он уходит из списка;
  * - «Новый чат» (#code-new-chat) — POST …/chats, затем created(chat);
+ * - chatManage (мост 0.47.0, владелец) — «⋯» строки (.code-chat-more): «Переименовать» и «Удалить сессию»
+ *   (code-chat-manage.js), затем reload();
+ * - над списком (#code-chats-tidy) — «Закрыть все без сообщений (N)» и «Закрыть старше месяца (N)»: открытые
+ *   строки без хода и вопроса; после подтверждения — PATCH {state: "closed"} по очереди, затем reload();
  * - отказ запроса — failed(err) (code.js: closed — к PIN, прочее — словами).
  * Текст машины — только textContent. */
 import { api, me } from './api.js';
 import { dateTime } from './time.js';
 import { ENGINE_NAMES, engineOrder } from './code-options.js';
-import { el } from './ui.js';
+import { button, el, openDialog } from './ui.js';
+import { icon } from './icons.js';
+import { menuItem, popupMenu } from './menu.js';
+import { canDelete, canRename, deleteChat, renameChat } from './code-chat-manage.js';
 import { worktreeView } from './code-worktrees.js';
 
 const UNTITLED = tr("Новый чат");
 /** Короткие подписи кнопок нового чата: четыре кнопки в ряд помещаются и на 320 px. */
 const SHORT = { claude: 'Claude', deepseek: 'DeepSeek' };
+const MONTH_SEC = 30 * 86400;    // «старше месяца» — без изменений 30 суток
 
 function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, deepseek = false, starts = true, readonly = false, contentSearch = false, worktrees = false, worktreeOpened }) {
+export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, deepseek = false, starts = true, readonly = false, contentSearch = false, worktrees = false, worktreeOpened, chatManage = false }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
   let found = Array.isArray(items) ? items : null;
@@ -79,7 +87,81 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
         paint();
       }
     }));
-    return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link, readonly ? null : toggle);
+    return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link, readonly ? null : toggle,
+      ...(chatManage && !readonly ? manage(chat, title) : []));
+  }
+
+  /** «⋯» строки: переименовать и удалить — что позволяет помощник и происхождение сессии. */
+  function manage(chat, title) {
+    const items = [];
+    const options = { url: `${base}/${chat.chat}`, engine: chat.engine || 'claude', title: chat.title, done: refreshList };
+    if (canRename(chat)) items.push([tr("Переименовать"), 'code-chat-rename', () => renameChat(host, options)]);
+    if (canDelete(chat)) items.push([tr("Удалить сессию"), 'code-chat-delete btn-danger', () => deleteChat(host, options)]);
+    if (!items.length) return [];
+    const label = tr("Действия с сессией · {0}", title);
+    const more = el('button', { type: 'button', class: 'icon-btn code-chat-more', 'aria-label': label,
+      title: tr("Действия с сессией"), 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, icon('more'));
+    const menu = el('div', { class: 'code-chat-menu', 'aria-label': label });
+    const popup = popupMenu(more, menu, { align: 'end' });
+    menu.append(...items.map(([text, cls, open]) => menuItem(text, { attrs: { class: cls }, onSelect: () => {
+      popup.close(true);
+      open();
+    } })));
+    return [more, menu];
+  }
+
+  async function refreshList() {
+    const fresh = await reload?.().catch(() => null);
+    if (alive && Array.isArray(fresh)) {
+      found = fresh;
+      paint();
+    }
+  }
+
+  /** Открытые строки без хода и вопроса — их можно закрыть пачкой. */
+  function idle(chat) {
+    return chat.state !== 'closed' && !chat.running && !chat.asking && !exclude.has(chat.chat);
+  }
+
+  const tidyEmpty = button('', { class: 'btn btn-sm', id: 'code-close-empty', hidden: true },
+    () => closeMany(tidyEmpty.rows, tr("Закрыть все без сообщений?")));
+  const tidyOld = button('', { class: 'btn btn-sm', id: 'code-close-old', hidden: true },
+    () => closeMany(tidyOld.rows, tr("Закрыть сессии старше месяца?")));
+  const tidy = el('div', { id: 'code-chats-tidy', class: 'code-chats-tidy', hidden: true }, tidyEmpty, tidyOld);
+
+  function paintTidy() {
+    const rows = readonly ? [] : (found || []).filter(idle);
+    const cutoff = Date.now() / 1000 - MONTH_SEC;
+    tidyEmpty.rows = rows.filter((c) => c.empty);
+    tidyOld.rows = rows.filter((c) => !c.empty && typeof c.modified === 'number' && c.modified > 0 && c.modified < cutoff);
+    tidyEmpty.textContent = tr("Закрыть все без сообщений ({0})", tidyEmpty.rows.length);
+    tidyOld.textContent = tr("Закрыть старше месяца ({0})", tidyOld.rows.length);
+    tidyEmpty.hidden = !tidyEmpty.rows.length;
+    tidyOld.hidden = !tidyOld.rows.length;
+    tidy.hidden = tidyEmpty.hidden && tidyOld.hidden;
+  }
+
+  /** Закрыть — не удалить: отметка уходит в «закрытые», сессия на компьютере остаётся. */
+  function closeMany(rows, question) {
+    if (!rows?.length) return;
+    const yes = button(tr("Закрыть: {0}", rows.length), { class: 'btn btn-accent', id: 'code-close-many-confirm' });
+    const dialog = openDialog(host, { id: 'code-close-many-dialog', title: question,
+      body: [el('p', {}, tr("Сессии останутся на компьютере, их можно открыть снова из списка."))], actions: [yes] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        for (const chat of rows) {
+          await api('PATCH', `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`,
+            { state: 'closed' });
+          if (!alive) return;
+        }
+      } catch (err) {
+        if (alive) failed(err);
+      } finally {
+        dialog.close();
+      }
+      await refreshList();
+    });
   }
 
   /** Порядок сервера: открытые, затем закрытые, внутри — новые сверху. */
@@ -127,6 +209,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
       return li;
     })
       : [el('li', { class: 'code-chats-wait muted', role: 'status' }, empty)]));
+    paintTidy();
   }
   function query() {
     clearTimeout(timer);
@@ -179,7 +262,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
     }).finally(() => { if (alive) list.setAttribute('aria-busy', 'false'); });
   }
   if (startersRow) host.append(startersRow);
-  host.append(searchRow, note, list);
+  host.append(searchRow, note, tidy, list);
   const copies = worktrees ? worktreeView(host, { aid, pid, opened: worktreeOpened }) : null;
   return {
     unmount() {
@@ -189,6 +272,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
       startersRow?.remove();
       searchRow.remove();
       note.remove();
+      tidy.remove();
       copies?.unmount();
       list.remove();
     },

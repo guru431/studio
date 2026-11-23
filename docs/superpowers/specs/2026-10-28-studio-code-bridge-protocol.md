@@ -1098,3 +1098,19 @@ Studio хранит имя папки и базовый манифест шиф�
 хода не то, что отвечает: оно в `watched` — `owned`, как прежде; его там нет — мост принимает ответ и передаёт
 управление ответившему окну (событие `ownership`, как после `claim`). Без `watched` (прежний сервер) — прежнее
 правило `owned`. `watched` не того вида — `invalid`.
+
+Своё название и удаление сессии. `hello.chat_manage: true` — две просьбы владельца компьютера (участнику и
+наблюдателю совместного проекта — нет: их нет в `SHARED_OPS`):
+
+| Просьба | Маршрут студии | Ответ |
+|---|---|---|
+| `chat_rename {project, chat, title, engine?}` | `PUT /chats/<chat>/title {title}` | `{}` |
+| `chat_delete {project, chat, engine?}` | `DELETE /chats/<chat>` | `{}` |
+
+`title` — 1–200 знаков без управляющих и без пробелов по краям, иначе `invalid`. Claude Code — `rename_session`
+(запись `custom-title` в файле сессии) и `delete_session` SDK (файл сессии и её подагенты); Codex — `thread/name/set`
+и `thread/archive` (свой обратимый архив Codex). OpenCode и DeepSeek Harness — `unsupported`; `chat_delete` чата,
+которого у них нет («Новый чат» без хода), — `not_found`. Сессии нет — `not_found`, идёт ход или ветвление —
+`running`. Студия удаляет только сессию, начатую в Студии (строка `code_chats` с `origin: studio` или метка
+`tag: "studio"` в `chats`); `not_found` для неё — уже удалена: студия убирает строку, вкладки и отметку
+«непрочитано».

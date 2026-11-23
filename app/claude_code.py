@@ -1042,7 +1042,8 @@ async def rename_chat(aid: int, pid: str, chat: str, body: ChatTitle, request: R
 
 @router.delete("/agents/{aid}/projects/{pid}/chats/{chat}", status_code=204)
 async def delete_chat(aid: int, pid: str, chat: str, request: Request):
-    """«Удалить сессию» — только начатую студией (строка `code_chats` с `origin` `studio`) и только владельцу
+    """«Удалить сессию» — только начатую студией (строка `code_chats` с `origin` `studio` или метка моста `studio`,
+    как «студия» в списке) и только владельцу
     компьютера: мост удаляет её штатным способом помощника (`chat_delete`); сессии на машине нет («Новый чат» без
     хода) — тоже удаление. Затем — строка `code_chats`, вкладки владельца и участников, отметка «непрочитано»."""
     project_access.owner(request, aid)
@@ -1051,9 +1052,13 @@ async def delete_chat(aid: int, pid: str, chat: str, request: Request):
     uid = request.state.user.id
     row = state.DB.execute("SELECT origin FROM code_chats WHERE user_id = ? AND agent_id = ? AND project = ?"
                            " AND session_id = ?", (uid, aid, pid, chat)).fetchone()
-    if row is None or row["origin"] != "studio":
-        raise _refuse(409, "not_studio", "удалить можно только сессию, начатую в Студии")
     require_capability(aid, "chat_manage")
+    if row is None or row["origin"] != "studio":
+        # Как «студия» в списке: и метка моста (сессии, начатые до `code_chats.origin` или другой Студией).
+        listed = (await ask(request, aid, "chats", project=pid)).get("items")
+        if not any(isinstance(i, dict) and i.get("chat") == chat and i.get("tag") == "studio"
+                   for i in (listed if isinstance(listed, list) else [])):
+            raise _refuse(409, "not_studio", "удалить можно только сессию, начатую в Студии")
     try:
         await ask(request, aid, "chat_delete", quiet=True, project=pid, chat=chat)
     except HTTPException as e:

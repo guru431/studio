@@ -132,6 +132,7 @@ Use installed coding agents on your own Windows, macOS or Linux computers from a
 - Save reusable quick actions and choose the preferred agent order and defaults for new chats.
 - Search project files with **@file** suggestions and search local agent conversation content through the bridge.
 - Fork supported Claude/Codex conversations, inspect available subagent sessions and create **Git worktrees** as separate projects.
+- Rename Claude/Codex sessions, delete sessions started in Studio, and close empty or month-old sessions in bulk.
 - DeepSeek Harness (npm CLI, Python package or Desktop) runs with the models, providers, MCP servers and memory from its own Web or Desktop profile; Studio lists any profile settings it could not apply and shows the DeepSeek balance for the official provider. A chat open in DeepSeek Harness on the computer cannot be continued from Studio until that app is closed; there is no forking, subagent tree or chat deletion, and access is chosen when the chat is created.
 - Browse and edit files, preview Markdown/PDF/images, create folders, rename, move and delete. Conflict checks protect against overwriting a file changed on the computer.
 - Inspect Git changes and diffs, branch/upstream status, unpushed commits, configured remotes and public GitHub synchronization.

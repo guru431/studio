@@ -9303,6 +9303,91 @@ def test_code_session_rows_close_and_reopen(browser, live):
     assert not known_refusals(problems(r), 409), problems(r)
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_code_session_menu_renames_deletes_and_closes_in_bulk(browser, live, width):
+    """07:I8, 08:I5: «⋯» строки (мост 0.47.0) — «Переименовать» (название хранит помощник) и «Удалить сессию» с
+    подтверждением; над списком — «Закрыть все без сообщений (N)» и «Закрыть старше месяца (N)»: закрывают, а не
+    удаляют. Сессия терминала удалить не предлагает."""
+    from fake_bridge import T0, pid
+    login = f"code-chat-manage-{width}"
+    live.add_user(login)
+    old, recent, other = ("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
+                          "33333333-3333-4333-8333-333333333333")
+    machine = code_free_machine({
+        recent: {"title": "Свежая", "created": T0, "modified": T0 + 10**8, "tag": "studio", "messages": []},
+        other: {"title": "Терминал", "created": T0, "modified": T0 + 10**8 - 1, "tag": None, "messages": []},
+        old: {"title": "Старая", "created": T0 - 10**8, "modified": T0 - 10**8, "tag": "studio", "messages": []}})
+    machine.chat_manage = True
+    aid, sb = code_online(live, login, machine)
+    empty = f"(async () => (await {API}.api('POST', '/api/code/agents/{aid}/projects/{pid('alpha')}/chats')).chat)()"
+    row = lambda chat: f'#code-chats li[data-chat="{chat}"]'
+    menu = lambda chat: (f"[...document.querySelectorAll('{row(chat)} .code-chat-menu .menu-option')]"
+                         ".filter((b) => !b.hidden).map((b) => b.textContent)")
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
+            ("wait", "document.querySelector('#code-projects li[data-pid]')"), ("eval", "empty", empty),
+            *code_project(aid, "alpha"),
+            ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 4"),
+            ("eval", "tidy", "[...document.querySelectorAll('#code-chats-tidy button:not([hidden])')].map((b) => b.textContent)"),
+            ("eval", "menus", f"[{menu(recent)}, {menu(other)}, !!document.querySelector('{row(other)} .code-chat-more')]"),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", f"{row(recent)} .code-chat-more"), ("wait", f"document.querySelector('{row(recent)} .code-chat-menu:popover-open')"),
+            ("click", f"{row(recent)} .code-chat-rename"), ("wait", "document.querySelector('#code-rename-dialog')?.open"),
+            ("eval", "named", "document.querySelector('#code-rename-dialog input').value = 'Своё'"),
+            ("click", "#code-rename-save"),
+            ("wait", f"document.querySelector('{row(recent)} .code-chat-title')?.textContent === 'Своё'"),
+            ("click", f"{row(old)} .code-chat-more"), ("wait", f"document.querySelector('{row(old)} .code-chat-menu:popover-open')"),
+            ("click", f"{row(old)} .code-chat-delete"), ("wait", "document.querySelector('#code-delete-dialog')?.open"),
+            ("eval", "warning", "document.querySelector('#code-delete-dialog p').textContent"),
+            ("click", "#code-delete-confirm"),
+            ("wait", f"!document.querySelector('{row(old)}') && !document.querySelector('#code-delete-dialog')"),
+            ("click", "#code-close-empty"), ("wait", "document.querySelector('#code-close-many-dialog')?.open"),
+            ("click", "#code-close-many-confirm"),
+            ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 2"
+                     " && document.querySelector('#code-chats-tidy').hidden"),
+            ("eval", "fits2", NO_OVERFLOW)], width=width, mobile=width == 320)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["tidy"] == ["Закрыть все без сообщений (1)", "Закрыть старше месяца (1)"]
+    assert v["menus"] == [["Переименовать", "Удалить сессию"], ["Переименовать"], True]
+    assert v["fits"] is True and v["fits2"] is True
+    assert "Восстановить её нельзя" in v["warning"]
+    assert [q["title"] for q in code_requests(machine, "chat_rename")] == ["Своё"]
+    assert [q["chat"] for q in code_requests(machine, "chat_delete")] == [old]
+    assert old not in machine.projects["alpha"]["chats"] and machine.projects["alpha"]["chats"][recent]["title"] == "Своё"
+
+
+def test_code_chat_toolbar_renames_and_deletes_the_session(browser, live):
+    """07:I8 в чате: «Переименовать сессию» меняет название вкладки, «Удалить сессию» после подтверждения убирает
+    вкладку и сессию (Claude — «восстановить нельзя»)."""
+    from fake_bridge import pid
+    login = "code-chat-toolbar-manage"
+    live.add_user(login)
+    machine = code_free_machine({CODE_CHAT_A: code_session("Чат студии")})
+    machine.chat_manage = True
+    aid, sb = code_online(live, login, machine)
+    tab = f"document.querySelector('#code-tabbar .code-tab[data-chat=\"{CODE_CHAT_A}\"]')"
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", "document.querySelector('#code-chat-rename')"),
+            ("click", "#code-chat-rename"), ("wait", "document.querySelector('#code-rename-dialog')?.open"),
+            ("eval", "before", "document.querySelector('#code-rename-dialog input').value"),
+            ("eval", "named", "document.querySelector('#code-rename-dialog input').value = 'Новое имя'"),
+            ("click", "#code-rename-save"), ("wait", f"{tab}?.textContent.includes('Новое имя')"),
+            ("click", "#code-chat-delete"), ("wait", "document.querySelector('#code-delete-dialog')?.open"),
+            ("click", "#code-delete-confirm"),
+            ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}' && !{tab}"),
+            ("eval", "fits", NO_OVERFLOW)], width=1280)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    assert r["values"]["before"] == "Чат студии" and r["values"]["fits"] is True
+    assert [q["title"] for q in code_requests(machine, "chat_rename")] == ["Новое имя"]
+    assert CODE_CHAT_A not in machine.projects["alpha"]["chats"]
+
+
 def test_code_push_click_opens_the_chat_in_an_open_studio(browser, live):
     """Нажатие на push при открытой студии: sw.js шлёт окну адрес code/<aid>/<pid>/<chat> — окно переходит в
     чат; адрес другого вида не открывается."""
