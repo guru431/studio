@@ -7,6 +7,9 @@ from test_ui_browser import (CODE_CHAT_A, READY, browser, code_free_machine, cod
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
+READY_AGENTS = ("document.querySelector('#search-results')?.dataset.state === 'ready'"
+                " && document.querySelectorAll('#search-results .search-agent').length === 2")
+
 
 @pytest.mark.parametrize("width", [320, 1280])
 def test_agents_chip_finds_chats_on_computers_and_opens_the_chat(browser, live, width, tmp_path):
@@ -26,9 +29,7 @@ def test_agents_chip_finds_chats_on_computers_and_opens_the_chat(browser, live, 
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("search"),
             ("wait", "document.querySelector('#search-q')"), ("click", ".search-chips .chip[data-section=code]"),
-            set_value("#search-q", "пингвин"),
-            ("wait", "document.querySelector('#search-results')?.dataset.state === 'ready'"
-                     " && document.querySelectorAll('#search-results .search-agent').length === 2"),
+            set_value("#search-q", "пингвин"), ("wait", READY_AGENTS),
             ("eval", "groups", groups),
             ("eval", "row", "document.querySelector('#search-results .search-row')?.textContent"),
             ("eval", "filters", "[document.querySelector('.search-filters').hidden,"
@@ -36,7 +37,12 @@ def test_agents_chip_finds_chats_on_computers_and_opens_the_chat(browser, live, 
             ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
             ("screenshot", str(tmp_path / f"search-agents-{width}.png")),
             ("click", "#search-results .search-row"), code_loaded(CODE_CHAT_A),
-            ("eval", "hash", "location.hash")], width=width, mobile=width < 400)
+            ("eval", "hash", "location.hash"),
+            # «Назад» из чата — прежняя выдача без нового поиска; новое открытие поиска — тот же запрос заново
+            ("eval", "back", "history.back(), true"), ("wait", READY_AGENTS),
+            ("eval", "backHash", "location.hash"),
+            *go("chat"), ("wait", "document.querySelector('#chat-input')"), *go("search"),
+            ("wait", READY_AGENTS)], width=width, mobile=width < 400)
     finally:
         sb1.stop()
         sb2.stop()
@@ -47,5 +53,7 @@ def test_agents_chip_finds_chats_on_computers_and_opens_the_chat(browser, live, 
     assert "Сборка релиза" in result["values"]["row"] and "alpha" in result["values"]["row"]
     assert result["values"]["filters"] == [True, True] and result["values"]["fits"]
     assert result["values"]["hash"] == f"#/code/{one}/{pid('alpha')}/{CODE_CHAT_A}"
+    assert result["values"]["backHash"] == "#/search"
+    assert result["sent"].count("POST /api/code/search") == 2, result["sent"]
     assert not any(row["op"] == "open" for row in locked.requests)   # компьютер с PIN сервер не открывает сам
     assert not problems(result), problems(result)
