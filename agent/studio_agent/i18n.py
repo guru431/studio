@@ -145,7 +145,6 @@ EN = {
     "Доступно {0} из {1} ГБ": "{0} of {1} GB available",
     # window: самопроверка; трей: задание ждёт ответа
     "Самопроверка": "Self-check",
-    "Проверить": "Check",
     "Запись в каталог моста": "Writing to the agent folder",
     "Канал со студией": "Studio connection",
     "Удалённый рабочий стол": "Remote desktop",

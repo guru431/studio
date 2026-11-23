@@ -80,7 +80,7 @@ def status_of(state: str) -> tuple[str, str]:
 
 
 def card_of(state: str) -> tuple[str, str, str, str]:
-    """Карточка состояния: слова, токен цвета точки, приглушённая строка под словами (или пусто), кнопка
+    """Карточка состояния: слова, токен цвета точки, приглушённая строка у кнопки (или пусто), кнопка
     (`MAIN_BUTTONS`). Заменённый (`replaced`) ключ не стирает: второй мост той же учётки Windows в другом сеансе
     живёт с тем же `key.bin` и `pin.bin` — стёртый PIN открыл бы ему любую сессию без PIN."""
     words, token = status_of(state)
@@ -671,16 +671,18 @@ class MainWindow:
         box = self.card(0, host=connection)
         box.columnconfigure(0, weight=0)
         box.columnconfigure(1, weight=1)
+        # Короткий экран: обычное окно укладывается в 440 логических px (test_window_integration) — самопроверка
+        # кнопкой в строке состояния, её пункты под ней; строка-подсказка — у главной кнопки, а не отдельной строкой.
         head = ttk.Frame(box, style="Card.TFrame")
-        head.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, self.px(8)))
+        head.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, self.px(8)))
+        head.columnconfigure(1, weight=1)
         d = self.px(14)
         dot = self.tk.Canvas(head, width=d, height=d, highlightthickness=0, background=self.c["panel"])
         oval = dot.create_oval(1, 1, d - 1, d - 1)
         dot.grid(row=0, column=0, padx=(0, self.px(10)))
-        words = ttk.Label(head, style="Card.Status.TLabel", wraplength=self.px(360), justify="left")
+        words = ttk.Label(head, style="Card.Status.TLabel", wraplength=self.px(330), justify="left")
         words.grid(row=0, column=1, sticky="w")
-        hint = ttk.Label(box, style="Card.Muted.TLabel", wraplength=self.px(380), justify="left")
-        hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, self.px(12)))
+        self.check_control(head, box)
         helpers = ttk.Frame(box, style="Card.TFrame")
         helpers.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, self.px(8)))
         helpers.columnconfigure(1, weight=1)
@@ -713,29 +715,32 @@ class MainWindow:
         bar = ttk.Frame(box, style="Card.TFrame")
         bar.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(self.px(8), 0))
         bar.columnconfigure(0, weight=1)
+        notes = ttk.Frame(bar, style="Card.TFrame")
+        notes.grid(row=0, column=0, sticky="w", padx=(0, self.px(12)))
+        hint = ttk.Label(notes, style="Card.Muted.TLabel", wraplength=self.px(250), justify="left")
+        hint.grid(row=0, column=0, sticky="w")
         self.card_problem = self.tk.StringVar()
-        ttk.Label(bar, textvariable=self.card_problem, style="Card.Error.TLabel", wraplength=self.px(240)).grid(
-            row=0, column=0, sticky="w")
+        problem = ttk.Label(notes, textvariable=self.card_problem, style="Card.Error.TLabel", wraplength=self.px(250))
+        problem.grid(row=1, column=0, sticky="w")
+        problem.grid_remove()
+        self.card_problem.trace_add("write", lambda *_: problem.grid() if self.card_problem.get() else problem.grid_remove())
         main = ttk.Button(bar)
         main.grid(row=0, column=1, sticky="e")
         self.buttons.append(main)
         self.card_widgets = (dot, oval, words, hint, main)
         self.show_card()
-        self.check_card(connection)
         self.activity_card()
         self.settings_card(cfg)
         self.sync_buttons()
         self.win.bind("<Return>", lambda e: None)
 
-    def check_card(self, page) -> None:
-        """Самопроверка по кнопке (`Controller.self_check`, в потоке): пункты — «подпись — слова» цветом состояния."""
+    def check_control(self, head, box) -> None:
+        """Самопроверка по кнопке строки состояния (`Controller.self_check`, в потоке): пункты — под строкой,
+        «подпись — слова» цветом состояния; до первой проверки места не занимают."""
         ttk = self.ttk
-        box = self.card(1, host=page)
-        ttk.Label(box, text=tr("Самопроверка"), style="Card.Head.TLabel").grid(row=0, column=0, sticky="w")
-        button = ttk.Button(box, text=tr("Проверить"))
-        button.grid(row=0, column=1, sticky="e")
+        button = ttk.Button(head, text=tr("Самопроверка"))
+        button.grid(row=0, column=2, sticky="e", padx=(self.px(12), 0))
         rows = ttk.Frame(box, style="Card.TFrame")
-        rows.grid(row=1, column=0, columnspan=2, sticky="ew")
         rows.columnconfigure(1, weight=1)
 
         def done(data, failed) -> None:
@@ -744,6 +749,7 @@ class MainWindow:
             button.state(["!disabled"])
             for child in rows.winfo_children():
                 child.destroy()
+            rows.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, self.px(8)))
             for r, (label, words, token) in enumerate(check_rows(None if failed else data)):
                 ttk.Label(rows, text=label, style="Card.Muted.TLabel").grid(
                     row=r, column=0, sticky="nw", padx=(0, self.px(16)), pady=self.px(1))
@@ -758,7 +764,7 @@ class MainWindow:
         button.configure(command=run)
 
     def show_card(self) -> None:
-        """Карточка состояния на месте (`card_of`): точка, слова, строка под ними, кнопка; прочее окна не трогается."""
+        """Карточка состояния на месте (`card_of`): точка, слова, строка у кнопки, кнопка; прочее окна не трогается."""
         if self.card_widgets is None:
             return
         dot, oval, words, hint, main = self.card_widgets
