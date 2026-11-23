@@ -300,6 +300,38 @@ def test_refused_turn_neither_drops_nor_installs_the_owner_turn_request(studio):
     assert bridge.TURN_REQUESTS[(aid, A)] is marker
 
 
+def test_turn_accepted_before_the_session_closed_is_not_rolled_back(studio, monkeypatch):
+    """E1: мост ход принял, а сессия Студии тем временем закрылась — ответ странице 409 `closed`, но ход идёт:
+    адресат push и отметка хода остаются этого хода, квитанция — тоже: повтор той же отправки из новой сессии
+    второй ход не начинает."""
+    from fake_bridge import emit
+    from test_code import ASK
+    aid, machine, link, member, _ = share(studio)
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a, **kw: pushed.append(uid))
+    monkeypatch.setattr(bridge, "watching", lambda *a: False)
+    signin(studio, "friend")
+    chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
+    original = machine._op_turn
+
+    def accepted_then_logout(req, events):
+        result = original(req, events)
+        state.DB.execute("DELETE FROM sessions WHERE user_id = ?", (member,))
+        return result
+
+    machine._op_turn = accepted_then_logout
+    turn, body = url(aid, "projects", ALPHA, "chats", chat, "turn"), {"text": "x", "request_id": "r" * 16}
+    response = studio.c.post(turn, json=body)
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "closed"
+    assert isinstance(bridge.TURN_REQUESTS[(aid, chat)], bridge._MemberTurn)
+    emit(studio, link, ALPHA, chat, ASK)
+    assert pushed == [member]                                           # не владельцу: ход участника идёт
+    machine._op_turn = original
+    signin(studio, "friend")
+    response = studio.c.post(turn, json=body)
+    assert response.status_code == 200 and response.json()["repeat"] == "turn" and machine.turns == 1
+
+
 def test_turn_request_back_restores_only_while_the_record_is_its_own(monkeypatch):
     """Два хода одного чата ждут ответа моста, один принят, другой отказан: возврат отказанного прежнюю запись не
     ставит поверх записи принятого — ни старый запрос владельца на ход соавтора, ни наоборот."""
