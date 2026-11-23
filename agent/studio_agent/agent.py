@@ -827,9 +827,15 @@ class Agent:
 
     async def _manage_chat(self, frame, method, claude, *args):
         """Переименовать или удалить сессию штатным способом помощника; идёт ход или ветвление — `running`.
-        OpenCode и DeepSeek Harness такого по ACP не дают — честный отказ."""
+        OpenCode и DeepSeek Harness такого по ACP не дают — честный отказ; удалить «Новый чат» без хода (сессии у
+        помощника нет) — `not_found`: студии остаётся убрать свою строку."""
         engine = frame.get("engine", "claude")
         if engine in ("opencode", "deepseek"):
+            backend = self._runner(frame)
+            if method == "delete_chat" and backend is not None:
+                project = await self._project(frame)
+                if all(item["chat"] != frame["chat"] for item in await backend.chats(project)):
+                    raise Refused("not_found", "нет такого чата")
             raise Refused("unsupported", f"{NAMES[engine]} не даёт переименовать или удалить сессию из Студии")
         project = await self._project(frame)
         runner = self._runner(frame)

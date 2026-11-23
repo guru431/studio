@@ -671,8 +671,14 @@ async def test_rename_and_delete_claude_session_with_the_sdk(agent, root, monkey
     assert calls == [("rename", CHAT, "Своё", project), ("delete", CHAT, project)]
     for title in ("", " с пробелом", "a\nb", "x" * 201, None):
         assert (await agent.handle(req("chat_rename", project=pid, chat=CHAT, title=title)))[0]["code"] == "invalid"
-    agent.opencode = SimpleNamespace(catalog={"models": []}, live=lambda: {})
+    listed = []
+    agent.opencode = SimpleNamespace(catalog={"models": []}, live=lambda: {}, chats=AsyncMock(side_effect=lambda _: listed))
     res = (await agent.handle(req("chat_delete", engine="opencode", project=pid, chat=CHAT)))[0]
+    assert res["code"] == "not_found"                     # «Новый чат» без хода: студия уберёт свою строку
+    listed.append({"chat": CHAT})
+    res = (await agent.handle(req("chat_delete", engine="opencode", project=pid, chat=CHAT)))[0]
+    assert res["code"] == "unsupported"
+    res = (await agent.handle(req("chat_rename", engine="opencode", project=pid, chat=CHAT, title="Своё")))[0]
     assert res["code"] == "unsupported"
     monkeypatch.setattr(agent.runner, "_turn", lambda *_: object())
     assert (await agent.handle(req("chat_delete", project=pid, chat=CHAT)))[0]["code"] == "running"
