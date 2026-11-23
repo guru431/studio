@@ -41,6 +41,11 @@
    `cancelled`. Строки в очереди при остановке службы — `error` самой остановкой (stop), при старте —
    recover. Связь строк — только в памяти (Job.series).
 9. Варианты (`GET /<id>/variants`): свои готовые картинки с тем же исходником и сделанные из этой.
+10. Перезапуск посреди картинки: остановка службы пишет строке ошибку RESTARTING (итог — откат на прежний код
+   оставит её удаляемой), обрыв оставляет её в работе или в очереди. При запуске recover ставит такую строку
+   снова в очередь (`queued`, RESUMED), resume ведёт её, как серию, с тем же seed, моделью, размером, исходником
+   и маской из media — одна попытка: прерванный повтор, отменявшаяся строка, строка в корзине или у
+   отключённой учётки, остановка дольше RESUME_SEC — ошибка INTERRUPTED.
 """
 import asyncio
 import base64
@@ -103,6 +108,12 @@ SERIES_MAX = 4
 VARIANTS_MAX = 24
 CANCELLING = "отменяю — карта освободится сразу после текущей картинки (если шлюз ещё ждёт карту — после её получения и картинки)"
 INTERRUPTED = "прервано перезапуском студии"
+#: остановка службы посреди картинки (п. 10 шапки): строка ждёт повтора при запуске
+RESTARTING = "прервано перезапуском студии — повторю после запуска"
+#: повтор после перезапуска: слова строки в очереди и в работе; второй перезапуск — уже INTERRUPTED
+RESUMED = "повторяю после перезапуска студии"
+#: остановка дольше часа (или откат на прежний код и возврат) — не повод генерировать давнее
+RESUME_SEC = 3600
 JSON_MAX = 512 * 1024
 #: удаление учётки ждёт конца её отменённых заданий: они освобождают карту её подключением
 SETTLE_SEC = 90
@@ -178,6 +189,7 @@ class Job:
     media_id: str | None = None              # готовая картинка в media (вместо прежнего png в памяти)
     mask_media_id: str | None = None
     series: "list[Job] | None" = None        # все строки серии по порядку (п. 8 шапки)
+    resumed: bool = False                    # повтор после перезапуска (п. 10 шапки)
 
     @property
     def gateway_model(self) -> str:
@@ -286,7 +298,7 @@ def _store(job: Job) -> None:
     changed = state.DB.execute("UPDATE images SET state = ?, detail = ?, seed = ?, media_id = ?, finished = ?"
                                " WHERE id = ? AND finished IS NULL",
                                (job.state, job.detail, job.seed, job.media_id, job.finished_at, job.id)).rowcount
-    if changed and job.finished_at is not None:
+    if changed and job.finished_at is not None and job.detail != RESTARTING:   # повтор впереди — не итог
         push.job_finished("images", job.id)
 
 
@@ -328,11 +340,51 @@ def _status(job: Job) -> dict:
 
 
 def recover() -> None:
-    """После перезапуска идущих заданий нет: их строки — ошибка «прервано перезапуском»."""
-    count = state.DB.execute("UPDATE images SET state = 'error', detail = ?, finished = ?"
-                             " WHERE state IN ('working', 'cancelling', 'queued')", (INTERRUPTED, clock.NOW())).rowcount
-    if count:
-        log.warning("картинки: %d заданий прервано перезапуском", count)
+    """После перезапуска идущих заданий нет (п. 10 шапки): картинка, прерванная впервые, — снова в очередь
+    (`queued`, RESUMED), её поведёт resume; прочие прерванные — ошибка INTERRUPTED."""
+    now = clock.NOW()
+    count = state.DB.execute(
+        "UPDATE images SET state = 'error', detail = ?, finished = COALESCE(finished, ?)"
+        " WHERE (state IN ('working', 'cancelling', 'queued') OR (state = 'error' AND detail = ?))"
+        " AND (state = 'cancelling' OR detail = ? OR deleted IS NOT NULL OR (state = 'error' AND finished < ?)"
+        " OR user_id NOT IN (SELECT id FROM users WHERE disabled = 0))",
+        (INTERRUPTED, now, RESTARTING, RESUMED, now - RESUME_SEC)).rowcount
+    again = state.DB.execute("UPDATE images SET state = 'queued', detail = ?, finished = NULL"
+                             " WHERE state IN ('working', 'queued') OR (state = 'error' AND detail = ?)",
+                             (RESUMED, RESTARTING)).rowcount
+    if count or again:
+        log.warning("картинки: прервано перезапуском — %d, повторю — %d", count, again)
+
+
+def resume() -> None:
+    """Старт службы (после recover и state.HTTP): строки, поставленные в повтор, — в память сразу (слот учётки
+    занят, «Отменить» работает) и задачей на учётку по порядку ленты, как серия (п. 10 шапки). Модели больше нет
+    среди отмеченных в разделе — ошибка INTERRUPTED."""
+    rows = state.DB.execute("SELECT * FROM images WHERE state = 'queued' AND detail = ?"
+                            " ORDER BY user_id, created DESC, id", (RESUMED,)).fetchall()
+    queues: dict[int, list[Job]] = {}
+    for row in rows:
+        try:
+            conn, model = sections.resolve(row["user_id"], "photo", None, row["model"])
+        except HTTPException:
+            conn = None
+        if conn is None or (row["mask_media_id"] is not None and conn.kind != "srvllm"):
+            state.DB.execute("UPDATE images SET state = 'error', detail = ?, finished = ? WHERE id = ?",
+                             (INTERRUPTED, clock.NOW(), row["id"]))
+            continue
+        job = Job(id=row["id"], user_id=row["user_id"], conn=conn, model=model, prompt=row["prompt"], size=row["size"],
+                  seed=row["seed"], started=row["created"], state="queued", detail=RESUMED, kind=row["kind"],
+                  strength=row["strength"] if row["strength"] is not None else 0.65,
+                  source_media_id=row["source_media_id"], mask_media_id=row["mask_media_id"], resumed=True)
+        JOBS[job.id] = job
+        queues.setdefault(job.user_id, []).append(job)
+    for uid, jobs in queues.items():
+        with operations.bind(uid):                   # очистка истории после старта запретит их сохранение
+            task = asyncio.create_task(run_series(jobs))
+        for job in jobs:
+            job.series = jobs if len(jobs) > 1 else None
+            job.task = task
+        log.info("картинки: повтор после перезапуска — %d", len(jobs))
 
 
 def _end_queued(job: Job, state_: str, detail: str) -> None:
@@ -378,14 +430,14 @@ async def settle_user(user_id: int) -> bool:
 async def stop() -> None:
     """Остановка службы: идущие задания отменяются и успевают записать итог до закрытия базы; строки
     серии в очереди — «прервано перезапуском» здесь же: откат install.sh вернул бы код, чей recover()
-    о `queued` не знает, и строки остались бы неудаляемыми."""
+    о `queued` не знает, и строки остались бы неудаляемыми. Итог — RESTARTING (п. 10 шапки), у повтора — INTERRUPTED."""
     tasks = {j.task for j in JOBS.values() if j.task and not j.task.done()}   # у серии задача одна на все строки
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     for job in JOBS.values():
         if job.state == "queued":
-            _end_queued(job, "error", INTERRUPTED)
+            _end_queued(job, "error", INTERRUPTED if job.resumed else RESTARTING)
 
 
 # ---- ввод: форма, фото, маска --------------------------------------------------
@@ -942,14 +994,31 @@ async def _save(job: Job, picture: "tuple[bytes, str]", seed: int) -> str:
 
 async def run_series(jobs: list[Job]) -> None:
     """Строки серии по одной (п. 8 шапки): следующая — после конца предыдущей и без await между ними,
-    так что слот пользователя не пустеет ни на миг. Отменённые и снятые строки пропускаются."""
+    так что слот пользователя не пустеет ни на миг. Отменённые и снятые строки пропускаются. Повтор после
+    перезапуска (resume) — та же очередь с первой строки; в работе его слова — RESUMED (п. 10 шапки)."""
     for i, job in enumerate(jobs):
-        if i:
-            if job.state != "queued":
-                continue
-            job.state, job.detail, job.started = "working", WORKING, clock.NOW()   # время строки — с этого мига
+        if job.state == "queued":
+            job.state, job.started = "working", clock.NOW()        # время строки — с этого мига
+            job.detail = RESUMED if job.resumed else WORKING
             _store(job)
+        elif i or job.state not in ("working", "cancelling"):
+            continue
         await run_job(job)
+
+
+async def _reload(job: Job) -> None:
+    """Фото и маска повтора после перезапуска — снова из media, тем же путём, что у запроса (create_job)."""
+    try:
+        job.image = await forms.photo(job.user_id, None, job.source_media_id, VIDEO_PIXELS)
+        if job.mask_media_id is not None:
+            mask = await forms.history_file(job.user_id, job.mask_media_id)
+            job.mask = await asyncio.to_thread(lambda: prepare_mask(_fit_mask(mask, job.image), job.image))
+    except UploadError as e:
+        raise JobError("image", str(e)) from None
+    except HTTPException as e:                        # исходник или маску удалили, шара недоступна
+        raise JobError("image", e.detail["message"]) from None
+    if job.state == "cancelling":                     # отменили, пока читали файлы: запрос не нужен
+        raise JobError("cancelled", "отменено")
 
 
 async def run_job(job: Job) -> None:
@@ -960,6 +1029,8 @@ async def run_job(job: Job) -> None:
                 await describe(job)
                 outcome = ("done", TEXT_WORDS[job.kind][0], None, None)
             else:
+                if job.resumed and (job.source_media_id or job.mask_media_id) and job.image is None:
+                    await _reload(job)
                 data, seed, mime = await generate(job)
                 outcome = ("done", "готово", (data, mime), seed)
         except JobError as e:
@@ -1011,8 +1082,8 @@ async def run_job(job: Job) -> None:
         job.description = None
         if job.kind in TEXT_KINDS:
             job.state, job.detail = "cancelled", "отменено остановкой студии"
-        else:
-            job.state, job.detail = "error", INTERRUPTED
+        else:                                         # отменявшаяся и сам повтор — без нового повтора (п. 10 шапки)
+            job.state, job.detail = "error", INTERRUPTED if job.resumed or job.state == "cancelling" else RESTARTING
         raise
     finally:
         job.image = None

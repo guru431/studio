@@ -3290,6 +3290,8 @@ globalThis.StudioEnglish = Object.freeze({
   "жду карту или генерирую": "waiting for GPU or generating",
   "отменяю — карта освободится сразу после текущей картинки (если шлюз ещё ждёт карту — после её получения и картинки)": "cancelling: GPU will be released after the current image (if still waiting for GPU, after acquiring it and generating the image)",
   "прервано перезапуском студии": "interrupted by Studio restart",
+  "прервано перезапуском студии — повторю после запуска": "interrupted by Studio restart; will retry after startup",
+  "повторяю после перезапуска студии": "retrying after Studio restart",
   "сервис вернул не картинку (нужен PNG, JPEG или WebP)": "service returned a non-image response (PNG, JPEG or WebP required)",
   "описание готово": "description ready",
   "описание уже выдано": "description already delivered",

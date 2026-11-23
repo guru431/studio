@@ -134,6 +134,7 @@ async def lifespan(_app):
     videos.recover()
     state.HTTP = state.make_http()
     state.CLEANER_HTTP = state.make_cleaner_http()
+    images.resume()                              # картинки, прерванные перезапуском, — повтор
     transcripts.resume()                         # ждущие в очереди — дальше (после recover и HTTP)
     speeches.resume()
     ocr.resume_queued()
