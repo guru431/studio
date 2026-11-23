@@ -347,7 +347,7 @@ class Replace(BaseModel):
 async def replace(request: Request, aid: int, body: Replace):
     """«Заменить компьютер»: ключ своего нового компьютера `new_id` (уже привязанного) переходит к прежнему `aid`.
     У `aid` остаются id, имя, выдачи участников (с ролью и сроком), зеркала, вкладки и отметки чатов — всё, что
-    ссылается на id; прежний ключ отозван (канал прежнего моста — 4401). Строка нового уходит вместе со своими
+    ссылается на id (у копий зеркал — без «после хода» и прежних состояний пар); прежний ключ отозван (канал прежнего моста — 4401). Строка нового уходит вместе со своими
     вкладками и отметками, место учётки на нём переходит к `aid`; канал нового — 1012: мост переподключится тем же
     ключом и придёт как `aid` (имя — из `welcome`). Пароль — `auth.confirm_password`. Шага схемы нет."""
     uid = request.state.user.id
@@ -370,6 +370,12 @@ async def replace(request: Request, aid: int, body: Replace):
                          " last_seen = ?, platform = COALESCE(?, platform) WHERE id = ?",
                          (new["key_hash"], new["has_pin"], new["projects_root"], new["cc_version"],
                           new["last_seen"], new["platform"], aid))
+        # копии зеркал `aid` описывают файлы прежней машины: без «после хода», накопленного и состояний пар первая
+        # сверка с новой машиной видит каждое различие как конфликт, а не обновление (как после смены ключа)
+        copies = "SELECT id FROM mirror_copies WHERE agent = ?"
+        state.DB.execute(f"UPDATE mirror_pairs SET state_a = NULL, state_b = NULL, synced = NULL"
+                         f" WHERE a IN ({copies}) OR b IN ({copies})", (aid, aid))
+        state.DB.execute("UPDATE mirror_copies SET auto = 0, held = NULL WHERE agent = ?", (aid,))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
