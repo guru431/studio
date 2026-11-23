@@ -8,7 +8,9 @@ import { tr } from './i18n.js';
  * `form.submit()`), а надёжного признака отправителя у работника нет (`Sec-Fetch-Site` ему не виден, referrer пуст и у
  * системного листа). Поэтому окно говорит, откуда это, а «Расшифровка» и «Сканы», где выбор файла сразу начинает
  * загрузку, спрашивают ещё раз своей кнопкой (UPLOAD). Принятое уходит из кэша, как только окно закрыто (выбором или «Не
- * отправлять»), и не живёт дольше RECEIVED_MS. На сервер — только запросом выбранного раздела. */
+ * отправлять»), и не живёт дольше RECEIVED_MS. Показанное хоть раз помечается `offered`: выход, аварийный выход, конец
+ * сессии и страница входа (login.js) его стирают — следующей учётке устройства оно не достаётся; принятое без сессии
+ * (ещё не показанное) ждёт входа. На сервер — только запросом выбранного раздела. */
 import { button, el, openDialog } from './ui.js';
 import { sectionName } from './sections-meta.js';
 
@@ -66,7 +68,10 @@ async function take() {
       if (body) files.push(new File([await body.blob()], info.name || 'file', { type: info.type || '' }));
     }
     const text = sharedText(meta);
-    if (files.length || text) return { files, text };
+    if (files.length || text) {
+      if (!meta.offered) await cache.put('/received/meta', new Response(JSON.stringify({ ...meta, offered: true })));
+      return { files, text };
+    }
     await caches.delete(RECEIVED);
     return null;
   } catch {
@@ -112,6 +117,24 @@ function confirmUpload(section, files) {
     dialog.addEventListener('close', () => resolve(yes));
   });
 }
+
+/** Стереть принятое; onlyOffered — только уже показанное какой-то сессии (принятое без сессии ждёт входа). */
+async function forgetReceived(onlyOffered) {
+  if (!('caches' in window)) return;
+  try {
+    const hit = onlyOffered && await caches.match('/received/meta', { cacheName: RECEIVED });
+    if (!onlyOffered || (hit && (await hit.json()).offered)) await caches.delete(RECEIVED);
+  } catch {
+    // кэш закрыт — стирать нечего
+  }
+}
+
+// явный выход — всё, до POST /logout; аварийный выход и конец сессии (api.js toLogin) — только показанное: конец
+// сессии в другой вкладке не должен съесть то, что лист только что принёс без сессии (login.js — то же правило)
+document.addEventListener('submit', (event) => {
+  if (event.target.matches('form[action="/logout"]')) forgetReceived(false);
+});
+document.addEventListener('studio-signed-out', () => forgetReceived(true));
 
 /** В поле раздела: файлы — как выбор файла (change), текст — как набор (input), к уже набранному. */
 async function deliver(section, { files, text }) {

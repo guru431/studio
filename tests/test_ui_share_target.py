@@ -2,6 +2,7 @@
 спрашивает раздел по типу принятого и кладёт его в поле раздела; принятое переживает вход."""
 import base64
 import io
+import time
 
 import pytest
 from PIL import Image
@@ -69,6 +70,13 @@ def png():
     out = io.BytesIO()
     Image.new("RGB", (40, 30), (20, 120, 200)).save(out, "PNG")
     return base64.b64encode(out.getvalue()).decode()
+
+
+def until(page, expression, sec=10.0):
+    deadline = time.monotonic() + sec
+    while not page.evaluate(expression):
+        assert time.monotonic() < deadline, expression
+        page.wait_for_timeout(50)
 
 
 def choices(page):
@@ -143,6 +151,37 @@ def test_shared_photo_and_text_land_in_the_chosen_section(chromium, live, mobile
         page.wait_for_selector("html[data-ready='1']")
         assert page.locator("#received").count() == 0
         assert errors == []
+
+
+def test_shown_but_unsent_share_does_not_outlive_the_session(chromium, live):  # noqa: F811
+    """Показанное, но не отправленное принятое стирают явный выход и страница входа после конца сессии: следующей
+    учётке устройства оно не достаётся (принятое без сессии ждёт входа — первый сценарий)."""
+    with chromium.new_context(viewport={"width": 1280, "height": 800}) as context:
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        page.goto(live.url + "/robots.txt")
+        page.evaluate("""async () => {
+          await navigator.serviceWorker.register('/sw.js');
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true}));
+          }
+        }""")
+        context.request.post(live.url + "/login", form={"login": "owner", "password": "password-123"})
+        has = "caches.has('studio-received')"
+        # явный выход: окно не закрыто (приложение свернули) — принятое уходит вместе с сессией
+        page.evaluate(SHARE, {"png": "", "title": "", "text": "чужое", "url": ""})
+        pw.expect(page.locator("#received")).to_be_visible()
+        assert page.evaluate(has) is True
+        page.evaluate("document.querySelector('#menu-logout').form.requestSubmit()")
+        page.wait_for_url("**/login")
+        until(page, f"{has}.then((x) => !x)")
+        # сессия кончилась (завершена с другого устройства): страница входа стирает уже показанное
+        context.request.post(live.url + "/login", form={"login": "owner", "password": "password-123"})
+        page.evaluate(SHARE, {"png": "", "title": "", "text": "чужое", "url": ""})
+        pw.expect(page.locator("#received")).to_be_visible()
+        context.clear_cookies()
+        page.goto(live.url + "/login")
+        until(page, f"{has}.then((x) => !x)")
 
 
 def test_app_badge_counts_unseen_finished_and_clears_with_the_panel(chromium, live):  # noqa: F811
