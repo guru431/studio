@@ -202,9 +202,9 @@ def test_backup_code_signs_in_once(studio, mail):
         "SELECT kind FROM security_events WHERE user_id=?", (uid,))]
 
 
-def test_backup_codes_are_keyed_and_legacy_sha256_still_signs_in_once(studio, mail):
-    """R2-8: голый sha256 резервного кода подбирался из копии базы; теперь — HMAC ключом данных. Коды, выданные
-    прежним кодом (sha256), действуют до использования или перевыпуска."""
+def test_backup_codes_are_keyed_and_bare_sha256_does_not_sign_in(studio, mail):
+    """R2-8: голый sha256 резервного кода подбирался из копии базы; теперь — только HMAC ключом данных (кодов
+    прежнего формата не выдавали: приложение вышло сразу с HMAC)."""
     import hashlib
     import hmac
     uid = make_user(studio, "owner")
@@ -217,8 +217,6 @@ def test_backup_codes_are_keyed_and_legacy_sha256_still_signs_in_once(studio, ma
     legacy = "abcdefghjk"
     state.DB.execute("INSERT INTO totp_backup(user_id, digest) VALUES (?, ?)",
                      (uid, hashlib.sha256(f"totp-backup:{uid}:{legacy}".encode()).hexdigest()))
-    totp_login(studio)
-    assert studio.c.post("/account/code", json={"code": legacy}).status_code == 200
     totp_login(studio)
     assert studio.c.post("/account/code", json={"code": legacy}).status_code == 400
     assert studio.c.post("/account/code", json={"code": codes[0]}).status_code == 200
