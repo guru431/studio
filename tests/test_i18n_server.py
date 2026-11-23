@@ -56,6 +56,7 @@ EXEMPT_CONSTANTS = {
     'mcp_files.MISSING': 'заметка модели о файлах диалога',
     'mcp_files.BLOCKED_WEB': 'заметка модели о файлах диалога',
     'mcp_files.BLOCKED_CONFIRM': 'заметка модели о файлах диалога',
+    'mcp_files.BLOCKED_CLEANER': 'заметка модели о файлах диалога',
     'chat_pending.REFUSED': 'результат инструмента для модели',
     'chat_tools.NO_ANSWER': 'результат инструмента для модели',
     'knowledge.NOTHING': 'результат инструмента для модели',

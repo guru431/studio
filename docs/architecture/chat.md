@@ -677,8 +677,9 @@ Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), кл�
   текст внешнему источнику векторов; при флажке внешний источник выключен у всех (`knowledge.source_off`).
 - Флажок «Веб и внешние MCP — только через Cleaner» (`cleaner_route.web_only`): `cleaner_route.web_allowed` — ход
   не через Cleaner не получает ни «Интернета» (`web.tools_for` пуст — и `web_tools` диалога, и ход, и продолжение
-  после паузы), ни веб-инструментов MCP (`mcp_client.Tools.discover` и `call`, `mcp_files._blocked` для
-  `artifact_upload`); `chat.StreamTask._web_on` перепроверяет его перед каждым вызовом и кругом. PATCH
+  после паузы), ни веб-инструментов MCP (`mcp_client.Tools.discover` и `call`); `chat.StreamTask._web_on`
+  перепроверяет его перед каждым вызовом и кругом. Веб-`artifact_upload` при флажке закрыт в любом диалоге, и через
+  Cleaner тоже (`mcp_files._blocked` — `mcp_files.CLEANER`): файлы Studio грузит сама, мимо Cleaner. PATCH
   `{web: true}` такого диалога — 409 `cleaner_web` (`cleaner_route.WEB_ONLY`). Страница знает флажок по
   `me.cleaner_web` (`/api/me`): кнопка «Интернет» выключена с подсказкой.
 - В `chat._chat_view` поле `routed` (тег «Cleaner» у выбора модели), `external` у такого диалога — `False`
