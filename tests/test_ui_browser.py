@@ -760,13 +760,13 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["records"] == "Расшифровка" and v["scans"] == "Сканы"
     assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]
     assert v["securityCurrent"] == "security"
-    assert v["security"] == ["Электронная почта", "Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
+    assert v["security"] == ["Электронная почта", "Приложение-аутентификатор", "Пароль", "PIN приложения", "Сессии", "Доступы и ссылки", "Аварийный выход",
                              "Журнал безопасности"]
     assert v["appearance"] == ["Имя в Студии", "Тема", "Вид на этом устройстве", "Нижняя панель", "Часовой пояс"]
     assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
                            "Это устройство — в других браузерах и на других устройствах свой выбор.",
                            "Это устройство — этот браузер и учётка.", "Вся учётка — на всех ваших устройствах."]
-    assert v["notifications"] == ["Уведомления", "ntfy"] and v["data"] == ["Хранилище", "История", "Учётка"]
+    assert v["notifications"] == ["Уведомления", "О чём уведомлять", "ntfy"] and v["data"] == ["Хранилище", "История", "Учётка"]
     assert v["cleaner"] == "Очистка данных · Cleaner"
     assert v["draft"] == "unsaved-key" and v["saved"] == "whisperx"
     assert not problems(r), problems(r)
