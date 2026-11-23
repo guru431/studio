@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 70
+VERSION = 71
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1022,6 +1022,13 @@ CREATE TABLE totp_backup(user_id INTEGER NOT NULL REFERENCES users ON DELETE CAS
        PRIMARY KEY(user_id, digest));
 """
 SCHEMA += TOTP_70
+#: Варианты ответа чата: «Ответить заново» не удаляет прежний ответ — он остаётся невыбранным (`unchosen` = 1);
+#: варианты — ответы ассистента после одного сообщения пользователя, выбран один. Невыбранные бывают только у
+#: последнего ответа диалога: новый ход их удаляет (chat.py). Прежний код столбца не знает и видит их подряд.
+VARIANTS_71 = """ALTER TABLE messages ADD COLUMN unchosen INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX messages_unchosen ON messages(chat_id) WHERE unchosen = 1;
+"""
+SCHEMA += VARIANTS_71
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1163,6 +1170,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     69: SHARES_69,
     # приложение-аутентификатор и резервные коды; письмо о входе с нового устройства
     70: TOTP_70,
+    # варианты ответа чата: невыбранный вариант последнего ответа
+    71: VARIANTS_71,
 }
 
 

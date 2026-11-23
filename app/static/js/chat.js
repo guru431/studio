@@ -25,7 +25,9 @@ import { mcpStateWords } from './mcp-sections.js';
  * раздел — ответ дочитывается и сохраняется. Пока вкладка читает ответ из браузера, она раз в
  * BEAT_MS шлёт признак жизни (POST .../alive): сервер отдаёт такой ответ с `live` — другая вкладка
  * показывает его идущим и опрашивает диалог, как ответ сервера, который идёт без нас. Ответ
- * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано».
+ * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано». Закрытие и перезагрузка вкладки
+ * посреди ответа (`pagehide`) кладут прочитанное PUT с keepalive со статусом stopped — начало, что влезает в
+ * предел тела keepalive (`partBody`).
  * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>); неподходящий тип и размер
  * чип называет при выборе файла. Отправленное фото — миниатюра (окно с ним), документ — ссылка на скачивание.
  * Первый ход нового диалога не прошёл — созданный под него диалог удаляется (`dropEmpty`). Открытый диалог
@@ -463,15 +465,56 @@ async function readBrowser(job, turn) {
       job.message.error = words(err);
     }
   }
+  if (job.parted) {               // вкладку закрывали: итог уже ушёл keepalive — тот же итог сервер примет повторно
+    status = 'stopped';
+    job.message.content = job.parted.content;
+  }
   job.message.status = status;
   job.message.content = wellFormed(job.message.content);
   // признак жизни — до конца сохранения: пока идут повторы PUT, другие вкладки не считают ответ брошенным
   // слова ошибки сервер хранит у ответа (`messages.error`): видны и после перечитывания диалога
   const error = status === 'error' ? clip(wellFormed(job.message.error || ''), ERROR_MAX) : '';
-  await saveAnswer(job.chatId, job.message, { content: job.message.content, status, ...(error ? { error } : {}) });
+  job.saving = { content: job.message.content, status, ...(error ? { error } : {}) };
+  await saveAnswer(job.chatId, job.message, job.saving);
   clearInterval(beat);
   finish(job);
 }
+
+/* ---- закрытие вкладки посреди ответа прямого подключения ---------------------- */
+
+/* Тело fetch с keepalive — не больше 64 КиБ на все такие запросы страницы разом; запас — прочим (jobs.js). */
+const PART_BYTES = 60 * 1024;
+
+/** Итог «остановлен» с прочитанным: начало ответа, а не хвост, — остановленный ответ всегда начало сказанного
+ * моделью, и история с контекстом следующего хода читаются связно; длиннее PART_BYTES тела — начало, что влезает. */
+function partBody(content) {
+  const size = (text) => new TextEncoder().encode(JSON.stringify({ content: text, status: 'stopped' })).length;
+  let text = wellFormed(clip(content, PART_BYTES));             // знак — не меньше байта
+  if (size(text) > PART_BYTES) {
+    let low = 0;
+    let high = text.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (size(clip(text, mid)) <= PART_BYTES) low = mid;
+      else high = mid - 1;
+    }
+    text = clip(text, low);
+  }
+  return { content: text, status: 'stopped' };
+}
+
+/* Вкладку закрывают или перезагружают, пока она читает ответ прямого подключения: прочитанное — PUT с keepalive
+ * (обычный запрос уход страницы оборвал бы), иначе текст пропал бы, а диалог ещё ALIVE_SEC отвечал бы «ответ идёт в
+ * другой вкладке». Уже сохраняемый итог — тем же телом ещё раз (сервер примет тот же итог повторно). */
+window.addEventListener('pagehide', () => {
+  for (const job of jobs.values()) {
+    if (job.message.via !== 'browser' || !job.message.id) continue;
+    const body = job.saving || job.parted || (job.parted = partBody(job.message.content));
+    api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, body, { keepalive: true, unlock: false })
+      .catch(() => {});
+    job.controller.abort();
+  }
+});
 
 /* ---- источники ответа («Интернет») --------------------------------------------- */
 
@@ -1639,6 +1682,70 @@ function build(view, ctx) {
     });
   }
 
+  /* Варианты ответа: «Ответить заново» оставляет прежний ответ невыбранным вариантом — у последнего ответа
+     переключатель «‹ 1 / 2 ›» (`m.variants` с сервера, подпись модели — строкой под ответом) и на широком экране
+     «Сравнить» — все варианты колонками (`comparing` — диалоги, где сравнение открыто). Выбор — POST …/choose:
+     выбранный вариант уходит в следующий ход, поиск, «Поделиться» и экспорт; новый ход фиксирует выбор. */
+  const comparing = new Set();
+
+  async function chooseVariant(id, focus) {
+    const at = chatId;
+    try {
+      await api('POST', `/api/chats/${at}/messages/${encodeURIComponent(id)}/choose`);
+    } catch (err) {
+      if (chatId === at) notice.textContent = words(err);
+    }
+    if (chatId !== at) return;
+    await reload();
+    if (focus) feed.querySelector(`.msg[data-id="${CSS.escape(id)}"] ${focus}`)?.focus();
+  }
+
+  function variantSwitch(m, variants) {
+    const p = parts.get(m);
+    const at = variants.findIndex((v) => v.id === m.id);
+    const busy = sending || jobs.has(chatId) || remoteStream() || otherTab();
+    const step = (by, cls) => {
+      const label = by < 0 ? tr("Предыдущий вариант") : tr("Следующий вариант");
+      const go = iconButton(by < 0 ? 'prev' : 'next', label, { class: `icon-btn ${cls}`, disabled: busy });
+      go.addEventListener('click', () => chooseVariant(variants[(at + by + variants.length) % variants.length].id,
+        `.${cls}`));
+      return go;
+    };
+    const box = el('span', { class: 'msg-variant', role: 'group',
+      'aria-label': tr("Вариант {0} из {1}", at + 1, variants.length) },
+    step(-1, 'msg-variant-prev'), el('span', { class: 'msg-variant-at' }, `${at + 1} / ${variants.length}`),
+    step(1, 'msg-variant-next'));
+    const open = comparing.has(chatId);
+    const toggle = button(open ? tr("Скрыть сравнение") : tr("Сравнить"), { class: 'btn btn-sm msg-compare-toggle',
+      'aria-pressed': String(open) }, () => {
+      if (comparing.has(chatId)) comparing.delete(chatId);
+      else comparing.add(chatId);
+      paint(m);
+      p.actions.querySelector('.msg-compare-toggle')?.focus();
+    });
+    return [box, toggle];
+  }
+
+  /* сравнение: колонки «Вариант N · модель» с текстом каждого; не выбранный — «Выбрать этот вариант» */
+  function paintCompare(p, m, variants) {
+    const on = !!variants && comparing.has(chatId);
+    p.node.classList.toggle('comparing', on);
+    if (!on) {
+      p.compare.replaceChildren();
+      return;
+    }
+    const busy = sending || jobs.has(chatId) || remoteStream() || otherTab();
+    p.compare.replaceChildren(...variants.map((v, i) => el('section', {
+      class: `msg-compare-item${v.id === m.id ? ' chosen' : ''}`, 'data-id': v.id,
+      'aria-label': tr("Вариант {0} из {1}", i + 1, variants.length) },
+    el('p', { class: 'msg-compare-head small' }, tr("Вариант {0} · {1}", i + 1, v.model || '—')),
+    v.content ? el('div', { class: 'md' }, renderMarkdown(v.content, { highlight: true }))
+      : el('p', { class: 'muted small' }, v.error ? message(v.error) : tr("ответ не получен")),
+    v.id === m.id ? el('p', { class: 'muted small msg-compare-chosen' }, tr("Выбран"))
+      : button(tr("Выбрать этот вариант"), { class: 'btn btn-sm msg-compare-choose', disabled: busy },
+        () => chooseVariant(v.id, '.msg-compare-toggle')))));
+  }
+
   function messageNode(m, last) {
     if (m.role === 'user') {
       const box = el('div', { class: 'msg user', 'data-id': m.id });
@@ -1683,11 +1790,12 @@ function build(view, ctx) {
     const consent = el('div', { class: 'msg-consents' });
     const pending = el('div', { class: 'msg-pending' });
     const plan = el('div', { class: 'msg-todo' });
+    const compare = el('div', { class: 'msg-compare' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, plan, md, pending, resultFiles(chatId, m, root), consent, steps,
+      el('div', { class: 'msg-body' }, badge, think, plan, md, compare, pending, resultFiles(chatId, m, root), consent, steps,
         model, meta, nowait, actions));
     parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '',
-      pending, plan, model, planKey: '' });
+      pending, plan, model, planKey: '', node, compare });
     paint(m);
     return node;
   }
@@ -1836,8 +1944,11 @@ function build(view, ctx) {
     p.model.hidden = !m.model || m.status === 'streaming';
     if (!p.model.hidden) p.model.textContent = m.cleaner_raw != null || m.cleanerTurn || m.cleaner_sent
       ? tr("{0} · через Cleaner", m.model) : m.model;
+    const variants = m.status !== 'streaming' && m.variants?.length > 1 ? m.variants : null;
+    paintCompare(p, m, variants);
     p.actions.replaceChildren();
     if (m.status === 'streaming' && (job || m.via !== 'browser' || m.live)) return;   // «прервано» можно переспросить
+    if (variants) p.actions.append(...variantSwitch(m, variants));
     if (m.content) {
       const copy = button(tr("Копировать"), { class: 'btn btn-sm msg-copy' }, async () => {
         try {

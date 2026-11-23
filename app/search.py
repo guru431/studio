@@ -64,6 +64,9 @@ NFC_FLAG = "search:nfc"          # compose_once уже прошёл по это�
 #: `<таблица>_trash` делает подзапросы дешёвыми
 TRASHED = " AND ".join(f"NOT (d.section = '{s}' AND d.item IN (SELECT id FROM {t} WHERE user_id = ?"
                        " AND deleted IS NOT NULL))" for s, (t, _) in TITLES.items())
+#: невыбранные варианты ответа чата (`messages.unchosen`) — мимо выдачи и моделей: в поиск идёт выбранный; без
+#: параметров, подзапрос — по частичному индексу `messages_unchosen`
+UNCHOSEN = "NOT (d.section = 'chat' AND d.part IN (SELECT id FROM messages WHERE unchosen = 1))"
 #: строки индекса одной записи — те же выражения, что у триггеров и заполнения шага 13 (db.SEARCH_13); `?` — id
 _SCAN_BODY = db._TRANSCRIPT.replace("new.", "")
 ITEM_DOCS = {
@@ -242,7 +245,7 @@ async def find(body: SearchIn, request: Request):
     match = _match(body.q)
     if not match and not (body.section or body.model or body.since or body.until):
         raise HTTPException(400, EMPTY)
-    where, args = ["d.user_id = ?", KNOWN, TRASHED], [uid] * (1 + TRASHED.count("?"))
+    where, args = ["d.user_id = ?", KNOWN, TRASHED, UNCHOSEN], [uid] * (1 + TRASHED.count("?"))
     hidden = sorted(lock_policy.hidden(request.state.digest))
     if hidden:
         where.append("d.section NOT IN (" + ",".join("?" for _ in hidden) + ")")
@@ -324,7 +327,7 @@ async def models(request: Request):
     out: dict[str, list[str]] = {}
     hidden = lock_policy.hidden(request.state.digest)
     for row in state.DB.execute("SELECT DISTINCT d.section, d.model FROM search_docs d WHERE d.user_id = ?"
-                                f" AND d.model IS NOT NULL AND {TRASHED} ORDER BY d.section, d.model",
+                                f" AND d.model IS NOT NULL AND {TRASHED} AND {UNCHOSEN} ORDER BY d.section, d.model",
                                 (request.state.user.id,) * (1 + TRASHED.count("?"))):
         if row["section"] not in TITLES or row["section"] in hidden:
             continue

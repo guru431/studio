@@ -238,6 +238,42 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
         assert page.evaluate(last_saved) == ["streaming", ""]
 
 
+def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
+    """Вкладку закрывают посреди ответа прямого подключения (`pagehide`): прочитанное уходит PUT с keepalive и
+    сохранено «остановлен» — диалог не ждёт «ответа в другой вкладке»; длиннее предела тела keepalive — сохранено
+    начало, что влезло, а итог страницы совпадает с ним (сервер принимает тот же итог повторно). Настоящая
+    перезагрузка здесь не годится: запрос из уходящей страницы Playwright шлёт без заголовка cookie контекста."""
+    login = "pagehide-mid-answer"
+    live.add_user(login)
+    last_saved = """async () => { const m = await import('/static/js/api.js');
+      const last = (await m.api('GET', '/api/chats/' + location.hash.split('/')[2])).messages.at(-1);
+      return [last.status, last.content]; }"""
+    puts = []
+    try:
+        with opened(chromium, live, login, 1280) as page:
+            add_cloud(page, live)
+            page.on("request", lambda r: puts.append(r.post_data) if r.method == "PUT" else None)
+            live.cloud.chunk_pause = 4
+            for first in ("Начало ответа. ", "я" * 40000):
+                live.cloud.chat_reply = [first, "конец"]
+                puts.clear()
+                page.locator("#chat-input").fill("Расскажи")
+                page.locator("#send").click()
+                pw.expect(page.locator(LAST + " .md")).to_contain_text(first[:20])
+                page.evaluate("() => window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+                pw.expect(page.locator(LAST + " .msg-meta")).to_have_text("")
+                until(page, lambda: len(puts) == 2)
+                assert puts[0] == puts[1]                # keepalive и итог страницы — одно тело
+                status, answer = page.evaluate(last_saved)
+                assert status == "stopped"
+                if len(first) < 100:
+                    assert answer == first
+                else:                                # 80 КБ UTF-8 > PART_BYTES: начало, что влезло
+                    assert 20000 < len(answer) < 40000 and set(answer) == {"я"}
+    finally:
+        live.cloud.chunk_pause, live.cloud.chat_reply = 0.05, ["Облако ", "на связи."]
+
+
 @pytest.mark.parametrize("touch,width", [(True, 320), (False, 1280)])
 def test_enter_breaks_the_line_on_touch_screens_and_sends_on_desktop(engine, live, touch, width):
     """Экранной клавиатуре нечем набрать Shift+Enter: на сенсорном экране Enter в «Чате» и «Агентах» — перенос
