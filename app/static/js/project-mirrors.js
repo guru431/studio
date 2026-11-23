@@ -201,8 +201,14 @@ export function projectMirrors(host, trigger, aid, project) {
             if (!window.confirm(tr("Папка уже в группе копий с компьютерами: {0}. Присоединить этот проект к группе?", computers))) return null;
             data = { ...data, join: true };
           } else if (err.code === 'exists' && err.detail?.former && !data.replace) {
-            if (!window.confirm(tr("В группе уже есть прежняя копия этого компьютера — например, проект под прежним именем. Заменить её этим проектом? Файлы прежней папки останутся на компьютере."))) return null;
+            // Сервер называет прежнюю копию (имя её папки) — какому проекту назначена группа.
+            const former = err.detail.name
+              ? tr("В группе уже есть прежняя копия этого компьютера — папка «{0}». Заменить её этим проектом? Файлы прежней папки останутся на компьютере.", err.detail.name)
+              : tr("В группе уже есть прежняя копия этого компьютера — например, проект под прежним именем. Заменить её этим проектом? Файлы прежней папки останутся на компьютере.");
+            if (!window.confirm(former)) return null;
             data = { ...data, replace: true };
+          } else if (err.code === 'exists' && err.detail?.name) {
+            throw new Error(tr("{0} · папка «{1}»", words(err), err.detail.name));
           } else if (err.code === 'conflict' && err.detail?.computers?.length) {
             // Слияние групп отклонено: назвать компьютеры, где копии есть в обеих группах.
             throw new Error(tr("{0} · компьютеры: {1}", words(err), err.detail.computers.join(', ')));

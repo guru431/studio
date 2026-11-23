@@ -749,6 +749,7 @@ def test_renamed_project_rejoins_its_group_replacing_the_former_copy(studio, com
     assert found["name"] == source.name and found["grouped"] == ["Source"]
     refused = client.post(url, json={**settings, "join": True})
     assert refused.status_code == 409 and refused.json()["detail"]["former"] is True, refused.text
+    assert refused.json()["detail"]["name"] == source.name      # прежняя копия названа — какому проекту назначена
     relinked = client.post(url, json={**settings, "existing": True, "join": True, "replace": True})
     assert relinked.status_code == 201, relinked.text
     assert client.get(old_url).json()["copy"] is None
@@ -756,6 +757,20 @@ def test_renamed_project_rejoins_its_group_replacing_the_former_copy(studio, com
     assert client.post(url + f"/discover?destination={b}").json()["devices"] == []
     again = client.post(url, json={**settings, "join": True, "replace": True})
     assert again.status_code == 409 and "former" not in again.json()["detail"]
+
+
+def test_second_copy_on_the_same_computer_names_the_existing_one(studio, computers, caplog):
+    """У проекта уже есть копия на компьютере — отказ `exists` называет её папку (имя, без пути), журнал — нет."""
+    source, first, second = computers
+    a, b = signed_in(studio, first, second)
+    client = studio.c
+    roots = mirror.projects.list_roots(second.roots)
+    url = mirrors(a, pid(source.name))
+    assert client.post(url, json={"destination": b, "root": roots[1]["id"], "name": source.name}).status_code == 201
+    refused = client.post(url, json={"destination": b, "root": roots[0]["id"], "name": "other-copy"})
+    detail = refused.json()["detail"]
+    assert refused.status_code == 409 and detail["code"] == "exists" and detail["name"] == source.name, refused.text
+    assert roots[1]["path"] not in caplog.text and "other-copy" not in caplog.text
 
 
 def test_bridge_without_groups_is_refused_as_source_and_still_works_as_destination(studio, computers):

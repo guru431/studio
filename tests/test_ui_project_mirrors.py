@@ -381,6 +381,10 @@ def test_mirror_dialog_rejoins_the_group_of_the_project_under_its_former_name(br
         (aid, pid("former"), target, root["id"], mirror_groups.name_key("former"),
          security.encrypt(json.dumps({"folder": root["path"], "name": "former"}))))
     assert mirror_groups.adopt() == 1
+    # Адрес прежней копии известен — подтверждение называет её папку.
+    former = mirror_groups.find(aid, pid("former"))
+    mirror_groups.place(former["id"], project=pid("former"), root=mirror.projects.list_roots(first.roots)[0]["id"],
+                        name="former", folder=first.roots[0])
     found = "#code-mirror-discovery"
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"code/{aid}/{pid(source.name)}"),
@@ -404,7 +408,7 @@ def test_mirror_dialog_rejoins_the_group_of_the_project_under_its_former_name(br
     assert not result.get("failed"), result
     assert "В группе копий с Source" in result["values"]["found"]
     confirmation, = result["values"]["confirmations"]
-    assert "Заменить её этим проектом?" in confirmation
+    assert "папка «former»" in confirmation and "Заменить её этим проектом?" in confirmation
     assert result["values"]["rows"] == 1
     mine = mirror_groups.find(aid, pid(source.name))
     assert mine is not None and mirror_groups.find(aid, pid("former")) is None
