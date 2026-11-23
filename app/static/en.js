@@ -1,5 +1,7 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Этот сервер MCP не предоставляет инструмент для изменения фото": "This MCP server has no photo editing tool",
+  "Повтор с тем же промптом и моделью, с новым seed, если инструмент его поддерживает.": "Repeat with the same prompt and model, using a new seed if the tool supports it.",
   "Картинка будет удалена из истории.": "The picture will be removed from history.",
   "Сохраняю": "Saving",
   "В принудительном режиме внешние модели Studio работают через Cleaner. В Open WebUI доступна история, отправка закрыта. Флажок ниже дополнительно ограничивает веб-инструменты и внешние MCP.": "In forced mode, external Studio models use Cleaner. Open WebUI history is available and sending is disabled. The option below also restricts web tools and external MCP servers.",

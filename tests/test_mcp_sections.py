@@ -326,7 +326,7 @@ def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio
     route = f"/api/mcp-tools/photo/servers/{sid}/run"
     for prompt in ("a red cup", "a blue plate"):
         reply = studio.c.post(route, json={"tool": "image_generate", "record": True,
-                                           "arguments": {"prompt": prompt}})
+                                           "arguments": {"prompt": prompt, "size": "832x1216", "seed": 12345}})
         assert reply.status_code == 200, reply.text
         assert reply.json()["history"]["status"] == "completed"
     items = studio.c.get("/api/mcp-tools/photo/history").json()["items"]
@@ -337,7 +337,11 @@ def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio
     latest = studio.c.get("/api/images?limit=1").json()["items"][0]
     older = studio.c.get("/api/images", params={"before": latest["created"], "before_id": latest["id"]}).json()["items"]
     assert len(older) == 1 and older[0]["id"] != latest["id"]
-    assert studio.c.get("/api/images/" + latest["id"]).json()["media_id"] == latest["media_id"]
+    saved = studio.c.get("/api/images/" + latest["id"]).json()
+    assert saved["media_id"] == latest["media_id"]
+    assert saved["chain"][0]["prompt"] == saved["prompt"]
+    assert saved["chain"][0]["seed"] == 12345 and saved["size"] == "832x1216"
+    assert saved["mcp_server_id"] == sid and saved["mcp_tool"] == "image_generate"
     first = "/api/mcp-tools/photo/history/" + items[1]["id"]
     url = studio.c.get(first).json()["result"]["files"][0]["url"]
     assert studio.c.get(url).content == PNG_REAL
@@ -347,6 +351,11 @@ def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio
     assert studio.c.get(files[0]["preview"]["url"]).content == PNG_REAL
     make_user(studio, "other-history")
     signin(studio, "other-history")
+    other = add(studio)
+    blocked = studio.c.post(f"/api/mcp-tools/photo/servers/{other}/run",
+                            json={"photo_job_id": saved["mcp_job_id"], "tool": "image_generate",
+                                  "arguments": {"prompt": saved["prompt"]}})
+    assert blocked.status_code == 404
     assert studio.c.get(first).status_code == 404
     assert studio.c.get(url).status_code == 404
     assert studio.c.post("/api/my-files/0/list", json={"path": ""}).json()["entries"] == []

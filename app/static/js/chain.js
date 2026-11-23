@@ -26,7 +26,7 @@ export function isExternal(model) {
 
 /** Seed, который стоит показывать (null — нет: внешний сервис его не получает). */
 export function seedOf(step) {
-  return step.seed !== undefined && step.seed !== null && !isExternal(step.model) ? step.seed : null;
+  return step.seed !== undefined && step.seed !== null && (!isExternal(step.model) || step.mcp_job_id) ? step.seed : null;
 }
 
 /** Сила, фактически переданная модели при создании записи. */
@@ -38,7 +38,7 @@ export function strengthOf(step) {
 export function paramParts(step) {
   const seed = seedOf(step);
   const strength = strengthOf(step);
-  return [step.model && (NAMES[step.model] || step.model), step.size && String(step.size).replace('x', '×'),
+  return [(step.model && (NAMES[step.model] || step.model)) || step.server, step.size && String(step.size).replace('x', '×'),
     seed !== null ? `seed ${seed}` : '', strength !== null ? tr("сила {0}", strength) : ''];
 }
 
@@ -47,7 +47,7 @@ function meta(step, n) {
   const parts = step.kind === 'video'
     ? [tr("{0} с", step.seconds), RESOLUTION[step.quality] || step.quality]
     : paramParts(step);
-  return [`${n}. ${KINDS[step.kind] || step.kind}`, ...parts, date].filter(Boolean).join(' · ');
+  return [`${n}. ${KINDS[step.kind] || step.kind}`, ...parts, step.model ? step.server : null, date].filter(Boolean).join(' · ');
 }
 
 function thumb(step, isNow, onOpen) {

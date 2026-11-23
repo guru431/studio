@@ -3116,6 +3116,8 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
               " return [c.querySelector('.card-prompt').textContent, c.querySelector('.card-meta').textContent,"
               " c.querySelector('img').getAttribute('srcset'), o.width / o.height]; })()")
     r = browser.drive(live.url + "/", [*photo_screen(login, cards=3), ("wait", done_cards(3)),
+        ("eval", "defaultView", "document.querySelector('#photo-feed').dataset.view"),
+        ("click", "#photo-view"), ("click", "#photo-view-tiles"),
         ("eval", "pressed", "[...document.querySelectorAll('#view .view-menu [aria-checked=true]')].map(b => b.id)"),
         ("eval", "tiles", grid_cols("#photo-feed")),
         ("click", "#photo-view"), ("click", "#photo-view-table"),
@@ -3136,6 +3138,7 @@ def test_photo_views_preview_tiles_and_table_are_kept(browser, live, width):
         width=width, mobile=width == 390)
     assert not r.get("failed"), r
     v = r["values"]
+    assert v["defaultView"] == "table"
     assert v["pressed"] == ["photo-view-tiles"] and v["tiles"] == (6 if width == 1280 else 2)
     assert v["head"] == ("grid" if width == 1280 else "none") and v["aligned"] and v["tableFits"]
     assert [row[0] for row in v["rows"]] == ["кот 2", "кот 1", "кот 0"]
@@ -3163,14 +3166,14 @@ def test_views_menu_closes_by_choice_escape_and_outside(browser, live, width):
     shows = "document.querySelector('#photo-view svg').innerHTML === document.querySelector('#photo-view-{0} svg').innerHTML"
     r = browser.drive(live.url + "/", [*photo_screen(login),
         ("eval", "button", f"[!{menu}.matches(':popover-open'), document.querySelector('#photo-view').getAttribute('aria-haspopup'),"
-                           f" {shows.format('tiles')}]"),
+                           f" {shows.format('table')}]"),
         ("click", "#photo-view"), ("wait", f"{menu}.matches(':popover-open')"),
         ("eval", "items", f"[...{menu}.children].map(b => [b.id, b.getAttribute('role'), b.getAttribute('aria-checked'),"
                           " b.textContent.trim(), !!b.querySelector('svg')])"),
         ("eval", "inside", f"(() => {{ const b = {menu}.getBoundingClientRect();"
                            f" return b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight && {NO_OVERFLOW}; }})()"),
-        ("click", "#photo-view-table"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'table'"),
-        ("eval", "chosen", state), ("eval", "shows", shows.format("table")),
+        ("click", "#photo-view-tiles"), ("wait", "document.querySelector('#photo-feed').dataset.view === 'tiles'"),
+        ("eval", "chosen", state), ("eval", "shows", shows.format("tiles")),
         ("click", "#photo-view"), ("wait", f"{menu}.matches(':popover-open')"), ("press", "Escape"),
         ("eval", "escaped", state),
         ("click", "#photo-view"), ("wait", f"{menu}.matches(':popover-open')"), ("click", ".photo .head h1"),
@@ -3180,8 +3183,8 @@ def test_views_menu_closes_by_choice_escape_and_outside(browser, live, width):
     v = r["values"]
     assert v["button"] == [True, "menu", True]
     assert v["items"] == [["photo-view-preview", "menuitemradio", "false", "Превью", True],
-                          ["photo-view-tiles", "menuitemradio", "true", "Плитка", True],
-                          ["photo-view-table", "menuitemradio", "false", "Таблица", True]]
+                          ["photo-view-tiles", "menuitemradio", "false", "Плитка", True],
+                          ["photo-view-table", "menuitemradio", "true", "Таблица", True]]
     assert v["inside"] and v["shows"]
     assert v["chosen"] == [True, "false", "photo-view"]
     assert v["escaped"] == [True, "false", "photo-view"]

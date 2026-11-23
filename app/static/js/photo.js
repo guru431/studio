@@ -129,7 +129,7 @@ function build(view, ctx) {
       shown: (items) => items.length === 2 && items.every((i) => i.state === 'done' && i.media_id),
       run: ([a, b]) => openCompare(root, { media_id: a.media_id, label: paramParts(a).filter(Boolean).join(' · ') },
         { media_id: b.media_id, label: paramParts(b).filter(Boolean).join(' · ') }) }] });
-  const layout = viewSwitch('photo', 'tiles', (name) => {
+  const layout = viewSwitch('photo', 'table', (name) => {
     feedBox.dataset.view = name;
     feed.redraw();
   });
@@ -595,10 +595,10 @@ function build(view, ctx) {
 
   /** «Повторить» неудачной и отменённой: то же тело, что у «Повторить» просмотра (repeatBody); без модели раздела — нет. */
   function repeatButton(item) {
-    if (ctx.hint || item.mcp_job_id) return null;
+    if (!canRepeatPhoto(item)) return null;
     const busy = isBusy();
     return button(tr("Повторить"), { class: 'btn-link card-repeat', disabled: busy,
-      title: busy ? tr("Дождитесь конца текущего задания") : null }, () => create(repeatBody(item)));
+      title: busy ? tr("Дождитесь конца текущего задания") : null }, () => repeatPhoto(item));
   }
 
   function noteText(item) {
@@ -747,6 +747,31 @@ function build(view, ctx) {
     });
   }
 
+  function canRepeatPhoto(item) {
+    return item.mcp_job_id ? Boolean(item.prompt) && (item.kind !== 'edit' || !!item.source_media_id) : !ctx.hint;
+  }
+
+  function mcpSource(item) {
+    return item.mcp_job_id ? item.mcp_server_id + ':' + item.mcp_tool : undefined;
+  }
+
+  function repeatPhoto(item, count, viewer, fail = error) {
+    const key = mcpSource(item);
+    if (!key) return create(repeatBody(item));
+    if (!mcp.option(key)) {
+      fail.textContent = tr("Инструмент MCP недоступен");
+      return false;
+    }
+    const seed = count === undefined ? item.seed ?? undefined : undefined;
+    const files = item.source_media_id ? { artifact_id: { mediaId: item.source_media_id } } : {};
+    return mcp.run({ prompt: item.prompt, model: item.model || undefined, size: item.size || undefined,
+      seed, strength: item.strength ?? undefined, n: count ?? 1 }, { files, source: key, photoJobId: item.mcp_job_id }).then(ok => {
+      if (!ok) fail.textContent = mcp.error || tr("Инструмент MCP недоступен");
+      else viewer?.close();
+      return ok;
+    });
+  }
+
   function repeatBody(item) {
     const known = SIZES.find((s) => s[2] === item.size);
     const body = { prompt: item.prompt, model: item.model, size: known ? known[0] : 'original', seed: item.seed };
@@ -761,34 +786,36 @@ function build(view, ctx) {
   /** «Ещё варианты»: тело «Повторить» без seed (его выбирает студия) и серия по seed; правка кистью — по одному
    * варианту (серии с маской сервер не принимает). Новые записи — в начало ленты (adopt). */
   function chooseVariants(item, after = () => {}) {
-    const top = item.mask_media_id ? 1 : SERIES_MAX;
+    const key = mcpSource(item);
+    const limit = key ? mcp.option(key)?.schema.properties?.n?.maximum : SERIES_MAX;
+    const top = item.mask_media_id || !Number.isFinite(limit) ? 1 : Math.max(1, Math.min(SERIES_MAX, Math.floor(limit)));
     const count = el('select', { id: 'photo-variants-count', 'aria-label': tr("Сколько вариантов") },
       ...Array.from({ length: top }, (_, i) => el('option', { value: String(i + 1) }, String(i + 1))));
     const fail = el('p', { class: 'error', 'aria-live': 'polite' });
     const go = button(tr("Сделать"), { class: 'btn btn-accent', id: 'photo-variants-go', disabled: isBusy() });
     const dialog = openDialog(root, { id: 'photo-variants-dialog', title: tr("Ещё варианты"),
-      body: [el('p', {}, item.mask_media_id ? tr("Тот же промпт, модель, исходник и маска; seed — новый. Правка кистью — по одному варианту.")
+      body: [el('p', {}, key ? tr("Повтор с тем же промптом и моделью, с новым seed, если инструмент его поддерживает.") : item.mask_media_id ? tr("Тот же промпт, модель, исходник и маска; seed — новый. Правка кистью — по одному варианту.")
         : tr("Тот же промпт, модель, размер и исходник; seed у каждой картинки — новый.")),
       el('label', {}, tr("Картинок: "), count), fail], actions: [go] });
     go.addEventListener('click', async () => {
-      const body = repeatBody(item);
-      delete body.seed;
+      const body = key ? null : repeatBody(item);
+      if (body) delete body.seed;
       const n = Number(count.value);
-      if (n > 1) body.series = { count: n, vary: 'seed' };
+      if (body && n > 1) body.series = { count: n, vary: 'seed' };
       go.disabled = true;
       fail.textContent = '';
-      if (await create(body)) {
+      if (await (key ? repeatPhoto(item, n, null, fail) : create(body))) {
         dialog.close();
         after();
       } else {
-        fail.textContent = error.textContent;
+        if (!key) fail.textContent = error.textContent;
         go.disabled = isBusy();
       }
     });
   }
 
   function variantsButton(item, cls, after) {
-    if (ctx.hint || item.mcp_job_id) return null;
+    if (!canRepeatPhoto(item)) return null;
     const busy = isBusy();
     return button(tr("Ещё варианты"), { class: `${cls} card-variants`, disabled: busy,
       title: busy ? tr("Дождитесь конца текущего задания") : null }, () => chooseVariants(item, after));
@@ -801,15 +828,20 @@ function build(view, ctx) {
       viewer.close();
       prompt.value = item.prompt;
       autosize();
-      const same = choices.filter(([, , c]) => c.model === item.model);
+      const fromMcp = item.mcp_job_id && mcp.selectSource(mcpSource(item), item.model);
+      const same = !item.mcp_job_id ? choices.filter(([, , c]) => c.model === item.model) : [];
       if (same.length) {
+        mcp.useNative();
         choice = (same.find(([key]) => key === choiceKey(choice)) || same[0])[2];
         chipModel.paint();
         say('', false);
+      } else if (item.mcp_job_id) {
+        say(fromMcp ? '' : tr("Инструмент MCP недоступен"), !fromMcp);
       } else {
+        mcp.useNative();
         say(tr("модели «{0}» нет в разделе — выбрана текущая", modelLabel(item.model)), false);
       }
-      const known = SIZES.find((s) => s[2] === item.size);
+      const known = sizes.find((s) => s[2] === item.size);
       if (known) {
         size = known[0];
         chipSize.paint();
@@ -853,7 +885,10 @@ function build(view, ctx) {
 
   /* просмотр */
   function openViewer(item, gallery = null, opener = document.activeElement) {
-    const canGenerate = !ctx.hint && !item.mcp_job_id;
+    const canNative = !ctx.hint;
+    const remoteSource = mcpSource(item);
+    const canRepeat = canRepeatPhoto(item);
+    const editSource = () => mcp.editSource(item.mcp_server_id);
     const img = el('img', { src: media(item.media_id), alt: tr("Картинка") });
     const stage = el('div', { class: 'viewer-stage' }, img);
     const close = iconButton('x', tr("Закрыть"), { class: 'icon-btn viewer-close' });
@@ -861,15 +896,30 @@ function build(view, ctx) {
     const dialog = el('dialog', { id: 'viewer', class: 'viewer', 'aria-label': tr("Просмотр картинки") });
     const starts = [
       act(tr("Изменить"), 'act-edit', () => {
+        const edit = remoteSource && editSource();
+        if (remoteSource && !edit) {
+          missing.textContent = tr("Этот сервер MCP не предоставляет инструмент для изменения фото");
+          return;
+        }
         dialog.close();
+        if (edit) {
+          mcp.selectSource(edit, item.model);
+          setSource(null, item.media_id);
+          prompt.focus();
+          return;
+        }
+        mcp.useNative();
         openEditor(item, choice, (created) => {
           adopt(created.ids || [created.id]);
           kick();
         });
       }),
-      act(isExternal(item.model) ? tr("Повторить") : tr("Повторить с тем же seed"), 'act-repeat', () => {
-        dialog.close();
-        create(repeatBody(item));
+      act((remoteSource ? item.seed == null : isExternal(item.model)) ? tr("Повторить") : tr("Повторить с тем же seed"), 'act-repeat', () => {
+        if (remoteSource) repeatPhoto(item, undefined, dialog, missing);
+        else {
+          dialog.close();
+          repeatPhoto(item);
+        }
       }),
       act(tr("Описать"), 'act-describe', () => {
         dialog.close();
@@ -877,21 +927,21 @@ function build(view, ctx) {
       }),
       act(tr("Ещё варианты"), 'act-variants', () => chooseVariants(item, () => dialog.close()))];
     // без модели раздела «Изменить», «Повторить», «Ещё варианты» и «В поле» не начать — их нет; «Описать» решает шлюз раздела
-    const actions = el('div', { class: 'viewer-actions' }, canGenerate ? starts[0] : null,
+    const actions = el('div', { class: 'viewer-actions' }, canNative || remoteSource ? starts[0] : null,
       act(tr("Создать видео"), 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
       }),
-      canGenerate ? starts[1] : null, canGenerate ? starts[3] : null, starts[2],
-      canGenerate ? act(tr("В поле"), 'act-to-field', () => toField(item, dialog)) : null,
+      canRepeat ? starts[1] : null, canRepeat ? starts[3] : null, starts[2],
+      item.prompt && (canNative || remoteSource) ? act(tr("В поле"), 'act-to-field', () => toField(item, dialog)) : null,
       act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
       // ссылка «Поделиться» на картинку (chat_shares.ITEMS): картинка, промпт и модель
-      item.mcp_job_id ? null : act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
+      remoteSource ? null : act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
         tr("Картинка"), api, { kind: 'images' })),
       act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
     syncBusy();
-    const missing = el('p', { class: 'error small', 'aria-live': 'polite' });
+    const missing = el('p', { id: 'photo-viewer-error', class: 'error small', 'aria-live': 'polite' });
     const onOpen = async (id) => {
       try {
         const step = await api('GET', `/api/images/${encodeURIComponent(id)}`);

@@ -258,6 +258,7 @@ class RunIn(BaseModel):
     files: dict[str, FileIn] = Field(default_factory=dict, max_length=1)
     voice_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
     record: bool = False
+    photo_job_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
 
 
 def ticket(session: mcp.Session, section: str, kind: str, *payload) -> str:
@@ -560,6 +561,11 @@ async def run(section: str, sid: int, request: Request):
         raise mcp.refused("Неверные параметры инструмента MCP", "invalid", 422) from None
     if body.tool not in names or len(arguments) > PARAMS_MAX or not access.tool_allowed(uid, sid, body.tool):
         raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
+    if body.photo_job_id:
+        prior = history_row(uid, "photo", body.photo_job_id)
+        if section != "photo" or (prior["server_id"], prior["tool"], prior["stamp"]) != (
+                sid, body.tool, mcp_sources.stamp(session.stamp)):
+            raise mcp.refused("Подключение или права MCP изменились")
     try:
         async with asyncio.timeout(DISCOVERY_TIMEOUT):
             listed = await session.tools()
@@ -593,7 +599,7 @@ async def run(section: str, sid: int, request: Request):
         jid = data.get("id") if isinstance(data, dict) else None
         if body.record:
             remote_id = jid if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid) else None
-            return await record_result(session, section, item["name"], body.tool, args, result, remote_id)
+            return await record_result(session, section, item["name"], body.tool, args, result, remote_id, body.files)
         if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid):
             return {"job": ticket(session, section, "job", jid), "status": "queued"}
         return await shown(session, section, result)
@@ -644,16 +650,29 @@ def history_view(row, *, details=True):
     return output
 
 
-async def record_result(session, section, server, tool, args, result, remote_id):
+async def record_result(session, section, server, tool, args, result, remote_id, input_files):
     operations.check(session.uid)
     rid = uuid.uuid4().hex
     stamp = mcp_sources.stamp(session.stamp)
     prompt = clean_text(args.get("prompt") or args.get("text"), 24_000)
     model = clean_text(args.get("model"), MODEL_ID_MAX)
+    metadata = {}
+    if section == "photo":
+        source = input_files.get("artifact_id")
+        if source is not None and source.media_id is not None:
+            metadata["source_media_id"] = source.media_id
+        size = args.get("size")
+        if isinstance(size, str) and re.fullmatch(r"[1-9][0-9]{0,4}x[1-9][0-9]{0,4}", size):
+            metadata["size"] = size
+        seed, strength = args.get("seed"), args.get("strength")
+        if type(seed) is int and 0 <= seed <= 2**53 - 1 and args.get("n", 1) == 1:
+            metadata["seed"] = seed
+        if type(strength) in (int, float) and 0 <= strength <= 1:
+            metadata["strength"] = strength
     state.DB.execute("INSERT INTO mcp_section_jobs(id, user_id, section, server_id, server, tool, model, prompt, "
-                     "created, stamp, remote_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (rid, session.uid, section, session.sid, server, tool, model, prompt,
-                      clock.NOW(), stamp, remote_id, "queued" if remote_id else "saving"))
+                     "created, stamp, remote_id, status, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (rid, session.uid, section, session.sid, server, tool, model, prompt, clock.NOW(), stamp,
+                      remote_id, "queued" if remote_id else "saving", json.dumps({"photo": metadata}) if metadata else None))
     if remote_id is None:
         try:
             await save_history(session, section, rid, result)
@@ -704,6 +723,13 @@ async def save_history(session, section, rid, result):
         saved.append({"mime": mime, "name": name, "url": f"/api/media/{mid}"})
     output["files"] = saved
     operations.check(session.uid)
+    if section == "photo":
+        stored = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone()[0]
+        output["photo"] = images.mcp_photo_metadata(output | (json.loads(stored) if stored else {}))
+        if isinstance(data, dict) and len(saved) == 1:
+            seed = data.get("seed")
+            if type(seed) is int and 0 <= seed <= 2**53 - 1:
+                output["photo"]["seed"] = seed
     state.DB.execute("BEGIN")
     try:
         state.DB.executemany("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",

@@ -56,6 +56,7 @@ import io
 import json
 import logging
 import math
+import re
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -590,7 +591,8 @@ async def create_job(request: Request):
 # MCP files already belong to section history. Project them into the photo feed without copying them.
 MCP_PHOTOS = """
 SELECT COALESCE(m.id, j.id) AS id, j.user_id, j.id AS mcp_job_id, j.server AS mcp_server,
-       j.tool, j.status, j.error, j.model, j.prompt, j.created, m.id AS media_id
+       j.tool, j.status, j.error, j.model, j.prompt, j.created, m.id AS media_id, j.server_id, json_extract(j.result, '$.photo') AS photo,
+       substr(json_extract(j.result, '$.text'), 1, 100) AS report
 FROM mcp_section_jobs j
 LEFT JOIN mcp_section_files f ON f.job_id = j.id AND f.user_id = j.user_id
 LEFT JOIN media m ON m.id = f.media_id AND m.user_id = j.user_id AND m.mime LIKE 'image/%'
@@ -600,16 +602,30 @@ WHERE j.section = 'photo' AND j.tool IN ('image_generate','image_edit','generate
 
 
 def _mcp_photo_out(row):
+    metadata = mcp_photo_metadata({"photo": json.loads(row["photo"]) if row["photo"] else {}, "text": row["report"] or ""})
+    size, seed = metadata.get("size", ""), metadata.get("seed")
+    step = {"image_id": row["id"], "kind": "edit" if row["tool"] in ("image_edit", "edit_image") else "generation",
+            "model": row["model"], "server": row["mcp_server"], "prompt": row["prompt"], "size": size,
+            "seed": seed, "mcp_job_id": row["mcp_job_id"], "created": row["created"], "media_id": row["media_id"]}
     status = row["status"]
     progress = {"queued": "В очереди", "waiting_gpu": "Ожидает GPU", "running": "Генерирую", "saving": "Сохраняю"}
     shown = "done" if row["media_id"] else "queued" if status in progress else "error"
-    return {"id": row["id"], "mcp_job_id": row["mcp_job_id"], "mcp_server": row["mcp_server"],
-            "kind": "edit" if row["tool"] in ("image_edit", "edit_image") else "generation",
-            "state": shown, "detail": row["error"] or progress.get(status, ""),
-            "elapsed": 0,
-            "model": row["model"], "prompt": row["prompt"], "created": row["created"], "media_id": row["media_id"],
-            "size": "", "seed": None, "strength": None, "source_media_id": None, "mask_media_id": None,
-            "steps": 0, "chain": []}
+    return {**step, "id": row["id"], "mcp_server": row["mcp_server"], "mcp_server_id": row["server_id"],
+            "mcp_tool": row["tool"], "state": shown, "detail": row["error"] or progress.get(status, ""),
+            "elapsed": 0, "strength": metadata.get("strength"), "source_media_id": metadata.get("source_media_id"), "mask_media_id": None,
+            "steps": 1, "chain": [step]}
+
+
+def mcp_photo_metadata(result):
+    """Поля сохранённой операции и метаданные формата Spark из прежних записей."""
+    metadata = dict(result.get("photo") or {})
+    match = re.match(r"^([1-9][0-9]{0,4})[×x]([1-9][0-9]{0,4}), ([0-9]{1,3}) шт\., seed ([0-9]{1,16})\.", result.get("text", ""))
+    if match:
+        width, height, count, seed = match.groups()
+        metadata["size"] = f"{width}x{height}"
+        if count == "1" and int(seed) <= 2**53 - 1:
+            metadata["seed"] = int(seed)
+    return metadata
 
 
 def _mcp_photo_row(uid, image_id):

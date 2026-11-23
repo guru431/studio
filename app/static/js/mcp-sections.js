@@ -351,28 +351,28 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     }
   }
 
-  async function run(values, { files = {}, voiceId } = {}) {
-    const choice = picked();
+  async function run(values, { files = {}, voiceId, source, photoJobId } = {}) {
+    const choice = source ? options.get(source) : picked();
     if (!choice || busy()) return false;
     const { server, tool } = choice;
-    const current = { starting: true, key: select.value, photo: onPhoto && PHOTO_TOOLS.has(tool.name) };
+    const current = { starting: true, key: source || select.value, photo: onPhoto && PHOTO_TOOLS.has(tool.name) };
     records.set(place, current);
     paint();
     try {
-      const args = Object.fromEntries(Object.entries({ ...extra?.values(), ...values })
-        .filter(([key, value]) => has(key) && value !== undefined));
+      const args = Object.fromEntries(Object.entries({ ...(!source && extra?.values()), ...values })
+        .filter(([key, value]) => Object.hasOwn(tool.schema.properties || {}, key) && value !== undefined));
       if (Object.hasOwn(tool.schema.properties || {}, 'model') && !Object.hasOwn(args, 'model')
         && typeof tool.schema.properties.model.default === 'string' && tool.schema.required?.includes('model')) {
         args.model = tool.schema.properties.model.default;
       }
-      const sources = Object.entries(files).filter(([key, value]) => hasFile(key) && value);
+      const sources = Object.entries(files).filter(([key, value]) => Object.hasOwn(tool.files, key) && value);
       const supplied = new Set([...Object.keys(args), ...sources.map(([key]) => key)]);
       if (voiceId) ['reference_artifact_id', 'reference_text'].forEach(key => supplied.add(key));
       const missing = tool.schema.required?.find(key => !supplied.has(key));
       if (missing) throw new Error(tr("Для MCP заполните поле «{0}»", tool.schema.properties[missing].title || (missing === 'model' ? tr("Модель") : missing)));
       const inputs = Object.fromEntries(await Promise.all(sources.map(async ([key, value]) => [key, await fileData(value, limit)])));
       const reply = await api('POST', `${base}/servers/${server.id}/run`, { tool: tool.name, arguments: args, files: inputs,
-        ...(voiceId ? { voice_id: voiceId } : {}), ...(place === section ? { record: true } : {}) });
+        ...(voiceId ? { voice_id: voiceId } : {}), ...(photoJobId ? { photo_job_id: photoJobId } : {}), ...(place === section ? { record: true } : {}) });
       if (reply.history) {
         const saved = reply.history;
         current.id = saved.id;
@@ -479,6 +479,24 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
   });
   return { control, output, fields: extras, has, hasFile, run, clear,
+    option(key) { return options.get(key)?.tool; },
+    editSource(sid) {
+      return [...options].find(([key, { server, tool }]) => (!sid || server.id === sid)
+        && ['image_edit', 'edit_image'].includes(tool.name) && Object.hasOwn(tool.files, 'artifact_id'))?.[0];
+    },
+    selectSource(key, model) {
+      if (!options.has(key)) return false;
+      select.value = key;
+      paintFields();
+      const field = extra?.querySelector('[data-field="model"]');
+      if (field && model && (field.tagName !== 'SELECT' || [...field.options].some(o => o.value === model))) {
+        field.value = model;
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      paintState();
+      onChange?.();
+      return true;
+    },
     argument(key) { return picked()?.tool.schema.properties?.[key]; },
     limits(key) { return schemaLimits(picked()?.tool.schema.properties?.[key]); },
     canClone() {
@@ -492,7 +510,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       paintFields();
       onChange?.();
     },
-    get tool() { return picked()?.tool.name; }, get busy() { return busy(); },
+    get tool() { return picked()?.tool.name; }, get busy() { return busy(); }, get error() { return record()?.error; },
     /** Предел записи инструмента, с (`studio/limits`, mcp_sections.supported) или null. */
     get maxSeconds() { return picked()?.tool.limits?.max_seconds ?? null; },
     get server() { return picked()?.server.name; },          // имя сервера выбранного инструмента (голоса «Озвучки»)
