@@ -228,6 +228,8 @@ async def enable(body: EnableIn, request: Request):
                          (security.encrypt(secret_b32), step, uid))
         state.DB.executemany("INSERT INTO totp_backup(user_id, digest) VALUES (?, ?)",
                              [(uid, _backup_digest(uid, c)) for c in codes])
+        # начатый вход кодом из письма (и «Отправить код ещё раз») впустил бы без приложения
+        state.DB.execute("DELETE FROM email_tokens WHERE user_id = ? AND kind IN ('login', 'bridge')", (uid,))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")

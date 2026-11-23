@@ -147,6 +147,9 @@ def token_row(token: str, kind: str):
             or row["password_stamp"] != security.digest(row["pw_hash"])
             or (kind in ("login", "bridge", "reset") and row["email"] != row["current_email"])):
         raise invalid_token()
+    import totp
+    if kind in ("login", "bridge") and totp.enabled(row["user_id"]):   # приложение включили, пока шло письмо
+        raise invalid_token()
     return row
 
 

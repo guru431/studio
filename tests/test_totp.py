@@ -114,6 +114,33 @@ def test_same_code_is_not_accepted_twice_and_wrong_codes_count(studio, mail):
     assert studio.c.post("/account/code", json={"code": code_now(studio, secret, 1)}).status_code == 429
 
 
+def test_enabling_the_app_voids_an_email_sign_in_already_in_progress(studio, mail):
+    """R2-2: вход кодом из письма, начатый до включения приложения, не должен впускать без него — ни прежним кодом,
+    ни «Отправить код ещё раз»."""
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    data = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD}).json()
+    session = list(studio.c.cookies.jar)
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/account/code"
+    mailed = mail[-1][2].rsplit("\n", 1)[-1]
+    challenge = list(studio.c.cookies.jar)
+    studio.c.cookies.clear()
+    for cookie in session:
+        studio.c.cookies.jar.set_cookie(cookie)
+    secret = base64.b32decode(data["secret"])
+    assert studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": code_now(studio, secret)}).status_code == 200
+    studio.c.cookies.clear()
+    for cookie in challenge:
+        studio.c.cookies.jar.set_cookie(cookie)
+    response = studio.c.post("/account/code/resend", json={})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "expired"
+    response = studio.c.post("/account/code", json={"code": mailed})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "expired"
+    assert studio.c.get("/api/me").status_code == 401
+
+
 def test_non_ascii_digits_are_an_ordinary_wrong_code(studio, mail):
     """R2-5: `\\d` пропускал цифры Unicode, а `hmac.compare_digest` на не-ASCII строке падал — 500 без `totp_fail`."""
     uid = make_user(studio, "owner")
