@@ -1,5 +1,7 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Картинка будет удалена из истории.": "The picture will be removed from history.",
+  "Сохраняю": "Saving",
   "В принудительном режиме внешние модели Studio работают через Cleaner. В Open WebUI доступна история, отправка закрыта. Флажок ниже дополнительно ограничивает веб-инструменты и внешние MCP.": "In forced mode, external Studio models use Cleaner. Open WebUI history is available and sending is disabled. The option below also restricts web tools and external MCP servers.",
   "Выберите модель": "Choose a model",
   "История MCP": "MCP history",

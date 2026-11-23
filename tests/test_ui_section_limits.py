@@ -1,4 +1,5 @@
 """Формы «Видео» и «Фото» берут пределы из схемы инструмента MCP; бессмысленная схема оставляет свои пределы."""
+import base64
 import json
 
 import pytest
@@ -39,7 +40,7 @@ BAD = {
 UPLOADED = "art_" + "c" * 32
 
 
-def serve(gateway, tools):
+def serve(gateway, tools, *, photo_result=False):
     calls = []
 
     async def rpc(request):
@@ -57,6 +58,8 @@ def serve(gateway, tools):
             calls.append((name, args))
             data = {"id": UPLOADED} if name == "artifact_upload" else {"text": "ok"}
             result = {"content": [{"type": "text", "text": json.dumps(data)}], "structuredContent": data}
+            if name == "image_generate" and photo_result:
+                result["content"].append({"type": "image", "mimeType": "image/png", "data": base64.b64encode(PNG_REAL).decode()})
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
 
     gateway.on["/mcp"] = rpc
@@ -173,17 +176,22 @@ def test_mcp_photo_model_and_history_survive_leaving_section(browser, live):
     live.add_user(login)
     photo = GOOD["image_generate"]
     tool = {**photo, "properties": {**photo["properties"], "model": {"type": "string", "enum": ["photo-a", "photo-b"]}}}
-    calls = serve(live.gw, {**GOOD, "image_generate": tool})
+    calls = serve(live.gw, {**GOOD, "image_generate": tool}, photo_result=True)
     select = set_value("#mcp-field-model", "photo-b")
-    count = "document.querySelectorAll('.mcp-history-entry').length"
+    count = "document.querySelectorAll('#photo-feed .photo-card[data-state=done] img').length"
     r = browser.drive(live.url + "/", [*start(login),
         ("eval", "photo", "location.hash='#/photo'"), ("wait", ready("image_generate")), choose("image_generate"), select,
         set_value("#photo-prompt", "First result"), ("click", "#photo-go"), ("wait", count + " === 1"),
         set_value("#photo-prompt", "Second result"), ("click", "#photo-go"), ("wait", count + " === 2"),
         ("eval", "video", "location.hash='#/video'"), ("wait", "document.querySelector('#video-go')"),
         ("eval", "back", "location.hash='#/photo'"), ("wait", count + " === 2"),
-        ("eval", "entries", "[...document.querySelectorAll('.mcp-history-prompt')].map(p => p.textContent)")], width=1280)
+        ("eval", "entries", f"(async () => (await {API}.api('GET','/api/images')).items.map(p=>p.prompt))()"),
+        ("click", "#photo-feed .photo-card .card-open"),
+        ("wait", "document.querySelector('#viewer img')?.naturalWidth > 0"),
+        ("click", "#viewer .act-delete"), ("click", "#photo-delete-confirm"), ("wait", count + " === 1"),
+        ("eval", "last", f"(async () => (await {API}.api('GET','/api/images')).items[0].prompt)()")], width=1280)
     assert not r.get("failed"), r
     assert r["values"]["entries"] == ["Second result", "First result"], r
+    assert r["values"]["last"] == "First result", r
     assert [args["model"] for name, args in calls if name == "image_generate"] == ["photo-b", "photo-b"]
     assert not problems(r), problems(r)

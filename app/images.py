@@ -587,6 +587,35 @@ async def create_job(request: Request):
     return {"id": jobs[0].id, "seed": seed, "ids": [j.id for j in jobs]}
 
 
+# MCP files already belong to section history. Project them into the photo feed without copying them.
+MCP_PHOTOS = """
+SELECT COALESCE(m.id, j.id) AS id, j.user_id, j.id AS mcp_job_id, j.server AS mcp_server,
+       j.tool, j.status, j.error, j.model, j.prompt, j.created, m.id AS media_id
+FROM mcp_section_jobs j
+LEFT JOIN mcp_section_files f ON f.job_id = j.id AND f.user_id = j.user_id
+LEFT JOIN media m ON m.id = f.media_id AND m.user_id = j.user_id AND m.mime LIKE 'image/%'
+WHERE j.section = 'photo' AND j.tool IN ('image_generate','image_edit','generate_image','edit_image')
+  AND (m.id IS NOT NULL OR (f.media_id IS NULL AND j.status <> 'completed'))
+"""
+
+
+def _mcp_photo_out(row):
+    status = row["status"]
+    progress = {"queued": "В очереди", "waiting_gpu": "Ожидает GPU", "running": "Генерирую", "saving": "Сохраняю"}
+    shown = "done" if row["media_id"] else "queued" if status in progress else "error"
+    return {"id": row["id"], "mcp_job_id": row["mcp_job_id"], "mcp_server": row["mcp_server"],
+            "kind": "edit" if row["tool"] in ("image_edit", "edit_image") else "generation",
+            "state": shown, "detail": row["error"] or progress.get(status, ""),
+            "elapsed": 0,
+            "model": row["model"], "prompt": row["prompt"], "created": row["created"], "media_id": row["media_id"],
+            "size": "", "seed": None, "strength": None, "source_media_id": None, "mask_media_id": None,
+            "steps": 0, "chain": []}
+
+
+def _mcp_photo_row(uid, image_id):
+    return state.DB.execute(MCP_PHOTOS + " AND j.user_id = ? AND COALESCE(m.id, j.id) = ?", (uid, image_id)).fetchone()
+
+
 @router.get("")
 async def list_images(request: Request, before: "float | None" = None,
                       before_id: "str | None" = Query(None, max_length=64), after: "float | None" = None,
@@ -598,9 +627,15 @@ async def list_images(request: Request, before: "float | None" = None,
     if (after is None) != (after_id is None):
         raise HTTPException(422, {"code": "after", "message": "after и after_id — только вместе"})
     extra, args = (" AND deleted IS NULL AND model = ?", (model,)) if model else (" AND deleted IS NULL", ())
-    rows = db.page(state.DB, "images", request.state.user.id, before, before_id, limit, extra=extra, extra_args=args,
-                   after=None if after is None else (after, after_id))
-    return {"items": [_out(r, with_chain=False) for r in rows]}
+    uid = request.state.user.id
+    cursors = (before, before_id, limit)
+    newer = None if after is None else (after, after_id)
+    native = db.page(state.DB, "images", uid, *cursors, extra=extra, extra_args=args, after=newer)
+    remote = db.page(state.DB, "(" + MCP_PHOTOS + ")", uid, *cursors,
+                     extra=" AND model = ?" if model else "", extra_args=args, after=newer)
+    rows = sorted([*native, *remote], key=lambda row: (row["created"], row["id"]), reverse=True)
+    rows = rows[-limit:] if newer is not None else rows[:limit]
+    return {"items": [_mcp_photo_out(r) if "mcp_job_id" in r.keys() else _out(r, with_chain=False) for r in rows]}
 
 
 @router.post("/descriptions", status_code=202)
@@ -736,7 +771,9 @@ async def release_card(request: Request):
 
 @router.get("/{image_id}")
 async def image_status(image_id: str, request: Request):
-    return _out(_row(request.state.user.id, image_id))
+    uid = request.state.user.id
+    remote = _mcp_photo_row(uid, image_id)
+    return _mcp_photo_out(remote) if remote else _out(_row(uid, image_id))
 
 
 @router.get("/{image_id}/variants")
@@ -744,7 +781,8 @@ async def variants(image_id: str, request: Request):
     """«Варианты» просмотра (п. 9 шапки): свои готовые с файлом — из того же исходника (кроме этой) и
     сделанные из этой; новые сверху, не больше VARIANTS_MAX в каждом ряду."""
     uid = request.state.user.id
-    row = _row(uid, image_id)
+    remote = _mcp_photo_row(uid, image_id)
+    row = remote if remote else _row(uid, image_id)
 
     def made_from(media_id: "str | None") -> list[dict]:
         if media_id is None:
@@ -755,7 +793,7 @@ async def variants(image_id: str, request: Request):
                                 (uid, media_id, image_id, VARIANTS_MAX))
         return [_out(r, with_chain=False) for r in rows]
 
-    return {"siblings": made_from(row["source_media_id"]), "children": made_from(row["media_id"])}
+    return {"siblings": [] if remote else made_from(row["source_media_id"]), "children": made_from(row["media_id"])}
 
 
 @router.post("/{job_id}/cancel")
@@ -778,6 +816,10 @@ async def cancel_job(job_id: str, request: Request):
 async def delete_image(image_id: str, request: Request):
     """Кончившаяся картинка — в корзину (`deleted`, trash.py); строка и файлы — до `purge`."""
     uid = request.state.user.id
+    remote = _mcp_photo_row(uid, image_id)
+    if remote is not None:
+        await delete_mcp_photo(remote)
+        return Response(status_code=204)
     row = _row(uid, image_id)
     if row["state"] not in TERMINAL:
         raise HTTPException(409, {"code": "running", "message": "сначала отмените"})
@@ -785,6 +827,29 @@ async def delete_image(image_id: str, request: Request):
     JOBS.pop(image_id, None)
     log.info("картинка %s: в корзине", image_id[:8])
     return Response(status_code=204)
+
+
+async def delete_mcp_photo(row):
+    uid, job_id, mid = row["user_id"], row["mcp_job_id"], row["media_id"]
+    if row["status"] in {"queued", "waiting_gpu", "running", "saving"}:
+        raise HTTPException(409, {"code": "running", "message": "Дождитесь завершения задания MCP"})
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("DELETE FROM mcp_section_files WHERE job_id = ? AND user_id = ? AND media_id = ?", (job_id, uid, mid))
+        remaining = state.DB.execute("SELECT result FROM mcp_section_jobs WHERE id = ? AND EXISTS"
+                                    " (SELECT 1 FROM mcp_section_files WHERE job_id = ?)", (job_id, job_id)).fetchone()
+        if remaining is None:
+            state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (job_id,))
+        elif remaining["result"]:
+            result = json.loads(remaining["result"])
+            result["files"] = [file for file in result["files"] if file["url"] != f"/api/media/{mid}"]
+            state.DB.execute("UPDATE mcp_section_jobs SET result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), job_id))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    if mid and not media.referenced(uid, mid):
+        await media.delete_async(uid, mid)
 
 
 async def purge(user_id: int, item_id: str) -> None:

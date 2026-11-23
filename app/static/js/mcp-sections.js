@@ -16,6 +16,7 @@ const imageNames = {
   image_describe: tr("Описать фото"), describe_image: tr("Описать фото"),
 };
 
+const PHOTO_TOOLS = new Set(['image_generate', 'image_edit', 'generate_image', 'edit_image']);
 const JOB_WORDS = {
   queued: tr("В очереди"), waiting_gpu: tr("Ожидает GPU"), running: tr("Выполняется"),
   completed: tr("Готово"), cancelled: tr("Отменено"), failed: tr("Ошибка"),
@@ -189,7 +190,7 @@ function showResult(host, output, urls, render) {
 /** The section owns its controls. MCP receives only the arguments from those controls that the tool declares.
  * `key` — место задания в `records` (по умолчанию — раздел: задание переживает уход из раздела); у «Прочитать» —
  * своё на каждый запуск, уходит с destroy(). `onEmpty` — каталог загрузился, а подходящих инструментов нет. */
-export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, key: place = section }) {
+export function sectionMcp(section, { native, fields, fileRequired, onChange, onBusy, onText, turns, onEmpty, onPhoto, key: place = section }) {
   const base = `/api/mcp-tools/${section}`;
   const suffix = place === section ? '' : `-${place.replace(/[^\w-]/g, '-')}`;
   const controller = new AbortController();
@@ -225,8 +226,8 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       undefined, { signal: controller.signal });
     if (controller.signal.aborted) return;
     if (!before) list.replaceChildren();
-    past.hidden = !list.childElementCount && !page.items.length;
     for (const item of page.items) {
+      if (onPhoto && PHOTO_TOOLS.has(item.tool) && (item.has_photo || item.status !== 'completed')) continue;
       const detail = el('div', { class: 'mcp-result' });
       const label = [dateTime(item.created), item.server, item.model && modelLabel(item.model), JOB_WORDS[item.status] || item.status]
         .filter(Boolean).join(' · ');
@@ -267,9 +268,10 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       });
       list.append(more);
     }
+    past.hidden = !list.childElementCount;
     const active = !before && page.items.find(item => item.active);
     if (!historyLoaded && active && !record()) {
-      records.set(place, { id: active.id, job: active.id, state: active.status, key: active.server_id + ':' + active.tool });
+      records.set(place, { id: active.id, job: active.id, state: active.status, photo: onPhoto && PHOTO_TOOLS.has(active.tool), key: active.server_id + ':' + active.tool });
       if (options.has(record().key)) {
         select.value = record().key;
         paintFields();
@@ -292,18 +294,20 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     if (controller.signal.aborted) return;
     const current = record();
     const active = busy();
+    const content = current?.photo && current.output?.files?.some(file => file.mime.startsWith('image/'))
+      ? null : current?.output;
     select.disabled = active;
     extra?.disable(active);
     paintState();
     retry.hidden = !current?.retry;
-    dismiss.hidden = active || !(current?.output || current?.error);
-    output.hidden = notice.hidden && past.hidden && !active && !(current?.error || current?.output);
+    dismiss.hidden = active || !(content || current?.error);
+    output.hidden = notice.hidden && past.hidden && !active && !(current?.error || content);
     status.classList.toggle('error', !!current?.error);
     status.classList.toggle('mcp-job-active', active);
     status.textContent = current?.error || (active ? JOB_WORDS[current?.state] || tr("Отправляется…")
-      : current?.output ? tr("Готово") : '');
-    if (rendered !== current?.output) {
-      rendered = current?.output;
+      : content ? tr("Готово") : '');
+    if (rendered !== content) {
+      rendered = content;
       if (onText) onText(rendered?.text || '');
       showResult(result, onText && rendered ? { files: rendered.files } : rendered, urls, turns);
     }
@@ -333,6 +337,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
         current.job = null;
         current.error = reply.error || (!current.id && reply.status ? tr("Задание MCP завершилось со статусом «{0}»", reply.status) : '');
         current.output = current.id ? reply.result : !current.error ? reply : undefined;
+        if (current.photo) onPhoto(reply);
         if (current.id) loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
       }
     } catch (err) {
@@ -350,7 +355,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const choice = picked();
     if (!choice || busy()) return false;
     const { server, tool } = choice;
-    const current = { starting: true, key: select.value };
+    const current = { starting: true, key: select.value, photo: onPhoto && PHOTO_TOOLS.has(tool.name) };
     records.set(place, current);
     paint();
     try {
@@ -375,6 +380,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
         current.state = saved.status;
         current.output = saved.result;
         current.error = saved.error;
+        if (current.photo && !controller.signal.aborted) onPhoto(saved);
         loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
       } else if (reply.job) {
         current.job = reply.job;

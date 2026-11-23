@@ -635,10 +635,13 @@ HISTORY_ACTIVE: set[str] = set()
 
 
 def history_view(row, *, details=True):
-    return {key: row[key] for key in ("id", "server", "tool", "model", "prompt", "created", "status", "error")} | {
+    output = {key: row[key] for key in ("id", "server", "tool", "model", "prompt", "created", "status", "error")} | {
         "active": row["remote_id"] is not None, "server_id": row["server_id"],
         "result": json.loads(row["result"]) if details and row["result"] else None,
     }
+    if not details:
+        output["has_photo"] = bool(row["has_photo"])
+    return output
 
 
 async def record_result(session, section, server, tool, args, result, remote_id):
@@ -791,7 +794,9 @@ async def history(section: str, request: Request, before: str = ""):
     if before and cursor is None:
         raise mcp.refused("Запись истории MCP недоступна", "not_found", 404)
     extra = " AND (created, rowid) < (?, ?)" if cursor else ""
-    rows = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE user_id = ? AND section = ?" + extra
+    rows = state.DB.execute("SELECT j.*, EXISTS (SELECT 1 FROM mcp_section_files f JOIN media m ON m.id = f.media_id"
+                            " WHERE f.job_id = j.id AND m.mime LIKE 'image/%') AS has_photo"
+                            " FROM mcp_section_jobs j WHERE user_id = ? AND section = ?" + extra
                             + " ORDER BY created DESC, rowid DESC LIMIT ?",
                             (uid, section, *(tuple(cursor) if cursor else ()), HISTORY_PAGE + 1)).fetchall()
     return {"items": [history_view(row, details=False) for row in rows[:HISTORY_PAGE]],

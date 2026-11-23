@@ -134,7 +134,7 @@ function build(view, ctx) {
     feed.redraw();
   });
   feedBox.dataset.view = layout.value;
-  const feedModel = modelFilter('photo', (m) => NAMES[m] || m, () => feed.reload());
+  const feedModel = modelFilter('photo', modelLabel, () => feed.reload());
   // кнопки-значки шапки — одной группой справа: на 320 px она целиком уходит под заголовок
   const head = el('header', { class: 'head' }, el('h1', {}, tr("Фото")), selection.tools,
     el('div', { class: 'head-tools' }, feedModel.node, selection.button, layout.node,
@@ -175,8 +175,8 @@ function build(view, ctx) {
   const go =el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
   const orphanLine = el('p', { id: 'photo-orphan', class: 'status photo-error', 'aria-live': 'polite' });
-  mcp =sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'strength', 'n'],
-    onChange: paintSource, onBusy: syncBusy });
+  mcp = sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'strength', 'n'],
+    onChange: paintSource, onBusy: syncBusy, onPhoto: (item) => { if (!unfilter([item])) feed.reload(); } });
   const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
   const seriesWrap = el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu);
   const form = el('form', { class: 'composer', id: 'photo-composer', hidden: !!ctx.hint }, sourceBox, promptBox.box, promptBox.error,
@@ -522,7 +522,8 @@ function build(view, ctx) {
     } catch (err) {
       if (alive && err.code === 'gone') {
         forget(id);
-        feed.remove(id);
+        if (entry.item.mcp_job_id) await feed.reload();
+        else feed.remove(id);
         return;
       }
     } finally {
@@ -541,6 +542,10 @@ function build(view, ctx) {
     if (item.state === 'queued') return cap(serverMessage(item.detail));      // «в очереди серии · 2 из 3» — без таймера
     const spent = clock(item.elapsed + (Date.now() - entry.at) / 1000);
     return withCard(`${item.state === 'cancelling' ? tr("Отменяю") : tr("Генерирую")} · ${spent}`, item.card);
+  }
+
+  function cardProgress(item) {
+    return item.mcp_job_id ? serverMessage(item.detail) : busyText(running.get(item.id));
   }
 
   /** Картинка карточки: миниатюра; в превью — и полный файл, если миниатюры мало (srcset). */
@@ -568,6 +573,10 @@ function build(view, ctx) {
     return save;
   }
 
+  function canCancel(item) {
+    return !item.mcp_job_id && CANCELLABLE.has(item.state);
+  }
+
   function cancelButton(item) {
     return button(tr("Отменить"), { class: 'btn-link card-cancel' }, async (event) => {
       event.currentTarget.disabled = true;
@@ -586,7 +595,7 @@ function build(view, ctx) {
 
   /** «Повторить» неудачной и отменённой: то же тело, что у «Повторить» просмотра (repeatBody); без модели раздела — нет. */
   function repeatButton(item) {
-    if (ctx.hint) return null;
+    if (ctx.hint || item.mcp_job_id) return null;
     const busy = isBusy();
     return button(tr("Повторить"), { class: 'btn-link card-repeat', disabled: busy,
       title: busy ? tr("Дождитесь конца текущего задания") : null }, () => create(repeatBody(item)));
@@ -599,7 +608,7 @@ function build(view, ctx) {
   /** Модель, размер и seed — столбцы таблицы (seed внешнего сервиса не показывается). */
   function params(item) {
     const shown = seedOf(item);
-    return [NAMES[item.model] || item.model, String(item.size || '').replace('x', '×'), shown !== null ? `seed ${shown}` : ''];
+    return [item.model ? modelLabel(item.model) : item.mcp_server, String(item.size || '').replace('x', '×'), shown !== null ? `seed ${shown}` : ''];
   }
 
   /** Строка вида «Таблица»: миниатюра, промпт, модель, размер, seed, время или ход, действие. */
@@ -607,29 +616,30 @@ function build(view, ctx) {
     const done = item.state === 'done' && item.media_id;
     const busy = RUNNING.has(item.state);
     const when = done ? el('span', {}, timeOf(item.created))
-      : busy ? el('b', { class: 'card-time' }, busyText(running.get(item.id)))
+      : busy ? el('b', { class: 'card-time' }, cardProgress(item))
         : el('span', { class: item.state === 'error' ? 'error' : 'muted' }, noteText(item));
     node.append(done ? openButton(item, picture(item))
       : el('span', { class: 'row-thumb' }, busy ? el('span', { class: 'ring', 'aria-hidden': 'true' }) : null),
     el('p', { class: 'cell-prompt', title: item.prompt }, item.prompt),
     el('span', { class: 'cell-meta' }, ...params(item).map((p) => el('span', {}, p)), el('span', { class: 'cell-when' }, when)),
-    el('span', { class: 'cell-act' }, ...(done ? [saveButton(item)] : busy ? [CANCELLABLE.has(item.state) ? cancelButton(item) : null]
+    el('span', { class: 'cell-act' }, ...(done ? [saveButton(item)] : busy ? [canCancel(item) ? cancelButton(item) : null]
       : [repeatButton(item), deleteButton(item)])));
     return node;
   }
 
   function card(item) {
+    if (item.model) feedModel.add(item.model);
     watch(item);
     const node = el('div', { class: 'card photo-card', 'data-id': item.id, 'data-state': item.state });
     if (layout.value === 'table') return selection.decorate(row(item, node), item);
     if (item.state === 'done' && item.media_id) {
       // «Скачать» — рядом с .card-open, а не внутри: кнопка в кнопке недопустима
       node.append(openButton(item, picture(item),
-        layout.value === 'tiles' ? el('span', { class: 'card-cap' }, NAMES[item.model] || item.model) : null), saveButton(item));
+        layout.value === 'tiles' ? el('span', { class: 'card-cap' }, item.model ? modelLabel(item.model) : item.mcp_server) : null), saveButton(item));
     } else if (RUNNING.has(item.state)) {
       node.append(el('div', { class: 'card-busy' }, el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('b', { class: 'card-time' }, busyText(running.get(item.id))),
-        CANCELLABLE.has(item.state) ? cancelButton(item) : el('p', { class: 'small' }, cap(serverMessage(item.detail)))));
+        el('b', { class: 'card-time' }, cardProgress(item)),
+        canCancel(item) ? cancelButton(item) : item.mcp_job_id ? null : el('p', { class: 'small' }, cap(serverMessage(item.detail)))));
     } else {
       node.append(el('div', { class: `card-note${item.state === 'error' ? ' error' : ''}` }, el('p', {}, noteText(item)),
         el('span', { class: 'card-note-acts' }, repeatButton(item), variantsButton(item, 'btn-link'), deleteButton(item))));
@@ -645,6 +655,7 @@ function build(view, ctx) {
 
   const tick = setInterval(() => {
     for (const [id, entry] of running) {
+      if (entry.item.mcp_job_id) continue;
       const time = feedBox.querySelector(`.photo-card[data-id="${id}"] .card-time`);
       if (time) time.textContent = busyText(entry);
     }
@@ -777,7 +788,7 @@ function build(view, ctx) {
   }
 
   function variantsButton(item, cls, after) {
-    if (ctx.hint) return null;
+    if (ctx.hint || item.mcp_job_id) return null;
     const busy = isBusy();
     return button(tr("Ещё варианты"), { class: `${cls} card-variants`, disabled: busy,
       title: busy ? tr("Дождитесь конца текущего задания") : null }, () => chooseVariants(item, after));
@@ -842,6 +853,7 @@ function build(view, ctx) {
 
   /* просмотр */
   function openViewer(item, gallery = null, opener = document.activeElement) {
+    const canGenerate = !ctx.hint && !item.mcp_job_id;
     const img = el('img', { src: media(item.media_id), alt: tr("Картинка") });
     const stage = el('div', { class: 'viewer-stage' }, img);
     const close = iconButton('x', tr("Закрыть"), { class: 'icon-btn viewer-close' });
@@ -865,16 +877,16 @@ function build(view, ctx) {
       }),
       act(tr("Ещё варианты"), 'act-variants', () => chooseVariants(item, () => dialog.close()))];
     // без модели раздела «Изменить», «Повторить», «Ещё варианты» и «В поле» не начать — их нет; «Описать» решает шлюз раздела
-    const actions = el('div', { class: 'viewer-actions' }, ctx.hint ? null : starts[0],
+    const actions = el('div', { class: 'viewer-actions' }, canGenerate ? starts[0] : null,
       act(tr("Создать видео"), 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
       }),
-      ctx.hint ? null : starts[1], ctx.hint ? null : starts[3], starts[2],
-      ctx.hint ? null : act(tr("В поле"), 'act-to-field', () => toField(item, dialog)),
+      canGenerate ? starts[1] : null, canGenerate ? starts[3] : null, starts[2],
+      canGenerate ? act(tr("В поле"), 'act-to-field', () => toField(item, dialog)) : null,
       act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
       // ссылка «Поделиться» на картинку (chat_shares.ITEMS): картинка, промпт и модель
-      act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
+      item.mcp_job_id ? null : act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
         tr("Картинка"), api, { kind: 'images' })),
       act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
@@ -961,7 +973,7 @@ function build(view, ctx) {
     const fail = el('p', { class: 'error' });
     const confirm = button(tr("Удалить"), { class: 'btn btn-danger solid', id: 'photo-delete-confirm' });
     const dialog = openDialog(root, { id: 'photo-delete-dialog', title: tr("Удалить картинку?"),
-      body: [el('p', {}, tr("Картинка уйдёт в корзину на 14 дней вместе с файлом — оттуда её можно вернуть. Если из неё сделаны другие картинки или ролики, файл останется у них исходником.")), fail], actions: [confirm] });
+      body: [el('p', {}, item.mcp_job_id ? tr("Картинка будет удалена из истории.") : tr("Картинка уйдёт в корзину на 14 дней вместе с файлом — оттуда её можно вернуть. Если из неё сделаны другие картинки или ролики, файл останется у них исходником.")), fail], actions: [confirm] });
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       try {

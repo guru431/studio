@@ -21,7 +21,7 @@ PATH = f"/artifacts/{ARTIFACT}/content"
 
 
 def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False,
-            named_upload=False, catalogs=False, monkeypatch=None):
+            named_upload=False, catalogs=False, monkeypatch=None, photo_job=False):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -70,7 +70,7 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
         else:
             name, args = (payload["params"][key] for key in ("name", "arguments"))
             calls.append((name, args))
-            if name == "image_generate":
+            if name == "image_generate" and not photo_job:
                 result = {"content": [{"type": "image", "mimeType": "image/png", "data": base64.b64encode(image).decode()}]}
             else:
                 data = {"id": JOB, "status": "queued"}
@@ -95,6 +95,12 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
                     data = {"text": "Recognized page"}
                 elif name == "job_status":
                     data = {"status": next(statuses)}
+                elif name == "job_result" and photo_job:
+                    data = {"result": {"artifacts": [
+                        {"id": aid, "mime_type": "image/png", "name": f"{index}.png",
+                         "download_path": f"/artifacts/{aid}/content"}
+                        for index, aid in enumerate((ARTIFACT, "art_" + "3" * 32))
+                    ]}}
                 elif name == "job_result":
                     data = {"result": {"artifacts": [{"id": ARTIFACT, "mime_type": "video/mp4", "name": "video.mp4",
                                                         "download_path": PATH, "download_url": "https://example.net/ignored"}]}}
@@ -325,6 +331,13 @@ def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio
         assert reply.json()["history"]["status"] == "completed"
     items = studio.c.get("/api/mcp-tools/photo/history").json()["items"]
     assert [row["prompt"] for row in items] == ["a blue plate", "a red cup"]
+    gallery = studio.c.get("/api/images").json()["items"]
+    assert {photo["prompt"] for photo in gallery} == {"a blue plate", "a red cup"}
+    assert all(photo["state"] == "done" and photo["media_id"] for photo in gallery)
+    latest = studio.c.get("/api/images?limit=1").json()["items"][0]
+    older = studio.c.get("/api/images", params={"before": latest["created"], "before_id": latest["id"]}).json()["items"]
+    assert len(older) == 1 and older[0]["id"] != latest["id"]
+    assert studio.c.get("/api/images/" + latest["id"]).json()["media_id"] == latest["media_id"]
     first = "/api/mcp-tools/photo/history/" + items[1]["id"]
     url = studio.c.get(first).json()["result"]["files"][0]["url"]
     assert studio.c.get(url).content == PNG_REAL
@@ -337,6 +350,36 @@ def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio
     assert studio.c.get(first).status_code == 404
     assert studio.c.get(url).status_code == 404
     assert studio.c.post("/api/my-files/0/list", json={"path": ""}).json()["entries"] == []
+
+
+def test_background_photo_series_appears_in_gallery_and_deletes_individual_files(studio):
+    sid = add(studio)
+    service(studio.gw, photo_job=True)
+
+    async def artifact(_request):
+        return httpx.Response(200, content=PNG_REAL)
+
+    studio.gw.on[PATH] = studio.gw.on["/artifacts/art_" + "3" * 32 + "/content"] = artifact
+    route = f"/api/mcp-tools/photo/servers/{sid}/run"
+    body = {"tool": "image_generate", "record": True, "arguments": {"prompt": "a cup", "model": "photo-b", "n": 2}}
+    job = studio.c.post(route, json=body).json()["history"]
+    rid = job["id"]
+    pending = studio.c.get("/api/images/" + rid).json()
+    assert pending["state"] == "queued" and pending["media_id"] is None
+    assert studio.c.delete("/api/images/" + rid).status_code == 409
+    for _ in range(2):
+        row = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone()
+        asyncio.run(mcp_sections.refresh_history(row))
+    photos = studio.c.get("/api/images?model=photo-b").json()["items"]
+    assert len(photos) == 2 and all(p["mcp_job_id"] == rid and p["state"] == "done" for p in photos)
+    first, second = ["/api/images/" + p["id"] for p in photos]
+    assert studio.c.delete(first).status_code == 204
+    assert studio.c.get(first).status_code == 404
+    assert studio.c.get(second).json()["state"] == "done"
+    history = studio.c.get("/api/mcp-tools/photo/history/" + rid).json()
+    remaining = "/api/media/" + photos[1]["media_id"]
+    assert [f["url"] for f in history["result"]["files"]] == [remaining]
+    assert studio.c.get(remaining).content == PNG_REAL
 
 
 def test_durable_video_job_copies_artifact_in_background(studio):
