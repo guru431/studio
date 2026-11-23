@@ -134,6 +134,109 @@ async function resubscribe(status) {
   assert.deepEqual(done.posted, []);
 }
 
+/** Cache Storage в памяти: имя кэша → Map(ключ → Response). */
+function memoryCaches(initial = {}) {
+  const store = new Map(Object.entries(initial).map(([name, entries]) => [name, new Map(Object.entries(entries))]));
+  return {
+    store,
+    async open(name) {
+      if (!store.has(name)) store.set(name, new Map());
+      const entries = store.get(name);
+      return {
+        async put(key, response) { entries.set(String(key), response); },
+        async match(key) { const hit = entries.get(String(key)); return hit && hit.clone(); },
+      };
+    },
+    async delete(name) { return store.delete(name); },
+    async match() { return undefined; },
+  };
+}
+
+// Share target: POST /receive never reaches the server — files, text and link go to the device cache, the window to /.
+{
+  const handlers = new Map();
+  const caches = memoryCaches({ 'studio-received': { '/received/0': new Response('old') } });
+  vm.runInNewContext(source, {
+    VERSION: 'test', URL, Response, JSON, Date, caches,
+    self: { location: { origin }, addEventListener: (name, fn) => handlers.set(name, fn) },
+  });
+  const form = new FormData();
+  form.append('title', 'Заметка');
+  form.append('text', 'текст');
+  form.append('url', 'https://example.com/a');
+  form.append('files', new File(['RIFF'], 'запись.m4a', { type: 'audio/mp4' }));
+  form.append('files', new File([], 'empty.png', { type: 'image/png' }));       // пустой — не принят
+  const request = new Request(`${origin}/receive`, { method: 'POST', body: form });
+  let response;
+  handlers.get('fetch')({ request, respondWith(promise) { response = promise; } });
+  const got = await response;
+  assert.equal(got.status, 303);
+  assert.equal(got.headers.get('location'), `${origin}/`);
+  const received = caches.store.get('studio-received');
+  assert.deepEqual([...received.keys()].sort(), ['/received/0', '/received/meta']);
+  assert.equal(await received.get('/received/0').text(), 'RIFF');
+  assert.equal(received.get('/received/0').headers.get('content-type'), 'audio/mp4');
+  const meta = await received.get('/received/meta').json();
+  assert.equal(meta.title, 'Заметка');
+  assert.equal(meta.text, 'текст');
+  assert.equal(meta.url, 'https://example.com/a');
+  assert.deepEqual(meta.files, [{ name: 'запись.m4a', type: 'audio/mp4' }]);
+  // GET to the same path and foreign POSTs pass by
+  let touched = false;
+  handlers.get('fetch')({ request: { method: 'POST', url: `${origin}/api/chats`, mode: 'cors' },
+    respondWith() { touched = true; } });
+  assert.equal(touched, false);
+}
+
+// App badge from push: the page's last number plus one for a new notification; the same tag on screen is not new.
+async function pushBadge({ stored, shownTags = [], tag }) {
+  const handlers = new Map();
+  const badges = [];
+  const shown = [];
+  const caches = memoryCaches(stored === undefined ? {} : { 'studio-badge': { '/badge': new Response(String(stored)) } });
+  vm.runInNewContext(source, {
+    VERSION: 'test', URL, Response, JSON, caches,
+    self: {
+      location: { origin }, addEventListener: (name, fn) => handlers.set(name, fn),
+      navigator: { async setAppBadge(n) { badges.push(n); } },
+      registration: {
+        async getNotifications(options) { return shownTags.filter((t) => t === options.tag); },
+        async showNotification(title, options) { shown.push([title, options.tag]); },
+      },
+    },
+  });
+  let finished;
+  handlers.get('push')({ data: { json: () => ({ title: 'Студия: ролик готов', tag, href: 'video?id=v1' }) },
+    waitUntil(promise) { finished = promise; } });
+  await finished;
+  return { badges, shown, stored: await caches.store.get('studio-badge')?.get('/badge')?.text() };
+}
+
+{
+  const fresh = await pushBadge({ stored: 2, tag: 'v1' });
+  assert.deepEqual(fresh.badges, [3]);
+  assert.equal(fresh.stored, '3');
+  assert.deepEqual(fresh.shown, [['Студия: ролик готов', 'v1']]);
+  const again = await pushBadge({ stored: 2, shownTags: ['v1'], tag: 'v1' });
+  assert.deepEqual(again.badges, [2]);
+  assert.equal((await pushBadge({ tag: '' })).badges[0], 1);
+}
+
+// No badge API (Firefox, Safari outside the home screen): the notification still shows.
+{
+  const handlers = new Map();
+  const shown = [];
+  vm.runInNewContext(source, {
+    VERSION: 'test', URL,
+    self: { location: { origin }, addEventListener: (name, fn) => handlers.set(name, fn),
+      registration: { async showNotification(title) { shown.push(title); } } },
+  });
+  let finished;
+  handlers.get('push')({ data: null, waitUntil(promise) { finished = promise; } });
+  await finished;
+  assert.deepEqual(shown, ['Студия']);
+}
+
 // Other origins and non-app pages are not reused.
 {
   const foreign = windowAt('https://other.example/');

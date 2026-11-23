@@ -183,7 +183,7 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
   const { select, refresh } = records;
 
-  const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
+  const input = el('input', { type: 'file', id: 'transcribe-file', class: 'sr', accept: ACCEPT, multiple: true });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'transcribe-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить запись"), input);
   // ход загрузки и её отмена — над видом записи, а не в списке: на телефоне список спрятан
   const progress = el('p', { id: 'transcribe-progress', class: 'muted small', 'aria-live': 'polite' });

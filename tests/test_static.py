@@ -55,16 +55,39 @@ def test_english_manifest_is_the_same_app_named_in_english():
     """FINDINGS 06:F4: английский интерфейс ставит «Studio» — то же приложение (`id`, адреса, значки, цвета)."""
     ru = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
     en = json.loads((STATIC / "manifest.en.webmanifest").read_text(encoding="utf-8"))
-    names = ("name", "short_name", "description", "lang")
+    names = ("name", "short_name", "description", "lang", "shortcuts")
     assert {k: v for k, v in en.items() if k not in names} == {k: v for k, v in ru.items() if k not in names}
     assert en["name"] == en["short_name"] == "Studio" and en["lang"] == "en"
     english = json.JSONDecoder().raw_decode((STATIC / "en.js").read_text(encoding="utf-8").split("Object.freeze(")[1])[0]
     assert en["description"] == english[ru["description"]]
+    # ярлыки — те же адреса и значки, имена — словарём страницы
+    assert [{**s, "name": english[s["name"]]} for s in ru["shortcuts"]] == en["shortcuts"]
     early = (STATIC / "i18n.js").read_text(encoding="utf-8")
     assert "setAttribute('href', '/manifest.en.webmanifest')" in early
     for page in ("index.html", "login.html"):         # ссылка — до раннего скрипта, иначе он её не найдёт
         html = (STATIC / page).read_text(encoding="utf-8")
         assert -1 < html.index('rel="manifest"') < html.index("/static/i18n.js"), page
+
+
+def test_manifest_shares_into_the_service_worker_and_offers_shortcuts():
+    """Лист «Поделиться» шлёт POST на адрес, который принимает sw.js (у сервера такого маршрута нет — не новый
+    анонимный вход); ярлыки — разделы оболочки с именами реестра."""
+    from test_sections_meta import registry
+
+    names = {sid: name for sid, name, _ in registry()}
+    m = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
+    share = m["share_target"]
+    assert (share["action"], share["method"], share["enctype"]) == ("/receive", "POST", "multipart/form-data")
+    assert share["params"]["files"] == [{"name": "files", "accept": share["params"]["files"][0]["accept"]}]
+    assert {"audio/*", "image/*", "application/pdf"} <= set(share["params"]["files"][0]["accept"])
+    sw = (STATIC / "sw.js").read_text(encoding="utf-8")
+    assert "const RECEIVE = '/receive';" in sw and "const RECEIVED = 'studio-received';" in sw
+    assert "const RECEIVED = 'studio-received';" in (STATIC / "js" / "share-target.js").read_text(encoding="utf-8")
+    assert not [p.name for p in APP.glob("*.py") if '"/receive' in p.read_text(encoding="utf-8")]
+    shortcuts = {s["url"]: s["name"] for s in m["shortcuts"]}
+    assert shortcuts == {"/#/chat": "Новый чат", "/#/search": "Поиск", "/#/code": names["code"]}
+    for s in m["shortcuts"]:
+        assert all((STATIC / i["src"].removeprefix("/static/")).is_file() for i in s["icons"])
 
 
 def test_manifest_icons_are_png_only():
@@ -150,8 +173,10 @@ def test_text_fields_carry_the_mic_through_field_js_and_have_no_seed():
 def test_service_worker_never_caches_api_or_media():
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
     assert "'/api/'" in sw and "'/static/js/'" in sw
-    # в кэш попадает только оболочка при установке (addAll); ответы на лету не кладутся никогда
-    assert ".put(" not in sw
+    # в кэш оболочки попадает только она сама при установке (addAll); ответы на лету не кладутся никогда — put только
+    # в свои кэши устройства: принятое листом «Поделиться» (файлы и описание) и число значка
+    assert sw.count(".put(") == 3 and sw.count("caches.open(CACHE)") == 1
+    assert ".put(" not in sw[sw.index("addEventListener('fetch'"):]
     assert "/offline.html" in sw and "studio-shell-" in sw
 
 

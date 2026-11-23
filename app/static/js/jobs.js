@@ -37,6 +37,7 @@ const POLL_TIMEOUT_MS = 20000;   // срок одного опроса
 const RECENT_SEC = 3600;
 const SEEN_KEY = 'studio-jobs-seen';
 const NOTIFY_KEY = 'studio-notify';
+const BADGE = 'studio-badge';    // кэш числа значка — то же имя в sw.js
 /** Слова уведомления раздела: готово, не получилось. Без промпта, текста и имён — их видно на запертом экране. */
 const NOTICES = {
   photo: [tr("картинка готова"), tr("картинка не получилась")],
@@ -74,6 +75,7 @@ let ticker = null;
 let shownMark = 0;           // отметка до открытия панели: по ней выделены новые строки
 let finishedTitle;
 let sinceVisit = false;
+let badgeShown = null;       // число, поставленное на значок приложения
 
 function readSeen() {
   try {
@@ -215,6 +217,16 @@ function renderPanel() {
     sinceVisit ? tr("С прошлого просмотра ничего не закончилось") : tr("За час ничего не закончилось"));
 }
 
+/** Число на значке установленного приложения: непросмотренное готовое и сессии «Агентов», которые ждут действия или
+ * не прочитаны; открытие панели снимает готовое. То же число — в кэш BADGE: push закрытой студии прибавит к нему
+ * (sw.js raiseBadge). Нет API значка (Firefox, Safari без установки) — ничего. До первого опроса не трогается. */
+function appBadge(n) {
+  if (n === badgeShown || typeof navigator.setAppBadge !== 'function') return;
+  badgeShown = n;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+  if ('caches' in window) caches.open(BADGE).then((c) => c.put('/badge', new Response(String(n)))).catch(() => {});
+}
+
 function paint() {
   const agents = allCodeActivity();
   const fresh = finished.some((f) => f.finished > readSeen()) || agents.some((item) => item.unread && !item.running);
@@ -228,6 +240,8 @@ function paint() {
   const label = tr("В работе{0}{1}{2}", total ? `: ${total}` : '', agents.some((item) => codeActivityState(item) === 'asking') ? tr(", требуется ваше действие") : '', fresh ? tr(", есть готовое") : '');
   badge.setAttribute('aria-label', label);
   badge.title = label;
+  if (!first) appBadge(finished.filter((f) => f.finished > readSeen()).length
+    + agents.filter((item) => codeActivityState(item) !== 'running').length);
   const bySection = new Map();
   for (const item of running) bySection.set(item.section, (bySection.get(item.section) || 0) + 1);
   bySection.set('code', agents.filter((item) => item.running).length);
@@ -415,7 +429,11 @@ export function setupJobs({ navigate }) {
     schedule();
   });
   // скрываясь, страница сразу говорит серверу «не на экране»: готовое после этого придёт push и ntfy
-  document.addEventListener('visibilitychange', () => poll());
+  // вернувшись, число значка ставится заново: push скрытой студии мог прибавить к нему (sw.js)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') badgeShown = null;
+    poll();
+  });
   document.addEventListener('studio-me', paint);
   // срок частичной защиты истёк (lock.js): строки закрытых разделов уходят сразу; готовые за час (и сканы их документов —
   // их раздел знает только сервер) перечитываются без since, как при открытии страницы, без уведомлений о них
