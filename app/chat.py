@@ -54,6 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+import access
 import card
 import chat_pending
 import chat_system
@@ -70,6 +71,7 @@ import manage
 import media
 import mcp_client
 import mcp_files
+import mcp_sections
 import mcp_sources
 import ocr
 import ocr_render
@@ -217,6 +219,7 @@ router = APIRouter(prefix="/api")
 
 class ChatIn(BaseModel):
     connection_id: int | None = None
+    mcp_model_sid: int | None = Field(None, gt=0)
     model: str | None = Field(None, max_length=MODEL_MAX)
 
 
@@ -227,6 +230,7 @@ class ChatPatch(BaseModel):
     mcp_tools_off: dict[str, list[str]] | None = Field(default=None, max_length=16)
     mcp_tools_on: dict[str, list[str]] | None = Field(default=None, max_length=16)
     title: str | None = Field(None, max_length=200)
+    mcp_model_sid: int | None = Field(None, gt=0)
     connection_id: int | None = None
     model: str | None = Field(None, max_length=MODEL_MAX)
     web: bool | None = None              # кнопка «Интернет»; null — не трогать
@@ -301,7 +305,7 @@ def unprotected(row):
 def _chat_out(row) -> dict:
     # protected — сработал защищённый источник MCP: «Интернет» не включить, «Поделиться» и экспорт — 409
     return {"id": row["id"], "title": row["title"], "connection_id": row["connection_id"], "model": row["model"],
-            "updated": row["updated"], "protected": bool(row["protected_used"])}
+            "updated": row["updated"], "protected": bool(row["protected_used"]), "mcp_model_sid": row["mcp_model_sid"]}
 
 
 def _needs_consent(chat_id: str, model: str, via: str) -> bool:
@@ -843,9 +847,10 @@ class StreamTask:
     user_id: int
     chat_id: str
     message_id: str
-    conn: Connection
+    conn: Connection | None
     model: str
     messages: list
+    mcp_model_sid: int | None = None
     content: str = ""
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     listening: bool = True
@@ -1381,6 +1386,18 @@ class StreamTask:
         """Инструменты выбранных MCP (mcp_client.Tools.discover), затем ответ модели. Сервер, что не ответил, —
         шаг-ошибка с его именем (событие `tool` с `skipped`: страница перечитает ответ, не крутя плашку); ответ
         идёт с остальными инструментами."""
+        if self.mcp_model_sid is not None:
+            try:
+                async with asyncio.timeout(STREAM_TOTAL_SEC):
+                    text = await mcp_sections.ask_chat(self.user_id, self.mcp_model_sid, self.model, self.messages)
+            except HTTPException as exc:
+                return exc.detail["message"]
+            except TimeoutError:
+                return self._cut_time()
+            if not text:
+                return NO_ANSWER
+            self._delta(mcp_sections.clean_text(text, ANSWER_MAX) + (CUT_SIZE if len(text) > ANSWER_MAX else ""))
+            return "Ответ слишком длинный" if len(text) > ANSWER_MAX else None
         self.mcp = mcp_client.Tools(self.user_id, self.chat_id, self.mcp_ids, explicit=self.mcp_explicit,
                                     conn=self.conn)
         row = state.DB.execute("SELECT protected_used FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
@@ -1775,10 +1792,16 @@ async def list_chats(request: Request):
 async def create_chat(body: ChatIn, request: Request):
     operations.check(request.state.user.id)
     user = request.state.user
-    conn, model = _chat_pair(user.id, body.connection_id, body.model)
+    if body.mcp_model_sid is not None:
+        await mcp_sections.check_chat_model(user.id, body.mcp_model_sid, body.model)
+        operations.check(user.id)
+        cid, model = None, body.model
+    else:
+        conn, model = _chat_pair(user.id, body.connection_id, body.model)
+        cid = conn.id
     chat_id, now = uuid.uuid4().hex, clock.NOW()
-    state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated)"
-                     " VALUES (?, ?, NULL, ?, ?, ?, ?)", (chat_id, user.id, conn.id, model, now, now))
+    state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated, mcp_model_sid)"
+                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?)", (chat_id, user.id, cid, model, now, now, body.mcp_model_sid))
     log.info("чат %s: создан", chat_id[:8])
     return _chat_view(user.id, _chat_row(user.id, chat_id))
 
@@ -1927,11 +1950,26 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
     sent, changes = body.model_fields_set, {}
     if "title" in sent:
         changes["title"] = (body.title or "").strip() or None
-    if ("connection_id" in sent and body.connection_id is not None) or ("model" in sent and (body.model or "").strip()):
+    if body.mcp_model_sid is not None:
+        row = _chat_row(uid, chat_id)
+        conn = _chat_connection(uid, row["connection_id"])
+        if conn is not None and (conn.cleaner or conn.routed):
+            raise mcp_client.refused("Диалог с Cleaner нельзя переключить на MCP", "cleaner_forced")
+        if row["protected_used"] and row["mcp_model_sid"] != body.mcp_model_sid:
+            raise mcp_client.refused(PROTECTED_OUT, "protected")
+        await mcp_sections.check_chat_model(uid, body.mcp_model_sid, body.model)
+        operations.check(uid)
+        current = _chat_row(uid, chat_id)
+        if (current["connection_id"], current["model"], current["mcp_model_sid"], current["protected_used"]) != (
+                row["connection_id"], row["model"], row["mcp_model_sid"], row["protected_used"]):
+            raise mcp_client.refused("Диалог изменился — выберите модель заново", "changed")
+        _busy(chat_id)
+        changes.update(connection_id=None, model=body.model, mcp_model_sid=body.mcp_model_sid)
+    elif ("connection_id" in sent and body.connection_id is not None) or ("model" in sent and (body.model or "").strip()):
         row = _chat_row(uid, chat_id)
         conn_id = body.connection_id if body.connection_id is not None else row["connection_id"]
         conn, model = _chat_pair(uid, conn_id, body.model if (body.model or "").strip() else row["model"])
-        changes["connection_id"], changes["model"] = conn.id, model
+        changes["connection_id"], changes["model"], changes["mcp_model_sid"] = conn.id, model, None
     if body.web is not None:
         row = _chat_row(uid, chat_id)
         conn = _chat_connection(uid, row["connection_id"])
@@ -1962,7 +2000,7 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         ids = body.mcp_ids if body.mcp_ids is not None else mcp_client.present(uid, row["mcp_ids"])
         cid = changes.get("connection_id", row["connection_id"])
         conn = _chat_connection(uid, cid)
-        if ids and (conn is None or not conn.proxied or conn.cleaner):
+        if ids and not changes.get("mcp_model_sid", row["mcp_model_sid"]) and (conn is None or not conn.proxied or conn.cleaner):
             raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
     if changes:
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
@@ -1977,7 +2015,7 @@ async def move_chats(body: ChatsMoveIn, request: Request):
     модель без MCP (прямую или Cleaner) не переводится — как PATCH диалога: `kept` — их число."""
     uid = request.state.user.id
     conn, model = _chat_pair(uid, body.connection_id, body.model)
-    rows = state.DB.execute("SELECT id, mcp_ids FROM chats WHERE user_id = ? AND deleted IS NULL AND connection_id IS ?",
+    rows = state.DB.execute("SELECT id, mcp_ids FROM chats WHERE user_id = ? AND deleted IS NULL AND mcp_model_sid IS NULL AND connection_id IS ?",
                             (uid, body.from_connection_id)).fetchall()
     mcp_ok = conn.proxied and not conn.cleaner
     ids = [r["id"] for r in rows if mcp_ok or not mcp_client.present(uid, r["mcp_ids"])]
@@ -2586,6 +2624,64 @@ async def turn_receipt(chat_id: str, request_id: str, request: Request):
     return {"accepted": receipt is not None, **(receipt or {})}
 
 
+def create_mcp_turn(uid, row, body, request):
+    """Text-only MCP completion through the ordinary conversation and SSE lifecycle."""
+    chat_id, sid, model = row["id"], row["mcp_model_sid"], row["model"]
+    mcp_sections.require_chat_policy()
+    item = mcp_client.row(uid, sid)
+    if not item["enabled"] or not access.tool_allowed(uid, sid, "llm_ask"):
+        raise mcp_client.refused("Сервер моделей MCP недоступен")
+    if body.attachment_ids or _attachments(chat_id) or knowledge.chat_kbs(uid, chat_id):
+        raise mcp_client.refused("Ответы через MCP доступны в текстовых диалогах без вложений и баз знаний")
+    if not body.regenerate and not body.text.strip():
+        raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
+    if state.DB.execute("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?"
+                        " AND m.via = 'server' AND m.status = 'streaming'", (uid,)).fetchone()[0] >= USER_STREAMS:
+        raise HTTPException(429, {"code": "streams", "message": "Дождитесь завершения ответов в других диалогах"})
+    operations.check(uid)
+    now, answer_id = clock.NOW(), uuid.uuid4().hex
+    state.DB.execute("BEGIN")
+    try:
+        edit = _edit_target(chat_id, body)
+        chat_pending.supersede(chat_id)
+        if body.regenerate:
+            user_mid = _new_variant(chat_id)
+        elif edit is not None:
+            user_mid = edit["id"]
+            state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND (created, rowid) > (?, ?)",
+                             (chat_id, edit["created"], edit["rowid"]))
+            state.DB.execute("UPDATE messages SET content = ?, via = 'server', model = ? WHERE id = ?",
+                             (body.text, model, user_mid))
+        else:
+            user_mid = uuid.uuid4().hex
+            state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND unchosen = 1", (chat_id,))
+            state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
+                             " VALUES (?, ?, 'user', ?, 'done', 'server', ?, ?)",
+                             (user_mid, chat_id, body.text, model, now))
+        system = chat_system.base(uid, None, _role(uid, row["role_id"]))
+        messages = chat_system.wrap(system, compose(chat_id, user_mid, model, 0))
+        if len(messages) > 100 or any(len(msg["content"]) > TEXT_MAX for msg in messages):
+            raise mcp_client.refused("Контекст превышает предел модели MCP. Продолжите в новом диалоге", "too_large", 413)
+        state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
+                         " VALUES (?, ?, 'assistant', '', 'streaming', 'server', ?, ?, ?)",
+                         (answer_id, chat_id, model, now, now))
+        title = row["title"] or (None if body.regenerate else _title(body.text))
+        state.DB.execute("UPDATE chats SET title = ?, updated = ?, protected_used = ? WHERE id = ?",
+                         (title, now, bool(row["protected_used"] or item["protected"]), chat_id))
+        if body.request_id is not None:
+            state.DB.execute("INSERT INTO chat_turn_requests VALUES (?, ?, ?, ?, ?)",
+                             (chat_id, body.request_id, _turn_fingerprint(body), user_mid, answer_id))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    task = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=None, model=model, messages=messages,
+                      mcp_model_sid=sid, user_message_id=user_mid)
+    STREAMS[answer_id] = task
+    task.task = asyncio.create_task(task.run())
+    return _EventStream(task, user_mid, getattr(request.state, "digest", None))
+
+
 @router.post("/chats/{chat_id}/turns")
 async def create_turn(chat_id: str, body: TurnIn, request: Request):
     uid = request.state.user.id
@@ -2594,6 +2690,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     if receipt is not None:
         return {"replayed": True, **receipt}
     _busy(chat_id)
+    if row["mcp_model_sid"] is not None:
+        return create_mcp_turn(uid, row, body, request)
     conn = _chat_connection(uid, row["connection_id"])
     if conn is None:                                 # не выбрано, удалено или закрыто группами доступа
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})

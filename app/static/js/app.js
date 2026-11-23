@@ -4,7 +4,7 @@ import { tr } from './i18n.js';
  *
  * Маршруты: #/chat, #/chat/<id>, #/photo, #/video, #/transcribe, #/speech, #/ocr, #/translate, #/owui,
  * #/owui/<id>[/<chat>] (owui.js), #/code, #/code/<aid>[/<pid>[/<chat>]] (code.js), #/search, #/settings, #/settings/<раздел>, #/help (help.js), #/trash (trash.js),
- * #/myfiles (my-files.js; пункт меню виден, если у учётки есть сервер MCP с «Моими файлами»), #/admin (только
+ * #/myfiles (my-files.js; пункт меню виден при наличии файлов Studio или сервера MCP с «Моими файлами»), #/admin (только
  * администратору); прежний #/profile — #/settings, прочее — #/chat. Раздел — модуль с
  * `mount(el, ctx)` и `unmount()`; ctx = { me, navigate, id, query, hint }, id — хвост адреса
  * (#/chat/<id>, #/settings/<раздел>) или null, query — URLSearchParams после `?`
@@ -311,7 +311,7 @@ function sectionKey(event) {
   location.hash = target.getAttribute('href');
 }
 
-/** «Мои файлы» в меню — только при сервере MCP с контрактом `studio/files` (GET /api/my-files/servers; каталоги
+/** «Мои файлы» в меню — при наличии файлов Studio или сервера MCP с контрактом `studio/files` (GET /api/my-files/servers; каталоги
  * серверов — из кэша сервера). Сбой проверки пункт не меняет. Пока заперт хоть один раздел, маршрут отвечает 423:
  * открытие меню экран блокировки не вызывает (`unlock: false`), пункт остаётся как был. */
 function checkMyFiles() {

@@ -465,6 +465,7 @@ REFERENCES = {
     "scans": ("source_media_id",),
     "scan_pages": ("media_id",),
     "translations": ("source_media_id",),
+    "mcp_section_files": ("media_id",),
     "chat_share_files": ("media_id",),          # своего user_id нет — владелец у chat_shares
 }
 #: `*media_id`, которые не ссылки: очередь удаления держит путь файла, чьей строки уже нет; загрузка на MCP

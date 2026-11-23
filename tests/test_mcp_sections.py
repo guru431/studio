@@ -1,5 +1,6 @@
 """Section tools through the same HTTP contract as the srvllm/s06 MCP service."""
 
+import asyncio
 import base64
 import json
 
@@ -20,7 +21,7 @@ PATH = f"/artifacts/{ARTIFACT}/content"
 
 
 def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False,
-            named_upload=False, monkeypatch=None):
+            named_upload=False, catalogs=False, monkeypatch=None):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -32,6 +33,10 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
              "speech_synthesize": (params(text="string", voice="string", reference_artifact_id="string", reference_text="string")
                                    | {"engine": {"type": "string", "enum": ["default", "clone"]}}, ["text"]),
              **dict.fromkeys(("artifact_upload", "job_status", "job_result", "internal_action"), ({}, []))}
+    if catalogs:
+        video["model"] = {"type": "string", "enum": ["wan", "h3"], "default": "wan"}
+        tools |= {"services_list": ({}, []), "models_list": ({}, []),
+                  "llm_ask": (params(messages="array", model="string"), ["messages"])}
     if uploads:
         tools.update(dict.fromkeys(("audio_transcribe", "document_read"), (params(artifact_id="string"), ["artifact_id"])))
     if named_upload:
@@ -69,7 +74,14 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
                 result = {"content": [{"type": "image", "mimeType": "image/png", "data": base64.b64encode(image).decode()}]}
             else:
                 data = {"id": JOB, "status": "queued"}
-                if name == "artifact_upload":
+                if name == "services_list":
+                    data = {"declarations": {"images": {"data": [{"id": "photo-a"}, {"id": "wan"}, {"id": "photo-a"}]}},
+                            "services": {"video": {"model_limits": {"wan": {}}}}}
+                elif name == "models_list":
+                    data = {"data": [{"id": "chat-a"}, {"id": "chat-b"}]}
+                elif name == "llm_ask":
+                    data = {"text": "Reply from MCP"}
+                elif name == "artifact_upload":
                     data = {"id": ARTIFACT}
                 elif name == "video_estimate":
                     data = {"text": "Estimated time"}
@@ -288,3 +300,80 @@ def test_speech_uses_the_selected_studio_voice_sample(studio):
     calls.clear()
     assert studio.c.post(route, json={**payload, "voice_id": "f" * 32}).status_code == 404
     assert calls == []
+
+
+def test_catalog_keeps_photo_video_and_chat_models_separate(studio):
+    add(studio)
+    calls = service(studio.gw, catalogs=True)
+    photo = studio.c.get("/api/mcp-tools/photo").json()["items"][0]["tools"][0]
+    assert photo["models"] == ["photo-a"]
+    video = studio.c.get("/api/mcp-tools/video").json()["items"][0]["tools"][0]
+    assert video["schema"]["properties"]["model"]["enum"] == ["wan", "h3"]
+    chat = studio.c.get("/api/mcp-tools/chat").json()["items"][0]
+    assert chat["models"] == ["chat-a", "chat-b"]
+    assert calls == [("services_list", {}), ("models_list", {})]
+
+
+def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio):
+    sid = add(studio)
+    service(studio.gw)
+    route = f"/api/mcp-tools/photo/servers/{sid}/run"
+    for prompt in ("a red cup", "a blue plate"):
+        reply = studio.c.post(route, json={"tool": "image_generate", "record": True,
+                                           "arguments": {"prompt": prompt}})
+        assert reply.status_code == 200, reply.text
+        assert reply.json()["history"]["status"] == "completed"
+    items = studio.c.get("/api/mcp-tools/photo/history").json()["items"]
+    assert [row["prompt"] for row in items] == ["a blue plate", "a red cup"]
+    first = "/api/mcp-tools/photo/history/" + items[1]["id"]
+    url = studio.c.get(first).json()["result"]["files"][0]["url"]
+    assert studio.c.get(url).content == PNG_REAL
+    assert studio.c.get("/api/my-files/servers").json() == [{"sid": 0, "name": "Студия", "local": True}]
+    files = studio.c.post("/api/my-files/0/list", json={"path": ""}).json()["entries"]
+    assert len(files) == 2 and all(file["section"] == "photo" for file in files)
+    assert studio.c.get(files[0]["preview"]["url"]).content == PNG_REAL
+    make_user(studio, "other-history")
+    signin(studio, "other-history")
+    assert studio.c.get(first).status_code == 404
+    assert studio.c.get(url).status_code == 404
+    assert studio.c.post("/api/my-files/0/list", json={"path": ""}).json()["entries"] == []
+
+
+def test_durable_video_job_copies_artifact_in_background(studio):
+    sid = add(studio)
+    service(studio.gw, catalogs=True)
+
+    async def artifact(_request):
+        return httpx.Response(200, content=MP4)
+
+    studio.gw.on[PATH] = artifact
+    body = {"tool": "video_create", "record": True, "arguments": {"artifact_id": ARTIFACT, "model": "h3"}}
+    response = studio.c.post(f"/api/mcp-tools/video/servers/{sid}/run", json=body)
+    assert response.status_code == 200, response.text
+    job = response.json()["history"]
+    assert job["active"] and job["model"] == "h3"
+    for _ in range(2):
+        row = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE id = ?", (job["id"],)).fetchone()
+        asyncio.run(mcp_sections.refresh_history(row))
+    studio.gw.on.pop(PATH)
+    result = studio.c.get("/api/mcp-tools/video/history/" + job["id"]).json()
+    assert result["status"] == "completed" and result["active"] is False
+    assert studio.c.get(result["result"]["files"][0]["url"]).content == MP4
+
+
+def test_chat_model_uses_mcp_and_saves_normal_conversation(studio):
+    sid = add(studio)
+    calls = service(studio.gw, catalogs=True)
+    created = studio.c.post("/api/chats", json={"mcp_model_sid": sid, "model": "chat-b"})
+    assert created.status_code == 201, created.text
+    row = created.json()
+    assert row["mcp_model_sid"] == sid and row["connection_id"] is None
+    path = "/api/chats/" + row["id"]
+    sent = studio.c.post(path + "/turns", json={"text": "hello", "request_id": "mcp-chat-first-message"})
+    assert sent.status_code == 200 and "Reply from MCP" in sent.text, sent.text
+    assert any(name == "llm_ask" and args["model"] == "chat-b" for name, args in calls)
+    assert [m["content"] for m in studio.c.get(path).json()["messages"]] == ["hello", "Reply from MCP"]
+    another = studio.c.post(path + "/turns", json={"text": "follow-up"})
+    assert another.status_code == 200
+    sent = [args["messages"] for name, args in calls if name == "llm_ask"][-1]
+    assert [m["content"] for m in sent[-3:]] == ["hello", "Reply from MCP", "follow-up"]

@@ -234,7 +234,8 @@ def test_media_sections_cover_every_file_reference():
     закрытого раздела по его id. Сканы и снимки «Поделиться» — отдельными запросами media_sections."""
     covered = {(table, column) for tables in lock_policy.MEDIA_SOURCES.values()
                for table, columns in tables for column in columns}
-    covered |= {("scans", "source_media_id"), ("scan_pages", "media_id"), ("chat_share_files", "media_id")}
+    covered |= {("scans", "source_media_id"), ("scan_pages", "media_id"), ("chat_share_files", "media_id"),
+                ("mcp_section_files", "media_id")}
     assert covered == {(table, column) for table, columns in media.REFERENCES.items() for column in columns}
 
 
@@ -404,7 +405,7 @@ ROUTES = {
         ("POST", "/api/trash/empty"), ("POST", "/api/me/storage/failed"),
         # «Мои файлы» на MCP: результаты инструментов любых разделов в одной папке, ссылки на них
         ("GET", "/api/my-files/servers"), ("POST", "/api/my-files/{sid}/list"), ("POST", "/api/my-files/{sid}/ticket"),
-        ("GET", "/api/my-files/{sid}/download/{encoded}"), ("PUT", "/api/my-files/{sid}/upload"),
+        ("GET", "/api/my-files/0/preview/{mid}"), ("GET", "/api/my-files/{sid}/download/{encoded}"), ("PUT", "/api/my-files/{sid}/upload"),
         ("POST", "/api/my-files/{sid}/mkdir"), ("POST", "/api/my-files/{sid}/delete"),
         ("POST", "/api/my-files/{sid}/trash"), ("POST", "/api/my-files/{sid}/restore"),
         ("POST", "/api/my-files/{sid}/zip"), ("POST", "/api/my-files/{sid}/links"), ("GET", "/api/my-files/links"),
@@ -436,6 +437,8 @@ ROUTES = {
     **{(m, p): "path" for m, p in [                                 # раздел — из адреса
         ("GET", "/api/mcp-tools/{section}"), ("POST", "/api/mcp-tools/{section}/servers/{sid}/run"),
         ("POST", "/api/mcp-tools/{section}/status"), ("GET", "/api/mcp-tools/{section}/files/{encoded}"),
+        ("GET", "/api/mcp-tools/{section}/history"), ("GET", "/api/mcp-tools/{section}/history/{rid}"),
+        ("DELETE", "/api/mcp-tools/{section}/history/{rid}"),
         ("PUT", "/api/sections/{section}/default"), ("POST", "/api/sections/{section}/links"),
         ("DELETE", "/api/sections/{section}/links/{conn_id}"), ("PUT", "/api/sections/{section}/links/{conn_id}"),
         ("GET", "/api/sections/{section}/links/{conn_id}/found")]},

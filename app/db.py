@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 79
+VERSION = 80
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1093,6 +1093,25 @@ UPDATE attachments SET cleaner_used = 1 WHERE message_id IN (
 """
 SCHEMA += CLEANER_ATTACHMENTS_79
 
+MCP_HISTORY_80 = """ALTER TABLE chats ADD COLUMN mcp_model_sid INTEGER;
+CREATE TABLE mcp_section_jobs (
+    id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    section TEXT NOT NULL, server_id INTEGER NOT NULL, server TEXT NOT NULL,
+    tool TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL, created REAL NOT NULL,
+    stamp TEXT NOT NULL, remote_id TEXT, status TEXT NOT NULL, result TEXT, error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX mcp_section_history ON mcp_section_jobs(user_id, section, created DESC, id DESC);
+CREATE INDEX mcp_section_pending ON mcp_section_jobs(created) WHERE remote_id IS NOT NULL;
+CREATE TABLE mcp_section_files (
+    job_id TEXT NOT NULL REFERENCES mcp_section_jobs ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    media_id TEXT NOT NULL REFERENCES media ON DELETE CASCADE,
+    PRIMARY KEY (job_id, media_id)
+);
+CREATE INDEX mcp_section_file_media ON mcp_section_files(user_id, media_id);
+"""
+SCHEMA += MCP_HISTORY_80
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1250,6 +1269,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     # ссылка приглашения, показанная администратором
     78: INVITE_LINK_78,
     79: CLEANER_ATTACHMENTS_79,
+    80: MCP_HISTORY_80,
 }
 
 

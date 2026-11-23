@@ -132,7 +132,7 @@ function paintRight() {
   if (view) return;
   ui.body.replaceChildren();
   const aid = route.aid;
-  const chat = chatView(ui.body, { account: aid, chatId: route.chat, created: (id) => created(aid, id) });
+  const chat = chatView(ui.body, { account: aid, chatId: route.chat, readOnly: ui.readOnly, created: (id) => created(aid, id) });
   const off = listen((type, data, from) => { if (from === aid) chat.event(type, data); });
   view = { chat, off };
   resync();
@@ -284,9 +284,9 @@ export function mount(view, ctx) {
   const side = el('aside', { id: 'owui-panel', class: 'owui-panel', 'aria-label': tr("Учётки и чаты Open WebUI") });
   const body = el('div', { class: 'owui-body' });
   const backdrop = el('div', { class: 'owui-backdrop', hidden: true });
-  // флажок администратора «Веб и внешние MCP — только через Cleaner» (`me.cleaner_web`) модели Open WebUI не охватывает
-  const note = el('p', { class: 'muted small owui-cleaner-note', id: 'owui-cleaner-note', hidden: !ctx.me.cleaner_web },
-    tr("Модели Open WebUI работают мимо Cleaner"));
+  const readOnly = Boolean(ctx.me.cleaner_forced);
+  const note = el('p', { class: 'muted small owui-cleaner-note', id: 'owui-cleaner-note', hidden: !readOnly && !ctx.me.cleaner_web },
+    readOnly ? tr("Отправка в Open WebUI отключена при обязательном Cleaner") : tr("Модели Open WebUI работают мимо Cleaner"));
   const main = el('section', { class: 'owui-main' },
     el('header', { class: 'head' }, toggle, el('h1', {}, sectionName('owui'))), note, body);
   const root = el('div', { class: 'owui-ws' }, side, main, backdrop);
@@ -294,7 +294,7 @@ export function mount(view, ctx) {
   backdrop.addEventListener('click', () => panelOpen(false));
   document.addEventListener('keydown', onKey);
   view.append(root);
-  ui = { root, toggle, body, backdrop };
+  ui = { root, toggle, body, backdrop, readOnly };
   const place = route.aid === null ? readPlace() : null;
   panel = panelView(side, { selected: route.aid ?? place?.aid ?? null, opened,
     chose: () => panelOpen(false) });

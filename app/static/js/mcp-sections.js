@@ -3,6 +3,8 @@ import { tr } from './i18n.js';
 import { button, el, words } from './ui.js';
 import { icon } from './icons.js';
 import { picker } from './picker.js';
+import { dateTime } from './time.js';
+import { modelLabel } from './models.js';
 
 const records = new Map();
 document.addEventListener('studio-locked', () => {
@@ -12,6 +14,11 @@ const imageNames = {
   image_generate: tr("Создать фото"), generate_image: tr("Создать фото"),
   image_edit: tr("Изменить фото"), edit_image: tr("Изменить фото"),
   image_describe: tr("Описать фото"), describe_image: tr("Описать фото"),
+};
+
+const JOB_WORDS = {
+  queued: tr("В очереди"), waiting_gpu: tr("Ожидает GPU"), running: tr("Выполняется"),
+  completed: tr("Готово"), cancelled: tr("Отменено"), failed: tr("Ошибка"),
 };
 
 const STATE_WORDS = { ok: tr("работает"), busy: tr("занят"), down: tr("недоступен") };
@@ -74,12 +81,24 @@ export function extraFields(tool, shown, suffix = '') {
   const box = el('span', { class: 'mcp-fields' });
   const readers = [], picks = [], controls = [];
   const skip = new Set([...shown, ...Object.keys(tool?.files || {})]);
+  const required = new Set(tool?.schema.required || []);
   for (const [key, prop] of Object.entries(tool?.schema?.properties || {})) {
     if (skip.has(key) || !prop || typeof prop !== 'object') continue;
     const name = FIELD_NAMES[key] || (typeof prop.title === 'string' && prop.title.trim().slice(0, 40)) || key;
     const limits = schemaLimits(prop);
     const id = `mcp-field-${key.replace(/[^\w-]/g, '_')}${suffix}`;
-    if (prop.type === 'boolean') {
+    const models = key === 'model' && prop.type === 'string' ? tool.models || limits?.enum : null;
+    if (Array.isArray(models) && models.length && models.every(value => typeof value === 'string')) {
+      const select = el('select', { id, 'data-field': key, 'aria-label': tr("Модель") },
+        el('option', { value: '' }, required.has(key) ? tr("Выбрать") : tr("По умолчанию")),
+        ...models.map(value => el('option', { value }, modelLabel(value))));
+      select.value = models.includes(prop.default) ? prop.default : '';
+      const pick = picker(document.body, tr("Модель"), select);
+      picks.push(pick);
+      box.append(pick.wrap);
+      controls.push(select);
+      readers.push([key, () => select.value || undefined]);
+    } else if (prop.type === 'boolean') {
       const initial = prop.default === true;
       const chip = el('button', { type: 'button', class: 'chip ctl-chip', id, 'data-field': key, 'aria-pressed': String(initial) }, name);
       chip.addEventListener('click', () => chip.setAttribute('aria-pressed', String(chip.getAttribute('aria-pressed') !== 'true')));
@@ -194,7 +213,72 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   const dismiss = button(tr("Закрыть"), { class: 'btn btn-sm', hidden: true }, clear);
   // сервер не ответил на список инструментов или каталог не загрузился — сказать, а не молча убрать выбор
   const notice = el('p', { class: 'muted', id: `section-mcp-notice${suffix}`, hidden: true });
-  const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss);
+  const list = el('div', { class: 'mcp-history-list' });
+  const past = el('details', { class: 'mcp-history', hidden: true },
+    el('summary', {}, tr("История MCP")), list);
+  const output = el('div', { class: 'mcp-run', hidden: true }, notice, status, result, retry, dismiss, past);
+  let historyLoaded = false;
+
+  async function loadHistory(before = '') {
+    if (place !== section) return;
+    const page = await api('GET', base + '/history' + (before ? '?before=' + encodeURIComponent(before) : ''),
+      undefined, { signal: controller.signal });
+    if (controller.signal.aborted) return;
+    if (!before) list.replaceChildren();
+    past.hidden = !list.childElementCount && !page.items.length;
+    for (const item of page.items) {
+      const detail = el('div', { class: 'mcp-result' });
+      const label = [dateTime(item.created), item.server, item.model && modelLabel(item.model), JOB_WORDS[item.status] || item.status]
+        .filter(Boolean).join(' · ');
+      const entry = el('details', { class: 'mcp-history-entry' }, el('summary', {}, label),
+        item.prompt ? el('p', { class: 'mcp-history-prompt' }, item.prompt) : null, detail);
+      entry.addEventListener('toggle', async () => {
+        if (!entry.open || entry.dataset.loaded) return;
+        entry.dataset.loaded = 'true';
+        try {
+          const viewed = await api('GET', base + '/history/' + item.id, undefined, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          showResult(detail, viewed.result, [], turns);
+          if (viewed.error) detail.append(el('p', { class: 'status error' }, viewed.error));
+          if (viewed.active) {
+            detail.append(el('p', { class: 'status' }, JOB_WORDS[viewed.status] || viewed.status));
+            delete entry.dataset.loaded;
+          } else {
+            detail.append(button(tr("Удалить"), { class: 'btn btn-sm' }, async () => {
+              try {
+                await api('DELETE', base + '/history/' + item.id, undefined, { signal: controller.signal });
+                if (record()?.id === item.id) clear();
+                await loadHistory();
+              } catch (err) { if (!controller.signal.aborted) warn(words(err)); }
+            }));
+          }
+        } catch (err) {
+          delete entry.dataset.loaded;
+          if (!controller.signal.aborted) detail.textContent = words(err);
+        }
+      });
+      list.append(entry);
+    }
+    if (page.next) {
+      const more = button(tr("Ещё"), { class: 'btn btn-sm' }, async () => {
+        more.disabled = true;
+        try { await loadHistory(page.next); more.remove(); }
+        catch (err) { if (!controller.signal.aborted) { more.disabled = false; warn(words(err)); } }
+      });
+      list.append(more);
+    }
+    const active = !before && page.items.find(item => item.active);
+    if (!historyLoaded && active && !record()) {
+      records.set(place, { id: active.id, job: active.id, state: active.status, key: active.server_id + ':' + active.tool });
+      if (options.has(record().key)) {
+        select.value = record().key;
+        paintFields();
+        onChange?.();
+      }
+    }
+    historyLoaded = true;
+    paint();
+  }
   // поля схемы выбранного инструмента, которых раздел не рисует (extraFields): раздел ставит `fields` в свой ряд
   const extras = el('span', { class: 'mcp-fields' });
   let extra = null;
@@ -213,9 +297,11 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     paintState();
     retry.hidden = !current?.retry;
     dismiss.hidden = active || !(current?.output || current?.error);
-    output.hidden = notice.hidden && !active && !(current?.error || current?.output);
+    output.hidden = notice.hidden && past.hidden && !active && !(current?.error || current?.output);
     status.classList.toggle('error', !!current?.error);
-    status.textContent = current?.error || (active ? tr("В работе") : current?.output ? tr("Готово") : '');
+    status.classList.toggle('mcp-job-active', active);
+    status.textContent = current?.error || (active ? JOB_WORDS[current?.state] || tr("Отправляется…")
+      : current?.output ? tr("Готово") : '');
     if (rendered !== current?.output) {
       rendered = current?.output;
       if (onText) onText(rendered?.text || '');
@@ -237,13 +323,17 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     if (!current?.job || polling || controller.signal.aborted) return;
     polling = true;
     try {
-      const reply = await api('POST', `${base}/status`, { ticket: current.job }, { signal: controller.signal });
+      const reply = current.id
+        ? await api('GET', base + '/history/' + current.id, undefined, { signal: controller.signal })
+        : await api('POST', base + '/status', { ticket: current.job }, { signal: controller.signal });
       if (controller.signal.aborted) return;
       current.error = '';
+      current.state = reply.status;
       if (!reply.active) {
         current.job = null;
-        current.error = reply.error || (reply.status ? tr("Задание MCP завершилось со статусом «{0}»", reply.status) : '');
-        if (!current.error) current.output = reply;
+        current.error = reply.error || (!current.id && reply.status ? tr("Задание MCP завершилось со статусом «{0}»", reply.status) : '');
+        current.output = current.id ? reply.result : !current.error ? reply : undefined;
+        if (current.id) loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -266,16 +356,32 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     try {
       const args = Object.fromEntries(Object.entries({ ...extra?.values(), ...values })
         .filter(([key, value]) => has(key) && value !== undefined));
+      if (Object.hasOwn(tool.schema.properties || {}, 'model') && !Object.hasOwn(args, 'model')
+        && typeof tool.schema.properties.model.default === 'string' && tool.schema.required?.includes('model')) {
+        args.model = tool.schema.properties.model.default;
+      }
       const sources = Object.entries(files).filter(([key, value]) => hasFile(key) && value);
       const supplied = new Set([...Object.keys(args), ...sources.map(([key]) => key)]);
       if (voiceId) ['reference_artifact_id', 'reference_text'].forEach(key => supplied.add(key));
       const missing = tool.schema.required?.find(key => !supplied.has(key));
-      if (missing) throw new Error(tr("Для MCP заполните поле «{0}»", tool.schema.properties[missing].title || missing));
+      if (missing) throw new Error(tr("Для MCP заполните поле «{0}»", tool.schema.properties[missing].title || (missing === 'model' ? tr("Модель") : missing)));
       const inputs = Object.fromEntries(await Promise.all(sources.map(async ([key, value]) => [key, await fileData(value, limit)])));
       const reply = await api('POST', `${base}/servers/${server.id}/run`, { tool: tool.name, arguments: args, files: inputs,
-        ...(voiceId ? { voice_id: voiceId } : {}) });
-      if (reply.job) current.job = reply.job;
-      else current.output = reply;
+        ...(voiceId ? { voice_id: voiceId } : {}), ...(place === section ? { record: true } : {}) });
+      if (reply.history) {
+        const saved = reply.history;
+        current.id = saved.id;
+        current.job = saved.active ? saved.id : null;
+        current.state = saved.status;
+        current.output = saved.result;
+        current.error = saved.error;
+        loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
+      } else if (reply.job) {
+        current.job = reply.job;
+        current.state = reply.status;
+      } else {
+        current.output = reply;
+      }
       return true;
     } catch (err) {
       current.error = words(err);
@@ -304,7 +410,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     const down = catalog.items.filter(server => server.unavailable).map(server => `«${server.name}»`);
     if (down.length) warn(down.join(', '));
     limit = catalog.max_upload_bytes;
-    const allowed = new Set(fields);
+    const allowed = new Set([...fields, 'model']);
     for (const server of catalog.items) for (const tool of server.tools || []) {
       if (fileRequired && !Object.hasOwn(tool.files, fileRequired)) continue;
       if (!(tool.schema.required || []).every(key => allowed.has(key) || Object.hasOwn(tool.files, key))) continue;
@@ -361,7 +467,11 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   select.addEventListener('change', () => { paintState(); paintFields(); onChange?.(); });
   document.addEventListener(`studio-mcp-${section}`, paint, { signal: controller.signal });
   document.addEventListener('studio-locked', paint, { signal: controller.signal });
-  queueMicrotask(() => { paint(); load(); });
+  queueMicrotask(() => {
+    paint();
+    load();
+    loadHistory().catch(err => { if (!controller.signal.aborted) warn(words(err)); });
+  });
   return { control, output, fields: extras, has, hasFile, run, clear,
     argument(key) { return picked()?.tool.schema.properties?.[key]; },
     limits(key) { return schemaLimits(picked()?.tool.schema.properties?.[key]); },

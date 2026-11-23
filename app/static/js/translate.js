@@ -191,10 +191,10 @@ function build(view, ctx) {
   textBox.box.prepend(sourceContent);
   const count = el('span', { id: 'tl-count', class: 'muted small tl-count' });
   const goBtn = el('button', { type: 'button', id: 'tl-go', class: 'btn btn-accent composer-go', hidden: !!ctx.hint }, tr("Перевести"));
-  const mcp = sectionMcp('translate', { native: !ctx.hint, fields: ['text', 'source_lang', 'target_lang', 'source_language', 'target_language', 'model'],
+  const mcp = sectionMcp('translate', { native: !ctx.hint, fields: ['text', 'source_lang', 'target_lang', 'source_language', 'target_language'],
     onChange: paintMcp, onBusy: paintGo, onText(value) { loose = value; paintRight(); } });
   const bar = el('div', { class: 'composer-bar' },
-    el('div', { class: 'composer-opts' }, mcp.control, count), ctx.hint ? null : goBtn);
+    el('div', { class: 'composer-opts' }, mcp.control, mcp.fields, count), ctx.hint ? null : goBtn);
   const left = el('div', { class: 'composer tl-left', id: 'tl-composer' }, langRow, textBox.box, textBox.error, bar,
     ...(ctx.hint ? [] : [fileInput, photoInput, attachMenu]));
 
@@ -378,7 +378,7 @@ function build(view, ctx) {
     goBtn.hidden = fresh.hidden = !!ctx.hint && !active;
     if (active && !goBtn.parentNode) bar.append(goBtn);
     attach.hidden = !!ctx.hint || active;
-    modelPick.wrap.hidden = !model.options.length || (active && !mcp.has('model'));
+    modelPick.wrap.hidden = !model.options.length || active;
     modelPick.sync();
     if (nativeHint) nativeHint.hidden = active;
   }
@@ -669,7 +669,7 @@ function build(view, ctx) {
         loose = '';
         paintRight();
         paintHistory();
-        mcp.run({ text, ...langs, source_language: langs.source_lang, target_language: langs.target_lang, model: pick.model })
+        mcp.run({ text, ...langs, source_language: langs.source_lang, target_language: langs.target_lang })
           .then(ok => { if (ok) draft.sent(text); });
       }
       return;

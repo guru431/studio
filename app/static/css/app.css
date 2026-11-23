@@ -343,6 +343,12 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
 .pick-trigger[data-mcp-state] .pick-value { flex: 1; }
 .mcp-run { flex: none; max-height: 40dvh; overflow: auto; padding: var(--space-4) var(--space-7); }
 .mcp-run > .status { margin: 0 0 var(--space-3); }
+.mcp-run > .mcp-job-active { font-weight: 650; color: var(--text); }
+.mcp-history { margin-top: var(--space-4); }
+.mcp-history summary { cursor: pointer; }
+.mcp-history-entry { padding: var(--space-2) 0; }
+.mcp-history-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.myfiles-preview :is(img, video) { max-height: 62dvh; }
 .mcp-result { display: grid; gap: var(--space-4); }
 .mcp-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .mcp-result :is(img, video, audio) { display: block; max-width: 100%; max-height: 32dvh; margin-bottom: var(--space-3); }

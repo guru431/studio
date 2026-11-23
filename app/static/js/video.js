@@ -146,7 +146,7 @@ function build(view, ctx) {
       nativeHint.hidden = active;
       if (active && !form.parentNode) nativeHint.after(form);
     }
-    modelView.wrap.hidden = modelPick.options.length < 2 || (active && !mcp.has('model'));
+    modelView.wrap.hidden = modelPick.options.length < 2 || active;
     modelView.sync();
     chipSeconds.hidden = active && !mcp.has('seconds');
     qualityWrap.hidden = active && !mcp.has('quality');
@@ -185,7 +185,7 @@ function build(view, ctx) {
   modelPick.addEventListener('change', paintModel);
   const go = el('button', { type: 'submit', id: 'video-go', class: 'btn btn-accent video-go composer-go' }, tr("Оживить"));
   const error = el('p', { id: 'video-error', class: 'error video-error', 'aria-live': 'polite' });
-  const mcp = sectionMcp('video', { native: !ctx.hint, fields: ['prompt', 'seconds', 'quality', 'smooth', 'model'],
+  const mcp = sectionMcp('video', { native: !ctx.hint, fields: ['prompt', 'seconds', 'quality', 'smooth'],
     onChange: paintModel, onBusy: paintGo });
   const promptBox = fieldBox(prompt, { attach: pick });
   const qualityWrap = el('div', { class: 'chip-wrap' }, chipQuality, qualityMenu);
@@ -785,7 +785,7 @@ function build(view, ctx) {
     }
     const [connId, ...model] = modelPick.value.split(':');
     return { prompt: text, seconds: Number(sec), quality: isH3() ? 'native' : quality, smooth: !isH3() && smooth,
-      ...(connId ? { connection_id: connId, model: model.join(':') } : {}) };
+      ...(!mcp.tool && connId ? { connection_id: connId, model: model.join(':') } : {}) };
   }
 
   async function submit() {

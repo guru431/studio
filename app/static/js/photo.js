@@ -175,7 +175,7 @@ function build(view, ctx) {
   const go =el('button', { type: 'submit', id: 'photo-go', class: 'btn btn-accent photo-go composer-go' }, tr("Создать"));
   const error = el('p', { id: 'photo-error', class: 'error photo-error', 'aria-live': 'polite' });
   const orphanLine = el('p', { id: 'photo-orphan', class: 'status photo-error', 'aria-live': 'polite' });
-  mcp =sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'model', 'strength', 'n'],
+  mcp =sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'strength', 'n'],
     onChange: paintSource, onBusy: syncBusy });
   const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
   const seriesWrap = el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu);
@@ -321,7 +321,7 @@ function build(view, ctx) {
     chipPhoto.hidden = active && !mcp.hasFile('artifact_id');
     sourceBox.hidden = !source || chipPhoto.hidden;
     strengthLabel.hidden = active ? !mcp.has('strength') : !isLustify();
-    chipModel.wrap.hidden = active && (!mcp.has('model') || !choice);
+    chipModel.wrap.hidden = active;
     chipSize.wrap.hidden = active && !mcp.has('size');
     seriesWrap.hidden = active && (!mcp.has('n') || seriesMax() < 2);
     go.textContent = describe ? tr("Описать фото") : tr("Создать");
@@ -710,7 +710,7 @@ function build(view, ctx) {
       }
       const many = series.value();
       const raw = prompt.value;
-      mcp.run({ prompt: text || undefined, model: choice?.model, size: (sizes.find(([key]) => key === size) || sizes[0])[2],
+      mcp.run({ prompt: text || undefined, size: (sizes.find(([key]) => key === size) || sizes[0])[2],
         strength: Number(strength.value), n: many?.count || 1 }, { files: { artifact_id: source?.file || source } }).then(ok => {
         if (ok) draft.sent(raw);
         if (ok && many && mcp.has('n')) series.reset();

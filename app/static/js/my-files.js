@@ -33,7 +33,7 @@ export function mount(view) {
   const host = view;
   const state = { servers: [], sid: null, path: '', trash: false };
   const note = el('p', { id: 'myfiles-status', class: 'status', role: 'status', 'aria-live': 'polite' });
-  const tabs = el('div', { class: 'row myfiles-tabs', id: 'myfiles-tabs', role: 'tablist', 'aria-label': tr("Серверы MCP") });
+  const tabs = el('div', { class: 'row myfiles-tabs', id: 'myfiles-tabs', role: 'tablist', 'aria-label': tr("Хранилища") });
   const crumbs = el('nav', { class: 'row myfiles-path', id: 'myfiles-path', 'aria-label': tr("Путь") });
   const picker = el('input', { type: 'file', multiple: true, hidden: true, id: 'myfiles-picker' });
   const toolbar = el('div', { class: 'row myfiles-actions' },
@@ -45,9 +45,12 @@ export function mount(view) {
       load();
     }), picker);
   const list = el('ul', { class: 'agents myfiles-list', id: 'myfiles-list' });
+  const more = button(tr("Ещё"), { class: 'btn btn-sm', hidden: true });
+  let loadVersion = 0;
+  let next = null;
   const fresh = el('div', { class: 'myfiles-fresh', id: 'myfiles-link', hidden: true });
   const links = el('ul', { class: 'agents', id: 'myfiles-links' });
-  const browser = el('div', { id: 'myfiles-browser', hidden: true }, tabs, crumbs, toolbar, fresh, list,
+  const browser = el('div', { id: 'myfiles-browser', hidden: true }, tabs, crumbs, toolbar, fresh, list, more,
     el('h2', {}, tr("Мои ссылки")),
     el('p', { class: 'muted small' }, tr("Ссылка открывает один файл без входа в Студию и действует сутки.")), links);
   view.append(el('header', { class: 'head' }, el('h1', {}, sectionName('myfiles'))),
@@ -102,6 +105,36 @@ export function mount(view) {
     load();
   }
 
+  async function preview(ticket, name) {
+    const type = ticket.kind.split('/')[0];
+    let content;
+    if (type === 'text') {
+      const shown = await api('GET', ticket.url, undefined, { signal });
+      content = el('pre', {}, shown.text);
+    } else if (type === 'audio' || type === 'video') {
+      content = el(type, { src: ticket.url, controls: true, playsinline: true, preload: 'metadata' });
+    } else {
+      content = el('img', { src: ticket.url, alt: name });
+    }
+    if (signal.aborted) return;
+    const body = el('div', { class: 'mcp-result myfiles-preview' }, content);
+    if (type === 'pdf') body.prepend(el('p', { class: 'muted small' }, tr("Первая страница PDF")));
+    content.addEventListener('error', () => body.replaceChildren(el('p', { class: 'error' }, tr("Не удалось открыть файл"))));
+    openDialog(host, { id: 'myfiles-preview', title: name, body, cancelText: tr("Закрыть") });
+  }
+
+  function studioRow(entry) {
+    const title = entry.preview
+      ? button(entry.name, { class: 'btn-link', title: tr("Предпросмотр") }, () => act(() => preview(entry.preview, entry.name)))
+      : el('b', {}, entry.name);
+    const facts = [sectionName(entry.section), sizeText(entry.size), moment(entry.mtime)];
+    return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': 'false' },
+      el('div', { class: 'session-info' }, title, el('p', { class: 'muted small' }, facts.filter(Boolean).join(' · '))),
+      el('div', { class: 'session-actions' },
+        button(tr("Скачать"), { class: 'btn btn-sm myfiles-download', 'aria-label': tr("Скачать: {0}", entry.name) },
+          () => fetchFile(entry.download, entry.name))));
+  }
+
   function entryRow(entry) {
     const path = join(state.path, entry.name);
     const actions = el('div', { class: 'session-actions' });
@@ -124,7 +157,10 @@ export function mount(view) {
       }, tr("В корзине сервера: {0}", entry.name))));
     const title = entry.dir
       ? button(entry.name, { class: 'btn-link myfiles-folder' }, () => open(path))
-      : el('b', {}, entry.name);
+      : button(entry.name, { class: 'btn-link', title: tr("Предпросмотр") }, () => act(async () => {
+        const ticket = await api('POST', `${base()}/ticket`, { path, preview: true }, { signal });
+        await preview(ticket, entry.name);
+      }));
     return el('li', { class: 'agent session myfiles-item', 'data-name': entry.name, 'data-dir': String(entry.dir) },
       el('div', { class: 'session-info' }, title, el('p', { class: 'muted small' }, facts.filter(Boolean).join(' · '))),
       actions);
@@ -143,27 +179,45 @@ export function mount(view) {
         }))));
   }
 
-  async function load() {
+  async function load(after = null) {
+    const version = ++loadVersion;
+    const local = Boolean(server()?.local);
+    if (!after) {
+      list.replaceChildren();
+      more.hidden = true;
+    }
+    toolbar.hidden = local;
     paintTabs();
     paintCrumbs();
     const toggle = document.getElementById('myfiles-trash');
     toggle.setAttribute('aria-pressed', String(state.trash));
     toggle.classList.toggle('btn-accent', state.trash);
-    let items;
+    let result;
     try {
-      items = state.trash
-        ? await api('POST', `${base()}/trash`, {}, { signal })
-        : (await api('POST', `${base()}/list`, { path: state.path }, { signal })).entries;
+      result = state.trash
+        ? { entries: await api('POST', `${base()}/trash`, {}, { signal }) }
+        : await api('POST', `${base()}/list${after ? `?after=${encodeURIComponent(after)}` : ''}`, { path: state.path }, { signal });
     } catch (err) {
-      if (signal.aborted) return;
-      say(words(err), 'error');
-      list.replaceChildren();
+      if (!signal.aborted && version === loadVersion) say(words(err), 'error');
       return;
     }
-    if (signal.aborted) return;
-    list.replaceChildren(...(items.length ? items.map(state.trash ? trashRow : entryRow)
+    if (signal.aborted || version !== loadVersion) return;
+    const rows = result.entries.map(local ? studioRow : state.trash ? trashRow : entryRow);
+    if (after) list.append(...rows);
+    else list.replaceChildren(...(rows.length ? rows
       : [el('li', { class: 'muted', id: 'myfiles-none' }, state.trash ? tr("Корзина сервера пуста") : tr("Папка пуста"))]));
+    next = result.next;
+    more.hidden = !next;
   }
+
+  more.addEventListener('click', async () => {
+    more.disabled = true;
+    try {
+      if (next) await load(next);
+    } finally {
+      more.disabled = false;
+    }
+  });
 
   async function loadLinks() {
     let items;

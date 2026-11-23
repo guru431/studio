@@ -304,8 +304,17 @@ def test_revoked_personal_cleanup_key_leaves_other_keys_at_the_same_address(prot
     monkeypatch.setattr(state.HTTP._transport, "handler", handler)
     studio.c.portal.call(cleaner.purge)
     assert seen == ["Bearer ck_revoked", "Bearer ck_current"]
+    storage = studio.c.get("/api/me/storage").json()
+    assert storage["cleaner_pending"] == 10
+    assert cleaner.stalled(remote.uid) == [{"base_url": address, "count": 10}]
+    assert "отложено контекстов: 10" in caplog.text and "ck_revoked" not in caplog.text
+    studio.c.portal.call(cleaner.purge)
+    assert len(seen) == 2
+
+    studio.clock[0] += cleaner.REFUSED_SEC
+    monkeypatch.setattr(state.HTTP._transport, "handler", lambda request: httpx.Response(204))
+    studio.c.portal.call(cleaner.purge)
     assert studio.c.get("/api/me/storage").json().get("cleaner_pending", 0) == 0
-    assert "из очереди снято контекстов: 10" in caplog.text and "ck_revoked" not in caplog.text
 
 
 def queue_deletion(uid, base_url, queued, token="ck_synthetic", n=1):

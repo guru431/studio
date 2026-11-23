@@ -35,7 +35,7 @@ const OWUI_FILE = /(^|[\s("'<])\/api\/v1\/files\/([A-Za-z0-9_.:-]{1,128})\/conte
 
 let localIds = 0;
 
-export function chatView(host, { account, chatId = null, created = () => {} }) {
+export function chatView(host, { account, chatId = null, readOnly = false, created = () => {} }) {
   const base = `/api/owui/accounts/${account}`;
   let chat = chatId;
   let messages = [];
@@ -80,11 +80,12 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   const stop = el('button', { type: 'button', id: 'owui-stop', class: 'send composer-go composer-stop', 'aria-label': tr("Остановить"),
     title: tr("Остановить"), hidden: true }, icon('stop'));
   const inputBox = fieldBox(input, { attach: clip });
-  const form = el('form', { class: 'composer owui-composer', id: 'owui-composer' }, chips, inputBox.box, inputBox.error,
+  const form = el('form', { class: 'composer owui-composer', id: 'owui-composer', hidden: readOnly }, chips, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick.wrap), stop, send));
   const root = el('div', { class: 'owui-chat-view', id: 'owui-feed', 'data-account': String(account) },
     titleNode, scroller, queuedNote, notice, form);
   host.append(root);
+  if (readOnly) root.append(stop);
 
   /* ---- лента ---- */
 
@@ -352,6 +353,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   }
 
   function attach(list) {
+    if (readOnly) return;
     if (sending) return;
     for (const f of list) {
       if (attachments.length >= FILES_MAX) {
@@ -403,7 +405,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
     other: [], done: false, error: null, pending: null });
 
   async function submit() {
-    if (sending) return;
+    if (readOnly || sending) return;
     const text = input.value;
     const ready = attachments.filter((a) => a.id);
     if (attachments.some((a) => a.uploading || a.removing)) return;
@@ -474,6 +476,7 @@ export function chatView(host, { account, chatId = null, created = () => {} }) {
   });
 
   async function resolve(id, decision) {
+    if (readOnly) return;
     try {
       await api('POST', `${base}/chats/${encodeURIComponent(chat)}/resolve`, { message_id: id, ...decision });
     } catch (err) {

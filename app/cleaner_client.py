@@ -243,9 +243,8 @@ def _pause(row) -> float:
     return min(max(clock.NOW() - row["queued"], RETRY_MIN_SEC), RETRY_MAX_SEC)
 
 
-def _drop_key(base_url: str, route: int, token: str) -> int:
-    """Снять строки этого адреса и вида авторизации со снимком отвергнутого ключа: повторы включили бы паузу
-    Cleaner на весь адрес Studio. Контексты остаются в Cleaner — их удаляют в интерфейсе Cleaner."""
+def _reject_key(base_url: str, route: int, token: str) -> int:
+    """Отложить личный ключ на сутки, снять строки отозванного служебного ключа."""
     gone = []
     for row in state.DB.execute("SELECT id, token_enc FROM cleaner_deletions WHERE route = ? AND base_url = ?",
                                 (route, base_url)).fetchall():
@@ -254,16 +253,22 @@ def _drop_key(base_url: str, route: int, token: str) -> int:
                 gone.append(row["id"])
         except (InvalidToken, ValueError):
             continue
+    retry_at = clock.NOW() + REFUSED_SEC
     for start in range(0, len(gone), 500):
         part = gone[start:start + 500]
-        state.DB.execute(f"DELETE FROM cleaner_deletions WHERE id IN ({','.join('?' * len(part))})", part)
+        marks = ",".join("?" * len(part))
+        if route:
+            state.DB.execute(f"DELETE FROM cleaner_deletions WHERE id IN ({marks})", part)
+        else:
+            state.DB.execute(f"UPDATE cleaner_deletions SET retry_at = MAX(retry_at, ?) WHERE id IN ({marks})",
+                             (retry_at, *part))
     return len(gone)
 
 
 async def purge():
     """Любая неудача откладывает строку (`retry_at`), так что недоступный адрес не держит голову очереди;
     сбой сети, отказ списка, 429 и 403 строки прежнего вида откладывают весь адрес. При 401 (а для шлюза и 403)
-    снимаются строки с отвергнутым ключом (`_drop_key`), прочие строки идут в том же проходе."""
+    личный ключ откладывается на сутки, служебный снимается; прочие строки идут в том же проходе."""
     postponed, refused, calls = set(), set(), 0
 
     def later(row, seconds, whole_address=False):
@@ -292,7 +297,7 @@ async def purge():
                 later(row, REFUSED_SEC)
                 continue
             credential = row["base_url"], row["route"], token
-            if credential in refused:      # строки этого ключа уже сняты
+            if credential in refused:      # строки этого ключа уже обработаны
                 continue
             calls += 1
             # контекст шлюза Cleaner (`route`): служебный ключ — только в X-Cleaner-Key, `Authorization` там — провайдера
@@ -315,9 +320,14 @@ async def purge():
                 state.DB.execute("DELETE FROM cleaner_deletions WHERE id = ?", (row["id"],))
             elif response.status_code == 401 or (row["route"] and response.status_code == 403):
                 refused.add(credential)
-                log.warning("Cleaner: ключ удаления отвергнут (%d) — из очереди снято контекстов: %d",
-                            response.status_code, _drop_key(*credential))
-                again = True                             # выборка без снятых строк: строки других ключей — в этом проходе
+                count = _reject_key(*credential)
+                if row["route"]:
+                    log.warning("Cleaner: ключ удаления отвергнут (%d) — из очереди снято контекстов: %d",
+                                response.status_code, count)
+                else:
+                    log.warning("Cleaner: личный ключ удаления отвергнут (%d) — отложено контекстов: %d",
+                                response.status_code, count)
+                again = True                             # строки других ключей — в этом проходе
                 break
             elif response.status_code in (403, 429):
                 # Cleaner throttles bad keys by source address. Do not lock out active Studio users

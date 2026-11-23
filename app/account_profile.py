@@ -156,7 +156,7 @@ def _me(request: Request) -> dict:
             "memory_on": bool(row["memory_on"]),     # личная память «Чата» (memory.py)
             # флажок администратора «Веб и внешние MCP — только через Cleaner»: «Интернет» вне Cleaner выключен,
             # «Open WebUI» показывает предупреждение
-            "cleaner_web": cleaner_route.web_only(),
+            "cleaner_web": cleaner_route.web_only(), "cleaner_forced": cleaner_route.forced(),
             # языки push и ntfy этой сессии: страница сверяет их с языком интерфейса устройства
             "notify_langs": ntfy.session_langs(request.state.digest)}
 

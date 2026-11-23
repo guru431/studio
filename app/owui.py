@@ -49,6 +49,7 @@ import auth
 import chat as studio_chat
 import claude_code
 import clock
+import cleaner_route
 import documents
 import lock_policy
 import owui_link
@@ -757,6 +758,12 @@ def _file_lock(aid: int) -> asyncio.Lock:
     return FILE_LOCKS.setdefault(aid, asyncio.Lock())
 
 
+def require_delivery():
+    if cleaner_route.forced():
+        raise HTTPException(409, {"code": "cleaner_forced",
+                                  "message": "Отправка в Open WebUI отключена при обязательном Cleaner"})
+
+
 async def _send(acc, body: SendIn, chat: str | None, parent: str | None, request: Request) -> tuple[str | None, str, bool]:
     if not body.files:
         return await _send_turn(acc, body, chat, parent, request)
@@ -775,6 +782,7 @@ async def _send_turn(acc, body: SendIn, chat: str | None, parent: str | None,
     text = body.text
     if not text.strip() and not body.files:
         raise HTTPException(422, EMPTY)
+    require_delivery()
     sid = await owui_link.ensure(acc)
     config_r, settings_r, models_r, previous, *items = await asyncio.gather(
         call(acc, "GET", "/api/config"), call(acc, "GET", "/api/v1/users/user/settings"),
@@ -816,6 +824,7 @@ async def _send_turn(acc, body: SendIn, chat: str | None, parent: str | None,
     if params.get("tool_approval_mode") in APPROVAL_MODES:            # `full` Студия не шлёт никогда
         payload["params"] = {"tool_approval_mode": params["tool_approval_mode"]}
     auth.recheck(request)
+    require_delivery()
     owui_link.track(acc, chat or "", answer_id)                        # события ответа идут сразу за ответом POST
     try:
         # По сетевой ошибке нельзя узнать, добавил ли Open WebUI сообщение. Сразу снимаем право удалить его файлы.
@@ -907,10 +916,12 @@ async def resolve(aid: int, chat: str, body: ResolveIn, request: Request):
     chat, message_id = _owui_id(chat, NO_CHAT), _owui_id(body.message_id, NO_CHAT)
     if (body.action == "answer") != (body.answers is not None):
         raise HTTPException(422, ANSWERS)
+    require_delivery()
     payload: dict = {"call_id": body.call_id, "action": body.action}
     if body.answers is not None:
         payload["answers"] = await _resolve_answers(acc, chat, message_id, body.call_id, body.answers)
     await owui_link.ensure(acc)                                        # события продолжения — через сокет Студии
+    require_delivery()
     owui_link.track(acc, chat, message_id)
     try:
         response = await call(acc, "POST", f"/api/v1/chats/{chat}/messages/{message_id}/resolve", json=payload)
@@ -982,7 +993,9 @@ async def upload(aid: int, request: Request):
     страница Open WebUI грузит без обработки (`?process=false`) и не ждёт — так и здесь: её статус остаётся
     `pending`, а обработка картинки как документа кончается `failed`."""
     acc = load(request.state.user.id, aid)
+    require_delivery()
     data = await _upload_body(request)
+    require_delivery()
     name = documents.clean_name(unquote(request.headers.get("x-studio-name", "")))
     mime = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if not MIME.fullmatch(mime):

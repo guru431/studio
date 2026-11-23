@@ -7,11 +7,13 @@ uploading a source or collecting the result of a permitted tool.
 
 import asyncio
 import base64
+import binascii
 from contextlib import AsyncExitStack
 import json
 import math
 import re
 from types import SimpleNamespace
+import uuid
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request
@@ -27,13 +29,16 @@ import images
 import mcp_client as mcp
 import mcp_sources
 import media
+import operations
 import security
 import speech
+import state
 import upstream
 import voices
 
 router = APIRouter(prefix="/api/mcp-tools")
 TOOLS = {
+    "chat": {"llm_ask"},
     "photo": {"image_generate", "image_edit", "image_describe", "generate_image", "edit_image", "describe_image"},
     "video": {"video_create", "video_estimate", "generate_video"},
     "speech": {"speech_synthesize", "synthesize_speech", "text_to_speech"},
@@ -46,6 +51,8 @@ FILE_FIELDS = {"photo": {"artifact_id": "image"}, "video": {"artifact_id": "imag
                "transcribe": {"artifact_id": "audio"}}
 UPLOAD_MAX = 12 << 20
 PARAMS_MAX = 128 << 10
+MODEL_CHOICES_MAX = 256
+MODEL_ID_MAX = 128
 RESULT_MAX = 4 << 20  # MCP-сервисы дублируют structuredContent в текстовом блоке.
 DOWNLOAD_MAX = 512 << 20
 DISCOVERY_TIMEOUT = 8
@@ -105,6 +112,112 @@ def supported(section, tools, *, uid=None, sid=None, item=None):
                "limits": {"max_seconds": found.max_seconds} if (found := speech.tool_limits(tool)) else None}
 
 
+def model_ids(payload):
+    """Model IDs from the OpenAI-style listing returned by an MCP catalog tool."""
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    return list(dict.fromkeys(model for item in items[:MODEL_CHOICES_MAX] if isinstance(item, dict)
+                              and isinstance(model := item.get("id"), str) and 0 < len(model) <= MODEL_ID_MAX
+                              and model.isprintable() and model == model.strip()))
+
+
+async def image_models(session, tools, listed, uid):
+    """The shared MCP platform publishes the gateway's image catalog in `services_list`."""
+    candidates = [tool for tool in tools if tool["name"] in {"image_generate", "image_edit"}
+                  and (prop := tool["schema"].get("properties", {}).get("model", {})).get("type") == "string"
+                  and "enum" not in prop]
+    if not candidates or not any(isinstance(tool, dict) and tool.get("name") == "services_list" for tool in listed):
+        return
+    if not access.tool_allowed(uid, session.sid, "services_list"):
+        return
+    try:
+        async with asyncio.timeout(DISCOVERY_TIMEOUT):
+            await session.initialize()
+            result = await call(session, "services_list", {}, timeout=DISCOVERY_TIMEOUT)
+    except (HTTPException, TimeoutError):
+        return
+    data = result.get("structuredContent")
+    declarations = data.get("declarations") if isinstance(data, dict) else None
+    images_catalog = declarations.get("images") if isinstance(declarations, dict) else None
+    services = data.get("services") if isinstance(data, dict) else None
+    video = services.get("video") if isinstance(services, dict) else None
+    video_models = video.get("model_limits") if isinstance(video, dict) else None
+    choices = [name for name in model_ids(images_catalog) if not isinstance(video_models, dict) or name not in video_models]
+    if choices:
+        for tool in candidates:
+            tool["models"] = choices
+
+
+def require_chat_policy():
+    if cleaner_route.forced():
+        raise mcp.refused("Ответы через MCP недоступны при обязательном Cleaner", "cleaner_forced")
+
+
+async def chat_models(session, uid):
+    if cleaner_route.forced():
+        return []
+    try:
+        async with asyncio.timeout(DISCOVERY_TIMEOUT):
+            found = await mcp_sources.catalog(session, DISCOVERY_TIMEOUT)
+            names = {tool["name"] for tool in found.tools
+                     if isinstance(tool, dict) and isinstance(tool.get("name"), str)}
+            if not {"models_list", "llm_ask"} <= names or not all(
+                    access.tool_allowed(uid, session.sid, name) for name in ("models_list", "llm_ask")):
+                return []
+            if not list(supported("chat", found.tools, uid=uid, sid=session.sid, item=mcp.row(uid, session.sid))):
+                return []
+            await session.initialize()
+            result = await call(session, "models_list", {}, timeout=DISCOVERY_TIMEOUT)
+            return model_ids(result.get("structuredContent"))
+    except (HTTPException, TimeoutError):
+        return []
+
+
+async def check_chat_model(uid, sid, model):
+    require_chat_policy()
+    item = mcp.row(uid, sid)
+    if not item["enabled"] or not model:
+        raise mcp.refused("Выберите модель сервера MCP", "invalid", 422)
+    session = mcp.Session(item, uid=uid)
+    try:
+        if model not in await chat_models(session, uid):
+            raise mcp.refused("Модель недоступна на сервере MCP")
+    finally:
+        await session.close()
+    return item
+
+
+async def ask_chat(uid, sid, model, messages):
+    item = await check_chat_model(uid, sid, model)
+    session = mcp.Session(item, uid=uid)
+    try:
+        await session.initialize()
+        require_chat_policy()
+        current = mcp.row(uid, sid)
+        if not current["enabled"] or not access.tool_allowed(uid, sid, "llm_ask") or current["secret_enc"] != item["secret_enc"]:
+            raise mcp.refused("Инструмент MCP недоступен")
+        result = await call(session, "llm_ask", {"model": model, "messages": messages, "wait_seconds": 2})
+        data = result.get("structuredContent")
+        job_id = data.get("id") if isinstance(data, dict) else None
+        if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id):
+            return result_text(data) if isinstance(data, dict) else first_text(result)
+        args = {"job_id": job_id}
+        while True:
+            status = (await call(session, "job_status", args)).get("structuredContent")
+            if isinstance(status, dict) and status.get("status") == "completed":
+                reply = (await call(session, "job_result", args)).get("structuredContent")
+                value = reply.get("result") if isinstance(reply, dict) else None
+                return result_text(value) if isinstance(value, dict) else ""
+            if not isinstance(status, dict) or status.get("status") not in ACTIVE:
+                error = status.get("error") if isinstance(status, dict) else None
+                words = clean_text(error.get("message"), 600) if isinstance(error, dict) else ""
+                raise mcp.refused(words or "Не удалось получить ответ модели MCP")
+            await asyncio.sleep(2)
+    finally:
+        await session.close()
+
+
 @router.get("/{section}")
 async def catalog(section: str, request: Request):
     section_tools(section)
@@ -116,6 +229,11 @@ async def catalog(section: str, request: Request):
         try:
             found = await mcp_sources.catalog(session, DISCOVERY_TIMEOUT)     # общий кэш каталогов MCP
             tools = list(supported(section, found.tools, uid=uid, sid=session.sid, item=item))
+            if section == "chat":
+                choices = await chat_models(session, uid) if tools else []
+                return {"id": session.sid, "name": item["name"], "tools": tools if choices else [], "models": choices}
+            if section == "photo":
+                await image_models(session, tools, found.tools, uid)
             return {"id": session.sid, "name": item["name"], "tools": tools}
         except (HTTPException, TimeoutError, ValueError, RecursionError):
             return {"id": session.sid, "name": item["name"], "unavailable": True}
@@ -139,6 +257,7 @@ class RunIn(BaseModel):
     arguments: dict = Field(default_factory=dict, max_length=128)
     files: dict[str, FileIn] = Field(default_factory=dict, max_length=1)
     voice_id: str | None = Field(default=None, pattern=forms.MEDIA_ID_RE.pattern, max_length=32)
+    record: bool = False
 
 
 def ticket(session: mcp.Session, section: str, kind: str, *payload) -> str:
@@ -428,6 +547,8 @@ def check_bounds(tool: dict, args: dict) -> None:
 
 @router.post("/{section}/servers/{sid}/run")
 async def run(section: str, sid: int, request: Request):
+    if section == "chat":
+        raise mcp.refused("Для модели MCP откройте диалог", "not_found", 404)
     names = section_tools(section)
     uid = request.state.user.id
     item = mcp.row(uid, sid)
@@ -451,7 +572,9 @@ async def run(section: str, sid: int, request: Request):
         if not body.files.keys() <= tool["files"].keys():
             raise mcp.refused("Инструмент не принимает этот файл MCP", "invalid", 422)
         if body.tool in {"image_generate", "image_edit"} and isinstance(args.get("model"), str):
-            args["model"] = images.MODELS.get(args["model"], args["model"])
+            model_schema = tool["schema"].get("properties", {}).get("model", {})
+            if "enum" not in model_schema and any(isinstance(t, dict) and t.get("name") == "services_list" for t in listed):
+                args["model"] = images.MODELS.get(args["model"], args["model"])
         if body.voice_id:
             for key in ("voice", "reference_artifact_id"):
                 args.pop(key, None)
@@ -463,9 +586,14 @@ async def run(section: str, sid: int, request: Request):
         check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
+        if body.record:
+            operations.check(uid)
         result = await call(session, body.tool, args)
         data = result.get("structuredContent")
         jid = data.get("id") if isinstance(data, dict) else None
+        if body.record:
+            remote_id = jid if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid) else None
+            return await record_result(session, section, item["name"], body.tool, args, result, remote_id)
         if tool["jobs"] and isinstance(jid, str) and JOB_ID.fullmatch(jid):
             return {"job": ticket(session, section, "job", jid), "status": "queued"}
         return await shown(session, section, result)
@@ -498,6 +626,205 @@ async def status(section: str, body: JobIn, request: Request):
                 "error": clean_text(error.get("message"), 600) if isinstance(error, dict) else ""}
     finally:
         await session.close()
+
+
+HISTORY_PAGE = 30
+HISTORY_MAX_WAIT = 3 * 3600
+HISTORY_BATCH = 12
+HISTORY_ACTIVE: set[str] = set()
+
+
+def history_view(row, *, details=True):
+    return {key: row[key] for key in ("id", "server", "tool", "model", "prompt", "created", "status", "error")} | {
+        "active": row["remote_id"] is not None, "server_id": row["server_id"],
+        "result": json.loads(row["result"]) if details and row["result"] else None,
+    }
+
+
+async def record_result(session, section, server, tool, args, result, remote_id):
+    operations.check(session.uid)
+    rid = uuid.uuid4().hex
+    stamp = mcp_sources.stamp(session.stamp)
+    prompt = clean_text(args.get("prompt") or args.get("text"), 24_000)
+    model = clean_text(args.get("model"), MODEL_ID_MAX)
+    state.DB.execute("INSERT INTO mcp_section_jobs(id, user_id, section, server_id, server, tool, model, prompt, "
+                     "created, stamp, remote_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (rid, session.uid, section, session.sid, server, tool, model, prompt,
+                      clock.NOW(), stamp, remote_id, "queued" if remote_id else "saving"))
+    if remote_id is None:
+        try:
+            await save_history(session, section, rid, result)
+        except BaseException:
+            end_history(rid, "failed", "Не удалось сохранить результат MCP")
+            raise
+    return {"history": history_view(state.DB.execute("SELECT * FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone())}
+
+
+def end_history(rid, status, error=""):
+    state.DB.execute("UPDATE mcp_section_jobs SET status = ?, error = ?, remote_id = NULL WHERE id = ?",
+                     (status, error, rid))
+
+
+async def save_history(session, section, rid, result):
+    output = await shown(session, section, result)
+    data = result.get("structuredContent")
+    sources = iter(artifacts(data) if isinstance(data, dict) else ())
+    remaining = DOWNLOAD_MAX
+    saved, media_ids = [], []
+    missing = False
+    for file in output["files"]:
+        mime = file["mime"]
+        name = clean_text(file.get("name"), 120).replace("\\", "/").rsplit("/", 1)[-1]
+        name = name or "result" + media.EXT.get(mime, ".bin")
+        try:
+            if "url" in file:
+                aid, _, _ = next(sources)
+                reply = await relay(session, aid, mime, SimpleNamespace(headers={}), name=name)
+                if not isinstance(reply, ArtifactStream):
+                    raise ValueError("artifact response")
+                try:
+                    if reply.status_code != 200:
+                        raise ValueError("incomplete artifact")
+                    mid = await media.save_stream(session.uid, reply.body_iterator, mime, name, remaining)
+                finally:
+                    await reply.stack.aclose()
+            else:
+                raw = base64.b64decode(file["base64"], validate=True)
+                if not raw or len(raw) > remaining:
+                    raise ValueError("result size")
+                mid = await media.save_async(session.uid, raw, mime, name, thumb=mime.startswith("image/"))
+        except (HTTPException, media.StorageError, ConnectionError, ValueError, binascii.Error):
+            missing = True
+            continue
+        remaining -= state.DB.execute("SELECT size FROM media WHERE id = ?", (mid,)).fetchone()[0]
+        media_ids.append(mid)
+        saved.append({"mime": mime, "name": name, "url": f"/api/media/{mid}"})
+    output["files"] = saved
+    operations.check(session.uid)
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.executemany("INSERT INTO mcp_section_files(job_id, user_id, media_id) VALUES (?, ?, ?)",
+                             ((rid, session.uid, mid) for mid in media_ids))
+        state.DB.execute("UPDATE mcp_section_jobs SET result = ? WHERE id = ?",
+                         (json.dumps(output, ensure_ascii=False), rid))
+        end_history(rid, "completed" if saved or output["text"] or not missing else "failed",
+                    "Часть файлов MCP не удалось сохранить" if missing and saved else
+                    "Файлы MCP не удалось сохранить" if missing else "")
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+
+
+async def refresh_history(row):
+    rid, uid, sid = row["id"], row["user_id"], row["server_id"]
+    if rid in HISTORY_ACTIVE:
+        return
+    HISTORY_ACTIVE.add(rid)
+    try:
+        if clock.NOW() - row["created"] > HISTORY_MAX_WAIT:
+            end_history(rid, "failed", "Истекло время ожидания задания MCP")
+            return
+        try:
+            item = mcp.row(uid, sid)
+            if (not item["enabled"] or row["stamp"] != mcp_sources.stamp(item["secret_enc"])
+                    or not access.tool_allowed(uid, sid, row["tool"])):
+                raise mcp.refused("Подключение или права MCP изменились")
+        except HTTPException:
+            end_history(rid, "failed", "Подключение или права MCP изменились")
+            return
+        session = mcp.Session(item, uid=uid)
+        try:
+            await session.initialize()
+            args = {"job_id": row["remote_id"]}
+            job = (await call(session, "job_status", args, timeout=DISCOVERY_TIMEOUT)).get("structuredContent")
+            if not isinstance(job, dict) or not isinstance(job.get("status"), str):
+                return
+            status = job["status"]
+            if status in ACTIVE:
+                state.DB.execute("UPDATE mcp_section_jobs SET status = ? WHERE id = ?", (status, rid))
+            elif status == "completed":
+                response = (await call(session, "job_result", args, timeout=DISCOVERY_TIMEOUT)).get("structuredContent")
+                if isinstance(response, dict) and isinstance(response.get("result"), dict):
+                    with operations.bind(uid):
+                        operations.check(uid)
+                        if state.DB.execute("SELECT 1 FROM mcp_section_jobs WHERE id = ?", (rid,)).fetchone():
+                            await save_history(session, row["section"], rid, {"structuredContent": response["result"]})
+                else:
+                    end_history(rid, "failed", "MCP не вернул результат задания")
+            else:
+                error = job.get("error")
+                words = clean_text(error.get("message"), 600) if isinstance(error, dict) else ""
+                end_history(rid, clean_text(status, 80), words or "Задание MCP не завершилось")
+        except (HTTPException, TimeoutError):
+            pass                            # Retry transient server failures on the next pass within the wait limit.
+        finally:
+            await session.close()
+    finally:
+        HISTORY_ACTIVE.discard(rid)
+
+
+async def watch_history():
+    # No remote id means an inline result was interrupted before Studio finished saving it.
+    state.DB.execute("UPDATE mcp_section_jobs SET status = 'failed', error = ? WHERE status = 'saving'",
+                     ("Сохранение результата прервано перезапуском Studio",))
+    cursor = (0.0, "")
+    while True:
+        rows = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE remote_id IS NOT NULL AND (created, id) > (?, ?)"
+                                " ORDER BY created, id LIMIT ?", (*cursor, HISTORY_BATCH)).fetchall()
+        if rows:
+            await asyncio.gather(*(refresh_history(row) for row in rows), return_exceptions=True)
+            cursor = (rows[-1]["created"], rows[-1]["id"])
+        if len(rows) < HISTORY_BATCH:
+            cursor = (0.0, "")
+            await asyncio.sleep(4)
+
+
+@router.get("/{section}/history")
+async def history(section: str, request: Request, before: str = ""):
+    section_tools(section)
+    uid = request.state.user.id
+    if before and not forms.MEDIA_ID_RE.fullmatch(before):
+        raise mcp.refused("Неверная страница истории MCP", "invalid", 422)
+    cursor = state.DB.execute("SELECT created, rowid FROM mcp_section_jobs WHERE user_id = ? AND section = ? AND id = ?",
+                              (uid, section, before)).fetchone() if before else None
+    if before and cursor is None:
+        raise mcp.refused("Запись истории MCP недоступна", "not_found", 404)
+    extra = " AND (created, rowid) < (?, ?)" if cursor else ""
+    rows = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE user_id = ? AND section = ?" + extra
+                            + " ORDER BY created DESC, rowid DESC LIMIT ?",
+                            (uid, section, *(tuple(cursor) if cursor else ()), HISTORY_PAGE + 1)).fetchall()
+    return {"items": [history_view(row, details=False) for row in rows[:HISTORY_PAGE]],
+            "next": rows[HISTORY_PAGE - 1]["id"] if len(rows) > HISTORY_PAGE else None}
+
+
+def history_row(uid, section, rid):
+    section_tools(section)
+    row = state.DB.execute("SELECT * FROM mcp_section_jobs WHERE user_id = ? AND section = ? AND id = ?",
+                           (uid, section, rid)).fetchone()
+    if row is None:
+        raise mcp.refused("Запись истории MCP недоступна", "not_found", 404)
+    return row
+
+
+@router.get("/{section}/history/{rid}")
+async def history_item(section: str, rid: str, request: Request):
+    row = history_row(request.state.user.id, section, rid)
+    return history_view(row)
+
+
+@router.delete("/{section}/history/{rid}", status_code=204)
+async def delete_history(section: str, rid: str, request: Request):
+    uid = request.state.user.id
+    row = history_row(uid, section, rid)
+    if row["remote_id"] or row["status"] == "saving":
+        raise mcp.refused("Дождитесь завершения задания MCP")
+    mids = state.DB.execute("SELECT media_id FROM mcp_section_files WHERE job_id = ?", (rid,)).fetchall()
+    state.DB.execute("DELETE FROM mcp_section_jobs WHERE id = ?", (rid,))
+    for (mid,) in mids:
+        if not media.referenced(uid, mid):
+            await media.delete_async(uid, mid)
+    return Response(status_code=204)
 
 
 class ArtifactStream(StreamingResponse):

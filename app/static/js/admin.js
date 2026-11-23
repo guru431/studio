@@ -538,7 +538,9 @@ function cleanerBlock() {
     const usable = !!url.value.trim() && (keySet || !!key.value.trim());
     forced.disabled = !usable && !forced.checked;
     web.disabled = !usable && !web.checked;
-    owuiNote.hidden = !web.checked;
+    owuiNote.hidden = !forced.checked && !web.checked;
+    owuiNote.textContent = forced.checked ? tr("Отправка в Open WebUI отключена при обязательном Cleaner")
+      : tr("Модели Open WebUI работают мимо Cleaner");
     check.disabled = !(keySet && url.value.trim());
   }
 
@@ -589,7 +591,7 @@ function cleanerBlock() {
       el('p', { class: 'muted small', id: 'cleaner-private-note' }, tr("Частные адреса из списка разрешённых считаются внутренними — не добавляйте туда шлюзы в облачные модели.")),
       reenter, field(tr("Адрес Cleaner"), url), field(tr("Служебный ключ"), key),
       el('label', { class: 'check' }, forced, tr("Cleaner для всех внешних моделей")),
-      el('p', { class: 'muted small', id: 'cleaner-forced-note' }, tr("Принудительный режим закрывает подключения моделей Studio: внешние идут только через Cleaner. Веб-инструменты и внешние MCP закрывает флажок ниже; раздел «Open WebUI» не закрывает ни один из них.")),
+      el('p', { class: 'muted small', id: 'cleaner-forced-note' }, tr("В принудительном режиме внешние модели Studio работают через Cleaner. В Open WebUI доступна история, отправка закрыта. Флажок ниже дополнительно ограничивает веб-инструменты и внешние MCP.")),
       el('label', { class: 'check' }, web, tr("Веб и внешние MCP — только через Cleaner")),
       el('p', { class: 'muted small', id: 'cleaner-web-note' }, tr("«Интернет» и веб-инструменты MCP (пометка «интернет») — только в диалогах через Cleaner; в остальных диалогах и в разделах они недоступны.")),
       owuiNote,

@@ -185,6 +185,7 @@ def _values_anywhere(package: Path, name: str) -> frozenset:
     return frozenset(found)
 
 
+@cache
 def _text(doc: Path) -> str:
     return FENCE.sub("", doc.read_text(encoding="utf-8"))
 
@@ -252,6 +253,12 @@ def _anchors(doc: Path) -> set:
     return {_slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+?)\s*#*$", _text(doc), re.M)}
 
 
+@cache
+def _local_destination(parent: Path, path: str) -> tuple[Path, bool]:
+    dest = (parent / path).resolve()
+    return dest, dest.exists()
+
+
 def _link_problems(doc: Path) -> list[str]:
     problems = []
     for match in LINK.finditer(_text(doc)):
@@ -259,8 +266,8 @@ def _link_problems(doc: Path) -> list[str]:
         if re.match(r"^[a-z]+:", target):
             continue
         path, _, anchor = target.partition("#")
-        dest = (doc.parent / path).resolve() if path else doc
-        if not dest.exists():
+        dest, exists = _local_destination(doc.parent, path)
+        if not exists:
             problems.append(f"{target}: нет файла")
         elif anchor and dest.suffix == ".md" and anchor not in _anchors(dest):
             problems.append(f"{target}: нет заголовка #{anchor}")

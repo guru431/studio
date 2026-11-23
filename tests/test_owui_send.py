@@ -10,6 +10,7 @@ from urllib.parse import quote
 import pytest
 
 import auth
+import cleaner_route
 import ntfy
 import owui
 import owui_link
@@ -77,6 +78,24 @@ def sse(text: str) -> list[tuple[str, dict]]:
         if "event" in lines:
             found.append((lines["event"], json.loads(lines["data"])))
     return found
+
+
+def test_forced_cleaner_keeps_history_and_blocks_transmission(setup, monkeypatch):
+    studio, fake, aid, _ = setup
+    monkeypatch.setattr(cleaner_route, "forced", lambda: True)
+    chat = talk(fake)
+    base = f"{BASE}/{aid}"
+    assert studio.c.get(f"{base}/chats/{chat}").status_code == 200
+    assert studio.c.get("/api/me").json()["cleaner_forced"] is True
+    for path, args in (
+        ("/chats", {"json": {"model": "m1", "text": "private"}}),
+        (f"/chats/{chat}/messages", {"json": {"model": "m1", "text": "private", "parent_id": "a1"}}),
+        (f"/chats/{chat}/resolve", {"json": {"message_id": "a1", "call_id": "c1", "action": "approve"}}),
+        ("/files", {"content": b"private", "headers": {"X-Studio-Name": "private.txt"}}),
+    ):
+        response = studio.c.post(base + path, **args)
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "cleaner_forced", response.text
+    assert not fake.completions
 
 
 def test_new_chat_sends_server_side_turn(setup):

@@ -96,7 +96,9 @@ def media_sections(uid: int, media_id: str) -> set[str]:
     """Один файл может использоваться в нескольких разделах: защищённая связь имеет приоритет.
     Файл скана (исходный PDF, PNG страниц) — разделов его документа (`scan_sections`); файл снимка
     «Поделиться» — раздела снимка: «Чат», «Агенты» или раздел записи."""
-    found = set()
+    found = {row[0] for row in state.DB.execute(
+        "SELECT j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id"
+        " WHERE f.user_id = ? AND f.media_id = ?", (uid, media_id))}
     for section, tables in MEDIA_SOURCES.items():
         for table, columns in tables:
             where = " OR ".join(f"{column} = ?" for column in columns)

@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 import auth
 import chat_shares
 import clock
+import documents
 import email_accounts
 import forms
 import mcp_client as mcp
@@ -45,6 +46,7 @@ import mcp_contracts
 import mcp_sections
 import mcp_sources
 import media
+import ocr_render
 import security
 import security_log
 import state
@@ -79,6 +81,10 @@ PROTECTED = "Сервер MCP — защищённый источник: ссы�
 
 class PathIn(BaseModel):
     path: str = Field(default="", max_length=PATH_MAX)
+
+
+class TicketIn(PathIn):
+    preview: bool = False
 
 
 class IdIn(BaseModel):
@@ -182,6 +188,21 @@ async def _entry(session, path):
 
 # ---- ticket скачивания ---------------------------------------------------------------------------------------
 
+PREVIEW_MAX = 16 << 20
+PREVIEW_MEDIA = {suffix: mime for mime, suffix in media.EXT.items() if mime.startswith(("image/", "audio/", "video/"))}
+PREVIEW_MEDIA[".jpeg"] = "image/jpeg"
+PREVIEW_TEXT = set(documents.SUFFIXES) | {".srt", ".vtt"}
+
+
+def preview_kind(path):
+    suffix = "." + path.rpartition("/")[2].rpartition(".")[2].lower()
+    if suffix in PREVIEW_MEDIA:
+        return PREVIEW_MEDIA[suffix]
+    if suffix == ".pdf":
+        return "pdf"
+    return "text" if suffix in PREVIEW_TEXT else ""
+
+
 def _ticket(session, kind, value):
     raw = json.dumps([session.uid, session.sid, mcp_sources.stamp(session.stamp), kind, clock.NOW(), value],
                      ensure_ascii=False)
@@ -194,7 +215,7 @@ def _redeem(request, sid, encoded):
         if len(encoded) > TICKET_MAX:
             raise ValueError
         owner, server, stamp, kind, issued, value = json.loads(security.decrypt(encoded.encode()))
-        if owner != uid or server != sid or kind not in ("file", "zip") or not 0 <= clock.NOW() - issued <= TICKET_SEC:
+        if owner != uid or server != sid or kind not in ("file", "zip", "preview") or not 0 <= clock.NOW() - issued <= TICKET_SEC:
             raise ValueError
         item = mcp.row(uid, sid)
         if not item["enabled"] or stamp != mcp_sources.stamp(item["secret_enc"]):
@@ -204,7 +225,7 @@ def _redeem(request, sid, encoded):
     return mcp.Session(item, uid=uid), kind, value
 
 
-async def _stream(session, route, extra, request, name, missing):
+async def _stream(session, route, extra, request, name, missing, *, inline=None):
     """Файл сервера потоком через Studio: Range, всегда вложением (`application/octet-stream`, `nosniff`,
     песочница CSP). Сервер ответил 404 — `missing()`."""
     headers = {**session.headers(rpc=False), **extra, "Accept-Encoding": "identity"}
@@ -231,8 +252,10 @@ async def _stream(session, route, extra, request, name, missing):
         if (response.status_code not in (200, 206) or response.headers.get("content-encoding", "identity") != "identity"
                 or (length and not re.fullmatch(r"[0-9]{1,15}", length))):
             raise mcp.refused("Файл MCP недоступен")
-        outgoing.update({"X-Content-Type-Options": "nosniff", "Content-Disposition": media.disposition(name),
+        outgoing.update({"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
                          "Content-Security-Policy": "default-src 'none'; sandbox"})
+        if inline is None:
+            outgoing["Content-Disposition"] = media.disposition(name)
 
         async def chunks():
             try:
@@ -241,7 +264,7 @@ async def _stream(session, route, extra, request, name, missing):
             except httpx.HTTPError:
                 raise ConnectionError("MCP file transfer was interrupted") from None
 
-        return mcp_sections.ArtifactStream(stack.pop_all(), chunks(), media_type="application/octet-stream",
+        return mcp_sections.ArtifactStream(stack.pop_all(), chunks(), media_type=inline or "application/octet-stream",
                                            status_code=response.status_code, headers=outgoing)
 
 
@@ -261,13 +284,71 @@ async def _declared(uid):
     return [pair for pair in found if pair is not None]
 
 
+# Files already referenced by the active section histories, including retained MCP results.
+STUDIO_FILES = """
+WITH files(id, section) AS (
+    SELECT f.media_id, j.section FROM mcp_section_files f JOIN mcp_section_jobs j ON j.id = f.job_id
+      WHERE f.user_id = :uid
+    UNION ALL SELECT media_id, 'photo' FROM images WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT media_id, 'video' FROM videos WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT media_id, 'speech' FROM speeches WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT result_media_id, 'transcribe' FROM transcripts WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT source_media_id, 'ocr' FROM scans WHERE user_id = :uid AND deleted IS NULL AND origin = 'section'
+    UNION ALL SELECT source_media_id, 'translate' FROM translations WHERE user_id = :uid AND deleted IS NULL
+    UNION ALL SELECT a.media_id, 'chat' FROM attachments a JOIN messages m ON m.id = a.message_id
+      JOIN chats c ON c.id = m.chat_id WHERE a.user_id = :uid AND c.deleted IS NULL
+    UNION ALL SELECT f.media_id, 'chat' FROM chat_media f JOIN chats c ON c.id = f.chat_id
+      WHERE f.user_id = :uid AND c.deleted IS NULL
+)
+SELECT m.id, m.download_name, m.mime, m.size, m.created, MIN(f.section) AS section FROM files f
+JOIN media m ON m.id = f.id AND m.user_id = :uid
+{where}
+GROUP BY m.id ORDER BY m.created DESC, m.id DESC LIMIT :limit
+"""
+STUDIO_PAGE = 100
+
+
+def studio_files(uid, *, after="", mid="", limit=STUDIO_PAGE):
+    where = ""
+    args = {"uid": uid, "limit": limit}
+    if mid:
+        where = "WHERE m.id = :mid"
+        args["mid"] = mid
+    elif after:
+        cursor = state.DB.execute("SELECT created FROM media WHERE user_id = ? AND id = ?", (uid, after)).fetchone()
+        if cursor is None:
+            raise _not_found()
+        where = "WHERE (m.created, m.id) < (:created, :after)"
+        args.update(created=cursor[0], after=after)
+    return state.DB.execute(STUDIO_FILES.format(where=where), args).fetchall()
+
+
+def studio_file_entries(uid, after):
+    rows = studio_files(uid, after=after, limit=STUDIO_PAGE + 1)
+    entries = []
+    for row in rows[:STUDIO_PAGE]:
+        source = f"/api/media/{row['id']}"
+        name = row["download_name"]
+        kind = row["mime"] if row["mime"] in PREVIEW_MEDIA.values() else preview_kind(name)
+        if kind not in ("pdf", "text") and row["mime"] != kind:
+            kind = ""
+        url = f"/api/my-files/0/preview/{row['id']}" if kind in ("pdf", "text") else source
+        entries.append({"name": name, "dir": False, "size": row["size"], "mtime": row["created"], "section": row["section"],
+                        "download": source + "?download=1", "preview": {"url": url, "kind": kind} if kind else None})
+    return {"path": "", "entries": entries, "next": rows[STUDIO_PAGE - 1]["id"] if len(rows) > STUDIO_PAGE else None}
+
+
 @router.get("/servers")
 async def servers(request: Request):
     """[{sid, name, max_upload, chunk, protected}] серверов учётки с «Моими файлами»; кусок — не больше CHUNK;
     `protected` — защищённый источник: ссылки на файл нет (`create_link` — 409 `protected`)."""
-    return [{"sid": item["id"], "name": item["name"], "max_upload": files["max_upload"],
-             "chunk": min(files["chunk"], CHUNK), "protected": bool(item["protected"])}
-            for item, files in await _declared(request.state.user.id)]
+    uid = request.state.user.id
+    items = [{"sid": item["id"], "name": item["name"], "max_upload": files["max_upload"],
+              "chunk": min(files["chunk"], CHUNK), "protected": bool(item["protected"])}
+             for item, files in await _declared(uid)]
+    if studio_files(uid, limit=1):
+        items.append({"sid": 0, "name": "Студия", "local": True})
+    return items
 
 
 async def storage(uid) -> list:
@@ -287,23 +368,100 @@ async def storage(uid) -> list:
 
 
 @router.post("/{sid}/list")
-async def list_files(sid: int, body: PathIn, request: Request):
+async def list_files(sid: int, body: PathIn, request: Request, after: str = ""):
+    if sid == 0:
+        if body.path or (after and not ID_RE.fullmatch(after)):
+            raise _not_found()
+        return studio_file_entries(request.state.user.id, after)
     path = _path(body.path, root=True)
     async with _server(request, sid) as (session, _):
         return _listing(await _post(session, "list", {"path": path}, LIST_MAX), path)
 
 
 @router.post("/{sid}/ticket")
-async def ticket(sid: int, body: PathIn, request: Request):
-    """Адрес скачивания файла (`GET /api/my-files/{sid}/download/{ticket}`, Range)."""
+async def ticket(sid: int, body: TicketIn, request: Request):
+    """Адрес скачивания или предпросмотра файла."""
     path = _path(body.path)
     async with _server(request, sid) as (session, _):
-        return {"url": _ticket(session, "file", path)}
+        if not body.preview:
+            return {"url": _ticket(session, "file", path)}
+        kind = preview_kind(path)
+        if not kind:
+            raise mcp.refused("Для этого формата нет предпросмотра", "invalid", 422)
+        return {"url": _ticket(session, "preview", path), "kind": kind}
+
+
+async def preview_file(session, path, request):
+    kind = preview_kind(path)
+    if not kind:
+        await session.close()
+        raise _not_found()
+    name = path.rpartition("/")[2]
+    headers = {"X-Studio-Path": _b64(path)}
+    if kind not in ("pdf", "text"):
+        return await _stream(session, "/files/content", headers, request, name, _not_found, inline=kind)
+    # Render PDF and extract other documents on Studio. The original document is only served as an attachment.
+    stream = await _stream(session, "/files/content", headers, SimpleNamespace(headers={}), name, _not_found)
+    if not isinstance(stream, mcp_sections.ArtifactStream):
+        raise _not_found()
+    content = bytearray()
+    try:
+        async for chunk in stream.body_iterator:
+            if len(content) + len(chunk) > PREVIEW_MAX:
+                raise mcp.refused("Файл слишком велик для предпросмотра", "too_large", 413)
+            content.extend(chunk)
+    except ConnectionError:
+        raise _not_found() from None
+    finally:
+        await stream.stack.aclose()
+    return await render_document_preview(kind, name, bytes(content))
+
+
+async def render_document_preview(kind, name, content):
+    response_headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    try:
+        if kind == "pdf":
+            png = await asyncio.to_thread(ocr_render.render_page, content, 0)
+            return Response(png, media_type="image/png", headers=response_headers)
+        if name.lower().endswith((".srt", ".vtt")):
+            name += ".txt"
+        text = await asyncio.to_thread(documents.extract, name, content)
+    except (documents.DocumentError, ocr_render.ScanError):
+        raise mcp.refused("Не удалось открыть предпросмотр файла", "invalid", 422) from None
+    return JSONResponse({"text": text[:60_000]}, headers=response_headers)
+
+
+@router.get("/0/preview/{mid}")
+async def studio_preview(mid: str, request: Request):
+    uid = request.state.user.id
+    rows = studio_files(uid, mid=mid, limit=1) if ID_RE.fullmatch(mid) else []
+    if not rows:
+        raise _not_found()
+    name = rows[0]["download_name"]
+    kind = preview_kind(name)
+    if kind not in ("pdf", "text"):
+        raise _not_found()
+
+    path = media.path(uid, mid)
+
+    def read():
+        with path.open("rb") as file:
+            return file.read(PREVIEW_MAX + 1)
+
+    try:
+        content = await asyncio.to_thread(read)
+    except FileNotFoundError:
+        raise _not_found() from None
+    if len(content) > PREVIEW_MAX:
+        raise mcp.refused("Файл слишком велик для предпросмотра", "too_large", 413)
+    return await render_document_preview(kind, name, content)
 
 
 @router.get("/{sid}/download/{encoded}")
 async def download(sid: int, encoded: str, request: Request):
     session, kind, value = _redeem(request, sid, encoded)
+    if kind == "preview" and isinstance(value, str):
+        return await preview_file(session, value, request)
     if kind == "file" and isinstance(value, str):
         route, extra, name = "/files/content", {"X-Studio-Path": _b64(value)}, value.rpartition("/")[2]
     elif kind == "zip" and isinstance(value, list) and len(value) == 2 and ID_RE.fullmatch(str(value[0])):

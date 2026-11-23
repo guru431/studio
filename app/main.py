@@ -142,7 +142,8 @@ async def lifespan(_app):
     translate.resume_queued()
     knowledge.resume()                           # векторы документов, прерванные перезапуском
     loops =([videos.start_watcher(), chat.start_sweeper(), media.start_purger(), transcripts.start_backfill(),
-              asyncio.create_task(cleaner.sweep()), admin.start_check_watch(), trash.start_purger(), bridge.start_reminders()]
+              asyncio.create_task(cleaner.sweep()), asyncio.create_task(mcp_sections.watch_history()),
+              admin.start_check_watch(), trash.start_purger(), bridge.start_reminders()]
              if state.WATCHER else [])
     try:
         yield

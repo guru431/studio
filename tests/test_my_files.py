@@ -244,3 +244,22 @@ def test_admin_cannot_open_foreign_files_or_links(studio):
     assert studio.c.post(f"/api/my-files/{sid}/links", json={"path": "secret.txt"}).status_code == 404
     admin_user = server.seen[-1][2]
     assert admin_user != access.studio_user(member, sid)
+
+
+def test_previews_are_safely_typed_and_remain_private(studio):
+    member, sid, server = member_with_files(studio)
+    me = access.studio_user(member, sid)
+    server.folder(me).update({"out/note.md": b"<script>plain text</script>", "out/movie.mp4": b"movie",
+                              "out/unsafe.svg": b"<svg></svg>"})
+    route = f"/api/my-files/{sid}/ticket"
+    made = studio.c.post(route, json={"path": "out/note.md", "preview": True}).json()
+    reply = studio.c.get(made["url"])
+    assert reply.json()["text"] == "<script>plain text</script>"
+    assert reply.headers["cache-control"] == "private, no-store"
+    clip = studio.c.post(route, json={"path": "out/movie.mp4", "preview": True}).json()
+    response = studio.c.get(clip["url"], headers={"Range": "bytes=0-1"})
+    assert response.status_code == 206 and response.content == b"mo"
+    assert response.headers["content-type"] == "video/mp4"
+    assert studio.c.post(route, json={"path": "out/unsafe.svg", "preview": True}).status_code == 422
+    signin(studio, "admin")
+    assert studio.c.get(made["url"]).status_code == 404

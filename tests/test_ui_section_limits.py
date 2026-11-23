@@ -165,3 +165,25 @@ def test_bad_schema_limits_ignored(browser, live, width):
     assert sent == [("video_create", {"artifact_id": UPLOADED, "prompt": "Кот моргает", "seconds": 7}),
                     ("image_generate", {"prompt": "Рыжий кот", "size": "832x1216", "n": 1})]
     assert not problems(result), result.get("log")
+
+
+
+def test_mcp_photo_model_and_history_survive_leaving_section(browser, live):
+    login = "mcp-photo-history"
+    live.add_user(login)
+    photo = GOOD["image_generate"]
+    tool = {**photo, "properties": {**photo["properties"], "model": {"type": "string", "enum": ["photo-a", "photo-b"]}}}
+    calls = serve(live.gw, {**GOOD, "image_generate": tool})
+    select = set_value("#mcp-field-model", "photo-b")
+    count = "document.querySelectorAll('.mcp-history-entry').length"
+    r = browser.drive(live.url + "/", [*start(login),
+        ("eval", "photo", "location.hash='#/photo'"), ("wait", ready("image_generate")), choose("image_generate"), select,
+        set_value("#photo-prompt", "First result"), ("click", "#photo-go"), ("wait", count + " === 1"),
+        set_value("#photo-prompt", "Second result"), ("click", "#photo-go"), ("wait", count + " === 2"),
+        ("eval", "video", "location.hash='#/video'"), ("wait", "document.querySelector('#video-go')"),
+        ("eval", "back", "location.hash='#/photo'"), ("wait", count + " === 2"),
+        ("eval", "entries", "[...document.querySelectorAll('.mcp-history-prompt')].map(p => p.textContent)")], width=1280)
+    assert not r.get("failed"), r
+    assert r["values"]["entries"] == ["Second result", "First result"], r
+    assert [args["model"] for name, args in calls if name == "image_generate"] == ["photo-b", "photo-b"]
+    assert not problems(r), problems(r)

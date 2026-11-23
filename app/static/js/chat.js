@@ -668,6 +668,7 @@ function sourcesNode(steps) {
 function build(view, ctx) {
   let chatId;                  // показанный диалог; null — новый, ещё не созданный
   let chat = null;             // { chat, messages } с сервера
+  let mcpModelServers = [];   // servers that expose MCP model completions
   let links = [];              // подключения раздела «Чат» с отмеченными моделями (GET /api/sections)
   let chatDefault = null;      // { connection_id, model } — умолчание раздела
   let draft = null;            // { connection_id, model } нового диалога
@@ -936,24 +937,25 @@ function build(view, ctx) {
 
   /* чип модели */
   function chosen() {
-    if (chat) return { connection_id: chat.chat.connection_id, model: chat.chat.model };
+    if (chat) return { connection_id: chat.chat.connection_id, model: chat.chat.model, mcp_model_sid: chat.chat.mcp_model_sid };
     if (draft) return draft;
     return chatDefault ? { ...chatDefault } : { connection_id: null, model: '' };
   }
 
   function paintChip() {
-    const { connection_id: connId, model } = chosen();
+    const { connection_id: connId, model, mcp_model_sid: sid } = chosen();
+    const modelServer = mcpModelServers.find(server => server.id === sid);
     // ни подключения, ни модели (раздел без модели, подключение диалога удалено) — «по умолчанию» нечему
     const none = connId === null && !model;
     // подключение открытого диалога удалено (`connection_id` null, модель прежняя): ход ответит `no_connection`
-    const deleted = !!chat && connId === null && !!model;
+    const deleted = !!chat && connId === null && !!model && !sid;
     const link = links.find((l) => l.connection.id === connId);
     // адрес подключения убран из списка администратора (`dropped`): ход ответит отказом
     const dropped = chat ? !!chat.chat.dropped : !!link?.connection.dropped;
     chipName.textContent = none ? tr("модель не выбрана") : deleted ? tr("подключение удалено — выберите модель")
       : model || tr("модель по умолчанию");
     chip.classList.toggle('off', none || deleted || dropped);
-    const name = link ? link.connection.name : '';
+    const name = sid ? ['MCP', modelServer?.name].filter(Boolean).join(' · ') : link?.connection.name || '';
     connName.textContent = !dropped ? name : name ? tr("{0}: адрес убран из списка администратора", name)
       : tr("адрес подключения убран из списка администратора");
     chip.title = connName.textContent;
@@ -1522,7 +1524,7 @@ function build(view, ctx) {
   function fillModels(close) {
     const now = chosen();
     const shown = links.filter((l) => l.models.length);
-    if (!shown.length) {
+    if (!shown.length && !mcpModelServers.length) {
       return [[el('p', { class: 'muted small menu-note' }, tr("Нет отмеченных моделей — выберите в настройках раздела «Чат»"))], []];
     }
     const items = [];
@@ -1539,34 +1541,51 @@ function build(view, ctx) {
       }
       return group;
     });
+    if (!chat?.chat.routed && !chat?.chat.cleaner) {
+      for (const server of mcpModelServers) {
+        const name = el('p', { class: 'model-group-name', id: 'mcp-model-group-' + server.id }, 'MCP · ' + server.name);
+        const group = el('div', { class: 'model-group', role: 'group', 'aria-labelledby': name.id }, name);
+        for (const id of server.models) {
+          const option = menuItem(id, { radio: true, checked: server.id === now.mcp_model_sid && id === now.model,
+            attrs: { class: 'model-option', 'data-mcp': String(server.id), 'data-model': id },
+            onSelect: () => { close(true); choose(null, id, server.id); } });
+          items.push(option);
+          group.append(option);
+        }
+        nodes.push(group);
+      }
+    }
     return [nodes, items];
   }
 
-  async function choose(connId, model) {
+  async function choose(connId, model, sid) {
     models.close();
     needModel = false;                             // явный выбор
     if (!chat) {
-      draft = { connection_id: connId, model };
+      draft = sid ? { mcp_model_sid: sid, model } : { connection_id: connId, model };
       paintChip();
       return;
     }
     const was = chat.chat;
     try {
-      chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { connection_id: connId, model });
+      const updated = await api('PATCH', `/api/chats/${was.id}`, sid ? { mcp_model_sid: sid, model } : { connection_id: connId, model });
+      if (chatId !== was.id) return;
+      chat.chat = updated;
       notice.textContent = '';
     } catch (err) {
+      if (chatId !== was.id) return;
       notice.textContent = words(err);
     }
     // подключение было удалено, закрыто группами доступа (`closed_connection_id`) или убрано из списка
     // администратора — те же диалоги списка можно перевести разом
-    if (chat.chat !== was && ((was.connection_id === null && was.model) || was.dropped)) {
+    if (!sid && !was.mcp_model_sid && chat.chat !== was && ((was.connection_id === null && was.model) || was.dropped)) {
       offerMove(was.connection_id ?? was.closed_connection_id ?? null, connId, model);
     }
     paintChip();
   }
 
   function offerMove(from, connId, model) {
-    const others = listed.filter((c) => c.id !== chatId && c.connection_id === from).length;
+    const others = listed.filter((c) => c.id !== chatId && !c.mcp_model_sid && c.connection_id === from).length;
     if (!others) return;
     moveFor = chatId;
     const go = button(tr("Перевести их"), { class: 'btn-link', id: 'chat-move-go' }, async () => {
@@ -2237,9 +2256,9 @@ function build(view, ctx) {
     }
     syncBusy();
     paintChip();
-    form.hidden = id === null && !!ctx.hint;         // без модели новый диалог не начать; прежний — по правилам сервера
+    form.hidden = id === null && !!ctx.hint && !mcpModelServers.length;         // без модели новый диалог не начать; прежний — по правилам сервера
     if (id === null) {
-      feed.replaceChildren(ctx.hint ? ctx.hint() : emptyNote());
+      feed.replaceChildren(form.hidden ? ctx.hint() : emptyNote());
       return;
     }
     feed.replaceChildren(el('p', { class: 'muted feed-note' }, tr("Загружаю диалог…")));
@@ -2473,6 +2492,10 @@ function build(view, ctx) {
     if (alive && location.hash === '#/chat') history.replaceState(history.state, '', `#/chat/${created.id}`);
     loadList();
     const think = draftThink && thinkOk();     // «Рассуждение», включённое до создания диалога
+    if (created.mcp_model_sid) {
+      draftMcp = null;
+      draftWeb = false;
+    }
     if (draftMcp) {                              // MCP, выбранные до создания диалога; иначе — общие по умолчанию
       const body = draftMcp;
       draftMcp = null;
@@ -2504,6 +2527,12 @@ function build(view, ctx) {
   }
 
   async function turn(regenerate, text, externalOk, webOk, made) {
+    if (!chatId && ctx.hint && !draft?.mcp_model_sid) {
+      throw new Error(tr("Выберите модель"));
+    }
+    if (chosen().mcp_model_sid && atts.length) {
+      throw new Error(tr("Ответы через MCP доступны в текстовых диалогах без вложений и баз знаний"));
+    }
     await ensureChat(made);
     const id = chatId;
     const edited = regenerate ? null : editing;
@@ -2785,6 +2814,15 @@ function build(view, ctx) {
     paintWeb();
     // каталог — только если есть включённые серверы: из него `chat_files` (звук и видео в поле ввода)
     if (!items.some((s) => s.enabled)) return null;
+    api('GET', '/api/mcp-tools/chat').then(({ items: sources }) => {
+      if (!alive) return;
+      mcpModelServers = sources.filter(server => server.models?.length);
+      if (chatId === null && ctx.hint && mcpModelServers.length) {
+        form.hidden = false;
+        feed.replaceChildren(emptyNote());
+      }
+      paintChip();
+    }, () => {});
     return api('GET', '/api/mcp/catalog').then((out) => {
       catalog = out.items;
       paintWeb();                                  // и звук с видео: веб-инструменты MCP открывают «Интернет» без ключа
