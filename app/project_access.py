@@ -255,13 +255,20 @@ async def add_member(aid: int, pid: str, body: Member, request: Request):
 
 @router.patch("/{uid}")
 async def set_role(aid: int, pid: str, uid: int, body: Role, request: Request):
-    """Сменить роль участника без пересоздания выдачи (срок, вкладки и место сохраняются). Без моста: круг проектов
-    не меняется, а папку могли переименовать. Журнал — как выдача (`project_member_add`, `member_add`): права
-    участника изменились."""
+    """Сменить роль участника без пересоздания выдачи (срок, вкладки и место сохраняются). Понижение — без моста,
+    как отзыв: папку могли переименовать. Повышение до соавтора даёт ход и правку файлов — требует того же, что
+    выдача (`_check`: проект есть, компьютер открыт этой сессией, PIN). Журнал — как выдача (`project_member_add`,
+    `member_add`): права участника изменились."""
     import claude_code
     row = owner(request, aid)
     claude_code.check_pid(pid)
     expire()
+    current = state.DB.execute("SELECT role FROM project_members WHERE agent_id = ? AND project = ? AND user_id = ?",
+                               (aid, pid, uid)).fetchone()
+    if current is None:
+        raise HTTPException(404, {"code": "not_found", "message": "нет такого участника"})
+    if body.role == "editor" and current[0] != "editor":
+        await _check(request, aid, pid)
     if not state.DB.execute("UPDATE project_members SET role = ? WHERE agent_id = ? AND project = ? AND user_id = ?",
                             (body.role, aid, pid, uid)).rowcount:
         raise HTTPException(404, {"code": "not_found", "message": "нет такого участника"})
