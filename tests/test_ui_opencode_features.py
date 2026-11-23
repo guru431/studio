@@ -60,7 +60,8 @@ def test_opencode_mode_directories_commands_progress_and_fork(browser, live, wid
             ('eval', 'completed', "document.querySelector('#code-opencode-status').textContent"),
             ('eval', 'fits', NO_OVERFLOW),
             ('eval', 'source', 'location.hash'),
-            *([('click', '#code-status-more')] if width == 320 else []), ('click', '#code-fork-chat'),
+            *([('click', '#code-status-more')] if width == 320 else []),
+            ('click', '#code-branch-actions'), ('click', '#code-fork-chat'),
             ('wait', "document.querySelector('#code-chat')?.dataset.loaded === '1' && !document.querySelector('#code-fork-chat').disabled"),
             ('eval', 'branch', 'location.hash')], width=width, mobile=width == 320, timeout=5000, timezone='UTC')
     finally:

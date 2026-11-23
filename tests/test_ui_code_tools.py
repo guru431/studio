@@ -168,24 +168,28 @@ def test_fork_subagents_and_worktree_browser_flows(browser, live, width, tmp_pat
     assert not problems(result), problems(result)
 
 
-@pytest.mark.parametrize("width", [320, 1280])
-def test_second_turn_in_a_project_has_no_prompt_and_can_use_a_worktree(browser, live, width):
+@pytest.mark.parametrize("width,in_copy", [(320, False), (320, True), (1280, True)])
+def test_second_turn_in_a_project_has_no_prompt_and_can_use_a_worktree(browser, live, width, in_copy):
     """При активном соседнем чате доступны непосредственная отправка и явный запуск в рабочей копии."""
-    login = f"busy-project-{width}"
+    login = f"busy-project-{width}-{int(in_copy)}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Основной чат"), CODE_CHAT_B: code_session("Второй чат")})
-    machine.project_activity = machine.worktrees = True
+    machine.project_activity = machine.worktrees = machine.chat_fork = True
     machine.running[CODE_CHAT_B] = {"turn": "t-b", "project": pid("alpha"), "rest": [], "text": "", "steps": [],
                                     "asks": {}, "followups": []}
     machine.script = [{"k": "text", "text": "Принято"}]
     aid, server = code_online(live, login, machine)
-    action = "#code-busy-copy" if width == 1280 else "#code-send"
+    open_branch_menu = [*([("click", "#code-status-more")] if width == 320 else []),
+                        ("click", "#code-branch-actions"),
+                        ("eval", "items", "[...document.querySelectorAll('#code-branch-actions-menu:popover-open [role=menuitem]')]"
+                         ".map(item => [item.textContent, item.disabled])")]
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             ("eval", "poll", "import('/static/js/code-activity.js').then((m) => { m.refreshCodeActivity(); return true; })"),
             ("wait", f"import('/static/js/code-activity.js').then((m) => m.codeActivity({aid}).some((i) => i.running))"),
+            *(open_branch_menu if in_copy else []),
             set_value("#code-text", "Почини сборку"),
-            ("click", action),
+            ("click", "#code-busy-copy" if in_copy else "#code-send"),
             # ответ машины «Принято»: ход дошёл до моста (своё сообщение лента рисует ещё до запроса)
             ("wait", "document.querySelector('#code-feed')?.textContent.includes('Почини сборку')"
                      " && document.querySelector('#code-feed').textContent.includes('Принято')"
@@ -196,7 +200,8 @@ def test_second_turn_in_a_project_has_no_prompt_and_can_use_a_worktree(browser, 
     assert not result.get("failed"), result
     turns = [row for row in machine.requests if row["op"] == "turn"]
     assert [row["text"] for row in turns] == ["Почини сборку"]
-    if width == 1280:
+    if in_copy:
+        assert result["values"]["items"] == [["Запустить в отдельной копии", True], ["Создать ветку чата", False]]
         copy = next(name for name in machine.projects if name.startswith("alpha--task-"))
         assert turns[0]["project"] == pid(copy) and pid(copy) in result["values"]["hash"]
         assert [row["query"] for row in machine.requests if row["op"] == "worktree_create"] == [copy[len("alpha--"):]]

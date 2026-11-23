@@ -58,6 +58,7 @@ import { taskNotice } from './code-task-notice.js';
 import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
 import { shareMenu } from './chat-share.js';
+import { menuItem, popupMenu } from './menu.js';
 import { statusActions } from './code-status-bar.js';
 import { historyImages } from './code-chat-images.js';
 import { commandsView } from './code-commands.js';
@@ -319,22 +320,32 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     export: endpoint('/export') });
   actions.append(sharing.button);
   // Мост 0.47.0, владелец компьютера: своё название и удаление сессии (code-chat-manage.js).
-  if (agent?.chat_manage && !agent?.shared && !readonly) {
+  const canManage = agent?.chat_manage && !agent?.shared && !readonly;
+  const renamable = canManage && canRename({ engine });
+  const deletable = canManage && canDelete({ engine, origin });
+  let sessionPopup = null;
+  if (renamable || deletable) {
     let shownTitle = typeof title === 'string' ? title : '';
     const manage = { url, engine, request: api };
-    if (canRename({ engine })) {
-      actions.append(iconButton('pencil', tr("Переименовать сессию"), { id: 'code-chat-rename' }));
-      actions.lastChild.addEventListener('click', () => renameChat(host, { ...manage, title: shownTitle, done: (value) => {
+    const label = tr("Действия с сессией");
+    const trigger = iconButton('pencil', label, { id: 'code-session-actions' });
+    const menu = el('div', { 'aria-label': label });
+    const popup = popupMenu(trigger, menu, { align: 'end' });
+    sessionPopup = popup;
+    if (renamable) menu.append(menuItem(tr("Переименовать сессию"), { attrs: { id: 'code-chat-rename' }, onSelect: () => {
+      popup.close(true);
+      renameChat(host, { ...manage, title: shownTitle, done: (value) => {
         shownTitle = value;
         sharing.set({ title: value, share: agent?.shared ? null : endpoint('/share'), export: endpoint('/export') });
         renamed?.(value);
+      } });
+    } }));
+    if (deletable) menu.append(menuItem(tr("Удалить сессию"), { attrs: { id: 'code-chat-delete', class: 'danger' },
+      onSelect: () => {
+        popup.close(true);
+        deleteChat(host, { ...manage, title: shownTitle, done: () => { if (alive) gone(); } });
       } }));
-    }
-    if (canDelete({ engine, origin })) {
-      actions.append(iconButton('trash', tr("Удалить сессию"), { id: 'code-chat-delete' }));
-      actions.lastChild.addEventListener('click', () => deleteChat(host, { ...manage, title: shownTitle,
-        done: () => { if (alive) gone(); } }));
-    }
+    actions.append(trigger, menu);
   }
   actions.append(reloadButton);
   const statusFixed = el('div', { class: 'code-status-fixed' }, context.cacheButton, contextBox, usage.button);
@@ -380,14 +391,25 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     writerNotice.hidden = true;
     loadState();
   });
-  // Явный запуск в worktree доступен в действиях чата, параллельный ход не требует подтверждения.
-  const busyCopy = iconButton('fork', tr("Запустить в отдельной копии"), { id: 'code-busy-copy', hidden: !separateCopy });
-  if (separateCopy) actions.insertBefore(busyCopy, reloadButton);
+  const busyCopy = separateCopy ? menuItem(tr("Запустить в отдельной копии"), { attrs: { id: 'code-busy-copy' } }) : null;
+  const forkChat = branching && !readonly ? menuItem(tr("Создать ветку чата"), { attrs: { id: 'code-fork-chat',
+    class: 'code-fork', title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") } }) : null;
+  let branchPopup = null;
+  if (busyCopy || forkChat) {
+    const label = tr("Ветки и рабочие копии");
+    const trigger = iconButton('fork', label, { id: 'code-branch-actions' });
+    const menu = el('div', { 'aria-label': label }, ...[busyCopy, forkChat].filter(Boolean));
+    const popup = popupMenu(trigger, menu, { align: 'end' });
+    branchPopup = popup;
+    busyCopy?.addEventListener('click', () => { popup.close(true); runInCopy(); });
+    forkChat?.addEventListener('click', () => { popup.close(true); forkAt(null); });
+    actions.append(trigger, menu);
+  }
   let copying = false;
   const othersRunning = () => codeActivity(aid).filter((item) => item.project === pid && item.chat !== chat && item.running).length;
-  busyCopy.addEventListener('click', async () => {
+  async function runInCopy() {
     const value = text.value;
-    if (!separateCopy || !value.trim() || images.length || busyCopy.disabled) return;
+    if (!value.trim() || images.length || busyCopy.disabled) return;
     copying = true;
     updateControls();
     showStatus(tr("Создаю отдельную копию…"), false);
@@ -403,7 +425,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       copying = false;
       if (alive) updateControls();
     }
-  });
+  }
   const pick = (label, select) => {
     const view = choice(host, label, select);
     picks.set(select, view);
@@ -471,13 +493,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     shared: agent?.shared, changed: () => loadState() });
   // Сводка наложения — настройки компьютера владельца: участнику совместного проекта её не показываем
   const deepseek = engine === 'deepseek' && !agent?.shared ? deepseekView(form, agent?.deepseek?.settings) : null;
-  if (branching) {
-    const copy = el('button', { type: 'button', class: 'icon-btn code-fork', id: 'code-fork-chat',
-      'aria-label': tr("Создать ветку чата"), title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") });
-    copy.append(icon('fork'));
-    copy.addEventListener('click', () => forkAt(null));
-    actions.append(copy);
-  }
   const subtaskControl = subagentView(host, { endpoint, supported: !!agent?.subagents && engine !== 'deepseek'
     && (engine !== 'opencode' || agent?.opencode_features),
     polling: () => running && Date.now() - acted < IDLE_POLL_FOR_SEC * 1000 });
@@ -1019,7 +1034,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintCopy() {
-    busyCopy.disabled = send.disabled || running || !text.value.trim() || images.length > 0;
+    if (busyCopy) busyCopy.disabled = send.disabled || running || !text.value.trim() || images.length > 0;
   }
 
   /** Плашка чужого окна. Ход, ждущий ответа на карточку, сам не завершится: «Дождаться» тогда не предлагается. */
@@ -2057,6 +2072,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       alive = false;
       askObserver.disconnect();
       sharing.unmount();
+      sessionPopup?.unmount();
+      branchPopup?.unmount();
       pictures.unmount();
       statusControls.unmount();
       for (const view of picks.values()) view.unmount();

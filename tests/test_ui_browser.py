@@ -9494,30 +9494,37 @@ def test_code_session_menu_renames_deletes_and_closes_in_bulk(browser, live, wid
     assert old not in machine.projects["alpha"]["chats"] and machine.projects["alpha"]["chats"][recent]["title"] == "Своё"
 
 
-def test_code_chat_toolbar_renames_and_deletes_the_session(browser, live):
+@pytest.mark.parametrize("width", [320, 1280])
+def test_code_chat_toolbar_renames_and_deletes_the_session(browser, live, width):
     """07:I8 в чате: «Переименовать сессию» меняет название вкладки, «Удалить сессию» после подтверждения убирает
     вкладку и сессию (Claude — «восстановить нельзя»)."""
     from fake_bridge import pid
-    login = "code-chat-toolbar-manage"
+    login = f"code-chat-toolbar-manage-{width}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Чат студии")})
     machine.chat_manage = True
     aid, sb = code_online(live, login, machine)
     tab = f"document.querySelector('#code-tabbar .code-tab[data-chat=\"{CODE_CHAT_A}\"]')"
+    open_session_menu = [*([("click", "#code-status-more")] if width == 320 else []),
+                         ("click", "#code-session-actions")]
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("wait", "document.querySelector('#code-chat-rename')"),
+            *open_session_menu,
+            ("eval", "items", "[...document.querySelectorAll('#code-session-actions-menu:popover-open [role=menuitem]')]"
+             ".map(item => item.textContent)"),
             ("click", "#code-chat-rename"), ("wait", "document.querySelector('#code-rename-dialog')?.open"),
             ("eval", "before", "document.querySelector('#code-rename-dialog input').value"),
             ("eval", "named", "document.querySelector('#code-rename-dialog input').value = 'Новое имя'"),
             ("click", "#code-rename-save"), ("wait", f"{tab}?.textContent.includes('Новое имя')"),
+            *open_session_menu,
             ("click", "#code-chat-delete"), ("wait", "document.querySelector('#code-delete-dialog')?.open"),
             ("click", "#code-delete-confirm"),
             ("wait", f"location.hash === '#/code/{aid}/{pid('alpha')}' && !{tab}"),
-            ("eval", "fits", NO_OVERFLOW)], width=1280)
+            ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width == 320)
     finally:
         sb.stop()
     assert not r.get("failed"), r
+    assert r["values"]["items"] == ["Переименовать сессию", "Удалить сессию"]
     assert r["values"]["before"] == "Чат студии" and r["values"]["fits"] is True
     assert [q["title"] for q in code_requests(machine, "chat_rename")] == ["Новое имя"]
     assert CODE_CHAT_A not in machine.projects["alpha"]["chats"]

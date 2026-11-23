@@ -1308,6 +1308,7 @@ globalThis.StudioEnglish = Object.freeze({
   "{0} задаёт вопрос": "{0} asks a question",
   " · ещё {0}": " · {0} more",
   "Создать ветку чата": "Branch chat",
+  "Ветки и рабочие копии": "Branches and worktrees",
   "Создать ветку чата · копия переписки, файлы в текущем состоянии": "Branch chat · copy the conversation with files in their current state",
   "Помощник не сообщает сведения о кэше": "The assistant does not report cache details",
   "Не получено": "Not received",

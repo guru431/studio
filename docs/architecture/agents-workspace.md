@@ -47,7 +47,8 @@ studio-agent 0.8.0: `file_suggestions`, `chat_search`, `queue_edit`, `chat_fork`
 Ветвление/дети — Claude и Codex через штатные API; worktree открывается отдельным проектом из HEAD,
 переписка и локальные настройки туда не копируются. Отправка идёт в открытый чат сразу. Подсказка кнопки отправки
 показывает наличие активных соседних чатов проекта, если они видны в снимке «Агентов» (`code-activity.js`).
-По кнопке «Запустить в отдельной копии» в действиях чата `code.js` создаёт worktree (`task-<время base36>`),
+Пункты «Создать ветку чата» и «Запустить в отдельной копии» собраны в меню `#code-branch-actions`.
+Для запуска в отдельной копии `code.js` создаёт worktree (`task-<время base36>`),
 новый чат того же помощника в нём и передаёт ему текст поля (`copyStart`, только память страницы); поле
 исходного чата очищается. Копия — только владельцу с `worktrees`, без вложений; мост не менялся. Проверки: `test_code_discovery.py`, `test_ui_code_tools.py`,
 сценарий `code_file_hints_and_held_queue` в `test_ui_webkit.py`, соответствующие тесты `agent/tests/`.
@@ -469,9 +470,10 @@ WebSearch передаёт действие и ограниченную выда
 месяца (N)» (открытые, без изменений 30 суток): обе без хода и вопроса, с подтверждением, тем же `PATCH` по очереди —
 закрыть, не удалить.
 Своё название и удаление сессии (07:I8, мост 0.47.0 `hello.chat_manage`, только владелец компьютера: участнику
-`/api/agents` отдаёт `chat_manage: false`): «⋯» строки списка (`.code-chat-more`) и кнопки чата `#code-chat-rename`,
-`#code-chat-delete` (`code-chat-manage.js`). «Переименовать» — Claude Code и Codex (название хранит помощник:
-`custom-title`, имя thread), `PUT …/chats/{chat}/title`; студия название не помнит. «Удалить сессию» — только начатую
+`/api/agents` отдаёт `chat_manage: false`): «⋯» строки списка (`.code-chat-more`) и меню чата `#code-session-actions`
+с пунктами `#code-chat-rename` и `#code-chat-delete` (`code-chat-manage.js`). «Переименовать» — Claude Code и Codex
+(название хранит помощник: `custom-title`, имя thread), `PUT …/chats/{chat}/title`; студия название не помнит.
+«Удалить сессию» — только начатую
 в Студии (`code_chats.origin` или метка моста `studio`, как «студия» строки) и «Новый чат» без хода любого помощника,
 `DELETE …/chats/{chat}` (`claude_code.delete_chat`): Claude Code удаляет файл сессии (восстановить нельзя), Codex
 переносит thread в свой архив; затем строка `code_chats`, вкладки (`workspace.drop_chat`) и «непрочитано»
