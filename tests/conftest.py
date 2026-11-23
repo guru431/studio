@@ -254,6 +254,7 @@ def studio(env, schema_db, monkeypatch):
     from fastapi.testclient import TestClient
 
     import auth
+    import card
     import chat
     import claude_code
     import clock
@@ -297,6 +298,7 @@ def studio(env, schema_db, monkeypatch):
     chat.LIMITS.clear()
     chat.NO_TOOLS.clear()
     transcripts.JOBS.clear()
+    card.TYPICAL.clear()                 # медианы прошлого теста (часы теста стоят)
     speech.LIMITS.clear()                # пределы речи прошлого теста (ключ — id подключения той базы)
     ocr.JOBS.clear()
     ocr.RUNNERS.clear()

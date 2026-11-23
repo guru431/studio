@@ -16,6 +16,7 @@
 сколько ждущих этой карты встало раньше. Чужие задания — только видом и числами: ни учётки, ни содержания.
 Длительность готового — от создания или от конца предыдущего готового той же учётки, что позже (очередь серии и
 раздела не в счёт). Запросов к шлюзу нет, журнал — ничего."""
+import asyncio
 import math
 import statistics
 from dataclasses import dataclass
@@ -30,6 +31,11 @@ import state
 HISTORY = {"image": ("images", "model"), "video": ("videos", "model"), "transcript": ("transcripts", None),
            "speech": ("speeches", None), "scan": ("scans", None), "translate": ("translations", None)}
 RECENT = 20
+#: медиана вида и модели живёт минуту (`typical`): опрос «В работе» не читает историю на каждую строку
+TYPICAL_SEC = 60
+TYPICAL: dict[tuple, tuple] = {}
+#: снимок `status` шага цикла событий: задача, снимок (`info` — один на все строки запроса)
+_TICK: "tuple | None" = None
 
 
 @dataclass
@@ -119,6 +125,9 @@ def typical(kind: str, model: "str | None") -> "float | None":
     """Медиана длительности RECENT недавних готовых вида (и модели, где она в истории); нет истории — None."""
     if kind not in HISTORY:
         return None
+    now = clock.NOW()
+    if (kept := TYPICAL.get((kind, model))) is not None and now - kept[0] < TYPICAL_SEC:
+        return kept[1]
     table, column = HISTORY[kind]
     where, args = (f" AND {column} = ?", (model,)) if column and model else ("", ())
     rows = state.DB.execute(
@@ -126,7 +135,8 @@ def typical(kind: str, model: "str | None") -> "float | None":
         f" FROM (SELECT user_id, created, finished FROM {table} WHERE state = 'done' AND finished IS NOT NULL{where}"
         " ORDER BY finished DESC LIMIT ?)", (*args, RECENT)).fetchall()
     found = [r[0] for r in rows if r[0] is not None and r[0] > 0]
-    return statistics.median(found) if found else None
+    TYPICAL[(kind, model)] = (now, statistics.median(found) if found else None)
+    return TYPICAL[(kind, model)][1]
 
 
 def _minutes(entry: Entry) -> "int | None":
@@ -151,8 +161,25 @@ def status() -> dict:
 
 
 def info(section: str, job_id: str) -> "dict | None":
-    """Очередь карты задания (`status`); не ждёт её — None."""
-    return status().get((section, job_id))
+    """Очередь карты задания (`status`); не ждёт её — None. В цикле событий снимок один на шаг задачи: строки одного
+    запроса не пересчитывают очередь, следующий шаг (`call_soon`) — заново."""
+    global _TICK
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:                         # вне цикла событий — без снимка
+        task = None
+    if task is None:
+        return status().get((section, job_id))
+    if _TICK is None or _TICK[0] is not task:
+        _TICK = (task, status())
+        asyncio.get_running_loop().call_soon(_forget, _TICK)
+    return _TICK[1].get((section, job_id))
+
+
+def _forget(tick: tuple) -> None:
+    global _TICK
+    if _TICK is tick:
+        _TICK = None
 
 
 def mark(item: dict, section: str, row) -> dict:
