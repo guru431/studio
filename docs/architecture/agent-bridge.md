@@ -164,6 +164,19 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 | 0.36.0 | Сводка сообщает `code_size_version: 2`, список проектов возвращает последний успешный размер | §10.1 |
 | 0.38.0 | `hello.terminal` (только Linux) — `terminal_info`, команда SSH и веб-консоль ([ниже](#терминал-linux)) | — |
 
+### `hello` по платформам
+
+Поля `hello`, которые зависят от ОС; прочие объявляются на Windows, macOS и Linux одинаково (`agent_update` и
+`agent_update_cancel` — по запуску: окно или служба Linux — `true`, `run --console` — `false`; каталоги помощников —
+по установленным CLI). Таблицу сверяет `agent/tests/test_platform_parity.py`: `Agent.hello` при подмене
+`host.MACOS`/`host.LINUX` и одинаковость остальных полей.
+
+| Поле `hello` | Windows | macOS | Linux |
+|---|---|---|---|
+| `platform` | `win32` | `darwin` | `linux` |
+| `desktop` | `true` | `true` | `false` до проверки `desktop_linux.available` при старте ядра |
+| `terminal` | — | — | `true` |
+
 ## Самопроверка и журнал (0.47.0)
 
 - **Самопроверка** — `selfcheck.run`: окно моста («Подключение» → «Самопроверка» → «Проверить», через
