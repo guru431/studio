@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Пакетная генерация картинок через API картинок шлюза srvllm (SNOFS или FLUX).
+"""Пакетная генерация картинок через API картинок шлюза srvllm (SNOFS, FLUX, FineView или Jib).
 
 Аналог studio-batch.ps1 для Linux и macOS: те же параметры (--prompts-file вместо
 -PromptsFile и т. д.), те же имена файлов и manifest.tsv. Нужен только Python 3.8+.
@@ -14,6 +14,10 @@
 имени добавляется -2, -3, … Рядом — manifest.tsv (номер, файл, seed, размер, модель, промпт),
 чтобы повторить удачную картинку тем же seed.
 
+Прерванный пакет (Ctrl+C, отказ шлюза) доделывает --resume с той же --out-dir: пропускаются пары
+«промпт × вариант», уже записанные в manifest.tsv с той же моделью и размером, если файл на месте.
+«Лимит запросов» (429) и «карта или модель недоступна» (503) — повтор через 5 с, всего до 3 попыток.
+
 Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
     python3 studio-batch.py --make-local [--vault-path /путь/vault.env] [--gateway-url http://<шлюз>:4000/slot]
 Рядом появится studio-batch.local.py (в .gitignore, права 0700) — дальше запускайте её; её
@@ -21,7 +25,7 @@
 списке процессов).
 
 Карта одна на всех: пока её держит другой потребитель, шлюз ждёт. Первая картинка занимает
-больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин.
+больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин (FineView и Jib — скрипт до 31 мин).
 По окончании карта освобождается и возвращается gemma4; --keep-card — оставить карту.
 Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
@@ -37,6 +41,7 @@ Ctrl+C обрывает текущий запрос и тоже освобожд
     python3 studio-batch.py --make-local
     python3 studio-batch.local.py --prompts-file prompts.txt
     python3 studio-batch.local.py --prompts-file prompts.txt --model flux --size square --count 3 --out-dir ~/studio
+    python3 studio-batch.local.py --prompts-file prompts.txt --model flux --size square --count 3 --out-dir ~/studio --resume
 """
 import argparse
 import base64
@@ -47,11 +52,13 @@ import os
 import re
 import secrets
 import socket
+import stat
 import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -61,9 +68,14 @@ LOCAL_NAME = "studio-batch.local.py"
 VAULT_KEY = "GATEWAY_KEY_OWNER_IMAGES"
 VAULT_PATH = r"C:\work\projects\local-config\secrets\vault.env"
 URL = "http://10.77.1.15:4000/slot"
-MODELS = {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein"}
+MODELS = {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein",
+          "fineview": "fineview-qw21", "jib-moss": "jib-moss-v2"}
+STRENGTH_MODELS = {"snofs", "jib-moss"}  # FLUX и FineView силу изменения не получают
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
 TIMEOUT = 1300                         # маршрут генерации у шлюза — до 1260 с
+MEDIA_TIMEOUT = 1900                   # FineView и Jib: холодная загрузка новых весов (как у студии)
+SEND_TRIES = 3                         # попыток запроса, на которые шлюз отвечает 429 или 503
+PAUSE = 5                              # пауза перед повтором после 429 и 503, с
 MAX_PROMPT = 24000                     # предел API картинок
 MAX_IMAGE = 10 * 1024 * 1024
 MAX_SEED = 4294967295
@@ -102,13 +114,17 @@ def parse_args(argv):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--prompts-file", help="файл с промптами, одна строка — один промпт")
     p.add_argument("--model", choices=sorted(MODELS), default="snofs",
-                   help="snofs (SNOFS Krea 2, по умолчанию) или flux (FLUX 3 Image Klein)")
+                   help="snofs (SNOFS Krea 2, по умолчанию), flux (FLUX 3 Image Klein), fineview (FineView QW21) "
+                        "или jib-moss (Jib Mix Moss V2)")
     p.add_argument("--image-path", default="",
                    help="исходное фото PNG/JPEG/WebP до 10 МиБ, одно на все промпты (запрос /images/edits)")
     p.add_argument("--strength", type=bounded(float, 0.05, 1.0), default=0.65,
-                   help="сила изменения SNOFS от 0.05 до 1 (по умолчанию 0.65); меньше — ближе к исходнику")
+                   help="сила изменения SNOFS и Jib от 0.05 до 1 (по умолчанию 0.65); меньше — ближе к исходнику")
     p.add_argument("--out-dir", default="",
                    help="куда класть картинки; по умолчанию — новая папка studio-<дата-время> в текущем каталоге")
+    p.add_argument("--resume", action="store_true",
+                   help="пропустить пары «промпт × вариант», уже записанные в manifest.tsv папки --out-dir "
+                        "с той же моделью и размером, если файл на месте")
     p.add_argument("--size", choices=["portrait", "square", "landscape"], default="portrait",
                    help="portrait (832x1216), square (1024x1024) или landscape (1216x832)")
     p.add_argument("--count", type=bounded(int, 1, 100), default=1, help="сколько картинок на каждый промпт")
@@ -129,6 +145,8 @@ def parse_args(argv):
         p.error("нужен --prompts-file (или --make-local)")
     if args.gateway_url and not args.make_local:
         p.error("--gateway-url — только с --make-local (на один запуск — --url)")
+    if args.resume and not args.out_dir:
+        p.error("--resume — только с --out-dir прежнего запуска")
     return args
 
 
@@ -292,6 +310,9 @@ def run(args):
                    f"--make-local, затем запускайте {LOCAL_NAME} (или передайте ключ параметром --token)")
     url = args.url.rstrip("/")
     model_id = MODELS[args.model]
+    # FineView и Jib занимают слот ComfyUI модели SNOFS: release — по слоту, как у студии
+    release_id = MODELS["flux"] if args.model == "flux" else MODELS["snofs"]
+    timeout = MEDIA_TIMEOUT if args.model in ("fineview", "jib-moss") else TIMEOUT
     image = None
     if args.image_path:
         image = Path(args.image_path).resolve()
@@ -316,32 +337,68 @@ def run(args):
     except FileExistsError:
         pass
 
-    total = len(prompts) * args.count
+    # --resume: готовые пары «промпт × вариант» той же модели и размера; счётчик — на повторы промпта
+    recorded = Counter()
+    if args.resume:
+        rows = re.split(r"\r\n|\r|\n", manifest.read_text(encoding="utf-8-sig", errors="replace"))
+        for row in rows[1:]:
+            c = row.split("\t")
+            if len(c) < 6 or "-" not in c[0]:
+                continue
+            try:
+                saved = (out_dir / c[1]).stat()
+            except OSError:
+                continue
+            if stat.S_ISREG(saved.st_mode) and saved.st_size > 0:
+                recorded[(c[0].rsplit("-", 1)[1], c[3], c[4], c[5])] += 1
+
+    todo = []                                       # (номер промпта, промпт, варианты к работе)
+    skipped = 0
+    for p, prompt in enumerate(prompts, 1):
+        variants = []
+        for k in range(1, args.count + 1):
+            key = (str(k), args.size, args.model, SEPARATORS.sub(" ", prompt))
+            if recorded[key]:
+                recorded[key] -= 1
+                skipped += 1
+            else:
+                variants.append(k)
+        if variants:
+            todo.append((p, prompt, variants))
+    total = sum(len(variants) for _, _, variants in todo)
     done = failed = 0
     started = time.monotonic()
+    if skipped:
+        say(f"Уже в manifest.tsv — пропущено: {skipped}")
     say(f"Шлюз: {total} картинок ({len(prompts)} промптов × {args.count}), {args.model}, "
         f"размер {args.size} → {out_dir}")
     say("Если карту держит другой потребитель, первая картинка ждёт её освобождения")
     try:
-        for p, prompt in enumerate(prompts, 1):
+        for p, prompt, variants in todo:
             preview = prompt[:60] + "…" if len(prompt) > 60 else prompt
             if len(prompt) > MAX_PROMPT:
                 warn(f"[{p}] промпт длиннее {MAX_PROMPT} символов — пропущен: {preview}")
-                failed += args.count
+                failed += len(variants)
                 continue
-            for k in range(1, args.count + 1):
+            for k in variants:
                 say(f"[{done + failed + 1}/{total}] {preview}")
                 seed = args.seed + k - 1 if args.seed is not None else secrets.randbits(32)
                 t0 = time.monotonic()
                 try:
                     body = {"model": model_id, "prompt": prompt, "size": SIZES[args.size], "n": 1,
                             "seed": seed, "response_format": "b64_json"}
-                    if image is not None:
-                        if args.model == "snofs":
-                            body["strength"] = args.strength
-                        status, text = call(url, token, "/images/edits", body, TIMEOUT, image)
-                    else:
-                        status, text = call(url, token, "/images/generations", body, TIMEOUT)
+                    if image is not None and args.model in STRENGTH_MODELS:
+                        body["strength"] = args.strength
+                    # 429 и 503 — шлюз запрос не выполнил: повтор безопасен, до SEND_TRIES попыток
+                    for attempt in range(1, SEND_TRIES + 1):
+                        if image is not None:
+                            status, text = call(url, token, "/images/edits", body, timeout, image)
+                        else:
+                            status, text = call(url, token, "/images/generations", body, timeout)
+                        if status not in (429, 503) or attempt == SEND_TRIES:
+                            break
+                        say(f"  {fail_text(status, text)} — повторю через {PAUSE} с")
+                        time.sleep(PAUSE)
                     if status != 200:
                         raise Fail(fail_text(status, text))
                     data = json.loads(text).get("data") or [{}]
@@ -364,7 +421,7 @@ def run(args):
         # Освобождение — в своём try: сетевой сбой не должен затереть исходную ошибку и итог
         if not args.keep_card:
             try:
-                status, text = call(url, token, "/images/release", {"model": model_id}, 60)
+                status, text = call(url, token, "/images/release", {"model": release_id}, 60)
                 if status == 200:
                     say("Карта освобождена — вернётся gemma4")
                 elif status == 409:

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Пакетная генерация картинок через API картинок шлюза srvllm (SNOFS или FLUX).
+  Пакетная генерация картинок через API картинок шлюза srvllm (SNOFS, FLUX, FineView или Jib).
 
 .DESCRIPTION
   Скрипт ходит прямо в шлюз (POST <Url>/images/generations) ключом владельца для картинок;
@@ -13,13 +13,17 @@
   имени добавляется -2, -3, … Рядом — manifest.tsv (номер, файл, seed, размер, модель, промпт),
   чтобы повторить удачную картинку тем же seed.
 
+  Прерванный пакет (Ctrl+C, отказ шлюза) доделывает -Resume с той же -OutDir: пропускаются пары
+  «промпт × вариант», уже записанные в manifest.tsv с той же моделью и размером, если файл на месте.
+  «Лимит запросов» (429) и «карта или модель недоступна» (503) — повтор через 5 с, всего до 3 попыток.
+
   Ключ. В репозитории скрипт без ключа. Один раз соберите локальную копию с ключом из vault:
     powershell -ExecutionPolicy Bypass -File studio-batch.ps1 -MakeLocal [-GatewayUrl http://<шлюз>:4000/slot]
   Рядом появится studio-batch.local.ps1 (в .gitignore) — дальше запускайте её; её можно
   переносить на другие компьютеры как есть. Ключ на один запуск — параметром -Token.
 
   Карта одна на всех: пока её держит другой потребитель, шлюз ждёт. Первая картинка занимает
-  больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин.
+  больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин (FineView и Jib — скрипт до 31 мин).
   По окончании карта освобождается и возвращается gemma4; -KeepCard — оставить карту.
   Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
@@ -34,13 +38,17 @@
 .PARAMETER PromptsFile
   Файл с промптами, одна строка — один промпт.
 .PARAMETER Model
-  snofs (по умолчанию, SNOFS Krea 2) или flux (FLUX 3 Image Klein).
+  snofs (по умолчанию, SNOFS Krea 2), flux (FLUX 3 Image Klein), fineview (FineView QW21) или
+  jib-moss (Jib Mix Moss V2).
 .PARAMETER ImagePath
   Исходное фото PNG/JPEG/WebP до 10 МиБ. Одно фото для всех промптов; запрос /images/edits.
 .PARAMETER Strength
-  Сила изменения SNOFS от 0.05 до 1 (по умолчанию 0.65). Меньше — ближе к исходнику.
+  Сила изменения SNOFS и Jib от 0.05 до 1 (по умолчанию 0.65). Меньше — ближе к исходнику.
 .PARAMETER OutDir
   Куда класть картинки. По умолчанию — новая папка studio-<дата-время> в текущем каталоге.
+.PARAMETER Resume
+  Пропустить пары «промпт × вариант», уже записанные в manifest.tsv папки -OutDir с той же моделью
+  и размером, если файл на месте. Только с -OutDir.
 .PARAMETER Size
   portrait (832x1216), square (1024x1024) или landscape (1216x832).
 .PARAMETER Count
@@ -68,16 +76,19 @@
   powershell -ExecutionPolicy Bypass -File studio-batch.local.ps1 -PromptsFile prompts.txt
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File studio-batch.local.ps1 -PromptsFile prompts.txt -Model flux -Size square -Count 3 -OutDir D:\studio
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File studio-batch.local.ps1 -PromptsFile prompts.txt -Model flux -Size square -Count 3 -OutDir D:\studio -Resume
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)][string]$PromptsFile,
-    [Parameter(ParameterSetName = 'Run')][ValidateSet('snofs', 'flux')][string]$Model = 'snofs',
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('snofs', 'flux', 'fineview', 'jib-moss')][string]$Model = 'snofs',
     [Parameter(ParameterSetName = 'Run')][string]$ImagePath = '',
     [Parameter(ParameterSetName = 'Run')][ValidateRange(0.05, 1.0)][double]$Strength = 0.65,
     [Parameter(ParameterSetName = 'Run')]
     [string]$OutDir = (Join-Path (Get-Location) ('studio-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))),
     [Parameter(ParameterSetName = 'Run')][ValidateSet('portrait', 'square', 'landscape')][string]$Size = 'portrait',
+    [Parameter(ParameterSetName = 'Run')][switch]$Resume,
     [Parameter(ParameterSetName = 'Run')][ValidateRange(1, 100)][int]$Count = 1,
     [Parameter(ParameterSetName = 'Run')][Nullable[long]]$Seed = $null,
     [Parameter(ParameterSetName = 'Run')][switch]$KeepCard,
@@ -92,10 +103,15 @@ $EmbeddedKey = ''
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $VaultKey = 'GATEWAY_KEY_OWNER_IMAGES'
-$Models = @{ snofs = 'snofs-krea2-v1.6'; flux = 'flux-3-image-klein' }
+$Models = @{ snofs = 'snofs-krea2-v1.6'; flux = 'flux-3-image-klein'
+             fineview = 'fineview-qw21'; 'jib-moss' = 'jib-moss-v2' }
+$StrengthModels = @('snofs', 'jib-moss')    # FLUX и FineView силу изменения не получают
 $Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }
 $Mime = @{ '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.png' = 'image/png'; '.webp' = 'image/webp' }
 $TimeoutSec = 1300                     # маршрут генерации у шлюза — до 1260 с
+$MediaTimeoutSec = 1900                # FineView и Jib: холодная загрузка новых весов (как у студии)
+$SendTries = 3                         # попыток запроса, на которые шлюз отвечает 429 или 503
+$PauseSec = 5                          # пауза перед повтором после 429 и 503, с
 $MaxPrompt = 24000                     # предел API картинок
 $MaxSeed = 4294967295
 
@@ -127,6 +143,7 @@ if ($MakeLocal) {
     return
 }
 
+if ($Resume -and -not $PSBoundParameters.ContainsKey('OutDir')) { throw '-Resume — только с -OutDir прежнего запуска' }
 if (-not $Token) { $Token = $EmbeddedKey }
 if (-not $Token) {
     throw ("Нет ключа шлюза. Соберите локальную копию с ключом из vault: " +
@@ -136,6 +153,9 @@ if (-not $Token) {
 $Url = $Url.TrimEnd('/')
 Add-Type -AssemblyName System.Net.Http
 $modelId = $Models[$Model]
+# FineView и Jib занимают слот ComfyUI модели SNOFS: release — по слоту, как у студии
+$releaseId = if ($Model -eq 'flux') { $Models.flux } else { $Models.snofs }
+if ($Model -eq 'fineview' -or $Model -eq 'jib-moss') { $TimeoutSec = $MediaTimeoutSec }
 if ($ImagePath) {
     $imageInfo = Get-Item -LiteralPath $ImagePath
     if ($imageInfo.PSIsContainer -or $imageInfo.Length -eq 0 -or $imageInfo.Length -gt 10MB) {
@@ -269,22 +289,54 @@ if ($newManifest) {
     } finally { $newManifest.Dispose() }
 }
 
-$total = $prompts.Count * $Count
+# -Resume: готовые пары «промпт × вариант» той же модели и размера; счётчик — на повторы промпта.
+# Словарь .NET, не @{}: ключи хеш-таблицы PowerShell не различают регистр, а промпты — различают
+$recorded = New-Object 'Collections.Generic.Dictionary[string,int]'
+if ($Resume) {
+    foreach ($row in @([IO.File]::ReadAllLines($manifest, $manifestEncoding) | Select-Object -Skip 1)) {
+        $c = $row.Split("`t")
+        if ($c.Count -lt 6 -or -not $c[0].Contains('-')) { continue }
+        try { $saved = New-Object IO.FileInfo ([IO.Path]::Combine($OutDir, $c[1])) } catch { continue }
+        if (-not $saved.Exists -or $saved.Length -eq 0) { continue }
+        $key = $c[0].Substring($c[0].LastIndexOf('-') + 1) + "`t" + $c[3] + "`t" + $c[4] + "`t" + $c[5]
+        $have = 0
+        [void]$recorded.TryGetValue($key, [ref]$have)
+        $recorded[$key] = $have + 1
+    }
+}
+$todo = @()                            # номер промпта (с 0) и варианты к работе (с 0)
+$skipped = 0
+for ($p = 0; $p -lt $prompts.Count; $p++) {
+    $clean = $prompts[$p] -replace '[\t\n\v\f\r\x1c-\x1e\x85  ]+', ' '
+    $variants = @()
+    for ($k = 0; $k -lt $Count; $k++) {
+        $key = "$($k + 1)`t$Size`t$Model`t$clean"
+        $have = 0
+        if ($recorded.TryGetValue($key, [ref]$have) -and $have -gt 0) { $recorded[$key] = $have - 1; $skipped++ }
+        else { $variants += $k }
+    }
+    if ($variants.Count) { $todo += [pscustomobject]@{ P = $p; Variants = $variants } }
+}
+
+$total = 0
+foreach ($item in $todo) { $total += $item.Variants.Count }
 $done = 0
 $failed = 0
 $started = Get-Date
+if ($skipped) { Write-Host "Уже в manifest.tsv — пропущено: $skipped" }
 Write-Host "Шлюз: $total картинок ($($prompts.Count) промптов × $Count), $Model, размер $Size → $OutDir"
 Write-Host 'Если карту держит другой потребитель, первая картинка ждёт её освобождения'
 try {
-    for ($p = 0; $p -lt $prompts.Count; $p++) {
+    foreach ($item in $todo) {
+        $p = $item.P
         $prompt = $prompts[$p]
         $preview = if ($prompt.Length -gt 60) { $prompt.Substring(0, 60) + '…' } else { $prompt }
         if ($prompt.Length -gt $MaxPrompt) {
             Write-Warning "[$($p + 1)] промпт длиннее $MaxPrompt символов — пропущен: $preview"
-            $failed += $Count
+            $failed += $item.Variants.Count
             continue
         }
-        for ($k = 0; $k -lt $Count; $k++) {
+        foreach ($k in $item.Variants) {
             $n = $done + $failed + 1
             Write-Host "[$n/$total] $preview"
             $seedValue = if ($null -ne $Seed) { $Seed + $k } else { New-Seed }
@@ -292,11 +344,17 @@ try {
             try {
                 $body = @{ model = $modelId; prompt = $prompt; size = $Sizes[$Size]; n = 1
                            seed = $seedValue; response_format = 'b64_json' }
-                if ($ImagePath) {
-                    if ($Model -eq 'snofs') { $body.strength = $Strength }
-                    $r = Invoke-Gateway '/images/edits' $body $TimeoutSec $ImagePath
-                } else {
-                    $r = Invoke-Gateway '/images/generations' $body $TimeoutSec
+                if ($ImagePath -and $StrengthModels -contains $Model) { $body.strength = $Strength }
+                # 429 и 503 — шлюз запрос не выполнил: повтор безопасен, до $SendTries попыток
+                for ($try = 1; ; $try++) {
+                    if ($ImagePath) {
+                        $r = Invoke-Gateway '/images/edits' $body $TimeoutSec $ImagePath
+                    } else {
+                        $r = Invoke-Gateway '/images/generations' $body $TimeoutSec
+                    }
+                    if (($r.Status -ne 429 -and $r.Status -ne 503) -or $try -ge $SendTries) { break }
+                    Write-Host "  $(Get-FailText $r) — повторю через $PauseSec с"
+                    Start-Sleep -Seconds $PauseSec
                 }
                 if ($r.Status -ne 200) { throw (Get-FailText $r) }
                 $item = @(($r.Text | ConvertFrom-Json).data)[0]
@@ -320,7 +378,7 @@ try {
     # Освобождение — в своём try: сетевой сбой не должен затереть исходную ошибку и итог
     if (-not $KeepCard) {
         try {
-            $r = Invoke-Gateway '/images/release' @{ model = $modelId } 60
+            $r = Invoke-Gateway '/images/release' @{ model = $releaseId } 60
             if ($r.Status -eq 200) { Write-Host 'Карта освобождена — вернётся gemma4' }
             elseif ($r.Status -eq 409) { Write-Warning 'Карта занята генерацией, освободится сама через 10 минут' }
             else { Write-Warning "Карту освободить не удалось: $(Get-FailText $r)" }

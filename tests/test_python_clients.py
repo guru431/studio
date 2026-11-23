@@ -45,11 +45,14 @@ def test_key_placeholder_is_empty_in_repo(script):
 
 def test_batch_defaults_match_the_gateway_contract():
     m = load(BATCH)
-    assert m.MODELS == {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein"}
+    assert m.MODELS == {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein",
+                        "fineview": "fineview-qw21", "jib-moss": "jib-moss-v2"}
     assert m.SIZES == {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
     a = m.parse_args(["--prompts-file", "p.txt"])
-    assert (a.model, a.size, a.count, a.strength, a.url, a.token, a.vault_path) == (
-        "snofs", "portrait", 1, 0.65, URL, "", VAULT)
+    assert (a.model, a.size, a.count, a.strength, a.url, a.token, a.vault_path, a.resume) == (
+        "snofs", "portrait", 1, 0.65, URL, "", VAULT, False)
+    with pytest.raises(SystemExit):            # в новой папке по умолчанию возобновлять нечего
+        m.parse_args(["--prompts-file", "p.txt", "--resume"])
     assert (m.VAULT_KEY, m.LOCAL_NAME) == ("GATEWAY_KEY_OWNER_IMAGES", "studio-batch.local.py")
 
 

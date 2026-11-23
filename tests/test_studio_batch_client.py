@@ -40,10 +40,30 @@ def test_key_placeholder_is_empty_in_repo():
 
 def test_models_and_sizes_match_the_gateway_contract():
     text = SCRIPT.read_text(encoding="utf-8-sig")
-    assert "$Models = @{ snofs = 'snofs-krea2-v1.6'; flux = 'flux-3-image-klein' }" in text
     assert "$Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }" in text
     assert "'/images/generations'" in text and "'/images/release'" in text
     assert "'GATEWAY_KEY_OWNER_IMAGES'" in text and "'studio-batch.local.ps1'" in text
+
+
+def test_script_models_and_strength_match_the_server():
+    """Контракт шлюза в сессии виден через то, что шлёт ему страница (app/images.py): имена моделей,
+    размеры и модели с силой изменения у обеих версий скрипта — те же."""
+    import importlib.util
+
+    import images
+    spec = importlib.util.spec_from_file_location("studio_batch_client", SCRIPT.with_suffix(".py"))
+    client = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client)
+    assert client.MODELS == images.MODELS and client.SIZES == images.SIZES
+    assert client.STRENGTH_MODELS == images.STRENGTH_MODELS
+    assert client.MEDIA_TIMEOUT == images.MEDIA_TIMEOUT_SEC
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    for name, model in images.MODELS.items():
+        key = name if name.isidentifier() else f"'{name}'"
+        assert f"{key} = '{model}'" in text and f"'{name}'" in text, model
+    strength = re.search(r"^\$StrengthModels = @\(([^)]*)\)", text, re.M)
+    assert strength and set(re.findall(r"'([^']+)'", strength[1])) == images.STRENGTH_MODELS
+    assert f"$MediaTimeoutSec = {images.MEDIA_TIMEOUT_SEC}" in text
 
 
 def test_local_copy_is_gitignored():
@@ -91,10 +111,12 @@ def test_powershell_parses_script_and_defaults_match_contract():
 def images():
     """Подставной API картинок на 127.0.0.1: журнал (путь, Authorization, поля или JSON).
     generations отдаёт «png-<номер>» без seed (так отвечает FLUX), на промпт «bad» — 400;
-    edits — «result-png» и seed 7. files — (поле, имя файла, тип) файловых частей multipart."""
+    edits — «result-png» и seed 7. files — (поле, имя файла, тип) файловых частей multipart.
+    statuses — коды отказа очередных generations (429, 503) до обычного ответа."""
     log = []
     files = []
     seeds = []
+    statuses = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -112,6 +134,8 @@ def images():
             code = 200
             if self.path == "/slot/images/generations" and payload.get("prompt") == "bad":
                 code, reply = 400, {"error": {"message": "промпт не принят"}}
+            elif self.path == "/slot/images/generations" and statuses:
+                code, reply = statuses.pop(0), {"error": {"message": "карта занята"}}
             elif self.path == "/slot/images/edits":
                 reply = {"data": [{"b64_json": base64.b64encode(b"result-png").decode(), "seed": 7}]}
             elif self.path == "/slot/images/generations":
@@ -133,7 +157,8 @@ def images():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
-    yield SimpleNamespace(log=log, files=files, seeds=seeds, url=f"http://127.0.0.1:{server.server_port}/slot")
+    yield SimpleNamespace(log=log, files=files, seeds=seeds, statuses=statuses,
+                          url=f"http://127.0.0.1:{server.server_port}/slot")
     server.shutdown()
     server.server_close()
     thread.join(1)
@@ -179,6 +204,66 @@ def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path)
     # Имя файла — своё (имя фото владельца в журналы службы не идёт), тип — по расширению
     assert images.files == [("image", "input.jpg", "image/jpeg")]
     assert [p.read_bytes() for p in out.glob("*.png")] == [b"result-png"]
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_fineview_and_jib_send_strength_like_the_page_and_release_the_comfy_slot(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("change background\n", encoding="utf-8")
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"source-photo")
+    for model in ("jib-moss", "fineview"):
+        run_script(runner, images, "-PromptsFile", str(prompts), "-ImagePath", str(photo), "-Strength", "0.3",
+                   "-Model", model, "-Seed", "7", "-OutDir", str(tmp_path / model))
+
+    edits = [fields for path, _, fields in images.log if path == "/slot/images/edits"]
+    # Сила — только у Jib (как у SNOFS); FineView берёт фото референсом
+    assert [(f["model"], f.get("strength")) for f in edits] == [(b"jib-moss-v2", b"0.3"), (b"fineview-qw21", None)]
+    # Обе занимают слот ComfyUI SNOFS: release — по слоту, как у студии (images.RELEASE_MODELS)
+    releases = [body for path, _, body in images.log if path == "/slot/images/release"]
+    assert releases == [{"model": "snofs-krea2-v1.6"}] * 2
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_resume_skips_recorded_pairs_with_the_file_in_place(runner, images, tmp_path):
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("first\nsecond\nFirst\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "a.png").write_bytes(b"a")
+    (out / "b.png").write_bytes(b"b")
+    (out / "c.png").write_bytes(b"c")
+    rows = ["n\tfile\tseed\tsize\tmodel\tprompt",
+            "1-1\ta.png\t1\tportrait\tsnofs\tfirst",          # готово — пропуск
+            "2-1\tgone.png\t1\tportrait\tsnofs\tsecond",      # файла нет — заново
+            "2-1\tb.png\t1\tsquare\tsnofs\tsecond",           # другой размер — заново
+            "3-1\tc.png\t1\tportrait\tsnofs\tfirst"]          # «first» второй раз: «First» — другой промпт
+    (out / "manifest.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    text = run_script(runner, images, "-PromptsFile", str(prompts), "-Seed", "5", "-KeepCard", "-OutDir", str(out),
+                      "-Resume")
+
+    gens = [body["prompt"] for path, _, body in images.log if path == "/slot/images/generations"]
+    assert gens == ["second", "First"]
+    assert "пропущено: 1" in text and "2 готово, 0 не вышло" in text
+    lines = (out / "manifest.tsv").read_text(encoding="utf-8").splitlines()
+    assert lines == [*rows, "2-1\t002-01_second_s5.png\t5\tportrait\tsnofs\tsecond",
+                     "3-1\t003-01_First_s5.png\t5\tportrait\tsnofs\tFirst"]
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_busy_gateway_is_retried_up_to_three_times(runner, images, tmp_path):
+    """429 и 503 — шлюз картинку не делал: повтор через 5 с, всего до трёх попыток (как у роликов)."""
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("first\n", encoding="utf-8")
+    images.statuses.extend([503, 429])
+    out = tmp_path / "out"
+
+    text = run_script(runner, images, "-PromptsFile", str(prompts), "-Seed", "5", "-KeepCard", "-OutDir", str(out))
+
+    assert [path for path, _, _ in images.log] == ["/slot/images/generations"] * 3
+    assert "(503): карта занята — повторю через 5 с" in text and "(429): карта занята — повторю через 5 с" in text
+    assert [p.name for p in out.glob("*.png")] == ["001-01_first_s5.png"]
 
 
 @pytest.mark.integration
