@@ -961,11 +961,15 @@ def test_restart_queues_images_interrupted_for_the_first_time_and_ends_the_rest(
         "h": (uid, "working", "x", None, T0, "error", images.INTERRUPTED),
         "i": (other, "error", images.RESTARTING, T0 - 5, None, "error", images.INTERRUPTED),
         "j": (uid, "error", "шлюз недоступен", T0, None, "error", "шлюз недоступен"),
+        # обрыв (OOM, kill -9) без отметки остановки: возраст — по `created` (ревью R3-4)
+        "k": (uid, "working", "x", None, None, "error", images.INTERRUPTED),
+        "l": (uid, "queued", "в очереди серии · 2 из 3", None, None, "error", images.INTERRUPTED),
     }
     for key, (owner, status, detail, finished, deleted, *_) in rows.items():
+        created = T0 - images.RESUME_SEC - 1 if key in "kl" else T0 - 10
         state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created, finished,"
                          " deleted) VALUES (?, ?, 'generation', 'flux', 'p', '1024x1024', 1, ?, ?, ?, ?, ?)",
-                         (key * 32, owner, status, detail, T0 - 10, finished, deleted))
+                         (key * 32, owner, status, detail, created, finished, deleted))
     images.recover()
     for key, (*_, status, detail) in rows.items():
         row = state.DB.execute("SELECT state, detail, finished FROM images WHERE id = ?", (key * 32,)).fetchone()

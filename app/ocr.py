@@ -1088,7 +1088,12 @@ async def get_scan(sid: str, request: Request, brief: bool = False):
     row = _row(request.state.user.id, sid)
     if brief:
         return _out(row)
-    pages = _page_list(sid)
+    return _full(row)
+
+
+def _full(row) -> dict:
+    """Документ со страницами и числом таблиц — ответ GET и правки страницы."""
+    pages = _page_list(row["id"])
     return _out(row) | {"pages": pages, "tables": len(exports.tables(pages))}
 
 
@@ -1164,7 +1169,7 @@ async def edit_page(sid: str, n: int, body: PageIn, request: Request):
         state.DB.execute("ROLLBACK")
         raise
     log.info("ocr %s: страница %d правлена", sid[:8], n)
-    return _out(_row(uid, sid)) | {"pages": _page_list(sid)}
+    return _full(_row(uid, sid))
 
 
 @router.delete("/{sid}/pages/{n}/edit")
@@ -1183,7 +1188,7 @@ async def restore_page(sid: str, n: int, request: Request):
         state.DB.execute("ROLLBACK")
         raise
     log.info("ocr %s: страница %d — распознанный текст", sid[:8], n)
-    return _out(_row(uid, sid)) | {"pages": _page_list(sid)}
+    return _full(_row(uid, sid))
 
 
 @router.post("/{sid}/cancel")

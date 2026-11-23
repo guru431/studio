@@ -368,11 +368,17 @@ def test_export_holds_transcript_edits_and_presets(studio):
     put("UPDATE transcripts SET edits = ?", json.dumps({"segments": {"0": "fixed"}}))
     put("INSERT INTO presets VALUES ('p1', ?, 'photo', 'night', ?, ?)", uid, json.dumps({"model": "snofs"}), T0)
     put("INSERT INTO presets VALUES ('p2', ?, 'photo', 'theirs', '{}', ?)", bob, T0)
+    for who, n, term in ((uid, 2, "аренда"), (uid, 1, "договор"), (bob, 1, "theirs")):    # ревью R3-5
+        put("INSERT INTO translate_glossary(user_id, n, term, translation) VALUES (?, ?, ?, ?)", who, n, term, term + "-en")
+    put("UPDATE users SET translate_tone = 'formal' WHERE id = ?", uid)
     _, z = download(studio)
     zf = unzip(z)
     assert json.loads(zf.read("transcripts/0001.json"))[0]["edits"] == {"segments": {"0": "fixed"}}
-    assert json.loads(zf.read("settings.json"))["presets"] == [
+    settings = json.loads(zf.read("settings.json"))
+    assert settings["presets"] == [
         {"id": "p1", "section": "photo", "name": "night", "params": {"model": "snofs"}, "created": T0}]
+    assert settings["translate"] == {"tone": "formal", "glossary": [
+        {"term": "договор", "translation": "договор-en"}, {"term": "аренда", "translation": "аренда-en"}]}
 
 
 def test_export_holds_the_steps_of_the_internet_but_not_the_exa_key(studio):
@@ -489,8 +495,8 @@ def test_takeout_has_scans_and_their_page_files(studio):
         put("INSERT INTO scans(id, user_id, connection_id, model, name, source_media_id, origin, pages, done_pages,"
             " state, detail, text, created, finished) VALUES (?, ?, 1, 'hunyuan-ocr', ?, ?, 'section', 2, 2, 'done',"
             " 'готово', ?, ?, ?)", f"{tag}scan", who, f"{tag}.pdf", src, f"{tag} text", T0, T0 + 7)
-        put("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text, detail) VALUES (?, ?, 1, ?, 'done', ?,"
-            " NULL)", f"{tag}scan", who, page, f"{tag} page text")
+        put("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text, detail, recognized) VALUES (?, ?, 1,"
+            " ?, 'done', ?, NULL, ?)", f"{tag}scan", who, page, f"{tag} page text", f"{tag} model text")
         put("INSERT INTO scan_pages(scan_id, user_id, n, media_id, state, text, detail) VALUES (?, ?, 2, NULL,"
             " 'failed', NULL, 'на странице не найден текст')", f"{tag}scan", who)
         ids[tag] = (src, page)
@@ -503,8 +509,10 @@ def test_takeout_has_scans_and_their_page_files(studio):
     assert json.loads(zf.read("scans/0001.json")) == [{
         "id": "minescan", "model": "hunyuan-ocr", "name": "mine.pdf", "origin": "section", "state": "done",
         "detail": "готово", "created": T0, "finished": T0 + 7, "file": f"files/{src}.pdf",
-        "pages": [{"n": 1, "state": "done", "text": "mine page text", "detail": None, "file": f"files/{page}.png"},
-                  {"n": 2, "state": "failed", "text": None, "detail": "на странице не найден текст", "file": None}]}]
+        "pages": [{"n": 1, "state": "done", "text": "mine page text", "recognized": "mine model text", "detail": None,
+                   "file": f"files/{page}.png"},
+                  {"n": 2, "state": "failed", "text": None, "recognized": None, "detail": "на странице не найден текст",
+                   "file": None}]}]
     assert json.loads(zf.read("manifest.json"))["counts"]["scans"] == 1
     assert "scans/" in zf.read("README.txt").decode("utf-8")
     assert not any("theirs" in zf.read(n).decode("utf-8", "replace") for n in zf.namelist() if n.endswith(".json"))

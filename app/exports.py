@@ -283,7 +283,8 @@ def _html_table(body: str, clean) -> tuple[list[str], list[list[Cell]]]:
 def _grid(rows: list[list[Cell]]) -> list[list[tuple]]:
     """Строки ячеек — сетка без сдвигов: место — `("cell", ячейка)` у её левого верхнего угла, `("up", ячейка)` —
     первый столбец ячейки сверху (rowspan), `("covered",)` — прочие места объединённой ячейки, `None` — пусто.
-    Ячейки ниже и правее объединённой не съезжают; все строки — одной ширины."""
+    Ячейки ниже и правее объединённой не съезжают; все строки — одной ширины. Ячейка, чей `colspan` налезает на
+    столбец, занятый `rowspan` сверху (кривой HTML модели), укорачивается до него."""
     grid: list[list[tuple]] = []
     below: dict[int, list] = {}      # столбец → [сколько ещё строк занимает ячейка сверху, ячейка, первый ли столбец]
     for row in rows:
@@ -300,6 +301,10 @@ def _grid(rows: list[list[Cell]]) -> list[list[tuple]]:
 
         for cell in row:
             fill_spanned()
+            span = 1                 # colspan до столбца, занятого сверху: объединения не пересекаются
+            while span < cell[1] and not below.get(len(out) + span):
+                span += 1
+            cell = cell if span == cell[1] else (cell[0], span, *cell[2:])
             for k in range(cell[1]):
                 if cell[2] > 1:
                     below[len(out)] = [cell[2] - 1, cell, k == 0]

@@ -16,7 +16,7 @@
 import io
 from dataclasses import dataclass, field
 
-from PIL import Image
+from PIL import Image, ImageOps
 from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject,
                            NumberObject)
@@ -139,7 +139,7 @@ def _text(lines: list, box: tuple, fonts: _Fonts) -> str:
 
 def _jpeg(image: bytes) -> tuple[bytes, int, int]:
     with Image.open(io.BytesIO(image)) as img:
-        rgb = img.convert("RGB")
+        rgb = ImageOps.exif_transpose(img).convert("RGB")     # как ocr_render.photo_png: рамки — по повёрнутой
     out = io.BytesIO()
     rgb.save(out, format="JPEG", quality=JPEG_QUALITY)
     return out.getvalue(), rgb.width, rgb.height

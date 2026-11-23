@@ -46,7 +46,8 @@
    оставит её удаляемой), обрыв оставляет её в работе или в очереди. При запуске recover ставит такую строку
    снова в очередь (`queued`, RESUMED), resume ведёт её, как серию, с тем же seed, моделью, размером, исходником
    и маской из media — одна попытка: прерванный повтор, отменявшаяся строка, строка в корзине или у
-   отключённой учётки, остановка дольше RESUME_SEC — ошибка INTERRUPTED.
+   отключённой учётки, остановка дольше RESUME_SEC — ошибка INTERRUPTED. У обрыва (OOM, `kill -9`) отметки
+   остановки нет — срок считается от создания строки (`created`).
 """
 import asyncio
 import base64
@@ -349,8 +350,9 @@ def recover() -> None:
         "UPDATE images SET state = 'error', detail = ?, finished = COALESCE(finished, ?)"
         " WHERE (state IN ('working', 'cancelling', 'queued') OR (state = 'error' AND detail = ?))"
         " AND (state = 'cancelling' OR detail = ? OR deleted IS NOT NULL OR (state = 'error' AND finished < ?)"
+        " OR (state IN ('working', 'queued') AND created < ?)"
         " OR user_id NOT IN (SELECT id FROM users WHERE disabled = 0))",
-        (INTERRUPTED, now, RESTARTING, RESUMED, now - RESUME_SEC)).rowcount
+        (INTERRUPTED, now, RESTARTING, RESUMED, now - RESUME_SEC, now - RESUME_SEC)).rowcount
     again = state.DB.execute("UPDATE images SET state = 'queued', detail = ?, finished = NULL"
                              " WHERE state IN ('working', 'queued') OR (state = 'error' AND detail = ?)",
                              (RESUMED, RESTARTING)).rowcount

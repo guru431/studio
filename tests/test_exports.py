@@ -265,6 +265,18 @@ def test_tables_go_to_xlsx_with_merges_and_to_csv():
         assert z.read("Счёт-2.csv").decode("utf-8") == "﻿a,b\r\n1,x y\r\n"
 
 
+def test_colspan_over_a_rowspan_from_above_stops_at_it():
+    """Ревью R3-3: `colspan`, налезший на столбец, занятый `rowspan` сверху, давал пересекающиеся `mergeCell`
+    (Excel — «восстановить содержимое») и сдвигал строку ниже. Ячейка укорачивается до занятого столбца."""
+    grid = exports.tables([{"n": 1, "state": "done", "detail": None, "text": (
+        "<table><tr><td>A</td><td rowspan=2>B</td></tr><tr><td colspan=2>C</td></tr>"
+        "<tr><td>D</td><td>E</td></tr></table>")}])
+    assert exports._texts(grid[0]) == [["A", "B"], ["C", ""], ["D", "E"]]
+    sheet = ElementTree.fromstring(exports._sheet(grid[0]))
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    assert [m.get("ref") for m in sheet.iter(f"{ns}mergeCell")] == ["B1:B2"]
+
+
 def test_pairs_docx_puts_each_source_next_to_its_translation():
     """Аудит 05:I5: таблица в два столбца — шапка на каждой странице, строка — кусок и его перевод; Markdown скана —
     структурой внутри ячейки (ячейка кончается абзацем), письмо справа налево — у своей стороны."""

@@ -958,6 +958,8 @@ def test_page_edit_keeps_the_recognized_text_and_feeds_exports_and_search(studio
     assert r.status_code == 200, r.text
     assert [(p["n"], p["text"], p["edited"]) for p in r.json()["pages"]] == [
         (1, "Сумма: 1 500 руб.", True), (2, None, False)]
+    assert r.json()["tables"] == 0                     # ответ — как GET: кнопки xlsx/csv не пропадают
+    assert edit(TABLE).json()["tables"] == 1
     assert edit("Сумма: 1 600 руб.").status_code == 200
     assert [(p["text"], p["recognized"]) for p in page_rows(studio, sid)][0] == ("Сумма: 1 600 руб.", TEXT)
     assert "Сумма: 1 600 руб." in studio.c.get(f"/api/ocr/{sid}/export?format=txt").text
@@ -969,6 +971,7 @@ def test_page_edit_keeps_the_recognized_text_and_feeds_exports_and_search(studio
     edit("Другое")
     r = studio.c.delete(f"/api/ocr/{sid}/pages/1/edit")
     assert r.status_code == 200 and (r.json()["pages"][0]["text"], r.json()["pages"][0]["edited"]) == (TEXT, False)
+    assert r.json()["tables"] == 0
     assert not [i for i in studio.c.post("/api/search", json={"q": "Другое"}).json()["items"] if i.get("section") == "ocr"]
     assert edit("x", 2).json()["detail"]["code"] == "page"                    # нераспознанную — нельзя
     assert edit("x", 3).status_code == 404
