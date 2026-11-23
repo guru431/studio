@@ -170,7 +170,9 @@ def launch(profile: Path):
                                    f"DevTools; {path}; профиль {profile}; stderr: {tail or 'пусто'}")
             time.sleep(0.1)
         else:
-            raise RuntimeError(f"браузер не открыл порт DevTools за {DEVTOOLS_TIMEOUT} с")
+            tail = errlog.read_text(encoding="utf-8", errors="replace").strip()[-600:]
+            raise RuntimeError(f"браузер не открыл порт DevTools за {DEVTOOLS_TIMEOUT} с; {path}; "
+                               f"профиль {profile}; stderr: {tail or 'пусто'}")
         port, path = endpoint
         yield BrowserProcess(node, port, f"ws://127.0.0.1:{port}{path}")
     finally:
