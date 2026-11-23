@@ -187,6 +187,7 @@ async def linux_install_download(request: Request):
 @router.get("/api/agents")
 async def list_agents(request: Request, refresh: bool = False):
     release = await asyncio.to_thread(agent_release.release, AGENT_ZIP)
+    project_access.expire()        # компьютер с одной истёкшей выдачей участнику уже не виден
     rows = list(state.DB.execute("SELECT id, user_id, name, has_pin, cc_version, projects_root, created, last_seen, platform FROM agents"
                             " WHERE user_id = ? OR id IN (SELECT m.agent_id FROM project_members m"
                             " JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = a.user_id"

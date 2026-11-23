@@ -170,6 +170,7 @@ function projectName(p) {
     p.naming = projectsOf(p.aid).then((items) => {
       const project = items.find((x) => x.pid === p.pid);
       p.shared = !!project?.shared;
+      p.readonly = project?.readonly === true;    // наблюдатель совместного проекта: только просмотр
       p.memberCount = project?.member_count ?? 0;
       p.dir = typeof project?.dir === 'string' ? project.dir : null;   // ссылки на файлы в ответах (мост ≥ 0.41.0)
       return project?.name || null;
@@ -668,6 +669,7 @@ function sessions(mine, p, status) {
     refresh: p.loaded ? listing : null, reload: () => chatsOf(p, true), exclude: new Set(tabsOf(p.aid, p.pid).tabs),
     picked: (chat, row) => { if (row) p.info.set(chat, row); toChat(p, chat); },
     contentSearch: !!p.chatSearch,
+    starts: !p.readonly, readonly: !!p.readonly,
     worktrees: !!p.worktrees,
     worktreeOpened: async () => { lists.delete(String(p.aid)); await panel.select(p.aid); },
     created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode,
@@ -709,7 +711,7 @@ async function chat(mine, p, id, agent, section, status) {
   freshChat = null;                          // дальше «новый» — только по пустой истории (loadHistory)
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent,
     project: name ? { pid: p.pid, name, ...(p.dir ? { dir: p.dir } : {}) } : null,
-    origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title,
+    origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title, readonly: !!p.readonly,
     git: p.repo, gitAction,
     onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },
     verify: cached ? listing.then(() => {
@@ -752,8 +754,8 @@ async function files(mine, p, path, status) {
     if (proj === p) failed(err, p.aid, box, file);
   };
   if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path,
-    git: p.repo, operations: agent?.file_operations === true, upload: agent?.file_upload === true,
-    search: agent?.file_search === true });
+    git: p.repo, operations: agent?.file_operations === true && !p.readonly, readonly: !!p.readonly,
+    upload: agent?.file_upload === true && !p.readonly, search: agent?.file_search === true });
   else if (path !== null) p.files.open(path);
 }
 
@@ -769,7 +771,7 @@ function gitControls(p) {
 
 function openGitActions() {
   const p = proj;
-  if (!p || p.gitActions) return;
+  if (!p || p.gitActions || p.readonly) return;     // действия Git — задание агенту, наблюдателю недоступно
   let hasGit = false;
   const status = el('p', { id: 'code-git-action-error', class: 'error', 'aria-live': 'polite' });
   const hint = el('p', { class: 'muted small code-git-hint', 'aria-live': 'polite' });
@@ -906,6 +908,10 @@ async function project(mine, aid, pid, id, key, path, status) {
   p.canStart = true;
   p.repo.refresh(key === 'git');
   ensurePoll();
+  if (agent.shared) {                       // роль участника (наблюдатель) — до показа «Нового чата»
+    await projectName(p).catch(() => null);
+    if (mine !== gen) return;
+  }
   if (id) chat(mine, p, id, agent, section, status);
   else if (key === 'files') files(mine, p, path, status);
   else if (key === 'git') git(p);

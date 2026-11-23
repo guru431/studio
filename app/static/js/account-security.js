@@ -202,7 +202,8 @@ export function accessBlock(host) {
         el('div', { class: 'row' }, el('b', {}, m.login), m.disabled ? el('span', { class: 'tag' }, tr("заблокирован")) : null,
           m.missing ? el('span', { class: 'tag access-missing' }, tr("папки нет")) : null),
         el('p', { class: 'small' }, where),
-        el('p', { class: 'muted small' }, tr("Выдан {0}", moment(m.created)))),
+        el('p', { class: 'muted small' }, [m.role === 'viewer' ? tr("Наблюдатель") : tr("Соавтор"),
+          tr("Выдан {0}", moment(m.created)), m.expires ? tr("до {0}", moment(m.expires)) : tr("бессрочно")].join(' · '))),
       el('div', { class: 'session-actions' }, button(tr("Отозвать"), { class: 'btn btn-sm btn-danger access-revoke',
         'aria-label': tr("Отозвать доступ: {0}, {1}", m.login, where) }, () => act(() => api('DELETE',
         `/api/me/access/members/${m.computer_id}/${encodeURIComponent(m.project)}/${m.user_id}`), tr("Доступ отозван")))));

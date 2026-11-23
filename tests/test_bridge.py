@@ -158,7 +158,7 @@ def test_replacement_tells_watchers_offline_and_drops_the_old_links_frames(studi
     make_user(studio, "owner")
     aid, _ = enroll(studio)
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda *a: pushed.append(a))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a, **kw: pushed.append(a))
     old = connect(studio, aid, FakeMachine())
 
     async def silent(frame):
@@ -506,7 +506,7 @@ def test_completions_after_an_outage_mark_unread_and_push_like_a_live_done(studi
     make_user(studio, "owner")
     aid, _ = enroll(studio)
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda *a: pushed.append(a))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a, **kw: pushed.append(a))
     other = "1f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
     items = [{"project": pid("studio"), "chat": CHAT, "status": "done", "project_name": "studio", "ago": 30},
              {"project": pid("studio"), "chat": other, "status": "error", "ago": 9_999_999}]
@@ -539,7 +539,7 @@ def test_pending_asks_after_an_outage_push_without_marking_unread(studio, monkey
     make_user(studio, "owner")
     aid, _ = enroll(studio)
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda *a: pushed.append(a))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a, **kw: pushed.append(a))
     other = "1f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
     machine = FakeMachine()
     machine.completions = True

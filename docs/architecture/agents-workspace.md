@@ -333,8 +333,9 @@ Worker завершается при очистке доступа и имеет
 у операций). `hello.file_search` даёт поле «Найти в файлах папки»: `POST …/files/search {path, query}` →
 `discovery.grep` моста (обход `discovery._walk` подсказок, пределы — протокол §4); список «файл:строка — фрагмент»
 открывает файл на строке (`.md` — в исходном тексте). Сервер найденное не хранит. Проверки: `test_file_operations.py`
-обоих наборов, `test_discovery.py` моста, `test_ui_file_operations.py` (320 px). Наблюдатель совместного проекта
-(если появится роль только для чтения) — `file_search` и «Скачать» читающие, `file_upload` пишущая.
+обоих наборов, `test_discovery.py` моста, `test_ui_file_operations.py` (320 px). Наблюдателю совместного проекта
+поиск и «Скачать» доступны (`file_search` и `raw` — в `project_access.READ_OPS` и `agent.SHARED_READ_OPS`),
+«Загрузить файл» скрыт, а `PUT …/files/upload` — 403 `readonly` до чтения тела (`project_access.editable`).
 Необязательный `files.items[].created` появляется с мостом 0.7.5; старый мост — `—`, без выдуманной даты.
 (мост ≥ 0.7.6) кнопка «Просчитать все подпапки» → `POST …/files/stats` → op `file_stats`, один обход
 `agent/studio_agent/file_stats.py`. В памяти дерева — рекурсивные размеры/счётчики и дата, без раскрытия папок;

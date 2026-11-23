@@ -4,7 +4,7 @@ import pytest
 from playwright.sync_api import expect
 
 from fake_bridge import FakeMachine, pid
-from test_ui_browser import code_online, live
+from test_ui_browser import CODE_CHAT_A, code_online, code_session, live
 from test_ui_desktop import desktop_browser
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
@@ -150,6 +150,77 @@ def test_project_membership_workflow(desktop_browser, live, width, tmp_path):
             page.get_by_role('dialog', name='Доступ к проекту private', exact=True).wait_for()
             assert page.locator('.project-members').count() == 1
             assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+            assert not errors, errors
+    finally:
+        channel.stop()
+
+
+@pytest.mark.parametrize('width', [1280, 320])
+def test_viewer_role_and_term(desktop_browser, live, width):
+    """Выдача наблюдателю на неделю: дата в окне «Доступ»; у наблюдателя чат без поля ввода и без «Нового чата»,
+    файл — только для чтения; владелец делает его соавтором, не пересоздавая выдачу."""
+    engine = desktop_browser.browser_type.name
+    owner, viewer = f'view-owner-{engine}-{width}', f'view-viewer-{engine}-{width}'
+    live.add_user(owner)
+    live.add_user(viewer)
+    machine = FakeMachine({'alpha': {'files': {'a.txt': b'hello'}, 'chats': {CODE_CHAT_A: code_session('Отчёт')}}})
+    machine.file_operations = machine.file_upload = machine.file_search = True
+    aid, channel = code_online(live, owner, machine)
+    owner_cookie, viewer_cookie = signed(live, owner), signed(live, viewer)
+    try:
+        with context(desktop_browser, live, owner_cookie, width) as owner_context:
+            page = owner_context.new_page()
+            page.set_default_timeout(10000)
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.goto(live.url + f'/#/code/{aid}/{pid("alpha")}')
+            button = page.locator('#code-project-access')
+            button.wait_for()
+            button.click()
+            popup = page.locator('.project-members:popover-open')
+            popup.get_by_text('Доступ есть только у владельца').wait_for()
+            popup.get_by_label('Логин или email пользователя Студии').fill(viewer)
+            popup.get_by_label('Роль участника').select_option('viewer')
+            popup.get_by_label('Срок доступа').select_option('week')
+            popup.get_by_role('button', name='Дать доступ', exact=True).click()
+            popup.get_by_text('Доступ предоставлен', exact=True).wait_for()
+            expect(popup.get_by_label(f'Роль · {viewer}')).to_have_value('viewer')
+            expect(popup.locator('.project-member-term')).to_contain_text('до ')
+            box = popup.bounding_box()
+            assert box['x'] >= 0 and box['x'] + box['width'] <= width + 1
+            with context(desktop_browser, live, viewer_cookie, width) as viewer_context:
+                member = viewer_context.new_page()
+                member.set_default_timeout(10000)
+                member.on('pageerror', lambda error: errors.append(str(error)))
+                member.goto(live.url + f'/#/code/{aid}/{pid("alpha")}')
+                member.locator('#code-chats li[data-chat]').first.wait_for()
+                assert member.locator('#code-new-chat').count() == 0
+                assert member.locator('#code-chats .code-chat-state').count() == 0
+                member.goto(live.url + f'/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+                member.locator('#code-chat[data-loaded="1"]').wait_for()
+                expect(member.locator('#code-readonly-note')).to_be_visible()
+                expect(member.locator('#code-composer')).to_be_hidden()
+                member.goto(live.url + f'/#/code/{aid}/{pid("alpha")}?tab=files')
+                member.locator('#code-files').get_by_text('a.txt').click()
+                editor = member.locator('#code-editor')
+                expect(editor).to_have_value('hello')
+                assert editor.evaluate('(node) => node.readOnly')
+                assert member.locator('#code-save').count() == 0
+                # «Загрузить файл» наблюдателю скрыт, поиск по содержимому и «Скачать» — есть
+                expect(member.locator('#code-upload')).to_be_hidden()
+                expect(member.locator('#code-files-search')).to_be_visible()
+                member.locator('#code-open-file-actions').click()
+                actions = member.locator('#code-file-actions [data-action]')
+                expect(actions).to_have_count(1)
+                expect(actions.first).to_have_attribute('data-action', 'download')
+                member.locator('#code-file-actions .dialog-close').click()
+                popup.get_by_label(f'Роль · {viewer}').select_option('editor')
+                popup.get_by_text('Роль изменена', exact=True).wait_for()
+                member.goto(live.url + f'/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')
+                member.reload()
+                member.locator('#code-chat[data-loaded="1"]').wait_for()
+                expect(member.locator('#code-composer')).to_be_visible()
+                assert member.locator('#code-readonly-note').count() == 0
             assert not errors, errors
     finally:
         channel.stop()

@@ -115,6 +115,8 @@ def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, 
     for project in ('0123456789abcdef', 'fedcba9876543210'):
         conn.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, ?)",
                      (aid, project, friend, now - 60))
+    # вторая выдача — наблюдателю на сутки: роль и срок видны в строке
+    conn.execute("UPDATE project_members SET role = 'viewer', expires = ? WHERE project = 'fedcba9876543210'", (now + 86400,))
     chat = 'access-chat-' + uuid.uuid4().hex
     conn.execute("INSERT INTO chats(id, user_id, title, created, updated) VALUES (?, ?, 'Отчёт за неделю', 0, 0)", (chat, uid))
     token, session = security.new_token(), str(uuid.uuid4())
@@ -156,6 +158,10 @@ def test_access_list_revokes_one_grant_and_then_everything(focus_browser, live, 
         pw.expect(members).to_have_count(2)
         pw.expect(members.first).to_contain_text(friend_login)
         pw.expect(members.first).to_contain_text('Рабочий ПК · проект 01234567')
+        pw.expect(members.first).to_contain_text('Соавтор · Выдан')
+        pw.expect(members.first).to_contain_text('бессрочно')
+        pw.expect(members.nth(1)).to_contain_text('Наблюдатель · Выдан')
+        pw.expect(members.nth(1)).to_contain_text(' · до ')
         pw.expect(shares).to_have_count(2)
         pw.expect(shares.first).to_contain_text('Отчёт за неделю')
         pw.expect(page.locator('#access-file-links')).to_contain_text('Действующих ссылок на файлы: 1.')

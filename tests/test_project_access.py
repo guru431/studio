@@ -31,7 +31,8 @@ def test_grant_by_email_normalizes_long_addresses_and_keeps_account_rules(studio
     assert response.status_code == 201, response.text
     assert response.json() == {"id": member}
     assert studio.c.post(base, json={"login": "friend"}).status_code == 201
-    assert studio.c.get(base).json()["items"] == [{"id": member, "login": "friend", "disabled": 0}]
+    assert studio.c.get(base).json()["items"] == [{"id": member, "login": "friend", "disabled": 0, "role": "editor",
+                                                   "expires": None}]
     state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (member,))
     for value in (email, "owner@example.com", "missing@example.com"):
         response = studio.c.post(base, json={"login": value})
@@ -66,7 +67,8 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
                            ('GET', '/self-check'), ('GET', '/log')]:
         assert studio.c.request(method, f'/api/code/agents/{aid}' + suffix).status_code == 404
     assert len(machine.requests) == before
-    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True,
+                                                                     "readonly": False, "expires": None}]}
     compare = url(aid, "projects", ALPHA, "git", "compare")
     before_compare = len(machine.requests)
     assert studio.c.post(compare, json={"path": "a.txt"}).status_code == 404
@@ -79,7 +81,8 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
             res["data"]["items"] = [{**i, "dir": "C:\\owner\\alpha"} for i in res["data"]["items"]]
         return res, events
     machine.handle = leaky
-    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True,
+                                                                     "readonly": False, "expires": None}]}
     machine.handle = original
     response = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a.txt"})
     assert response.status_code == 200 and response.json()["text"] == "hello"
@@ -124,7 +127,7 @@ def test_push_of_a_member_turn_goes_to_the_member_while_access_lasts(studio, mon
     aid, machine, link, member, base = share(studio)
     owner = link.user_id
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a: pushed.append(uid))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a, **kw: pushed.append(uid))
     monkeypatch.setattr(bridge, "watching", lambda *a: False)       # страница ушла: поток хода — не взгляд
     signin(studio, "friend")
     chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
@@ -159,7 +162,7 @@ def test_push_skips_only_when_the_addressee_watches_not_another_user(studio, mon
     aid, machine, link, member, _ = share(studio)
     owner = link.user_id
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a: pushed.append(uid))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a, **kw: pushed.append(uid))
     queues = []
     original = bridge.watch
     monkeypatch.setattr(bridge, "watch", lambda *a: queues.append(original(*a)) or queues[-1])
@@ -223,6 +226,94 @@ def test_member_cannot_reach_other_projects_or_manage_computer_or_members(studio
         response = studio.c.request(method, path, **({"json": body} if body is not None else {}))
         assert response.status_code == 404, (method, path, response.text)
     assert len(machine.requests) == before
+
+
+def test_viewer_reads_the_project_but_every_change_is_refused_before_the_bridge(studio):
+    aid, machine, link, member, base = share(studio)
+    machine.projects["alpha"]["files"]["a.txt"] = b"hello"
+    link.hello.update(file_operations=True, queue_edit=True, file_upload=True, file_search=True)
+    other = make_user(studio, "viewer")
+    assert studio.c.post(base, json={"login": "viewer", "role": "viewer"}).status_code == 201
+    signin(studio, "viewer")
+    assert studio.c.get(url(aid, "projects")).json() == {"items": [
+        {"pid": ALPHA, "name": "alpha", "shared": True, "readonly": True, "expires": None}]}
+    response = studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a.txt"})
+    assert response.status_code == 200 and response.json()["text"] == "hello"
+    assert machine.requests[-1]["shared_readonly"] is True and machine.requests[-1]["shared_projects"] == [ALPHA]
+    assert studio.c.get(url(aid, "projects", ALPHA, "chats")).status_code == 200
+    assert studio.c.get(url(aid, "projects", ALPHA, "chats", A)).status_code == 200
+    found = studio.c.post(url(aid, "projects", ALPHA, "files", "search"), json={"path": "", "query": "hello"})
+    assert found.status_code == 200 and found.json()["items"] == [{"path": "a.txt", "line": 1, "text": "hello"}]
+    assert machine.requests[-1]["op"] == "file_search" and machine.requests[-1]["shared_readonly"] is True
+    got = studio.c.post(url(aid, "projects", ALPHA, "files", "download"), json={"path": "a.txt"})
+    assert got.status_code == 200 and got.content == b"hello"
+    before = len(machine.requests)
+    chat = url(aid, "projects", ALPHA, "chats", A)
+    for method, path, body in [
+        ("PUT", url(aid, "projects", ALPHA, "file"), {"path": "a.txt", "text": "x", "version": "1"}),
+        ("POST", url(aid, "projects", ALPHA, "files", "operate"), {"operation": "delete", "path": "a.txt"}),
+        ("PUT", url(aid, "projects", ALPHA, "files", "upload"), None),
+        ("POST", url(aid, "projects", ALPHA, "chats"), None),
+        ("POST", chat + "/turn", {"text": "hello"}), ("POST", chat + "/steer", {"text": "hello"}),
+        ("POST", chat + "/answer", {"request_id": "r1", "decision": "allow"}), ("POST", chat + "/stop", None),
+        ("POST", chat + "/claim", {}), ("POST", chat + "/queue/pause", {"paused": True}),
+        ("POST", chat + "/fork", {"message_id": "m1"}), ("PATCH", chat, {"state": "closed"}),
+    ]:
+        response = studio.c.request(method, path, **({"json": body} if body is not None else {}))
+        assert response.status_code == 403 and response.json()["detail"]["code"] == "readonly", (method, path, response.text)
+    assert len(machine.requests) == before
+    assert not state.DB.execute("SELECT 1 FROM code_chats WHERE project = ?", (ALPHA,)).fetchone()
+    signin(studio, "friend")                    # соавтор того же проекта работает, как прежде, без признака
+    assert studio.c.post(url(aid, "projects", ALPHA, "read"), json={"path": "a.txt"}).status_code == 200
+    assert "shared_readonly" not in machine.requests[-1]
+    signin(studio, "owner")
+    assert studio.c.post(url(aid, "open"), json={"pin": "2468"}).status_code == 204
+    items = studio.c.get(base).json()["items"]
+    assert [(i["login"], i["role"]) for i in items] == [("friend", "editor"), ("viewer", "viewer")]
+    assert other != member
+
+
+def test_role_changes_without_recreating_the_grant_and_is_journaled(studio):
+    aid, machine, _, member, base = share(studio)
+    created = state.DB.execute("SELECT created FROM project_members WHERE user_id = ?", (member,)).fetchone()[0]
+    studio.clock[0] += 100
+    assert studio.c.patch(base + f"/{member}", json={"role": "viewer"}).json() == {"role": "viewer"}
+    assert studio.c.patch(base + "/999", json={"role": "viewer"}).status_code == 404
+    assert studio.c.patch(base + f"/{member}", json={"role": "owner"}).status_code == 422
+    assert state.DB.execute("SELECT created, role FROM project_members WHERE user_id = ?",
+                            (member,)).fetchone()[:] == (created, "viewer")
+    kinds = [e["kind"] for e in studio.c.get("/api/agents/events").json()["items"]]
+    assert kinds.count("member_add") == 2
+    signin(studio, "friend")
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 403
+    assert studio.c.patch(base + f"/{member}", json={"role": "editor"}).status_code == 404   # не владелец
+    signin(studio, "owner")
+    assert studio.c.patch(base + f"/{member}", json={"role": "editor"}).status_code == 200
+    signin(studio, "friend")
+    assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201
+
+
+def test_term_grant_expires_and_is_removed_on_first_access(studio):
+    aid, machine, _, _, base = share(studio)
+    member = make_user(studio, "temp")
+    assert studio.c.post(base, json={"login": "temp", "term": "week"}).status_code == 201
+    assert studio.c.post(base, json={"login": "temp", "term": "year"}).status_code == 422
+    expires = studio.clock[0] + 7 * 86400
+    assert {i["login"]: i["expires"] for i in studio.c.get(base).json()["items"]} == {"friend": None, "temp": expires}
+    access = studio.c.get("/api/me/access").json()["members"]
+    assert {m["login"]: (m["role"], m["expires"]) for m in access} == {"friend": ("editor", None),
+                                                                     "temp": ("editor", expires)}
+    signin(studio, "temp")
+    assert studio.c.patch("/api/code/workspace", json={"op": "open", "aid": aid, "pid": ALPHA, "chat": A}).status_code == 200
+    assert studio.c.get(url(aid, "projects")).json()["items"][0]["expires"] == expires
+    studio.clock[0] = expires
+    assert studio.c.get(url(aid, "projects", ALPHA, "chats")).status_code == 404
+    assert studio.c.get("/api/agents").json() == {"items": []}
+    assert not state.DB.execute("SELECT 1 FROM project_members WHERE user_id = ?", (member,)).fetchone()
+    assert not state.DB.execute("SELECT 1 FROM code_member_tabs WHERE user_id = ?", (member,)).fetchone()
+    signin(studio, "owner")
+    assert studio.c.post(url(aid, "open"), json={"pin": "2468"}).status_code == 204
+    assert [i["login"] for i in studio.c.get(base).json()["items"]] == ["friend"]
 
 
 def test_workspace_is_personal_and_revocation_clears_member_access(studio):

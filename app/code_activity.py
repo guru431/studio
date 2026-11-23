@@ -67,6 +67,7 @@ async def all_activity(request: Request):
     """Сводка для значка раздела: только свои доступные компьютеры, PIN не открываем (компьютер без PIN
     открывается со строкой `open` в истории подключений). Значок опрашивает её из любого раздела — все просьбы
     фоновые и срок PIN компьютера не продлевают."""
+    project_access.expire()
     agents = [dict(row) for row in state.DB.execute("SELECT id, name, user_id, has_pin FROM agents WHERE user_id = ? OR id IN"
         " (SELECT m.agent_id FROM project_members m JOIN agents a ON a.id = m.agent_id"
         " JOIN users u ON u.id = a.user_id WHERE m.user_id = ? AND u.disabled = 0) ORDER BY id",

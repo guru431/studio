@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 73
+VERSION = 76
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1045,6 +1045,34 @@ ALTER TABLE users ADD COLUMN translate_tone TEXT NOT NULL DEFAULT '';
 """
 SCHEMA += GLOSSARY_73
 
+#: «PDF со слоем» скана (ocr.find_lines, ocr_pdf): `scan_pages.boxes` — строки страницы с рамками по ответу
+#: `translate_spot.PROMPT` (JSON `[[текст, x1, y1, x2, y2], …]`, доли 0…1000 картинки страницы; `[]` — строк с
+#: координатами нет), NULL — не искали; `scans.layer_prior` — документ снова в очереди ради рамок строк, JSON его
+#: прежнего итога `{state, detail, finished}` (вернётся после поиска); NULL — обычный документ. Прежний код столбцы
+#: не читает: ждущий поиск строк для него — распознавание, которому нечего распознавать, идущий — «прервано»
+SCAN_LAYER_74 = "ALTER TABLE scan_pages ADD COLUMN boxes TEXT;\nALTER TABLE scans ADD COLUMN layer_prior TEXT;\n"
+SCHEMA += SCAN_LAYER_74
+#: о чём уведомлять устройство (push.muted, push.reminders): у сессии — снятые виды (`off`, JSON-список из
+#: `push.KINDS`), тихие часы (минуты от полуночи по поясу учётки, оба NULL — без них) и интервал напоминания о ждущей
+#: карточке «Агентов», мин (0 — не напоминать). Одна строка на оба канала (push и ntfy) этой сессии; прежний код
+#: таблицу не читает — шлёт все виды и в любое время, строки уходят каскадом с сессией
+NOTIFY_PREFS_75 = """CREATE TABLE notify_prefs(
+       digest TEXT PRIMARY KEY REFERENCES sessions ON DELETE CASCADE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       off TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(off)),
+       quiet_from INTEGER CHECK (quiet_from BETWEEN 0 AND 1439), quiet_to INTEGER CHECK (quiet_to BETWEEN 0 AND 1439),
+       remind INTEGER NOT NULL DEFAULT 30);
+CREATE INDEX notify_prefs_user ON notify_prefs(user_id);
+"""
+SCHEMA += NOTIFY_PREFS_75
+#: роль и срок выдачи доступа к проекту (project_access): `viewer` — только читающие просьбы, `expires` — время
+#: истечения или NULL (бессрочно). Прежний код столбцов не читает: наблюдатель — снова соавтор, срок не действует
+PROJECT_ROLES_76 = """ALTER TABLE project_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'
+       CHECK(role IN ('editor', 'viewer'));
+ALTER TABLE project_members ADD COLUMN expires REAL;
+"""
+SCHEMA += PROJECT_ROLES_76
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1191,6 +1219,12 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     72: SCAN_EDITS_72,
     # глоссарий и тон перевода учётки
     73: GLOSSARY_73,
+    # рамки строк страниц скана для «PDF со слоем»
+    74: SCAN_LAYER_74,
+    # о чём уведомлять устройство: виды, тихие часы, напоминание о ждущей карточке
+    75: NOTIFY_PREFS_75,
+    # роль «Наблюдатель» и срок выдачи доступа к проекту
+    76: PROJECT_ROLES_76,
 }
 
 

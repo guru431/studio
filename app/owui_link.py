@@ -319,7 +319,7 @@ class Link:
             del self.turns[message_id]
             words = push.DECISION_NOTICE if kind == "pending" else push.CHAT_NOTICES[0 if event["error"] is None else 1]
             push.notify_later(self.acc.user_id, words, f"owui/{self.acc.id}/{event['chat_id']}", message_id,
-                              title=push.OWUI_TITLE, quiet=True)
+                              title=push.OWUI_TITLE, quiet=True, kind="ask" if kind == "pending" else "done")
         elif kind == "active" and not event["active"]:
             for message_id in [m for m, chat_id in self.turns.items() if chat_id == event["chat_id"]]:
                 del self.turns[message_id]

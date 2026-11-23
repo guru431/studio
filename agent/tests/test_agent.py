@@ -147,6 +147,30 @@ async def test_shared_scope_cannot_authorize_other_projects_or_machine_operation
     assert not result["ok"] and result["code"] == "closed"
 
 
+async def test_shared_readonly_allows_only_reading_requests(agent_with_pin, root):
+    """Наблюдатель проекта (`shared_readonly`, 0.47.0): чтение — да; правка, ход и ответ — `closed` даже при
+    ошибке сервера; признак без `shared_projects` не открывает ничего, не логическое значение — `invalid`."""
+    agent = agent_with_pin
+    (root / "demo" / "a.txt").write_text("shared", encoding="utf-8")
+    scope = [projects.pid("demo")]
+    response = (await agent.handle(req("read", shared_projects=scope, shared_readonly=True, project=scope[0],
+                                       path="a.txt")))[0]
+    assert response["ok"] and response["data"]["text"] == "shared"
+    for op, fields in [("save", {"path": "a.txt", "text": "x", "version": None}),
+                       ("file_operation", {"operation": "delete", "path": "a.txt"}),
+                       ("file_upload", {"path": "a.txt", "data": "eA==", "replace": True}),
+                       ("turn", {"chat": "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70", "text": "hi"}),
+                       ("answer", {"chat": "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70", "request_id": "r1", "decision": "allow"})]:
+        result = (await agent.handle(req(op, shared_projects=scope, shared_readonly=True, project=scope[0], **fields)))[0]
+        assert result["code"] == "closed", op
+    assert (root / "demo" / "a.txt").read_text(encoding="utf-8") == "shared"
+    found = (await agent.handle(req("file_search", shared_projects=scope, shared_readonly=True, project=scope[0],
+                                    path="", query="shared")))[0]
+    assert found["ok"] and found["data"]["items"] == [{"path": "a.txt", "line": 1, "text": "shared"}]
+    assert (await agent.handle(req("projects", shared_readonly=True)))[0]["code"] == "closed"
+    assert (await agent.handle(req("projects", shared_projects=scope, shared_readonly=1)))[0]["code"] == "invalid"
+
+
 @pytest.mark.parametrize("scope", [[], "a" * 16, ["bad"], [None]])
 async def test_invalid_shared_scope_does_not_bypass_pin(agent_with_pin, scope):
     result = (await agent_with_pin.handle(req("projects", shared_projects=scope)))[0]

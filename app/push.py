@@ -19,7 +19,10 @@ import hmac
 import json
 import logging
 import os
+from datetime import datetime
+from typing import Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -30,7 +33,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import clock
 import ntfy
@@ -71,6 +74,15 @@ CHAT_NOTICES = ({"ru": "ответ готов", "en": "answer ready"}, {"ru": "�
 DECISION_NOTICE = {"ru": "нужно ваше решение", "en": "your decision is needed"}
 #: заголовок push раздела «Open WebUI» (имя продукта, на всех языках одно)
 OWUI_TITLE = "Open WebUI"
+
+#: виды уведомлений — галочки «О чём уведомлять» устройства (`notify_prefs.off`): `ask` — карточки «Агентов»
+#: (подтверждение, вопрос), очередь ждёт, решение Open WebUI и напоминания о карточке; `done` — конец хода «Агентов»,
+#: ответ чата и Open WebUI; `jobs` — задания разделов; `service` — копия базы, отключённая ссылка «Поделиться»
+KINDS = ("ask", "done", "jobs", "service")
+#: напоминание о ждущей карточке «Агентов» (`bridge.remind`), минуты; 0 — не напоминать
+REMINDS = (0, 10, 30, 60)
+REMIND_DEFAULT = 30
+TIME = r"^([01]\d|2[0-3]):[0-5]\d$"
 
 #: сессии, чья страница студии сейчас на экране: digest → время, когда опрос `/api/jobs?visible=1` это сказал
 #: (`screen`). Готовность заданий (`quiet`) им не шлётся ни push, ни ntfy — она видна в самой студии, как у «Агентов»
@@ -236,11 +248,38 @@ async def notify(user_id: int, body: str | dict[str, str], href: str, tag: str, 
             log.warning("push: ответ %d", r.status_code)
 
 
+def _quiet(row, now: float) -> bool:
+    """Тихие часы строки `notify_prefs` идут сейчас по поясу учётки; через полночь — «с 22:00 по 08:00»."""
+    start, end = row["quiet_from"], row["quiet_to"]
+    if start is None or end is None:
+        return False
+    moment = datetime.fromtimestamp(now, ZoneInfo(row["timezone"]))
+    minute = moment.hour * 60 + moment.minute
+    return start <= minute < end if start < end else minute >= start or minute < end
+
+
+def muted(user_id: int, kind: str) -> frozenset[str]:
+    """Сессии учётки, которым вид `kind` сейчас не слать: снята его галочка или идут тихие часы устройства."""
+    now = clock.NOW()
+    rows = state.DB.execute("SELECT n.digest, n.off, n.quiet_from, n.quiet_to, u.timezone FROM notify_prefs n"
+                            " JOIN users u ON u.id = n.user_id WHERE n.user_id = ?", (user_id,)).fetchall()
+    return frozenset(row["digest"] for row in rows if kind in json.loads(row["off"]) or _quiet(row, now))
+
+
+def reminders(user_id: int) -> dict[str, int]:
+    """Живые сессии учётки → интервал напоминания о ждущей карточке, с (0 — не напоминать; нет строки — умолчание)."""
+    return {row[0]: row[1] * 60 for row in state.DB.execute(
+        "SELECT s.digest, COALESCE(n.remind, ?) FROM sessions s LEFT JOIN notify_prefs n ON n.digest = s.digest"
+        " WHERE s.user_id = ? AND s.expires > ?", (REMIND_DEFAULT, user_id, clock.NOW()))}
+
+
 def notify_later(user_id: int, body: str | dict[str, str], href: str, tag: str, *,
-                 title: str | dict[str, str] = TITLES, quiet: bool = False) -> None:
+                 title: str | dict[str, str] = TITLES, quiet: bool = False, kind: str = "service",
+                 skip: frozenset[str] = frozenset()) -> None:
     """`notify` фоном: завершение задания и событие моста не ждут службу push. `quiet` — готовность задания: сессиям,
-    чья страница на экране (`on_screen`), не слать."""
-    skip = on_screen() if quiet else frozenset()
+    чья страница на экране (`on_screen`), не слать. `kind` — вид из `KINDS`: устройствам, где он снят или идут тихие
+    часы (`muted`), не слать. `skip` — ещё сессии, которым не слать (напоминание — только тем, кому оно пора)."""
+    skip = skip | muted(user_id, kind) | (on_screen() if quiet else frozenset())
 
     async def run():
         results = await asyncio.gather(notify(user_id, body, href, tag, title=title, skip=skip),
@@ -285,7 +324,7 @@ def job_finished(table: str, item_id: str, *, tag: str | None = None, failed: bo
     if row is not None:
         ok = row["state"] == "done" and not failed and not (table == "scans" and unread_scans([item_id]))
         notify_later(row["user_id"], done if ok else error,
-                     f"{section}?id={item_id}", tag or item_id, title=STUDIO, quiet=True)
+                     f"{section}?id={item_id}", tag or item_id, title=STUDIO, quiet=True, kind="jobs")
 
 
 def chat_answered(user_id: int, chat_id: str, message_id: str, ok: bool) -> None:
@@ -293,7 +332,8 @@ def chat_answered(user_id: int, chat_id: str, message_id: str, ok: bool) -> None
     Диалог в корзине — молча."""
     if state.DB.execute("SELECT 1 FROM chats WHERE id = ? AND deleted IS NULL", (chat_id,)).fetchone() is None:
         return
-    notify_later(user_id, CHAT_NOTICES[0 if ok else 1], f"chat/{chat_id}", message_id, title=STUDIO, quiet=True)
+    notify_later(user_id, CHAT_NOTICES[0 if ok else 1], f"chat/{chat_id}", message_id, title=STUDIO, quiet=True,
+                 kind="done")
 
 
 async def stop() -> None:
@@ -366,3 +406,57 @@ async def unsubscribe(request: Request):
     n = state.DB.execute("DELETE FROM push_subs WHERE digest = ?", (request.state.digest,)).rowcount
     log.info("пользователь %d: подписка push снята (%d)", request.state.user.id, n)
     return Response(status_code=204)
+
+
+# ---- о чём уведомлять устройство -------------------------------------------------
+
+class Prefs(BaseModel):
+    """«О чём уведомлять» этой сессии — для push и ntfy сразу: снятые виды, тихие часы «ЧЧ:ММ» (оба или ни одного,
+    не равные) по поясу учётки, напоминание о ждущей карточке, мин."""
+    off: list[Literal[KINDS]] = Field(max_length=len(KINDS))
+    quiet_from: str | None = Field(None, pattern=TIME)
+    quiet_to: str | None = Field(None, pattern=TIME)
+    remind: Literal[REMINDS]
+
+    @model_validator(mode="after")
+    def _window(self):
+        if (self.quiet_from is None) != (self.quiet_to is None) or (
+                self.quiet_from is not None and self.quiet_from == self.quiet_to):
+            raise ValueError("quiet hours need a start and a different end")
+        return self
+
+
+def _minute(text: str | None) -> int | None:
+    return None if text is None else int(text[:2]) * 60 + int(text[3:])
+
+
+def _clock(minute: int | None) -> str | None:
+    return None if minute is None else f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def prefs(user_id: int, digest: str) -> dict:
+    row = state.DB.execute("SELECT off, quiet_from, quiet_to, remind FROM notify_prefs WHERE digest = ?",
+                           (digest,)).fetchone()
+    zone = state.DB.execute("SELECT timezone FROM users WHERE id = ?", (user_id,)).fetchone()[0]
+    if row is None:
+        return {"off": [], "quiet_from": None, "quiet_to": None, "remind": REMIND_DEFAULT, "timezone": zone}
+    return {"off": [k for k in KINDS if k in json.loads(row["off"])], "quiet_from": _clock(row["quiet_from"]),
+            "quiet_to": _clock(row["quiet_to"]), "remind": row["remind"], "timezone": zone}
+
+
+@router.get("/me/notify")
+async def get_prefs(request: Request):
+    return prefs(request.state.user.id, request.state.digest)
+
+
+@router.put("/me/notify")
+async def put_prefs(body: Prefs, request: Request):
+    uid = request.state.user.id
+    state.DB.execute(
+        "INSERT INTO notify_prefs(digest, user_id, off, quiet_from, quiet_to, remind) VALUES (?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(digest) DO UPDATE SET off = excluded.off, quiet_from = excluded.quiet_from,"
+        " quiet_to = excluded.quiet_to, remind = excluded.remind",
+        (request.state.digest, uid, json.dumps(sorted(set(body.off))), _minute(body.quiet_from),
+         _minute(body.quiet_to), body.remind))
+    log.info("пользователь %d: настройка уведомлений устройства сохранена", uid)
+    return prefs(uid, request.state.digest)

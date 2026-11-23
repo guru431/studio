@@ -108,6 +108,19 @@ def test_enabling_ntfy_on_one_device_does_not_enable_another(ntfy_ready):
     assert s.c.get('/api/me/ntfy', headers={'Cookie': f'{auth.COOKIE}={first_cookie}'}).json()['enabled'] is True
 
 
+def test_device_choice_mutes_ntfy_too(ntfy_ready):
+    """«О чём уведомлять» устройства — для обоих каналов: снятый вид не идёт и в ntfy этой сессии."""
+    s = ntfy_ready
+    uid = make_user(s, 'owner')
+    signin(s, 'owner')
+    assert s.c.put('/api/me/ntfy', json=SETTINGS).status_code == 200
+    assert s.c.put('/api/me/notify', json={'off': ['jobs'], 'remind': 30}).status_code == 200
+    s.c.portal.call(lambda: push.notify_later(uid, 'job', 'photo', 'j', kind='jobs'))
+    s.c.portal.call(lambda: push.notify_later(uid, 'ask', 'code', 'q', kind='ask'))
+    settle(s)
+    assert [json.loads(r.content)['message'] for r in s.gw.ntfy_requests] == ['ask']
+
+
 def test_ntfy_targets_are_deduplicated_and_stop_on_expiry_or_logout(ntfy_ready):
     s = ntfy_ready
     uid = make_user(s, 'owner')

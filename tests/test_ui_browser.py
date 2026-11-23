@@ -4759,7 +4759,11 @@ def put_audio(selector, data, name="Звонок.wav", mime="audio/wav"):
       input.dispatchEvent(new Event('change', {{ bubbles: true }})); return input.files.length; }})()""")
 
 
-COPY_SPY = "(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; }; return true; })()"
+#: «Копировать» пишет `writeText` или — с разметкой (формулы «Сканов») — `write` с `ClipboardItem`: ловим оба, текст —
+#: `text/plain`
+COPY_SPY = ("(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; };"
+            " navigator.clipboard.write = async (items) => {"
+            " window.copied = await (await items[0].getType('text/plain')).text(); }; return true; })()")
 
 
 @pytest.mark.parametrize("width", [390, 1280])
@@ -5340,7 +5344,7 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     v = r["values"]
     assert v["pager"] is False                                       # одна страница — без листалки
     assert v["copied"] == f"## Страница 1\n\n{OCR_MARKDOWN}\n"
-    assert v["formats"] == ["txt", "md", "docx", "xlsx", "csv"]                # в документе таблица — 05:I4
+    assert v["formats"] == ["txt", "md", "docx", "pdf", "xlsx", "csv"]                # в документе таблица — 05:I4
     assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md&lang=ru", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"

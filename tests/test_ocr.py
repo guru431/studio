@@ -1045,7 +1045,7 @@ def test_export_txt_md_docx(studio):
     texts = [t.text for t in root.iter(f"{W}t")]
     assert texts[:2] == ["Отчёт", "Страница 1"] and "Хлеб & соль" in texts and "[пустая страница]" in texts
     assert len(list(root.iter(f"{W}tc"))) == 4                         # аудит 05:I4: таблица — таблицей Word
-    assert studio.c.get(f"/api/ocr/{sid}/export?format=pdf").status_code == 422
+    assert studio.c.get(f"/api/ocr/{sid}/export?format=odt").status_code == 422
     # таблицы — книгой и CSV (одна таблица — файл); число таблиц — в документе для меню страницы
     assert studio.c.get(f"/api/ocr/{sid}").json()["tables"] == 1
     r = studio.c.get(f"/api/ocr/{sid}/export?format=xlsx")

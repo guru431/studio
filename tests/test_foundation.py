@@ -13,7 +13,7 @@ import state
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 73
+SCHEMA_VERSION = 76
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
