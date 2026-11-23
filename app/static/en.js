@@ -1859,6 +1859,7 @@ globalThis.StudioEnglish = Object.freeze({
   "нет такого файла": "no such file",
   "нельзя переместить папку внутрь самой себя": "cannot move a folder into itself",
   "файл или папка с таким именем уже существует": "a file or folder with this name already exists",
+  "папка с таким именем уже существует": "a folder with this name already exists",
   "файл или папка не найдены": "file or folder not found",
   "операция не завершена — проверьте доступ к файлам и обновите дерево": "operation not completed. Check file access and refresh the tree",
   "файл только для чтения": "file is read-only",

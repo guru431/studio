@@ -293,7 +293,7 @@ def test_hello(agent):
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
-                             "account_disabled": True, "git_compare": True,
+                             "account_disabled": True, "git_compare": True, "file_upload": True, "file_search": True,
                              "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
                              "self_check": True, "agent_log": True,

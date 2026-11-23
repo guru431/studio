@@ -259,15 +259,59 @@ def save_text(project: Path, path: str, text: str, ver: str) -> dict:
         raise Refused("invalid") from None
     if len(new) > limits.TEXT_MAX:
         raise Refused("too_large", TOO_BIG_TEXT)
+    _overwrite(p, new)
+    return {"version": version(new)}
+
+
+def _overwrite(p: Path, new: bytes) -> None:
+    """Замена байтов существующего файла целиком; «только чтение» — отказ до записи, атрибуты прежнего — новому."""
     before = os.stat(p)
     attrs = getattr(before, "st_file_attributes", 0)
     if attrs & stat.FILE_ATTRIBUTE_READONLY or os.name != "nt" and not before.st_mode & 0o222:
         raise Refused("read_only", READ_ONLY)
     if os.name != "nt":
         store.write_atomic(p, new, mode=stat.S_IMODE(before.st_mode))
-        return {"version": version(new)}
+        return
     store.write_atomic(p, new)
     keep = attrs & KEEP_ATTRIBUTES
     if not ctypes.windll.kernel32.SetFileAttributesW(str(p), keep or stat.FILE_ATTRIBUTE_NORMAL):
         log.warning("правка: атрибуты файла не перенесены")
-    return {"version": version(new)}
+
+
+def upload(project: Path, path: str, data: str, replace: bool) -> dict:
+    """Файл с устройства пользователя (0.47.0): байты base64 до `limits.RAW_MAX`, путь — как у `operate` (ниже корня,
+    без ссылок и junction, родитель существует). Без `replace` имя занято — `exists`, ничего не затирается;
+    `replace` (подтверждено на странице) заменяет существующий обычный файл целиком, папку — нет."""
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (TypeError, ValueError):
+        raise Refused("invalid") from None
+    if len(raw) > limits.RAW_MAX:
+        raise Refused("too_large", TOO_BIG_RAW)
+    try:
+        target = _mutation_path(project, path)
+        if replace and os.path.lexists(target):
+            if not stat.S_ISREG(os.lstat(target).st_mode):
+                raise Refused("exists", "папка с таким именем уже существует")
+            _overwrite(target, raw)
+        else:
+            created = False
+            try:
+                with target.open("xb") as output:           # исключительное создание: успели занять имя — exists
+                    created = True
+                    output.write(raw)
+            except BaseException:
+                if created:
+                    target.unlink(missing_ok=True)          # недописанный файл не остаётся
+                raise
+    except FileExistsError:
+        raise Refused("exists", "файл или папка с таким именем уже существует") from None
+    except (FileNotFoundError, NotADirectoryError):
+        raise Refused("not_found", NO_DIR) from None
+    except OSError as error:
+        if getattr(error, "winerror", None) in (32, 33):
+            raise Refused("busy", FILE_BUSY) from None
+        if isinstance(error, PermissionError):
+            raise Refused("read_only", NO_ACCESS) from None
+        raise Refused("busy", "операция не завершена — проверьте доступ к файлам и обновите дерево") from None
+    return {"version": version(raw)}

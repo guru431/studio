@@ -79,6 +79,8 @@ OPS = {
     "file_stats": ("project", "path"),
     "file_operation": ("project", "operation", "path", "destination"),
     "file_suggestions": ("project", "query"),
+    "file_search": ("project", "path", "query"),
+    "file_upload": ("project", "path", "data", "replace"),
     "chat_search": ("project", "query"),
     "chat_fork": ("project", "chat", "message_id"),
     "subagents": ("project", "chat"),
@@ -100,7 +102,7 @@ RESTART_SAFE_OPS = frozenset({
     "desktop_status", "desktop_frame", "computer_info", "terminal_info", "self_check", "agent_log", "software_versions",
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
-    "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
+    "files", "file_stats", "file_suggestions", "file_search", "chat_search", "subagents", "subagent_history",
     "worktrees", "read", "raw", "visualization", "git", "git_compare", "mirror_identity", "mirror_candidates",
     "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
 })
@@ -108,7 +110,7 @@ RESTART_SAFE_OPS = frozenset({
 # Новая операция получает доступ соавтора только после явного включения в контракт.
 SHARED_OPS = frozenset({"projects", "activity", "project_summary", "chats", "history", "history_image",
     "state", "turn", "steer", "queue_edit", "queue_pause", "claim", "watch", "answer", "stop",
-    "files", "file_stats", "file_operation", "file_suggestions", "chat_search", "chat_fork",
+    "files", "file_stats", "file_operation", "file_suggestions", "file_search", "file_upload", "chat_search", "chat_fork",
     "subagents", "subagent_history", "read", "raw", "visualization", "save", "git"})
 
 
@@ -158,6 +160,7 @@ class Agent:
         self._files_lock = asyncio.Lock()
         self._mirrors = mirror.Transfers()
         self._search_lock = asyncio.Lock()
+        self._grep_lock = asyncio.Lock()
         self._forking = {}
         self._file_index = discovery.FileIndex()
         self._catalog = projects.Catalog(now=now)
@@ -190,7 +193,7 @@ class Agent:
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                  "file_suggestions": True, "chat_search": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
-                 "git_compare": True,
+                 "git_compare": True, "file_upload": True, "file_search": True,
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
                  "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
@@ -391,7 +394,7 @@ class Agent:
                     'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
             raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
-                "turn", "save", "file_operation", "worktree_create", "project_create", "chat_fork", "desktop_start",
+                "turn", "save", "file_operation", "file_upload", "worktree_create", "project_create", "chat_fork", "desktop_start",
                 "mcp_save", "usage_reset", "mirror_begin"):
             raise Refused("busy", "Мост обновляется — дождитесь перезапуска")
         if frame.get("window") is not None and not (
@@ -437,7 +440,7 @@ class Agent:
             key = "pid" if op == "projects" else "project"
             result = {**result, "items": [{k: v for k, v in i.items() if k != "dir"}
                                           for i in result.get("items", []) if i.get(key) in scope]}
-        if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork"):
+        if op in ("turn", "save", "file_operation", "file_upload", "worktree_create", "chat_fork"):
             self._metadata.invalidate(frame.get("project"))
         return result
 
@@ -548,6 +551,10 @@ class Agent:
             return value in ("create_file", "create_dir", "move", "delete")
         if name == "destination" and value is None:
             return True
+        if name == "data":  # байты `file_upload` base64: предел до раскодирования, остальное — files.upload
+            return isinstance(value, str) and len(value) <= (limits.RAW_MAX + 2) // 3 * 4
+        if name == "replace":
+            return type(value) is bool
         if name in ("refresh", "remote", "code_size", "metadata_only", "reasons"):
             return value is None or type(value) is bool
         if name == "query":
@@ -1036,6 +1043,18 @@ class Agent:
         async with self._files_lock:
             return await asyncio.to_thread(files.operate, project, frame["operation"], frame["path"],
                                            frame.get("destination"))
+
+    async def _op_file_upload(self, frame, after):
+        project = await self._project(frame)
+        async with self._files_lock:
+            return await asyncio.to_thread(files.upload, project, frame["path"], frame["data"], frame["replace"])
+
+    async def _op_file_search(self, frame, after):
+        project = await self._project(frame)
+        if self._grep_lock.locked():
+            raise Refused("busy", "Предыдущий поиск ещё выполняется")
+        async with self._grep_lock:
+            return await asyncio.to_thread(discovery.grep, project, frame["path"], frame["query"])
 
     async def _op_raw(self, frame, after):
         project = await self._project(frame)
