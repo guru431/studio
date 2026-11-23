@@ -98,6 +98,11 @@ assert.equal(en.message('перевод готов; карту освободи�
 assert.equal(en.message('отменено; карта занята другим запросом — освободится сама по окончании аренды'),
   'cancelled; GPU busy with another request. It will be released when the lease ends');
 assert.equal(en.message('в очереди серии · 2 из 3'), 'batch queue · 2 of 3');
+// FXg G2: строка состояния ролика — слова шлюза (сверено с подделкой tests/fakes.py, не с самим шлюзом)
+assert.equal(en.message('в очереди: перед ним 0'), 'queued: 0 ahead');
+assert.equal(en.message('В очереди: перед ним 12'), 'Queued: 12 ahead');
+assert.equal(en.message('генерирую: 40%'), 'generating: 40%');
+assert.equal(en.message('генерирую кадры'), 'generating frames');
 assert.equal(en.message('выберите модель в настройках раздела «Голосовой ввод»'), 'choose a model in Settings → “Voice input”');
 assert.equal(en.message('нет связи с подключением «Голосовой ввод»'), 'no connection to “Голосовой ввод”');
 assert.equal(en.message('Ответ · Чат'), 'Response · Чат');
