@@ -214,6 +214,7 @@ def test_pagination_retries_and_late_page_cannot_reopen_closed_viewer(media_page
     rows, calls = gallery(page, section, count=120)
     open_first(page, live, section)
     page.locator('.viewer-close').click()
+    pw.expect(page.locator('.viewer')).to_have_count(0)  # the closed viewer leaves on its asynchronous close event
     selector = '.photo-card .card-open' if section == 'photo' else '.video-card .card-viewer'
     loaded = page.locator(selector).count()
     assert loaded < len(rows) - 1

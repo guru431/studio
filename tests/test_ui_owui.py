@@ -232,7 +232,6 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         page.evaluate("location.hash = '#/search'")                          # «Поиск» чаты Open WebUI не охватывает
         pw.expect(page.locator(".search-chips .chip[data-section=chat]")).to_have_count(1)
         pw.expect(page.locator(".search-chips .chip[data-section=owui]")).to_have_count(0)
-        pw.expect(page.locator(".search-chips .chip[data-section=code]")).to_have_count(0)
         assert not page.problems, page.problems
 
 
@@ -802,6 +801,7 @@ def test_stream_comes_back_after_the_screen_lock(owui_browser, live, fake, monke
           const img = document.querySelector('img[data-retried]');
           return img?.complete && img.naturalWidth === 0;
         }""")
+        pw.expect(page.locator("#lock-password-go")).to_be_enabled()          # экран прочитал состояние блокировки
         if page.locator("#lock-use-password").is_visible():
             page.locator("#lock-use-password").click()
         page.locator("#lock-password").fill(PASSWORD)

@@ -113,7 +113,7 @@ def test_english_touch_settings_errors_and_public_pages_in_other_engines(live, e
                   catch (error) { return error.message; }
                 }""") == 'current password incorrect'
                 for route, title in [('/offline.html', 'Studio — offline'),
-                                     ('/account/forgot', 'Studio — account'), ('/share', 'Studio — shared chat')]:
+                                     ('/account/forgot', 'Studio — account'), ('/share', 'Studio — shared link')]:
                     page.goto(live.url + route)
                     page.wait_for_function('() => document.readyState === "complete"')
                     assert page.title() == title

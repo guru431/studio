@@ -429,6 +429,9 @@ def lock_and_unlock(page):
       await m.api('POST', '/api/lock/now');
       m.api('GET', '/api/me'); }""")                     # 423 — экран блокировки, запрос ждёт отпирания
     page.locator("#lock[open]").wait_for()
+    # «Открыть паролем» видна, пока экран читает состояние блокировки; учётке без PIN и passkey он затем сам
+    # показывает поле и прячет ссылку — «Войти» включается только после этого.
+    pw.expect(page.locator("#lock-password-go")).to_be_enabled()
     if page.locator("#lock-use-password").is_visible():
         page.locator("#lock-use-password").click()
     page.locator("#lock-password").fill("password-123")
