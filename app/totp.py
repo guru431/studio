@@ -2,8 +2,8 @@
 
 - TOTP своим кодом: HMAC-SHA-1, `DIGITS` цифр, шаг `STEP` с, окно ±`WINDOW` шаг; время — только `clock.NOW`.
   Принятый шаг запоминается (`users.totp_step`): тот же код (и более ранний шаг) второй раз не принимается.
-- Секрет — шифром `STUDIO_DATA_KEY` (`users.totp_secret`); резервных кодов `BACKUP_COUNT`, в базе — sha256, каждый
-  одноразовый (`totp_backup`). Сменённый ключ сервера: секрет нечитаем — приложение считается выключенным
+- Секрет — шифром `STUDIO_DATA_KEY` (`users.totp_secret`); резервных кодов `BACKUP_COUNT`, в базе — HMAC ключом данных
+  (выданные раньше sha256 — до использования), каждый одноразовый (`totp_backup`). Сменённый ключ сервера: секрет нечитаем — приложение считается выключенным
   (`status` → `reenter`), вход идёт как без него, «Защита» просит настроить заново; учётку это не запирает.
 - Включение — в два шага из «Защиты»: `POST /api/me/totp/setup` с паролем выдаёт секрет, адрес `otpauth://` для QR и
   билет (секрет шифром, привязан к сессии, `SETUP_SEC`); `POST /api/me/totp` с билетом и кодом приложения включает и
@@ -113,6 +113,12 @@ def backup_left(uid: int) -> int:
 
 
 def _backup_digest(uid: int, code: str) -> str:
+    """HMAC ключом данных, как код привязки моста: из копии базы без ключа код не подобрать."""
+    return hmac.digest(state.CFG.data_key.encode(), f"totp-backup:{uid}:{code}".encode(), "sha256").hex()
+
+
+def _legacy_digest(uid: int, code: str) -> str:
+    """Голый sha256 кодов, выданных до HMAC: действуют до использования или перевыпуска (`enable` стирает все)."""
     return security.digest(f"totp-backup:{uid}:{code}")
 
 
@@ -128,7 +134,8 @@ def _accept(uid: int, code: str, ip: str | None) -> bool:
         return step is not None and state.DB.execute(
             "UPDATE users SET totp_step = ? WHERE id = ? AND totp_step < ?", (step, uid, step)).rowcount == 1
     if BACKUP_RE.fullmatch(code) and state.DB.execute(
-            "DELETE FROM totp_backup WHERE user_id = ? AND digest = ?", (uid, _backup_digest(uid, code))).rowcount:
+            "DELETE FROM totp_backup WHERE user_id = ? AND digest IN (?, ?)",
+            (uid, _backup_digest(uid, code), _legacy_digest(uid, code))).rowcount:
         security_log.record(uid, "totp_backup_used", ip=ip)
         return True
     return False

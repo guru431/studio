@@ -147,6 +147,28 @@ def test_backup_code_signs_in_once(studio, mail):
         "SELECT kind FROM security_events WHERE user_id=?", (uid,))]
 
 
+def test_backup_codes_are_keyed_and_legacy_sha256_still_signs_in_once(studio, mail):
+    """R2-8: голый sha256 резервного кода подбирался из копии базы; теперь — HMAC ключом данных. Коды, выданные
+    прежним кодом (sha256), действуют до использования или перевыпуска."""
+    import hashlib
+    import hmac
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    _, codes = enable(studio)
+    plain = codes[0].replace("-", "")
+    stored = {r[0] for r in state.DB.execute("SELECT digest FROM totp_backup WHERE user_id=?", (uid,))}
+    assert hashlib.sha256(f"totp-backup:{uid}:{plain}".encode()).hexdigest() not in stored
+    assert hmac.digest(state.CFG.data_key.encode(), f"totp-backup:{uid}:{plain}".encode(), "sha256").hex() in stored
+    legacy = "abcdefghjk"
+    state.DB.execute("INSERT INTO totp_backup(user_id, digest) VALUES (?, ?)",
+                     (uid, hashlib.sha256(f"totp-backup:{uid}:{legacy}".encode()).hexdigest()))
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": legacy}).status_code == 200
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": legacy}).status_code == 400
+    assert studio.c.post("/account/code", json={"code": codes[0]}).status_code == 200
+
+
 def test_bridge_enrollment_accepts_authenticator_code_in_code_field(studio, mail):
     make_user(studio, "owner")
     signin(studio, "owner")
