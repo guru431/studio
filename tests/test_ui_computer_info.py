@@ -269,6 +269,45 @@ def test_computer_info_button_shows_snapshot_refreshes_and_keeps_project(browser
     assert not problems(result), problems(result)
 
 
+@pytest.mark.parametrize('width', [320, 1280])
+def test_self_check_and_agent_log_in_computer_info(browser, live, width):
+    """Мост 0.47.0: самопроверка и журнал агента по кнопкам в сведениях."""
+    login = f'self-check-{width}'
+    live.add_user(login)
+    machine = computer()
+    machine.self_check = machine.agent_log = True
+    machine.self_check_data = {'items': [
+        {'id': 'git', 'state': 'ok', 'version': '2.47.1'},
+        {'id': 'codex', 'state': 'warn', 'code': 'login', 'version': '0.63.0', 'login': 'no'},
+        {'id': 'disk', 'state': 'ok', 'free': 3 * 1024 ** 3}], 'checked_at': 1800000000}
+    machine.log_lines = ['2026-11-23 10:00:00,000 INFO канал: на связи', '2026-11-23 10:00:01,000 INFO ход 1a2b: done']
+    aid, server = code_online(live, login, machine)
+    try:
+        result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('code'),
+            ('wait', '!!document.querySelector("#code-projects li")'),
+            ('click', f'#code-agents li[data-id="{aid}"] .code-agent-info'),
+            ('wait', '!!document.querySelector("#code-self-check")'),
+            ('eval', 'idle', '!document.querySelector(".code-self-check")'),
+            ('click', '#code-self-check'),
+            ('wait', 'document.querySelectorAll(".code-self-check > div").length === 3'),
+            ('eval', 'rows', 'Array.from(document.querySelectorAll(".code-self-check > div"), d => [d.dataset.state, d.textContent])'),
+            ('click', '#code-agent-log'),
+            ('wait', '!!document.querySelector(".code-agent-log")'),
+            ('eval', 'log', 'document.querySelector(".code-agent-log").textContent'),
+            ('eval', 'save', '!!document.querySelector("#code-agent-log-save")'),
+            ('eval', 'fits', FITS)], width=width, mobile=width == 320)
+    finally:
+        server.stop()
+    assert not result.get('failed'), result
+    values = result['values']
+    assert values['idle'] and values['save'] and values['fits']
+    assert values['rows'] == [['ok', 'GitВ порядке · 2.47.1'], ['warn', 'CodexНет входа · 0.63.0'],
+                              ['ok', 'Свободное местоВ порядке · свободно 3.0 ГиБ']]
+    assert values['log'] == '\n'.join(machine.log_lines)
+    assert [req['op'] for req in machine.requests].count('self_check') == 1
+    assert not problems(result), problems(result)
+
+
 def test_computer_info_waits_for_pin_and_reopens_after_expiration(browser, live):
     login = 'computer-info-pin'
     live.add_user(login)

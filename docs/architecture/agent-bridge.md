@@ -107,6 +107,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.47.0 | `hello.self_check` (`self_check`) — самопроверка моста; `hello.agent_log` (`agent_log`) — последние строки `agent.log` ([ниже](#самопроверка-и-журнал-0470)); уведомление трея о задании, ждущем ответа (локально, без capability) | §24 |
 | 0.46.0 | `hello.deepseek` (каталог `{version, models, efforts, defaults, settings}`), `hello.deepseek_models` (`models`, `engine: deepseek`), `hello.deepseek_usage` (баланс) — DeepSeek Harness, четвёртый помощник ([ниже](#deepseek-harness-0460)); `usage.balance`, `history.notice`, отказ `writer_active`; ветвление и подагенты — `unsupported` | §2.2, §4, §9, §21, §22 |
 | 0.45.0 | `hello.mirror_groups` — группы копий: `root`/`folder` в `mirror_identity`, причины пропуска `reasons`; база SQLite с журналом — пропуск, а не отказ | §23.3 |
 | 0.44.0 | `hello.git_compare` — сравнение выбранного изменённого текстового файла с HEAD, только владельцу | §4 |
@@ -162,6 +163,30 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 | 0.34.0 | `project_summary` по флагу `code_size` возвращает размер исходников в байтах | §10.1 |
 | 0.36.0 | Сводка сообщает `code_size_version: 2`, список проектов возвращает последний успешный размер | §10.1 |
 | 0.38.0 | `hello.terminal` (только Linux) — `terminal_info`, команда SSH и веб-консоль ([ниже](#терминал-linux)) | — |
+
+## Самопроверка и журнал (0.47.0)
+
+- **Самопроверка** — `selfcheck.run`: окно моста («Подключение» → «Самопроверка» → «Проверить», через
+  `Controller.self_check`) и «Сведения» компьютера в Студии (`GET /api/code/agents/{aid}/self-check`). Пункты: git
+  (`git --version`), четыре помощника (каталог моделей последней проверки и признак входа `selfcheck.login` — файл или
+  переменная входа, без сети; Keychain macOS и ключи провайдеров OpenCode/DSH — `unknown`), чтение папок проектов,
+  запись в каталог моста (пробный файл создаётся и удаляется: `os.access` на Windows не видит ACL), канал, удалённый
+  рабочий стол (выключатель, на macOS — preflight разрешений), свободное место (меньше `limits.LOW_DISK` —
+  предупреждение). Каждая проверка — в потоке со своим пределом `limits.SELF_CHECK_SEC` (5) с; не уложилась —
+  `timeout`, исключение — `error` (в журнал — имя типа). Ответ — состояние, код, версия и числа; сервер
+  (`app/computer_info.py::self_check`) пропускает только известные пункты и поля.
+- **Журнал агента** — `journal.tail`: последние `limits.LOG_TAIL` (200) строк `agent.log` (начало — из `agent.log.1`,
+  если текущий файл короче), без управляющих знаков; похожее на путь заменяет `journal.MASK` — журнал путей не пишет
+  (проверено по живому `agent.log` 12 тыс. строк), маска — страховка. Сервер (`app/computer_info.py::log_lines`) ретранслирует
+  строки без записи в базу и журнал; на странице — просмотр и «Скачать» (файл собирается в браузере).
+- Обе просьбы — только владельцу после PIN (`own_agent`; в `SHARED_OPS` их нет), чтения (`RESTART_SAFE_OPS`).
+- **Уведомление о задании, ждущем ответа** — `app.WaitNotice`: задания ждут ответа (`waiting > 0` в
+  `Controller._refresh_activity`) дольше `limits.WAIT_NOTICE_SEC` (60) с — одно уведомление трея «Задание ждёт ответа
+  в Студии» без текста задания; снова — только когда ждать перестали и начали заново. Часы — параметр `now`
+  `Controller`. Щелчок по уведомлению на Windows открывает раздел «Агенты» (`Controller.studio_url`): pystray не
+  обрабатывает щелчок по уведомлению, `tray.balloon_handler` ловит `NIN_BALLOONUSERCLICK` в обработчике сообщения
+  значка. macOS показывает уведомление через osascript pystray — щелчок до моста не доходит. У Linux трея нет
+  (служба systemd и консольное меню) — уведомления нет.
 
 ## DeepSeek Harness (0.46.0)
 

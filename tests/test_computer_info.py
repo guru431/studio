@@ -111,3 +111,44 @@ def test_software_response_drops_paths_output_and_invalid_versions():
     assert data['items'][0]['latest'] == '1.2.4'
     assert data['update'] == {'tool': None, 'state': 'error'}
     assert 'private' not in str(data)
+
+
+def test_self_check_and_log_require_capability_pin_ownership_and_never_log(studio, caplog):
+    """Мост 0.47.0: самопроверка и хвост журнала — владельцу после PIN; ретрансляция без журнала сервера."""
+    aid, machine, link = setup(studio, pin='2468', opened=False)
+    for suffix in ('/self-check', '/log'):
+        assert studio.c.get(f'/api/code/agents/{aid}{suffix}').json()['detail']['code'] == 'unsupported'
+    link.hello.update(self_check=True, agent_log=True)
+    item = studio.c.get('/api/agents').json()['items'][0]
+    assert item['self_check'] is True and item['agent_log'] is True
+    assert studio.c.get(f'/api/code/agents/{aid}/log').json()['detail']['code'] == 'closed'
+    studio.c.post(f'/api/code/agents/{aid}/open', json={'pin': '2468'})
+    machine.self_check_data = {'items': [{'id': 'git', 'state': 'ok', 'version': '2.47.1'},
+                                         {'id': 'disk', 'state': 'warn', 'code': 'low', 'free': 5}], 'checked_at': 9}
+    machine.log_lines = ['2026-11-23 INFO канал: на связи', 'private-line\x1b']
+    with caplog.at_level(logging.DEBUG):
+        check = studio.c.get(f'/api/code/agents/{aid}/self-check')
+        journal = studio.c.get(f'/api/code/agents/{aid}/log')
+    assert check.headers['cache-control'] == journal.headers['cache-control'] == 'no-store'
+    assert check.json()['items'][1] == {'id': 'disk', 'state': 'warn', 'code': 'low', 'version': None, 'login': None,
+                                        'count': None, 'total': None, 'free': 5}
+    assert journal.json() == {'lines': ['2026-11-23 INFO канал: на связи', 'private-line']}
+    assert 'private-line' not in caplog.text
+    make_user(studio, 'other-log')
+    signin(studio, 'other-log')
+    before = len(machine.requests)
+    assert studio.c.get(f'/api/code/agents/{aid}/log').status_code == 404
+    assert len(machine.requests) == before
+
+
+def test_self_check_drops_unknown_items_paths_and_texts():
+    from computer_info import log_lines, self_check
+
+    data = self_check({'items': [{'id': 'git', 'state': 'odd', 'code': 'C:\\private', 'version': '2.4 private',
+                                  'path': 'private', 'login': 'maybe', 'count': -1},
+                                 {'id': 'git', 'state': 'ok'}, {'id': 'unknown', 'state': 'ok'}, None],
+                       'checked_at': 'now'})
+    assert data == {'items': [{'id': 'git', 'state': 'fail', 'code': None, 'version': None, 'login': None,
+                               'count': None, 'total': None, 'free': None}], 'checked_at': None}
+    assert log_lines({'lines': [*map(str, range(250)), 5]})['lines'][0] == '51'
+    assert log_lines({'lines': 'text'}) == {'lines': []}

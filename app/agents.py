@@ -217,6 +217,7 @@ async def list_agents(request: Request, refresh: bool = False):
                       "computer_info": hello.get("computer_info", False),
                       "software_versions": hello.get("software_versions", False),
                       "software_update_all": hello.get("software_update_all", False),
+                      "self_check": hello.get("self_check", False), "agent_log": hello.get("agent_log", False),
                       "desktop": hello.get("desktop", False),
                       "terminal": hello.get("platform") == "linux" and hello.get("terminal") is True,
                       "file_stats": hello.get("file_stats", False),
@@ -238,7 +239,7 @@ async def list_agents(request: Request, refresh: bool = False):
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:
             items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
-                             computer_info=False, software_versions=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False)
+                             computer_info=False, software_versions=False, self_check=False, agent_log=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False)
             if isinstance(items[-1].get("deepseek"), dict):  # сводка наложения — настройки компьютера владельца
                 items[-1]["deepseek"] = {k: v for k, v in items[-1]["deepseek"].items() if k != "settings"}
     return {"items": items}

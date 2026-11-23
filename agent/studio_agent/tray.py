@@ -29,6 +29,8 @@ TOP, BOTTOM = (0xE2, 0x82, 0x5C), (0xB2, 0x4F, 0x2B)  # градиент зна�
 STAR = (0xC9, 0x64, 0x42)
 ONLINE_FIRST = "Компьютер подключён к студии"
 NOTICES = {"revoked": "Компьютер отозван в студии", "replaced": "Ключ используется другим мостом"}
+# Shell_NotifyIcon без NIM_SETVERSION (как у pystray): щелчок по уведомлению приходит в lParam сообщения значка.
+NIN_BALLOONUSERCLICK = 0x0405
 
 
 def _arc(cx: float, cy: float, r: float, start: float, end: float, steps: int = 24) -> list[tuple[float, float]]:
@@ -123,6 +125,18 @@ def notice(state: str, fresh: bool) -> str | None:
     return tr(NOTICES[state]) if state in NOTICES else None
 
 
+def balloon_handler(previous: Callable, take: Callable[[], Callable[[], None] | None]) -> Callable:
+    """Обработчик сообщения значка Windows поверх обработчика pystray: щелчок по уведомлению — действие, заданное
+    при показе (`take` забирает его один раз; следующее уведомление его заменяет); прочее — pystray."""
+    def handle(wparam, lparam):
+        if lparam == NIN_BALLOONUSERCLICK:
+            if (action := take()) is not None:
+                action()
+            return 0
+        return previous(wparam, lparam)
+    return handle
+
+
 class Tray:
     """`post(команда)` — в очередь главного потока: `open`, `reset_pin`, `log`, `cancel_update`, `quit_idle`,
     `quit_now`."""
@@ -159,6 +173,12 @@ class Tray:
             pystray.MenuItem(lambda item: tr("Выход сейчас · заданий: {0}", self.activity['tasks']),
                              lambda: post("quit_now")))  # при заданиях — подтверждение (`window.ask_quit`)
         self.icon = pystray.Icon("studio-agent", image(state), title(state, login), menu)
+        self._click: Callable[[], None] | None = None  # щелчок по последнему уведомлению (только Windows)
+        handlers = getattr(self.icon, "_message_handlers", None)
+        if not host.MACOS and not host.LINUX and isinstance(handlers, dict):
+            from pystray._util import win32
+
+            handlers[win32.WM_NOTIFY] = balloon_handler(handlers[win32.WM_NOTIFY], self._take_click)
 
     def start(self) -> None:
         if host.MACOS:
@@ -202,7 +222,14 @@ class Tray:
 
         threading.Thread(target=run, name="studio-agent-tray-menu", daemon=True).start()
 
-    def notify(self, text: str) -> None:
+    def _take_click(self):
+        action, self._click = self._click, None
+        return action
+
+    def notify(self, text: str, on_click: Callable[[], None] | None = None) -> None:
+        """Уведомление; `on_click` — щелчок по нему (Windows; macOS показывает уведомление через osascript, щелчок
+        до моста не доходит)."""
+        self._click = on_click
         with contextlib.suppress(Exception):
             self.icon.notify(text, TITLE)
 

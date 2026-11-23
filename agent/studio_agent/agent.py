@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, limits, mcp, metadata, mirror, permissions, project_summary, projects, sessions, store, subagents, subscription, visualizations, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, journal, limits, mcp, metadata, mirror, permissions, project_summary, projects, selfcheck, sessions, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .software import Software
 from .pin import OpenSessions, PinStore
@@ -36,7 +36,7 @@ def _unavailable(backend) -> str | None:
 OPS = {
     "desktop_status": (), "desktop_start": (), "desktop_frame": (), "desktop_input": (),
     "desktop_clipboard": (), "desktop_stop": (),
-    "computer_info": (), "terminal_info": (),
+    "computer_info": (), "terminal_info": (), "self_check": (), "agent_log": (),
     "software_versions": ("refresh",),
     "software_update": ("software",),
     "software_update_cancel": (),
@@ -97,7 +97,7 @@ OPS = {
 # Новый op по умолчанию удерживает штатный перезапуск, пока обработчик не закончит работу.
 RESTART_SAFE_OPS = frozenset({
     "agent_update", "agent_update_status", "agent_update_cancel", "software_update_cancel",
-    "desktop_status", "desktop_frame", "computer_info", "terminal_info", "software_versions",
+    "desktop_status", "desktop_frame", "computer_info", "terminal_info", "self_check", "agent_log", "software_versions",
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
     "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
@@ -194,6 +194,7 @@ class Agent:
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
                  "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                  "computer_info": True, "software_versions": True, "software_update_all": True,
+                 "self_check": True, "agent_log": True,
                  "desktop": self.desktop.capable, "metadata_cache": True, "visualizations": True,
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
@@ -386,7 +387,7 @@ class Agent:
             raise Refused("invalid")
         if self.software.busy and (op in ('turn', 'chat_fork', 'agent_update', 'mirror_begin') or
                 self.software.state == 'updating' and op not in (
-                    'computer_info', 'terminal_info', 'software_versions', 'software_update', 'software_update_cancel',
+                    'computer_info', 'terminal_info', 'self_check', 'agent_log', 'software_versions', 'software_update', 'software_update_cancel',
                     'agent_update_status', 'agent_update_cancel') and not op.startswith('desktop_')):
             raise Refused('busy', 'Обновление программы — дождитесь завершения')
         if self.updater is not None and self.updater.busy and op in (
@@ -491,6 +492,13 @@ class Agent:
 
     async def _op_computer_info(self, frame, after):
         return await asyncio.to_thread(computer_info.read, list(self.cfg.projects_roots))
+
+    async def _op_self_check(self, frame, after):
+        """Канал есть — просьба пришла по нему; окно моста передаёт своё состояние канала (`Controller.self_check`)."""
+        return await selfcheck.run(self, self.pins.path.parent, "online", wall=self._wall)
+
+    async def _op_agent_log(self, frame, after):
+        return {"lines": await asyncio.to_thread(journal.tail, self.pins.path.parent)}
 
     async def _op_terminal_info(self, frame, after):
         from . import linux_terminal

@@ -1734,6 +1734,19 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-software-numbers, .code-software-meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-6); }
 .code-software-version[data-state="current"] { color: var(--success); }
 .code-software-version[data-state="outdated"] { color: var(--danger); }
+.code-diagnostics-part { margin-top: var(--space-7); }
+.code-diagnostics h3 { margin: 0; font-size: var(--fs-md); }
+.code-self-check { margin: var(--space-4) 0 0; font-size: var(--fs-sm); }
+.code-self-check > div { display: grid; grid-template-columns: minmax(110px, 27%) minmax(0, 1fr); gap: var(--space-6);
+  padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
+.code-self-check dt { color: var(--text-2); font-size: var(--fs-xs); }
+.code-self-check dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.code-self-check [data-state="ok"] dd { color: var(--success); }
+.code-self-check [data-state="warn"] dd { color: var(--warn); }
+.code-self-check [data-state="fail"] dd { color: var(--danger); }
+.code-agent-log { max-height: 320px; margin: var(--space-4) 0; padding: var(--space-4); overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--r-menu); background: var(--surface-0);
+  font: var(--fs-xs)/1.45 var(--mono); white-space: pre; }
 @media (pointer: coarse) { .code-computer-dialog button { min-height: var(--h-touch); } }
 @media (max-width: 400px) {
   .code-computer-heading, .code-computer-footer { padding-inline: var(--space-6); }
