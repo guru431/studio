@@ -284,8 +284,11 @@ export function mount(view, ctx) {
   const side = el('aside', { id: 'owui-panel', class: 'owui-panel', 'aria-label': tr("Учётки и чаты Open WebUI") });
   const body = el('div', { class: 'owui-body' });
   const backdrop = el('div', { class: 'owui-backdrop', hidden: true });
+  // флажок администратора «Веб и внешние MCP — только через Cleaner» (`me.cleaner_web`) модели Open WebUI не охватывает
+  const note = el('p', { class: 'muted small owui-cleaner-note', id: 'owui-cleaner-note', hidden: !ctx.me.cleaner_web },
+    tr("Модели Open WebUI работают мимо Cleaner"));
   const main = el('section', { class: 'owui-main' },
-    el('header', { class: 'head' }, toggle, el('h1', {}, sectionName('owui'))), body);
+    el('header', { class: 'head' }, toggle, el('h1', {}, sectionName('owui'))), note, body);
   const root = el('div', { class: 'owui-ws' }, side, main, backdrop);
   toggle.addEventListener('click', () => panelOpen(!root.classList.contains('panel-open')));
   backdrop.addEventListener('click', () => panelOpen(false));

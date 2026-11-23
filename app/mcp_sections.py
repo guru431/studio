@@ -20,6 +20,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 import access
+import cleaner_route
 import clock
 import forms
 import images
@@ -68,15 +69,21 @@ def clean_text(value, limit=60_000):
     return value[:limit].encode("utf-8", "replace").decode() if isinstance(value, str) else ""
 
 
-def supported(section, tools, *, uid=None, sid=None):
-    """Section tools of one server; with `sid` — only those the account may call (`access.tool_allowed`)."""
+def supported(section, tools, *, uid=None, sid=None, item=None):
+    """Section tools of one server; with `sid` — only those the account may call (`access.tool_allowed`). With the
+    server row `item` and the admin flag "web only through Cleaner" (`cleaner_route.web_only`) — no web tools (the
+    "internet" mark with the admin policy, `mcp_sources.effective`): sections have no path through Cleaner."""
     by_name = {t["name"]: t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)}
     has_upload = "artifact_upload" in by_name
+    closed = item is not None and cleaner_route.web_only()
+    rules = mcp_sources.policy(item["id"]) if closed and item["user_id"] is None else {}
     for name, tool in by_name.items():
         schema = tool.get("inputSchema")
         if name not in TOOLS[section] or not isinstance(schema, dict) or schema.get("type") != "object":
             continue
         if sid is not None and not access.tool_allowed(uid, sid, name):
+            continue
+        if closed and mcp_sources.effective(tool, rules.get(name))["open_world"]:
             continue
         properties, required = schema.get("properties", {}), schema.get("required", [])
         if (not isinstance(properties, dict) or len(properties) > 128
@@ -108,7 +115,7 @@ async def catalog(section: str, request: Request):
         session = mcp.Session(item, uid=uid)
         try:
             found = await mcp_sources.catalog(session, DISCOVERY_TIMEOUT)     # общий кэш каталогов MCP
-            tools = list(supported(section, found.tools, uid=uid, sid=session.sid))
+            tools = list(supported(section, found.tools, uid=uid, sid=session.sid, item=item))
             return {"id": session.sid, "name": item["name"], "tools": tools}
         except (HTTPException, TimeoutError, ValueError, RecursionError):
             return {"id": session.sid, "name": item["name"], "unavailable": True}
@@ -423,7 +430,8 @@ def check_bounds(tool: dict, args: dict) -> None:
 async def run(section: str, sid: int, request: Request):
     names = section_tools(section)
     uid = request.state.user.id
-    session = mcp.Session(mcp.row(uid, sid), uid=uid)
+    item = mcp.row(uid, sid)
+    session = mcp.Session(item, uid=uid)
     try:
         body = RunIn.model_validate_json(await forms.read_body(request, UPLOAD_MAX * 4 // 3 + PARAMS_MAX))
         arguments = json.dumps(body.arguments, allow_nan=False)
@@ -434,7 +442,7 @@ async def run(section: str, sid: int, request: Request):
     try:
         async with asyncio.timeout(DISCOVERY_TIMEOUT):
             listed = await session.tools()
-        tools = list(supported(section, listed, uid=uid, sid=sid))
+        tools = list(supported(section, listed, uid=uid, sid=sid, item=item))
         named = accepts_name(listed)
         tool = next((item for item in tools if item["name"] == body.tool), None)
         if tool is None:

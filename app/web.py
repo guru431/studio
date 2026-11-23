@@ -35,6 +35,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import httpx
 from cryptography.fernet import InvalidToken
 
+import cleaner_route
 import security
 import state
 from connections import Connection
@@ -89,8 +90,9 @@ class ToolError(Exception):
 def tools_for(conn: "Connection | None", has_key: bool) -> list[str]:
     """Виды инструментов, которые ход диалога даст модели: только путь через сервер (`conn.proxied`, как
     `via` в chat.create_turn) и только с ключом Exa — без ключа ни одного, и YouTube тоже (решение владельца
-    2026-10-21)."""
-    if conn is None or not conn.proxied or not has_key:
+    2026-10-21). Флажок администратора «Веб и внешние MCP — только через Cleaner» — только ходу через Cleaner
+    (`cleaner_route.web_allowed`)."""
+    if conn is None or not conn.proxied or not has_key or not cleaner_route.web_allowed(conn):
         return []
     return list(KINDS)
 

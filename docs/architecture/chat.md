@@ -675,6 +675,12 @@ Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), кл�
 - Принудительный режим в чате: `cleaner_route.refuse_forced` в `chat.create_turn` и `chat_pending.answer_pending`
   (облачная роль srvllm — 409 `cleaner_forced`). «Знания»: `knowledge.vectors_for` — диалог через Cleaner не отдаёт
   текст внешнему источнику векторов; при флажке внешний источник выключен у всех (`knowledge.source_off`).
+- Флажок «Веб и внешние MCP — только через Cleaner» (`cleaner_route.web_only`): `cleaner_route.web_allowed` — ход
+  не через Cleaner не получает ни «Интернета» (`web.tools_for` пуст — и `web_tools` диалога, и ход, и продолжение
+  после паузы), ни веб-инструментов MCP (`mcp_client.Tools.discover` и `call`, `mcp_files._blocked` для
+  `artifact_upload`); `chat.StreamTask._web_on` перепроверяет его перед каждым вызовом и кругом. PATCH
+  `{web: true}` такого диалога — 409 `cleaner_web` (`cleaner_route.WEB_ONLY`). Страница знает флажок по
+  `me.cleaner_web` (`/api/me`): кнопка «Интернет» выключена с подсказкой.
 - В `chat._chat_view` поле `routed` (тег «Cleaner» у выбора модели), `external` у такого диалога — `False`
   (согласие на внешнюю модель не спрашивается: текст очищает Cleaner).
 - Журнал — «ход через Cleaner: код N» и id, без адресов, ключей и текста (`tests/test_cleaner_route_chat.py`).

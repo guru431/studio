@@ -9,8 +9,8 @@ import pytest
 
 import db
 from fakes import FakeCleanerGateway
-from test_ui_browser import (ANSWERED, API, LAST_ANSWER, NO_OVERFLOW, READY, browser, go, live, open_new_chat,  # noqa: F401
-                             problems, set_value, signin)
+from test_ui_browser import (ANSWERED, API, EXA_KEY_SET, LAST_ANSWER, NO_OVERFLOW, READY, WEB_TOGGLE,  # noqa: F401
+                             browser, go, live, open_new_chat, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -141,7 +141,8 @@ def test_cleaner_gateway_page(browser, live, cleaner, width):
     assert "частные адреса" in v["notes"][0].lower() and "Open WebUI" in v["notes"][1]
     assert v["afterSave"] == [ADDRESS, "", False]
     assert "ok" in v["checked"][0] and "ключ действует" in v["checked"][1]
-    assert json.loads(v["saved"]) == {"base_url": ADDRESS, "key_set": True, "forced": True, "reenter": False}
+    assert json.loads(v["saved"]) == {"base_url": ADDRESS, "key_set": True, "forced": True, "web": False,
+                                      "reenter": False}
     assert v["locked"][:2] == [True, True] and "заблокирован" in v["locked"][2] and v["locked"][3] is True
     assert v["free"] == [False, False] and True in v["on"] and True not in v["off"]
     assert v["draftTag"] is True and v["tag"] == [True, "Диалог идёт через Cleaner"]
@@ -153,4 +154,61 @@ def test_cleaner_gateway_page(browser, live, cleaner, width):
     assert v["adminFits"] and v["settingsFits"] and v["chatFits"]
     assert cleaner.turns and cleaner.sent_reads and cleaner.checked
     assert all(r.headers["x-cleaner-key"] == KEY and "authorization" not in r.headers for r in cleaner.sent_reads)
+    assert not problems(result), problems(result)
+
+
+NOTE = "document.querySelector('#cleaner-owui-note')"
+CHIP = "document.querySelector('#model-chip')"
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_web_only_through_cleaner_page(browser, live, cleaner, width):
+    """Флажок «Веб и внешние MCP — только через Cleaner»: в панели — с предупреждением об Open WebUI, пока отмечен;
+    новый диалог шлюза srvllm — кнопка «Интернет» выключена с подсказкой, диалог через Cleaner — кнопка доступна;
+    в «Open WebUI» — то же предупреждение."""
+    mobile = width == 320
+    steps = [*signin(), ("wait", READY), ("eval", "exa", EXA_KEY_SET),
+        call("set", f"'PUT', '/api/admin/cleaner', {{ base_url: {ADDRESS!r}, key: {KEY!r}, forced: false }}"),
+        ("eval", "cid", f"""(async () => {{ const m = {API};
+          const c = await m.api('POST', '/api/connections', {{ name: 'Облако веб {width}', kind: 'openai',
+            base_url: {PROVIDER!r}, token: 'cloud-key', sections: ['chat'] }});
+          await m.api('PUT', '/api/sections/chat/links/' + c.id, {{ models: ['gpt-web'] }});
+          await m.api('PATCH', '/api/connections/' + c.id, {{ via_cleaner: true }});
+          sessionStorage.cid = c.id; return c.id; }})()"""),
+        # панель: флажок, предупреждение об Open WebUI — пока он отмечен
+        *go("admin"), ("wait", "document.querySelector('#cleaner-web') && !document.querySelector('#cleaner-web').disabled"),
+        ("eval", "noteOff", f"{NOTE}.hidden"),
+        ("click", "#cleaner-web"), ("eval", "noteOn", f"[!{NOTE}.hidden, {NOTE}.textContent]"),
+        ("click", "#cleaner-save"), ("wait", "document.querySelector('#cleaner-status').classList.contains('ok')"),
+        ("eval", "saved", "fetch('/api/admin/cleaner').then((r) => r.json()).then((r) => r.web)"),
+        ("eval", "adminFits", NO_OVERFLOW),
+        ("eval", "me", f"(async () => {{ const m = {API}; await m.loadMe(); return m.me.cleaner_web; }})()"),
+        # диалог шлюза srvllm: кнопка выключена с подсказкой
+        *open_new_chat(mobile), ("wait", f"{CHIP}.textContent.includes('local-gemma-abl')"),
+        ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.hidden"),
+        ("eval", "internal", f"[{WEB_TOGGLE}.disabled, {WEB_TOGGLE}.title, document.querySelector('#web-note').textContent]"),
+        ("eval", "chatFits", NO_OVERFLOW),
+        # диалог через Cleaner: кнопка доступна
+        ("click", "#model-chip"), ("wait", "document.querySelector('.model-option[data-model=\"gpt-web\"]')"),
+        ("click", ".model-option[data-model=\"gpt-web\"]"), ("wait", f"{CHIP}.textContent.includes('gpt-web')"),
+        ("wait", f"{WEB_TOGGLE} && !{WEB_TOGGLE}.disabled"),
+        ("eval", "routed", f"[{WEB_TOGGLE}.title, document.querySelector('#web-note').textContent]"),
+        # «Open WebUI»: предупреждение
+        *go("owui"), ("wait", "document.querySelector('#owui-cleaner-note')"),
+        ("eval", "owui", "[!document.querySelector('#owui-cleaner-note').hidden,"
+                         " document.querySelector('#owui-cleaner-note').textContent]"),
+        ("eval", "owuiFits", NO_OVERFLOW),
+        call("cleanup", "'DELETE', '/api/connections/' + sessionStorage.cid"),
+        call("unset", "'PUT', '/api/admin/cleaner', { base_url: '', key: null, forced: false }"),
+    ]
+    result = browser.drive(live.url + "/", steps, width=width, mobile=mobile)
+    assert not result.get("failed"), result
+    v = result["values"]
+    hint = "Администратор разрешил «Интернет» только в диалогах через Cleaner"
+    assert v["noteOff"] is True and v["noteOn"] == [True, "Модели Open WebUI работают мимо Cleaner"]
+    assert v["saved"] is True and v["me"] is True
+    assert v["internal"] == [True, hint, hint]
+    assert hint not in v["routed"][0] and v["routed"][1] != hint
+    assert v["owui"] == [True, "Модели Open WebUI работают мимо Cleaner"]
+    assert v["adminFits"] and v["chatFits"] and v["owuiFits"]
     assert not problems(result), problems(result)

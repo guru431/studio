@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, StrictInt, field_validator
 
 import auth
 import cleaner_client
+import cleaner_route
 import code_actions
 import history
 import lock_policy
@@ -153,6 +154,9 @@ def _me(request: Request) -> dict:
             # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null
             "password_reset": row["password_reset"],
             "memory_on": bool(row["memory_on"]),     # личная память «Чата» (memory.py)
+            # флажок администратора «Веб и внешние MCP — только через Cleaner»: «Интернет» вне Cleaner выключен,
+            # «Open WebUI» показывает предупреждение
+            "cleaner_web": cleaner_route.web_only(),
             # языки push и ntfy этой сессии: страница сверяет их с языком интерфейса устройства
             "notify_langs": ntfy.session_langs(request.state.digest)}
 

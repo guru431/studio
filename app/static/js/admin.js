@@ -410,12 +410,17 @@ function chatSettingsBlock() {
 }
 
 /* «Cleaner» (cleaner_route): адрес шлюза Cleaner, служебный ключ (страница его не получает — только `key_set`),
- * флажок «Cleaner для всех внешних моделей» и проверка связи. Флажок — только при адресе и ключе. */
+ * флажки «Cleaner для всех внешних моделей» и «Веб и внешние MCP — только через Cleaner» (со вторым — предупреждение
+ * об Open WebUI) и проверка связи. Флажки — только при адресе и ключе. */
 function cleanerBlock() {
   const url = el('input', { class: 'input', id: 'cleaner-url', type: 'url', maxlength: '2048', autocomplete: 'off',
     placeholder: tr("адрес Cleaner, http(s), хост и порт, без пути") });
   const key = el('input', { class: 'input', id: 'cleaner-key', type: 'password', maxlength: '512', autocomplete: 'new-password' });
   const forced = el('input', { type: 'checkbox', id: 'cleaner-forced' });
+  const web = el('input', { type: 'checkbox', id: 'cleaner-web' });
+  // модели Open WebUI флажок не охватывает: предупреждение, пока он включён (сохранён или отмечен)
+  const owuiNote = el('p', { class: 'muted small', id: 'cleaner-owui-note', hidden: true },
+    tr("Модели Open WebUI работают мимо Cleaner"));
   const reenter = el('p', { class: 'error', id: 'cleaner-reenter', hidden: true },
     tr("Ключ сервера сменился: введите адрес и служебный ключ Cleaner заново."));
   const note = el('p', { class: 'status', id: 'cleaner-status', 'aria-live': 'polite' });
@@ -435,14 +440,17 @@ function cleanerBlock() {
     keySet = saved.key_set;
     key.placeholder = keySet ? tr("задан — оставьте пустым, чтобы не менять") : 'ck_…';
     forced.checked = saved.forced;
+    web.checked = saved.web;
     reenter.hidden = !saved.reenter;
     ready();
   }
 
-  // флажок и проверка — при адресе и ключе (cleaner_route.save_settings иначе отвечает 422)
+  // флажки и проверка — при адресе и ключе (cleaner_route.save_settings иначе отвечает 422)
   function ready() {
     const usable = !!url.value.trim() && (keySet || !!key.value.trim());
     forced.disabled = !usable && !forced.checked;
+    web.disabled = !usable && !web.checked;
+    owuiNote.hidden = !web.checked;
     check.disabled = !(keySet && url.value.trim());
   }
 
@@ -456,11 +464,13 @@ function cleanerBlock() {
 
   url.addEventListener('input', ready);
   key.addEventListener('input', ready);
+  web.addEventListener('change', ready);
   save.addEventListener('click', async () => {
     save.disabled = true;
     checks.replaceChildren();
     try {
-      paint(await api('PUT', '/api/admin/cleaner', { base_url: url.value, key: key.value || null, forced: forced.checked }));
+      paint(await api('PUT', '/api/admin/cleaner', { base_url: url.value, key: key.value || null, forced: forced.checked,
+        web: web.checked }));
       say(tr("Сохранено"), 'ok');
     } catch (err) {
       say(words(err), 'error');
@@ -491,7 +501,10 @@ function cleanerBlock() {
       el('p', { class: 'muted small', id: 'cleaner-private-note' }, tr("Частные адреса из списка разрешённых считаются внутренними — не добавляйте туда шлюзы в облачные модели.")),
       reenter, field(tr("Адрес Cleaner"), url), field(tr("Служебный ключ"), key),
       el('label', { class: 'check' }, forced, tr("Cleaner для всех внешних моделей")),
-      el('p', { class: 'muted small', id: 'cleaner-forced-note' }, tr("Принудительный режим закрывает подключения моделей Studio: внешние идут только через Cleaner. Веб-инструменты в диалогах с внутренними моделями, внешние MCP-серверы и раздел «Open WebUI» он не затрагивает.")),
+      el('p', { class: 'muted small', id: 'cleaner-forced-note' }, tr("Принудительный режим закрывает подключения моделей Studio: внешние идут только через Cleaner. Веб-инструменты и внешние MCP закрывает флажок ниже; раздел «Open WebUI» не закрывает ни один из них.")),
+      el('label', { class: 'check' }, web, tr("Веб и внешние MCP — только через Cleaner")),
+      el('p', { class: 'muted small', id: 'cleaner-web-note' }, tr("«Интернет» и веб-инструменты MCP (пометка «интернет») — только в диалогах через Cleaner; в остальных диалогах и в разделах они недоступны.")),
+      owuiNote,
       el('div', { class: 'row' }, save, check, note), checks),
     load,
   };

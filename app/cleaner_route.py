@@ -1,7 +1,8 @@
 """Шлюз Cleaner для внешних моделей (шаг схемы 66): настройки администратора и самопроверка.
 
 - Настройки — один JSON шифром `STUDIO_DATA_KEY` в `settings[SETTINGS_KEY]`: адрес Cleaner, служебный ключ и флажок
-  «Cleaner для всех внешних моделей». Ключ в браузер не отдаётся; после смены `STUDIO_DATA_KEY` настройки не
+  «Cleaner для всех внешних моделей» и флажок «Веб и внешние MCP — только через Cleaner» (`web_only`, `web_allowed`).
+  Ключ в браузер не отдаётся; после смены `STUDIO_DATA_KEY` настройки не
   расшифровать — панель просит ввести их заново (`reenter`), принудительный режим выключен.
 - Сервер Studio ходит к Cleaner только по списку разрешённых адресов (`upstream`, сертификат — `STUDIO_CLEANER_CA`),
   ключ — только заголовком `X-Cleaner-Key`.
@@ -95,10 +96,11 @@ class SettingsIn(BaseModel):
     base_url: str = Field(max_length=URL_MAX)
     key: str | None = Field(default=None, max_length=512)
     forced: bool = False
+    web: bool = False
 
 
 def _empty(**extra) -> dict:
-    return {"base_url": "", "key": None, "forced": False, "reenter": False} | extra
+    return {"base_url": "", "key": None, "forced": False, "web": False, "reenter": False} | extra
 
 
 #: предупреждение «настройки не расшифровываются» уже записано (до перезапуска службы)
@@ -118,13 +120,13 @@ def settings() -> dict:
             _WARNED.append(True)
             log.warning("cleaner settings: not decryptable with the current data key")
         return _empty(reenter=True)
-    return _empty() | {k: saved[k] for k in ("base_url", "key", "forced") if k in saved}
+    return _empty() | {k: saved[k] for k in ("base_url", "key", "forced", "web") if k in saved}
 
 
 def public_settings() -> dict:
     config = settings()
     return {"base_url": config["base_url"], "key_set": bool(config["key"]), "forced": config["forced"],
-            "reenter": config["reenter"]}
+            "web": config["web"], "reenter": config["reenter"]}
 
 
 def configured() -> bool:
@@ -136,6 +138,23 @@ def forced() -> bool:
     """Принудительный режим: только при заданных адресе и ключе (после смены ключа сервера — выключен)."""
     config = settings()
     return bool(config["forced"] and config["base_url"] and config["key"])
+
+
+def web_only() -> bool:
+    """Флажок «Веб и внешние MCP — только через Cleaner»: как `forced`, только при заданных адресе и ключе."""
+    config = settings()
+    return bool(config["web"] and config["base_url"] and config["key"])
+
+
+#: флажок `web_only`: «Интернет» и веб-инструменты MCP — только в диалогах через Cleaner (PATCH {web: true} — 409)
+WEB_ONLY = "администратор разрешает «Интернет» и веб-инструменты MCP только в диалогах через Cleaner"
+
+
+def web_allowed(conn: "connections.Connection | None") -> bool:
+    """«Интернет» (`web.tools_for`) и веб-инструменты MCP (пометка «интернет», `mcp_client.Tools`) хода подключения
+    `conn`: при флажке `web_only` — только если ход идёт через Cleaner (`Connection.routed`); вне чата пути через
+    Cleaner нет (`conn` None) — нет и веба."""
+    return not web_only() or (conn is not None and conn.routed)
 
 
 def is_external(conn: "connections.Connection") -> bool:
@@ -256,16 +275,19 @@ def save_settings(body: SettingsIn) -> dict:
     key = previous["key"] if body.key is None or not body.key.strip() else _key(body.key)
     if body.forced and not (base_url and key):
         raise _bad("cleaner", "принудительный режим требует адрес и служебный ключ Cleaner")
-    config = {"base_url": base_url, "key": key, "forced": body.forced}
+    if body.web and not (base_url and key):
+        raise _bad("cleaner", "веб только через Cleaner требует адрес и служебный ключ Cleaner")
+    config = {"base_url": base_url, "key": key, "forced": body.forced, "web": body.web}
     state.DB.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                      (SETTINGS_KEY, security.encrypt(json.dumps(config))))
     if (base_url, key) != (previous["base_url"], previous["key"]):
         # контексты прежнего адреса и ключа: триггер кладёт их в `cleaner_deletions` со снимком прежнего ключа;
         # контексты прежнего вида Cleaner (личный ключ, без отметки `cleaner_route_contexts`) не трогаются
         state.DB.execute("DELETE FROM cleaner_contexts WHERE id IN (SELECT id FROM cleaner_route_contexts)")
-    log.info("cleaner: настройки сохранены: адрес %s, ключ %s, принудительный режим %s",
+    log.info("cleaner: настройки сохранены: адрес %s, ключ %s, принудительный режим %s, веб только через Cleaner %s",
              "изменён" if base_url != previous["base_url"] else "прежний",
-             "изменён" if key != previous["key"] else "прежний", "включён" if config["forced"] else "выключен")
+             "изменён" if key != previous["key"] else "прежний", "включён" if config["forced"] else "выключен",
+             "включён" if config["web"] else "выключен")
     return public_settings()
 
 
