@@ -46,10 +46,12 @@ const NOTICES = {
   translate: [tr("перевод готов"), tr("перевод не получился")],
   speech: [tr("озвучка готова"), tr("озвучка не получилась")],
   chat: [tr("ответ готов"), tr("ответ не получился")],
+  description: [tr("описание фото готово"), tr("описание фото не получилось")],   // строки «Фото» с `kind` (jobs.py)
+  translation: [tr("перевод промпта готов"), tr("перевод промпта не получился")],
 };
 /** Адрес записи из ответа или от service worker (и строки «Поиска»): иное не открывается. Push Claude Code
- * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>. */
-export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
+ * (bridge.py) ведёт в чат: code/<agent_id>/<pid>/<chat>; описание и перевод промпта — раздел «Фото» без id. */
+export const HREF = /^(?:(?:photo|video|transcribe|ocr|translate|speech)\?id=[\w-]+|photo|chat\/[\w-]+|code\/\d+\/[0-9a-f]{16}\/[0-9a-f-]{36})$/;
 /** Адрес отмены из ответа (jobs.py CANCEL): иное не отправляется. */
 const CANCEL = /^\/api\/(?:(?:images|videos|transcripts|ocr|translate|speeches|speeches\/chats)\/[\w-]+\/cancel|chats\/[\w-]+\/stop)$/;
 let badge = null;
@@ -380,7 +382,7 @@ export async function setNotify(on) {
 /** Готовое за жизнь страницы, пока она скрыта: текст без содержимого, tag — id (повтор не дублирует),
  * data.href — куда вести по нажатию (sw.js). Видимой странице хватает значка; отменённое — не повод. */
 async function notify(item) {
-  const words = NOTICES[item.section];
+  const words = NOTICES[item.section === 'photo' && item.kind] || NOTICES[item.section];
   if (!words || item.state === 'cancelled' || document.visibilityState === 'visible' || !notifyEnabled()) return;
   try {
     const registration = await navigator.serviceWorker.ready;
