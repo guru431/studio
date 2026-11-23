@@ -12,8 +12,9 @@ from pathlib import Path
 
 
 ARTIFACTS = ("studio-agent.zip", "studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh")
-BUILD_FILES = ("build-agent-installer.ps1", "agent-installer.cs", "build-agent-macos.py",
-               "build-agent-linux.py", "macos-runtime.json")
+BUILD_FILES = ("build-agent-installer.ps1", "agent-installer.cs", "build-agent-launcher.ps1", "agent-launcher.cs",
+               "build-agent-macos.py", "build-agent-linux.py", "macos-runtime.json")
+WINDOWS_LAUNCHER = "studio-agent/Studio Agent.exe"  # `shortcut.LAUNCHER` в копии моста
 SIGNING = ("STUDIO_MACOS_SIGNING_IDENTITY", "STUDIO_MACOS_CAPTURE_PROFILE", "STUDIO_MACOS_INSTALLER_IDENTITY")
 BUILD_TIMEOUT = 3800
 
@@ -90,7 +91,15 @@ def build(repo, revision, work):
         if os.environ.get("STUDIO_MACOS_SIGNING_IDENTITY"):
             bundle.writestr("studio-agent/macos/signed-package.json",
                             json.dumps({"sha256": digest(macos), "size": macos.stat().st_size}))
-    print("==> сборка установщика Windows", flush=True)
+    print("==> сборка запускателя и установщика Windows", flush=True)
+    executable = work / "studio-agent-launcher.exe"
+    subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-File", work / "build-agent-launcher.ps1", "-Archive", archive, "-Output", executable],
+                   check=True, timeout=180)
+    with zipfile.ZipFile(archive, "a") as bundle:
+        if WINDOWS_LAUNCHER in bundle.namelist():
+            raise ValueError("Bridge source already contains a compiled launcher")
+        bundle.write(executable, WINDOWS_LAUNCHER)
     subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                     "-File", work / "build-agent-installer.ps1", "-Archive", archive, "-Output", windows],
                    check=True, timeout=180)

@@ -91,8 +91,10 @@
 Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt`); грязное
 дерево выкладываемых частей и `agent/` — отказ. С ним едут установщик EXE и ZIP обновления моста:
 `git archive --format=zip --prefix=studio-agent/ <ревизия>:agent` → `.incoming-…/agent/studio-agent.zip`, строка
-`==> мост <хеш>` того же коммита студии. До первого SSH `deploy/build-agent-installer.ps1` собирает
-`studio-agent-setup.exe` из этого ZIP и `deploy/agent-installer.cs` того же HEAD (штатный csc .NET Framework Windows).
+`==> мост <хеш>` того же коммита студии. До первого SSH `deploy/build-agent-launcher.ps1` собирает запускатель
+`Studio Agent.exe` (`deploy/agent-launcher.cs`), `deploy/build-agent-bundle.py` кладёт его в ZIP, затем
+`deploy/build-agent-installer.ps1` собирает `studio-agent-setup.exe` из этого ZIP и `deploy/agent-installer.cs` того же
+HEAD (штатный csc .NET Framework Windows, значок студии из ZIP).
 `GET /api/agent/download` отдаёт EXE браузеру, `/api/agent/package` — ZIP действующему мосту.
 Нет моста в HEAD или он грязный — отказ до копирования кода. `install.sh` без ZIP или EXE —
 отказ до подмены; `agent` переезжает в `SWAP` с кодом, и откат `.previous` возвращает оба файла.

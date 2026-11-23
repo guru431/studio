@@ -4,7 +4,8 @@
 # Из git-копии — на месте (разработка). Повторный запуск безопасен: среда остаётся, пакеты догоняют
 # requirements.txt. Автозапуск ставит окно моста и указывает на ту копию, из которой мост запущен; установка в
 # Programs уже включённый автозапуск (значение StudioAgent в Run) переписывает на себя, не включённый — не заводит,
-# и ставит ярлык «Studio Agent» в меню «Пуск» пользователя (%APPDATA%) с той же командой.
+# и ставит ярлык «Studio Agent» в меню «Пуск» пользователя (%APPDATA%) с той же командой. Команда — запускатель
+# «Studio Agent.exe» пакета студии, если он прошёл пробу (--probe → 0), иначе pythonw.exe среды (как autostart.command()).
 #   install.cmd  (двойной щелчок)  или  powershell -ExecutionPolicy Bypass -File install.ps1 [-Python <python.exe>]
 #   -NoVenv — без среды и пакетов, -NoStart — без запуска, -RunKey — ключ автозапуска (тесты установки).
 param(
@@ -55,12 +56,6 @@ if ((Test-Path -LiteralPath (Join-Path $source '.git')) -or
     Assert-BridgeStopped $to
     Get-ChildItem -LiteralPath $to -Recurse -File -Force |
         Where-Object { $_.FullName -notlike (Join-Path $to '.venv\*') } | Unblock-File
-    # Автозапуск включён (git-копией или прежней установкой) — теперь он запускает эту копию, как autostart.command().
-    if ($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name 'StudioAgent' -ErrorAction SilentlyContinue)) {
-        $command = '"{0}" "{1}"' -f (Join-Path $to '.venv\Scripts\pythonw.exe'), (Join-Path $to 'studio_agent.pyw')
-        Set-ItemProperty -LiteralPath $RunKey -Name 'StudioAgent' -Value $command
-        Write-Host 'Автозапуск теперь запускает установленную копию.'
-    }
 }
 
 $venv = Join-Path $repo '.venv'
@@ -94,14 +89,39 @@ if (-not $NoVenv) {
     Invoke-Checked $py @('-m', 'pip', 'install', '--disable-pip-version-check', '-q', '-r', (Join-Path $repo 'requirements.txt'), '-c', (Join-Path $repo 'constraints.txt'))
 }
 
+# Запускатель «Studio Agent.exe» есть только в пакете студии. Автозапуск, ярлык и первый запуск переходят на него лишь
+# после пробы: антивирус мог его убрать или запретить — тогда pythonw.exe, как раньше (update_helper.launcher).
+$script = Join-Path $repo 'studio_agent.pyw'
+$launcher = Join-Path $repo 'Studio Agent.exe'
+$ready = $false
+if (Test-Path -LiteralPath $launcher) {
+    try {
+        $ready = (Start-Process -FilePath $launcher -ArgumentList '--probe' -Wait -PassThru -WindowStyle Hidden).ExitCode -eq 0
+    } catch {
+        $ready = $false
+    }
+}
+if ($ready) { $command = '"{0}"' -f $launcher } else { $command = '"{0}" "{1}"' -f $pyw, $script }
+
 if ($installed) {
+    # Автозапуск включён (git-копией или прежней установкой) — теперь он запускает эту копию, как autostart.command().
+    if ($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name 'StudioAgent' -ErrorAction SilentlyContinue)) {
+        Set-ItemProperty -LiteralPath $RunKey -Name 'StudioAgent' -Value $command
+        Write-Host 'Автозапуск теперь запускает установленную копию.'
+    }
     # Ярлык «Studio Agent» в меню «Пуск» пользователя — та же команда и папка, что автозапуск, и значок студии
-    # (shortcut.target). Самообновление переводит его на новый выпуск; копия из git ярлык не ставит.
+    # (shortcut.target). AppUserModelID ярлыку добавляет сам мост при запуске (autostart.repair): WScript.Shell его не
+    # пишет. Самообновление переводит ярлык на новый выпуск; копия из git ярлык не ставит.
     $menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
     New-Item -ItemType Directory -Force -Path $menu | Out-Null
     $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $menu 'Studio Agent.lnk'))
-    $link.TargetPath = $pyw
-    $link.Arguments = '"{0}"' -f (Join-Path $repo 'studio_agent.pyw')
+    if ($ready) {
+        $link.TargetPath = $launcher
+        $link.Arguments = ''
+    } else {
+        $link.TargetPath = $pyw
+        $link.Arguments = '"{0}"' -f $script
+    }
     $link.WorkingDirectory = $repo
     $link.Description = 'Studio Agent'
     $link.IconLocation = '{0},0' -f (Join-Path $repo 'studio_agent\studio-agent.ico')
@@ -110,6 +130,10 @@ if ($installed) {
 }
 
 if (-not $NoStart) {
-    Start-Process -FilePath $pyw -ArgumentList ('"{0}"' -f (Join-Path $repo 'studio_agent.pyw')) -WorkingDirectory $repo -WindowStyle Hidden
+    if ($ready) {
+        Start-Process -FilePath $launcher -WorkingDirectory $repo
+    } else {
+        Start-Process -FilePath $pyw -ArgumentList ('"{0}"' -f $script) -WorkingDirectory $repo -WindowStyle Hidden
+    }
     Write-Host 'Мост запущен: значок в трее. Не подключён — окно моста откроется само.'
 }

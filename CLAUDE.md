@@ -164,7 +164,7 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
     bash deploy/deploy.sh --refresh-base     # Docker: образ без кэша — свежие база и пакеты Debian сразу
 
 Выкладывается закоммиченный HEAD (`git archive` частей `app deploy requirements.txt constraints.txt docs/guide.ru.md` (руководство — для «Справки») и `.dockerignore` для Docker).
-Мост — ZIP из `HEAD:agent` и три установщика. `deploy/build-agent-bundle.py` сверяет общий комплект
+Мост — ZIP из `HEAD:agent` (плюс собранные запускатели macOS и Windows `Studio Agent.exe`) и три установщика. `deploy/build-agent-bundle.py` сверяет общий комплект
 по хэшам артефактов и переиспользует его при совпадении дерева моста и скриптов сборки;
 грязное дерево выкладываемых частей и `agent/` — отказ. `install-docker.sh`
 собирает образ до смены `current`, перед новым шагом схемы делает копию базы в работающем `web`

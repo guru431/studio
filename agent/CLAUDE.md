@@ -16,7 +16,9 @@ capability → версия моста — [docs/architecture/agent-bridge.md](.
 ветка после очистки публикуется на GitHub — в отслеживаемые файлы только примеры. Общие правила —
 [../CLAUDE.md](../CLAUDE.md); сервер и мост меняются одним коммитом, ZIP собирается из `HEAD:agent`. Браузеру
 отдаётся `studio-agent-setup.exe` для Windows: сборка — `../deploy/build-agent-installer.ps1`, оболочка —
-`../deploy/agent-installer.cs` (временная распаковка ZIP, `install.ps1`, уборка только своей папки). Windows требует
+`../deploy/agent-installer.cs` (временная распаковка ZIP, `install.ps1`, уборка только своей папки); запускатель
+`Studio Agent.exe` (с 0.47.0) — `../deploy/agent-launcher.cs`, сборка `../deploy/build-agent-launcher.ps1`, в ZIP его
+кладёт `../deploy/build-agent-bundle.py` (в git-копии его нет). Windows требует
 Python 3.11+ и интернет для pip; macOS получает автономный `studio-agent-setup.pkg` со встроенными Python/Tk и wheels
 (`../deploy/build-agent-macos.py`). Права администратора не нужны. Обновления моста получают ZIP. Находки и идеи — в корневых
 `FINDINGS.md` и `IDEAS.md` (вне Git: след закрытия — сообщение коммита с заголовком записи). Отдельного проекта и
@@ -85,6 +87,9 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
   частичный клон не дозагружает объекты (`gitinfo.OFFLINE`); исключение — `worktree add` по действию владельца.
 - Автозапуск Windows — значение `StudioAgent` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; Task Scheduler не трогать.
   Ярлык «Studio Agent» меню «Пуск» (`%APPDATA%`) — та же команда; тесты пишут его во временную `APPDATA` (conftest).
+  Команда — `Studio Agent.exe` копии только после пробы (`update_helper.launcher`), иначе `pythonw.exe`; откат на
+  `pythonw.exe` при пропаже exe — `autostart.repair` (поток `autostart.watch`). Тесты реестра — тестовый ключ или
+  подставной `winreg`, настоящий `Run` не трогают.
   macOS — `~/Library/LaunchAgents/com.studio.agent.plist`, без принудительного перезапуска.
 - Каталоги, которые читает обычный сеанс, — `host.private_dir`, `host.new_dir`, `host.temporary_dir`, не `mode=0o700` и
   не `tempfile.mkdtemp`/`TemporaryDirectory`: на Windows режим 0o700 даёт DACL «по владельцу», и после запуска с

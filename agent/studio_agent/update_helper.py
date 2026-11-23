@@ -16,6 +16,8 @@ MACOS = sys.platform == 'darwin'
 LINUX = sys.platform == 'linux'
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 OLD_WAIT_ROUNDS = 720  # по 120 с `wait_old` — до суток ожидания выхода прежнего моста
+LAUNCHER = 'Studio Agent.exe'  # запускатель Windows в копии из пакета студии (`deploy/agent-launcher.cs`)
+PROBE_SEC = 10
 READY_POLLS = 1800  # по 0,5 с — до 15 минут на готовность новой копии, пока она жива
 # Итоги перехода, о которых сообщает уже работающая копия (`failed_update`).
 FAILED_RESULTS = ('rolled_back', 'unconfirmed', 'old_running', 'failed')
@@ -45,9 +47,25 @@ def _macos_startup():
     return macos_autostart
 
 
+def launcher(repo, run=subprocess.run):
+    """Windows: `Studio Agent.exe` копии, если он прошёл пробу (`--probe` → 0: запускатель исполняется — антивирус его
+    не убрал и не запретил, рядом среда и скрипт), иначе None — тогда запускают `pythonw.exe`, как до 0.47.0."""
+    exe = Path(repo) / LAUNCHER
+    if MACOS or LINUX or not exe.is_file():
+        return None
+    try:
+        result = run([str(exe), '--probe'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, creationflags=NO_WINDOW, timeout=PROBE_SEC)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return exe if result.returncode == 0 else None
+
+
 def launch_arguments(stage, env=None):
     if MACOS:
         return _macos_startup().open_arguments(Path(stage), env)
+    if (exe := launcher(stage)) is not None:
+        return [str(exe)]
     return [str(python(Path(stage))), str(Path(stage) / 'studio_agent.pyw')]
 
 
@@ -541,14 +559,15 @@ def _shortcut(stage: Path) -> None:
     if MACOS or LINUX or _managed_location(stage) is None:
         return
     try:
+        ready = launcher(stage) is not None  # ярлык — на запускатель, только если он прошёл пробу
         if __package__:
             from . import shortcut
-            shortcut.ensure(stage)
+            shortcut.ensure(stage, launcher=ready)
         else:
             import runpy
             source = Path(__file__).with_name('_shortcut.py')
             if source.is_file():
-                runpy.run_path(str(source))['ensure'](stage)
+                runpy.run_path(str(source))['ensure'](stage, launcher=ready)
     except Exception:
         pass
 
@@ -610,8 +629,14 @@ def failed_update(repo: Path):
     return max(found)[1] if found else None
 
 
+def startup_commands(repo: Path) -> tuple[str, str]:
+    """Команды автозапуска Windows копии `repo`: запускатель (с 0.47.0) и `pythonw.exe` (прежняя и запасная)."""
+    return f'"{repo / LAUNCHER}"', f'"{repo / ".venv/Scripts/pythonw.exe"}" "{repo / "studio_agent.pyw"}"'
+
+
 def _switch_windows(stage: Path, old: Path):
-    """Автозапуск прежней копии → новая; чужое значение не перезаписываем. Итог — значение автозапуска для prune:
+    """Автозапуск прежней копии (запускателем или `pythonw.exe`) → новая: её запускатель, если прошёл пробу, иначе
+    `pythonw.exe`; чужое значение не перезаписываем. Итог — значение автозапуска для prune:
     `''` — его нет, None — неизвестно (prune откажется от удаления)."""
     import winreg
     key = r'Software\Microsoft\Windows\CurrentVersion\Run'
@@ -620,9 +645,10 @@ def _switch_windows(stage: Path, old: Path):
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
             value, _ = winreg.QueryValueEx(k, 'StudioAgent')
             autostart = value if isinstance(value, str) else None
-            expected = f'"{old / ".venv/Scripts/pythonw.exe"}" "{old / "studio_agent.pyw"}"'
-            if isinstance(value, str) and os.path.normcase(value.strip()) == os.path.normcase(expected):
-                command = f'"{stage / ".venv/Scripts/pythonw.exe"}" "{stage / "studio_agent.pyw"}"'
+            if isinstance(value, str) and os.path.normcase(value.strip()) in {
+                    os.path.normcase(command) for command in startup_commands(old)}:
+                exe, pythonw = startup_commands(stage)
+                command = exe if launcher(stage) is not None else pythonw
                 winreg.SetValueEx(k, 'StudioAgent', 0, winreg.REG_SZ, command)
                 autostart = command
     except FileNotFoundError:
