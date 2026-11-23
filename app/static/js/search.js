@@ -14,8 +14,14 @@ import { tr } from './i18n.js';
  * ctx.navigate(href) (адрес проверяет HREF jobs.js или MESSAGE_HREF: строка диалога — `chat/<id>?m=<сообщение>`,
  * chat.js прокручивает к нему и подсвечивает). Номер запроса:
  * запоздалый ответ прежнего не ляжет. Состояние выдачи — #search-results[data-state]: idle | loading |
- * ready | error (по нему ждут тесты); #search-status (aria-live) называет число найденного. */
+ * ready | error (по нему ждут тесты); #search-status (aria-live) называет число найденного.
+ *
+ * Чип «Агенты» — история на компьютерах: POST /api/code/search (мост 0.47.0, `chat_search_all`) — каждому своему
+ * компьютеру на связи одна просьба по всем проектам; выдача — группами по компьютеру, строка ведёт в чат, закрытый или
+ * недоступный компьютер — строкой в группе. Фильтры модели и дат к ней не относятся и скрыты. Поиск на компьютере
+ * идёт до 15 с: новый запрос ждёт конца прежнего (мост держит один поиск), последний ответ — в памяти модуля. */
 import { api } from './api.js';
+import { ENGINE_NAMES } from './code-options.js';
 import { calendarRange, timeOnly } from './time.js';
 import { dayKey, dayTitle } from './feed.js';
 import { fieldBox } from './field.js';
@@ -26,10 +32,19 @@ import { el, words } from './ui.js';
 import { modelLabel } from './models.js';
 
 export const SEARCH_PAUSE_MS = 300;
+const CODE_PAUSE_MS = 800;     // «Агенты»: каждый запрос — поиск на компьютерах, реже
 const LIMIT = 30;
-/** Фильтр разделов: разделы с историей в Студии в порядке рельса (история «Агентов» — на компьютере, «Open WebUI» — на
- * его сервере: поиск их не видит). */
-const SECTIONS = [['', tr("Все")], ...historyPairs()];
+/** Фильтр разделов: разделы с историей в Студии в порядке рельса, затем «Агенты» (история на компьютерах — своим
+ * запросом, не индексом Студии; «Open WebUI» — на его сервере: поиск его не видит). */
+const SECTIONS = [['', tr("Все")], ...historyPairs(), ['code', NAMES.code]];
+const AGENT_STATES = {
+  offline: tr("Компьютер не на связи"),
+  closed: tr("Компьютер закрыт — откройте его PIN в «Агентах»"),
+  unsupported: tr("Обновите мост на компьютере до 0.47.0"),
+  timeout: tr("Компьютер не ответил вовремя"),
+  busy: tr("На компьютере уже идёт поиск — повторите позже"),
+  error: tr("Поиск на компьютере не удался"),
+};
 /** Разделы, где заголовок — тот же текст, что найден: кусок с выделением встаёт на его место. */
 const SAME_TEXT = new Set(['photo', 'video', 'speech']);
 const PERIODS = [[1, tr("Сегодня")], [7, tr("Неделя")], [30, tr("Месяц")]];
@@ -38,12 +53,14 @@ const HAS_WORD = /[\p{L}\p{N}]/u;
 const MESSAGE_HREF = /^chat\/[\w-]+\?m=[\w-]+$/;
 
 const memory = { q: '', section: '', model: '', since: '', until: '' };
+const codeFound = { q: '', groups: null };   // последний ответ «Агентов»: возврат из чата не ищет заново
 let returnTo = null;
 let screen = null;
-document.addEventListener('studio-locked', () => { returnTo = null; });
+document.addEventListener('studio-locked', () => { returnTo = null; codeFound.groups = null; });
 // срок частичной защиты истёк (lock.js): выдача с кусками закрытых разделов уходит, тот же запрос — заново
 document.addEventListener('studio-sections-locked', () => {
   returnTo = null;
+  codeFound.groups = null;
   if (screen) screen.forget();
 });
 
@@ -94,6 +111,20 @@ function row(item, go) {
   return el('li', {}, node);
 }
 
+/** Строка «Агентов»: название чата, кусок с найденным (текст как есть), проект и помощник; нажатие — в чат. */
+function codeRow(aid, item, go) {
+  const snippet = item.snippets[0]?.text;
+  const node = el('button', { type: 'button', class: 'search-row', 'data-section': 'code', 'data-id': item.chat },
+    icon('code'), el('span', { class: 'sr' }, NAMES.code),
+    el('span', { class: 'search-text' }, el('b', { class: 'search-title' }, item.title || tr("Без названия")),
+      snippet ? el('span', { class: 'search-snippet' }, snippet) : null,
+      el('span', { class: 'search-meta' }, [item.project_name, ENGINE_NAMES[item.engine]].filter(Boolean).join(' · '))));
+  node.addEventListener('click', () => {
+    if (/^[0-9a-f]{16}$/.test(item.project)) go(`code/${aid}/${item.project}/${encodeURIComponent(item.chat)}`);
+  });
+  return el('li', {}, node);
+}
+
 function mountScreen(view, ctx) {
   let asked = 0;               // номер запроса: запоздалый ответ прежнего не ляжет
   let timer = null;
@@ -122,12 +153,70 @@ function mountScreen(view, ctx) {
   const results = el('div', { id: 'search-results', 'data-state': 'idle' });
   const moreBtn = el('button', { type: 'button', id: 'search-more', class: 'btn', hidden: true }, tr("Показать ещё"));
 
+  const filters = el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, tr("с")), since,
+    el('label', { for: until.id }, tr("по")), until, reset);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.search)),
     el('div', { class: 'page search-page' },
-      field.box, field.error, chips,
-      el('div', { class: 'search-filters' }, model, el('label', { for: since.id }, tr("с")), since,
-        el('label', { for: until.id }, tr("по")), until, reset), periods,
+      field.box, field.error, chips, filters, periods,
       status, results, moreBtn));
+  let stopped = false;
+  let codeBusy = false;        // поиск «Агентов» в пути: следующий — после него (мост держит один поиск)
+  let codeAgain = false;
+
+  function paintCode(groups) {
+    const total = groups.reduce((n, g) => n + g.items.length, 0);
+    const go = (href) => ctx.navigate(href);
+    results.replaceChildren(...groups.map((g) => el('section', { class: 'search-day search-agent', 'data-aid': g.aid },
+      el('h2', { class: 'feed-day-title' }, g.name),
+      g.state !== 'ok' ? el('p', { class: 'muted small search-agent-state' }, AGENT_STATES[g.state] || AGENT_STATES.error)
+        : g.items.length ? el('ul', { class: 'search-list' }, ...g.items.map((item) => codeRow(g.aid, item, go)))
+          : el('p', { class: 'muted small search-agent-state' }, tr("Ничего не нашлось")),
+      g.state === 'ok' && !g.complete ? el('p', { class: 'muted small' }, tr("Просмотрены не все чаты — уточните запрос")) : null)));
+    status.textContent = !groups.length ? tr("Компьютеров пока нет.") : !total ? tr("Ничего не нашлось") : tr("Найдено: {0}", total);
+    results.dataset.state = 'ready';
+  }
+
+  async function runCode() {
+    const query = memory.q.trim();
+    items = [];
+    shown = '';
+    more = false;
+    moreBtn.hidden = true;
+    if (!HAS_WORD.test(query)) {
+      results.replaceChildren();
+      status.textContent = tr("Введите слова — поиск идёт по чатам компьютеров на связи");
+      results.dataset.state = 'idle';
+      return;
+    }
+    if (codeFound.groups && codeFound.q === query) {
+      paintCode(codeFound.groups);
+      return;
+    }
+    if (codeBusy) {
+      codeAgain = true;
+      return;
+    }
+    codeBusy = true;
+    const mine = asked;
+    results.dataset.state = 'loading';
+    status.textContent = tr("Ищу в чатах компьютеров…");
+    try {
+      const out = await api('POST', '/api/code/search', { query });
+      Object.assign(codeFound, { q: query, groups: out.items });
+      if (mine === asked && !stopped) paintCode(out.items);
+    } catch (err) {
+      if (mine === asked && !stopped) {
+        status.textContent = words(err);
+        results.dataset.state = 'error';
+      }
+    } finally {
+      codeBusy = false;
+      if (codeAgain && !stopped) {
+        codeAgain = false;
+        if (memory.section === 'code') run();
+      }
+    }
+  }
 
   function paintModels() {
     const known = models || {};
@@ -186,6 +275,13 @@ function mountScreen(view, ctx) {
 
   async function run(append = false, restore = null) {
     clearTimeout(timer);
+    filters.hidden = periods.hidden = memory.section === 'code';
+    if (memory.section === 'code') {
+      asked += 1;
+      returnTo = null;
+      runCode();
+      return;
+    }
     const mine = ++asked;
     const body = wanted();
     const key = JSON.stringify(body);
@@ -241,7 +337,7 @@ function mountScreen(view, ctx) {
 
   function later() {
     clearTimeout(timer);
-    timer = setTimeout(run, SEARCH_PAUSE_MS);
+    timer = setTimeout(run, memory.section === 'code' ? CODE_PAUSE_MS : SEARCH_PAUSE_MS);
   }
 
   q.addEventListener('input', () => {
@@ -295,7 +391,7 @@ function mountScreen(view, ctx) {
   if (!restore && matchMedia('(hover: hover)').matches) q.focus();
   return {
     results,
-    stop() { clearTimeout(timer); asked += 1; },
+    stop() { clearTimeout(timer); asked += 1; stopped = true; },
     forget() {
       items = [];
       shown = '';

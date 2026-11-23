@@ -416,6 +416,17 @@ def test_models_are_probed_again_every_hour(make, configured):
     assert len(ctrl.links) == 2 and [m["id"] for m in ctrl.agent.models] == ["m1", "m3"]  # сбой пробы — без канала
 
 
+def test_studio_refreshes_claude_models_without_a_new_channel(make, configured):
+    found = {1: ["m1"], 2: ["m1", "m2"]}
+    ctrl = make(probe=lambda n: ([{"id": m, "label": "M"} for m in found[n]], ["low"]))
+    ctrl.start()
+    until(lambda: ctrl.state == "online")
+    assert ctrl.links[0].hello["claude_models"] is True
+    ok = asyncio.run_coroutine_threadsafe(ctrl.agent.claude_probe(), ctrl._loop).result(5)
+    assert ok and [m["id"] for m in ctrl.agent.models] == ["m1", "m2"] and len(ctrl.links) == 1
+    assert ctrl.backend_status()["claude"] == {"status": "ready", "models": 2}
+
+
 def test_catalogs_are_in_hello_and_revocation_stops_all_runners(make, configured, home):
     class Backend:
         def __init__(self, emit, home, choices):
