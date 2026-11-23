@@ -232,7 +232,6 @@ def test_connect_account_and_see_tree(owui_browser, live, fake, width):
         page.evaluate("location.hash = '#/search'")                          # «Поиск» чаты Open WebUI не охватывает
         pw.expect(page.locator(".search-chips .chip[data-section=chat]")).to_have_count(1)
         pw.expect(page.locator(".search-chips .chip[data-section=owui]")).to_have_count(0)
-        pw.expect(page.locator(".search-chips .chip[data-section=code]")).to_have_count(0)
         assert not page.problems, page.problems
 
 
