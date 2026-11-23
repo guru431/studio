@@ -2177,6 +2177,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Сейчас ничего не идёт": "Nothing running",
   "Куда отправить?": "Where should it go?",
   "Не отправлять": "Don't send",
+  "Получено из другого приложения или сайта. Отправляйте, только если делились этим сами.": "Received from another app or website. Send it only if you shared it yourself.",
   "Эти файлы вместе не принимает ни один раздел. Поделитесь ими по отдельности.": "No section accepts these files together. Share them one at a time.",
   "За час ничего не закончилось": "Nothing finished in the past hour",
   "В работе{0}{1}{2}": "In progress{0}{1}{2}",

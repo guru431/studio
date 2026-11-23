@@ -53,7 +53,9 @@ const HAS_WORD = /[\p{L}\p{N}]/u;
 const MESSAGE_HREF = /^chat\/[\w-]+\?m=[\w-]+$/;
 
 const memory = { q: '', section: '', model: '', since: '', until: '' };
-const codeFound = { q: '', groups: null };   // последний ответ «Агентов»: возврат из чата не ищет заново
+/** Последний ответ «Агентов» и запись истории (метка `entry` роутера), где он получен: возврат из чата «Назад» на ту же
+ * запись не ищет заново; новое открытие поиска — новая запись — ищет (новые чаты по тому же слову). */
+const codeFound = { q: '', groups: null, entry: null };
 let returnTo = null;
 let screen = null;
 document.addEventListener('studio-locked', () => { returnTo = null; codeFound.groups = null; });
@@ -202,7 +204,7 @@ function mountScreen(view, ctx) {
     status.textContent = tr("Ищу в чатах компьютеров…");
     try {
       const out = await api('POST', '/api/code/search', { query });
-      Object.assign(codeFound, { q: query, groups: out.items });
+      Object.assign(codeFound, { q: query, groups: out.items, entry: history.state?.entry ?? null });
       if (mine === asked && !stopped) paintCode(out.items);
     } catch (err) {
       if (mine === asked && !stopped) {
@@ -403,6 +405,7 @@ function mountScreen(view, ctx) {
 }
 
 export function mount(view, ctx) {
+  if (codeFound.entry !== (history.state?.entry ?? null)) codeFound.groups = null;
   screen = mountScreen(view, ctx);
 }
 

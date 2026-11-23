@@ -1080,7 +1080,8 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   let all = false;
   let asked = 0;   // ответ прежнего фильтра, пришедший после переключения, не рисуется
   const important = Object.keys(AGENT_EVENTS).filter((k) => !LINK_KINDS.has(k)).join(',');
-  const filter = el('fieldset', { class: 'segment', id: 'agent-events-filter', 'aria-label': tr("Какие события показать") });
+  const filter = el('fieldset', { class: 'segment', id: 'agent-events-filter' },
+    el('legend', { class: 'sr' }, tr("Какие события показать")));
   for (const [id, text] of [['important', tr("Важное")], ['all', tr("Всё")]]) {
     const input = el('input', { type: 'radio', class: 'sr', name: 'agent-events-filter', value: id,
       id: `agent-events-${id}`, checked: id === 'important' });

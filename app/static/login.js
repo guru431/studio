@@ -10,6 +10,14 @@
   // без сессии число на значке приложения (js/jobs.js, sw.js) — чужое для следующего входа
   if (navigator.clearAppBadge) navigator.clearAppBadge().catch(function () {});
   if (window.caches) caches.delete('studio-badge').catch(function () {});
+  // непринятое из листа «Поделиться» (js/share-target.js), уже показанное прежней сессии, — тоже чужое; принятое без
+  // сессии (offered ещё нет) ждёт этого входа
+  if (window.caches) {
+    caches.match('/received/meta', { cacheName: 'studio-received' })
+      .then(function (hit) { return hit ? hit.json() : null; })
+      .then(function (meta) { if (meta && meta.offered) return caches.delete('studio-received'); })
+      .catch(function () {});
+  }
   var login = document.getElementById('login');     // после отказа логин уже набран (auth._login_page) — к паролю
   if (matchMedia('(hover: hover) and (pointer: fine)').matches) (login && login.value ? document.getElementById('password') : login)?.focus();
   var next = document.getElementById('next');
