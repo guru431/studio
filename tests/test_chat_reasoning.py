@@ -1,10 +1,7 @@
 """Кнопка «Рассуждение» диалога (`chats.thinking`) и рассуждение модели в потоке ответа (спека
 2026-10-22-studio-chat-tools-badge-reasoning, раздел 4)."""
-import asyncio
 import json
 import logging
-
-import pytest
 
 import chat
 import state
@@ -42,15 +39,6 @@ def test_request_carries_enable_thinking_only_for_a_local_model(studio):
 
 
 # ---- рассуждение в потоке ----------------------------------------------------------------------
-
-@pytest.fixture
-def no_pings(monkeypatch):
-    """Пинги ответа двигают подменённые часы на PING_SEC каждую миллисекунду: секунды рассуждения и «не чаще
-    раза в секунду» сверяются без них."""
-    async def idle(self):
-        await asyncio.Event().wait()
-    monkeypatch.setattr(chat.StreamTask, "_pings", idle)
-
 
 def thinking_chat(s, on=True) -> str:
     add_gateway(s); cid = new_chat(s)

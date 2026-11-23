@@ -2,6 +2,7 @@
 import hashlib
 import mimetypes
 import re
+from functools import cache
 from pathlib import Path
 
 from starlette.exceptions import HTTPException
@@ -14,22 +15,29 @@ def module_preloads(directory: Path) -> dict[str, list[str]]:
     root = directory.resolve()
     imports = re.compile(r"^\s*import\s+(?:[^;]*?\s+from\s+)?['\"]([^'\"]+)['\"]", re.MULTILINE)
 
+    @cache
+    def dependencies(path):
+        path = path.resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError('Invalid local module dependency')
+        children = []
+        for target in imports.findall(path.read_text(encoding='utf-8')):
+            if target.startswith('.'):
+                children.append(path.parent / target)
+            elif target.startswith('/static/'):
+                children.append(root / target.removeprefix('/static/'))
+        return path.relative_to(root).as_posix(), children
+
     def graph(entries):
         found = set()
 
         def visit(path):
-            path = path.resolve()
-            if not path.is_relative_to(root) or not path.is_file():
-                raise ValueError('Invalid local module dependency')
-            relative = path.relative_to(root).as_posix()
+            relative, children = dependencies(path)
             if relative in found:
                 return
             found.add(relative)
-            for target in imports.findall(path.read_text(encoding='utf-8')):
-                if target.startswith('.'):
-                    visit(path.parent / target)
-                elif target.startswith('/static/'):
-                    visit(root / target.removeprefix('/static/'))
+            for child in children:
+                visit(child)
 
         for entry in entries:
             visit(root / 'js' / (entry + '.js'))

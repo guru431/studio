@@ -256,8 +256,8 @@ ffmpeg и yt-dlp внутри образа. `web` работает от uid/gid 
 Контракт — `local-config/cron/project-registry.json::studio.tests`: наборы `main` (корень, `.venv`) и `agent`
 (`agent/`, своя `.venv`, [agent/CLAUDE.md](agent/CLAUDE.md#тесты)); быстрый и полный уровни запускают оба.
 
-    .venv/Scripts/python -m pytest -q                       # быстрый набор: 10 процессов xdist, бюджет 60 с
-    .venv/Scripts/python -m pytest -q -n0 <файл>            # один тест/файл без параллели
+    .venv/Scripts/python -m pytest -q                       # быстрый набор: 12 процессов xdist, бюджет 60 с
+    .venv/Scripts/python -m pytest -q -n0 --assert=rewrite <файл>  # точечный прогон с разбором ассертов
     .venv/Scripts/python -m pytest -q -m integration        # браузер (Edge/Chrome + node 22, Firefox, WebKit), PowerShell
     .venv/Scripts/python -m pytest -q -m manual             # живая приёмка после выкладки (команда — testing.md)
 

@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -51,13 +52,12 @@ def roomy_disk(monkeypatch):
 
 
 @pytest.fixture
-def base(env, monkeypatch):
+def base(env, monkeypatch, schema_db):
     """Рабочая база с учёткой, тремя токенами и тремя файлами (одного на шаре нет)."""
     monkeypatch.setattr(state, "CFG", config.load())
-    conn = db.connect(env.db_path)
-    db.migrate(conn)
-    yield conn
-    conn.close()
+    env.db_path.write_bytes(schema_db)
+    with closing(db.connect(env.db_path)) as conn:
+        yield conn
 
 
 def backup_of(conn, env, monkeypatch):

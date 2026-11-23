@@ -10,6 +10,7 @@ import mcp_client
 import my_files
 import security
 import state
+from http_checks import on_http
 from test_my_files import member_with_files, upload  # noqa: F401  (фикстура empty_cache — ниже)
 from test_my_files import empty_cache  # noqa: F401
 
@@ -288,19 +289,24 @@ def test_link_bruteforce_locks_ip_429(studio):
     member, sid, server = member_with_files(studio)
     token = make_link(studio, sid)["url"].split("#")[1]
     anonymous(studio)
-    # удачные проверки неудачами не считаются
-    for _ in range(35):
-        assert check(studio, token).status_code == 200
-    for _ in range(30):
-        assert check(studio, secrets.token_urlsafe(32)).status_code == 404
-    locked = check(studio, token)
-    assert locked.status_code == 429 and locked.json()["detail"]["code"] == "file_locked"
-    public_headers(locked)
-    assert opened(studio, token).status_code == 429
-    # другой адрес — свой счёт
-    assert check(studio, token, **{"X-Forwarded-For": "203.0.113.9"}).status_code == 200
-    studio.clock[0] += 901
-    assert check(studio, token).status_code == 200
+
+    async def verify(client):
+        url, body = "/f/check", {"token": token}
+        # удачные проверки неудачами не считаются
+        for _ in range(35):
+            assert (await client.post(url, json=body)).status_code == 200
+        for _ in range(30):
+            assert (await client.post(url, json={"token": secrets.token_urlsafe(32)})).status_code == 404
+        locked = await client.post(url, json=body)
+        assert locked.status_code == 429 and locked.json()["detail"]["code"] == "file_locked"
+        public_headers(locked)
+        assert (await client.post("/f/open", json=body)).status_code == 429
+        # другой адрес — свой счёт
+        assert (await client.post(url, json=body, headers={"X-Forwarded-For": "203.0.113.9"})).status_code == 200
+        studio.clock[0] += 901
+        assert (await client.post(url, json=body)).status_code == 200
+
+    on_http(studio, verify)
 
 
 def test_link_deeply_nested_listing_is_the_uniform_404(studio):

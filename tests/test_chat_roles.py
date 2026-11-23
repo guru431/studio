@@ -27,7 +27,9 @@ def test_builtin_roles_cover_six_professions_in_both_languages():
         assert all(0 < len(text) <= roles.TEXT_MAX for _, _, text in roles.BUILTIN[lang])
 
 
-def test_first_list_seeds_library_once(studio):
+def test_first_list_seeds_library_once(env, schema_db, request):
+    env.db_path.write_bytes(schema_db)       # настоящий первый запуск без готовых умолчаний
+    studio = request.getfixturevalue('studio')
     signin_uid = make_user(studio, "owner"); signin(studio, "owner")
     assert state.DB.execute("SELECT roles_seeded FROM users WHERE id = ?", (signin_uid,)).fetchone()[0] is None
     first = studio.c.get("/api/roles")

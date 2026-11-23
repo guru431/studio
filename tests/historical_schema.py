@@ -1,4 +1,7 @@
 """Historical base for file-backed migration tests. Schema 1 is from df413e1."""
+import sqlite3
+from contextlib import closing
+
 import db
 
 
@@ -46,5 +49,10 @@ INSERT INTO settings(key, value) VALUES ('allowlist', '["10.77.1.15:4000"]');
 
 def install_schema(conn, version: int) -> None:
     """Create the empty database an installation at this version would have."""
+    if conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone() is not None:
+        raise ValueError("historical schema requires an empty database")
     steps = "\n".join(db.STEPS[v] for v in range(2, version + 1))
-    conn.executescript(f"BEGIN;\n{SCHEMA_V1}\n{steps}\nPRAGMA user_version = {version};\nCOMMIT;")
+    with closing(sqlite3.connect(":memory:")) as template:
+        template.execute("PRAGMA foreign_keys=ON")
+        template.executescript(f"BEGIN;\n{SCHEMA_V1}\n{steps}\nPRAGMA user_version = {version};\nCOMMIT;")
+        template.backup(conn)

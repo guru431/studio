@@ -918,7 +918,7 @@ def test_long_pdf_asks_for_a_range_and_keeps_the_source_page_numbers(studio):
     документ из выбранных страниц с номерами исходника: рисуется та самая страница, выгрузка и «В чат» называют
     её номер."""
     add_gateway(studio)
-    pdf = scan_pdf(*["blank"] * 50, "ink", "blank")                   # 52 страницы, текст — только на 51-й
+    pdf = scan_pdf(*["empty"] * 49, "blank", "ink", "blank")         # сканы только в проверяемом диапазоне 50–52
 
     def post(first=None, last=None):
         headers = {k: str(v) for k, v in (("x-studio-first-page", first), ("x-studio-last-page", last)) if v}

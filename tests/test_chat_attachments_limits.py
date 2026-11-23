@@ -86,9 +86,7 @@ def test_profile_max_images_overrides_default_and_stays_out_of_request(studio):
     assert parts[1]["text"] == chat.DROPPED.format(2)
 
 
-def test_mcp_with_consent_gets_all_photos(studio, monkeypatch):
-    # паузы пингов потока двигают часы теста на PING_SEC, пока идут загрузки: срок хода здесь не проверяется
-    monkeypatch.setattr(mcp_files, "SYNC_SEC", 10 ** 6)
+def test_mcp_with_consent_gets_all_photos(studio, no_pings):
     sid, calls = setup(studio)
     cid = new_chat(studio)
     consent(studio, cid, sid)

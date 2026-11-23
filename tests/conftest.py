@@ -239,16 +239,43 @@ def schema_db(tmp_path_factory):
         path = Path(directory) / 'studio.db'
         conn = db.connect(path)
         try:
+            conn.execute('PRAGMA synchronous=OFF')
             db.migrate(conn)
         finally:
             conn.close()
         return path.read_bytes()
 
 
+@pytest.fixture(scope="session")
+def studio_db(schema_db, tmp_path_factory):
+    """Снимок пустой базы после одноразовой инициализации при старте службы."""
+    from contextlib import closing
+    from tempfile import TemporaryDirectory
+
+    import clock
+    import db
+    import roles
+    import search
+    import sections
+    import state
+
+    with TemporaryDirectory(prefix='studio-db-', dir=tmp_path_factory.getbasetemp()) as directory:
+        path = Path(directory) / 'studio.db'
+        path.write_bytes(schema_db)
+        with closing(db.connect(path)) as conn, pytest.MonkeyPatch.context() as patch:
+            conn.execute('PRAGMA synchronous=OFF')
+            patch.setattr(state, 'DB', conn)
+            patch.setattr(clock, 'NOW', lambda: T0)
+            sections.adopt('translate', 'chat')
+            roles.seed_defaults()
+            search.compose_once(conn)
+        return path.read_bytes()
+
+
 @pytest.fixture
-def studio(env, schema_db, monkeypatch):
+def studio(env, studio_db, monkeypatch):
     """main.app на свежей базе: часы — список `clock`, пауза двигает их и пишется в `sleeps`,
-    шлюз — FakeGateway через httpx.MockTransport. База — копия `schema_db`, если тест не положил
+    шлюз — FakeGateway через httpx.MockTransport. База — копия `studio_db`, если тест не положил
     свою заранее (её lifespan доведёт до VERSION сам)."""
     import httpx
     from fastapi.testclient import TestClient
@@ -329,7 +356,7 @@ def studio(env, schema_db, monkeypatch):
     owui.FAILS.clear()                   # неудачи входа в Open WebUI (ключ — uid той базы)
     clear_owui_links()
     if not env.db_path.exists():
-        env.db_path.write_bytes(schema_db)
+        env.db_path.write_bytes(studio_db)
     with TestClient(main.app, base_url="https://testserver",
                    backend_options={"loop_factory": new_event_loop}) as client:
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
@@ -390,6 +417,17 @@ def clear_push() -> None:
             except RuntimeError:
                 pass
     push.TASKS.clear()
+
+
+@pytest.fixture
+def no_pings(monkeypatch):
+    """Фиктивные часы в тестах сроков сдвигает сценарий, а не фоновые пинги SSE."""
+    import chat
+
+    async def idle(self):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(chat.StreamTask, "_pings", idle)
 
 
 @pytest.fixture

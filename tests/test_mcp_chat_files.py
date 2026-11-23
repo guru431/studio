@@ -6,6 +6,7 @@ import json
 import logging
 
 import httpx
+import pytest
 
 import access
 import mcp_client
@@ -19,6 +20,8 @@ from test_chat_shares import create as create_share, unlock as unlock_share
 from test_chat_web import call
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
 from test_shared_integrations import add_models
+
+pytestmark = pytest.mark.usefixtures("no_pings")
 
 ART = "art_" + "a" * 32
 CONTENT = b"0123456789result-bytes"
