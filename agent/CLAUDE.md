@@ -88,7 +88,8 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 - Автозапуск Windows — значение `StudioAgent` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; Task Scheduler не трогать.
   Ярлык «Studio Agent» меню «Пуск» (`%APPDATA%`) — та же команда; тесты пишут его во временную `APPDATA` (conftest).
   Команда — `Studio Agent.exe` копии только после пробы (`update_helper.launcher`), иначе `pythonw.exe`; откат на
-  `pythonw.exe` при пропаже exe — `autostart.repair` (поток `autostart.watch`). Тесты реестра — тестовый ключ или
+  `pythonw.exe` при пропаже exe — `autostart.repair` (поток `autostart.watch`; у моста от exe ещё
+  `autostart.follow_launcher` — exe без Job Object, мост переживает его завершение антивирусом). Тесты реестра — тестовый ключ или
   подставной `winreg`, настоящий `Run` не трогают.
   macOS — `~/Library/LaunchAgents/com.studio.agent.plist`, без принудительного перезапуска.
 - Каталоги, которые читает обычный сеанс, — `host.private_dir`, `host.new_dir`, `host.temporary_dir`, не `mode=0o700` и

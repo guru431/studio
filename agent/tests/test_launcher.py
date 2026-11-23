@@ -123,6 +123,35 @@ def _raise():
     raise PermissionError('fixture')
 
 
+def test_launcher_passes_its_pid_and_does_not_bind_the_bridge_to_its_life():
+    """Контракт `agent-launcher.cs` ↔ `autostart.follow_launcher`: pid — переменной `LAUNCHER_ENV`, без Job Object с
+    `KILL_ON_JOB_CLOSE` (иначе антивирус, завершивший exe, убил бы мост до `repair`)."""
+    source = (DEPLOY / 'agent-launcher.cs').read_text(encoding='utf-8')
+    assert f'EnvironmentVariables["{autostart.LAUNCHER_ENV}"]' in source
+    assert 'JobObject' not in source and '0x2000' not in source
+
+
+@pytest.mark.parametrize('present', [True, False])
+def test_bridge_quits_with_a_closed_launcher_but_outlives_a_removed_one(monkeypatch, ready, present):
+    steps = []
+    ready(present)
+    autostart.follow_launcher('42', lambda: steps.append('quit'), wait=lambda pid, repo: steps.append(pid) or True,
+                              sleep=steps.append, fix=lambda: steps.append('repair'))
+    # Сначала пауза: антивирус убирает файл после завершения процесса; exe на месте — закрыли, выход моста.
+    assert steps == ['42', autostart.LAUNCHER_GRACE_SEC, 'quit' if present else 'repair']
+
+
+def test_launcher_follower_survives_a_registry_failure_and_ignores_foreign_processes(ready):
+    ready(False)
+    autostart.follow_launcher('42', _raise, wait=lambda pid, repo: True, sleep=lambda s: None, fix=_raise)  # не падает
+    steps = []
+    autostart.follow_launcher('42', lambda: steps.append('quit'), wait=lambda pid, repo: False, sleep=steps.append)
+    assert steps == []
+    # Настоящее ожидание: не число и чужой процесс (этот python — не запускатель копии) — сразу False, без ожидания.
+    assert not autostart._wait_launcher('x', REPO)
+    assert not autostart._wait_launcher(str(os.getpid()), REPO)
+
+
 @pytest.mark.parametrize('value', [None, r'"C:\other\studio-agent\Studio Agent.exe"',
                                    r'"C:\other\studio-agent\.venv\Scripts\pythonw.exe" "C:\other\studio-agent\studio_agent.pyw"'])
 def test_start_leaves_a_missing_or_foreign_autostart_alone(monkeypatch, ready, value):
@@ -226,7 +255,15 @@ def _copy(built, tmp_path, *, venv=True):
         '    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],\n'
         '        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP).pid\n'
         'Path(__file__).with_name("out.json").write_text(json.dumps({"pid": os.getpid(), "cwd": os.getcwd(),\n'
-        '    "exe": sys.executable, "child": child, "mark": os.environ.get("MARK")}))\n'
+        '    "exe": sys.executable, "child": child, "mark": os.environ.get("MARK"),\n'
+        '    "launcher": os.environ.get("STUDIO_AGENT_LAUNCHER")}))\n'
+        'if os.environ["MODE"] == "follow":\n'      # как `app.main`, но вместо выхода и реестра — отметки-файлы
+        '    sys.path.insert(0, os.environ["AGENT_REPO"])\n'
+        '    from studio_agent import autostart\n'
+        '    here = Path(__file__).parent\n'
+        '    autostart.follow_launcher(os.environ.pop(autostart.LAUNCHER_ENV), lambda: (here / "quit").touch(),\n'
+        '        repo=here, sleep=lambda s: time.sleep(1), fix=lambda: (here / "repair").touch())\n'
+        '    (here / "followed").touch()\n'
         'if os.environ["MODE"] == "hold":\n'
         '    time.sleep(60)\n'
         'sys.exit(7)\n', encoding='utf-8')
@@ -272,12 +309,13 @@ def test_launcher_runs_venv_pythonw_as_its_child_and_returns_its_code(built, tmp
 
 
 @pytest.mark.integration
-def test_bridge_dies_with_the_launcher_but_its_detached_helper_survives(built, tmp_path):
-    """KILL_ON_JOB_CLOSE — мост не переживает запускатель; SILENT_BREAKAWAY_OK — хелпер обновления (как
-    `updater.launch`) не входит в задание и переживает выход старого моста."""
+@pytest.mark.parametrize('removed', [False, True])
+def test_bridge_quits_with_a_killed_launcher_unless_the_exe_is_gone(built, tmp_path, removed):
+    """Убитый запускатель (только свой тестовый процесс) мост не убивает: тот сам видит его выход по pid из окружения.
+    exe на месте — выход (`quit`); exe убран, как антивирусом после завершения, — `repair` и работа дальше."""
     repo = _copy(built, tmp_path)
-    out = repo / 'out.json'
-    launcher = subprocess.Popen([str(repo / update_helper.LAUNCHER)], env={**os.environ, 'MODE': 'hold'})
+    out, exe = repo / 'out.json', repo / update_helper.LAUNCHER
+    launcher = subprocess.Popen([str(exe)], env={**os.environ, 'MODE': 'follow', 'AGENT_REPO': str(REPO)})
     info = None
     try:
         for _ in range(200):
@@ -285,13 +323,17 @@ def test_bridge_dies_with_the_launcher_but_its_detached_helper_survives(built, t
                 info = json.loads(out.read_text(encoding='utf-8'))
                 break
             time.sleep(0.05)
-        assert info is not None
-        launcher.kill()                                                            # только свой тестовый процесс
+        assert info is not None and info['launcher'] == str(launcher.pid)
+        time.sleep(1)                                                              # мост открыл дескриптор запускателя
+        launcher.kill()
         launcher.wait(timeout=10)
-        assert update_helper.wait_old(info['pid'], 10000)
-        assert not update_helper.wait_old(info['child'], 300)
+        if removed:
+            exe.unlink()
+        assert update_helper.wait_old(info['pid'], 20000)                          # мост пережил запускатель и дошёл
+        assert (repo / 'followed').is_file()
+        assert (repo / 'quit').is_file() != removed and (repo / 'repair').is_file() == removed
     finally:
         if launcher.poll() is None:
             launcher.kill()
-        if info is not None and not update_helper.wait_old(info['child'], 0):
-            os.kill(info['child'], 9)
+        if info is not None and not update_helper.wait_old(info['pid'], 0):
+            os.kill(info['pid'], 9)

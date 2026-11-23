@@ -17,6 +17,8 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE = "StudioAgent"
 REPO = Path(__file__).resolve().parent.parent
 REPAIR_SEC = 600
+LAUNCHER_ENV = "STUDIO_AGENT_LAUNCHER"  # pid `Studio Agent.exe`: его ставит запускатель своему дочернему процессу
+LAUNCHER_GRACE_SEC = 5  # антивирус убирает файл уже после завершения процесса
 
 
 def command() -> str:
@@ -119,3 +121,59 @@ def watch(sleep=time.sleep) -> None:
         except OSError as error:
             log.warning("автозапуск: %s", type(error).__name__)
         sleep(REPAIR_SEC)
+
+
+def _wait_launcher(pid_text: str, repo: Path) -> bool:
+    """Ждёт выхода запускателя этой копии (`Studio Agent.exe` рядом с `repo`) по pid из `LAUNCHER_ENV`. False — следить
+    не за кем: pid не число, процесс уже вышел или это не запускатель этой копии (pid мог достаться другому)."""
+    import ctypes
+    from ctypes import wintypes
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return False
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                  ctypes.POINTER(wintypes.DWORD))
+    kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buffer))
+        if not kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return False
+        try:
+            if not os.path.samefile(buffer.value, repo / update_helper.LAUNCHER):
+                return False
+        except OSError:
+            return False
+        kernel.WaitForSingleObject(handle, 0xFFFFFFFF)  # INFINITE
+        return True
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def follow_launcher(pid_text: str, quit, repo: Path = REPO, wait=_wait_launcher, sleep=time.sleep, fix=None) -> None:
+    """Поток моста Windows, запущенного `Studio Agent.exe`. Мост не в задании запускателя: антивирус, завершивший exe
+    перед карантином, иначе убил бы и мост, и `repair` не успел бы вернуть автозапуск и ярлык на `pythonw.exe`.
+    Запускатель вышел раньше моста — через `LAUNCHER_GRACE_SEC` проба: exe на месте и исполняется — его закрыли,
+    мост штатно выходит (`quit`); пропал или запрещён — `repair` сразу (автозапуск и ярлык — на `pythonw.exe`), мост
+    продолжает работу: его ходы и открытые сессии не теряются."""
+    if host.MACOS or host.LINUX or not wait(pid_text, repo):
+        return
+    sleep(LAUNCHER_GRACE_SEC)
+    if update_helper.launcher(repo) is not None:
+        log.info("запускатель: закрыт — мост выходит")
+        quit()
+        return
+    log.warning("запускатель: exe пропал или не исполняется — мост продолжает работу")
+    try:
+        (fix or repair)()
+    except OSError as error:  # `watch` повторит через REPAIR_SEC
+        log.warning("автозапуск: %s", type(error).__name__)
