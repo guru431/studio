@@ -302,7 +302,7 @@ def test_hello(agent):
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
-                             "deepseek_models": False, "deepseek_usage": True}
+                             "deepseek_models": False, "deepseek_usage": True, "open_asks": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -557,6 +557,32 @@ async def test_answer_stop_watch_of_another_project_do_not_see_the_turn(home, ro
     assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
     await settle(a)
     assert a.sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+async def test_open_asks_are_resent_on_every_new_link_only_to_a_studio_that_takes_them(home, root):
+    """07:I5: карточка, открытая при живом канале, после перезапуска службы не забыта — новый канал студии с
+    `welcome.open_asks` получает её с `known: true` (push уже был) и `request_id`; карточка без канала — без
+    `known` (push нужен); прежней студии — как раньше. Закрытая карточка не досылается."""
+    a = make(home, root, FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()]))
+    await opened(a)
+    pid = projects.pid("demo")
+    await a.handle(req("turn", project=pid, chat=CHAT, text="Привет", model=None, effort=None))
+    for _ in range(2000):
+        if a.runner.live().get(CHAT):
+            break
+        await asyncio.sleep(0.001)
+    rid = a.sent[-1]["e"]["request_id"]
+    card = {"project": pid, "chat": CHAT, "project_name": "demo", "status": "permission", "request_id": rid, "ago": 0}
+    assert a.completions(asks=True) is None                                          # прежняя студия
+    assert a.completions(asks=True, open_asks=True) == {"t": "completions", "items": [{**card, "known": True}]}
+    assert a.completions(asks=True, open_asks=True)["items"] == [{**card, "known": True}]   # и при каждом канале
+    a.missed({"t": "completions", "items": [{**card, "known": True}]})                    # кадр не ушёл
+    assert not a._asks
+    a._asks = {CHAT: {**card, "at": a._now()}}                                          # возникла без канала
+    assert a.completions(asks=True, open_asks=True)["items"] == [card]
+    assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
+    await settle(a)
+    assert a.completions(asks=True, open_asks=True) is None
 
 
 async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):

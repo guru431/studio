@@ -199,7 +199,8 @@ class Agent:
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
                  "codex_models": True, "opencode_models": self.opencode is not None,
-                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True}
+                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True,
+                 "open_asks": True}  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -252,8 +253,9 @@ class Agent:
             older = {i["chat"]: self._sending.get(i["chat"], {**i, "at": self._now() - i["ago"]})
                      for i in done if i["chat"] not in self._missed}
             self._missed = {**older, **self._missed}
+            # Уже известные студии карточки (`known`) не возвращаются: следующий канал соберёт их у ходов заново.
             asks = {i["chat"]: self._sending_asks.get(i["chat"], {**i, "at": self._now() - i["ago"]})
-                    for i in frame["items"] if i["status"] in ASK_KINDS
+                    for i in frame["items"] if i["status"] in ASK_KINDS and not i.get("known")
                     and i["chat"] not in self._missed and i["chat"] not in self._asks}
             self._asks = {**asks, **self._asks}
         else:
@@ -283,18 +285,28 @@ class Agent:
         while len(self._missed) > limits.COMPLETIONS_MAX:
             self._missed.pop(next(iter(self._missed)))
 
-    def completions(self, *, asks: bool = False) -> dict | None:
+    def completions(self, *, asks: bool = False, open_asks: bool = False) -> dict | None:
         """Кадр досылки завершений (и забыть их) или `None`, если досылать нечего. `asks` — студия принимает и
-        открытые карточки (`welcome.pending_asks`); иначе они отбрасываются: прежняя студия отбила бы весь кадр."""
-        pending = self._asks if asks else {}
+        открытые карточки (`welcome.pending_asks`); иначе они отбрасываются: прежняя студия отбила бы весь кадр.
+        `open_asks` (`welcome.open_asks`) — ещё и все прочие открытые карточки ходов с `known: true` (о них студия
+        уже слала push, но после перезапуска службы их не помнит), у всех карточек — `request_id`."""
+        pending = self._asks if asks or open_asks else {}
         self._sending_asks, self._asks = pending, {}
-        if not self._missed and not pending:
+        fresh = {(item["chat"], item.get("request_id")) for item in pending.values()}
+        known = [item for item in self._open_asks() if (item["chat"], item["request_id"]) not in fresh] if open_asks else []
+        if not self._missed and not pending and not known:
             return None
         now = self._now()
-        items = [{**{k: v for k, v in item.items() if k not in ("at", "request_id")}, "ago": max(0, int(now - item["at"]))}
+        hidden = ("at",) if open_asks else ("at", "request_id")
+        items = [{**{k: v for k, v in item.items() if k not in hidden and v is not None}, "ago": max(0, int(now - item["at"]))}
                  for item in (*self._missed.values(), *pending.values())]
+        items += [{**item, "known": True, "ago": 0} for item in known][:max(0, limits.COMPLETIONS_MAX - len(items))]
         self._sending, self._missed = self._missed, {}
         return {"t": "completions", "items": items}
+
+    def _open_asks(self) -> list[dict]:
+        return [item for backend in (self.runner, self.codex, self.opencode, self.deepseek) if backend is not None
+                for item in backend.open_asks()]
 
     # --- просьба ---
 

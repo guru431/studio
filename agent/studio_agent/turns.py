@@ -487,6 +487,13 @@ class Runner:
         """Идущие ходы: чат → ждёт ли ход ответа на карточку."""
         return {chat: bool(t.asks) for chat, t in self._turns.items()}
 
+    def open_asks(self) -> list[dict]:
+        """Открытые карточки ходов — студии при каждом новом канале (протокол §18, `welcome.open_asks`)."""
+        return [{"project": t.pid, "chat": t.chat, "project_name": t.project.name, "status": a.event["kind"],
+                 "request_id": rid}
+                for t in self._turns.values() for rid, a in t.asks.items()
+                if a.event.get("kind") in ("permission", "question")]
+
     def live_image(self, project, chat, message_id, index):
         return self._live_images.get(project, chat, message_id, index)
 

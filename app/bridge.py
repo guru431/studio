@@ -84,6 +84,7 @@ DEEPSEEK_MODEL_ID = re.compile(r'\["[^"\\\x00-\x1f]{1,150}","[^"\\\x00-\x1f]{1,1
 DEEPSEEK_SKIPPED = ("unknown", "acp_own", "env_key", "unreadable")
 PID = re.compile(r"[0-9a-f]{16}")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")  # id карточки в досылке (`turns.REQUEST_ID` моста)
 
 
 class ProtocolError(ValueError):
@@ -238,7 +239,7 @@ def parse_hello(frame: dict) -> dict:
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "mirror_groups", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare",
-                       "deepseek_models", "deepseek_usage", "self_check", "agent_log"):
+                       "deepseek_models", "deepseek_usage", "self_check", "agent_log", "open_asks"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -344,9 +345,10 @@ async def attach(link: Link) -> None:
         _close_later(old, CLOSE_REPLACED)
     try:
         # `completions` — студия принимает кадр досланных завершений (протокол §18), `pending_asks` — и открытых
-        # карточек в нём; старый мост поля не читает.
+        # карточек в нём, `open_asks` — и всех открытых карточек ходов (`known`); старый мост поля не читает.
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"],
-                         "studio_version": release.VERSION, "completions": True, "pending_asks": True})
+                         "studio_version": release.VERSION, "completions": True, "pending_asks": True,
+                         "open_asks": True})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
     if old is None and LINKS.get(link.agent_id) is link:
@@ -427,20 +429,25 @@ def _completions(link: Link, frame: dict) -> None:
     """Ходы, кончившиеся без канала (протокол §18): отметка «непрочитано» и push — как у живого `done`. Строки
     `code_attention` — только этого компьютера (`link.agent_id`): чужой чат кадр не тронет. Открытые карточки,
     возникшие без канала (`status` `permission|question`, `welcome.pending_asks`), — только push, как у живого
-    `ask`."""
+    `ask`. Карточка с `known: true` (мост с `hello.open_asks` досылает все открытые при каждом новом канале) —
+    о ней push уже был: второго нет."""
     if LINKS.get(link.agent_id) is not link:
         return
     items = frame.get("items")
     if not (isinstance(items, list) and len(items) <= COMPLETIONS_MAX and all(
             isinstance(i, dict) and isinstance(i.get("status"), str) and (i["status"] in DONE_WORDS or i["status"] in ASK_WORDS)
             and type(i.get("ago")) is int and i["ago"] >= 0
-            and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}}) for i in items)):
+            and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}})
+            and ("request_id" not in i or isinstance(i["request_id"], str) and REQUEST_ID.fullmatch(i["request_id"]))
+            and type(i.get("known", False)) is bool and (not i.get("known") or i["status"] in ASK_WORDS)
+            for i in items)):
         log.warning("агент %d: неверные досланные завершения", link.agent_id)
         return
     for item in items:
         if item["status"] in ASK_WORDS:
-            _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
-                         "e": {"k": "ask", "kind": item["status"]}})
+            if item.get("known") is not True:
+                _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
+                             "e": {"k": "ask", "kind": item["status"]}})
             continue
         finished = clock.NOW() - min(item["ago"], COMPLETION_AGE_MAX)
         code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
