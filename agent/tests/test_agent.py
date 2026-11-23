@@ -610,6 +610,25 @@ async def test_open_asks_are_resent_on_every_new_link_only_to_a_studio_that_take
     assert a.completions(asks=True, open_asks=True) is None
 
 
+async def test_completions_frame_never_exceeds_the_studio_limit(home, root):
+    """Студия отбрасывает кадр досылки длиннее `COMPLETIONS_MAX` целиком: карточки — все, концы ходов — на остаток
+    места (новейшие); не ушедший кадр возвращает только посланные."""
+    a = make(home, root, FakeFactory([]))
+    pid = projects.pid("demo")
+    chat = "{:08x}-0000-4000-8000-000000000000".format
+    for i in range(limits.COMPLETIONS_MAX):
+        a.missed({"t": "ev", "project": pid, "chat": chat(i), "e": {"k": "done", "status": "done"}})
+    for i in range(10):
+        a.missed({"t": "ev", "project": pid, "chat": chat(1000 + i), "e": {"k": "ask", "kind": "question"}})
+    frame = a.completions(asks=True)
+    assert len(frame["items"]) == limits.COMPLETIONS_MAX
+    assert sum(i["status"] == "question" for i in frame["items"]) == 10
+    assert {i["chat"] for i in frame["items"] if i["status"] == "done"} == {chat(i) for i in range(10, limits.COMPLETIONS_MAX)}
+    a.missed(frame)
+    again = a.completions(asks=True)["items"]
+    assert sorted(i["chat"] for i in again) == sorted(i["chat"] for i in frame["items"])
+
+
 async def test_answer_from_another_window_takes_over_when_the_owner_is_not_watched(home, root):
     """08:I4: ответ на карточку из чужого окна — `owned`, пока окно-владелец среди `watched` (или студия их не
     прислала); его никто не смотрит — ответ принят, управление — ответившему (`ownership`)."""

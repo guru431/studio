@@ -299,7 +299,10 @@ class Agent:
         """Кадр досылки завершений (и забыть их) или `None`, если досылать нечего. `asks` — студия принимает и
         открытые карточки (`welcome.pending_asks`); иначе они отбрасываются: прежняя студия отбила бы весь кадр.
         `open_asks` (`welcome.open_asks`) — ещё и все прочие открытые карточки ходов с `known: true` (о них студия
-        уже слала push, но после перезапуска службы их не помнит), у всех карточек — `request_id`."""
+        уже слала push, но после перезапуска службы их не помнит), у всех карточек — `request_id`.
+
+        Студия отбрасывает кадр длиннее `limits.COMPLETIONS_MAX` целиком: карточки (ждут ответа) — первыми, концы
+        ходов — на остаток места, самые старые сверх него забываются."""
         pending = self._asks if asks or open_asks else {}
         self._sending_asks, self._asks = pending, {}
         fresh = {(item["chat"], item.get("request_id")) for item in pending.values()}
@@ -308,10 +311,14 @@ class Agent:
             return None
         now = self._now()
         hidden = ("at",) if open_asks else ("at", "request_id")
+        room = max(0, limits.COMPLETIONS_MAX - len(pending))
+        missed = dict(list(self._missed.items())[len(self._missed) - room:]) if len(self._missed) > room else self._missed
+        if len(missed) < len(self._missed):
+            log.info("досылка: забыто старых завершений %d", len(self._missed) - len(missed))
         items = [{**{k: v for k, v in item.items() if k not in hidden and v is not None}, "ago": max(0, int(now - item["at"]))}
-                 for item in (*self._missed.values(), *pending.values())]
+                 for item in (*missed.values(), *pending.values())]
         items += [{**item, "known": True, "ago": 0} for item in known][:max(0, limits.COMPLETIONS_MAX - len(items))]
-        self._sending, self._missed = self._missed, {}
+        self._sending, self._missed = missed, {}
         return {"t": "completions", "items": items}
 
     def _open_asks(self) -> list[dict]:
