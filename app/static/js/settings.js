@@ -38,6 +38,7 @@ import { openMobileNavigationEditor } from './mobile-navigation.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
+import { mirrorsBlock } from './mirror-list.js';
 import { ntfyBlock } from './ntfy-settings.js';
 import { notifyPrefsBlock } from './notify-prefs.js';
 import { pushFlag } from './push-sync.js';
@@ -1782,7 +1783,8 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       let pendingAgents = null;
       const agents = () => pendingAgents ||= api('GET', '/api/agents').finally(() => { pendingAgents = null; });
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
-        codeDefaultsBlock(agents), quickActionsBlock(), agentMcpBlock(agents), computerPinBlock(), agentsBlock(host, agents)));
+        codeDefaultsBlock(agents), quickActionsBlock(), agentMcpBlock(agents), computerPinBlock(), agentsBlock(host, agents),
+        mirrorsBlock(host)));
       return;
     }
     if (shown === 'smtp' && other && me?.is_admin) {

@@ -1243,6 +1243,8 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
     previous = bridge.initiated(aid, chat, member)
+    # до просьбы, как `initiated`: зеркало после хода — той же сессией; ход участника зеркала не трогает
+    bridge.owner_turn(aid, chat, request if member is None else None)
     # до просьбы, как `_watched`
     q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
     try:

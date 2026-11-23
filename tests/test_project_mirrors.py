@@ -814,3 +814,103 @@ def test_group_sealed_with_a_former_key_lists_unlinks_and_rewrites_exclusions(st
         gone = getattr(client, method)(f"{url}/{mid}{suffix}")
         assert gone.status_code == 404 and gone.json()["detail"]["gone"] is True, suffix
     assert client.put(url + "/exclude", json={"exclude": []}).json()["detail"]["gone"] is True
+
+
+CHAT = "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
+
+
+def turn(client, aid, project, machine, status="done"):
+    """Ход владельца в проекте `project` до его конца; затем — конец передач после хода."""
+    import project_mirrors
+    machine.script = [{"k": "done", "status": status}]
+    with client.stream("POST", f"/api/code/agents/{aid}/projects/{project}/chats/{CHAT}/turn",
+                       json={"text": "x"}) as response:
+        assert response.status_code == 200
+        for line in response.iter_lines():
+            if line == "event: done":
+                break
+
+    async def finish():
+        for task in list(project_mirrors.TRANSFERS.values()):
+            await task
+    client.portal.call(finish)
+
+
+def test_sync_after_turn_applies_only_clean_plans_and_tells_about_differences(studio, computers, monkeypatch):
+    """«Синхронизировать после хода»: успешный ход в проекте копии с флажком — изменения уходят в копию сами (той
+    же сессией, без страницы); локальное изменение копии или удаление — ничего не трогается, ход `differs` и push
+    вида `service` без имён файлов. Прерванный ход и копия без флажка не синхронизируют."""
+    import push
+    source, first, second = computers
+    root = mirror.projects.list_roots(second.roots)[1]
+    clone = Path(root["path"]) / source.name
+    shutil.copytree(source, clone)
+    a, b = signed_in(studio, first, second)
+    client = studio.c
+    project = pid(source.name)
+    url = mirrors(a, project)
+    mid = client.post(url, json={"destination": b, "root": root["id"], "name": source.name, "existing": True}).json()["id"]
+    assert client.post(f"{url}/{mid}/compare").json()["changes"] == []
+    own = client.get(url).json()
+    assert own["auto"] is False
+    sent = []
+    monkeypatch.setattr(push, "notify_later", lambda *args, **kwargs: sent.append((args, kwargs)))
+
+    (source / "notes.txt").write_bytes(b"after the first turn\n")
+    turn(client, a, project, first)
+    assert (clone / "notes.txt").read_bytes() == b"original\n"          # без флажка — ничего
+    flag = client.put(f"/api/code/mirrors/{own['copy']}/auto", json={"auto": True})
+    assert flag.status_code == 200 and flag.json() == {"id": own["copy"], "auto": True}
+    assert client.get(url).json()["auto"] is True
+    turn(client, a, project, first, status="stopped")
+    assert (clone / "notes.txt").read_bytes() == b"original\n"          # прерванный ход — ничего
+    turn(client, a, project, first)
+    assert (clone / "notes.txt").read_bytes() == b"after the first turn\n"
+    job = client.get(f"{url}/{mid}").json()["job"]
+    assert job["state"] == "done" and job["auto"] is True and client.get(f"{url}/{mid}").json()["synced"]
+
+    (source / "notes.txt").write_bytes(b"second turn\n")
+    (clone / "local.env").write_bytes(b"PRIVATE=copy edit\n")
+    turn(client, a, project, first)
+    assert (clone / "notes.txt").read_bytes() == b"after the first turn\n"
+    assert client.get(f"{url}/{mid}").json()["job"]["state"] == "differs"
+    (args, kwargs), = sent
+    assert args[0] == state.DB.execute("SELECT id FROM users").fetchone()[0] and kwargs["kind"] == "service"
+    # имя проекта — из `done` моста (`bridge._place`); поддельный мост его не шлёт
+    assert args[1]["ru"] == "Source: копия на «Destination» отличается — после хода не отправлено, откройте сравнение"
+    assert args[2] == f"code/{a}/{project}" and "notes" not in str(args) and "local.env" not in str(args)
+
+    (clone / "local.env").write_bytes(b"PRIVATE=example\n")
+    (source / "empty").rmdir()                                          # удаление в копии — только руками
+    turn(client, a, project, first)
+    assert (clone / "empty").is_dir() and client.get(f"{url}/{mid}").json()["job"]["state"] == "differs"
+    assert len(sent) == 2
+    assert client.put(f"/api/code/mirrors/{own['copy']}/auto", json={"auto": "yes"}).status_code == 422
+
+
+def test_all_mirrors_list_marks_a_vanished_project_and_unlinks_its_copy(studio, computers):
+    """Общий список зеркал: компьютер → проект → остальные копии; папку проекта переименовали — «проекта больше
+    нет», и копию снимают отсюда; чужой компьютер и исчезнувшая копия — 404."""
+    source, first, second = computers
+    a, b = signed_in(studio, first, second)
+    client = studio.c
+    root = mirror.projects.list_roots(second.roots)[1]
+    url = mirrors(a, pid(source.name))
+    mid = client.post(url, json={"destination": b, "root": root["id"], "name": source.name}).json()["id"]
+    copy = client.get(url).json()["copy"]
+    items = client.get("/api/code/mirrors").json()["items"]
+    assert [(i["id"], i["agent"], i["computer"], i["name"], i["auto"], i["missing"]) for i in items] == [
+        (copy, a, "Source", source.name, False, False), (mid, b, "Destination", source.name, False, True)]
+    assert [(p["id"], p["computer"], p["folder"], p["synced"]) for p in items[0]["peers"]] == [
+        (mid, "Destination", root["path"], None)]
+    renamed = source.with_name("project-v2")
+    source.rename(renamed)
+    first.projects = {renamed.name: {}}
+    listed = {i["id"]: i for i in client.get("/api/code/mirrors").json()["items"]}
+    assert listed[copy]["missing"] is True
+    assert client.delete(f"/api/code/mirrors/{copy}").status_code == 204
+    assert client.get("/api/code/mirrors").json() == {"items": []}      # одна копия — группы больше нет
+    assert client.delete(f"/api/code/mirrors/{copy}").json()["detail"]["gone"] is True
+    make_user(studio, "other")
+    signin(studio, "other")
+    assert client.get("/api/code/mirrors").json() == {"items": []}

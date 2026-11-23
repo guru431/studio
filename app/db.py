@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 75
+VERSION = 76
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1065,6 +1065,11 @@ NOTIFY_PREFS_75 = """CREATE TABLE notify_prefs(
 CREATE INDEX notify_prefs_user ON notify_prefs(user_id);
 """
 SCHEMA += NOTIFY_PREFS_75
+#: «Синхронизировать после хода» копии зеркала (project_mirrors.after_turn): после успешного хода в проекте этой
+#: копии сервер сам сравнивает её с остальными копиями группы и отправляет изменения без конфликтов и удалений.
+#: Прежний код столбец не читает: после ходов не синхронизирует, флажок сохраняется до возврата вперёд
+MIRROR_AUTO_76 = "ALTER TABLE mirror_copies ADD COLUMN auto INTEGER NOT NULL DEFAULT 0;\n"
+SCHEMA += MIRROR_AUTO_76
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1216,6 +1221,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     74: SCAN_LAYER_74,
     # о чём уведомлять устройство: виды, тихие часы, напоминание о ждущей карточке
     75: NOTIFY_PREFS_75,
+    # «синхронизировать после хода» у копии зеркала
+    76: MIRROR_AUTO_76,
 }
 
 
