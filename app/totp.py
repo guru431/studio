@@ -7,7 +7,8 @@
   (`status` → `reenter`), вход идёт как без него, «Защита» просит настроить заново; учётку это не запирает.
 - Включение — в два шага из «Защиты»: `POST /api/me/totp/setup` с паролем выдаёт секрет, адрес `otpauth://` для QR и
   билет (секрет шифром, привязан к сессии, `SETUP_SEC`); `POST /api/me/totp` с билетом и кодом приложения включает и
-  один раз отдаёт резервные коды. Выключение — паролем; администратор сбрасывает чужое (потерянный телефон).
+  один раз отдаёт резервные коды. Выключение — паролем. Сброса в панели нет: администратор, снявший приложение и
+  задавший пароль, взял бы учётку; потерянный телефон — резервные коды или оператор хоста (`manage.recover_email`).
 - Вход (`/login`) у учётки с приложением после пароля ведёт на `/account/totp`: вызов — строка `email_tokens` вида
   `totp` без кода, связанная с cookie `__Host-studio_email` браузера; письма нет. Привязка моста принимает код в поле
   `code`. Паузы: вызовы — как у кода из письма (`code-user`, `code-ip`), попытки — `email_accounts.CODE_ATTEMPTS` на
@@ -24,7 +25,7 @@ import struct
 from urllib.parse import quote, urlencode, urlsplit
 
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -236,15 +237,3 @@ async def disable(body: OffIn, request: Request):
     log.info("пользователь %d: приложение-аутентификатор отключено", uid)
     return {"status": "off"}
 
-
-@router.delete("/api/admin/users/{uid}/totp", status_code=204)
-async def admin_reset(uid: int, admin: auth.User = Depends(auth.require_admin)):
-    """Потерянный телефон: администратор снимает приложение чужой учётки; владелец видит это в журнале."""
-    if uid == admin.id:
-        raise HTTPException(409, {"code": "self", "message": "своё приложение отключают в «Настройках» → «Защита»"})
-    if state.DB.execute("SELECT 1 FROM users WHERE id = ?", (uid,)).fetchone() is None:
-        raise HTTPException(404, {"code": "gone", "message": "такого пользователя нет"})
-    _clear(uid)
-    security_log.record(uid, "totp_reset")          # без адреса и устройства администратора, как password_reset
-    log.info("администратор %d: пользователю %d сброшено приложение-аутентификатор", admin.id, uid)
-    return Response(status_code=204)

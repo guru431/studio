@@ -141,11 +141,12 @@ def test_bridge_enrollment_accepts_authenticator_code_in_code_field(studio, mail
     assert studio.c.post("/api/agent/enroll", json={**body, "code": codes[1]}).status_code == 201
 
 
-def test_disable_needs_password_and_admin_can_reset_lost_phone(studio, mail):
-    owner = make_user(studio, "owner", is_admin=True)
+def test_disable_needs_password_and_admin_cannot_reset_it(studio, mail):
+    """Сбросить чужое приложение в панели нельзя: иначе администратор (или его украденная сессия) снял бы второй
+    фактор и задал пароль. Потерянный телефон — резервные коды или оператор хоста (`recover-email`)."""
+    make_user(studio, "owner", is_admin=True)
     signin(studio, "owner")
     enable(studio)
-    assert studio.c.delete(f"/api/admin/users/{owner}/totp").status_code == 409      # своё — в «Защите»
     assert studio.c.post("/api/me/totp/off", json={"password": "wrong-pass"}).status_code == 403
     assert studio.c.post("/api/me/totp/off", json={"password": PASSWORD}).json() == {"status": "off"}
     assert state.DB.execute("SELECT count(*) FROM totp_backup").fetchone()[0] == 0
@@ -153,18 +154,15 @@ def test_disable_needs_password_and_admin_can_reset_lost_phone(studio, mail):
     signin(studio, "friend")
     enable(studio)
     signin(studio, "owner")
-    users = {u["login"]: u for u in studio.c.get("/api/admin/users").json()["items"]}
-    assert users["friend"]["totp"] is True and users["owner"]["totp"] is False
-    assert studio.c.delete(f"/api/admin/users/{friend}/totp").status_code == 204
-    assert state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (friend,)).fetchone()[0] is None
-    assert ("totp_reset", None) in [tuple(r) for r in state.DB.execute(
-        "SELECT kind, ip FROM security_events WHERE user_id=?", (friend,))]
+    assert studio.c.delete(f"/api/admin/users/{friend}/totp").status_code in (404, 405)
+    assert state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (friend,)).fetchone()[0] is not None
+    assert "totp" not in studio.c.get("/api/admin/users").json()["items"][0]
     studio.c.cookies.clear()
-    assert login(studio, "friend", PASSWORD).headers["location"] == "/"
+    assert login(studio, "friend", PASSWORD).headers["location"] == "/account/totp"
 
 
 def test_operator_resets_authenticator_of_the_only_admin(studio, mail, capsys):
-    """Единственный администратор без телефона и резервных кодов: сбросить в панели некому — `recover-email`."""
+    """Нет телефона и резервных кодов: сброса в панели нет — только оператор хоста, `recover-email`."""
     import manage
     uid = make_user(studio, "owner", is_admin=True)
     signin(studio, "owner")
