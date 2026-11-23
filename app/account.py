@@ -285,8 +285,9 @@ async def access(request: Request):
     """Все выданные доступы к проектам компьютеров учётки (и к исчезнувшим папкам), все её ссылки «Поделиться» и
     число действующих ссылок на файлы (`file_links`; сами ссылки — в «Моих файлах»)."""
     uid = request.state.user.id
+    project_access.expire()
     members = state.DB.execute(
-        "SELECT m.agent_id, a.name AS computer, m.project, m.user_id, u.login, u.disabled, m.created"
+        "SELECT m.agent_id, a.name AS computer, m.project, m.user_id, u.login, u.disabled, m.created, m.role, m.expires"
         " FROM project_members m JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = m.user_id"
         " WHERE a.user_id = ? ORDER BY a.name, m.project, u.login", (uid,)).fetchall()
     shares = [_item_share(r) for r in state.DB.execute(
@@ -299,7 +300,8 @@ async def access(request: Request):
     names = await _project_names(request, aids) if aids else {}
     return {"members": [{"computer_id": r["agent_id"], "computer": r["computer"], "project": r["project"],
                          **_place(names, r["agent_id"], r["project"]), "user_id": r["user_id"], "login": r["login"],
-                         "disabled": bool(r["disabled"]), "created": r["created"]} for r in members],
+                         "disabled": bool(r["disabled"]), "created": r["created"], "role": r["role"],
+                         "expires": r["expires"]} for r in members],
             "shares": [{"id": r["id"], "kind": r["section"] or ("code" if r["agent_id"] else "chat"),
                         "title": r["title"] if r["chat_id"] or r["section"] else _label(r["label"]),
                         # запись раздела (chat_shares.ITEMS): открыть — #/<раздел>?id=<item_id>

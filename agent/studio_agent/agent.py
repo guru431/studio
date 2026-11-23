@@ -110,6 +110,9 @@ SHARED_OPS = frozenset({"projects", "activity", "project_summary", "chats", "his
     "state", "turn", "steer", "queue_edit", "queue_pause", "claim", "watch", "answer", "stop",
     "files", "file_stats", "file_operation", "file_suggestions", "chat_search", "chat_fork",
     "subagents", "subagent_history", "read", "raw", "visualization", "save", "git"})
+# Наблюдатель проекта (`shared_readonly`, 0.47.0): только чтение — без хода, ответов, правки и новых чатов.
+SHARED_READ_OPS = SHARED_OPS - {"turn", "steer", "queue_edit", "queue_pause", "claim", "answer", "stop",
+                                "file_operation", "chat_fork", "save"}
 
 
 def read_has_pin(pins: PinStore) -> bool:
@@ -374,6 +377,11 @@ class Agent:
             if op not in SHARED_OPS or (op not in ("projects", "activity") and
                     ("project" not in OPS[op] or frame.get("project") not in scope)):
                 raise Refused("closed")
+        readonly = frame.get("shared_readonly", False)
+        if type(readonly) is not bool:
+            raise Refused("invalid")
+        if readonly and (scope is None or op not in SHARED_READ_OPS):
+            raise Refused("closed")
         if self.local_exit_pending and op not in RESTART_SAFE_OPS and op not in ("mirror_chunk", "mirror_apply", "mirror_abort"):
             raise Refused("busy", "Мост завершает работу по выбору на компьютере")
         if (self.updater is not None and self.updater.state == "restarting"

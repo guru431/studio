@@ -153,7 +153,7 @@ function preview(input) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null }) {
+  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null, readonly = false }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { ...options.headers, 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -370,7 +370,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         pick(tr("Модель"), model), pick(tr("Усилие"), effort), pick(tr("Права"), access)),
       stop, send));
   host.dataset.engine = engine;
+  // Наблюдатель совместного проекта: поле ввода, ответы на карточки, ветки и «Продолжить здесь» скрыты (CSS
+  // [data-readonly]); сервер их и так отклонит (403 readonly).
+  if (readonly) host.dataset.readonly = '';
+  else delete host.dataset.readonly;
   scroller.append(
+    ...(readonly ? [el('p', { id: 'code-readonly-note', class: 'code-shared-note' },
+      tr("Вы наблюдатель: чаты, файлы и Git этого проекта — только для просмотра"))] : []),
     ...(origin === 'other' ? [el('p', { id: 'code-shared-note', class: 'code-shared-note' }, SHARED)] : []),
     more, historyNotice, feed, quickActions);
   // Плашка ожидающего вопроса над полем (D2): на узком экране карточка .code-ask часто вне ленты на экране.

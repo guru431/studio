@@ -76,7 +76,7 @@ const FILE_COLUMNS = [
 /** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
 const edits = new Map();
 
-export function filesView(host, { aid, pid, name, failed, path: start = null, git, operations = false }) {
+export function filesView(host, { aid, pid, name, failed, path: start = null, git, operations = false, readonly = false }) {
   const url = `/api/code/agents/${aid}/projects/${pid}`;
   let alive = true;
   let dir = '';
@@ -583,6 +583,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     const editor = el('textarea', { id: 'code-editor', class: 'input code-editor', spellcheck: 'false',
       autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': nameOf(path) });
     editor.value = got.text;
+    editor.readOnly = readonly;                         // наблюдатель совместного проекта: без правки и «Сохранить»
     const base = editor.value;
     const key = `${aid}/${pid}/${path}`;
     const kept = edits.get(key);                        // правка, чьё сохранение застал closed
@@ -708,7 +709,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       file.append(shown);
       paintMarkdown();
     }
-    bar.append(save);
+    if (!readonly) bar.append(save);
   }
 
   function openPdf(path) {

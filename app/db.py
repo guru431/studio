@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 73
+VERSION = 74
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1045,6 +1045,14 @@ ALTER TABLE users ADD COLUMN translate_tone TEXT NOT NULL DEFAULT '';
 """
 SCHEMA += GLOSSARY_73
 
+#: роль и срок выдачи доступа к проекту (project_access): `viewer` — только читающие просьбы, `expires` — время
+#: истечения или NULL (бессрочно). Прежний код столбцов не читает: наблюдатель — снова соавтор, срок не действует
+PROJECT_ROLES_74 = """ALTER TABLE project_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'
+       CHECK(role IN ('editor', 'viewer'));
+ALTER TABLE project_members ADD COLUMN expires REAL;
+"""
+SCHEMA += PROJECT_ROLES_74
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1191,6 +1199,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     72: SCAN_EDITS_72,
     # глоссарий и тон перевода учётки
     73: GLOSSARY_73,
+    # роль «Наблюдатель» и срок выдачи доступа к проекту
+    74: PROJECT_ROLES_74,
 }
 
 
