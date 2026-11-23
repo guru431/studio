@@ -279,13 +279,25 @@ def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(live.url + "/#/admin")
+            page.locator("#admin-smtp-delivery a").wait_for()              # почта не настроена — известно окну
             page.locator("#user-add").click()
+            pw.expect(page.locator("#invite-manual-note")).to_contain_text("письма не будет")
             page.locator("#invite-email").fill(f"nomail-{engine}@example.com")
+            page.locator("#invite-password").fill("wrong-password")
             page.locator("#invite-save").click()
-            failure = page.locator("#invite-form > p[role=alert]")
-            pw.expect(failure).to_contain_text(account_mail.UNSET_MESSAGE)
+            pw.expect(page.locator("#invite-form > p[role=alert]")).not_to_be_empty()
             assert page.locator(f'#invitations tr[data-email="nomail-{engine}@example.com"]').count() == 0
-            failure.locator("a.smtp-link").click()
+            page.locator("#invite-password").fill("password-123")
+            page.locator("#invite-save").click()
+            pw.expect(page.locator("#invite-link-result .invite-link-url").first).to_have_value(
+                re.compile(r"^https://localhost:\d+/account/invite#[A-Za-z0-9_-]+$"))
+            pw.expect(page.locator("#invite-link-result")).to_contain_text("Передайте ссылку только адресату")
+            fits(page)
+            page.locator("#invite-dialog .dialog-close").click()
+            pw.expect(page.locator(f'#invitations tr[data-email="nomail-{engine}@example.com"]')).to_contain_text(
+                "Ожидает регистрации до ")
+            page.locator("#user-add").click()
+            page.locator("#invite-manual-note a.smtp-link").click()
             page.locator("#smtp-test:not([disabled])").wait_for()
             page.locator("#smtp-test").click()
             pw.expect(page.locator("#smtp-status")).to_have_text(account_mail.UNSET_MESSAGE)

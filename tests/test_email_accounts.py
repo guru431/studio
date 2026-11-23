@@ -332,6 +332,34 @@ def test_admin_shows_a_new_invitation_link_only_with_password_and_old_links_die(
     assert "friend@example.com" not in caplog.text
 
 
+def test_invitation_without_smtp_is_created_with_a_shown_link_after_password(studio, monkeypatch):
+    """Почта не настроена: приглашение с паролем администратора создаётся без письма, ссылка — в ответе (no-store),
+    отметка «вписал администратор»; без пароля и с неверным — ни строки, ни попытки."""
+    owner = admin(studio)
+    sent = []
+
+    async def send(*args):
+        sent.append(args)
+
+    monkeypatch.setattr(account_mail, "send", send)
+    body = {"email": "friend@example.com", "comment": "note", "is_admin": True}
+    assert studio.c.post("/api/admin/invitations", json=body).json()["detail"]["code"] == "smtp_unset"
+    assert studio.c.post("/api/admin/invitations", json={**body, "password": "wrong-password"}).status_code == 403
+    assert studio.c.get("/api/admin/invitations").json()["items"] == []
+    response = studio.c.post("/api/admin/invitations", json={**body, "password": PASSWORD})
+    assert response.status_code == 201 and response.headers["cache-control"] == "no-store" and not sent
+    created = response.json()
+    assert created["status"] == "pending" and created["is_admin"] is True and created["comment"] == "note"
+    secret = re.fullmatch(r"https://testserver/account/invite#([A-Za-z0-9_-]+)", created["links"][0])[1]
+    assert events(owner)[-1] == ("invite_link", None)
+    assert secret not in str([tuple(r) for r in state.DB.execute("SELECT * FROM invitations")])
+    studio.c.cookies.clear()
+    assert studio.c.post("/account/invite/accept", json={"token": secret, "login": "friend", "password": PASSWORD}).status_code == 201
+    uid = state.DB.execute("SELECT id FROM users WHERE login='friend'").fetchone()[0]
+    assert events(uid) == [("invite_accept", "admin")]
+    assert state.DB.execute("SELECT is_admin FROM users WHERE id=?", (uid,)).fetchone()[0] == 1
+
+
 def test_shown_link_rescues_an_unsent_invitation_and_mail_resend_is_marked_as_mail(studio, mail, monkeypatch):
     """Письмо не ушло — ссылку можно показать (строка становится ожидающей); отправка письмом после показа снимает
     отметку «вписал администратор»; принятое и отозванное приглашение ссылку не выпускают."""
@@ -344,6 +372,9 @@ def test_shown_link_rescues_an_unsent_invitation_and_mail_resend_is_marked_as_ma
     monkeypatch.setattr(account_mail, "send", failed)
     assert studio.c.post("/api/admin/invitations", json={"email": "friend@example.com"}).status_code == 503
     iid = studio.c.get("/api/admin/invitations").json()["items"][0]["id"]
+    # окно приглашения после сбоя письма: та же строка, ссылка — в ответе
+    retried = studio.c.post("/api/admin/invitations", json={"email": "friend@example.com", "password": PASSWORD})
+    assert retried.status_code == 201 and retried.json()["id"] == iid and len(retried.json()["links"]) == 1
     shown(studio.c.post(f"/api/admin/invitations/{iid}/link", json={"password": PASSWORD}))
     assert studio.c.get("/api/admin/invitations").json()["items"][0]["status"] == "pending"
     monkeypatch.setattr(account_mail, "send", sender)

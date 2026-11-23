@@ -63,6 +63,8 @@ class InviteIn(BaseModel):
     email: str = Field(max_length=254)
     comment: str = Field(default="", max_length=1000)
     is_admin: bool = False
+    #: пароль администратора — приглашение без письма, ссылка в ответе (почта не настроена или не дошла)
+    password: str | None = Field(default=None, max_length=1024)
 
     _email = field_validator("email")(email_address)
 
@@ -258,7 +260,10 @@ async def invitations():
 async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(auth.require_admin)):
     if state.DB.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
         raise HTTPException(409, {"code": "email", "message": "Пользователь с этой почтой уже есть"})
-    if not account_mail.configured(account_mail.settings()):
+    manual = body.password is not None   # без письма: ссылку показать администратору (как `show_link`)
+    if manual:
+        await auth.confirm_password(admin.id, body.password, "ссылка приглашения", digest=request.state.digest)
+    elif not account_mail.configured(account_mail.settings()):
         raise account_mail.unset()          # до паузы и строки: не тратить попытку и не оставлять неотправленное
     throttle("invite-admin", str(admin.id), 30, 900)
     throttle("invite-email", body.email, 3, 900)
@@ -274,25 +279,37 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if not old:
         state.DB.execute("INSERT INTO invitations(id,email,comment,is_admin,invited_by,created,expires) VALUES (?,?,?,?,?,?,?)",
                          (iid, body.email, body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC))
-    links = link("invite", token)
-    if state.CFG.alternate_origin:
-        links += "\n\nДругой адрес / Alternate address\n" + link("invite", token, state.CFG.alternate_origin)
-    await account_mail.send_admin(body.email, "Приглашение в Студию / Invitation to Studio",
-                                  "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
-                                  "You are invited to Studio. Choose a login and password with this one-time link,"
-                                  " valid for 48 hours.\n\n" + links)
-    # После SMTP снова проверить права пригласившего и состояние приглашения.
+    links = invite_links(token)
+    if not manual:
+        await account_mail.send_admin(body.email, "Приглашение в Студию / Invitation to Studio",
+                                      "Вы приглашены в Студию. Выберите логин и пароль по одноразовой ссылке, она действует 48 часов.\n"
+                                      "You are invited to Studio. Choose a login and password with this one-time link,"
+                                      " valid for 48 hours.\n\n" + "\n\nДругой адрес / Alternate address\n".join(links))
+    # После SMTP (или пароля) снова проверить права пригласившего и состояние приглашения.
     inviter = state.DB.execute("SELECT is_admin,disabled FROM users WHERE id=?", (admin.id,)).fetchone()
     if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
         raise HTTPException(403)
     changed = state.DB.execute("UPDATE invitations SET comment=?,is_admin=?,invited_by=?,created=?,expires=?,"
-                               "token_hash=?,revoked=NULL,sent=1,manual=0 WHERE id=? AND accepted IS NULL AND token_hash IS ? AND revoked IS ?",
+                               "token_hash=?,revoked=NULL,sent=1,manual=? WHERE id=? AND accepted IS NULL AND token_hash IS ? AND revoked IS ?",
                                (body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC,
-                                security.digest(token), iid, old["token_hash"] if old else None,
+                                security.digest(token), int(manual), iid, old["token_hash"] if old else None,
                                 old["revoked"] if old else None)).rowcount
     if not changed:
         raise invalid_token()
-    return invitation(state.DB.execute("SELECT * FROM invitations WHERE id=?", (iid,)).fetchone())
+    item = invitation(state.DB.execute("SELECT * FROM invitations WHERE id=?", (iid,)).fetchone())
+    if not manual:
+        return item
+    security_log.record(admin.id, "invite_link", digest=request.state.digest, ip=auth.client_ip(request))
+    return Response(json.dumps({**item, "links": links}), status_code=201, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+def invite_links(token: str) -> list[str]:
+    """Ссылка приглашения и, если задан, та же на другой адрес — для письма и для показа администратору."""
+    links = [link("invite", token)]
+    if state.CFG.alternate_origin:
+        links.append(link("invite", token, state.CFG.alternate_origin))
+    return links
 
 
 @router.post("/api/admin/smtp/test")
@@ -348,10 +365,7 @@ async def show_link(iid: str, body: PasswordIn, request: Request, admin: auth.Us
                             (admin.id, now, now + INVITE_SEC, security.digest(token), iid)).rowcount:
         raise HTTPException(409, {"code": "state", "message": "Ссылку можно показать только у непринятого и неотозванного приглашения"})
     security_log.record(admin.id, "invite_link", digest=request.state.digest, ip=auth.client_ip(request))
-    links = [link("invite", token)]
-    if state.CFG.alternate_origin:
-        links.append(link("invite", token, state.CFG.alternate_origin))
-    return Response(json.dumps({"links": links, "expires": now + INVITE_SEC}), media_type="application/json",
+    return Response(json.dumps({"links": invite_links(token), "expires": now + INVITE_SEC}), media_type="application/json",
                     headers={"Cache-Control": "no-store"})
 
 
