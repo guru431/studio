@@ -18,6 +18,7 @@ from fastapi import HTTPException
 import clock
 import connections
 import documents
+import exports
 import history
 import media
 import ocr
@@ -958,8 +959,19 @@ def test_export_txt_md_docx(studio):
         root = ElementTree.fromstring(z.read("word/document.xml"))
     texts = [t.text for t in root.iter(f"{W}t")]
     assert texts[:2] == ["Отчёт", "Страница 1"] and "Хлеб & соль" in texts and "[пустая страница]" in texts
-    assert len(list(root.iter(f"{W}tab"))) == 2                        # ячейки таблицы — табуляцией
+    assert len(list(root.iter(f"{W}tc"))) == 4                         # аудит 05:I4: таблица — таблицей Word
     assert studio.c.get(f"/api/ocr/{sid}/export?format=pdf").status_code == 422
+    # таблицы — книгой и CSV (одна таблица — файл); число таблиц — в документе для меню страницы
+    assert studio.c.get(f"/api/ocr/{sid}").json()["tables"] == 1
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=xlsx")
+    assert r.status_code == 200 and r.headers["content-type"] == exports.TYPES["xlsx"]
+    assert quote("Отчёт.xlsx", safe="") in r.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        assert "Хлеб &amp; соль" in z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=csv")
+    assert r.status_code == 200 and r.headers["content-type"] == "text/csv; charset=utf-8"
+    assert quote("Отчёт.csv", safe="") in r.headers["content-disposition"]
+    assert r.content.decode("utf-8") == "﻿Товар,Цена\r\nХлеб & соль,50\r\n"
     # FINDINGS 05:F10: заголовки и пометки — на языке интерфейса (`lang`), распознанный текст и имя — как есть
     r = studio.c.get(f"/api/ocr/{sid}/export?format=md&lang=en")
     assert r.text.startswith(f"## Page 1\n\n{TABLE}\n\n## Page 2\n\n[not recognized: ") and "## Page 3\n\n[empty page]" in r.text
@@ -1007,6 +1019,10 @@ def test_a_failed_document_gives_out_and_indexes_what_was_recognized(studio):
     assert wait_ocr(studio, empty)["state"] == "done"
     for r in (studio.c.get(f"/api/ocr/{empty}/export?format=txt"), studio.c.post(f"/api/ocr/{empty}/attachments")):
         assert r.status_code == 409 and r.json()["detail"]["code"] == "empty", r.text
+    # аудит 05:I4: распознанный текст без таблиц — книги и CSV нет
+    r = studio.c.get(f"/api/ocr/{sid}/export?format=xlsx")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "no_tables", r.text
+    assert studio.c.get(f"/api/ocr/{sid}").json()["tables"] == 0
 
 
 def test_rename_keeps_the_extension_for_exports_and_the_search_finds_it(studio, caplog):

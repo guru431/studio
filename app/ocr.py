@@ -948,10 +948,14 @@ async def list_scans(request: Request, before: "float | None" = None,
 
 @router.get("/{sid}")
 async def get_scan(sid: str, request: Request, brief: bool = False):
-    """Документ и его страницы: `pages` — список `{n, state, text, detail, media_id}`. `brief=1` — только
-    состояние, `pages` — число, как в ленте: опрос чата раз в секунды не тянет тексты всех страниц."""
+    """Документ и его страницы: `pages` — список `{n, state, text, detail, media_id}`, `tables` — сколько в них
+    таблиц (выгрузки xlsx и csv). `brief=1` — только состояние, `pages` — число, как в ленте: опрос чата раз в
+    секунды не тянет тексты всех страниц."""
     row = _row(request.state.user.id, sid)
-    return _out(row) if brief else _out(row) | {"pages": _page_list(sid)}
+    if brief:
+        return _out(row)
+    pages = _page_list(sid)
+    return _out(row) | {"pages": pages, "tables": len(exports.tables(pages))}
 
 
 class RenameIn(BaseModel):
@@ -1050,18 +1054,29 @@ def _readable(user_id: int, sid: str):
 
 
 @router.get("/{sid}/export")
-async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$"),  # noqa: A002
+async def export(sid: str, request: Request,
+                 format: str = Query(..., pattern="^(txt|md|docx|xlsx|csv)$"),  # noqa: A002
                  lang: exports.Lang = "ru"):
     """Документ с распознанным (`_readable`) файлом: имя — по документу («Договор.pdf» → «Договор.docx»);
-    заголовки страниц и пометки — на языке `lang` (exports.Lang)."""
+    заголовки страниц и пометки — на языке `lang` (exports.Lang). xlsx и csv — только таблицы документа
+    (`exports.tables`); таблиц нет — 409 `no_tables`."""
     row = _readable(request.state.user.id, sid)
     pages, stem = _page_list(sid), _stem(row["name"])
-    if format == "docx":
+    name = f"{stem}.{format}"
+    if format in ("xlsx", "csv"):
+        grids = exports.tables(pages)
+        if not grids:
+            raise HTTPException(409, {"code": "no_tables", "message": "в документе нет таблиц"})
+        if format == "xlsx":
+            body = exports.xlsx(grids, lang)
+        else:
+            body, name = exports.tables_csv(grids, stem)
+    elif format == "docx":
         body = exports.pages_docx(pages, stem, lang)
     else:
         body = (exports.pages_txt(pages, lang) if format == "txt" else exports.pages_md(pages, lang)).encode("utf-8")
-    return Response(body, media_type=exports.TYPES[format],
-                    headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})
+    return Response(body, media_type=exports.TYPES[name.rsplit(".", 1)[1]],
+                    headers={"Content-Disposition": media.disposition(name), "Cache-Control": "no-store"})
 
 
 @router.post("/{sid}/attachments", status_code=201)

@@ -1184,10 +1184,13 @@ def _scan_done(user_id: int, sid: "str | None") -> bool:
 
 
 @router.get("/{tid}/export")
-async def export(tid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$"),  # noqa: A002
+async def export(tid: str, request: Request,
+                 format: str = Query(..., pattern="^(txt|md|docx|bilingual)$"),  # noqa: A002
                  lang: exports.Lang = "ru"):
     """Перевод файлом — у кончившейся записи с переведённым: «<имя без расширения>.<язык перевода>.<формат>»,
-    у текста — «Перевод.ru.txt» (по-английски, `lang` — «Translation.ru.txt»). md — перевод как есть."""
+    у текста — «Перевод.ru.txt» (по-английски, `lang` — «Translation.ru.txt»). md — перевод как есть.
+    `bilingual` — двуязычный docx (`exports.pairs_docx`: готовые куски подряд, исходник и перевод строкой)
+    «<имя>.<язык исходника>-<язык перевода>.docx»."""
     row = _row(request.state.user.id, tid)
     text = joined(tid) if row["state"] in TERMINAL else ""
     if not text:
@@ -1195,12 +1198,23 @@ async def export(tid: str, request: Request, format: str = Query(..., pattern="^
     stem = exports.word(TEXT_STEM, lang) if row["kind"] == "text" else _stem(row["name"])
     # Markdown — только у перевода распознанного скана: txt и docx — через md_plain; текст поля и документа — как есть
     markdown = row["scan_id"] is not None
-    if format == "docx":
-        body = exports.text_docx(text, stem, markdown=markdown,
-                                 rtl=(row["result_lang"] or row["target_lang"]) in translate_text.RTL)
+    target = row["result_lang"] or row["target_lang"]
+    name = f"{stem}.{target}.{format}"
+    if format == "bilingual":
+        pairs = []
+        for p in state.DB.execute("SELECT state, source, text FROM translation_parts WHERE translation_id = ?"
+                                  " ORDER BY n", (tid,)):
+            if p["state"] != "done":
+                break
+            pairs.append((p["source"] or "", p["text"] or ""))
+        origin = row["detected_lang"] or row["source_lang"]
+        body = exports.pairs_docx(pairs, stem, (exports.word("Исходник", lang), exports.word("Перевод", lang)),
+                                  markdown=markdown, rtl=(origin in translate_text.RTL, target in translate_text.RTL))
+        format, name = "docx", f"{stem}.{origin}-{target}.docx" if origin != "auto" else f"{stem}.{target}.docx"
+    elif format == "docx":
+        body = exports.text_docx(text, stem, markdown=markdown, rtl=target in translate_text.RTL)
     else:
         body = (exports.md_plain(text) if markdown and format == "txt" else text).encode("utf-8")
-    name = f"{stem}.{row['result_lang'] or row['target_lang']}.{format}"
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(name), "Cache-Control": "no-store"})
 

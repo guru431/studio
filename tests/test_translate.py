@@ -1063,6 +1063,19 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
         assert next(ElementTree.fromstring(z.read("word/document.xml")).iter(f"{w}t")).text == "Translation"
     r = studio.c.get(f"/api/translate/{tid}/export?format=txt&lang=en")
     assert r.headers["content-disposition"] == media.disposition("Договор.ru.txt")
+    # аудит 05:I5: двуязычный docx — шапка на языке интерфейса, кусок исходника и его перевод строкой таблицы
+    got = studio.c.get(f"/api/translate/{tid}").json()
+    origin = got["detected_lang"] or got["source_lang"]
+    r = studio.c.get(f"/api/translate/{tid}/export?format=bilingual&lang=en")
+    assert r.status_code == 200 and r.headers["content-type"] == exports.TYPES["docx"]
+    assert r.headers["content-disposition"] == media.disposition(f"Договор.{origin}-ru.docx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    rows = [["\n".join("".join(t.text or "" for t in p.iter(f"{w}t")) for p in tc.iter(f"{w}p")) for tc in tr.iter(f"{w}tc")]
+            for tr in root.iter(f"{w}tr")]
+    assert rows[0] == ["Source", "Translation"]
+    assert ["\n".join(r[0] for r in rows[1:]), "\n".join(r[1] for r in rows[1:])] == [
+        "First line.\nSecond line.", "Первая строка.\nВторая строка."]
 
     # аудит 05:F13: перевод на арабский — абзацы текста справа налево, заголовок-имя — как есть
     studio.gw.chat_script = [["مرحبا."]]

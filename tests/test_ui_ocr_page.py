@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from test_ui_browser import (API, NO_OVERFLOW, READY, TL_DONE, add_gateway, add_translator, browser, go, live, problems,
-                             put_files, recognized, signin, translator)
+from test_ui_browser import (API, NO_OVERFLOW, READY, TL_DONE, add_gateway, add_translator, browser, go, live, ocr_reply,
+                             problems, put_files, recognized, signin, translator)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -238,4 +238,47 @@ def test_polling_keeps_the_shown_page_nodes(browser, live):
         live.gw.ocr_hold = False
     assert not r.get("failed"), r
     assert r["values"]["same"] == [True, True, True, False]      # кнопки — заново: появились «Копировать» и др.
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_translation_of_a_table_scan_reads_side_by_side(browser, live, translator, ocr_reply, width):
+    """05:I4: документ с таблицей — в «Скачать ▾» ещё «Таблицы .xlsx» и «.csv». 05:I5: «Абзац к абзацу» — вместо окна
+    перевода таблица: кусок исходника (Markdown скана — разметкой) и его перевод строкой; касание отмечает пару;
+    повторное нажатие возвращает окно; «Скачать ▾» перевода — ещё двуязычный .docx."""
+    from scans import photo
+    login = f"ocrpairs{width}"
+    live.add_user(login)
+    translator.chat_script = [["Übersetzte Seite"]]
+    pairs = "#tl-pairs-view"
+    rows = f"{pairs} > table > tbody > tr"                    # строки пар, не таблицы скана в ячейке
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_translator(), *go("ocr"),
+        ("wait", "document.querySelector('#ocr-add input')"), put_files("#ocr-add input", [("Лист.png", photo("PNG"))]),
+        ("wait", "document.querySelector('#ocr-translate')"),
+        ("eval", "scan", "[...document.querySelectorAll('.ocr-formats [data-format]')].map(b => b.dataset.format)"),
+        ("click", "#ocr-translate"),
+        ("wait", "document.querySelector('#ocr-translate-target option[value=de]')"),
+        ("eval", "target", "document.querySelector('#ocr-translate-target').value = 'de'"),
+        ("click", "#ocr-translate-confirm"),
+        ("wait", f"{TL_DONE} && document.querySelector('#tl-output')?.textContent.includes('Übersetzte Seite')"),
+        ("eval", "before", f"[document.querySelector('#tl-pairs').hidden, document.querySelector('{pairs}').hidden]"),
+        ("click", "#tl-pairs"), ("wait", f"!document.querySelector('{pairs}').hidden"),
+        ("eval", "rows", f"[...document.querySelectorAll('{rows}')].map(r => [...r.cells].map(c => c.textContent))"),
+        ("eval", "table", f"!!document.querySelector('{rows} > td table')"),
+        ("eval", "state", "[document.querySelector('#tl-pairs').getAttribute('aria-pressed'),"
+                          " document.querySelector('#tl-output').hidden]"),
+        ("click", f"{rows} > td:last-child"),
+        ("eval", "on", f"document.querySelector('{rows}').classList.contains('on')"),
+        ("eval", "fits", NO_OVERFLOW),
+        ("eval", "formats", "[...document.querySelectorAll('.tl-formats [data-format]:not([hidden])')].map(b => b.dataset.format)"),
+        ("click", "#tl-pairs"),
+        ("eval", "after", f"[document.querySelector('{pairs}').hidden, document.querySelector('#tl-output').hidden]")],
+        width=width, mobile=width == 320)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["scan"] == ["txt", "md", "docx", "xlsx", "csv"]
+    assert v["before"] == [False, True] and v["state"] == ["true", True] and v["after"] == [True, False]
+    assert len(v["rows"]) == 1 and "Офис" in v["rows"][0][0] and v["rows"][0][1].strip() == "Übersetzte Seite"
+    assert v["table"] is True and v["on"] is True and v["fits"] is True
+    assert v["formats"] == ["txt", "md", "docx", "bilingual"]
     assert not problems(r), problems(r)
