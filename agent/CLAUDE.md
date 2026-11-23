@@ -125,9 +125,11 @@ studio). Команды ниже — из `agent/`, с отдельной сре
 `tests/test_deepseek_live.py` — один короткий ответ настоящего DeepSeek Harness, затем история из файлов сессий, чаты и
 состояние: `.venv/Scripts/python -m pytest tests/test_deepseek_live.py -q -m manual --durations=5`. Временные проект и
 `DSH_HOME`; провайдер — сторонний OpenAI-совместимый из окружения теста: `DSH_LIVE_BASE_URL`, `DSH_LIVE_MODEL`,
-`DSH_LIVE_API_KEY` (ключ только окружением, DSH читает его по `apiKeyEnv`), `DSH_TEST_PACKAGE` — каталог пакета
-`@deepseek-ai/dsh`, если DSH не установлен глобально. Без переменных — пропуск. Node DSH не принимает самоподписанный
-сертификат без имени адреса — такому шлюзу нужен его HTTP-порт частной сети.
+`DSH_LIVE_API_KEY` (ключ только окружением, DSH читает его по `apiKeyEnv`). `DSH_LIVE_PROFILE` выбирает установку
+`web` или `desktop`, по умолчанию проверяется профиль найденной установки. `DSH_LIVE_SHELL=1` дополнительно проверяет
+вызов `bash` на macOS/Linux без записи файлов. `DSH_TEST_PACKAGE` — каталог пакета
+`@deepseek-ai/dsh`, если DSH не установлен глобально. Без настроек провайдера — пропуск. Node DSH не принимает
+самоподписанный сертификат без имени адреса — такому шлюзу нужен его HTTP-порт частной сети.
 
 `timeout = 30`, `asyncio_mode = auto`; pytest-xdist нет — набор идёт одним процессом.
 Временный корень — `.tmp/.pytest_cache/agent` внутри корня Studio (вне синхронизации), успешные временные каталоги удаляются; явные `--basetemp`
