@@ -39,6 +39,8 @@ KINDS = frozenset({
     "agent_replace",                                  # «Заменить компьютер»: ключ нового перешёл к прежнему (agents)
     "totp_on", "totp_off", "totp_reset",              # приложение-аутентификатор подключено, отключено, сброшено (operator)
     "totp_fail", "totp_backup_used",                  # неверный код приложения (detail — login | bridge); резервный код
+    "invite_link",                                    # администратор показал ссылку приглашения (без адреса и ссылки)
+    "invite_accept",                                  # учётка создана по приглашению (detail — mail | admin: почту вписал администратор)
 })
 DETAIL_MAX = 32
 KEEP_SEC = 180 * 86400

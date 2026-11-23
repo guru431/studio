@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 77
+VERSION = 78
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1077,6 +1077,10 @@ SCHEMA += PROJECT_ROLES_76
 #: Прежний код столбец не читает: после ходов не синхронизирует, флажок сохраняется до возврата вперёд
 MIRROR_AUTO_77 = "ALTER TABLE mirror_copies ADD COLUMN auto INTEGER NOT NULL DEFAULT 0;\n"
 SCHEMA += MIRROR_AUTO_77
+#: ссылку приглашения показал администратор (email_accounts.show_link), а не отправило письмо: принятие пишет в
+#: журнал новой учётки «почту вписал администратор». Прежний код столбец не читает: ссылка действует, отметки нет
+INVITE_LINK_78 = "ALTER TABLE invitations ADD COLUMN manual INTEGER NOT NULL DEFAULT 0;\n"
+SCHEMA += INVITE_LINK_78
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1232,6 +1236,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     76: PROJECT_ROLES_76,
     # «синхронизировать после хода» у копии зеркала
     77: MIRROR_AUTO_77,
+    # ссылка приглашения, показанная администратором
+    78: INVITE_LINK_78,
 }
 
 

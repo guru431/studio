@@ -216,10 +216,31 @@ function mailFailure(target, err) {
   if (err?.code === 'smtp_unset') target.append(' ', el('a', { href: '#/settings/smtp', class: 'smtp-link' }, tr("Открыть настройки SMTP")));
 }
 
+/** Отказы отправки письма (account_mail): после них окно приглашения предлагает ссылку без письма. */
+const MAIL_ERRORS = new Set(['smtp_unset', 'mail', 'smtp']);
+
+/** Показанная ссылка приглашения: вместо формы окна — поле с «Копировать» и предупреждением; кнопка действия уходит. */
+function showLinks(dialog, form, action, links) {
+  action.remove();
+  dialog.querySelector('.dialog-close').textContent = tr("Закрыть");
+  const copyFail = el('p', { class: 'error', role: 'status' });
+  form.replaceWith(el('div', { id: 'invite-link-result' },
+    el('p', {}, el('strong', {}, tr("Передайте ссылку только адресату. После закрытия окна её не показать — только выпустить новую."))),
+    ...links.map((value) => {
+      const link = el('input', { class: 'input invite-link-url', readonly: true, value, 'aria-label': tr("Ссылка приглашения") });
+      const copy = button(tr("Копировать"), { class: 'btn btn-sm invite-link-copy' }, async () => {
+        try { await navigator.clipboard.writeText(link.value); copy.textContent = tr("Скопировано"); }
+        catch { link.focus(); link.select(); copyFail.textContent = tr("Скопируйте выделенную ссылку"); }
+      });
+      return el('div', { class: 'field' }, link, copy);
+    }), copyFail));
+}
+
 function invitationsBlock(host) {
   const list = el('tbody', { id: 'invitations' });
   const note = el('p', { id: 'invitations-status', role: 'status', 'aria-live': 'polite' });
   const delivery = el('p', { class: 'muted small', id: 'admin-smtp-delivery' });
+  let mailReady = null;           // настроена ли почта (/api/admin/smtp/status); null — ещё не известно
   const statuses = { accepted: tr("Зарегистрирован"), deleted: tr("Учётка удалена"), expired: tr("Срок истёк"),
     revoked: tr("Отозвано"), failed: tr("Письмо не отправлено") };
   const statusText = (invite) => invite.status === 'pending'
@@ -240,26 +261,86 @@ function invitationsBlock(host) {
     const fail = el('p', { class: 'error', role: 'alert' });
     const save = button(invite ? tr("Сохранить") : tr("Отправить приглашение"), { class: 'btn btn-accent', id: 'invite-save',
       type: 'submit', form: 'invite-form' });
+    // без письма (почта не настроена или письмо не ушло): пароль администратора — и ссылка в окне, как «Показать ссылку»
+    const password = el('input', { class: 'input', id: 'invite-password', name: 'password', type: 'password',
+      maxlength: '1024', autocomplete: 'current-password' });
+    const manualNote = el('p', { class: 'muted small', id: 'invite-manual-note' });
+    const manualBox = el('div', {}, manualNote, field(tr("Пароль учётки"), password, 'password'));
+    manualBox.hidden = true;
+    let manual = false;
+    const manualMode = (text, smtp) => {
+      manual = true;
+      manualBox.hidden = false;
+      password.required = true;
+      manualNote.replaceChildren(text);
+      if (smtp) manualNote.append(' ', el('a', { href: '#/settings/smtp', class: 'smtp-link' }, tr("Открыть настройки SMTP")));
+      save.textContent = tr("Создать и показать ссылку");
+    };
     const form = el('form', { id: 'invite-form' }, field('Email', email, email.id),
       field(tr("Комментарий (виден только администраторам)"), comment, comment.id),
-      ...(!invite ? [el('label', { class: 'check' }, admin, tr("Администратор"))] : []), fail);
+      ...(!invite ? [el('label', { class: 'check' }, admin, tr("Администратор")), manualBox] : []), fail);
     const dialog = openDialog(host, { id: 'invite-dialog', title: invite ? tr("Комментарий к приглашению") : tr("Пригласить пользователя"),
       body: [form], actions: [save] });
+    if (!invite && mailReady === false) {
+      manualMode(tr("Почта не настроена: письма не будет. После вашего пароля Студия создаст приглашение и покажет ссылку — передайте её адресату сами."), true);
+    }
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (save.disabled) return;
       save.disabled = true;
       try {
         if (invite) await api('PATCH', `/api/admin/invitations/${invite.id}`, { comment: comment.value });
-        else await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value, is_admin: admin.checked });
+        else if (manual) {
+          const { links } = await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value,
+            is_admin: admin.checked, password: password.value });
+          password.value = '';
+          showLinks(dialog, form, save, links);
+          await reload();
+          return;
+        } else await api('POST', '/api/admin/invitations', { email: email.value, comment: comment.value, is_admin: admin.checked });
         dialog.close();
         await reload();
-      } catch (err) { mailFailure(fail, err); await reload(); }
-      finally { save.disabled = false; }
+      } catch (err) {
+        mailFailure(fail, err);
+        if (!invite && !manual && MAIL_ERRORS.has(err?.code)) {
+          manualMode(tr("Письмо не ушло. Можно создать ссылку и передать её адресату самому: введите свой пароль."), false);
+        }
+        await reload();
+      } finally { save.disabled = false; }
+    });
+  }
+  /** «Показать ссылку» — письмо не дошло: паролем администратора выпустить новую ссылку (прежняя гаснет) и
+   *  показать её один раз, для передачи вручную (email_accounts.show_link). */
+  function showLink(invite) {
+    const password = el('input', { class: 'input', id: 'invite-link-password', name: 'password', type: 'password',
+      maxlength: '1024', autocomplete: 'current-password', required: true });
+    const fail = el('p', { class: 'error', role: 'alert' });
+    const show = button(tr("Показать ссылку"), { class: 'btn btn-accent', id: 'invite-link-show', type: 'submit',
+      form: 'invite-link-form' });
+    const form = el('form', { id: 'invite-link-form' },
+      el('p', {}, tr("Новая ссылка для {0} заменит прежнюю и будет действовать 48 часов. Почта учётки будет считаться подтверждённой вами, а не письмом.", invite.email)),
+      field(tr("Пароль учётки"), password, 'password'), fail);
+    const dialog = openDialog(host, { id: 'invite-link-dialog', title: tr("Показать ссылку приглашения?"), body: [form],
+      actions: [show] });
+    password.focus();
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (show.disabled) return;
+      show.disabled = true;
+      try {
+        const { links } = await api('POST', `/api/admin/invitations/${invite.id}/link`, { password: password.value });
+        password.value = '';
+        showLinks(dialog, form, show, links);
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        show.disabled = false;
+      }
     });
   }
   async function reload() {
     api('GET', '/api/admin/smtp/status').then(status => {
+      mailReady = status.configured;
       delivery.textContent = smtpDeliveryText(status);
       if (!status.configured) delivery.append(' ', el('a', { href: '#/settings/smtp' }, tr("Открыть настройки SMTP")));
     }).catch(() => {});
@@ -281,6 +362,8 @@ function invitationsBlock(host) {
                 act(() => api('POST', '/api/admin/invitations', {
                   email: invite.email, comment: invite.comment, is_admin: invite.is_admin }));
               }),
+            ...(['pending', 'failed', 'expired'].includes(invite.status)
+              ? [button(tr("Показать ссылку"), { class: 'btn btn-sm invite-link' }, () => showLink(invite))] : []),
             invite.status === 'pending'
               ? button(tr("Отозвать"), { class: 'btn btn-sm invite-revoke' }, () =>
                 act(() => api('DELETE', `/api/admin/invitations/${invite.id}`)))

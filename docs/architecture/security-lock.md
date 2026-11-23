@@ -165,7 +165,9 @@
   `share_locked` (посетитель ссылки — без сессии: `ip=auth.client_ip(request)`, без digest), `file_link_create`,
   `file_link_revoke` (ссылка на файл «Моих файлов» создана, отозвана; без подробности, у «Отозвать всё» — all),
   `project_member_add`, `project_member_remove` (без подробности: ни логина, ни проекта; ту же пару пишет история
-  подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39). Адрес — открыто, как
+  подключений компьютера — `agent_events` `member_add`/`member_remove`, шаг схемы 39), `invite_link` (администратор
+  показал ссылку приглашения, без адреса и ссылки) и `invite_accept` (учётка создана по приглашению: `mail` — почту
+  подтвердило письмо, `admin` — вписал администратор, [email-accounts](email-accounts.md)). Адрес — открыто, как
   `agent_events.ip`. Хранение — `security_log.KEEP_SEC` (180 дней), `security_log.KEEP_MAX` (1000) строк на учётку.
 - Шумные неудачи `security_log.NOISY` (`login_fail`, `login_code_fail`, `share_pin_fail`) сворачиваются в пределах
   `security_log.COLLAPSE_SEC` (3600) по виду, адресу, подробности и сессии: `count`, `first` (шаг 36), `created` —

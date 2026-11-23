@@ -30,10 +30,13 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   agent_replace: tr("компьютер заменён"),
   totp_on: tr("приложение-аутентификатор подключено"), totp_off: tr("приложение-аутентификатор отключено"),
   totp_reset: tr("приложение-аутентификатор сброшено"), totp_fail: tr("неверный код приложения"),
-  totp_backup_used: tr("вход резервным кодом") };
+  totp_backup_used: tr("вход резервным кодом"),
+  invite_link: tr("ссылка приглашения показана"), invite_accept: tr("учётка создана по приглашению") };
 const DETAILS = { password: tr("паролем"), pin: 'PIN', passkey: tr("ключом"), bridge: tr("мост"), login: '', chat: tr("чат"),
   code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все"),
   operator: tr("оператором хоста"),
+  // invite_accept: адрес учётки подтвердило письмо или вписал администратор (email_accounts.show_link)
+  mail: tr("— почта подтверждена письмом"), admin: tr("— почту вписал администратор"),
   // раздел записи у ссылки «Поделиться» (chat_shares.ITEMS)
   transcribe: sectionName('transcribe'), translate: sectionName('translate'), ocr: sectionName('ocr'),
   photo: sectionName('photo'), video: sectionName('video') };
