@@ -241,10 +241,32 @@ HTML_TAG = re.compile(
 _SUP = str.maketrans("0123456789+-=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ")
 _SUB = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
 _SCRIPT = re.compile(r"<(sup|sub)\b[^<>\n]*>([^<>\n]*)</\1\s*>", re.I)
-_TABLE = re.compile(r"<table\b[^>]*>(.*?)</table\s*>", re.I | re.S)
-_CAPTION = re.compile(r"<caption\b[^>]*>(.*?)</caption\s*>", re.I | re.S)
-_TR = re.compile(r"<tr\b[^>]*>(.*?)</tr\s*>", re.I | re.S)
-_CELL = re.compile(r"<t[dh]\b([^>]*)>(.*?)</t[dh]\s*>", re.I | re.S)
+
+
+def _tags(name: str) -> tuple["re.Pattern", "re.Pattern"]:
+    return re.compile(rf"<{name}\b", re.I), re.compile(rf"</{name}\s*>", re.I)
+
+
+_TABLE, _CAPTION, _TR, _CELL = _tags("table"), _tags("caption"), _tags("tr"), _tags("t[dh]")
+
+
+def _elements(tags: tuple["re.Pattern", "re.Pattern"], text: str) -> list[tuple[int, int, str, str]]:
+    """Элементы `<имя атрибуты>тело</имя>` по порядку: начало, конец, атрибуты, тело до ближайшего закрывающего тега —
+    как `<имя\\b([^>]*)>(.*?)</имя\\s*>`, но за один проход. Выражение на повторённом открывающем теге без `>` или без
+    закрывающего искало бы конец с каждого начала — квадратично (FXg G1); здесь нет `>` или конца после одного начала —
+    нет и после следующих."""
+    opening, closing = tags
+    out, pos = [], 0
+    while m := opening.search(text, pos):
+        gt = text.find(">", m.end())
+        end = closing.search(text, gt + 1) if gt >= 0 else None
+        if not end:
+            break
+        out.append((m.start(), end.end(), text[m.end():gt], text[gt + 1:end.start()]))
+        pos = end.end()
+    return out
+
+
 SPAN_MAX = 50                    # colspan/rowspan больше — разметка сломана или чужая: не раздувать текст
 _PIPE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$|^\s*\|\s*:?-{3,}:?\s*\|\s*$")
 _PIPE = re.compile(r"(?<!\\)\|")
@@ -275,9 +297,9 @@ Cell = tuple[str, int, int, bool]
 
 def _html_table(body: str, clean) -> tuple[list[str], list[list[Cell]]]:
     """Тело `<table>` — подписи (`caption`) и строки ячеек; `clean` — текст ячейки и подписи из её HTML."""
-    rows = [[(clean(c.group(2)), _span(c.group(1), "colspan"), _span(c.group(1), "rowspan"), c.group(0)[2] in "hH")
-             for c in _CELL.finditer(row.group(1))] for row in _TR.finditer(body)]
-    return [clean(c.group(1)) for c in _CAPTION.finditer(body)], rows
+    rows = [[(clean(inner), _span(attrs, "colspan"), _span(attrs, "rowspan"), row[start + 2] in "hH")
+             for start, _, attrs, inner in _elements(_CELL, row)] for *_, row in _elements(_TR, body)]
+    return [clean(inner) for *_, inner in _elements(_CAPTION, body)], rows
 
 
 def _grid(rows: list[list[Cell]]) -> list[list[tuple]]:
@@ -324,12 +346,20 @@ def _texts(grid: list[list[tuple]]) -> list[list[str]]:
     return [[slot[1][0] if slot and slot[0] == "cell" else "" for slot in row] for row in grid]
 
 
-def _table(m: "re.Match") -> str:
+def _table(body: str) -> str:
     """Таблица HTML — строки ячеек через табуляцию; объединённые ячейки (`colspan`, `rowspan`) — пустые места
     по сетке, чтобы ячейки ниже и правее не съезжали; подпись (`caption`) — строкой над таблицей."""
-    captions, rows = _html_table(m.group(1), _flat)
+    captions, rows = _html_table(body, _flat)
     lines = captions + ["\t".join(r).rstrip("\t") for r in _texts(_grid(rows))]
     return "\n" + "\n".join(lines) + "\n"
+
+
+def _tables(text: str) -> str:
+    out, pos = [], 0
+    for start, end, _, body in _elements(_TABLE, text):
+        out += [text[pos:start], _table(body)]
+        pos = end
+    return "".join(out) + text[pos:]
 
 
 def _pipe_lines(lines: list[str]) -> list[bool]:
@@ -363,13 +393,20 @@ def _pipes(text: str) -> str:
 
 _CELL_END = re.compile(r"</t[dh]\s*>\s*", re.I)
 _ROW_END = re.compile(r"</tr\s*>\s*", re.I)
+_LOOSE_OPEN = re.compile(r"<(?:table|thead|tbody|tfoot|tr|t[dh])\b", re.I)
+_SPACES = re.compile(r"\s*")
 
 
 def _loose(text: str) -> str:
     """Теги таблицы вне целой `<table>` (обрывок куска перевода): ячейки — табуляцией, строки — переносом.
     Пробелы перед закрывающим тегом снимает `rstrip`, а не `\\s*` в начале выражения: оно перебирало бы длинный
-    пробельный ряд с каждой его позиции — квадратично (20 000 пробелов — полсекунды)."""
-    text = re.sub(r"<(?:table|thead|tbody|tfoot|tr|t[dh])\b[^>]*>\s*", "", text, flags=re.I)
+    пробельный ряд с каждой его позиции — квадратично (20 000 пробелов — полсекунды). Открывающий тег с пробелами
+    за ним снимается проходом, как в `_elements`: `<td\\b[^>]*>` искал бы `>` с каждого повторённого `<td ` (FXg G1)."""
+    out, pos = [], 0
+    while (m := _LOOSE_OPEN.search(text, pos)) and (gt := text.find(">", m.end())) >= 0:
+        out.append(text[pos:m.start()])
+        pos = _SPACES.match(text, gt + 1).end()
+    text = "".join(out) + text[pos:]
     parts = _CELL_END.split(text)
     text = "\t".join([part.rstrip() for part in parts[:-1]] + parts[-1:])
     parts = _ROW_END.split(text)
@@ -380,7 +417,7 @@ def md_plain(md: str) -> str:
     """Markdown модели — простым текстом: таблица HTML и Markdown — строки ячеек через табуляцию (объединённые
     ячейки — пустыми местами, `_table`), индексы `sup`/`sub` — знаками индекса, прочие теги убраны (`<br>` —
     перенос), сущности раскрыты; знаки заголовков, `**`, `__` и `` ` `` сняты."""
-    text = _loose(_pipes(_TABLE.sub(_table, _SCRIPT.sub(_script, md))))
+    text = _loose(_pipes(_tables(_SCRIPT.sub(_script, md))))
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
     text = html.unescape(HTML_TAG.sub("", text))
     text = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "", text, flags=re.M)
@@ -447,13 +484,13 @@ def blocks(md: str) -> list[tuple]:
     Таблицы — HTML (как пишет HunyuanOCR, с `colspan`/`rowspan`) и Markdown; подпись таблицы — абзацем над ней."""
     out: list[tuple] = []
     pos = 0
-    for m in _TABLE.finditer(md):
-        out += _text_blocks(md[pos:m.start()])
-        captions, rows = _html_table(m.group(1), lambda cell: _inline(_flat(cell)))
+    for start, end, _, body in _elements(_TABLE, md):
+        out += _text_blocks(md[pos:start])
+        captions, rows = _html_table(body, lambda cell: _inline(_flat(cell)))
         out += [("p", c) for c in captions if c]
         if any(rows):
             out.append(("table", [r for r in rows if r]))
-        pos = m.end()
+        pos = end
     return out + _text_blocks(md[pos:])
 
 
