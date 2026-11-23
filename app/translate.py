@@ -506,7 +506,11 @@ async def _spotted(job: Job, png: bytes) -> str:
     waited = None
     while True:
         try:
+            protected = job.conn.routed or cleaner_route.dialog_routed(job.user_id, job.conn.id)
+            cleaner_route.refuse_ocr(job.ocr_conn, protected)
             return await ocr.recognize(job.ocr_conn, png, translate_spot.PROMPT)
+        except HTTPException as e:
+            raise ocr.OcrError(e.detail["message"]) from None
         except ocr.Busy:
             waited = await _busy(job, waited)
 
@@ -827,7 +831,7 @@ router = APIRouter(prefix="/api/translate")
 _HEAD = ("(SELECT substr({0}, 1, %d) FROM translation_parts WHERE translation_id = translations.id AND n = 1)"
          % HEAD_CHARS)
 COLUMNS = ("id, user_id, kind, connection_id, model, source_lang, target_lang, detected_lang, result_lang, name,"
-           " source_media_id, scan_id, parts, done_parts, state, detail, created, finished,"
+           " source_media_id, scan_id, parts, done_parts, state, detail, created, finished, cleaner_used,"
            f" source IS NOT NULL AS has_source, {_HEAD.format('source')} AS source_head,"
            f" {_HEAD.format('text')} AS text_head,"
            # скан записи нужен и другой живой (повтор берёт тот же скан): удаление этой его не уносит (`purge`)
@@ -1121,6 +1125,9 @@ async def translate_file(request: Request):
     else:
         kind, (text, pages, reader) = "file", await _read_file(uid, name, data)
         mime, stored = chat.DOC_MIME[PurePosixPath(name.lower()).suffix], name
+    needs_ocr = pages is not None or kind == "photo"
+    if needs_ocr:
+        cleaner_route.refuse_ocr(reader[0], conn.routed)
     _check_queue(uid, "file")                        # полная полоса — до записи на шару
     try:
         media_id = await media.save_async(uid, data, mime, stored)
@@ -1130,6 +1137,8 @@ async def translate_file(request: Request):
         await media.delete_async(uid, media_id)
         raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})
     try:
+        if needs_ocr:
+            cleaner_route.refuse_ocr(reader[0], conn.routed or cleaner_route.dialog_routed(uid, conn.id))
         tid = _start_file(uid, conn, model, name=name, source_lang=source_lang, target_lang=target_lang,
                           media_id=media_id, text=text, pages=pages, reader=reader, kind=kind)
     except HTTPException:                            # очередь заполнилась, пока шла запись
@@ -1236,6 +1245,9 @@ async def repeat(tid: str, body: RepeatIn, request: Request):
             text, pages, reader = await _read_file(uid, row["name"], data)
             if not media.alive(uid, media_id):       # удалён, пока читали
                 raise HTTPException(409, {"code": "gone", "message": FILE_GONE})
+        if pages is not None or row["kind"] == "photo":
+            cleaner_route.refuse_ocr(reader[0], bool(row["cleaner_used"]) or conn.routed
+                                     or cleaner_route.dialog_routed(uid, conn.id))
         new = _start_file(uid, conn, model, name=row["name"], media_id=media_id, text=text, pages=pages,
                           reader=reader, kind=row["kind"], **langs)
     log.info("перевод %s: повтор %s", new[:8], tid[:8])

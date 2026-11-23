@@ -195,15 +195,29 @@ def test_cleaner_refusals_in_words(cleaner_gw, status, code, words):
     assert words in answer["error"] and not answer["cleaner_sent"]          # отказ Cleaner: провайдер запроса не получил
 
 
-def test_local_provider_is_refused_by_cleaner_in_words(cleaner_gw):
-    """Подключение через Cleaner на localhost: Cleaner отвечает 400 `upstream`, слова понятны, провайдеру — ничего."""
+@pytest.mark.parametrize("base", ["http://localhost:1234/v1", "https://10.77.1.99/v1"])
+def test_local_provider_is_refused_by_cleaner_in_words(cleaner_gw, base):
+    """Cleaner отвечает 400 `upstream`; запросы идут только на адрес Cleaner."""
     s, gw = cleaner_gw
-    local = add_connection(s, base_url="http://localhost:1234/v1", sections=["chat"], chat_models=("local-x",),
-                           name="local")
+    local = add_connection(s, base_url=base, sections=["chat"], chat_models=("local-x",), name="local")
+    provider = httpx.URL(base)
+    s.gw.hosts[f"{provider.host}:{provider.port or 443}"] = gw.provider
     assert s.c.patch(f"/api/connections/{local}", json={"via_cleaner": True}).status_code == 200
     chat_id = new_chat(s, connection_id=local, model="local-x")
     sse(turn(s, chat_id, "Привет"))
     assert "публичные https" in messages(s, chat_id)[-1]["error"]
+    assert all(request.url.host != provider.host for request in s.gw.requests)
+    assert gw.requests[-1].headers["x-cleaner-upstream"] == base
+
+
+def test_idn_provider_address_is_ascii_in_cleaner_requests(cleaner_gw):
+    s, gw = cleaner_gw
+    cid = add_connection(s, base_url="https://пример.рф/путь", sections=["chat"], chat_models=("gpt-x",))
+    assert s.c.patch(f"/api/connections/{cid}", json={"via_cleaner": True}).status_code == 200
+    assert s.c.get(f"/api/connections/{cid}/models").status_code == 200
+    assert sse(turn(s, new_chat(s, connection_id=cid, model="gpt-x"), "Привет"))[-1][0] == "done"
+    sent = [r.headers["x-cleaner-upstream"] for r in gw.requests if "x-cleaner-upstream" in r.headers]
+    assert len(sent) >= 2 and set(sent) == {"https://xn--e1afmkfd.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C"}
 
 
 def test_vanished_context_is_recreated_on_the_next_turn(cleaner_gw):

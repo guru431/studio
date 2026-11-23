@@ -6,12 +6,12 @@ import ssl
 import subprocess
 import time
 from pathlib import Path
-from dataclasses import replace
 
 import httpx
 import pytest
 
 import cleaner_client
+import config
 import sections
 import state
 from conftest import add_connection, make_user, signin
@@ -35,7 +35,7 @@ def cleaner_server(tmp_path, request):
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     mode = getattr(request, "param", False)
-    tls = mode is True
+    tls = mode in (True, "client-tls")
     url = f'{"https" if tls else "http"}://127.0.0.1:{port}'
     extra, ca, verify = [], None, True
     if tls:
@@ -61,8 +61,8 @@ def cleaner_server(tmp_path, request):
         extra = [str(ca), str(private)]
         verify = ssl.create_default_context(cafile=ca)
     log = (tmp_path / "cleaner.log").open("wb")
-    if mode == "client":
-        extra = ["--client"]
+    if mode in ("client", "client-tls"):
+        extra.append("--client")
     process = subprocess.Popen([str(python), str(script), str(tmp_path), str(port), *extra], cwd=root,
                                stdout=log, stderr=log)
     real = httpx.Client(trust_env=False, timeout=10, verify=verify)
@@ -92,11 +92,14 @@ def cleaner_ca_client(studio, cleaner_server, monkeypatch):
     if ca is None:
         yield
         return
-    monkeypatch.setattr(state, "CFG", replace(state.CFG, cleaner_ca=ca))
+    monkeypatch.setenv("STUDIO_CLEANER_CA", str(ca))
+    monkeypatch.setattr(state, "CFG", config.load())
     native = state.make_cleaner_http()
     monkeypatch.setattr(state, "CLEANER_HTTP", native)
-    yield
-    studio.c.portal.call(native.aclose)
+    try:
+        yield
+    finally:
+        studio.c.portal.call(native.aclose)
 
 
 @pytest.mark.parametrize("cleaner_server", [False, True], indirect=True)
@@ -165,12 +168,13 @@ def echo_mcp(studio) -> list:
     return calls
 
 
-@pytest.mark.parametrize("cleaner_server", ["client"], indirect=True)
-def test_real_cleaner_client_key_turn_tools_web_sent_and_delete(studio, cleaner_server, tmp_path, monkeypatch):
+@pytest.mark.parametrize("cleaner_server", ["client", "client-tls"], indirect=True)
+def test_real_cleaner_client_key_turn_tools_web_sent_and_delete(studio, cleaner_server, cleaner_ca_client,
+                                                         tmp_path, monkeypatch):
     """Подключение «Через Cleaner» с настоящим Cleaner (ключ `client`) и его заглушкой провайдера: модель видит
     замены, MCP-инструмент получает оригинал, его результат уходит провайдеру очищенным; поиск «Интернета» — с
     заменами; «Что получила модель» — запрос с заменами; удаление диалога удаляет контекст в Cleaner."""
-    url, real, _ = cleaner_server
+    url, real, ca = cleaner_server
     printed = dict(line.split("=", 1) for line in (tmp_path / "cleaner.log").read_text(encoding="utf-8").split()
                    if line.startswith(("CLIENT_KEY=", "CLIENT_UPSTREAM=")))
     key, provider = printed["CLIENT_KEY"], printed["CLIENT_UPSTREAM"]
@@ -183,7 +187,8 @@ def test_real_cleaner_client_key_turn_tools_web_sent_and_delete(studio, cleaner_
         response = real.request(request.method, str(request.url), headers=request.headers, content=request.content)
         return httpx.Response(response.status_code, headers=response.headers, content=response.content)
 
-    monkeypatch.setattr(state.HTTP._transport, "handler", forward)
+    if ca is None:
+        monkeypatch.setattr(state.HTTP._transport, "handler", forward)
     cid = add_connection(studio, base_url=provider, token="sk-provider-fixture", sections=["chat"],
                          chat_models=("stub-model",))
     state.DB.execute("UPDATE settings SET value = ? WHERE key = 'allowlist'",
@@ -221,6 +226,8 @@ def test_real_cleaner_client_key_turn_tools_web_sent_and_delete(studio, cleaner_
     assert sse(turn(studio, web_chat, f"web_search почта {CANARY}"))[-1] == ("done", {"status": "done"})
     query = studio.gw.exa_requests[-1][1]["query"]
     assert CANARY not in query and query.startswith("web_search почта ") and query != f"web_search почта {CANARY}"
+    (card,) = messages(studio, web_chat)[-1]["tools"]
+    assert card["kind"] == "search" and card["query"] == query
 
     # удаление диалога: контекст уходит из Cleaner (его «Что ушло» — 404 `chat`, а не журнал)
     remote, rid = state.DB.execute("SELECT cleaner_request FROM messages WHERE id = ?",

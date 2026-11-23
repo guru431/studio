@@ -55,7 +55,7 @@ def provider_trap(s) -> list:
     return hits
 
 
-def embed_source(s) -> int:
+def embed_source(s, kind="openai", *, s06=False) -> int:
     """Общее подключение администратора на внешнем адресе из списка и источник «Знаний» на нём; запросы —
     `s.embeds`, `s.reranks`."""
     s.embeds, s.reranks = [], []
@@ -71,8 +71,9 @@ def embed_source(s) -> int:
                                                      for i, d in enumerate(body["documents"])]})
     s.gw.hosts["8.8.4.4:443"] = source
     cid = state.DB.execute(
-        "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only)"
-        " VALUES (NULL, 'cloud embeddings', 'openai', ?, ?, '[]', 0, 1)", (EMBED, security.encrypt("embed-key"))).lastrowid
+        "INSERT INTO connections(user_id, name, kind, base_url, token_enc, sections, created, server_only, s06)"
+        " VALUES (NULL, 'cloud embeddings', ?, ?, ?, '[]', 0, 1, ?)",
+        (kind, EMBED, security.encrypt("embed-key"), s06)).lastrowid
     r = s.c.put("/api/admin/knowledge", json={"connection_id": cid, "embed_model": "embed-1", "rerank_model": "rerank-1"})
     assert r.status_code == 200, r.text
     return cid
@@ -263,10 +264,11 @@ def test_shared_external_connection_is_routed_and_locked(forced_studio):
     assert s.cleaner.bodies[0]["messages"][-1] == {"role": "user", "content": "Привет"}
 
 
-def test_external_knowledge_source_is_off_when_forced(forced_studio):
+@pytest.mark.parametrize(("kind", "s06"), [("openai", False), ("srvllm", False), ("openai", True)])
+def test_external_knowledge_source_is_off_when_forced(forced_studio, kind, s06):
     s = forced_studio
     settings(s, forced=False)
-    embed_source(s)
+    embed_source(s, kind, s06=s06)
     kb = base(s)
     upload(s, kb, "пароли.txt", "Кодовое слово отдела — бирюза. Его меняют весной.")
     settle(s)
@@ -325,7 +327,9 @@ def test_big_attachment_of_a_routed_dialog_is_indexed_without_vectors(cleaner_gw
     row = state.DB.execute("SELECT id, state FROM kb_documents WHERE attachment_id = ?", (doc["id"],)).fetchone()
     assert row["state"] == "ready"
     settle(s)
-    # смена модели эмбеддингов ставит все документы на пересчёт — вложение диалога через Cleaner остаётся без векторов
+    # Даже после смены подключения чата повторный индекс не отправляет старое вложение.
+    assert s.c.patch(f"/api/connections/{gw.conn_id}", json={"via_cleaner": False}).status_code == 200
+    assert not s.c.get(f"/api/chats/{chat_id}").json()["chat"]["routed"]
     r = s.c.put("/api/admin/knowledge", json={"connection_id": source, "embed_model": "embed-2", "rerank_model": None})
     assert r.status_code == 200, r.text
     settle(s)

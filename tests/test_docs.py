@@ -18,9 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 AGENT = ROOT / "agent" / "studio_agent"
 ARCH = ROOT / "docs" / "architecture"
+CLAUDE = ROOT / "CLAUDE.md"
 AGENT_DOCS = {ROOT / "agent" / "CLAUDE.md", ARCH / "agent-bridge.md"}
-SYMBOL_DOCS = sorted({ROOT / "CLAUDE.md", *ARCH.glob("*.md"), *AGENT_DOCS})
-LINK_DOCS = sorted({*SYMBOL_DOCS, ROOT / "AGENTS.md", *ROOT.glob("README*.md"),
+SYMBOL_DOCS = sorted({*ARCH.glob("*.md"), *AGENT_DOCS})
+LINK_DOCS = sorted({CLAUDE, *SYMBOL_DOCS, ROOT / "AGENTS.md", *ROOT.glob("README*.md"),
                     ROOT / "docs" / "guide.ru.md", ROOT / "docs" / "screenshots" / "README.md", ROOT / "agent" / "README.md",
                     ROOT / "agent" / "AGENTS.md", ROOT / "docs" / "glossary.md"})
 
@@ -65,7 +66,8 @@ def _module(package: Path, name: str) -> "tuple[dict, dict, dict] | None":
     Ключ кэша — имя строкой: пути Windows равны без учёта регистра."""
     if name not in _modules(package):
         return None
-    tree = ast.parse(_source(package, name)[0])
+    source = _source(package, name)[0]
+    tree = ast.parse(source)
     top, classes, values = {}, {}, {}
 
     def names(target):
@@ -106,10 +108,11 @@ def _module(package: Path, name: str) -> "tuple[dict, dict, dict] | None":
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 top[(alias.asname or alias.name).split(".")[0]] = node
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Global):
-            for name in node.names:
-                top.setdefault(name, node)
+    if "global" in source:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    top.setdefault(name, node)
     return top, classes, values
 
 
@@ -186,10 +189,11 @@ def _text(doc: Path) -> str:
     return FENCE.sub("", doc.read_text(encoding="utf-8"))
 
 
-def _symbol_problems(doc: Path) -> list[str]:
+def _symbol_problems(doc: Path, text: str | None = None) -> list[str]:
     package = _package(doc)
     problems = []
-    text = _text(doc)
+    if text is None:
+        text = _text(doc)
     for match in REF.finditer(text):
         module, name, attr, _args, _paren, value = match.groups()
         if name in EXT or (attr is None and name.lower() in EXT) or (module, name) in BROWSER:
@@ -264,6 +268,13 @@ def _link_problems(doc: Path) -> list[str]:
 
 
 @pytest.mark.xdist_group("docs")  # общий AST-кэш, без повторного разбора пакета в каждом worker
+@pytest.mark.parametrize("text", re.split(r"(?=^## )", _text(CLAUDE), flags=re.M),
+                         ids=lambda text: text.splitlines()[0].lstrip("# "))
+def test_code_references_in_claude_section_exist(text):
+    assert _symbol_problems(CLAUDE, text) == []
+
+
+@pytest.mark.xdist_group("docs")
 @pytest.mark.parametrize("doc", SYMBOL_DOCS, ids=lambda p: p.relative_to(ROOT).as_posix())
 def test_code_references_in_docs_exist(doc):
     assert _symbol_problems(doc) == []

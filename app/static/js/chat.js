@@ -779,7 +779,7 @@ function build(view, ctx) {
   // «Разговор» уступает место «очистить», пока в поле текст (идущий — виден всегда): колонка — три значка, рамка
   // пустого поля не растёт с первой буквой
   const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
-    dialog: () => chosen().connection_id });
+    dialog: voiceDialog });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
   const moveNote = el('p', { class: 'chat-passport', id: 'chat-move', 'aria-live': 'polite', hidden: true });
   const editNote = el('div', { class: 'chat-edit-note', hidden: true },
@@ -1267,11 +1267,15 @@ function build(view, ctx) {
     }
     notice.textContent = '';
     try {
-      talking = startConversation({ send: voiceTurn, state: paintTalk, dialog: () => chosen().connection_id,
+      talking = startConversation({ send: voiceTurn, state: paintTalk, dialog: voiceDialog,
         failed: (text) => { notice.textContent = text; } });
     } catch (err) {                                  // браузер без Web Audio
       notice.textContent = words(err);
     }
+  }
+
+  function voiceDialog() {
+    return chatId ? { chat_id: chatId } : { connection_id: chosen().connection_id };
   }
 
   function paintTalk(state) {
@@ -2304,7 +2308,7 @@ function build(view, ctx) {
     return '';
   }
 
-  async function upload(a) {
+  async function upload(a, id) {
     if (a.meta) return true;
     a.busy = true;
     a.error = '';
@@ -2312,7 +2316,7 @@ function build(view, ctx) {
     try {
       const body = new FormData();
       body.append('file', a.file, a.file.name);
-      a.meta = await api('POST', '/api/attachments', body);
+      a.meta = await api('POST', '/api/attachments', body, { headers: { 'X-Studio-Chat': id } });
       return true;
     } catch (err) {
       a.error = words(err);
@@ -2505,7 +2509,7 @@ function build(view, ctx) {
     const edited = regenerate ? null : editing;
     const sent = regenerate ? [] : atts.slice();
     for (const a of sent) {
-      if (!(await upload(a))) return;              // отказ — словами у чипа
+      if (chatId !== id || !(await upload(a, id))) return;  // отказ — словами у чипа
     }
     if (chatId !== id) return;
     const edit = edited ? { id: edited.message.id, last_id: edited.last } : null;

@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 78
+VERSION = 79
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1082,6 +1082,17 @@ SCHEMA += MIRROR_AUTO_77
 INVITE_LINK_78 = "ALTER TABLE invitations ADD COLUMN manual INTEGER NOT NULL DEFAULT 0;\n"
 SCHEMA += INVITE_LINK_78
 
+#: Вложение использовали в диалоге через Cleaner: внешний индекс и распознавание не получают его после смены модели.
+CLEANER_ATTACHMENTS_79 = """ALTER TABLE attachments ADD COLUMN cleaner_used INTEGER NOT NULL DEFAULT 0;
+UPDATE attachments SET cleaner_used = 1 WHERE message_id IN (
+  SELECT id FROM messages WHERE chat_id IN (
+    SELECT c.item_id FROM cleaner_contexts c JOIN cleaner_route_contexts r USING (id) WHERE c.resource = 'chat'
+    UNION SELECT chat_id FROM messages WHERE cleaner_request IS NOT NULL
+  )
+);
+"""
+SCHEMA += CLEANER_ATTACHMENTS_79
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1238,6 +1249,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     77: MIRROR_AUTO_77,
     # ссылка приглашения, показанная администратором
     78: INVITE_LINK_78,
+    79: CLEANER_ATTACHMENTS_79,
 }
 
 

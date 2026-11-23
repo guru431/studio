@@ -1125,6 +1125,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Cleaner не дождался провайдера ({0})": "Cleaner got no answer from the provider ({0})",
   "Cleaner отклонил запрос ({0})": "Cleaner rejected the request ({0})",
   "администратор требует Cleaner для внешних моделей; этот раздел через Cleaner не работает": "The administrator requires Cleaner for external models; this section does not work through Cleaner",
+  "для распознавания файла с Cleaner выберите внутреннюю модель «Сканов»": "Choose an internal Scans model to recognize the file when using Cleaner",
   "администратор требует Cleaner; облачные роли srvllm через Cleaner пока не работают": "The administrator requires Cleaner; srvllm cloud roles do not work through Cleaner yet",
   "диалог идёт через Cleaner, а модель речи внешняя: текст или звук ушли бы мимо Cleaner — выберите внутреннюю модель речи": "This conversation goes through Cleaner, but the speech model is external: text or audio would bypass Cleaner. Choose an internal speech model",
   "перевод сделан через Cleaner, а модель речи внешняя — выберите внутреннюю модель речи": "This translation went through Cleaner, but the speech model is external. Choose an internal speech model",

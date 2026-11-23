@@ -13,7 +13,7 @@ import state
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 78
+SCHEMA_VERSION = 79
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -37,6 +37,27 @@ def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_step_79_preserves_cleaner_attachment_routes_after_a_model_change(env):
+    from contextlib import closing
+
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 78)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        for chat_id in ("cleaner", "ordinary"):
+            conn.execute("INSERT INTO chats(id,user_id,created,updated) VALUES(?,1,0,0)", (chat_id,))
+            conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created)"
+                         " VALUES(?,?,'user','','done','server',0)", (chat_id, chat_id))
+            conn.execute("INSERT INTO attachments(id,user_id,message_id,kind,name,media_id,created)"
+                         " VALUES(?,1,?,'document','file.txt','file',0)", (chat_id, chat_id))
+        conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,created,cleaner_request)"
+                     " VALUES('answer','cleaner','assistant','','done','server',1,'context/request')")
+        db.migrate(conn)
+        db.migrate(conn)
+        assert [tuple(r) for r in conn.execute("SELECT id, cleaner_used FROM attachments ORDER BY id")] == [
+            ("cleaner", 1), ("ordinary", 0)]
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_shared_integration_migration_preserves_personal_rows_and_sequences(env):

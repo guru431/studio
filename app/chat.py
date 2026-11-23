@@ -2065,6 +2065,9 @@ async def upload_attachment(request: Request):
     К сообщению вложение привязывает ход. PDF со страницами без текстового слоя при подключении раздела
     «Распознавание» через сервер — документ распознавания (`ocr` в ответе), текст вложения допишет он."""
     uid = request.state.user.id
+    chat_id = request.headers.get("x-studio-chat")
+    dialog = cleaner_route.chat_connection(uid, chat_id) if chat_id is not None else None
+    protected = cleaner_route.dialog_routed(uid, dialog)
     text, scan, reader = None, None, None
     try:
         name, data = await documents.read_upload(request)
@@ -2090,21 +2093,30 @@ async def upload_attachment(request: Request):
         raise HTTPException(e.status, {"code": "document", "message": message}) from None
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
+    if scan is not None:
+        if chat_id is not None:
+            protected |= cleaner_route.dialog_routed(uid, cleaner_route.chat_connection(uid, chat_id))
+        cleaner_route.refuse_ocr(reader[0], protected or chat_id is None)
     operations.check(uid)
     try:
         media_id = await media.save_async(uid, body, mime, download, thumb=kind == "image")
     except media.StorageError as e:
         raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
     att_id, chars = uuid.uuid4().hex, len(text or "")
-    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created)"
-                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)", (att_id, uid, kind, name, media_id, text, chars, clock.NOW()))
+    state.DB.execute("INSERT INTO attachments(id, user_id, message_id, kind, name, media_id, text, chars, created, cleaner_used)"
+                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                     (att_id, uid, kind, name, media_id, text, chars, clock.NOW(), protected))
     out ={"id": att_id, "kind": kind, "name": name, "chars": chars, "media_id": media_id}
     if scan is not None:
         conn, model = reader
         try:
+            if chat_id is not None and not protected:
+                protected = cleaner_route.dialog_routed(uid, cleaner_route.chat_connection(uid, chat_id))
+                if protected:
+                    state.DB.execute("UPDATE attachments SET cleaner_used = 1 WHERE id = ?", (att_id,))
             sid = ocr.create(uid, conn, model, name, origin="chat", source_media_id=media_id, pages=scan,
                              attachment_id=att_id)
-        except HTTPException:                        # очередь распознавания полна — вложения нет
+        except HTTPException:                        # скан не поставлен в очередь — вложения нет
             await _drop_attachments([{"id": att_id, "user_id": uid, "media_id": media_id}])
             raise
         ocr.kick(uid)
@@ -2683,6 +2695,9 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                                     (user_mid, a["id"])).rowcount != 1:
                     raise _gone("вложения нет или оно уже отправлено")
             ask = not free and _needs_consent(chat_id, model, via)
+        if conn.routed:
+            state.DB.execute("UPDATE attachments SET cleaner_used = 1 WHERE cleaner_used = 0 AND message_id IN"
+                             " (SELECT id FROM messages WHERE chat_id = ?)", (chat_id,))
         if ask:
             raise HTTPException(409, {"code": "external",
                                       "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})

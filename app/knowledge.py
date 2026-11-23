@@ -158,15 +158,18 @@ def _shared(conn_id: int):
         return None
 
 
+def _source_blocked(conn) -> bool:
+    return conn.routed or (cleaner_route.forced() and cleaner_route.is_external(conn))
+
+
 def _source_conn() -> "tuple[dict, object] | None":
     """Источник, которым можно пользоваться. Внешний адрес при принудительном Cleaner (или общее подключение с
-    переключателем «Через Cleaner») — `routed`: эмбеддинги и переранжирование Cleaner не проводит, и мимо него текст
-    не уходит — у всех только BM25."""
+    переключателем «Через Cleaner») даёт только BM25: Cleaner не проводит эмбеддинги и переранжирование."""
     src = source()
     if src is None:
         return None
     conn = _shared(src["connection_id"])
-    if conn is None or not conn.proxied or conn.routed:
+    if conn is None or not conn.proxied or _source_blocked(conn):
         return None
     return src, conn
 
@@ -175,7 +178,7 @@ def source_off() -> bool:
     """Источник задан, но не используется: он внешний, а Cleaner обязателен (панель предупреждает)."""
     src = source()
     conn = _shared(src["connection_id"]) if src is not None else None
-    return conn is not None and conn.routed
+    return conn is not None and _source_blocked(conn)
 
 
 def vectors_for(conn) -> bool:
@@ -188,17 +191,9 @@ def vectors_for(conn) -> bool:
 
 
 def _routed_attachment(doc_id: str) -> bool:
-    """Документ — большое вложение диалога, чьё подключение идёт через Cleaner (подключение — по `chats`, без групп
-    доступа: вложение уже в диалоге)."""
-    row = state.DB.execute(
-        "SELECT c.user_id, c.connection_id FROM kb_documents d JOIN attachments a ON a.id = d.attachment_id"
-        " JOIN messages m ON m.id = a.message_id JOIN chats c ON c.id = m.chat_id WHERE d.id = ?", (doc_id,)).fetchone()
-    if row is None or row["connection_id"] is None:
-        return False
-    try:
-        return connections.get(row["user_id"], row["connection_id"], gate=False).routed
-    except HTTPException:
-        return False
+    """Учитываем сохранённый маршрут вложения и действующее подключение его диалога."""
+    row = state.DB.execute("SELECT attachment_id FROM kb_documents WHERE id = ?", (doc_id,)).fetchone()
+    return row is not None and row["attachment_id"] is not None and cleaner_route.attachment_routed(row["attachment_id"])
 
 
 def _pack(values) -> bytes:
@@ -299,18 +294,20 @@ async def _drain() -> None:
 async def _vectors(doc_id: str) -> None:
     """Векторы кусков документа пачками; документ удалили — пачки пишутся мимо, обработчик идёт дальше."""
     try:
-        found = _source_conn()
-        if found is None:
-            raise SourceError("none")
-        # вложение диалога через Cleaner внешнему источнику не уходит и при пересчёте после смены источника
-        if cleaner_route.is_external(found[1]) and _routed_attachment(doc_id):
-            raise SourceError("none")
         while True:
+            found = _source_conn()
+            if found is None or (cleaner_route.is_external(found[1]) and _routed_attachment(doc_id)):
+                raise SourceError("none")
             rows = state.DB.execute("SELECT id, text FROM kb_chunks WHERE doc_id = ? AND vector IS NULL ORDER BY n"
                                     " LIMIT ?", (doc_id, EMBED_BATCH)).fetchall()
             if not rows:
                 break
             vectors = await embed([r["text"] for r in rows])
+            latest = _source_conn()
+            if latest is None:
+                raise SourceError("none")
+            if latest[0] != found[0]:
+                continue                       # смена источника уже сбросила векторы, не писать поверх них старые
             state.DB.executemany("UPDATE kb_chunks SET vector = ? WHERE id = ?",
                                  [(v, r["id"]) for v, r in zip(vectors, rows)])
         state.DB.execute("UPDATE kb_documents SET state = 'ready' WHERE id = ?", (doc_id,))

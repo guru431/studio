@@ -55,6 +55,7 @@ from pydantic import BaseModel, Field
 
 import chat
 import card
+import cleaner_route
 import clock
 import connections
 import db
@@ -362,6 +363,7 @@ def create(user_id: int, conn, model: str, name: str, *, origin: str, source_med
     """Документ в очередь пользователя (раннер — `kick`). `pages`: `{"n", "state": "waiting"|"layer",
     "media_id", "text"}`. Ждущих уже QUEUE_MAX — 409 busy."""
     operations.check(user_id)
+    cleaner_route.refuse_ocr(conn, attachment_id is not None and cleaner_route.attachment_routed(attachment_id))
     waiting = state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                                (user_id,)).fetchone()[0]
     if waiting >= QUEUE_MAX:
@@ -387,6 +389,15 @@ def create(user_id: int, conn, model: str, name: str, *, origin: str, source_med
     return sid
 
 
+def _private_scan(scan_id: str) -> bool:
+    row = state.DB.execute("SELECT attachment_id FROM scans WHERE id = ?", (scan_id,)).fetchone()
+    if row is not None and row["attachment_id"] is not None and cleaner_route.attachment_routed(row["attachment_id"]):
+        return True
+    translations = state.DB.execute("SELECT cleaner_used, user_id, connection_id FROM translations"
+                                    " WHERE scan_id = ?", (scan_id,)).fetchall()
+    return any(r["cleaner_used"] or cleaner_route.dialog_routed(r["user_id"], r["connection_id"]) for r in translations)
+
+
 def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     """«Повторить страницу» (`page` — её номер, только `failed`) и «Распознать заново» (`page` None — все
     нераспознанные: `failed` и `waiting`) кончившегося документа: страницы снова `waiting`, документ — в очередь
@@ -408,6 +419,7 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
         conn = connections.get(user_id, row["connection_id"])
     except HTTPException:
         raise HTTPException(409, {"code": "no_connection", "message": NO_CONNECTION}) from None
+    cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
     operations.check(user_id)
     if state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                         (user_id,)).fetchone()[0] >= QUEUE_MAX:
@@ -451,6 +463,7 @@ def again(user_id: int, scan_id: str, conn, model: str) -> str:
     files = [source] if source else [p["media_id"] for p in pages if p["state"] == "waiting"]
     if not all(f is not None and media.alive(user_id, f) for f in files):
         raise HTTPException(404, media.GONE)
+    cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
     return create(user_id, conn, model, row["name"], origin="section", source_media_id=source, pages=pages)
 
 
@@ -477,6 +490,7 @@ def find_lines(user_id: int, scan_id: str) -> bool:
     conn = _lines_conn(user_id, row)
     if conn is None:
         return False
+    cleaner_route.refuse_ocr(conn, _private_scan(scan_id))
     operations.check(user_id)
     if state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
                         (user_id,)).fetchone()[0] >= QUEUE_MAX:
@@ -559,6 +573,8 @@ async def _page_text(job: Job, png: bytes, prompt: str = PROMPT) -> str:
     waited_from = None
     while True:
         try:
+            if cleaner_route.is_external(job.conn) and _private_scan(job.id):
+                raise OcrError(cleaner_route.OCR_PRIVATE)
             return await recognize(job.conn, png, prompt)
         except Busy:
             now = clock.NOW()

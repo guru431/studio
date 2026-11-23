@@ -155,8 +155,7 @@ function dictationReady() {
   return me?.capabilities?.dictation !== false;
 }
 
-/* `dialog()` — подключение диалога, в чьё поле идёт текст (поле чата): сервер не отдаст звук внешней модели голосового
- * ввода мимо Cleaner, если диалог идёт через Cleaner (cleaner_route.refuse_dialog_speech). */
+/* `dialog()` — id диалога или подключение черновика, в чьё поле идёт текст. */
 export function attachMic(field, host, { dialog = null } = {}) {
   const button = el('button', { type: 'button', class: 'icon-btn mic', 'aria-label': tr("Голосовой ввод"), title: tr("Голосовой ввод") });
   // «×» рядом с идущей записью или распознаванием: отменить без распознавания (встаёт за микрофоном при первом показе)
@@ -215,6 +214,11 @@ export function attachMic(field, host, { dialog = null } = {}) {
     error.textContent = '';
     const caret = [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
     const value = field.value;                       // поле правили во время записи — курсор уже другой
+    const target = dialog?.();
+    const inTarget = () => {
+      const current = dialog?.();
+      return target?.chat_id === current?.chat_id && target?.connection_id === current?.connection_id;
+    };
     starting = true;
     paint();
     if (!dictationReady()) {
@@ -244,7 +248,7 @@ export function attachMic(field, host, { dialog = null } = {}) {
     const blob = await recording.done;
     recording = null;
     paint();
-    if (!blob || !button.isConnected) return;          // отменена: звук не уходит
+    if (!blob || !button.isConnected || !inTarget()) return;
     sending = true;
     controller = new AbortController();
     const { signal } = controller;
@@ -254,10 +258,11 @@ export function attachMic(field, host, { dialog = null } = {}) {
       body.append('audio', blob, recordingName(blob));
       const language = dictationLanguage();
       if (language !== 'auto') body.append('language', language);
-      const conn = dialog?.();
-      if (conn != null) body.append('connection_id', String(conn));
+      for (const [key, value] of Object.entries(target || {})) {
+        if (value != null) body.append(key, String(value));
+      }
       const { text } = await api('POST', '/api/dictation', body, { signal });
-      if (!button.isConnected) return;                 // поле уже убрали
+      if (!button.isConnected || !inTarget()) return;
       const at = field.value === value ? caret
         : [field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length];
       if (text) insertAt(field, text, at);

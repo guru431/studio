@@ -1,9 +1,8 @@
 """Шлюз Cleaner для внешних моделей (шаг схемы 66): настройки администратора и самопроверка.
 
-- Настройки — один JSON шифром `STUDIO_DATA_KEY` в `settings[SETTINGS_KEY]`: адрес Cleaner, служебный ключ и флажок
-  «Cleaner для всех внешних моделей» и флажок «Веб и внешние MCP — только через Cleaner» (`web_only`, `web_allowed`).
-  Ключ в браузер не отдаётся; после смены `STUDIO_DATA_KEY` настройки не
-  расшифровать — панель просит ввести их заново (`reenter`), принудительный режим выключен.
+- Адрес и служебный ключ зашифрованы в `settings[SETTINGS_KEY]`. Флажки обязательного Cleaner и веб-инструментов
+  дополнительно хранятся открыто, чтобы пережить смену `STUDIO_DATA_KEY`. Если прежние флажки неизвестны,
+  действуют оба ограничения. Панель просит заново ввести адрес и ключ (`reenter`).
 - Сервер Studio ходит к Cleaner только по списку разрешённых адресов (`upstream`, сертификат — `STUDIO_CLEANER_CA`),
   ключ — только заголовком `X-Cleaner-Key`.
 - Запросы пользователя (`context`, `stream`, `request`) идут через синтетическое подключение к самому Cleaner
@@ -21,6 +20,7 @@
 - Журнал — только коды и числа: адресов и ключей в нём нет.
 """
 import asyncio
+import hashlib
 import ipaddress
 import json
 import logging
@@ -43,6 +43,7 @@ import upstream
 log = logging.getLogger("studio")
 
 SETTINGS_KEY = "cleaner_gateway"
+POLICY_KEY = "cleaner_gateway_policy"
 #: заголовок служебного ключа Cleaner
 KEY_HEADER = "X-Cleaner-Key"
 #: заголовки запроса к шлюзу: адрес провайдера (база), контекст (чат Cleaner), инструменты без восстановления
@@ -85,11 +86,17 @@ COMMIT;
 
 
 def forward() -> None:
-    """При старте службы: работает новый код — значит, мы снова впереди отката; `FORWARD_66`, если есть что вернуть."""
+    """Восстановить ключи после отката 66 и сохранить флажки сохранившихся настроек при старте службы."""
     count = state.DB.execute("SELECT count(*) FROM cleaner_rollback").fetchone()[0]
     if count:
         state.DB.executescript(FORWARD_66)
         log.info("cleaner: после отката возвращено ключей %d", count)
+    row = _settings_row()
+    if row is not None and not _saved_policy(row):
+        config = settings()
+        if not config["reenter"]:
+            state.DB.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+                             (POLICY_KEY, _policy_value(row["value"], config)))
 
 
 class SettingsIn(BaseModel):
@@ -107,19 +114,44 @@ def _empty(**extra) -> dict:
 _WARNED: list = []
 
 
+def _settings_row():
+    if state.DB is None:
+        return None
+    return state.DB.execute("SELECT value, (SELECT value FROM settings WHERE key = ?) AS policy"
+                            " FROM settings WHERE key = ?", (POLICY_KEY, SETTINGS_KEY)).fetchone()
+
+
+def _policy_value(blob: bytes, config: dict) -> str:
+    return json.dumps({"digest": hashlib.sha256(blob).hexdigest(), "forced": config["forced"], "web": config["web"]})
+
+
+def _saved_policy(row) -> dict:
+    if row["policy"] is not None and isinstance(row["value"], bytes):
+        try:
+            policy = json.loads(row["policy"])
+        except (TypeError, ValueError):
+            return {}
+        # Прежняя версия могла заменить зашифрованные настройки, не зная об этой строке.
+        if (isinstance(policy, dict) and policy.get("digest") == hashlib.sha256(row["value"]).hexdigest()
+                and type(policy.get("forced")) is bool and type(policy.get("web")) is bool):
+            return {"forced": policy["forced"], "web": policy["web"]}
+    return {}
+
+
 def settings() -> dict:
-    """Настройки с расшифрованным ключом. Не расшифровываются (прежний `STUDIO_DATA_KEY`) — пустые, с `reenter`."""
-    row = state.DB.execute("SELECT value FROM settings WHERE key = ?", (SETTINGS_KEY,)).fetchone() \
-        if state.DB is not None else None
-    if not row:
+    """При смене ключа сохраняем флажки, а адрес и служебный ключ запрашиваем заново."""
+    row = _settings_row()
+    if row is None:
         return _empty()
     try:
-        saved = json.loads(security.decrypt(row[0]))
-    except InvalidToken:
+        saved = json.loads(security.decrypt(row["value"]))
+        if not isinstance(saved, dict):
+            raise ValueError("invalid Cleaner settings")
+    except (InvalidToken, TypeError, ValueError):
         if not _WARNED:                          # settings() зовут на каждую строку подключения — в журнал один раз
             _WARNED.append(True)
             log.warning("cleaner settings: not decryptable with the current data key")
-        return _empty(reenter=True)
+        return _empty(forced=True, web=True, reenter=True) | _saved_policy(row)
     return _empty() | {k: saved[k] for k in ("base_url", "key", "forced", "web") if k in saved}
 
 
@@ -135,15 +167,13 @@ def configured() -> bool:
 
 
 def forced() -> bool:
-    """Принудительный режим: только при заданных адресе и ключе (после смены ключа сервера — выключен)."""
-    config = settings()
-    return bool(config["forced"] and config["base_url"] and config["key"])
+    """Политика действует и в ожидании повторного ввода адреса и ключа."""
+    return bool(settings()["forced"])
 
 
 def web_only() -> bool:
-    """Флажок «Веб и внешние MCP — только через Cleaner»: как `forced`, только при заданных адресе и ключе."""
-    config = settings()
-    return bool(config["web"] and config["base_url"] and config["key"])
+    """Флажок «Веб и внешние MCP — только через Cleaner»."""
+    return bool(settings()["web"])
 
 
 #: флажок `web_only`: «Интернет» и веб-инструменты MCP — только в диалогах через Cleaner (PATCH {web: true} — 409)
@@ -213,24 +243,48 @@ DIALOG_SPEECH = ("диалог идёт через Cleaner, а модель ре
                  " выберите внутреннюю модель речи")
 
 
-def refuse_dialog_speech(user_id: int, dialog_conn_id: "int | None", conn: "connections.Connection", *,
-                         routed: bool = False) -> None:
-    """409 `cleaner_dialog`, если речь диалога (`conn` — модель «Озвучки» или голосового ввода) внешняя, а подключение
-    диалога (`dialog_conn_id`) идёт через Cleaner или текст — ответ, данный через Cleaner (`routed`). Подключение
-    диалога ищется и закрытым учётке группами доступа (`gate=False`): маршрут диалога от этого не меняется. Чужое или
-    удалённое — не отказ. Принудительный режим отказывает внешней речи и без диалога (`forced_refusal`)."""
-    if not is_external(conn):
-        return
-    if routed:
-        raise HTTPException(409, {"code": "cleaner_dialog", "message": DIALOG_SPEECH})
-    if dialog_conn_id is None:
-        return
+def chat_connection(user_id: int, chat_id: str) -> "int | None":
+    """Подключение сохранённого диалога берётся с сервера и только для его владельца."""
+    row = state.DB.execute("SELECT connection_id FROM chats WHERE id = ? AND user_id = ? AND deleted IS NULL",
+                           (chat_id, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, {"code": "gone", "message": "такого диалога нет"})
+    return row["connection_id"]
+
+
+def dialog_routed(user_id: int, connection_id: "int | None") -> bool:
+    if connection_id is None:
+        return False
     try:
-        dialog = connections.get(user_id, dialog_conn_id, gate=False)
+        return connections.get(user_id, connection_id, gate=False).routed
     except HTTPException:
-        return
-    if dialog.routed:
+        return False
+
+
+def attachment_routed(attachment_id: str) -> bool:
+    """Маршрут вложения учитывает сохранённую отметку и действующее подключение его диалога."""
+    row = state.DB.execute(
+        "SELECT a.user_id, a.cleaner_used, c.connection_id FROM attachments a LEFT JOIN messages m ON m.id = a.message_id"
+        " LEFT JOIN chats c ON c.id = m.chat_id WHERE a.id = ?", (attachment_id,)).fetchone()
+    return row is not None and (bool(row["cleaner_used"]) or dialog_routed(row["user_id"], row["connection_id"]))
+
+
+def refuse_dialog_speech(user_id: int, dialog_conn_id: "int | None", conn: "connections.Connection", *,
+                         routed: bool = False, chat_id: "str | None" = None) -> None:
+    """Запретить внешнюю речь сохранённого диалога или черновика с Cleaner, либо ответа, полученного через Cleaner."""
+    if chat_id is not None:
+        dialog_conn_id = chat_connection(user_id, chat_id)
+    if is_external(conn) and (routed or dialog_routed(user_id, dialog_conn_id)):
         raise HTTPException(409, {"code": "cleaner_dialog", "message": DIALOG_SPEECH})
+
+
+OCR_PRIVATE = "для распознавания файла с Cleaner выберите внутреннюю модель «Сканов»"
+
+
+def refuse_ocr(conn: "connections.Connection", protected: bool) -> None:
+    refuse_forced(conn, "ocr", "")
+    if protected and is_external(conn):
+        raise HTTPException(409, {"code": "cleaner_ocr", "message": OCR_PRIVATE})
 
 
 def refuse_forced(conn: "connections.Connection", section: str, model: str) -> None:
@@ -279,8 +333,10 @@ def save_settings(body: SettingsIn) -> dict:
         raise _bad("cleaner", "веб только через Cleaner требует адрес и служебный ключ Cleaner")
     web = body.web if body.web is not None else bool(previous["web"] and base_url and key)
     config = {"base_url": base_url, "key": key, "forced": body.forced, "web": web}
-    state.DB.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                     (SETTINGS_KEY, security.encrypt(json.dumps(config))))
+    blob = security.encrypt(json.dumps(config))  # прежний код читает и флажки из этого снимка
+    state.DB.execute("INSERT INTO settings(key, value) VALUES (?, ?), (?, ?)"
+                     " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (SETTINGS_KEY, blob, POLICY_KEY, _policy_value(blob, config)))
     if (base_url, key) != (previous["base_url"], previous["key"]):
         # контексты прежнего адреса и ключа: триггер кладёт их в `cleaner_deletions` со снимком прежнего ключа;
         # контексты прежнего вида Cleaner (личный ключ, без отметки `cleaner_route_contexts`) не трогаются
@@ -361,7 +417,7 @@ def _config() -> dict:
 
 def _headers(config: dict, conn: "connections.Connection", remote: "str | None", hold: Iterable[str]) -> dict[str, str]:
     out = {KEY_HEADER: config["key"], "Authorization": f"Bearer {connections.token(conn)}",
-           UPSTREAM_HEADER: conn.base_url}
+           UPSTREAM_HEADER: str(httpx.URL(conn.base_url))}
     if remote is not None:
         out[CHAT_HEADER] = remote
     names = list(dict.fromkeys(hold))

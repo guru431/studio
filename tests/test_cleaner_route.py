@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -108,16 +109,19 @@ def test_empty_key_keeps_the_previous(studio):
     assert save(studio, key="").json()["key_set"] is True and cleaner_route.settings()["key"] == KEY
 
 
-def test_new_data_key_asks_to_reenter(studio):
-    """Смена STUDIO_DATA_KEY: настройки не расшифровать — панель просит ввести их заново, принудительный режим выключен."""
+@pytest.mark.parametrize(("forced", "web", "legacy"), [(True, False, False), (False, True, False), (False, False, True)])
+def test_new_data_key_asks_to_reenter(studio, monkeypatch, forced, web, legacy):
+    """Смена STUDIO_DATA_KEY сохраняет известную политику; без её снимка действуют оба запрета."""
     admin(studio)
     allow(studio, "10.77.1.20:5464")
-    save(studio, forced=True)
-    state.DB.execute("UPDATE settings SET value = ? WHERE key = ?",
-                     (Fernet(Fernet.generate_key()).encrypt(b'{"forced": true}'), cleaner_route.SETTINGS_KEY))
-    assert studio.c.get("/api/admin/cleaner").json() == {"base_url": "", "key_set": False, "forced": False,
-                                                          "web": False, "reenter": True}
-    assert not cleaner_route.configured() and not cleaner_route.forced()
+    save(studio, forced=forced, web=web)
+    if legacy:
+        state.DB.execute("DELETE FROM settings WHERE key = ?", (cleaner_route.POLICY_KEY,))
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, data_key=Fernet.generate_key()))
+    assert studio.c.get("/api/admin/cleaner").json() == {"base_url": "", "key_set": False, "forced": forced or legacy,
+                                                          "web": web or legacy, "reenter": True}
+    assert not cleaner_route.configured() and cleaner_route.forced() is (forced or legacy)
+    assert cleaner_route.web_only() is (web or legacy)
     assert studio.c.post("/api/admin/cleaner/check").status_code == 503
     assert save(studio, key=None, forced=True).status_code == 422          # прежнего ключа нет
     response = save(studio)
@@ -438,13 +442,18 @@ def test_forced_routes_external_and_locks_the_toggle(studio):
     assert not conn_of(cid).routed and studio.c.get(f"/api/connections/{cid}/token").status_code == 200
 
 
-def test_forced_is_off_when_settings_cannot_be_decrypted(studio):
+def test_forced_does_not_expose_a_reentered_provider_key(studio, monkeypatch):
     cid = add_connection(studio, base_url=PROVIDER)
     configure(studio, forced=True)
     assert conn_of(cid).routed
-    state.DB.execute("UPDATE settings SET value = ? WHERE key = ?",
-                     (Fernet(Fernet.generate_key()).encrypt(b"{}"), cleaner_route.SETTINGS_KEY))
-    assert not conn_of(cid).routed                                                   # `reenter`: принудительный режим выключен
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, data_key=Fernet.generate_key()))
+    assert studio.c.patch(f"/api/connections/{cid}", json={"token": "new-provider-key"}).status_code == 200
+    studio.gw.requests.clear()
+    assert conn_of(cid).routed
+    assert studio.c.get(f"/api/connections/{cid}/token").status_code == 403
+    response = studio.c.get(f"/api/connections/{cid}/models")
+    assert response.status_code == 503 and response.json()["detail"]["code"] == "cleaner_unset"
+    assert studio.gw.requests == []
 
 
 def test_routed_connection_never_reaches_the_provider(studio, monkeypatch):

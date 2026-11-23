@@ -11,8 +11,9 @@ import sections
 import state
 import translate_text
 from conftest import add_connection
-from test_cleaner_route_chat import KEY, PROVIDER, allow, cleaner_gw, settings  # noqa: F401 — фикстура
-from test_translate import THREE, owner_of, parts_of, start, wait_row
+from scans import scan_pdf
+from test_cleaner_route_chat import KEY, PROVIDER, allow, cleaner_gw, routed_chat, settings  # noqa: F401 — фикстура
+from test_translate import THREE, owner_of, parts_of, send_file, start, wait_row
 
 MODEL = "gpt-x"
 
@@ -89,6 +90,49 @@ def test_read_refuses_external_speech_for_a_translation_restored_by_cleaner(clea
                                                   "origin": {"kind": "translate", "id": row["id"]}})
     assert response.status_code == 409 and response.json()["detail"]["code"] == "cleaner_translate"
     assert not hits and state.DB.execute("SELECT count(*) FROM speeches").fetchone()[0] == 0
+
+
+def test_cleaner_pdf_uses_local_text_layer_and_refuses_external_ocr(cleaner_gw):
+    s, gw = cleaner_gw
+    cid = translating(s, gw)
+    uid = owner_of(cid)
+    allow("10.77.1.20:5464", "8.8.8.8:443")
+    scan_conn = add_connection(s, kind="srvllm", base_url="https://8.8.8.8", sections=["ocr"], name="scan")
+    sections.set_models(uid, "ocr", scan_conn, ["hunyuan-ocr"])
+    sections.set_default(uid, "ocr", scan_conn, "hunyuan-ocr")
+    s.gw.hosts["8.8.8.8:443"] = gw.provider
+    chat_id = routed_chat(s, gw)
+    upload = {"X-Studio-Chat": chat_id}
+    translate = {"X-Studio-Connection": str(cid), "X-Studio-Model": MODEL}
+    scanned = scan_pdf("ink")
+    layer = scan_pdf("Text from the PDF layer that can be read locally.")
+    for response in (
+        s.c.post("/api/attachments", files={"file": ("scan.pdf", scanned, "application/pdf")}, headers=upload),
+        send_file(s, "scan.pdf", scanned, **translate),
+    ):
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "cleaner_ocr", response.text
+    assert state.DB.execute("SELECT count(*) FROM scans").fetchone()[0] == 0
+    assert state.DB.execute("SELECT count(*) FROM media").fetchone()[0] == 0
+    text = s.c.post("/api/attachments", files={"file": ("text.pdf", layer, "application/pdf")}, headers=upload)
+    assert text.status_code == 201 and text.json()["chars"] > 0 and "ocr" not in text.json()
+    assert send_file(s, "text.pdf", layer, **translate).status_code == 202
+    assert all(request.url.host != "8.8.8.8" for request in s.gw.requests)
+
+
+def test_saved_dialog_sets_the_route_for_voice_requests(cleaner_gw):
+    s, gw = cleaner_gw
+    chat_id = routed_chat(s, gw)
+    uid = owner_of(gw.conn_id)
+    allow("10.77.1.20:5464", "8.8.8.8:443")
+    voice = add_connection(s, base_url="https://8.8.8.8/v1", name="voice", sections=["speech", "dictation"])
+    sections.set_models(uid, "speech", voice, ["tts-1"])
+    sections.set_models(uid, "dictation", voice, ["whisper-1"])
+    s.gw.hosts["8.8.8.8:443"] = gw.provider
+    say = s.c.post("/api/speech/say", json={"text": "Фраза", "chat_id": chat_id})
+    dictate = s.c.post("/api/dictation", data={"chat_id": chat_id},
+                       files={"audio": ("voice.m4a", b"\x00" * 128, "audio/mp4")})
+    assert all(r.status_code == 409 and r.json()["detail"]["code"] == "cleaner_dialog" for r in (say, dictate))
+    assert all(request.url.host != "8.8.8.8" for request in s.gw.requests)
 
 
 def test_models_refresh_goes_through_cleaner(cleaner_gw):

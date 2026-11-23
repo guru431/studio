@@ -122,6 +122,7 @@ class SayIn(BaseModel):
     text: str = Field(max_length=SAY_MAX * 4)                   # с разметкой; предел — после `exports.md_plain`
     #: подключение диалога «Разговора»: через Cleaner — внешняя озвучка отказывает (`cleaner_route.refuse_dialog_speech`)
     connection_id: "int | None" = None
+    chat_id: "str | None" = Field(default=None, max_length=64)
 
 
 @dataclass
@@ -692,7 +693,7 @@ async def say(body: SayIn, request: Request):
     uid = request.state.user.id
     text = _text_of(exports.md_plain(body.text), SAY_MAX)
     conn, model = _default_source(uid, "say_mcp", "для «Разговора» нужен источник озвучки через API")
-    cleaner_route.refuse_dialog_speech(uid, body.connection_id, conn)
+    cleaner_route.refuse_dialog_speech(uid, body.connection_id, conn, chat_id=body.chat_id)
     voice, _ = _read_voice(uid, conn, model)
     if uid in SAYING:
         raise HTTPException(429, {"code": "busy", "message": "предыдущая фраза ещё озвучивается"})

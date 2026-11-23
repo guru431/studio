@@ -172,8 +172,9 @@ export function startConversation(chat) {
     body.append('audio', blob, recordingName(blob));
     const language = dictationLanguage();
     if (language !== 'auto') body.append('language', language);
-    const conn = chat.dialog?.();
-    if (conn != null) body.append('connection_id', String(conn));
+    for (const [key, value] of Object.entries(chat.dialog?.() || {})) {
+      if (value != null) body.append(key, String(value));
+    }
     const { text } = await api('POST', '/api/dictation', body, { signal: controller.signal });
     return (text || '').trim();
   }
@@ -182,7 +183,7 @@ export function startConversation(chat) {
   async function say(text) {
     if (stopped) return null;
     try {
-      const response = await api('POST', '/api/speech/say', { text, connection_id: chat.dialog?.() ?? null },
+      const response = await api('POST', '/api/speech/say', { text, ...chat.dialog?.() },
         { signal: controller.signal });
       return await context.decodeAudioData(await response.arrayBuffer());
     } catch (err) {
