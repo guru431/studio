@@ -4,7 +4,7 @@
    пометка `_meta["studio/chat-files"] = {"max_bytes": N}` (`mcp_sources.chat_files`), и только с согласием
    пользователя на пару «диалог, сервер»: `chats.mcp_file_consent` `{sid: stamp}` (`mcp_sources.stamp` шифра
    ключа), и только если `artifact_upload` проходит классификацию хода (`_blocked`: веб-инструмент — при
-   «Интернете», «с подтверждением» — явно включённый). Предел сервера — не больше MEDIA_MAX (`limit_of`).
+   «Интернете» и без флажка «Веб только через Cleaner», «с подтверждением» — явно включённый). Предел сервера — не больше MEDIA_MAX (`limit_of`).
    Новый сервер, сменённый адрес или ключ требуют нового согласия; «Не передавать» хранит `REFUSED` +
    stamp — запрос больше не повторяется, пока сервер тот же. Без согласия `sync` ничего не грузит: модель
    получает имена файлов «есть, но не переданы», лента — шаг с `consent` (кнопки на странице).
@@ -57,12 +57,15 @@ NAME_MAX = 255
 REFUSED = "refused:"                         # «Не передавать»: `chats.mcp_file_consent[sid]` = REFUSED + stamp
 UPLOAD = "artifact_upload"
 CONFIRM = "confirm"                          # итог `_blocked`: загрузка «с подтверждением» не включена в диалоге
+CLEANER = "cleaner"                          # итог `_blocked`: веб-загрузка при флажке «Веб только через Cleaner»
 
 NO_CONSENT = "Файлы диалога не переданы серверу «{0}» без согласия пользователя"
 NOT_SENT = "Файлы диалога есть, но не переданы серверу «{0}» без согласия пользователя: {1}."
 BLOCKED_WEB = "Файлы диалога не переданы серверу «{0}»: его загрузка файлов работает только при включённом «Интернете»."
 BLOCKED_CONFIRM = ("Файлы диалога не переданы серверу «{0}»: его загрузка файлов — с подтверждением и не включена "
                    "в диалоге.")
+BLOCKED_CLEANER = ("Файлы диалога не переданы серверу «{0}»: администратор разрешает веб-инструменты только через "
+                   "Cleaner, а файлы уходят на сервер мимо Cleaner.")
 ON_SERVER = "Файлы диалога на сервере «{0}»:"
 TOO_BIG = "файл «{0}» не передан: больше предела сервера ({1} МиБ)"
 LEFT = "файл «{0}» не передан: предел хода"
@@ -155,14 +158,18 @@ def _fresh(f: dict, sid: int, stamp: str):
 def _blocked(item, found, row, conn) -> "str | None":
     """Слова отказа, если `artifact_upload` сервера `item` (каталог `found`) не предлагается при нынешних
     «Интернете» и явно включённых инструментах диалога `row` с подключением хода `conn` — та же классификация, что у
-    хода (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера; флажок «Веб только через
-    Cleaner» — `cleaner_route.web_allowed`); иначе None. `artifact_upload`
+    хода (`mcp_client.Tools._offered`: политика администратора поверх пометок сервера); иначе None. `artifact_upload`
     в `found` есть: его пометка и делает сервер получателем (`limit_of`). Загрузку делает сама Studio, без карточки
-    «Запустить»: «с подтверждением» — только явно включённая в диалоге (`mcp_tools_on`), иначе `CONFIRM`."""
+    «Запустить»: «с подтверждением» — только явно включённая в диалоге (`mcp_tools_on`), иначе `CONFIRM`. Байты
+    идут на сервер мимо Cleaner, поэтому при флажке «Веб только через Cleaner» (`cleaner_route.web_only`) веб-загрузка
+    закрыта в любом диалоге, и через Cleaner тоже — `CLEANER`."""
     tool = upload_tool(found)
     rules = mcp_sources.policy(item["id"]) if item["user_id"] is None else {}
     _, on = mcp_sources.tool_state(row["mcp_tools_off"])
-    hint, refusal = mcp_client.Tools._offered(item, tool, rules, bool(row["web"]) and cleaner_route.web_allowed(conn))
+    web_only = cleaner_route.web_only()
+    hint, refusal = mcp_client.Tools._offered(item, tool, rules, bool(row["web"]) and not web_only)
+    if refusal == mcp_client.WEB_OFF and row["web"] and web_only:
+        return CLEANER
     if refusal is None and hint["confirm"] is not None and tool["name"] not in on.get(item["id"], ()):
         return CONFIRM
     return refusal
@@ -214,9 +221,9 @@ async def sync(task, servers) -> tuple[list[str], list[dict]]:
         sid, server, stamp = item["id"], item["name"], mcp_sources.stamp(item["secret_enc"])
         names = [f["name"] for f in files]
         blocked = _blocked(item, found, row, task.conn)
-        if blocked is not None:                  # «Интернет» выключен или загрузка — с подтверждением, не включена
-            notes.append((BLOCKED_WEB if blocked == mcp_client.WEB_OFF else BLOCKED_CONFIRM).format(
-                chat_system.clean(server, 200)))
+        if blocked is not None:                  # «Интернет» выключен, флажок Cleaner или «с подтверждением»
+            notes.append({mcp_client.WEB_OFF: BLOCKED_WEB, CLEANER: BLOCKED_CLEANER}.get(blocked, BLOCKED_CONFIRM)
+                         .format(chat_system.clean(server, 200)))
             continue
         if consent.get(str(sid)) != stamp:
             notes.append(NOT_SENT.format(chat_system.clean(server, 200),

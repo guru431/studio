@@ -1051,8 +1051,9 @@ function build(view, ctx) {
       if (!conn?.proxied || conn.cleaner) return null;
       ids = draftIds(draftMcp, mcpServers);
     }
+    // флажок «Веб только через Cleaner»: файлы идут на сервер мимо Cleaner — веб-загрузка закрыта и через Cleaner
     const targets = mediaTargets(catalog, ids, stateOf(chat?.chat ?? draftMcp),
-      chat ? !!chat.chat.web && webState() !== 'cleaner' : webOn())
+      !me?.cleaner_web && (chat ? !!chat.chat.web : webOn()))
       .filter((t) => decisions[String(t.id)] !== 'refused');
     if (!targets.length) return null;
     const allowed = targets.filter((t) => decisions[String(t.id)] === 'allowed');
@@ -1376,7 +1377,8 @@ function build(view, ctx) {
     const caps = links.find((l) => l.connection.id === connId)?.capabilities;
     const blind = photoAtts().length > 0 && !!caps && Object.hasOwn(caps, model) && !caps[model].includes('vision');
     const decisions = chat?.chat.mcp_file_consent || {};
-    const tool = blind && chat ? mediaTargets(catalog, chat.chat.mcp_ids || [], stateOf(chat.chat), !!chat.chat.web)
+    const tool = blind && chat ? mediaTargets(catalog, chat.chat.mcp_ids || [], stateOf(chat.chat),
+      !!chat.chat.web && !me?.cleaner_web)
       .find((t) => decisions[String(t.id)] === 'allowed') : null;
     const key = blind ? `blind:${tool ? tool.name : ''}` : '';
     if (key === passportKey) return;                 // ссылки не пересоздаются: фокус на них не теряется

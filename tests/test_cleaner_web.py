@@ -5,13 +5,16 @@
 import pytest
 
 import cleaner_route
+import mcp_files
 import mcp_sections
 import state
 from conftest import add_connection, add_gateway
 from fakes import FakeCleanerGateway
-from test_chat import messages, new_chat, sse, turn
+from test_chat import attach, messages, new_chat, sse, turn
 from test_chat_web import EXA_KEY, call, chat_of
 from test_cleaner_route_chat import ADDRESS, KEY, PROVIDER, allow, settings, shared_mcp, tool, tool_names
+from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
+from test_mcp_chat_files import consent, post_media, server as files_server, uploads
 
 
 @pytest.fixture
@@ -85,6 +88,30 @@ def test_flag_off_keeps_web_of_internal_dialogs(flagged):
     assert s.c.patch(f"/api/chats/{chat_id}", json={"web": True}).json()["web"] is True
     assert sse(turn(s, chat_id, "Найди"))[-1][0] == "done"
     assert {"web_search", f"mcp_{s.mcp}_1"} <= set(tool_names(s.gw.chat_requests[0]))
+
+
+def test_dialog_files_do_not_go_to_a_web_server_even_through_cleaner(flagged):
+    """Файлы диалога Studio грузит на MCP сама, мимо Cleaner: при флажке веб-`artifact_upload` закрыт и в диалоге
+    через Cleaner — ни вложений, ни приёма медиа; без флажка — как раньше."""
+    s, gw = flagged
+    calls = files_server(s, "/files")
+    sid = s.c.post("/api/admin/shared/mcp", json={"name": "Files", "url": MCP_URL.replace("/mcp", "/files"),
+                                                   "token": MCP_KEY}).json()["id"]
+    assert s.c.put(f"/api/admin/shared/mcp/{sid}/policy",
+                   json={"tools": {"artifact_upload": {"open_world": True}}}).status_code == 200
+    chat_id = new_chat(s, connection_id=gw.conn_id, model="gpt-x")
+    assert s.c.patch(f"/api/chats/{chat_id}", json={"web": True}).json()["web"] is True
+    consent(s, chat_id, sid)
+    note = attach(s, "notes.txt", b"secret notes")
+    assert sse(turn(s, chat_id, "Посмотри", attachment_ids=[note["id"]]))[-1][0] == "done"
+    assert uploads(calls) == []
+    assert mcp_files.BLOCKED_CLEANER.format("Files") in gw.bodies[-1]["messages"][0]["content"]
+    refused = post_media(s, chat_id, b"v" * 10)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "mcp_files"
+    settings(s, web=False)
+    assert post_media(s, chat_id, b"v" * 10).status_code == 201
+    assert sse(turn(s, chat_id, "Ещё"))[-1][0] == "done"
+    assert len(uploads(calls)) == 2
 
 
 def test_section_tools_with_the_internet_mark_are_hidden_by_the_flag(flagged):
