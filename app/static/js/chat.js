@@ -486,17 +486,19 @@ async function readBrowser(job, turn) {
 /* Тело fetch с keepalive — не больше 64 КиБ на все такие запросы страницы разом; запас — прочим (jobs.js). */
 const PART_BYTES = 60 * 1024;
 
+const bodyBytes = (body) => new TextEncoder().encode(JSON.stringify(body)).length;
+
 /** Итог «остановлен» с прочитанным: начало ответа, а не хвост, — остановленный ответ всегда начало сказанного
- * моделью, и история с контекстом следующего хода читаются связно; длиннее PART_BYTES тела — начало, что влезает. */
-function partBody(content) {
-  const size = (text) => new TextEncoder().encode(JSON.stringify({ content: text, status: 'stopped' })).length;
-  let text = wellFormed(clip(content, PART_BYTES));             // знак — не меньше байта
-  if (size(text) > PART_BYTES) {
+ * моделью, и история с контекстом следующего хода читаются связно; длиннее limit байт тела — начало, что влезает. */
+function partBody(content, limit = PART_BYTES) {
+  const size = (text) => bodyBytes({ content: text, status: 'stopped' });
+  let text = wellFormed(clip(content, limit));                  // знак — не меньше байта
+  if (size(text) > limit) {
     let low = 0;
     let high = text.length;
     while (low < high) {
       const mid = Math.ceil((low + high) / 2);
-      if (size(clip(text, mid)) <= PART_BYTES) low = mid;
+      if (size(clip(text, mid)) <= limit) low = mid;
       else high = mid - 1;
     }
     text = clip(text, low);
@@ -506,13 +508,21 @@ function partBody(content) {
 
 /* Вкладку закрывают или перезагружают, пока она читает ответ прямого подключения: прочитанное — PUT с keepalive
  * (обычный запрос уход страницы оборвал бы), иначе текст пропал бы, а диалог ещё ALIVE_SEC отвечал бы «ответ идёт в
- * другой вкладке». Уже сохраняемый итог — тем же телом ещё раз (сервер примет тот же итог повторно). */
+ * другой вкладке». Уже сохраняемый итог — тем же телом ещё раз (сервер примет тот же итог повторно), а не влезающий
+ * в квоту — началом со статусом stopped. Квота keepalive одна на все ответы страницы: каждый следующий получает
+ * остаток, ответ без остатка не шлётся (браузер отверг бы такой fetch молча). */
 window.addEventListener('pagehide', () => {
+  let left = PART_BYTES;
   for (const job of jobs.values()) {
     if (job.message.via !== 'browser' || !job.message.id) continue;
-    const body = job.saving || job.parted || (job.parted = partBody(job.message.content));
-    api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, body, { keepalive: true, unlock: false })
-      .catch(() => {});
+    let body = job.saving || job.parted;
+    if (!body || bodyBytes(body) > left) body = partBody((job.saving || job.message).content, left);
+    if (bodyBytes(body) <= left) {
+      if (!job.saving) job.parted = body;
+      left -= bodyBytes(body);
+      api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, body, { keepalive: true, unlock: false })
+        .catch(() => {});
+    }
     job.controller.abort();
   }
 });
