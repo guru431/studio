@@ -3,8 +3,13 @@
 Выдача привязана к pid, а pid — к имени папки: удаление или переименование папки выдачу не снимает, новая папка
 с тем же именем открывается прежнему участнику. Поэтому отзыв (`revoke`) моста не спрашивает, а все выдачи
 владельца, и к исчезнувшим папкам, видны и отзываются в «Настройки → Защита» (account.py `/api/me/access`).
-Аварийный выход снимает их всегда (`granted`, `drop`, `wake`)."""
+Аварийный выход снимает их всегда (`granted`, `drop`, `wake`).
+
+Роль выдачи (шаг 74): соавтор (`editor`) или наблюдатель (`viewer`) — ему сервер пропускает только читающие
+просьбы `READ_OPS`, изменяющие маршруты — 403 `readonly` (`editable`). Срок (`expires`, `TERMS`): истёкшая выдача
+не действует и снимается при первом обращении (`expire`)."""
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -18,12 +23,60 @@ import state
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/code/agents/{aid}/projects/{pid}/members")
 
+#: сроки выдачи «на день / неделю / месяц», секунды; без срока — бессрочно
+TERMS = {"day": 86400, "week": 7 * 86400, "month": 30 * 86400}
+#: просьбы мосту, которые наблюдатель может слать: чтение проекта, чатов, файлов и git — без хода, ответа на
+#: карточки, правки файлов и новых чатов. `state` читает настройки и контекст (мост ничего не пишет)
+READ_OPS = frozenset({"projects", "activity", "project_summary", "chats", "history", "history_image", "state", "watch",
+                      "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
+                      "read", "raw", "visualization", "git", "git_compare"})
+READONLY = "у наблюдателя проекта — только просмотр"
+#: действует ли выдача сейчас (`?` — clock.NOW())
+LIVE = "(m.expires IS NULL OR m.expires > ?)"
+
+
+def expire() -> None:
+    """Истёкшие выдачи — прочь, как отзыв (`drop`, `wake`): при первом обращении к выдачам после срока. Внутри
+    чужой транзакции не снимает — фильтр `LIVE` всё равно их не пропустит."""
+    if state.DB.in_transaction or state.DB.execute(
+            "SELECT 1 FROM project_members WHERE expires <= ? LIMIT 1", (clock.NOW(),)).fetchone() is None:
+        return
+    state.DB.execute("BEGIN IMMEDIATE")
+    try:
+        grants = [tuple(r) for r in state.DB.execute(
+            "SELECT agent_id, project, user_id FROM project_members WHERE expires <= ?", (clock.NOW(),))]
+        drop(grants)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    wake(grants)
+    log.info("истекли выдачи доступа к проектам — %d", len(grants))
+
 
 def projects(uid: int, aid: int) -> list[str]:
+    expire()
     return [r[0] for r in state.DB.execute(
         "SELECT m.project FROM project_members m JOIN agents a ON a.id = m.agent_id"
-        " JOIN users u ON u.id = a.user_id WHERE m.user_id = ? AND m.agent_id = ? AND u.disabled = 0",
-        (uid, aid))]
+        " JOIN users u ON u.id = a.user_id WHERE m.user_id = ? AND m.agent_id = ? AND u.disabled = 0 AND " + LIVE,
+        (uid, aid, clock.NOW()))]
+
+
+def role(uid: int, aid: int, pid: str | None) -> str | None:
+    """Роль действующей выдачи участника (`editor`, `viewer`); владелец компьютера и чужой — None."""
+    if pid is None:
+        return None
+    row = state.DB.execute(
+        "SELECT m.role FROM project_members m JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = a.user_id"
+        " WHERE m.user_id = ? AND m.agent_id = ? AND m.project = ? AND u.disabled = 0 AND " + LIVE,
+        (uid, aid, pid, clock.NOW())).fetchone()
+    return row[0] if row else None
+
+
+def editable(request: Request, aid: int, pid: str | None) -> None:
+    """Изменяющее действие (ход, ответ на карточку, правка, новый чат, отметка чата) наблюдателю — 403 до моста."""
+    if role(request.state.user.id, aid, pid) == "viewer":
+        raise HTTPException(403, {"code": "readonly", "message": READONLY})
 
 
 def agent(uid: int, aid: int, pid: str | None = None, *, shared: bool = False):
@@ -40,6 +93,12 @@ def owner(request: Request, aid: int):
 
 class Member(BaseModel):
     login: str = Field(min_length=1, max_length=254)
+    role: Literal["editor", "viewer"] = "editor"
+    term: Literal["day", "week", "month"] | None = None
+
+
+class Role(BaseModel):
+    role: Literal["editor", "viewer"]
 
 
 async def _check(request: Request, aid: int, pid: str):
@@ -56,9 +115,10 @@ async def _check(request: Request, aid: int, pid: str):
 @router.get("")
 async def members(aid: int, pid: str, request: Request):
     await _check(request, aid, pid)
+    expire()
     return {"items": [dict(r) for r in state.DB.execute(
-        "SELECT u.id, u.login, u.disabled FROM project_members m JOIN users u ON u.id = m.user_id"
-        " WHERE m.agent_id = ? AND m.project = ? ORDER BY u.login", (aid, pid))]}
+        "SELECT u.id, u.login, u.disabled, m.role, m.expires FROM project_members m JOIN users u ON u.id = m.user_id"
+        " WHERE m.agent_id = ? AND m.project = ? AND " + LIVE + " ORDER BY u.login", (aid, pid, clock.NOW()))]}
 
 
 def _journal(request: Request, row, kind: str) -> None:
@@ -100,6 +160,7 @@ def wake(grants) -> None:
 
 def granted(owner_id: int) -> list[tuple[int, str, int]]:
     """Все выдачи на компьютерах учётки, и к проектам, которых уже нет (выдача привязана к имени папки)."""
+    expire()
     return [tuple(r) for r in state.DB.execute(
         "SELECT m.agent_id, m.project, m.user_id FROM project_members m JOIN agents a ON a.id = m.agent_id"
         " WHERE a.user_id = ?", (owner_id,))]
@@ -180,12 +241,33 @@ async def add_member(aid: int, pid: str, body: Member, request: Request):
                             (identity, identity)).fetchone()
     if user is None or user["id"] == request.state.user.id:
         raise HTTPException(422, {"code": "member", "message": "укажите логин или email другого активного пользователя Студии"})
-    if state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created) VALUES (?, ?, ?, ?)"
-                        " ON CONFLICT DO NOTHING", (aid, pid, user["id"], clock.NOW())).rowcount:
+    now = clock.NOW()
+    expire()
+    if state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created, role, expires)"
+                        " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                        (aid, pid, user["id"], now, body.role,
+                         None if body.term is None else now + TERMS[body.term])).rowcount:
         _journal(request, owner(request, aid), "add")
         log.info("пользователь %d: выдан доступ участнику %d к проекту компьютера %d",
                  request.state.user.id, user["id"], aid)
     return {"id": user["id"]}
+
+
+@router.patch("/{uid}")
+async def set_role(aid: int, pid: str, uid: int, body: Role, request: Request):
+    """Сменить роль участника без пересоздания выдачи (срок, вкладки и место сохраняются). Без моста: круг проектов
+    не меняется, а папку могли переименовать. Журнал — как выдача (`project_member_add`, `member_add`): права
+    участника изменились."""
+    import claude_code
+    row = owner(request, aid)
+    claude_code.check_pid(pid)
+    expire()
+    if not state.DB.execute("UPDATE project_members SET role = ? WHERE agent_id = ? AND project = ? AND user_id = ?",
+                            (body.role, aid, pid, uid)).rowcount:
+        raise HTTPException(404, {"code": "not_found", "message": "нет такого участника"})
+    _journal(request, row, "add")
+    log.info("пользователь %d: роль участника %d проекта компьютера %d изменена", request.state.user.id, uid, aid)
+    return {"role": body.role}
 
 
 @router.delete("/{uid}", status_code=204)

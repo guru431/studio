@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 75
+VERSION = 76
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1065,6 +1065,13 @@ NOTIFY_PREFS_75 = """CREATE TABLE notify_prefs(
 CREATE INDEX notify_prefs_user ON notify_prefs(user_id);
 """
 SCHEMA += NOTIFY_PREFS_75
+#: роль и срок выдачи доступа к проекту (project_access): `viewer` — только читающие просьбы, `expires` — время
+#: истечения или NULL (бессрочно). Прежний код столбцов не читает: наблюдатель — снова соавтор, срок не действует
+PROJECT_ROLES_76 = """ALTER TABLE project_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'
+       CHECK(role IN ('editor', 'viewer'));
+ALTER TABLE project_members ADD COLUMN expires REAL;
+"""
+SCHEMA += PROJECT_ROLES_76
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1216,6 +1223,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     74: SCAN_LAYER_74,
     # о чём уведомлять устройство: виды, тихие часы, напоминание о ждущей карточке
     75: NOTIFY_PREFS_75,
+    # роль «Наблюдатель» и срок выдачи доступа к проекту
+    76: PROJECT_ROLES_76,
 }
 
 

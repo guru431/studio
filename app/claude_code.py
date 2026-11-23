@@ -387,6 +387,11 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         if op not in ("projects", "activity") and pid is None:
             raise _refuse(404, "not_found", "нет такого компьютера", computer=True)
         args["shared_projects"] = [pid] if pid is not None else scope
+        if project_access.role(request.state.user.id, aid, pid) == "viewer":
+            # Наблюдатель: только читающие просьбы; мост ≥ 0.47.0 сверяет признак сам (защита в глубину).
+            if op not in project_access.READ_OPS or args.get("additional_directories"):
+                raise _refuse(403, "readonly", project_access.READONLY)
+            args["shared_readonly"] = True
     if "chat" in args:
         window = request.headers.get("x-studio-window")
         if window is not None:
@@ -514,11 +519,17 @@ async def open_without_pin(request: Request, agent, call):
 async def projects(aid: int, request: Request):
     owner = own_agent(request, aid, shared=True)["user_id"] == request.state.user.id
     items = (await ask(request, aid, "projects", refresh=request.query_params.get("refresh") == "true")).get("items")
-    shared = dict(state.DB.execute("SELECT project, count(*) FROM project_members WHERE agent_id = ?"
-                                  " GROUP BY project", (aid,)))
+    shared = dict(state.DB.execute("SELECT project, count(*) FROM project_members m WHERE agent_id = ? AND "
+                                   + project_access.LIVE + " GROUP BY project", (aid, clock.NOW())))
+    # участнику — его роль и срок выдачи: наблюдателю страница прячет поле ввода и правку (сервер их и так не пустит)
+    grants = {} if owner else {r["project"]: r for r in state.DB.execute(
+        "SELECT project, role, expires FROM project_members m WHERE agent_id = ? AND user_id = ? AND "
+        + project_access.LIVE, (aid, request.state.user.id, clock.NOW()))}
     # `dir` — настоящий путь папки для ссылок на файлы (протокол §5): только владельцу, как `projects_root`.
     return {"items": [{"pid": i["pid"], "name": i["name"], "shared": i["pid"] in shared,
                        **({"member_count": shared[i["pid"]]} if owner and i["pid"] in shared else {}),
+                       **({"readonly": grants[i["pid"]]["role"] == "viewer", "expires": grants[i["pid"]]["expires"]}
+                          if i["pid"] in grants else {}),
                        **({"dir": folder} if owner and isinstance(folder := i.get("dir"), str)
                           and 0 < len(folder) <= PATH_MAX and not re.search(r"[\x00-\x1f\x7f]", folder) else {}),
                        **({"last_code_bytes": size} if type(size := i.get("last_code_bytes")) is int and size >= 0 else {})}
@@ -858,6 +869,7 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
     agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    project_access.editable(request, aid, pid)
     require_capability(aid, "chat_fork")
     engine = chat_engine(request, aid, chat)
     _forkable(aid, engine)
@@ -936,6 +948,7 @@ async def new_chat(aid: int, pid: str, request: Request):
     agent = own_agent(request, aid)
     operations.check(agent["user_id"])
     check_pid(pid)
+    project_access.editable(request, aid, pid)
     engine = chat_engine(request, aid)
     if engine != "claude":
         require_engine(aid, engine)
@@ -960,6 +973,7 @@ async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request
     agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    project_access.editable(request, aid, pid)
     uid = agent["user_id"]
     operations.check(request.state.user.id)
     operations.check(uid)

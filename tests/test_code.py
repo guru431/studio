@@ -39,6 +39,7 @@ BODIES = {
     ("GET", "/api/code/agents/1/projects/1/members"): None,
     ("POST", "/api/code/agents/1/projects/1/members"): {"login": "friend"},
     ("DELETE", "/api/code/agents/1/projects/1/members/1"): None,
+    ("PATCH", "/api/code/agents/1/projects/1/members/1"): {"role": "viewer"},
     ("GET", "/api/code/agents/1/projects/1/mirrors"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/discover"): None,
     ("POST", "/api/code/agents/1/projects/1/mirrors/locate"): None,

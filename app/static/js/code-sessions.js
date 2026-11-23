@@ -26,7 +26,7 @@ function when(ts) {
   return dateTime(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, deepseek = false, starts = true, contentSearch = false, worktrees = false, worktreeOpened }) {
+export function sessionList(host, { aid, pid, items, refresh = null, reload = null, exclude = new Set(), picked, created, failed, codex = false, opencode = false, deepseek = false, starts = true, readonly = false, contentSearch = false, worktrees = false, worktreeOpened }) {
   const base = `/api/code/agents/${aid}/projects/${pid}/chats`;
   let alive = true;
   let found = Array.isArray(items) ? items : null;
@@ -58,7 +58,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
       el('span', { class: 'code-marks' }, ...marks));
     const url = `${base}/${chat.chat}${chat.engine && chat.engine !== 'claude' ? `?engine=${chat.engine}` : ''}`;
     link.addEventListener('click', () => busy(link, async () => {
-      if (closed) await api('PATCH', url, { state: 'open' });
+      if (closed && !readonly) await api('PATCH', url, { state: 'open' });   // наблюдатель отметок не меняет
       if (alive) picked(chat.chat, chat);
     }));
     const title = chat.title || UNTITLED;
@@ -79,7 +79,7 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
         paint();
       }
     }));
-    return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link, toggle);
+    return el('li', { 'data-chat': chat.chat, class: closed ? 'closed' : null }, link, readonly ? null : toggle);
   }
 
   /** Порядок сервера: открытые, затем закрытые, внутри — новые сверху. */

@@ -824,6 +824,12 @@ HTTP-сервер поддерживает `?refresh=true`, для списка 
 или проект вне разрешения — `closed`. Сведения о компьютере, его PIN, рабочий стол, обновление,
 подписка и worktree участнику недоступны даже с открытой PIN-сессией.
 
+Наблюдатель проекта (роль `viewer` в `project_members`, шаг схемы 76): сервер пропускает только читающие
+просьбы (`project_access.READ_OPS`) и добавляет к ним доверенное `shared_readonly: true`. Мост 0.47.0 сверяет его
+сам: только вместе с `shared_projects` и только операции `agent.SHARED_READ_OPS` (`SHARED_OPS` без `turn`, `steer`,
+`queue_edit`, `queue_pause`, `claim`, `answer`, `stop`, `file_operation`, `chat_fork`, `save`); иначе — `closed`,
+не логическое значение — `invalid`. Capability нет: прежний мост неизвестное поле пропускает, граница — сервер.
+
 `visualization` участника читает только файлы проекта: общий каталог визуализаций Codex
 (`$CODEX_HOME/visualizations`) хранит HTML тредов всех проектов владельца. Мост 0.20.0 объявляет это
 `hello.visualization_scope: true`; мосту без него сервер передаёт от участника только относительный `source`

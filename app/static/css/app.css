@@ -1838,6 +1838,13 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .project-members-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-block: var(--space-2); }
 .project-members-list li span { overflow-wrap: anywhere; min-width: 0; }
 .project-members .btn { min-height: 44px; }
+.project-members select { min-height: 44px; font-size: max(16px, 1em); min-width: 0; }
+.project-members-options { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.project-members-list li > span:first-child { display: grid; flex: 1; }
+.project-members-list .project-member-role { width: auto; }
+/* Наблюдатель совместного проекта (code-chat.js readonly): без ввода и ответов */
+[data-readonly] :is(#code-composer, #code-ask-pin, .code-ask-actions, .code-fork, #code-session-notice,
+  #code-quick-actions, #code-queue button) { display: none !important; }
 #code-project-mirrors { width: min(640px, calc(100 * var(--vw) - 32px)); }
 #code-project-mirrors label, .project-mirror-form { display: grid; gap: var(--space-2); }
 .project-mirror-form { margin-block: var(--space-4); }
