@@ -570,6 +570,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .dialog form, .dialog .field:last-child { margin-bottom: 0; }
 .dialog p { margin: 0 0 var(--space-6); }
 .dialog .error { margin: var(--space-2) 0 0; font-size:var(--fs-sm); }
+/* принятое листом «Поделиться» (share-target.js): длинный текст или ссылка — не шире окна, не выше пяти строк */
+.dialog .received-what { overflow-wrap: anywhere; white-space: pre-line; max-height: 7.5em; overflow: auto; }
 
 /* раздел со списком слева и выбранным справа (расшифровка, озвучка); на телефоне список выезжает */
 .split { flex: 1; min-height: 0; display: flex; }

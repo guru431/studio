@@ -113,7 +113,7 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
   const { select, refresh } = docs;
 
-  const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
+  const input = el('input', { type: 'file', id: 'ocr-file', class: 'sr', accept: ACCEPT, multiple: true });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"), input);
   const progress = el('p', { id: 'ocr-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Документы") });
