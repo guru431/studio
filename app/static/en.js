@@ -1690,6 +1690,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Закрыть сессии старше месяца?": "Close sessions older than a month?",
   "Закрыть: {0}": "Close: {0}",
   "Сессии останутся на компьютере, их можно открыть снова из списка.": "The sessions stay on the computer; you can reopen them from the list.",
+  "Пустые чаты исчезнут из списка: на компьютере их сессий нет.": "Empty chats will disappear from the list: they have no sessions on the computer.",
   "ждёт ответа": "awaiting reply",
   "идёт ход": "turn in progress",
   "Поиск по названиям чатов": "Search chat titles",

@@ -9471,6 +9471,7 @@ def test_code_session_menu_renames_deletes_and_closes_in_bulk(browser, live, wid
             ("click", "#code-delete-confirm"),
             ("wait", f"!document.querySelector('{row(old)}') && !document.querySelector('#code-delete-dialog')"),
             ("click", "#code-close-empty"), ("wait", "document.querySelector('#code-close-many-dialog')?.open"),
+            ("eval", "note", "document.querySelector('#code-close-many-dialog p').textContent"),
             ("click", "#code-close-many-confirm"),
             ("wait", "document.querySelectorAll('#code-chats li[data-chat]').length === 2"
                      " && document.querySelector('#code-chats-tidy').hidden"),
@@ -9483,6 +9484,7 @@ def test_code_session_menu_renames_deletes_and_closes_in_bulk(browser, live, wid
     assert v["menus"] == [["Переименовать", "Удалить сессию"], ["Переименовать"], True]
     assert v["fits"] is True and v["fits2"] is True
     assert "Восстановить её нельзя" in v["warning"]
+    assert v["note"] == "Пустые чаты исчезнут из списка: на компьютере их сессий нет."   # закрытые пустые не видны
     assert [q["title"] for q in code_requests(machine, "chat_rename")] == ["Своё"]
     assert [q["chat"] for q in code_requests(machine, "chat_delete")] == [old]
     assert old not in machine.projects["alpha"]["chats"] and machine.projects["alpha"]["chats"][recent]["title"] == "Своё"
