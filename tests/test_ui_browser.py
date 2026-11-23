@@ -8464,9 +8464,11 @@ def test_settings_replaces_a_computer_with_the_new_one(browser, live):
     import bridge
     from fake_bridge import FakeMachine, SocketBridge
     login = "replacer"
-    live.add_user(login)
+    uid = live.add_user(login)
     old, _ = enroll_live(live, login, "Старый ПК")
     new, key = enroll_live(live, login, "Новый ПК")
+    live_sql(live, "INSERT INTO mirror_groups(user_id) VALUES (?)", (uid,))   # ревью R4b-4: окно называет, что уйдёт
+    live_sql(live, "INSERT INTO mirror_copies(grp, agent) VALUES ((SELECT max(id) FROM mirror_groups), ?)", (new,))
     sb = SocketBridge(live.url, key, FakeMachine()).start()
     rows = """[...document.querySelectorAll('#agents li[data-id]')].map((li) => [Number(li.dataset.id),
       li.querySelector('.agent-name').textContent, li.querySelector('.agent-replace')?.textContent ?? null])"""
@@ -8479,6 +8481,8 @@ def test_settings_replaces_a_computer_with_the_new_one(browser, live):
             ("click", f"#agents li[data-id='{old}'] .agent-replace"), ("wait", is_open("#agent-replace-dialog")),
             ("eval", "title", "document.querySelector('#agent-replace-dialog h2').textContent"),
             ("eval", "choices", "[...document.querySelectorAll('#agent-replace-new option')].map((o) => o.textContent)"),
+            ("wait", "!document.querySelector('#agent-replace-losses').hidden"),
+            ("eval", "losses", "document.querySelector('#agent-replace-losses').textContent"),
             ("eval", "dialogFits", NO_OVERFLOW),
             ("type", "#agent-replace-password", "password-123"),
             ("click", "#agent-replace-confirm"),
@@ -8492,6 +8496,8 @@ def test_settings_replaces_a_computer_with_the_new_one(browser, live):
     v = r["values"]
     assert v["before"] == [[old, "Старый ПК", "Заменить"], [new, "Новый ПК", "Заменить"]] and v["fits"] is True
     assert v["title"] == "Заменить компьютер?" and v["choices"] == ["Новый ПК"] and v["dialogFits"] is True
+    assert v["losses"] == ("С выбранным компьютером пропадут: доступов участникам — 0, копий зеркал — 1,"
+                           " ссылок «Поделиться» — 0.")
     assert v["closed"] is True and v["after"] == [[old, "Старый ПК", None]]
     assert sb.close_code == 1012
     again = SocketBridge(live.url, key, FakeMachine()).start()

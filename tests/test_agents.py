@@ -430,6 +430,32 @@ def test_replace_during_a_handshake_checks_the_key_not_only_the_id(studio):
     assert connect(studio, old, FakeMachine()).sent[0]["agent_id"] == old     # с новым ключом — как прежний
 
 
+def test_replace_window_counts_what_goes_with_the_new_computer(studio):
+    """Ревью R4b-4: окно «Заменить» называет числами, что уйдёт каскадом со строкой нового: действующие выдачи
+    участникам, его копии зеркал, действующие ссылки «Поделиться» на его чаты; истёкшее не считается."""
+    import mirror_groups
+    uid = make_user(studio, "owner"); friend = make_user(studio, "friend")
+    old, _ = enroll(studio, name="Старый ПК")
+    new, _ = enroll(studio, name="Новый ПК")
+    for project, expires in (("a", None), ("b", 9e9), ("c", 1.0)):
+        state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created, role, expires)"
+                         " VALUES (?, ?, ?, 0, 'viewer', ?)", (new, project, friend, expires))
+    state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created, role) VALUES (?, 'a', ?, 0,"
+                     " 'viewer')", (old, friend))
+    mirror_groups.add(mirror_groups.create_group(uid), new, "0123456789abcdef", None, None, None)
+    for n, expires in enumerate((None, 1.0)):
+        state.DB.execute("INSERT INTO chat_shares(id, user_id, agent_id, project, session_id, engine, token_hash,"
+                         " token_enc, pin_hash, snapshot, created, expires) VALUES (?, ?, ?, 'p', ?, 'claude', ?,"
+                         " x'00', 'h', '', 0, ?)", (f"s{n}", uid, new, f"chat{n}", f"t{n}", expires))
+    signin(studio, "owner")
+    url = f"/api/agents/{old}/replace"
+    assert studio.c.get(url, params={"new_id": new}).json() == {"members": 2, "mirrors": 1, "shares": 1}
+    assert studio.c.get(f"/api/agents/{new}/replace", params={"new_id": old}).json() == {
+        "members": 1, "mirrors": 0, "shares": 0}
+    assert studio.c.get(url, params={"new_id": old}).status_code == 422
+    assert studio.c.get(url, params={"new_id": 999}).status_code == 404
+
+
 def test_replace_needs_two_own_distinct_computers(studio):
     make_user(studio, "owner"); make_user(studio, "friend")
     mine, _ = enroll(studio)
