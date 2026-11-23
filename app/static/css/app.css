@@ -694,6 +694,16 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
   overflow-wrap: anywhere; line-height: 1.45; }
 .tl-output:empty::before { content: attr(data-placeholder); color: var(--text-2); }
 .tl-output.md { white-space: normal; }
+/* «Абзац к абзацу»: кусок исходника и его перевод строкой; наведение (касание — .on) подсвечивает пару */
+.tl-pairs-wrap { flex: 1; min-height: 94px; max-height: calc(25 * var(--dvh)); overflow: auto; }
+.tl-pairs { width: 100%; border-collapse: collapse; table-layout: fixed; line-height: 1.45; }
+.tl-pairs > thead > tr > th { text-align: start; font-weight: 600; color: var(--text-2); padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line); }
+.tl-pairs > tbody > tr > td { vertical-align: top; padding: var(--space-3); border-bottom: 1px solid var(--line);
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.tl-pairs > tbody > tr > td.md { white-space: normal; }
+.tl-pairs > tbody > tr.on > td { background: var(--surface-2); }
+@media (hover: hover) { .tl-pairs > tbody > tr:hover > td { background: var(--surface-2); } }
 .tl-state { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 .tl-state:has(.tl-status:empty):not(:has(.btn:not([hidden]), a:not([hidden]))) { display: none; }
 .tl-status { display: inline-flex; align-items: center; gap: var(--space-4); margin: 0; overflow-wrap: anywhere; }
@@ -2398,7 +2408,7 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 /* печать чата и перевода: без рельса, шапок и поля ввода, переписка целиком, а не один экран */
 @media print {
   body.shell { display: block; height: auto; overflow: visible; }
-  #view, .chat, .chat-main, .messages, .split, .split-main, .tl-source-text, .tl-output {
+  #view, .chat, .chat-main, .messages, .split, .split-main, .tl-source-text, .tl-output, .tl-pairs-wrap {
     height: auto; max-height: none; overflow: visible; }
   :is(#rail, #menu, .head, .chats, .composer, .hint-bar, .split-aside, .msg-actions, .copy, .chat-error, .tl-past) {
     display: none; }

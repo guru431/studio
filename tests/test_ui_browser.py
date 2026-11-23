@@ -5315,7 +5315,7 @@ def test_ocr_renames_a_document_keeping_its_pages(browser, live, ocr_reply):
 
 
 def test_ocr_download_and_to_chat(browser, live, ocr_reply):
-    """«Скачать ▾» — .txt, .md, .docx (ссылка на выгрузку); «Копировать» — весь текст по страницам;
+    """«Скачать ▾» — .txt, .md, .docx, с таблицей — ещё .xlsx и .csv (ссылка на выгрузку); «Копировать» — весь текст по страницам;
     «В чат ▾» — три просьбы, нажатие ведёт в #/chat?ocr=<id>&ask=<просьба> (вложение — Task 8 чата)."""
     from scans import photo
     live.add_user("ocrdl")
@@ -5340,7 +5340,7 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     v = r["values"]
     assert v["pager"] is False                                       # одна страница — без листалки
     assert v["copied"] == f"## Страница 1\n\n{OCR_MARKDOWN}\n"
-    assert v["formats"] == ["txt", "md", "docx"]
+    assert v["formats"] == ["txt", "md", "docx", "xlsx", "csv"]                # в документе таблица — 05:I4
     assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md&lang=ru", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"
@@ -7640,7 +7640,7 @@ def test_translate_file_shows_source_and_translation(browser, live, translator):
     v = r["values"]
     assert "Записка.docx" in v["chosen"][0] and v["chosen"][1] is True
     assert v["left"] == ["Hello world.", True, "Записка.docx"] and v["kind"] is True
-    assert v["formats"] == ["txt", "docx"]
+    assert v["formats"] == ["txt", "docx", "bilingual"]
     assert v["clicked"] == [f"/api/translate/{v['tid']}/export?format=txt&lang=ru", True]
     assert v["body"] == "Привет, мир."
     assert v["cleared"] == [True, "", ""]
@@ -8050,7 +8050,7 @@ def test_translate_scan_shows_markdown_as_a_table(browser, live, translator):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["shown"] == [["Площадь", "12 m2"], "Счёт", True, 0, 0]
-    assert v["formats"] == ["txt", "md", "docx"]
+    assert v["formats"] == ["txt", "md", "docx", "bilingual"]
     assert v["txt"].startswith("Счёт\n\nПлощадь\t12 m²\n")
     assert v["copied"] == reply and v["fits"] is True
     assert not problems(r), problems(r)

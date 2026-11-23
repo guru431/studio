@@ -2,7 +2,7 @@ import { language, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
- * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx), «В чат ▾», «Переименовать» (PATCH `name`,
+ * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx; есть таблицы — ещё «Таблицы .xlsx» и «.csv»), «В чат ▾», «Переименовать» (PATCH `name`,
  * расширение сохраняет сервер), «Удалить»; идущий — состояние
  * и «Отменить». Ниже — листалка «‹ страница N из M ›» и две колонки: картинка страницы (нажатие — окно
  * просмотра #ocr-viewer) и её текст. На телефоне (≤ 760 px) картинка над текстом, список выезжает сбоку,
@@ -50,6 +50,8 @@ const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
 const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
+// таблицы документа (`tables` ответа) — книгой и CSV: одна таблица — файл, несколько — ZIP
+const TABLE_FORMATS = [['xlsx', tr("Таблицы .xlsx")], ['csv', tr("Таблицы .csv")]];
 const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Кратко пересказать")], ['translate', tr("Перевести")]];
 
 let screen = null;
@@ -503,7 +505,7 @@ function build(view, ctx) {
     const running = RUNNING.has(item.state);
     const choose = engines.length > 1;
     const again = !running && (choose || item.pages.some((p) => p.state === 'waiting' || p.state === 'failed'));
-    const key = JSON.stringify([item.id, readable(item), item.state === 'done', again, choose, running]);
+    const key = JSON.stringify([item.id, readable(item), item.state === 'done', again, choose, running, !!item.tables]);
     if (acts && acts.key === key) return acts.box;
     const box = el('div', { class: 'tr-acts' });
     if (readable(item)) {
@@ -519,7 +521,8 @@ function build(view, ctx) {
       const read = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-read' }, tr("Прочитать"));
       read.addEventListener('click', () => readAloud(asMarkdown(docs.current.pages), { kind: 'ocr', id: docs.current.id }, readBox));
       box.append(copy, read,
-        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
+        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), [...FORMATS, ...(item.tables ? TABLE_FORMATS : [])]
+          .map(([f, label]) => [f, label, 'data-format', download])),
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
       // ссылка «Поделиться» на скан (chat_shares.ITEMS): текст страниц, исходный файл — по выбору
