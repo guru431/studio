@@ -142,6 +142,25 @@ def test_events_come_in_pages(studio):
     assert set(first["items"][0]) == {"id", "created", "kind", "agent_id", "agent_name", "device", "ip"}
 
 
+def test_events_filter_by_kinds_keeps_pages(studio):
+    """«Важное» страницы — `kinds` без online/offline: страница фильтра полная и листается по `next`."""
+    uid = make_user(studio, "owner")
+    agent_id, _ = enroll(studio)
+    for i in range(60):
+        bridge.record(uid, agent_id, "Рабочий ПК", "pin_fail" if i % 3 == 0 else "online")
+    signin(studio, "owner")
+    r = studio.c.get("/api/agents/events", params={"kinds": "enroll,pin_fail"})
+    first = r.json()
+    assert r.status_code == 200 and len(first["items"]) == 21 and first["next"] is None
+    assert {e["kind"] for e in first["items"]} == {"enroll", "pin_fail"}
+    assert len(studio.c.get("/api/agents/events", params={"kinds": "online"}).json()["items"]) == 40
+    r = studio.c.get("/api/agents/events", params={"kinds": "online", "before": first["items"][0]["id"]})
+    assert len(r.json()["items"]) == 38 and r.json()["next"] is None   # два online новее последнего pin_fail
+    for bad in ("", "online,", "ONLINE", "online;drop", ",".join(["x"] * (agents.EVENT_KINDS_MAX + 1))):
+        r = studio.c.get("/api/agents/events", params={"kinds": bad})
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "kinds", bad
+
+
 def test_enroll_answers_login(studio):
     """Мост показывает, под какой учёткой он на связи: логин, как его проверила студия."""
     make_user(studio, "owner")

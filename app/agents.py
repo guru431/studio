@@ -19,6 +19,7 @@
 import asyncio
 import json
 import logging
+import re
 import shlex
 import unicodedata
 from pathlib import Path
@@ -43,6 +44,8 @@ router = APIRouter()
 
 NAME_MAX = 64
 EVENTS_PAGE = 50
+#: видов в фильтре `kinds` истории подключений — не больше
+EVENT_KINDS_MAX = 20
 #: архив моста — `<корень кода>/agent/studio-agent.zip`, рядом с `app/` (кладёт выкладка; тесты подменяют)
 AGENT_ZIP = Path(__file__).resolve().parent.parent / "agent" / "studio-agent.zip"
 AGENT_SETUP = AGENT_ZIP.with_name("studio-agent-setup.exe")
@@ -288,8 +291,16 @@ async def update_package(request: Request):
 
 
 @router.get("/api/agents/events")
-async def list_events(request: Request, before: int | None = None):
+async def list_events(request: Request, before: int | None = None, kinds: str | None = None):
+    """`kinds` — виды через запятую («Важное» страницы — всё, кроме `online`/`offline`): страницы фильтра идут
+    по тем же `next`, что и полная история."""
     where, args = ("", ()) if before is None else (" AND id < ?", (before,))
+    if kinds is not None:
+        wanted = kinds.split(",")
+        if not 0 < len(wanted) <= EVENT_KINDS_MAX or not all(re.fullmatch(r"[a-z_]{1,32}", k) for k in wanted):
+            raise HTTPException(422, {"code": "kinds", "message": "неверный список видов событий"})
+        where += f" AND kind IN ({','.join('?' * len(wanted))})"
+        args += tuple(wanted)
     rows = state.DB.execute("SELECT id, created, kind, agent_id, agent_name, device, ip FROM agent_events"
                             f" WHERE user_id = ?{where} ORDER BY id DESC LIMIT ?",
                             (request.state.user.id, *args, EVENTS_PAGE)).fetchall()

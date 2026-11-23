@@ -1035,7 +1035,9 @@ function notifyBlock() {
  * Мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
  * DELETE /api/agents/<id> (мост на связи отключается). Чужой компьютер участника (`shared`) — метка «Совместные»
  * и «Покинуть»: DELETE /api/me/access/shared/<id> снимает его выдачи. История подключений (GET /api/agents/events) — только
- * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
+ * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. «Важное» (по умолчанию) — фильтр `kinds` сервера:
+ * все известные виды, кроме `online`/`offline`; «Всё» — подряд идущие `online`/`offline` одного компьютера — одной строкой
+ * «обрывов связи: N» (`eventRows`, и через границу страниц). */
 const AGENT_EVENTS = { enroll: tr("привязан"), revoke: tr("отозван"), online: tr("на связи"), offline: tr("связь потеряна"),
   open: tr("открыт"), pin_ok: tr("открыт PIN"), pin_fail: tr("неверный PIN"), session_start: tr("новый чат"),
   member_add: tr("доступ к проекту выдан"), member_remove: tr("доступ к проекту отозван") };
@@ -1048,11 +1050,46 @@ function agentDevice(device) {
   return Object.hasOwn(AGENT_DEVICES, device) ? AGENT_DEVICES[device] : device;
 }
 
+/** Строки истории: серия подряд идущих `online`/`offline` одного компьютера (больше одного события) — одна строка
+ * со временем последнего события и числом обрывов; одиночные события — как есть. */
+const LINK_KINDS = new Set(['online', 'offline']);
+function eventRows(items) {
+  const rows = [];
+  for (const e of items) {
+    const last = rows.at(-1);
+    if (LINK_KINDS.has(e.kind) && last?.run && last.agent_id === e.agent_id) last.run.push(e);
+    else rows.push(LINK_KINDS.has(e.kind) ? { agent_id: e.agent_id, run: [e] } : { event: e });
+  }
+  return rows.map(({ event, run }) => {
+    if (run?.length === 1) [event] = run;
+    if (event) return el('li', {}, [momentText(event.created), event.agent_name, AGENT_EVENTS[event.kind] || event.kind,
+      agentDevice(event.device), event.ip].filter(Boolean).join(' · '));
+    const lost = run.filter((e) => e.kind === 'offline').length;
+    return el('li', { class: 'agent-events-run' }, [momentText(run[0].created), run[0].agent_name,
+      lost ? tr("обрывов связи: {0}", lost) : AGENT_EVENTS.online].join(' · '));
+  });
+}
+
 function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   const list = el('ul', { class: 'agents', id: 'agents' });
   const events = el('ul', { class: 'agent-events', id: 'agent-events' });
   const note = status('agents-status');
   let next = null;
+  let loaded = [];
+  let all = false;
+  let asked = 0;   // ответ прежнего фильтра, пришедший после переключения, не рисуется
+  const important = Object.keys(AGENT_EVENTS).filter((k) => !LINK_KINDS.has(k)).join(',');
+  const filter = el('fieldset', { class: 'segment', id: 'agent-events-filter', 'aria-label': tr("Какие события показать") });
+  for (const [id, text] of [['important', tr("Важное")], ['all', tr("Всё")]]) {
+    const input = el('input', { type: 'radio', class: 'sr', name: 'agent-events-filter', value: id,
+      id: `agent-events-${id}`, checked: id === 'important' });
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      all = id === 'all';
+      loadEvents(null);
+    });
+    filter.append(el('label', { class: 'segment-option' }, input, el('span', {}, text)));
+  }
   const more = button(tr("Показать ещё"), { class: 'btn btn-sm', id: 'agent-events-more', hidden: true },
     () => loadEvents(next));
 
@@ -1114,11 +1151,13 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   async function loadEvents(before) {
     more.disabled = true;
     try {
-      const page = await api('GET', before ? `/api/agents/events?before=${before}` : '/api/agents/events');
-      const rows = page.items.map((e) => el('li', {}, [momentText(e.created), e.agent_name, AGENT_EVENTS[e.kind] || e.kind,
-        agentDevice(e.device), e.ip].filter(Boolean).join(' · ')));
-      if (before) events.append(...rows);
-      else events.replaceChildren(...rows);
+      const query = new URLSearchParams(all ? {} : { kinds: important });
+      if (before) query.set('before', before);
+      const mine = ++asked;
+      const page = await api('GET', `/api/agents/events${String(query) ? `?${query}` : ''}`);
+      if (mine !== asked) return;
+      loaded = before ? [...loaded, ...page.items] : page.items;
+      events.replaceChildren(...eventRows(loaded));
       next = page.next;
       more.hidden = next === null;
     } catch (err) {
@@ -1137,7 +1176,7 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   reload();
   return el('section', { class: 'block agents-block' }, el('h2', {}, tr("Компьютеры (Claude Code, Codex, OpenCode и DeepSeek Harness)")),
     list, note,
-    el('h3', {}, tr("История подключений")), events, el('div', { class: 'row' }, more));
+    el('h3', {}, tr("История подключений")), filter, events, el('div', { class: 'row' }, more));
 }
 
 /** Что уносит «Удалить всю историю» (history._delete_all): записи разделов с историей — имена из реестра разделов —

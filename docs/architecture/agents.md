@@ -90,7 +90,9 @@
   Команда передаёт пропуск в заголовке Bearer на `GET /api/agent/linux-installer`. Пропуск действует 10 минут
   только для Linux-установщика и требует действующей сессии с доступом к разделу «Агенты».
   ZIP обновления `agents.AGENT_ZIP` = `<корень кода>/agent/studio-agent.zip` — `GET /api/agent/package`
-  (Bearer-ключ действующего устройства, `auth.OPEN_API`); `GET /api/agents` («на связи», модели, усилия — из `bridge.LINKS`), `GET /api/agents/events`. `bridge` —
+  (Bearer-ключ действующего устройства, `auth.OPEN_API`); `GET /api/agents` («на связи», модели, усилия — из `bridge.LINKS`), `GET /api/agents/events`
+  (страницы по `agents.EVENTS_PAGE` (50) и `before`; `kinds` — виды через запятую, не больше `agents.EVENT_KINDS_MAX` (20):
+  «Важное» страницы — все известные ей виды, кроме `online`/`offline`; свёртку серий «Всё» делает страница). `bridge` —
   канал `/api/agent/link` (WebSocket, `Authorization: Bearer <ключ>`, не строка запроса): `hello` за `HELLO_SEC`,
   кадр до `FRAME_MAX` (48 МиБ; `--ws-max-size` юнита — на 1 КиБ больше, чтобы такой кадр получил 4400, а не 1009
   uvicorn). Разбор JSON идёт на цикле событий, поэтому в любом кадре — не больше `bridge.VALUES_MAX` запятых и скобок,

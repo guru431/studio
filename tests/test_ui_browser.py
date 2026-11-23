@@ -8293,6 +8293,33 @@ def test_socket_bridge_comes_online(live):
     wait_for(lambda: aid not in bridge.LINKS)
 
 
+def test_connection_history_folds_link_losses(browser, live):
+    """«Всё» в истории подключений: подряд идущие «на связи»/«связь потеряна» одного компьютера — одной строкой
+    «обрывов связи: N», серия другого компьютера и событие между ними её разрывают; «Важное» их не показывает."""
+    login = "fold-events"
+    uid = live.add_user(login)
+    rows = [(1, "Ноутбук", "online"), (1, "Ноутбук", "offline"), (1, "Ноутбук", "online"), (1, "Ноутбук", "offline"),
+            (1, "Ноутбук", "online"), (1, "Ноутбук", "pin_fail"), (1, "Ноутбук", "offline"), (2, "ПК", "online"),
+            (2, "ПК", "offline"), (1, "Ноутбук", "online"), (1, "Ноутбук", "offline")]
+    for i, (agent, name, kind) in enumerate(rows):
+        live_sql(live, "INSERT INTO agent_events(user_id, agent_id, agent_name, created, kind, device, ip)"
+                       " VALUES (?, ?, ?, ?, ?, NULL, NULL)", (uid, agent, name, time.time() - 100 + i, kind))
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
+        ("wait", "document.querySelectorAll('#agent-events li').length === 1"),
+        ("eval", "important", AGENT_EVENTS),
+        ("click", "label:has(> #agent-events-all)"),
+        ("wait", "document.querySelectorAll('#agent-events li').length === 5"),
+        ("eval", "all", AGENT_EVENTS), ("eval", "fits", NO_OVERFLOW),
+        ("click", "label:has(> #agent-events-important)"),
+        ("wait", "document.querySelectorAll('#agent-events li').length === 1")], width=320, mobile=True)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["important"] == [["Ноутбук", "неверный PIN"]]
+    assert v["all"] == [["Ноутбук", "обрывов связи: 1"], ["ПК", "обрывов связи: 1"],
+                        ["Ноутбук", "связь потеряна"], ["Ноутбук", "неверный PIN"], ["Ноутбук", "обрывов связи: 2"]]
+    assert v["fits"] is True and not problems(r), problems(r)
+
+
 def enroll_live(live, login, name):
     """Привязка моста к учётке `login` живой студии: (agent_id, device_key)."""
     r = httpx.post(f"{live.url}/api/agent/enroll", json={"login": login, "password": "password-123", "name": name},
@@ -8310,8 +8337,9 @@ AGENT_EVENTS = "[...document.querySelectorAll('#agent-events li')].map((li) => l
 
 
 def test_settings_lists_computers_and_revokes_one(browser, live):
-    """«Код» → «Компьютеры (Claude Code)»: два компьютера, один на связи с PIN; история подключений по 50
-    и «Показать ещё»; «Отозвать» → окно → подтверждение: строка ушла, мост получил 4401, в истории «отозван»."""
+    """«Код» → «Компьютеры (Claude Code)»: два компьютера, один на связи с PIN; история подключений («Важное» —
+    без «на связи»/«связь потеряна») по 50 и «Показать ещё»; «Отозвать» → окно → подтверждение: строка ушла, мост
+    получил 4401, в истории «отозван»; «Всё» — и «связь потеряна»."""
     import bridge
     from fake_bridge import FakeMachine, SocketBridge
     login = "computers"
@@ -8334,7 +8362,7 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
             ("eval", "moreText", "document.querySelector('#agent-events-more').textContent"),
             ("eval", "fits", NO_OVERFLOW),
             ("click", "#agent-events-more"),
-            ("wait", "document.querySelectorAll('#agent-events li').length === 58"),
+            ("wait", "document.querySelectorAll('#agent-events li').length === 57"),
             ("eval", "moreHidden", "document.querySelector('#agent-events-more').hidden"),
             ("click", f"#agents li[data-id='{work}'] .agent-revoke"), ("wait", is_open("#agent-revoke-dialog")),
             ("eval", "dialogTitle", "document.querySelector('#agent-revoke-dialog h2').textContent"),
@@ -8347,7 +8375,10 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
                      " || document.querySelectorAll('#agent-events li')[1]?.textContent.includes('Рабочий ПК · отозван')"),
             ("eval", "closed", "!" + is_open("#agent-revoke-dialog")),
             ("eval", "after", AGENT_ROWS),
-            ("eval", "events", AGENT_EVENTS)], width=320, mobile=True)
+            ("eval", "events", AGENT_EVENTS),
+            ("click", "label:has(> #agent-events-all)"),
+            ("wait", "document.querySelector('#agent-events li')?.textContent.includes('связь потеряна')"),
+            ("eval", "everything", AGENT_EVENTS)], width=320, mobile=True)
         wait_for(lambda: sb.close_code is not None)
     finally:
         sb.stop()
@@ -8356,9 +8387,8 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     assert v["title"] == "Компьютеры (Claude Code, Codex, OpenCode и DeepSeek Harness)"
     assert v["rows"] == [[home, "Домашний ПК", "не на связи", None, "Отозвать"],
                          [work, "Рабочий ПК", "на связи", "PIN", "Отозвать"]]
-    assert v["first"][:3] == [["Рабочий ПК", "на связи", "127.0.0.1"], ["Рабочий ПК", "привязан", "127.0.0.1"],
-                              ["Домашний ПК", "привязан", "127.0.0.1"]]
-    assert v["first"][3] == ["Старый ПК", "неверный PIN", "телефон", "10.0.0.9"]
+    assert v["first"][:2] == [["Рабочий ПК", "привязан", "127.0.0.1"], ["Домашний ПК", "привязан", "127.0.0.1"]]
+    assert v["first"][2] == ["Старый ПК", "неверный PIN", "телефон", "10.0.0.9"]
     assert v["moreText"] == "Показать ещё" and v["moreHidden"] is True and v["fits"] is True
     assert v["dialogTitle"] == "Отозвать компьютер?" and v["confirmText"] == "Отозвать"
     assert v["dialogText"] == ("Мост на нём отключится и не войдёт снова без нового входа. История подключений"
@@ -8367,7 +8397,9 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     revoked = [e for e in v["events"] if e[:2] == ["Рабочий ПК", "отозван"]]
     assert len(revoked) == 1 and re.fullmatch(r"(телефон|браузер) [0-9a-f]{6}", revoked[0][2]), v["events"][:3]
     assert revoked[0][3] == "127.0.0.1"
-    assert ["Рабочий ПК", "связь потеряна", "127.0.0.1"] in v["events"][:3]
+    assert all(e[1] != "связь потеряна" for e in v["events"])
+    assert v["everything"][0] == ["Рабочий ПК", "связь потеряна", "127.0.0.1"]
+    assert ["Рабочий ПК", "на связи", "127.0.0.1"] in v["everything"][:4]
     assert sb.close_code == 4401 and work not in bridge.LINKS
     assert not problems(r), problems(r)
 
