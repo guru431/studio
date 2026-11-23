@@ -620,6 +620,42 @@ def test_regenerate_keeps_the_previous_answer_as_a_variant(studio):
     assert r.status_code == 409
 
 
+def test_receipt_edit_links_and_export_files_follow_the_chosen_variant(studio):
+    """Ревью R1-9: квитанция хода, ставшего невыбранным, — 409 `request_gone`, после повторного выбора снова
+    действует; правка сверяет последний выбранный ответ; адреса для read_page и файлы результатов экспорта — только
+    из выбранного варианта."""
+    import chat_exports
+    add_gateway(studio); cid = new_chat(studio)
+    uid = studio.c.get("/api/me").json()["id"]
+    r1, r2 = "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"
+    studio.gw.chat_reply = ["Первый"]
+    sse(turn(studio, cid, "Привет", request_id=r1))
+    studio.gw.chat_reply = ["Второй"]
+    sse(turn(studio, cid, "", regenerate=True, request_id=r2))
+
+    def receipt(key):
+        r = studio.c.get(f"/api/chats/{cid}/turns/{key}")
+        return r.json()["detail"]["code"] if r.status_code == 409 else r.json()["assistant_message_id"]
+
+    first, second = messages(studio, cid)[1]["variants"]
+    assert (receipt(r1), receipt(r2)) == ("request_gone", second["id"])
+    for n, variant in ((1, first), (2, second)):
+        steps = [{"kind": "search", "query": "q", "results": [{"title": "t", "url": f"https://example.test/{n}",
+                                                                "published": ""}], "text": "t"},
+                 {"kind": "mcp", "server": "s", "tool": "t", "sid": 1, "stamp": "x",
+                  "files": [{"name": f"{n}.txt", "aid": f"a{n}", "mime": "text/plain"}]}]
+        state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(steps), variant["id"]))
+    assert list(chat._known_links(cid).values()) == ["https://example.test/2"]
+    assert studio.c.post(f"/api/chats/{cid}/messages/{first['id']}/choose").status_code == 204
+    assert (receipt(r1), receipt(r2)) == (first["id"], "request_gone")
+    assert list(chat._known_links(cid).values()) == ["https://example.test/1"]
+    assert [f[0] for f in chat_exports._plan(uid, cid, "ru")[3]] == ["1.txt"]
+    user = messages(studio, cid)[0]["id"]
+    stale = turn(studio, cid, "Правка", edit={"id": user, "last_id": second["id"]})
+    assert (stale.status_code, stale.json()["detail"]["code"]) == (409, "edit_stale")
+    assert sse(turn(studio, cid, "Правка", edit={"id": user, "last_id": first["id"]}))[-1] == ("done", {"status": "done"})
+
+
 def test_regenerate_drops_an_empty_failed_answer(studio):
     """Ответ-ошибка без единого слова вариантом не остаётся — сравнивать нечего; с текстом — остаётся."""
     add_gateway(studio); cid = new_chat(studio)

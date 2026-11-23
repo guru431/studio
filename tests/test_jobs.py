@@ -282,7 +282,7 @@ def test_jobs_list_translations(studio, caplog):
     caplog.set_level(logging.DEBUG)
     uid = me(studio)
     translation(uid, "r1")
-    translate.JOBS["r1"] = SimpleNamespace(stage="перевожу · 2 из 3", stage_at=T0 - 10, conn=None)
+    translate.JOBS["r1"] = SimpleNamespace(stage="перевожу · 2 из 3", stage_at=T0 - 10, conn=None, model="m")
     translation(uid, "r2", state_="queued", detail="в очереди")
     translation(uid, "r3", state_="done", detail="готово", finished=T0 - 2)
     translation(make_user(studio, "friend"), "r9")

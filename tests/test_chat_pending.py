@@ -273,6 +273,27 @@ def test_ask_user_option_and_own_text_reach_model(studio):
         "question": "Да или нет?", "answer": None, "note": "пользователь не ответил"}
 
 
+def test_pause_of_an_unchosen_variant_waits_until_it_is_chosen_again(studio):
+    """Ревью R1-8: вариант A1 встал на паузу, выбран A0 — ответ на карточку A1 (вторая вкладка) — 409 `pending_gone`,
+    скрытый вариант не продолжается; A1 снова выбран — пауза ждёт и продолжает его."""
+    add_gateway(studio)
+    cid = new_chat(studio)
+    studio.gw.chat_reply = ["A0"]
+    sse(turn(studio, cid, "Привет"))
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Какой цвет?", options=["Красный"])]},
+                             ["Выбран красный."]]
+    shown = pending_of(sse(turn(studio, cid, "", regenerate=True)))
+    a0, a1 = messages(studio, cid)[1]["variants"]
+    assert studio.c.post(f"/api/chats/{cid}/messages/{a0['id']}/choose").status_code == 204
+    r = answer(studio, cid, shown["id"], "answer", "Красный")
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "pending_gone")
+    msgs = messages(studio, cid)
+    assert msgs[1]["content"] == "A0" and msgs[1]["variants"][1]["content"] == ""
+    assert studio.c.post(f"/api/chats/{cid}/messages/{a1['id']}/choose").status_code == 204
+    assert sse(answer(studio, cid, shown["id"], "answer", "Красный"))[-1] == ("done", {"status": "done"})
+    assert messages(studio, cid)[1]["content"] == "Выбран красный."
+
+
 def test_superseded_or_expired_pause_keeps_the_question(studio):
     """Ревью A-I1: шаг паузы пишется сразу; новое сообщение или срок снимают паузу, а вопрос и инструмент остаются
     шагом — странице и модели следующего хода; ответ на карточке модель получает вместе с вопросом."""
