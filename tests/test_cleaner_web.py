@@ -1,20 +1,27 @@
 """Флажок администратора «Веб и внешние MCP — только через Cleaner» (`cleaner_route.web_only`): «Интернет» и
 веб-инструменты MCP (пометка «интернет») — только ходу через Cleaner; в диалоге шлюза srvllm сервер их не предлагает,
 вызов модели — шаг-ошибка без Exa, PATCH {web: true} — 409; инструменты разделов MCP с пометкой не показываются;
-флажок выключен — как раньше."""
+флажок выключен — как раньше. Флажок, включённый на паузе или посреди хода, действует с продолжения и следующего
+вызова; файлы диалога веб-серверу MCP не уходят и через Cleaner."""
+import json
+
 import pytest
 
+import chat_pending
 import cleaner_route
 import mcp_files
 import mcp_sections
 import state
-from conftest import add_connection, add_gateway
+from conftest import add_connection, add_gateway, make_user, signin
 from fakes import FakeCleanerGateway
 from test_chat import attach, messages, new_chat, sse, turn
+from test_chat_pending import answer, confirm_setup, pause_on
 from test_chat_web import EXA_KEY, call, chat_of
 from test_cleaner_route_chat import ADDRESS, KEY, PROVIDER, allow, settings, shared_mcp, tool, tool_names
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
 from test_mcp_chat_files import consent, post_media, server as files_server, uploads
+from test_mcp_dialog import methods, name_of
+from test_mcp_sections import service as section_service
 
 
 @pytest.fixture
@@ -117,6 +124,80 @@ def test_dialog_files_do_not_go_to_a_web_server_even_through_cleaner(flagged):
     assert post_media(s, chat_id, b"v" * 10).status_code == 201
     assert sse(turn(s, chat_id, "Ещё"))[-1][0] == "done"
     assert len(uploads(calls)) == 2
+
+
+def flag_on():
+    """Флажок без запроса к панели (вход — не администратором)."""
+    allow("10.77.1.20:5464")
+    cleaner_route.save_settings(cleaner_route.SettingsIn(base_url=ADDRESS, key=KEY, web=True))
+    assert cleaner_route.web_only()
+
+
+def test_flag_turned_on_during_a_pause_drops_the_web_call(studio):
+    """Пауза подтверждения веб-инструмента MCP, флажок включён до «Запустить»: продолжение (`answer_pending`) его
+    не находит — шаг GONE, запроса к MCP нет."""
+    web_tool = tool("search", annotations={"openWorldHint": True}, _meta={"studio/confirm": True})
+    sid, calls = confirm_setup(studio, more=[web_tool])
+    cid = new_chat(studio)
+    state.DB.execute("UPDATE chats SET web = 1 WHERE id = ?", (cid,))
+    shown = pause_on(studio, cid, name_of(sid, 2), text="Найди")
+    assert shown["tool"] == "search"
+    flag_on()
+    assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
+    step = messages(studio, cid)[-1]["tools"][-1]
+    assert step["tool"] == "search" and step["error"] == chat_pending.GONE
+    assert "tools/call" not in methods(calls)
+
+
+def test_flag_turned_on_mid_turn_closes_web_from_the_next_call(flagged):
+    """Флажок включили в обработчике первого вызова: следующий круг — без встроенного веба, вызов веб-инструмента MCP
+    — шаг-ошибка без запроса к серверу (`StreamTask._web_on`, `Tools.call`)."""
+    s, _ = flagged
+    settings(s, web=False)
+    chat_id = new_chat(s, connection_id=s.srvllm)
+    assert s.c.patch(f"/api/chats/{chat_id}", json={"web": True}).json()["web"] is True
+    inner, called = s.gw.on["/mcp"], []
+
+    async def handler(request):
+        payload = json.loads(request.content) if request.method == "POST" else {}
+        if payload.get("method") == "tools/call":
+            called.append(payload["params"]["name"])
+            flag_on()
+        return await inner(request)
+
+    s.gw.on["/mcp"] = handler
+    s.gw.chat_script = [{"tool_calls": [call(f"mcp_{s.mcp}_0", q="x")]},
+                        {"tool_calls": [call(f"mcp_{s.mcp}_1", q="x"), call("web_search", query="x")]}, ["Готово."]]
+    assert sse(turn(s, chat_id, "Найди"))[-1][0] == "done"
+    assert "web_search" in tool_names(s.gw.chat_requests[0])
+    assert not {"web_search", "read_page", "youtube_subtitles"} & set(tool_names(s.gw.chat_requests[1]))
+    assert called == ["lookup"] and s.gw.exa_requests == []
+    steps = messages(s, chat_id)[-1]["tools"]
+    assert [bool(step.get("error")) for step in steps] == [False, True, True]
+
+
+def test_shared_section_tool_made_web_by_policy_is_hidden_and_refused(studio):
+    """Общий сервер: политика администратора делает инструмент раздела веб-инструментом — при флажке его нет в
+    каталоге раздела (`GET /api/mcp-tools/{section}`) и `run` отказывает без вызова; без флажка — как раньше."""
+    make_user(studio, "admin", is_admin=True)
+    signin(studio, "admin")
+    flag_on()
+    calls = section_service(studio.gw)
+    sid = studio.c.post("/api/admin/shared/mcp", json={"name": "Sections", "url": MCP_URL, "token": MCP_KEY}).json()["id"]
+    assert studio.c.put(f"/api/admin/shared/mcp/{sid}/policy",
+                        json={"tools": {"image_generate": {"open_world": True}}}).status_code == 200
+
+    def names(section):
+        return [t["name"] for item in studio.c.get(f"/api/mcp-tools/{section}").json()["items"] for t in item["tools"]]
+
+    run = f"/api/mcp-tools/photo/servers/{sid}/run"
+    assert names("photo") == [] and names("video") == ["video_create", "video_estimate"]
+    refused = studio.c.post(run, json={"tool": "image_generate", "arguments": {"prompt": "x"}})
+    assert refused.status_code == 409 and calls == []
+    settings(studio, web=False)
+    assert names("photo") == ["image_generate"]
+    assert studio.c.post(run, json={"tool": "image_generate", "arguments": {"prompt": "x"}}).status_code == 200
+    assert calls == [("image_generate", {"prompt": "x"})]
 
 
 def test_section_tools_with_the_internet_mark_are_hidden_by_the_flag(flagged):
