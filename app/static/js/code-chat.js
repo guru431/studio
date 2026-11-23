@@ -64,6 +64,7 @@ import { commandsView } from './code-commands.js';
 import { WINDOW } from './code-window.js';
 import { cancelRefresh, refreshAfterFailure } from './refresh.js';
 import { saveDraft, savedDrafts } from './code-drafts.js';
+import { codeActivity } from './code-activity.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -154,7 +155,8 @@ function preview(input) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null, readonly = false, renamed = null }) {
+  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null, readonly = false, renamed = null,
+  separateCopy = null, startText = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { ...options.headers, 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -378,6 +380,39 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     writerNotice.hidden = true;
     loadState();
   });
+  // Второй ход в том же проекте: другой чат проекта уже работает и правит те же файлы. Перед отправкой — строка и
+  // выбор: «Запустить в отдельной копии» (git worktree и новый чат в нём; владельцу с мостом `worktrees`, без
+  // вложений) или «Отправить здесь». Ходы других чатов — из снимка «Агентов» (code-activity.js), PIN не открывается.
+  const busyText = el('p');
+  const busyCopy = el('button', { type: 'button', id: 'code-busy-copy', class: 'btn btn-sm btn-accent' }, tr("Запустить в отдельной копии"));
+  const busySend = el('button', { type: 'button', id: 'code-busy-send', class: 'btn btn-sm' }, tr("Отправить здесь"));
+  const busyNotice = el('div', { id: 'code-busy-notice', class: 'code-session-notice', hidden: true, role: 'status' },
+    busyText, el('div', { class: 'code-session-actions' }, busyCopy, busySend));
+  let busyConfirmed = false;
+  const othersRunning = () => codeActivity(aid).filter((item) => item.project === pid && item.chat !== chat && item.running).length;
+  busySend.addEventListener('click', () => {
+    busyNotice.hidden = true;
+    busyConfirmed = true;
+    submit();
+  });
+  busyCopy.addEventListener('click', async () => {
+    const value = text.value;
+    if (!separateCopy || !value.trim() || images.length || busyCopy.disabled) return;
+    busyCopy.disabled = busySend.disabled = true;
+    showStatus(tr("Создаю отдельную копию…"), false);
+    try {
+      await separateCopy(value);
+      if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }   // текст ушёл в чат копии
+      busyNotice.hidden = true;
+      if (alive) showStatus('');
+    } catch (err) {
+      if (!alive) return;
+      if (err.code === 'closed') closed();
+      else showStatus(words(err));
+    } finally {
+      busyCopy.disabled = busySend.disabled = false;
+    }
+  });
   const pick = (label, select) => {
     const view = choice(host, label, select);
     picks.set(select, view);
@@ -435,6 +470,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
   host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
     el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, writerNotice, askPin, statusBar, form));
+  writerNotice.after(busyNotice);
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -1723,6 +1759,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       submit(prompt);
       return true;
     }
+    if (first && startText) {      // чат отдельной копии: задание, перенесённое из чата исходного проекта
+      text.value = startText;
+      startText = null;
+      autosize();
+      busyConfirmed = true;
+      submit();
+      return true;
+    }
     if (thenLive) openLive();
     return thenLive;
   }
@@ -1826,6 +1870,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         sending = false;
         if (alive) updateControls();
       }
+      return;
+    }
+    const others = quick || busyConfirmed ? 0 : othersRunning();
+    busyConfirmed = false;
+    busyNotice.hidden = !others;
+    if (others) {
+      busyText.textContent = tr("В проекте идёт ещё заданий: {0} — они могут править те же файлы", others);
+      busyCopy.hidden = !separateCopy || images.length > 0;
       return;
     }
     const sentImages = quick ? [] : images;

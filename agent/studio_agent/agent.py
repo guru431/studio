@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, journal, limits, mcp, metadata, mirror, permissions, project_summary, projects, selfcheck, sessions, store, subagents, subscription, visualizations, worktrees
@@ -82,6 +82,7 @@ OPS = {
     "file_search": ("project", "path", "query"),
     "file_upload": ("project", "path", "data", "replace"),
     "chat_search": ("project", "query"),
+    "chat_search_all": ("query",),
     "chat_fork": ("project", "chat", "message_id"),
     "chat_rename": ("project", "chat", "title"),
     "chat_delete": ("project", "chat"),
@@ -104,7 +105,7 @@ RESTART_SAFE_OPS = frozenset({
     "desktop_status", "desktop_frame", "computer_info", "terminal_info", "self_check", "agent_log", "software_versions",
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
-    "files", "file_stats", "file_suggestions", "file_search", "chat_search", "subagents", "subagent_history",
+    "files", "file_stats", "file_suggestions", "file_search", "chat_search", "chat_search_all", "subagents", "subagent_history",
     "worktrees", "read", "raw", "visualization", "git", "git_compare", "mirror_identity", "mirror_candidates",
     "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
 })
@@ -155,6 +156,9 @@ class Agent:
         self.cc_version = cc_version
         self.models = models
         self.efforts = efforts
+        # Проба каталога Claude Code по просьбе `models` (`claude_models`, 0.47.0): ставит ядро (`Controller`), итог —
+        # получен ли набор; без неё (тесты, консоль) просьба — `unsupported`.
+        self.claude_probe: Callable[[], Awaitable[bool]] | None = None
         self.has_pin = read_has_pin(pins) if has_pin is None else has_pin
         self.open = OpenSessions(now)
         self.send: Callable[[dict], None] | None = None
@@ -196,7 +200,7 @@ class Agent:
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
-                 "file_suggestions": True, "chat_search": True, "queue_edit": True,
+                 "file_suggestions": True, "chat_search": True, "chat_search_all": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                  "git_compare": True, "file_upload": True, "file_search": True,
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
@@ -210,7 +214,8 @@ class Agent:
                  "deepseek_models": self.deepseek is not None, "deepseek_usage": True,
                  "open_asks": True,  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
                  "answer_takeover": True,  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
-                 "chat_manage": True}  # 0.47.0: переименовать и удалить сессию (§25)
+                 "chat_manage": True,  # 0.47.0: переименовать и удалить сессию (§25)
+                 "claude_models": self.claude_probe is not None}
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -434,8 +439,10 @@ class Agent:
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode", "deepseek"):
             raise Refused("invalid")
-        if (op == "usage_reset" and engine != "codex") or (op == "models" and engine == "claude"):
+        if op == "usage_reset" and engine != "codex":
             raise Refused("invalid")
+        if op == "models" and engine == "claude" and self.claude_probe is None:
+            raise Refused("unsupported")
         backend = self._runner(frame)
         if engine != "claude" and (backend is None or (backend.catalog is None and op != "models")):
             raise Refused("unsupported", _unavailable(backend) or f"{NAMES[engine]} не найден на компьютере")
@@ -516,7 +523,13 @@ class Agent:
         return self.updater.start(frame)
 
     async def _op_models(self, frame, after):
-        engine = frame["engine"]
+        engine = frame.get("engine", "claude")
+        if engine == "claude":
+            # Каталог Claude Code сразу, без нового канала: ответ несёт набор, студия заменяет им свой из `hello`.
+            async with asyncio.timeout(24):
+                if not await self.claude_probe():
+                    raise Refused("busy", "Не удалось обновить модели Claude Code — повторите позже")
+            return {"claude": {"models": self.models, "efforts": self.efforts}}
         backend = self._runner(frame)
         async with asyncio.timeout(24):
             if not await backend.probe(self.cfg.projects_root):
@@ -869,6 +882,24 @@ class Agent:
 
     async def _op_chat_search(self, frame, after):
         project = await self._project(frame)
+        return await self._chat_search(frame, [(frame["project"], None, project)])
+
+    async def _op_chat_search_all(self, frame, after):
+        """Общий поиск Студии, чип «Агенты» (`hello.chat_search_all`, 0.47.0): чаты всех проектов корней одной
+        просьбой. Пределы `discovery` — на весь запрос (новейшие `discovery.MAX_CHATS` чатов всех проектов); находка
+        несёт `project` и `project_name`. Только владельцу: в `SHARED_OPS` её нет."""
+        def places():
+            found = []
+            for item in self._catalog.list(self.cfg):
+                try:
+                    found.append((item["pid"], item["name"], self._catalog.find(self.cfg, item["pid"])))
+                except Refused:
+                    pass                # скрытая папка, ссылка, исчезла — как у `_project`
+            return found
+        return await self._chat_search(frame, await asyncio.to_thread(places))
+
+    async def _chat_search(self, frame, places):
+        """`places` — [(pid, имя или None, папка)]; имя есть — находки помечаются проектом (поиск по всем)."""
         if not frame["query"].strip():
             return {"items": [], "complete": True, "scanned": 0}
         if self._search_lock.locked():
@@ -877,26 +908,41 @@ class Agent:
             try:
                 async with asyncio.timeout(discovery.SEARCH_SECONDS + 1):
                     deadline = time.monotonic() + discovery.SEARCH_SECONDS
-                    catalog, complete = [], True
-                    try:
-                        catalog += await asyncio.wait_for(asyncio.to_thread(sessions.chats, project, self.runner.live()), 4)
-                    except Exception:
-                        complete = False
-                    for name in ("codex", "opencode", "deepseek"):
-                        backend = getattr(self, name)
-                        if backend is not None and backend.catalog is not None:
-                            try:
-                                catalog += await asyncio.wait_for(backend.chats(project), min(4, max(.1, deadline - time.monotonic())))
-                            except Exception:
-                                complete = False
+                    # Много проектов — списки чатов не дольше двух третей срока: остальное — на чтение истории.
+                    listing = deadline - (discovery.SEARCH_SECONDS / 3 if len(places) > 1 else 0)
+                    catalog, complete, where = [], True, {}
+                    for pid, name, project in places:
+                        if time.monotonic() >= listing:
+                            complete = False
+                            break
+                        rows = []
+                        try:
+                            rows += await asyncio.wait_for(asyncio.to_thread(sessions.chats, project, self.runner.live()),
+                                                           min(4, max(.1, listing - time.monotonic())))
+                        except Exception:
+                            complete = False
+                        for engine in ("codex", "opencode", "deepseek"):
+                            backend = getattr(self, engine)
+                            if backend is not None and backend.catalog is not None:
+                                try:
+                                    rows += await asyncio.wait_for(backend.chats(project), min(4, max(.1, listing - time.monotonic())))
+                                except Exception:
+                                    complete = False
+                        catalog += rows
+                        where.update({(row["chat"], row.get("engine", "claude")): (pid, name) for row in rows})
 
                     async def history(row, before):
-                        return await self._op_history({**frame, "chat": row["chat"],
+                        pid = where[(row["chat"], row.get("engine", "claude"))][0]
+                        return await self._op_history({**frame, "project": pid, "chat": row["chat"],
                             "engine": row.get("engine", "claude"), "before": before, "limit": 100}, [])
 
                     result = await discovery.search(frame["query"], catalog, history,
                                                     timeout=max(.1, deadline - time.monotonic()))
                     result["complete"] = result["complete"] and complete
+                    for hit in result["items"]:
+                        pid, name = where[(hit["chat"], hit["engine"])]
+                        if name is not None:
+                            hit.update(project=pid, project_name=name)
                     return result
             except TimeoutError:
                 return {"items": [], "complete": False, "scanned": 0}

@@ -19,6 +19,31 @@ def test_discovery_requires_capabilities_pin_and_project_ownership(studio):
     assert studio.c.post(base + "/files/suggest", json={"query": "a\nb"}).status_code == 422
 
 
+def test_search_everywhere_asks_each_open_computer_once_and_keeps_text_out_of_logs(studio, caplog):
+    import state
+    from fake_bridge import enroll, pid
+
+    aid, machine, link = setup(studio, pin="2468", opened=False)
+    offline, _ = enroll(studio, name="Ноутбук")
+    machine.projects["beta"] = {"chats": {A.replace("a", "b"): {"title": "Другое", "messages": [
+        {"id": "m", "role": "user", "text": "секретный маркер в beta"}]}}}
+    machine.projects["alpha"]["chats"][A]["messages"] = [{"id": "m", "role": "assistant", "text": "секретный маркер"}]
+    states = lambda r: {g["aid"]: g["state"] for g in r.json()["items"]}            # noqa: E731
+    assert states(studio.c.post("/api/code/search", json={"query": "маркер"})) == {aid: "unsupported", offline: "offline"}
+    link.hello["chat_search_all"] = machine.chat_search_all = True
+    assert states(studio.c.post("/api/code/search", json={"query": "маркер"}))[aid] == "closed"   # PIN не отперт
+    assert studio.c.post(f"/api/code/agents/{aid}/open", json={"pin": "2468"}).status_code == 204
+    response = studio.c.post("/api/code/search", json={"query": "  маркер "})
+    group = next(g for g in response.json()["items"] if g["aid"] == aid)
+    assert group["state"] == "ok" and group["complete"] is True and group["name"] == "Рабочий ПК"
+    assert {(i["project"], i["project_name"]) for i in group["items"]} == {(ALPHA, "alpha"), (pid("beta"), "beta")}
+    asked = [r for r in machine.requests if r["op"] == "chat_search_all"]
+    assert asked[-1]["query"] == "маркер" and "project" not in asked[-1]
+    assert studio.c.post("/api/code/search", json={"query": "  "}).status_code == 422
+    assert "маркер" not in caplog.text and "маркер" not in str(response.request.url)
+    assert not any("маркер" in str(row) for row in state.DB.execute("SELECT * FROM agent_events"))
+
+
 def test_queue_endpoint_checks_version_and_keeps_text_out_of_url(studio):
     aid, machine, link = setup(studio)
     link.hello["queue_edit"] = machine.queue_edit = True

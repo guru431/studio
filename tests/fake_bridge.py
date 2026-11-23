@@ -63,6 +63,8 @@ class FakeMachine:
         self.running: dict[str, dict] = {}       # chat → идущий ход
         self.now = T0
         self.turns = 0
+        self.models = [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}]  # каталог Claude Code
+        self.claude_models = False               # просьба `models` для Claude Code (мост 0.47.0)
         self.codex = None
         self.codex_models = False
         self.opencode = None
@@ -102,6 +104,7 @@ class FakeMachine:
         self.git_compare = False
         self.file_suggestions = False
         self.chat_search = False
+        self.chat_search_all = False             # поиск по чатам всех проектов одной просьбой (мост 0.47.0)
         self.queue_edit = False
         self.chat_fork = False
         self.subagents = False
@@ -131,7 +134,7 @@ class FakeMachine:
     def hello(self) -> dict:
         return {"t": "hello", "v": 1, "cc_version": "2.3.1", "projects_root": "C:\\work\\projects",
                 "has_pin": self.pin is not None,
-                "models": [{"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"}],
+                "models": self.models,
                 "efforts": ["low", "high"], "images": self.images, "chat_state": self.chat_state,
                 "chat_control": self.chat_control,
                 **({'platform': self.platform} if self.platform else {}),
@@ -141,7 +144,8 @@ class FakeMachine:
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
                                            "software_update_all", "git_compare", "deepseek_models", "deepseek_usage", "file_upload", "file_search",
-                                           "self_check", "agent_log", "answer_takeover", "chat_manage")
+                                           "self_check", "agent_log", "answer_takeover", "chat_manage",
+                                           "claude_models", "chat_search_all")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode),
@@ -201,7 +205,9 @@ class FakeMachine:
         return self._op_agent_update_status(req, events)
 
     def _op_models(self, req, events):
-        engine = req.get("engine", "codex")
+        engine = req.get("engine", "claude")
+        if engine == "claude":
+            return {"claude": {"models": self.models, "efforts": ["low", "high"]}}
         return {engine: getattr(self, engine)}
 
     def _op_computer_info(self, req, events):
@@ -406,6 +412,13 @@ class FakeMachine:
             if snippets or query in (row.get("title") or "").casefold():
                 items.append({"chat": chat, "title": row.get("title") or "", "engine": row.get("engine", "claude"),
                               "snippets": snippets[:3]})
+        return {"items": items, "complete": True}
+
+    def _op_chat_search_all(self, req, events):
+        items = []
+        for name in self.projects:
+            found = self._op_chat_search({**req, "project": pid(name)}, events)["items"]
+            items += [{**row, "project": pid(name), "project_name": name} for row in found]
         return {"items": items, "complete": True}
 
     def _op_state(self, req, events):
