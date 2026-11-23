@@ -15,7 +15,8 @@
    живёт в памяти, GET отдаёт его и повторно (ответ мог потеряться в пути), пока страница не
    подтвердит получение (DELETE …/<id>) или не пройдёт TEXT_KEEP_SEC от первой выдачи; невыданный —
    до KEEP_DONE_SEC. Перевод — тот же путь, что описание (маршрут шлюза
-   `/slot/images/descriptions`, gemma-abl), без картинки.
+   `/slot/images/descriptions`, gemma-abl), без картинки. Своё идущее или готовое — `GET /text` (страница
+   после перезагрузки снова показывает его окно), в «В работе» — строкой с «Отменить» (jobs.py).
 3. Фото — файл с устройства (сохраняется в media как исходник) или фото истории
    (`source_media_id`); оба нормализуются normalize_image. Фото с устройства — в пределах картинки
    ролика (VIDEO_UPLOAD, VIDEO_PIXELS: снимок телефона 24–48 Мп): шлюз получает его уже уменьшенным
@@ -610,8 +611,10 @@ async def create_description(request: Request):
     except UploadError as e:
         raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
     ensure_idle(uid)
+    # фото истории — его миниатюра в окне, подхваченном после перезагрузки (current_text)
     job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model="gemma-abl", prompt="", size="", seed=0,
-              started=clock.NOW(), kind="description", image=image, detail="жду карту или описываю фото")
+              started=clock.NOW(), kind="description", image=image, detail="жду карту или описываю фото",
+              source_media_id=fields.get("source_media_id") if upload is None else None)
     JOBS[job.id] = job
     job.task = asyncio.create_task(run_job(job))
     log.info("задание %s: описание gemma-abl", job.id[:8])
@@ -680,6 +683,23 @@ async def translation_status(job_id: str, request: Request):
 @router.delete("/translations/{job_id}", status_code=204)
 async def translation_received(job_id: str, request: Request):
     return _text_received(job_id, request, "translation")
+
+
+def text_job(user_id: int) -> "Job | None":
+    """Своё описание или перевод (п. 2 шапки), идущее или готовое с ещё не стёртым текстом; последнее начатое."""
+    _prune()
+    mine = [j for j in JOBS.values() if j.user_id == user_id and j.kind in TEXT_KINDS
+            and (j.state not in TERMINAL or (j.state == "done" and j.description is not None))]
+    return max(mine, key=lambda j: j.started, default=None)
+
+
+@router.get("/text")
+async def current_text(request: Request):
+    """Раздел «Фото» при открытии (перезагрузка, PWA выгружена, «Открыть» в «В работе») — своё идущее или готовое
+    текстовое задание, чтобы показать его окно; сам текст — обычным опросом …/descriptions|translations/<id>.
+    Нет — `{}`."""
+    job = text_job(request.state.user.id)
+    return {} if job is None else _status(job) | {"source_media_id": job.source_media_id}
 
 
 @router.post("/release")

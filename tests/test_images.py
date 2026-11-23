@@ -730,6 +730,40 @@ def test_description_cancellation_waits_then_discards_text_and_releases(studio):
     assert [model for model, _ in studio.gw.releases][-1] == "gemma4-abl"
 
 
+def test_text_job_is_found_after_a_reload_and_shown_in_jobs_until_received(studio):
+    """Описание с фото истории — в «В работе» строкой с «Отменить» и в `GET /api/images/text` (окно после перезагрузки)
+    — идущим и готовым, пока страница не подтвердит получение; текст — только обычным опросом."""
+    arrived, finish = threading.Event(), threading.Event()
+
+    async def descriptions(request):
+        arrived.set()
+        while not finish.is_set():
+            await asyncio.sleep(0.001)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "private description"}}]})
+
+    studio.gw.on["/slot/images/descriptions"] = descriptions
+    add_gateway(studio)
+    first = wait_state(studio, start(studio).json()["id"], {"done"})
+    job_id = studio.c.post("/api/images/descriptions", files={"source_media_id": (None, first["media_id"])}).json()["id"]
+    assert arrived.wait(1)
+    current = studio.c.get("/api/images/text").json()
+    assert (current["id"], current["kind"], current["state"], current["source_media_id"]) == (
+        job_id, "description", "working", first["media_id"])
+    row = next(i for i in studio.c.get("/api/jobs").json()["running"] if i["id"] == job_id)
+    assert (row["title"], row["href"], row["cancel"], row["section"]) == (
+        "Описание фото", "photo", f"/api/images/{job_id}/cancel", "photo")
+    finish.set()
+    wait_description(studio, job_id)
+    assert studio.c.get("/api/images/text").json()["state"] == "done"
+    done = next(i for i in studio.c.get("/api/jobs").json()["finished"] if i["id"] == job_id)
+    assert done["state"] == "done" and "cancel" not in done and "private" not in json.dumps(done)
+    assert studio.c.delete(f"/api/images/descriptions/{job_id}").status_code == 204
+    assert studio.c.get("/api/images/text").json() == {}
+    other = make_user(studio, "stranger")
+    signin(studio, "stranger")
+    assert other and studio.c.get("/api/images/text").json() == {}
+
+
 def test_description_can_be_cancelled_during_model_release(studio):
     releasing, finish = threading.Event(), threading.Event()
 
