@@ -187,7 +187,6 @@ def test_shown_but_unsent_share_does_not_outlive_the_session(chromium, live):  #
 def test_app_badge_counts_unseen_finished_and_clears_with_the_panel(chromium, live):  # noqa: F811
     """Число на значке приложения: непросмотренное готовое (здесь — картинка за минуту до входа); открытие панели
     «В работе» его снимает. Само API значка подменено: у неустановленной страницы его эффекта не видно."""
-    import time
 
     import db
     import media
