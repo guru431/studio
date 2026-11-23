@@ -10,7 +10,7 @@ import bridge
 import security
 import state
 from conftest import login, make_user, signin
-from fake_bridge import FakeMachine, connect, enroll, settle
+from fake_bridge import FakeMachine, InProcessBridge, connect, enroll, settle
 
 IP = "10.77.48.5"
 
@@ -410,6 +410,24 @@ def test_replace_forgets_what_the_old_computer_s_mirror_copies_knew(studio):
     assert copies[mine] == (0, None) and copies[theirs][0] == 1 and copies[spare][1] is not None
     assert mirror_groups.pair(mine, theirs) == (None, None, None, None) and not mirror_groups.held(mine)
     assert mirror_groups.pair(theirs, spare).synced == 6.0
+
+
+def test_replace_during_a_handshake_checks_the_key_not_only_the_id(studio):
+    """Ревью R4b-3: знакомство, начатое до замены, кончается после неё. Прежний ключ к строке `aid` уже не подходит —
+    4401, строка не перезаписана данными старой машины; мост нового с id `new` — 1012: ключ теперь у `aid`."""
+    uid = make_user(studio, "owner")
+    old, _ = enroll(studio, name="Старый ПК")
+    new, _ = enroll(studio, name="Новый ПК")
+    late_old = InProcessBridge(old, uid, "Старый ПК", FakeMachine(pin="1234"))
+    late_new = InProcessBridge(new, uid, "Новый ПК", FakeMachine())
+    signin(studio, "owner")
+    assert replace(studio, old, new).status_code == 200
+    for link in (late_old, late_new):
+        studio.c.portal.call(bridge.attach, link)
+    assert (late_old.closed_with, late_new.closed_with) == (bridge.CLOSE_AUTH, bridge.CLOSE_RESTART)
+    assert not bridge.LINKS and late_old.sent == late_new.sent == []
+    assert state.DB.execute("SELECT has_pin FROM agents WHERE id = ?", (old,)).fetchone()[0] == 0
+    assert connect(studio, old, FakeMachine()).sent[0]["agent_id"] == old     # с новым ключом — как прежний
 
 
 def test_replace_needs_two_own_distinct_computers(studio):

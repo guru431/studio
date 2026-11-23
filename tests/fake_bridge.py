@@ -853,8 +853,12 @@ class InProcessBridge(bridge.Link):
     """Канал без сокета: кадры студии — в `sent`, ответ и события машины — через `bridge.deliver` следующими
     шагами цикла службы, по порядку. После `close` отправка падает, как у закрытого сокета."""
 
-    def __init__(self, agent_id: int, user_id: int, name: str, machine: FakeMachine, ip: str = "10.77.48.5"):
-        super().__init__(agent_id, user_id, name, ip)
+    def __init__(self, agent_id: int, user_id: int, name: str, machine: FakeMachine, ip: str = "10.77.48.5",
+                 key_hash: str | None = None):
+        if key_hash is None:            # ключ, которым вошёл бы мост этой строки (`attach` его сверяет)
+            row = state.DB.execute("SELECT key_hash FROM agents WHERE id = ?", (agent_id,)).fetchone()
+            key_hash = row["key_hash"] if row is not None else None
+        super().__init__(agent_id, user_id, name, ip, key_hash)
         self.hello = bridge.parse_hello(machine.hello)
         self.machine = machine
         self.sent: list[dict] = []

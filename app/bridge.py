@@ -106,10 +106,11 @@ class BridgeError(Exception):
 
 
 class Link:
-    """Канал одного компьютера. `pending` — просьбы, ждущие ответа: id → будущий кадр `res`."""
+    """Канал одного компьютера. `pending` — просьбы, ждущие ответа: id → будущий кадр `res`; `key_hash` — digest
+    ключа, которым канал вошёл (`attach` сверяет его со строкой: «Заменить» переносит ключ на другую строку)."""
 
-    def __init__(self, agent_id: int, user_id: int, name: str, ip: str | None = None):
-        self.agent_id, self.user_id, self.name, self.ip = agent_id, user_id, name, ip
+    def __init__(self, agent_id: int, user_id: int, name: str, ip: str | None = None, key_hash: str | None = None):
+        self.agent_id, self.user_id, self.name, self.ip, self.key_hash = agent_id, user_id, name, ip, key_hash
         self.hello: dict = {}
         self.pending: dict[str, asyncio.Future] = {}
 
@@ -123,8 +124,9 @@ class Link:
 class SocketLink(Link):
     """Канал поверх WebSocket; отправки — под замком: кадры разных просьб не перемежаются."""
 
-    def __init__(self, ws: WebSocket, agent_id: int, user_id: int, name: str, ip: str | None = None):
-        super().__init__(agent_id, user_id, name, ip)
+    def __init__(self, ws: WebSocket, agent_id: int, user_id: int, name: str, ip: str | None = None,
+                 key_hash: str | None = None):
+        super().__init__(agent_id, user_id, name, ip, key_hash)
         self.ws = ws
         self.lock = asyncio.Lock()
 
@@ -336,19 +338,25 @@ def _deepseek(catalog) -> dict:
 async def attach(link: Link) -> None:
     """Канал на связи: прежний канал компьютера закрывается 4409 (фоном — `welcome` новому сразу). Компьютер
     отозвали, пока шло знакомство, — 4401 и в `LINKS` его нет; учётка отключена (и до рукопожатия) —
-    `disabled_code`. `welcome` несёт логин учётки компьютера — мост показывает, под кем он на связи."""
+    `disabled_code`. Строка ищется по id и ключу канала: «Заменить» во время знакомства отдал ключ другой строке —
+    1012, мост переподключится и придёт с её id (прежний ключ к строке уже не подходит — 4401). `welcome` несёт
+    логин учётки компьютера — мост показывает, под кем он на связи."""
     hello = link.hello
     row = state.DB.execute(
         "UPDATE agents SET has_pin = ?, cc_version = ?, projects_root = ?, last_seen = ?, platform = COALESCE(?, platform)"
-        " WHERE id = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0)"
+        " WHERE id = ? AND key_hash = ? AND user_id IN (SELECT id FROM users WHERE disabled = 0)"
         " RETURNING name, (SELECT login FROM users WHERE users.id = agents.user_id) AS login",
         (int(hello["has_pin"]), hello["cc_version"], hello["projects_root"], clock.NOW(),
-         hello.get("platform"), link.agent_id)).fetchone()
+         hello.get("platform"), link.agent_id, link.key_hash)).fetchone()
     if row is None:
-        disabled = state.DB.execute("SELECT 1 FROM agents a JOIN users u ON u.id = a.user_id"
-                                    " WHERE a.id = ? AND u.disabled = 1", (link.agent_id,)).fetchone()
-        log.warning("агент %d: %s до знакомства", link.agent_id, "учётка отключена" if disabled else "отозван")
-        await link.close(disabled_code(link) if disabled else CLOSE_AUTH)
+        owner = state.DB.execute("SELECT a.id, u.disabled FROM agents a JOIN users u ON u.id = a.user_id"
+                                 " WHERE a.key_hash = ?", (link.key_hash,)).fetchone()
+        if owner is not None and not owner["disabled"]:
+            log.info("агент %d: ключ перешёл к компьютеру %d до знакомства", link.agent_id, owner["id"])
+            await link.close(CLOSE_RESTART)
+            return
+        log.warning("агент %d: %s до знакомства", link.agent_id, "учётка отключена" if owner else "отозван")
+        await link.close(disabled_code(link) if owner else CLOSE_AUTH)
         return
     link.name = row["name"]
     old = LINKS.get(link.agent_id)
@@ -815,14 +823,14 @@ async def link_socket(ws: WebSocket):
     row = None
     if header.startswith("Bearer ") and len(header) > len("Bearer "):
         # и отключённой учётки: код закрытия ей выбирает `attach` по `hello` (`disabled_code`)
-        row = state.DB.execute("SELECT a.id, a.user_id, a.name FROM agents a WHERE a.key_hash = ?",
+        row = state.DB.execute("SELECT a.id, a.user_id, a.name, a.key_hash FROM agents a WHERE a.key_hash = ?",
                                (security.digest(header[len("Bearer "):]),)).fetchone()
     await ws.accept()
     if row is None:
         log.warning("канал: неизвестный ключ с %s", ip)
         await ws.close(CLOSE_AUTH)
         return
-    link = SocketLink(ws, row["id"], row["user_id"], row["name"], ip)
+    link = SocketLink(ws, row["id"], row["user_id"], row["name"], ip, row["key_hash"])
     try:
         try:
             link.hello = parse_hello(_frame(await asyncio.wait_for(ws.receive(), HELLO_SEC), link))
