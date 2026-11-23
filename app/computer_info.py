@@ -32,6 +32,38 @@ def software(data):
                         if results.get(tool) in ('done', 'error')}} if update.get('tool') == 'all' else {})}}
 
 
+CHECKS = ('git', 'claude', 'codex', 'opencode', 'deepseek', 'projects', 'home', 'link', 'desktop', 'disk')
+LOG_LINES = 200
+LOG_LINE_MAX = 2000
+
+
+def self_check(data):
+    """Самопроверка моста: известные пункты, состояние, короткий код, версия и числа — без путей и текстов."""
+    items, seen = [], set()
+    for item in data.get('items', [])[:len(CHECKS)] if isinstance(data.get('items'), list) else []:
+        if not isinstance(item, dict) or item.get('id') not in CHECKS or item['id'] in seen:
+            continue
+        seen.add(item['id'])
+        code, version = item.get('code'), item.get('version')
+        items.append({'id': item['id'],
+                      'state': item.get('state') if item.get('state') in ('ok', 'warn', 'fail', 'off') else 'fail',
+                      'code': code if isinstance(code, str) and re.fullmatch(r'[a-z_]{1,24}', code) else None,
+                      'version': version if isinstance(version, str) and re.fullmatch(
+                          r'[0-9]{1,6}(?:\.[0-9]{1,6}){1,3}', version) else None,
+                      'login': item.get('login') if item.get('login') in ('yes', 'no', 'unknown') else None,
+                      **{key: _number(item.get(key)) for key in ('count', 'total', 'free')}})
+    stamp = data.get('checked_at')
+    return {'items': items,
+            'checked_at': stamp if type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= 0 else None}
+
+
+def log_lines(data):
+    """Хвост `agent.log` (мост уже маскирует пути): строки, не больше `LOG_LINES`, без управляющих знаков."""
+    lines = data.get('lines')
+    return {'lines': [''.join(c for c in line if c >= ' ' and c != '\x7f' or c == '\t')[:LOG_LINE_MAX]
+                      for line in (lines[-LOG_LINES:] if isinstance(lines, list) else []) if isinstance(line, str)]}
+
+
 def _text(value, maximum=512):
     return value if isinstance(value, str) and 0 < len(value) <= maximum and not any(
         ord(c) < 32 or ord(c) == 127 for c in value) else None

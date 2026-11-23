@@ -122,6 +122,39 @@ def backend_row(status: dict | None) -> tuple[str, str]:
     return tr("Недоступен"), "warn"
 
 
+# Самопроверка (`selfcheck`): подписи пунктов, слова кодов и цвет состояния.
+CHECKS = {"git": "Git", "claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode",
+          "deepseek": "DeepSeek Harness", "projects": "Папки проектов", "home": "Запись в каталог моста",
+          "link": "Канал со студией", "desktop": "Удалённый рабочий стол", "disk": "Свободное место"}
+CHECK_CODES = {"missing": "Не найден", "timeout": "Не ответил вовремя", "error": "Ошибка проверки",
+               "node": "Нужен Node.js новее", "login": "Нет входа", "none": "Не настроены",
+               "unreadable": "Нет доступа", "read_only": "Нет записи", "disabled": "Выключен в окне моста",
+               "unsupported": "Не поддерживается", "screen": "Нет разрешения на запись экрана",
+               "input": "Нет разрешения на управление вводом", "low": "Мало места"}
+CHECK_TOKENS = {"ok": "ok", "warn": "warn", "fail": "danger", "off": "muted"}
+
+
+def check_rows(data: dict | None) -> list[tuple[str, str, str]]:
+    """Пункты самопроверки → (подпись, слова, токен цвета); без итога — одна строка «не удалось»."""
+    if not data:
+        return [(tr("Самопроверка"), tr("Не удалось проверить"), "danger")]
+    rows = []
+    for item in data["items"]:
+        code = item.get("code")
+        words = [tr(CHECK_CODES[code]) if code in CHECK_CODES else tr(STATUS[code][0]) if code in STATUS
+                 else tr("В порядке") if item["state"] == "ok" else tr("Ошибка проверки")]
+        if item.get("version"):
+            words.append(item["version"])
+        if item.get("login") in ("yes", "unknown") and code != "login":
+            words.append(tr("вход есть" if item["login"] == "yes" else "вход не проверен"))
+        if "total" in item and item["total"]:
+            words.append(tr("доступно {0} из {1}", item["count"], item["total"]))
+        if "free" in item:
+            words.append(tr("свободно {0} ГБ", f"{item['free'] / 1024 ** 3:.1f}"))
+        rows.append((tr(CHECKS.get(item["id"], item["id"])), " · ".join(words), CHECK_TOKENS.get(item["state"], "muted")))
+    return rows
+
+
 def pin_dialog_errors(pin: str, pin2: str) -> list[str]:
     """Окно «Задать / Изменить PIN»: пустой — не PIN."""
     return [tr(setup.PIN_WORDS)] if not pin else setup.pin_errors(pin, pin2)
@@ -687,10 +720,41 @@ class MainWindow:
         self.buttons.append(main)
         self.card_widgets = (dot, oval, words, hint, main)
         self.show_card()
+        self.check_card(connection)
         self.activity_card()
         self.settings_card(cfg)
         self.sync_buttons()
         self.win.bind("<Return>", lambda e: None)
+
+    def check_card(self, page) -> None:
+        """Самопроверка по кнопке (`Controller.self_check`, в потоке): пункты — «подпись — слова» цветом состояния."""
+        ttk = self.ttk
+        box = self.card(1, host=page)
+        ttk.Label(box, text=tr("Самопроверка"), style="Card.Head.TLabel").grid(row=0, column=0, sticky="w")
+        button = ttk.Button(box, text=tr("Проверить"))
+        button.grid(row=0, column=1, sticky="e")
+        rows = ttk.Frame(box, style="Card.TFrame")
+        rows.grid(row=1, column=0, columnspan=2, sticky="ew")
+        rows.columnconfigure(1, weight=1)
+
+        def done(data, failed) -> None:
+            if not rows.winfo_exists():
+                return
+            button.state(["!disabled"])
+            for child in rows.winfo_children():
+                child.destroy()
+            for r, (label, words, token) in enumerate(check_rows(None if failed else data)):
+                ttk.Label(rows, text=label, style="Card.Muted.TLabel").grid(
+                    row=r, column=0, sticky="nw", padx=(0, self.px(16)), pady=self.px(1))
+                ttk.Label(rows, text=words, style="Card.TLabel", foreground=self.c[token], wraplength=self.px(260),
+                          justify="left").grid(row=r, column=1, sticky="w", pady=self.px(1))
+            self.schedule_fit()
+
+        def run() -> None:
+            button.state(["disabled"])
+            self.work(self.ctrl.self_check, done, hold=False)
+
+        button.configure(command=run)
 
     def show_card(self) -> None:
         """Карточка состояния на месте (`card_of`): точка, слова, строка под ними, кнопка; прочее окна не трогается."""

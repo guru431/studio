@@ -684,6 +684,26 @@ async def software_versions(aid: int, request: Request, refresh: bool = False):
                        headers={'Cache-Control': 'no-store'})
 
 
+@router.get('/agents/{aid}/self-check')
+async def self_check(aid: int, request: Request):
+    """Самопроверка моста — только владельцу после PIN; ответ не сохраняется и в журнал не пишется."""
+    from computer_info import self_check as clean
+
+    own_agent(request, aid)
+    require_capability(aid, 'self_check')
+    return _BridgeJSON(clean(await ask(request, aid, 'self_check')), headers={'Cache-Control': 'no-store'})
+
+
+@router.get('/agents/{aid}/log')
+async def agent_log(aid: int, request: Request):
+    """Последние строки `agent.log` — ретрансляция владельцу после PIN, без записи в базу и журнал."""
+    from computer_info import log_lines
+
+    own_agent(request, aid)
+    require_capability(aid, 'agent_log')
+    return _BridgeJSON(log_lines(await ask(request, aid, 'agent_log')), headers={'Cache-Control': 'no-store'})
+
+
 @router.post('/agents/{aid}/software/{tool}/update')
 async def software_update(aid: int, tool: str, request: Request):
     from computer_info import software

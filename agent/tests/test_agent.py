@@ -137,6 +137,7 @@ async def test_shared_requests_are_scoped_without_opening_the_computer(agent_wit
 @pytest.mark.parametrize("op,fields", [
     ("read", {"project": "f" * 16, "path": "a.txt"}),
     ("computer_info", {}), ("desktop_status", {}), ("agent_update", {}), ("agent_update_cancel", {}), ("usage", {}),
+    ("self_check", {}), ("agent_log", {}),
     ("open", {"pin": "2468"}),
     ("worktrees", {"project": projects.pid("demo")}),
     ("worktree_create", {"project": projects.pid("demo"), "query": "branch"}),
@@ -295,6 +296,7 @@ def test_hello(agent):
                              "account_disabled": True, "git_compare": True,
                              "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
+                             "self_check": True, "agent_log": True,
                              **({'terminal': True} if host.platform_id() == 'linux' else {}),
                              "metadata_cache": True, "visualizations": True,
                              "passive_requests": True, "history_images": True, "project_sharing": True,

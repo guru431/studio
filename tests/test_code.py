@@ -106,6 +106,8 @@ BODIES = {
     ("POST", "/api/code/agents/1/update"): None,
     ("GET", "/api/code/agents/1/update"): None,
     ('GET', '/api/code/agents/1/software'): None,
+    ('GET', '/api/code/agents/1/self-check'): None,
+    ('GET', '/api/code/agents/1/log'): None,
     ('POST', '/api/code/agents/1/software/1/update'): None,
     ('POST', '/api/code/agents/1/software/cancel'): None,
     ("DELETE", "/api/code/agents/1/update"): None,

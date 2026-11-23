@@ -5,6 +5,7 @@ import { dateTime } from './time.js';
 import { icon } from './icons.js';
 import { el, words } from './ui.js';
 import { softwareView } from './code-software.js';
+import { diagnosticsView } from './code-diagnostics.js';
 
 const bytes = (value) => Number.isFinite(value)
   ? tr("{0} ГиБ", (value / 1073741824).toLocaleString(locale(), { maximumFractionDigits: 1 })) : tr("Нет данных");
@@ -25,11 +26,13 @@ export function computerView(host, { locked }) {
     el('footer', { class: 'code-computer-footer' }, updated, el('div', { class: 'actions' }, refresh, close)));
   host.append(dialog);
   const software = softwareView({ locked(id) { dialog.close(); locked(id); } });
+  const diagnostics = diagnosticsView({ locked(id) { dialog.close(); locked(id); } });
   close.addEventListener('click', () => dialog.close());
   function clear() {
     generation += 1;
     controller?.abort();
     software.clear();
+    diagnostics.clear();
     content.replaceChildren();
     updated.textContent = '';
     content.removeAttribute('aria-busy');
@@ -54,13 +57,14 @@ export function computerView(host, { locked }) {
       disk.total === null ? tr("{0} — нет данных", disk.path)
         : tr("{0} — {1} из {2}", disk.path, disk.free === null ? tr("нет данных о свободном месте") : tr("свободно {0}", bytes(disk.free)), bytes(disk.total))) : [null]));
     row(tr("Папки с проектами"), ...(data.projects_roots.length ? data.projects_roots : [tr("Не настроены")]));
-    content.replaceChildren(details, software.host);
+    content.replaceChildren(details, software.host, diagnostics.host);
     updated.textContent = tr("Обновлено: {0}", date(data.checked_at));
   }
 
   async function load(force = false) {
     controller?.abort();
     software.clear();
+    diagnostics.clear();
     updated.textContent = '';
     const mine = ++generation;
     const target = agent;
@@ -78,7 +82,7 @@ export function computerView(host, { locked }) {
     content.replaceChildren(el('p', { class: 'muted' }, tr("Получаю сведения компьютера…")));
     try {
       const data = await api('GET', `/api/code/agents/${target.id}/info`, undefined, { signal });
-      if (mine === generation && dialog.open) { paint(data); software.show(target, force); }
+      if (mine === generation && dialog.open) { paint(data); software.show(target, force); diagnostics.show(target); }
     } catch (err) {
       if (mine !== generation || signal.aborted || !dialog.open) return;
       if (err.code === 'closed') { dialog.close(); locked(target.id); }

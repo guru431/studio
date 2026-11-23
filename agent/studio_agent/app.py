@@ -11,7 +11,7 @@ import re
 import threading
 from pathlib import Path
 
-from . import attachments, autostart, cli, deepseek_settings, enroll, host, mcp, setup, store, theme, update_helper, updater
+from . import attachments, autostart, cli, deepseek_settings, enroll, host, limits, mcp, selfcheck, setup, store, theme, update_helper, updater
 from .claude_sdk import ClaudeSDKClient
 from .codex import CodexRunner
 from .deepseek import DeepSeekRunner
@@ -39,8 +39,31 @@ QUIT_SEC = 60  # выход: ходы (turns.CLOSE_SEC × 2) и канал
 UNENROLL_SEC = 120  # «Отключиться»: ходы, канал и запрос к студии (15 с) — не дольше
 ERASE_TRIES, ERASE_PAUSE_SEC = 10, 0.05  # стирание ключа: файл читает другой поток (окно, трей) — WinError 5/32
 ERASE_FAILED = "Не удалось стереть ключ компьютера — закройте окно моста и нажмите «Отключиться» снова"
+SELF_CHECK_WAIT = limits.SELF_CHECK_SEC + 5  # окно ждёт самопроверку ядра не дольше
+WAITING_NOTICE = "Задание ждёт ответа в Студии"
 PIN_LEFT = ("Компьютер отключён, но прежний PIN стереть не удалось — после новой привязки смените или уберите его в "
             "окне моста")
+
+
+class WaitNotice:
+    """Одно уведомление на непрерывное ожидание ответа (`waiting > 0`) дольше `limits.WAIT_NOTICE_SEC`; снова —
+    только после того, как ждать перестали и начали заново."""
+
+    def __init__(self, now):
+        self._now = now
+        self._since: float | None = None
+        self._sent = False
+
+    def check(self, waiting: int) -> bool:
+        if not waiting:
+            self._since, self._sent = None, False
+            return False
+        if self._since is None:
+            self._since = self._now()
+        if self._sent or self._now() - self._since < limits.WAIT_NOTICE_SEC:
+            return False
+        self._sent = True
+        return True
 
 
 def _configured(cfg: store.Config, key: str | None) -> bool:
@@ -68,7 +91,7 @@ class Controller:
     def __init__(self, h: Path, *, link_factory=Link, sdk_factory=ClaudeSDKClient, find_cli=cli.find_cli,
                  cli_version=cli.cli_version, probe=cli.probe, enroll_fn=enroll.enroll, unenroll_fn=enroll.unenroll,
                  autostart=autostart, sleep=asyncio.sleep, codex_factory=CodexRunner, opencode_factory=OpenCodeRunner,
-                 deepseek_factory=DeepSeekRunner):
+                 deepseek_factory=DeepSeekRunner, now=None):
         self.h = h
         self._link_factory = link_factory
         self._sdk_factory = sdk_factory
@@ -93,6 +116,7 @@ class Controller:
         self._activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False}
         self._quit_when_idle = False
         self._idle_quit_posted = False
+        self._wait_notice = WaitNotice(now or host.awake_clock())
         self._backends = {name: {"status": "checking", "models": 0} for name in ("claude", "codex", "opencode", "deepseek")}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -111,6 +135,7 @@ class Controller:
         self.on_pin_changed = None  # блок PIN из студии, снятие блока, новый PIN — меню трея и окно (любой поток)
         self.on_update_quit = None  # штатный выход Tk после подготовки обновления и завершения заданий
         self.on_idle_quit = None  # штатный выход Tk по локальному выбору «Выйти после завершения»
+        self.on_waiting = None  # задание ждёт ответа дольше минуты — уведомление трея (из потока ядра)
 
     # --- из любого потока ---
 
@@ -194,6 +219,20 @@ class Controller:
     def has_pin(self) -> bool:
         """Задан ли PIN (DPAPI — не из потока Tk); нечитаемый `pin.bin` — «задан», как в `hello`."""
         return read_has_pin(PinStore(self.h))
+
+    def self_check(self) -> dict | None:
+        """Самопроверка для окна (блокирует — не из потока Tk); ядро ещё не собрано — `None`."""
+        if self.agent is None or self._loop is None or not self._loop.is_running():
+            return None
+        return asyncio.run_coroutine_threadsafe(selfcheck.run(self.agent, self.h, self.state),
+                                                self._loop).result(SELF_CHECK_WAIT)
+
+    def studio_url(self) -> str | None:
+        """Раздел «Агенты» студии из `config.json` (щелчок по уведомлению трея); адрес неверен — `None`."""
+        try:
+            return enroll.base_url(self.config().url) + "/#/code"
+        except enroll.EnrollError:
+            return None
 
     def pin_status(self) -> str:
         """`none`, `set` или `locked` — для окна (DPAPI — не из потока Tk); нечитаемый `pin.bin` — `set`."""
@@ -617,6 +656,11 @@ class Controller:
         value = {"tasks": len(live), "waiting": sum(bool(waiting) for waiting in live),
                  "desktop_active": bool(active), "quit_when_idle": self._quit_when_idle,
                  "updating": update is not None and update.state in ("preparing", "waiting")}
+        if self._wait_notice.check(value["waiting"]) and self.on_waiting is not None:
+            try:
+                self.on_waiting()
+            except Exception as error:
+                log.warning("уведомление ожидания: %s", type(error).__name__)
         if value != self._activity:
             self._activity = value
             for callback in list(self._activity_subscribers):
@@ -799,6 +843,7 @@ def main(argv: list[str]) -> int:
     import os
     import queue
     import tkinter as tk
+    import webbrowser
     from tkinter import messagebox
 
     from . import VERSION, journal, single, tray, window
@@ -833,6 +878,7 @@ def main(argv: list[str]) -> int:
     ctrl.on_pin_changed = lambda: commands.put("pin")  # меню трея и окно — «Снять блок PIN»
     ctrl.on_update_quit = lambda: commands.put("quit")
     ctrl.on_idle_quit = lambda: commands.put("quit")
+    ctrl.on_waiting = lambda: commands.put("waiting")
     ready_file = os.environ.pop('STUDIO_AGENT_UPDATE_READY', '')
 
     def poll() -> None:
@@ -875,6 +921,11 @@ def main(argv: list[str]) -> int:
             elif cmd == "pin":
                 icon.refresh()
                 window.pin_changed()
+            elif cmd == "waiting":  # без текста задания: только слова и щелчок — раздел «Агенты»
+                icon.notify(tr(WAITING_NOTICE), on_click=lambda: commands.put("studio"))
+            elif cmd == "studio":
+                if url := ctrl.studio_url():
+                    webbrowser.open(url)
             elif cmd == "log":
                 with contextlib.suppress(OSError):
                     host.open_file(h / "agent.log")

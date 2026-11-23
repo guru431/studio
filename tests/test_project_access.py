@@ -59,9 +59,11 @@ def test_member_sees_only_shared_project_and_can_work_without_owner_pin(studio):
     signin(studio, "friend")
     agent = studio.c.get("/api/agents").json()["items"][0]
     assert agent["id"] == aid and agent["shared"] and not agent["projects_root"]
-    assert not any(agent[k] for k in ("computer_info", "software_versions", "desktop", "agent_update", "subscription_usage"))
+    assert not any(agent[k] for k in ("computer_info", "software_versions", "desktop", "agent_update", "subscription_usage",
+                                      "self_check", "agent_log"))
     before = len(machine.requests)
-    for method, suffix in [('GET', '/software'), ('POST', '/software/codex/update'), ('POST', '/software/cancel')]:
+    for method, suffix in [('GET', '/software'), ('POST', '/software/codex/update'), ('POST', '/software/cancel'),
+                           ('GET', '/self-check'), ('GET', '/log')]:
         assert studio.c.request(method, f'/api/code/agents/{aid}' + suffix).status_code == 404
     assert len(machine.requests) == before
     assert studio.c.get(url(aid, "projects")).json() == {"items": [{"pid": ALPHA, "name": "alpha", "shared": True}]}

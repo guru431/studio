@@ -1033,3 +1033,25 @@ Studio хранит имя папки и базовый манифест шиф�
 отсутствующим журналом переносится как файл. Отказа `busy` «открытая база SQLite» больше нет — открытая база
 не мешает зеркалу. `mirror_apply` снимает манифест назначения без причин, поэтому Studio сверяет `expected` по
 манифесту, где причины приведены к `["skip", "", 0, 0]`. Studio шлёт `reasons` только мостам с `hello.mirror_groups`.
+
+## 24. Самопроверка и журнал моста (мост 0.47.0)
+
+`hello.self_check: true` объявляет op `self_check`, `hello.agent_log: true` — op `agent_log`; оба без полей, только
+открытой PIN-сессии владельца (`shared_projects` — `closed`). HTTP — `GET /api/code/agents/<aid>/self-check` и
+`GET /api/code/agents/<aid>/log`; старый мост — 409 `unsupported`, ответы — `Cache-Control: no-store`.
+
+```json
+{"items":[{"id":"git","state":"ok","version":"2.47.1"},
+          {"id":"codex","state":"warn","code":"login","version":"0.63.0","login":"no"},
+          {"id":"projects","state":"warn","code":"unreadable","count":1,"total":2},
+          {"id":"disk","state":"ok","free":53687091200}],"checked_at":1800000000}
+```
+
+Пункты `id`: `git`, `claude`, `codex`, `opencode`, `deepseek`, `projects`, `home`, `link`, `desktop`, `disk`;
+`state` — `ok|warn|fail|off`; необязательные `code` (`[a-z_]{1,24}`: `missing`, `timeout`, `error`, `node`, `login`,
+`none`, `unreadable`, `read_only`, `disabled`, `unsupported`, `screen`, `input`, `low`), `version`, `login`
+(`yes|no|unknown`), `count`, `total`, `free` (байт). Путей, имён и текстов нет; у каждой проверки свой предел 5 с.
+
+`agent_log` → `{"lines": ["2026-11-23 10:00:00,000 INFO канал: на связи", …]}` — до 200 последних строк `agent.log`
+(журнал — только id, коды и числа; похожее на путь мост заменяет `<path>`), строка до 2000 знаков. Сервер ничего из
+ответов не сохраняет и не журналирует.
