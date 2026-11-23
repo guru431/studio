@@ -406,8 +406,11 @@ def _attachments(chat_id: str) -> dict[str, list]:
     return out
 
 
-def _messages(chat_id: str):
-    return state.DB.execute("SELECT * FROM messages WHERE chat_id = ? ORDER BY created, rowid", (chat_id,)).fetchall()
+def _messages(chat_id: str, variants: bool = False):
+    """Сообщения диалога по порядку; без `variants` — только выбранные варианты ответов (`messages.unchosen` = 0):
+    их видят модель, ссылка «Поделиться», экспорт и проверки хода."""
+    return state.DB.execute("SELECT * FROM messages WHERE chat_id = ?" + ("" if variants else " AND unchosen = 0") +
+                            " ORDER BY created, rowid", (chat_id,)).fetchall()
 
 
 def _alive(row) -> bool:
@@ -604,12 +607,13 @@ def _refused_turns(rows, model: "str | None") -> set[str]:
 def compose(chat_id: str, upto: str, model: "str | None" = None,
             max_images: int = profiles.DEFAULT_MAX_IMAGES, excerpts: "dict | None" = None,
             replacement: "tuple[str, list] | None" = None) -> list[dict]:
-    """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped`; сообщения
+    """Сообщения OpenAI диалога до `upto` включительно: только `done` и `stopped` и из ответов — выбранный вариант
+    (`_messages`); сообщения
     пользователя подряд сливаются, картинок — не больше `max_images` на весь запрос. Найденное «Интернетом»
     (`messages.tools` ответа) — блоками web.history_block в начале сообщения пользователя перед этим ответом,
     без ролей `tool` и `tool_calls`. Вложения сообщения, на которое модель хода (`model`) ответила ошибкой без
     единого слова (`_refused_turns`), не уходят снова — пометкой REFUSED: иначе фото, отклонённое текстовой моделью,
-    запирало бы диалог; «Ответить заново» удаляет ответ-ошибку и шлёт их, другая модель — тоже. Синхронно и без
+    запирало бы диалог; «Ответить заново» убирает ответ-ошибку (`_new_variant`) и шлёт их, другая модель — тоже. Синхронно и без
     файлов (идёт в транзакции хода): картинки — частями с id media, данные — fill_photos после COMMIT. Большие
     вложения — выдержками `excerpts` (_content, knowledge.for_turn)."""
     atts = _attachments(chat_id)
@@ -1841,9 +1845,34 @@ async def get_chat(chat_id: str, request: Request):
     excerpts = set(knowledge.big_attachments(chat_id)) if docs else set()
     views = {a["id"]: _attachment_out(a, scans, sources, rescan, excerpts) for a in all_atts}
     pending = chat_pending.open_views(chat_id)
+    rows = _messages(chat_id, variants=True)
     return {"chat": _chat_view(uid, row), "media": mcp_files.media_of(chat_id),
             "knowledge": knowledge.chat_kbs(uid, chat_id),        # базы знаний диалога (чип «Знания»)
-            "messages": [_message_out(m, atts.get(m["id"], []), views, pending) for m in _messages(chat_id)]}
+            "messages": _with_variants(rows, [_message_out(m, atts.get(m["id"], []), views, pending) for m in rows])}
+
+
+def _with_variants(rows, out: list[dict]) -> list[dict]:
+    """Выбранные сообщения для страницы; у ответа с вариантами (ответы ассистента после одного сообщения пользователя,
+    невыбранные — `messages.unchosen`) — `variants`: все варианты по порядку, выбранный среди них."""
+    shown, group = [], []
+
+    def close():
+        if len(group) > 1:
+            variants = [dict(item) for _, item in group]
+            for message, item in group:
+                if not message["unchosen"]:
+                    item["variants"] = variants
+        group.clear()
+
+    for message, item in zip(rows, out):
+        if message["role"] == "user":
+            close()
+        else:
+            group.append((message, item))
+        if not message["unchosen"]:
+            shown.append(item)
+    close()
+    return shown
 
 
 def _tool_names(raw: dict) -> dict:
@@ -2158,17 +2187,25 @@ def _busy(chat_id: str) -> None:
         raise HTTPException(409, {"code": "busy", "message": "ответ ещё идёт в другой вкладке — дождитесь его"})
 
 
-def _drop_last_answer(chat_id: str) -> str:
-    """Перед повтором: последний ответ ассистента удаляется; итог — id последнего сообщения пользователя."""
-    last = state.DB.execute("SELECT id, role FROM messages WHERE chat_id = ? ORDER BY created DESC, rowid DESC"
-                            " LIMIT 1", (chat_id,)).fetchone()
-    if last is not None and last["role"] == "assistant":
-        state.DB.execute("DELETE FROM messages WHERE id = ?", (last["id"],))
-        last = state.DB.execute("SELECT id, role FROM messages WHERE chat_id = ? ORDER BY created DESC, rowid DESC"
-                                " LIMIT 1", (chat_id,)).fetchone()
-    if last is None or last["role"] != "user":
+def _new_variant(chat_id: str) -> str:
+    """Перед «Ответить заново»: ответы на последнее сообщение пользователя остаются невыбранными вариантами
+    (`messages.unchosen`), новый ответ станет выбранным; пустые (ошибка без слов, остановлен до первого слова)
+    удаляются — сравнивать нечего. Итог — id последнего сообщения пользователя."""
+    user = _last_user(chat_id)
+    if user is None:
         raise HTTPException(409, {"code": "nothing", "message": "нечего переспрашивать"})
-    return last["id"]
+    after = (chat_id, user["created"], user["rowid"])
+    state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND role = 'assistant' AND content = ''"
+                     " AND (created, rowid) > (?, ?)", after)
+    state.DB.execute("UPDATE messages SET unchosen = 1 WHERE chat_id = ? AND role = 'assistant'"
+                     " AND (created, rowid) > (?, ?)", after)
+    return user["id"]
+
+
+def _last_user(chat_id: str):
+    """Последнее сообщение пользователя (id, created, rowid): ответы после него — варианты последнего ответа."""
+    return state.DB.execute("SELECT id, created, rowid FROM messages WHERE chat_id = ? AND role = 'user'"
+                            " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
 
 
 def _user_turn(chat_id: str, message_id: str):
@@ -2185,8 +2222,9 @@ def _edit_target(chat_id: str, body: TurnIn):
     if body.regenerate:
         raise HTTPException(422, {"code": "invalid", "message": "нельзя одновременно изменить ход и повторить ответ"})
     target = _user_turn(chat_id, body.edit.id)
-    last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? ORDER BY created DESC, rowid DESC LIMIT 1",
-                            (chat_id,)).fetchone()
+    # последнее, что видит страница, — выбранный вариант ответа (_with_variants)
+    last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND unchosen = 0"
+                            " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
     if last["id"] != body.edit.last_id:
         raise HTTPException(409, {"code": "edit_stale", "message": "диалог изменился — откройте сообщение заново"})
     return target
@@ -2224,7 +2262,8 @@ def _known_links(chat_id: str) -> dict[str, str]:
     пользователя и вложенных документов диалога и результаты поиска прежних ответов (`messages.tools`).
     Синхронно — в транзакции хода."""
     known = {}
-    for row in state.DB.execute("SELECT role, content, tools FROM messages WHERE chat_id = ?", (chat_id,)):
+    for row in state.DB.execute("SELECT role, content, tools FROM messages WHERE chat_id = ? AND unchosen = 0",
+                                (chat_id,)):
         if row["role"] == "user":
             known |= web.links(row["content"])
         for step in json.loads(row["tools"] or "[]"):
@@ -2334,7 +2373,7 @@ def _cleaner_messages(uid, chat_id, body, atts, model, conn):
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
     if any(a["kind"] == "document" and a["text"] is None for a in atts):
         raise cleaner.refused("Документ ещё не распознан")
-    last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ?" +
+    last = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND unchosen = 0" +
                             (" AND role = 'user'" if body.regenerate else "") +
                             " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
     if body.regenerate and last is None:
@@ -2411,7 +2450,8 @@ def _turn_receipt(chat_id: str, request_id: str | None, body: TurnIn | None = No
         return None
     if body is not None and receipt["fingerprint"] != _turn_fingerprint(body):
         raise HTTPException(409, {"code": "request_conflict", "message": "Эта отправка уже содержит другое сообщение"})
-    if state.DB.execute("SELECT 1 FROM messages WHERE id=? AND chat_id=?",
+    # ответ, ставший невыбранным вариантом («Ответить заново»), — тоже «заменён»
+    if state.DB.execute("SELECT 1 FROM messages WHERE id=? AND chat_id=? AND unchosen = 0",
                         (receipt["assistant_message_id"], chat_id)).fetchone() is None:
         raise HTTPException(409, {"code": "request_gone", "message": "Ответ этой отправки уже заменён или удалён"})
     return {"user_message_id": receipt["user_message_id"], "assistant_message_id": receipt["assistant_message_id"]}
@@ -2589,12 +2629,14 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         state.DB.execute("UPDATE messages SET status = 'error' WHERE chat_id = ? AND via = 'browser'"
                          " AND status = 'streaming'", (chat_id,))
         # расшифровка в истории (и в этом ходе) к нелокальной модели — только с подтверждением; у повтора
-        # след подтверждения ищется до удаления прежнего ответа: он мог быть им
+        # след подтверждения ищется до удаления прежнего ответа: он мог быть им. Повтор оставляет прежние ответы
+        # невыбранными вариантами; новый ход фиксирует выбранный — невыбранные удаляются (правка — с хвостом)
         if body.regenerate:
             ask = not free and _needs_consent(chat_id, model, via)
-            user_mid = _drop_last_answer(chat_id)
+            user_mid = _new_variant(chat_id)
         else:
             if edit is None:
+                state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND unchosen = 1", (chat_id,))
                 user_mid = uuid.uuid4().hex
                 state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
                                  " VALUES (?, ?, 'user', ?, 'done', ?, ?, ?)",
@@ -2724,6 +2766,24 @@ async def put_answer(chat_id: str, message_id: str, body: AnswerIn, request: Req
         raise HTTPException(409, {"code": "state", "message": "этот ответ уже сохранён"})
     log.info("чат %s: ответ %s от браузера — %s", chat_id[:8], message_id[:8], body.status)
     return {"id": message_id, "status": body.status}
+
+
+@router.post("/chats/{chat_id}/messages/{message_id}/choose", status_code=204)
+async def choose_variant(chat_id: str, message_id: str, request: Request):
+    """Переключатель «‹ 1 / 2 ›»: выбранным становится этот вариант последнего ответа (остальные — `unchosen`); его
+    берут следующий ход, поиск, «Поделиться», экспорт и выгрузка истории. Идёт ответ — 409 `busy`; не вариант
+    последнего ответа (прежние ответы новый ход зафиксировал) — 409 `state`."""
+    _chat_row(request.state.user.id, chat_id)
+    _busy(chat_id)
+    user = _last_user(chat_id)
+    after = (chat_id, user["created"], user["rowid"]) if user is not None else None
+    if after is None or state.DB.execute(
+            "SELECT 1 FROM messages WHERE id = ? AND chat_id = ? AND role = 'assistant' AND (created, rowid) > (?, ?)",
+            (message_id, *after)).fetchone() is None:
+        raise HTTPException(409, {"code": "state", "message": "этот ответ уже не выбрать"})
+    state.DB.execute("UPDATE messages SET unchosen = (id != ?) WHERE chat_id = ? AND role = 'assistant'"
+                     " AND (created, rowid) > (?, ?)", (message_id, *after))
+    return Response(status_code=204)
 
 
 @router.get("/chats/{chat_id}/messages/{message_id}/cleaner-sent")

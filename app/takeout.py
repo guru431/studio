@@ -202,7 +202,7 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
                  "todo": _maybe_json(m["todo"])}                            # план ответа (todo_write)
                 for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
                                           " reasoning_sec, todo FROM messages"
-                                          " WHERE chat_id = ? ORDER BY created, rowid", (chat_id,))]
+                                          " WHERE chat_id = ? AND unchosen = 0 ORDER BY created, rowid", (chat_id,))]
     chat_media = [{"id": r["id"], "name": r["name"], "mime": r["mime"], "size": r["size"], "created": r["created"],
                    "file": files.get(r["media_id"])}
                   for r in state.DB.execute("SELECT id, name, mime, size, created, media_id FROM chat_media"

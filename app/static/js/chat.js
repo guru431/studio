@@ -1682,6 +1682,70 @@ function build(view, ctx) {
     });
   }
 
+  /* Варианты ответа: «Ответить заново» оставляет прежний ответ невыбранным вариантом — у последнего ответа
+     переключатель «‹ 1 / 2 ›» (`m.variants` с сервера, подпись модели — строкой под ответом) и на широком экране
+     «Сравнить» — все варианты колонками (`comparing` — диалоги, где сравнение открыто). Выбор — POST …/choose:
+     выбранный вариант уходит в следующий ход, поиск, «Поделиться» и экспорт; новый ход фиксирует выбор. */
+  const comparing = new Set();
+
+  async function chooseVariant(id, focus) {
+    const at = chatId;
+    try {
+      await api('POST', `/api/chats/${at}/messages/${encodeURIComponent(id)}/choose`);
+    } catch (err) {
+      if (chatId === at) notice.textContent = words(err);
+    }
+    if (chatId !== at) return;
+    await reload();
+    if (focus) feed.querySelector(`.msg[data-id="${CSS.escape(id)}"] ${focus}`)?.focus();
+  }
+
+  function variantSwitch(m, variants) {
+    const p = parts.get(m);
+    const at = variants.findIndex((v) => v.id === m.id);
+    const busy = sending || jobs.has(chatId) || remoteStream() || otherTab();
+    const step = (by, cls) => {
+      const label = by < 0 ? tr("Предыдущий вариант") : tr("Следующий вариант");
+      const go = iconButton(by < 0 ? 'prev' : 'next', label, { class: `icon-btn ${cls}`, disabled: busy });
+      go.addEventListener('click', () => chooseVariant(variants[(at + by + variants.length) % variants.length].id,
+        `.${cls}`));
+      return go;
+    };
+    const box = el('span', { class: 'msg-variant', role: 'group',
+      'aria-label': tr("Вариант {0} из {1}", at + 1, variants.length) },
+    step(-1, 'msg-variant-prev'), el('span', { class: 'msg-variant-at' }, `${at + 1} / ${variants.length}`),
+    step(1, 'msg-variant-next'));
+    const open = comparing.has(chatId);
+    const toggle = button(open ? tr("Скрыть сравнение") : tr("Сравнить"), { class: 'btn btn-sm msg-compare-toggle',
+      'aria-pressed': String(open) }, () => {
+      if (comparing.has(chatId)) comparing.delete(chatId);
+      else comparing.add(chatId);
+      paint(m);
+      p.actions.querySelector('.msg-compare-toggle')?.focus();
+    });
+    return [box, toggle];
+  }
+
+  /* сравнение: колонки «Вариант N · модель» с текстом каждого; не выбранный — «Выбрать этот вариант» */
+  function paintCompare(p, m, variants) {
+    const on = !!variants && comparing.has(chatId);
+    p.node.classList.toggle('comparing', on);
+    if (!on) {
+      p.compare.replaceChildren();
+      return;
+    }
+    const busy = sending || jobs.has(chatId) || remoteStream() || otherTab();
+    p.compare.replaceChildren(...variants.map((v, i) => el('section', {
+      class: `msg-compare-item${v.id === m.id ? ' chosen' : ''}`, 'data-id': v.id,
+      'aria-label': tr("Вариант {0} из {1}", i + 1, variants.length) },
+    el('p', { class: 'msg-compare-head small' }, tr("Вариант {0} · {1}", i + 1, v.model || '—')),
+    v.content ? el('div', { class: 'md' }, renderMarkdown(v.content, { highlight: true }))
+      : el('p', { class: 'muted small' }, v.error ? message(v.error) : tr("ответ не получен")),
+    v.id === m.id ? el('p', { class: 'muted small msg-compare-chosen' }, tr("Выбран"))
+      : button(tr("Выбрать этот вариант"), { class: 'btn btn-sm msg-compare-choose', disabled: busy },
+        () => chooseVariant(v.id, '.msg-compare-toggle')))));
+  }
+
   function messageNode(m, last) {
     if (m.role === 'user') {
       const box = el('div', { class: 'msg user', 'data-id': m.id });
@@ -1726,11 +1790,12 @@ function build(view, ctx) {
     const consent = el('div', { class: 'msg-consents' });
     const pending = el('div', { class: 'msg-pending' });
     const plan = el('div', { class: 'msg-todo' });
+    const compare = el('div', { class: 'msg-compare' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, plan, md, pending, resultFiles(chatId, m, root), consent, steps,
+      el('div', { class: 'msg-body' }, badge, think, plan, md, compare, pending, resultFiles(chatId, m, root), consent, steps,
         model, meta, nowait, actions));
     parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '',
-      pending, plan, model, planKey: '' });
+      pending, plan, model, planKey: '', node, compare });
     paint(m);
     return node;
   }
@@ -1879,8 +1944,11 @@ function build(view, ctx) {
     p.model.hidden = !m.model || m.status === 'streaming';
     if (!p.model.hidden) p.model.textContent = m.cleaner_raw != null || m.cleanerTurn || m.cleaner_sent
       ? tr("{0} · через Cleaner", m.model) : m.model;
+    const variants = m.status !== 'streaming' && m.variants?.length > 1 ? m.variants : null;
+    paintCompare(p, m, variants);
     p.actions.replaceChildren();
     if (m.status === 'streaming' && (job || m.via !== 'browser' || m.live)) return;   // «прервано» можно переспросить
+    if (variants) p.actions.append(...variantSwitch(m, variants));
     if (m.content) {
       const copy = button(tr("Копировать"), { class: 'btn btn-sm msg-copy' }, async () => {
         try {

@@ -998,6 +998,25 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .msg-actions .btn { min-height: 28px; padding: var(--space-1) 9px; border-color: transparent; background: none; color: var(--text-2);
   font-size:var(--fs-xs); }
 @media (hover: hover) { .msg-actions .btn:hover { background: var(--surface-2); color: var(--text-1); } }
+/* варианты ответа (chat.js): «‹ 1 / 2 ›»; «Сравнить» и колонки — только на широком экране */
+.msg-variant { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-2); font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums; }
+.msg-variant .icon-btn { width: 28px; height: 28px; }
+.msg-variant .icon-btn svg.ico { width: 16px; height: 16px; }
+.msg-actions .msg-compare-toggle, .msg-compare { display: none; }
+@media (min-width: 1024px) {
+  .msg-actions .msg-compare-toggle { display: inline-flex; }
+  .feed:has(.msg.comparing) { max-width: 1200px; }
+  .msg.comparing .msg-body > .md { display: none; }
+  .msg.comparing .msg-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    gap: var(--space-5); }
+}
+.msg-compare-item { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-5);
+  border: 1px solid var(--line); border-radius: var(--r-card); }
+.msg-compare-item.chosen { border-color: var(--accent); }
+.msg-compare-head { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.msg-compare-chosen { margin: 0; }
+.msg-compare-item .msg-compare-choose { align-self: flex-start; }
 .chat-empty { margin: auto; font-size: var(--empty-font); }
 /* подсказки пустого экрана (chat-suggest.js): чипы под заметкой, форма аргументов подсказки MCP — панель у чипа */
 .chat-suggest { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-3); max-width: 100%; }

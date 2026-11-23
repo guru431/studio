@@ -570,8 +570,15 @@ def test_direct_answer_with_a_lone_surrogate_is_refused_in_words(studio):
     assert messages(studio, cid)[1]["status"] == "streaming"
 
 
-def test_regenerate_replaces_the_last_answer(studio):
+def test_regenerate_keeps_the_previous_answer_as_a_variant(studio):
+    """«Ответить заново» не удаляет прежний ответ: он — невыбранный вариант (`messages.unchosen`), страница получает
+    `variants` у выбранного. Выбранный вариант (`choose`) — и только он — идёт в следующий ход, поиск, «Поделиться» и
+    выгрузку истории; новый ход фиксирует выбор (прочие варианты удалены), «Удалить ход» уносит все варианты."""
+    import chat_shares
+    import takeout
     add_gateway(studio); cid = new_chat(studio)
+    uid = studio.c.get("/api/me").json()["id"]
+    studio.gw.chat_reply = ["Первый ", "ответ"]
     sse(turn(studio, cid, "Привет"))
     studio.gw.chat_reply = ["Другой ", "ответ"]
     events = sse(turn(studio, cid, "", regenerate=True))
@@ -579,9 +586,49 @@ def test_regenerate_replaces_the_last_answer(studio):
     assert [(m["role"], m["content"]) for m in msgs] == [("user", "Привет"), ("assistant", "Другой ответ")]
     assert events[0][1]["user_message_id"] == msgs[0]["id"]
     assert studio.gw.chat_requests[1]["messages"][1:] == [{"role": "user", "content": "Привет"}]
+    first, second = msgs[1]["variants"]
+    assert (first["content"], second["id"]) == ("Первый ответ", msgs[1]["id"])
+    assert all("variants" not in v for v in msgs[1]["variants"])
+
+    def found(word):
+        return [i["title"] for i in studio.c.post("/api/search", json={"q": word}).json()["items"]]
+
+    assert found("Другой") and not found("Первый")
+    url = f"/api/chats/{cid}/messages/{{}}/choose"
+    assert studio.c.post(url.format(msgs[0]["id"])).status_code == 409             # не вариант ответа
+    assert studio.c.post(url.format(first["id"])).status_code == 204
+    msgs = messages(studio, cid)
+    assert msgs[1]["id"] == first["id"] and len(msgs[1]["variants"]) == 2
+    assert found("Первый") and not found("Другой")
+    shared = chat_shares.regular_snapshot(uid, cid)[0]["messages"]
+    assert [m["text"] for m in shared] == ["Привет", "Первый ответ"]
+    assert [m["content"] for m in takeout._chat(uid, cid, {})["messages"]] == ["Привет", "Первый ответ"]
+
+    sse(turn(studio, cid, "Ещё"))
+    assert studio.gw.chat_requests[-1]["messages"][1:3] == [
+        {"role": "user", "content": "Привет"}, {"role": "assistant", "content": "Первый ответ"}]
+    msgs = messages(studio, cid)
+    assert len(msgs) == 4 and "variants" not in msgs[1]
+    assert state.DB.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (cid,)).fetchone()[0] == 4
+    assert studio.c.post(url.format(first["id"])).status_code == 409             # выбор зафиксирован
+    sse(turn(studio, cid, "", regenerate=True))
+    assert len(messages(studio, cid)[3]["variants"]) == 2
+    assert studio.c.delete(f"/api/chats/{cid}/turns/{msgs[2]['id']}").status_code == 204
+    assert state.DB.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (cid,)).fetchone()[0] == 2
     empty = new_chat(studio)
     r = turn(studio, empty, "", regenerate=True)
     assert r.status_code == 409
+
+
+def test_regenerate_drops_an_empty_failed_answer(studio):
+    """Ответ-ошибка без единого слова вариантом не остаётся — сравнивать нечего; с текстом — остаётся."""
+    add_gateway(studio); cid = new_chat(studio)
+    sse(turn(studio, cid, "Привет"))
+    state.DB.execute("UPDATE messages SET content = '', status = 'error' WHERE chat_id = ? AND role = 'assistant'",
+                     (cid,))
+    sse(turn(studio, cid, "", regenerate=True))
+    msgs = messages(studio, cid)
+    assert len(msgs) == 2 and "variants" not in msgs[1] and msgs[1]["status"] == "done"
 
 
 def test_title_comes_from_the_first_line(studio):

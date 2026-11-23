@@ -451,7 +451,7 @@ def _plan(uid: int, chat_id: str, lang: str) -> tuple[str, bytes, list, list]:
         " LEFT JOIN media m ON m.id = c.media_id AND m.user_id = c.user_id"
         " WHERE c.chat_id = ? AND c.user_id = ? AND c.deleted IS NULL ORDER BY c.created, c.rowid", (chat_id, uid))]
     results = []
-    for row in state.DB.execute("SELECT tools FROM messages WHERE chat_id = ? ORDER BY created, rowid", (chat_id,)):
+    for row in state.DB.execute("SELECT tools FROM messages WHERE chat_id = ? AND unchosen = 0 ORDER BY created, rowid", (chat_id,)):
         try:
             steps = json.loads(row["tools"] or "[]")
         except ValueError:

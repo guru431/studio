@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 68
+VERSION = 69
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1002,6 +1002,14 @@ OWUI_DRAFTS_68 = """CREATE TABLE owui_file_drafts(
 """
 SCHEMA += OWUI_DRAFTS_68
 
+#: Варианты ответа чата: «Ответить заново» не удаляет прежний ответ — он остаётся невыбранным (`unchosen` = 1);
+#: варианты — ответы ассистента после одного сообщения пользователя, выбран один. Невыбранные бывают только у
+#: последнего ответа диалога: новый ход их удаляет (chat.py). Прежний код столбца не знает и видит их подряд.
+VARIANTS_69 = """ALTER TABLE messages ADD COLUMN unchosen INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX messages_unchosen ON messages(chat_id) WHERE unchosen = 1;
+"""
+SCHEMA += VARIANTS_69
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1138,6 +1146,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     66: CLEANER_ROUTE_66,
     67: TRANSLATE_CLEANER_67,
     68: OWUI_DRAFTS_68,
+    # варианты ответа чата: невыбранный вариант последнего ответа
+    69: VARIANTS_69,
 }
 
 
