@@ -351,8 +351,11 @@ def _chat_view(user_id: int, row) -> dict:
     `external_web` — следующий ход даст модели Exa при расшифровке в истории без подтверждения (сервер ответил
     бы 409 `external_web`); `thinking` — кнопка «Рассуждение» и `thinking_ok` — действует ли она у модели диалога
     (та же `local`: параметр уходит только ролям `local-*` srvllm через сервер); `dropped` — адрес подключения
-    убран из списка (`connections.dropped`: ход ответит 409 `server`); `role` — роль диалога `{id, name}` или None."""
+    убран из списка (`connections.dropped`: ход ответит 409 `server`); `role` — роль диалога `{id, name}` или None;
+    `closed_connection_id` — id подключения, закрытого группами доступа (`connection_id` тогда null, как у удалённого;
+    список `GET /api/chats` отдаёт тот же id): «перевести остальные» берёт диалоги этого подключения, а не удалённых."""
     out, conn = _chat_out(row), _chat_connection(user_id, row["connection_id"])
+    out["closed_connection_id"] = row["connection_id"] if conn is None else None
     if conn is None:                                 # удалено или закрыто группами — страница просит выбрать модель
         out["connection_id"] = None
     model = row["model"] or manage.DEFAULT_MODEL

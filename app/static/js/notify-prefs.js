@@ -38,7 +38,7 @@ export function notifyPrefsBlock() {
       to.value = value.quiet_to;
     }
     remind.value = String(value.remind);
-    zone.textContent = tr("Тихие часы — по часовому поясу учётки: {0}. В них не приходит ничего; о ждущем вопросе агента напомнит повтор после них.", value.timezone);
+    zone.textContent = tr("Тихие часы — по часовому поясу учётки: {0}. В них не приходит ничего; о ждущем вопросе агента после них напомнит повтор, если напоминание включено.", value.timezone);
   }
   save.addEventListener('click', async () => {
     note.textContent = '';

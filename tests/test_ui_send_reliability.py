@@ -274,6 +274,45 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
         live.cloud.chunk_pause, live.cloud.chat_reply = 0.05, ["Облако ", "на связи."]
 
 
+def test_long_answer_being_saved_goes_keepalive_as_its_beginning(chromium, live):
+    """Законченный ответ длиннее предела keepalive ещё сохраняется обычным PUT, и вкладку закрывают: keepalive уходит
+    началом итога со статусом stopped — целиком (80 КБ) браузер отверг бы такой fetch молча, и ответ пропал бы."""
+    login = "pagehide-long-saving"
+    live.add_user(login)
+    held, bodies = [], []
+
+    def put(route):
+        if route.request.method != "PUT":
+            route.continue_()
+            return
+        bodies.append(route.request.post_data)
+        if held:
+            route.continue_()
+        else:
+            held.append(route)                       # обычный PUT итога не доходит: вкладку «закрывают» раньше
+
+    try:
+        with opened(chromium, live, login, 1280) as page:
+            add_cloud(page, live)
+            live.cloud.chat_reply = ["я" * 40000, "конец"]
+            page.route("**/api/chats/*/messages/*", put)
+            page.locator("#chat-input").fill("Расскажи")
+            page.locator("#send").click()
+            until(page, lambda: len(bodies) == 1)
+            page.evaluate("() => window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+            until(page, lambda: len(bodies) == 2)
+            whole, part = json.loads(bodies[0]), json.loads(bodies[1])
+            assert whole["status"] == "done" and len(bodies[0].encode()) > 64 * 1024
+            assert part["status"] == "stopped" and len(bodies[1].encode()) <= 60 * 1024
+            assert part["content"] and whole["content"].startswith(part["content"])
+            held[0].continue_()                      # дошёл позже — сервер уже закрыл ответ (409)
+            until(page, lambda: page.evaluate("""async () => { const m = await import('/static/js/api.js');
+              const last = (await m.api('GET', '/api/chats/' + location.hash.split('/')[2])).messages.at(-1);
+              return last.status === 'stopped' && last.content.length > 20000; }"""))
+    finally:
+        live.cloud.chat_reply = ["Облако ", "на связи."]
+
+
 @pytest.mark.parametrize("touch,width", [(True, 320), (False, 1280)])
 def test_enter_breaks_the_line_on_touch_screens_and_sends_on_desktop(engine, live, touch, width):
     """Экранной клавиатуре нечем набрать Shift+Enter: на сенсорном экране Enter в «Чате» и «Агентах» — перенос

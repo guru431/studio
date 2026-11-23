@@ -126,6 +126,7 @@ class FakeMachine:
         self.context = None
         self.project_sharing = True
         self.completions = False                 # кадр досланных завершений (§18)
+        self.open_asks = False                   # и все открытые карточки при каждом канале (мост 0.47.0)
         self.visualization_scope = False         # участнику — только визуализации проекта (§17)
         self.visualization_images = False
         self.large_attachments = False
@@ -144,7 +145,7 @@ class FakeMachine:
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
                                            "software_update_all", "git_compare", "deepseek_models", "deepseek_usage", "file_upload", "file_search",
-                                           "self_check", "agent_log", "answer_takeover", "chat_manage",
+                                           "self_check", "agent_log", "answer_takeover", "chat_manage", "open_asks",
                                            "claude_models", "chat_search_all")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},

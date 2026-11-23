@@ -360,6 +360,7 @@ async def attach(link: Link) -> None:
         _fail_pending(old)               # ответов по закрытому каналу уже не будет
         _offline(link.agent_id)          # потоки переподключатся к новому каналу
         _close_later(old, CLOSE_REPLACED)
+    _check_cards(link)
     try:
         # `completions` — студия принимает кадр досланных завершений (протокол §18), `pending_asks` — и открытых
         # карточек в нём, `open_asks` — и всех открытых карточек ходов (`known`); старый мост поля не читает.
@@ -467,6 +468,8 @@ def _completions(link: Link, frame: dict) -> None:
             card = {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
                     "e": {"k": "ask", "kind": item["status"], "request_id": item.get("request_id")}}
             held = CARDS.get((link.agent_id, item["chat"]))
+            if held is not None:
+                held.pop("check", None)          # мост её прислал: открыта (другую `request_id` заменит `_push`)
             if item.get("known") is not True:
                 _push(link, card)
             elif held is None or held["request_id"] not in (None, item.get("request_id")):
@@ -476,6 +479,9 @@ def _completions(link: Link, frame: dict) -> None:
         code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
         _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
                      "e": {"k": "done", "status": item["status"]}})
+    if link.hello.get("open_asks") is True and len(items) < COMPLETIONS_MAX:   # полный кадр мог урезать карточки
+        for key in [key for key, card in CARDS.items() if key[0] == link.agent_id and "check" in card]:
+            del CARDS[key]                       # мост её не прислал: закрыта, пока канала не было
     log.info("агент %d: досланных завершений %d", link.agent_id, len(items))
 
 
@@ -592,6 +598,20 @@ def _card(link: Link, frame: dict, body: dict | None) -> None:
         del CARDS[key]
 
 
+def _check_cards(link: Link) -> None:
+    """Новый канал моста с `hello.open_asks`: карточки компьютера ждут подтверждения досылкой (`_completions`) — о
+    закрытой, пока канала не было (перезапуск моста), `asked` уже не придёт, и мост её не пришлёт. Не подтверждённую
+    за `REMIND_TICK_SEC` (60) `remind` забывает (кадр досылки мост шлёт первым и только если есть что слать). Мост
+    без поля — как раньше: карточка ждёт закрытия."""
+    now, checks = clock.NOW(), link.hello.get("open_asks") is True
+    for (agent_id, _chat), card in CARDS.items():
+        if agent_id == link.agent_id:
+            if checks:
+                card["check"] = now
+            else:
+                card.pop("check", None)
+
+
 def remind() -> None:
     """Проход напоминаний (07:I5): карточка не закрыта, компьютер на связи, адресат чат не смотрит — каждому его
     устройству, где напоминание включено и вид `ask` не заглушён (`push.muted`), повтор push с той же меткой
@@ -603,6 +623,10 @@ def remind() -> None:
         link = LINKS.get(agent_id)
         if link is None:
             continue                     # без связи ответить нельзя; вернётся — карточка та же
+        if "check" in card:              # новый канал её не подтвердил (`_check_cards`)
+            if now - card["check"] >= REMIND_TICK_SEC:
+                del CARDS[key]
+            continue
         user_id = _addressee(link, {"chat": chat, "project": card["project"]})
         if user_id is None:
             del CARDS[key]
