@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 71
+VERSION = 72
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -387,7 +387,8 @@ ALTER TABLE messages ADD COLUMN reasoning_sec REAL;
 #: распознавание (ocr.py, спека 2026-10-27-studio-ocr-design, 6.3 и 6.7): документ — `scans` (state — queued,
 #: working, cancelling, done, error, cancelled; origin — раздел или вложение чата, attachment_id без ссылки на
 #: attachments: вложение удаляют, документ остаётся; text — весь текст по готовности, для поиска), страницы —
-#: `scan_pages` с n от 1 (свой user_id — media.referenced). Поиск — триггерами, как у расшифровки; текст скана,
+#: `scan_pages`, n — номер страницы исходника с 1 (PDF диапазоном — с первой выбранной; свой user_id —
+#: media.referenced). Поиск — триггерами, как у расшифровки; текст скана,
 #: который раннер дописал во вложение уже после хода, — в поиск чата `search_attachments_text` (строка — заново:
 #: у прямого подключения ход уходит с готовым текстом, и строка уже есть). Каждое
 #: подключение srvllm — в разделе ocr с hunyuan-ocr, умолчание — наименьшее (как шаг 4): скан в чате работает
@@ -1030,6 +1031,12 @@ CREATE INDEX messages_unchosen ON messages(chat_id) WHERE unchosen = 1;
 """
 SCHEMA += VARIANTS_71
 
+#: правка распознанного текста страницы «Сканов» (ocr.edit_page): `text` — правленый (его берут выгрузки, «В чат»,
+#: перевод, ссылка «Поделиться» и поиск), `recognized` — распознанный до первой правки, NULL — страницу не правили.
+#: Прежний код столбец не читает: правленый текст для него — распознанный
+SCAN_EDITS_72 = "ALTER TABLE scan_pages ADD COLUMN recognized TEXT;\n"
+SCHEMA += SCAN_EDITS_72
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1172,6 +1179,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     70: TOTP_70,
     # варианты ответа чата: невыбранный вариант последнего ответа
     71: VARIANTS_71,
+    # правленый текст страницы скана и распознанный рядом
+    72: SCAN_EDITS_72,
 }
 
 

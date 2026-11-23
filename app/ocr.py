@@ -32,7 +32,9 @@
 8. API раздела — `router` (`/api/ocr`, вторая половина файла): загрузка, лента, документ со страницами,
    отмена, удаление, выгрузка txt/md/docx (`exports.pages_*`), «В чат» — вложение «<имя>.md», «Повторить
    страницу» и «Распознать заново» кончившегося документа (`retry`; другим движком раздела — новый документ из
-   тех же файлов, `again`).
+   тех же файлов, `again`). PDF длиннее PAGES_MAX — диапазоном страниц (`_inspect`), номера страниц документа —
+   номера исходника. «Править» страницу (`edit_page`, `restore_page`): правленый текст — в `text`, распознанный —
+   рядом (`recognized`).
 """
 import asyncio
 import base64
@@ -420,7 +422,7 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
 def again(user_id: int, scan_id: str, conn, model: str) -> str:
     """«Распознать заново» другим движком (подключение и модель раздела): новый документ раздела из тех же файлов —
     исходного PDF (и уже нарисованных PNG страниц) или фото страниц; ждут все страницы, кроме страниц текстового
-    слоя. Прежний документ остаётся — их можно сравнить. Идёт — 409 `running`, файла нет — 404 `gone`, очередь
+    слоя (их текст — без правок, `edit_page`). Номера страниц — прежние. Прежний документ остаётся — их можно сравнить. Идёт — 409 `running`, файла нет — 404 `gone`, очередь
     полна — 409 `busy`."""
     row = state.DB.execute("SELECT name, state, source_media_id FROM scans WHERE id = ? AND user_id = ?"
                            " AND deleted IS NULL", (scan_id, user_id)).fetchone()
@@ -430,8 +432,8 @@ def again(user_id: int, scan_id: str, conn, model: str) -> str:
         raise HTTPException(409, {"code": "running", "message": "документ ещё распознаётся"})
     pages = [{"n": p["n"], "state": "layer", "media_id": None, "text": p["text"]} if p["state"] == "layer"
              else {"n": p["n"], "state": "waiting", "media_id": p["media_id"], "text": None}
-             for p in state.DB.execute("SELECT n, state, media_id, text FROM scan_pages WHERE scan_id = ? ORDER BY n",
-                                       (scan_id,))]
+             for p in state.DB.execute("SELECT n, state, media_id, coalesce(recognized, text) AS text FROM scan_pages"
+                                       " WHERE scan_id = ? ORDER BY n", (scan_id,))]
     source = row["source_media_id"]
     files = [source] if source else [p["media_id"] for p in pages if p["state"] == "waiting"]
     if not all(f is not None and media.alive(user_id, f) for f in files):
@@ -534,6 +536,8 @@ async def _recognize_pages(job: Job, row) -> str:
     source = await _read(job.user_id, row["source_media_id"]) if row["source_media_id"] else None
     waiting = state.DB.execute("SELECT n, media_id FROM scan_pages WHERE scan_id = ? AND state = 'waiting' ORDER BY n",
                                (job.id,)).fetchall()
+    # n — номер страницы исходника (PDF диапазоном — не с 1): в состоянии — место страницы в документе
+    first = state.DB.execute("SELECT min(n) FROM scan_pages WHERE scan_id = ?", (job.id,)).fetchone()[0]
     for page in waiting:
         _check(job)
         n = page["n"]
@@ -568,7 +572,7 @@ async def _recognize_pages(job: Job, row) -> str:
                 await speech.free_card(job.conn)
                 _check(job)                               # отменили, пока освобождалась карта
             LEASED[job.conn.base_url] = job.conn
-            job.stage = f"распознаю · стр. {n} из {row['pages']}"
+            job.stage = f"распознаю · стр. {n - first + 1} из {row['pages']}"
             _store(job)
             try:
                 page_state, text, why = "done", await _page_text(job, png), None
@@ -827,7 +831,9 @@ COLUMNS = ("id, user_id, connection_id, model, name, source_media_id, origin, at
            " (SELECT count(*) FROM scan_pages p WHERE p.scan_id = scans.id AND p.state = 'failed') AS failed_pages")
 FORMAT = "нужен один PDF или фото PNG, JPEG, WebP"
 TOO_MANY_PAGES = f"больше {ocr_render.PAGES_MAX} страниц — разделите документ"
+BAD_RANGE = f"страницы — от 1 до {{}}, не больше {ocr_render.PAGES_MAX} за раз"
 PHOTO_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+PAGE_TEXT_MAX = 100_000          # правленый текст страницы (`edit_page`); ответ модели — до MAX_TOKENS токенов
 
 
 def _row(user_id: int, sid: str):
@@ -850,26 +856,44 @@ def _out(row) -> dict:
 
 
 def _page_list(sid: str) -> list[dict]:
-    return [dict(r) for r in state.DB.execute(
-        "SELECT n, state, text, detail, media_id FROM scan_pages WHERE scan_id = ? ORDER BY n", (sid,))]
+    """Страницы документа; `edited` — текст правлен (`edit_page`), распознанный хранится рядом."""
+    return [dict(r) | {"edited": bool(r["edited"])} for r in state.DB.execute(
+        "SELECT n, state, text, detail, media_id, recognized IS NOT NULL AS edited FROM scan_pages"
+        " WHERE scan_id = ? ORDER BY n", (sid,))]
 
 
 def _stem(name: str) -> str:
     return name.rsplit(".", 1)[0] if "." in name else name
 
 
-def _inspect(files: list[tuple[str, bytes]]) -> tuple[int, list[str]]:
-    """Состав загрузки (в потоке): один PDF — (страниц, []), только фото — (фото, их форматы Pillow).
-    Иначе — ScanError словами."""
+class _Range(ocr_render.ScanError):
+    """PDF длиннее PAGES_MAX без диапазона или диапазон мимо документа: 422 `pages` с числом страниц PDF —
+    страница предлагает выбрать диапазон и шлёт файл заново."""
+
+    def __init__(self, message: str, total: int):
+        super().__init__(message)
+        self.total = total
+
+
+def _inspect(files: list[tuple[str, bytes]], first: "int | None" = None,
+             last: "int | None" = None) -> tuple[range, list[str]]:
+    """Состав загрузки (в потоке): один PDF — (номера его страниц, []), только фото — (номера фото, их форматы
+    Pillow). PDF — все страницы или диапазон `first`…`last` (номера исходника с 1, не больше PAGES_MAX страниц;
+    одна граница — другая по краю документа); у фото диапазон не действует. Иначе — ScanError словами."""
     if any(data[:5] == b"%PDF-" or name.lower().endswith(".pdf") for name, data in files):
         if len(files) != 1:
             raise ocr_render.ScanError(FORMAT, 415)
-        pages = ocr_render.pdf_page_count(files[0][1])
-        if pages > ocr_render.PAGES_MAX:
-            raise ocr_render.ScanError(TOO_MANY_PAGES)
-        if pages == 0:
+        total = ocr_render.pdf_page_count(files[0][1])
+        if total == 0:
             raise ocr_render.ScanError(ocr_render.BROKEN)
-        return pages, []
+        if first is None and last is None:
+            if total > ocr_render.PAGES_MAX:
+                raise _Range(TOO_MANY_PAGES, total)
+            return range(1, total + 1), []
+        first, last = first or 1, last or total
+        if not 1 <= first <= last <= total or last - first + 1 > ocr_render.PAGES_MAX:
+            raise _Range(BAD_RANGE.format(total), total)
+        return range(first, last + 1), []
     formats = []
     for _, data in files:
         try:
@@ -878,7 +902,7 @@ def _inspect(files: list[tuple[str, bytes]]) -> tuple[int, list[str]]:
             if e.status == 415:
                 raise ocr_render.ScanError(FORMAT, 415) from None
             raise
-    return len(files), formats
+    return range(1, len(files) + 1), formats
 
 
 async def _drop(user_id: int, media_ids: list[str]) -> None:
@@ -898,9 +922,13 @@ async def upload(request: Request):
                                    request.headers.get("x-studio-model") or None)
     try:
         files = await documents.read_uploads(request, ocr_render.PAGES_MAX)
-        count, formats = await asyncio.to_thread(_inspect, files)
+        numbers, formats = await asyncio.to_thread(_inspect, files, _int_header(request, "x-studio-first-page"),
+                                                   _int_header(request, "x-studio-last-page"))
     except documents.DocumentError as e:
         raise HTTPException(e.status, {"code": "upload", "message": str(e)}) from None
+    except _Range as e:
+        raise HTTPException(422, {"code": "pages", "message": str(e), "pages": e.total,
+                                  "max": ocr_render.PAGES_MAX}) from None
     except ocr_render.ScanError as e:
         raise HTTPException(e.status, {"code": "format" if e.status == 415 else "scan", "message": str(e)}) from None
     saved: list[str] = []
@@ -920,9 +948,9 @@ async def upload(request: Request):
         await _drop(uid, saved)
         raise HTTPException(409, {"code": "gone", "message": "файл удалён во время загрузки"})
     if formats:
-        pages = [{"n": n, "state": "waiting", "media_id": m, "text": None} for n, m in enumerate(saved, 1)]
+        pages = [{"n": n, "state": "waiting", "media_id": m, "text": None} for n, m in zip(numbers, saved)]
     else:
-        pages = [{"n": n, "state": "waiting", "media_id": None, "text": None} for n in range(1, count + 1)]
+        pages = [{"n": n, "state": "waiting", "media_id": None, "text": None} for n in numbers]
     try:
         sid = create(uid, conn, model, files[0][0], origin="section",
                      source_media_id=None if formats else saved[0], pages=pages)
@@ -970,6 +998,82 @@ async def rename(sid: str, body: RenameIn, request: Request):
     state.DB.execute("UPDATE scans SET name = ? WHERE id = ?", (name, sid))
     log.info("ocr %s: переименован", sid[:8])
     return _out(_row(uid, sid))
+
+
+class PageIn(BaseModel):
+    text: str = Field(max_length=PAGE_TEXT_MAX * 4)              # предел текста — edit_page
+
+
+def _editable(user_id: int, sid: str, n: int):
+    """Документ, чью страницу `n` правят: кончился, страница с текстом (`done`, `layer`); иначе отказ словами."""
+    row = _row(user_id, sid)
+    if row["state"] not in TERMINAL:
+        raise HTTPException(409, {"code": "running", "message": "документ ещё распознаётся"})
+    page = state.DB.execute("SELECT state FROM scan_pages WHERE scan_id = ? AND n = ?", (sid, n)).fetchone()
+    if page is None:
+        raise HTTPException(404, {"code": "gone", "message": "такой страницы нет"})
+    if page["state"] not in ("done", "layer"):
+        raise HTTPException(409, {"code": "page", "message": "править можно только страницу с текстом"})
+    return row
+
+
+def _edited(row) -> None:
+    """После правки страницы (в её транзакции): текст документа — в поиск (search_scans_au), у готового
+    документа из чата — в ещё не отправленное вложение. Отправленное вложение — история хода, оно не меняется."""
+    sid = row["id"]
+    state.DB.execute("UPDATE scans SET text = ? WHERE id = ?", (_text(sid) or None, sid))
+    if row["attachment_id"] is not None and row["state"] == "done":
+        text = attachment_text(sid)
+        state.DB.execute("UPDATE attachments SET text = ?, chars = ? WHERE id = ? AND message_id IS NULL",
+                         (text, len(text), row["attachment_id"]))
+
+
+@router.patch("/{sid}/pages/{n}")
+async def edit_page(sid: str, n: int, body: PageIn, request: Request):
+    """«Править» страницу кончившегося документа (`_editable`): `text` — правленый, его берут выгрузки, «В чат»,
+    перевод, ссылка «Поделиться» и поиск; распознанный до первой правки — в `recognized` (`edited` страницы).
+    Текст, равный распознанному, отметку снимает. Пустой или длиннее PAGE_TEXT_MAX — 422 `input`. Ответ — документ
+    со страницами, как GET."""
+    uid = request.state.user.id
+    row = _editable(uid, sid, n)
+    text = documents.nfc(body.text).strip()
+    if not text:
+        raise HTTPException(422, {"code": "input", "message": "текст страницы пуст"})
+    if len(text) > PAGE_TEXT_MAX:
+        raise HTTPException(422, {"code": "input", "message": (
+            f"текст страницы длиннее {PAGE_TEXT_MAX:,} знаков".replace(",", " "))})
+    state.DB.execute("BEGIN")
+    try:
+        # SET видит прежнюю строку: recognized — распознанный до первой правки
+        state.DB.execute("UPDATE scan_pages SET text = ?, recognized = CASE WHEN coalesce(recognized, text) = ?"
+                         " THEN NULL ELSE coalesce(recognized, text) END WHERE scan_id = ? AND n = ?",
+                         (text, text, sid, n))
+        _edited(row)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    log.info("ocr %s: страница %d правлена", sid[:8], n)
+    return _out(_row(uid, sid)) | {"pages": _page_list(sid)}
+
+
+@router.delete("/{sid}/pages/{n}/edit")
+async def restore_page(sid: str, n: int, request: Request):
+    """«Вернуть распознанное»: текст страницы — распознанный до первой правки, отметка снята; не правили — как
+    есть. Ответ — документ со страницами."""
+    uid = request.state.user.id
+    row = _editable(uid, sid, n)
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("UPDATE scan_pages SET text = recognized, recognized = NULL"
+                         " WHERE scan_id = ? AND n = ? AND recognized IS NOT NULL", (sid, n))
+        _edited(row)
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    log.info("ocr %s: страница %d — распознанный текст", sid[:8], n)
+    return _out(_row(uid, sid)) | {"pages": _page_list(sid)}
 
 
 @router.post("/{sid}/cancel")

@@ -239,3 +239,49 @@ def test_polling_keeps_the_shown_page_nodes(browser, live):
     assert not r.get("failed"), r
     assert r["values"]["same"] == [True, True, True, False]      # кнопки — заново: появились «Копировать» и др.
     assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_long_pdf_range_and_page_edit(browser, live, width):
+    """05:I3: PDF длиннее предела — окно «страницы 1–50 из 52», диапазон правится, документ — с номерами исходника.
+    05:I6: «Править» страницу, отметка «правлено», «Вернуть распознанное»."""
+    from scans import scan_pdf
+    from test_ui_browser import set_value
+    login = f"ocrrange{width}"
+    live.add_user(login)
+    pdf = scan_pdf(*["blank"] * 50, "ink", "blank")
+    text = "document.querySelector('.ocr-text.md')?.textContent"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("ocr"),
+        ("wait", "document.querySelector('#ocr-add input')"), put_files("#ocr-add input", [("Книга.pdf", pdf)],
+                                                                        mime="application/pdf"),
+        ("wait", "document.querySelector('#ocr-range-dialog')?.open"),
+        ("eval", "offered", "document.querySelector('#ocr-range-summary').textContent"),
+        set_value("#ocr-range-last", "52"),
+        ("eval", "tooMany", "document.querySelector('#ocr-range-confirm').disabled"),
+        set_value("#ocr-range-first", "50"),
+        ("eval", "chosen", "document.querySelector('#ocr-range-summary').textContent"),
+        ("eval", "fitsDialog", NO_OVERFLOW),
+        ("click", "#ocr-range-confirm"),
+        ("wait", "document.querySelector('.ocr-item[data-state=done]') && document.querySelector('#ocr-page')"),
+        ("eval", "first", PAGE_NO), ("eval", "meta", "document.querySelector('.ocr-meta').textContent"),
+        ("click", "#ocr-next"), ("wait", f"{PAGE_NO} === 'страница 51 · 2 из 3' && document.querySelector('#ocr-edit')"),
+        ("click", "#ocr-edit"), ("wait", "document.querySelector('#ocr-edit-text')"),
+        ("eval", "draft", "document.querySelector('#ocr-edit-text').value"),
+        ("eval", "pagerStops", "document.querySelector('#ocr-prev').disabled"),
+        ("eval", "fitsEdit", NO_OVERFLOW),
+        set_value("#ocr-edit-text", "# Договор\n\nСумма: 1 600 руб."),
+        ("click", "#ocr-edit-save"),
+        ("wait", f"document.querySelector('#ocr-edited') && {text}?.includes('1 600')"),
+        ("click", "#ocr-restore"), ("wait", "document.querySelector('#ocr-restore-dialog')?.open"),
+        ("click", "#ocr-restore-confirm"),
+        ("wait", f"!document.querySelector('#ocr-edited') && {text}?.includes('Текст страницы')")],
+        width=width, mobile=width == 320)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["offered"] == "страницы 1–50 из 52" and v["tooMany"] is True and v["chosen"] == "страницы 50–52 из 52"
+    assert v["first"] == "страница 50 · 1 из 3" and "стр. 50–52" in v["meta"]
+    assert v["draft"] == "# Договор\n\nТекст страницы." and v["pagerStops"] is True
+    assert v["fitsDialog"] is True and v["fitsEdit"] is True
+    # 422 первой загрузки — штатный ответ «выберите диапазон»
+    rest = [line for line in problems(r) if "status of 422" not in str(line)]
+    assert not rest, rest

@@ -912,6 +912,91 @@ def test_refusals_are_words(studio, monkeypatch):
     assert "Сканы" in r.json()["detail"]["message"]
 
 
+def test_long_pdf_asks_for_a_range_and_keeps_the_source_page_numbers(studio):
+    """05:I3: PDF длиннее предела без диапазона — 422 `pages` с числом страниц, файл не сохранён; диапазоном —
+    документ из выбранных страниц с номерами исходника: рисуется та самая страница, выгрузка и «В чат» называют
+    её номер."""
+    add_gateway(studio)
+    pdf = scan_pdf(*["blank"] * 50, "ink", "blank")                   # 52 страницы, текст — только на 51-й
+
+    def post(first=None, last=None):
+        headers = {k: str(v) for k, v in (("x-studio-first-page", first), ("x-studio-last-page", last)) if v}
+        return studio.c.post("/api/ocr", files=[("file", (NAME, pdf, "application/pdf"))], headers=headers)
+    r = post()
+    assert r.status_code == 422 and r.json()["detail"] == {
+        "code": "pages", "message": "больше 50 страниц — разделите документ", "pages": 52, "max": 50}
+    for first, last in ((5, 3), (1, 51), (50, 53)):
+        r = post(first, last)
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "pages", (first, last)
+        assert r.json()["detail"]["message"] == "страницы — от 1 до 52, не больше 50 за раз"
+    assert count(studio, "media") == 0 and count(studio, "scans") == 0
+    r = post(50, 52)
+    assert r.status_code == 202 and r.json()["pages"] == 3
+    item = wait_ocr(studio, r.json()["id"], {"done"})
+    assert [(p["n"], p["state"]) for p in item["pages"]] == [(50, "blank"), (51, "done"), (52, "blank")]
+    assert len(studio.gw.ocr_requests) == 1
+    assert studio.c.get(f"/api/ocr/{item['id']}/export?format=md").text.startswith("## Страница 50\n\n[пустая страница]")
+    assert f"## Страница 51\n\n{TEXT}" in studio.c.post(f"/api/ocr/{item['id']}/attachments").json()["text"]
+
+
+def test_page_edit_keeps_the_recognized_text_and_feeds_exports_and_search(studio, monkeypatch):
+    """05:I6: правка страницы — в `text` (выгрузка, «В чат», поиск), распознанный — в `recognized`; текст, равный
+    распознанному, и «Вернуть распознанное» отметку снимают. Править можно только страницу с текстом
+    кончившегося документа."""
+    add_gateway(studio)
+    studio.gw.ocr_replies = [(200, answer(TEXT)), (200, answer("Обрывок", "length"))]
+    studio.gw.ocr_hold = True
+    sid = post_files(studio, [("a.jpg", photo()), ("b.jpg", photo())]).json()["id"]
+    assert studio.c.patch(f"/api/ocr/{sid}/pages/1", json={"text": "x"}).json()["detail"]["code"] == "running"
+    studio.gw.ocr_hold = False
+    wait_ocr(studio, sid)
+
+    def edit(text, n=1):
+        return studio.c.patch(f"/api/ocr/{sid}/pages/{n}", json={"text": text})
+    r = edit("  Сумма: 1 500 руб.\n")
+    assert r.status_code == 200, r.text
+    assert [(p["n"], p["text"], p["edited"]) for p in r.json()["pages"]] == [
+        (1, "Сумма: 1 500 руб.", True), (2, None, False)]
+    assert edit("Сумма: 1 600 руб.").status_code == 200
+    assert [(p["text"], p["recognized"]) for p in page_rows(studio, sid)][0] == ("Сумма: 1 600 руб.", TEXT)
+    assert "Сумма: 1 600 руб." in studio.c.get(f"/api/ocr/{sid}/export?format=txt").text
+    assert studio.c.post(f"/api/ocr/{sid}/attachments").json()["text"].startswith("## Страница 1\n\nСумма: 1 600")
+    found = studio.c.post("/api/search", json={"q": "руб"}).json()["items"]
+    assert [i["id"] for i in found if i.get("section") == "ocr"] == [sid], found
+    assert edit(TEXT).json()["pages"][0]["edited"] is False                    # как распознано — не правлено
+    assert page_rows(studio, sid)[0]["recognized"] is None
+    edit("Другое")
+    r = studio.c.delete(f"/api/ocr/{sid}/pages/1/edit")
+    assert r.status_code == 200 and (r.json()["pages"][0]["text"], r.json()["pages"][0]["edited"]) == (TEXT, False)
+    assert not [i for i in studio.c.post("/api/search", json={"q": "Другое"}).json()["items"] if i.get("section") == "ocr"]
+    assert edit("x", 2).json()["detail"]["code"] == "page"                    # нераспознанную — нельзя
+    assert edit("x", 3).status_code == 404
+    assert edit(" \n").json()["detail"]["code"] == "input"
+    monkeypatch.setattr(ocr, "PAGE_TEXT_MAX", 5)
+    assert edit("123456").json()["detail"]["message"] == "текст страницы длиннее 5 знаков"
+    make_user(studio, "bob")
+    signin(studio, "bob")
+    assert edit("чужой").status_code == 404 and studio.c.delete(f"/api/ocr/{sid}/pages/1/edit").status_code == 404
+
+
+def test_page_edit_reaches_an_unsent_chat_attachment_only(studio):
+    """Правка страницы скана из чата меняет текст ещё не отправленного вложения; отправленное — история хода."""
+    uid, conn = gateway_user(studio)
+    aid = add_attachment(studio, uid)
+    sid = pdf_scan(studio, uid, conn, "ink", origin="chat", attachment_id=aid)
+    wait_scan(studio, sid)
+    assert studio.c.patch(f"/api/ocr/{sid}/pages/1", json={"text": "Правка"}).status_code == 200
+    assert attachment(studio, aid)[0] == "Страница 1\n\nПравка"
+
+    def sent():                                   # ход отправлен: сообщения в этом тесте нет — без проверки FK
+        state.DB.execute("PRAGMA foreign_keys=OFF")
+        state.DB.execute("UPDATE attachments SET message_id = 'm' WHERE id = ?", (aid,))
+        state.DB.execute("PRAGMA foreign_keys=ON")
+    on_loop(studio, sent)
+    assert studio.c.patch(f"/api/ocr/{sid}/pages/1", json={"text": "Вторая"}).status_code == 200
+    assert attachment(studio, aid)[0] == "Страница 1\n\nПравка"
+
+
 def test_someone_else_cannot_see_the_scan_or_its_pages(studio):
     add_gateway(studio)
     sid = post_files(studio, [(NAME, scan_pdf("ink"))]).json()["id"]
