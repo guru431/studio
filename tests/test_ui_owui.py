@@ -801,6 +801,7 @@ def test_stream_comes_back_after_the_screen_lock(owui_browser, live, fake, monke
           const img = document.querySelector('img[data-retried]');
           return img?.complete && img.naturalWidth === 0;
         }""")
+        pw.expect(page.locator("#lock-password-go")).to_be_enabled()          # экран прочитал состояние блокировки
         if page.locator("#lock-use-password").is_visible():
             page.locator("#lock-use-password").click()
         page.locator("#lock-password").fill(PASSWORD)
