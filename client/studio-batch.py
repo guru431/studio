@@ -25,7 +25,7 @@
 списке процессов).
 
 Карта одна на всех: пока её держит другой потребитель, шлюз ждёт. Первая картинка занимает
-больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин (FineView и Jib — скрипт до 31 мин).
+больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин (SNOFS, FineView и Jib — скрипт до 31 мин).
 По окончании карта освобождается и возвращается gemma4; --keep-card — оставить карту.
 Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
@@ -73,7 +73,7 @@ MODELS = {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein",
 STRENGTH_MODELS = {"snofs", "jib-moss"}  # FLUX и FineView силу изменения не получают
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
 TIMEOUT = 1300                         # маршрут генерации у шлюза — до 1260 с
-MEDIA_TIMEOUT = 1900                   # FineView и Jib: холодная загрузка новых весов (как у студии)
+MEDIA_TIMEOUT = 1900                   # модели ComfyUI (всё, кроме FLUX): холодная загрузка весов (как у студии)
 SEND_TRIES = 3                         # попыток запроса, на которые шлюз отвечает 429 или 503
 PAUSE = 5                              # пауза перед повтором после 429 и 503, с
 MAX_PROMPT = 24000                     # предел API картинок
@@ -312,7 +312,7 @@ def run(args):
     model_id = MODELS[args.model]
     # FineView и Jib занимают слот ComfyUI модели SNOFS: release — по слоту, как у студии
     release_id = MODELS["flux"] if args.model == "flux" else MODELS["snofs"]
-    timeout = MEDIA_TIMEOUT if args.model in ("fineview", "jib-moss") else TIMEOUT
+    timeout = MEDIA_TIMEOUT if args.model != "flux" else TIMEOUT
     image = None
     if args.image_path:
         image = Path(args.image_path).resolve()

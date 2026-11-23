@@ -90,6 +90,14 @@ assert.equal(en.message('пишет ответ'), 'writing response');
 assert.equal(en.message('жду карту · озвучиваю 2 из 5'), 'waiting for GPU · synthesizing 2 of 5');
 assert.equal(en.message('кусок 5 из 17: модель вернула пустой ответ'), 'chunk 5 of 17: model returned an empty response');
 assert.equal(en.message('сбой службы: TimeoutError'), 'service failure: TimeoutError');
+// итоги «Фото» в «В работе» (images.release_after_cancel): итог задания + слова release карты
+assert.equal(en.message('описание готово — карта освобождена'), 'description ready; GPU released');
+assert.equal(en.message('Отменено — карта освобождена'), 'Cancelled; GPU released');
+assert.equal(en.message('перевод готов; карту освободить не удалось — шлюз недоступен: ConnectError'),
+  'translation ready; could not release GPU: gateway unavailable: ConnectError');
+assert.equal(en.message('отменено; карта занята другим запросом — освободится сама по окончании аренды'),
+  'cancelled; GPU busy with another request. It will be released when the lease ends');
+assert.equal(en.message('в очереди серии · 2 из 3'), 'batch queue · 2 of 3');
 assert.equal(en.message('выберите модель в настройках раздела «Голосовой ввод»'), 'choose a model in Settings → “Voice input”');
 assert.equal(en.message('нет связи с подключением «Голосовой ввод»'), 'no connection to “Голосовой ввод”');
 assert.equal(en.message('Ответ · Чат'), 'Response · Чат');

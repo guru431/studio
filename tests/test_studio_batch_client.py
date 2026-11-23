@@ -66,6 +66,24 @@ def test_script_models_and_strength_match_the_server():
     assert f"$MediaTimeoutSec = {images.MEDIA_TIMEOUT_SEC}" in text
 
 
+def test_script_timeouts_follow_the_server_model_rule():
+    """Долгий срок — у всех моделей ComfyUI, короткий — только у FLUX, как в images.generate:
+    SNOFS со сроком 1300 с обрывался на холодной загрузке, хотя студия ждёт его 1900 с."""
+    import importlib.util
+    import inspect
+
+    import images
+    assert 'job.model != "flux"' in inspect.getsource(images.generate)
+    spec = importlib.util.spec_from_file_location("studio_batch_client", SCRIPT.with_suffix(".py"))
+    client = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client)
+    assert client.TIMEOUT == images.GENERATE_TIMEOUT_SEC
+    assert 'MEDIA_TIMEOUT if args.model != "flux" else TIMEOUT' in SCRIPT.with_suffix(".py").read_text(encoding="utf-8")
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert f"$TimeoutSec = {images.GENERATE_TIMEOUT_SEC} " in text
+    assert "if ($Model -ne 'flux') { $TimeoutSec = $MediaTimeoutSec }" in text
+
+
 def test_local_copy_is_gitignored():
     git = shutil.which("git")
     if not git:
@@ -183,6 +201,26 @@ def test_python_run_survives_a_pipe_in_a_non_utf8_encoding(images, tmp_path):
                         "--token", "test-key", "--url", images.url, "--out-dir", str(tmp_path / "out")],
                        capture_output=True, timeout=25, env={**os.environ, "PYTHONIOENCODING": "cp1251"})
     assert r.returncode == 0, r.stderr.decode("cp1251", "replace")
+
+
+@pytest.mark.integration  # старт PowerShell и локальный HTTP
+def test_relative_out_dir_is_taken_from_the_powershell_location(images, tmp_path):
+    """Относительный -OutDir — от текущей папки PowerShell: .NET-вызовы ([IO.File]::Open) разрешают
+    путь от каталога процесса, и картинки с журналом уходили бы туда (или запуск падал)."""
+    ps = shutil.which("powershell") or shutil.which("pwsh")
+    if not ps:
+        pytest.skip("нет powershell — прогон скрипта пропущен")
+    here, elsewhere = tmp_path / "here", tmp_path / "elsewhere"
+    here.mkdir()
+    elsewhere.mkdir()
+    (here / "prompts.txt").write_text("first\n", encoding="utf-8")
+    command = (f"Set-Location -LiteralPath '{here}'; & '{SCRIPT}' -PromptsFile prompts.txt -OutDir out "
+               f"-Seed 5 -KeepCard -Token test-key -Url '{images.url}'; if (-not $?) {{ exit 1 }}")
+    r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+                       cwd=elsewhere, capture_output=True, timeout=25)
+    assert r.returncode == 0, r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    assert [p.name for p in (here / "out").glob("*.png")] == ["001-01_first_s5.png"]
+    assert (here / "out" / "manifest.tsv").is_file() and not list(elsewhere.iterdir())
 
 
 @pytest.mark.parametrize("runner", RUNNERS)

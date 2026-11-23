@@ -23,7 +23,7 @@
   переносить на другие компьютеры как есть. Ключ на один запуск — параметром -Token.
 
   Карта одна на всех: пока её держит другой потребитель, шлюз ждёт. Первая картинка занимает
-  больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин (FineView и Jib — скрипт до 31 мин).
+  больше времени из-за загрузки модели. Шлюз ждёт ответ до 21 мин (SNOFS, FineView и Jib — скрипт до 31 мин).
   По окончании карта освобождается и возвращается gemma4; -KeepCard — оставить карту.
   Ctrl+C обрывает текущий запрос и тоже освобождает карту.
 
@@ -109,7 +109,7 @@ $StrengthModels = @('snofs', 'jib-moss')    # FLUX и FineView силу изме
 $Sizes = @{ portrait = '832x1216'; square = '1024x1024'; landscape = '1216x832' }
 $Mime = @{ '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.png' = 'image/png'; '.webp' = 'image/webp' }
 $TimeoutSec = 1300                     # маршрут генерации у шлюза — до 1260 с
-$MediaTimeoutSec = 1900                # FineView и Jib: холодная загрузка новых весов (как у студии)
+$MediaTimeoutSec = 1900                # модели ComfyUI (всё, кроме FLUX): холодная загрузка весов (как у студии)
 $SendTries = 3                         # попыток запроса, на которые шлюз отвечает 429 или 503
 $PauseSec = 5                          # пауза перед повтором после 429 и 503, с
 $MaxPrompt = 24000                     # предел API картинок
@@ -151,11 +151,13 @@ if (-not $Token) {
         "затем запускайте studio-batch.local.ps1 (или передайте ключ параметром -Token)")
 }
 $Url = $Url.TrimEnd('/')
+# Относительный путь — от текущей папки PowerShell: .NET-вызовы ниже разрешили бы его от каталога процесса
+$OutDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 Add-Type -AssemblyName System.Net.Http
 $modelId = $Models[$Model]
 # FineView и Jib занимают слот ComfyUI модели SNOFS: release — по слоту, как у студии
 $releaseId = if ($Model -eq 'flux') { $Models.flux } else { $Models.snofs }
-if ($Model -eq 'fineview' -or $Model -eq 'jib-moss') { $TimeoutSec = $MediaTimeoutSec }
+if ($Model -ne 'flux') { $TimeoutSec = $MediaTimeoutSec }
 if ($ImagePath) {
     $imageInfo = Get-Item -LiteralPath $ImagePath
     if ($imageInfo.PSIsContainer -or $imageInfo.Length -eq 0 -or $imageInfo.Length -gt 10MB) {
