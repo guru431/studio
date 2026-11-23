@@ -5,7 +5,8 @@
    вызов, круги, шаги, оставшиеся вызовы круга и вид карточки. Страница получает событие SSE `pending`, ход кончается
    статусом `done` — текст до паузы сохранён; у сообщения в выдаче — `pending` (`open_views`).
 2. Ответ (`POST /api/chats/{chat_id}/pending/{pending_id}`): одна смена `resolved` (`WHERE resolved IS NULL`) — второй
-   ответ и ответ позже PENDING_TTL_SEC получают 409 `pending_gone`; подключение диалога заново — сменилось — 409
+   ответ, ответ позже PENDING_TTL_SEC и ответ невыбранному варианту (`messages.unchosen`, пауза ждёт его выбора)
+   получают 409 `pending_gone`; подключение диалога заново — сменилось — 409
    `connection_changed`. То же сообщение снова `streaming`, `chat.StreamTask` с `resume` продолжает цикл, ответ — поток
    SSE, как у хода. Доступ, политика и «Интернет» перепроверяют каталог хода и `mcp_client.Tools.call`. Квитанция
    `request_id` — в `chat_turn_requests` той же транзакцией, что смена `resolved`: повтор того же ответа (ответ потерян
@@ -267,8 +268,9 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
                 f"Сразу идёт не больше {chat.USER_STREAMS} ответов в разных диалогах — дождитесь одного из них"
                 " или остановите")})
         mid = pending["message_id"]
+        # невыбранный вариант не продолжается (карточка в другой вкладке): пауза ждёт, пока его не выберут снова
         if state.DB.execute("UPDATE messages SET status = 'streaming', error = NULL WHERE id = ? AND chat_id = ?"
-                            " AND status = 'done'", (mid, chat_id)).rowcount != 1:
+                            " AND status = 'done' AND unchosen = 0", (mid, chat_id)).rowcount != 1:
             raise _gone()
         message = state.DB.execute("SELECT content, reasoning, reasoning_sec FROM messages WHERE id = ?", (mid,)).fetchone()
         user = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND role = 'user'"
