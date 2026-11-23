@@ -32,7 +32,8 @@ def test_vendor_files_name_package_and_version():
     banners = {"marked.min.js": "marked 18.1.1", "purify.min.js": "dompurify 3.4.17",
                "highlight.min.js": "highlight.js 11.12.0", "hl-paper.css": "highlight.js 11.12.0",
                "hl-graphite.css": "highlight.js 11.12.0", "lucide.min.js": "lucide 1.17.0",
-               "qrcode.js": "qrcode-generator 1.4.4"}
+               "qrcode.js": "qrcode-generator 1.4.4", "katex/katex.min.js": "katex 0.19.1",
+               "katex/katex.min.css": "katex 0.19.1"}
     for name, banner in banners.items():
         first = (STATIC / "vendor" / name).read_text(encoding="utf-8").splitlines()[0]
         assert banner in first, name

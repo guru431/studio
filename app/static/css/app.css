@@ -1210,6 +1210,7 @@ video.msg-file-media { max-height: 320px; }
 .md :is(th, td)[align="center"] { text-align: center; }
 .md :is(th, td)[align="right"] { text-align: right; }
 .md img { max-width: 100%; border-radius: var(--r-control); }
+.md .katex-display { margin: 0 0 .75em; overflow-x: auto; overflow-y: hidden; }   /* формула шире окна — прокрутка, не вылет */
 .md hr { border: 0; border-top: 1px solid var(--line); }
 .copy { position: absolute; top: 6px; right: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--r-control);
   background: var(--surface-1); color: var(--text-2); font-size:var(--fs-xs); user-select: none; opacity: .85; }

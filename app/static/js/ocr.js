@@ -16,8 +16,8 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * удаляются, вместо загрузки — подсказка.
  *
  * Текст страницы — Markdown модели через renderMarkdown(…, { html: true }) (marked + DOMPurify: таблицы
- * HunyuanOCR — HTML-тегами, скрипты — нет); прочий текст сервера — только textContent. «Копировать» — весь
- * документ, как выгрузка .md; «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
+ * HunyuanOCR — HTML-тегами, скрипты — нет; формулы `$…$` рисует KaTeX); прочий текст сервера — только textContent.
+ * «Копировать» — весь документ, как выгрузка .md, и он же HTML с формулами MathML (`markdownHtml`); «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
  * другой документ его убирает). «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
  * «Перевести» у готового скана — выбор языка и новая запись «Перевода» без повторного распознавания.
  * PDF длиннее предела (422 `pages` с числом страниц) — окно диапазона #ocr-range-dialog и тот же файл заново с
@@ -36,7 +36,7 @@ import { busyBlock, createPicker, keep, pickerList, recordSelection } from './fe
 import { kick } from './jobs.js';
 import { shareDialog } from './chat-share.js';
 import { sectionMcp } from './mcp-sections.js';
-import { renderMarkdown } from './markdown.js';
+import { markdownHtml, renderMarkdown } from './markdown.js';
 import { clearRead, readAloud } from './speech-read.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
@@ -509,8 +509,13 @@ function build(view, ctx) {
     if (readable(item)) {
       const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, tr("Копировать"));
       copy.addEventListener('click', async () => {
+        // Markdown — текстом, разметка с формулами MathML — HTML (обещание — в ClipboardItem сразу, для Safari)
+        const text = asMarkdown(docs.current.pages);
         try {
-          await navigator.clipboard.writeText(asMarkdown(docs.current.pages));
+          if (typeof ClipboardItem === 'function' && navigator.clipboard.write) {
+            await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }),
+              'text/html': markdownHtml(text).then((html) => new Blob([html], { type: 'text/html' })) })]);
+          } else await navigator.clipboard.writeText(text);
           copy.textContent = tr("Скопировано");
         } catch {
           error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
