@@ -152,6 +152,18 @@
         finally { resend.disabled = false; }
       });
       extra = resend;
+    } else if (screen === 'totp') {
+      // второй шаг входа приложением-аутентификатором (totp.py): письма нет, «отправить ещё раз» не нужно
+      title.textContent = tr("Приложение-аутентификатор");
+      description.textContent = tr("Введите шестизначный код из приложения или резервный код.");
+      const code = field('code', tr("Код"), 'text', 'one-time-code', 16);
+      action = async () => {
+        try { location.assign((await request('/account/code', { code: code.value })).next); }
+        catch (err) {
+          throw new Error(err.code === 'wrong_code' ? tr("Неверный код — осталось попыток: {0}", err.left)
+            : err.code === 'expired' ? tr("Код больше не действует. Начните вход заново.") : err.message);
+        }
+      };
     } else {
       if (screen === 'verify') title.textContent = tr("Подтверждение почты");
       let me;
@@ -197,7 +209,7 @@
     submit = document.createElement('button');
     submit.type = 'submit'; submit.className = 'btn btn-accent';
     submit.textContent = ({ invite: tr("Создать учётную запись"), forgot: tr("Отправить ссылку"), reset: tr("Сохранить пароль"),
-      code: tr("Войти"), email: tr("Подтвердить почту") })[screen];
+      code: tr("Войти"), totp: tr("Войти"), email: tr("Подтвердить почту") })[screen];
     form.append(submit);
     if (extra) form.append(extra);
     form.addEventListener('submit', async (event) => {

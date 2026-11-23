@@ -26,6 +26,9 @@
   известной учётки и выход — ещё и в журнал безопасности учётки (security_log).
 - Сессия помнит время входа и активности, вид устройства, браузер, ОС, доступную модель и последний IP
   (session_devices.py; исходный User-Agent не хранится) — для списка сессий (account.py).
+- Второй шаг после верного пароля: приложение-аутентификатор (totp.py, `/account/totp`) или, без него, код из письма
+  (email_accounts.py, `/account/code`). Вход с нового вида устройства, браузера или адреса — письмо владельцу после ответа
+  (`email_accounts.notice_due`).
 """
 import asyncio
 import base64
@@ -41,6 +44,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.background import BackgroundTask
 from starlette.requests import HTTPConnection
 
 import clock
@@ -430,8 +434,18 @@ async def login(request: Request):
     uid = await check_password(name, password, ip)
     if uid is not None:               # сессия — без await после сверки
         import email_accounts
+        import totp
         row = state.DB.execute("SELECT email_codes FROM users WHERE id=?", (uid,)).fetchone()
         next_ = (form.get("next") or [""])[0]
+        if totp.enabled(uid):            # приложение — вместо письма: вход не зависит от SMTP
+            try:
+                token = totp.challenge(uid, request, next_)
+            except HTTPException as err:
+                return _login_page(err.detail["message"], err.status_code, typed)
+            response = RedirectResponse("/account/totp", status_code=303)
+            email_accounts.challenge_cookie(response, token)
+            response.headers["Cache-Control"] = "no-store"
+            return response
         if row["email_codes"]:
             try:
                 token = await email_accounts.login_code(uid, request, next_)
@@ -460,14 +474,23 @@ def finish_login(uid: int, request: Request, next_: str = "", *, as_json: bool =
     replaced = request.cookies.get(COOKIE)
     if replaced:
         state.DB.execute("DELETE FROM sessions WHERE digest=?", (security.digest(replaced),))
-    value, _ = create_session(uid, device_class(request.headers.get("user-agent")))
-    session_devices.remember(security.digest(value), request.headers.get("user-agent"), ip)
-    security_log.record(uid, "login", digest=security.digest(value), ip=ip)
+    agent = request.headers.get("user-agent")
+    device = device_class(agent)
+    value, _ = create_session(uid, device)
+    session_devices.remember(security.digest(value), agent, ip)
+    browser, system, _ = session_devices.describe(agent)
+    # браузер без версии — подробностью входа: письмо о новом входе (email_accounts.notice_due) сверяет вид
+    # устройства, браузер и адрес с прежними входами, а версия меняется с каждым обновлением браузера
+    family = browser.rsplit(" ", 1)[0] if browser else None
+    notice = email_accounts.notice_due(uid, device, family, ip)
+    security_log.record(uid, "login", digest=security.digest(value), ip=ip, detail=family)
     log.info("вход с %s: успешно", ip)
     target = login_target(next_) if email_accounts.has_email(uid) else "/account/email"
     response = (JSONResponse({"next": target}, headers={"Cache-Control": "no-store"}) if as_json
                 else RedirectResponse(target, status_code=303, headers={"Cache-Control": "no-store"}))
     _set_cookie(response, value)
+    if notice:                       # письмо — после ответа: вход его не ждёт
+        response.background = BackgroundTask(email_accounts.login_notice, uid, clock.NOW(), device, browser, system, ip)
     return response
 
 

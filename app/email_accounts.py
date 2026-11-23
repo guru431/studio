@@ -10,6 +10,8 @@ import logging
 import re
 import secrets
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -32,6 +34,8 @@ RESET_SEC = 1800
 CODE_SEC = 600
 CODE_ATTEMPTS = 5
 SMTP_TEST_SEC = 60
+#: письмо о входе: вида устройства, браузера и адреса нет среди входов журнала безопасности за столько секунд
+LOGIN_NOTICE_SEC = 180 * 86400
 PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
 EMAIL_PATHS = frozenset({"/api/me", "/api/me/email", "/api/me/email/confirm"})
 EMAIL_RE = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}")  # после lower(); re.I сопоставил бы «ſ» и «ı» с s и i
@@ -77,6 +81,10 @@ class EmailIn(BaseModel):
 class CodesIn(BaseModel):
     enabled: bool
     password: str = Field(max_length=1024)
+
+
+class NoticeIn(BaseModel):
+    enabled: bool
 
 
 def has_email(uid: int) -> bool:
@@ -220,7 +228,7 @@ def bridge_code(uid: int, code: str, *, ip: str | None = None) -> None:
 
 @router.api_route("/account/{screen}", methods=["GET", "HEAD"])
 async def account_page(screen: str):
-    if screen not in ("invite", "forgot", "reset", "code", "email", "verify"):
+    if screen not in ("invite", "forgot", "reset", "code", "totp", "email", "verify"):
         raise HTTPException(404)
     return HTMLResponse(auth.page("account.html"), headers=PUBLIC_HEADERS)
 
@@ -439,7 +447,11 @@ async def complete_login(request: Request):
     data = await public_data(request)
     throttle("verify-code-ip", auth.client_ip(request), 30, 900)
     token = request.cookies.get(CHALLENGE_COOKIE, "")
-    row = check_code(token, data.get("code", ""), ip=auth.client_ip(request))
+    import totp
+    if totp.is_challenge(token):         # вызов приложения-аутентификатора (auth.login), не письма
+        row = totp.check_challenge(token, data.get("code", ""), auth.client_ip(request))
+    else:
+        row = check_code(token, data.get("code", ""), ip=auth.client_ip(request))
     response = auth.finish_login(row["user_id"], request, row["next"][1:], as_json=True)
     response.delete_cookie(CHALLENGE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response
@@ -541,3 +553,56 @@ async def email_codes(body: CodesIn, request: Request):
     security_log.record(uid, "email_codes_on" if body.enabled else "email_codes_off", digest=request.state.digest,
                         ip=auth.client_ip(request))
     return {"enabled": body.enabled}
+
+
+@router.put("/api/me/login-notice")
+async def set_login_notice(body: NoticeIn, request: Request):
+    """«Письмо о входе с нового устройства» (по умолчанию включено)."""
+    state.DB.execute("UPDATE users SET login_notice=? WHERE id=?", (int(body.enabled), request.state.user.id))
+    return {"enabled": body.enabled}
+
+
+def notice_due(uid: int, device: str | None, browser: str | None, ip: str) -> bool:
+    """Слать ли письмо о входе: опция включена, почта есть и SMTP настроен (иначе молча нет), у учётки были входы за
+    LOGIN_NOTICE_SEC (самый первый вход — сам владелец), и ни один из них не совпал видом устройства, браузером без
+    версии и адресом. Входы до выпуска браузера не помнят (`detail` NULL) — совпадают с любым."""
+    row = state.DB.execute("SELECT login_notice, email FROM users WHERE id=?", (uid,)).fetchone()
+    if row is None or not row["login_notice"] or not row["email"] or not account_mail.configured(account_mail.settings()):
+        return False
+    since = clock.NOW() - LOGIN_NOTICE_SEC
+    if state.DB.execute("SELECT 1 FROM security_events WHERE user_id=? AND kind='login' AND created>=? LIMIT 1",
+                        (uid, since)).fetchone() is None:
+        return False
+    return state.DB.execute("SELECT 1 FROM security_events WHERE user_id=? AND kind='login' AND created>=?"
+                            " AND device IS ? AND ip IS ? AND (detail IS NULL OR detail IS ?) LIMIT 1",
+                            (uid, since, device, ip, browser)).fetchone() is None
+
+
+DEVICE_WORDS = {"phone": ("телефон", "phone"), "computer": ("компьютер", "computer")}
+
+
+async def login_notice(uid: int, when: float, device: str | None, browser: str | None, system: str | None,
+                       ip: str) -> None:
+    """Письмо «Новый вход в Студию»: только время, устройство, браузер и адрес — без ссылок. Отказ почты вход не
+    отменяет (в журнал — id учётки и код отказа)."""
+    row = state.DB.execute("SELECT email, timezone FROM users WHERE id=? AND disabled=0", (uid,)).fetchone()
+    if row is None or not row["email"]:
+        return
+    try:
+        moment = datetime.fromtimestamp(when, ZoneInfo(row["timezone"])).strftime("%Y-%m-%d %H:%M ") + row["timezone"]
+    except (ValueError, KeyError):
+        moment = datetime.fromtimestamp(when, ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M UTC")
+    ru, en = DEVICE_WORDS.get(device, ("неизвестно", "unknown"))
+    unknown = ("неизвестен", "unknown")
+    try:
+        await account_mail.send(row["email"], "Студия: новый вход / Studio: new sign-in",
+                                "В вашу учётную запись Студии вошли с нового устройства, браузера или адреса.\n"
+                                f"Время: {moment}\nУстройство: {', '.join(filter(None, (ru, system)))}\n"
+                                f"Браузер: {browser or unknown[0]}\nАдрес: {ip}\n"
+                                "Если это были не вы, завершите эту сессию в «Настройки → Защита» и смените пароль.\n\n"
+                                "Someone signed in to your Studio account from a new device, browser or address.\n"
+                                f"Time: {moment}\nDevice: {', '.join(filter(None, (en, system)))}\n"
+                                f"Browser: {browser or unknown[1]}\nAddress: {ip}\n"
+                                "If it was not you, end this session in Settings → Security and change your password.")
+    except HTTPException as err:
+        log.warning("account email: login notice for user %d failed (%s)", uid, err.detail.get("code"))

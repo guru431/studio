@@ -31,6 +31,7 @@ import { language, locale, message, tr } from './i18n.js';
  * в адресе — список разделов, с разделом — его экран со ссылкой «‹ Настройки». */
 import { api, loadMe, me, toLogin } from './api.js';
 import { emailBlock } from './email-settings.js';
+import { totpBlock } from './totp-settings.js';
 import { accessBlock, emergencyBlock, securityEventsBlock, sessionsBlock } from './account-security.js';
 import { accountLookBlock, deviceLookBlock } from './appearance.js';
 import { openMobileNavigationEditor } from './mobile-navigation.js';
@@ -1758,7 +1759,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'security') {
-      group('security', emailBlock(), passwordBlock(), lockBlock(), sessionsBlock(host), accessBlock(host), emergencyBlock(host),
+      group('security', emailBlock(), totpBlock(host), passwordBlock(), lockBlock(), sessionsBlock(host), accessBlock(host), emergencyBlock(host),
         securityEventsBlock());
       return;
     }

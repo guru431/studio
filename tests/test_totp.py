@@ -1,0 +1,253 @@
+"""Приложение-аутентификатор (totp.py) и письмо о входе с нового устройства (email_accounts.notice_due)."""
+import base64
+import logging
+from dataclasses import replace
+
+import pytest
+
+import account_mail
+import state
+import totp
+from conftest import LOGIN_IP, login, make_user, signin
+
+PASSWORD = "password-123"
+BROWSER = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+                         " Chrome/120.0.0.0 Safari/537.36"}
+
+
+@pytest.fixture
+def mail(monkeypatch):
+    sent = []
+
+    async def send(email, subject, body):
+        sent.append((email, subject, body))
+
+    monkeypatch.setattr(account_mail, "send", send)
+    monkeypatch.setattr(account_mail, "configured", lambda config: True)
+    return sent
+
+
+def test_rfc6238_sha1_reference_values():
+    """RFC 6238, приложение B (SHA-1, секрет «12345678901234567890»): последние 6 цифр восьмизначных кодов."""
+    secret = b"12345678901234567890"
+    for moment, expected in ((59, "287082"), (1111111109, "081804"), (1234567890, "005924"), (2000000000, "279037")):
+        assert totp.code_at(secret, moment // totp.STEP) == expected
+    assert totp.matching_step(secret, "287082", 59 + totp.STEP) == 1          # прошлый шаг — в окне
+    assert totp.matching_step(secret, "287082", 59 + 2 * totp.STEP) is None   # позапрошлый — нет
+    assert totp.matching_step(secret, "287082", 59, after=1) is None          # уже принятый шаг
+
+
+def enable(studio) -> tuple[bytes, list[str]]:
+    setup = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD})
+    assert setup.status_code == 200 and setup.headers["cache-control"] == "no-store"
+    data = setup.json()
+    assert data["uri"].startswith("otpauth://totp/Studio:") and f"secret={data['secret']}&issuer=Studio" in data["uri"]
+    secret = base64.b32decode(data["secret"])
+    response = studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": wrong(studio, secret)})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    response = studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": code_now(studio, secret)})
+    assert response.status_code == 200, response.text
+    return secret, response.json()["codes"]
+
+
+def code_now(studio, secret, shift=0):
+    return totp.code_at(secret, int(studio.clock[0] // 30) + shift)
+
+
+def wrong(studio, secret):
+    """Код, которого нет в окне ±1 шаг."""
+    valid = {code_now(studio, secret, shift) for shift in (-1, 0, 1)}
+    return next(c for c in ("000000", "111111", "222222", "333333") if c not in valid)
+
+
+def totp_login(studio, ip=LOGIN_IP):
+    studio.c.cookies.clear()
+    response = login(studio, "owner", PASSWORD, ip=ip)
+    assert response.status_code == 303 and response.headers["location"] == "/account/totp"
+    return response
+
+
+def test_setup_needs_password_and_enables_second_factor_without_mail(studio, mail, caplog):
+    caplog.set_level(logging.INFO)
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    assert studio.c.post("/api/me/totp/setup", json={"password": "wrong-pass"}).status_code == 403
+    assert studio.c.get("/api/me").json()["totp"] == "off"
+    secret, codes = enable(studio)
+    assert len(codes) == totp.BACKUP_COUNT and all(len(c) == 11 and c[5] == "-" for c in codes)
+    me = studio.c.get("/api/me").json()
+    assert me["totp"] == "on" and me["totp_backup_left"] == totp.BACKUP_COUNT
+    row = state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (uid,)).fetchone()
+    assert base64.b32encode(secret) not in row[0]               # секрет — шифром
+    assert all(c.replace("-", "") not in str(list(state.DB.execute("SELECT * FROM totp_backup"))) for c in codes)
+    # вход: после пароля — страница кода приложения, письма нет
+    totp_login(studio)
+    assert mail == []
+    assert studio.c.get("/api/me").status_code == 401
+    studio.clock[0] += 31                                        # код включения уже принят — новый шаг
+    response = studio.c.post("/account/code", json={"code": code_now(studio, secret)})
+    assert response.status_code == 200 and response.json()["next"] == "/"
+    assert studio.c.get("/api/me").status_code == 200
+    for private in [base64.b32encode(secret).decode(), *codes]:
+        assert private not in caplog.text
+
+
+def test_same_code_is_not_accepted_twice_and_wrong_codes_count(studio, mail):
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    secret, _ = enable(studio)
+    studio.clock[0] += 31
+    used = code_now(studio, secret)
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": used}).status_code == 200
+    totp_login(studio)
+    response = studio.c.post("/account/code", json={"code": used})           # повтор того же шага
+    assert response.status_code == 400 and response.json()["detail"] == {
+        "code": "wrong_code", "message": "Неверный код", "left": 4}
+    kinds = [r[0] for r in state.DB.execute("SELECT kind FROM security_events WHERE user_id=?", (uid,))]
+    assert "totp_fail" in kinds
+    # неудачи учётки — общая пауза по всем вызовам: после FAILS неудач — 429 и с новым вызовом
+    for _ in range(3):
+        assert studio.c.post("/account/code", json={"code": used}).status_code == 400
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": used}).status_code == 400
+    assert studio.c.post("/account/code", json={"code": code_now(studio, secret, 1)}).status_code == 429
+
+
+def test_backup_code_signs_in_once(studio, mail):
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    _, codes = enable(studio)
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": codes[0].upper().replace("-", " ")}).status_code == 200
+    assert studio.c.get("/api/me").json()["totp_backup_left"] == totp.BACKUP_COUNT - 1
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": codes[0]}).status_code == 400
+    assert ("totp_backup_used",) in [tuple(r) for r in state.DB.execute(
+        "SELECT kind FROM security_events WHERE user_id=?", (uid,))]
+
+
+def test_bridge_enrollment_accepts_authenticator_code_in_code_field(studio, mail):
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    secret, codes = enable(studio)
+    body = {"login": "owner", "password": PASSWORD, "name": "pc"}
+    response = studio.c.post("/api/agent/enroll", json=body)
+    assert response.status_code == 428 and response.json()["detail"]["code"] == "totp_code" and mail == []
+    response = studio.c.post("/api/agent/enroll", json={**body, "code": wrong(studio, secret)})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    response = studio.c.post("/api/agent/enroll", json={**body, "code": code_now(studio, secret, 1)})
+    assert response.status_code == 201
+    assert studio.c.post("/api/agent/enroll", json={**body, "code": codes[1]}).status_code == 201
+
+
+def test_disable_needs_password_and_admin_can_reset_lost_phone(studio, mail):
+    owner = make_user(studio, "owner", is_admin=True)
+    signin(studio, "owner")
+    enable(studio)
+    assert studio.c.delete(f"/api/admin/users/{owner}/totp").status_code == 409      # своё — в «Защите»
+    assert studio.c.post("/api/me/totp/off", json={"password": "wrong-pass"}).status_code == 403
+    assert studio.c.post("/api/me/totp/off", json={"password": PASSWORD}).json() == {"status": "off"}
+    assert state.DB.execute("SELECT count(*) FROM totp_backup").fetchone()[0] == 0
+    friend = make_user(studio, "friend")
+    signin(studio, "friend")
+    enable(studio)
+    signin(studio, "owner")
+    users = {u["login"]: u for u in studio.c.get("/api/admin/users").json()["items"]}
+    assert users["friend"]["totp"] is True and users["owner"]["totp"] is False
+    assert studio.c.delete(f"/api/admin/users/{friend}/totp").status_code == 204
+    assert state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (friend,)).fetchone()[0] is None
+    assert ("totp_reset", None) in [tuple(r) for r in state.DB.execute(
+        "SELECT kind, ip FROM security_events WHERE user_id=?", (friend,))]
+    studio.c.cookies.clear()
+    assert login(studio, "friend", PASSWORD).headers["location"] == "/"
+
+
+def test_operator_resets_authenticator_of_the_only_admin(studio, mail, capsys):
+    """Единственный администратор без телефона и резервных кодов: сбросить в панели некому — `recover-email`."""
+    import manage
+    uid = make_user(studio, "owner", is_admin=True)
+    signin(studio, "owner")
+    enable(studio)
+    assert manage.recover_email({"STUDIO_ACCOUNT_LOGIN": "owner", "STUDIO_TOTP": "off"}) == 0
+    assert "приложение-аутентификатор сброшено" in capsys.readouterr().out
+    assert state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (uid,)).fetchone()[0] is None
+    assert state.DB.execute("SELECT count(*) FROM totp_backup").fetchone()[0] == 0
+    assert ("totp_reset", "operator") in [tuple(r) for r in state.DB.execute(
+        "SELECT kind, detail FROM security_events WHERE user_id=?", (uid,))]
+    studio.c.cookies.clear()
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/"
+
+
+def test_changed_data_key_turns_authenticator_off_without_locking_the_account(studio, mail, monkeypatch):
+    from cryptography.fernet import Fernet
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    enable(studio)
+    monkeypatch.setattr(state, "CFG", replace(state.CFG, data_key=Fernet.generate_key().decode()))
+    studio.c.cookies.clear()
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/"           # без второго шага
+    assert studio.c.get("/api/me").json()["totp"] == "reenter"
+
+
+def test_setup_ticket_is_bound_to_its_session_and_expires(studio, mail):
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    data = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD}).json()
+    code = totp.code_at(base64.b32decode(data["secret"]), int(studio.clock[0] // 30))
+    studio.clock[0] += totp.SETUP_SEC
+    response = studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": code})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "expired"
+    data = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD}).json()
+    signin(studio, "owner")                                                        # другая сессия
+    code = totp.code_at(base64.b32decode(data["secret"]), int(studio.clock[0] // 30))
+    assert studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": code}).json()["detail"]["code"] == "expired"
+
+
+# ---- письмо о входе с нового устройства ------------------------------------------------------------------------
+
+def browser_login(studio, ip=LOGIN_IP, headers=BROWSER):
+    studio.c.cookies.clear()
+    return studio.c.post("/login", data={"login": "owner", "password": PASSWORD},
+                         headers={"X-Forwarded-For": ip, **headers}, follow_redirects=False)
+
+
+def test_login_from_new_device_browser_or_address_sends_a_notice(studio, mail):
+    uid = make_user(studio, "owner")
+    assert browser_login(studio).status_code == 303 and mail == []        # первый вход — сам владелец
+    studio.clock[0] += 3600
+    browser_login(studio)                                                 # тот же браузер и адрес
+    browser_login(studio, headers={"User-Agent": BROWSER["User-Agent"].replace("120.0.0.0", "121.0.0.0")})
+    assert mail == []                                                     # новая версия браузера — не новое
+    browser_login(studio, ip="203.0.113.9")
+    assert len(mail) == 1
+    _, subject, body = mail[0]
+    assert "Studio" in subject and "203.0.113.9" in body and "Chrome 120" in body and "Windows" in body
+    assert "http" not in body and "owner" not in body
+    browser_login(studio, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"
+                                                 " AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"})
+    assert len(mail) == 2 and "iOS" in mail[1][2]
+    studio.clock[0] += 181 * 86400                                        # входы старше 180 дней не в счёт
+    browser_login(studio)
+    assert len(mail) == 2                                                 # и истории нет — снова «первый»
+    state.DB.execute("UPDATE users SET login_notice=0 WHERE id=?", (uid,))
+    browser_login(studio, ip="198.51.100.7")
+    assert len(mail) == 2
+
+
+def test_notice_switch_and_missing_smtp_stay_silent(studio, monkeypatch):
+    sent = []
+
+    async def send(email, subject, body):
+        sent.append(body)
+
+    monkeypatch.setattr(account_mail, "send", send)
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    assert studio.c.get("/api/me").json()["login_notice"] is True
+    assert studio.c.put("/api/me/login-notice", json={"enabled": False}).json() == {"enabled": False}
+    assert studio.c.get("/api/me").json()["login_notice"] is False
+    studio.c.put("/api/me/login-notice", json={"enabled": True})
+    monkeypatch.setattr(account_mail, "configured", lambda config: False)       # SMTP не настроен
+    browser_login(studio, ip="203.0.113.9")
+    assert sent == []

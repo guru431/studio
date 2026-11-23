@@ -1,9 +1,10 @@
 """Компьютеры с мостом Claude Code: привязка и учёт (спека 2026-10-28-studio-claude-code-design, 6.1, 6.2, 6.4;
 протокол docs/superpowers/specs/2026-10-28-studio-code-bridge-protocol.md, §1).
 
-- Привязка — `POST /api/agent/enroll {login, password, name}` без сессии (`auth.OPEN_API`): учётка студии —
+- Привязка — `POST /api/agent/enroll {login, password, name[, code]}` без сессии (`auth.OPEN_API`): учётка студии —
   право подключать компьютеры, поэтому логин и пароль проверяет `auth.check_password` — тем же путём, с теми
-  же паузами и общим счётом неудач, что и `/login`. Ключ устройства — случайный, в ответе один раз, в базе —
+  же паузами и общим счётом неудач, что и `/login`; второй фактор — код приложения-аутентификатора (`totp.verify`) или,
+  без него, код из письма — в поле `code`. Ключ устройства — случайный, в ответе один раз, в базе —
   только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — `DELETE /api/agents/<id>` из
   студии или `DELETE /api/agent/enroll` самим мостом (ключ — заголовком `Authorization`; «Отключиться» в окне
   моста); канал на связи закрывается 4401 (`bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
@@ -35,6 +36,7 @@ import lock_policy
 import security
 import project_access
 import state
+import totp
 
 log = logging.getLogger("studio")
 router = APIRouter()
@@ -73,7 +75,7 @@ async def enroll(request: Request):
         raise _refuse(ip, 422, "invalid", "неверные данные запроса")
     name, password, agent_name = auth.identity_name(fields[0].strip().lower()), fields[1], fields[2].strip()
     code = data.get("code", "")
-    if not isinstance(code, str) or len(code) > 6:
+    if not isinstance(code, str) or len(code) > 32:
         raise _refuse(ip, 422, "invalid", "неверный код входа")
     if not 1 <= len(agent_name) <= NAME_MAX or any(unicodedata.category(c).startswith("C") for c in agent_name):
         raise _refuse(ip, 422, "name", "имя компьютера — от 1 до 64 знаков без управляющих")
@@ -84,7 +86,13 @@ async def enroll(request: Request):
         raise _refuse(ip, 401, "login", "неверный логин или пароль")
     if not email_accounts.has_email(uid):
         raise _refuse(ip, 428, "email_required", "Сначала подтвердите почту в браузере Студии")
-    if state.DB.execute("SELECT email_codes FROM users WHERE id=?", (uid,)).fetchone()[0]:
+    if totp.enabled(uid):                # приложение-аутентификатор — вместо письма, как у входа
+        if not code:
+            raise HTTPException(428, {"code": "totp_code",
+                                      "message": "Введите код приложения-аутентификатора и повторите пароль"})
+        if not totp.verify(uid, code, "bridge", ip):
+            raise _refuse(ip, 400, "wrong_code", "Неверный код приложения-аутентификатора")
+    elif state.DB.execute("SELECT email_codes FROM users WHERE id=?", (uid,)).fetchone()[0]:
         if not code:
             await email_accounts.login_code(uid, request, "", "bridge")
             raise HTTPException(428, {"code": "email_code", "message": "Введите код из письма и повторите пароль"})

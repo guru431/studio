@@ -25,7 +25,7 @@ verify-backup [ПУТЬ] — поднимется ли студия из коп�
 CHECK_KEY: его показывает панель, а провал служба сообщает администраторам (admin.notify_failed_check).
 Ночной юнит копии зовёт verify-backup сразу после backup.
 
-set-email — недостающая почта учётки; recover-email — замена почты и/или выключение кодов входа учётки, у
+set-email — недостающая почта учётки; recover-email — замена почты, выключение кодов входа и/или сброс приложения-аутентификатора учётки, у
 которой нет доступа к ящику или сломан SMTP (recover_email). Обе читают значения из stdin, выводят только id.
 """
 import json
@@ -182,6 +182,8 @@ def recover_email(values: dict[str, str]) -> int:
     import security_log
     login = values.get("STUDIO_ACCOUNT_LOGIN", "").strip().lower()
     codes_off = values.get("STUDIO_EMAIL_CODES", "").strip().lower() == "off"
+    # единственный администратор потерял телефон и резервные коды: сбросить приложение в панели некому
+    totp_off = values.get("STUDIO_TOTP", "").strip().lower() == "off"
     try:
         email = (email_accounts.email_address(values["STUDIO_ACCOUNT_EMAIL"])
                  if values.get("STUDIO_ACCOUNT_EMAIL", "").strip() else None)
@@ -189,8 +191,8 @@ def recover_email(values: dict[str, str]) -> int:
     except (ValueError, RuntimeError):
         print("нужны корректные STUDIO_ACCOUNT_LOGIN, STUDIO_ACCOUNT_EMAIL и конфигурация", file=sys.stderr)
         return 2
-    if email is None and not codes_off:
-        print("нужен STUDIO_ACCOUNT_EMAIL или STUDIO_EMAIL_CODES=off", file=sys.stderr)
+    if email is None and not codes_off and not totp_off:
+        print("нужен STUDIO_ACCOUNT_EMAIL, STUDIO_EMAIL_CODES=off или STUDIO_TOTP=off", file=sys.stderr)
         return 2
     if not re.fullmatch(auth.LOGIN_RE, login) or not cfg.db_path.is_file():
         print("учётка или база не найдена", file=sys.stderr)
@@ -212,6 +214,10 @@ def recover_email(values: dict[str, str]) -> int:
             if codes_off:
                 conn.execute("UPDATE users SET email_codes=0 WHERE id=?", (uid,))
                 security_log.record(uid, "email_codes_off", detail="operator")
+            if totp_off:
+                conn.execute("UPDATE users SET totp_secret=NULL, totp_step=0 WHERE id=?", (uid,))
+                conn.execute("DELETE FROM totp_backup WHERE user_id=?", (uid,))
+                security_log.record(uid, "totp_reset", detail="operator")
             conn.execute("DELETE FROM email_tokens WHERE user_id=?", (uid,))
             auth.end_sessions(uid)
             conn.execute("COMMIT")
@@ -222,7 +228,8 @@ def recover_email(values: dict[str, str]) -> int:
         except BaseException:
             conn.execute("ROLLBACK")
             raise
-        done = (["почта заменена"] if email is not None else []) + (["коды входа выключены"] if codes_off else [])
+        done = ((["почта заменена"] if email is not None else []) + (["коды входа выключены"] if codes_off else [])
+                + (["приложение-аутентификатор сброшено"] if totp_off else []))
         print(f"пользователь {uid}: {', '.join(done)}, сеансы закрыты")
         return 0
     finally:

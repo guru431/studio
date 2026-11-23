@@ -87,7 +87,7 @@ def _enroll(h) -> int:
         cfg = setup.apply(h, form)
     except enroll.EnrollError as e:
         if e.code == "email_code":
-            form["email_code"] = input(tr("Код из письма: ")).strip()
+            form["email_code"] = input(tr("Код из письма или приложения: ")).strip()
             try:
                 cfg = setup.apply(h, form)
             except enroll.EnrollError as retry:

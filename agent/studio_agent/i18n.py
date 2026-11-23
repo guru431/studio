@@ -83,6 +83,10 @@ EN = {
     "Введите код из письма и повторите пароль": "Enter the code from the email and repeat the password",
     "Код неверен или истёк. Для нового письма оставьте поле кода пустым":
         "The code is incorrect or expired. Leave the code field empty to get a new email",
+    "Введите код приложения-аутентификатора или резервный код и повторите пароль":
+        "Enter the authenticator app code or a backup code and repeat the password",
+    "Код приложения неверен. Введите текущий код или резервный код":
+        "The app code is incorrect. Enter the current code or a backup code",
     "Сначала подтвердите почту в браузере Студии": "Confirm your email in the Studio browser first",
     "Папки нет": "Folder not found",
     "PIN — от 4 до 8 цифр": "PIN must be 4 to 8 digits",
@@ -144,7 +148,7 @@ EN = {
     "Логин или email": "Login or email",
     "Пароль": "Password",
     "Пароль нужен один раз и на компьютере не хранится": "The password is needed once and is not stored on the computer",
-    "Код из письма": "Code from email",
+    "Код из письма или приложения": "Code from email or app",
     "Имя компьютера": "Computer name",
     "PIN (по желанию)": "PIN (optional)",
     "Ещё раз": "Repeat",
@@ -208,7 +212,7 @@ EN = {
     "нет": "no",
     "Логин": "Login",
     "Пароль: ": "Password: ",
-    "Код из письма: ": "Code from email: ",
+    "Код из письма или приложения: ": "Code from email or app: ",
     "Привязан: компьютер {0}. Работающий мост подхватит ключ после перезапуска.":
         "Linked: computer {0}. A running bridge will pick up the key after a restart.",
     "Папки проектов:": "Project folders:",

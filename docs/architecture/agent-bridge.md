@@ -107,6 +107,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.47.0 | привязка (`POST /api/agent/enroll`, не канал): отказы `428 totp_code` и `400 wrong_code` учётки с приложением-аутентификатором — словами окна и консоли, код приложения или резервный код — в поле «Код из письма или приложения» (`code`); прежний мост показывает их «Студия недоступна (HTTP 428/400)» | — |
 | 0.46.0 | `hello.deepseek` (каталог `{version, models, efforts, defaults, settings}`), `hello.deepseek_models` (`models`, `engine: deepseek`), `hello.deepseek_usage` (баланс) — DeepSeek Harness, четвёртый помощник ([ниже](#deepseek-harness-0460)); `usage.balance`, `history.notice`, отказ `writer_active`; ветвление и подагенты — `unsupported` | §2.2, §4, §9, §21, §22 |
 | 0.45.0 | `hello.mirror_groups` — группы копий: `root`/`folder` в `mirror_identity`, причины пропуска `reasons`; база SQLite с журналом — пропуск, а не отказ | §23.3 |
 | 0.44.0 | `hello.git_compare` — сравнение выбранного изменённого текстового файла с HEAD, только владельцу | §4 |
