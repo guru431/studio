@@ -86,3 +86,33 @@ def test_jobs_panel_cancel_by_touch_in_webkit(webkit, live):
         page.locator(f"{row} .jobs-cancel").tap()
         until(page, f"!document.querySelector(\"{row}\")")
         assert page.evaluate(NO_OVERFLOW) and not errors
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_jobs_panel_names_what_holds_the_card_and_how_long(browser, live, width):
+    """00:I3: ждущий ролик в «В работе» — «карта занята: ролик · ещё примерно 9 мин» (идущий ролик, медиана недавних
+    готовых — 600 с, прошло 60); строка влезает в панель."""
+    login = f"jobscard{width}"
+    uid = live.add_user(login)
+    now, conn = time.time(), 900000 + width
+    live_sql(live, "INSERT INTO connections(id, user_id, name, kind, base_url, token_enc, sections, created)"
+                   " VALUES (?, ?, 'srvllm', 'srvllm', 'http://10.77.1.15:4000', x'00', '[\"video\"]', ?)", (conn, uid, now))
+    for vid, state_, created, finished in ((f"{login}-old", "done", now - 4000, now - 3400),
+                                           (f"{login}-run", "in_progress", now - 60, None),
+                                           (f"{login}-wait", "queued", now - 30, None)):
+        live_sql(live, "INSERT INTO videos(id, user_id, connection_id, source_media_id, prompt, seconds, quality, smooth,"
+                       " state, progress, detail, created, finished) VALUES (?, ?, ?, 'nope', 'p', 5, 'standard', 1, ?, 0,"
+                       " 'в очереди', ?, ?)", (vid, uid, conn, state_, created, finished))
+    row = f"#jobs-running .jobs-row[data-id='{login}-wait']"
+    r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("wait", JOBS_POLLED),
+        ("click", "#jobs"), ("wait", is_open("#jobs-panel")),
+        ("wait", f"document.querySelector(\"{row} .jobs-detail\")?.textContent.includes('карта занята')"),
+        ("eval", "detail", f"document.querySelector(\"{row} .jobs-detail\").textContent"),
+        ("eval", "busy", f"document.querySelector(\"#jobs-running .jobs-row[data-id='{login}-run'] .jobs-detail\").textContent"),
+        ("eval", "fits", f"[...document.querySelectorAll('#jobs-running .jobs-row')].every(r => r.scrollWidth <= r.clientWidth + 1) && {NO_OVERFLOW}")],
+        width=width, height=900, mobile=width == 320)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["detail"].startswith("в очереди · карта занята: ролик · ещё примерно 9 мин · "), v
+    assert "карта занята" not in v["busy"] and v["fits"]
+    assert not problems(r), problems(r)

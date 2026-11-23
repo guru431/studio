@@ -11,6 +11,8 @@
 `since` — `now` прошлого ответа: часы устройства не участвуют; граница включена — задание, кончившееся
 в тот же миг, не теряется, повтор страница отсекает по id. У идущих — `cancel`: адрес отмены своего раздела
 (чат — остановка ответа), им пользуется «Отменить» панели; блокировка раздела закрывает его, как любой запрос.
+Идущее, что ждёт карту шлюза, несёт `card` (card.py): вид задания на карте, примерно минут, сколько ждущих раньше —
+чужие задания только видом и числами.
 
 Только база (строки своего `user_id`, индексы `*_user_created` и `messages_streaming`) и память
 модулей (`detail` идущих — те же слова, что у раздела). Ни одного запроса к шлюзу. Журнал — ничего:
@@ -20,6 +22,7 @@ from math import isfinite
 
 from fastapi import APIRouter, Request
 
+import card
 import chat
 import clock
 import lock_policy
@@ -59,7 +62,14 @@ def _item(section: str, row, title: str, detail: str, href: str) -> dict:
            "started": row["created"], "finished": finished, "href": href}
     if finished is None:
         out["cancel"] = CANCEL[section].format(row["id"])
+        _card(out, section, row["id"])
     return out
+
+
+def _card(item: dict, section: str, job_id: str) -> None:
+    """Задание ждёт карту — `card` (card.info: вид держащего, примерно минут, сколько ждущих раньше)."""
+    if (queue := card.info(section, job_id)) is not None:
+        item["card"] = queue
 
 
 def _rows(table: str, uid: int, running: tuple, after: float, columns: str = "*",
@@ -105,6 +115,7 @@ def _photo_text(uid: int, after: float) -> list:
                 "started": job.started, "finished": job.finished_at, "href": "photo"}
         if job.finished_at is None:
             item["cancel"] = CANCEL["photo"].format(job.id)
+            _card(item, "photo", job.id)
         out.append(item)
     return out
 
@@ -231,10 +242,12 @@ def _chat(uid: int) -> list:
     for row in rows:
         live = chat.STREAMS.get(row["id"])
         detail = "пишет ответ" if live is not None and live.content else "жду ответ модели"
-        out.append({"section": "chat", "id": row["id"], "state": "running",
-                    "title": f"Ответ · {row['title'] or 'новый диалог'}", "detail": detail,
-                    "started": row["created"], "finished": None, "href": f"chat/{row['chat_id']}",
-                    "cancel": f"/api/chats/{row['chat_id']}/stop"})
+        item = {"section": "chat", "id": row["id"], "state": "running",
+                "title": f"Ответ · {row['title'] or 'новый диалог'}", "detail": detail,
+                "started": row["created"], "finished": None, "href": f"chat/{row['chat_id']}",
+                "cancel": f"/api/chats/{row['chat_id']}/stop"}
+        _card(item, "chat", row["id"])
+        out.append(item)
     return out
 
 

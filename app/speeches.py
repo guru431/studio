@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 
 import audio
 import cleaner_route
+import card
 import clock
 import connections
 import db
@@ -132,6 +133,7 @@ class Job:
     voice: str
     text: str
     stage: str = "готовлю"
+    stage_at: float = 0.0                             # начало «озвучиваю» или ожидания карты (card.py)
     task: "asyncio.Task | None" = None
     by_user: bool = False
     files: list = field(default_factory=list)
@@ -240,13 +242,14 @@ def queued_at(row) -> float:
 
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
-    return {"id": row["id"], "chat_id": row["chat_id"], "voice_name": row["voice_name"],
+    return card.mark({"id": row["id"], "chat_id": row["chat_id"], "voice_name": row["voice_name"],
             "connection_id": row["connection_id"], "language": row["language"],
             "text": row["text"], "voice": row["voice"], "model": row["model"], "state": row["state"],
             "detail": job.stage if job is not None and row["state"] == "working"
             else waiting(row) if row["state"] == "queued" else row["detail"],
             "media_id": row["media_id"], "duration": row["duration"], "created": row["created"],
-            "finished": row["finished"], "parts": job.ready if job is not None and row["state"] == "working" else 0}
+            "finished": row["finished"], "parts": job.ready if job is not None and row["state"] == "working" else 0},
+        "speech", row)
 
 
 def _store(job: Job) -> None:
@@ -369,12 +372,12 @@ async def _say(job: Job, text: str, voice, label: str) -> tuple[bytes, str]:
             waited_from = now if waited_from is None else waited_from
             if now - waited_from >= WAIT_MAX_SEC:
                 raise JobError(f"карта занята дольше {WAIT_MAX_SEC // 60} минут — попробуйте позже") from None
-            job.stage = f"жду карту · {label}"
+            job.stage, job.stage_at = f"жду карту · {label}", waited_from
             _store(job)
             await clock.SLEEP(RETRY_SEC)
             if job.model == "qwen3-tts":             # кончившуюся генерацию картинок снять, не ждать конца аренды
                 await speech.free_card(job.conn)
-            job.stage = label
+            job.stage, job.stage_at = label, clock.NOW()
             _store(job)
 
 
@@ -396,6 +399,7 @@ async def run(job: Job) -> None:
                     await speech.free_card(job.conn)
             else:
                 voice = job.voice
+            job.stage_at = clock.NOW()
             for n, piece in enumerate(pieces, 1):
                 label = f"озвучиваю {n} из {len(pieces)}"
                 job.stage = label

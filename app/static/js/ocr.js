@@ -42,7 +42,7 @@ import { clearRead, readAloud } from './speech-read.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { DOCUMENT_PHOTO_SIDE, resizePhoto } from './resize-photo.js';
-import { el, field, openDialog, plural, renameDialog, words } from './ui.js';
+import { el, field, openDialog, plural, renameDialog, withCard, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
@@ -151,7 +151,7 @@ function build(view, ctx) {
   /* список */
   const paintRows = pickerList(list, { cls: 'ocr-item', moreId: 'ocr-more', empty: tr("Здесь появятся ваши документы"),
     name: (item) => item.name,
-    state: (item) => [tr("{0} стр.", item.pages), serverMessage(item.detail),
+    state: (item) => [tr("{0} стр.", item.pages), withCard(serverMessage(item.detail), item.card),
       item.failed_pages ? tr("не распознано: {0}", item.failed_pages) : ''].filter(Boolean).join(' · '),
     pick(id) {
       panel(false);
@@ -623,7 +623,7 @@ function build(view, ctx) {
       nodes.push(busy.box);
     } else if (item.state !== 'done') {
       note.className = item.state === 'error' ? 'error' : 'muted';
-      put(note, serverMessage(item.detail));
+      put(note, withCard(serverMessage(item.detail), item.card));
       nodes.push(note);
     }
     const n = item.pages.length;

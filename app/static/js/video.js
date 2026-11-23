@@ -33,7 +33,7 @@ import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { sectionMcp } from './mcp-sections.js';
-import { button, el, openDialog, words } from './ui.js';
+import { button, el, openDialog, withCard, words } from './ui.js';
 import { modelFilter, tableHead, timeOf, viewSwitch } from './views.js';
 import { viewerNavigation } from './viewer-navigation.js';
 
@@ -435,7 +435,7 @@ function build(view, ctx) {
       const bar = el('span');
       bar.style.width = `${item.progress}%`;
       over.append(el('span', { class: 'ring', 'aria-hidden': 'true' }),
-        el('p', { class: 'video-state' }, cap(serverMessage(item.detail)) || tr("В очереди")),
+        el('p', { class: 'video-state' }, withCard(cap(serverMessage(item.detail)) || tr("В очереди"), item.card)),
         el('div', { class: 'video-bar', role: 'progressbar', 'aria-label': tr("Ход ролика"), 'aria-valuemin': '0',
           'aria-valuemax': '100', 'aria-valuenow': String(item.progress) }, bar),
         el('b', { class: 'card-time' }, busyText(running.get(item.id))));
@@ -712,7 +712,7 @@ function build(view, ctx) {
         if (time.closest('.cell-when')) time.title = cap(serverMessage(item.detail));           // вид «Таблица»
       }
       const state = card.querySelector('.video-state');
-      if (state) state.textContent = cap(serverMessage(item.detail)) || tr("В очереди");
+      if (state) state.textContent = withCard(cap(serverMessage(item.detail)) || tr("В очереди"), item.card);
       const bar = card.querySelector('.video-bar');
       if (bar) {
         bar.setAttribute('aria-valuenow', String(item.progress));

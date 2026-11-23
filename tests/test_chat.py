@@ -912,6 +912,39 @@ def test_history_wipe_refuses_a_turn_started_during_it(studio, monkeypatch):
     assert studio.c.get("/api/chats").json() == {"items": []}
 
 
+# ---- замена подключения во всех диалогах -------------------------------------------
+
+def test_move_chats_takes_only_own_listed_chats_of_one_connection(studio, monkeypatch):
+    """POST /api/chats/move: свои диалоги без подключения (удалено) — одним запросом на пару раздела «Чат»; корзина,
+    чужие и диалоги другого подключения не трогаются; неотмеченная модель и чужое подключение — отказ без перемен;
+    диалог с MCP на прямую модель не переходит (`kept`)."""
+    gw = add_gateway(studio)
+    cloud = add_connection(studio, name="Облако", chat_models=("cloud-chat",))
+    gone, kept, trashed, mcp = (new_chat(studio, connection_id=cloud, model="cloud-chat") for _ in range(4))
+    stay = new_chat(studio)
+    model = studio.c.get(f"/api/chats/{stay}").json()["chat"]["model"]
+    assert studio.c.delete(f"/api/chats/{trashed}").status_code == 204
+    other = make_user(studio, "other")
+    state.DB.execute("INSERT INTO chats(id, user_id, connection_id, model, created, updated) VALUES ('x', ?, NULL, 'm', 0, 0)",
+                     (other,))
+    assert studio.c.delete(f"/api/connections/{cloud}").status_code == 204
+    refused = studio.c.post("/api/chats/move", json={"connection_id": gw, "model": "no-such-model"})
+    assert refused.status_code == 422
+    assert studio.c.post("/api/chats/move", json={"connection_id": cloud, "model": "cloud-chat"}).status_code == 404
+    second = add_connection(studio, name="Прямое", chat_models=("cloud-chat",))
+    state.DB.execute("UPDATE chats SET mcp_ids = '[7]' WHERE id = ?", (mcp,))
+    monkeypatch.setattr(chat.mcp_client, "present", lambda uid, raw: [7] if raw == "[7]" else [])
+    r = studio.c.post("/api/chats/move", json={"connection_id": second, "model": "cloud-chat"})
+    assert r.status_code == 200 and r.json() == {"moved": 2, "kept": 1}
+    r = studio.c.post("/api/chats/move", json={"from_connection_id": None, "connection_id": gw, "model": model})
+    assert r.json() == {"moved": 1, "kept": 0}                 # MCP через сервер — можно
+    rows = {r["id"]: (r["connection_id"], r["model"]) for r in state.DB.execute("SELECT * FROM chats")}
+    assert rows[gone] == rows[kept] == (second, "cloud-chat") and rows[mcp] == (gw, model)
+    assert rows[trashed] == (None, "cloud-chat") and rows["x"] == (None, "m") and rows[stay] == (gw, model)
+    r = studio.c.post("/api/chats/move", json={"from_connection_id": second, "connection_id": gw, "model": model})
+    assert r.json() == {"moved": 2, "kept": 0}
+
+
 # ---- неотправленные вложения ---------------------------------------------------
 
 def _media_count() -> int:

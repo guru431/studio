@@ -1536,21 +1536,36 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     const fail = el('p', { class: 'error' });
     const used = sectionsText(conn.sections);
     const chats = el('p', { class: 'muted', id: 'conn-delete-chats' });
+    // их можно сразу перевести на другую модель «Чата» (POST /api/chats/move до удаления); умолчание раздела — выбрано
+    const chat = sectionOf('chat');
+    const move = el('select', { class: 'input', id: 'conn-delete-move' }, el('option', { value: '' }, tr("не переводить")),
+      ...(chat?.links || []).filter(({ connection: c }) => c.id !== conn.id)
+        .flatMap(({ connection: c, models }) => models.map((m) => el('option', { value: `${c.id}:${m}` }, `${modelLabel(m)} · ${c.name}`))));
+    const preferred = chat?.default ? `${chat.default.connection_id}:${chat.default.model}` : '';
+    if ([...move.options].some((o) => o.value === preferred)) move.value = preferred;
+    const moveRow = field(tr("Перевести диалоги на"), move, 'move');
+    moveRow.hidden = true;
     const dialog = openDialog(host, { id: 'conn-delete-dialog', title: tr("Удалить подключение?"), actions: [yes], body: [
       el('p', {}, `«${conn.name}» — ${conn.base_url}`),
       el('p', { class: 'muted' }, used ? tr("Подключение участвует в разделах: {0}. Оно уйдёт из всех.", used) : tr("Подключение не участвует ни в одном разделе.")),
-      chats, fail] });
+      chats, moveRow, fail] });
     // свои диалоги на подключении (в панели администратора чужих диалогов нет): после удаления их ход попросит
     // выбрать модель (`connections.delete` обнуляет `connection_id`)
+    let count = 0;
     if (direct) {
       api('GET', '/api/chats').then(({ items }) => {
-        const count = items.filter((c) => c.connection_id === conn.id).length;
+        count = items.filter((c) => c.connection_id === conn.id).length;
         if (count) chats.textContent = tr("Диалогов на этом подключении: {0}. Они останутся, но продолжить их можно будет только с другой моделью.", count);
+        moveRow.hidden = !count || move.options.length < 2;
       }).catch(() => {});
     }
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
+        if (count && !moveRow.hidden && move.value) {
+          const [connId, ...rest] = move.value.split(':');
+          await api('POST', '/api/chats/move', { from_connection_id: conn.id, connection_id: Number(connId), model: rest.join(':') });
+        }
         await api('DELETE', `${connBase}/${conn.id}`);
         dialog.close();
         await changed();

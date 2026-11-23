@@ -56,7 +56,7 @@ import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { SERIES_MAX, seriesControl } from './series.js';
 import { modelLabel } from './settings.js';
-import { button, el, field, openDialog, words } from './ui.js';
+import { button, el, field, openDialog, withCard, words } from './ui.js';
 import { modelFilter, tableHead, timeOf, viewSwitch } from './views.js';
 import { viewerNavigation } from './viewer-navigation.js';
 
@@ -540,7 +540,7 @@ function build(view, ctx) {
     const item = entry.item;
     if (item.state === 'queued') return cap(serverMessage(item.detail));      // «в очереди серии · 2 из 3» — без таймера
     const spent = clock(item.elapsed + (Date.now() - entry.at) / 1000);
-    return `${item.state === 'cancelling' ? tr("Отменяю") : tr("Генерирую")} · ${spent}`;
+    return withCard(`${item.state === 'cancelling' ? tr("Отменяю") : tr("Генерирую")} · ${spent}`, item.card);
   }
 
   /** Картинка карточки: миниатюра; в превью — и полный файл, если миниатюры мало (srcset). */
