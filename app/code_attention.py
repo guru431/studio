@@ -17,6 +17,11 @@ def completed(aid: int, project: str, chat: str, finished: float | None = None) 
     return revision
 
 
+def forget(aid: int, chat: str) -> None:
+    """Удалённая сессия: её отметка «непрочитано» и просмотры (`code_attention_seen` — каскадом)."""
+    state.DB.execute("DELETE FROM code_attention WHERE agent_id = ? AND chat = ?", (aid, chat))
+
+
 def revision(aid: int, project: str, chat: str) -> str | None:
     row = state.DB.execute("SELECT revision FROM code_attention WHERE agent_id = ? AND project = ? AND chat = ?",
                            (aid, project, chat)).fetchone()

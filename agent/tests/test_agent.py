@@ -303,7 +303,7 @@ def test_hello(agent):
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
                              "deepseek_models": False, "deepseek_usage": True, "open_asks": True,
-                             "answer_takeover": True}
+                             "answer_takeover": True, "chat_manage": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -605,6 +605,36 @@ async def test_answer_from_another_window_takes_over_when_the_owner_is_not_watch
     assert (await a.handle(req("answer", **answer, watched=[other])))[0]["ok"]
     assert {"k": "ownership", "owner": other} in [f["e"] for f in a.sent if f.get("t") == "ev"]
     await settle(a)
+
+
+async def test_rename_and_delete_claude_session_with_the_sdk(agent, root, monkeypatch):
+    """07:I8: Claude — `rename_session`/`delete_session` SDK в папке проекта; сессии нет — `not_found`; неверное
+    название — `invalid`; идёт ход — `running`; OpenCode и DeepSeek Harness — честный `unsupported`."""
+    calls = []
+
+    def rename(chat, title, directory=None):
+        calls.append(("rename", chat, title, directory))
+
+    def delete(chat, directory=None):
+        calls.append(("delete", chat, directory))
+        raise FileNotFoundError(chat)
+
+    monkeypatch.setattr(sessions, "rename_session", rename)
+    monkeypatch.setattr(sessions, "delete_session", delete)
+    await opened(agent)
+    pid, project = projects.pid("demo"), str(root / "demo")
+    assert (await agent.handle(req("chat_rename", project=pid, chat=CHAT, title="Своё")))[0]["ok"]
+    assert (await agent.handle(req("chat_delete", project=pid, chat=CHAT)))[0]["code"] == "not_found"
+    assert calls == [("rename", CHAT, "Своё", project), ("delete", CHAT, project)]
+    for title in ("", " с пробелом", "a\nb", "x" * 201, None):
+        assert (await agent.handle(req("chat_rename", project=pid, chat=CHAT, title=title)))[0]["code"] == "invalid"
+    agent.opencode = SimpleNamespace(catalog={"models": []}, live=lambda: {})
+    res = (await agent.handle(req("chat_delete", engine="opencode", project=pid, chat=CHAT)))[0]
+    assert res["code"] == "unsupported"
+    monkeypatch.setattr(agent.runner, "_turn", lambda *_: object())
+    assert (await agent.handle(req("chat_delete", project=pid, chat=CHAT)))[0]["code"] == "running"
+    assert len(calls) == 2
+    assert agent.hello()["chat_manage"] is True
 
 
 async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):

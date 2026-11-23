@@ -324,6 +324,22 @@ class FakeMachine:
                  for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
 
+    def _op_chat_rename(self, req, events):
+        """Как мост 0.47.0 (§25): помощник хранит своё название; идёт ход — `running`."""
+        chat = self._chat(req)
+        if req["chat"] in self.running:
+            raise Refused("running", "Дождитесь завершения задания")
+        chat["title"] = req["title"]
+        return {}
+
+    def _op_chat_delete(self, req, events):
+        _, project = self._project(req)
+        self._chat(req)
+        if req["chat"] in self.running:
+            raise Refused("running", "Дождитесь завершения задания")
+        del project["chats"][req["chat"]]
+        return {}
+
     def _op_file_suggestions(self, req, events):
         _, project = self._project(req)
         return {"items": [path for path in sorted(project.get("files", {})) if req["query"].casefold() in path.casefold()][:50],

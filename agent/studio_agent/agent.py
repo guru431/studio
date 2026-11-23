@@ -81,6 +81,8 @@ OPS = {
     "file_suggestions": ("project", "query"),
     "chat_search": ("project", "query"),
     "chat_fork": ("project", "chat", "message_id"),
+    "chat_rename": ("project", "chat", "title"),
+    "chat_delete": ("project", "chat"),
     "subagents": ("project", "chat"),
     "subagent_history": ("project", "chat", "request_id"),
     "worktrees": ("project",),
@@ -201,7 +203,8 @@ class Agent:
                  "codex_models": True, "opencode_models": self.opencode is not None,
                  "deepseek_models": self.deepseek is not None, "deepseek_usage": True,
                  "open_asks": True,  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
-                 "answer_takeover": True}  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
+                 "answer_takeover": True,
+                 "chat_manage": True}  # 0.47.0: переименовать и удалить сессию (§25)  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -450,7 +453,7 @@ class Agent:
             key = "pid" if op == "projects" else "project"
             result = {**result, "items": [{k: v for k, v in i.items() if k != "dir"}
                                           for i in result.get("items", []) if i.get(key) in scope]}
-        if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork"):
+        if op in ("turn", "save", "file_operation", "worktree_create", "chat_fork", "chat_rename", "chat_delete"):
             self._metadata.invalidate(frame.get("project"))
         return result
 
@@ -565,6 +568,9 @@ class Agent:
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
+        if name == "title":
+            return (isinstance(value, str) and 0 < len(value) <= sessions.TITLE_MAX and value == value.strip()
+                    and not any(ord(c) < 32 for c in value))
         if name == "message_id":
             return (value is None and op == "chat_fork" or isinstance(value, str)
                     and 1 <= len(value) <= 100 and not any(ord(c) < 32 for c in value))
@@ -786,6 +792,30 @@ class Agent:
                 except Exception:
                     break
             raise
+
+    async def _op_chat_rename(self, frame, after):
+        await self._manage_chat(frame, "rename_chat", sessions.rename, frame["title"])
+        return {}
+
+    async def _op_chat_delete(self, frame, after):
+        await self._manage_chat(frame, "delete_chat", sessions.delete)
+        self._histories.clear()
+        return {}
+
+    async def _manage_chat(self, frame, method, claude, *args):
+        """Переименовать или удалить сессию штатным способом помощника; идёт ход или ветвление — `running`.
+        OpenCode и DeepSeek Harness такого по ACP не дают — честный отказ."""
+        engine = frame.get("engine", "claude")
+        if engine in ("opencode", "deepseek"):
+            raise Refused("unsupported", f"{NAMES[engine]} не даёт переименовать или удалить сессию из Студии")
+        project = await self._project(frame)
+        runner = self._runner(frame)
+        if (engine, frame["chat"]) in self._forking or runner._turn(frame["project"], frame["chat"]) is not None:
+            raise Refused("running", "Дождитесь завершения задания")
+        if engine == "codex":
+            await getattr(runner, method)(project, frame["chat"], *args)
+        else:
+            await asyncio.to_thread(claude, project, frame["chat"], *args)
 
     async def _op_subagents(self, frame, after):
         if frame.get("engine") == "deepseek":

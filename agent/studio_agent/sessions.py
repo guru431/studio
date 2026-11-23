@@ -11,7 +11,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-from claude_agent_sdk import get_session_info, get_session_messages, list_sessions, tag_session
+from claude_agent_sdk import (delete_session, get_session_info, get_session_messages, list_sessions, rename_session,
+                              tag_session)
 from claude_agent_sdk._internal.sessions import _resolve_session_file_path
 
 from . import diffs, history_images, limits, permissions, timeline
@@ -187,6 +188,23 @@ def exists(project: Path, chat: str) -> bool:
     if get_session_info(chat, directory=str(project)) is not None:
         return True
     return bool(get_session_messages(chat, directory=str(project), limit=1))
+
+
+def rename(project: Path, chat: str, title: str) -> None:
+    """Своё название сессии — запись `custom-title` в её файле (SDK `rename_session`, как `/rename` Claude Code):
+    список берёт последнюю (`custom_title` раньше `summary`)."""
+    try:
+        rename_session(chat, title, directory=str(project))
+    except FileNotFoundError:
+        raise Refused("not_found", "нет такого чата") from None
+
+
+def delete(project: Path, chat: str) -> None:
+    """Удалить сессию штатно — SDK `delete_session`: файл `<chat>.jsonl` проекта и каталог её подагентов."""
+    try:
+        delete_session(chat, directory=str(project))
+    except FileNotFoundError:
+        raise Refused("not_found", "нет такого чата") from None
 
 
 def last_model(project: Path, chat: str) -> str | None:

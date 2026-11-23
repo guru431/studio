@@ -115,6 +115,14 @@ def _close(uid: int, aid: int, pid: str, chat: str) -> None:
                      (json.dumps(tabs), active, uid, aid, pid))
 
 
+def drop_chat(aid: int, pid: str, chat: str) -> None:
+    """Удалённая сессия уходит из вкладок владельца и участников проекта (`_close` каждому)."""
+    for table in ("code_tabs", "code_member_tabs"):
+        for row in state.DB.execute(f"SELECT user_id FROM {table} WHERE agent_id = ? AND project = ?",
+                                    (aid, pid)).fetchall():
+            _close(row["user_id"], aid, pid, chat)
+
+
 def _move(uid: int, aid: int, pid: str, chat: str, index: int) -> None:
     """Вкладка — на место index (дальше конца — в конец); активная и `touched` прежние. Чужая — ничего."""
     tabs, _ = _tabs(uid, aid, pid) or ([], None)

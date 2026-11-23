@@ -98,6 +98,7 @@ HISTORY_TAIL = 12
 PING_SEC = 15
 CHECK_SEC = 1                    # поток сверяет свою сессию на событиях не чаще
 PDF_TTL_SEC = 300
+TITLE_MAX = 200                  # знаков своего названия сессии (`sessions.TITLE_MAX` моста)
 PDF_RENDERS = 2                  # страниц PDF раздела в потоках сразу: остальные ждут на цикле, а не в пуле
 NEW_CHATS_PER_MIN = 10           # «Новых чатов» на компьютер за минуту (строки code_chats и события session_start)
 MEMBER = "участник"              # устройство строки истории владельца о новом чате участника
@@ -126,6 +127,10 @@ class NewProject(BaseModel):
 
 class ChatState(BaseModel):
     state: Literal["open", "closed"]
+
+
+class ChatTitle(BaseModel):
+    title: str = Field(min_length=1, max_length=TITLE_MAX, pattern=r"^[^\x00-\x1f]*$")
 
 
 class ChatSeen(BaseModel):
@@ -890,8 +895,8 @@ async def fork_chat(aid: int, pid: str, chat: str, body: ForkPoint, request: Req
 @router.get("/agents/{aid}/projects/{pid}/chats")
 async def chats(aid: int, pid: str, request: Request):
     """Сессии машины с отметками студии; открытые строки `code_chats` проекта без сессии на машине (новый чат
-    без хода) — тоже, закрытые — нет: сессию, что Claude Code вычистил по сроку, список не воскрешает «Новым
-    чатом». Открытые, затем закрытые, внутри — новые сверху."""
+    без хода) — тоже, с `empty: true`, закрытые — нет: сессию, что Claude Code вычистил по сроку, список не
+    воскрешает «Новым чатом». Открытые, затем закрытые, внутри — новые сверху."""
     agent = own_agent(request, aid)
     check_pid(pid)
     refresh = request.query_params.get("refresh") == "true" or request.headers.get('x-studio-refresh') == 'true'
@@ -922,7 +927,7 @@ async def chats(aid: int, pid: str, request: Request):
     for chat, mark in marks.items():
         if chat not in seen and mark["project"] == pid and mark["state"] == "open":
             items.append({"chat": chat, "engine": mark["engine"], "title": None, "created": mark["created"], "modified": mark["updated"],
-                          "origin": "studio", "state": mark["state"], "running": False, "asking": False})
+                          "origin": "studio", "state": mark["state"], "running": False, "asking": False, "empty": True})
     items.sort(key=lambda i: (i["state"] == "closed", -(i["modified"] or 0)))
     return {"items": items, **({"complete": False} if data.get("complete") is False else {})}
 
@@ -974,6 +979,49 @@ async def set_chat_state(aid: int, pid: str, chat: str, body: ChatState, request
                          " DO UPDATE SET state = excluded.state, updated = excluded.updated",
                          (uid, aid, pid, chat, body.state, now, now, engine))
     return {"state": body.state}
+
+
+@router.put("/agents/{aid}/projects/{pid}/chats/{chat}/title")
+async def rename_chat(aid: int, pid: str, chat: str, body: ChatTitle, request: Request):
+    """Своё название сессии — просьба `chat_rename` мосту с `hello.chat_manage`: название хранит помощник
+    (`custom-title` Claude Code, имя thread Codex), студия его не помнит. Только владельцу компьютера."""
+    project_access.owner(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    title = body.title.strip()
+    if not title:
+        raise _refuse(422, "title", "нужно название")
+    require_capability(aid, "chat_manage")
+    await ask(request, aid, "chat_rename", project=pid, chat=chat, title=title)
+    return {"title": title}
+
+
+@router.delete("/agents/{aid}/projects/{pid}/chats/{chat}", status_code=204)
+async def delete_chat(aid: int, pid: str, chat: str, request: Request):
+    """«Удалить сессию» — только начатую студией (строка `code_chats` с `origin` `studio`) и только владельцу
+    компьютера: мост удаляет её штатным способом помощника (`chat_delete`); сессии на машине нет («Новый чат» без
+    хода) — тоже удаление. Затем — строка `code_chats`, вкладки владельца и участников, отметка «непрочитано»."""
+    project_access.owner(request, aid)
+    check_pid(pid)
+    check_chat(chat)
+    uid = request.state.user.id
+    row = state.DB.execute("SELECT origin FROM code_chats WHERE user_id = ? AND agent_id = ? AND project = ?"
+                           " AND session_id = ?", (uid, aid, pid, chat)).fetchone()
+    if row is None or row["origin"] != "studio":
+        raise _refuse(409, "not_studio", "удалить можно только сессию, начатую в Студии")
+    require_capability(aid, "chat_manage")
+    try:
+        await ask(request, aid, "chat_delete", quiet=True, project=pid, chat=chat)
+    except HTTPException as e:
+        if e.detail["code"] != "not_found":
+            _warn(request, aid, "chat_delete", e)
+            raise
+    import workspace                     # он импортирует этот модуль: на загрузке — кольцо
+    state.DB.execute("DELETE FROM code_chats WHERE user_id = ? AND agent_id = ? AND project = ? AND session_id = ?",
+                     (uid, aid, pid, chat))
+    workspace.drop_chat(aid, pid, chat)
+    code_attention.forget(aid, chat)
+    return Response(status_code=204)
 
 
 def _new_chat(request: Request, aid: int, pid: str, chat: str, e: HTTPException) -> bool:
