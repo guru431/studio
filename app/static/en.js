@@ -3891,6 +3891,7 @@ globalThis.StudioEnglish = Object.freeze({
   "неверный проект": "invalid project",
   "неверный чат": "invalid chat",
   "Сеанс Студии закрыт": "Studio session ended",
+  "пустой запрос": "empty query",
   "неверный помощник": "invalid assistant",
   "обновите мост и установите {0} на компьютере": "update the bridge and install {0} on the computer",
   "обновите мост на компьютере для сведений о проектах": "update the bridge on the computer for project details",
