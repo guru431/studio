@@ -779,8 +779,8 @@ def test_fake_machine_admits_members_only_where_the_bridge_does():
     `closed`, как у настоящего моста, даже в выданном проекте."""
     from fake_bridge import SHARED_OPS, SHARED_READ_OPS
     assert {"turn", "read", "save"} <= SHARED_OPS and "turn" not in SHARED_READ_OPS and "read" in SHARED_READ_OPS
-    # Чтения наблюдателя на сервере мост тоже пускает; `git_compare` — маршрут только владельца (участнику 404).
-    assert project_access.READ_OPS - SHARED_READ_OPS == {"git_compare"}
+    # Чтения наблюдателя на сервере мост тоже пускает (`git_compare` — маршрут только владельца, в списках его нет).
+    assert project_access.READ_OPS - SHARED_READ_OPS == set()
     p = pid("studio")
     m = FakeMachine({"studio": {"files": {"a.txt": b"hi"}, "chats": {}, "git": None}})
     n = iter(range(100))

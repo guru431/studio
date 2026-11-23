@@ -250,8 +250,8 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
     """Вкладку закрывают посреди ответа прямого подключения (`pagehide`): прочитанное уходит PUT с keepalive и
     сохранено «остановлен» — диалог не ждёт «ответа в другой вкладке»; длиннее предела тела keepalive — сохранено
     начало, что влезло, а итог страницы совпадает с ним (сервер принимает тот же итог повторно). Затем вкладку
-    закрывают по-настоящему посреди ответа: keepalive уходящей страницы несёт cookie хранилища контекста (`opened`) —
-    сохранено «остановлен» с прочитанным."""
+    перезагружают и закрывают по-настоящему посреди ответа: keepalive уходящей страницы несёт cookie хранилища
+    контекста (`opened`) — сохранено «остановлен» с прочитанным, а не ошибкой обрыва потока."""
     login = "pagehide-mid-answer"
     live.add_user(login)
     last_saved = """async () => { const m = await import('/static/js/api.js');
@@ -279,6 +279,15 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
                     assert answer == first
                 else:                                # 80 КБ UTF-8 > PART_BYTES: начало, что влезло
                     assert 20000 < len(answer) < 40000 and set(answer) == {"я"}
+            # Настоящая перезагрузка: поток рвётся сетевой ошибкой раньше `pagehide` — итог ошибки не уходит первым.
+            live.cloud.chat_reply = ["Перед перезагрузкой. ", "конец"]
+            page.locator("#chat-input").fill("Снова")
+            page.locator("#send").click()
+            pw.expect(page.locator(LAST + " .md")).to_contain_text("Перед перезагрузкой.")
+            page.reload()
+            page.locator("#chat-input").wait_for()
+            until(page, lambda: page.evaluate(last_saved) == ["stopped", "Перед перезагрузкой. "])
+            pw.expect(page.locator(LAST + " .msg-meta")).not_to_contain_text("Связь с сервисом оборвалась")
             # Настоящее закрытие вкладки: скрипт страницы кончается, сохранить может только keepalive из `pagehide`.
             live.cloud.chat_reply = ["Перед закрытием. ", "конец"]
             page.locator("#chat-input").fill("Ещё раз")
