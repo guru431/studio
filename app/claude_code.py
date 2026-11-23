@@ -104,6 +104,7 @@ PDF_RENDERS = 2                  # страниц PDF раздела в пото
 NEW_CHATS_PER_MIN = 10           # «Новых чатов» на компьютер за минуту (строки code_chats и события session_start)
 MEMBER = "участник"              # устройство строки истории владельца о новом чате участника
 ANSWER_MAX = 2000                # знаков в словах отказа и в каждом вопросе и ответе
+SEARCH_WAIT = 20                 # с ожидания ответа `chat_search_all`: мост ищет до 16 с (`discovery.SEARCH_SECONDS` + 1)
 ANSWERS_MAX = 20                 # пар «вопрос → ответ»
 NO_TEXT = "задание пустое или длиннее 100 000 знаков"
 TOO_MANY = "слишком много новых чатов — подождите минуту"
@@ -847,6 +848,57 @@ async def chat_search(aid: int, pid: str, body: DiscoveryQuery, request: Request
                                    for s in row.get("snippets", [])[:3] if isinstance(s, dict)
                                    and s.get("role") in ("user", "assistant")]})
     return {"items": items, "complete": data.get("complete") is True}
+
+
+def _search_hits(data: dict) -> list[dict]:
+    """Находки `chat_search_all` одного компьютера: только проверенные поля, не больше 60."""
+    items = []
+    for row in data.get("items", [])[:60]:
+        if (not isinstance(row, dict) or not isinstance(row.get("chat"), str) or row.get("engine", "claude") not in ACCESS
+                or not isinstance(row.get("project"), str) or PID_RE.fullmatch(row["project"]) is None):
+            continue
+        try:
+            check_chat(row["chat"])
+        except HTTPException:
+            continue
+        items.append({"project": row["project"], "project_name": str(row.get("project_name", ""))[:255],
+                      "chat": row["chat"], "engine": row.get("engine", "claude"), "title": str(row.get("title", ""))[:200],
+                      "snippets": [{"text": str(s.get("text", ""))[:400], "role": s.get("role")}
+                                   for s in row.get("snippets", [])[:3] if isinstance(s, dict)
+                                   and s.get("role") in ("user", "assistant")]})
+    return items
+
+
+@router.post("/search")
+async def search_everywhere(body: DiscoveryQuery, request: Request):
+    """Общий поиск Студии, чип «Агенты»: каждому своему компьютеру на связи — одна просьба `chat_search_all`
+    (мост 0.47.0) по всем его проектам, параллельно, не дольше `SEARCH_WAIT` с. Компьютер без PIN открывается,
+    как значком «В работе»; с PIN — только уже открытый. Находки идут только в ответ: ни в базу, ни в журнал."""
+    query = body.query.strip()
+    if not query:
+        raise _refuse(422, "query", "пустой запрос")
+    agents = [dict(r) for r in state.DB.execute("SELECT id, name, user_id, has_pin FROM agents WHERE user_id = ?"
+                                                " ORDER BY created, id", (request.state.user.id,))]
+
+    async def one(agent: dict) -> dict:
+        out = {"aid": agent["id"], "name": agent["name"], "items": [], "complete": False}
+        link = bridge.LINKS.get(agent["id"])
+        if link is None:
+            return {**out, "state": "offline"}
+        if not link.hello.get("chat_search_all"):
+            return {**out, "state": "unsupported"}
+        try:
+            data = await open_without_pin(request, agent, lambda: ask(
+                request, agent["id"], "chat_search_all", quiet=True, reply_timeout=SEARCH_WAIT, query=query))
+        except HTTPException as error:
+            code = error.detail.get("code") if isinstance(error.detail, dict) else None
+            return {**out, "state": code if code in ("closed", "offline", "timeout", "busy") else "error"}
+        return {**out, "state": "ok", "items": _search_hits(data), "complete": data.get("complete") is True}
+
+    found = await asyncio.gather(*(one(agent) for agent in agents))
+    if not _session_open(request.state.digest):
+        raise _refuse(409, "closed", "Сеанс Студии закрыт")
+    return {"items": found}
 
 
 @router.get("/agents/{aid}/projects/{pid}/worktrees")

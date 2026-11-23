@@ -245,7 +245,7 @@ def parse_hello(frame: dict) -> dict:
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "mirror_groups", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare", "file_upload", "file_search",
-                       "deepseek_models", "deepseek_usage", "self_check", "agent_log", "claude_models"):
+                       "deepseek_models", "deepseek_usage", "self_check", "agent_log", "claude_models", "chat_search_all"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")

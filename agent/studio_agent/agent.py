@@ -82,6 +82,7 @@ OPS = {
     "file_search": ("project", "path", "query"),
     "file_upload": ("project", "path", "data", "replace"),
     "chat_search": ("project", "query"),
+    "chat_search_all": ("query",),
     "chat_fork": ("project", "chat", "message_id"),
     "subagents": ("project", "chat"),
     "subagent_history": ("project", "chat", "request_id"),
@@ -102,7 +103,7 @@ RESTART_SAFE_OPS = frozenset({
     "desktop_status", "desktop_frame", "computer_info", "terminal_info", "self_check", "agent_log", "software_versions",
     "usage", "models", "projects", "project_roots", "project_summary", "activity",
     "mcp_get", "chats", "history", "history_image", "state", "watch",
-    "files", "file_stats", "file_suggestions", "file_search", "chat_search", "subagents", "subagent_history",
+    "files", "file_stats", "file_suggestions", "file_search", "chat_search", "chat_search_all", "subagents", "subagent_history",
     "worktrees", "read", "raw", "visualization", "git", "git_compare", "mirror_identity", "mirror_candidates",
     "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
 })
@@ -197,7 +198,7 @@ class Agent:
                  "has_pin": self.has_pin, "models": self.models, "efforts": self.efforts, "images": True,
                  "chat_state": True, "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                  "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
-                 "file_suggestions": True, "chat_search": True, "queue_edit": True,
+                 "file_suggestions": True, "chat_search": True, "chat_search_all": True, "queue_edit": True,
                  "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                  "git_compare": True, "file_upload": True, "file_search": True,
                  "account_disabled": True,  # 4403 — учётка отключена: ходы прочь, переподключение с паузами (`link`)
@@ -824,6 +825,24 @@ class Agent:
 
     async def _op_chat_search(self, frame, after):
         project = await self._project(frame)
+        return await self._chat_search(frame, [(frame["project"], None, project)])
+
+    async def _op_chat_search_all(self, frame, after):
+        """Общий поиск Студии, чип «Агенты» (`hello.chat_search_all`, 0.47.0): чаты всех проектов корней одной
+        просьбой. Пределы `discovery` — на весь запрос (новейшие `discovery.MAX_CHATS` чатов всех проектов); находка
+        несёт `project` и `project_name`. Только владельцу: в `SHARED_OPS` её нет."""
+        def places():
+            found = []
+            for item in self._catalog.list(self.cfg):
+                try:
+                    found.append((item["pid"], item["name"], self._catalog.find(self.cfg, item["pid"])))
+                except Refused:
+                    pass                # скрытая папка, ссылка, исчезла — как у `_project`
+            return found
+        return await self._chat_search(frame, await asyncio.to_thread(places))
+
+    async def _chat_search(self, frame, places):
+        """`places` — [(pid, имя или None, папка)]; имя есть — находки помечаются проектом (поиск по всем)."""
         if not frame["query"].strip():
             return {"items": [], "complete": True, "scanned": 0}
         if self._search_lock.locked():
@@ -832,26 +851,41 @@ class Agent:
             try:
                 async with asyncio.timeout(discovery.SEARCH_SECONDS + 1):
                     deadline = time.monotonic() + discovery.SEARCH_SECONDS
-                    catalog, complete = [], True
-                    try:
-                        catalog += await asyncio.wait_for(asyncio.to_thread(sessions.chats, project, self.runner.live()), 4)
-                    except Exception:
-                        complete = False
-                    for name in ("codex", "opencode", "deepseek"):
-                        backend = getattr(self, name)
-                        if backend is not None and backend.catalog is not None:
-                            try:
-                                catalog += await asyncio.wait_for(backend.chats(project), min(4, max(.1, deadline - time.monotonic())))
-                            except Exception:
-                                complete = False
+                    # Много проектов — списки чатов не дольше двух третей срока: остальное — на чтение истории.
+                    listing = deadline - (discovery.SEARCH_SECONDS / 3 if len(places) > 1 else 0)
+                    catalog, complete, where = [], True, {}
+                    for pid, name, project in places:
+                        if time.monotonic() >= listing:
+                            complete = False
+                            break
+                        rows = []
+                        try:
+                            rows += await asyncio.wait_for(asyncio.to_thread(sessions.chats, project, self.runner.live()),
+                                                           min(4, max(.1, listing - time.monotonic())))
+                        except Exception:
+                            complete = False
+                        for engine in ("codex", "opencode", "deepseek"):
+                            backend = getattr(self, engine)
+                            if backend is not None and backend.catalog is not None:
+                                try:
+                                    rows += await asyncio.wait_for(backend.chats(project), min(4, max(.1, listing - time.monotonic())))
+                                except Exception:
+                                    complete = False
+                        catalog += rows
+                        where.update({(row["chat"], row.get("engine", "claude")): (pid, name) for row in rows})
 
                     async def history(row, before):
-                        return await self._op_history({**frame, "chat": row["chat"],
+                        pid = where[(row["chat"], row.get("engine", "claude"))][0]
+                        return await self._op_history({**frame, "project": pid, "chat": row["chat"],
                             "engine": row.get("engine", "claude"), "before": before, "limit": 100}, [])
 
                     result = await discovery.search(frame["query"], catalog, history,
                                                     timeout=max(.1, deadline - time.monotonic()))
                     result["complete"] = result["complete"] and complete
+                    for hit in result["items"]:
+                        pid, name = where[(hit["chat"], hit["engine"])]
+                        if name is not None:
+                            hit.update(project=pid, project_name=name)
                     return result
             except TimeoutError:
                 return {"items": [], "complete": False, "scanned": 0}

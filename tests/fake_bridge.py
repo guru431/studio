@@ -102,6 +102,7 @@ class FakeMachine:
         self.git_compare = False
         self.file_suggestions = False
         self.chat_search = False
+        self.chat_search_all = False             # поиск по чатам всех проектов одной просьбой (мост 0.47.0)
         self.queue_edit = False
         self.chat_fork = False
         self.subagents = False
@@ -141,7 +142,7 @@ class FakeMachine:
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
                                            "software_update_all", "git_compare", "deepseek_models", "deepseek_usage", "file_upload", "file_search",
-                                           "self_check", "agent_log", "claude_models")
+                                           "self_check", "agent_log", "claude_models", "chat_search_all")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode),
@@ -392,6 +393,13 @@ class FakeMachine:
             if snippets or query in (row.get("title") or "").casefold():
                 items.append({"chat": chat, "title": row.get("title") or "", "engine": row.get("engine", "claude"),
                               "snippets": snippets[:3]})
+        return {"items": items, "complete": True}
+
+    def _op_chat_search_all(self, req, events):
+        items = []
+        for name in self.projects:
+            found = self._op_chat_search({**req, "project": pid(name)}, events)["items"]
+            items += [{**row, "project": pid(name), "project_name": name} for row in found]
         return {"items": items, "complete": True}
 
     def _op_state(self, req, events):

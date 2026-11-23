@@ -315,7 +315,7 @@ def test_hello(agent):
                              "has_pin": False, "models": MODELS, "efforts": ["low", "high"], "images": True, "chat_state": True,
                              "chat_control": True, "attachments": True, "large_attachments": True, "project_activity": True, "mcp": True,
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
-                             "file_suggestions": True, "chat_search": True, "queue_edit": True,
+                             "file_suggestions": True, "chat_search": True, "chat_search_all": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
                              "account_disabled": True, "git_compare": True, "file_upload": True, "file_search": True,
                              "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
@@ -742,6 +742,33 @@ async def test_models_refresh_for_claude_answers_the_new_catalog(agent):
     res = (await agent.handle(req("models")))[0]               # без engine — Claude Code, как у прочих просьб
     assert res["data"] == {"claude": {"models": found, "efforts": ["max"]}}
     assert agent.hello()["models"] == found                    # следующее знакомство — тот же набор
+
+
+async def test_chat_search_all_reads_every_project_in_one_request(agent, root, monkeypatch):
+    (root / "other").mkdir()
+    chats = {"demo": [{"chat": "c-demo", "title": "Сборка", "modified": 1}],
+             "other": [{"chat": "c-other", "title": "Ежик", "modified": 2}]}
+    monkeypatch.setattr(sessions, "chats", lambda project, live: chats[project.name])
+    texts = {"c-demo": "починить ёжика в сборке", "c-other": "без совпадения"}
+
+    async def history(frame, after):
+        assert frame["project"] == projects.pid("demo" if frame["chat"] == "c-demo" else "other")
+        return {"items": [{"id": "m1", "role": "user", "text": texts[frame["chat"]]}], "start": 0}
+
+    monkeypatch.setattr(agent, "_op_history", history)
+    await opened(agent)
+    data = (await agent.handle(req("chat_search_all", query="ежик")))[0]["data"]
+    assert data["complete"] is True
+    found = {i["chat"]: i for i in data["items"]}
+    assert found["c-demo"]["project"] == projects.pid("demo") and found["c-demo"]["project_name"] == "demo"
+    assert found["c-demo"]["snippets"][0]["text"] == "починить ёжика в сборке"
+    assert found["c-other"]["project_name"] == "other" and found["c-other"]["snippets"] == []   # по названию
+    # Поиск в одном проекте — прежний ответ, без пометок проекта.
+    one = (await agent.handle(req("chat_search", project=projects.pid("demo"), query="ежик")))[0]["data"]
+    assert [set(i) for i in one["items"]] == [{"chat", "engine", "title", "snippets"}]
+    # Участнику совместного проекта — нет: только владельцу.
+    shared = req("chat_search_all", query="ежик", shared_projects=[projects.pid("demo")])
+    assert (await agent.handle(shared))[0]["code"] == "closed"
 
 
 async def test_deepseek_turn_shares_the_limit_and_activity(agent):
