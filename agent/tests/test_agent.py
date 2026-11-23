@@ -302,7 +302,8 @@ def test_hello(agent):
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
-                             "deepseek_models": False, "deepseek_usage": True, "open_asks": True}
+                             "deepseek_models": False, "deepseek_usage": True, "open_asks": True,
+                             "answer_takeover": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -583,6 +584,27 @@ async def test_open_asks_are_resent_on_every_new_link_only_to_a_studio_that_take
     assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
     await settle(a)
     assert a.completions(asks=True, open_asks=True) is None
+
+
+async def test_answer_from_another_window_takes_over_when_the_owner_is_not_watched(home, root):
+    """08:I4: ответ на карточку из чужого окна — `owned`, пока окно-владелец среди `watched` (или студия их не
+    прислала); его никто не смотрит — ответ принят, управление — ответившему (`ownership`)."""
+    a = make(home, root, FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()]))
+    await opened(a)
+    pid, owner, other = projects.pid("demo"), "a" * 32, "b" * 32
+    await a.handle(req("turn", project=pid, chat=CHAT, text="Привет", model=None, effort=None, window=owner))
+    for _ in range(2000):
+        if a.runner.live().get(CHAT):
+            break
+        await asyncio.sleep(0.001)
+    rid = a.sent[-1]["e"]["request_id"]
+    answer = dict(project=pid, chat=CHAT, request_id=rid, decision="allow", window=other)
+    for extra in ({}, {"watched": [owner, other]}):
+        assert (await a.handle(req("answer", **answer, **extra)))[0]["code"] == "owned"
+    assert (await a.handle(req("answer", **answer, watched=["x"])))[0]["code"] == "invalid"
+    assert (await a.handle(req("answer", **answer, watched=[other])))[0]["ok"]
+    assert {"k": "ownership", "owner": other} in [f["e"] for f in a.sent if f.get("t") == "ev"]
+    await settle(a)
 
 
 async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):

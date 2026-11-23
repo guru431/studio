@@ -68,6 +68,7 @@ CALL_SEC = 30
 #: меньше предела Apache для `/api/code/` (600 с, сверяет tests/test_deploy.py)
 SEND_SEC = 300
 WATCH_MAX = 1000
+WATCHED_MAX = 64  # окон в `answer.watched` (`limits.WATCHED_MAX` моста)
 COMPLETIONS_MAX = 50  # досланных завершений в кадре (протокол §18)
 COMPLETION_AGE_MAX = 7 * 24 * 3600  # давность конца хода, с: старше — время отметки по этому пределу
 STOP_SEC = 2
@@ -141,13 +142,15 @@ class SocketLink(Link):
 class Watch(asyncio.Queue):
     """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("online", None) | ("closed", None); `session` — `tag`
     сессии студии, что смотрит (её `forget` кладёт `closed`), `user_id` — её учётка (push хода не уходит, только пока
-    смотрит его адресат, `watching`). Событий в ней — не больше `WATCH_MAX`: застрявший
-    поток SSE (TCP жив, страница не читает) получает `offline` и снимается (`_put_event`)."""
+    смотрит его адресат, `watching`), `window` — id окна страницы (`X-Studio-Window`; ответ на карточку — `windows`).
+    Событий в ней — не больше `WATCH_MAX`: застрявший поток SSE (TCP жив, страница не читает) получает `offline` и
+    снимается (`_put_event`)."""
 
-    def __init__(self, session: str | None, user_id: int | None = None):
+    def __init__(self, session: str | None, user_id: int | None = None, window: str | None = None):
         super().__init__()
         self.session = session
         self.user_id = user_id
+        self.window = window
 
 
 #: agent_id → канал на связи
@@ -239,7 +242,7 @@ def parse_hello(frame: dict) -> dict:
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "mirror_groups", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare",
-                       "deepseek_models", "deepseek_usage", "self_check", "agent_log", "open_asks"):
+                       "deepseek_models", "deepseek_usage", "self_check", "agent_log", "open_asks", "answer_takeover", "chat_manage"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -558,8 +561,9 @@ async def call(agent_id: int, op: str, session: str, timeout: float | None = Non
 
 # ---- наблюдатели ---------------------------------------------------------------
 
-def watch(agent_id: int, chat: str, session: str | None = None, user_id: int | None = None) -> Watch:
-    q = Watch(session, user_id)
+def watch(agent_id: int, chat: str, session: str | None = None, user_id: int | None = None,
+          window: str | None = None) -> Watch:
+    q = Watch(session, user_id, window)
     WATCHERS.setdefault((agent_id, chat), set()).add(q)
     return q
 
@@ -576,6 +580,12 @@ def watching(agent_id: int, chat: str, user_id: int | None = None) -> bool:
     """Чат кто-то смотрит; с `user_id` — именно эта учётка (чужой взгляд участника не глушит push владельцу)."""
     queues = WATCHERS.get((agent_id, chat), ())
     return any(user_id is None or q.user_id == user_id for q in queues)
+
+
+def windows(agent_id: int, chat: str) -> list[str]:
+    """Окна страниц, что сейчас смотрят чат (не больше `WATCHED_MAX`): ответ на карточку из другого окна мост
+    примет без «Продолжить здесь», если окна-владельца хода среди них нет (`hello.answer_takeover`)."""
+    return sorted({q.window for q in WATCHERS.get((agent_id, chat), ()) if q.window})[:WATCHED_MAX]
 
 
 def _put_event(agent_id: int, chat: str, q: Watch, e: dict) -> None:

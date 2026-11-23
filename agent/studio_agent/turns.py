@@ -172,10 +172,15 @@ class Runner:
         log.info("ход %s: начат", t.turn)
         return t.turn
 
-    def check_owner(self, pid, chat, owner):
+    def check_owner(self, pid, chat, owner, watched=None) -> bool:
+        """Чужое окно — `owned`. `watched` (ответ на карточку, `hello.answer_takeover`) — окна, что сейчас смотрят
+        чат: окно-владельца среди них нет — `True`, ответ примут и управление перейдёт отвечающему."""
         t = self._turn(pid, chat)
         if t is not None and t.owner is not None and t.owner != owner:
-            raise Refused("owned", "Задание выполняется в другом окне — сначала перенесите управление сюда")
+            if watched is None or owner is None or t.owner in watched:
+                raise Refused("owned", "Задание выполняется в другом окне — сначала перенесите управление сюда")
+            return True
+        return False
 
     def claim(self, pid, chat, owner):
         t = self._turn(pid, chat)

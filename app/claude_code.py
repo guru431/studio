@@ -1163,11 +1163,17 @@ async def _idle():
     yield _sse("idle", {})
 
 
+def _window(request: Request) -> str | None:
+    """Id окна страницы наблюдателя (`X-Studio-Window`); не того вида — без него (отказ скажет `ask`)."""
+    window = request.headers.get("x-studio-window")
+    return window if window is not None and re.fullmatch(r"[0-9a-f]{32}", window) else None
+
+
 async def _watched(request: Request, aid: int, chat: str, op: str, *, quiet: bool = False,
                    **args) -> tuple[bridge.Watch, dict]:
     """Очередь наблюдателя (с признаком сессии запроса) — до просьбы: события хода идут сразу за ответом моста
     и не должны пройти мимо. Отказ — очередь прочь."""
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id, _window(request))
     try:
         return q, await ask(request, aid, op, quiet=quiet, chat=chat, **args)
     except BaseException:
@@ -1319,7 +1325,7 @@ async def live(aid: int, pid: str, chat: str, request: Request):
         q, data = await _watched(request, aid, chat, "watch", quiet=True, project=pid)
     except HTTPException as e:
         if e.detail["code"] == "offline":
-            q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
+            q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id, _window(request))
             if aid in bridge.LINKS:                  # вернулся, пока шёл отказ: ждать нечего
                 q.put_nowait(("online", None))
             return _Watch(aid, chat, q, request.state.digest, first=("offline", {"wait": True}), live=True, pid=pid)
@@ -1337,12 +1343,16 @@ async def live(aid: int, pid: str, chat: str, request: Request):
 @router.post("/agents/{aid}/projects/{pid}/chats/{chat}/answer", status_code=204)
 async def answer(aid: int, pid: str, chat: str, body: Answer, request: Request):
     """Ответ на карточку — мосту как есть: о самой карточке студия ничего не помнит (перезапуск, другая
-    вкладка), её нет у моста — 410 `gone`. Закрытие карточки (`asked`) мост шлёт всем наблюдателям."""
+    вкладка), её нет у моста — 410 `gone`. Закрытие карточки (`asked`) мост шлёт всем наблюдателям. Мосту с
+    `hello.answer_takeover` — и окна, что смотрят чат (`bridge.windows`): окно-владельца хода никто не смотрит —
+    ответ из другого окна мост примет и передаст ему управление, без «Продолжить здесь»."""
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    link = bridge.LINKS.get(aid)
+    watched = {"watched": bridge.windows(aid, chat)} if link is not None and link.hello.get("answer_takeover") else {}
     await ask(request, aid, "answer", project=pid, chat=chat, request_id=body.request_id, decision=body.decision,
-              message=body.message, answers=body.answers)
+              message=body.message, answers=body.answers, **watched)
     return Response(status_code=204)
 
 

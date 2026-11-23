@@ -513,3 +513,36 @@ def test_browser_reload_keeps_the_window_and_a_waiting_question_offers_only_take
     assert "ждёт вашего ответа" in values["notice"] and values["wait"] is True
     assert values["after"] == values["before"] and values["stored"] is None
     assert not code_requests(machine, "claim")
+
+
+def test_answer_from_another_device_takes_over_when_the_owner_window_is_closed(browser, live):
+    """08:I4: окно-владелец хода закрыто (его никто не смотрит) — кнопки карточки в другом окне доступны сразу,
+    ответ принят без «Продолжить здесь», управление переходит сюда (`ownership`), плашка чужого окна уходит."""
+    from test_ui_browser import code_permission
+    login = "answer-takeover"
+    live.add_user(login)
+    machine = RefreshMachine({"alpha": {"chats": {CODE_CHAT_A: code_session("Waiting chat")}}})
+    machine.answer_takeover = True
+    ask = {k: v for k, v in code_permission("r1", False).items() if k != "k"}
+    machine.running[CODE_CHAT_A] = {"turn": "elsewhere", "project": pid("alpha"), "text": "", "steps": [],
+                                    "asks": {"r1": ask}, "owner": "a" * 32, "followups": [], "engine": "claude"}
+    aid, server = code_online(live, login, machine)
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
+            *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"),
+            ("wait", "document.querySelector(\".code-ask[data-request='r1'] .code-ask-yes\")"
+                     " && !document.querySelector('#code-session-notice').hidden"),
+            ("eval", "notice", "document.querySelector('#code-session-notice p').textContent"),
+            ("eval", "enabled", "!document.querySelector('.code-ask-yes').disabled"),
+            ("click", ".code-ask-yes"),
+            ("wait", "document.querySelector('#code-session-notice').hidden"
+                     " && !document.querySelector(\".code-ask[data-request='r1']\")"),
+            ("eval", "window", WINDOW_ID)])
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert "управление перейдёт сюда" in values["notice"] and values["enabled"] is True
+    answer = code_requests(machine, "answer")[-1]
+    assert answer["window"] == values["window"] and "a" * 32 not in answer["watched"]
+    assert not code_requests(machine, "claim")

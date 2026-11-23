@@ -243,11 +243,13 @@ async def list_agents(request: Request, refresh: bool = False):
                       "opencode_usage": hello.get("opencode_usage", False),
                       "opencode_features": hello.get("opencode_features", False),
                       "deepseek_usage": hello.get("deepseek_usage", False),
+                      "answer_takeover": hello.get("answer_takeover", False),
+                      "chat_manage": hello.get("chat_manage", False),
                       **{engine: hello[engine] for engine in ("codex", "opencode", "deepseek") if engine in hello}})
         items[-1]["project_sharing"] = hello.get("project_sharing", False)
         if r["user_id"] != request.state.user.id:
             items[-1].update(shared=True, projects_root="", has_pin=False, agent_update=False, agent_update_cancel=False,
-                             computer_info=False, software_versions=False, self_check=False, agent_log=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False)
+                             computer_info=False, software_versions=False, self_check=False, agent_log=False, desktop=False, terminal=False, subscription_usage=False, usage_reset=False, opencode_usage=False, deepseek_usage=False, worktrees=False, project_create=False, chat_manage=False)
             if isinstance(items[-1].get("deepseek"), dict):  # сводка наложения — настройки компьютера владельца
                 items[-1]["deepseek"] = {k: v for k, v in items[-1]["deepseek"].items() if k != "settings"}
     return {"items": items}

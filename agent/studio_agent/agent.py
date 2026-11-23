@@ -200,7 +200,8 @@ class Agent:
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
                  "codex_models": True, "opencode_models": self.opencode is not None,
                  "deepseek_models": self.deepseek is not None, "deepseek_usage": True,
-                 "open_asks": True}  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
+                 "open_asks": True,  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
+                 "answer_takeover": True}  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -1010,9 +1011,16 @@ class Agent:
         return {"running": running}
 
     async def _op_answer(self, frame, after):
-        self._runner(frame).check_owner(frame["project"], frame["chat"], frame.get("window"))
-        self._runner(frame).answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
-                                   frame.get("message"), frame.get("answers"))
+        watched = frame.get("watched")
+        if watched is not None and not (isinstance(watched, list) and len(watched) <= limits.WATCHED_MAX
+                                        and all(isinstance(w, str) and SESSION.fullmatch(w) for w in watched)):
+            raise Refused("invalid")
+        runner = self._runner(frame)
+        takeover = runner.check_owner(frame["project"], frame["chat"], frame.get("window"), watched) is True
+        runner.answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
+                      frame.get("message"), frame.get("answers"))
+        if takeover:  # окно-владельца никто не смотрит: управление — ответившему (событие `ownership`)
+            runner.claim(frame["project"], frame["chat"], frame["window"])
         return {}
 
     async def _op_stop(self, frame, after):
