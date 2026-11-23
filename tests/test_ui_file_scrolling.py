@@ -5,7 +5,7 @@ import re
 import httpx
 import pytest
 
-from browser import run_playwright
+from browser import CHROMIUM_ARGS, find_browser, run_playwright
 
 from fake_bridge import FakeMachine, pid
 from scans import scan_pdf
@@ -31,9 +31,10 @@ def test_file_tree_and_content_keep_independent_scroll_positions(live, engine, w
         cookie = '; '.join(f'{key}={value}' for key, value in signed.cookies.items())
         with run_playwright(pw) as driver:
             kind = getattr(driver, engine)
-            if engine == 'webkit' and not Path(kind.executable_path).exists():
-                pytest.skip('WebKit is not installed')
-            browser = kind.launch(**({'channel': 'chrome'} if engine == 'chromium' else {}))
+            executable = find_browser() if engine == 'chromium' else kind.executable_path
+            if not executable or not Path(executable).exists():
+                pytest.skip(f'{engine} is not installed')
+            browser = kind.launch(executable_path=executable, args=CHROMIUM_ARGS if engine == 'chromium' else [])
             try:
                 with browser.new_context(viewport={'width': width, 'height': 800},
                         is_mobile=width == 320, has_touch=width == 320,
@@ -48,7 +49,7 @@ def test_file_tree_and_content_keep_independent_scroll_positions(live, engine, w
                     tree.evaluate('(node) => { node.scrollTop = 300; }')
                     before = tree.evaluate('(node) => node.scrollTop')
                     assert before > 0, 'The tree must scroll within the available height'
-                    page.locator('#code-files li[data-name="file-012.txt"] > button').click()
+                    page.locator('#code-files li[data-name="file-012.txt"] > button.code-file-item').click()
                     page.locator('#code-editor').wait_for()
                     assert page.locator('#view').evaluate('(node) => node.scrollTop') == 0
                     if width == 1280:
@@ -63,10 +64,11 @@ def test_file_tree_and_content_keep_independent_scroll_positions(live, engine, w
                         page.locator('#code-path button').first.click()
                         assert tree.is_visible()
                         assert abs(tree.evaluate('(node) => node.scrollTop') - before) <= 1
-                    page.locator('#code-files li[data-name="preview.md"] > button').click()
+                    page.locator('#code-files li[data-name="preview.md"] > button.code-file-item').click()
                     pw.expect(page.locator('#code-editor')).to_be_hidden()
                     pw.expect(page.locator('#code-md-view button')).to_have_text(['Разметка', 'Исходный'])
-                    page.locator('#code-md p').first.wait_for()
+                    # разметка строится кадрами: прокрутка — когда вся (иначе высоты ещё нет)
+                    pw.expect(page.locator('#code-md p')).to_have_count(200)
                     tree_before_preview = tree.evaluate('(node) => node.scrollTop')
                     page.locator('#code-file').evaluate('(node) => { node.scrollTop = 300; }')
                     assert page.locator('#code-file').evaluate('(node) => node.scrollTop') > 0
@@ -78,7 +80,7 @@ def test_file_tree_and_content_keep_independent_scroll_positions(live, engine, w
                     page.locator('#code-path button').first.click()
                     page.set_viewport_size({'width': width, 'height': 500})
                     page.evaluate("document.documentElement.style.setProperty('--font-scale', '1.5')")
-                    page.locator('#code-files li[data-name="preview.pdf"] > button').click()
+                    page.locator('#code-files li[data-name="preview.pdf"] > button.code-file-item').click()
                     image = page.locator('#code-pdf img')
                     pw.expect(image).to_have_attribute('src', re.compile(r'^blob:'))
                     pw.expect(image).to_have_js_property('complete', True)
