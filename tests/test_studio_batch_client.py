@@ -66,6 +66,24 @@ def test_script_models_and_strength_match_the_server():
     assert f"$MediaTimeoutSec = {images.MEDIA_TIMEOUT_SEC}" in text
 
 
+def test_script_timeouts_follow_the_server_model_rule():
+    """Долгий срок — у всех моделей ComfyUI, короткий — только у FLUX, как в images.generate:
+    SNOFS со сроком 1300 с обрывался на холодной загрузке, хотя студия ждёт его 1900 с."""
+    import importlib.util
+    import inspect
+
+    import images
+    assert 'job.model != "flux"' in inspect.getsource(images.generate)
+    spec = importlib.util.spec_from_file_location("studio_batch_client", SCRIPT.with_suffix(".py"))
+    client = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client)
+    assert client.TIMEOUT == images.GENERATE_TIMEOUT_SEC
+    assert 'MEDIA_TIMEOUT if args.model != "flux" else TIMEOUT' in SCRIPT.with_suffix(".py").read_text(encoding="utf-8")
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert f"$TimeoutSec = {images.GENERATE_TIMEOUT_SEC} " in text
+    assert "if ($Model -ne 'flux') { $TimeoutSec = $MediaTimeoutSec }" in text
+
+
 def test_local_copy_is_gitignored():
     git = shutil.which("git")
     if not git:

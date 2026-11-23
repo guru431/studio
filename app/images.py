@@ -918,7 +918,7 @@ async def generate(job: Job) -> "tuple[bytes, int | None, str]":
     payload = {"model": job.gateway_model, "prompt": job.prompt, "n": 1, "size": job.size,
                "seed": job.seed, "response_format": "b64_json"}
     await _release_others(job)
-    timeout = MEDIA_TIMEOUT_SEC if job.model in MODELS and job.model not in {"lustify", "flux"} else GENERATE_TIMEOUT_SEC
+    timeout = MEDIA_TIMEOUT_SEC if job.model in MODELS and job.model != "flux" else GENERATE_TIMEOUT_SEC
     try:
         if job.image is not None:
             if job.model in STRENGTH_MODELS:
