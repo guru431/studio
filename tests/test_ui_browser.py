@@ -10031,7 +10031,10 @@ def test_code_done_before_snapshot_reloads_history(browser, live):
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
-            ("wait", CODE_IDLE_AFTER.format(n=1)), ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
+            # Markdown ответа из истории рисуется следующим кадром: узел уже в ленте, текста ещё нет
+            ("wait", CODE_IDLE_AFTER.format(n=1)
+             + " && document.querySelector('.code-msg.assistant .code-timeline-text')?.textContent.trim()"),
+            ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
