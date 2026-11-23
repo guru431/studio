@@ -576,8 +576,16 @@ def test_known_open_asks_after_a_restart_do_not_push_again(studio, monkeypatch):
         studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": bad})
     studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [known]})
     assert pushed == []
+    card = bridge.CARDS[(aid, CHAT)]                    # знакомая карточка ждёт напоминаний и после перезапуска
+    assert card["request_id"] == "toolu_1" and card["sent"] == {}
+    card["sent"]["d"] = (1, 0.0)
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [known]})
+    assert bridge.CARDS[(aid, CHAT)] is card            # новый канал: счёт напоминаний не сбрасывается
     studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [{**known, "known": False}]})
     assert len(pushed) == 1
+    studio.c.portal.call(bridge.deliver, link, {"t": "ev", "project": pid("studio"), "chat": CHAT,
+                                                "e": {"k": "asked", "request_id": "toolu_1"}})
+    assert (aid, CHAT) not in bridge.CARDS
 
 
 def test_stop_and_drop_user_close_links(studio):

@@ -455,9 +455,13 @@ def _completions(link: Link, frame: dict) -> None:
         return
     for item in items:
         if item["status"] in ASK_WORDS:
+            card = {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
+                    "e": {"k": "ask", "kind": item["status"], "request_id": item.get("request_id")}}
+            held = CARDS.get((link.agent_id, item["chat"]))
             if item.get("known") is not True:
-                _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
-                             "e": {"k": "ask", "kind": item["status"]}})
+                _push(link, card)
+            elif held is None or held["request_id"] not in (None, item.get("request_id")):
+                _push(link, card, notify=False)   # напоминания — и после перезапуска службы; знакомая — без сброса счёта
             continue
         finished = clock.NOW() - min(item["ago"], COMPLETION_AGE_MAX)
         code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
@@ -507,9 +511,9 @@ def _place(link: Link, frame: dict) -> str:
     return f"{link.name} · {project_name}" if valid_name else link.name
 
 
-def _push(link: Link, frame: dict) -> None:
+def _push(link: Link, frame: dict, *, notify: bool = True) -> None:
     """Карточка или конец хода, которых начавший ход не смотрит, — push ему (спека 6.8); карточка ещё и ждёт
-    напоминаний (`CARDS`, `remind`)."""
+    напоминаний (`CARDS`, `remind`). `notify=False` — только напоминания: о карточке push уже был."""
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
@@ -521,7 +525,7 @@ def _push(link: Link, frame: dict) -> None:
         INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью
     body = {lang: f"{_place(link, frame)}: {words}" for lang, words in text.items()} if text else None
     _card(link, frame, body)
-    if text is None or user_id is None or watching(link.agent_id, frame["chat"], user_id):
+    if not notify or text is None or user_id is None or watching(link.agent_id, frame["chat"], user_id):
         return
     push.notify_later(user_id, body, f"code/{link.agent_id}/{frame['project']}/{frame['chat']}",
                       f"code-{frame['chat']}", kind=kind)
