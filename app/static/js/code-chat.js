@@ -966,7 +966,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     send.setAttribute('aria-label', label);
     send.querySelector('.go-label').textContent = label;
     text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
-    for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
+    // Мост 0.47.0 примет ответ из этого окна, если окно-владельца хода никто не смотрит (иначе — `owned` словами).
+    for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign && !agent?.answer_takeover;
     paintSessionNotice();
   }
 
@@ -982,7 +983,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       takeSession.textContent = tr("Продолжить копией");
       waitSession.textContent = tr("Дождаться освобождения");
     } else if (foreign) {
-      sessionText.textContent = asking ? tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить.")
+      sessionText.textContent = asking ? (agent?.answer_takeover
+        ? tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Ответьте здесь: если то окно сейчас закрыто, управление перейдёт сюда.")
+        : tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить."))
         : waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
         : tr("Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.");
       takeSession.textContent = tr("Продолжить здесь");

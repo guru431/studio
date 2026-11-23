@@ -82,6 +82,8 @@ class FakeMachine:
         self.software_update_all = False
         self.self_check = False                  # самопроверка и хвост журнала (мост 0.47.0)
         self.agent_log = False
+        self.answer_takeover = False             # ответ из чужого окна, если владельца не смотрят (мост 0.47.0)
+        self.chat_manage = False                 # переименовать и удалить сессию (мост 0.47.0)
         self.self_check_data = {'items': [], 'checked_at': None}
         self.log_lines = []
         self.software_data = {'items': [], 'update': {'tool': None, 'state': 'idle'}}
@@ -139,7 +141,7 @@ class FakeMachine:
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
                                            "software_update_all", "git_compare", "deepseek_models", "deepseek_usage", "file_upload", "file_search",
-                                           "self_check", "agent_log")
+                                           "self_check", "agent_log", "answer_takeover", "chat_manage")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode),
@@ -323,6 +325,22 @@ class FakeMachine:
                   **({"queue_paused": True} if self.running.get(chat, {}).get("queue_paused") else {})}
                  for chat, c in project.get("chats", {}).items() if c.get("listed", True)]
         return {"items": sorted(items, key=lambda i: i["modified"] or 0, reverse=True)}
+
+    def _op_chat_rename(self, req, events):
+        """Как мост 0.47.0 (§25): помощник хранит своё название; идёт ход — `running`."""
+        chat = self._chat(req)
+        if req["chat"] in self.running:
+            raise Refused("running", "Дождитесь завершения задания")
+        chat["title"] = req["title"]
+        return {}
+
+    def _op_chat_delete(self, req, events):
+        _, project = self._project(req)
+        self._chat(req)
+        if req["chat"] in self.running:
+            raise Refused("running", "Дождитесь завершения задания")
+        del project["chats"][req["chat"]]
+        return {}
 
     def _op_file_suggestions(self, req, events):
         _, project = self._project(req)
@@ -532,12 +550,21 @@ class FakeMachine:
         chat_id = req.get("chat")
         self._chat(req)
         run = self.running.get(chat_id)
+        takeover = False
+        if run is not None and run.get("owner") and run["owner"] != req.get("window") and self.answer_takeover:
+            watched = req.get("watched")             # как `turns.Runner.check_owner` моста 0.47.0
+            if watched is None or req.get("window") is None or run["owner"] in watched:
+                raise Refused("owned", "задание выполняется в другом окне")
+            takeover = True
         if run is None or req.get("request_id") not in run["asks"]:
             raise Refused("gone", "запроса уже нет")
         if req.get("decision") not in ("allow", "always", "deny"):
             raise Refused("invalid", "неверные поля")
         del run["asks"][req["request_id"]]
         events.append(self._ev(chat_id, {"k": "asked", "request_id": req["request_id"]}))
+        if takeover:
+            run["owner"] = req["window"]
+            events.append(self._ev(chat_id, {"k": "ownership", "owner": req["window"]}))
         self._play(chat_id, events)
         return {}
 

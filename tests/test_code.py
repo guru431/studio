@@ -87,6 +87,8 @@ BODIES = {
     ("GET", "/api/code/agents/1/projects/1/chats"): None,
     ("POST", "/api/code/agents/1/projects/1/chats"): None,
     ("PATCH", "/api/code/agents/1/projects/1/chats/1"): {"state": "closed"},
+    ("PUT", "/api/code/agents/1/projects/1/chats/1/title"): {"title": "x"},
+    ("DELETE", "/api/code/agents/1/projects/1/chats/1"): None,
     ("GET", "/api/code/agents/1/projects/1/chats/1"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/turn"): {"text": "x"},
     ("POST", "/api/code/agents/1/projects/1/chats/1/steer"): {"text": "x"},
@@ -313,7 +315,7 @@ def test_chats_merge_machine_sessions_with_studio_marks(studio):
     now = studio.clock[0]
     assert items == [
         {"chat": new, "engine": "claude", "title": None, "created": now, "modified": now, "origin": "studio", "state": "open",
-         "running": False, "asking": False},
+         "running": False, "asking": False, "empty": True},
         {"chat": A, "engine": "claude", "title": "Чат студии", "created": 10, "modified": 30, "origin": "studio", "state": "open",
          "running": True, "asking": True},
         {"chat": B, "engine": "claude", "title": "Чат терминала", "created": 20, "modified": 40, "origin": "other", "state": "closed",

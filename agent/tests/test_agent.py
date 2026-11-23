@@ -326,7 +326,8 @@ def test_hello(agent):
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
-                             "deepseek_models": False, "deepseek_usage": True}
+                             "deepseek_models": False, "deepseek_usage": True, "open_asks": True,
+                             "answer_takeover": True, "chat_manage": True}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -581,6 +582,83 @@ async def test_answer_stop_watch_of_another_project_do_not_see_the_turn(home, ro
     assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
     await settle(a)
     assert a.sent[-1]["e"] == {"k": "done", "status": "done"}
+
+
+async def test_open_asks_are_resent_on_every_new_link_only_to_a_studio_that_takes_them(home, root):
+    """07:I5: карточка, открытая при живом канале, после перезапуска службы не забыта — новый канал студии с
+    `welcome.open_asks` получает её с `known: true` (push уже был) и `request_id`; карточка без канала — без
+    `known` (push нужен); прежней студии — как раньше. Закрытая карточка не досылается."""
+    a = make(home, root, FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()]))
+    await opened(a)
+    pid = projects.pid("demo")
+    await a.handle(req("turn", project=pid, chat=CHAT, text="Привет", model=None, effort=None))
+    for _ in range(2000):
+        if a.runner.live().get(CHAT):
+            break
+        await asyncio.sleep(0.001)
+    rid = a.sent[-1]["e"]["request_id"]
+    card = {"project": pid, "chat": CHAT, "project_name": "demo", "status": "permission", "request_id": rid, "ago": 0}
+    assert a.completions(asks=True) is None                                          # прежняя студия
+    assert a.completions(asks=True, open_asks=True) == {"t": "completions", "items": [{**card, "known": True}]}
+    assert a.completions(asks=True, open_asks=True)["items"] == [{**card, "known": True}]   # и при каждом канале
+    a.missed({"t": "completions", "items": [{**card, "known": True}]})                    # кадр не ушёл
+    assert not a._asks
+    a._asks = {CHAT: {**card, "at": a._now()}}                                          # возникла без канала
+    assert a.completions(asks=True, open_asks=True)["items"] == [card]
+    assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
+    await settle(a)
+    assert a.completions(asks=True, open_asks=True) is None
+
+
+async def test_answer_from_another_window_takes_over_when_the_owner_is_not_watched(home, root):
+    """08:I4: ответ на карточку из чужого окна — `owned`, пока окно-владелец среди `watched` (или студия их не
+    прислала); его никто не смотрит — ответ принят, управление — ответившему (`ownership`)."""
+    a = make(home, root, FakeFactory([("ask", "Bash", {"command": "ls"}, []), result_ok()]))
+    await opened(a)
+    pid, owner, other = projects.pid("demo"), "a" * 32, "b" * 32
+    await a.handle(req("turn", project=pid, chat=CHAT, text="Привет", model=None, effort=None, window=owner))
+    for _ in range(2000):
+        if a.runner.live().get(CHAT):
+            break
+        await asyncio.sleep(0.001)
+    rid = a.sent[-1]["e"]["request_id"]
+    answer = dict(project=pid, chat=CHAT, request_id=rid, decision="allow", window=other)
+    for extra in ({}, {"watched": [owner, other]}):
+        assert (await a.handle(req("answer", **answer, **extra)))[0]["code"] == "owned"
+    assert (await a.handle(req("answer", **answer, watched=["x"])))[0]["code"] == "invalid"
+    assert (await a.handle(req("answer", **answer, watched=[other])))[0]["ok"]
+    assert {"k": "ownership", "owner": other} in [f["e"] for f in a.sent if f.get("t") == "ev"]
+    await settle(a)
+
+
+async def test_rename_and_delete_claude_session_with_the_sdk(agent, root, monkeypatch):
+    """07:I8: Claude — `rename_session`/`delete_session` SDK в папке проекта; сессии нет — `not_found`; неверное
+    название — `invalid`; идёт ход — `running`; OpenCode и DeepSeek Harness — честный `unsupported`."""
+    calls = []
+
+    def rename(chat, title, directory=None):
+        calls.append(("rename", chat, title, directory))
+
+    def delete(chat, directory=None):
+        calls.append(("delete", chat, directory))
+        raise FileNotFoundError(chat)
+
+    monkeypatch.setattr(sessions, "rename_session", rename)
+    monkeypatch.setattr(sessions, "delete_session", delete)
+    await opened(agent)
+    pid, project = projects.pid("demo"), str(root / "demo")
+    assert (await agent.handle(req("chat_rename", project=pid, chat=CHAT, title="Своё")))[0]["ok"]
+    assert (await agent.handle(req("chat_delete", project=pid, chat=CHAT)))[0]["code"] == "not_found"
+    assert calls == [("rename", CHAT, "Своё", project), ("delete", CHAT, project)]
+    for title in ("", " с пробелом", "a\nb", "x" * 201, None):
+        assert (await agent.handle(req("chat_rename", project=pid, chat=CHAT, title=title)))[0]["code"] == "invalid"
+    agent.opencode = SimpleNamespace(catalog={"models": []}, live=lambda: {})
+    res = (await agent.handle(req("chat_delete", engine="opencode", project=pid, chat=CHAT)))[0]
+    assert res["code"] == "unsupported"
+    monkeypatch.setattr(agent.runner, "_turn", lambda *_: object())
+    assert (await agent.handle(req("chat_delete", project=pid, chat=CHAT)))[0]["code"] == "running"
+    assert len(calls) == 2
+    assert agent.hello()["chat_manage"] is True
 
 
 async def test_watch_without_a_turn_does_not_look_for_the_chat(agent):

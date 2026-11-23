@@ -177,10 +177,10 @@ class Link:
                 except Exception as e:
                     log.warning("канал: welcome: %s", type(e).__name__)
             self.agent.new_link(reconnect=True)
-            # Ходы, кончившиеся без канала, и карточки, открытые без него, — первым кадром, если студия их
-            # принимает (протокол §18).
+            # Ходы, кончившиеся без канала, и карточки, открытые без него (а студии с `open_asks` — все открытые),
+            # — первым кадром, если студия их принимает (протокол §18).
             if frame.get("completions") is True and (missed := self.agent.completions(
-                    asks=frame.get("pending_asks") is True)) is not None:
+                    asks=frame.get("pending_asks") is True, open_asks=frame.get("open_asks") is True)) is not None:
                 queue.put_nowait(missed)
             self._queue = queue
             self.agent.send = self.send

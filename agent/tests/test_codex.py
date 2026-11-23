@@ -72,6 +72,10 @@ class FakeRpc:
                               "isDefault": True, "defaultReasoningEffort": "high"}]}
         if method == "config/read":
             return {"config": {"model": "codex-test", "model_reasoning_effort": "high"}}
+        if method in ("thread/name/set", "thread/archive"):
+            if self.factory.manage_error is not None:
+                raise self.factory.manage_error
+            return {}
         if method == "thread/unsubscribe":
             if self.factory.writers.get(params["threadId"]) is self:
                 del self.factory.writers[params["threadId"]]
@@ -93,6 +97,7 @@ class Factory:
         self.calls, self.replies, self.clients, self.turns = [], [], [], []
         self.exists = False
         self.read_error = None
+        self.manage_error = None
         self.ask = "item/commandExecution/requestApproval"
         self.ask_params = {}
         self.writers = {}
@@ -113,6 +118,24 @@ def runner(home):
     runner.catalog = {"version": "test", "models": [], "efforts": []}
     runner.sent, runner.fake, runner.project = sent, factory, project
     return runner
+
+
+async def test_rename_and_delete_use_codex_thread_methods(runner):
+    """07:I8: своё название — `thread/name/set`, «Удалить» — штатный архив `thread/archive`; thread не этого проекта
+    или его нет — `not_found`; Codex без метода — `unsupported`."""
+    runner.fake.exists = True
+    await runner.rename_chat(runner.project, THREAD, "Своё название")
+    await runner.delete_chat(runner.project, THREAD)
+    assert [c for c in runner.fake.calls if c[0] in ("thread/name/set", "thread/archive")] == [
+        ("thread/name/set", {"threadId": THREAD, "name": "Своё название"}), ("thread/archive", {"threadId": THREAD})]
+    runner.fake.manage_error = codex_rpc.RpcError(method="thread/name/set", code=-32601)
+    with pytest.raises(Refused) as e:
+        await runner.rename_chat(runner.project, THREAD, "Ещё")
+    assert e.value.code == "unsupported"
+    runner.fake.exists = False
+    with pytest.raises(Refused) as e:
+        await runner.delete_chat(runner.project, THREAD)
+    assert e.value.code == "not_found"
 
 
 async def test_question_ids_distinguish_identical_text(runner):
