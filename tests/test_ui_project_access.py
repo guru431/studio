@@ -164,6 +164,7 @@ def test_viewer_role_and_term(desktop_browser, live, width):
     live.add_user(owner)
     live.add_user(viewer)
     machine = FakeMachine({'alpha': {'files': {'a.txt': b'hello'}, 'chats': {CODE_CHAT_A: code_session('Отчёт')}}})
+    machine.file_operations = machine.file_upload = machine.file_search = True
     aid, channel = code_online(live, owner, machine)
     owner_cookie, viewer_cookie = signed(live, owner), signed(live, viewer)
     try:
@@ -205,6 +206,14 @@ def test_viewer_role_and_term(desktop_browser, live, width):
                 expect(editor).to_have_value('hello')
                 assert editor.evaluate('(node) => node.readOnly')
                 assert member.locator('#code-save').count() == 0
+                # «Загрузить файл» наблюдателю скрыт, поиск по содержимому и «Скачать» — есть
+                expect(member.locator('#code-upload')).to_be_hidden()
+                expect(member.locator('#code-files-search')).to_be_visible()
+                member.locator('#code-open-file-actions').click()
+                actions = member.locator('#code-file-actions [data-action]')
+                expect(actions).to_have_count(1)
+                expect(actions.first).to_have_attribute('data-action', 'download')
+                member.locator('#code-file-actions .dialog-close').click()
                 popup.get_by_label(f'Роль · {viewer}').select_option('editor')
                 popup.get_by_text('Роль изменена', exact=True).wait_for()
                 member.goto(live.url + f'/#/code/{aid}/{pid("alpha")}/{CODE_CHAT_A}')

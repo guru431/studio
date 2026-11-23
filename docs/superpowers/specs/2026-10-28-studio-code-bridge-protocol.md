@@ -307,6 +307,8 @@ app-server, ходы продолжают сессии Codex; авторизац
 | `visualization` (0.16.0, `hello.visualizations`) | `project`, `source` | `{"text", "version"}` | `outside`, `invalid`, `not_found`, `too_large` (HTML до 10 МиБ с 0.23.1; ранее 2 МиБ), `binary`, `closed` |
 | `save` | `project`, `path`, `text`, `version` | `{"version"}` | `outside`, `conflict` (`"version"` — нынешний), `too_large`, `binary`, `read_only` (файл только для чтения; сервер — 409) |
 | `file_operation` (0.8.1, `hello.file_operations`) | `project`, `operation`, `path`, `destination` (путь или `null`) | `{}` | `outside`, `invalid`, `not_found`, `exists` (409), `read_only` (409), `busy` (409) |
+| `file_upload` (0.47.0, `hello.file_upload`) | `project`, `path`, `data` (base64 до 10 МиБ байтов), `replace` (bool) | `{"version"}` | `outside`, `invalid`, `not_found` (нет папки), `exists` (409), `read_only` (409), `busy` (409), `too_large` |
+| `file_search` (0.47.0, `hello.file_search`) | `project`, `path` (папка), `query` | `{"items": [{"path", "line", "text"}], "complete", "more"}` | `outside`, `not_found`, `busy` (поиск уже идёт) |
 | `git` | `project` | `{"branch", "upstream", "ahead", "behind", "files": [{"path", "status"}]}` | `not_git`; `git_unavailable` (0.42.0, сервер — 409: нет git, отказ `safe.directory`, сбой git при своём `.git`) |
 | `git_compare` (`hello.git_compare`, 0.43.0) | `project`, `path` | `{"before": str, "after": str, "exists": bool}` — HEAD и рабочий файл по одной строке статуса, UTF-8 до 128 КиБ с каждой стороны | `not_git`, `git_unavailable`, `not_found`, `outside`, `binary`, `too_large`; только владелец и открытая сессия |
 
@@ -375,6 +377,25 @@ Harness незнакомой версии формата или повреждё
   При ошибке удаления часть записей могла быть удалена: интерфейс обновляет дерево.
   `save` и операции сериализованы на машине. Успех сбрасывает кэш PDF сессии, статистику дерева и обновляет Git.
   Старый мост без capability — HTTP 409 `unsupported`, интерфейс скрывает операции.
+- Скачать файл (любой мост): `POST /api/code/agents/{aid}/projects/{pid}/files/download {path}` — просьба `raw`,
+  ответ — байты `application/octet-stream`, имя — только последняя часть пути в `Content-Disposition`
+  (`filename` ASCII и `filename*` UTF-8), `no-store`. Байты на сервере не остаются.
+- Добавка v1 с 0.47.0: `hello.file_upload: true` объявляет `file_upload` через
+  `PUT /api/code/agents/{aid}/projects/{pid}/files/upload` (успех HTTP 204): тело — сами байты до 10 МиБ, путь от
+  корня проекта — заголовком `X-Studio-Name` (encodeURIComponent; не в адресе), `X-Studio-Replace: 1` — `replace`.
+  Путь — как у `file_operation` (непустой, родитель существует, без ссылок и reparse-point). Без `replace`
+  занятое имя — `exists`, ничего не затирается (исключительное создание, недописанный файл удаляется); с `replace`
+  существующий обычный файл заменяется целиком (атрибуты и «только чтение» — как у `save`), папка — `exists`,
+  отсутствующий создаётся. Страница посылает `replace` только после окна «Заменить?». Сериализован с `save` и
+  операциями; участнику — по тем же правам, что `file_operation`.
+- Добавка v1 с 0.47.0: `hello.file_search: true` объявляет `file_search` через
+  `POST /api/code/agents/{aid}/projects/{pid}/files/search {path, query}`: строки с `query` (без регистра, `ё` = `е`)
+  в файлах папки `path`. Обход, исключения служебных каталогов и известных файлов секретов, symlink/reparse points,
+  пределы каталогов и файлов — как у `file_suggestions` (§11); файл больше 2 МиБ, с NUL или не UTF-8 — пропуск;
+  срок 10 с, до 100 строк и до 10 из одного файла (`more` — показаны не все), `complete:false` — неполный обход.
+  `line` — номер строки с 1 (разделители `\r\n`, `\r`, `\n` — как в поле правки), `text` — фрагмент вокруг
+  совпадения без лишних пробелов (около 170 знаков, сервер режет до 400). Один поиск одновременно на мост (`busy`).
+  Найденное сервер не хранит и не журналирует.
 
 ## 5. Проект
 
@@ -817,8 +838,8 @@ HTTP-сервер поддерживает `?refresh=true`, для списка 
 При наличии поля мост не требует открытой PIN-сессии и не открывает/продлевает её. Допустимы только
 операции из явного списка `agent.SHARED_OPS`: `projects`, `activity`, `project_summary`, `chats`,
 `history`, `history_image`, `state`, `turn`, `steer`, `queue_edit`, `queue_pause`, `claim`, `watch`,
-`answer`, `stop`, `files`, `file_stats`, `file_operation`, `file_suggestions`, `chat_search`,
-`chat_fork`, `subagents`, `subagent_history`, `read`, `raw`, `visualization`, `save`, `git`.
+`answer`, `stop`, `files`, `file_stats`, `file_operation`, `file_suggestions`, `file_search`, `file_upload`,
+`chat_search`, `chat_fork`, `subagents`, `subagent_history`, `read`, `raw`, `visualization`, `save`, `git`.
 У операций, кроме `projects`/`activity`, `project` обязательно входит в выданный список.
 `projects` и `activity` возвращают только его элементы, `projects` — без `dir`. Некорректный список — `invalid`, операция
 или проект вне разрешения — `closed`. Сведения о компьютере, его PIN, рабочий стол, обновление,
@@ -827,7 +848,8 @@ HTTP-сервер поддерживает `?refresh=true`, для списка 
 Наблюдатель проекта (роль `viewer` в `project_members`, шаг схемы 76): сервер пропускает только читающие
 просьбы (`project_access.READ_OPS`) и добавляет к ним доверенное `shared_readonly: true`. Мост 0.47.0 сверяет его
 сам: только вместе с `shared_projects` и только операции `agent.SHARED_READ_OPS` (`SHARED_OPS` без `turn`, `steer`,
-`queue_edit`, `queue_pause`, `claim`, `answer`, `stop`, `file_operation`, `chat_fork`, `save`); иначе — `closed`,
+`queue_edit`, `queue_pause`, `claim`, `answer`, `stop`, `file_operation`, `file_upload`, `chat_fork`, `save`;
+`file_search` и `raw` (её «Скачать») наблюдателю доступны); иначе — `closed`,
 не логическое значение — `invalid`. Capability нет: прежний мост неизвестное поле пропускает, граница — сервер.
 
 `visualization` участника читает только файлы проекта: общий каталог визуализаций Codex

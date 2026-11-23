@@ -1,11 +1,12 @@
-"""Подсказки путей и ограниченный поиск по локальной истории. Без постоянного индекса и журналирования."""
+"""Подсказки путей, поиск по содержимому файлов и ограниченный поиск по локальной истории. Без постоянного индекса
+и журналирования."""
 
 import asyncio
 import os
 import stat
 import time
 
-from . import files
+from . import files, limits
 from .errors import Refused
 
 IGNORED = frozenset((".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
@@ -17,21 +18,23 @@ MAX_SECONDS = 3
 MAX_CHATS = 60
 MAX_MESSAGES = 1500
 SEARCH_SECONDS = 15
+GREP_SECONDS = 10
+GREP_HITS = 100
+GREP_PER_FILE = 10
 
 
 def normalize(text):
     return str(text).casefold().replace("ё", "е")
 
 
-def suggest(project, query, *, monotonic=time.monotonic, limit=50):
-    """Только имена; не следуем reparse points, результат явно помечает предел обхода."""
-    deadline = monotonic() + MAX_SECONDS
-    pending, matches, visited, count = [""], [], 0, 0
-    complete = True
-    needle = normalize(query.strip())
+def _walk(project, start, deadline, state, monotonic):
+    """Пути обычных файлов ниже `start` (генератор): без служебных каталогов, известных файлов секретов, symlink и
+    reparse points; пределы — `deadline`, MAX_DIRS каталогов, MAX_FILES файлов. Неполный обход —
+    `state["complete"] = False`."""
+    pending, visited, count = [start], 0, 0
     while pending:
         if monotonic() >= deadline or visited >= MAX_DIRS or count >= MAX_FILES:
-            complete = False
+            state["complete"] = False
             break
         relative = pending.pop()
         visited += 1
@@ -39,7 +42,7 @@ def suggest(project, query, *, monotonic=time.monotonic, limit=50):
             with os.scandir(files.resolve(project, relative)) as iterator:
                 for entry in iterator:
                     if monotonic() >= deadline or count >= MAX_FILES:
-                        complete = False
+                        state["complete"] = False
                         break
                     try:
                         info = entry.stat(follow_symlinks=False)
@@ -52,20 +55,28 @@ def suggest(project, query, *, monotonic=time.monotonic, limit=50):
                             if name not in IGNORED and len(pending) + visited < MAX_DIRS:
                                 pending.append(path)
                             elif name not in IGNORED:
-                                complete = False
+                                state["complete"] = False
                         elif stat.S_ISREG(info.st_mode):
                             count += 1
                             if name in PRIVATE or name.startswith(".env.") and not name.endswith((".example", ".sample")):
                                 continue
                             if name.endswith((".pem", ".key", ".p12", ".pfx", ".local.ps1", ".local.py")):
                                 continue
-                            folded = normalize(path)
-                            if all(word in folded for word in needle.split()):
-                                matches.append(path)
+                            yield path, info
                     except (OSError, Refused):
-                        complete = False
+                        state["complete"] = False
         except (OSError, Refused):
-            complete = False
+            state["complete"] = False
+
+
+def suggest(project, query, *, monotonic=time.monotonic, limit=50):
+    """Только имена; не следуем reparse points, результат явно помечает предел обхода."""
+    deadline = monotonic() + MAX_SECONDS
+    state = {"complete": True}
+    needle = normalize(query.strip())
+    matches = [path for path, _ in _walk(project, "", deadline, state, monotonic)
+               if all(word in normalize(path) for word in needle.split())]
+    complete = state["complete"]
     matches.sort(key=lambda path: (not normalize(path.rsplit("/", 1)[-1]).startswith(needle), len(path), normalize(path)))
     return {"items": matches[:limit] if limit is not None else matches, "complete": complete,
             "more": limit is not None and len(matches) > limit}
@@ -101,6 +112,51 @@ def snippet(text, query):
     start = max(0, at - 65)
     end = min(len(flat), max(0, at) + len(query) + 100)
     return ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
+def grep(project, path, query, *, monotonic=time.monotonic):
+    """Строки с `query` (без регистра, ё = е) в файлах папки `path` (0.47.0): обход и исключения — как у подсказок
+    (`_walk`), файл больше `limits.TEXT_MAX`, с NUL или не UTF-8 — пропуск, общий срок GREP_SECONDS. До GREP_HITS
+    строк, из одного файла — до GREP_PER_FILE; `more` — совпадений больше показанных. Ничего не запоминает."""
+    target = files.resolve(project, path)
+    if not target.is_dir():
+        raise Refused("not_found", files.NO_DIR)
+    query = query.strip()
+    needle = normalize(query)
+    if not needle:
+        return {"items": [], "complete": True, "more": False}
+    deadline = monotonic() + GREP_SECONDS
+    state = {"complete": True}
+    hits, more = [], False
+    for relative, info in _walk(project, path, deadline, state, monotonic):
+        if info.st_size > limits.TEXT_MAX:
+            continue
+        try:
+            with open(files.resolve(project, relative), "rb") as source:
+                data = source.read(limits.TEXT_MAX + 1)
+        except (OSError, Refused):
+            state["complete"] = False
+            continue
+        if len(data) > limits.TEXT_MAX or b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if needle not in normalize(text):
+            continue
+        found = 0
+        # Строки — как их считает поле правки страницы (textarea): разделители только \r\n, \r и \n.
+        for number, line in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
+            if needle in normalize(line):
+                if found == GREP_PER_FILE or len(hits) == GREP_HITS:
+                    more = True
+                    break
+                hits.append({"path": relative, "line": number, "text": snippet(line, query)})
+                found += 1
+        if more and len(hits) == GREP_HITS:
+            break
+    return {"items": hits, "complete": state["complete"], "more": more}
 
 
 async def search(query, catalog, history, *, monotonic=time.monotonic, timeout=SEARCH_SECONDS):

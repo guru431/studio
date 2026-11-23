@@ -28,7 +28,7 @@ TERMS = {"day": 86400, "week": 7 * 86400, "month": 30 * 86400}
 #: просьбы мосту, которые наблюдатель может слать: чтение проекта, чатов, файлов и git — без хода, ответа на
 #: карточки, правки файлов и новых чатов. `state` читает настройки и контекст (мост ничего не пишет)
 READ_OPS = frozenset({"projects", "activity", "project_summary", "chats", "history", "history_image", "state", "watch",
-                      "files", "file_stats", "file_suggestions", "chat_search", "subagents", "subagent_history",
+                      "files", "file_stats", "file_suggestions", "file_search", "chat_search", "subagents", "subagent_history",
                       "read", "raw", "visualization", "git", "git_compare"})
 READONLY = "у наблюдателя проекта — только просмотр"
 #: действует ли выдача сейчас (`?` — clock.NOW())

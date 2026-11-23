@@ -3,7 +3,7 @@
 import pytest
 
 from fake_bridge import FakeMachine
-from test_ui_browser import READY, browser, code_item, code_online, code_tab, live, problems, set_value, signin
+from test_ui_browser import CLICKS, READY, browser, code_item, code_online, code_tab, live, problems, set_value, signin
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
@@ -102,14 +102,67 @@ def test_old_bridge_keeps_reading_without_mutation_controls(browser, live):
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
             ("wait", exists("a.txt")),
-            ("eval", "hidden", "document.querySelector('.code-files-create').hidden && !document.querySelector('.code-file-menu')"),
+            ("eval", "hidden", "document.querySelector('.code-files-create').hidden && document.querySelector('.code-files-search').hidden"),
+            menu("a.txt"), ("eval", "actions", "[...document.querySelectorAll('#code-file-actions [data-action]')].map(b => b.dataset.action)"),
+            ("click", "#code-file-actions .dialog-close"),
             ("click", code_item("a.txt")), ("wait", "document.querySelector('#code-editor')"),
             ("eval", "content", "document.querySelector('#code-editor').value")])
     finally:
         server.stop()
     assert not result.get("failed"), result
     assert result["values"]["hidden"] and result["values"]["content"] == "old bridge"
+    assert result["values"]["actions"] == ["download"]      # скачать файл можно и старым мостом (`raw`)
     assert not problems(result), problems(result)
+
+
+def test_phone_searches_contents_downloads_and_uploads_with_replace_confirmation(browser, live, tmp_path):
+    login = "file-search-upload"
+    live.add_user(login, theme="dark")
+    machine = FakeMachine({"alpha": {"files": {"src/app.py": "print('hello')\n# найди меня\n".encode(),
+                                               "build/out.bin": b"\x00\x01\x02"}}})
+    machine.file_operations = machine.file_upload = machine.file_search = True
+    aid, server = code_online(live, login, machine)
+    pick = """(() => { const dt = new DataTransfer(); dt.items.add(new File(['%s'], 'заметка.txt'));
+      const input = document.querySelector('#code-upload-input'); input.files = dt.files;
+      input.dispatchEvent(new Event('change')); return true; })()"""
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_tab(aid, "files"),
+            ("wait", exists("src")),
+            set_value("#code-files-search", "НАЙДИ"), ("click", "#code-files-search-go"),
+            ("wait", "document.querySelector('#code-files-found .code-found-item')"),
+            ("eval", "found", "document.querySelector('#code-files-found').textContent"),
+            ("screenshot", str(tmp_path / "file-search-320.png")),
+            ("click", "#code-files-found .code-found-item"),
+            ("wait", "document.querySelector('#code-editor')?.selectionEnd > 0"),
+            ("eval", "line", "(e => e.value.slice(e.selectionStart, e.selectionEnd))(document.querySelector('#code-editor'))"),
+            ("click", "#code-path .code-path-link"), ("wait", "document.querySelector('#code-file').hidden"),
+            ("click", code_item("build")), ("wait", exists("build/out.bin")),
+            ("eval", "spy", CLICKS), ("eval", "blobs", """(() => { const real = URL.createObjectURL;
+              URL.createObjectURL = (blob) => { window.lastBlob = blob; return real(blob); }; return true; })()"""),
+            menu("build/out.bin"), action("download"), ("wait", "window.clicked.length === 1"),
+            ("eval", "bytes", "window.lastBlob.arrayBuffer().then(b => [...new Uint8Array(b)])"),
+            ("eval", "named", "window.clicked[0][1]"),
+            menu("build"), action("upload"), ("eval", "first", pick % "первая"),
+            ("wait", exists("build/заметка.txt")),
+            menu("build"), action("upload"), ("eval", "second", pick % "вторая"),
+            ("wait", "document.querySelector('#code-upload-exists[open]')"),
+            ("eval", "ask", "document.querySelector('#code-upload-exists').textContent"),
+            ("click", "#code-upload-replace"),
+            ("wait", "document.querySelector('#code-upload-status').textContent.includes('build/заметка.txt')"),
+            ("eval", "overflow", "document.documentElement.scrollWidth > innerWidth")], width=320, mobile=True)
+    finally:
+        server.stop()
+    assert not result.get("failed"), result
+    values = result["values"]
+    assert "src/app.py:2" in values["found"] and "# найди меня" in values["found"]
+    assert values["line"] == "# найди меня"
+    assert values["bytes"] == [0, 1, 2] and values["named"] is True
+    assert "заметка.txt" in values["ask"] and not values["overflow"]
+    assert machine.projects["alpha"]["files"]["build/заметка.txt"] == "вторая".encode()
+    uploads = [r for r in machine.requests if r["op"] == "file_upload"]
+    assert [r["replace"] for r in uploads] == [False, False, True]
+    errors = problems(result)
+    assert len(errors) == 1 and "409 (Conflict)" in errors[0] and "/files/upload" in errors[0], errors
 
 
 def test_moving_parent_retargets_editor_and_unrelated_operations_keep_draft(browser, live):

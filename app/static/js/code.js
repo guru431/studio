@@ -754,7 +754,8 @@ async function files(mine, p, path, status) {
     if (proj === p) failed(err, p.aid, box, file);
   };
   if (!p.files) p.files = filesView(p.filesBox, { aid: p.aid, pid: p.pid, name: name || '', failed: refuse, path,
-    git: p.repo, operations: agent?.file_operations === true && !p.readonly, readonly: !!p.readonly });
+    git: p.repo, operations: agent?.file_operations === true && !p.readonly, readonly: !!p.readonly,
+    upload: agent?.file_upload === true && !p.readonly, search: agent?.file_search === true });
   else if (path !== null) p.files.open(path);
 }
 

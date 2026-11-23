@@ -95,6 +95,8 @@ class FakeMachine:
         self.desktop_clipboard = ''
         self.file_stats = False
         self.file_operations = False
+        self.file_upload = False                 # «Загрузить файл» в папку проекта (мост 0.47.0)
+        self.file_search = False                 # поиск по содержимому файлов (мост 0.47.0)
         self.git_compare = False
         self.file_suggestions = False
         self.chat_search = False
@@ -136,7 +138,7 @@ class FakeMachine:
                 **{name: True for name in ("attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "opencode_features", "project_summary", "computer_info", "software_versions", "visualizations", "desktop", "terminal", "file_stats", "file_operations", "passive_requests",
                                            "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "history_images", "project_sharing",
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
-                                           "software_update_all", "git_compare", "deepseek_models", "deepseek_usage",
+                                           "software_update_all", "git_compare", "deepseek_models", "deepseek_usage", "file_upload", "file_search",
                                            "self_check", "agent_log")
                    if getattr(self, name)},
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
@@ -623,6 +625,41 @@ class FakeMachine:
                 if operation == "move":
                     dirs.add(destination + folder[len(path):])
         return {}
+
+    def _op_file_upload(self, req, events):
+        files = self._files(req)
+        _, project = self._project(req)
+        path, data = req["path"], base64.b64decode(req["data"], validate=True)
+        if not path:
+            raise Refused("invalid", "неверные поля")
+        if len(data) > RAW_MAX:
+            raise Refused("too_large", "файл больше 10 МиБ")
+        dirs = project.setdefault("dirs", set()) | {""} | {
+            "/".join(f.split("/")[:i]) for f in files for i in range(1, f.count("/") + 1)}
+        if path in dirs:
+            raise Refused("exists", "папка с таким именем уже существует")
+        if path in files and not req["replace"]:
+            raise Refused("exists", "файл или папка с таким именем уже существует")
+        if path.rpartition("/")[0] not in dirs:
+            raise Refused("not_found", "нет такой папки")
+        if path in files and path in self.read_only:
+            raise Refused("read_only", "файл только для чтения")
+        files[path] = data
+        return {"version": _version(data)}
+
+    def _op_file_search(self, req, events):
+        files, path, needle = self._files(req), req["path"], req["query"].strip().casefold()
+        hits = []
+        for name in sorted(files):
+            if path and not name.startswith(path + "/"):
+                continue
+            try:
+                text = self._text(files[name])
+            except Refused:
+                continue
+            hits += [{"path": name, "line": number, "text": line.strip()}
+                     for number, line in enumerate(text.splitlines(), 1) if needle and needle in line.casefold()]
+        return {"items": hits[:100], "complete": True, "more": len(hits) > 100}
 
     def _op_file_stats(self, req, events):
         _, project = self._project(req)

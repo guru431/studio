@@ -158,11 +158,15 @@ async def test_shared_readonly_allows_only_reading_requests(agent_with_pin, root
     assert response["ok"] and response["data"]["text"] == "shared"
     for op, fields in [("save", {"path": "a.txt", "text": "x", "version": None}),
                        ("file_operation", {"operation": "delete", "path": "a.txt"}),
+                       ("file_upload", {"path": "a.txt", "data": "eA==", "replace": True}),
                        ("turn", {"chat": "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70", "text": "hi"}),
                        ("answer", {"chat": "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70", "request_id": "r1", "decision": "allow"})]:
         result = (await agent.handle(req(op, shared_projects=scope, shared_readonly=True, project=scope[0], **fields)))[0]
         assert result["code"] == "closed", op
     assert (root / "demo" / "a.txt").read_text(encoding="utf-8") == "shared"
+    found = (await agent.handle(req("file_search", shared_projects=scope, shared_readonly=True, project=scope[0],
+                                    path="", query="shared")))[0]
+    assert found["ok"] and found["data"]["items"] == [{"path": "a.txt", "line": 1, "text": "shared"}]
     assert (await agent.handle(req("projects", shared_readonly=True)))[0]["code"] == "closed"
     assert (await agent.handle(req("projects", shared_projects=scope, shared_readonly=1)))[0]["code"] == "invalid"
 
@@ -313,7 +317,7 @@ def test_hello(agent):
                              "subscription_usage": True, "usage_reset": True, "opencode_usage": True, "opencode_features": True, "project_summary": True, "file_stats": True, "file_operations": True,
                              "file_suggestions": True, "chat_search": True, "queue_edit": True,
                              "chat_fork": True, "subagents": True, "worktrees": True, "project_create": True, "project_mirror": True, "pin_timeout": True,
-                             "account_disabled": True, "git_compare": True,
+                             "account_disabled": True, "git_compare": True, "file_upload": True, "file_search": True,
                              "project_mirror_discovery": True, "mirror_exclude": True, "mirror_groups": True,
                              "computer_info": True, "software_versions": True, "software_update_all": True, "desktop": host.platform_id() != 'linux',
                              "self_check": True, "agent_log": True,

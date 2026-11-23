@@ -35,6 +35,7 @@ import unicodedata
 import uuid
 from collections import deque
 from typing import Any, Literal
+from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -47,6 +48,7 @@ import clock
 import code_attention
 import code_visualizations
 import lock_policy
+import media
 import ocr_render
 import operations
 import project_access
@@ -797,6 +799,34 @@ async def file_suggestions(aid: int, pid: str, body: DiscoveryQuery, request: Re
             "complete": data.get("complete") is True, "more": data.get("more") is True}
 
 
+class FileSearch(DiscoveryQuery):
+    path: Any = None             # папка поиска — check_path
+
+
+@router.post("/agents/{aid}/projects/{pid}/files/search")
+async def file_search(aid: int, pid: str, body: FileSearch, request: Request):
+    """Строки файлов папки с `query` (мост 0.47.0, `hello.file_search`): запрос и папка — телом POST; найденные
+    строки сервер передаёт странице и не хранит, в журнал — только код отказа (`_warn`)."""
+    own_agent(request, aid)
+    check_pid(pid)
+    path = check_path(body.path)
+    require_capability(aid, "file_search")
+    data = await ask(request, aid, "file_search", project=pid, path=path, query=body.query.strip())
+    items = []
+    for row in data.get("items", [])[:100] if isinstance(data.get("items"), list) else ():
+        if (not isinstance(row, dict) or not isinstance(row.get("path"), str) or not row["path"]
+                or type(row.get("line")) is not int
+                or row["line"] < 1 or not isinstance(row.get("text"), str)
+                or path and not row["path"].startswith(path + "/")):
+            continue
+        try:
+            check_path(row["path"])
+        except HTTPException:
+            continue
+        items.append({"path": row["path"], "line": row["line"], "text": row["text"][:400]})
+    return {"items": items, "complete": data.get("complete") is True, "more": data.get("more") is True}
+
+
 @router.post("/agents/{aid}/projects/{pid}/search")
 async def chat_search(aid: int, pid: str, body: DiscoveryQuery, request: Request):
     own_agent(request, aid)
@@ -1543,6 +1573,48 @@ async def file_operation(aid: int, pid: str, body: FileOperation, request: Reque
     # Перенос/удаление PDF не оставляет старую копию в кэше просмотра.
     _forget_pdf(request.state.user.id, bridge.tag(request.state.digest))
     return Response(status_code=204)
+
+
+@router.put("/agents/{aid}/projects/{pid}/files/upload", status_code=204)
+async def file_upload(aid: int, pid: str, request: Request):
+    """Файл с устройства в папку проекта (мост 0.47.0, `hello.file_upload`): тело — сами байты до RAW_MAX, путь от
+    корня проекта — заголовком `X-Studio-Name` (encodeURIComponent; строку запроса пишет журнал Apache). Занятое имя —
+    409 `exists`; `X-Studio-Replace: 1` — замена существующего файла после подтверждения на странице."""
+    own_agent(request, aid)
+    check_pid(pid)
+    project_access.editable(request, aid, pid)      # наблюдателю — 403 `readonly` до чтения тела
+    try:
+        path = check_path(unquote(request.headers.get("x-studio-name", ""), errors="strict"))
+    except UnicodeDecodeError:
+        raise _refuse(422, "path", BAD_PATH) from None
+    if not path:
+        raise _refuse(422, "path", BAD_PATH)
+    require_capability(aid, "file_upload")
+    raw = await auth.small_body(request, RAW_MAX)
+    if raw is None:
+        raise _refuse(413, "too_large", TOO_LARGE_RAW)
+    await ask(request, aid, "file_upload", project=pid, path=path, data=base64.b64encode(raw).decode("ascii"),
+              replace=request.headers.get("x-studio-replace") == "1")
+    _forget_pdf(request.state.user.id, bridge.tag(request.state.digest))
+    return Response(status_code=204)
+
+
+@router.post("/agents/{aid}/projects/{pid}/files/download")
+async def file_download(aid: int, pid: str, body: PathBody, request: Request):
+    """Файл проекта до RAW_MAX вложением (просьба `raw`): путь — телом POST, имя — только в `Content-Disposition`
+    (`media.disposition`); байты в памяти сервера не остаются."""
+    own_agent(request, aid)
+    check_pid(pid)
+    path = check_path(body.path)
+    if not path:
+        raise _refuse(422, "path", BAD_PATH)
+    raw = await asyncio.to_thread(_raw_bytes, await ask(request, aid, "raw", project=pid, path=path))
+    own_agent(request, aid)
+    if not _session_open(request.state.digest):
+        raise _refuse(409, "closed", "Сеанс Студии закрыт")
+    return Response(raw, media_type="application/octet-stream", headers={
+        "Content-Disposition": media.disposition(path.rsplit("/", 1)[-1]), "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/agents/{aid}/projects/{pid}/read")

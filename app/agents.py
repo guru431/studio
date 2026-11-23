@@ -232,6 +232,8 @@ async def list_agents(request: Request, refresh: bool = False):
                       "file_stats": hello.get("file_stats", False),
                       "file_operations": hello.get("file_operations", False), "mcp": hello.get("mcp", False),
                       "file_suggestions": hello.get("file_suggestions", False),
+                      "file_upload": hello.get("file_upload", False),
+                      "file_search": hello.get("file_search", False),
                       "chat_search": hello.get("chat_search", False),
                       "queue_edit": hello.get("queue_edit", False),
                       "chat_fork": hello.get("chat_fork", False),

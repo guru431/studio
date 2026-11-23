@@ -1,6 +1,7 @@
 """Изменения файлов: границы проекта, отсутствие перезаписи и настоящий Windows junction."""
 
 from platform_fs import create_directory_link
+import base64
 import ctypes
 import os
 import stat
@@ -218,3 +219,92 @@ async def test_operation_requires_open_session_and_validates_both_paths(agent, r
     assert (root / "demo/new.txt").exists()
     frame["project"] = "0" * 16
     assert (await agent.handle(frame))[0]["code"] == "not_found"
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def test_upload_creates_new_file_and_never_overwrites_without_replace(tmp_path):
+    (tmp_path / "docs").mkdir()
+    assert files.upload(tmp_path, "docs/photo.bin", _b64(b"\x00\x01data"), False) == {
+        "version": files.version(b"\x00\x01data")}
+    assert (tmp_path / "docs/photo.bin").read_bytes() == b"\x00\x01data"
+    with pytest.raises(Refused, match="exists"):
+        files.upload(tmp_path, "docs/photo.bin", _b64(b"other"), False)
+    with pytest.raises(Refused, match="exists"):
+        files.upload(tmp_path, "docs", _b64(b"other"), True)        # папку замена не трогает
+    assert (tmp_path / "docs/photo.bin").read_bytes() == b"\x00\x01data"
+    files.upload(tmp_path, "docs/photo.bin", _b64(b"replaced"), True)
+    assert (tmp_path / "docs/photo.bin").read_bytes() == b"replaced"
+    files.upload(tmp_path, "fresh.txt", _b64(b""), True)              # замена разрешена, а файла нет — создаётся
+    assert (tmp_path / "fresh.txt").read_bytes() == b""
+
+
+@pytest.mark.parametrize("path, data, code", [
+    ("", "eA==", "invalid"), ("../up.txt", "eA==", "invalid"), ("a.txt", "не base64", "invalid"),
+    ("missing/a.txt", "eA==", "not_found")])
+def test_upload_refuses_bad_paths_and_data(tmp_path, path, data, code):
+    with pytest.raises(Refused, match=code):
+        files.upload(tmp_path, path, data, False)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_upload_limit_and_links(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_bytes(b"keep")
+    create_directory_link(outside, project / "link")
+    for replace in (False, True):
+        with pytest.raises(Refused, match="outside"):
+            files.upload(project, "link/keep", _b64(b"evil"), replace)
+        with pytest.raises(Refused, match="outside"):
+            files.upload(project, "link/new", _b64(b"evil"), replace)
+    assert (outside / "keep").read_bytes() == b"keep" and not (outside / "new").exists()
+    monkeypatch.setattr(files.limits, "RAW_MAX", 3)
+    with pytest.raises(Refused, match="too_large"):
+        files.upload(project, "big.bin", _b64(b"four"), False)
+    assert not (project / "big.bin").exists()
+
+
+def test_upload_failed_write_leaves_no_partial_file(tmp_path, monkeypatch):
+    real = Path.open
+
+    class Broken:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *error):
+            self.handle.close()
+
+        def write(self, data):
+            self.handle.write(data[:1])
+            raise OSError(28, "no space")
+
+    monkeypatch.setattr(Path, "open", lambda self, mode="r", *a, **k: Broken(real(self, mode, *a, **k)))
+    with pytest.raises(Refused, match="busy"):
+        files.upload(tmp_path, "half.bin", _b64(b"abcdef"), False)
+    assert not (tmp_path / "half.bin").exists()
+
+
+async def test_upload_and_search_through_agent(agent, root):
+    (root / "demo/src").mkdir(parents=True, exist_ok=True)
+    (root / "demo/src/main.py").write_text("print('hello')\n# Привет, мир\n", encoding="utf-8")
+    upload = req("file_upload", project=projects.pid("demo"), path="src/new.bin", data=_b64(b"x"), replace=False)
+    search = req("file_search", project=projects.pid("demo"), path="src", query="привет")
+    assert (await agent.handle(upload))[0]["code"] == "closed"
+    await opened(agent)
+    assert agent.hello()["file_upload"] is True and agent.hello()["file_search"] is True
+    assert (await agent.handle(upload))[0]["ok"]
+    assert (root / "demo/src/new.bin").read_bytes() == b"x"
+    assert (await agent.handle(upload))[0]["code"] == "exists"
+    for bad in ({"replace": None}, {"data": 5}, {"path": "../x"}):
+        assert (await agent.handle({**upload, **bad}))[0]["code"] == "invalid"
+    found = (await agent.handle(search))[0]
+    assert found["ok"] and found["data"] == {"items": [{"path": "src/main.py", "line": 2, "text": "# Привет, мир"}],
+                                             "complete": True, "more": False}

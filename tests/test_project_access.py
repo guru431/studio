@@ -231,7 +231,7 @@ def test_member_cannot_reach_other_projects_or_manage_computer_or_members(studio
 def test_viewer_reads_the_project_but_every_change_is_refused_before_the_bridge(studio):
     aid, machine, link, member, base = share(studio)
     machine.projects["alpha"]["files"]["a.txt"] = b"hello"
-    link.hello.update(file_operations=True, queue_edit=True)
+    link.hello.update(file_operations=True, queue_edit=True, file_upload=True, file_search=True)
     other = make_user(studio, "viewer")
     assert studio.c.post(base, json={"login": "viewer", "role": "viewer"}).status_code == 201
     signin(studio, "viewer")
@@ -242,11 +242,17 @@ def test_viewer_reads_the_project_but_every_change_is_refused_before_the_bridge(
     assert machine.requests[-1]["shared_readonly"] is True and machine.requests[-1]["shared_projects"] == [ALPHA]
     assert studio.c.get(url(aid, "projects", ALPHA, "chats")).status_code == 200
     assert studio.c.get(url(aid, "projects", ALPHA, "chats", A)).status_code == 200
+    found = studio.c.post(url(aid, "projects", ALPHA, "files", "search"), json={"path": "", "query": "hello"})
+    assert found.status_code == 200 and found.json()["items"] == [{"path": "a.txt", "line": 1, "text": "hello"}]
+    assert machine.requests[-1]["op"] == "file_search" and machine.requests[-1]["shared_readonly"] is True
+    got = studio.c.post(url(aid, "projects", ALPHA, "files", "download"), json={"path": "a.txt"})
+    assert got.status_code == 200 and got.content == b"hello"
     before = len(machine.requests)
     chat = url(aid, "projects", ALPHA, "chats", A)
     for method, path, body in [
         ("PUT", url(aid, "projects", ALPHA, "file"), {"path": "a.txt", "text": "x", "version": "1"}),
         ("POST", url(aid, "projects", ALPHA, "files", "operate"), {"operation": "delete", "path": "a.txt"}),
+        ("PUT", url(aid, "projects", ALPHA, "files", "upload"), None),
         ("POST", url(aid, "projects", ALPHA, "chats"), None),
         ("POST", chat + "/turn", {"text": "hello"}), ("POST", chat + "/steer", {"text": "hello"}),
         ("POST", chat + "/answer", {"request_id": "r1", "decision": "allow"}), ("POST", chat + "/stop", None),

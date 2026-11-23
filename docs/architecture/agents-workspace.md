@@ -325,6 +325,17 @@ Worker завершается при очистке доступа и имеет
 Сохранения и операции сериализованы в мосте; успешная операция сбрасывает статистику и обновляет дерево/Git,
 перенос открытого файла меняет путь редактора. Проверки: `test_file_operations.py` обоих наборов,
 `test_ui_file_operations.py` (320/1280 px и старый мост).
+«Скачать» в «⋯» файла есть с любым мостом: `POST …/files/download` — просьба `raw` (до 10 МиБ), ответ —
+`application/octet-stream` с именем только в `Content-Disposition` (`media.disposition`), страница — blob и ссылка
+`download`. С мостом 0.47.0 `hello.file_upload` даёт «Загрузить файл» (кнопка текущей папки и «⋯» папки):
+`PUT …/files/upload`, тело — файл до 10 МиБ, путь — `X-Studio-Name`; занятое имя — 409 `exists` и окно «Заменить?»,
+повтор с `X-Studio-Replace: 1` (`files.upload` моста: исключительное создание или замена обычного файла, пути — как
+у операций). `hello.file_search` даёт поле «Найти в файлах папки»: `POST …/files/search {path, query}` →
+`discovery.grep` моста (обход `discovery._walk` подсказок, пределы — протокол §4); список «файл:строка — фрагмент»
+открывает файл на строке (`.md` — в исходном тексте). Сервер найденное не хранит. Проверки: `test_file_operations.py`
+обоих наборов, `test_discovery.py` моста, `test_ui_file_operations.py` (320 px). Наблюдателю совместного проекта
+поиск и «Скачать» доступны (`file_search` и `raw` — в `project_access.READ_OPS` и `agent.SHARED_READ_OPS`),
+«Загрузить файл» скрыт, а `PUT …/files/upload` — 403 `readonly` до чтения тела (`project_access.editable`).
 Необязательный `files.items[].created` появляется с мостом 0.7.5; старый мост — `—`, без выдуманной даты.
 (мост ≥ 0.7.6) кнопка «Просчитать все подпапки» → `POST …/files/stats` → op `file_stats`, один обход
 `agent/studio_agent/file_stats.py`. В памяти дерева — рекурсивные размеры/счётчики и дата, без раскрытия папок;
