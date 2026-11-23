@@ -13,6 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import auth
 import bridge
+import project_access
 import release
 import security
 import state
@@ -771,6 +772,31 @@ def test_fake_machine_follows_the_protocol():
     assert ok("git", project=pid("alpha"))[0]["branch"] == "main"
     assert refused("nope")["code"] == "invalid"
     assert all(r["op"] for r in m.requests) and len(m.requests) == next(n)
+
+
+def test_fake_machine_admits_members_only_where_the_bridge_does():
+    """Участник и наблюдатель в фейке — по спискам моста (`agent.SHARED_OPS`, `SHARED_READ_OPS`): просьба вне списка —
+    `closed`, как у настоящего моста, даже в выданном проекте."""
+    from fake_bridge import SHARED_OPS, SHARED_READ_OPS
+    assert {"turn", "read", "save"} <= SHARED_OPS and "turn" not in SHARED_READ_OPS and "read" in SHARED_READ_OPS
+    # Чтения наблюдателя на сервере мост тоже пускает; `git_compare` — маршрут только владельца (участнику 404).
+    assert project_access.READ_OPS - SHARED_READ_OPS == {"git_compare"}
+    p = pid("studio")
+    m = FakeMachine({"studio": {"files": {"a.txt": b"hi"}, "chats": {}, "git": None}})
+    n = iter(range(100))
+
+    def code(op, **args):
+        res, _ = m.handle({"t": "req", "id": f"{next(n):016x}", "op": op, "session": SESSION, "shared_projects": [p],
+                           "project": p, **args})
+        return res.get("code") if not res["ok"] else "ok"
+
+    assert code("read", path="a.txt") == "ok"
+    assert code("read", path="a.txt", shared_readonly=True) == "ok"
+    assert "computer_info" not in SHARED_OPS and code("computer_info") == "closed"
+    assert code("turn", chat=CHAT, text="x", model=None, effort=None, shared_readonly=True) == "closed"
+    res, _ = m.handle({"t": "req", "id": "f" * 16, "op": "read", "session": SESSION, "project": p, "path": "a.txt",
+                       "shared_readonly": True})
+    assert res["code"] == "closed"
 
 
 def test_fake_machine_opens_an_open_session_without_the_pin_again():
