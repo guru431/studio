@@ -15,6 +15,12 @@
 .share-page details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; }
 .share-page .shared-image { max-width: 100%; max-height: 400px; object-fit: contain; }
 .share-page .shared-files { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.share-page .shared-segment { margin: 0 0 var(--space-4); overflow-wrap: anywhere; }
+.share-page .shared-when { font-variant-numeric: tabular-nums; font-size: var(--fs-sm); }
+.share-page .shared-part { min-width: 0; margin: 0 0 var(--space-7); }
+.share-page .shared-part h2 { margin: 0 0 var(--space-4); font-size: var(--fs-lg); }
+.share-page .shared-media { margin: 0 0 var(--space-7); }
+.share-page .shared-media .shared-picture, .share-page .shared-video { display: block; max-width: 100%; max-height: calc(70 * var(--vh)); }
 #shared-status { max-width: 752px; margin: var(--space-7) auto; }
 @media (max-width: 600px) {
   .share-page #shared-main { padding: var(--space-7) 0; }

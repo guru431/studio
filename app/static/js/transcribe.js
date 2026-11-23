@@ -53,6 +53,7 @@ import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { busyBlock, createPicker, keep, pickerList } from './feed.js';
 import { kick } from './jobs.js';
+import { shareDialog } from './chat-share.js';
 import { sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
@@ -634,6 +635,13 @@ function build(view, ctx) {
         acts.append(reset);
       }
       if (!editing) acts.append(chatMenu(item));
+      if (!editing) {
+        // ссылка «Поделиться» на расшифровку (chat_shares.ITEMS): собеседники и время, запись разговора — по выбору
+        const share = el('button', { type: 'button', class: 'btn btn-sm', id: 'tr-share' }, tr("Поделиться"));
+        share.addEventListener('click', () => shareDialog(root, `/api/transcripts/${encodeURIComponent(item.id)}/share`,
+          item.name, api, { kind: 'transcripts', source: !!(item.listen_media_id || item.source_media_id) }));
+        acts.append(share);
+      }
       if (!editing && item.listen_media_id && item.listen_media_id !== item.source_media_id) {
         const drop = el('button', { type: 'button', class: 'btn btn-sm btn-danger', id: 'tr-source-delete' },
           tr("Удалить исходник"));

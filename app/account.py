@@ -260,6 +260,20 @@ def _label(blob) -> "str | None":
         return None
 
 
+def _item_share(row) -> dict:
+    """Строка ссылки как dict; у ссылки на запись раздела (`chat_shares.ITEMS`) — ещё `section`, название записи
+    (имя, у картинки и ролика — начало промпта) и в корзине ли она: тогда получателю ссылка недоступна."""
+    import chat_shares
+    out = dict(row) | {"section": None}
+    if row["item_kind"] in chat_shares.ITEMS:
+        column = "prompt" if row["item_kind"] in ("images", "videos") else "name"
+        item = state.DB.execute(f"SELECT substr({column}, 1, 80) AS title, deleted IS NOT NULL AS trashed"
+                                f" FROM {row['item_kind']} WHERE id = ?", (row["item_id"],)).fetchone()
+        out |= {"section": chat_shares.ITEMS[row["item_kind"]][0], "title": item["title"] if item else None,
+                "trashed": bool(item and item["trashed"])}
+    return out
+
+
 def _file_links(uid) -> int:
     """Действующие ссылки на файлы «Моих файлов» учётки (my_files.py: список — там же, «Мои ссылки»)."""
     return state.DB.execute("SELECT COUNT(*) FROM file_links WHERE user_id = ? AND revoked IS NULL AND expires > ?",
@@ -275,19 +289,21 @@ async def access(request: Request):
         "SELECT m.agent_id, a.name AS computer, m.project, m.user_id, u.login, u.disabled, m.created"
         " FROM project_members m JOIN agents a ON a.id = m.agent_id JOIN users u ON u.id = m.user_id"
         " WHERE a.user_id = ? ORDER BY a.name, m.project, u.login", (uid,)).fetchall()
-    shares = state.DB.execute(
+    shares = [_item_share(r) for r in state.DB.execute(
         "SELECT s.id, s.chat_id, s.agent_id, a.name AS computer, s.project, s.session_id, c.title, s.label, s.created,"
         " s.expires, c.deleted IS NOT NULL AS trashed, c.protected_used = 1 AS protected,"
-        " s.views, s.viewed, s.fails FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
+        " s.views, s.viewed, s.fails, s.item_kind, s.item_id FROM chat_shares s LEFT JOIN chats c ON c.id = s.chat_id"
         " LEFT JOIN agents a ON a.id = s.agent_id WHERE s.user_id = ? AND (s.expires IS NULL OR s.expires > ?)"
-        " ORDER BY s.created DESC", (uid, clock.NOW())).fetchall()
+        " ORDER BY s.created DESC", (uid, clock.NOW()))]
     aids = sorted({r["agent_id"] for r in members} | {r["agent_id"] for r in shares if r["agent_id"] is not None})
     names = await _project_names(request, aids) if aids else {}
     return {"members": [{"computer_id": r["agent_id"], "computer": r["computer"], "project": r["project"],
                          **_place(names, r["agent_id"], r["project"]), "user_id": r["user_id"], "login": r["login"],
                          "disabled": bool(r["disabled"]), "created": r["created"]} for r in members],
-            "shares": [{"id": r["id"], "kind": "code" if r["agent_id"] else "chat",
-                        "title": r["title"] if r["chat_id"] else _label(r["label"]),
+            "shares": [{"id": r["id"], "kind": r["section"] or ("code" if r["agent_id"] else "chat"),
+                        "title": r["title"] if r["chat_id"] or r["section"] else _label(r["label"]),
+                        # запись раздела (chat_shares.ITEMS): открыть — #/<раздел>?id=<item_id>
+                        "item_id": r["item_id"],
                         "chat_id": r["chat_id"], "computer_id": r["agent_id"], "session_id": r["session_id"],
                         # чат в корзине: ссылка получателю недоступна, после «Вернуть» откроется снова (trash.py)
                         "trashed": bool(r["trashed"]),
@@ -335,10 +351,11 @@ async def share_link(share_id: str, request: Request):
 async def revoke_share(share_id: str, request: Request):
     """Отключить свою ссылку «Поделиться» из общего списка: и ту, чей чат или компьютер сейчас не открыть."""
     uid = request.state.user.id
-    row = state.DB.execute("DELETE FROM chat_shares WHERE id = ? AND user_id = ? RETURNING agent_id",
+    import chat_shares
+    row = state.DB.execute("DELETE FROM chat_shares WHERE id = ? AND user_id = ? RETURNING agent_id, item_kind",
                            (share_id, uid)).fetchone()
     if row is not None:
-        security_log.record(uid, "share_revoke", detail="code" if row["agent_id"] else "chat",
+        security_log.record(uid, "share_revoke", detail=chat_shares._detail(row["agent_id"], row["item_kind"]),
                             digest=request.state.digest, ip=auth.client_ip(request))
     return Response(status_code=204)
 

@@ -20,6 +20,7 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   screen_lock_off: tr("блокировка выключена"), screen_lock_change: tr("блокировка перенастроена"), password: tr("пароль сменён"), session_end: tr("сессия завершена"),
   sessions_end: tr("остальные сессии завершены"),
   emergency: tr("аварийный выход"), share_create: tr("ссылка создана"), share_revoke: tr("ссылка отозвана"),
+  share_refresh: tr("снимок ссылки обновлён"),
   file_link_create: tr("ссылка на файл создана"), file_link_revoke: tr("ссылка на файл отозвана"),
   share_pin_fail: tr("неверный PIN ссылки"), share_locked: tr("ссылка остановлена"), pin_set: tr("PIN задан"),
   pin_delete: tr("PIN убран"), passkey_add: tr("ключ добавлен"), passkey_delete: tr("ключ удалён"),
@@ -28,7 +29,10 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   project_member_remove: tr("доступ к проекту отозван"), project_leave: tr("вы покинули совместные проекты") };
 const DETAILS = { password: tr("паролем"), pin: 'PIN', passkey: tr("ключом"), bridge: tr("мост"), login: '', chat: tr("чат"),
   code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все"),
-  operator: tr("оператором хоста") };
+  operator: tr("оператором хоста"),
+  // раздел записи у ссылки «Поделиться» (chat_shares.ITEMS)
+  transcribe: sectionName('transcribe'), translate: sectionName('translate'), ocr: sectionName('ocr'),
+  photo: sectionName('photo'), video: sectionName('video') };
 
 function moment(ts) {
   return ts ? dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -202,14 +206,18 @@ export function accessBlock(host) {
   }
 
   function shareRow(s) {
-    const place = s.kind === 'chat' ? '' : `${s.computer} · ${project(s)}`;   // у обычного чата проекта нет
-    const title = s.kind === 'chat' ? s.title || tr("Чат") : (s.title ? `${s.title} · ${place}` : place);
+    // запись раздела (расшифровка, перевод, скан, картинка, ролик): `kind` — её раздел, открыть — #/<раздел>?id=<id>
+    const item = !!s.item_id;
+    const place = s.kind === 'chat' || item ? '' : `${s.computer} · ${project(s)}`;   // у обычного чата проекта нет
+    const title = item ? s.title || sectionName(s.kind)
+      : s.kind === 'chat' ? s.title || tr("Чат") : (s.title ? `${s.title} · ${place}` : place);
     const facts = [sectionName(s.kind), s.expires ? tr("до {0}", moment(s.expires)) : tr("бессрочная"),
       tr("открыта {0} {1}", s.views || 0, plural(s.views || 0, [tr("раз"), tr("раза"), tr("раз")])),
       s.fails ? tr("неверных PIN: {0}", s.fails) : null].filter(Boolean).join(' · ');
     // чат в корзине: ссылка получателю недоступна, пока его не вернут; открыть его — со страницы «Корзина»
     const href = s.trashed ? '#/trash' : s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
-      : s.session_id ? `#/code/${s.computer_id}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session_id)}` : null;
+      : item ? `#/${s.kind}?id=${encodeURIComponent(s.item_id)}`
+        : s.session_id ? `#/code/${s.computer_id}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session_id)}` : null;
     const info = el('div', { class: 'session-info' },
       el('div', { class: 'row' }, el('b', {}, title),
         s.trashed ? el('span', { class: 'tag access-trashed' }, tr("в корзине — недоступна")) : null,
@@ -220,7 +228,8 @@ export function accessBlock(host) {
     return el('li', { class: 'agent session access-share', 'data-id': s.id }, info,
       el('div', { class: 'session-actions' },
         href ? el('a', { class: 'btn btn-sm access-open', href, 'aria-label': s.trashed ? tr("Открыть корзину: {0}", title)
-          : tr("Открыть чат: {0}", title) }, s.trashed ? tr("Открыть корзину") : tr("Открыть чат")) : null,
+          : item ? tr("Открыть запись: {0}", title) : tr("Открыть чат: {0}", title) },
+        s.trashed ? tr("Открыть корзину") : item ? tr("Открыть запись") : tr("Открыть чат")) : null,
         button(tr("Копировать ссылку"), { class: 'btn btn-sm access-copy', 'aria-label': tr("Копировать ссылку: {0}", title) },
           () => copyLink(s, info)),
         button(tr("Отключить"), { class: 'btn btn-sm btn-danger access-revoke',
@@ -289,7 +298,7 @@ export function accessBlock(host) {
 
   reload();
   return el('section', { class: 'block access-block' }, el('h2', {}, tr("Доступы и ссылки")),
-    el('p', { class: 'muted small' }, tr("Кому открыты проекты ваших компьютеров и какие чаты доступны по ссылке. Доступ привязан к имени папки: удаление или переименование папки его не снимает — отзовите его здесь.")),
+    el('p', { class: 'muted small' }, tr("Кому открыты проекты ваших компьютеров и какие чаты и записи доступны по ссылке. Доступ привязан к имени папки: удаление или переименование папки его не снимает — отзовите его здесь.")),
     el('h3', {}, tr("Участники проектов")), members,
     el('h3', {}, tr("Ссылки «Поделиться»")), shares,
     el('h3', {}, tr("Ссылки на файлы")), files,

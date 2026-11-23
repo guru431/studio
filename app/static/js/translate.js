@@ -52,6 +52,7 @@ import { createPicker, dayTitle, recordSelection } from './feed.js';
 import { fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
+import { shareDialog } from './chat-share.js';
 import { sectionMcp } from './mcp-sections.js';
 import { photoView, RTL } from './translate-photo.js';
 import { picker } from './picker.js';
@@ -205,7 +206,13 @@ function build(view, ctx) {
     { 'data-format': key }, () => download(key)]) });
   const readBtn = el('button', { type: 'button', id: 'tl-read', class: 'btn btn-sm' }, tr("Прочитать"));
   const readBox = el('div', { id: 'tl-read-box', class: 'read-box' });
-  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, readBtn, formats);
+  // ссылка «Поделиться» на перевод (chat_shares.ITEMS): исходный текст и перевод, исходный файл — по выбору
+  const shareBtn = el('button', { type: 'button', id: 'tl-share', class: 'btn btn-sm' }, tr("Поделиться"));
+  shareBtn.addEventListener('click', () => {
+    if (rec) shareDialog(root, `/api/translate/${encodeURIComponent(rec.id)}/share`, rec.name, api,
+      { kind: 'translations', source: rec.kind !== 'text' });
+  });
+  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, readBtn, formats, shareBtn);
   const exportBtn = formats.querySelector('#tl-export');
   const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, scanLink, stop, cont), mcp.output, output, acts, readBox);
 

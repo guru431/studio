@@ -52,6 +52,7 @@ BODIES = {
     ("POST", "/api/code/agents/1/projects/1/chats/1/export"): {"format": "md"},
     ("GET", "/api/code/agents/1/projects/1/chats/1/share"): None,
     ("POST", "/api/code/agents/1/projects/1/chats/1/share"): {"pin": "0123"},
+    ("PUT", "/api/code/agents/1/projects/1/chats/1/share"): {},
     ("DELETE", "/api/code/agents/1/projects/1/chats/1/share"): None,
     ("POST", "/api/code/agents/1/projects/1/visualization"): {"source": "a.html"},
     ("GET", "/api/code/agents/1/projects/1/visualization/1"): None,
