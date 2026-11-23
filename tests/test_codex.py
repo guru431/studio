@@ -46,6 +46,22 @@ def test_explicit_refresh_replaces_codex_catalog_on_the_same_link(studio):
     assert request["engine"] == "codex" and request["passive"] is True
 
 
+@pytest.mark.parametrize("capable", [True, False])
+def test_explicit_refresh_replaces_claude_catalog_on_the_same_link(studio, capable):
+    aid, machine, link = setup(studio)
+    machine.claude_models, machine.passive_requests = capable, True
+    link.hello = bridge.parse_hello(machine.hello)
+    old = list(machine.models)
+    machine.models = [*old, {"id": "opus-next", "label": "Opus Next"}]
+    item = studio.c.get("/api/agents?refresh=true").json()["items"][0]
+    assert item["models"] == (machine.models if capable else old) and bridge.LINKS[aid] is link
+    asked = [req for req in machine.requests if req["op"] == "models"]
+    assert [(req["engine"], req["passive"]) for req in asked] == ([("claude", True)] if capable else [])
+    if capable:                                                 # непонятный ответ — каталог остаётся прежним
+        machine.models = [{"id": "bad id", "label": "?"}]
+        assert studio.c.get("/api/agents?refresh=true").json()["items"][0]["models"][-1]["id"] == "opus-next"
+
+
 @pytest.mark.parametrize("case", ["old", "closed", "invalid"])
 def test_refresh_preserves_catalog_for_old_closed_or_invalid_bridge(studio, case):
     aid, machine, link = setup(studio, opened=case != "closed")

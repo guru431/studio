@@ -202,7 +202,7 @@ async def list_agents(request: Request, refresh: bool = False):
 
         await asyncio.gather(*(_refresh_catalog(request, link, engine) for row in rows
             if row["user_id"] == request.state.user.id and (link := bridge.LINKS.get(row["id"])) is not None
-            for engine in ("codex", "opencode", "deepseek") if link.hello.get(engine + "_models")))
+            for engine in ("claude", "codex", "opencode", "deepseek") if link.hello.get(engine + "_models")))
         if not _session_open(request.state.digest):
             raise HTTPException(409, {"code": "closed", "message": "Сеанс Студии закрыт"})
     items = []
@@ -266,11 +266,20 @@ async def _refresh_catalog(request: Request, link: bridge.Link, engine: str) -> 
 
     try:
         data = await ask(request, link.agent_id, "models", engine=engine, quiet=True, passive=True)
-        catalog = bridge.parse_hello({**link.hello, "t": "hello", "v": 1, engine: data.get(engine)})[engine]
+        if engine == "claude":  # мост ≥ 0.47.0 (`claude_models`): набор и усилия — те же поля, что в `hello`
+            found = data.get("claude")
+            parsed = bridge.parse_hello({**link.hello, "t": "hello", "v": 1, "models": found.get("models"),
+                                         "efforts": found.get("efforts")} if isinstance(found, dict) else None)
+            catalog = {"models": parsed["models"], "efforts": parsed["efforts"]}
+        else:
+            catalog = bridge.parse_hello({**link.hello, "t": "hello", "v": 1, engine: data.get(engine)})[engine]
     except (HTTPException, bridge.ProtocolError):
         return  # закрытый/старый мост или сбой: прежний каталог остаётся доступен
     if bridge.LINKS.get(link.agent_id) is link:
-        link.hello[engine] = catalog
+        if engine == "claude":
+            link.hello.update(catalog)
+        else:
+            link.hello[engine] = catalog
 
 
 @router.get("/api/agent/package")

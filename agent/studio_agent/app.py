@@ -597,6 +597,7 @@ class Controller:
         if self.on_update_quit is not None:
             agent.updater = updater.Updater(self.h, self._update_active, self.on_update_quit, holds=self._update_holds)
         agent.on_pin_locked = self._pin_changed
+        agent.claude_probe = self.claude_models
         await asyncio.to_thread(update_helper.acquire_runtime_lease, updater.REPO)
         failure = await asyncio.to_thread(update_helper.failed_update, updater.REPO)
         if failure is not None:
@@ -795,11 +796,35 @@ class Controller:
         finally:
             self.agent._software_requests -= 1
 
-    async def _probe_models(self) -> bool:
+    async def _probe_claude(self) -> tuple[list[dict], list[str]]:
         self._set_backend("claude", "checking")
-        models, efforts = await self._probe(self.agent.cfg.projects_root, self.runner.cli_path,
-                                            factory=self._sdk_factory)
+        try:
+            models, efforts = await self._probe(self.agent.cfg.projects_root, self.runner.cli_path,
+                                                factory=self._sdk_factory)
+        except asyncio.CancelledError:  # предел ожидания просьбы `models`: прежний набор остаётся
+            self._set_backend("claude", "ready" if self.agent.models else "unavailable", len(self.agent.models))
+            raise
         self._set_backend("claude", "ready" if models else "unavailable", len(models))
+        return models, efforts
+
+    async def claude_models(self) -> bool:
+        """Просьба студии `models` для Claude Code (`claude_models`): путь `claude.exe` и каталог заново, без нового
+        канала — студия берёт набор из ответа, следующий `hello` — тот же. Итог — получен ли набор."""
+        if self.agent.software.busy:
+            return False
+        self.agent._software_requests += 1
+        try:
+            await self._read_cli()
+            models, efforts = await self._probe_claude()
+            if models:
+                self.agent.set_models(models, efforts)
+                self._probed = True
+            return bool(models)
+        finally:
+            self.agent._software_requests -= 1
+
+    async def _probe_models(self) -> bool:
+        models, efforts = await self._probe_claude()
         changed = bool(models) and (models, efforts) != (self.agent.models, self.agent.efforts)
         if models:
             self.agent.set_models(models, efforts)

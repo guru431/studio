@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, journal, limits, mcp, metadata, mirror, permissions, project_summary, projects, selfcheck, sessions, store, subagents, subscription, visualizations, worktrees
@@ -153,6 +153,9 @@ class Agent:
         self.cc_version = cc_version
         self.models = models
         self.efforts = efforts
+        # Проба каталога Claude Code по просьбе `models` (`claude_models`, 0.47.0): ставит ядро (`Controller`), итог —
+        # получен ли набор; без неё (тесты, консоль) просьба — `unsupported`.
+        self.claude_probe: Callable[[], Awaitable[bool]] | None = None
         self.has_pin = read_has_pin(pins) if has_pin is None else has_pin
         self.open = OpenSessions(now)
         self.send: Callable[[dict], None] | None = None
@@ -205,7 +208,8 @@ class Agent:
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
                  "codex_models": True, "opencode_models": self.opencode is not None,
-                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True}
+                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True,
+                 "claude_models": self.claude_probe is not None}
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -411,8 +415,10 @@ class Agent:
         engine = frame.get("engine", "claude")
         if engine not in ("claude", "codex", "opencode", "deepseek"):
             raise Refused("invalid")
-        if (op == "usage_reset" and engine != "codex") or (op == "models" and engine == "claude"):
+        if op == "usage_reset" and engine != "codex":
             raise Refused("invalid")
+        if op == "models" and engine == "claude" and self.claude_probe is None:
+            raise Refused("unsupported")
         backend = self._runner(frame)
         if engine != "claude" and (backend is None or (backend.catalog is None and op != "models")):
             raise Refused("unsupported", _unavailable(backend) or f"{NAMES[engine]} не найден на компьютере")
@@ -492,7 +498,13 @@ class Agent:
         return self.updater.start(frame)
 
     async def _op_models(self, frame, after):
-        engine = frame["engine"]
+        engine = frame.get("engine", "claude")
+        if engine == "claude":
+            # Каталог Claude Code сразу, без нового канала: ответ несёт набор, студия заменяет им свой из `hello`.
+            async with asyncio.timeout(24):
+                if not await self.claude_probe():
+                    raise Refused("busy", "Не удалось обновить модели Claude Code — повторите позже")
+            return {"claude": {"models": self.models, "efforts": self.efforts}}
         backend = self._runner(frame)
         async with asyncio.timeout(24):
             if not await backend.probe(self.cfg.projects_root):

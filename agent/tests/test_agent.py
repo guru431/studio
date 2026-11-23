@@ -326,7 +326,7 @@ def test_hello(agent):
                              "passive_requests": True, "history_images": True, "project_sharing": True,
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
-                             "deepseek_models": False, "deepseek_usage": True}
+                             "deepseek_models": False, "deepseek_usage": True, "claude_models": False}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -721,6 +721,27 @@ async def test_models_refresh_for_deepseek_without_new_channel(agent):
     backend.unavailable_message = deepseek.NODE                  # проба не запустила DSH: Node старше нужного
     res = (await agent.handle(req("models", engine="deepseek")))[0]
     assert res["code"] == "unsupported" and res["message"] == deepseek.NODE
+
+
+async def test_models_refresh_for_claude_answers_the_new_catalog(agent):
+    await opened(agent)
+    assert (await agent.handle(req("models", engine="claude")))[0]["code"] == "unsupported"  # без ядра — нечем
+    found = []
+
+    async def probe():
+        if not found:
+            return False                                       # сбой пробы: прежний набор остаётся
+        agent.set_models(found, ["max"])
+        return True
+
+    agent.claude_probe = probe
+    assert agent.hello()["claude_models"] is True
+    res = (await agent.handle(req("models", engine="claude")))[0]
+    assert res["code"] == "busy" and "Claude Code" in res["message"] and agent.models == MODELS
+    found.append({"id": "opus-next", "label": "Opus Next"})
+    res = (await agent.handle(req("models")))[0]               # без engine — Claude Code, как у прочих просьб
+    assert res["data"] == {"claude": {"models": found, "efforts": ["max"]}}
+    assert agent.hello()["models"] == found                    # следующее знакомство — тот же набор
 
 
 async def test_deepseek_turn_shares_the_limit_and_activity(agent):
