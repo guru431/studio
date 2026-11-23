@@ -149,6 +149,25 @@ def test_loose_table_tags_are_linear_on_long_whitespace():
     assert exports._loose("a  </td>b") == "a\tb"
 
 
+def test_unclosed_table_tags_are_linear():
+    """FXg G1: ленивое тело `<table\\b[^>]*>(.*?)</table>` (и `tr`, `td`, `caption`) и открывающий тег `_loose`
+    искали конец с каждого повторённого начала без закрывающего тега или без `>` — 4 000 повторов давали секунду,
+    50 000 — минуты (тест упёрся бы в срок `timeout`); теперь текст проходится один раз."""
+    n = 50_000
+    for text in ("<table>" * n, "<table " * n, "<td " * n, "<table>" + "<tr>" * n + "</table>",
+                 "<table><tr>" + "<td>" * n + "</tr></table>", "<table><tr>" + "<td " * n + "</tr></table>",
+                 "<table>" + "<caption>" * n + "</table>"):
+        assert len(exports.md_plain(text)) <= len(text)
+        assert len(exports.blocks(text)) <= 1
+    assert exports.md_plain("<table>" * 3) == ""
+    assert exports._loose("x<td " * 3) == "x<td " * 3
+    assert exports._loose("<tr>\n <td a<b>1</td><td>2") == "1\t2"
+    assert exports.md_plain("<table x><tr><td>a</td></tr></table><table><tr><td>b</td><td>c</td></tr></TABLE >") == \
+        "a\n\nb\tc"
+    assert exports.blocks("до<table><caption>Ц</caption><tr><th>a</th><td>b</td></tr></table>после") == \
+        [("p", "до"), ("p", "Ц"), ("table", [[("a", 1, 1, True), ("b", 1, 1, False)]]), ("p", "после")]
+
+
 PAGES = [{"n": 1, "state": "done", "text": "# Заголовок\n\nТекст", "detail": None},
          {"n": 2, "state": "layer", "text": "Слой", "detail": None},
          {"n": 3, "state": "failed", "text": None, "detail": "на странице не найден текст"},
