@@ -2524,6 +2524,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Настройка зеркала недоступна после смены ключа Студии — отвяжите зеркало и привяжите папку заново.": "The mirror settings are unavailable after the Studio key changed. Unlink the mirror and link the folder again.",
   "Папка уже в группе копий с компьютерами: {0}. Присоединить этот проект к группе?": "The folder is already in a group of copies with these computers: {0}. Join this project to the group?",
   "В группе уже есть прежняя копия этого компьютера — например, проект под прежним именем. Заменить её этим проектом? Файлы прежней папки останутся на компьютере.": "The group already has a former copy on this computer, for example the project under its former name. Replace it with this project? The files of the former folder stay on the computer.",
+  "В группе уже есть прежняя копия этого компьютера — папка «{0}». Заменить её этим проектом? Файлы прежней папки останутся на компьютере.": "The group already has a former copy on this computer: the folder “{0}”. Replace it with this project? The files of the former folder stay on the computer.",
+  "{0} · папка «{1}»": "{0} · folder “{1}”",
   "Непривязанные копии не найдены.": "No unlinked copies found.",
   "Ищу копии в папках проектов…": "Searching project folders for copies…",
   "Обновите мост исходного компьютера для поиска копий.": "Update the source bridge to search for copies.",

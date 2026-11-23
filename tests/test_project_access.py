@@ -273,6 +273,29 @@ def test_viewer_reads_the_project_but_every_change_is_refused_before_the_bridge(
     assert other != member
 
 
+def test_viewer_gets_readonly_not_unsupported_from_an_older_bridge(studio):
+    """Мост без возможности изменяющего действия: наблюдателю — 403 `readonly`, а не 409 `unsupported` (права
+    проверяются раньше возможностей моста)."""
+    aid, machine, link, _, base = share(studio)
+    for name in ("file_operations", "queue_edit", "file_upload", "chat_control", "chat_fork", "opencode_features"):
+        link.hello.pop(name, None)
+    make_user(studio, "viewer")
+    assert studio.c.post(base, json={"login": "viewer", "role": "viewer"}).status_code == 201
+    signin(studio, "viewer")
+    before = len(machine.requests)
+    chat = url(aid, "projects", ALPHA, "chats", A)
+    for method, path, body in [
+        ("POST", url(aid, "projects", ALPHA, "files", "operate"), {"operation": "delete", "path": "a.txt"}),
+        ("POST", chat + "/claim", {}), ("POST", chat + "/queue/pause", {"paused": True}),
+        ("POST", chat + "/queue", {"request_id": "0" * 16, "version": 1, "text": "x"}),
+        ("POST", chat + "/steer", {"text": "hello", "mode": "queue"}),
+        ("POST", chat + "/state", {"additional_directories": ["C:\\work"]}),
+    ]:
+        response = studio.c.request(method, path, json=body)
+        assert response.status_code == 403 and response.json()["detail"]["code"] == "readonly", (method, path, response.text)
+    assert len(machine.requests) == before
+
+
 def test_refused_turn_neither_drops_nor_installs_the_owner_turn_request(studio):
     """Синхронизация после хода (`bridge.TURN_REQUESTS`) — только по ходу владельца, принятому мостом: ход
     наблюдателя (403 до моста) и отказанный `running` ход соавтора запрос идущего хода владельца не снимают;

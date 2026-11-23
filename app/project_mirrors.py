@@ -124,6 +124,16 @@ def _at(agent, root, name, project=None):
         (agent, root, mirror_groups.name_key(name), project)).fetchone()
 
 
+def _named(row):
+    """`{"name": имя папки копии}` для отказа — какому проекту она назначена (только имя, без пути машины; в журнал
+    не идёт). Адрес неизвестен или не расшифровать — пусто."""
+    try:
+        location = mirror_groups.location(row)
+    except InvalidToken:
+        return {}
+    return {"name": location["name"]} if location is not None and isinstance(location.get("name"), str) else {}
+
+
 def _computers(rows, without):
     """Имена компьютеров копий без компьютера `without`, по порядку копий, без повторов."""
     return list(dict.fromkeys(row["computer"] for row in rows if row["agent"] != without))
@@ -780,9 +790,10 @@ def _attach(uid, aid, pid, found, body, project, folder):
     if held is not None and current is not None and held["grp"] == current["grp"]:
         raise code._refuse(409, "exists", "эта папка уже зеркало этого проекта")
     if held is None:
-        if current is not None and any(row["agent"] == body.destination
-                                       for row in mirror_groups.members(current["grp"])):
-            raise code._refuse(409, "exists", "на этом компьютере уже есть копия проекта")
+        there = next((row for row in mirror_groups.members(current["grp"]) if row["agent"] == body.destination),
+                     None) if current is not None else None
+        if there is not None:
+            raise code._refuse(409, "exists", "на этом компьютере уже есть копия проекта", **_named(there))
         if current is None:
             current = mirror_groups.get(mirror_groups.add(mirror_groups.create_group(uid), aid, pid, **found))
         hid = mirror_groups.add(current["grp"], body.destination, project, body.root, body.name, folder)
@@ -796,7 +807,8 @@ def _attach(uid, aid, pid, found, body, project, folder):
         former = next((row for row in group if row["agent"] == aid), None)
         if former is not None:
             if not body.replace:
-                raise code._refuse(409, "exists", "в группе уже есть прежняя копия этого компьютера", former=True)
+                raise code._refuse(409, "exists", "в группе уже есть прежняя копия этого компьютера", former=True,
+                                   **_named(former))
             if aid in TRANSFERS:
                 raise code._refuse(409, "busy", BUSY)
             mirror_groups.remove(former["id"], prune=False)

@@ -1206,6 +1206,8 @@ async def chat_state(aid: int, pid: str, chat: str, body: ChatSettings, request:
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    if body.additional_directories:                 # в `ask` наблюдателю — 403; раньше возможностей моста
+        project_access.editable(request, aid, pid)
     engine = chat_engine(request, aid, chat)
     if body.access is not None and body.access not in ACCESS[engine]:
         raise _refuse(422, "access", "такого режима доступа нет у помощника")
@@ -1472,6 +1474,7 @@ async def queue_pause(aid: int, pid: str, chat: str, body: QueuePause, request: 
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    project_access.editable(request, aid, pid)
     require_capability(aid, "queue_edit")
     return _relay(await ask(request, aid, "queue_pause", project=pid, chat=chat, paused=body.paused))
 
@@ -1481,6 +1484,7 @@ async def queue_edit(aid: int, pid: str, chat: str, body: QueueEdit, request: Re
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    project_access.editable(request, aid, pid)
     require_capability(aid, "queue_edit")
     return _relay(await ask(request, aid, "queue_edit", project=pid, chat=chat, **body.model_dump()))
 
@@ -1490,6 +1494,7 @@ async def claim(aid: int, pid: str, chat: str, body: Claim, request: Request):
     own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    project_access.editable(request, aid, pid)
     link = bridge.LINKS.get(aid)
     if link is not None and not link.hello.get("chat_control"):
         raise _refuse(409, "unsupported", "Обновите мост для переноса управления сессией")
@@ -1718,6 +1723,7 @@ async def file_operation(aid: int, pid: str, body: FileOperation, request: Reque
     destination = check_path(body.destination) if body.destination is not None else None
     if not path or (body.operation == "move") != (destination is not None) or destination == "":
         raise _refuse(422, "invalid", BAD_BODY)
+    project_access.editable(request, aid, pid)      # наблюдателю — 403 `readonly`, не `unsupported` старого моста
     require_capability(aid, "file_operations")
     await ask(request, aid, "file_operation", project=pid, operation=body.operation, path=path,
               destination=destination)

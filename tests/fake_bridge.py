@@ -7,16 +7,33 @@
   приходят через `bridge.deliver` на цикле службы.
 - `SocketBridge` — настоящий WebSocket к живой студии (браузерные тесты), в своём потоке.
 """
+import ast
 import asyncio
 import base64
 import hashlib
 import json
 import threading
 import uuid
+from pathlib import Path
 
 import bridge
 import state
 
+
+def _shared_ops() -> tuple[frozenset, frozenset]:
+    """Списки операций участника и наблюдателя — из исходника моста (AST, без импорта: мост тянет Windows-зависимости),
+    чтобы фейк не пускал туда, куда мост не пустит: `SHARED_OPS = frozenset({…})`, `SHARED_READ_OPS = SHARED_OPS - {…}`."""
+    tree = ast.parse((Path(__file__).resolve().parents[1] / "agent" / "studio_agent" / "agent.py").read_text(encoding="utf-8"))
+    found = {node.targets[0].id: node.value for node in tree.body
+             if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+             and node.targets[0].id in ("SHARED_OPS", "SHARED_READ_OPS")}
+    shared = frozenset(ast.literal_eval(found["SHARED_OPS"].args[0]))
+    read = found["SHARED_READ_OPS"]
+    assert isinstance(read, ast.BinOp) and isinstance(read.op, ast.Sub) and read.left.id == "SHARED_OPS"
+    return shared, shared - frozenset(ast.literal_eval(read.right))
+
+
+SHARED_OPS, SHARED_READ_OPS = _shared_ops()
 PIN_TRIES = 5                    # неверных PIN подряд — дальше pin_locked (§3)
 OPEN_MAX = 2 * 1024 * 1024       # текст до 2 МиБ (§6)
 RAW_MAX = 10 * 1024 * 1024
@@ -164,7 +181,11 @@ class FakeMachine:
                 data = self._open(req)
             else:
                 scope = req.get("shared_projects")
-                if scope is not None and op not in ("projects", "activity") and req.get("project") not in scope:
+                # Участник и наблюдатель — по спискам самого моста (`agent.SHARED_OPS`, `SHARED_READ_OPS`).
+                if scope is not None and (op not in SHARED_OPS or op not in ("projects", "activity")
+                                          and req.get("project") not in scope):
+                    raise Refused("closed")
+                if req.get("shared_readonly") and (scope is None or op not in SHARED_READ_OPS):
                     raise Refused("closed")
                 if scope is None and req.get("session") not in self.open_sessions:
                     raise Refused("closed", "компьютер закрыт")
