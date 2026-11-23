@@ -203,6 +203,26 @@ def test_python_run_survives_a_pipe_in_a_non_utf8_encoding(images, tmp_path):
     assert r.returncode == 0, r.stderr.decode("cp1251", "replace")
 
 
+@pytest.mark.integration  # старт PowerShell и локальный HTTP
+def test_relative_out_dir_is_taken_from_the_powershell_location(images, tmp_path):
+    """Относительный -OutDir — от текущей папки PowerShell: .NET-вызовы ([IO.File]::Open) разрешают
+    путь от каталога процесса, и картинки с журналом уходили бы туда (или запуск падал)."""
+    ps = shutil.which("powershell") or shutil.which("pwsh")
+    if not ps:
+        pytest.skip("нет powershell — прогон скрипта пропущен")
+    here, elsewhere = tmp_path / "here", tmp_path / "elsewhere"
+    here.mkdir()
+    elsewhere.mkdir()
+    (here / "prompts.txt").write_text("first\n", encoding="utf-8")
+    command = (f"Set-Location -LiteralPath '{here}'; & '{SCRIPT}' -PromptsFile prompts.txt -OutDir out "
+               f"-Seed 5 -KeepCard -Token test-key -Url '{images.url}'; if (-not $?) {{ exit 1 }}")
+    r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+                       cwd=elsewhere, capture_output=True, timeout=25)
+    assert r.returncode == 0, r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    assert [p.name for p in (here / "out").glob("*.png")] == ["001-01_first_s5.png"]
+    assert (here / "out" / "manifest.tsv").is_file() and not list(elsewhere.iterdir())
+
+
 @pytest.mark.parametrize("runner", RUNNERS)
 def test_photo_upload_uses_multipart_and_writes_result(runner, images, tmp_path):
     prompts = tmp_path / "prompts.txt"

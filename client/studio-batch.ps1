@@ -151,6 +151,8 @@ if (-not $Token) {
         "затем запускайте studio-batch.local.ps1 (или передайте ключ параметром -Token)")
 }
 $Url = $Url.TrimEnd('/')
+# Относительный путь — от текущей папки PowerShell: .NET-вызовы ниже разрешили бы его от каталога процесса
+$OutDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 Add-Type -AssemblyName System.Net.Http
 $modelId = $Models[$Model]
 # FineView и Jib занимают слот ComfyUI модели SNOFS: release — по слоту, как у студии
