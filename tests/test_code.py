@@ -797,7 +797,7 @@ def test_cut_member_turn_keeps_the_member_as_push_addressee_until_the_bridge_ans
         first.cancel()                                 # обрыв запроса участника
         with pytest.raises(asyncio.CancelledError):
             await first
-        claude_code._initiator_back(key, 2, A, previous)
+        claude_code._turn_back(key, lambda: bridge.initiated(2, A, previous))
         assert bridge.INITIATORS == {(2, A): member}
         if accepted:
             gate.set_result({"turn": "t-1"})

@@ -273,6 +273,54 @@ def test_viewer_reads_the_project_but_every_change_is_refused_before_the_bridge(
     assert other != member
 
 
+def test_refused_turn_neither_drops_nor_installs_the_owner_turn_request(studio):
+    """Синхронизация после хода (`bridge.TURN_REQUESTS`) — только по ходу владельца, принятому мостом: ход
+    наблюдателя (403 до моста) и отказанный `running` ход соавтора запрос идущего хода владельца не снимают;
+    отказанный ход владельца во время хода соавтора своего запроса не ставит."""
+    aid, machine, link, member, base = share(studio)
+    make_user(studio, "viewer")
+    assert studio.c.post(base, json={"login": "viewer", "role": "viewer"}).status_code == 201
+    turn = url(aid, "projects", ALPHA, "chats", A, "turn")
+    owner_request = object()
+    bridge.TURN_REQUESTS[(aid, A)] = owner_request                      # идёт ход владельца
+    machine.running[A] = {"turn": "t-0", "project": ALPHA, "text": "", "steps": [], "asks": {}, "followups": []}
+    signin(studio, "viewer")
+    response = studio.c.post(turn, json={"text": "x"})
+    assert response.status_code == 403 and response.json()["detail"]["code"] == "readonly"
+    signin(studio, "friend")
+    response = studio.c.post(turn, json={"text": "x"})
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "running", response.text
+    assert bridge.TURN_REQUESTS[(aid, A)] is owner_request
+    bridge.owner_turn(aid, A, None)                                     # идёт ход соавтора
+    marker = bridge.TURN_REQUESTS[(aid, A)]
+    signin(studio, "owner")
+    assert studio.c.post(url(aid, "open"), json={"pin": "2468"}).status_code == 204
+    response = studio.c.post(turn, json={"text": "x"})                 # страница владельца устарела
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "running", response.text
+    assert bridge.TURN_REQUESTS[(aid, A)] is marker
+
+
+def test_turn_request_back_restores_only_while_the_record_is_its_own(monkeypatch):
+    """Два хода одного чата ждут ответа моста, один принят, другой отказан: возврат отказанного прежнюю запись не
+    ставит поверх записи принятого — ни старый запрос владельца на ход соавтора, ни наоборот."""
+    old, owner, other = object(), object(), object()
+    for first, second, accepted in ((owner, None, "second"), (None, None, "second"), (None, owner, "second"),
+                                    (owner, other, "first"), (owner, None, "first")):
+        monkeypatch.setattr(bridge, "TURN_REQUESTS", {(1, A): old})
+        back_first = bridge.owner_turn(1, A, first)
+        record_first = bridge.TURN_REQUESTS[(1, A)]
+        back_second = bridge.owner_turn(1, A, second)
+        record_second = bridge.TURN_REQUESTS[(1, A)]
+        (back_first if accepted == "second" else back_second)()        # отказ одного из двух
+        assert bridge.TURN_REQUESTS[(1, A)] is (record_second if accepted == "second" else record_first)
+    monkeypatch.setattr(bridge, "TURN_REQUESTS", {(1, A): old})
+    bridge.owner_turn(1, A, None)()                                     # единственный ход отказан
+    assert bridge.TURN_REQUESTS == {(1, A): old}
+    monkeypatch.setattr(bridge, "TURN_REQUESTS", {})
+    bridge.owner_turn(1, A, owner)()
+    assert bridge.TURN_REQUESTS == {}
+
+
 def test_role_changes_without_recreating_the_grant_and_is_journaled(studio):
     aid, machine, _, member, base = share(studio)
     created = state.DB.execute("SELECT created FROM project_members WHERE user_id = ?", (member,)).fetchone()[0]

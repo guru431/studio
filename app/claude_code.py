@@ -255,17 +255,19 @@ def _first(key: tuple | None, op: str, call):
     return asyncio.shield(task)
 
 
-def _initiator_back(key: tuple | None, aid: int, chat: str, previous: int | None) -> None:
-    """Ход не получил ответа: прежний адресат push (`bridge.initiated`). Просьба под квитанцией, оборванная только
-    обрывом запроса, идёт дальше: адресата возвращает лишь отказ моста — иначе push хода участника ушёл бы владельцу."""
+def _turn_back(key: tuple | None, undo) -> None:
+    """Ход не получил ответа: `undo()` возвращает поставленное до просьбы — прежнего адресата push
+    (`bridge.initiated`) и запись синхронизации после хода (`bridge.owner_turn`). Просьба под квитанцией, оборванная
+    только обрывом запроса, идёт дальше: возвращает лишь отказ моста — иначе push хода участника ушёл бы владельцу,
+    а принятый ход владельца остался бы без синхронизации."""
     held = RECEIPTS.get(key) if key is not None else None
     if held is None:                               # без квитанции или отказ уже снял её
-        bridge.initiated(aid, chat, previous)
+        undo()
         return
 
     def back(t: asyncio.Future) -> None:
         if t.cancelled() or t.exception() is not None:
-            bridge.initiated(aid, chat, previous)
+            undo()
 
     if held.task.done():
         back(held.task)
@@ -452,6 +454,7 @@ async def ask(request: Request, aid: int, op: str, *, quiet: bool = False, passi
         status = STATUS.get(e.code)
         error = (_refuse(502, "bridge", "мост ответил непонятно") if status is None
                  else _refuse(status, e.code, e.message, **e.extra))
+        error.agent_id = aid               # чей отказ: `open_without_pin` открывает только этот компьютер
     if not _session_open(request.state.digest, while_locked):
         raise _refuse(409, "closed", "Сеанс Студии закрыт")
     if scope is not None:
@@ -507,18 +510,21 @@ async def open_agent(aid: int, body: Open, request: Request):
     return Response(status_code=204)
 
 
-async def open_without_pin(request: Request, agent, call):
-    """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` —
-    открыть его для сессии и повторить. Открытие пишет ту же строку `open` истории подключений, что `open_agent`:
-    след новой сессии не зависит от того, кто открыл компьютер первым. Чужой компьютер участника совместного
-    проекта не открывается: `open` — только владельцу. `agent` — строка с `id`, `name`, `user_id`, `has_pin`."""
+async def open_without_pin(request: Request, agent, call, *, while_locked: bool = False):
+    """Фоновая просьба `call()` к компьютеру без PIN (значок «В работе», поиск копий зеркала): на `closed` этого
+    компьютера (`agent_id` отказа — `call()` может спрашивать и другие) — открыть его для сессии и повторить.
+    Открытие пишет ту же строку `open` истории подключений, что `open_agent`: след новой сессии не зависит от того,
+    кто открыл компьютер первым. Чужой компьютер участника совместного проекта не открывается: `open` — только
+    владельцу. `agent` — строка с `id`, `name`, `user_id`, `has_pin`; `while_locked` — как у `ask` (фоновое задание
+    при запертой студии: синхронизация после хода)."""
     try:
         return await call()
     except HTTPException as error:
-        if (error.detail.get("code") != "closed" or agent["has_pin"]
-                or agent["user_id"] != request.state.user.id):
+        if (error.detail.get("code") != "closed" or getattr(error, "agent_id", None) != agent["id"]
+                or agent["has_pin"] or agent["user_id"] != request.state.user.id):
             raise
-    await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, pin=None)
+    await ask(request, agent["id"], "open", quiet=True, passive=True, reply_timeout=5, while_locked=while_locked,
+              pin=None)
     _event(request, agent, "open")
     return await call()
 
@@ -1351,6 +1357,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     agent = own_agent(request, aid)
     check_pid(pid)
     check_chat(chat)
+    project_access.editable(request, aid, pid)
     raw = await auth.small_body(request, TURN_BODY_MAX)
     if raw is None:
         raise _refuse(413, "too_large", "задание больше предела")
@@ -1400,10 +1407,11 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
     previous = bridge.initiated(aid, chat, member)
-    # до просьбы, как `initiated`: зеркало после хода — той же сессией; ход участника зеркала не трогает
-    bridge.owner_turn(aid, chat, request if member is None else None)
-    # до просьбы, как `_watched`
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
+    # до просьбы, как `initiated`: зеркало после хода — той же сессией; ход участника зеркала не трогает;
+    # не принят — запись идущего хода остаётся какой была
+    owner_back = bridge.owner_turn(aid, chat, request if member is None else None)
+    # до просьбы, как `_watched`; окно, начавшее ход, читает этот поток — оно смотрит чат (`bridge.windows`)
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id, _window(request))
     try:
         data = await _first(key, op, ask(request, aid, "turn", chat=chat, project=pid, text=body.text,
                                          model=body.model, effort=body.effort,
@@ -1413,7 +1421,11 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                          **({"images": images} if images else {})))
     except BaseException:
         bridge.unwatch(aid, chat, q)
-        _initiator_back(key, aid, chat, previous)
+
+        def undo() -> None:
+            bridge.initiated(aid, chat, previous)
+            owner_back()
+        _turn_back(key, undo)
         raise
     log.info("пользователь %d: компьютер %d — ход", request.state.user.id, aid)
     turn_id = data.get("turn")

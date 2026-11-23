@@ -28,6 +28,7 @@ import json
 import logging
 import re
 import secrets
+from collections.abc import Callable
 
 from fastapi import APIRouter, Request, WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -160,9 +161,10 @@ WATCHERS: dict[tuple[int, str], set[Watch]] = {}
 #: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
 INITIATORS: dict[tuple[int, str], int] = {}
 INITIATORS_MAX = 10_000
-#: (agent_id, chat) → запрос последнего хода владельца в чате (`owner_turn`): после успешного `done` той же сессией
-#: идёт синхронизация зеркала (`project_mirrors.after_turn`), и для ходов очереди моста. Только память
-TURN_REQUESTS: dict[tuple[int, str], Request] = {}
+#: (agent_id, chat) → запрос последнего хода владельца в чате (`owner_turn`; ход участника — отметка `_MemberTurn`):
+#: после успешного `done` той же сессией идёт синхронизация зеркала (`project_mirrors.after_turn`). Очередь моста —
+#: часть того же хода: решает тот, кто ход начал. Только память
+TURN_REQUESTS: dict[tuple[int, str], "Request | _MemberTurn"] = {}
 TURN_REQUESTS_MAX = 256
 #: (agent_id, chat) → ждущая карточка для напоминаний (`_card`, `remind`): проект, `request_id`, текст push, время
 #: карточки и последнего взгляда на чат, по сессиям — (повторов, время последнего). Только память: после перезапуска
@@ -499,23 +501,38 @@ def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
     return previous
 
 
-def owner_turn(agent_id: int, chat: str, request: Request | None) -> None:
+class _MemberTurn:
+    """Отметка хода участника в `TURN_REQUESTS` вместо запроса владельца: синхронизации после него нет. Своя на
+    каждый ход — возврат при отказе (`owner_turn`) узнаёт, что запись всё ещё его."""
+    __slots__ = ()
+
+
+def owner_turn(agent_id: int, chat: str, request: Request | None) -> Callable[[], None]:
     """Ход в чате: запрос хода владельца компьютера — для синхронизации зеркала после хода (`_after_turn`); ход
-    участника (`None`) прежний запрос владельца снимает."""
+    участника (`None`) ставит свою отметку на место запроса владельца. Ставится до просьбы `turn`, как `initiated`;
+    возвращает возврат для хода, которого мост не принял: прежняя запись — только пока место за этим ходом (запись
+    хода, принятого тем временем из другого запроса, отказ не снимает и не подменяет)."""
     key = (agent_id, chat)
-    TURN_REQUESTS.pop(key, None)
-    if request is None:
-        return
-    TURN_REQUESTS[key] = request
+    previous = TURN_REQUESTS.pop(key, None)
+    mine = request if request is not None else _MemberTurn()
+    TURN_REQUESTS[key] = mine
     while len(TURN_REQUESTS) > TURN_REQUESTS_MAX:
         del TURN_REQUESTS[next(iter(TURN_REQUESTS))]
+
+    def back() -> None:
+        if TURN_REQUESTS.get(key) is mine:
+            del TURN_REQUESTS[key]
+            if previous is not None:
+                TURN_REQUESTS[key] = previous
+
+    return back
 
 
 def _after_turn(link: Link, frame: dict) -> None:
     """Успешный ход, начатый владельцем из студии: зеркала проекта с «синхронизировать после хода». Ходы, кончившиеся
     без канала (`_completions`), и ходы участников зеркала не трогают."""
     request = TURN_REQUESTS.get((link.agent_id, frame["chat"]))
-    if request is None:
+    if request is None or isinstance(request, _MemberTurn):
         return
     import project_mirrors               # он импортирует этот модуль: на загрузке — кольцо
     project_mirrors.after_turn(request, link.agent_id, frame["project"], _place(link, frame))
