@@ -863,6 +863,8 @@ def main(argv: list[str]) -> int:
     journal.setup(h)
     log.info("мост %s: старт", VERSION)
     threading.excepthook = lambda a: log.error("поток: %s", a.exc_type.__name__)
+    # Windows: автозапуск и ярлык этой копии — на прошедший пробу «Studio Agent.exe» или обратно на pythonw.
+    threading.Thread(target=autostart.watch, name="autostart", daemon=True).start()
     prepare_env()
     ctrl = Controller(h)
     commands: queue.Queue = queue.Queue()

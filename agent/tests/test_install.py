@@ -30,7 +30,8 @@ SHIPPED = ["install.cmd", "install.ps1", "requirements.txt", "constraints.txt", 
 def git(*args: str, stdin: str | None = None) -> str:
     """Ввод — байтами: текстовый режим Windows превратил бы `
 ` в `
-`, и git искал бы пути с ``."""
+`, и git искал бы пути с `
+`."""
     r = subprocess.run(["git", "-C", str(REPO), *args], input=stdin.encode("utf-8") if stdin is not None else None,
                        capture_output=True, check=True, timeout=60)
     return r.stdout.decode("utf-8")
@@ -138,8 +139,9 @@ def test_install_ps1_installs_into_programs_from_archive(tmp_path):
     assert r.stdout.strip() == f'"{target}\\.venv\\Scripts\\pythonw.exe" "{target}\\studio_agent.pyw"'
     with pytest.raises(FileNotFoundError):                              # автозапуска не было — и не заведён
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY)
-    # Ярлык меню «Пуск» (PowerShell WScript.Shell) — та же команда, что у моста (`shortcut.target`, IShellLinkW).
-    assert shortcut.read() == shortcut.target(target)
+    # Ярлык меню «Пуск» (PowerShell WScript.Shell) — та же команда, что у моста (`shortcut.target`, IShellLinkW);
+    # AppUserModelID WScript.Shell не пишет — его добавляет мост при запуске (`autostart.repair`).
+    assert shortcut.read() == shortcut.target(target)[:4] + ('',)
 
 
 def test_install_points_the_start_menu_shortcut_back_to_the_installed_copy(tmp_path):
@@ -192,6 +194,38 @@ def test_install_moves_an_enabled_autostart_to_the_installed_copy(tmp_path):
                         "from studio_agent import autostart; print(autostart.command())", str(target)],
                        capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert (value, kind) == (r.stdout.strip(), winreg.REG_SZ)          # окно этой копии увидит галочку
+
+
+def test_install_switches_autostart_and_shortcut_to_the_launcher_only_after_its_probe(tmp_path):
+    """Пакет студии везёт «Studio Agent.exe»: без среды рядом проба отвечает 78 — автозапуск и ярлык остаются на
+    pythonw.exe; со средой — переходят на запускатель (как `autostart.command`)."""
+    src = archive(tmp_path / "Downloads" / "studio-agent")
+    package = tmp_path / "launcher.zip"
+    with zipfile.ZipFile(package, "w") as z:
+        for name in ("studio_agent/__init__.py", shortcut.ICON):
+            z.write(REPO / name, "studio-agent/" + name)
+    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+                             str(REPO.parent / "deploy" / "build-agent-launcher.ps1"), "-Archive", str(package),
+                             "-Output", str(src / "Studio Agent.exe")], capture_output=True, timeout=60)
+    assert result.returncode == 0, (result.stdout + result.stderr).decode("utf-8", "replace")
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        winreg.SetValueEx(k, autostart.VALUE, 0, winreg.REG_SZ, autostart.command())
+    local = tmp_path / "Local"
+    target = local / "Programs" / "studio-agent"
+
+    def value():
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return winreg.QueryValueEx(k, autostart.VALUE)[0]
+
+    install(src, local)                                                 # -NoVenv: среды нет — проба 78
+    assert (target / "Studio Agent.exe").is_file()
+    assert value() == f'"{target}\\.venv\\Scripts\\pythonw.exe" "{target}\\studio_agent.pyw"'
+    assert shortcut.read()[:4] == shortcut.target(target)[:4]
+    (target / ".venv" / "Scripts").mkdir(parents=True)
+    (target / ".venv" / "Scripts" / "pythonw.exe").write_bytes(b"")
+    install(src, local)
+    assert value() == f'"{target}\\Studio Agent.exe"'
+    assert shortcut.read()[:4] == shortcut.target(target, True)[:4]
 
 
 def test_install_from_the_installed_copy_stays_in_place(tmp_path):

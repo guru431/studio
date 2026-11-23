@@ -1120,8 +1120,8 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
     repo = tmp_path / "studio"
     (repo / "deploy").mkdir(parents=True)
     (repo / "deploy" / "deploy.sh").write_text(DEPLOY_SH, encoding="utf-8", newline="\n")
-    for name in ("build-agent-installer.ps1", "agent-installer.cs", "build-agent-linux.py", "render-profile.py",
-                 "build-agent-bundle.py"):
+    for name in ("build-agent-installer.ps1", "agent-installer.cs", "build-agent-launcher.ps1", "agent-launcher.cs",
+                 "build-agent-linux.py", "render-profile.py", "build-agent-bundle.py"):
         shutil.copyfile(DEPLOY / name, repo / "deploy" / name)
     # Здесь проверяется доставка одного HEAD; тяжёлая сборка PKG имеет собственную приёмку на Mac.
     (repo / 'deploy/build-agent-macos.py').write_text(
@@ -1200,6 +1200,7 @@ def test_deploy_ships_the_committed_component_and_refuses_missing_or_dirty_sourc
         names = {n for n in archive.namelist() if not n.endswith("/")}
         assert "studio-agent/install.cmd" in names and "studio-agent/studio_agent/app.py" in names
         assert archive.read('studio-agent/macos/studio-agent').startswith(b'\xca\xfe\xba\xbe')
+        assert archive.read('studio-agent/Studio Agent.exe').startswith(b'MZ')    # запускатель Windows, csc
         descriptor = 'studio-agent/macos/signed-package.json'
         if signed_pkg:
             import json
