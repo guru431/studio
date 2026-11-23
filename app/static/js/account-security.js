@@ -26,7 +26,10 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   pin_delete: tr("PIN убран"), passkey_add: tr("ключ добавлен"), passkey_delete: tr("ключ удалён"),
   password_reset: tr("пароль сброшен администратором"), admin_grant: tr("права администратора выданы"),
   admin_revoke: tr("права администратора сняты"), project_member_add: tr("доступ к проекту выдан"),
-  project_member_remove: tr("доступ к проекту отозван"), project_leave: tr("вы покинули совместные проекты") };
+  project_member_remove: tr("доступ к проекту отозван"), project_leave: tr("вы покинули совместные проекты"),
+  totp_on: tr("приложение-аутентификатор подключено"), totp_off: tr("приложение-аутентификатор отключено"),
+  totp_reset: tr("приложение-аутентификатор сброшено администратором"), totp_fail: tr("неверный код приложения"),
+  totp_backup_used: tr("вход резервным кодом") };
 const DETAILS = { password: tr("паролем"), pin: 'PIN', passkey: tr("ключом"), bridge: tr("мост"), login: '', chat: tr("чат"),
   code: tr("агенты"), agents: tr("и компьютеры"), pause: tr("на 15 минут"), revoked: tr("— отключена"), all: tr("— все"),
   operator: tr("оператором хоста"),

@@ -211,8 +211,9 @@ def enrollment(h):
             "autostart": s["autostart"]}
     errors = invoke(h, "enroll", form)
     # Слова считает служба на своём языке: код из письма узнаётся на обоих.
-    if len(errors) == 1 and errors[0] in (enroll.EMAIL_CODE_REQUIRED, EN[enroll.EMAIL_CODE_REQUIRED]):
-        form["email_code"] = input(tr("Код из письма: ")).strip()
+    if len(errors) == 1 and errors[0] in (enroll.EMAIL_CODE_REQUIRED, EN[enroll.EMAIL_CODE_REQUIRED],
+                                          enroll.TOTP_CODE_REQUIRED, EN[enroll.TOTP_CODE_REQUIRED]):
+        form["email_code"] = input(tr("Код из письма или приложения: ")).strip()
         errors = invoke(h, "enroll", form)
     print("\n".join(errors) if errors else tr("Компьютер привязан."))
     return int(bool(errors))

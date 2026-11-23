@@ -318,3 +318,68 @@ def test_detailed_sessions_can_be_named_refreshed_and_ended_with_keyboard_and_to
             assert conn.execute('SELECT 1 FROM sessions WHERE digest = ?', (digest,)).fetchone() is None
         finally:
             conn.close()
+
+
+#: TOTP в странице (WebCrypto HMAC-SHA-1) по ключу из окна подключения — как приложение на телефоне
+TOTP_FILL = r"""(async () => {
+  const secret = document.querySelector('#totp-secret').textContent.replace(/\s/g, '');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bits = [...secret].map((c) => alphabet.indexOf(c).toString(2).padStart(5, '0')).join('');
+  const key = new Uint8Array(Math.floor(bits.length / 8)).map((_, i) => parseInt(bits.slice(i * 8, i * 8 + 8), 2));
+  const counter = new DataView(new ArrayBuffer(8));
+  counter.setUint32(4, Math.floor(Date.now() / 30000));
+  const hmac = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, counter.buffer));
+  const at = mac[19] & 15;
+  const value = (((mac[at] & 127) << 24) | (mac[at + 1] << 16) | (mac[at + 2] << 8) | mac[at + 3]) % 1000000;
+  const input = document.querySelector('#totp-code');
+  input.value = String(value).padStart(6, '0');
+  return input.value;
+})()"""
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_authenticator_app_setup_shows_qr_and_backup_codes_then_signs_in_with_a_backup_code(browser, live, width, tmp_path):
+    """«Защита → Приложение-аутентификатор»: пароль, QR в canvas и ключ текстом, проверочный код, 10 резервных кодов
+    один раз; следующий вход после пароля — страница кода, резервный код открывает студию."""
+    login = f'totp-{width}'
+    uid = live.add_user(login)
+    codes = "[...document.querySelectorAll('#totp-codes code')].map(n => n.textContent)"
+    result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *go('settings/security'),
+        ('wait', "document.querySelector('#totp-setup') && document.querySelector('#login-notice').checked"),
+        ('click', '#login-notice'),                       # «Письмо о входе с нового устройства» — сразу, без пароля
+        ('wait', "document.querySelector('#login-notice-status').textContent === 'Сохранено'"),
+        ('eval', 'notice', "fetch('/api/me').then(r => r.json()).then(m => m.login_notice)"),
+        set_value('#totp-setup-password', 'password-123'), ('click', '#totp-setup'),
+        ('wait', "document.querySelector('#totp-dialog')?.open && document.querySelector('#totp-qr')"),
+        ('eval', 'qr', "(() => { const c = document.querySelector('#totp-qr'); return [c.width, c.getBoundingClientRect().width]; })()"),
+        ('eval', 'overflow', "document.querySelector('#totp-dialog').scrollWidth > document.querySelector('#totp-dialog').clientWidth"),
+        ('screenshot', str(tmp_path / f'totp-setup-{width}.png'), '#totp-dialog'),
+        ('eval', 'code', TOTP_FILL), ('click', '#totp-enable'),
+        ('wait', "document.querySelector('#totp-codes-dialog')?.open"),
+        ('eval', 'codes', codes),
+        ('eval', 'keep', f"localStorage.setItem('totp-test-code', {codes}[0]); true"),
+        ('click', '#totp-codes-dialog .dialog-close'),
+        ('wait', "document.querySelector('#totp-on')"),
+        ('eval', 'on', "document.querySelector('#totp-on').textContent"),
+        ('eval', 'out', "fetch('/logout', { method: 'POST' }).then(() => location.assign('/login'))"),
+        ('wait', "location.pathname === '/login' && document.querySelector('#login')"),
+        ('type', '#login', login), ('type', '#password', 'password-123'), ('click', '#submit'),
+        ('wait', "location.pathname === '/account/totp' && document.querySelector('#code')"),
+        ('eval', 'fill', "(() => { const e = document.querySelector('#code'); e.value = localStorage.getItem('totp-test-code');"
+                         " return e.value; })()"),
+        ('click', '#account-form button[type=submit]'),
+        ('wait', READY)],
+        width=width, mobile=width == 320)
+    assert not result.get('failed'), result
+    values = result['values']
+    assert values['notice'] is False
+    assert values['qr'][0] > 100 and values['qr'][1] > 100 and not values['overflow']
+    assert len(values['codes']) == 10 and all(len(c) == 11 for c in values['codes'])
+    assert '10' in values['on']
+    assert not problems(result), problems(result)
+    conn = db.connect(live.db_path)
+    try:
+        assert conn.execute('SELECT count(*) FROM totp_backup WHERE user_id = ?', (uid,)).fetchone()[0] == 9
+    finally:
+        conn.close()

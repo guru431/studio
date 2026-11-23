@@ -21,6 +21,9 @@ UNAVAILABLE = "Студия недоступна ({0})"
 KEPT = "Студия недоступна — компьютер остался в её списке: отзовите его в «Настройки» → «Компьютеры»"
 EMAIL_CODE_REQUIRED = "Введите код из письма и повторите пароль"
 EMAIL_CODE_INVALID = "Код неверен или истёк. Для нового письма оставьте поле кода пустым"
+#: учётка с приложением-аутентификатором (студия с 0.47.0 моста): код — в том же поле, письма нет
+TOTP_CODE_REQUIRED = "Введите код приложения-аутентификатора или резервный код и повторите пароль"
+TOTP_CODE_INVALID = "Код приложения неверен. Введите текущий код или резервный код"
 
 
 class EnrollError(Exception):
@@ -115,6 +118,11 @@ def _refusal(e: urllib.error.HTTPError) -> EnrollError:
     code = _code(e)
     if e.code == 428 and code == "email_code":
         return EnrollError("email_code", tr(EMAIL_CODE_REQUIRED))
+    # код приложения — тем же полем окна и консоли: отказ с кодом `email_code` открывает поле кода
+    if e.code == 428 and code == "totp_code":
+        return EnrollError("email_code", tr(TOTP_CODE_REQUIRED))
+    if e.code == 400 and code == "wrong_code":
+        return EnrollError("email_code", tr(TOTP_CODE_INVALID))
     if e.code == 428 and code == "email_required":
         return EnrollError("email_required", tr("Сначала подтвердите почту в браузере Студии"))
     if e.code == 400 and code == "expired":

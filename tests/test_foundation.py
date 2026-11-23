@@ -13,7 +13,7 @@ import state
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
-SCHEMA_VERSION = 69
+SCHEMA_VERSION = 70
 
 
 def test_config_names_missing_variables_without_values(monkeypatch):
@@ -457,6 +457,18 @@ def test_step_68_adds_open_webui_drafts_to_existing_accounts(env):
         conn.execute("DELETE FROM owui_accounts WHERE id = 2")
         assert conn.execute("SELECT count(*) FROM owui_file_drafts").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_step_69_adds_authenticator_and_login_notice_to_existing_accounts(env):
+    from contextlib import closing
+    with closing(db.connect(env.db_path)) as conn:
+        install_schema(conn, 68)
+        conn.execute("INSERT INTO users(id,login,name,pw_hash,created) VALUES(1,'owner','Owner','hash',0)")
+        db.migrate(conn)
+        assert conn.execute("SELECT totp_secret, totp_step, login_notice FROM users").fetchone()[:] == (None, 0, 1)
+        conn.execute("INSERT INTO totp_backup VALUES(1,'d')")
+        conn.execute("DELETE FROM users WHERE id = 1")
+        assert conn.execute("SELECT count(*) FROM totp_backup").fetchone()[0] == 0
 
 
 def test_step_49_keeps_connections_with_their_links_and_never_reuses_an_id(env):

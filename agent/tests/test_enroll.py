@@ -91,6 +91,16 @@ def test_email_code_request_is_reported_to_the_setup_form(studio):
 
 
 @pytest.mark.parametrize("status, code, words", [
+    (428, "totp_code", enroll.TOTP_CODE_REQUIRED), (400, "wrong_code", enroll.TOTP_CODE_INVALID)])
+def test_authenticator_code_refusals_open_the_same_code_field(studio, status, code, words):
+    """Учётка с приложением-аутентификатором: код — в том же поле, что и код из письма (EnrollError `email_code`)."""
+    s = studio(status, {"detail": {"code": code}})
+    with pytest.raises(enroll.EnrollError) as caught:
+        enroll.enroll(s.url, "owner", "password", "Computer")
+    assert caught.value.code == "email_code" and caught.value.words == words
+
+
+@pytest.mark.parametrize("status, code, words", [
     (401, "login", "Неверный логин или пароль"),
     (429, "locked", "Вход на паузе после неудач — попробуйте позже"),
     (422, "name", "Имя компьютера — от 1 до 64 знаков"),

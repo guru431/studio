@@ -22,7 +22,21 @@ export function emailBlock() {
     } catch (err) { enabled.checked = me.email_codes; note.className = 'error'; note.textContent = words(err); }
     finally { save.disabled = false; }
   });
+  // письмо о входе с нового устройства (email_accounts.notice_due): сохраняется сразу, без пароля
+  const notice = el('input', { type: 'checkbox', id: 'login-notice', checked: me.login_notice });
+  const noticeNote = el('p', { id: 'login-notice-status', role: 'status', 'aria-live': 'polite' });
+  notice.addEventListener('change', async () => {
+    notice.disabled = true;
+    try {
+      me.login_notice = (await api('PUT', '/api/me/login-notice', { enabled: notice.checked })).enabled;
+      noticeNote.className = 'ok'; noticeNote.textContent = tr("Сохранено");
+    } catch (err) { notice.checked = me.login_notice; noticeNote.className = 'error'; noticeNote.textContent = words(err); }
+    finally { notice.disabled = false; }
+  });
   return el('section', { class: 'block' }, el('h2', {}, tr("Электронная почта")), el('p', { id: 'account-email' }, me.email),
     el('a', { class: 'btn', href: '/account/email' }, tr("Изменить почту")),
-    el('p', { class: 'muted small' }, tr("Коды входа по умолчанию выключены. При включении после пароля потребуется код из письма.")), form);
+    el('p', { class: 'muted small' }, tr("Коды входа по умолчанию выключены. При включении после пароля потребуется код из письма.")), form,
+    el('label', { class: 'check' }, notice, tr("Письмо о входе с нового устройства")),
+    el('p', { class: 'muted small' }, tr("Если вход идёт с устройства, браузера или адреса, которых не было за полгода, на почту придёт письмо: время, устройство, браузер и адрес, без ссылок.")),
+    noticeNote);
 }

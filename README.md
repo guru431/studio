@@ -149,6 +149,7 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 - Isolated user histories and encrypted connection credentials.
 - Per-section connections, selected models/defaults and an administrator-controlled allowlist for server-side destinations.
 - Password login, brute-force limits, session management and a security event history.
+- Authenticator app (TOTP) second step with backup codes that does not depend on email; email notice about sign-ins from a new device.
 - Lock the whole app or selected sections using an application PIN, account password or passkey, including device biometrics where supported.
 - Emergency sign-out revokes sessions, shared links and notifications, with an option to revoke connected computers.
 - Share a read-only conversation snapshot with a **four-digit PIN**, optional expiry and revocation. Creating a new link rotates the old one; links do not grant account access. Update snapshot replaces the content under the same address and PIN.

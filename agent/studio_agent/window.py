@@ -577,7 +577,7 @@ class MainWindow:
         ttk.Label(box, text=tr(NOTE_PASSWORD), style="Card.Muted.TLabel").grid(row=r + 1, column=0, columnspan=2,
                                                                           sticky="w", pady=(0, gap))
         r += 2
-        code_entry = field(tr("Код из письма"), email_code)
+        code_entry = field(tr("Код из письма или приложения"), email_code)
         code_widgets = box.grid_slaves(row=r)
         for widget in code_widgets:
             widget.grid_remove()
@@ -629,7 +629,8 @@ class MainWindow:
                     if go.winfo_exists():
                         go.state(["!disabled"])
                         errors.set("\n".join(found) if found else tr(FAILED))
-                        if found and any(word in (tr(enroll.EMAIL_CODE_REQUIRED), tr(enroll.EMAIL_CODE_INVALID)) for word in found):
+                        if found and any(word in (tr(enroll.EMAIL_CODE_REQUIRED), tr(enroll.EMAIL_CODE_INVALID), tr(enroll.TOTP_CODE_REQUIRED),
+                                                    tr(enroll.TOTP_CODE_INVALID)) for word in found):
                             for widget in code_widgets:
                                 widget.grid()
                             code_entry.focus_set()

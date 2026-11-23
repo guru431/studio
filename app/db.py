@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 69
+VERSION = 70
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1011,6 +1011,17 @@ SHARES_69 = "ALTER TABLE chat_shares ADD COLUMN item_kind TEXT;\nALTER TABLE cha
         f"  DELETE FROM chat_shares WHERE item_kind = '{table}' AND item_id = old.id; END;\n"
         for table in ("transcripts", "translations", "scans", "images", "videos"))
 SCHEMA += SHARES_69
+#: второй фактор приложением-аутентификатором (totp.py): секрет — шифром `STUDIO_DATA_KEY`, `totp_step` — последний
+#: принятый шаг 30 с (тот же код второй раз не принимается), резервные коды — sha256, каждый одноразовый;
+#: `users.login_notice` — письмо о входе с нового устройства (auth.finish_login). Прежний код столбцов и таблицы не
+#: читает: вход без второго фактора приложения (коды из письма — как были), письма о новом входе нет
+TOTP_70 = """ALTER TABLE users ADD COLUMN totp_secret BLOB;
+ALTER TABLE users ADD COLUMN totp_step INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN login_notice INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE totp_backup(user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE, digest TEXT NOT NULL,
+       PRIMARY KEY(user_id, digest));
+"""
+SCHEMA += TOTP_70
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1150,6 +1161,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     68: OWUI_DRAFTS_68,
     # ссылка «Поделиться» на расшифровку, перевод, скан, картинку и ролик
     69: SHARES_69,
+    # приложение-аутентификатор и резервные коды; письмо о входе с нового устройства
+    70: TOTP_70,
 }
 
 

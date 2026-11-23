@@ -36,6 +36,8 @@ KINDS = frozenset({
     "admin_grant", "admin_revoke",                    # права администратора выданы, сняты (панель)
     "project_member_add", "project_member_remove",    # доступ к проекту «Агентов» выдан, отозван (project_access)
     "project_leave",                                  # участник покинул совместные проекты чужого компьютера
+    "totp_on", "totp_off", "totp_reset",              # приложение-аутентификатор подключено, отключено, сброшено администратором
+    "totp_fail", "totp_backup_used",                  # неверный код приложения (detail — login | bridge); резервный код
 })
 DETAIL_MAX = 32
 KEEP_SEC = 180 * 86400
@@ -45,7 +47,7 @@ KEEP_MAX = 1000
 #: время последней, `first` — первой). Разные
 #: адреса — разные строки, поэтому ещё и квота: строк этих видов не больше NOISY_MAX, лишние уходят старшими, и подбор
 #: с тысяч адресов не вытеснит за KEEP_MAX входы, отпирания и прочие события
-NOISY = frozenset({"login_fail", "login_code_fail", "share_pin_fail"})
+NOISY = frozenset({"login_fail", "login_code_fail", "share_pin_fail", "totp_fail"})
 COLLAPSE_SEC = 3600
 NOISY_MAX = 200
 

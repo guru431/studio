@@ -127,6 +127,28 @@ function usersBlock(host) {
     });
   }
 
+  /** Потерянный телефон: снять приложение-аутентификатор чужой учётки (totp.admin_reset), владелец увидит это в журнале. */
+  function resetTotp(user) {
+    const yes = button(tr("Сбросить"), { class: 'btn btn-danger solid', id: 'totp-reset-confirm' });
+    const fail = el('p', { class: 'error' });
+    const dialog = openDialog(host, { id: 'totp-reset-dialog', title: tr("Сбросить приложение-аутентификатор?"), actions: [yes], body: [
+      el('p', {}, tr("«{0}» войдёт без кода приложения, а резервные коды перестанут действовать. Сбрасывайте, только если владелец потерял телефон и подтвердил это.", user.login)),
+      fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('DELETE', `/api/admin/users/${user.id}/totp`);
+        dialog.close();
+        await reload();
+        note.className = 'status ok';
+        note.textContent = tr("Приложение-аутентификатор «{0}» сброшено", user.login);
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
   function disable(user) {
     const yes = button(tr("Отключить"), { class: 'btn btn-danger solid', id: 'disable-confirm' });
     const fail = el('p', { class: 'error' });
@@ -193,6 +215,9 @@ function usersBlock(host) {
         button(tr("Подключения"), { class: 'btn btn-sm user-conns' }, () => connections(user)),
         !self && user.email && !user.disabled
           ? button(tr("Отправить ссылку для нового пароля"), { class: 'btn btn-sm user-password-link' }, () => sendPasswordLink(user))
+          : null,
+        !self && user.totp
+          ? button(tr("Сбросить аутентификатор"), { class: 'btn btn-sm user-totp-reset' }, () => resetTotp(user))
           : null,
         button(tr("Сбросить пароль"), { class: 'btn btn-sm user-reset', disabled: self,
           title: self ? tr("свой пароль — в «Настройках» → «Защита»") : null }, () => resetPassword(user)),
