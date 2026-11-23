@@ -64,3 +64,25 @@ def test_answer_from_another_window_takes_over_only_when_the_owner_window_is_not
     assert machine.requests[-1]['watched'] == [] and machine.running[A]['owner'] == other
     link.hello.pop('answer_takeover')
     assert answer('r2').status_code == 204 and 'watched' not in machine.requests[-1]
+
+
+def test_window_reading_its_turn_stream_counts_as_watching(studio):
+    """Окно, начавшее ход, читает поток ответа `POST …/turn` (на `/live` не переходит): оно смотрит чат, и ответ
+    на карточку из другого окна ход не перехватывает — `owned`, мосту уходит `watched` с окном-владельцем."""
+    from test_code import ASK
+    aid, machine, link = setup(studio)
+    machine.answer_takeover = link.hello['answer_takeover'] = True
+    owner, other = 'a' * 32, 'b' * 32
+    machine.script = [ASK]
+    answered = None
+    with studio.c.stream('POST', chat_url(aid, 'turn'), json={'text': 'x'},
+                         headers={'x-studio-window': owner}) as response:
+        assert response.status_code == 200
+        for line in response.iter_lines():
+            if line.startswith('event: ask'):            # поток ещё читается: выход из цикла его закроет
+                answered = studio.c.post(chat_url(aid, 'answer'), json={'request_id': 'r1', 'decision': 'allow'},
+                                         headers={'x-studio-window': other})
+                break
+    assert answered is not None and answered.status_code == 409 and detail(answered)['code'] == 'owned', answered
+    assert machine.requests[-1]['watched'] == [owner]
+    assert machine.running[A]['owner'] == owner

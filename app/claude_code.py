@@ -1400,8 +1400,8 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
     previous = bridge.initiated(aid, chat, member)
     # до просьбы, как `initiated`: зеркало после хода — той же сессией; ход участника зеркала не трогает
     bridge.owner_turn(aid, chat, request if member is None else None)
-    # до просьбы, как `_watched`
-    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id)
+    # до просьбы, как `_watched`; окно, начавшее ход, читает этот поток — оно смотрит чат (`bridge.windows`)
+    q = bridge.watch(aid, chat, bridge.tag(request.state.digest), request.state.user.id, _window(request))
     try:
         data = await _first(key, op, ask(request, aid, "turn", chat=chat, project=pid, text=body.text,
                                          model=body.model, effort=body.effort,
