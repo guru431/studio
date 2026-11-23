@@ -42,8 +42,10 @@ def test_delete_only_a_studio_session_and_clean_tabs_and_unread(studio):
     state.DB.execute("INSERT INTO code_tabs(user_id, agent_id, project, tabs, active, touched) VALUES (?, ?, ?, ?, ?, 1)",
                      (uid, aid, ALPHA, json.dumps([A, fresh]), A))
     code_attention.completed(aid, ALPHA, A)
+    assert studio.c.post(chat_url(aid, "share"), json={"pin": "0123"}).status_code == 201
     assert studio.c.delete(chat_url(aid)).status_code == 204
     assert A not in machine.projects["alpha"]["chats"]
+    assert not state.DB.execute("SELECT 1 FROM chat_shares WHERE session_id = ?", (A,)).fetchone()   # снимок — тоже
     assert code_attention.revision(aid, ALPHA, A) is None
     tabs = state.DB.execute("SELECT tabs, active FROM code_tabs WHERE agent_id = ?", (aid,)).fetchone()
     assert (json.loads(tabs["tabs"]), tabs["active"]) == ([fresh], fresh)

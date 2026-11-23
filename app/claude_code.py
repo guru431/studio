@@ -1097,7 +1097,8 @@ async def delete_chat(aid: int, pid: str, chat: str, request: Request):
     """«Удалить сессию» — только начатую студией (строка `code_chats` с `origin` `studio` или метка моста `studio`,
     как «студия» в списке) и только владельцу
     компьютера: мост удаляет её штатным способом помощника (`chat_delete`); сессии на машине нет («Новый чат» без
-    хода) — тоже удаление. Затем — строка `code_chats`, вкладки владельца и участников, отметка «непрочитано»."""
+    хода) — тоже удаление. Затем — строка `code_chats`, ссылки «Поделиться» на сессию (и прежние ссылки участников:
+    снимок живёт до удаления исходного чата), вкладки владельца и участников, отметка «непрочитано»."""
     project_access.owner(request, aid)
     check_pid(pid)
     check_chat(chat)
@@ -1120,6 +1121,7 @@ async def delete_chat(aid: int, pid: str, chat: str, request: Request):
     import workspace                     # он импортирует этот модуль: на загрузке — кольцо
     state.DB.execute("DELETE FROM code_chats WHERE user_id = ? AND agent_id = ? AND project = ? AND session_id = ?",
                      (uid, aid, pid, chat))
+    state.DB.execute("DELETE FROM chat_shares WHERE agent_id = ? AND project = ? AND session_id = ?", (aid, pid, chat))
     workspace.drop_chat(aid, pid, chat)
     code_attention.forget(aid, chat)
     return Response(status_code=204)
