@@ -4759,7 +4759,11 @@ def put_audio(selector, data, name="Звонок.wav", mime="audio/wav"):
       input.dispatchEvent(new Event('change', {{ bubbles: true }})); return input.files.length; }})()""")
 
 
-COPY_SPY = "(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; }; return true; })()"
+#: «Копировать» пишет `writeText` или — с разметкой (формулы «Сканов») — `write` с `ClipboardItem`: ловим оба, текст —
+#: `text/plain`
+COPY_SPY = ("(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; };"
+            " navigator.clipboard.write = async (items) => {"
+            " window.copied = await (await items[0].getType('text/plain')).text(); }; return true; })()")
 
 
 @pytest.mark.parametrize("width", [390, 1280])
