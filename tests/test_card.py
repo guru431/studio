@@ -9,6 +9,7 @@ import ocr
 import speeches
 import state
 import transcripts
+import translate
 from conftest import T0, add_connection, add_gateway
 from test_jobs import me, speech, transcript
 
@@ -46,3 +47,24 @@ def test_waiting_jobs_see_the_holder_estimate_and_their_place(studio):
         assert card.status() == {("speech", "s1"): other | {"ahead": 0}, ("chat", "m1"): other | {"ahead": 2}}
     finally:
         chat.STREAMS.pop("m1", None)
+
+
+def test_cloud_roles_and_a_translation_awaiting_its_scan_do_not_hold_the_card(studio):
+    """Облачная роль srvllm (ответ чата, перевод) карту не держит: ждущему — «другой клиент». Перевод файла, что ждёт
+    свой скан, — тоже: карту держит распознавание, его оценка и вид."""
+    uid = me(studio)
+    gw = connections.get(uid, add_gateway(studio))
+    speech(uid, "s1")
+    speeches.JOBS["s1"] = SimpleNamespace(stage="жду карту · озвучиваю 1 из 2", stage_at=T0 - 30, conn=gw, task=None)
+    chat.STREAMS["m1"] = SimpleNamespace(card_wait=None, conn=gw, model="gpt-cloud-role")
+    translate.JOBS["t1"] = SimpleNamespace(stage="перевожу · 1 из 3", stage_at=T0 - 90, conn=gw, model="gpt-cloud-role")
+    try:
+        assert card.status() == {("speech", "s1"): {"busy": None, "minutes": None, "ahead": 0}}
+        translate.JOBS["t1"] = SimpleNamespace(stage=f"{translate.SCANNING} 1 из 3", stage_at=T0 - 90, conn=gw,
+                                               model="local-gemma-abl")
+        ocr.JOBS["o1"] = SimpleNamespace(stage="распознаю · стр. 1 из 3", stage_at=T0 - 60, conn=gw)
+        assert card.status() == {("speech", "s1"): {"busy": "scan", "minutes": None, "ahead": 0}}
+    finally:
+        chat.STREAMS.pop("m1", None)
+        translate.JOBS.pop("t1", None)
+        ocr.JOBS.pop("o1", None)

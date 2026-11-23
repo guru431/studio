@@ -94,6 +94,8 @@ POLL_SEC = 1
 #: Lustify, и локальная модель ждала бы карту под его арендой
 FREED_FRESH_SEC = 15
 QUEUED = "в очереди"
+#: этап записи-файла, что ждёт свой скан (`_await_scan`): карту держит распознавание, не перевод (`card`)
+SCANNING = "распознаю · стр."
 CANCELLING = "останавливаю"
 CANCELLED = "остановлено"
 DONE = "готово"
@@ -420,7 +422,7 @@ async def _await_scan(job: Job, row):
         if scan["state"] == "done":
             break
         done, pages = ocr.progress([sid])
-        stage = f"распознаю · стр. {min(done + 1, pages)} из {pages}"
+        stage = f"{SCANNING} {min(done + 1, pages)} из {pages}"
         if stage != job.stage:
             job.stage = stage
             _store(job)
