@@ -28,7 +28,7 @@ import { schemaLimits, sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { chatPlayer } from './speech-read.js';
-import { el, openDialog, plural, words } from './ui.js';
+import { el, openDialog, plural, withCard, words } from './ui.js';
 import { timeOnly } from './time.js';
 
 const POLL_MS = 3000;
@@ -303,7 +303,7 @@ function build(view, ctx) {
   const paintRows = pickerList(list, { cls: 'sp-item', moreId: 'sp-more', empty: tr("Здесь появятся ваши озвучки"),
     name: (item) => item.text.slice(0, 80),
     // время начала и, пока чат не «готово», — его состояние словами (как у «Расшифровки»)
-    state: (item) => [timeOnly(item.created), RUNNING.has(item.state) ? serverMessage(item.detail)
+    state: (item) => [timeOnly(item.created), RUNNING.has(item.state) ? withCard(serverMessage(item.detail), item.card)
       : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("отменено") : ''].filter(Boolean).join(' · '),
     pick(id) {
       panel(false);
@@ -473,7 +473,7 @@ function build(view, ctx) {
       if (item.parts > 0) nodes.push(liveAudio(item));
     } else {
       // отказ повторной озвучки оставляет прежний звук: слова ошибки и плеер вместе
-      if (item.state !== 'done') nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, serverMessage(item.detail)));
+      if (item.state !== 'done') nodes.push(el('p', { class: item.state === 'error' ? 'error' : 'muted' }, withCard(serverMessage(item.detail), item.card)));
       if (item.media_id) {
         nodes.push(el('audio', { class: 'sp-audio', controls: true, preload: 'metadata',
           src: `/api/media/${encodeURIComponent(item.media_id)}` }));

@@ -108,7 +108,7 @@ import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { saveMedia } from './save.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
-import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
+import { button, el, field, focusDesktop, openDialog, plural, withCard, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 import { readAloud } from './speech-read.js';
@@ -320,6 +320,7 @@ async function readServer(job, response) {
       } else if (event === 'wait' && data) {       // {seconds} — ждём карту (503 шлюза), {} — шлюз принял запрос
         job.scan = null;
         job.wait = Number.isFinite(data.seconds) ? Date.now() - data.seconds * 1000 : null;
+        job.card = data.card || null;              // очередь карты (card.py): кто на ней и сколько примерно ждать
         notify(job, false);
       } else if (event === 'closed') {             // сессия вышла или «Чат» заперт: перечитать через вход/блокировку
         break;
@@ -1956,7 +1957,8 @@ function build(view, ctx) {
     // карта занята (503 шлюза): своя вкладка — событие `wait`, ответ, который читает не она, — `wait` с сервера
     const waiting = m.status === 'streaming' && (job ? job.wait != null : Number.isFinite(m.wait));
     p.nowait.hidden = !waiting;
-    if (waiting) text = tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000));
+    if (waiting) text = withCard(tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000)),
+      job ? job.card : m.card);
     else if (m.status === 'streaming') {
       // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке.
       // Грузит модель только локальная (`local` диалога), облачная — просто ещё молчит

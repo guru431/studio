@@ -21,7 +21,7 @@ import { message, tr } from './i18n.js';
  * dayTitle — и подпись дня этих списков и «Сканов» (год — если не текущий). */
 import { api } from './api.js';
 import { calendarDay, dateOnly } from './time.js';
-import { button, el as make, words } from './ui.js';
+import { button, el as make, withCard, words } from './ui.js';
 
 const NEAR_PX = 600;             // ближе к низу — подгрузить следующую страницу
 
@@ -274,7 +274,7 @@ export function busyBlock(prev, item, { id, url, fail, after }) {
     prev = { id: item.id, text, box: make('div', { class: 'tr-busy' },
       make('span', { class: 'ring', 'aria-hidden': 'true' }), text, cancel) };
   }
-  const shown = message(item.detail ?? '');
+  const shown = withCard(message(item.detail ?? ''), item.card);
   if (prev.text.textContent !== shown) prev.text.textContent = shown;
   return prev;
 }

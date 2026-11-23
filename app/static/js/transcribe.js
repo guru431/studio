@@ -59,7 +59,7 @@ import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { SPEECH_LANGUAGES, recordingName } from './mic.js';
 import { SCREEN_STOPS, discard, meeting, pendingRecordings, restore, startMeeting } from './recorder.js';
-import { el, field, openDialog, renameDialog, words } from './ui.js';
+import { el, field, openDialog, renameDialog, withCard, words } from './ui.js';
 
 const POLL_MS = 3000;
 const PAGE = 60;
@@ -238,7 +238,7 @@ function build(view, ctx) {
   const paintRows = pickerList(list, { cls: '', moreId: 'tr-more', empty: tr("Здесь появятся ваши записи"),
     name: (item) => item.name,
     state: (item) => (item.state === 'done' ? clock(item.duration)
-      : RUNNING.has(item.state) ? serverMessage(item.detail) : item.state === 'cancelled' ? tr("отменено") : tr("ошибка")),
+      : RUNNING.has(item.state) ? withCard(serverMessage(item.detail), item.card) : item.state === 'cancelled' ? tr("отменено") : tr("ошибка")),
     pick(id) {
       leave(() => {
         panel(false);

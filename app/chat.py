@@ -54,6 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+import card
 import chat_pending
 import chat_system
 import chat_tools
@@ -453,6 +454,7 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
            "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
            "ocr": live.scan_state if live else None, "wait": live.waited() if live else None,
+           "card": card.info("chat", row["id"]) if live and live.card_wait is not None else None,
            "todo": json.loads(row["todo"]) if row["todo"] else None}   # план ответа (chat_tools.TODO_WRITE)
     if pending and row["id"] in pending:
         out["pending"] = pending[row["id"]]
@@ -939,7 +941,7 @@ class StreamTask:
             log.info("чат %s: ответ %s — жду карту", self.chat_id[:8], self.message_id[:8])
         self.card_wait = (shown, counted)
         self.fresh = True
-        self.put("wait", {"seconds": round(now - shown)})
+        self.put("wait", {"seconds": round(now - shown), "card": card.info("chat", self.message_id)})
         await clock.SLEEP(RETRY_SEC)
         self.deadline += clock.NOW() - now
         return None

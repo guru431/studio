@@ -26,7 +26,7 @@ import { message, tr } from './i18n.js';
 import { api } from './api.js';
 import { svg } from './icons.js';
 import { timeOnly } from './time.js';
-import { el, words } from './ui.js';
+import { el, withCard, words } from './ui.js';
 import { allCodeActivity, codeActivityState, codeActivityLabel, refreshCodeActivity } from './code-activity.js';
 import { ENGINE_NAMES } from './code-options.js';
 import { sectionName } from './sections-meta.js';
@@ -120,7 +120,7 @@ function titleText(item) {
 function detailText(item) {
   if (item.section === 'code') return [ENGINE_NAMES[item.engine], codeActivityLabel(item)].filter(Boolean).join(' · ');
   const when = item.finished === null
-    ? [message(item.detail), item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
+    ? [withCard(message(item.detail), item.card), item.progress ? `${item.progress}%` : '', clock(serverNow() - item.started)]
     : [message(item.detail), timeOnly(item.finished)];
   return when.filter(Boolean).join(' · ');
 }

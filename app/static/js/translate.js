@@ -60,7 +60,7 @@ import { picker } from './picker.js';
 import { renderMarkdown } from './markdown.js';
 import { DOCUMENT_PHOTO_SIDE, resizePhoto } from './resize-photo.js';
 import { clearRead, readAloud } from './speech-read.js';
-import { el, openDialog, words } from './ui.js';
+import { el, openDialog, withCard, words } from './ui.js';
 
 const POLL_MS = 1000;                    // опрос открытой идущей записи
 const LIST_POLL_MS = 3000;               // опрос истории, пока в ней что-то идёт
@@ -448,7 +448,7 @@ function build(view, ctx) {
     const formatMd = formats.querySelector('[data-format=md]');
     formatMd.hidden = !(rec && (rec.scan_id || /\.md$/i.test(rec.name || '')));
     if (!rec) setStatus('', '');
-    else if (running) setStatus('', serverMessage(rec.detail) || '', true);
+    else if (running) setStatus('', withCard(serverMessage(rec.detail) || '', rec.card), true);
     else if (rec.state === 'error') setStatus('error', serverMessage(rec.detail) || tr("ошибка"));
     else if (rec.state === 'cancelled' || !text) setStatus('muted', serverMessage(rec.detail) || '');
     else if (rec.notice) setStatus('warn', serverMessage(rec.notice));      // «не распознано страниц: 2 из 12»
@@ -749,7 +749,7 @@ function build(view, ctx) {
   /** Строка под парой языков: время, вид, состояние словами (у идущей — «жду карту · м:сс», каждую секунду новое). */
   function metaText(item) {
     const running = RUNNING.has(item.state);
-    const state = running ? serverMessage(item.detail) : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("остановлено")
+    const state = running ? withCard(serverMessage(item.detail), item.card) : item.state === 'error' ? tr("ошибка") : item.state === 'cancelled' ? tr("остановлено")
       : item.notice ? serverMessage(item.notice) : '';
     return [timeOf(item.created), kindLabel(item), state].filter(Boolean).join(' · ');
   }

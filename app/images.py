@@ -68,6 +68,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 import auth
 import chains
+import card
 import clock
 import connections
 import db
@@ -331,13 +332,13 @@ def _out(row, with_chain=True) -> dict:
            "media_id": row["media_id"], "created": row["created"], "steps": len(chain)}
     if with_chain:
         out["chain"] = chains.annotate(row["user_id"], chain)
-    return out
+    return card.mark(out, "photo", row)
 
 
 def _status(job: Job) -> dict:
     end = job.finished_at if job.finished_at is not None else clock.NOW()
-    return {"id": job.id, "state": job.state, "detail": job.detail, "model": job.model, "kind": job.kind,
-            "elapsed": int(max(0, end - job.started))}
+    return card.mark({"id": job.id, "state": job.state, "detail": job.detail, "model": job.model, "kind": job.kind,
+                      "elapsed": int(max(0, end - job.started))}, "photo", {"id": job.id, "finished": job.finished_at})
 
 
 def recover() -> None:

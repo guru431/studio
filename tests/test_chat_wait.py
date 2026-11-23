@@ -53,7 +53,10 @@ def test_busy_card_waits_and_retries_the_model(studio):
     events = sse(turn(studio, cid, "Привет"))
     waits = [d for e, d in events if e == "wait"]
     # часы двигают и пинги потока: секунды второго ожидания — не меньше паузы
-    assert waits[0] == {"seconds": 0} and waits[1]["seconds"] >= chat.RETRY_SEC and waits[2:] == [{}]
+    # студия ничего на карте не держит: очередь карты (card.py) — «другой клиент», перед ответом никого
+    other = {"busy": None, "minutes": None, "ahead": 0}
+    assert waits[0] == {"seconds": 0, "card": other} and waits[1]["seconds"] >= chat.RETRY_SEC and waits[2:] == [{}]
+    assert waits[1]["card"] == other
     assert events[-1] == ("done", {"status": "done"})
     assert studio.gw.chat_busy == 3 and len(studio.gw.chat_requests) == 1
     answer = messages(studio, cid)[1]
@@ -118,7 +121,7 @@ def test_do_not_wait_ends_the_answer_with_words(studio):
     busy_gateway(studio, None)
     with studio.c.stream("POST", f"/api/chats/{cid}/turns", json={"text": "Привет"}) as r:
         events = events_of(r.iter_lines())
-        assert next(d for e, d in events if e == "wait") == {"seconds": 0}
+        assert next(d for e, d in events if e == "wait")["seconds"] == 0
         assert messages(studio, cid)[1]["wait"] >= 0
         assert studio.c.post(f"/api/chats/{cid}/nowait").status_code == 204
         rest = [(e, d) for e, d in events if e not in ("ping", "wait")]
