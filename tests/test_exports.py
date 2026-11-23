@@ -160,7 +160,7 @@ def test_pages_docx_is_a_valid_word_file():
     assert paragraphs[:4] == [[(f"{W}t", "Скан & Co")], [(f"{W}t", "Страница 1")], [(f"{W}t", "Заголовок")],
                               [(f"{W}t", "Текст")]]
     assert [(f"{W}t", "[пустая страница]")] in paragraphs
-    assert paragraphs[-1] == [(f"{W}t", "a<b"), (f"{W}tab", None), (f"{W}t", "c d")]
+    assert cells(root) == [[["a<b"], ["c d"]]]                     # таблица — таблицей Word, не табуляцией
 
 
 def test_text_docx_has_a_title_and_a_paragraph_per_line():
@@ -169,7 +169,116 @@ def test_text_docx_has_a_title_and_a_paragraph_per_line():
         root = ElementTree.fromstring(z.read("word/document.xml"))
     paragraphs = [[(t.tag, t.text) for t in p.iter() if t.tag in (f"{W}t", f"{W}tab")] for p in root.iter(f"{W}p")]
     assert paragraphs == [[(f"{W}t", "Договор & Co")], [(f"{W}t", "Договор")], [(f"{W}t", "Срок — 30 дней.")],
-                          [(f"{W}t", "a<b"), (f"{W}tab", None), (f"{W}t", "c d")]]
+                          [(f"{W}t", "a<b")], [(f"{W}t", "c d")]]
+    assert styles(root)[1] == "Heading2" and cells(root) == [[["a<b"], ["c d"]]]
+
+
+def cells(root) -> list:
+    """Строки таблиц документа: ячейка — список её абзацев (текстом)."""
+    return [[["".join(t.text or "" for t in p.iter(f"{W}t")) for p in tc.iter(f"{W}p")]
+             for tc in tr.findall(f"{W}tc")] for tr in root.iter(f"{W}tr")]
+
+
+def styles(root) -> list:
+    """Стиль каждого абзаца документа («» — без стиля)."""
+    return [next((s.get(f"{W}val") for s in p.iter(f"{W}pStyle")), "") for p in root.iter(f"{W}p")]
+
+
+def docx_parts(data: bytes) -> dict:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return {name: ElementTree.fromstring(z.read(name)) for name in z.namelist() if name.endswith((".xml", ".rels"))}
+
+
+def test_docx_keeps_merged_cells_on_the_grid():
+    """Аудит 05:F9/I4: объединённые ячейки — `gridSpan`/`vMerge` по сетке, ячейки правее и ниже не съезжают; `th` —
+    жирным; подпись — абзацем над таблицей; таблица Markdown — тоже таблицей, первая строка — заголовочная."""
+    md = ("<table><caption>Цены</caption><tr><th rowspan=\"2\">Товар</th><th colspan=\"2\">Цена</th></tr>"
+          "<tr><th>опт</th><th>розница</th></tr><tr><td>Хлеб<br>белый</td><td>4<sup>2</sup></td><td>50</td></tr>"
+          "</table>\n\n| Товар | Цена |\n|:---|---:|\n| Хлеб \\| батон | 50 |")
+    root = docx_parts(exports.text_docx(md, "Т"))["word/document.xml"]
+    tables = list(root.iter(f"{W}tbl"))
+    assert len(tables) == 2
+    assert [len(t.find(f"{W}tblGrid")) for t in tables] == [3, 2]
+    first = [[(tc.find(f"{W}tcPr/{W}gridSpan"), tc.find(f"{W}tcPr/{W}vMerge"),
+               "".join(x.text or "" for x in tc.iter(f"{W}t"))) for tc in tr.findall(f"{W}tc")]
+             for tr in tables[0].iter(f"{W}tr")]
+    assert [[c[2] for c in row] for row in first] == [["Товар", "Цена"], ["", "опт", "розница"], ["Хлеб белый", "4²", "50"]]
+    assert first[0][0][1].get(f"{W}val") == "restart" and first[1][0][1].get(f"{W}val") is None
+    assert first[0][1][0].get(f"{W}val") == "2" and first[2][0][0] is None
+    assert tables[0].find(f".//{W}b") is not None                       # заголовочные ячейки — жирным
+    assert cells(tables[1]) == [[["Товар"], ["Цена"]], [["Хлеб | батон"], ["50"]]]
+    assert ["".join(t.text for t in p.iter(f"{W}t")) for p in root.findall(f"{W}body/{W}p")][1] == "Цены"
+
+
+def test_docx_headings_are_styles_and_lists_keep_their_numbers():
+    """Аудит 05:I4: заголовки — стилями Heading (их описание — в styles.xml), маркеры и номера — нумерацией Word;
+    номер, что не продолжает список, начинает свой (`startOverride`): «7.» после «5.» не станет «6.»."""
+    md = ("# Договор\n<h3>Сроки</h3>\n- первое\n  - вложенное\n* второе\n\n5. пятый\n6. шестой\n\n"
+          "текст\n7) седьмой\n9) девятый\n1.1. не список")
+    parts = docx_parts(exports.text_docx(md, "Т"))
+    root = parts["word/document.xml"]
+    assert styles(root)[1:3] == ["Heading1", "Heading3"]
+    defined = {s.get(f"{W}styleId") for s in parts["word/styles.xml"].iter(f"{W}style")}
+    assert {"Heading1", "Heading3"} <= defined
+    nums = [(p.find(f".//{W}numId").get(f"{W}val"), p.find(f".//{W}ilvl").get(f"{W}val"),
+             "".join(t.text for t in p.iter(f"{W}t"))) for p in root.iter(f"{W}p") if p.find(f".//{W}numPr") is not None]
+    assert nums == [("1", "0", "первое"), ("1", "1", "вложенное"), ("1", "0", "второе"),
+                    ("2", "0", "пятый"), ("2", "0", "шестой"), ("3", "0", "седьмой"), ("4", "0", "девятый")]
+    numbering = parts["word/numbering.xml"]
+    own = {n.get(f"{W}numId"): (n.find(f"{W}abstractNumId").get(f"{W}val"),
+                                n.find(f".//{W}startOverride").get(f"{W}val"))
+           for n in numbering.iter(f"{W}num") if n.find(f".//{W}startOverride") is not None}
+    assert own == {"2": ("1", "5"), "3": ("2", "7"), "4": ("2", "9")}
+    assert "1.1. не список" in ["".join(t.text for t in p.iter(f"{W}t")) for p in root.iter(f"{W}p")]
+    rels = parts["word/_rels/document.xml.rels"]
+    assert {r.get("Target") for r in rels} == {"styles.xml", "numbering.xml"}
+    types = parts["[Content_Types].xml"]
+    assert {"/word/styles.xml", "/word/numbering.xml"} <= {o.get("PartName") for o in types}
+
+
+def test_tables_go_to_xlsx_with_merges_and_to_csv():
+    """Аудит 05:I4: лист «Таблица N» на таблицу, объединение — `mergeCell`, число — числом, «007» и «1 250,00» —
+    текстом; CSV — UTF-8 с BOM, одна таблица — файл, несколько — ZIP."""
+    pages = [{"n": 1, "state": "done", "detail": None, "text": (
+                 "<table><tr><td colspan=\"2\">Итого</td><td rowspan=\"2\">1250.5</td></tr>"
+                 "<tr><td>007</td><td>1 250,00</td></tr></table>")},
+             {"n": 2, "state": "failed", "detail": None, "text": None},
+             {"n": 3, "state": "done", "detail": None, "text": "| a | b |\n|---|---|\n| 1 | x\x0by |"}]
+    grids = exports.tables(pages)
+    assert len(grids) == 2 and exports.tables(pages[1:2]) == []
+    sheet = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(exports.xlsx(grids, "en"))) as z:
+        book = ElementTree.fromstring(z.read("xl/workbook.xml"))
+        first = ElementTree.fromstring(z.read("xl/worksheets/sheet1.xml"))
+        assert "xl/worksheets/sheet2.xml" in z.namelist()
+    assert [s.get("name") for s in book.iter(f"{sheet}sheet")] == ["Table 1", "Table 2"]
+    assert [m.get("ref") for m in first.iter(f"{sheet}mergeCell")] == ["A1:B1", "C1:C2"]
+    values = {c.get("r"): (c.get("t"), "".join(x.text or "" for x in c.iter() if x.tag in (f"{sheet}v", f"{sheet}t")))
+              for c in first.iter(f"{sheet}c")}
+    assert values == {"A1": ("inlineStr", "Итого"), "C1": (None, "1250.5"), "A2": ("inlineStr", "007"),
+                      "B2": ("inlineStr", "1 250,00")}
+    body, name = exports.tables_csv(grids[:1], "Счёт")
+    assert name == "Счёт.csv" and body.decode("utf-8") == "﻿Итого,,1250.5\r\n007,\"1 250,00\",\r\n"
+    body, name = exports.tables_csv(grids, "Счёт")
+    with zipfile.ZipFile(io.BytesIO(body)) as z:
+        assert name == "Счёт.csv.zip" and z.namelist() == ["Счёт-1.csv", "Счёт-2.csv"]
+        assert z.read("Счёт-2.csv").decode("utf-8") == "﻿a,b\r\n1,x y\r\n"
+
+
+def test_pairs_docx_puts_each_source_next_to_its_translation():
+    """Аудит 05:I5: таблица в два столбца — шапка на каждой странице, строка — кусок и его перевод; Markdown скана —
+    структурой внутри ячейки (ячейка кончается абзацем), письмо справа налево — у своей стороны."""
+    pairs = [("Hello.\nSecond line.", "שלום."), ("<table><tr><td>a</td></tr></table>", "<table><tr><td>б</td></tr></table>")]
+    root = docx_parts(exports.pairs_docx(pairs, "Договор", ("Source", "Translation"), markdown=True,
+                                         rtl=(False, True)))["word/document.xml"]
+    outer = root.find(f"{W}body/{W}tbl")
+    rows = outer.findall(f"{W}tr")
+    assert rows[0].find(f"{W}trPr/{W}tblHeader") is not None
+    assert cells(outer)[:2] == [[["Source"], ["Translation"]], [["Hello.", "Second line."], ["שלום."]]]
+    left, right = rows[1].findall(f"{W}tc")
+    assert left.find(f".//{W}bidi") is None and right.find(f".//{W}bidi") is not None
+    nested = rows[2].findall(f"{W}tc")
+    assert all(tc.find(f"{W}tbl") is not None and tc[-1].tag == f"{W}p" for tc in nested)
 
 
 def test_export_route_names_the_file_after_the_recording(studio, fake_audio):

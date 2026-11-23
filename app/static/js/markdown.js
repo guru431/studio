@@ -14,7 +14,14 @@ import { tr } from './i18n.js';
  *
  * renderMarkdown(text, { html: true }) — текст распознавания («Сканы», ocr.js): HunyuanOCR пишет
  * таблицы HTML-тегами, и они должны стать таблицей. HTML отдаётся DOMPurify как есть — остаются те же
- * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет. */
+ * теги и атрибуты (плюс colspan и rowspan ячеек), скрипты, стили и формы — нет.
+ *
+ * Формулы LaTeX того же текста (указание распознавания велит писать их `$…$`) — расширение marked `MATH` только
+ * при html: `$$…$$`, `\[…\]` — блоком, `\(…\)`, `$…$` — в строке (у `$` — без пробела внутри у знаков и без цифры
+ * сразу после закрывающего: «$5 и $10» — деньги, не формула). До разбора разметки: `_` и `\` формулы marked не
+ * трогает. Формула идёт через DOMPurify текстом в `<code class="language-math[-display]">`, затем `typesetMath`
+ * рисует её KaTeX (vendor/katex, грузится при первой формуле) построением DOM, без innerHTML; ошибка разбора или
+ * библиотека не загрузилась — формула остаётся текстом с разделителями. */
 
 import { localFileHref, visualizationFilePath } from './code-file-links.js';
 import { visualizationExtension, visualizationReference } from './visualization-markup.js';
@@ -47,6 +54,77 @@ const BR = /^<br\s*\/?>$/i;     // единственный тег из отве
 
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+const MATH_RULES = [[/^\$\$([\s\S]+?)\$\$/, true], [/^\\\[([\s\S]+?)\\\]/, true], [/^\\\(([\s\S]+?)\\\)/, false],
+  [/^\$((?:\\[\s\S]|[^\\$\n])+?)\$(?!\d)/, false]];
+const MATH = {
+  name: 'math',
+  level: 'inline',
+  start(src) {
+    const at = src.search(/\$|\\[([]/);
+    return at < 0 ? undefined : at;
+  },
+  tokenizer(src) {
+    for (const [rule, display] of MATH_RULES) {
+      const m = rule.exec(src);
+      if (!m) continue;
+      const tex = m[1];
+      if (!display && src[0] === '$' && (/^\s/.test(tex) || /\s$/.test(tex))) return undefined;
+      if (!tex.trim()) return undefined;
+      return { type: 'math', raw: m[0], tex, display };
+    }
+    return undefined;
+  },
+  renderer({ tex, display }) {
+    return `<code class="language-math${display ? '-display' : ''}">${escapeHtml(tex)}</code>`;
+  },
+};
+
+let katexLoad = null;
+
+function loadKatex() {
+  if (window.katex) return Promise.resolve();
+  katexLoad ||= new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = new URL('../vendor/katex/katex.min.css', import.meta.url).href;
+    document.head.append(css);
+    const script = document.createElement('script');
+    script.src = new URL('../vendor/katex/katex.min.js', import.meta.url).href;
+    script.crossOrigin = 'anonymous';
+    script.onload = () => (window.katex ? resolve() : reject(new Error('KaTeX unavailable')));
+    script.onerror = () => { katexLoad = null; reject(new Error('KaTeX unavailable')); };
+    document.head.append(script);
+  });
+  return katexLoad;
+}
+
+/** Формулы `code.language-math[-display]` внутри root — KaTeX (`output`: 'htmlAndMathml' на странице, 'mathml'
+ *  для буфера обмена). Ошибка разбора или нет библиотеки — текст формулы с разделителями. */
+export async function typesetMath(root, { output = 'htmlAndMathml' } = {}) {
+  const nodes = [...root.querySelectorAll('code.language-math, code.language-math-display')];
+  if (!nodes.length) return;
+  let ready = true;
+  try {
+    await loadKatex();
+  } catch {
+    ready = false;
+  }
+  for (const node of nodes) {
+    const display = node.classList.contains('language-math-display');
+    const tex = node.textContent;
+    const plain = display ? `$$${tex}$$` : `$${tex}$`;
+    if (!ready) { node.replaceWith(plain); continue; }
+    const out = document.createElement('span');
+    try {
+      window.katex.render(tex, out, { displayMode: display, output, throwOnError: true, trust: false,
+        strict: 'ignore', maxExpand: 1000, maxSize: 50 });
+      node.replaceWith(out);
+    } catch {
+      node.replaceWith(plain);
+    }
+  }
 }
 
 const parsers = {};
@@ -83,7 +161,7 @@ function markdownParser(html) {
       },
     },
   });
-  parsers[html].use({ extensions: [visualizationExtension] });
+  parsers[html].use({ extensions: html ? [MATH, visualizationExtension] : [visualizationExtension] });
   return parsers[html];
 }
 
@@ -98,7 +176,7 @@ async function copy(pre, button) {
   setTimeout(() => { button.textContent = tr("Копировать"); }, COPIED_MS);
 }
 
-function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = {}) {
+function fragmentOf(out, { html = false, highlight = true, fileLinks = null, math = html } = {}) {
   const fragment = window.DOMPurify.sanitize(out, { RETURN_DOM_FRAGMENT: true, ALLOWED_TAGS: TAGS,
     ALLOWED_ATTR: html ? [...ATTRS, 'colspan', 'rowspan'] : ATTRS, ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
   for (const node of fragment.querySelectorAll('[class]')) {
@@ -160,11 +238,22 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null } = 
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
   }
+  // узлы фрагмента переезжают в страницу, KaTeX дорисует их там, когда загрузится
+  if (math) for (const node of fragment.children) typesetMath(node);
   return fragment;
 }
 
 export function renderMarkdown(text, options = {}) {
   return fragmentOf(markdownParser(!!options.html).parse(String(text ?? '')), options);
+}
+
+/** HTML текста распознавания для буфера обмена: разметка как на странице, формулы — MathML, без кнопок. */
+export async function markdownHtml(text) {
+  const box = document.createElement('div');
+  box.append(renderMarkdown(text, { html: true, math: false, highlight: false }));
+  for (const button of box.querySelectorAll('button')) button.remove();
+  await typesetMath(box, { output: 'mathml' });
+  return box.innerHTML;
 }
 
 const renderQueue = [];

@@ -36,6 +36,7 @@ import { choose, current as look, deviceSizeControls, follow, paintSave, retrySa
 import { setupMobileNavigation } from './mobile-navigation.js';
 import { passwordResetNotice } from './account-security.js';
 import { setupPushSync } from './push-sync.js';
+import { offerReceived } from './share-target.js';
 import { timezoneOffer } from './timezone-offer.js';
 import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
@@ -443,6 +444,7 @@ async function enter(worker) {
   window.addEventListener('hashchange', render);
   document.addEventListener('keydown', sectionKey);
   await render();
+  offerReceived();           // принятое листом «Поделиться» (sw.js) — окно выбора раздела
   if (claimRequested) {
     let failed;
     try { failed = await claimActiveSessions(); }

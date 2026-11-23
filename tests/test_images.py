@@ -730,6 +730,40 @@ def test_description_cancellation_waits_then_discards_text_and_releases(studio):
     assert [model for model, _ in studio.gw.releases][-1] == "gemma4-abl"
 
 
+def test_text_job_is_found_after_a_reload_and_shown_in_jobs_until_received(studio):
+    """Описание с фото истории — в «В работе» строкой с «Отменить» и в `GET /api/images/text` (окно после перезагрузки)
+    — идущим и готовым, пока страница не подтвердит получение; текст — только обычным опросом."""
+    arrived, finish = threading.Event(), threading.Event()
+
+    async def descriptions(request):
+        arrived.set()
+        while not finish.is_set():
+            await asyncio.sleep(0.001)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "private description"}}]})
+
+    studio.gw.on["/slot/images/descriptions"] = descriptions
+    add_gateway(studio)
+    first = wait_state(studio, start(studio).json()["id"], {"done"})
+    job_id = studio.c.post("/api/images/descriptions", files={"source_media_id": (None, first["media_id"])}).json()["id"]
+    assert arrived.wait(1)
+    current = studio.c.get("/api/images/text").json()
+    assert (current["id"], current["kind"], current["state"], current["source_media_id"]) == (
+        job_id, "description", "working", first["media_id"])
+    row = next(i for i in studio.c.get("/api/jobs").json()["running"] if i["id"] == job_id)
+    assert (row["title"], row["href"], row["cancel"], row["section"]) == (
+        "Описание фото", "photo", f"/api/images/{job_id}/cancel", "photo")
+    finish.set()
+    wait_description(studio, job_id)
+    assert studio.c.get("/api/images/text").json()["state"] == "done"
+    done = next(i for i in studio.c.get("/api/jobs").json()["finished"] if i["id"] == job_id)
+    assert done["state"] == "done" and "cancel" not in done and "private" not in json.dumps(done)
+    assert studio.c.delete(f"/api/images/descriptions/{job_id}").status_code == 204
+    assert studio.c.get("/api/images/text").json() == {}
+    other = make_user(studio, "stranger")
+    signin(studio, "stranger")
+    assert other and studio.c.get("/api/images/text").json() == {}
+
+
 def test_description_can_be_cancelled_during_model_release(studio):
     releasing, finish = threading.Event(), threading.Event()
 
@@ -909,18 +943,46 @@ def test_unsaved_image_becomes_an_error(studio, monkeypatch):
     assert result["media_id"] is None
 
 
-def test_restart_marks_running_images_interrupted(studio):
+def test_restart_queues_images_interrupted_for_the_first_time_and_ends_the_rest(studio):
+    """recover (п. 10 шапки images.py): прерванная впервые — в повтор; повтор, отменявшаяся, в корзине, у
+    отключённой учётки и остановка дольше RESUME_SEC — ошибка INTERRUPTED; кончившиеся — как были."""
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
-    for image_id, status in (("a" * 32, "working"), ("b" * 32, "cancelling"), ("c" * 32, "done"), ("d" * 32, "queued")):
-        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
-                         " VALUES (?, ?, 'generation', 'flux', 'p', '1024x1024', 1, ?, 'x', ?)",
-                         (image_id, uid, status, T0))
+    other = make_user(studio, "gone-user")
+    state.DB.execute("UPDATE users SET disabled = 1 WHERE id = ?", (other,))
+    rows = {  # id: (учётка, state, detail, finished, deleted) → (state, detail)
+        "a": (uid, "working", "x", None, None, "queued", images.RESUMED),
+        "b": (uid, "cancelling", "x", None, None, "error", images.INTERRUPTED),
+        "c": (uid, "done", "готово", T0, None, "done", "готово"),
+        "d": (uid, "queued", "в очереди серии · 2 из 3", None, None, "queued", images.RESUMED),
+        "e": (uid, "working", images.RESUMED, None, None, "error", images.INTERRUPTED),
+        "f": (uid, "error", images.RESTARTING, T0 - 5, None, "queued", images.RESUMED),
+        "g": (uid, "error", images.RESTARTING, T0 - images.RESUME_SEC - 1, None, "error", images.INTERRUPTED),
+        "h": (uid, "working", "x", None, T0, "error", images.INTERRUPTED),
+        "i": (other, "error", images.RESTARTING, T0 - 5, None, "error", images.INTERRUPTED),
+        "j": (uid, "error", "шлюз недоступен", T0, None, "error", "шлюз недоступен"),
+    }
+    for key, (owner, status, detail, finished, deleted, *_) in rows.items():
+        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created, finished,"
+                         " deleted) VALUES (?, ?, 'generation', 'flux', 'p', '1024x1024', 1, ?, ?, ?, ?, ?)",
+                         (key * 32, owner, status, detail, T0 - 10, finished, deleted))
     images.recover()
-    for image_id, status in (("a" * 32, "error"), ("b" * 32, "error"), ("c" * 32, "done"), ("d" * 32, "error")):
-        body = studio.c.get(f"/api/images/{image_id}").json()
-        assert body["state"] == status
-    assert studio.c.get(f"/api/images/{'a' * 32}").json()["detail"] == "прервано перезапуском студии"
+    for key, (*_, status, detail) in rows.items():
+        row = state.DB.execute("SELECT state, detail, finished FROM images WHERE id = ?", (key * 32,)).fetchone()
+        assert (row["state"], row["detail"]) == (status, detail), key
+        assert (row["finished"] is None) == (status == "queued"), key
+
+
+def test_restart_does_not_repeat_an_image_whose_model_left_the_section(studio):
+    add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                     " VALUES (?, ?, 'generation', 'retired-model', 'p', '1024x1024', 1, 'working', 'x', ?)",
+                     ("a" * 32, uid, T0))
+    studio.c.__exit__(None, None, None)
+    studio.c.__enter__()
+    body = studio.c.get(f"/api/images/{'a' * 32}").json()
+    assert (body["state"], body["detail"]) == ("error", images.INTERRUPTED) and not studio.gw.generations
 
 
 def test_running_image_cannot_be_deleted_and_done_one_can(studio, env, unlinks):
@@ -1134,17 +1196,61 @@ def test_graceful_stop_during_the_cancel_delete_leaves_no_broken_row(studio, env
     assert body["media_id"] is None and share_files(env) == []
 
 
-def test_graceful_restart_marks_a_running_image_interrupted(studio):
-    """Остановка службы (SIGTERM при выкладке) — тоже перезапуск, не отмена пользователем (ревью A2-I4)."""
+def test_graceful_restart_repeats_an_interrupted_image_once(studio):
+    """Остановка службы (SIGTERM при выкладке) — перезапуск, не отмена пользователем (ревью A2-I4): строка —
+    RESTARTING без уведомления, после запуска — тот же запрос заново; второй перезапуск — уже ошибка."""
     studio.gw.hold = True
     add_gateway(studio)
-    job_id = start(studio).json()["id"]
+    job_id = start(studio, seed=77).json()["id"]
     wait_for(lambda: studio.gw.generations)
+    studio.c.__exit__(None, None, None)
+    assert (images.JOBS[job_id].state, images.JOBS[job_id].detail) == ("error", images.RESTARTING)
+    studio.c.__enter__()
+    wait_for(lambda: len(studio.gw.generations) == 2)
+    assert studio.gw.generations[1][0] == studio.gw.generations[0][0] and studio.gw.generations[1][0]["seed"] == 77
+    body = studio.c.get(f"/api/images/{job_id}").json()
+    assert (body["state"], body["detail"]) == ("working", images.RESUMED)
+    assert start(studio).status_code == 409                       # слот учётки занят повтором
     studio.c.__exit__(None, None, None)
     studio.gw.hold = False
     studio.c.__enter__()
     body = studio.c.get(f"/api/images/{job_id}").json()
-    assert (body["state"], body["detail"]) == ("error", "прервано перезапуском студии")
+    assert (body["state"], body["detail"]) == ("error", images.INTERRUPTED) and len(studio.gw.generations) == 2
+
+
+def test_restart_repeats_a_brush_edit_with_its_source_and_mask(studio):
+    add_gateway(studio)
+    first = wait_state(studio, start(studio).json()["id"], {"done"})
+    mask = Image.new("L", (64, 48), 0)
+    mask.paste(255, (0, 0, 16, 16))
+    studio.gw.hold = True
+    form = {"prompt": "x", "size": "original", "model": "snofs", "strength": "0.4", "source_media_id": first["media_id"]}
+    edit = studio.c.post("/api/images", data=form, files={"mask": ("m.png", png(mask), "image/png")}).json()["id"]
+    wait_for(lambda: studio.gw.edits)
+    studio.c.__exit__(None, None, None)
+    studio.gw.hold = False
+    studio.c.__enter__()
+    done = wait_state(studio, edit, {"done", "error"})
+    assert done["state"] == "done", done
+    assert len(studio.gw.edits) == 2 and studio.gw.edits[1] == studio.gw.edits[0]   # те же поля, seed, сила и фото
+    assert done["mask_media_id"] and done["source_media_id"] == first["media_id"]
+
+
+def test_a_repeat_cancelled_before_it_starts_sends_nothing(studio):
+    add_gateway(studio)
+    uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
+    for key, created in (("a", T0), ("b", T0 - 1)):
+        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"
+                         " VALUES (?, ?, 'generation', 'flux', 'p', '1024x1024', 1, 'queued', 'x', ?)",
+                         (key * 32, uid, created))
+    studio.gw.hold = True
+    studio.c.__exit__(None, None, None)
+    studio.c.__enter__()
+    wait_for(lambda: studio.gw.generations)
+    assert studio.c.post(f"/api/images/{'b' * 32}/cancel").json() == {"state": "cancelled"}   # серия — весь остаток
+    studio.gw.hold = False
+    assert wait_state(studio, "a" * 32, images.TERMINAL)["state"] == "cancelled"
+    assert studio.c.get(f"/api/images/{'b' * 32}").json()["state"] == "cancelled" and len(studio.gw.generations) == 1
 
 
 def on_loop() -> bool:
@@ -1653,7 +1759,7 @@ def test_stop_marks_queued_rows_interrupted(studio, monkeypatch):
     go.set()
     monkeypatch.setattr(images, "recover", lambda: None)
     studio.c.__enter__()
-    assert [r[:2] for r in rows_of(ids)] == [("error", "прервано перезапуском студии")] * 3
+    assert [r[:2] for r in rows_of(ids)] == [("error", images.RESTARTING)] * 3
     assert all(images.JOBS[i].prompt == "" for i in ids)
 
 

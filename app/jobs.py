@@ -1,7 +1,7 @@
 """«В работе» (спека 2026-10-21-studio-jobs-panel): свои задания всех разделов одним списком.
 
 `GET /api/jobs?since=<время>` → `{now, running, finished, push}` (`push` — подписка этой сессии). Идущие — картинки `working`,
-`cancelling` и `queued` (серия), ролики `queued`/`in_progress`, расшифровки и озвучки `working`/`queued`,
+`cancelling` и `queued` (серия), описания и переводы промпта «Фото» (только память `images.JOBS`), ролики `queued`/`in_progress`, расшифровки и озвучки `working`/`queued`,
 распознавания (кроме сканов перевода и уже отправленного хода чата — `ocr.SERVED`) и переводы
 `queued`/`working`/`cancelling`,
 ответы чата через сервер (`streaming`, `via='server'`); готовые — закончившиеся не раньше `since` и
@@ -41,6 +41,8 @@ SPEECH_TITLE = 40
 MODEL_NAMES = {"lustify": "Lustify", "flux": "FLUX", "snofs": "SNOFS Krea 2", "big-love": "Big Love Eryn1",
                "fineview": "FineView QW21", "muse": "Muse 3.5 Krea 2", "jib-moss": "Jib Mix Moss V2",
                "fineporn": "FinePorn v5", "moody-krea": "Moody Krea v8"}
+#: строки описания и перевода промпта «Фото» (`images.TEXT_KINDS`)
+TEXT_TITLES = {"description": "Описание фото", "translation": "Перевод промпта"}
 STATES = {"done": "done", "error": "error", "failed": "error", "cancelled": "cancelled"}
 TERMINAL = tuple(STATES)
 
@@ -86,6 +88,23 @@ def _photo(uid: int, after: float) -> list:
         item = _item("photo", row, f"{kind} · {MODEL_NAMES.get(row['model'], row['model'])}", detail,
                      f"photo?id={row['id']}")
         item["started"] = images.started(row)        # строка серии — с перехода в работу, не с создания
+        out.append(item)
+    return out
+
+
+def _photo_text(uid: int, after: float) -> list:
+    """Описания и переводы промпта — из памяти `images.JOBS` (в истории их нет, текст сюда не идёт): идущие — с
+    «Отменить», кончившиеся после `after` — пока задание помнится. «Открыть» — раздел: он сам покажет окно задания
+    (`images.current_text`)."""
+    out = []
+    for job in list(images.JOBS.values()):
+        if job.user_id != uid or job.kind not in images.TEXT_KINDS or (job.finished_at or after) < after:
+            continue
+        item = {"section": "photo", "id": job.id, "kind": job.kind, "title": TEXT_TITLES[job.kind],
+                "state": "running" if job.finished_at is None else STATES[job.state], "detail": job.detail,
+                "started": job.started, "finished": job.finished_at, "href": "photo"}
+        if job.finished_at is None:
+            item["cancel"] = CANCEL["photo"].format(job.id)
         out.append(item)
     return out
 
@@ -232,7 +251,7 @@ async def list_jobs(request: Request, since: "float | None" = None, visible: "bo
         window_start = max(now - JOBS_VISIT_MAX_SEC, min(window_start, seen))
     after = window_start if since is None else max(since, window_start)
     hidden = lock_policy.hidden(request.state.digest)
-    items = (_photo(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after, hidden)
+    items = (_photo(uid, after) + _photo_text(uid, after) + _video(uid, after) + _transcribe(uid, after) + _ocr(uid, after, hidden)
              + _translate(uid, after) + _speech(uid, after) + ([] if "chat" in hidden else _chat_done(uid, after)))
     items = [i for i in items if i["section"] not in hidden]
     running = sorted([i for i in items if i["finished"] is None] + ([] if "chat" in hidden else _chat(uid)), key=lambda i: i["started"], reverse=True)

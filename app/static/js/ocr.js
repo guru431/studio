@@ -2,8 +2,9 @@ import { language, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
- * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx, «PDF со слоем» — layerPdf), «В чат ▾»,
- * «Переименовать» (PATCH `name`, расширение сохраняет сервер), «Удалить»; идущий — состояние
+ * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx, «PDF со слоем» — layerPdf; есть таблицы —
+ * ещё «Таблицы .xlsx» и «.csv»), «В чат ▾», «Переименовать» (PATCH `name`, расширение сохраняет сервер),
+ * «Удалить»; идущий — состояние
  * и «Отменить». Ниже — листалка «‹ страница N из M ›» и две колонки: картинка страницы (нажатие — окно
  * просмотра #ocr-viewer) и её текст. На телефоне (≤ 760 px) картинка над текстом, список выезжает сбоку,
  * как у «Расшифровки». Готовые страницы идущего документа уже листаются; опрос вид не пересобирает — картинка,
@@ -16,8 +17,8 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * удаляются, вместо загрузки — подсказка.
  *
  * Текст страницы — Markdown модели через renderMarkdown(…, { html: true }) (marked + DOMPurify: таблицы
- * HunyuanOCR — HTML-тегами, скрипты — нет); прочий текст сервера — только textContent. «Копировать» — весь
- * документ, как выгрузка .md; «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
+ * HunyuanOCR — HTML-тегами, скрипты — нет; формулы `$…$` рисует KaTeX); прочий текст сервера — только textContent.
+ * «Копировать» — весь документ, как выгрузка .md, и он же HTML с формулами MathML (`markdownHtml`); «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
  * другой документ его убирает). «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
  * «Перевести» у готового скана — выбор языка и новая запись «Перевода» без повторного распознавания.
  * PDF длиннее предела (422 `pages` с числом страниц) — окно диапазона #ocr-range-dialog и тот же файл заново с
@@ -36,7 +37,7 @@ import { busyBlock, createPicker, keep, pickerList, recordSelection } from './fe
 import { kick } from './jobs.js';
 import { shareDialog } from './chat-share.js';
 import { sectionMcp } from './mcp-sections.js';
-import { renderMarkdown } from './markdown.js';
+import { markdownHtml, renderMarkdown } from './markdown.js';
 import { clearRead, readAloud } from './speech-read.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
@@ -50,6 +51,8 @@ const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
 const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx'], ['pdf', tr("PDF со слоем")]];
+// таблицы документа (`tables` ответа) — книгой и CSV: одна таблица — файл, несколько — ZIP
+const TABLE_FORMATS = [['xlsx', tr("Таблицы .xlsx")], ['csv', tr("Таблицы .csv")]];
 const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Кратко пересказать")], ['translate', tr("Перевести")]];
 
 let screen = null;
@@ -112,7 +115,7 @@ function build(view, ctx) {
     fail(err) { error.textContent = words(err); } });
   const { select, refresh } = docs;
 
-  const input = el('input', { type: 'file', class: 'sr', accept: ACCEPT, multiple: true });
+  const input = el('input', { type: 'file', id: 'ocr-file', class: 'sr', accept: ACCEPT, multiple: true });
   const add = el('label', { class: 'btn btn-accent tr-add', id: 'ocr-add', hidden: !!ctx.hint }, icon('plus'), tr("Загрузить скан"), input);
   const progress = el('p', { id: 'ocr-progress', class: 'muted small', 'aria-live': 'polite' });
   const list = el('nav', { class: 'tr-list', 'aria-label': tr("Документы") });
@@ -539,14 +542,19 @@ function build(view, ctx) {
     const running = RUNNING.has(item.state);
     const choose = engines.length > 1;
     const again = !running && (choose || item.pages.some((p) => p.state === 'waiting' || p.state === 'failed'));
-    const key = JSON.stringify([item.id, readable(item), item.state === 'done', again, choose, running]);
+    const key = JSON.stringify([item.id, readable(item), item.state === 'done', again, choose, running, !!item.tables]);
     if (acts && acts.key === key) return acts.box;
     const box = el('div', { class: 'tr-acts' });
     if (readable(item)) {
       const copy = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-copy' }, tr("Копировать"));
       copy.addEventListener('click', async () => {
+        // Markdown — текстом, разметка с формулами MathML — HTML (обещание — в ClipboardItem сразу, для Safari)
+        const text = asMarkdown(docs.current.pages);
         try {
-          await navigator.clipboard.writeText(asMarkdown(docs.current.pages));
+          if (typeof ClipboardItem === 'function' && navigator.clipboard.write) {
+            await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }),
+              'text/html': markdownHtml(text).then((html) => new Blob([html], { type: 'text/html' })) })]);
+          } else await navigator.clipboard.writeText(text);
           copy.textContent = tr("Скопировано");
         } catch {
           error.textContent = tr("Буфер обмена недоступен — выделите текст вручную");
@@ -555,7 +563,8 @@ function build(view, ctx) {
       const read = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-read' }, tr("Прочитать"));
       read.addEventListener('click', () => readAloud(asMarkdown(docs.current.pages), { kind: 'ocr', id: docs.current.id }, readBox));
       box.append(copy, read,
-        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
+        menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), [...FORMATS, ...(item.tables ? TABLE_FORMATS : [])]
+          .map(([f, label]) => [f, label, 'data-format', download])),
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
       // ссылка «Поделиться» на скан (chat_shares.ITEMS): текст страниц, исходный файл — по выбору

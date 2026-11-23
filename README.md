@@ -165,7 +165,7 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 - Agent chat search runs separately on the selected computer through its bridge.
 - A task panel for background jobs, cancellation, completed work and agent sessions needing attention.
 - Per-device **Web Push** and optional **ntfy** delivery, including Android devices without Google services.
-- Installable PWA, touch layouts, keyboard navigation and configurable mobile bottom tabs.
+- Installable PWA with shortcuts, an app-icon badge and files or text received from the system share sheet; touch layouts, keyboard navigation and configurable mobile bottom tabs.
 - Light, dark and system themes; four accent colors, text size, UI scale, compact density and account timezone.
 - Storage usage, a 14-day **trash** for deleted items, history export, password-confirmed history deletion and an administrator backup/restore check.
 - **My files** on MCP servers with one-day personal file links, and **Help** with the Studio guide and MCP server guides.

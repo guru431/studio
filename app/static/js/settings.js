@@ -54,6 +54,7 @@ import { deviceZone, offsetOf } from './timezone-offer.js';
 import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { rolesBlock } from './roles.js';
 import { knowledgeBlock } from './knowledge.js';
+import { glossaryBlock } from './translate-glossary.js';
 import { smtpSettings } from './smtp-settings.js';
 import { SPEECH_LANGUAGES, dictationLanguage, setDictationLanguage } from './mic.js';
 import { NAMES, SECTIONS as RAIL_SECTIONS, sectionName, sectionPairs } from './sections-meta.js';
@@ -1778,7 +1779,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     panel.replaceChildren(back, sectionBlock(s), ...(other && s.id === 'chat' ? [rolesBlock(), chatMcpBlock(), memoryBlock(host), knowledgeBlock()] : []),
-      ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []));
+      ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []), ...(other && s.id === 'translate' ? [glossaryBlock()] : []));
   }
 
   function show(id) {

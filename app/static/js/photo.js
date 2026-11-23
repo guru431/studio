@@ -16,8 +16,10 @@ import { message as serverMessage, tr } from './i18n.js';
  * стирает; окно закрыли раньше — описание отменяется. «В поле промпта» / «Создать по описанию» — текст
  * в поле (и генерация); свой непустой промпт — после вопроса. Перевод — так же через …/translations: ответ
  * заменяет промпт в поле, генерация не начинается; «EN» во время перевода его отменяет, «Вернуть оригинал» —
- * прежний промпт, пока поле не правили. Описание или перевод, начатые до перезагрузки или в другой вкладке,
- * в ленте не видны: 409 busy с detail.kind — строка #photo-orphan с «Отменить».
+ * прежний промпт, пока поле не правили. Описание или перевод, начатые до перезагрузки, раздел при открытии (и при
+ * «Открыть» в «В работе» — update без ?id) узнаёт из GET /api/images/text и показывает снова: окно «Описать» или
+ * «EN» с временем (reopenText). Начатые в другой вкладке, пока раздел открыт: 409 busy с detail.kind — строка
+ * #photo-orphan с «Отменить».
  * Текст сервера — только textContent.
  * Чип «модель» — отмеченные модели раздела «Фото» (GET /api/sections), по умолчанию — умолчание
  * раздела; задание несёт пару connection_id + model. Сила и кисть — только у Lustify / шлюза srvllm.
@@ -467,6 +469,17 @@ function build(view, ctx) {
     };
     job.timer = setTimeout(check, POLL_MS);
     syncBusy();
+  }
+
+  /* своё описание или перевод, начатые до перезагрузки (PWA выгружена, вкладку закрыли): при открытии раздела и
+   * «Открыть» в «В работе» — снова его окно «Описать» или «EN» с временем; текст — обычным опросом */
+  function reopenText() {
+    if (ctx.hint) return;
+    api('GET', '/api/images/text').then((job) => {
+      if (!alive || !job.id || describing || translating || orphan) return;
+      if (job.kind === 'description') describe({ jobId: job.id, elapsed: job.elapsed, mediaId: job.source_media_id });
+      else if (job.kind === 'translation') translate({ id: job.id, elapsed: job.elapsed });
+    }, () => {});
   }
 
   /* карточки ленты */
@@ -960,11 +973,13 @@ function build(view, ctx) {
     });
   }
 
-  /* «Описать»: gemma-abl, текст можно править, «Создать по описанию» — без исходного фото */
+  /* «Описать»: gemma-abl, текст можно править, «Создать по описанию» — без исходного фото. from.jobId — подхват
+   * идущего или готового описания (reopenText): без отправки, сразу опрос; фото с устройства тогда не показать */
   function describe(from) {
     const preview = el('img', { id: 'describe-photo', alt: tr("Фото для описания") });
     const url = from.file ? URL.createObjectURL(from.file) : null;
-    preview.src = url || media(from.mediaId, '?thumb=1');
+    if (url || from.mediaId) preview.src = url || media(from.mediaId, '?thumb=1');
+    else preview.hidden = true;
     const wait = el('p', { id: 'describe-status', class: 'muted small', 'aria-live': 'polite' }, tr("gemma-abl описывает фото · 0:00"));
     const text = el('textarea', { id: 'describe-text', class: 'input', rows: '10', maxlength: String(PROMPT_MAX), disabled: true });
     const extra = el('textarea', { id: 'describe-extra', class: 'input', rows: '2', maxlength: String(EXTRA_MAX),
@@ -976,7 +991,7 @@ function build(view, ctx) {
     const dialog = openDialog(root, { id: 'describe-dialog', title: tr("Описание картинки"), actions: [toField, make], body: [preview,
       el('p', { class: 'muted small' }, tr("gemma-abl описывает фото на карте студии. Описание на английском подготовлено как промпт для генерации; его можно править.")),
       wait, field(tr("Подробное описание"), text, 'text'), field(tr("Ваш дополнительный текст"), extra, 'extra'), counter, fail] });
-    const started = Date.now();
+    const started = Date.now() - (from.elapsed || 0) * 1000;
     let jobId = null;
     let finished = false;
     let open = true;
@@ -1075,11 +1090,16 @@ function build(view, ctx) {
       timer = setTimeout(poll, POLL_MS);
     }
 
+    describing = true;
+    syncBusy();
+    if (from.jobId) {
+      jobId = from.jobId;
+      poll();
+      return;
+    }
     const body = new FormData();
     if (from.file) body.append('image', from.file, from.file.name);
     else body.append('source_media_id', from.mediaId);
-    describing = true;
-    syncBusy();
     api('POST', '/api/images/descriptions', body).then((out) => {
       jobId = out.id;
       if (!open) {
@@ -1094,29 +1114,33 @@ function build(view, ctx) {
     });
   }
 
-  /* «EN»: gemma-abl переводит промпт на английский; перевод встаёт в поле вместо него */
-  async function translate() {
+  /* «EN»: gemma-abl переводит промпт на английский; перевод встаёт в поле вместо него. resume — подхват идущего
+   * или готового перевода (reopenText, { id, elapsed }): без отправки, сразу опрос */
+  async function translate(resume = null) {
     if (translating) {                                    // нажали ещё раз — отменить (id ещё нет — после создания)
       translating.cancelled = true;
       if (translating.id) api('POST', `/api/images/${translating.id}/cancel`).catch(() => {});
       return;
     }
     const text = prompt.value.trim();
-    if (!text) {
+    if (!text && !resume) {
       error.textContent = tr("Напишите промпт");
       return;
     }
     error.textContent = '';
-    const job = { id: null, started: Date.now(), cancelled: false };
+    const job = { id: resume?.id || null, started: Date.now() - (resume?.elapsed || 0) * 1000, cancelled: false };
     translating = job;
     prompt.readOnly = true;                               // правка во время перевода пропала бы
+    chipTranslate.hidden = false;                         // подхват при пустом поле: время и отмена — на виду
     const paint = () => { chipTranslate.textContent = `EN · ${clock((Date.now() - job.started) / 1000)}`; };
     paint();
     const timer = setInterval(paint, 1000);
     syncBusy();
     try {
-      job.id = (await api('POST', '/api/images/translations', { prompt: text })).id;
-      if (job.cancelled) api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
+      if (!resume) {
+        job.id = (await api('POST', '/api/images/translations', { prompt: text })).id;
+        if (job.cancelled) api('POST', `/api/images/${job.id}/cancel`).catch(() => {});
+      }
       let fails = 0;
       for (;;) {
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
@@ -1161,6 +1185,7 @@ function build(view, ctx) {
       if (alive) {
         prompt.readOnly = false;
         chipTranslate.textContent = 'EN';
+        chipTranslate.hidden = !prompt.value;
         syncBusy();
       }
     }
@@ -1213,7 +1238,7 @@ function build(view, ctx) {
     strengthValue.textContent = Number(strength.value).toFixed(2);
     series.refresh();                                   // сила «от» серии по силе — этот ползунок
   });
-  chipTranslate.addEventListener('click', translate);
+  chipTranslate.addEventListener('click', () => translate());
   chipUndo.addEventListener('click', () => {
     if (undo && prompt.value === undo.translated) prompt.value = undo.original;
     undo = null;
@@ -1241,6 +1266,7 @@ function build(view, ctx) {
     if (!go.disabled) submit(true);
   });
   syncBusy();
+  reopenText();
   if (!ctx.hint) presets.load();
   api('GET', '/api/sections').then(({ sections }) => {
     if (alive) loadModels(sections.find((s) => s.id === 'photo'));
@@ -1248,6 +1274,7 @@ function build(view, ctx) {
 
   return {
     follow,
+    reopenText,
     destroy() {
       draft.save();
       alive = false;
@@ -1266,9 +1293,13 @@ export function mount(view, ctx) {
   screen = build(view, ctx);
 }
 
-/** Переход внутри открытого раздела (#/photo?id=…): только ?id — промпт, исходник, серия и выделение целы. */
+/** Переход внутри открытого раздела (#/photo?id=…): только ?id — промпт, исходник, серия и выделение целы; без ?id
+ * («Открыть» описания или перевода в «В работе») — их окно (reopenText). */
 export function update(ctx) {
-  if (screen) screen.follow(ctx.query.get('id'));
+  if (!screen) return;
+  const id = ctx.query.get('id');
+  if (id) screen.follow(id);
+  else screen.reopenText();
 }
 
 export function unmount() {

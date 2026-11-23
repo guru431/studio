@@ -13,8 +13,9 @@ import { language, locale, message as serverMessage, tr } from './i18n.js';
  * /api/media/<id>, под ней текст). Скрепка открывает «Файл» (#tl-file-input) / «Фото» (#tl-photo-input); под полем счётчик
  * #tl-count и «Перевести» #tl-go. Правое окно #tl-output — перевод (только чтение), над ним состояние
  * #tl-status, «Остановить» #tl-stop и «Продолжить» #tl-continue, под ним «Копировать» #tl-copy и «Скачать ▾»
- * #tl-export (.txt, .docx; у скана и файла .md — ещё .md), «Прочитать» #tl-read (speech-read.js: проигрыватель — в #tl-read-box,
- * другая запись его убирает). Готовый перевод скана — Markdown распознавания
+ * #tl-export (.txt, .docx, двуязычный .docx; у скана и файла .md — ещё .md), «Прочитать» #tl-read (speech-read.js: проигрыватель — в #tl-read-box,
+ * другая запись его убирает), «Абзац к абзацу» #tl-pairs (aria-pressed): вместо #tl-output — таблица #tl-pairs-view, кусок
+ * исходника и его перевод строкой; наведение (касание — класс .on) подсвечивает пару. Готовый перевод скана — Markdown распознавания
  * разметкой (renderMarkdown html, как «Сканы»), прочее и идущий — текстом. «Готово, но не всё» (`notice` записи: нераспознанные страницы скана) — #tl-status и
  * строка истории цветом предупреждения, у записи скана рядом — ссылка #tl-scan «Открыть в „Сканах“».
  *
@@ -71,7 +72,8 @@ const LANGUAGE_NAMES = language() === 'en' ? new Intl.DisplayNames([locale()], {
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
 const FILE_ACCEPT = '.pdf,.docx,.txt,.md,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.toml,.ini,.log,.py,.js,.ts,.html,.css,.sql,.sh,.ps1';
 const PHOTO_ACCEPT = 'image/png,image/jpeg,image/webp';
-const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
+const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx'],
+  ['bilingual', tr("Двуязычный .docx")]];
 const FILE_KINDS = { pdf: 'PDF', docx: 'Word', txt: 'TXT', md: 'MD' };
 
 let screen = null;
@@ -142,6 +144,8 @@ function build(view, ctx) {
   let pollWords = '';          // слова неудачного опроса записи: удачный опрос их уберёт
   let chipKey = '';            // что показывает плашка: та же — не пересобирается
   let mdKey = '';              // какой перевод скана показан разметкой: тот же — не пересобирается
+  let pairsOn = false;         // «Абзац к абзацу»: живёт в памяти экрана, как режим снимка
+  let pairsKey = '';           // какие пары показаны: те же — не пересобираются
   let statusKey = '';          // что показывает #tl-status: то же — не перерисовывается (aria-live — только перемены)
   let rows = new Map();        // id → { sig, node } строк истории: строка с теми же данными — тот же узел
   const dayNodes = new Map();  // подпись дня → узел
@@ -212,9 +216,28 @@ function build(view, ctx) {
     if (rec) shareDialog(root, `/api/translate/${encodeURIComponent(rec.id)}/share`, rec.name, api,
       { kind: 'translations', source: rec.kind !== 'text' });
   });
-  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, readBtn, formats, shareBtn);
+  // «Абзац к абзацу»: кусок исходника и его перевод строкой таблицы вместо #tl-output (куски — пары API)
+  const pairsBtn = el('button', { type: 'button', id: 'tl-pairs', class: 'btn btn-sm', 'aria-pressed': 'false' }, tr("Абзац к абзацу"));
+  const pairsBody = el('tbody');
+  const pairsView = el('div', { id: 'tl-pairs-view', class: 'tl-pairs-wrap', hidden: true },
+    el('table', { class: 'tl-pairs' }, el('thead', {}, el('tr', {}, el('th', {}, tr("Исходник")), el('th', {}, tr("Перевод")))),
+      pairsBody));
+  pairsBtn.addEventListener('click', () => {
+    pairsOn = !pairsOn;
+    pairsBtn.setAttribute('aria-pressed', String(pairsOn));
+    paintRight();
+  });
+  // касание отмечает пару (наведения на телефоне нет); на компьютере пару подсвечивает и наведение
+  pairsBody.addEventListener('click', (e) => {
+    const row = e.target.closest('.tl-pairs > tbody > tr');      // не строка таблицы скана внутри ячейки
+    if (!row || e.target.closest('a')) return;
+    for (const other of pairsBody.querySelectorAll(':scope > tr.on')) if (other !== row) other.classList.remove('on');
+    row.classList.toggle('on');
+  });
+  const acts = el('div', { class: 'tr-acts tl-acts', hidden: true }, copy, readBtn, pairsBtn, formats, shareBtn);
   const exportBtn = formats.querySelector('#tl-export');
-  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, scanLink, stop, cont), mcp.output, output, acts, readBox);
+  const right = el('div', { class: 'tl-pane tl-right' }, el('div', { class: 'tl-state' }, status, scanLink, stop, cont), mcp.output, output,
+    pairsView, acts, readBox);
 
   const error = el('p', { class: 'error tl-error', 'aria-live': 'polite' });
   const list = el('div', { id: 'tl-history', class: 'tl-history' });
@@ -414,6 +437,14 @@ function build(view, ctx) {
     // язык перевода справа налево — окно целиком так, даже если перевод начат числом или латиницей
     const dir = rec && RTL.has(rec.result_lang || rec.target_lang) ? 'rtl' : 'auto';
     if (output.dir !== dir) output.dir = dir;
+    // «Абзац к абзацу» — у кончившейся записи с переводом; у снимка — в виде «Текстом» (поверх снимка — свой вид)
+    const canPairs = !!rec && !running && !!text && !(photo && photoMode === 'overlay') && rec.parts.some((p) => p.state === 'done');
+    pairsBtn.hidden = !canPairs;
+    pairsView.hidden = !(canPairs && pairsOn);
+    if (canPairs && pairsOn) {
+      paintPairs(md);
+      output.hidden = true;
+    }
     const formatMd = formats.querySelector('[data-format=md]');
     formatMd.hidden = !(rec && (rec.scan_id || /\.md$/i.test(rec.name || '')));
     if (!rec) setStatus('', '');
@@ -431,6 +462,22 @@ function build(view, ctx) {
     cont.hidden = !(rec && rec.can_continue) || !!ctx.hint;
     acts.hidden = running || !text;
     exportBtn.hidden = !rec;
+  }
+
+  /** Пары «исходник — перевод» готовых кусков подряд (как двуязычный .docx); перевод скана — разметкой. */
+  function paintPairs(md) {
+    const done = [];
+    for (const p of rec.parts) {
+      if (p.state !== 'done') break;
+      done.push(p);
+    }
+    const key = `${rec.id}\n${md}\n${done.length}`;
+    if (key === pairsKey) return;
+    pairsKey = key;
+    const dir = RTL.has(rec.result_lang || rec.target_lang) ? 'rtl' : 'auto';
+    const cell = (value, side) => el('td', { dir: side, class: md ? 'md' : null },
+      md ? renderMarkdown(value, { html: true }) : value);
+    pairsBody.replaceChildren(...done.map((p) => el('tr', {}, cell(p.source || '', 'auto'), cell(p.text || '', dir))));
   }
 
   function schedulePoll() {

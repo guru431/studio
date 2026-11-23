@@ -8,8 +8,14 @@
  * заголовком `Clear-Site-Data: "cache"` — этот кэш оболочки (Cache Storage) он не трогает. Навигация — из
  * сети, без связи и при 502/503/504 прокси — /offline.html. Новая версия удаляет кэш прежних. Ещё — уведомления: «В работе»
  * без подписки показывает открытая студия (jobs.js), Web Push заданий и «Кода» — обработчик `push` здесь; нажатие на
- * любое — notificationclick; смена подписки браузером — pushsubscriptionchange. */
+ * любое — notificationclick; смена подписки браузером — pushsubscriptionchange. Ещё два своих кэша устройства, не
+ * оболочки (смена версии их не трогает): RECEIVED — принятое системным листом «Поделиться» до выбора раздела
+ * (POST RECEIVE, share-target.js), BADGE — число на значке приложения (jobs.js). */
 const CACHE = `studio-shell-${VERSION}`;
+const RECEIVED = 'studio-received';
+const RECEIVE = '/receive';
+const RECEIVED_FILES = 10;
+const BADGE = 'studio-badge';
 const SHELL = [
   '/offline.html',
   `/static/css/app.css?v=${VERSION}`,
@@ -84,10 +90,27 @@ self.addEventListener('push', (event) => {
   if (!data || typeof data !== 'object') data = {};
   const text = (value) => (typeof value === 'string' ? value : '');
   const tag = text(data.tag);
-  event.waitUntil(self.registration.showNotification(text(data.title) || 'Студия', {
+  event.waitUntil(raiseBadge(tag).then(() => self.registration.showNotification(text(data.title) || 'Студия', {
     body: text(data.body), tag, ...(tag ? { renotify: true } : {}), icon: '/static/icons/icon-192.png',
-    data: { href: text(data.href) } }));
+    data: { href: text(data.href) } })));
 });
+
+/** Число на значке приложения при закрытой студии: к числу, которое последним поставила страница (jobs.js кладёт его
+ * в кэш BADGE), — единица за новое уведомление; тот же tag (тот же чат или задание) уже на экране — не новое.
+ * Открытая студия ставит точное число сама. Нет API значка или кэш закрыт — ничего: уведомление важнее. */
+async function raiseBadge(tag) {
+  try {
+    if (!self.navigator || typeof self.navigator.setAppBadge !== 'function') return;
+    const shown = tag ? await self.registration.getNotifications({ tag }) : [];
+    const cache = await caches.open(BADGE);
+    const hit = await cache.match('/badge');
+    const next = (hit ? Number(await hit.text()) || 0 : 0) + (shown.length ? 0 : 1);
+    await cache.put('/badge', new Response(String(next)));
+    await self.navigator.setAppBadge(next);
+  } catch {
+    // значок — подсказка, а не данные
+  }
+}
 
 /* Браузер сменил подписку push сам (служба push её обновила или отозвала): новую — серверу той же сессии, иначе
  * push тихо кончится. Cookie сессии запрос работника несёт сам; CSRF — из GET /api/me, как у страницы. Нет новой
@@ -131,9 +154,33 @@ async function shell(reason, fallback) {
   return new Response(body, { status: page.status, headers: page.headers });
 }
 
+/** Системный лист «Поделиться» (share_target манифеста): POST RECEIVE с файлами, текстом и ссылкой до сервера не идёт —
+ * принятое ложится в кэш RECEIVED (прежнее непринятое заменяет), окно уходит на `/`. Студия спросит раздел при запуске,
+ * в том числе после входа (share-target.js). Кривая форма — студия просто откроется. */
+async function receive(request) {
+  try {
+    const form = await request.formData();
+    const value = (name) => (typeof form.get(name) === 'string' ? form.get(name) : '');
+    const files = form.getAll('files').filter((f) => typeof f === 'object' && f && f.size > 0).slice(0, RECEIVED_FILES);
+    await caches.delete(RECEIVED);
+    const cache = await caches.open(RECEIVED);
+    await Promise.all(files.map((f, i) => cache.put(`/received/${i}`,
+      new Response(f, { headers: { 'content-type': f.type || 'application/octet-stream' } }))));
+    await cache.put('/received/meta', new Response(JSON.stringify({ at: Date.now(), title: value('title'),
+      text: value('text'), url: value('url'), files: files.map((f) => ({ name: f.name || '', type: f.type || '' })) })));
+  } catch {
+    // ничего не принято: студия откроется как обычно
+  }
+  return Response.redirect(new URL('/', self.location.origin).href, 303);
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
+  if (request.method === 'POST' && url.origin === self.location.origin && url.pathname === RECEIVE) {
+    event.respondWith(receive(request));
+    return;
+  }
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (request.mode === 'navigate') {
     // 502/503/504 страницы — прокси без службы (выкладка, перезапуск): та же оболочка с «Повторить», что без связи,

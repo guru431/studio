@@ -154,6 +154,33 @@ def test_next_chunk_gets_the_end_of_the_previous_translation_as_context(studio, 
     assert [b["messages"][0]["content"] for b in studio.gw.chat_requests] == [translate_text.system_prompt("en", "ru")] * 2
 
 
+def test_glossary_and_tone_of_the_account_go_to_matching_chunks(studio, monkeypatch, caplog):
+    """Глоссарий и тон учётки (идея 05:I7): PUT целиком, половина пары — 422, пустая пропускается; задание берёт
+    их в начале, в указание куска — только пары, встретившиеся в нём; в журнал — только число пар."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    add_gateway(studio)
+    assert studio.c.get("/api/translate/glossary").json() == {"tone": "", "glossary": [],
+                                                             "max": translate_text.GLOSSARY_MAX}
+    bad = studio.c.put("/api/translate/glossary", json={"tone": "", "glossary": [{"term": "Acme", "translation": " "}]})
+    assert bad.status_code == 422 and bad.json()["detail"]["code"] == "glossary"
+    assert studio.c.put("/api/translate/glossary", json={"tone": "loud"}).status_code == 422
+    r = studio.c.put("/api/translate/glossary", json={"tone": "formal", "glossary": [
+        {"term": " Third\n one ", "translation": "Третий"}, {"term": "", "translation": ""},
+        {"term": "Secret", "translation": "Тайна"}]})
+    assert r.status_code == 200 and r.json()["glossary"] == [{"term": "Third one", "translation": "Третий"},
+                                                             {"term": "Secret", "translation": "Тайна"}]
+    studio.gw.chat_script = [["Первый."], ["Второй."], ["Третий."]]
+    assert wait_row(studio, start(studio, THREE))["state"] == "done"
+    systems = [b["messages"][0]["content"] for b in studio.gw.chat_requests if b.get("stream")]
+    assert systems[0] == translate_text.system_prompt("en", "ru", tone="formal")
+    assert systems[2] == translate_text.system_prompt("en", "ru", context="Второй.", glossary=[("Third one", "Третий")],
+                                                      tone="formal")
+    assert "Secret" not in "".join(systems) and "Third" not in caplog.text and "Тайна" not in caplog.text
+    other = make_user(studio, "glossary-other")
+    assert on_loop(studio, translate.preferences, other) == ((), "")
+
+
 def test_same_language_goes_to_english(studio):
     add_gateway(studio)
     studio.gw.chat_reply = ["ru"]
@@ -1063,6 +1090,19 @@ def test_export_gives_txt_and_docx_named_by_language(studio):
         assert next(ElementTree.fromstring(z.read("word/document.xml")).iter(f"{w}t")).text == "Translation"
     r = studio.c.get(f"/api/translate/{tid}/export?format=txt&lang=en")
     assert r.headers["content-disposition"] == media.disposition("Договор.ru.txt")
+    # аудит 05:I5: двуязычный docx — шапка на языке интерфейса, кусок исходника и его перевод строкой таблицы
+    got = studio.c.get(f"/api/translate/{tid}").json()
+    origin = got["detected_lang"] or got["source_lang"]
+    r = studio.c.get(f"/api/translate/{tid}/export?format=bilingual&lang=en")
+    assert r.status_code == 200 and r.headers["content-type"] == exports.TYPES["docx"]
+    assert r.headers["content-disposition"] == media.disposition(f"Договор.{origin}-ru.docx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        root = ElementTree.fromstring(z.read("word/document.xml"))
+    rows = [["\n".join("".join(t.text or "" for t in p.iter(f"{w}t")) for p in tc.iter(f"{w}p")) for tc in tr.iter(f"{w}tc")]
+            for tr in root.iter(f"{w}tr")]
+    assert rows[0] == ["Source", "Translation"]
+    assert ["\n".join(r[0] for r in rows[1:]), "\n".join(r[1] for r in rows[1:])] == [
+        "First line.\nSecond line.", "Первая строка.\nВторая строка."]
 
     # аудит 05:F13: перевод на арабский — абзацы текста справа налево, заголовок-имя — как есть
     studio.gw.chat_script = [["مرحبا."]]

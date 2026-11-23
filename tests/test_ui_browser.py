@@ -2460,6 +2460,97 @@ def test_photo_shows_a_description_started_before_the_reload(browser, live):
     assert not [p for p in problems(r) if not ("status of 409" in p and p.endswith("/api/images)"))], problems(r)
 
 
+def test_photo_reopens_a_description_after_the_reload(browser, live, monkeypatch):
+    """Описание, начатое до перезагрузки (PWA выгружена): в «В работе» — «Описание фото» с «Отменить»; после
+    перезагрузки «Фото» само снова открывает окно «Описать», готовый текст — в нём, «В поле промпта» — как обычно."""
+    import images
+    login = "descreload"
+    live.add_user(login)
+    asked, real = [0], images.text_job
+
+    def counted(user_id):
+        asked[0] += 1
+        return real(user_id)
+
+    async def held(request):
+        """Описание «идёт», пока раздел после перезагрузки не спросит своё задание (предел — 20 с)."""
+        before, deadline = asked[0], time.monotonic() + 20
+        while time.monotonic() < deadline and asked[0] == before:
+            await asyncio.sleep(0.01)
+        return await live.gw.builtin(request)
+
+    monkeypatch.setattr(images, "text_job", counted)
+    saved, d0, g0 = live.gw.description_reply, len(live.gw.descriptions), len(live.gw.generations)
+    live.gw.description_reply = {"choices": [{"message": {"content": "a red boat"}, "finish_reason": "stop"}]}
+    live.gw.on["/slot/images/descriptions"] = held
+    started = ("eval", "started", f"""(async () => {{ const m = {API}; const form = new FormData();
+      form.append('image', new File([Uint8Array.from(atob('{base64.b64encode(png_of(8, 8, "red")).decode()}'),
+        c => c.charCodeAt(0))], 's.png', {{ type: 'image/png' }}));
+      return !!(await m.api('POST', '/api/images/descriptions', form)).id; }})()""")
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), started,
+            ("click", "#jobs"), ("wait", "document.querySelector('#jobs-running .jobs-cancel')"),
+            ("eval", "rows", JOBS_ROWS.replace("{list}", "#jobs-running")),
+            ("press", "Escape"), ("wait", "!" + is_open("#jobs-panel")),
+            *reload_page(), ("wait", is_open("#describe-dialog")),
+            ("eval", "preview", "document.querySelector('#describe-photo').hidden"),
+            ("wait", "document.querySelector('#describe-text')?.value === 'a red boat'"),
+            ("click", "#describe-to-field"), ("wait", f"!{is_open('#describe-dialog')}"),
+            ("eval", "placed", "[document.querySelector('#photo-prompt').value, document.querySelector('#photo-go').disabled]")],
+            width=390, height=900, mobile=True, timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/descriptions", None)
+        live.gw.description_reply = saved
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["started"] is True and v["rows"] == [["photo", "Описание фото", False, "running"]]
+    assert v["preview"] is True and v["placed"] == ["a red boat", False]       # фото с устройства — без превью
+    assert len(live.gw.descriptions) == d0 + 1 and len(live.gw.generations) == g0
+    assert not problems(r), problems(r)
+
+
+def test_photo_reopens_a_translation_after_the_reload(browser, live, monkeypatch):
+    """Перевод промпта, начатый до перезагрузки: «EN» снова с часами (и при пустом поле), перевод встаёт в поле,
+    «Вернуть оригинал» — как после обычного перевода."""
+    import images
+    login = "trreload"
+    live.add_user(login)
+    asked, real = [0], images.text_job
+
+    def counted(user_id):
+        asked[0] += 1
+        return real(user_id)
+
+    async def held(request):
+        before, deadline = asked[0], time.monotonic() + 20
+        while time.monotonic() < deadline and asked[0] == before:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.5)                                  # «EN · 0:00» успевают увидеть
+        return await live.gw.builtin(request)
+
+    monkeypatch.setattr(images, "text_job", counted)
+    saved = live.gw.description_reply
+    live.gw.description_reply = {"choices": [{"message": {"content": "a cat"}, "finish_reason": "stop"}]}
+    live.gw.on["/slot/images/descriptions"] = held
+    started = ("eval", "started", f"""(async () => !!(await {API}.api('POST', '/api/images/translations',
+      {{ prompt: 'кошка' }})).id)()""")
+    chip = "document.querySelector('#photo-translate')"
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), started, *reload_page(),
+            ("wait", f"{chip}.textContent.startsWith('EN · ') && !{chip}.hidden"),
+            ("eval", "busy", "document.querySelector('#photo-go').disabled"),
+            ("wait", "document.querySelector('#photo-prompt').value === 'a cat'"),
+            ("wait", f"{chip}.textContent === 'EN' && !document.querySelector('#photo-go').disabled"),
+            ("eval", "undo", "!document.querySelector('#photo-translate-undo').hidden")], timeout=20000)
+    finally:
+        live.gw.on.pop("/slot/images/descriptions", None)
+        live.gw.description_reply = saved
+    assert not r.get("failed"), r
+    assert r["values"]["started"] is True and r["values"]["busy"] is True and r["values"]["undo"] is True
+    assert any(s.startswith("DELETE /api/images/translations/") for s in r["sent"])
+    assert not problems(r), problems(r)
+
+
 @pytest.mark.parametrize("created", [True, False])
 def test_photo_description_is_cancelled_when_the_section_goes_away(browser, live, created):
     """Ушли из раздела («Назад» браузера) при открытом «Описать»: удалённое окно события close не шлёт,
@@ -5224,7 +5315,7 @@ def test_ocr_renames_a_document_keeping_its_pages(browser, live, ocr_reply):
 
 
 def test_ocr_download_and_to_chat(browser, live, ocr_reply):
-    """«Скачать ▾» — .txt, .md, .docx (ссылка на выгрузку); «Копировать» — весь текст по страницам;
+    """«Скачать ▾» — .txt, .md, .docx, с таблицей — ещё .xlsx и .csv (ссылка на выгрузку); «Копировать» — весь текст по страницам;
     «В чат ▾» — три просьбы, нажатие ведёт в #/chat?ocr=<id>&ask=<просьба> (вложение — Task 8 чата)."""
     from scans import photo
     live.add_user("ocrdl")
@@ -5249,7 +5340,7 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     v = r["values"]
     assert v["pager"] is False                                       # одна страница — без листалки
     assert v["copied"] == f"## Страница 1\n\n{OCR_MARKDOWN}\n"
-    assert v["formats"] == ["txt", "md", "docx", "pdf"]
+    assert v["formats"] == ["txt", "md", "docx", "pdf", "xlsx", "csv"]                # в документе таблица — 05:I4
     assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md&lang=ru", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"
@@ -7549,7 +7640,7 @@ def test_translate_file_shows_source_and_translation(browser, live, translator):
     v = r["values"]
     assert "Записка.docx" in v["chosen"][0] and v["chosen"][1] is True
     assert v["left"] == ["Hello world.", True, "Записка.docx"] and v["kind"] is True
-    assert v["formats"] == ["txt", "docx"]
+    assert v["formats"] == ["txt", "docx", "bilingual"]
     assert v["clicked"] == [f"/api/translate/{v['tid']}/export?format=txt&lang=ru", True]
     assert v["body"] == "Привет, мир."
     assert v["cleared"] == [True, "", ""]
@@ -7959,7 +8050,7 @@ def test_translate_scan_shows_markdown_as_a_table(browser, live, translator):
     assert not r.get("failed"), r
     v = r["values"]
     assert v["shown"] == [["Площадь", "12 m2"], "Счёт", True, 0, 0]
-    assert v["formats"] == ["txt", "md", "docx"]
+    assert v["formats"] == ["txt", "md", "docx", "bilingual"]
     assert v["txt"].startswith("Счёт\n\nПлощадь\t12 m²\n")
     assert v["copied"] == reply and v["fits"] is True
     assert not problems(r), problems(r)
