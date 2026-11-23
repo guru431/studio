@@ -254,8 +254,10 @@ function invitationsBlock(host) {
     await reload();
   }
   function edit(invite = null) {
+    // email приглашённого — без автозаполнения: в одной форме с паролем администратора менеджер паролей взял бы его
+    // логином и сохранил чужую пару под адресом Студии
     const email = el('input', { class: 'input', id: 'invite-email', name: 'email', type: 'email',
-      autocomplete: 'email', maxlength: '254', required: true, value: invite?.email || '', readonly: !!invite });
+      autocomplete: 'off', maxlength: '254', required: true, value: invite?.email || '', readonly: !!invite });
     const comment = el('textarea', { class: 'input', id: 'invite-comment', name: 'comment', maxlength: '1000' }, invite?.comment || '');
     const admin = el('input', { type: 'checkbox', id: 'invite-admin' });
     const fail = el('p', { class: 'error', role: 'alert' });
@@ -265,7 +267,10 @@ function invitationsBlock(host) {
     const password = el('input', { class: 'input', id: 'invite-password', name: 'password', type: 'password',
       maxlength: '1024', autocomplete: 'current-password' });
     const manualNote = el('p', { class: 'muted small', id: 'invite-manual-note' });
-    const manualBox = el('div', {}, manualNote, field(tr("Пароль учётки"), password, 'password'));
+    // скрытый логин самого администратора перед паролем — его менеджер паролей и берёт логином пары
+    const owner = el('input', { type: 'text', name: 'username', autocomplete: 'username', value: me.login,
+      readonly: true, hidden: true, tabindex: '-1', 'aria-hidden': 'true' });
+    const manualBox = el('div', {}, manualNote, owner, field(tr("Пароль учётки"), password, 'password'));
     manualBox.hidden = true;
     let manual = false;
     const manualMode = (text, smtp) => {

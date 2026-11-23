@@ -282,6 +282,14 @@ def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser
             page.locator("#admin-smtp-delivery a").wait_for()              # почта не настроена — известно окну
             page.locator("#user-add").click()
             pw.expect(page.locator("#invite-manual-note")).to_contain_text("письма не будет")
+            # менеджер паролей берёт логином самого администратора, не email приглашённого (R5-2)
+            assert page.evaluate("""() => {
+              const fields = [...document.querySelectorAll('#invite-form input')];
+              const password = fields.indexOf(document.querySelector('#invite-password'));
+              const user = fields.findIndex((f) => f.autocomplete === 'username');
+              return [user >= 0 && user < password && fields[user].value,
+                      document.querySelector('#invite-email').autocomplete];
+            }""") == [login, "off"]
             page.locator("#invite-email").fill(f"nomail-{engine}@example.com")
             page.locator("#invite-password").fill("wrong-password")
             page.locator("#invite-save").click()
