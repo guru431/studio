@@ -352,7 +352,7 @@ ROUTES = {
         ("GET", "/api/admin/cleaner"), ("PUT", "/api/admin/cleaner"), ("POST", "/api/admin/cleaner/check"),
         ("POST", "/api/admin/backup-check"), ("GET", "/api/admin/storage"), ("GET", "/api/admin/users"),
         ("POST", "/api/admin/users"), ("DELETE", "/api/admin/users/{uid}"), ("PATCH", "/api/admin/users/{uid}"),
-        ("POST", "/api/admin/users/{uid}/password-link"), ("DELETE", "/api/admin/users/{uid}/totp"),
+        ("POST", "/api/admin/users/{uid}/password-link"),
         ("GET", "/api/admin/users/{uid}/connections"), ("POST", "/api/admin/users/{uid}/connections"),
         ("DELETE", "/api/admin/users/{uid}/connections/{conn_id}"),
         ("PATCH", "/api/admin/users/{uid}/connections/{conn_id}"), ("GET", "/api/admin/users/{uid}/sections"),

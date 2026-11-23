@@ -114,6 +114,81 @@ def test_same_code_is_not_accepted_twice_and_wrong_codes_count(studio, mail):
     assert studio.c.post("/account/code", json={"code": code_now(studio, secret, 1)}).status_code == 429
 
 
+def test_enabling_the_app_voids_an_email_sign_in_already_in_progress(studio, mail):
+    """R2-2: вход кодом из письма, начатый до включения приложения, не должен впускать без него — ни прежним кодом,
+    ни «Отправить код ещё раз»."""
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    data = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD}).json()
+    session = list(studio.c.cookies.jar)
+    state.DB.execute("UPDATE users SET email_codes=1 WHERE id=?", (uid,))
+    studio.c.cookies.clear()
+    assert login(studio, "owner", PASSWORD).headers["location"] == "/account/code"
+    mailed = mail[-1][2].rsplit("\n", 1)[-1]
+    challenge = list(studio.c.cookies.jar)
+    studio.c.cookies.clear()
+    for cookie in session:
+        studio.c.cookies.jar.set_cookie(cookie)
+    secret = base64.b32decode(data["secret"])
+    assert studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": code_now(studio, secret)}).status_code == 200
+    studio.c.cookies.clear()
+    for cookie in challenge:
+        studio.c.cookies.jar.set_cookie(cookie)
+    response = studio.c.post("/account/code/resend", json={})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "expired"
+    response = studio.c.post("/account/code", json={"code": mailed})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "expired"
+    assert studio.c.get("/api/me").status_code == 401
+
+
+def test_non_ascii_digits_are_an_ordinary_wrong_code(studio, mail):
+    """R2-5: `\\d` пропускал цифры Unicode, а `hmac.compare_digest` на не-ASCII строке падал — 500 без `totp_fail`."""
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    data = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD}).json()
+    response = studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": "١٢٣٤٥٦"})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    enable(studio)
+    totp_login(studio)
+    response = studio.c.post("/account/code", json={"code": "١٢٣٤٥٦"})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    response = studio.c.post("/account/code", json={"code": "２３４５６７８９ab"})    # полноширинные — не алфавит кодов
+    assert response.status_code == 400
+    assert [r[0] for r in state.DB.execute(
+        "SELECT count FROM security_events WHERE user_id=? AND kind='totp_fail'", (uid,))] == [2]
+    response = studio.c.post("/api/agent/enroll", json={"login": "owner", "password": PASSWORD, "name": "pc",
+                                                        "code": "١٢٣٤٥٦"})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+
+
+def test_wrong_app_code_after_right_password_tells_the_owner_once_per_pause(studio, mail, monkeypatch):
+    """R2-7: верный пароль и подбор кода не должны идти молча. Неудача — письмо (почта и SMTP есть) и push `service`
+    владельцу, не чаще раза за окно паузы `FAIL_SEC`; без кода в тексте."""
+    import push
+    pushed = []
+    monkeypatch.setattr(push, "notify_later", lambda *args, **kw: pushed.append((args, kw)))
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    secret, _ = enable(studio)
+    bad = wrong(studio, secret)
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": bad}).status_code == 400
+    assert studio.c.post("/account/code", json={"code": bad}).status_code == 400
+    body = {"login": "owner", "password": PASSWORD, "name": "pc", "code": bad}
+    assert studio.c.post("/api/agent/enroll", json=body).status_code == 400
+    assert studio.c.get("/health").status_code == 200                    # фоновая отправка письма успела
+    assert len(pushed) == 1 and len(mail) == 1
+    (uid, words, href, tag), options = pushed[0]
+    assert href == "settings/security" and options.get("kind", "service") == "service"
+    _, subject, text = mail[0]
+    assert "Studio" in subject and bad not in text and bad not in str(words) and "http" not in text
+    studio.clock[0] += totp.FAIL_SEC                                       # новое окно — снова сказать
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": wrong(studio, secret)}).status_code == 400
+    studio.c.get("/health")
+    assert len(pushed) == 2 and len(mail) == 2
+
+
 def test_backup_code_signs_in_once(studio, mail):
     uid = make_user(studio, "owner")
     signin(studio, "owner")
@@ -125,6 +200,28 @@ def test_backup_code_signs_in_once(studio, mail):
     assert studio.c.post("/account/code", json={"code": codes[0]}).status_code == 400
     assert ("totp_backup_used",) in [tuple(r) for r in state.DB.execute(
         "SELECT kind FROM security_events WHERE user_id=?", (uid,))]
+
+
+def test_backup_codes_are_keyed_and_legacy_sha256_still_signs_in_once(studio, mail):
+    """R2-8: голый sha256 резервного кода подбирался из копии базы; теперь — HMAC ключом данных. Коды, выданные
+    прежним кодом (sha256), действуют до использования или перевыпуска."""
+    import hashlib
+    import hmac
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    _, codes = enable(studio)
+    plain = codes[0].replace("-", "")
+    stored = {r[0] for r in state.DB.execute("SELECT digest FROM totp_backup WHERE user_id=?", (uid,))}
+    assert hashlib.sha256(f"totp-backup:{uid}:{plain}".encode()).hexdigest() not in stored
+    assert hmac.digest(state.CFG.data_key.encode(), f"totp-backup:{uid}:{plain}".encode(), "sha256").hex() in stored
+    legacy = "abcdefghjk"
+    state.DB.execute("INSERT INTO totp_backup(user_id, digest) VALUES (?, ?)",
+                     (uid, hashlib.sha256(f"totp-backup:{uid}:{legacy}".encode()).hexdigest()))
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": legacy}).status_code == 200
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": legacy}).status_code == 400
+    assert studio.c.post("/account/code", json={"code": codes[0]}).status_code == 200
 
 
 def test_bridge_enrollment_accepts_authenticator_code_in_code_field(studio, mail):
@@ -141,11 +238,12 @@ def test_bridge_enrollment_accepts_authenticator_code_in_code_field(studio, mail
     assert studio.c.post("/api/agent/enroll", json={**body, "code": codes[1]}).status_code == 201
 
 
-def test_disable_needs_password_and_admin_can_reset_lost_phone(studio, mail):
-    owner = make_user(studio, "owner", is_admin=True)
+def test_disable_needs_password_and_admin_cannot_reset_it(studio, mail):
+    """Сбросить чужое приложение в панели нельзя: иначе администратор (или его украденная сессия) снял бы второй
+    фактор и задал пароль. Потерянный телефон — резервные коды или оператор хоста (`recover-email`)."""
+    make_user(studio, "owner", is_admin=True)
     signin(studio, "owner")
     enable(studio)
-    assert studio.c.delete(f"/api/admin/users/{owner}/totp").status_code == 409      # своё — в «Защите»
     assert studio.c.post("/api/me/totp/off", json={"password": "wrong-pass"}).status_code == 403
     assert studio.c.post("/api/me/totp/off", json={"password": PASSWORD}).json() == {"status": "off"}
     assert state.DB.execute("SELECT count(*) FROM totp_backup").fetchone()[0] == 0
@@ -153,18 +251,15 @@ def test_disable_needs_password_and_admin_can_reset_lost_phone(studio, mail):
     signin(studio, "friend")
     enable(studio)
     signin(studio, "owner")
-    users = {u["login"]: u for u in studio.c.get("/api/admin/users").json()["items"]}
-    assert users["friend"]["totp"] is True and users["owner"]["totp"] is False
-    assert studio.c.delete(f"/api/admin/users/{friend}/totp").status_code == 204
-    assert state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (friend,)).fetchone()[0] is None
-    assert ("totp_reset", None) in [tuple(r) for r in state.DB.execute(
-        "SELECT kind, ip FROM security_events WHERE user_id=?", (friend,))]
+    assert studio.c.delete(f"/api/admin/users/{friend}/totp").status_code in (404, 405)
+    assert state.DB.execute("SELECT totp_secret FROM users WHERE id=?", (friend,)).fetchone()[0] is not None
+    assert "totp" not in studio.c.get("/api/admin/users").json()["items"][0]
     studio.c.cookies.clear()
-    assert login(studio, "friend", PASSWORD).headers["location"] == "/"
+    assert login(studio, "friend", PASSWORD).headers["location"] == "/account/totp"
 
 
 def test_operator_resets_authenticator_of_the_only_admin(studio, mail, capsys):
-    """Единственный администратор без телефона и резервных кодов: сбросить в панели некому — `recover-email`."""
+    """Нет телефона и резервных кодов: сброса в панели нет — только оператор хоста, `recover-email`."""
     import manage
     uid = make_user(studio, "owner", is_admin=True)
     signin(studio, "owner")

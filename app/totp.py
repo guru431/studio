@@ -2,18 +2,20 @@
 
 - TOTP своим кодом: HMAC-SHA-1, `DIGITS` цифр, шаг `STEP` с, окно ±`WINDOW` шаг; время — только `clock.NOW`.
   Принятый шаг запоминается (`users.totp_step`): тот же код (и более ранний шаг) второй раз не принимается.
-- Секрет — шифром `STUDIO_DATA_KEY` (`users.totp_secret`); резервных кодов `BACKUP_COUNT`, в базе — sha256, каждый
-  одноразовый (`totp_backup`). Сменённый ключ сервера: секрет нечитаем — приложение считается выключенным
+- Секрет — шифром `STUDIO_DATA_KEY` (`users.totp_secret`); резервных кодов `BACKUP_COUNT`, в базе — HMAC ключом данных
+  (выданные раньше sha256 — до использования), каждый одноразовый (`totp_backup`). Сменённый ключ сервера: секрет нечитаем — приложение считается выключенным
   (`status` → `reenter`), вход идёт как без него, «Защита» просит настроить заново; учётку это не запирает.
 - Включение — в два шага из «Защиты»: `POST /api/me/totp/setup` с паролем выдаёт секрет, адрес `otpauth://` для QR и
   билет (секрет шифром, привязан к сессии, `SETUP_SEC`); `POST /api/me/totp` с билетом и кодом приложения включает и
-  один раз отдаёт резервные коды. Выключение — паролем; администратор сбрасывает чужое (потерянный телефон).
+  один раз отдаёт резервные коды. Выключение — паролем. Сброса в панели нет: администратор, снявший приложение и
+  задавший пароль, взял бы учётку; потерянный телефон — резервные коды или оператор хоста (`manage.recover_email`).
 - Вход (`/login`) у учётки с приложением после пароля ведёт на `/account/totp`: вызов — строка `email_tokens` вида
   `totp` без кода, связанная с cookie `__Host-studio_email` браузера; письма нет. Привязка моста принимает код в поле
   `code`. Паузы: вызовы — как у кода из письма (`code-user`, `code-ip`), попытки — `email_accounts.CODE_ATTEMPTS` на
   вызов и `FAILS` неудач учётки за `FAIL_SEC` по всем входам и мостам.
 - Журнал — id и коды; ни секрета, ни кодов.
 """
+import asyncio
 import base64
 import hmac
 import json
@@ -24,13 +26,15 @@ import struct
 from urllib.parse import quote, urlencode, urlsplit
 
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import account_mail
 import auth
 import clock
 import email_accounts
+import push
 import security
 import security_log
 import state
@@ -51,6 +55,18 @@ ISSUER = "Studio"
 #: резервный код — 10 знаков без похожих (0/o, 1/l/i), показывается «xxxxx-xxxxx»
 BACKUP_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 BACKUP_RE = re.compile(f"[{BACKUP_ALPHABET}]{{10}}")
+#: только ASCII-цифры: `\d` пропускает цифры Unicode, а `hmac.compare_digest` на не-ASCII строке падает
+CODE_RE = re.compile(f"[0-9]{{{DIGITS}}}")
+#: неверный код после верного пароля — push владельцу (не чаще раза за FAIL_SEC, `_fail_notice`); письмо — FAIL_MAIL
+FAIL_PUSH = {"ru": "Верный пароль, но неверный код приложения-аутентификатора",
+             "en": "Correct password but a wrong authenticator app code"}
+FAIL_MAIL = ("Студия: неверный код приложения / Studio: wrong authenticator code",
+             "Для вашей учётной записи Студии ввели верный пароль, но неверный код приложения-аутентификатора."
+             " Если это были не вы, смените пароль в «Настройки → Защита»; попытки видны в «Журнале безопасности».\n"
+             "Someone entered the correct password for your Studio account but a wrong authenticator app code."
+             " If it was not you, change your password in Settings → Security; the attempts are in the Security log.")
+#: фоновые письма `_fail_notice`: ссылка держит задачу до конца
+TASKS: set[asyncio.Task] = set()
 
 
 class SetupIn(BaseModel):
@@ -110,6 +126,12 @@ def backup_left(uid: int) -> int:
 
 
 def _backup_digest(uid: int, code: str) -> str:
+    """HMAC ключом данных, как код привязки моста: из копии базы без ключа код не подобрать."""
+    return hmac.digest(state.CFG.data_key.encode(), f"totp-backup:{uid}:{code}".encode(), "sha256").hex()
+
+
+def _legacy_digest(uid: int, code: str) -> str:
+    """Голый sha256 кодов, выданных до HMAC: действуют до использования или перевыпуска (`enable` стирает все)."""
     return security.digest(f"totp-backup:{uid}:{code}")
 
 
@@ -118,14 +140,15 @@ def _accept(uid: int, code: str, ip: str | None) -> bool:
     secret = _secret(uid)
     if secret is None:
         return False
-    if re.fullmatch(r"\d{%d}" % DIGITS, code):
+    if CODE_RE.fullmatch(code):
         last = state.DB.execute("SELECT totp_step FROM users WHERE id = ?", (uid,)).fetchone()[0]
         step = matching_step(secret, code, clock.NOW(), last)
         # условие в UPDATE: параллельный вход тем же кодом второй раз не пройдёт
         return step is not None and state.DB.execute(
             "UPDATE users SET totp_step = ? WHERE id = ? AND totp_step < ?", (step, uid, step)).rowcount == 1
     if BACKUP_RE.fullmatch(code) and state.DB.execute(
-            "DELETE FROM totp_backup WHERE user_id = ? AND digest = ?", (uid, _backup_digest(uid, code))).rowcount:
+            "DELETE FROM totp_backup WHERE user_id = ? AND digest IN (?, ?)",
+            (uid, _backup_digest(uid, code), _legacy_digest(uid, code))).rowcount:
         security_log.record(uid, "totp_backup_used", ip=ip)
         return True
     return False
@@ -140,7 +163,31 @@ def verify(uid: int, code: str, source: str, ip: str | None) -> bool:
         email_accounts.refund("totp-user", str(uid))
         return True
     security_log.record(uid, "totp_fail", detail=source, ip=ip)
+    _fail_notice(uid)
     return False
+
+
+def _fail_notice(uid: int) -> None:
+    """Неверный код бывает только после верного пароля: подбор не должен идти молча. Владельцу — push `service` и
+    письмо (почта и SMTP есть), не чаще раза за окно паузы `FAIL_SEC` (счёт — `email_limits`, переживает перезапуск);
+    без кода, адреса и ссылок — подробности в журнале безопасности."""
+    try:
+        email_accounts.throttle("totp-notice", str(uid), 1, FAIL_SEC)
+    except HTTPException:
+        return
+    push.notify_later(uid, FAIL_PUSH, "settings/security", "totp-fail", title=push.STUDIO)
+    email = state.DB.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()["email"]
+    if not email or not account_mail.configured(account_mail.settings()):
+        return
+
+    async def send():
+        try:
+            await account_mail.send(email, *FAIL_MAIL)
+        except HTTPException as err:     # в журнал — только id учётки и код отказа
+            log.warning("totp: fail notice for user %d failed (%s)", uid, err.detail.get("code"))
+    task = asyncio.get_running_loop().create_task(send())
+    TASKS.add(task)
+    task.add_done_callback(TASKS.discard)
 
 
 def challenge(uid: int, request: Request, next_: str) -> str:
@@ -204,7 +251,8 @@ async def enable(body: EnableIn, request: Request):
         secret = base64.b32decode(secret_b32)
     except (InvalidToken, TypeError, ValueError, UnicodeError):
         raise HTTPException(400, {"code": "expired", "message": "Настройка устарела. Начните заново."}) from None
-    step = matching_step(secret, re.sub(r"\s", "", body.code), clock.NOW())
+    code = re.sub(r"\s", "", body.code)
+    step = matching_step(secret, code, clock.NOW()) if CODE_RE.fullmatch(code) else None
     if step is None:
         raise HTTPException(400, {"code": "wrong_code", "message": "Неверный код"})
     if enabled(uid):
@@ -217,6 +265,8 @@ async def enable(body: EnableIn, request: Request):
                          (security.encrypt(secret_b32), step, uid))
         state.DB.executemany("INSERT INTO totp_backup(user_id, digest) VALUES (?, ?)",
                              [(uid, _backup_digest(uid, c)) for c in codes])
+        # начатый вход кодом из письма (и «Отправить код ещё раз») впустил бы без приложения
+        state.DB.execute("DELETE FROM email_tokens WHERE user_id = ? AND kind IN ('login', 'bridge')", (uid,))
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
@@ -236,15 +286,3 @@ async def disable(body: OffIn, request: Request):
     log.info("пользователь %d: приложение-аутентификатор отключено", uid)
     return {"status": "off"}
 
-
-@router.delete("/api/admin/users/{uid}/totp", status_code=204)
-async def admin_reset(uid: int, admin: auth.User = Depends(auth.require_admin)):
-    """Потерянный телефон: администратор снимает приложение чужой учётки; владелец видит это в журнале."""
-    if uid == admin.id:
-        raise HTTPException(409, {"code": "self", "message": "своё приложение отключают в «Настройках» → «Защита»"})
-    if state.DB.execute("SELECT 1 FROM users WHERE id = ?", (uid,)).fetchone() is None:
-        raise HTTPException(404, {"code": "gone", "message": "такого пользователя нет"})
-    _clear(uid)
-    security_log.record(uid, "totp_reset")          # без адреса и устройства администратора, как password_reset
-    log.info("администратор %d: пользователю %d сброшено приложение-аутентификатор", admin.id, uid)
-    return Response(status_code=204)

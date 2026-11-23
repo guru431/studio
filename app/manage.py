@@ -182,7 +182,7 @@ def recover_email(values: dict[str, str]) -> int:
     import security_log
     login = values.get("STUDIO_ACCOUNT_LOGIN", "").strip().lower()
     codes_off = values.get("STUDIO_EMAIL_CODES", "").strip().lower() == "off"
-    # единственный администратор потерял телефон и резервные коды: сбросить приложение в панели некому
+    # потерян телефон и резервные коды: сброса приложения в панели нет (как и кодов из письма) — только здесь
     totp_off = values.get("STUDIO_TOTP", "").strip().lower() == "off"
     try:
         email = (email_accounts.email_address(values["STUDIO_ACCOUNT_EMAIL"])
