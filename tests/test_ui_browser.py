@@ -9852,7 +9852,10 @@ def test_code_question_card_sends_answers(browser, live):
             ("eval", "fits", NO_OVERFLOW),
             ("click", ".code-ask input[value='Postgres']"), ("click", ".code-ask input[value='Тесты']"),
             ("click", ".code-ask input[value='Типы']"), ("click", ".code-ask-answer"),
-            ("wait", CODE_IDLE_AFTER.format(n=1)), ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
+            # конечная отрисовка Markdown очищает текст ответа и заполняет его следующим кадром
+            ("wait", CODE_IDLE_AFTER.format(n=1)
+             + " && document.querySelector('.code-msg.assistant .code-timeline-text')?.textContent.trim()"),
+            ("eval", "msgs", CODE_MSGS)], width=320, mobile=True)
     finally:
         sb.stop()
     assert not r.get("failed"), r
