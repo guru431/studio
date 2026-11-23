@@ -38,3 +38,29 @@ def test_old_bridge_invalid_content_and_window_are_rejected_before_relay(studio)
     assert studio.c.post(chat_url(aid, 'steer'), json={'text': 'Текст'},
                          headers={'x-studio-window': 'invalid'}).status_code == 422
     assert not any(r['op'] in ('steer', 'claim') for r in machine.requests)
+
+
+def test_answer_from_another_window_takes_over_only_when_the_owner_window_is_not_watched(studio):
+    """08:I4: ответ на карточку с другого устройства — без «Продолжить здесь», если окно-владельца хода никто не
+    смотрит: студия передаёт мосту 0.47.0 окна наблюдателей (`watched`), он принимает ответ и передаёт управление.
+    Окно-владелец смотрит — прежний `owned`; прежнему мосту окна не уходят."""
+    import bridge
+    aid, machine, link = setup(studio)
+    machine.answer_takeover = link.hello['answer_takeover'] = True
+    owner, other = 'a' * 32, 'b' * 32
+    machine.running[A] = {'turn': 't1', 'project': ALPHA, 'text': '', 'steps': [], 'owner': owner, 'followups': [],
+                          'asks': {f'r{i}': {'request_id': f'r{i}', 'kind': 'permission'} for i in (1, 2)}}
+    q = studio.c.portal.call(bridge.watch, aid, A, None, link.user_id, owner)
+
+    def answer(rid):
+        return studio.c.post(chat_url(aid, 'answer'), json={'request_id': rid, 'decision': 'allow'},
+                             headers={'x-studio-window': other})
+
+    r = answer('r1')
+    assert r.status_code == 409 and detail(r)['code'] == 'owned'
+    assert machine.requests[-1]['watched'] == [owner]
+    studio.c.portal.call(bridge.unwatch, aid, A, q)
+    assert answer('r1').status_code == 204
+    assert machine.requests[-1]['watched'] == [] and machine.running[A]['owner'] == other
+    link.hello.pop('answer_takeover')
+    assert answer('r2').status_code == 204 and 'watched' not in machine.requests[-1]

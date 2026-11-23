@@ -37,7 +37,8 @@ import { deepseekView } from './code-deepseek.js';
  * в sessionStorage вкладки (code-drafts.js) до отправки, блокировки, выхода или страницы входа; ленты там нет. Текст машины —
  * только textContent и markdown.js. */
 import { api as request, me, unknownOutcome } from './api.js';
-import { icon } from './icons.js';
+import { icon, iconButton } from './icons.js';
+import { canDelete, canRename, deleteChat, renameChat } from './code-chat-manage.js';
 import { ACCESS, ENGINE_NAMES, QUEUE_ONLY, USAGE_BY_MODEL, accessLabel, effortLabel } from './code-options.js';
 import { picker as choice } from './picker.js';
 import { enterSends, fieldBox } from './field.js';
@@ -153,7 +154,7 @@ function preview(input) {
 }
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
-  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null, readonly = false }) {
+  openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null, readonly = false, renamed = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { ...options.headers, 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -315,6 +316,24 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   sharing.set({ title: typeof title === 'string' ? title : tr("Чат"), share: agent?.shared ? null : endpoint('/share'),
     export: endpoint('/export') });
   actions.append(sharing.button);
+  // Мост 0.47.0, владелец компьютера: своё название и удаление сессии (code-chat-manage.js).
+  if (agent?.chat_manage && !agent?.shared && !readonly) {
+    let shownTitle = typeof title === 'string' ? title : '';
+    const manage = { url, engine, request: api };
+    if (canRename({ engine })) {
+      actions.append(iconButton('pencil', tr("Переименовать сессию"), { id: 'code-chat-rename' }));
+      actions.lastChild.addEventListener('click', () => renameChat(host, { ...manage, title: shownTitle, done: (value) => {
+        shownTitle = value;
+        sharing.set({ title: value, share: agent?.shared ? null : endpoint('/share'), export: endpoint('/export') });
+        renamed?.(value);
+      } }));
+    }
+    if (canDelete({ engine, origin })) {
+      actions.append(iconButton('trash', tr("Удалить сессию"), { id: 'code-chat-delete' }));
+      actions.lastChild.addEventListener('click', () => deleteChat(host, { ...manage, title: shownTitle,
+        done: () => { if (alive) gone(); } }));
+    }
+  }
   actions.append(reloadButton);
   const statusFixed = el('div', { class: 'code-status-fixed' }, context.cacheButton, contextBox, usage.button);
   const statusBar = el('div', { class: 'code-status-bar' });
@@ -966,7 +985,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     send.setAttribute('aria-label', label);
     send.querySelector('.go-label').textContent = label;
     text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
-    for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign;
+    // Мост 0.47.0 примет ответ из этого окна, если окно-владельца хода никто не смотрит (иначе — `owned` словами).
+    for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign && !agent?.answer_takeover;
     paintSessionNotice();
   }
 
@@ -982,7 +1002,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       takeSession.textContent = tr("Продолжить копией");
       waitSession.textContent = tr("Дождаться освобождения");
     } else if (foreign) {
-      sessionText.textContent = asking ? tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить.")
+      sessionText.textContent = asking ? (agent?.answer_takeover
+        ? tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Ответьте здесь: если то окно сейчас закрыто, управление перейдёт сюда.")
+        : tr("Задание ждёт вашего ответа, а управление — в другом окне или браузере. Перенесите управление сюда, чтобы ответить."))
         : waitingForRelease ? tr("Жду завершения задания в другом окне. Результат появится здесь.")
         : tr("Задание выполняется в другом окне или браузере. Можно дождаться результата или перенести управление сюда.");
       takeSession.textContent = tr("Продолжить здесь");

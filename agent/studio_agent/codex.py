@@ -537,6 +537,39 @@ class CodexRunner(Runner):
                           "asking": bool(live.get(chat))})
         return items
 
+    async def _own_thread(self, project, chat):
+        """Thread чата (с учётом alias студии), если он этого проекта; нет — `not_found`."""
+        target = await asyncio.to_thread(self.aliases.target, project, chat)
+        try:
+            thread = (await self._metadata(project, "thread/read", {"threadId": target, "includeTurns": False})).get("thread", {})
+        except codex_rpc.RpcError as e:
+            if e.not_found:
+                raise Refused("not_found", "нет такого чата") from None
+            raise
+        if not same_project(thread.get("cwd"), project):
+            raise Refused("not_found")
+        return target
+
+    async def _manage(self, project, chat, method, params):
+        target = await self._own_thread(project, chat)
+        try:
+            await self._metadata(project, method, {"threadId": target, **params})
+        except codex_rpc.RpcError as e:
+            if e.not_found:
+                raise Refused("not_found", "нет такого чата") from None
+            if e.code == -32601:  # метода нет: Codex старше app-server с этой просьбой
+                raise Refused("unsupported", "Обновите Codex на компьютере для этой возможности") from None
+            raise
+        self._histories.clear()
+
+    async def rename_chat(self, project, chat, title):
+        """Своё название — имя thread Codex (`thread/name/set`)."""
+        await self._manage(project, chat, "thread/name/set", {"name": title})
+
+    async def delete_chat(self, project, chat):
+        """«Удалить» — штатный архив Codex (`thread/archive`): из списков уходит, файлы — в его архив сессий."""
+        await self._manage(project, chat, "thread/archive", {})
+
     async def history(self, project, chat, before, limit):
         target = await asyncio.to_thread(self.aliases.target, project, chat)
         root = await asyncio.to_thread(project.resolve)

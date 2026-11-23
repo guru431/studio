@@ -92,7 +92,8 @@ def test_hello_brings_the_agent_online(studio):
     with link_ws(studio, key) as ws:
         ws.send_json(HELLO)
         assert ws.receive_json() == {"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
-                                     "studio_version": release.VERSION, "completions": True, "pending_asks": True}
+                                     "studio_version": release.VERSION, "completions": True, "pending_asks": True,
+                              "open_asks": True}
         [item] = agents(studio)
         assert {k: item[k] for k in ("online", "has_pin", "cc_version", "projects_root", "models", "efforts",
                                      "last_seen")} == {
@@ -430,7 +431,8 @@ def test_lock_and_unlock_preserve_computer_pin_but_block_access_while_locked(stu
     foreign = connect(studio, enroll(studio, login="friend")[0], other)
     session = bridge.tag(security.digest(studio.c.cookies[auth.COOKIE]))
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Рабочий ПК", "login": "owner",
-                          "studio_version": release.VERSION, "completions": True, "pending_asks": True}]
+                          "studio_version": release.VERSION, "completions": True, "pending_asks": True,
+                              "open_asks": True}]
 
     def closes():
         settle(studio)
@@ -557,6 +559,35 @@ def test_pending_asks_after_an_outage_push_without_marking_unread(studio, monkey
     studio.c.portal.call(bridge.unwatch, aid, other, q)
 
 
+def test_known_open_asks_after_a_restart_do_not_push_again(studio, monkeypatch):
+    """07:I5: мост 0.47.0 при каждом новом канале досылает все открытые карточки (`welcome.open_asks`); о карточке
+    с `known: true` push уже был — второго нет; `known` у конца хода и неверный `request_id` — кадр пропущен."""
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    pushed = []
+    monkeypatch.setattr(bridge.push, "notify_later", lambda *a, **kw: pushed.append(a))
+    machine = FakeMachine()
+    machine.completions = True
+    link = connect(studio, aid, machine)
+    assert link.sent[0]["open_asks"] is True
+    known = {"project": pid("studio"), "chat": CHAT, "status": "permission", "request_id": "toolu_1", "known": True,
+             "ago": 0}
+    for bad in ([{**known, "status": "done"}], [{**known, "request_id": "a b"}], [{**known, "known": 1}]):
+        studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": bad})
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [known]})
+    assert pushed == []
+    card = bridge.CARDS[(aid, CHAT)]                    # знакомая карточка ждёт напоминаний и после перезапуска
+    assert card["request_id"] == "toolu_1" and card["sent"] == {}
+    card["sent"]["d"] = (1, 0.0)
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [known]})
+    assert bridge.CARDS[(aid, CHAT)] is card            # новый канал: счёт напоминаний не сбрасывается
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [{**known, "known": False}]})
+    assert len(pushed) == 1
+    studio.c.portal.call(bridge.deliver, link, {"t": "ev", "project": pid("studio"), "chat": CHAT,
+                                                "e": {"k": "asked", "request_id": "toolu_1"}})
+    assert (aid, CHAT) not in bridge.CARDS
+
+
 def test_stop_and_drop_user_close_links(studio):
     owner = make_user(studio, "owner")
     make_user(studio, "friend")
@@ -581,7 +612,8 @@ def test_welcome_carries_login(studio):
     aid, _ = enroll(studio, login="friend", name="Ноутбук")
     link = connect(studio, aid, FakeMachine())
     assert link.sent == [{"t": "welcome", "agent_id": aid, "name": "Ноутбук", "login": "friend",
-                          "studio_version": release.VERSION, "completions": True, "pending_asks": True}]
+                          "studio_version": release.VERSION, "completions": True, "pending_asks": True,
+                              "open_asks": True}]
 
 
 def test_hanging_close_holds_neither_the_new_link_nor_the_revoke(studio, monkeypatch):

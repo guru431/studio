@@ -670,7 +670,7 @@ function sessions(mine, p, status) {
     picked: (chat, row) => { if (row) p.info.set(chat, row); toChat(p, chat); },
     contentSearch: !!p.chatSearch,
     starts: !p.readonly, readonly: !!p.readonly,
-    worktrees: !!p.worktrees,
+    worktrees: !!p.worktrees, chatManage: !!p.chatManage,
     worktreeOpened: async () => { lists.delete(String(p.aid)); await panel.select(p.aid); },
     created: (chat, engine) => created(p, chat, engine), codex: !!p.codex, opencode: !!p.opencode,
     deepseek: !!p.deepseek,
@@ -733,6 +733,11 @@ async function chat(mine, p, id, agent, section, status) {
     },
     closed: () => failed({ code: 'closed' }, p.aid, null),
     gone: () => closeTab(p, id),
+    renamed: (title) => {
+      p.info.set(id, { ...(p.info.get(id) || { chat: id }), title });
+      if (proj === p) paintTabs();
+      chatsOf(p, true).catch(() => {});
+    },
     openFile: (path) => {
       wantFile = path;
       ctx.navigate(`code/${p.aid}/${p.pid}?tab=files`);
@@ -883,6 +888,7 @@ async function project(mine, aid, pid, id, key, path, status) {
   p.codex = agent?.codex || null;
   p.chatSearch = !!agent?.chat_search;
   p.worktrees = !!agent?.worktrees;
+  p.chatManage = !!agent?.chat_manage;       // участнику сервер отдаёт false: переименовать и удалить — владелец
   p.opencode = agent?.opencode || null;
   p.deepseek = agent?.deepseek || null;
   p.offline = !!agent && !agent.online;

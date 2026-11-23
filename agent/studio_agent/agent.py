@@ -83,6 +83,8 @@ OPS = {
     "file_upload": ("project", "path", "data", "replace"),
     "chat_search": ("project", "query"),
     "chat_fork": ("project", "chat", "message_id"),
+    "chat_rename": ("project", "chat", "title"),
+    "chat_delete": ("project", "chat"),
     "subagents": ("project", "chat"),
     "subagent_history": ("project", "chat", "request_id"),
     "worktrees": ("project",),
@@ -205,7 +207,10 @@ class Agent:
                  "passive_requests": True, "history_images": True, "project_sharing": True, "completions": True,
                  "visualization_scope": True, "visualization_images": True, "agent_update_cancel": self.updater is not None,
                  "codex_models": True, "opencode_models": self.opencode is not None,
-                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True}
+                 "deepseek_models": self.deepseek is not None, "deepseek_usage": True,
+                 "open_asks": True,  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
+                 "answer_takeover": True,  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
+                 "chat_manage": True}  # 0.47.0: переименовать и удалить сессию (§25)
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -258,8 +263,9 @@ class Agent:
             older = {i["chat"]: self._sending.get(i["chat"], {**i, "at": self._now() - i["ago"]})
                      for i in done if i["chat"] not in self._missed}
             self._missed = {**older, **self._missed}
+            # Уже известные студии карточки (`known`) не возвращаются: следующий канал соберёт их у ходов заново.
             asks = {i["chat"]: self._sending_asks.get(i["chat"], {**i, "at": self._now() - i["ago"]})
-                    for i in frame["items"] if i["status"] in ASK_KINDS
+                    for i in frame["items"] if i["status"] in ASK_KINDS and not i.get("known")
                     and i["chat"] not in self._missed and i["chat"] not in self._asks}
             self._asks = {**asks, **self._asks}
         else:
@@ -289,18 +295,35 @@ class Agent:
         while len(self._missed) > limits.COMPLETIONS_MAX:
             self._missed.pop(next(iter(self._missed)))
 
-    def completions(self, *, asks: bool = False) -> dict | None:
+    def completions(self, *, asks: bool = False, open_asks: bool = False) -> dict | None:
         """Кадр досылки завершений (и забыть их) или `None`, если досылать нечего. `asks` — студия принимает и
-        открытые карточки (`welcome.pending_asks`); иначе они отбрасываются: прежняя студия отбила бы весь кадр."""
-        pending = self._asks if asks else {}
+        открытые карточки (`welcome.pending_asks`); иначе они отбрасываются: прежняя студия отбила бы весь кадр.
+        `open_asks` (`welcome.open_asks`) — ещё и все прочие открытые карточки ходов с `known: true` (о них студия
+        уже слала push, но после перезапуска службы их не помнит), у всех карточек — `request_id`.
+
+        Студия отбрасывает кадр длиннее `limits.COMPLETIONS_MAX` целиком: карточки (ждут ответа) — первыми, концы
+        ходов — на остаток места, самые старые сверх него забываются."""
+        pending = self._asks if asks or open_asks else {}
         self._sending_asks, self._asks = pending, {}
-        if not self._missed and not pending:
+        fresh = {(item["chat"], item.get("request_id")) for item in pending.values()}
+        known = [item for item in self._open_asks() if (item["chat"], item["request_id"]) not in fresh] if open_asks else []
+        if not self._missed and not pending and not known:
             return None
         now = self._now()
-        items = [{**{k: v for k, v in item.items() if k not in ("at", "request_id")}, "ago": max(0, int(now - item["at"]))}
-                 for item in (*self._missed.values(), *pending.values())]
-        self._sending, self._missed = self._missed, {}
+        hidden = ("at",) if open_asks else ("at", "request_id")
+        room = max(0, limits.COMPLETIONS_MAX - len(pending))
+        missed = dict(list(self._missed.items())[len(self._missed) - room:]) if len(self._missed) > room else self._missed
+        if len(missed) < len(self._missed):
+            log.info("досылка: забыто старых завершений %d", len(self._missed) - len(missed))
+        items = [{**{k: v for k, v in item.items() if k not in hidden and v is not None}, "ago": max(0, int(now - item["at"]))}
+                 for item in (*missed.values(), *pending.values())]
+        items += [{**item, "known": True, "ago": 0} for item in known][:max(0, limits.COMPLETIONS_MAX - len(items))]
+        self._sending, self._missed = missed, {}
         return {"t": "completions", "items": items}
+
+    def _open_asks(self) -> list[dict]:
+        return [item for backend in (self.runner, self.codex, self.opencode, self.deepseek) if backend is not None
+                for item in backend.open_asks()]
 
     # --- просьба ---
 
@@ -448,7 +471,8 @@ class Agent:
             key = "pid" if op == "projects" else "project"
             result = {**result, "items": [{k: v for k, v in i.items() if k != "dir"}
                                           for i in result.get("items", []) if i.get(key) in scope]}
-        if op in ("turn", "save", "file_operation", "file_upload", "worktree_create", "chat_fork"):
+        if op in ("turn", "save", "file_operation", "file_upload", "worktree_create", "chat_fork", "chat_rename",
+                  "chat_delete"):
             self._metadata.invalidate(frame.get("project"))
         return result
 
@@ -567,6 +591,9 @@ class Agent:
             return value is None or type(value) is bool
         if name == "query":
             return isinstance(value, str) and len(value) <= 200 and not any(ord(c) < 32 for c in value)
+        if name == "title":
+            return (isinstance(value, str) and 0 < len(value) <= sessions.TITLE_MAX and value == value.strip()
+                    and not any(ord(c) < 32 for c in value))
         if name == "message_id":
             return (value is None and op == "chat_fork" or isinstance(value, str)
                     and 1 <= len(value) <= 100 and not any(ord(c) < 32 for c in value))
@@ -788,6 +815,36 @@ class Agent:
                 except Exception:
                     break
             raise
+
+    async def _op_chat_rename(self, frame, after):
+        await self._manage_chat(frame, "rename_chat", sessions.rename, frame["title"])
+        return {}
+
+    async def _op_chat_delete(self, frame, after):
+        await self._manage_chat(frame, "delete_chat", sessions.delete)
+        self._histories.clear()
+        return {}
+
+    async def _manage_chat(self, frame, method, claude, *args):
+        """Переименовать или удалить сессию штатным способом помощника; идёт ход или ветвление — `running`.
+        OpenCode и DeepSeek Harness такого по ACP не дают — честный отказ; удалить «Новый чат» без хода (сессии у
+        помощника нет) — `not_found`: студии остаётся убрать свою строку."""
+        engine = frame.get("engine", "claude")
+        if engine in ("opencode", "deepseek"):
+            backend = self._runner(frame)
+            if method == "delete_chat" and backend is not None:
+                project = await self._project(frame)
+                if all(item["chat"] != frame["chat"] for item in await backend.chats(project)):
+                    raise Refused("not_found", "нет такого чата")
+            raise Refused("unsupported", f"{NAMES[engine]} не даёт переименовать или удалить сессию из Студии")
+        project = await self._project(frame)
+        runner = self._runner(frame)
+        if (engine, frame["chat"]) in self._forking or runner._turn(frame["project"], frame["chat"]) is not None:
+            raise Refused("running", "Дождитесь завершения задания")
+        if engine == "codex":
+            await getattr(runner, method)(project, frame["chat"], *args)
+        else:
+            await asyncio.to_thread(claude, project, frame["chat"], *args)
 
     async def _op_subagents(self, frame, after):
         if frame.get("engine") == "deepseek":
@@ -1013,9 +1070,16 @@ class Agent:
         return {"running": running}
 
     async def _op_answer(self, frame, after):
-        self._runner(frame).check_owner(frame["project"], frame["chat"], frame.get("window"))
-        self._runner(frame).answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
-                                   frame.get("message"), frame.get("answers"))
+        watched = frame.get("watched")
+        if watched is not None and not (isinstance(watched, list) and len(watched) <= limits.WATCHED_MAX
+                                        and all(isinstance(w, str) and SESSION.fullmatch(w) for w in watched)):
+            raise Refused("invalid")
+        runner = self._runner(frame)
+        takeover = runner.check_owner(frame["project"], frame["chat"], frame.get("window"), watched) is True
+        runner.answer(frame["project"], frame["chat"], frame["request_id"], frame.get("decision"),
+                      frame.get("message"), frame.get("answers"))
+        if takeover:  # окно-владельца никто не смотрит: управление — ответившему (событие `ownership`)
+            runner.claim(frame["project"], frame["chat"], frame["window"])
         return {}
 
     async def _op_stop(self, frame, after):

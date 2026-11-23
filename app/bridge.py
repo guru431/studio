@@ -68,6 +68,7 @@ CALL_SEC = 30
 #: меньше предела Apache для `/api/code/` (600 с, сверяет tests/test_deploy.py)
 SEND_SEC = 300
 WATCH_MAX = 1000
+WATCHED_MAX = 64  # окон в `answer.watched` (`limits.WATCHED_MAX` моста)
 COMPLETIONS_MAX = 50  # досланных завершений в кадре (протокол §18)
 COMPLETION_AGE_MAX = 7 * 24 * 3600  # давность конца хода, с: старше — время отметки по этому пределу
 STOP_SEC = 2
@@ -84,6 +85,7 @@ DEEPSEEK_MODEL_ID = re.compile(r'\["[^"\\\x00-\x1f]{1,150}","[^"\\\x00-\x1f]{1,1
 DEEPSEEK_SKIPPED = ("unknown", "acp_own", "env_key", "unreadable")
 PID = re.compile(r"[0-9a-f]{16}")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")  # id карточки в досылке (`turns.REQUEST_ID` моста)
 
 
 class ProtocolError(ValueError):
@@ -140,13 +142,15 @@ class SocketLink(Link):
 class Watch(asyncio.Queue):
     """Очередь наблюдателя чата: ("ev", событие) | ("offline", None) | ("online", None) | ("closed", None); `session` — `tag`
     сессии студии, что смотрит (её `forget` кладёт `closed`), `user_id` — её учётка (push хода не уходит, только пока
-    смотрит его адресат, `watching`). Событий в ней — не больше `WATCH_MAX`: застрявший
-    поток SSE (TCP жив, страница не читает) получает `offline` и снимается (`_put_event`)."""
+    смотрит его адресат, `watching`), `window` — id окна страницы (`X-Studio-Window`; ответ на карточку — `windows`).
+    Событий в ней — не больше `WATCH_MAX`: застрявший поток SSE (TCP жив, страница не читает) получает `offline` и
+    снимается (`_put_event`)."""
 
-    def __init__(self, session: str | None, user_id: int | None = None):
+    def __init__(self, session: str | None, user_id: int | None = None, window: str | None = None):
         super().__init__()
         self.session = session
         self.user_id = user_id
+        self.window = window
 
 
 #: agent_id → канал на связи
@@ -249,7 +253,7 @@ def parse_hello(frame: dict) -> dict:
     for capability in ("chat_state", "chat_control", "attachments", "large_attachments", "project_activity", "subscription_usage", "usage_reset", "opencode_usage", "project_summary", "metadata_cache", "file_stats", "file_operations", "mcp",
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "mirror_groups", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare", "file_upload", "file_search",
-                       "deepseek_models", "deepseek_usage", "self_check", "agent_log"):
+                       "deepseek_models", "deepseek_usage", "self_check", "agent_log", "open_asks", "answer_takeover", "chat_manage"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
@@ -355,9 +359,10 @@ async def attach(link: Link) -> None:
         _close_later(old, CLOSE_REPLACED)
     try:
         # `completions` — студия принимает кадр досланных завершений (протокол §18), `pending_asks` — и открытых
-        # карточек в нём; старый мост поля не читает.
+        # карточек в нём, `open_asks` — и всех открытых карточек ходов (`known`); старый мост поля не читает.
         await link.send({"t": "welcome", "agent_id": link.agent_id, "name": link.name, "login": row["login"],
-                         "studio_version": release.VERSION, "completions": True, "pending_asks": True})
+                         "studio_version": release.VERSION, "completions": True, "pending_asks": True,
+                         "open_asks": True})
     except Exception:
         pass                             # канал уже рвётся: его конец сделает detach
     if old is None and LINKS.get(link.agent_id) is link:
@@ -440,20 +445,29 @@ def _completions(link: Link, frame: dict) -> None:
     """Ходы, кончившиеся без канала (протокол §18): отметка «непрочитано» и push — как у живого `done`. Строки
     `code_attention` — только этого компьютера (`link.agent_id`): чужой чат кадр не тронет. Открытые карточки,
     возникшие без канала (`status` `permission|question`, `welcome.pending_asks`), — только push, как у живого
-    `ask`."""
+    `ask`. Карточка с `known: true` (мост с `hello.open_asks` досылает все открытые при каждом новом канале) —
+    о ней push уже был: второго нет."""
     if LINKS.get(link.agent_id) is not link:
         return
     items = frame.get("items")
     if not (isinstance(items, list) and len(items) <= COMPLETIONS_MAX and all(
             isinstance(i, dict) and isinstance(i.get("status"), str) and (i["status"] in DONE_WORDS or i["status"] in ASK_WORDS)
             and type(i.get("ago")) is int and i["ago"] >= 0
-            and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}}) for i in items)):
+            and _event_ok({"project": i.get("project"), "chat": i.get("chat"), "e": {"k": "done"}})
+            and ("request_id" not in i or isinstance(i["request_id"], str) and REQUEST_ID.fullmatch(i["request_id"]))
+            and type(i.get("known", False)) is bool and (not i.get("known") or i["status"] in ASK_WORDS)
+            for i in items)):
         log.warning("агент %d: неверные досланные завершения", link.agent_id)
         return
     for item in items:
         if item["status"] in ASK_WORDS:
-            _push(link, {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
-                         "e": {"k": "ask", "kind": item["status"]}})
+            card = {"project": item["project"], "chat": item["chat"], "project_name": item.get("project_name"),
+                    "e": {"k": "ask", "kind": item["status"], "request_id": item.get("request_id")}}
+            held = CARDS.get((link.agent_id, item["chat"]))
+            if item.get("known") is not True:
+                _push(link, card)
+            elif held is None or held["request_id"] not in (None, item.get("request_id")):
+                _push(link, card, notify=False)   # напоминания — и после перезапуска службы; знакомая — без сброса счёта
             continue
         finished = clock.NOW() - min(item["ago"], COMPLETION_AGE_MAX)
         code_attention.completed(link.agent_id, item["project"], item["chat"], finished)
@@ -525,9 +539,9 @@ def _place(link: Link, frame: dict) -> str:
     return f"{link.name} · {project_name}" if valid_name else link.name
 
 
-def _push(link: Link, frame: dict) -> None:
+def _push(link: Link, frame: dict, *, notify: bool = True) -> None:
     """Карточка или конец хода, которых начавший ход не смотрит, — push ему (спека 6.8); карточка ещё и ждёт
-    напоминаний (`CARDS`, `remind`)."""
+    напоминаний (`CARDS`, `remind`). `notify=False` — только напоминания: о карточке push уже был."""
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
@@ -539,7 +553,7 @@ def _push(link: Link, frame: dict) -> None:
         INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью
     body = {lang: f"{_place(link, frame)}: {words}" for lang, words in text.items()} if text else None
     _card(link, frame, body)
-    if text is None or user_id is None or watching(link.agent_id, frame["chat"], user_id):
+    if not notify or text is None or user_id is None or watching(link.agent_id, frame["chat"], user_id):
         return
     push.notify_later(user_id, body, f"code/{link.agent_id}/{frame['project']}/{frame['chat']}",
                       f"code-{frame['chat']}", kind=kind)
@@ -651,8 +665,9 @@ async def call(agent_id: int, op: str, session: str, timeout: float | None = Non
 
 # ---- наблюдатели ---------------------------------------------------------------
 
-def watch(agent_id: int, chat: str, session: str | None = None, user_id: int | None = None) -> Watch:
-    q = Watch(session, user_id)
+def watch(agent_id: int, chat: str, session: str | None = None, user_id: int | None = None,
+          window: str | None = None) -> Watch:
+    q = Watch(session, user_id, window)
     WATCHERS.setdefault((agent_id, chat), set()).add(q)
     return q
 
@@ -669,6 +684,12 @@ def watching(agent_id: int, chat: str, user_id: int | None = None) -> bool:
     """Чат кто-то смотрит; с `user_id` — именно эта учётка (чужой взгляд участника не глушит push владельцу)."""
     queues = WATCHERS.get((agent_id, chat), ())
     return any(user_id is None or q.user_id == user_id for q in queues)
+
+
+def windows(agent_id: int, chat: str) -> list[str]:
+    """Окна страниц, что сейчас смотрят чат (не больше `WATCHED_MAX`): ответ на карточку из другого окна мост
+    примет без «Продолжить здесь», если окна-владельца хода среди них нет (`hello.answer_takeover`)."""
+    return sorted({q.window for q in WATCHERS.get((agent_id, chat), ()) if q.window})[:WATCHED_MAX]
 
 
 def _put_event(agent_id: int, chat: str, q: Watch, e: dict) -> None:
