@@ -1971,11 +1971,16 @@ ntfy получает только текст уведомления (для а�
 на другие компьютеры как есть. После ротации ключа и после обновления скриптов — `-MakeLocal` заново: живая
 приёмка отказывает, если копия расходится со скриптом не только ключом и адресом.
 
-**Картинки** — `studio-batch.local.ps1 -PromptsFile prompts.txt [-Model snofs|flux]
+**Картинки** — `studio-batch.local.ps1 -PromptsFile prompts.txt [-Model snofs|flux|fineview|jib-moss]
 [-Size portrait|square|landscape] [-Count 3] [-Seed N] [-ImagePath D:\photo.jpg] [-Strength 0.65]
-[-OutDir D:\out] [-KeepCard]`: промпты — строками файла, картинки и `manifest.tsv` (seed и модель
+[-OutDir D:\out] [-Resume] [-KeepCard]`: промпты — строками файла, картинки и `manifest.tsv` (seed и модель
 каждой) — в папку; в конце и по Ctrl+C карта освобождается, кроме `-KeepCard`. Модель по умолчанию —
-SNOFS Krea 2 (`snofs`), силу `-Strength` с исходным фото получает только она; FineView и Jib скрипт не знает.
+SNOFS Krea 2 (`snofs`); ещё FLUX 3 Image Klein (`flux`), FineView QW21 (`fineview`) и Jib Mix Moss V2
+(`jib-moss`), как на странице. Силу `-Strength` с исходным фото получают SNOFS и Jib, FineView берёт фото
+референсом. «Лимит запросов» (429) и «карта или модель недоступна» (503) скрипт повторяет через 5 с, всего
+до трёх попыток, потом переходит к следующей картинке. Прерванный пакет (Ctrl+C, отказ шлюза) доделывает
+`-Resume` с той же `-OutDir`: пропускаются пары «промпт × вариант», уже записанные в `manifest.tsv` с той же
+моделью и размером, если файл на месте (`-Seed` и исходное фото не сверяются).
 
 **Ролики** — `studio-video.local.ps1 -Folder D:\pics [-Prompt "…"] [-Model wan|h3] [-Seconds 5]
 [-Quality fast|standard|high] [-NoSmooth] [-Count 2] [-Seed N] [-Redo] [-KeepCard]`: картинки
