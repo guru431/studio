@@ -1,6 +1,8 @@
 """Зеркала проекта — группа равноправных копий на мостах владельца (`mirror_groups`). Маршруты — от открытого
-проекта (текущая копия): список остальных копий, сверка и отправка в выбранную. Содержимое файлов проходит только
-по каналу."""
+проекта (текущая копия): список остальных копий, сверка и отправка в выбранную; `all_router` — все зеркала учётки
+(«Настройки» → «Агенты»): список, «синхронизировать после хода» и «Отвязать», в том числе копию исчезнувшего проекта.
+После успешного хода в проекте копии с этим флажком сервер сам сравнивает её с остальными копиями (`after_turn`).
+Содержимое файлов проходит только по каналу."""
 
 import asyncio
 import hashlib
@@ -13,7 +15,7 @@ from typing import Annotated, NamedTuple
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, StrictBool, ValidationError
 
 import auth
 import bridge
@@ -21,9 +23,11 @@ import claude_code as code
 import clock
 import mirror_groups
 import project_access
+import push
 import state
 
 router = APIRouter(prefix="/api/code/agents/{aid}/projects/{pid}/mirrors", default_response_class=code._BridgeJSON)
+all_router = APIRouter(prefix="/api/code/mirrors", default_response_class=code._BridgeJSON)
 log = logging.getLogger("studio")
 CHUNK = 4 * 1024 * 1024
 MAX_ENTRIES = 150_000
@@ -74,6 +78,10 @@ class Exclusions(BaseModel):
 
 class FileDiff(BaseModel):
     path: str = Field(min_length=1, max_length=code.PATH_MAX)
+
+
+class Auto(BaseModel):
+    auto: StrictBool
 
 
 def _json(value):
@@ -142,7 +150,7 @@ def _listing(aid, pid):
     mine = mirror_groups.find(aid, pid)
     if mine is None:
         return {"copy": None, "items": [], "exclude": [], "pending": bool(mirror_groups.unlocated(aid))}
-    result = {"copy": mine["id"], "pending": mine["root"] is None,
+    result = {"copy": mine["id"], "pending": mine["root"] is None, "auto": bool(mine["auto"]),
               "items": [_item(mine, row) for row in mirror_groups.members(mine["grp"]) if row["id"] != mine["id"]]}
     try:
         result["exclude"] = mirror_groups.exclusions(mine["grp"])
@@ -682,12 +690,14 @@ async def _record(x, y, state_x, state_y, synced, *, first=False):
         (mirror_groups.seal(x, y, state_x, state_y) if first else mirror_groups.save(x, y, state_x, state_y, synced))
 
 
-async def _sync(request, mine, other, selected, progress):
+async def _sync(request, mine, other, selected, progress, comparison=None):
+    """Передача по плану `selected`; `comparison` — уже готовая сверка (синхронизация после хода)."""
     aid, pid, destination = mine["agent"], mine["project"], other["agent"]
     ticket = secrets.token_hex(16)
     started = False
     try:
-        comparison = await _compare(request, mine, other, background=True)
+        if comparison is None:
+            comparison = await _compare(request, mine, other, background=True)
         plan, to, exclude = comparison.result, comparison.to, comparison.exclude
         if plan["plan"] != selected.plan:
             raise code._refuse(409, "conflict", "проект или зеркало изменились — обновите сравнение")
@@ -918,14 +928,20 @@ async def sync(aid: int, pid: str, cid: int, request: Request):
     destination = other["agent"]
     if destination in TRANSFERS or len(TRANSFERS) >= 4:
         raise code._refuse(409, "busy", "уже выполняется передача зеркала — дождитесь окончания")
-    progress = {"state": "running"}
+    progress = _started(mine, other)
+    TRANSFERS[destination] = asyncio.create_task(_sync(request, mine, other, selected, progress))
+    return progress
+
+
+def _started(mine, other, **extra):
+    """Ход новой передачи в `RESULTS`; полон — уходит один законченный."""
+    progress = {"state": "running", **extra}
     if len(RESULTS) >= 128:
         for key, value in RESULTS.copy().items():
             if value["state"] != "running":
                 del RESULTS[key]
                 break
     RESULTS[(mine["id"], other["id"])] = progress
-    TRANSFERS[destination] = asyncio.create_task(_sync(request, mine, other, selected, progress))
     return progress
 
 
@@ -939,6 +955,161 @@ async def unlink(aid: int, pid: str, cid: int, request: Request):
         mirror_groups.remove(other["id"])
     _forget()
     log.info("зеркало: копия %d отвязана", other["id"])
+    return Response(status_code=204)
+
+
+# ---- синхронизация после хода ----------------------------------------------------
+
+#: push о различиях после хода (вид `service`): только «компьютер · проект» и имя компьютера копии, без файлов
+DIFFERS = {"ru": "{0}: копия на «{1}» отличается — после хода не отправлено, откройте сравнение",
+           "en": "{0}: the copy on “{1}” differs; not sent after the turn, open the comparison"}
+
+
+def after_turn(request: Request, aid: int, pid: str, place: str) -> None:
+    """Успешный ход владельца в проекте `pid` (`bridge.deliver`, запрос хода — `bridge.TURN_REQUESTS`): копия с флажком
+    `auto` сравнивается с каждой другой копией группы той же сессией, что начала ход, фоном и без открытой страницы
+    (как ручная передача: блокировка экрана не мешает; выход, отключение учётки и отзыв компьютера — обрывают).
+    Просьбы мостам — фоновые (`X-Studio-Passive`): срок PIN не продлевают. Применяется только план без локальных
+    изменений копии, без удалений и не в отсутствующую копию; иначе — ход `differs` и push вида `service`. Копия,
+    в которую уже идёт передача, пропускается."""
+    mine = mirror_groups.find(aid, pid)
+    if mine is None or not mine["auto"] or not code._session_open(request.state.digest, True):
+        return
+    try:
+        project_access.owner(request, aid)
+    except HTTPException:
+        return
+    background = Request({**request.scope, "headers": [*request.scope["headers"], (b"x-studio-passive", b"1")]})
+    for other in mirror_groups.members(mine["grp"]):
+        destination = other["agent"]
+        if other["id"] == mine["id"] or destination in TRANSFERS or len(TRANSFERS) >= 4:
+            continue
+        progress = _started(mine, other, auto=True)
+        TRANSFERS[destination] = asyncio.get_running_loop().create_task(
+            _auto(background, mine, other, progress, place))
+
+
+def _release(destination):
+    if TRANSFERS.get(destination) is asyncio.current_task():
+        del TRANSFERS[destination]
+
+
+async def _auto(request, mine, other, progress, place):
+    destination = other["agent"]
+    agent = state.DB.execute("SELECT id, name, user_id, has_pin FROM agents WHERE id=?", (destination,)).fetchone()
+    try:
+        if agent is None:
+            raise _gone()
+        comparison = await code.open_without_pin(request, agent, lambda: _compare(request, mine, other, background=True))
+    except HTTPException as error:
+        progress.update(state="failed", error=error.detail)
+        _release(destination)
+        return
+    except (InvalidToken, ValueError, OSError, sqlite3.Error) as error:
+        log.warning("зеркало %d→%d после хода: %s", mine["id"], other["id"], type(error).__name__)
+        progress.update(state="failed", error={"code": "mirror", "message": "Не удалось синхронизировать зеркало"})
+        _release(destination)
+        return
+    plan = comparison.result
+    if plan["conflicts"] or plan["deletions"] or not plan["exists"]:
+        progress.update(state="differs")
+        _release(destination)
+        log.info("зеркало %d→%d: после хода есть различия", mine["id"], other["id"])
+        push.notify_later(request.state.user.id,
+                          {lang: words.format(place, agent["name"]) for lang, words in DIFFERS.items()},
+                          f"code/{mine['agent']}/{mine['project']}", f"mirror-{mine['id']}-{other['id']}", kind="service")
+        return
+    await _sync(request, mine, other, Sync(plan=plan["plan"]), progress, comparison)
+
+
+# ---- все зеркала учётки («Настройки» → «Агенты») ---------------------------------------
+
+def _own_copy(request, cid):
+    """Копия своего компьютера; чужая или исчезнувшая — 404 `gone`."""
+    row = _copy(cid)
+    if row is None:
+        raise _gone()
+    try:
+        project_access.owner(request, row["agent"])
+    except HTTPException:
+        raise _gone() from None
+    return row
+
+
+def _place_of(row):
+    """`{name, folder}` копии для списка; нечитаемо — `reenter`, ещё неизвестно — `unknown`."""
+    try:
+        location = mirror_groups.location(row)
+    except InvalidToken:
+        return {"name": None, "folder": None, "reenter": True}
+    return location if location is not None else {"name": None, "folder": None, "unknown": True}
+
+
+async def _present(request, agents):
+    """`{компьютер: {pid, …}}` проектов компьютеров на связи (фоновая просьба `projects`, без PIN — открыть для
+    сессии); не ответил, заперт PIN или не на связи — компьютера в ответе нет: «проекта больше нет» не ставится."""
+    async def one(agent):
+        if agent["id"] not in bridge.LINKS:
+            return None
+        try:
+            data = await code.open_without_pin(request, agent, lambda: code.ask(
+                request, agent["id"], "projects", quiet=True, passive=True, reply_timeout=10))
+        except HTTPException:
+            return None
+        items = data.get("items")
+        return agent["id"], {i.get("pid") for i in items if isinstance(i, dict)} if isinstance(items, list) else set()
+    return dict(found for found in await asyncio.gather(*(one(agent) for agent in agents)) if found is not None)
+
+
+@all_router.get("")
+async def all_mirrors(request: Request):
+    """Все копии компьютеров учётки (компьютер → проект → остальные копии группы): адрес, флажок `auto`,
+    «проекта больше нет» (`missing`) по ответу моста, у остальных копий — время синхронизации с этой и ход передачи."""
+    uid = request.state.user.id
+    rows = state.DB.execute(
+        f"SELECT {mirror_groups.COPY_COLUMNS}, a.name AS computer FROM mirror_copies c JOIN agents a ON a.id=c.agent"
+        " JOIN mirror_groups g ON g.id=c.grp WHERE a.user_id=? AND g.user_id=? ORDER BY a.id, c.id", (uid, uid)).fetchall()
+    agents = state.DB.execute(
+        "SELECT id, name, user_id, has_pin FROM agents WHERE user_id=? AND id IN (SELECT agent FROM mirror_copies)"
+        " ORDER BY id", (uid,)).fetchall()
+    present = await _present(request, agents)
+    groups = {}
+    for row in rows:
+        groups.setdefault(row["grp"], []).append(row)
+    items = []
+    for row in rows:
+        known = present.get(row["agent"])
+        peers = [{"id": peer["id"], "computer": peer["computer"], "online": peer["agent"] in bridge.LINKS,
+                  **_place_of(peer), "synced": mirror_groups.synced(row["id"], peer["id"]),
+                  "job": RESULTS.get((row["id"], peer["id"]))} for peer in groups[row["grp"]] if peer["id"] != row["id"]]
+        items.append({"id": row["id"], "agent": row["agent"], "computer": row["computer"],
+                      "online": row["agent"] in bridge.LINKS, "project": row["project"], **_place_of(row),
+                      "auto": bool(row["auto"]),
+                      "missing": known is not None and row["project"] is not None and row["project"] not in known,
+                      "peers": peers})
+    return {"items": items}
+
+
+@all_router.put("/{cid}/auto")
+async def set_auto(cid: int, request: Request):
+    """«Синхронизировать после хода» копии: после успешного хода в её проекте — в остальные копии группы."""
+    body = await _body(request, Auto)
+    row = _own_copy(request, cid)
+    state.DB.execute("UPDATE mirror_copies SET auto=? WHERE id=?", (int(body.auto), row["id"]))
+    return {"id": row["id"], "auto": body.auto}
+
+
+@all_router.delete("/{cid}", status_code=204)
+async def unlink_copy(cid: int, request: Request):
+    """Отвязать копию из общего списка — и копию проекта, которого больше нет (переименован или удалён): только
+    настройка, папка остаётся. Идёт передача с её участием — 409 `busy`."""
+    row = _own_copy(request, cid)
+    if row["agent"] in TRANSFERS or any(cid in key and job["state"] == "running" for key, job in RESULTS.items()):
+        raise code._refuse(409, "busy", BUSY)
+    with mirror_groups.transaction():
+        mirror_groups.remove(row["id"])
+    _forget()
+    log.info("зеркало: копия %d отвязана из общего списка", row["id"])
     return Response(status_code=204)
 
 

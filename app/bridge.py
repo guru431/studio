@@ -156,6 +156,10 @@ WATCHERS: dict[tuple[int, str], set[Watch]] = {}
 #: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
 INITIATORS: dict[tuple[int, str], int] = {}
 INITIATORS_MAX = 10_000
+#: (agent_id, chat) → запрос последнего хода владельца в чате (`owner_turn`): после успешного `done` той же сессией
+#: идёт синхронизация зеркала (`project_mirrors.after_turn`), и для ходов очереди моста. Только память
+TURN_REQUESTS: dict[tuple[int, str], Request] = {}
+TURN_REQUESTS_MAX = 256
 #: (agent_id, chat) → ждущая карточка для напоминаний (`_card`, `remind`): проект, `request_id`, текст push, время
 #: карточки и последнего взгляда на чат, по сессиям — (повторов, время последнего). Только память: после перезапуска
 #: службы карточки, возникшие без канала, снова заводит досылка моста (`welcome.pending_asks`), прочие — забыты
@@ -424,6 +428,8 @@ def deliver(link: Link, frame: dict) -> None:
         for q in list(WATCHERS.get((link.agent_id, frame["chat"]), ())):
             _put_event(link.agent_id, frame["chat"], q, frame["e"])
         _push(link, frame)
+        if frame["e"]["k"] == "done" and frame["e"].get("status") == "done":
+            _after_turn(link, frame)
     elif t == "completions" and link.hello.get("completions"):
         _completions(link, frame)
     else:
@@ -476,6 +482,28 @@ def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
         while len(INITIATORS) > INITIATORS_MAX:
             del INITIATORS[next(iter(INITIATORS))]
     return previous
+
+
+def owner_turn(agent_id: int, chat: str, request: Request | None) -> None:
+    """Ход в чате: запрос хода владельца компьютера — для синхронизации зеркала после хода (`_after_turn`); ход
+    участника (`None`) прежний запрос владельца снимает."""
+    key = (agent_id, chat)
+    TURN_REQUESTS.pop(key, None)
+    if request is None:
+        return
+    TURN_REQUESTS[key] = request
+    while len(TURN_REQUESTS) > TURN_REQUESTS_MAX:
+        del TURN_REQUESTS[next(iter(TURN_REQUESTS))]
+
+
+def _after_turn(link: Link, frame: dict) -> None:
+    """Успешный ход, начатый владельцем из студии: зеркала проекта с «синхронизировать после хода». Ходы, кончившиеся
+    без канала (`_completions`), и ходы участников зеркала не трогают."""
+    request = TURN_REQUESTS.get((link.agent_id, frame["chat"]))
+    if request is None:
+        return
+    import project_mirrors               # он импортирует этот модуль: на загрузке — кольцо
+    project_mirrors.after_turn(request, link.agent_id, frame["project"], _place(link, frame))
 
 
 def _addressee(link: Link, frame: dict) -> int | None:

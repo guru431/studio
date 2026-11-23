@@ -297,6 +297,72 @@ def test_mirror_dialog_unlinks_a_copy_sealed_with_a_former_key(browser, live, co
     assert state.DB.execute("SELECT 1 FROM mirror_copies WHERE agent = ?", (target,)).fetchone() is None
 
 
+def test_mirror_dialog_switches_sending_after_turns(browser, live, computers):
+    """«Отправлять изменения в копии после каждого хода» — флажок текущей копии группы в окне «Зеркало»."""
+    login = "auto-mirror"
+    live.add_user(login)
+    source, first, second = computers
+    aid, left = code_online(live, login, first, "Source")
+    target, right = code_online(live, login, second, "Destination")
+    root_a, root_b = mirror.projects.list_roots(first.roots)[0], mirror.projects.list_roots(second.roots)[1]
+    mine, _ = group(aid, (aid, pid(source.name), root_a, source.name), (target, None, root_b, source.name))
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"code/{aid}/{pid(source.name)}"),
+            ("wait", "document.querySelector('#code-project-mirror')?.hidden === false"),
+            ("click", "#code-project-mirror"),
+            ("wait", f"document.querySelector('{COPIES} li[data-copy]') && {IDLE}"
+                     " && !document.querySelector('.project-mirror-auto').hidden"),
+            ("eval", "before", "document.querySelector('#code-mirror-auto').checked"),
+            ("click", "#code-mirror-auto"),
+            ("wait", f"document.querySelector('{PANEL} .status')?.textContent.includes('после каждого хода')"),
+            ("eval", "text", "document.querySelector('.project-mirror-auto').textContent")])
+    finally:
+        left.stop()
+        right.stop()
+    assert not result.get("failed"), result
+    assert result["values"]["before"] is False
+    assert result["values"]["text"].startswith("Отправлять изменения в копии после каждого хода")
+    assert state.DB.execute("SELECT auto FROM mirror_copies WHERE id = ?", (mine,)).fetchone()[0] == 1
+
+
+def test_settings_list_all_mirrors_and_unlinks_a_vanished_project(browser, live, computers):
+    """«Настройки» → «Агенты» → «Зеркала проектов»: компьютер → проект → остальные копии; копия проекта, которого
+    больше нет (переименован), помечена и отвязывается отсюда; флажок «Отправлять после хода» сохраняется."""
+    login = "all-mirrors"
+    live.add_user(login)
+    source, first, second = computers
+    aid, left = code_online(live, login, first, "Source")
+    target, right = code_online(live, login, second, "Destination")
+    root_a, root_b = mirror.projects.list_roots(first.roots)[0], mirror.projects.list_roots(second.roots)[1]
+    former, copy = group(aid, (aid, pid("former"), root_a, "former"), (target, None, root_b, "former"))
+    rows = "[...document.querySelectorAll('#mirror-list .mirror-copy')]"
+    try:
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
+            ("wait", f"document.querySelector('#mirror-list .mirror-missing')"),
+            ("eval", "computers", "[...document.querySelectorAll('#mirror-list h3')].map((h) => h.textContent)"),
+            ("eval", "rows", f"{rows}.map((li) => [li.dataset.copy, li.querySelector('.mirror-name').textContent,"
+                             " !!li.querySelector('.mirror-missing'), li.querySelector('.mirror-peers').textContent])"),
+            ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
+            ("click", f"#mirror-list li[data-copy='{copy}'] .mirror-auto"),
+            ("wait", f"!document.querySelector(\"#mirror-list li[data-copy='{copy}'] .mirror-auto\").disabled"),
+            ("eval", "auto", f"fetch('/api/code/mirrors').then((r) => r.json())"
+                             f".then((j) => j.items.find((i) => i.id === {copy}).auto)"),
+            ("click", f"#mirror-list li[data-copy='{former}'] .mirror-unlink"),
+            ("wait", "!!document.querySelector('#mirror-unlink-dialog')?.open"),
+            ("click", "#mirror-unlink-confirm"),
+            ("wait", "document.querySelector('#mirror-list')?.textContent.includes('Зеркал пока нет')")],
+            width=320, touch=True)
+    finally:
+        left.stop()
+        right.stop()
+    assert not result.get("failed"), result
+    v = result["values"]
+    assert v["computers"] == ["Source на связи", "Destination на связи"] and v["fits"] is True and v["auto"] is True
+    assert v["rows"][0][:3] == [str(former), "former", True] and v["rows"][1][:3] == [str(copy), "former", False]
+    assert v["rows"][0][3].startswith("Destination · ") and v["rows"][1][3].startswith("Source · ")
+    assert state.DB.execute("SELECT count(*) FROM mirror_copies WHERE id IN (?, ?)", (former, copy)).fetchone()[0] == 0
+
+
 def test_mirror_dialog_rejoins_the_group_of_the_project_under_its_former_name(browser, live, computers, monkeypatch):
     """Проект переименован: его прежняя копия держит группу с папкой на втором компьютере. Поиск показывает папку
     «В группе копий с Source», «Присоединить» после подтверждения заменяет прежнюю копию этим проектом."""

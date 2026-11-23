@@ -17,7 +17,7 @@ function* parents(path) {
 }
 
 /** `компьютер · папка\имя` — разделителем самой папки; адрес неизвестен или нечитаем — только компьютер. */
-function place(item) {
+export function place(item) {
   if (!item.folder || !item.name) return item.computer;
   const separator = item.folder.includes('\\') ? '\\' : '/';
   return `${item.computer} · ${item.folder.replace(/[\\/]+$/, '')}${separator}${item.name}`;
@@ -27,10 +27,12 @@ function progress(job) {
   return job.total ? tr("Передача файлов · {0}%", Math.floor(100 * job.bytes / job.total)) : tr("Подготавливаю синхронизацию…");
 }
 
-/** Пометка копии в списке по её состоянию. */
-function mark(item) {
+/** Пометка копии в списке по её состоянию; ход синхронизации после хода агента (`job.auto`) — своими словами. */
+export function mark(item) {
   if (item.reenter) return tr("настройка недоступна");
   if (item.job?.state === 'running') return progress(item.job);
+  if (item.job?.state === 'differs') return tr("после хода не отправлено: есть различия — откройте сравнение");
+  if (item.job?.auto && item.job.state === 'failed') return tr("после хода не отправлено: {0}", words(item.job.error));
   if (item.unknown) return item.online ? tr("адрес копии уточнится при сравнении")
     : tr("адрес копии уточнится, когда компьютер будет на связи");
   if (!item.online) return tr("не на связи");
@@ -79,6 +81,10 @@ export function projectMirrors(host, trigger, aid, project) {
     const add = button(tr("+ Добавить зеркало"), { id: 'code-mirror-add', 'aria-expanded': 'false',
       'aria-controls': 'code-mirror-add-panel' });
     const groupActions = el('div', { class: 'actions project-mirror-group', hidden: true }, sendAll, add);
+    const auto = el('input', { type: 'checkbox', id: 'code-mirror-auto' });
+    const autoBox = el('div', { class: 'project-mirror-auto', hidden: true },
+      el('label', { class: 'check' }, auto, tr("Отправлять изменения в копии после каждого хода")),
+      el('small', { class: 'muted' }, tr("Только без локальных изменений копии и удалений — иначе пометка у копии и уведомление.")));
     const targets = el('select', { class: 'input', 'aria-label': tr("Компьютер назначения"), required: true });
     const roots = el('select', { class: 'input', 'aria-label': tr("Папка проектов на компьютере"), required: true });
     const name = el('input', { class: 'input', type: 'text', 'aria-label': tr("Имя папки копии"),
@@ -96,7 +102,7 @@ export function projectMirrors(host, trigger, aid, project) {
     const addPanel = el('section', { id: 'code-mirror-add-panel', hidden: true }, found, targetForm);
     const exclusionsBox = el('div', { hidden: true });
     dialog = openDialog(host, { id: 'code-project-mirrors', title: tr("Зеркало · {0}", project.name),
-      body: [copiesBox, groupActions, addPanel, pinSlot, exclusionsBox, status, state], cancelText: tr("Закрыть") });
+      body: [copiesBox, groupActions, autoBox, addPanel, pinSlot, exclusionsBox, status, state], cancelText: tr("Закрыть") });
     let devices = [];
     let listing = { copy: null, items: [], exclude: [] };
     let chosen = null;
@@ -119,7 +125,7 @@ export function projectMirrors(host, trigger, aid, project) {
     }
 
     function interactive() {
-      for (const node of [copies, groupActions, targetForm, pinSlot, state, foundList, exclusionsBox]) node.inert = busy;
+      for (const node of [copies, groupActions, autoBox, targetForm, pinSlot, state, foundList, exclusionsBox]) node.inert = busy;
       save.disabled = !roots.value;
     }
 
@@ -584,6 +590,8 @@ export function projectMirrors(host, trigger, aid, project) {
       const grouped = listing.items.length > 0;
       copiesBox.hidden = !grouped;
       groupActions.hidden = !grouped;
+      autoBox.hidden = !grouped || listing.copy === null;
+      auto.checked = !!listing.auto;
       paintCopies();
       paintExclusions();
       selectField(targets, tr("Выберите компьютер"), devices.map((agent) =>
@@ -595,6 +603,17 @@ export function projectMirrors(host, trigger, aid, project) {
     }
 
     sendAll.addEventListener('click', () => work(sendToAll));
+    auto.addEventListener('change', () => work(async () => {
+      const wanted = auto.checked;
+      try {
+        await request('PUT', `/api/code/mirrors/${listing.copy}/auto`, { auto: wanted });
+        listing.auto = wanted;
+        tell(wanted ? tr("Изменения будут уходить в копии после каждого хода.") : tr("Отправка после хода выключена."));
+      } catch (err) {
+        auto.checked = !wanted;
+        throw err;
+      }
+    }));
     add.addEventListener('click', () => setAdd(addPanel.hidden));
     targets.addEventListener('change', () => work(async () => {
       selectField(roots, tr("Выберите папку проектов"), []);

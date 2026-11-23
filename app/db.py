@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 76
+VERSION = 77
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1072,6 +1072,11 @@ PROJECT_ROLES_76 = """ALTER TABLE project_members ADD COLUMN role TEXT NOT NULL 
 ALTER TABLE project_members ADD COLUMN expires REAL;
 """
 SCHEMA += PROJECT_ROLES_76
+#: «Синхронизировать после хода» копии зеркала (project_mirrors.after_turn): после успешного хода в проекте этой
+#: копии сервер сам сравнивает её с остальными копиями группы и отправляет изменения без конфликтов и удалений.
+#: Прежний код столбец не читает: после ходов не синхронизирует, флажок сохраняется до возврата вперёд
+MIRROR_AUTO_77 = "ALTER TABLE mirror_copies ADD COLUMN auto INTEGER NOT NULL DEFAULT 0;\n"
+SCHEMA += MIRROR_AUTO_77
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1225,6 +1230,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     75: NOTIFY_PREFS_75,
     # роль «Наблюдатель» и срок выдачи доступа к проекту
     76: PROJECT_ROLES_76,
+    # «синхронизировать после хода» у копии зеркала
+    77: MIRROR_AUTO_77,
 }
 
 

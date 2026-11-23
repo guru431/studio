@@ -2,7 +2,7 @@
 
 Группа — копии одного проекта у одного пользователя и их общие постоянные исключения (шифром). Копия — папка
 компьютера: `project` — id проекта на нём, `root` + `name_key` + `location` (шифром `{name, folder}`) — адрес для
-записи; неизвестное — NULL, дописывается `place`; `held` (шифром `{путь: [запись, …]}`) — накопленные записи копии на
+записи; неизвестное — NULL, дописывается `place`; `auto` — «синхронизировать после хода» (`project_mirrors.after_turn`); `held` (шифром `{путь: [запись, …]}`) — накопленные записи копии на
 её синхронизациях, последние `HELD_MAX` на путь: правило 3 «уже держал» не теряет их, когда передача переписывает
 состояние копии в паре. Пара — состояния двух копий на их последнюю синхронизацию
 (шифром) и её время; стороны хранятся по возрастанию id (`a < b`), наружу — с точки зрения запрошенной копии.
@@ -53,7 +53,7 @@ def name_key(name: str) -> str:
     return security.digest(name.casefold())
 
 
-COPY_COLUMNS = "c.id, c.grp, c.agent, c.project, c.root, c.name_key, c.location"
+COPY_COLUMNS = "c.id, c.grp, c.agent, c.project, c.root, c.name_key, c.location, c.auto"
 
 
 def find(aid: int, pid: str) -> sqlite3.Row | None:
@@ -342,6 +342,8 @@ def _merge_copies(keep, drop):
     if keep["root"] is None and drop["root"] is not None:
         state.DB.execute("UPDATE mirror_copies SET root=?, name_key=?, location=? WHERE id=?",
                          (drop["root"], drop["name_key"], drop["location"], k))
+    if drop["auto"]:
+        state.DB.execute("UPDATE mirror_copies SET auto=1 WHERE id=?", (k,))
 
 
 def place(cid: int, *, project: str | None = None, root: str | None = None, name: str | None = None,
