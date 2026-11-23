@@ -295,6 +295,9 @@ def test_closed_shared_model_in_existing_chat(studio):
     opened = studio.c.get(f"/api/chats/{chat_id}")
     assert opened.status_code == 200 and opened.json()["chat"]["connection_id"] is None
     assert opened.json()["chat"]["model"] == MODEL
+    # ревью R1-7: «перевести остальные» — диалоги этого подключения (`closed_connection_id`, как в списке), не удалённых
+    assert opened.json()["chat"]["closed_connection_id"] == cid
+    assert [c["connection_id"] for c in studio.c.get("/api/chats").json()["items"]] == [cid]
     for patch in ({"web": False}, {"mcp_ids": []}):
         changed = studio.c.patch(f"/api/chats/{chat_id}", json=patch)
         assert changed.status_code == 200, (patch, changed.text)
@@ -308,6 +311,7 @@ def test_closed_shared_model_in_existing_chat(studio):
     assert state.DB.execute("SELECT connection_id FROM chats WHERE id = ?", (chat_id,)).fetchone()[0] == cid
     access.set_rule("connection", cid, None)                          # доступ вернули — диалог снова на общей модели
     assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["connection_id"] == cid
+    assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["closed_connection_id"] is None
     assert studio.c.get("/api/me").json()["default_connection_id"] == cid
 
 

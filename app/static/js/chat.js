@@ -1535,8 +1535,11 @@ function build(view, ctx) {
     } catch (err) {
       notice.textContent = words(err);
     }
-    // подключение было удалено или убрано из списка администратора — те же диалоги списка можно перевести разом
-    if (chat.chat !== was && ((was.connection_id === null && was.model) || was.dropped)) offerMove(was.connection_id, connId, model);
+    // подключение было удалено, закрыто группами доступа (`closed_connection_id`) или убрано из списка
+    // администратора — те же диалоги списка можно перевести разом
+    if (chat.chat !== was && ((was.connection_id === null && was.model) || was.dropped)) {
+      offerMove(was.connection_id ?? was.closed_connection_id ?? null, connId, model);
+    }
     paintChip();
   }
 
