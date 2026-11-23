@@ -1162,7 +1162,7 @@ def test_code_chat_tabs_files_and_git_show_their_content(iphone, tmp_path):
     fits(page)
     page.screenshot(path=str(tmp_path / 'file-tree.png'))
     table.evaluate('el => el.scrollLeft=0')
-    page.locator("#code-files li[data-name='README.md'] button").tap()
+    page.locator("#code-files li[data-name='README.md'] button.code-file-item").tap()
     pw.expect(page.locator("#code-editor")).to_have_value("# Hello\n\nPreview text")
     pw.expect(page.locator("#code-editor")).to_be_hidden()
     pw.expect(page.locator("#code-md-view button")).to_have_text(["Разметка", "Исходный"])

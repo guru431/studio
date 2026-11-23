@@ -10414,6 +10414,8 @@ def test_code_account_defaults_apply_only_to_new_chats(browser, live):
             *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
             ("eval", "again", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
             *code_send("снова"),
+            # в проекте ещё идёт ход «нового» чата — предупреждение о втором ходе, «Отправить здесь»
+            ("wait", "!document.querySelector('#code-busy-notice').hidden"), ("click", "#code-busy-send"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
             ("eval", "stored2", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults.claude)()"),
             # новый выбор устройства — уже начатому «новому» чату он не подставляется
