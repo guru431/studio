@@ -287,7 +287,12 @@ def test_role_changes_without_recreating_the_grant_and_is_journaled(studio):
     signin(studio, "friend")
     assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 403
     assert studio.c.patch(base + f"/{member}", json={"role": "editor"}).status_code == 404   # не владелец
-    signin(studio, "owner")
+    signin(studio, "owner")                     # новая сессия: компьютер с PIN для неё закрыт
+    response = studio.c.patch(base + f"/{member}", json={"role": "editor"})
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "closed"   # повышение — как выдача
+    assert studio.c.patch(base + f"/{member}", json={"role": "viewer"}).status_code == 200  # понижение — без PIN
+    assert state.DB.execute("SELECT role FROM project_members WHERE user_id = ?", (member,)).fetchone()[0] == "viewer"
+    assert studio.c.post(url(aid, "open"), json={"pin": "2468"}).status_code == 204
     assert studio.c.patch(base + f"/{member}", json={"role": "editor"}).status_code == 200
     signin(studio, "friend")
     assert studio.c.post(url(aid, "projects", ALPHA, "chats")).status_code == 201

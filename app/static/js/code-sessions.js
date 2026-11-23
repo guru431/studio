@@ -124,9 +124,11 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
   }
 
   const tidyEmpty = button('', { class: 'btn btn-sm', id: 'code-close-empty', hidden: true },
-    () => closeMany(tidyEmpty.rows, tr("Закрыть все без сообщений?")));
+    () => closeMany(tidyEmpty.rows, tr("Закрыть все без сообщений?"),
+      tr("Пустые чаты исчезнут из списка: на компьютере их сессий нет.")));
   const tidyOld = button('', { class: 'btn btn-sm', id: 'code-close-old', hidden: true },
-    () => closeMany(tidyOld.rows, tr("Закрыть сессии старше месяца?")));
+    () => closeMany(tidyOld.rows, tr("Закрыть сессии старше месяца?"),
+      tr("Сессии останутся на компьютере, их можно открыть снова из списка.")));
   const tidy = el('div', { id: 'code-chats-tidy', class: 'code-chats-tidy', hidden: true }, tidyEmpty, tidyOld);
 
   function paintTidy() {
@@ -141,12 +143,13 @@ export function sessionList(host, { aid, pid, items, refresh = null, reload = nu
     tidy.hidden = tidyEmpty.hidden && tidyOld.hidden;
   }
 
-  /** Закрыть — не удалить: отметка уходит в «закрытые», сессия на компьютере остаётся. */
-  function closeMany(rows, question) {
+  /** Закрыть — не удалить: отметка уходит в «закрытые», сессия на компьютере остаётся. Пустой «Новый чат» сессии
+   * на компьютере не имеет — закрытым список его не показывает, поэтому `note` у пачек разный. */
+  function closeMany(rows, question, note) {
     if (!rows?.length) return;
     const yes = button(tr("Закрыть: {0}", rows.length), { class: 'btn btn-accent', id: 'code-close-many-confirm' });
     const dialog = openDialog(host, { id: 'code-close-many-dialog', title: question,
-      body: [el('p', {}, tr("Сессии останутся на компьютере, их можно открыть снова из списка."))], actions: [yes] });
+      body: [el('p', {}, note)], actions: [yes] });
     yes.addEventListener('click', async () => {
       yes.disabled = true;
       try {
