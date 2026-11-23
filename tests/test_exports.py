@@ -135,6 +135,20 @@ def test_md_plain_keeps_merged_cells_in_place_and_reads_pipe_tables():
     assert rows.split("\n")[3] == "x" + "\t" * exports.SPAN_MAX + "y"
 
 
+def test_loose_table_tags_are_linear_on_long_whitespace():
+    """Дрейф D5: `\\s*</t[dh]…` и `\\t*</tr…` перебирали пробельный ряд с каждой позиции — 20 000 пробелов давали
+    полсекунды, 400 000 — минуты (тест упёрся бы в срок `timeout`); теперь ряд проходится один раз. Обрывки
+    таблицы читаются по-прежнему."""
+    big = 400_000
+    for text in (" " * big + "x", "\t" * big + "x", "\n" * big + "x", "</td" + " " * big):
+        assert exports._loose(text) == text
+        assert len(exports.md_plain("a" + text)) <= len(text) + 1
+    assert exports._loose("a" + " \t" * big + "</td>b") == "a\tb"
+    assert exports._loose("<tr><td> a </td>\n<td>b \t</td>\t\t</tr>  \n<TD class=x>c</Td >\n</TR>tail") == \
+        "a\tb\nc\ntail"
+    assert exports._loose("a  </td>b") == "a\tb"
+
+
 PAGES = [{"n": 1, "state": "done", "text": "# Заголовок\n\nТекст", "detail": None},
          {"n": 2, "state": "layer", "text": "Слой", "detail": None},
          {"n": 3, "state": "failed", "text": None, "detail": "на странице не найден текст"},

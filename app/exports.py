@@ -361,11 +361,19 @@ def _pipes(text: str) -> str:
     return "\n".join(out)
 
 
+_CELL_END = re.compile(r"</t[dh]\s*>\s*", re.I)
+_ROW_END = re.compile(r"</tr\s*>\s*", re.I)
+
+
 def _loose(text: str) -> str:
-    """Теги таблицы вне целой `<table>` (обрывок куска перевода): ячейки — табуляцией, строки — переносом."""
+    """Теги таблицы вне целой `<table>` (обрывок куска перевода): ячейки — табуляцией, строки — переносом.
+    Пробелы перед закрывающим тегом снимает `rstrip`, а не `\\s*` в начале выражения: оно перебирало бы длинный
+    пробельный ряд с каждой его позиции — квадратично (20 000 пробелов — полсекунды)."""
     text = re.sub(r"<(?:table|thead|tbody|tfoot|tr|t[dh])\b[^>]*>\s*", "", text, flags=re.I)
-    text = re.sub(r"\s*</t[dh]\s*>\s*", "\t", text, flags=re.I)
-    return re.sub(r"\t*</tr\s*>\s*", "\n", text, flags=re.I)
+    parts = _CELL_END.split(text)
+    text = "\t".join([part.rstrip() for part in parts[:-1]] + parts[-1:])
+    parts = _ROW_END.split(text)
+    return "\n".join([part.rstrip("\t") for part in parts[:-1]] + parts[-1:])
 
 
 def md_plain(md: str) -> str:
