@@ -370,6 +370,7 @@ def clear_bridge() -> None:
     bridge.LINKS.clear()
     bridge.WATCHERS.clear()
     bridge.INITIATORS.clear()
+    bridge.CARDS.clear()
 
 
 def clear_push() -> None:

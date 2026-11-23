@@ -386,7 +386,7 @@ ROUTES = {
         ("DELETE", "/api/me/ntfy"),
         ("PUT", "/api/me/ntfy"), ("POST", "/api/me/ntfy/test"), ("POST", "/api/me/password"),
         ("DELETE", "/api/me/pin"), ("PUT", "/api/me/pin"), ("DELETE", "/api/me/push"), ("POST", "/api/me/push"),
-        ("POST", "/api/me/screen-lock"), ("GET", "/api/me/sessions"), ("DELETE", "/api/me/sessions/{sid}"),
+        ("PUT", "/api/me/notify"), ("POST", "/api/me/screen-lock"), ("GET", "/api/me/sessions"), ("DELETE", "/api/me/sessions/{sid}"),
         ("DELETE", "/api/me/sessions"), ("DELETE", "/api/me/account"),
         ("PATCH", "/api/me/sessions/{sid}"),
         ("POST", "/api/me/emergency"), ("GET", "/api/me/security-events"), ("DELETE", "/api/me/password-reset"),
@@ -423,7 +423,8 @@ ROUTES = {
         ("GET", "/api/connections"), ("GET", "/api/connections/{conn_id}/models"),
         ("GET", "/api/connections/{conn_id}/profile"),
         ("POST", "/api/dictation"), ("GET", "/api/jobs"),
-        ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/storage"),
+        ("GET", "/api/me"), ("GET", "/api/me/ntfy"), ("GET", "/api/me/push"), ("GET", "/api/me/notify"),
+        ("GET", "/api/me/storage"),
         ("POST", "/api/search"), ("GET", "/api/search/models"), ("GET", "/api/sections"), ("GET", "/api/trash"),
         ("GET", "/api/help"), ("GET", "/api/help/studio"), ("POST", "/api/help/server")]},
     **{(m, p): "lock" for m, p in [

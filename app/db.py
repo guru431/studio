@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 72
+VERSION = 73
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1037,6 +1037,20 @@ SCHEMA += VARIANTS_71
 SCAN_EDITS_72 = "ALTER TABLE scan_pages ADD COLUMN recognized TEXT;\n"
 SCHEMA += SCAN_EDITS_72
 
+#: о чём уведомлять устройство (push.muted, push.reminders): у сессии — снятые виды (`off`, JSON-список из
+#: `push.KINDS`), тихие часы (минуты от полуночи по поясу учётки, оба NULL — без них) и интервал напоминания о ждущей
+#: карточке «Агентов», мин (0 — не напоминать). Одна строка на оба канала (push и ntfy) этой сессии; прежний код
+#: таблицу не читает — шлёт все виды и в любое время, строки уходят каскадом с сессией
+NOTIFY_PREFS_73 = """CREATE TABLE notify_prefs(
+       digest TEXT PRIMARY KEY REFERENCES sessions ON DELETE CASCADE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       off TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(off)),
+       quiet_from INTEGER CHECK (quiet_from BETWEEN 0 AND 1439), quiet_to INTEGER CHECK (quiet_to BETWEEN 0 AND 1439),
+       remind INTEGER NOT NULL DEFAULT 30);
+CREATE INDEX notify_prefs_user ON notify_prefs(user_id);
+"""
+SCHEMA += NOTIFY_PREFS_73
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1181,6 +1195,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     71: VARIANTS_71,
     # правленый текст страницы скана и распознанный рядом
     72: SCAN_EDITS_72,
+    # о чём уведомлять устройство: виды, тихие часы, напоминание о ждущей карточке
+    73: NOTIFY_PREFS_73,
 }
 
 

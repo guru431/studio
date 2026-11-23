@@ -31,7 +31,7 @@ import transcripts
 import translate
 import videos
 from conftest import T0, make_user, signin
-from fake_bridge import FakeMachine, connect, emit, enroll, pid
+from fake_bridge import FakeMachine, connect, drop, emit, enroll, pid
 from test_chat import events_of
 
 A = "0f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f70"
@@ -604,3 +604,150 @@ def test_notifications_follow_the_interface_language_of_each_subscription(studio
     studio.c.portal.call(push.notify, uid, {"ru": "русский", "en": "english"}, "code", "t")
     assert [renewed.decrypt(r.content)["body"] for r in studio.gw.push_requests[-2:]
             if str(r.url) == renewed.endpoint] == ["русский"]
+
+
+def got(studio, devices: dict, start: int = 0) -> list[tuple[str, str]]:
+    """(устройство, метка) push-запросов начиная со `start`: адрес — какое устройство, расшифровка — его ключом."""
+    by = {d.endpoint: (name, d) for name, d in devices.items()}
+    return sorted((by[str(r.url)][0], by[str(r.url)][1].decrypt(r.content)["tag"])
+                  for r in studio.gw.push_requests[start:])
+
+
+def test_device_choice_mutes_kinds_and_quiet_hours_per_session(studio):
+    """IDEAS 06:I6: «О чём уведомлять» — у сессии (телефон и компьютер отдельно): снятый вид и тихие часы по поясу
+    учётки (и через полночь) глушат push этого устройства, другому — как прежде."""
+    from test_jobs import image
+
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    assert studio.c.get("/api/me/notify").json() == {"off": [], "quiet_from": None, "quiet_to": None,
+                                                     "remind": 30, "timezone": "Europe/Moscow"}
+    for bad in ({"off": ["chat"], "remind": 30}, {"off": [], "remind": 15}, {"off": [], "quiet_from": "22:00", "remind": 30},
+                {"off": [], "quiet_from": "22:00", "quiet_to": "22:00", "remind": 30},
+                {"off": [], "quiet_from": "24:00", "quiet_to": "08:00", "remind": 30}):
+        assert studio.c.put("/api/me/notify", json=bad).status_code == 422, bad
+    phone, laptop = Device(), Device("https://web.push.apple.com/laptop")
+    devices = {"phone": phone, "laptop": laptop}
+    assert studio.c.post("/api/me/push", json=phone.body()).status_code == 204
+    r = studio.c.put("/api/me/notify", json={"off": ["jobs", "jobs"], "quiet_from": None, "quiet_to": None, "remind": 10})
+    assert r.json() == {"off": ["jobs"], "quiet_from": None, "quiet_to": None, "remind": 10, "timezone": "Europe/Moscow"}
+    studio.c.cookies.clear()
+    signin(studio, "owner")
+    assert studio.c.post("/api/me/push", json=laptop.body()).status_code == 204
+    assert studio.c.get("/api/me/notify").json()["off"] == []                  # своя настройка у каждой сессии
+    image(uid, "img", state_="done", finished=T0)
+    studio.c.portal.call(push.job_finished, "images", "img")
+    studio.c.portal.call(lambda: push.notify_later(uid, "вопрос", "code", "q1", kind="ask"))
+    settle(studio)
+    assert got(studio, devices) == [("laptop", "img"), ("laptop", "q1"), ("phone", "q1")]
+    # T0 — 11:00 по Москве: тихие часы ноутбука 10:00–12:00
+    assert studio.c.put("/api/me/notify", json={"off": [], "quiet_from": "10:00", "quiet_to": "12:00",
+                                                "remind": 30}).json()["quiet_to"] == "12:00"
+    sent = len(studio.gw.push_requests)
+    studio.c.portal.call(lambda: push.notify_later(uid, "вопрос", "code", "q2", kind="ask"))
+    settle(studio)
+    assert got(studio, devices, sent) == [("phone", "q2")]
+    state.DB.execute("UPDATE users SET timezone = 'UTC' WHERE id = ?", (uid,))   # 08:00 — вне 10:00–12:00
+    studio.c.portal.call(lambda: push.notify_later(uid, "вопрос", "code", "q3", kind="ask"))
+    settle(studio)
+    assert got(studio, devices, sent) == [("laptop", "q3"), ("phone", "q2"), ("phone", "q3")]
+    studio.c.put("/api/me/notify", json={"off": [], "quiet_from": "22:00", "quiet_to": "09:00", "remind": 30})
+    sent = len(studio.gw.push_requests)
+    studio.c.portal.call(lambda: push.notify_later(uid, "служебное", "admin", "s1"))   # вид по умолчанию — service
+    settle(studio)
+    assert got(studio, devices, sent) == [("phone", "s1")]                     # 08:00 — внутри 22:00–09:00
+
+
+def test_waiting_card_is_reminded_per_device_until_closed(studio):
+    """IDEAS 07:I5: карточка не закрыта и чат не смотрят — повтор push с той же меткой каждому устройству через его
+    интервал, не больше `bridge.REMIND_TIMES`; взгляд на чат отсчитывает интервал заново; `asked` карточки закрывает."""
+    uid = make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    signin(studio, "owner")
+    phone, laptop = Device(), Device("https://web.push.apple.com/laptop")
+    devices = {"phone": phone, "laptop": laptop}
+    assert studio.c.post("/api/me/push", json=phone.body()).status_code == 204
+    studio.c.put("/api/me/notify", json={"off": [], "quiet_from": None, "quiet_to": None, "remind": 10})
+    studio.c.cookies.clear()
+    signin(studio, "owner")
+    assert studio.c.post("/api/me/push", json=laptop.body()).status_code == 204      # интервал по умолчанию — 30
+    link = connect(studio, aid, FakeMachine({"alpha": {}}))
+    emit(studio, link, ALPHA, A, {"k": "ask", "request_id": "r1", "kind": "permission", "tool": "Bash",
+                                  "input": {}, "always": False})
+    settle(studio)
+    tag = f"code-{A}"
+    assert got(studio, devices) == [("laptop", tag), ("phone", tag)]
+    start = len(studio.gw.push_requests)
+
+    def tick(minutes):
+        studio.clock[0] += minutes * 60
+        studio.c.portal.call(bridge.remind)
+        settle(studio)
+        return [name for name, _ in got(studio, devices, start)]
+
+    assert tick(9) == []
+    assert tick(1) == ["phone"]
+    assert tick(10) == ["phone", "phone"]
+    assert tick(10) == ["laptop", "phone", "phone", "phone"]                    # 30 мин: ноутбук — первый повтор
+    assert tick(10) == ["laptop", "phone", "phone", "phone"]                    # телефону — уже три
+    assert tick(20) == ["laptop", "laptop", "phone", "phone", "phone"]          # 60 мин
+    q = studio.c.portal.call(bridge.watch, aid, A, None, uid)
+    assert tick(30) == ["laptop", "laptop", "phone", "phone", "phone"]          # смотрит — без повтора
+    studio.c.portal.call(bridge.unwatch, aid, A, q)
+    assert tick(20) == ["laptop", "laptop", "phone", "phone", "phone"]          # 20 мин после взгляда
+    assert tick(10) == ["laptop", "laptop", "laptop", "phone", "phone", "phone"]
+    assert {phone.decrypt(r.content)["body"] for r in studio.gw.push_requests if str(r.url) == phone.endpoint} == {
+        "Рабочий ПК: ждёт подтверждения"}
+    emit(studio, link, ALPHA, A, {"k": "asked", "request_id": "other"})
+    assert (aid, A) in bridge.CARDS
+    emit(studio, link, ALPHA, A, {"k": "asked", "request_id": "r1"})
+    assert bridge.CARDS == {}
+
+
+def test_reminder_waits_out_quiet_hours_and_follows_the_device_choice(studio):
+    """Напоминание соблюдает «О чём уведомлять»: тихие часы его откладывают (не съедают), снятый вид «вопросы» и
+    «не напоминать» глушат; без связи с компьютером — ждёт. Досланную мостом карточку (без `request_id`) закрывает
+    любой `asked`; карточки закрывают и конец хода, и снимок без открытых карточек."""
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    signin(studio, "owner")
+    d = Device()
+    assert studio.c.post("/api/me/push", json=d.body()).status_code == 204
+
+    def prefs(**kw):
+        body = {"off": [], "quiet_from": "11:00", "quiet_to": "11:45", "remind": 10} | kw   # T0 — 11:00 по Москве
+        assert studio.c.put("/api/me/notify", json=body).status_code == 200
+
+    def tick(minutes):
+        studio.clock[0] += minutes * 60
+        studio.c.portal.call(bridge.remind)
+        settle(studio)
+        return len(studio.gw.push_requests)
+
+    prefs()
+    machine = FakeMachine({"alpha": {}})
+    machine.completions = True
+    link = connect(studio, aid, machine)
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [
+        {"project": ALPHA, "chat": A, "status": "question", "ago": 5}]})
+    settle(studio)
+    assert len(studio.gw.push_requests) == 0                                    # тихие часы
+    assert tick(30) == 0
+    assert tick(15) == 1                                                        # 11:45 — сразу повтор
+    prefs(off=["ask"])
+    assert tick(10) == 1
+    prefs(remind=0)
+    assert tick(10) == 1
+    prefs(remind=10)
+    drop(studio, link)
+    assert tick(10) == 1                                                        # компьютер не на связи
+    link = connect(studio, aid, machine)
+    assert tick(1) == 2
+    emit(studio, link, ALPHA, A, {"k": "asked", "request_id": "any"})
+    assert bridge.CARDS == {}
+    ask = {"k": "ask", "request_id": "r2", "kind": "question", "questions": []}
+    emit(studio, link, ALPHA, A, ask, {"k": "done", "status": "stopped"})
+    emit(studio, link, ALPHA, A, ask)
+    assert (aid, A) in bridge.CARDS
+    emit(studio, link, ALPHA, A, {"k": "snapshot", "text": "", "steps": [], "asks": []})
+    assert bridge.CARDS == {}

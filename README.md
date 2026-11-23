@@ -163,7 +163,8 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 - Full-text search across chat, media prompts, transcripts, scans, translations and speech, with section/model/date filters.
 - Agent chat search runs separately on the selected computer through its bridge.
 - A task panel for background jobs, cancellation, completed work and agent sessions needing attention.
-- Per-device **Web Push** and optional **ntfy** delivery, including Android devices without Google services.
+- Per-device **Web Push** and optional **ntfy** delivery, including Android devices without Google services, with a
+  per-device choice of notification kinds, quiet hours and reminders about waiting agent questions.
 - Installable PWA, touch layouts, keyboard navigation and configurable mobile bottom tabs.
 - Light, dark and system themes; four accent colors, text size, UI scale, compact density and account timezone.
 - Storage usage, a 14-day **trash** for deleted items, history export, password-confirmed history deletion and an administrator backup/restore check.
