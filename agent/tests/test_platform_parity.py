@@ -55,14 +55,33 @@ def test_hello_of_every_platform_matches_the_document_table(home, root, monkeypa
     assert rest[0] == rest[1] == rest[2], "поле `hello`, зависящее от ОС, — в таблицу документа"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="имена, запрещённые Windows, создаются только на POSIX")
+FORBIDDEN_ON_WINDOWS = ["aux.c", "What?.md", "2026-11-20T10:11:12.log", "dot."]
+
+
 def test_posix_mirror_scans_names_only_windows_forbids(tmp_path, monkeypatch):
-    """На Linux и macOS `aux.c`, `What?.md` и время с двоеточиями — обычные файлы зеркала, не «пропущен»."""
-    monkeypatch.setattr(mirror.files, "WINDOWS", False)
+    """На Linux и macOS `aux.c`, `What?.md` и время с двоеточиями — обычные файлы зеркала, не «пропущен». На Windows
+    таких файлов не создать, поэтому без диска: `mirror.scan` пропускает ровно имена, которые отвергает
+    `files._parts`, а тот с `files.WINDOWS = False` их принимает (с `True` — отвергает)."""
+    for windows in (False, True):
+        monkeypatch.setattr(mirror.files, "WINDOWS", windows)
+        for name in FORBIDDEN_ON_WINDOWS:
+            if windows:
+                with pytest.raises(mirror.Refused):
+                    mirror.files._parts(name)
+            else:
+                assert mirror.files._parts(name) == [name]
+    monkeypatch.setattr(mirror.files, "WINDOWS", os.name == "nt")
     project = tmp_path / "project"
     project.mkdir()
-    names = ["aux.c", "What?.md", "2026-11-20T10:11:12.log", "dot."]
-    for name in names:
+    for name in ("plain.txt", "refused.txt"):
         (project / name).write_bytes(b"x")
+    parts = mirror.files._parts
+
+    def this_os(path):  # «эта ОС» не принимает одно из имён — как Windows `aux.c`
+        if path == "refused.txt":
+            raise mirror.Refused("invalid")
+        return parts(path)
+
+    monkeypatch.setattr(mirror.files, "_parts", this_os)
     entries = mirror.scan(project.resolve())["entries"]
-    assert set(entries) == set(names) and all(entries[n] != mirror.SKIPPED and entries[n][0] == "file" for n in names)
+    assert entries["refused.txt"] == mirror.SKIPPED and entries["plain.txt"][0] == "file"

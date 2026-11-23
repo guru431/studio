@@ -78,8 +78,71 @@ def test_foreign_archives_are_refused_without_writing(machines, tmp_path, conten
     assert not (new / "choices.json").exists()
 
 
+def _encrypted(archive):
+    """Пометка «зашифровано» у второй записи центрального каталога (`choices.json`): zipfile сам так не пишет."""
+    data = bytearray(archive.read_bytes())
+    second = data.index(b"PK\x01\x02", data.index(b"PK\x01\x02") + 4)
+    data[second + 8] |= 1
+    archive.write_bytes(bytes(data))
+
+
+MANIFEST = json.dumps({"format": 1, "platform": "win32", "roots": []})
+
+
+@pytest.mark.parametrize("manifest, choices, spoil", [
+    (MANIFEST + " " * transfer.MANIFEST_MAX, "{}", None),             # манифест больше предела — не распаковываем
+    (MANIFEST, "[" * 100_000, None),                                  # RecursionError
+    (MANIFEST, "{}", _encrypted),                                     # RuntimeError: нужен пароль
+], ids=["manifest-size", "nesting", "encrypted"])
+def test_hostile_archives_are_refused_without_a_traceback(machines, tmp_path, manifest, choices, spoil):
+    _, new, _, _ = machines
+    archive = tmp_path / "hostile.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("manifest.json", manifest)
+        z.writestr("choices.json", choices)
+    if spoil:
+        spoil(archive)
+    with pytest.raises(transfer.TransferError):
+        transfer.import_(new, archive)
+    assert not (new / "choices.json").exists()
+
+
+def test_lone_surrogate_paths_survive_export_and_import(machines, tmp_path):
+    old, new, _, _ = machines
+    project = "C:\\Projects\\bad\udc80name"                           # имя Windows, которого нет в UTF-8
+    write(old / "codex-chats.json", {"c1": {"project": project, "thread": "t1"}})
+    archive = tmp_path / "t.zip"
+    assert transfer.export(old, archive) == 1
+    assert transfer.import_(new, archive) == 1
+    assert json.loads((new / "codex-chats.json").read_text("utf-8"))["c1"]["project"] == project
+
+
+class Lock:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_import_refuses_while_the_bridge_runs_and_holds_its_lock_meanwhile(machines, tmp_path, monkeypatch, capsys):
+    old, new, _, _ = machines
+    write(old / "choices.json", {"c1": {"model": "opus"}})
+    archive = tmp_path / "t.zip"
+    transfer.export(old, archive)
+    monkeypatch.setenv("STUDIO_AGENT_HOME", str(new))
+    monkeypatch.setattr(cli.single, "acquire", lambda: None)            # замок у работающего моста
+    assert cli.main(["import-chats", str(archive)]) == 1
+    assert "Мост запущен" in capsys.readouterr().out and not (new / "choices.json").exists()
+    lock = Lock()
+    monkeypatch.setattr(cli.single, "acquire", lambda: lock)
+    assert cli.main(["import-chats", str(archive)]) == 0
+    assert lock.closed and (new / "choices.json").exists()
+
+
 def test_console_commands_export_and_import(machines, tmp_path, monkeypatch, capsys):
     old, new, _, _ = machines
+    monkeypatch.setattr(cli.single, "acquire", Lock)                   # настоящий мьютекс держит мост машины
     write(old / "choices.json", {"c1": {"model": "opus"}})
     archive = tmp_path / "t.zip"
     monkeypatch.setenv("STUDIO_AGENT_HOME", str(old))

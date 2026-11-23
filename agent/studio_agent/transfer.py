@@ -10,6 +10,7 @@ id прежнего через «Заменить компьютер» в Сту
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import zipfile
+import zlib
 
 from . import host, store
 from .atomic import write_atomic
@@ -22,6 +23,7 @@ ALIASES = ("codex-chats.json", "opencode-chats.json", "deepseek-chats.json")
 CHOICES = (store.CHOICES, "opencode/" + store.CHOICES, "deepseek/" + store.CHOICES)
 FILES = ALIASES + CHOICES
 FILE_MAX = 8 * 1024 * 1024
+MANIFEST_MAX = 1024 * 1024  # формат, платформа и корни — заявленный размер больше значит чужой архив (zip-бомба)
 
 
 class TransferError(Exception):
@@ -46,18 +48,30 @@ def export(h: Path, target: Path) -> int:
         archive.writestr(MANIFEST, json.dumps({"format": FORMAT, "platform": host.platform_id(), "roots": roots}))
         for name in FILES:
             data = _read(h / name)
-            if data is not None:
-                archive.writestr(name, json.dumps(data, ensure_ascii=False))
+            if data is not None:  # ASCII, как сам мост: имена Windows бывают с одиночными суррогатами
+                archive.writestr(name, json.dumps(data, ensure_ascii=True))
                 count += 1
     return count
+
+
+def _json(archive: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int):
+    """Запись архива как JSON; больше `limit`, не JSON, слишком глубокая вложенность (`RecursionError`), шифр или
+    неизвестное сжатие (`RuntimeError`, `NotImplementedError`), битый поток — `TransferError`, без трассировки."""
+    if info.file_size > limit:
+        raise TransferError(info.filename)
+    try:
+        return json.loads(archive.read(info))
+    except (ValueError, RuntimeError, zlib.error, EOFError):
+        raise TransferError(info.filename) from None
 
 
 def _load(source: Path) -> tuple[dict, dict[str, dict]]:
     with zipfile.ZipFile(source) as archive:
         try:
-            manifest = json.loads(archive.read(MANIFEST))
-        except (KeyError, ValueError):
+            info = archive.getinfo(MANIFEST)
+        except KeyError:
             raise TransferError(MANIFEST) from None
+        manifest = _json(archive, info, MANIFEST_MAX)
         if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
             raise TransferError(MANIFEST)
         found = {}
@@ -66,12 +80,7 @@ def _load(source: Path) -> tuple[dict, dict[str, dict]]:
                 info = archive.getinfo(name)
             except KeyError:
                 continue
-            if info.file_size > FILE_MAX:
-                raise TransferError(name)
-            try:
-                data = json.loads(archive.read(info))
-            except ValueError:
-                raise TransferError(name) from None
+            data = _json(archive, info, FILE_MAX)
             if not isinstance(data, dict):
                 raise TransferError(name)
             found[name] = data
@@ -118,5 +127,5 @@ def import_(h: Path, source: Path) -> int:
             continue
         added += len(merged) - len(current)
         host.private_dir(path.parent, parents=True, exist_ok=True)
-        write_atomic(path, json.dumps(merged, ensure_ascii=name in ALIASES).encode("utf-8"))
+        write_atomic(path, json.dumps(merged, ensure_ascii=True).encode("utf-8"))  # `\udc80` из архива — не сбой
     return added

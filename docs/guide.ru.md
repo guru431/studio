@@ -1725,7 +1725,7 @@ Control, но через свою студию, а не через claude.ai. Р
   Проекты находятся по именам папок, поэтому кладите их в папку проектов под теми же именами. Соответствия чатов
   Codex, OpenCode и DeepSeek Harness и выбор моделей перенесите командами моста: на старом компьютере
   `python -m studio_agent export-chats перенос.zip`, на новом — `python -m studio_agent import-chats перенос.zip`
-  (Linux — `studio-agent export-chats` / `import-chats`). В архиве нет ключа и PIN; сами чаты хранят помощники
+  (Linux — `studio-agent export-chats` / `import-chats`); на время импорта мост закройте. В архиве нет ключа и PIN; сами чаты хранят помощники
   (`~/.claude`, `~/.codex` и т. д.) — их переносят отдельно.
 - **Одно окно на все проекты** (спека [2026-10-29-studio-code-workspace-design.md](../docs/superpowers/specs/2026-10-29-studio-code-workspace-design.md)):
   слева панель — компьютеры строками, под ними проекты выбранного компьютера (прокручиваются только проекты, имена

@@ -151,15 +151,21 @@ def disk(h: Path) -> dict:
             "free": free}
 
 
-async def run(agent, h: Path, link_state: str, *, wall=time.time) -> dict:
-    """Все проверки параллельно; не уложилась в предел — `timeout`, исключение — `error` (в журнал — имя типа)."""
+async def _limited(check, limit: float):
+    """Проверка в потоке с пределом по часам цикла; поток зависшей проверки остаётся, ответ — без неё."""
+    return await asyncio.wait_for(asyncio.to_thread(check), limit)
+
+
+async def run(agent, h: Path, link_state: str, *, wall=time.time, limited=_limited) -> dict:
+    """Все проверки параллельно, у каждой свой предел `limits.SELF_CHECK_SEC` (`limited` — подмена в тестах вместо
+    настоящих часов); не уложилась — `timeout`, исключение — `error` (в журнал — имя типа)."""
     checks = [("git", git), *((engine, partial(helper, engine, agent)) for engine in ENGINES),
               ("projects", partial(projects, list(agent.cfg.projects_roots))), ("home", partial(home, h)),
               ("link", partial(link, link_state)), ("desktop", partial(desktop, agent.desktop)), ("disk", partial(disk, h))]
 
     async def one(name, check):
         try:
-            result = await asyncio.wait_for(asyncio.to_thread(check), limits.SELF_CHECK_SEC)
+            result = await limited(check, limits.SELF_CHECK_SEC)
         except TimeoutError:
             result = {"state": "fail", "code": "timeout"}
         except Exception as e:

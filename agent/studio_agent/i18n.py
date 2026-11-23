@@ -274,6 +274,7 @@ EN = {
     "Сохранено файлов: {0}. Ключа и PIN в архиве нет. На новом компьютере: import-chats.":
         "Files saved: {0}. The archive has no key or PIN. On the new computer: import-chats.",
     "Это не архив переноса моста или он не читается.": "This is not a bridge transfer archive, or it cannot be read.",
+    "Мост запущен — выйдите из него и повторите импорт.": "The bridge is running. Quit it and run the import again.",
     "Добавлено записей: {0}. Затем в Студии у прежнего компьютера — «Заменить».":
         "Entries added: {0}. Then choose “Replace” on the old computer in Studio.",
     # linux_menu: меню и консоль Linux

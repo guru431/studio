@@ -893,6 +893,7 @@ def main(argv: list[str]) -> int:
     threading.excepthook = lambda a: log.error("поток: %s", a.exc_type.__name__)
     # Windows: автозапуск и ярлык этой копии — на прошедший пробу «Studio Agent.exe» или обратно на pythonw.
     threading.Thread(target=autostart.watch, name="autostart", daemon=True).start()
+    launcher_pid = os.environ.pop(autostart.LAUNCHER_ENV, '')  # потомки моста (хелпер обновления, CLI) — без него
     prepare_env()
     ctrl = Controller(h)
     commands: queue.Queue = queue.Queue()
@@ -909,6 +910,9 @@ def main(argv: list[str]) -> int:
     ctrl.on_update_quit = lambda: commands.put("quit")
     ctrl.on_idle_quit = lambda: commands.put("quit")
     ctrl.on_waiting = lambda: commands.put("waiting")
+    if launcher_pid:  # «Studio Agent.exe» закрыли — выход; антивирус убрал его — работа дальше, автозапуск на pythonw
+        threading.Thread(target=autostart.follow_launcher, args=(launcher_pid, lambda: commands.put("quit")),
+                         name="launcher", daemon=True).start()
     ready_file = os.environ.pop('STUDIO_AGENT_UPDATE_READY', '')
 
     def poll() -> None:

@@ -1,7 +1,6 @@
 """Самопроверка моста, хвост журнала для Студии и уведомление о задании, ждущем ответа (мост 0.47.0)."""
 
 import json
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -37,13 +36,26 @@ async def test_self_check_needs_pin_and_answers_codes_without_paths(home, root, 
     assert home.name not in text and "private" not in text
 
 
-async def test_each_check_has_its_own_time_limit(opened, monkeypatch):
-    monkeypatch.setattr(limits, "SELF_CHECK_SEC", 0.05)
-    monkeypatch.setattr(selfcheck, "git", lambda: time.sleep(0.3))
+async def test_each_check_has_its_own_time_limit(opened, home, monkeypatch):
+    """Предел — подменой `limited` (без настоящих часов): истёк у одной проверки — `timeout` только у неё."""
+    def hung():
+        raise AssertionError("зависшая проверка не исполняется")
+
+    async def limited(check, limit):
+        limits_seen.append(limit)
+        if check is hung:
+            raise TimeoutError
+        return check()
+
+    limits_seen = []
+    monkeypatch.setattr(selfcheck, "git", hung)
     monkeypatch.setattr(selfcheck, "disk", lambda h: 1 / 0)
-    items = {item["id"]: item for item in (await opened.handle(req("self_check")))[0]["data"]["items"]}
+    data = await selfcheck.run(opened, home, "online", limited=limited)
+    items = {item["id"]: item for item in data["items"]}
     assert items["git"] == {"id": "git", "state": "fail", "code": "timeout"}
     assert items["disk"] == {"id": "disk", "state": "fail", "code": "error"}
+    assert items["home"]["state"] == "ok"
+    assert limits_seen == [limits.SELF_CHECK_SEC] * len(items)
 
 
 def test_helper_reports_node_and_version_of_the_catalog(monkeypatch):
