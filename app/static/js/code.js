@@ -86,6 +86,7 @@ let pollTimer = null;   // следующий опрос меток
 let wantFile = null;    // путь файла из шага чата до перехода на «Файлы» — только в памяти
 let returnTo = null;    // { aid, hash, file } — где компьютер оказался закрыт: после PIN — туда (file — к файлу)
 let freshChat = null;   // чат, заведённый «Новым чатом» в этом окне, до первого показа: ему — выбор устройства
+let copyStart = null;   // { aid, pid, chat, text } — задание для чата отдельной копии (separateCopy) до его показа
 let shownHash = null;   // адрес отрисованной правой части: сюда возвращает несохранённая правка
 let shownEntry = null;  // метка записи отрисованного адреса ({ entry: n } в history.state — ставит роутер app.js)
 /** Проекты компьютеров (GET …/projects): aid → обещание списка, пока показан раздел; отказ не запоминается. */
@@ -683,9 +684,24 @@ function sessions(mine, p, status) {
   wantSearch = false;
 }
 
+/** «Запустить в отдельной копии»: git worktree из HEAD (`worktree_create`), в нём новый чат того же помощника, туда —
+ * текст задания (`copyStart`, только память страницы). Имя копии — `task-` и время в base36 (шаблон имени моста). */
+async function separateCopy(p, engine, text) {
+  const copy = await api('POST', `${base(p.aid, p.pid)}/worktrees`, { name: `task-${Date.now().toString(36)}` });
+  if (!/^[0-9a-f]{16}$/.test(copy?.pid || '')) throw new Error(tr("Рабочая копия не открылась"));
+  const { chat } = await api('POST', `${base(p.aid, copy.pid)}/chats${engine === 'claude' ? '' : `?engine=${engine}`}`);
+  lists.delete(String(p.aid));
+  await panel?.select(p.aid);
+  copyStart = { aid: p.aid, pid: copy.pid, chat, text };
+  freshChat = chat;
+  location.replace(`#/code/${p.aid}/${copy.pid}/${chat}`);
+}
+
 async function chat(mine, p, id, agent, section, status) {
   const gitAction = p.gitAction?.chat === id ? p.gitAction.prompt : null;
   p.gitAction = null;
+  const startText = copyStart?.pid === p.pid && copyStart.chat === id ? copyStart.text : null;
+  if (startText !== null) copyStart = null;
   let name;
   let row;
   let chatView;
@@ -712,7 +728,8 @@ async function chat(mine, p, id, agent, section, status) {
   view = chatView(section, { aid: p.aid, pid: p.pid, chat: id, agent,
     project: name ? { pid: p.pid, name, ...(p.dir ? { dir: p.dir } : {}) } : null,
     origin: row ? row.origin : 'studio', fresh, engine: row?.engine || 'claude', title: row?.title, readonly: !!p.readonly,
-    git: p.repo, gitAction,
+    git: p.repo, gitAction, startText,
+    separateCopy: p.worktrees && !p.readonly ? (text) => separateCopy(p, row?.engine || 'claude', text) : null,
     onReady: () => { if (mine === gen && proj === p) p.bar?.restoreFocus(id); },
     verify: cached ? listing.then(() => {
       const current = p.info.get(id);
