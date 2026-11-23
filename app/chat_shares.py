@@ -11,6 +11,10 @@ PIN check grants a separate, expiring read token, never a Studio account session
 Срок ссылки — `days` при создании (1, 7, 30 дней или бессрочно, по умолчанию `DAYS_DEFAULT`): истёкшая удаляется
 со снимком при первом же обращении к ссылкам или старте. Неверные PIN считаются и без окна (`fails`): `FAILS_MAX`
 отзывает ссылку, владельцу — push/ntfy без содержимого и `share_locked` в журнале безопасности.
+
+Кроме чатов — запись другого раздела (`ITEMS`, шаг 69): расшифровка, перевод, скан, картинка, ролик; снимок —
+`item_snapshot`, маршруты — `…/<id>/share` под префиксом раздела (блокировка раздела — та же). «Обновить снимок»
+(PUT) заменяет содержимое под тем же адресом, сроком и PIN, счётчики остаются.
 """
 import asyncio
 import base64
@@ -28,13 +32,18 @@ import bridge
 import chat
 import claude_code
 import clock
+import images
 import media
 import lock_policy
+import ocr
 import operations
 import push
 import security
 import security_log
 import state
+import transcripts
+import translate
+import videos
 
 log = logging.getLogger("studio")
 router = APIRouter()
@@ -58,6 +67,14 @@ MAX_SNAPSHOT = 16 * 1024 * 1024
 PUBLIC_BODY_MAX = 4096
 PUBLIC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
                   "X-Robots-Tag": "noindex, nofollow, noarchive"}
+#: записи других разделов, которыми делятся ссылкой (шаг 69): таблица (`chat_shares.item_kind`) → раздел (блокировка,
+#: «Доступы и ссылки», журнал) и префикс маршрутов раздела. Окончательное удаление записи уносит ссылку триггером
+#: (db.SHARES_69), запись в корзине — `LIVE`
+ITEMS = {"transcripts": ("transcribe", "/api/transcripts"), "translations": ("translate", "/api/translate"),
+         "scans": ("ocr", "/api/ocr"), "images": ("photo", "/api/images"), "videos": ("video", "/api/videos")}
+#: своя запись не из корзины, иначе 404 (`_row` раздела)
+_ROWS = {"transcripts": transcripts._row, "translations": translate._row, "scans": ocr._row, "images": images._row,
+         "videos": videos._row}
 
 
 async def public_guard(request: Request, call_next):
@@ -73,11 +90,17 @@ async def public_guard(request: Request, call_next):
     return await call_next(request)
 
 
-class ShareIn(BaseModel):
-    pin: str = Field(strict=True, pattern=r"^[0-9]{4}$", min_length=4, max_length=4)
+class RefreshIn(BaseModel):
+    """«Обновить снимок»: то же содержимое, что при создании, — без PIN и срока (они у ссылки остаются)."""
     title: str = Field(default="Чат", max_length=200)
     #: рассуждение модели обычного чата — черновик, который владелец обычно не перечитывал: только по выбору
     reasoning: StrictBool = False
+    #: запись раздела: приложить исходный файл (запись разговора, исходный документ) — только по выбору
+    source: StrictBool = False
+
+
+class ShareIn(RefreshIn):
+    pin: str = Field(strict=True, pattern=r"^[0-9]{4}$", min_length=4, max_length=4)
     days: int | None = Field(default=DAYS_DEFAULT, strict=True)
 
     @field_validator("days")
@@ -103,6 +126,11 @@ class FileIn(ReadIn):
 
 def _refuse(status=404, code="share_gone", message="ссылка недоступна или отключена"):
     return HTTPException(status, {"code": code, "message": message}, headers=PUBLIC_HEADERS)
+
+
+def _gone():
+    """«Обновить снимок» без ссылки: её отключили или она истекла — создать новую."""
+    raise _refuse(404, "share_gone", "ссылка отключена или истекла — создайте новую")
 
 
 def _owner_open(request: Request, section: str) -> None:
@@ -155,12 +183,20 @@ def _own_computer(request: Request, aid: int) -> None:
         raise _refuse(403, "owner_only", "ссылкой на чат проекта делится только владелец компьютера")
 
 
-def _owned(request: Request, *, chat_id=None, agent_id=None, project=None, session_id=None, engine=None):
+def _owned(request: Request, *, chat_id=None, agent_id=None, project=None, session_id=None, engine=None,
+           item_kind=None, item_id=None):
     _expire()
     return state.DB.execute(
         "SELECT * FROM chat_shares WHERE user_id = ? AND chat_id IS ? AND agent_id IS ?"
-        " AND project IS ? AND session_id IS ? AND engine IS ?",
-        (request.state.user.id, chat_id, agent_id, project, session_id, engine)).fetchone()
+        " AND project IS ? AND session_id IS ? AND engine IS ? AND item_kind IS ? AND item_id IS ?",
+        (request.state.user.id, chat_id, agent_id, project, session_id, engine, item_kind, item_id)).fetchone()
+
+
+def _detail(agent_id, item_kind) -> str:
+    """Код подробности журнала: `chat`, `code` или раздел записи (`ITEMS`)."""
+    if agent_id:
+        return "code"
+    return ITEMS[item_kind][0] if item_kind in ITEMS else "chat"
 
 
 def _out(row) -> dict:
@@ -185,44 +221,58 @@ def _encode(snapshot: dict) -> str:
     return raw
 
 
-async def _store(request: Request, body: ShareIn, snapshot: dict, expected, files=(), **source):
+async def _store(request: Request, body: RefreshIn, snapshot: dict, expected, files=(), *, refresh=False, **source):
+    """Создать ссылку (новый адрес, PIN и срок; прежняя отзывается) или, `refresh`, заменить снимок и файлы
+    `expected` под тем же адресом, сроком и PIN — счётчики открытий и неверных PIN остаются."""
     sealed = await asyncio.to_thread(security.encrypt, _encode(snapshot))
-    pin_hash = await asyncio.to_thread(security.hash_password, body.pin)
+    pin_hash = None if refresh else await asyncio.to_thread(security.hash_password, body.pin)
     if source.get("agent_id"):
         await claude_code.ask(request, source["agent_id"], "history", project=source["project"],
                               chat=source["session_id"], before=None, limit=1)
         _own_computer(request, source["agent_id"])
-    _owner_open(request, "code" if source.get("agent_id") else "chat")
+    kind = source.get("item_kind")
+    _owner_open(request, "code" if source.get("agent_id") else ITEMS[kind][0] if kind else "chat")
     if source.get("chat_id"):
         chat.unprotected(chat._chat_row(request.state.user.id, source["chat_id"]))
+    if kind:
+        _ROWS[kind](request.state.user.id, source["item_id"])     # запись не ушла в корзину, пока собирали снимок
     current = _owned(request, **source)
     if (current["id"] if current else None) != (expected["id"] if expected else None):
         raise _refuse(409, "share_changed", "настройки ссылки изменились — откройте окно заново")
+    if refresh and current is None:
+        _gone()
+    label = security.encrypt(snapshot["title"]) if source.get("agent_id") else None
     token, share_id, now = security.new_token(), uuid.uuid4().hex, clock.NOW()
     state.DB.execute("BEGIN")
     try:
-        if current:
-            state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (current["id"],))
-        state.DB.execute(
-            "INSERT INTO chat_shares(id,user_id,chat_id,agent_id,project,session_id,engine,"
-            "token_hash,token_enc,pin_hash,snapshot,sealed,created,expires,label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (share_id, request.state.user.id, source.get("chat_id"), source.get("agent_id"),
-             source.get("project"), source.get("session_id"), source.get("engine"), security.digest(token),
-             security.encrypt(token), pin_hash, PLACEHOLDER_RAW, sealed, now,
-             None if body.days is None else now + body.days * 86400,
-             security.encrypt(snapshot["title"]) if source.get("agent_id") else None))
+        if refresh:
+            share_id = current["id"]
+            state.DB.execute("UPDATE chat_shares SET sealed = ?, snapshot = ?, label = ? WHERE id = ?",
+                             (sealed, PLACEHOLDER_RAW, label, share_id))
+            state.DB.execute("DELETE FROM chat_share_files WHERE share_id = ?", (share_id,))
+        else:
+            if current:
+                state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (current["id"],))
+            state.DB.execute(
+                "INSERT INTO chat_shares(id,user_id,chat_id,agent_id,project,session_id,engine,token_hash,token_enc,"
+                "pin_hash,snapshot,sealed,created,expires,label,item_kind,item_id)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (share_id, request.state.user.id, source.get("chat_id"), source.get("agent_id"),
+                 source.get("project"), source.get("session_id"), source.get("engine"), security.digest(token),
+                 security.encrypt(token), pin_hash, PLACEHOLDER_RAW, sealed, now,
+                 None if body.days is None else now + body.days * 86400, label, kind, source.get("item_id")))
         state.DB.executemany("INSERT INTO chat_share_files(share_id,media_id) VALUES(?,?)",
                              [(share_id, mid) for mid in set(files)])
         state.DB.execute("COMMIT")
     except BaseException:
         state.DB.execute("ROLLBACK")
         raise
-    _journal(request, "share_create", source)
+    _journal(request, "share_refresh" if refresh else "share_create", source)
     return _out(_owned(request, **source))
 
 
 def _journal(request: Request, kind: str, source: dict) -> None:
-    security_log.record(request.state.user.id, kind, detail="code" if source.get("agent_id") else "chat",
+    security_log.record(request.state.user.id, kind, detail=_detail(source.get("agent_id"), source.get("item_kind")),
                         digest=request.state.digest, ip=auth.client_ip(request))
 
 
@@ -263,6 +313,13 @@ async def create_chat_share(chat_id: str, body: ShareIn, request: Request):
     expected = _owned(request, chat_id=chat_id)
     snapshot, files = regular_snapshot(request.state.user.id, chat_id, body.reasoning)
     return await _store(request, body, snapshot, expected, files, chat_id=chat_id)
+
+
+@router.put("/api/chats/{chat_id}/share")
+async def refresh_chat_share(chat_id: str, body: RefreshIn, request: Request):
+    expected = _owned(request, chat_id=chat_id) or _gone()
+    snapshot, files = regular_snapshot(request.state.user.id, chat_id, body.reasoning)
+    return await _store(request, body, snapshot, expected, files, refresh=True, chat_id=chat_id)
 
 
 @router.delete("/api/chats/{chat_id}/share", status_code=204)
@@ -425,6 +482,15 @@ async def create_agent_share(aid: int, pid: str, session_id: str, body: ShareIn,
     return await _store(request, body, snapshot, expected, **source)
 
 
+@router.put("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share")
+async def refresh_agent_share(aid: int, pid: str, session_id: str, body: RefreshIn, request: Request):
+    source = _agent_source(request, aid, pid, session_id)
+    _own_computer(request, aid)
+    expected = _owned(request, **source) or _gone()
+    snapshot = await agent_snapshot(request, aid, pid, session_id, body.title, images=True)
+    return await _store(request, body, snapshot, expected, refresh=True, **source)
+
+
 @router.delete("/api/code/agents/{aid}/projects/{pid}/chats/{session_id}/share", status_code=204)
 async def revoke_agent_share(aid: int, pid: str, session_id: str, request: Request):
     source = _agent_source(request, aid, pid, session_id)
@@ -433,6 +499,100 @@ async def revoke_agent_share(aid: int, pid: str, session_id: str, request: Reque
     if row:
         state.DB.execute("DELETE FROM chat_shares WHERE id = ?", (row["id"],))
         _journal(request, "share_revoke", source)
+
+
+def _media(uid: int, media_id) -> "dict | None":
+    """Файл записи для снимка — `{file, name, mime}` (получатель берёт его `/share/file` по read-токену); нет — None."""
+    row = state.DB.execute("SELECT id, mime, download_name FROM media WHERE id = ? AND user_id = ?",
+                           (media_id, uid)).fetchone() if media_id else None
+    return None if row is None else {"file": row["id"], "name": row["download_name"], "mime": row["mime"]}
+
+
+def _not_ready(message: str) -> HTTPException:
+    return HTTPException(409, {"code": "running", "message": message})
+
+
+async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False) -> tuple[dict, list[str]]:
+    """Снимок записи раздела (`ITEMS`) и id его файлов. Что видит получатель: у расшифровки — реплики с собеседником
+    и временем (с правками владельца), у перевода — исходный текст и перевод, у скана — текст страниц, у картинки и
+    ролика — сам файл, промпт и модель. `source` — ещё исходный файл записи (запись разговора, документ) для
+    скачивания. `messages` — заглушка `PLACEHOLDER`: её покажет прежний код (откат), новый смотрит `item`."""
+    row = _ROWS[kind](uid, item_id)
+    item, title, attach = {"kind": kind}, "", None
+    if kind == "transcripts":
+        row = transcripts._done(uid, item_id)
+        segments = transcripts.view(row, await transcripts.result_of(uid, row))
+        item |= {"duration": row["duration"], "segments": [
+            {key: s[key] for key in ("start", "end", "speaker", "text")} | ({"system": True} if s.get("system") else {})
+            for s in segments]}
+        title, attach = row["name"], row["listen_media_id"] or row["source_media_id"]
+    elif kind == "translations":
+        text = translate.joined(item_id) if row["state"] in translate.TERMINAL else ""
+        if not text:
+            raise _not_ready("перевода ещё нет")
+        original = state.DB.execute("SELECT source FROM translations WHERE id = ?", (item_id,)).fetchone()[0]
+        if original is None:          # снимок: исходник — блоки надписей
+            parts = [x for p in state.DB.execute("SELECT source, sep FROM translation_parts WHERE translation_id = ?"
+                                                 " ORDER BY n", (item_id,)) for x in (p["source"] or "", p["sep"])]
+            original = "".join(parts[:-1])
+        item |= {"source": original, "text": text, "source_lang": row["detected_lang"] or row["source_lang"],
+                 "target_lang": row["result_lang"] or row["target_lang"], "markdown": row["scan_id"] is not None}
+        title, attach = row["name"], row["source_media_id"]
+    elif kind == "scans":
+        row = ocr._readable(uid, item_id)
+        item["pages"] = [{"n": p["n"], "state": p["state"], "text": p["text"]} for p in ocr._page_list(item_id)]
+        title, attach = row["name"], row["source_media_id"]
+    else:
+        if row["state"] != "done" or not row["media_id"]:
+            raise _not_ready("картинка ещё не готова" if kind == "images" else "ролик ещё не готов")
+        shown = _media(uid, row["media_id"])
+        if shown is None:
+            raise HTTPException(404, media.GONE)
+        item |= {"prompt": row["prompt"], "model": row["model"], "file": shown}
+        item |= {"size": row["size"]} if kind == "images" else {"seconds": row["seconds"]}
+    files = [item["file"]["file"]] if "file" in item else []
+    if source and (extra := _media(uid, attach)):
+        item["attachments"] = [extra]
+        files.append(extra["file"])
+    snapshot = {"title": title, "messages": PLACEHOLDER["messages"], "item": item}
+    _encode(snapshot)
+    return snapshot, files
+
+
+def _item_routes(kind: str) -> None:
+    """`GET/POST/PUT/DELETE <префикс раздела>/<id>/share`: под префиксом раздела маршрут закрывает та же блокировка
+    раздела (lock_policy.blocks), что и саму запись."""
+    path = ITEMS[kind][1] + "/{item_id}/share"
+
+    async def get_share(item_id: str, request: Request):
+        _ROWS[kind](request.state.user.id, item_id)
+        return _out(_owned(request, item_kind=kind, item_id=item_id))
+
+    async def create_share(item_id: str, body: ShareIn, request: Request):
+        expected = _owned(request, item_kind=kind, item_id=item_id)
+        snapshot, files = await item_snapshot(request.state.user.id, kind, item_id, body.source)
+        return await _store(request, body, snapshot, expected, files, item_kind=kind, item_id=item_id)
+
+    async def refresh_share(item_id: str, body: RefreshIn, request: Request):
+        _ROWS[kind](request.state.user.id, item_id)
+        expected = _owned(request, item_kind=kind, item_id=item_id) or _gone()
+        snapshot, files = await item_snapshot(request.state.user.id, kind, item_id, body.source)
+        return await _store(request, body, snapshot, expected, files, refresh=True, item_kind=kind, item_id=item_id)
+
+    async def revoke_share(item_id: str, request: Request):
+        _ROWS[kind](request.state.user.id, item_id)
+        if state.DB.execute("DELETE FROM chat_shares WHERE item_kind = ? AND item_id = ? AND user_id = ?",
+                            (kind, item_id, request.state.user.id)).rowcount:
+            _journal(request, "share_revoke", {"item_kind": kind})
+
+    router.add_api_route(path, get_share, methods=["GET"], name=f"{kind}_share")
+    router.add_api_route(path, create_share, methods=["POST"], status_code=201, name=f"create_{kind}_share")
+    router.add_api_route(path, refresh_share, methods=["PUT"], name=f"refresh_{kind}_share")
+    router.add_api_route(path, revoke_share, methods=["DELETE"], status_code=204, name=f"revoke_{kind}_share")
+
+
+for _kind in ITEMS:
+    _item_routes(_kind)
 
 
 @router.api_route("/share", methods=["GET", "HEAD"])
@@ -446,9 +606,12 @@ def _same_origin(request):
 
 
 #: ссылка обычного чата в корзине «недоступна», после «Вернуть» — снова открывается (строка и снимок — на месте);
-#: чата, где сработал защищённый источник (`chats.protected_used`), — «недоступна» с того же мгновения и навсегда
+#: чата, где сработал защищённый источник (`chats.protected_used`), — «недоступна» с того же мгновения и навсегда;
+#: ссылка записи раздела (`ITEMS`) — так же, пока запись в корзине
 LIVE = (" AND (s.chat_id IS NULL OR s.chat_id IN (SELECT id FROM chats WHERE deleted IS NULL"
-        " AND protected_used = 0))")
+        " AND protected_used = 0)) AND (s.item_kind IS NULL OR "
+        + " OR ".join(f"(s.item_kind = '{t}' AND s.item_id IN (SELECT id FROM {t} WHERE deleted IS NULL))"
+                      for t in ITEMS) + ")")
 
 
 def _public_share(token_hash):
@@ -475,8 +638,8 @@ def _open(row, pin: str) -> "dict | None":
 def _wrong_pin(request: Request, row, reserved: int) -> None:
     """Неверный PIN: в журнал владельца (повторы свернёт security_log), общий счёт ссылки; FAILS_MAX — отзыв."""
     uid, ip = row["user_id"], auth.client_ip(request)
-    detail = "code" if row["agent_id"] else "chat"
-    fails = state.DB.execute("UPDATE chat_shares SET fails = fails + 1 WHERE id = ? RETURNING fails",
+    detail = _detail(row["agent_id"], row["item_kind"])
+    fails =state.DB.execute("UPDATE chat_shares SET fails = fails + 1 WHERE id = ? RETURNING fails",
                              (row["id"],)).fetchone()[0]
     security_log.record(uid, "share_pin_fail", detail=detail, ip=ip)
     if fails >= FAILS_MAX:

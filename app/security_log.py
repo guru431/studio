@@ -26,7 +26,8 @@ KINDS = frozenset({
     "screen_lock_on", "screen_lock_off", "screen_lock_change",   # блокировка включена, выключена, область или таймер
     "password",                                       # смена пароля из профиля
     "session_end", "sessions_end", "emergency",      # завершение сессий, аварийный выход (detail — agents)
-    "share_create", "share_revoke",                   # ссылка «Поделиться» (detail — chat | code)
+    "share_create", "share_revoke", "share_refresh",  # ссылка «Поделиться»: создана, отозвана, снимок обновлён
+                                                      # (detail — chat | code | раздел записи, chat_shares.ITEMS)
     "share_pin_fail", "share_locked",                 # неверный PIN ссылки; пауза (pause) или отзыв (revoked) ссылки
     "file_link_create", "file_link_revoke",           # ссылка на файл «Моих файлов» (my_files; отзыв всех — all)
     "pin_set", "pin_delete",                          # PIN приложения задан или сменён, убран

@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 68
+VERSION = 69
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1002,6 +1002,16 @@ OWUI_DRAFTS_68 = """CREATE TABLE owui_file_drafts(
 """
 SCHEMA += OWUI_DRAFTS_68
 
+#: ссылка «Поделиться» на запись другого раздела (chat_shares.ITEMS): таблица и id записи. Окончательное удаление
+#: записи уносит ссылку триггером (и прежним кодом); корзину и защиту учитывает `chat_shares.LIVE`. Снимок такой
+#: ссылки несёт `messages` заглушки `chat_shares.PLACEHOLDER`: прежний код (откат) покажет её вместо записи
+SHARES_69 = "ALTER TABLE chat_shares ADD COLUMN item_kind TEXT;\nALTER TABLE chat_shares ADD COLUMN item_id TEXT;\n" \
+    "CREATE UNIQUE INDEX chat_shares_item ON chat_shares(item_kind, item_id);\n" + "".join(
+        f"CREATE TRIGGER chat_shares_{table}_gone AFTER DELETE ON {table} BEGIN\n"
+        f"  DELETE FROM chat_shares WHERE item_kind = '{table}' AND item_id = old.id; END;\n"
+        for table in ("transcripts", "translations", "scans", "images", "videos"))
+SCHEMA += SHARES_69
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1138,6 +1148,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     66: CLEANER_ROUTE_66,
     67: TRANSLATE_CLEANER_67,
     68: OWUI_DRAFTS_68,
+    # ссылка «Поделиться» на расшифровку, перевод, скан, картинку и ролик
+    69: SHARES_69,
 }
 
 

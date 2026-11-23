@@ -95,7 +95,7 @@ MEDIA_SOURCES = {
 def media_sections(uid: int, media_id: str) -> set[str]:
     """Один файл может использоваться в нескольких разделах: защищённая связь имеет приоритет.
     Файл скана (исходный PDF, PNG страниц) — разделов его документа (`scan_sections`); файл снимка
-    «Поделиться» — раздела снимка: «Чат» или «Агенты»."""
+    «Поделиться» — раздела снимка: «Чат», «Агенты» или раздел записи."""
     found = set()
     for section, tables in MEDIA_SOURCES.items():
         for table, columns in tables:
@@ -108,9 +108,16 @@ def media_sections(uid: int, media_id: str) -> set[str]:
                                 " UNION SELECT scan_id FROM scan_pages WHERE user_id = ? AND media_id = ?",
                                 (uid, media_id, uid, media_id)).fetchall():
         found |= scan_sections(uid, row[0])
-    for row in state.DB.execute("SELECT s.chat_id FROM chat_share_files f JOIN chat_shares s ON s.id = f.share_id"
-                                " WHERE s.user_id = ? AND f.media_id = ?", (uid, media_id)).fetchall():
-        found.add("chat" if row[0] else "code")
+    for row in state.DB.execute("SELECT s.chat_id, s.item_kind, s.item_id FROM chat_share_files f"
+                                " JOIN chat_shares s ON s.id = f.share_id WHERE s.user_id = ? AND f.media_id = ?",
+                                (uid, media_id)).fetchall():
+        if row["item_kind"] == "scans":
+            found |= scan_sections(uid, row["item_id"])
+        elif row["item_kind"]:      # снимок записи раздела (chat_shares.ITEMS) — раздел её таблицы
+            found |= {section for section, tables in MEDIA_SOURCES.items()
+                      if any(table == row["item_kind"] for table, _ in tables)}
+        else:
+            found.add("chat" if row["chat_id"] else "code")
     return found
 
 
