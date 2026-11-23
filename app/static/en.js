@@ -2267,7 +2267,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Не беспокоить": "Do not disturb",
   "С": "From",
   "По": "To",
-  "Тихие часы — по часовому поясу учётки: {0}. В них не приходит ничего; о ждущем вопросе агента напомнит повтор после них.": "Quiet hours follow the account time zone: {0}. Nothing arrives during them; a reminder about a waiting agent question comes after they end.",
+  "Тихие часы — по часовому поясу учётки: {0}. В них не приходит ничего; о ждущем вопросе агента после них напомнит повтор, если напоминание включено.": "Quiet hours follow the account time zone: {0}. Nothing arrives during them; if reminders are on, a reminder about a waiting agent question comes after they end.",
   "Напомнить о ждущем вопросе агента": "Remind about a waiting agent question",
   "Не напоминать": "Do not remind",
   "Через 10 минут": "After 10 minutes",
