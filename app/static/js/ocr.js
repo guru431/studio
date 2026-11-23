@@ -2,8 +2,9 @@ import { language, message as serverMessage, tr } from './i18n.js';
 /* Раздел «Сканы» (#/ocr, распознавание) — раскладка Б спеки 2026-10-27-studio-ocr-design (раздел 6.4).
  *
  * Слева — «+ Загрузить скан» и документы по дням (имя, «N стр.», состояние словами), справа — выбранный:
- * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx; есть таблицы — ещё «Таблицы .xlsx» и «.csv»), «В чат ▾», «Переименовать» (PATCH `name`,
- * расширение сохраняет сервер), «Удалить»; идущий — состояние
+ * «N страниц · дата», «Копировать», «Скачать ▾» (txt, md, docx, «PDF со слоем» — layerPdf; есть таблицы —
+ * ещё «Таблицы .xlsx» и «.csv»), «В чат ▾», «Переименовать» (PATCH `name`, расширение сохраняет сервер),
+ * «Удалить»; идущий — состояние
  * и «Отменить». Ниже — листалка «‹ страница N из M ›» и две колонки: картинка страницы (нажатие — окно
  * просмотра #ocr-viewer) и её текст. На телефоне (≤ 760 px) картинка над текстом, список выезжает сбоку,
  * как у «Расшифровки». Готовые страницы идущего документа уже листаются; опрос вид не пересобирает — картинка,
@@ -49,7 +50,7 @@ const UPLOAD_MAX = 20 * 1024 * 1024;     // documents.DOC_MAX — на всю з
 const FILES_MAX = 50;                    // ocr_render.PAGES_MAX
 const ACCEPT = 'application/pdf,.pdf,image/png,image/jpeg,image/webp';
 const RUNNING = new Set(['queued', 'working', 'cancelling']);
-const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx']];
+const FORMATS = [['txt', tr("Текст .txt")], ['md', 'Markdown .md'], ['docx', 'Word .docx'], ['pdf', tr("PDF со слоем")]];
 // таблицы документа (`tables` ответа) — книгой и CSV: одна таблица — файл, несколько — ZIP
 const TABLE_FORMATS = [['xlsx', tr("Таблицы .xlsx")], ['csv', tr("Таблицы .csv")]];
 const ASKS = [['discuss', tr("Обсудить в чате")], ['summary', tr("Кратко пересказать")], ['translate', tr("Перевести")]];
@@ -101,6 +102,7 @@ function build(view, ctx) {
   let acts = null;             // { key, box } — кнопки документа
   let two = null;              // { key, box, scan, text } — показанная страница: картинка и текст
   let engines = [];            // движки раздела через сервер: { connection_id, model, label } (GET /api/sections)
+  const layerWanted = new Set();   // документы, ищущие строки для «PDF со слоем»: кончились — выгрузка (layerDone)
   const selection = recordSelection('ocr', me.id);
   const docs = createPicker({ url: '/api/ocr', size: PAGE, pollMs: POLL_MS,
     running: (i) => RUNNING.has(i.state), paint: paintList,
@@ -162,8 +164,43 @@ function build(view, ctx) {
   }
 
   /* выбранный */
+  function save(id, format) {
+    el('a', { href: `/api/ocr/${id}/export?format=${format}&lang=${language()}`, download: '' }).click();
+  }
+
   function download(format) {
-    el('a', { href: `/api/ocr/${docs.current.id}/export?format=${format}&lang=${language()}`, download: '' }).click();
+    if (format === 'pdf') layerPdf(docs.current);
+    else save(docs.current.id, format);
+  }
+
+  /** «PDF со слоем» (05:I9): рамки строк ищет сервер (POST …/layer) — готово сразу или документ встаёт в очередь,
+   * как идущий (состояние, «Отменить»); кончился — GET …/layer: готово — выгрузка, отказ — словами. */
+  async function layerPdf(item) {
+    error.textContent = '';
+    try {
+      if ((await api('POST', `/api/ocr/${item.id}/layer`)).ready) {
+        save(item.id, 'pdf');
+        return;
+      }
+    } catch (err) {
+      error.textContent = words(err);
+      return;
+    }
+    kick();
+    await docs.load();
+    await select(item.id);
+    if (docs.current?.id === item.id && RUNNING.has(docs.current.state)) layerWanted.add(item.id);
+    else layerDone(item.id);                       // кончился, пока документ перечитывали
+  }
+
+  async function layerDone(id) {
+    try {
+      const got = await api('GET', `/api/ocr/${id}/layer`);
+      if (got.ready) save(id, 'pdf');
+      else if (got.error) error.textContent = tr("PDF со слоем не готов: {0}", serverMessage(got.error));
+    } catch (err) {
+      error.textContent = words(err);
+    }
   }
 
   function rename(item) {
@@ -574,6 +611,10 @@ function build(view, ctx) {
       body.replaceChildren(el('p', { class: 'muted tr-empty' }, ctx.hint ? tr("Выберите документ в списке.")
         : tr("Загрузите PDF-скан или фото страниц — студия распознает текст.")));
       return;
+    }
+    if (layerWanted.has(item.id) && !RUNNING.has(item.state)) {
+      layerWanted.delete(item.id);
+      layerDone(item.id);
     }
     const nodes = [];
     busy = RUNNING.has(item.state) ? busyBlock(busy, item, { id: 'ocr-cancel', url: '/api/ocr',

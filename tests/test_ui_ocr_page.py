@@ -322,7 +322,7 @@ def test_translation_of_a_table_scan_reads_side_by_side(browser, live, translato
         width=width, mobile=width == 320)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["scan"] == ["txt", "md", "docx", "xlsx", "csv"]
+    assert v["scan"] == ["txt", "md", "docx", "pdf", "xlsx", "csv"]
     assert v["before"] == [False, True] and v["state"] == ["true", True] and v["after"] == [True, False]
     assert len(v["rows"]) == 1 and "Офис" in v["rows"][0][0] and v["rows"][0][1].strip() == "Übersetzte Seite"
     assert v["table"] is True and v["on"] is True and v["fits"] is True
