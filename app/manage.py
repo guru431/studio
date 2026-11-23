@@ -68,6 +68,7 @@ ENCRYPTED_BACKUP_FIELDS = (
     ("shares", "ссылки «Поделиться»", "SELECT token_enc FROM chat_shares UNION ALL"
      " SELECT sealed FROM chat_shares WHERE sealed IS NOT NULL"),
     ("smtp", "настройки SMTP", "SELECT value FROM settings WHERE key = 'smtp'"),
+    ("ldap", "настройки LDAP", "SELECT value FROM settings WHERE key = 'ldap'"),
     ("mcp", "настройки MCP", "SELECT secret_enc FROM mcp_servers"),
     ("memory", "личная память чата", "SELECT text_enc FROM user_memory"),
     ("mirrors", "сведения о зеркалах", "SELECT location FROM project_mirrors UNION ALL"

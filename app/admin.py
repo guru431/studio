@@ -94,6 +94,52 @@ async def check_smtp_settings():
     return await account_mail.check()
 
 
+def require_local_admin(request: Request) -> auth.User:
+    user = auth.require_admin(request)
+    row = state.DB.execute("SELECT ldap_guid FROM users WHERE id=?", (user.id,)).fetchone()
+    if row is None or row[0] is not None:
+        raise HTTPException(403, {"code": "ldap_local_admin", "message": "Подключение LDAP настраивает локальный администратор"})
+    return user
+
+
+@router.get("/ldap", dependencies=[Depends(require_local_admin)])
+async def ldap_settings():
+    return ldap_auth.public_settings()
+
+
+async def _ldap_candidate(body: ldap_auth.SettingsIn, request: Request, *, check: bool) -> dict:
+    admin = require_local_admin(request)
+    await auth.confirm_password(admin.id, body.admin_password, "настройка LDAP", digest=request.state.digest)
+    previous = ldap_auth.configuration()
+    candidate = ldap_auth.prepare(body, previous)
+    if check or body.enabled:
+        try:
+            await asyncio.to_thread(ldap_auth.check, candidate)
+        except ValueError:
+            raise HTTPException(422, {"code": "ldap_settings", "message": "Проверьте адрес LDAP, DN и пароль служебной учётки"}) from None
+        except ldap_auth.Unavailable:
+            raise HTTPException(503, {"code": "ldap_connection", "message": "Не удалось проверить TLS, служебную учётку или DN в LDAP"}) from None
+    auth.recheck(request)
+    require_local_admin(request)
+    if ldap_auth.configuration() != previous:
+        raise HTTPException(409, {"code": "ldap_changed", "message": "Настройки LDAP изменились. Обновите страницу"})
+    return candidate
+
+
+@router.put("/ldap")
+async def save_ldap_settings(body: ldap_auth.SettingsIn, request: Request):
+    config = await _ldap_candidate(body, request, check=False)
+    result = await ldap_auth.save(config)
+    log.info("администратор %d: сохранены настройки LDAP (enabled=%s)", request.state.user.id, result["enabled"])
+    return result
+
+
+@router.post("/ldap/check")
+async def check_ldap_settings(body: ldap_auth.SettingsIn, request: Request):
+    await _ldap_candidate(body, request, check=True)
+    return {"ok": True}
+
+
 @router.get("/cleaner")
 async def cleaner_settings():
     return cleaner_route.public_settings()
@@ -200,7 +246,7 @@ async def link_ldap(uid: int, body: LdapLink, request: Request, admin: auth.User
     account.keep_active_admin(uid)
     await auth.confirm_password(admin.id, body.password, "привязка LDAP", digest=request.state.digest)
     try:
-        guid = await asyncio.to_thread(ldap_auth.find_user, body.login.strip())
+        guid = await ldap_auth.query(ldap_auth.find_user, body.login.strip())
     except ldap_auth.Unavailable:
         raise HTTPException(503, {"code": "ldap_unavailable", "message": "Каталог LDAP временно недоступен"}) from None
     if guid is None:
@@ -260,7 +306,7 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User, *, request: Re
     if body.disabled is False and user["disabled"] and user["ldap"]:
         guid = state.DB.execute("SELECT ldap_guid FROM users WHERE id=?", (uid,)).fetchone()[0]
         try:
-            allowed = await asyncio.to_thread(ldap_auth.eligible, [guid])
+            allowed = await ldap_auth.query(ldap_auth.eligible, [guid])
         except ldap_auth.Unavailable:
             raise HTTPException(503, {"code": "ldap_unavailable", "message": "Каталог LDAP временно недоступен"}) from None
         if guid not in allowed:

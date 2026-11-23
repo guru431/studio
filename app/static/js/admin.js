@@ -9,6 +9,7 @@ import { locale, message, tr } from './i18n.js';
 import { api, loadMe, me } from './api.js';
 import { accessPicker, chatMcpBlock } from './mcp-settings.js';
 import { knowledgeAdminBlock } from './knowledge.js';
+import { ldapSettings } from './ldap-settings.js';
 import { roleDefaultsBlock } from './roles.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
@@ -945,7 +946,9 @@ export function mount(view, ctx) {
   const storage = storageBlock();
   const chatSettings = chatSettingsBlock();
   const groups = groupsBlock(root, users.reload);
-  root.append(invitations.el, users.el, allow.el, cleaner.el, groups.el, sharedModelsBlock(root), chatSettings.el,
+  root.append(invitations.el);
+  if (!me.ldap) root.append(ldapSettings(users.reload));
+  root.append(users.el, allow.el, cleaner.el, groups.el, sharedModelsBlock(root), chatSettings.el,
     chatMcpBlock({ admin: true }), knowledgeAdminBlock(root), roleDefaultsBlock(), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();

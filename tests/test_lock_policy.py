@@ -347,6 +347,9 @@ ROUTES = {
     ("PUT", "/api/admin/smtp"): "closed",
     ("POST", "/api/admin/smtp/check"): "closed",
     ("POST", "/api/admin/smtp/test"): "closed",
+    ("GET", "/api/admin/ldap"): "closed",
+    ("PUT", "/api/admin/ldap"): "closed",
+    ("POST", "/api/admin/ldap/check"): "closed",
     **{(m, p): "closed" for m, p in [
         ("GET", "/api/admin/allowlist"), ("PUT", "/api/admin/allowlist"), ("GET", "/api/admin/chat"),
         ("PUT", "/api/admin/chat"), ("GET", "/api/admin/backup-check"),

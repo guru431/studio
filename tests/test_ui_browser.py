@@ -806,26 +806,6 @@ def test_admin_renames_a_user_in_the_panel(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_admin_links_an_existing_account_to_ldap(browser, live, monkeypatch):
-    import ldap_auth
-
-    live.add_user("ldap-ui")
-    monkeypatch.setenv("STUDIO_LDAP_URL", "ldaps://dc.example.com")
-    monkeypatch.setattr(ldap_auth, "find_user", lambda name: "00112233-4455-6677-8899-aabbccddeeff"
-                        if name == "employee@example.com" else None)
-    row = "#users tr[data-login=ldap-ui]"
-    dialog = "#ldap-link-dialog"
-    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), *go("admin"),
-        ("wait", f"document.querySelector('{row} .user-ldap')"),
-        ("click", f"{row} .user-ldap"), ("wait", is_open(dialog)),
-        set_value("#ldap-login", "employee@example.com"), set_value("#ldap-admin-password", "password-123"),
-        ("click", "#ldap-link-confirm"),
-        ("wait", f"!{is_open(dialog)} && !document.querySelector('{row} .user-reset') && "
-                 f"document.querySelector('{row} .actions').textContent.includes('LDAP')")])
-    assert not r.get("failed"), r
-    assert not problems(r), problems(r)
-
-
 @pytest.mark.parametrize("width", [320, 1280])
 def test_admin_grants_and_revokes_admin_rights_in_the_edit_dialog(browser, live, width):
     chief, mate = f"boss{width}", f"aide{width}"

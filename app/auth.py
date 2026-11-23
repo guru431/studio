@@ -352,7 +352,7 @@ async def confirm_password(uid: int, password: str, what: str, message: str = "Ð
 
 async def _verify_password(row, password: str) -> bool:
     if row and row["ldap_guid"]:
-        return await asyncio.to_thread(ldap_auth.verify, row["ldap_guid"], password)
+        return await ldap_auth.query(ldap_auth.verify, row["ldap_guid"], password)
     return await asyncio.to_thread(security.verify_password, password, row["pw_hash"] if row else security.DUMMY_HASH)
 
 

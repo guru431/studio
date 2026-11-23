@@ -146,7 +146,7 @@ async def lifespan(_app):
               asyncio.create_task(cleaner.sweep()), asyncio.create_task(mcp_sections.watch_history()),
               admin.start_check_watch(), trash.start_purger(), bridge.start_reminders()]
              if state.WATCHER else [])
-    if state.WATCHER and ldap_auth.configured():
+    if state.WATCHER:
         loops.append(asyncio.create_task(ldap_auth.watch()))
     try:
         yield
