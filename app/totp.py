@@ -52,6 +52,8 @@ ISSUER = "Studio"
 #: резервный код — 10 знаков без похожих (0/o, 1/l/i), показывается «xxxxx-xxxxx»
 BACKUP_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 BACKUP_RE = re.compile(f"[{BACKUP_ALPHABET}]{{10}}")
+#: только ASCII-цифры: `\d` пропускает цифры Unicode, а `hmac.compare_digest` на не-ASCII строке падает
+CODE_RE = re.compile(f"[0-9]{{{DIGITS}}}")
 
 
 class SetupIn(BaseModel):
@@ -119,7 +121,7 @@ def _accept(uid: int, code: str, ip: str | None) -> bool:
     secret = _secret(uid)
     if secret is None:
         return False
-    if re.fullmatch(r"\d{%d}" % DIGITS, code):
+    if CODE_RE.fullmatch(code):
         last = state.DB.execute("SELECT totp_step FROM users WHERE id = ?", (uid,)).fetchone()[0]
         step = matching_step(secret, code, clock.NOW(), last)
         # условие в UPDATE: параллельный вход тем же кодом второй раз не пройдёт
@@ -205,7 +207,8 @@ async def enable(body: EnableIn, request: Request):
         secret = base64.b32decode(secret_b32)
     except (InvalidToken, TypeError, ValueError, UnicodeError):
         raise HTTPException(400, {"code": "expired", "message": "Настройка устарела. Начните заново."}) from None
-    step = matching_step(secret, re.sub(r"\s", "", body.code), clock.NOW())
+    code = re.sub(r"\s", "", body.code)
+    step = matching_step(secret, code, clock.NOW()) if CODE_RE.fullmatch(code) else None
     if step is None:
         raise HTTPException(400, {"code": "wrong_code", "message": "Неверный код"})
     if enabled(uid):

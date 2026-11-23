@@ -114,6 +114,26 @@ def test_same_code_is_not_accepted_twice_and_wrong_codes_count(studio, mail):
     assert studio.c.post("/account/code", json={"code": code_now(studio, secret, 1)}).status_code == 429
 
 
+def test_non_ascii_digits_are_an_ordinary_wrong_code(studio, mail):
+    """R2-5: `\\d` пропускал цифры Unicode, а `hmac.compare_digest` на не-ASCII строке падал — 500 без `totp_fail`."""
+    uid = make_user(studio, "owner")
+    signin(studio, "owner")
+    data = studio.c.post("/api/me/totp/setup", json={"password": PASSWORD}).json()
+    response = studio.c.post("/api/me/totp", json={"ticket": data["ticket"], "code": "١٢٣٤٥٦"})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    enable(studio)
+    totp_login(studio)
+    response = studio.c.post("/account/code", json={"code": "١٢٣٤٥٦"})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+    response = studio.c.post("/account/code", json={"code": "２３４５６７８９ab"})    # полноширинные — не алфавит кодов
+    assert response.status_code == 400
+    assert [r[0] for r in state.DB.execute(
+        "SELECT count FROM security_events WHERE user_id=? AND kind='totp_fail'", (uid,))] == [2]
+    response = studio.c.post("/api/agent/enroll", json={"login": "owner", "password": PASSWORD, "name": "pc",
+                                                        "code": "١٢٣٤٥٦"})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
+
+
 def test_backup_code_signs_in_once(studio, mail):
     uid = make_user(studio, "owner")
     signin(studio, "owner")
