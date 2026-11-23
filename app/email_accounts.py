@@ -146,10 +146,11 @@ def invalid_token() -> HTTPException:
 
 
 def token_row(token: str, kind: str):
-    row = state.DB.execute("SELECT t.*, u.pw_hash, u.email AS current_email FROM email_tokens t"
+    row = state.DB.execute("SELECT t.*, u.pw_hash, u.ldap_guid, u.email AS current_email FROM email_tokens t"
                            " JOIN users u ON u.id=t.user_id WHERE t.digest=? AND t.kind=? AND u.disabled=0",
                            (security.digest(token), kind)).fetchone()
     if (row is None or row["expires"] <= clock.NOW() or row["attempts"] >= CODE_ATTEMPTS
+            or (kind == "reset" and row["ldap_guid"] is not None)
             or row["password_stamp"] != security.digest(row["pw_hash"])
             or (kind in ("login", "bridge", "reset") and row["email"] != row["current_email"])):
         raise invalid_token()
@@ -444,7 +445,8 @@ async def forgot(request: Request, tasks: BackgroundTasks):
     identity = data.get("login", "").strip().lower()
     # Известные и неизвестные учётки получают одинаковый ответ; отправка начинается после ответа.
     throttle("forgot-identity", identity, 3, 900)
-    row = state.DB.execute("SELECT id,email FROM users WHERE (login=? OR email=?) AND disabled=0 AND email IS NOT NULL",
+    row = state.DB.execute("SELECT id,email FROM users WHERE (login=? OR email=?) AND disabled=0"
+                           " AND email IS NOT NULL AND ldap_guid IS NULL",
                            (identity, identity)).fetchone()
     if row:
         try:

@@ -1,5 +1,7 @@
 # Почта учётной записи
 
+Вход с доменным паролем настраивается отдельно. См. [Вход через Active Directory](ldap.md).
+
 `email_accounts.py` отвечает за приглашения, подтверждение почты, восстановление пароля и дополнительные
 коды входа; `account_mail.py` отправляет письма. Формы — `static/account.html`, `static/account.js`,
 настройка кодов — `static/js/email-settings.js`, приглашения — `static/js/admin.js`.

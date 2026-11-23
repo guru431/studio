@@ -130,7 +130,7 @@ def _me(request: Request) -> dict:
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, timezone, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
                            " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions,"
-                           " password_reset, email, email_codes, memory_on, login_notice FROM users WHERE id = ?",
+                           " password_reset, email, email_codes, memory_on, login_notice, ldap_guid FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
     views = json.loads(row["views"])
@@ -153,6 +153,7 @@ def _me(request: Request) -> dict:
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
             # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null
             "password_reset": row["password_reset"],
+            "ldap": row["ldap_guid"] is not None,
             "memory_on": bool(row["memory_on"]),     # личная память «Чата» (memory.py)
             # флажок администратора «Веб и внешние MCP — только через Cleaner»: «Интернет» вне Cleaner выключен,
             # «Open WebUI» показывает предупреждение
@@ -224,6 +225,8 @@ async def patch_me(body: MePatch, request: Request):
 @router.post("/me/password", status_code=204)
 async def change_password(body: PasswordChange, request: Request):
     uid = request.state.user.id
+    if state.DB.execute("SELECT ldap_guid FROM users WHERE id=?", (uid,)).fetchone()[0] is not None:
+        raise HTTPException(409, {"code": "ldap_password", "message": "Пароль этой учётной записи меняется в Active Directory"})
     confirmed = await auth.confirm_password(uid, body.current, "смена пароля", "текущий пароль неверен",
                                             digest=request.state.digest)
     check_password(body.new)

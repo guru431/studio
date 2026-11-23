@@ -266,6 +266,8 @@ function timezoneBlock(refreshTimes) {
 }
 
 function passwordBlock() {
+  if (me.ldap) return el('section', { class: 'block' }, el('h2', {}, tr("Пароль")),
+    el('p', {}, tr("Пароль этой учётной записи меняется в Active Directory")));
   const input = (id, autocomplete) => el('input', { class: 'input', id, type: 'password', autocomplete, maxlength: '1024' });
   const current = input('pw-current', 'current-password');
   const fresh = input('pw-new', 'new-password');

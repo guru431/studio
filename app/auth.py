@@ -48,6 +48,7 @@ from starlette.background import BackgroundTask
 from starlette.requests import HTTPConnection
 
 import clock
+import ldap_auth
 import lock_policy
 import operations
 import security
@@ -334,14 +335,25 @@ async def confirm_password(uid: int, password: str, what: str, message: str = "�
         raise HTTPException(429, {"code": "locked", "message": "слишком много попыток — подождите 15 минут"})
     attempt = clock.NOW()
     FAILS.setdefault(key, []).append(attempt)       # до хеша: параллельная пачка не пройдёт разом
-    row = state.DB.execute("SELECT pw_hash FROM users WHERE id = ?", (uid,)).fetchone()
+    row = state.DB.execute("SELECT pw_hash, ldap_guid FROM users WHERE id = ? AND disabled=0", (uid,)).fetchone()
     # учётку удалили после проверки сессии — отказ, как неверному паролю (still_valid её не найдёт)
     stored = row["pw_hash"] if row else security.DUMMY_HASH
-    if not await asyncio.to_thread(security.verify_password, password, stored) or not still_valid(uid, stored):
+    try:
+        ok = await _verify_password(row, password)
+    except ldap_auth.Unavailable:
+        _forget(key, attempt)
+        raise HTTPException(503, {"code": "ldap_unavailable", "message": "Каталог LDAP временно недоступен"}) from None
+    if not ok or not still_valid(uid, stored):
         log.warning("пользователь %d: %s — неверный пароль", uid, what)
         raise HTTPException(403, {"code": "password", "message": message})
     FAILS.pop(key, None)
     return stored
+
+
+async def _verify_password(row, password: str) -> bool:
+    if row and row["ldap_guid"]:
+        return await asyncio.to_thread(ldap_auth.verify, row["ldap_guid"], password)
+    return await asyncio.to_thread(security.verify_password, password, row["pw_hash"] if row else security.DUMMY_HASH)
 
 
 def _login_fails(login: str) -> int:
@@ -507,10 +519,13 @@ async def check_password(name: str, password: str, ip: str, source: str = "login
         FAILS.setdefault(key, []).append(attempt)
     row = None
     if re.fullmatch(LOGIN_RE, name):
-        row = state.DB.execute("SELECT id, pw_hash FROM users WHERE login = ? AND disabled = 0", (name,)).fetchone()
-    # неизвестный логин проверяется против DUMMY_HASH: по времени ответа его не отличить
-    ok = await asyncio.to_thread(security.verify_password, password,
-                                 row["pw_hash"] if row else security.DUMMY_HASH)
+        row = state.DB.execute("SELECT id, pw_hash, ldap_guid FROM users WHERE login = ? AND disabled = 0", (name,)).fetchone()
+    try:
+        ok = await _verify_password(row, password)
+    except ldap_auth.Unavailable:
+        for key in _keys(name, ip):
+            _forget(key, attempt)
+        return None
     if ok and row and still_valid(row["id"], row["pw_hash"]):
         FAILS.pop(("pair", name, ip), None)
         _forget(("ip", ip), attempt)  # только эту попытку: свой вход не обнуляет счёт адреса

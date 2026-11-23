@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 80
+VERSION = 81
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1112,6 +1112,11 @@ CREATE INDEX mcp_section_file_media ON mcp_section_files(user_id, media_id);
 """
 SCHEMA += MCP_HISTORY_80
 
+LDAP_81 = """ALTER TABLE users ADD COLUMN ldap_guid TEXT;
+CREATE UNIQUE INDEX users_ldap_guid ON users(ldap_guid) WHERE ldap_guid IS NOT NULL;
+"""
+SCHEMA += LDAP_81
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1270,6 +1275,7 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     78: INVITE_LINK_78,
     79: CLEANER_ATTACHMENTS_79,
     80: MCP_HISTORY_80,
+    81: LDAP_81,
 }
 
 

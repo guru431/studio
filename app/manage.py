@@ -261,7 +261,7 @@ def _ensure_gateway(conn, login: str, key: str) -> None:
 
 
 def _ensure_admin(conn, login: str, password: str, email: str | None = None) -> int:
-    row = conn.execute("SELECT id, pw_hash FROM users WHERE login = ?", (login,)).fetchone()
+    row = conn.execute("SELECT id, pw_hash, ldap_guid FROM users WHERE login = ?", (login,)).fetchone()
     if row is None:
         if not email:
             print("для первого администратора нужен STUDIO_ADMIN_EMAIL", file=sys.stderr)
@@ -276,10 +276,16 @@ def _ensure_admin(conn, login: str, password: str, email: str | None = None) -> 
             return 2
         print(f"администратор {login}: создан")
         return 0
+    if row["ldap_guid"] is not None:
+        print("выберите отдельный логин локального администратора: эта учётка связана с LDAP", file=sys.stderr)
+        return 2
     changed = not security.verify_password(password, row["pw_hash"])
     conn.execute("BEGIN")
     try:
-        conn.execute("UPDATE users SET is_admin = 1, disabled = 0 WHERE id = ?", (row["id"],))
+        if not conn.execute("UPDATE users SET is_admin=1, disabled=0 WHERE id=? AND ldap_guid IS NULL",
+                            (row["id"],)).rowcount:
+            conn.execute("ROLLBACK")
+            return 2
         if changed:
             conn.execute("UPDATE users SET pw_hash = ? WHERE id = ?", (security.hash_password(password), row["id"]))
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))

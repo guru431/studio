@@ -82,10 +82,16 @@ class DeleteAccount(BaseModel):
 
 
 def keep_active_admin(uid: int) -> None:
-    if state.DB.execute("SELECT 1 FROM users WHERE id = ? AND is_admin = 1 AND disabled = 0"
-                        " AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1 AND disabled = 0 AND id != ?)",
+    if state.DB.execute("SELECT 1 FROM users WHERE id = ? AND is_admin=1 AND disabled=0 AND ldap_guid IS NULL"
+                        " AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin=1 AND disabled=0 AND ldap_guid IS NULL AND id != ?)",
                         (uid, uid)).fetchone():
         raise HTTPException(409, {"code": "last_admin", "message": "Нужен хотя бы один активный администратор."})
+
+
+async def stop_disabled_user(uid: int) -> None:
+    await bridge.drop_user(uid, disabled=True)
+    await owui.drop_user(uid, revoke=False)
+    await history.stop_user(uid)
 
 
 async def delete_user_data(uid: int, *, allow_disabled: bool = False) -> int:

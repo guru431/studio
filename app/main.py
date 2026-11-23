@@ -61,6 +61,7 @@ import help as help_page
 import images
 import jobs
 import knowledge
+import ldap_auth
 import media
 import ocr
 import ntfy
@@ -145,6 +146,8 @@ async def lifespan(_app):
               asyncio.create_task(cleaner.sweep()), asyncio.create_task(mcp_sections.watch_history()),
               admin.start_check_watch(), trash.start_purger(), bridge.start_reminders()]
              if state.WATCHER else [])
+    if state.WATCHER and ldap_auth.configured():
+        loops.append(asyncio.create_task(ldap_auth.watch()))
     try:
         yield
     finally:

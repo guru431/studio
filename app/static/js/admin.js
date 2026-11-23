@@ -26,6 +26,7 @@ function yesNo(value) {
 
 function usersBlock(host) {
   const tbody = el('tbody');
+  let ldapConfigured = false;
   const note = el('p', { class: 'status error', id: 'admin-status', 'aria-live': 'polite' });
   const table = el('table', { class: 'users', id: 'users' },
     el('thead', {}, el('tr', {}, ...COLUMNS.map(([, title]) => el('th', { scope: 'col' }, title)),
@@ -33,7 +34,8 @@ function usersBlock(host) {
 
   async function reload() {
     try {
-      const { items } = await api('GET', '/api/admin/users');
+      const { items, ldap_configured } = await api('GET', '/api/admin/users');
+      ldapConfigured = ldap_configured;
       tbody.replaceChildren(...items.map(row));
     } catch (err) {
       fail(words(err));
@@ -127,6 +129,34 @@ function usersBlock(host) {
     });
   }
 
+  function linkLdap(user) {
+    const login = el('input', { class: 'input', id: 'ldap-login', maxlength: '254', autocomplete: 'off',
+      autocapitalize: 'none', spellcheck: 'false' });
+    const password = el('input', { class: 'input', id: 'ldap-admin-password', type: 'password',
+      maxlength: '1024', autocomplete: 'current-password' });
+    const link = button(tr("Привязать"), { class: 'btn btn-accent', id: 'ldap-link-confirm' });
+    const fail = el('p', { class: 'error', role: 'status' });
+    const dialog = openDialog(host, { id: 'ldap-link-dialog', title: tr("Привязать LDAP: {0}", user.login), actions: [link], body: [
+      el('p', {}, tr("Пользователь будет входить с паролем Active Directory. Его текущие веб-сессии закроются.")),
+      field(tr("Имя пользователя Active Directory"), login, login.id),
+      field(tr("Ваш пароль администратора"), password, password.id), fail] });
+    login.focus();
+    link.addEventListener('click', async () => {
+      link.disabled = true;
+      try {
+        await api('POST', `/api/admin/users/${user.id}/ldap`, { login: login.value.trim(), password: password.value });
+        dialog.close();
+        if (user.id === me.id) location.reload();
+        else await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+      } finally {
+        password.value = '';
+        link.disabled = false;
+      }
+    });
+  }
+
   function disable(user) {
     const yes = button(tr("Отключить"), { class: 'btn btn-danger solid', id: 'disable-confirm' });
     const fail = el('p', { class: 'error' });
@@ -191,11 +221,14 @@ function usersBlock(host) {
       el('td', { class: 'actions' }, el('div', { class: 'acts' },
         button(tr("Изменить"), { class: 'btn btn-sm user-edit' }, () => edit(user)),
         button(tr("Подключения"), { class: 'btn btn-sm user-conns' }, () => connections(user)),
-        !self && user.email && !user.disabled
+        !self && !user.ldap && user.email && !user.disabled
           ? button(tr("Отправить ссылку для нового пароля"), { class: 'btn btn-sm user-password-link' }, () => sendPasswordLink(user))
           : null,
-        button(tr("Сбросить пароль"), { class: 'btn btn-sm user-reset', disabled: self,
-          title: self ? tr("свой пароль — в «Настройках» → «Защита»") : null }, () => resetPassword(user)),
+        user.ldap ? el('span', { class: 'muted small' }, 'LDAP')
+          : button(tr("Сбросить пароль"), { class: 'btn btn-sm user-reset', disabled: self,
+            title: self ? tr("свой пароль — в «Настройках» → «Защита»") : null }, () => resetPassword(user)),
+        ldapConfigured && !user.ldap
+          ? button(tr("Привязать LDAP"), { class: 'btn btn-sm user-ldap' }, () => linkLdap(user)) : null,
         button(user.disabled ? tr("Включить") : tr("Отключить"), { class: 'btn btn-sm user-toggle', disabled: self,
           title: self ? tr("себя отключить нельзя") : null },
         () => user.disabled ? act(api('PATCH', `/api/admin/users/${user.id}`, { disabled: false })) : disable(user)),

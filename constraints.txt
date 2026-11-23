@@ -22,6 +22,7 @@ httpcore==1.0.9
 httptools==0.9.0
 httpx==0.28.1
 idna==3.20
+ldap3==2.9.1
 markdown-it-py==4.0.0
 mdurl==0.1.2
 mutagen==1.48.1

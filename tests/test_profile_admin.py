@@ -73,7 +73,8 @@ def test_me_carries_csrf_and_profile(studio):
                        "csrf", "capabilities", "screen_lock", "exa_key", "pin", "code_defaults", "code_quick_actions",
                        "screen_lock_sections", "screen_lock_timeout", "computer_pin_timeout", "password_reset", "accent",
                        "studio_version", "email", "email_codes", "code_quick_actions_default", "code_quick_actions_set", "notify_langs", "memory_on",
-                       "totp", "totp_backup_left", "login_notice", "cleaner_web", "cleaner_forced"}
+                       "totp", "totp_backup_left", "login_notice", "cleaner_web", "cleaner_forced", "ldap"}
+    assert me["ldap"] is False
     assert me["password_reset"] is None and me["notify_langs"] == [] and me["memory_on"] is False
 
 
@@ -565,11 +566,11 @@ def test_panel_lists_no_history(studio, env):
     make_user(studio, "owner", is_admin=True); bob = make_user(studio, "bob"); signin(studio, "owner")
     add_history(studio, env, bob, tag="секрет")
     text = studio.c.get("/api/admin/users").text
-    for word in ["prompt", "title", "content", "секрет", "pw_hash"]:
+    for word in ["prompt", "title", "content", "секрет", "pw_hash", "ldap_guid"]:
         assert word not in text, word
     for item in studio.c.get("/api/admin/users").json()["items"]:
         assert set(item) == {"id", "login", "name", "is_admin", "disabled", "created", "connections", "email",
-                             "groups", "group_names"}
+                             "groups", "group_names", "ldap"}
 
 
 def test_allowlist_round_trip(studio):

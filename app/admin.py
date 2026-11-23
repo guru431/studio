@@ -34,14 +34,13 @@ import cleaner_route
 import clock
 import connections
 import email_accounts
-import history
 import knowledge
+import ldap_auth
 import manage
 import mcp_client
 import mcp_sources
 import media
 import operations
-import owui
 import account_profile as profile
 import profiles
 import push
@@ -64,6 +63,11 @@ class UserPatch(BaseModel):
     is_admin: bool | None = None
     disabled: bool | None = None
     password: str | None = Field(None, max_length=profile.PASSWORD_MAX)
+
+
+class LdapLink(BaseModel):
+    login: str = Field(min_length=1, max_length=254)
+    password: str = Field(max_length=profile.PASSWORD_MAX)
 
 
 class Allowlist(BaseModel):
@@ -109,7 +113,7 @@ async def check_cleaner_settings():
     return await cleaner_route.check()
 
 
-USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email,"
+USERS_SQL = ("SELECT u.id, u.login, u.name, u.is_admin, u.disabled, u.created, u.email, u.ldap_guid,"
              " (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections,"
              " (SELECT json_group_array(json_array(id, name)) FROM (SELECT g.id, g.name FROM access_group_members m"
              "   JOIN access_groups g ON g.id = m.group_id WHERE m.user_id = u.id ORDER BY g.id))"
@@ -128,6 +132,7 @@ def _user_doc(row) -> dict:
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
             "email": row["email"],
             "disabled": bool(row["disabled"]), "created": row["created"], "connections": row["connections"],
+            "ldap": row["ldap_guid"] is not None,
             "groups": [gid for gid, _ in groups], "group_names": [name for _, name in groups]}
 
 
@@ -156,7 +161,8 @@ def _self(admin: auth.User, uid: int) -> None:
 
 @router.get("/users")
 async def list_users():
-    return {"items": [_user_doc(row) for row in state.DB.execute(USERS_SQL + ' ORDER BY u.id')]}
+    return {"items": [_user_doc(row) for row in state.DB.execute(USERS_SQL + ' ORDER BY u.id')],
+            "ldap_configured": ldap_auth.configured()}
 
 
 @router.post("/users", status_code=201)
@@ -167,6 +173,8 @@ async def create_user():
 @router.post("/users/{uid}/password-link", status_code=204)
 async def send_password_link(uid: int, request: Request):
     user = _user_out(uid)
+    if user["ldap"]:
+        raise HTTPException(409, {"code": "ldap_password", "message": "Пароль этой учётной записи меняется в Active Directory"})
     if uid == request.state.user.id:
         raise HTTPException(409, {"code": "self", "message": "свой пароль меняют в «Настройках» → «Защита»"})
     if user["disabled"] or not user["email"]:
@@ -184,9 +192,49 @@ async def send_password_link(uid: int, request: Request):
     return Response(status_code=204)
 
 
+@router.post("/users/{uid}/ldap", status_code=204)
+async def link_ldap(uid: int, body: LdapLink, request: Request, admin: auth.User = Depends(auth.require_admin)):
+    user = _user_out(uid)
+    if user["ldap"]:
+        raise HTTPException(409, {"code": "ldap_linked", "message": "Учётная запись уже связана с LDAP"})
+    account.keep_active_admin(uid)
+    await auth.confirm_password(admin.id, body.password, "привязка LDAP", digest=request.state.digest)
+    try:
+        guid = await asyncio.to_thread(ldap_auth.find_user, body.login.strip())
+    except ldap_auth.Unavailable:
+        raise HTTPException(503, {"code": "ldap_unavailable", "message": "Каталог LDAP временно недоступен"}) from None
+    if guid is None:
+        raise HTTPException(422, {"code": "ldap_user", "message": "Учётная запись AD с доступом к Studio не найдена"})
+    auth.recheck(request)
+    auth.require_admin(request)
+    state.DB.execute("BEGIN")
+    try:
+        account.keep_active_admin(uid)
+        # У связанной учётки уникальная метка для токенов вместо локального пароля.
+        changed = state.DB.execute("UPDATE users SET ldap_guid=?, pw_hash=?, password_reset=NULL"
+                                   " WHERE id=? AND ldap_guid IS NULL", (guid, "ldap:" + security.new_token(), uid)).rowcount
+        if not changed:
+            raise HTTPException(409, {"code": "ldap_linked", "message": "Учётная запись уже связана с LDAP или удалена"})
+        auth.end_sessions(uid)
+        state.DB.execute("DELETE FROM email_tokens WHERE user_id=?", (uid,))
+        security_log.record(uid, "ldap_link")
+        state.DB.execute("COMMIT")
+    except sqlite3.IntegrityError:
+        state.DB.execute("ROLLBACK")
+        raise HTTPException(409, {"code": "ldap_linked", "message": "У этой учётной записи AD уже есть привязка"}) from None
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    return Response(status_code=204)
+
+
 @router.patch("/users/{uid}")
-async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.require_admin)):
-    _user_out(uid)                                            # нет такого — 404 до всяких проверок
+async def patch_user_route(uid: int, body: UserPatch, request: Request, admin: auth.User = Depends(auth.require_admin)):
+    return await patch_user(uid, body, admin, request=request)
+
+
+async def patch_user(uid: int, body: UserPatch, admin: auth.User, *, request: Request | None = None):
+    user = _user_out(uid)                                      # нет такого — 404 до всяких проверок
     if body.disabled or body.is_admin is False:
         _self(admin, uid)
     if body.password is not None and uid == admin.id:
@@ -203,10 +251,24 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
     if body.disabled is not None:
         changes["disabled"] = int(body.disabled)
     if body.password is not None:
+        if user["ldap"]:
+            raise HTTPException(409, {"code": "ldap_password", "message": "Пароль этой учётной записи меняется в Active Directory"})
         profile.check_password(body.password)
         changes["pw_hash"] = await asyncio.to_thread(security.hash_password, body.password)
         # владелец после входа увидит совет проверить сессии и сделать аварийный выход (account.py)
         changes["password_reset"] = clock.NOW()
+    if body.disabled is False and user["disabled"] and user["ldap"]:
+        guid = state.DB.execute("SELECT ldap_guid FROM users WHERE id=?", (uid,)).fetchone()[0]
+        try:
+            allowed = await asyncio.to_thread(ldap_auth.eligible, [guid])
+        except ldap_auth.Unavailable:
+            raise HTTPException(503, {"code": "ldap_unavailable", "message": "Каталог LDAP временно недоступен"}) from None
+        if guid not in allowed:
+            raise HTTPException(409, {"code": "ldap_user", "message": "Учётная запись AD с доступом к Studio не найдена"})
+        if request is not None:
+            auth.recheck(request)
+            admin = auth.require_admin(request)
+        operations.check(uid, allow_disabled=True)
     with operations.barrier(uid) if body.disabled else nullcontext():
         return await _apply_user_patch(uid, body, admin, changes)
 
@@ -214,7 +276,9 @@ async def patch_user(uid: int, body: UserPatch, admin: auth.User = Depends(auth.
 async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes: dict):
     state.DB.execute("BEGIN")
     try:
-        was = state.DB.execute("SELECT is_admin FROM users WHERE id = ?", (uid,)).fetchone()
+        was = state.DB.execute("SELECT is_admin, ldap_guid FROM users WHERE id = ?", (uid,)).fetchone()
+        if body.password is not None and was is not None and was["ldap_guid"] is not None:
+            raise HTTPException(409, {"code": "ldap_password", "message": "Пароль этой учётной записи меняется в Active Directory"})
         if body.disabled or body.is_admin is False:
             account.keep_active_admin(uid)
         if changes:
@@ -240,9 +304,7 @@ async def _apply_user_patch(uid: int, body: UserPatch, admin: auth.User, changes
     if body.disabled:
         # мосты — 4403 (вернутся после «Включить»; прежние — 4401); смена пароля их не рвёт: ключ устройства
         # самостоятелен (спека 6.2)
-        await bridge.drop_user(uid, disabled=True)
-        await owui.drop_user(uid, revoke=False)    # токены Open WebUI не обновлять; сессии — до «Включить»
-        await history.stop_user(uid)          # отключённая учётка не держит карту и очередь шлюза
+        await account.stop_disabled_user(uid)
     return _user_out(uid)
 
 

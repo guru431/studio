@@ -1,5 +1,18 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Привязать LDAP": "Link LDAP",
+  "Привязать LDAP: {0}": "Link LDAP for {0}",
+  "Пользователь будет входить с паролем Active Directory. Его текущие веб-сессии закроются.": "The user will sign in with their Active Directory password. Their current web sessions will end.",
+  "Имя пользователя Active Directory": "Active Directory username",
+  "Ваш пароль администратора": "Your administrator password",
+  "Каталог LDAP временно недоступен": "The LDAP directory is temporarily unavailable",
+  "Учётная запись AD с доступом к Studio не найдена": "No AD account with Studio access was found",
+  "Учётная запись уже связана с LDAP": "This account is already linked to LDAP",
+  "Учётная запись уже связана с LDAP или удалена": "This account is already linked to LDAP or was deleted",
+  "У этой учётной записи AD уже есть привязка": "This AD account is already linked",
+  "Пароль этой учётной записи меняется в Active Directory": "This account's password is managed in Active Directory",
+  "учётка связана с LDAP": "account linked to LDAP",
+  "доступ через LDAP отозван": "LDAP access revoked",
   "Переключиться на {0}": "Switch to {0}",
   "Текущий инструмент не принимает исходное фото.": "The selected tool cannot use a reference photo.",
   "Выберите фото PNG, JPEG или WebP": "Choose a PNG, JPEG or WebP photo",
