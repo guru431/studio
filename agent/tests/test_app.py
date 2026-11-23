@@ -620,7 +620,7 @@ def test_setup_errors_change_nothing(make, root):
 
 def test_setup_enrolls_sets_autostart_and_links(make, home, root):
     calls = []
-    ctrl = make(enroll_calls=calls)
+    ctrl = make(enroll_calls=calls, welcomes=[{**WELCOME, "agent_id": 7}])
     ctrl.start()
     assert ctrl.apply_setup(form(root, login="owner", password="пароль", autostart=False)) == []
     assert calls == [("https://studio.example.com", "owner", "Рабочий")]
@@ -632,7 +632,7 @@ def test_setup_enrolls_sets_autostart_and_links(make, home, root):
 
 def test_rebinding_revokes_the_previous_computer(make, configured, home, root):
     """Меню Linux: новая привязка поверх ключа отзывает прежний — второй компьютер в студии не остаётся."""
-    ctrl = make()
+    ctrl = make(welcomes=[WELCOME, {**WELCOME, "agent_id": 7}])
     ctrl.start()
     until(lambda: ctrl.state == "online")
     assert ctrl.apply_setup(form(root, login="owner", password="x")) == []
@@ -1105,6 +1105,17 @@ def test_login_from_enroll_and_welcome(make, home, root):
     until(lambda: len(ctrl.links) == 2 and ctrl.state == "online")
     time.sleep(0.05)
     assert ctrl.login == "ivanov"                              # без login в welcome — прежний
+
+
+def test_welcome_of_a_replaced_computer_renames_and_renumbers_it(make, home, root):
+    """IDEAS 09:I8: «Заменить компьютер» в Студии отдаёт ключ этого моста прежнему компьютеру — `welcome` несёт его id
+    и имя, и `config.json` (статус консоли, меню Linux) показывает их."""
+    ctrl = make(welcomes=[{"t": "welcome", "agent_id": 3, "name": "Старый ПК", "login": "ivanov"}])
+    assert ctrl.apply_setup(form(root, login="ivanov", password="x")) == []
+    assert store.load_config(home).agent_id == 7
+    ctrl.start()
+    until(lambda: store.load_config(home).agent_id == 3)
+    assert store.load_config(home).name == "Старый ПК"
 
 
 def test_login_comes_from_the_enroll_answer(make, home, root):

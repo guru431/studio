@@ -852,7 +852,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .memory-text { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
 .agent { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; min-width: 0; }
 .agent b { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
-.agent .agent-revoke { margin-left: auto; }
+.agent .agent-revoke, .agent .agent-replace { margin-left: auto; }
+.agent .agent-replace + .agent-revoke { margin-left: 0; }
 .session { align-items: flex-start; padding: var(--space-6); border: 1px solid var(--line); border-radius: var(--r-control); }
 .session-info { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
 .session-info .row { flex-wrap: wrap; }

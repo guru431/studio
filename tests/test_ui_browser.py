@@ -8425,6 +8425,50 @@ def test_settings_lists_computers_and_revokes_one(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_settings_replaces_a_computer_with_the_new_one(browser, live):
+    """IDEAS 09:I8: «Заменить» → окно с выбором нового компьютера и паролем; строка нового уходит, прежняя остаётся
+    со своим id и именем; мост нового получает 1012 и тем же ключом приходит как прежний."""
+    import bridge
+    from fake_bridge import FakeMachine, SocketBridge
+    login = "replacer"
+    live.add_user(login)
+    old, _ = enroll_live(live, login, "Старый ПК")
+    new, key = enroll_live(live, login, "Новый ПК")
+    sb = SocketBridge(live.url, key, FakeMachine()).start()
+    rows = """[...document.querySelectorAll('#agents li[data-id]')].map((li) => [Number(li.dataset.id),
+      li.querySelector('.agent-name').textContent, li.querySelector('.agent-replace')?.textContent ?? null])"""
+    try:
+        wait_for(lambda: new in bridge.LINKS)
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
+            ("wait", "document.querySelectorAll('#agents li[data-id]').length === 2"),
+            ("eval", "before", rows),
+            ("eval", "fits", NO_OVERFLOW),
+            ("click", f"#agents li[data-id='{old}'] .agent-replace"), ("wait", is_open("#agent-replace-dialog")),
+            ("eval", "title", "document.querySelector('#agent-replace-dialog h2').textContent"),
+            ("eval", "choices", "[...document.querySelectorAll('#agent-replace-new option')].map((o) => o.textContent)"),
+            ("eval", "dialogFits", NO_OVERFLOW),
+            ("type", "#agent-replace-password", "password-123"),
+            ("click", "#agent-replace-confirm"),
+            ("wait", "document.querySelectorAll('#agents li[data-id]').length === 1"),
+            ("eval", "closed", "!" + is_open("#agent-replace-dialog")),
+            ("eval", "after", rows)], width=320, mobile=True)
+        wait_for(lambda: sb.close_code is not None)
+    finally:
+        sb.stop()
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["before"] == [[old, "Старый ПК", "Заменить"], [new, "Новый ПК", "Заменить"]] and v["fits"] is True
+    assert v["title"] == "Заменить компьютер?" and v["choices"] == ["Новый ПК"] and v["dialogFits"] is True
+    assert v["closed"] is True and v["after"] == [[old, "Старый ПК", None]]
+    assert sb.close_code == 1012
+    again = SocketBridge(live.url, key, FakeMachine()).start()
+    try:
+        assert again.welcome["agent_id"] == old and again.welcome["name"] == "Старый ПК"
+    finally:
+        again.stop()
+    assert not problems(r), problems(r)
+
+
 def test_settings_member_leaves_a_shared_computer_instead_of_revoking_it(browser, live):
     """FINDINGS 07:F3: чужой компьютер участника — метка «Совместные» и «Покинуть» вместо «Отозвать»; подтверждение
     снимает выдачи, строка уходит."""
