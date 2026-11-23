@@ -35,7 +35,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `selfcheck` (самопроверка моста), `desktop`, `desktop_native` (Windows), `desktop_macos` (macOS) |
 | Обновление | `updater`, `update_helper` (stdlib-хелпер), `winacl` (ACL каталогов Windows), `shortcut` (ярлык меню «Пуск»), `install.ps1`, `install.cmd` |
-| Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `i18n` (язык окна, трея и консоли), `__main__` (консольные команды), `studio_agent.pyw` |
+| Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `i18n` (язык окна, трея и консоли), `__main__` (консольные команды), `transfer` (перенос на новый компьютер: `export-chats`/`import-chats`), `studio_agent.pyw` |
 
 ## Правила
 

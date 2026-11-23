@@ -508,33 +508,36 @@ class Controller:
         return result
 
     def _on_welcome(self, gen: int, frame: dict) -> None:
-        """`welcome` (в цикле): логин учётки и имя компьютера → `config.json` в потоке, если сменились."""
+        """`welcome` (в цикле): логин учётки, имя и id компьютера → `config.json` в потоке, если сменились (id и имя
+        меняет «Заменить компьютер» в Студии: ключ этого моста перешёл к прежнему компьютеру)."""
         if gen != self._gen:
             return
         version = frame.get("studio_version")
         self.studio_version = version if isinstance(version, str) and re.fullmatch(
             r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}", version) else None
-        login, name = frame.get("login"), frame.get("name")
+        login, name, agent_id = frame.get("login"), frame.get("name"), frame.get("agent_id")
         login = login if isinstance(login, str) and login else None
         name = name.strip() if isinstance(name, str) and setup.name_ok(name) else None
-        if login is None and name is None:
+        agent_id = agent_id if type(agent_id) is int and agent_id > 0 else None
+        if login is None and name is None and agent_id is None:
             return
-        task = asyncio.create_task(asyncio.to_thread(self._remember, gen, login, name))
+        task = asyncio.create_task(asyncio.to_thread(self._remember, gen, login, name, agent_id))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
 
-    def _remember(self, gen: int, login: str | None, name: str | None) -> None:
+    def _remember(self, gen: int, login: str | None, name: str | None, agent_id: int | None = None) -> None:
         """В потоке: запись в config.json; логин сменился — подписчикам `on_login` (окно и трей читают его из файла,
         их смена состояния могла прийти раньше записи)."""
         with self._cfg_lock:
             if gen != self._gen:  # канал уже погашен (отвязка стёрла логин) — не возвращать
                 return
             cfg = store.load_config(self.h)
-            new = dataclasses.replace(cfg, login=login or cfg.login, name=name or cfg.name)
+            new = dataclasses.replace(cfg, login=login or cfg.login, name=name or cfg.name,
+                                      agent_id=agent_id or cfg.agent_id)
             if new == cfg:
                 return
             store.save_config(self.h, new)
-            log.info("вход: логин и имя компьютера — из welcome")
+            log.info("вход: логин, имя и id компьютера — из welcome")
         if new.login != cfg.login:
             for callback in list(self._login_subscribers):
                 try:

@@ -265,6 +265,17 @@ EN = {
     "снять блок PIN": "unlock PIN",
     "настройки (без ключа)": "settings (without the key)",
     "интерактивные настройки и диагностика": "interactive settings and diagnostics",
+    "соответствия чатов и выбор моделей — в архив для нового компьютера":
+        "chat mappings and model choices to an archive for a new computer",
+    "соответствия чатов и выбор моделей — из архива прежнего компьютера":
+        "chat mappings and model choices from the old computer's archive",
+    "файл архива ZIP": "ZIP archive file",
+    "Архив переноса не записан.": "The transfer archive was not written.",
+    "Сохранено файлов: {0}. Ключа и PIN в архиве нет. На новом компьютере: import-chats.":
+        "Files saved: {0}. The archive has no key or PIN. On the new computer: import-chats.",
+    "Это не архив переноса моста или он не читается.": "This is not a bridge transfer archive, or it cannot be read.",
+    "Добавлено записей: {0}. Затем в Студии у прежнего компьютера — «Заменить».":
+        "Entries added: {0}. Then choose “Replace” on the old computer in Studio.",
     # linux_menu: меню и консоль Linux
     "Состояние и проверка CLI": "Status and CLI check",
     "Привязка к Студии": "Link to Studio",

@@ -1,4 +1,5 @@
-"""Команды моста: `python -m studio_agent [run] [--console] | enroll | set-pin | clear-pin | reset-pin | status`.
+"""Команды моста: `python -m studio_agent [run] [--console] | enroll | set-pin | clear-pin | reset-pin | status |
+export-chats <архив> | import-chats <архив>`.
 
 Пароль и PIN — только `getpass` (не argv). `run` без `--console` — трей и окно (`app.main`)."""
 
@@ -8,6 +9,7 @@ import os
 import socket
 import sys
 import threading
+from pathlib import Path
 
 from . import enroll, host, journal, setup, single, store
 from .i18n import tr
@@ -137,6 +139,28 @@ def _status(h) -> int:
     return 0
 
 
+def _transfer(h, cmd: str, path: str) -> int:
+    """Перенос на новый компьютер: соответствия чатов и выбор моделей — в архив и обратно (без ключа и PIN)."""
+    import zipfile
+
+    from . import transfer
+    if cmd == "export-chats":
+        try:
+            count = transfer.export(h, Path(path))
+        except OSError:
+            print(tr("Архив переноса не записан."))
+            return 1
+        print(tr("Сохранено файлов: {0}. Ключа и PIN в архиве нет. На новом компьютере: import-chats.", count))
+        return 0
+    try:
+        added = transfer.import_(h, Path(path))
+    except (OSError, zipfile.BadZipFile, transfer.TransferError):
+        print(tr("Это не архив переноса моста или он не читается."))
+        return 1
+    print(tr("Добавлено записей: {0}. Затем в Студии у прежнего компьютера — «Заменить».", added))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m studio_agent", description=tr("Мост studio-agent"))
     sub = parser.add_subparsers(dest="cmd")
@@ -147,11 +171,16 @@ def main(argv: list[str]) -> int:
     sub.add_parser("clear-pin", help=tr("убрать PIN"))
     sub.add_parser("reset-pin", help=tr("снять блок PIN"))
     sub.add_parser("status", help=tr("настройки (без ключа)"))
+    for cmd, words in (("export-chats", "соответствия чатов и выбор моделей — в архив для нового компьютера"),
+                       ("import-chats", "соответствия чатов и выбор моделей — из архива прежнего компьютера")):
+        sub.add_parser(cmd, help=tr(words)).add_argument("archive", help=tr("файл архива ZIP"))
     if host.LINUX:
         sub.add_parser("menu", help=tr("интерактивные настройки и диагностика"))
         sub.add_parser("_service", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     h = store.home()
+    if args.cmd in ("export-chats", "import-chats"):
+        return _transfer(h, args.cmd, args.archive)
     if host.LINUX:
         from . import linux_menu
         if args.cmd in (None, "menu"):
