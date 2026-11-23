@@ -88,7 +88,8 @@ README = """Выгрузка истории студии
 Что внутри:
 - settings.json — профиль (логин, имя, тема, виды лент), подключения (адреса без ключей), разделы
   (подключения и отмеченные модели, умолчания), пресеты и роли чата (имя, текст, порядок),
-  личная память чата (memory_on — включена ли, memory — записи: текст и время, новые первыми).
+  личная память чата (memory_on — включена ли, memory — записи: текст и время, новые первыми),
+  тон и глоссарий перевода (translate: tone, glossary — пары термин и перевод по порядку).
 - chats/<id>.json — диалог: сообщения по порядку, вложения (текст документа и ссылка на файл), у ответов —
   найденное «Интернетом» (tools: поиски, страницы, субтитры с их текстом), рассуждение модели (reasoning,
   reasoning_sec — секунды) и план работы (todo: шаги и их состояние), звук и видео диалога для MCP
@@ -99,7 +100,8 @@ README = """Выгрузка истории студии
 - videos/ — ролики, transcripts/ — расшифровки (и правки, если были), speeches/ — озвучки, voices/ —
   образцы голосов, так же страницами. Файлы — ссылками «files/…».
 - scans/ — распознанные документы, так же страницами: имя, состояние, страницы с текстом (Markdown) и
-  состоянием; исходный PDF и картинки страниц — ссылками «files/…».
+  состоянием, у правленой страницы — ещё распознанный моделью текст (recognized); исходный PDF и
+  картинки страниц — ссылками «files/…».
 - translations/0001.json … — переводы, так же страницами: вид (текст, файл, снимок), языки (выбранные,
   определённый, итоговый), исходный текст и перевод, куски по порядку (у снимка — рамка блока в долях
   0…1000) с состоянием; исходный файл или снимок — ссылкой «files/…».
@@ -152,8 +154,8 @@ def _file_name(row) -> str:
 
 
 def _settings(user_id: int) -> dict | None:
-    user = state.DB.execute("SELECT login, name, theme, views, screen_lock, memory_on FROM users WHERE id = ?",
-                            (user_id,)).fetchone()
+    user = state.DB.execute("SELECT login, name, theme, views, screen_lock, memory_on, translate_tone FROM users"
+                            " WHERE id = ?", (user_id,)).fetchone()
     if user is None:
         return None
     return {
@@ -177,6 +179,9 @@ def _settings(user_id: int) -> dict | None:
                                             (user_id,))],
         "memory_on": bool(user["memory_on"]),
         "memory": memory.list_for(user_id),            # личная память «Чата» — расшифрованной, новые первыми
+        "translate": {"tone": user["translate_tone"],  # тон и глоссарий «Перевода» (translate.preferences)
+                      "glossary": [dict(r) for r in state.DB.execute(
+                          "SELECT term, translation FROM translate_glossary WHERE user_id = ? ORDER BY n", (user_id,))]},
     }
 
 
@@ -261,9 +266,10 @@ def _scans(user_id: int, rows: list, files: dict) -> list:
     pages: dict[str, list] = {}
     if rows:
         marks = ", ".join("?" * len(rows))
-        for p in state.DB.execute(f"SELECT scan_id, n, state, text, detail, media_id FROM scan_pages WHERE user_id = ?"
-                                  f" AND scan_id IN ({marks}) ORDER BY scan_id, n", (user_id, *(r["id"] for r in rows))):
-            pages.setdefault(p["scan_id"], []).append(_pick(p, "n", "state", "text", "detail")
+        for p in state.DB.execute(f"SELECT scan_id, n, state, text, recognized, detail, media_id FROM scan_pages"
+                                  f" WHERE user_id = ? AND scan_id IN ({marks}) ORDER BY scan_id, n",
+                                  (user_id, *(r["id"] for r in rows))):
+            pages.setdefault(p["scan_id"], []).append(_pick(p, "n", "state", "text", "recognized", "detail")
                                                       | {"file": files.get(p["media_id"])})
     return [_pick(r, "id", "model", "name", "origin", "state", "detail", "created", "finished")
             | {"file": files.get(r["source_media_id"]), "pages": pages.get(r["id"], [])}
