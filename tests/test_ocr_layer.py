@@ -79,6 +79,21 @@ def test_photo_pages_are_jpeg_pages_with_the_layer():
     assert image.image.size == (600, 900)
 
 
+def test_photo_page_follows_exif_orientation_like_recognition():
+    """Фото с Orientation=6 распознаётся повёрнутым (`photo_png`) — страница PDF повёрнута так же."""
+    from PIL import Image
+    out = io.BytesIO()
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("RGB", (400, 300), "white").save(out, format="JPEG", exif=exif)
+    raw = out.getvalue()
+    with Image.open(io.BytesIO(ocr_render.photo_png(raw))) as seen:
+        assert seen.size == (225, 300)                # портрет; длинная сторона — MAX_SIDE фикстуры
+    pdf = ocr_pdf.build(None, [ocr_pdf.Page(image=raw, lines=[("Строка", (100, 100, 600, 130))])])
+    assert pypdfium2.PdfDocument(pdf)[0].get_size() == (631.5, 842)
+    assert PdfReader(io.BytesIO(pdf)).pages[0].images[0].image.size == (300, 400)
+
+
 SPOT = "Первая строка(100,100),(600,130)Second line(100,200),(500,230)"
 
 
