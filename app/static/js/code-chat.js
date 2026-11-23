@@ -1943,7 +1943,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     await follow(response, own);
   }
 
-  async function loadEarlier() {
+  async function loadEarlier({ showStart = false } = {}) {
     if (more.disabled || start <= 0) return false;
     more.disabled = true;
     const revision = historyRevision;
@@ -1959,7 +1959,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const oldStart = start;
       start = Number.isInteger(page.start) ? page.start : 0;
       more.hidden = start <= 0;
-      if (anchor?.isConnected) scrollByViewportPixels(anchor.getBoundingClientRect().top - top);
+      if (showStart) {
+        messageTarget = null;
+        followTail = false;
+        scroller.scrollTop = 0;
+      } else if (anchor?.isConnected) {
+        scrollByViewportPixels(anchor.getBoundingClientRect().top - top);
+      }
       if (messageTarget && scroller) messageScrollTop = scroller.scrollTop;
       return start < oldStart;
     } catch (err) {
@@ -1972,7 +1978,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
   }
 
-  more.addEventListener('click', loadEarlier);
+  more.addEventListener('click', () => loadEarlier({ showStart: true }));
   previous.addEventListener('click', () => jumpMessage(-1));
   allSteps.addEventListener('click', () => {
     interacted();

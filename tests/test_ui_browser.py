@@ -10293,7 +10293,11 @@ def test_code_reopened_chat_shows_history_and_more(browser, live):
               return c.bottom <= rail.top + 1 && c.top >= 0; })()"""),
             ("eval", "fits", NO_OVERFLOW),
             ("click", "#code-more"), ("wait", f"{count} === 42"), ("eval", "first2", first),
-            ("eval", "shown2", "!document.querySelector('#code-more').hidden"),
+            ("eval", "shown2", """new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
+              const button = document.querySelector('#code-more');
+              const {x, y, width, height} = button.getBoundingClientRect();
+              resolve(!button.disabled && button.contains(document.elementFromPoint(x + width / 2, y + height / 2)));
+            })))"""),
             *remaining, ("eval", "first3", first),
             # кнопка прячется после отрисовки последней страницы — кадром позже подсчёта сообщений
             ("wait", "document.querySelector('#code-more').hidden"),
