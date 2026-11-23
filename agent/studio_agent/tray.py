@@ -1,5 +1,5 @@
 """Значок в трее (pystray, свой поток): рисунок значка студии с точкой состояния, подсказка с логином, меню и
-уведомления Windows; команды меню — в очередь Tk.
+уведомления Windows/macOS; команды меню и щелчки — в очередь Tk.
 
 Рисунок — `icons/icon.svg` студии (viewBox 512): скруглённый квадрат с диагональным градиентом, белое облачко,
 четырёхлучевая звезда. Рисуется Pillow-ом в 512 px (кривые — многоугольником) и уменьшается: края гладкие."""
@@ -145,9 +145,11 @@ class Tray:
         import pystray
 
         self.state, self.login = state, login
+        self._post = post
         self._pin_locked = pin_locked
         self._pin_status = False
         self._stopped = False
+        self._mac_wait = None
         self.activity = {"tasks": 0, "waiting": 0, "desktop_active": False, "quit_when_idle": False, "updating": False}
 
         def updating(item) -> bool:  # «Отменить обновление» — пока Studio Agent готовит обновление или ждёт заданий
@@ -182,6 +184,9 @@ class Tray:
 
     def start(self) -> None:
         if host.MACOS:
+            from .macos_notifications import WaitNotifications
+
+            self._mac_wait = WaitNotifications.for_app(self._post)
             self.icon.run_detached()
             return
         threading.Thread(target=self.icon.run, name="studio-agent-tray", daemon=True).start()
@@ -227,12 +232,20 @@ class Tray:
         return action
 
     def notify(self, text: str, on_click: Callable[[], None] | None = None) -> None:
-        """Уведомление; `on_click` — щелчок по нему (Windows; macOS показывает уведомление через osascript, щелчок
-        до моста не доходит)."""
+        """Уведомление pystray; `on_click` обрабатывается на Windows."""
         self._click = on_click
         with contextlib.suppress(Exception):
             self.icon.notify(text, TITLE)
 
+    def notify_waiting(self, text: str) -> None:
+        if self._mac_wait is not None:
+            self._mac_wait.show(TITLE, text)
+        else:
+            self.notify(text, on_click=lambda: self._post("studio"))
+
     def stop(self) -> None:
         self._stopped = True
+        if self._mac_wait is not None:
+            self._mac_wait.close()
+            self._mac_wait = None
         self.icon.stop()

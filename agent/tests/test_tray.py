@@ -68,6 +68,16 @@ def test_notice_only_for_first_online_and_studio_closing():
         assert tray.notice(state, True) is None
 
 
+def test_waiting_notice_uses_native_macos_notification_when_available():
+    from types import SimpleNamespace
+
+    notifications = []
+    icon = tray.Tray.__new__(tray.Tray)
+    icon._mac_wait = SimpleNamespace(show=lambda title, body: notifications.append((title, body)))
+    icon.notify_waiting("Задание ждёт ответа в Студии")
+    assert notifications == [(tray.TITLE, "Задание ждёт ответа в Студии")]
+
+
 def test_local_activity_menu_routes_desktop_and_exit_actions_without_private_details(monkeypatch):
     import sys
     from types import SimpleNamespace

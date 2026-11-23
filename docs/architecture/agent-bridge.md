@@ -235,10 +235,11 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 - **Уведомление о задании, ждущем ответа** — `app.WaitNotice`: задания ждут ответа (`waiting > 0` в
   `Controller._refresh_activity`) дольше `limits.WAIT_NOTICE_SEC` (60) с — одно уведомление трея «Задание ждёт ответа
   в Студии» без текста задания; снова — только когда ждать перестали и начали заново. Часы — параметр `now`
-  `Controller`. Щелчок по уведомлению на Windows открывает раздел «Агенты» (`Controller.studio_url`): pystray не
-  обрабатывает щелчок по уведомлению, `tray.balloon_handler` ловит `NIN_BALLOONUSERCLICK` в обработчике сообщения
-  значка. macOS показывает уведомление через osascript pystray — щелчок до моста не доходит. У Linux трея нет
-  (служба systemd и консольное меню) — уведомления нет.
+  `Controller`. Щелчок открывает раздел «Агенты» (`Controller.studio_url`) через очередь главного потока.
+  На Windows `tray.balloon_handler` ловит `NIN_BALLOONUSERCLICK` в обработчике сообщения значка. На macOS
+  с 0.47.1 приложение Studio Agent запрашивает разрешение на показ и принимает щелчок через делегат
+  `UNUserNotificationCenter` (`macos_notifications`). Для запуска из исходников вне приложения остаётся
+  уведомление pystray. Linux работает как служба systemd с консольным меню, без трея.
 
 ## DeepSeek Harness (0.46.0)
 

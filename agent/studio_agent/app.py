@@ -956,7 +956,7 @@ def main(argv: list[str]) -> int:
                 icon.refresh()
                 window.pin_changed()
             elif cmd == "waiting":  # без текста задания: только слова и щелчок — раздел «Агенты»
-                icon.notify(tr(WAITING_NOTICE), on_click=lambda: commands.put("studio"))
+                icon.notify_waiting(tr(WAITING_NOTICE))
             elif cmd == "studio":
                 if url := ctrl.studio_url():
                     webbrowser.open(url)
