@@ -1033,7 +1033,7 @@ function notifyBlock() {
 
 /* «Компьютеры (Claude Code)»: установщик находится наверху корня настроек (ui.js agentDownload).
  * Мосты учётки (GET /api/agents) — имя, «на связи», значок «PIN»; «Отозвать» — окно и
- * DELETE /api/agents/<id> (мост на связи отключается). Чужой компьютер участника (`shared`) — метка «Совместные»
+ * DELETE /api/agents/<id> (мост на связи отключается); «Заменить» (есть другой свой компьютер) — окно с паролем. Чужой компьютер участника (`shared`) — метка «Совместные»
  * и «Покинуть»: DELETE /api/me/access/shared/<id> снимает его выдачи. История подключений (GET /api/agents/events) — только
  * чтение, новые сверху страницами сервера, «Показать ещё» — по `next`. */
 const AGENT_EVENTS = { enroll: tr("привязан"), revoke: tr("отозван"), online: tr("на связи"), offline: tr("связь потеряна"),
@@ -1075,6 +1075,32 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
     });
   }
 
+  /** «Заменить компьютер»: прежний `agent` получает ключ выбранного нового — id, имя, доступы участников, зеркала и
+   * вкладки остаются у прежнего, его мост отключается, строка нового уходит (POST /api/agents/<id>/replace). */
+  function replace(agent, others) {
+    const pick = el('select', { class: 'input', id: 'agent-replace-new' },
+      ...others.map((a) => el('option', { value: String(a.id) }, a.name)));
+    const password = el('input', { class: 'input', id: 'agent-replace-password', type: 'password',
+      autocomplete: 'current-password', maxlength: '1024' });
+    const yes = button(tr("Заменить"), { class: 'btn btn-danger', id: 'agent-replace-confirm' });
+    const fail = el('p', { class: 'error', role: 'status' });
+    const dialog = openDialog(host, { id: 'agent-replace-dialog', title: tr("Заменить компьютер?"), actions: [yes], body: [
+      el('p', {}, tr("«{0}» получит ключ выбранного компьютера: id, имя, доступы участников, зеркала и вкладки останутся, а мост на прежнем компьютере отключится.", agent.name)),
+      el('p', { class: 'muted' }, tr("Строка нового компьютера уйдёт вместе с его вкладками и отметками чатов. Соответствия чатов перенесите командами моста export-chats и import-chats.")),
+      field(tr("Новый компьютер"), pick, pick.id), field(tr("Пароль учётки"), password, password.id), fail] });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      try {
+        await api('POST', `/api/agents/${agent.id}/replace`, { new_id: Number(pick.value), password: password.value });
+        dialog.close();
+        reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        yes.disabled = false;
+      }
+    });
+  }
+
   /** Чужой компьютер участника: отозвать его нельзя, можно покинуть выданные проекты (сервер снимает выдачи). */
   function leave(agent) {
     const yes = button(tr("Покинуть"), { class: 'btn btn-danger', id: 'agent-leave-confirm' });
@@ -1098,11 +1124,14 @@ function agentsBlock(host, agents = () => api('GET', '/api/agents')) {
   async function loadAgents() {
     try {
       const { items } = await agents();
+      const own = items.filter((a) => !a.shared);
       list.replaceChildren(...(items.length ? items.map((a) => el('li', { class: 'agent', 'data-id': String(a.id) },
         el('b', { class: 'agent-name' }, a.name),
         el('span', { class: `tag agent-state${a.online ? ' server' : ''}` }, a.online ? tr("на связи") : tr("не на связи")),
         a.has_pin ? el('span', { class: 'tag agent-pin' }, 'PIN') : null,
         a.shared ? el('span', { class: 'tag agent-shared' }, tr("Совместные")) : null,
+        !a.shared && own.length > 1 ? button(tr("Заменить"), { class: 'btn btn-sm agent-replace',
+          'aria-label': tr("Заменить компьютер: {0}", a.name) }, () => replace(a, own.filter((b) => b.id !== a.id))) : null,
         a.shared ? button(tr("Покинуть"), { class: 'btn btn-sm btn-danger agent-leave' }, () => leave(a))
           : button(tr("Отозвать"), { class: 'btn btn-sm btn-danger agent-revoke' }, () => revoke(a))))
         : [el('li', { class: 'muted small' }, tr("Компьютеров пока нет."))]));

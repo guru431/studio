@@ -8,6 +8,8 @@
   только `security.digest` (как сессия). Смена пароля его не гасит; отзыв — `DELETE /api/agents/<id>` из
   студии или `DELETE /api/agent/enroll` самим мостом (ключ — заголовком `Authorization`; «Отключиться» в окне
   моста); канал на связи закрывается 4401 (`bridge.drop`). «На связи», модели и усилия — из канала (`bridge.LINKS`).
+- Перенос на новый компьютер — `POST /api/agents/<id>/replace {new_id, password}` (`replace`): новая привязка
+  наследует id, имя, доступы, зеркала и вкладки прежней, прежний ключ отозван.
 - Установщик моста — `GET /api/agent/download` (только вошедшим): `AGENT_SETUP` рядом с кодом кладёт выкладка
   (`deploy/deploy.sh` собирает EXE и ZIP из одного HEAD); секретов в них нет.
   Для терминала Linux вошедшая сессия выдаёт короткоживущий пропуск только на этот установщик.
@@ -26,6 +28,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from cryptography.fernet import InvalidToken
+from pydantic import BaseModel, Field
 
 import auth
 import agent_release
@@ -35,6 +38,7 @@ import email_accounts
 import lock_policy
 import security
 import project_access
+import security_log
 import state
 import totp
 
@@ -310,3 +314,50 @@ async def revoke(request: Request, aid: int):
     log.info("пользователь %d: компьютер %d отозван", uid, aid)
     await bridge.drop(aid)
     return Response(status_code=204)
+
+
+class Replace(BaseModel):
+    new_id: int
+    password: str = Field(max_length=1024)
+
+
+@router.post("/api/agents/{aid}/replace")
+async def replace(request: Request, aid: int, body: Replace):
+    """«Заменить компьютер»: ключ своего нового компьютера `new_id` (уже привязанного) переходит к прежнему `aid`.
+    У `aid` остаются id, имя, выдачи участников (с ролью и сроком), зеркала, вкладки и отметки чатов — всё, что
+    ссылается на id; прежний ключ отозван (канал прежнего моста — 4401). Строка нового уходит вместе со своими
+    вкладками и отметками, место учётки на нём переходит к `aid`; канал нового — 1012: мост переподключится тем же
+    ключом и придёт как `aid` (имя — из `welcome`). Пароль — `auth.confirm_password`. Шага схемы нет."""
+    uid = request.state.user.id
+    mine = "SELECT id, name, key_hash, has_pin, projects_root, cc_version, last_seen, platform FROM agents" \
+           " WHERE id = ? AND user_id = ?"
+    if body.new_id == aid:
+        raise HTTPException(422, {"code": "same", "message": "выберите новый компьютер"})
+    if any(state.DB.execute(mine, (i, uid)).fetchone() is None for i in (aid, body.new_id)):
+        raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера"})
+    await auth.confirm_password(uid, body.password, "замена компьютера", digest=request.state.digest)
+    state.DB.execute("BEGIN IMMEDIATE")      # после await — строки заново: их могли отозвать
+    try:
+        old, new = (state.DB.execute(mine, (i, uid)).fetchone() for i in (aid, body.new_id))
+        if old is None or new is None:
+            raise HTTPException(404, {"code": "not_found", "message": "нет такого компьютера"})
+        for column in ("panel_id", "agent_id"):                                   # имена — из кода
+            state.DB.execute(f"UPDATE code_place SET {column} = ? WHERE {column} = ?", (aid, new["id"]))
+        state.DB.execute("DELETE FROM agents WHERE id = ?", (new["id"],))        # key_hash UNIQUE — сперва прочь
+        state.DB.execute("UPDATE agents SET key_hash = ?, has_pin = ?, projects_root = ?, cc_version = ?,"
+                         " last_seen = ?, platform = COALESCE(?, platform) WHERE id = ?",
+                         (new["key_hash"], new["has_pin"], new["projects_root"], new["cc_version"],
+                          new["last_seen"], new["platform"], aid))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    device, ip = bridge.device(request), auth.client_ip(request)
+    bridge.record(uid, new["id"], new["name"], "revoke", device=device, ip=ip)
+    bridge.record(uid, aid, old["name"], "revoke", device=device, ip=ip)    # прежний ключ
+    bridge.record(uid, aid, old["name"], "enroll", device=device, ip=ip)    # ключ нового компьютера
+    security_log.record(uid, "agent_replace", digest=request.state.digest, ip=ip)
+    log.info("пользователь %d: компьютер %d заменён компьютером %d", uid, aid, new["id"])
+    await bridge.drop(aid)
+    await bridge.drop(new["id"], bridge.CLOSE_RESTART)
+    return {"id": aid}

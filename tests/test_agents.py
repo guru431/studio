@@ -316,3 +316,67 @@ def test_agent_log_holds_no_secrets(studio, caplog):
     assert f"привязка с {IP}: login" in text and f"привязка с {IP}: name" in text
     for secret in (key, security.digest(key), "password-123", "wrong-secret-9", "owner", "Рабочий", "ПК"):
         assert secret not in text, secret
+
+
+def replace(s, aid, new_id, password="password-123"):
+    return s.c.post(f"/api/agents/{aid}/replace", json={"new_id": new_id, "password": password},
+                    headers={"X-Forwarded-For": "203.0.113.4"})
+
+
+def test_replace_moves_the_new_key_to_the_old_computer_and_keeps_what_hangs_on_its_id(studio):
+    """IDEAS 09:I8: новая привязка наследует id, имя, выдачи (с ролью и сроком), зеркала и вкладки прежней; прежний
+    ключ отозван (4401), строка нового — прочь, его канал — 1012: мост переподключится тем же ключом как прежний."""
+    uid = make_user(studio, "owner"); friend = make_user(studio, "friend")
+    old, old_key = enroll(studio, name="Старый ПК")
+    new, new_key = enroll(studio, name="Новый ПК")
+    other, _ = enroll(studio, name="Третий ПК")
+    state.DB.execute("INSERT INTO project_members(agent_id, project, user_id, created, role, expires)"
+                     " VALUES (?, '0123456789abcdef', ?, 0, 'viewer', 9e9)", (old, friend))
+    state.DB.execute("INSERT INTO code_tabs(user_id, agent_id, project, tabs, touched) VALUES (?, ?, 'p', '[]', 0)",
+                     (uid, old))
+    state.DB.execute("INSERT INTO code_tabs(user_id, agent_id, project, tabs, touched) VALUES (?, ?, 'q', '[]', 0)",
+                     (uid, new))
+    mirror = state.DB.execute("INSERT INTO project_mirrors(source, project, destination, root, name_key, location)"
+                              " VALUES (?, '0123456789abcdef', ?, 'r', 'n', x'00')",
+                              (old, other)).lastrowid
+    state.DB.execute("INSERT INTO code_place(user_id, panel_id, agent_id, project) VALUES (?, ?, ?, 'q')",
+                     (uid, new, new))
+    old_link = connect(studio, old, FakeMachine())
+    new_link = connect(studio, new, FakeMachine(pin="1234"))
+    signin(studio, "owner")
+    r = replace(studio, old, new, password="wrong")
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "password"
+    assert state.DB.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 3
+    r = replace(studio, old, new)
+    assert r.status_code == 200 and r.json() == {"id": old}
+    settle(studio)
+    assert old_link.closed_with == bridge.CLOSE_AUTH and new_link.closed_with == bridge.CLOSE_RESTART
+    row = state.DB.execute("SELECT name, key_hash, has_pin FROM agents WHERE id = ?", (old,)).fetchone()
+    assert (row["name"], row["key_hash"], row["has_pin"]) == ("Старый ПК", security.digest(new_key), 1)
+    assert state.DB.execute("SELECT 1 FROM agents WHERE id = ? OR key_hash = ?",
+                            (new, security.digest(old_key))).fetchone() is None
+    assert [tuple(r) for r in state.DB.execute("SELECT agent_id, user_id, role, expires FROM project_members")] == [
+        (old, friend, "viewer", 9e9)]
+    assert [tuple(r) for r in state.DB.execute("SELECT agent_id, project FROM code_tabs")] == [(old, "p")]
+    assert state.DB.execute("SELECT source FROM project_mirrors WHERE id = ?", (mirror,)).fetchone()[0] == old
+    assert tuple(state.DB.execute("SELECT panel_id, agent_id FROM code_place").fetchone()) == (old, old)
+    kinds = [(e["kind"], e["agent_id"]) for e in events(studio)["items"]]
+    assert kinds[:5] == [("offline", new), ("offline", old), ("enroll", old), ("revoke", old), ("revoke", new)]
+    assert state.DB.execute("SELECT COUNT(*) FROM security_events WHERE kind = 'agent_replace'").fetchone()[0] == 1
+    link = connect(studio, old, FakeMachine())          # мост нового компьютера с прежним ключом приходит как old
+    assert link.sent[0]["agent_id"] == old and link.sent[0]["name"] == "Старый ПК"
+    items = studio.c.get("/api/agents").json()["items"]
+    assert [(i["id"], i["name"]) for i in items] == [(old, "Старый ПК"), (other, "Третий ПК")]
+
+
+def test_replace_needs_two_own_distinct_computers(studio):
+    make_user(studio, "owner"); make_user(studio, "friend")
+    mine, _ = enroll(studio)
+    theirs, _ = enroll(studio, login="friend")
+    signin(studio, "owner")
+    r = replace(studio, mine, mine)
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "same", "message": "выберите новый компьютер"}
+    for aid, new_id in ((mine, theirs), (theirs, mine), (mine, 999)):
+        r = replace(studio, aid, new_id)
+        assert r.status_code == 404 and r.json()["detail"]["code"] == "not_found"
+    assert state.DB.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 2

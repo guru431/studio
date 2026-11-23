@@ -36,6 +36,7 @@ KINDS = frozenset({
     "admin_grant", "admin_revoke",                    # права администратора выданы, сняты (панель)
     "project_member_add", "project_member_remove",    # доступ к проекту «Агентов» выдан, отозван (project_access)
     "project_leave",                                  # участник покинул совместные проекты чужого компьютера
+    "agent_replace",                                  # «Заменить компьютер»: ключ нового перешёл к прежнему (agents)
     "totp_on", "totp_off", "totp_reset",              # приложение-аутентификатор подключено, отключено, сброшено администратором
     "totp_fail", "totp_backup_used",                  # неверный код приложения (detail — login | bridge); резервный код
 })

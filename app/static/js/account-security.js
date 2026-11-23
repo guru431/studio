@@ -27,6 +27,7 @@ const EVENTS = { email_change: tr("почта изменена"), email_codes_on
   password_reset: tr("пароль сброшен администратором"), admin_grant: tr("права администратора выданы"),
   admin_revoke: tr("права администратора сняты"), project_member_add: tr("доступ к проекту выдан"),
   project_member_remove: tr("доступ к проекту отозван"), project_leave: tr("вы покинули совместные проекты"),
+  agent_replace: tr("компьютер заменён"),
   totp_on: tr("приложение-аутентификатор подключено"), totp_off: tr("приложение-аутентификатор отключено"),
   totp_reset: tr("приложение-аутентификатор сброшено администратором"), totp_fail: tr("неверный код приложения"),
   totp_backup_used: tr("вход резервным кодом") };
