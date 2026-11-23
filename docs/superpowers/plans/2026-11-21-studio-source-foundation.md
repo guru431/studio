@@ -21,8 +21,8 @@
 - Подписи — `tr` и `app/static/en.js`; 320 и 1280 px; значки — `icons.js`; `:hover` — в `@media (hover: hover)`.
 - Отслеживаемые файлы — только примеры адресов (`studio.example.com`, `10.77.1.x`).
 - Часы — `clock.NOW`; тест дольше 1 с — `integration`.
-- Тесты: точечно `<repo>/.venv/Scripts/python -m pytest -q -n0 <файлы>` из worktree; быстрый набор
-  `<repo>/.venv/Scripts/python -m pytest -q` — один раз в конце задачи; браузер — `-m integration`.
+- Тесты: точечно `.venv/Scripts/python -m pytest -q -n0 <файлы>` основного checkout из worktree; быстрый набор
+  `.venv/Scripts/python -m pytest -q` — один раз в конце задачи; браузер — `-m integration`.
 - Worktree исполнителя начинается со старого коммита: первым делом `git merge --ff-only main`.
 - Коммит после каждой задачи; сообщение + пустая строка + `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
