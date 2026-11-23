@@ -191,7 +191,9 @@ def test_second_turn_in_a_project_warns_and_runs_in_a_separate_worktree(browser,
             ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
             ("screenshot", str(tmp_path / f"busy-project-{width}.png")),
             ("click", action),
+            # ответ машины «Принято»: ход дошёл до моста (своё сообщение лента рисует ещё до запроса)
             ("wait", "document.querySelector('#code-feed')?.textContent.includes('Почини сборку')"
+                     " && document.querySelector('#code-feed').textContent.includes('Принято')"
                      " && document.querySelector('#code-busy-notice').hidden"),
             ("eval", "hash", "location.hash")], width=width, mobile=width == 320)
     finally:
