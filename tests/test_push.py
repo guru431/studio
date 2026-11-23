@@ -751,3 +751,35 @@ def test_reminder_waits_out_quiet_hours_and_follows_the_device_choice(studio):
     assert (aid, A) in bridge.CARDS
     emit(studio, link, ALPHA, A, {"k": "snapshot", "text": "", "steps": [], "asks": []})
     assert bridge.CARDS == {}
+
+
+def test_card_closed_without_a_link_is_forgotten_by_the_next_link(studio):
+    """Ревью R1-5: карточка закрылась, пока канала не было (перезапуск моста), — `asked` уже не придёт. Мост с
+    `hello.open_asks` при новом канале присылает все открытые: не присланные карточки компьютера удаляются, присланная
+    сохраняет счёт напоминаний; без кадра досылки (мосту нечего слать) неподтверждённые забываются за тик."""
+    make_user(studio, "owner")
+    aid, _ = enroll(studio)
+    signin(studio, "owner")
+    assert studio.c.post("/api/me/push", json=Device().body()).status_code == 204
+    studio.c.put("/api/me/notify", json={"off": [], "quiet_from": None, "quiet_to": None, "remind": 10})
+    machine = FakeMachine({"alpha": {}})
+    machine.completions = machine.open_asks = True
+    link = connect(studio, aid, machine)
+    b = "1f8e2a52-5d0e-4b8e-9a51-2f3c4d5e6f71"
+    for chat, rid in ((A, "r1"), (b, "r2")):
+        emit(studio, link, ALPHA, chat, {"k": "ask", "request_id": rid, "kind": "question", "questions": []})
+    bridge.CARDS[(aid, A)]["sent"]["d"] = (1, T0)
+    drop(studio, link)
+    link = connect(studio, aid, machine)
+    studio.c.portal.call(bridge.deliver, link, {"t": "completions", "items": [
+        {"project": ALPHA, "chat": A, "status": "question", "request_id": "r1", "known": True, "ago": 0}]})
+    assert list(bridge.CARDS) == [(aid, A)] and bridge.CARDS[(aid, A)]["sent"] == {"d": (1, T0)}
+    drop(studio, link)
+    link = connect(studio, aid, machine)                 # и эта закрылась: кадра досылки нет
+    sent = len(studio.gw.push_requests)
+    studio.clock[0] += 59
+    studio.c.portal.call(bridge.remind)
+    assert (aid, A) in bridge.CARDS
+    studio.clock[0] += 1
+    studio.c.portal.call(bridge.remind)
+    assert bridge.CARDS == {} and len(studio.gw.push_requests) == sent
