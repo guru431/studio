@@ -27,7 +27,7 @@ import { mcpStateWords } from './mcp-sections.js';
  * показывает его идущим и опрашивает диалог, как ответ сервера, который идёт без нас. Ответ
  * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано». Закрытие и перезагрузка вкладки
  * посреди ответа (`pagehide`) кладут прочитанное PUT с keepalive со статусом stopped — начало, что влезает в
- * предел тела keepalive (`partBody`).
+ * предел тела keepalive (`partBody`); сетевой обрыв потока ждёт `pagehide` LEAVE_MS — перезагрузка рвёт поток раньше.
  * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>); неподходящий тип и размер
  * чип называет при выборе файла. Отправленное фото — миниатюра (окно с ним), документ — ссылка на скачивание.
  * Первый ход нового диалога не прошёл — созданный под него диалог удаляется (`dropEmpty`). Открытый диалог
@@ -417,6 +417,7 @@ async function readBrowser(job, turn) {
     });
   }, BEAT_MS);
   let status = 'done';
+  let cut = false;                                  // запрос оборвала сеть — или уход страницы (`LEAVE_MS`)
   try {
     const token = await tokenFor(job.connId, turn.url);
     let response;
@@ -426,7 +427,8 @@ async function readBrowser(job, turn) {
         body: JSON.stringify({ ...(turn.params || {}), model: turn.model, messages: turn.messages, stream: true }),
         credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
     } catch (err) {
-      throw err instanceof TypeError ? new Error(CORS) : err;
+      cut = err instanceof TypeError;
+      throw cut ? new Error(CORS) : err;
     }
     if (response.status === 401 || response.status === 403) tokens.delete(job.connId);
     if (!response.ok) throw new Error(await serviceRefusal(response, turn.params));
@@ -452,7 +454,8 @@ async function readBrowser(job, turn) {
         }
       }
     } catch (err) {
-      throw err instanceof TypeError ? new Error(tr("Связь с сервисом оборвалась")) : err;
+      cut = err instanceof TypeError;
+      throw cut ? new Error(tr("Связь с сервисом оборвалась")) : err;
     }
     if (!ending) throw new Error(tr("Модель оборвала ответ: поток кончился без признака конца"));
     if (ending === 'length') {
@@ -466,6 +469,9 @@ async function readBrowser(job, turn) {
       job.message.error = words(err);
     }
   }
+  // Перезагрузка рвёт поток сетевой ошибкой за миг до `pagehide`: итог ошибки ждёт LEAVE_MS — успел `pagehide`,
+  // и ответ сохранён «остановлен» с прочитанным (`job.parted`), а не ошибкой, которую сервер уже не сменил бы.
+  if (cut) await new Promise((resolve) => { setTimeout(resolve, LEAVE_MS); });
   if (job.parted) {               // вкладку закрывали: итог уже ушёл keepalive — тот же итог сервер примет повторно
     status = 'stopped';
     job.message.content = job.parted.content;
@@ -485,6 +491,9 @@ async function readBrowser(job, turn) {
 
 /* Тело fetch с keepalive — не больше 64 КиБ на все такие запросы страницы разом; запас — прочим (jobs.js). */
 const PART_BYTES = 60 * 1024;
+/* Сколько итог сетевого обрыва ждёт `pagehide`: Chromium рвёт поток уходящей страницы при смене документа, за
+ * миллисекунду до `pagehide`, как бы долго ни шла сама перезагрузка. */
+const LEAVE_MS = 250;
 
 const bodyBytes = (body) => new TextEncoder().encode(JSON.stringify(body)).length;
 
