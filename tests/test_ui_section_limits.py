@@ -222,3 +222,42 @@ def test_mcp_photo_model_and_history_survive_leaving_section(browser, live):
     assert calls[-2][1]["n"] == 2 and "seed" not in calls[-2][1]
     assert calls[-1][1]["seed"] == 12345
     assert not problems(r), problems(r)
+
+
+def test_photo_reference_stays_visible_and_requires_a_tool_that_accepts_it(browser, live):
+    login = "mcp-photo-reference"
+    live.add_user(login)
+    tools = {**GOOD, "image_edit": {
+        "properties": {"prompt": TEXT, "artifact_id": TEXT}, "required": ["prompt", "artifact_id"],
+    }}
+    calls = serve(live.gw, tools)
+    result = browser.drive(live.url + "/", [*start(login),
+        ("eval", "photo", "location.hash='#/photo'"), ("wait", ready("image_generate")), choose("image_generate"),
+        ("eval", "clip", "!document.querySelector('#chip-photo').hidden"),
+        set_value("#photo-prompt", "Keep the composition"),
+        put_files("#photo-file", [("reference.png", PNG_REAL)]),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth > 0"),
+        ("eval", "preview", "!document.querySelector('#photo-source').hidden"),
+        ("click", "#photo-source-clear"),
+        ("eval", "paste", "(() => { const data = new DataTransfer();"
+         " data.items.add(new File(['image'], 'pasted.png', { type: 'image/png' }));"
+         " document.querySelector('#photo-prompt').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data })); })()"),
+        ("wait", "!document.querySelector('#photo-source').hidden"),
+        ("click", "#photo-source-clear"),
+        ("eval", "drop", "(() => { const data = new DataTransfer();"
+         f" data.items.add(new File([Uint8Array.from(atob({base64.b64encode(PNG_REAL).decode()!r}), c => c.charCodeAt(0))],"
+         " 'dropped.png', { type: 'image/png' }));"
+         " document.querySelector('#photo-composer').dispatchEvent(new DragEvent('drop', { dataTransfer: data })); })()"),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth > 0"),
+        ("click", "#photo-go"), ("eval", "blocked", "document.querySelector('#photo-error').textContent"),
+        ("click", "#photo-source-change"),
+        ("wait", "document.querySelector('#section-mcp-tool').value.endsWith(':image_edit')"),
+        ("eval", "retained", "[!document.querySelector('#photo-source').hidden, document.querySelector('#photo-prompt').value]"),
+        ("click", "#photo-go"), ("wait", DONE)], width=1280)
+    assert not result.get("failed"), result
+    assert result["values"]["clip"] and result["values"]["preview"]
+    assert "исходное фото" in result["values"]["blocked"]
+    assert result["values"]["retained"] == [True, "Keep the composition"]
+    assert [name for name, _ in calls] == ["artifact_upload", "image_edit"]
+    assert calls[-1][1] == {"artifact_id": UPLOADED, "prompt": "Keep the composition"}
+    assert not problems(result), problems(result)

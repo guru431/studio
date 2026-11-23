@@ -481,9 +481,10 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   return { control, output, fields: extras, has, hasFile, run, clear,
     option(key) { return options.get(key)?.tool; },
     editSource(sid) {
-      return [...options].find(([key, { server, tool }]) => (!sid || server.id === sid)
+      return [...options].find(([, { server, tool }]) => (!sid || server.id === sid)
         && ['image_edit', 'edit_image'].includes(tool.name) && Object.hasOwn(tool.files, 'artifact_id'))?.[0];
     },
+    sourceName(key) { return options.get(key)?.server.name; },
     selectSource(key, model) {
       if (!options.has(key)) return false;
       select.value = key;
@@ -513,6 +514,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
     get tool() { return picked()?.tool.name; }, get busy() { return busy(); }, get error() { return record()?.error; },
     /** Предел записи инструмента, с (`studio/limits`, mcp_sections.supported) или null. */
     get maxSeconds() { return picked()?.tool.limits?.max_seconds ?? null; },
+    get serverId() { return picked()?.server.id; },
     get server() { return picked()?.server.name; },          // имя сервера выбранного инструмента (голоса «Озвучки»)
     destroy() {
       controller.abort();

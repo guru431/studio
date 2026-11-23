@@ -1,5 +1,8 @@
 /* English interface catalog. Russian source strings are stable keys. */
 globalThis.StudioEnglish = Object.freeze({
+  "Переключиться на {0}": "Switch to {0}",
+  "Текущий инструмент не принимает исходное фото.": "The selected tool cannot use a reference photo.",
+  "Выберите фото PNG, JPEG или WebP": "Choose a PNG, JPEG or WebP photo",
   "Этот сервер MCP не предоставляет инструмент для изменения фото": "This MCP server has no photo editing tool",
   "Повтор с тем же промптом и моделью, с новым seed, если инструмент его поддерживает.": "Repeat with the same prompt and model, using a new seed if the tool supports it.",
   "Картинка будет удалена из истории.": "The picture will be removed from history.",

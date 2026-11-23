@@ -145,7 +145,10 @@ function build(view, ctx) {
   const strengthValue = el('output', { for: 'photo-strength' }, '0.25');
   const strengthLabel = el('label', { id: 'photo-strength-label', class: 'strength' }, tr("Сила изменения"), strength, strengthValue);
   const sourceClear = iconButton('x', tr("Убрать фото"), { id: 'photo-source-clear' });
-  const sourceBox = el('div', { id: 'photo-source', class: 'photo-source', hidden: true }, sourceImg, strengthLabel, sourceClear);
+  const sourceNote = el('span', { class: 'muted small', id: 'photo-source-note', role: 'status', hidden: true });
+  const sourceChange = button('', { class: 'btn btn-sm', id: 'photo-source-change', hidden: true });
+  const sourceBox = el('div', { id: 'photo-source', class: 'photo-source', hidden: true },
+    sourceImg, strengthLabel, sourceNote, sourceChange, sourceClear);
   const prompt = el('textarea', { id: 'photo-prompt', rows: '1', maxlength: String(PROMPT_MAX), 'aria-label': tr("Промпт"),
     placeholder: tr("Опишите картинку: кто, где, свет, ракурс, стиль") });
   const file = el('input', { type: 'file', id: 'photo-file', class: 'sr', accept: ACCEPT });
@@ -318,8 +321,19 @@ function build(view, ctx) {
       nativeHint.hidden = active;
       if (active && !form.parentNode) nativeHint.after(form);
     }
-    chipPhoto.hidden = active && !mcp.hasFile('artifact_id');
-    sourceBox.hidden = !source || chipPhoto.hidden;
+    const blocked = !!source && active && !mcp.hasFile('artifact_id');
+    const edit = blocked && (mcp.editSource(mcp.serverId) || mcp.editSource());
+    sourceBox.hidden = !source;
+    sourceNote.hidden = !blocked;
+    sourceNote.textContent = blocked ? tr("Текущий инструмент не принимает исходное фото.") : '';
+    sourceChange.hidden = !blocked || !(edit || !ctx.hint);
+    if (!sourceChange.hidden) sourceChange.textContent = tr("Переключиться на {0}", edit ? mcp.sourceName(edit) : tr("Студия"));
+    sourceChange.onclick = !blocked ? null : () => {
+      if (edit) mcp.selectSource(edit);
+      else mcp.useNative();
+      error.textContent = '';
+      prompt.focus();
+    };
     strengthLabel.hidden = active ? !mcp.has('strength') : !isLustify();
     chipModel.wrap.hidden = active;
     chipSize.wrap.hidden = active && !mcp.has('size');
@@ -715,6 +729,11 @@ function build(view, ctx) {
     const text = prompt.value.trim();
     if (withSource && mcp.tool) {
       error.textContent = '';
+      if (source && !mcp.hasFile('artifact_id')) {
+        error.textContent = tr("Текущий инструмент не принимает исходное фото.");
+        if (!sourceChange.hidden) sourceChange.focus();
+        return;
+      }
       if (mcp.hasFile('artifact_id') && !source) {
         error.textContent = tr("Выберите исходное фото");
         return;
@@ -1278,18 +1297,45 @@ function build(view, ctx) {
 
   /* события (меню закрывают сами: menu.js) */
 
-  file.addEventListener('change', async () => {
-    const selected = file.files[0];
+  async function attachSource(selected) {
+    if (!selected) return;
+    if (!ACCEPT.split(',').includes(selected.type) || !selected.size) {
+      error.textContent = tr("Выберите фото PNG, JPEG или WebP");
+      return;
+    }
+    error.textContent = '';
     const mine = ++choosing;
-    preparingSource = !!selected;
+    preparingSource = true;
     syncBusy();
-    const f = selected ? await resizePhoto(selected, PHOTO_SIDE) : null;
+    const f = await resizePhoto(selected, PHOTO_SIDE);
     if (!alive || mine !== choosing) return;
     preparingSource = false;
-    setSource(f);
+    if (f.size > PHOTO_MAX) error.textContent = tr("Фото больше 20 МиБ");
+    else setSource(f);
     syncBusy();
+  }
+  file.addEventListener('change', () => {
+    const selected = file.files[0];
+    file.value = '';
+    attachSource(selected);
+  });
+  prompt.addEventListener('paste', (event) => {
+    const image = [...(event.clipboardData?.files || [])].find(value => value.type.startsWith('image/'));
+    if (!image) return;
+    event.preventDefault();
+    attachSource(image);
+  });
+  form.addEventListener('dragover', (event) => {
+    if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+  });
+  form.addEventListener('drop', (event) => {
+    const dropped = event.dataTransfer?.files[0];
+    if (!dropped) return;
+    event.preventDefault();
+    attachSource(dropped);
   });
   sourceClear.addEventListener('click', () => {
+    error.textContent = '';
     choosing += 1;
     preparingSource = false;
     file.value = '';
