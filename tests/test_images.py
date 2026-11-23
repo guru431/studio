@@ -1223,6 +1223,24 @@ def test_feed_pages_by_created(studio):
         assert studio.c.get(f"/api/images?limit={bad}").status_code == 422
 
 
+def test_feed_filters_by_model(studio):
+    add_gateway(studio)
+    made = []
+    for i, model in enumerate(["snofs", "flux", "snofs", "flux"]):
+        studio.clock[0] = T0 + i
+        made.append((model, start(studio, model=model).json()["id"]))
+        wait_state(studio, made[-1][1], {"done"})
+    flux = [i for m, i in reversed(made) if m == "flux"]
+    assert [x["id"] for x in studio.c.get("/api/images?model=flux").json()["items"]] == flux
+    page = studio.c.get("/api/images?model=flux&limit=1").json()["items"]
+    older = studio.c.get(f"/api/images?model=flux&limit=1&before={page[0]['created']}&before_id={page[0]['id']}")
+    assert [x["id"] for x in page + older.json()["items"]] == flux
+    newer = studio.c.get(f"/api/images?model=flux&after={T0}&after_id={made[0][1]}").json()["items"]
+    assert [x["id"] for x in newer] == flux
+    assert studio.c.get("/api/images?model=fineview").json()["items"] == []
+    assert sorted(studio.c.get("/api/search/models").json()["models"]["photo"]) == ["flux", "snofs"]
+
+
 def test_prompt_and_key_never_reach_the_log_or_the_answers(studio, caplog):
     caplog.set_level(logging.DEBUG)
     make_user(studio, "owner", is_admin=True)

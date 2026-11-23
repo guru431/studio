@@ -1127,6 +1127,18 @@ def test_feed_pages_by_created(studio):
         assert studio.c.get(f"/api/videos?limit={bad}").status_code == 422
 
 
+def test_feed_filters_by_model(studio):
+    add_gateway(studio)
+    ids = []
+    for i in range(3):
+        studio.clock[0] = T0 + i
+        ids.append(create_video(studio).json()["id"])
+    state.DB.execute("UPDATE videos SET model = 'h3' WHERE id = ?", (ids[1],))
+    assert [x["id"] for x in studio.c.get("/api/videos?model=h3").json()["items"]] == [ids[1]]
+    assert [x["id"] for x in studio.c.get("/api/videos?model=wan").json()["items"]] == [ids[2], ids[0]]
+    assert len(studio.c.get("/api/videos").json()["items"]) == 3
+
+
 def test_video_needs_a_linked_gateway(studio):
     cid = add_gateway(studio)
     studio.c.delete(f"/api/sections/video/links/{cid}")

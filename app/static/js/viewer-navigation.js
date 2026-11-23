@@ -2,7 +2,8 @@ import { tr } from './i18n.js';
 /* Фото и видео: переходы по готовым файлам в порядке ленты, старые страницы — по требованию.
  * Снимок галереи передаётся следующему просмотру; действия и цепочка принадлежат его записи.
  * Запись вне загруженной ленты (поиск, цепочка, «Варианты») — своё окно вокруг неё: страница старше и
- * страница новее (after=), дальше — по краям окна; ленту до неё не читаем. top — окно дошло до новейшей. */
+ * страница новее (after=), дальше — по краям окна; ленту до неё не читаем. top — окно дошло до новейшей.
+ * query — отбор ленты (`&model=…`): страницы перелистывания читаются с ним же. */
 import { api } from './api.js';
 import { pageQuery } from './feed.js';
 import { iconButton } from './icons.js';
@@ -11,8 +12,8 @@ import { el, words } from './ui.js';
 const ready = (item) => !!item.media_id && item.state === 'done';
 const PAGE = 30;
 
-export function viewerNavigation(dialog, { item, items, section, open, done, opener, gallery = null }) {
-  const state = gallery || { items: items.slice(), done, top: true, opener };
+export function viewerNavigation(dialog, { item, items, section, open, done, opener, gallery = null, query = '' }) {
+  const state = gallery || { items: items.slice(), done, top: true, opener, query };
   const previous = iconButton('prev', tr("Предыдущий файл"), { class: 'icon-btn viewer-prev' });
   const next = iconButton('next', tr("Следующий файл"), { class: 'icon-btn viewer-next' });
   const position = el('span', { class: 'viewer-position', 'aria-live': 'polite', 'aria-atomic': 'true' });
@@ -46,7 +47,7 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
   };
 
   async function more() {
-    const rows = (await api('GET', `/api/${section}?limit=${PAGE}${pageQuery(state.items.at(-1))}`)).items;
+    const rows = (await api('GET', `/api/${section}?limit=${PAGE}${state.query || ''}${pageQuery(state.items.at(-1))}`)).items;
     if (!active()) return;
     const added = fresh(rows);
     state.items.push(...added);
@@ -54,7 +55,7 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
   }
 
   async function newer() {
-    const rows = (await api('GET', `/api/${section}?limit=${PAGE}${newerQuery(state.items[0])}`)).items;
+    const rows = (await api('GET', `/api/${section}?limit=${PAGE}${state.query || ''}${newerQuery(state.items[0])}`)).items;
     if (!active()) return;
     state.items.unshift(...fresh(rows));
     state.top = rows.length < PAGE;
@@ -165,7 +166,7 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
       return;
     }
     const [above, below] = await Promise.all([newerQuery(item), pageQuery(item)].map((query) =>
-      api('GET', `/api/${section}?limit=${PAGE}${query}`).then((page) => page.items)));
+      api('GET', `/api/${section}?limit=${PAGE}${state.query || ''}${query}`).then((page) => page.items)));
     if (!active()) return;
     state.items = [...above, item, ...below.filter((row) => row.id !== item.id)];
     state.top = above.length < PAGE;
