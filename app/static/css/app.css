@@ -289,7 +289,9 @@ body.shell { display:flex; height:calc(100 * var(--dvh)); min-height:0; overflow
  * заливка акцентом и толстая рамка (не только фон) */
 .segment { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 0; padding: var(--space-1); min-width: 0;
   border: 1px solid var(--field-border); border-radius: var(--r-control); background: var(--surface-0); }
-.segment legend { float: left; width: 100%; padding: 0 var(--space-2) var(--space-2); color: var(--text-2); font-size: var(--fs-xs); }
+/* видимая подпись — строкой над кнопками; скрытая (.sr) остаётся точкой 1px: иначе width 100% и отступы растягивают
+ * страницу на 320 px и закрывают кнопки сегмента */
+.segment legend:not(.sr) { float: left; width: 100%; padding: 0 var(--space-2) var(--space-2); color: var(--text-2); font-size: var(--fs-xs); }
 .segment-option { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: center;
   min-height: calc(var(--h-touch) / var(--ui-scale, 1)); padding: 0 var(--space-5); border-radius: var(--r-sm);
   color: var(--text-1); font-size: var(--fs-md); cursor: pointer; }
