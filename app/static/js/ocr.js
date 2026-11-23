@@ -30,6 +30,7 @@ import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { busyBlock, createPicker, keep, pickerList, recordSelection } from './feed.js';
 import { kick } from './jobs.js';
+import { shareDialog } from './chat-share.js';
 import { sectionMcp } from './mcp-sections.js';
 import { renderMarkdown } from './markdown.js';
 import { clearRead, readAloud } from './speech-read.js';
@@ -445,6 +446,11 @@ function build(view, ctx) {
         menu('ocr-download', 'ocr-formats', tr("Скачать ▾"), FORMATS.map(([f, label]) => [f, label, 'data-format', download])),
         menu('ocr-chat', 'ocr-chat-menu', tr("В чат ▾"), ASKS.map(([ask, label]) => [ask, label, 'data-ask',
           () => ctx.navigate(`chat?ocr=${encodeURIComponent(item.id)}&ask=${ask}`)])));
+      // ссылка «Поделиться» на скан (chat_shares.ITEMS): текст страниц, исходный файл — по выбору
+      const share = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-share' }, tr("Поделиться"));
+      share.addEventListener('click', () => shareDialog(root, `/api/ocr/${encodeURIComponent(docs.current.id)}/share`,
+        docs.current.name, api, { kind: 'scans', source: true }));
+      box.append(share);
       if (item.state === 'done') {
         const translate = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-translate' }, tr("Перевести"));
         translate.addEventListener('click', () => translateDialog(docs.current));

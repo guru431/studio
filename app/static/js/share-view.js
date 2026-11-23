@@ -34,7 +34,7 @@ function clear(message = '') {
   pin.value = '';
   feed.replaceChildren();
   document.getElementById('shared-title').textContent = '';
-  document.title = tr("Студия — просмотр чата");
+  document.title = tr("Студия — просмотр по ссылке");
   for (const blob of blobs) URL.revokeObjectURL(blob);
   blobs.clear();
   chat.hidden = true;
@@ -133,6 +133,95 @@ async function download(file, button) {
   } finally { button.disabled = false; }
 }
 
+/* запись другого раздела (chat_shares.ITEMS): подпись под заголовком и название без имени записи */
+const KINDS = {
+  transcripts: [tr("Только чтение · расшифровка"), tr("Расшифровка")],
+  translations: [tr("Только чтение · перевод"), tr("Перевод")],
+  scans: [tr("Только чтение · скан"), tr("Скан")],
+  images: [tr("Только чтение · картинка"), tr("Картинка")],
+  videos: [tr("Только чтение · ролик"), tr("Ролик")],
+};
+const SHOWN = { images: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], videos: ['video/mp4', 'video/webm'] };
+
+function stamp(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const mm = String(Math.floor(s / 60) % 60).padStart(2, '0'), ss = String(s % 60).padStart(2, '0');
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function langName(code) {
+  try { return new Intl.DisplayNames([document.documentElement.lang || 'ru'], { type: 'language' }).of(code) || code; }
+  catch { return typeof code === 'string' ? code : ''; }
+}
+
+/* картинка или ролик снимка — байты по read-токену (`/share/file`), показ — blob с типом из снимка */
+async function showFile(file, kind, box) {
+  const current = access;
+  try {
+    const blob = await (await request('/share/file', { access: current, file: file.file })).blob();
+    if (access !== current) return;
+    const href = URL.createObjectURL(new Blob([blob], { type: file.mime }));
+    blobs.add(href);
+    box.replaceChildren(kind === 'images' ? el('img', { class: 'shared-image shared-picture', src: href, alt: tr("Картинка") })
+      : el('video', { class: 'shared-video', src: href, controls: true, playsinline: true, preload: 'metadata' }));
+  } catch (err) {
+    if (access !== current) return;
+    if (err.status === 404) clear(err.message);
+    else box.replaceChildren(el('p', { class: 'error' }, err.message || tr("Не удалось загрузить файл")));
+  }
+}
+
+function fileButtons(files) {
+  const box = el('div', { class: 'shared-files' });
+  for (const file of files) {
+    if (!file || typeof file.file !== 'string') continue;
+    const button = el('button', { type: 'button', class: 'btn btn-sm' }, file.name || tr("Скачать вложение"));
+    button.addEventListener('click', () => download(file, button));
+    box.append(button);
+  }
+  return box;
+}
+
+function itemNodes(item, markdown) {
+  const text = (value, md) => {
+    const body = el('div', { class: md && markdown ? 'md shared-body' : 'shared-user', dir: 'auto' });
+    if (md && markdown) body.append(markdown.renderMarkdown(typeof value === 'string' ? value : ''));
+    else body.textContent = typeof value === 'string' ? value : '';
+    return body;
+  };
+  const nodes = [];
+  if (item.kind === 'transcripts') {
+    const segments = Array.isArray(item.segments) ? item.segments.filter((s) => s && typeof s.text === 'string') : [];
+    nodes.push(el('div', { class: 'shared-transcript' }, ...segments.map((s) => (s.system
+      ? el('p', { class: 'muted small' }, s.text)
+      : el('p', { class: 'shared-segment' }, el('span', { class: 'shared-when muted' }, stamp(s.start)), ' ',
+        typeof s.speaker === 'string' && s.speaker ? el('b', {}, `${s.speaker}: `) : null, s.text)))));
+  } else if (item.kind === 'translations') {
+    nodes.push(el('section', { class: 'shared-part' }, el('h2', {}, `${tr("Исходный текст")} · ${langName(item.source_lang)}`),
+      text(item.source, false)),
+    el('section', { class: 'shared-part' }, el('h2', {}, `${tr("Перевод")} · ${langName(item.target_lang)}`),
+      text(item.text, !!item.markdown)));
+  } else if (item.kind === 'scans') {
+    for (const page of Array.isArray(item.pages) ? item.pages : []) {
+      if (!page || !Number.isInteger(page.n)) continue;
+      nodes.push(el('section', { class: 'shared-part' }, el('h2', {}, tr("Страница {0}", page.n)),
+        typeof page.text === 'string' && page.text ? text(page.text, true)
+          : el('p', { class: 'muted' }, tr("Страница не распознана"))));
+    }
+  } else if (item.kind === 'images' || item.kind === 'videos') {
+    const file = item.file && typeof item.file.file === 'string' ? item.file : null;
+    const box = el('div', { class: 'shared-media' });
+    if (file && SHOWN[item.kind].includes(file.mime)) showFile(file, item.kind, box);
+    nodes.push(box, el('section', { class: 'shared-part' }, el('h2', {}, tr("Промпт")), text(item.prompt, false),
+      typeof item.model === 'string' && item.model ? el('p', { class: 'muted small' }, tr("Модель: {0}", item.model)) : null),
+    file ? fileButtons([file]) : null);
+  }
+  if (Array.isArray(item.attachments) && item.attachments.length) {
+    nodes.push(el('section', { class: 'shared-part' }, el('h2', {}, tr("Файлы")), fileButtons(item.attachments)));
+  }
+  return nodes;
+}
+
 async function check() {
   const current = access;
   if (!current) return;
@@ -165,8 +254,12 @@ form.addEventListener('submit', async (event) => {
     try { ({ changeView } = await import('./code-diff.js')); } catch { /* без диффа — сырой ввод шага */ }
     if (version !== generation) return;
     access = snapshot.access;
-    document.getElementById('shared-title').textContent = snapshot.title || tr("Чат");
-    for (const message of snapshot.messages) {
+    // запись другого раздела — `item`; `messages` у неё — заглушка для прежней версии студии
+    const item = snapshot.item && KINDS[snapshot.item.kind] ? snapshot.item : null;
+    document.getElementById('shared-title').textContent = snapshot.title || (item ? KINDS[item.kind][1] : tr("Чат"));
+    document.getElementById('shared-kind').textContent = item ? KINDS[item.kind][0] : tr("Только чтение · снимок переписки");
+    if (item) feed.append(el('article', { class: 'msg shared-message shared-item' }, ...itemNodes(item, markdown)));
+    for (const message of item ? [] : snapshot.messages) {
       const textNode = (text) => {
         const body = el('div', { class: message.role === 'user' ? 'shared-user' : 'md shared-body' });
         if (markdown && message.role === 'assistant') body.append(markdown.renderMarkdown(text));
@@ -228,7 +321,7 @@ form.addEventListener('submit', async (event) => {
       node.append(files);
       feed.append(node);
     }
-    if (!snapshot.messages.length) feed.append(el('p', { class: 'muted' }, tr("В этом чате пока нет сообщений")));
+    if (!item && !snapshot.messages.length) feed.append(el('p', { class: 'muted' }, tr("В этом чате пока нет сообщений")));
     form.hidden = true;
     chat.hidden = false;
     check();

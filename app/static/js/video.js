@@ -25,6 +25,7 @@ import { createFeed, pageQuery } from './feed.js';
 import { enterSends, fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
+import { shareDialog } from './chat-share.js';
 import { saveMedia } from './save.js';
 import { createSelection } from './select.js';
 import { modelLabel } from './settings.js';
@@ -603,6 +604,9 @@ function build(view, ctx) {
     dialog.append(el('div', { class: 'viewer-top' }, close), el('div', { class: 'viewer-stage' }, player),
       el('div', { class: 'viewer-bar' }, el('p', { class: 'viewer-meta' }, metaText(item)), chain, missing,
         el('div', { class: 'viewer-actions' }, act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
+          // ссылка «Поделиться» на ролик (chat_shares.ITEMS): ролик, промпт и модель
+          act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/videos/${encodeURIComponent(item.id)}/share`,
+            tr("Ролик"), api, { kind: 'videos' })),
           repeatButton(item, 'btn btn-sm act-repeat', () => dialog.close()),
           variantsButton(item, 'btn btn-sm act-variants', () => dialog.close()),
           act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)))));

@@ -133,34 +133,62 @@ function facts(out) {
     tr("неверных PIN: {0}", out.fails || 0)].join(' · ');
 }
 
-export function shareDialog(host, endpoint, title = tr("Чат"), request = api) {
+/** Записи других разделов (chat_shares.ITEMS): заголовок окна, что увидит получатель и, где есть исходный файл,
+ * подпись «приложить его» (в ссылку — только по выбору). */
+const KINDS = {
+  transcripts: { title: tr("Поделиться расшифровкой"), source: tr("Приложить запись разговора"),
+    intro: tr("Получатель увидит текст расшифровки с собеседниками и временем, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+  translations: { title: tr("Поделиться переводом"), source: tr("Приложить исходный файл"),
+    intro: tr("Получатель увидит исходный текст и перевод, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+  scans: { title: tr("Поделиться сканом"), source: tr("Приложить исходный файл"),
+    intro: tr("Получатель увидит распознанный текст страниц, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+  images: { title: tr("Поделиться картинкой"),
+    intro: tr("Получатель увидит картинку и её промпт, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+  videos: { title: tr("Поделиться роликом"),
+    intro: tr("Получатель увидит ролик и его промпт, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+};
+
+/** Окно ссылки. `kind` — запись раздела (KINDS), `source` — есть ли у неё исходный файл, который можно приложить.
+ * «Обновить снимок» (PUT) — то же содержимое заново под тем же адресом, сроком и PIN; «Поделиться…» — системное окно
+ * (`navigator.share`), только где оно есть. */
+export function shareDialog(host, endpoint, title = tr("Чат"), request = api, { kind = null, source = false } = {}) {
   const pin = el('input', { id: 'chat-share-pin', class: 'input', type: 'password', inputmode: 'numeric',
     pattern: '[0-9]{4}', minlength: '4', maxlength: '4', autocomplete: 'off', required: true, disabled: true });
   const error = el('p', { class: 'error', role: 'alert' });
-  const link = el('input', { id: 'chat-share-link', class: 'input', readonly: true, 'aria-label': tr("Ссылка на чат") });
+  const link = el('input', { id: 'chat-share-link', class: 'input', readonly: true,
+    'aria-label': kind ? tr("Ссылка на запись") : tr("Ссылка на чат") });
   const copy = button(tr("Копировать ссылку"), { id: 'chat-share-copy' });
+  const native = typeof navigator.share === 'function'
+    ? button(tr("Поделиться…"), { id: 'chat-share-native' }) : null;
   const info = el('p', { class: 'muted small', id: 'chat-share-facts' });
   const broken = el('p', { class: 'error', id: 'chat-share-broken', hidden: true },
     tr("Ссылку больше не открыть: ключ данных студии сменили. Создайте новую или отключите эту."));
-  const linkBox = el('div', {}, field(tr("Ссылка для чтения"), link, 'share-link'), copy);
+  const linkBox = el('div', {}, field(tr("Ссылка для чтения"), link, 'share-link'), el('div', { class: 'row' }, copy, native));
   const output = el('div', { hidden: true }, linkBox, broken, info);
   const save = button(tr("Создать ссылку"), { id: 'chat-share-create', type: 'submit', class: 'btn btn-accent', disabled: true });
+  const refresh = button(tr("Обновить снимок"), { id: 'chat-share-refresh', class: 'btn', hidden: true });
   const revoke = button(tr("Отключить ссылку"), { id: 'chat-share-revoke', class: 'btn btn-danger', hidden: true });
   const days = el('select', { id: 'chat-share-days', class: 'input', disabled: true },
     ...LIFETIMES.map(([value, label]) => el('option', { value, selected: value === '7' }, label)));
   // рассуждение модели есть только у обычного чата; в ссылку — лишь по явному выбору
   const regular = endpoint.startsWith('/api/chats/');
   const reasoning = el('input', { type: 'checkbox', id: 'chat-share-reasoning', disabled: true });
+  const text = KINDS[kind];
+  const attach = el('input', { type: 'checkbox', id: 'chat-share-source', disabled: true });
+  const options = () => ({ title, ...(regular ? { reasoning: reasoning.checked } : {}),
+    ...(text?.source && source ? { source: attach.checked } : {}) });
   const form = el('form', {}, field(tr("PIN доступа · 4 цифры"), pin, 'share-pin'), field(tr("Срок ссылки"), days, 'share-days'),
-    regular ? el('label', { class: 'check' }, reasoning, tr("Показать рассуждение модели")) : null, save);
-  const dialog = openDialog(host, { id: 'chat-share-dialog', title: tr("Поделиться чатом"), cancelText: tr("Закрыть"),
-    body: [el('p', {}, tr("Получатель увидит снимок всей переписки и вложения, только для чтения. При каждом открытии нужен PIN этого чата. Передайте его отдельно от ссылки.")),
-    el('p', { class: 'muted small' }, tr("Новая ссылка отключит прежнюю. Новые сообщения в снимок не добавляются. Снимок хранится зашифрованным и удаляется по истечении срока; после 50 неверных PIN ссылка отключится сама.")),
-    form, output, error], actions: [revoke] });
+    regular ? el('label', { class: 'check' }, reasoning, tr("Показать рассуждение модели")) : null,
+    text?.source && source ? el('label', { class: 'check' }, attach, text.source) : null, save);
+  const dialog = openDialog(host, { id: 'chat-share-dialog', title: text ? text.title : tr("Поделиться чатом"), cancelText: tr("Закрыть"),
+    body: [el('p', {}, text ? text.intro : tr("Получатель увидит снимок всей переписки и вложения, только для чтения. При каждом открытии нужен PIN этого чата. Передайте его отдельно от ссылки.")),
+    el('p', { class: 'muted small' }, tr("Новая ссылка отключит прежнюю. «Обновить снимок» заменит содержимое под тем же адресом и PIN, само оно не обновляется. Снимок хранится зашифрованным и удаляется по истечении срока; после 50 неверных PIN ссылка отключится сама.")),
+    form, output, error], actions: [refresh, revoke] });
   let busy = true;
   const state = (out) => {
     copy.textContent = tr("Копировать ссылку");
     output.hidden = revoke.hidden = !out.enabled;
+    refresh.hidden = !(out.enabled && out.url);
     link.value = out.url || '';
     linkBox.hidden = out.enabled && !out.url;
     broken.hidden = !(out.enabled && !out.url);
@@ -169,7 +197,8 @@ export function shareDialog(host, endpoint, title = tr("Чат"), request = api)
   };
   const pending = (value) => {
     busy = value;
-    save.disabled = revoke.disabled = pin.disabled = days.disabled = reasoning.disabled = value;
+    save.disabled = revoke.disabled = refresh.disabled = pin.disabled = days.disabled = reasoning.disabled
+      = attach.disabled = value;
   };
   request('GET', endpoint).then((out) => {
     if (dialog.isConnected) state(out);
@@ -191,8 +220,8 @@ export function shareDialog(host, endpoint, title = tr("Чат"), request = api)
     error.textContent = '';
     pending(true);
     try {
-      const out = await request('POST', endpoint, { pin: pin.value, title,
-        days: days.value ? Number(days.value) : null, ...(regular ? { reasoning: reasoning.checked } : {}) });
+      const out = await request('POST', endpoint, { pin: pin.value, days: days.value ? Number(days.value) : null,
+        ...options() });
       if (!dialog.isConnected) return;
       pin.value = '';
       state(out);
@@ -212,9 +241,27 @@ export function shareDialog(host, endpoint, title = tr("Чат"), request = api)
       if (dialog.isConnected) error.textContent = words(err);
     } finally { if (dialog.isConnected) pending(false); }
   });
+  refresh.addEventListener('click', async () => {
+    if (busy) return;
+    pending(true);
+    error.textContent = '';
+    try {
+      const out = await request('PUT', endpoint, options());
+      if (!dialog.isConnected) return;
+      state(out);
+      info.textContent = `${tr("Снимок обновлён")} · ${info.textContent}`;
+    } catch (err) {
+      if (dialog.isConnected) error.textContent = words(err);
+    } finally { if (dialog.isConnected) pending(false); }
+  });
   copy.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(link.value); copy.textContent = tr("Скопировано"); }
     catch { link.focus(); link.select(); error.textContent = tr("Скопируйте выделенную ссылку"); }
+  });
+  // системное «Поделиться»: отмена пользователем (AbortError) — не ошибка
+  native?.addEventListener('click', async () => {
+    try { await navigator.share({ title: title || tr("Чат"), url: link.value }); }
+    catch (err) { if (err.name !== 'AbortError') error.textContent = tr("Не удалось открыть окно «Поделиться»"); }
   });
   dialog.addEventListener('close', () => { pin.value = ''; link.value = ''; });
   return dialog;

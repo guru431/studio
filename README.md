@@ -151,7 +151,8 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 - Password login, brute-force limits, session management and a security event history.
 - Lock the whole app or selected sections using an application PIN, account password or passkey, including device biometrics where supported.
 - Emergency sign-out revokes sessions, shared links and notifications, with an option to revoke connected computers.
-- Share a read-only conversation snapshot with a **four-digit PIN**, optional expiry and revocation. Creating a new link rotates the old one; links do not grant account access.
+- Share a read-only conversation snapshot with a **four-digit PIN**, optional expiry and revocation. Creating a new link rotates the old one; links do not grant account access. Update snapshot replaces the content under the same address and PIN.
+- The same kind of link shares a transcript (with speakers and times), translation, scan, image or video.
 - Shared snapshots are encrypted with the server data key; reasoning is included only when explicitly selected.
 - Prompts, conversation/document text, credentials, media and filenames are excluded from service logs.
 - Content is sent to the model/provider selected for the task. Local processing requires the corresponding local backend; cloud connections and optional web tools contact external services.

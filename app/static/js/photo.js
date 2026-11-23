@@ -43,6 +43,7 @@ import { createFeed, pageQuery } from './feed.js';
 import { enterSends, fieldBox } from './field.js';
 import { sectionDraft } from './drafts.js';
 import { kick } from './jobs.js';
+import { shareDialog } from './chat-share.js';
 import { sectionMcp } from './mcp-sections.js';
 import { presetChip } from './presets.js';
 import { resizePhoto } from './resize-photo.js';
@@ -750,6 +751,9 @@ function build(view, ctx) {
       }),
       ctx.hint ? null : starts[1], starts[2],
       act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
+      // ссылка «Поделиться» на картинку (chat_shares.ITEMS): картинка, промпт и модель
+      act(tr("Поделиться"), 'act-share', () => shareDialog(dialog, `/api/images/${encodeURIComponent(item.id)}/share`,
+        tr("Картинка"), api, { kind: 'images' })),
       act(tr("Удалить"), 'btn-danger act-delete', () => confirmDelete(item, dialog)));
     for (const b of starts) gated.add(b);
     syncBusy();
