@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 72
+VERSION = 73
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1037,6 +1037,14 @@ SCHEMA += VARIANTS_71
 SCAN_EDITS_72 = "ALTER TABLE scan_pages ADD COLUMN recognized TEXT;\n"
 SCHEMA += SCAN_EDITS_72
 
+#: глоссарий и тон перевода учётки (translate.preferences): пары «термин → перевод» по порядку `n`, тон — ключ
+#: `translate_text.TONES` или пусто. Прежний код их не читает: перевод без глоссария и тона
+GLOSSARY_73 = """CREATE TABLE translate_glossary(user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       n INTEGER NOT NULL, term TEXT NOT NULL, translation TEXT NOT NULL, PRIMARY KEY(user_id, n));
+ALTER TABLE users ADD COLUMN translate_tone TEXT NOT NULL DEFAULT '';
+"""
+SCHEMA += GLOSSARY_73
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1181,6 +1189,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     71: VARIANTS_71,
     # правленый текст страницы скана и распознанный рядом
     72: SCAN_EDITS_72,
+    # глоссарий и тон перевода учётки
+    73: GLOSSARY_73,
 }
 
 

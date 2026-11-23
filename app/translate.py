@@ -43,8 +43,12 @@
    Выгрузка — txt, md и docx перевода (txt и docx через `md_plain` — только у перевода скана: прочее — не Markdown).
 9. Журнал — только id, коды и числа: текст, имя файла, языки исходника туда не пишутся. База — только с цикла
    событий.
-10. API раздела — `router` (`/api/translate`, вторая половина файла): языки, перевод текста и файла, лента,
-   запись с кусками (`?from=` — только новые), остановка, «Продолжить», повтор, выгрузка, удаление.
+10. API раздела — `router` (`/api/translate`, вторая половина файла): языки, глоссарий и тон учётки, перевод
+   текста и файла, лента, запись с кусками (`?from=` — только новые), остановка, «Продолжить», повтор, выгрузка,
+   удаление.
+11. Глоссарий и тон (`preferences`): пары `translate_glossary` и `users.translate_tone` читаются в начале задания
+   (`run`) и идут в каждый запрос куска, блоков снимка и прежнего Cleaner — в указание только пары, встретившиеся в
+   тексте запроса (`translate_text.terms`). В журнал — только число пар.
 """
 import asyncio
 import json
@@ -129,6 +133,8 @@ class Job:
     stopped: bool = False         # stop_user: раннер оборван, итог — «остановлено»
     freed: bool = False           # модели картинок отпущены перед локальной моделью
     request: "asyncio.Task | None" = None   # идущий запрос к модели шлюза — его обрывает «Остановить» (`_abortable`)
+    glossary: tuple = ()          # пары «термин → перевод» учётки на начало задания (`preferences`)
+    tone: str = ""                # тон перевода учётки: ключ `translate_text.TONES` или пусто
 
 
 #: записи в очереди и в работе (снимок подключения — для раннера); кончившееся уходит
@@ -189,6 +195,14 @@ def create(user_id: int, conn, model: str, *, kind: str, name: str, source_lang:
     JOBS[tid] = Job(id=tid, user_id=user_id, conn=conn, model=model, ocr_conn=ocr_conn, stage_at=now)
     log.info("перевод %s: в очереди, %d кусков", tid[:8], len(rows))
     return tid
+
+
+def preferences(user_id: int) -> tuple[tuple, str]:
+    """Глоссарий учётки — пары (термин, перевод) по порядку — и тон перевода (`translate_text.TONES` или пусто)."""
+    pairs = tuple((r["term"], r["translation"]) for r in state.DB.execute(
+        "SELECT term, translation FROM translate_glossary WHERE user_id = ? ORDER BY n", (user_id,)))
+    tone = state.DB.execute("SELECT translate_tone FROM users WHERE id = ?", (user_id,)).fetchone()
+    return pairs, tone[0] if tone is not None else ""
 
 
 def kick(user_id: int, lane: str) -> None:
@@ -321,8 +335,9 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
                         job.live = head + value
 
                 try:
-                    answer = await cleaner.translate(job.conn, job.id, job.model,
-                                                     translate_text.system_prompt(origin, lang, blocks), text, on_text)
+                    system = translate_text.system_prompt(origin, lang, blocks,
+                                                          glossary=translate_text.terms(job.glossary, text), tone=job.tone)
+                    answer = await cleaner.translate(job.conn, job.id, job.model, system, text, on_text)
                 except HTTPException as exc:
                     raise translate_text.TranslateError(exc.detail["message"]) from None
                 # как у шлюза (`translate_text.chunk`): без ограды, в NFC (в поиск), пустой — не перевод
@@ -332,7 +347,8 @@ async def _attempt(job: Job, text: str, origin: str, lang: str, blocks: bool = F
                 return answer
             remote = await _remote(job)
             return await _abortable(job, translate_text.chunk(job.conn, job.model, text, origin, lang, on_delta,
-                                                              blocks=blocks, context=context, remote=remote))
+                                                              blocks=blocks, context=context, remote=remote,
+                                                              glossary=job.glossary, tone=job.tone))
         except translate_text.ContextLost:
             cleaner_route.forget(job.conn, "translate", job.id)       # следующий запрос создаст новый контекст
             raise
@@ -635,6 +651,7 @@ async def run(job: Job) -> None:
     try:
         try:
             job.stage, job.stage_at = "готовлю", clock.NOW()
+            job.glossary, job.tone = preferences(job.user_id)
             state.DB.execute("UPDATE translations SET state = 'working', detail = ?,"
                              " cleaner_used = CASE WHEN ? THEN 1 ELSE cleaner_used END WHERE id = ?",
                              (job.stage, job.conn.cleaner or job.conn.routed, job.id))
@@ -890,6 +907,54 @@ def _langs(source: str, target: str) -> None:
 async def get_languages():
     return {"items": translate_text.languages(), "auto": translate_text.AUTO,
             "default_target": translate_text.DEFAULT_TARGET}
+
+
+class PairIn(BaseModel):
+    term: str = Field(max_length=translate_text.TERM_CHARS)
+    translation: str = Field(max_length=translate_text.TERM_CHARS)
+
+
+class GlossaryIn(BaseModel):
+    tone: str = Field("", pattern="^(|formal|plain)$")
+    glossary: list[PairIn] = Field(default_factory=list, max_length=translate_text.GLOSSARY_MAX)
+
+
+def _glossary_out(user_id: int) -> dict:
+    pairs, tone = preferences(user_id)
+    return {"tone": tone, "glossary": [{"term": t, "translation": v} for t, v in pairs],
+            "max": translate_text.GLOSSARY_MAX}
+
+
+@router.get("/glossary")
+async def get_glossary(request: Request):
+    return _glossary_out(request.state.user.id)
+
+
+@router.put("/glossary")
+async def put_glossary(body: GlossaryIn, request: Request):
+    """Глоссарий и тон учётки целиком. Пробельные внутри — одним пробелом; пустая пара пропускается, половина
+    пары — 422. Действует с начала следующего задания (и «Продолжить»)."""
+    uid = request.state.user.id
+    pairs = []
+    for p in body.glossary:
+        term, translation = " ".join(p.term.split()), " ".join(p.translation.split())
+        if not term and not translation:
+            continue
+        if not term or not translation:
+            raise HTTPException(422, {"code": "glossary", "message": "у каждого термина нужен перевод"})
+        pairs.append((term, translation))
+    state.DB.execute("BEGIN")
+    try:
+        state.DB.execute("DELETE FROM translate_glossary WHERE user_id = ?", (uid,))
+        state.DB.executemany("INSERT INTO translate_glossary(user_id, n, term, translation) VALUES (?, ?, ?, ?)",
+                             [(uid, n, *pair) for n, pair in enumerate(pairs, 1)])
+        state.DB.execute("UPDATE users SET translate_tone = ? WHERE id = ?", (body.tone, uid))
+        state.DB.execute("COMMIT")
+    except BaseException:
+        state.DB.execute("ROLLBACK")
+        raise
+    log.info("перевод: глоссарий учётки %d — %d пар", uid, len(pairs))
+    return _glossary_out(uid)
 
 
 @router.post("", status_code=202)

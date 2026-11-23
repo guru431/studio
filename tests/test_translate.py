@@ -154,6 +154,33 @@ def test_next_chunk_gets_the_end_of_the_previous_translation_as_context(studio, 
     assert [b["messages"][0]["content"] for b in studio.gw.chat_requests] == [translate_text.system_prompt("en", "ru")] * 2
 
 
+def test_glossary_and_tone_of_the_account_go_to_matching_chunks(studio, monkeypatch, caplog):
+    """Глоссарий и тон учётки (идея 05:I7): PUT целиком, половина пары — 422, пустая пропускается; задание берёт
+    их в начале, в указание куска — только пары, встретившиеся в нём; в журнал — только число пар."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(translate_text, "CHUNK_CHARS", 20)
+    add_gateway(studio)
+    assert studio.c.get("/api/translate/glossary").json() == {"tone": "", "glossary": [],
+                                                             "max": translate_text.GLOSSARY_MAX}
+    bad = studio.c.put("/api/translate/glossary", json={"tone": "", "glossary": [{"term": "Acme", "translation": " "}]})
+    assert bad.status_code == 422 and bad.json()["detail"]["code"] == "glossary"
+    assert studio.c.put("/api/translate/glossary", json={"tone": "loud"}).status_code == 422
+    r = studio.c.put("/api/translate/glossary", json={"tone": "formal", "glossary": [
+        {"term": " Third\n one ", "translation": "Третий"}, {"term": "", "translation": ""},
+        {"term": "Secret", "translation": "Тайна"}]})
+    assert r.status_code == 200 and r.json()["glossary"] == [{"term": "Third one", "translation": "Третий"},
+                                                             {"term": "Secret", "translation": "Тайна"}]
+    studio.gw.chat_script = [["Первый."], ["Второй."], ["Третий."]]
+    assert wait_row(studio, start(studio, THREE))["state"] == "done"
+    systems = [b["messages"][0]["content"] for b in studio.gw.chat_requests if b.get("stream")]
+    assert systems[0] == translate_text.system_prompt("en", "ru", tone="formal")
+    assert systems[2] == translate_text.system_prompt("en", "ru", context="Второй.", glossary=[("Third one", "Третий")],
+                                                      tone="formal")
+    assert "Secret" not in "".join(systems) and "Third" not in caplog.text and "Тайна" not in caplog.text
+    other = make_user(studio, "glossary-other")
+    assert on_loop(studio, translate.preferences, other) == ((), "")
+
+
 def test_same_language_goes_to_english(studio):
     add_gateway(studio)
     studio.gw.chat_reply = ["ru"]
