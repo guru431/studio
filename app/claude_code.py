@@ -1426,7 +1426,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
                                                 **({"images": images} if images else {}))))
     # Push хода — начавшему его участнику; не принят — прежний адресат идущего хода.
     member = request.state.user.id if agent["user_id"] != request.state.user.id else None
-    previous = bridge.initiated(aid, chat, member)
+    initiator_back = bridge.initiated(aid, chat, member)
     # до просьбы, как `initiated`: зеркало после хода — той же сессией; ход участника зеркала не трогает;
     # не принят — запись идущего хода остаётся какой была
     owner_back = bridge.owner_turn(aid, chat, request if member is None else None)
@@ -1443,7 +1443,7 @@ async def _turn_input(aid: int, pid: str, chat: str, request: Request, op: str):
         bridge.unwatch(aid, chat, q)
 
         def undo() -> None:
-            bridge.initiated(aid, chat, previous)
+            initiator_back()
             owner_back()
         _turn_back(key, undo, error)
         raise

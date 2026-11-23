@@ -353,6 +353,32 @@ def test_turn_request_back_restores_only_while_the_record_is_its_own(monkeypatch
     assert bridge.TURN_REQUESTS == {}
 
 
+def test_push_addressee_back_restores_only_while_the_record_is_its_own(monkeypatch):
+    """E2: два хода одного чата ждут ответа моста, один принят, другой отказан: возврат отказанного прежнего
+    адресата push не ставит поверх адресата принятого — ни участника на ход владельца, ни владельца на ход участника."""
+    def addressee():
+        started = bridge.INITIATORS.get((1, A))
+        return "none" if started is None else started.user_id
+
+    for first, second, accepted in ((None, 7, "second"), (7, None, "second"), (7, 8, "second"),
+                                    (None, 7, "first"), (7, None, "first"), (None, None, "second")):
+        monkeypatch.setattr(bridge, "INITIATORS", {})
+        bridge.initiated(1, A, 9)                                       # идёт ход участника 9
+        back_first = bridge.initiated(1, A, first)
+        mark_first = bridge.INITIATORS[(1, A)]
+        back_second = bridge.initiated(1, A, second)
+        mark_second = bridge.INITIATORS[(1, A)]
+        (back_first if accepted == "second" else back_second)()        # отказ одного из двух
+        assert bridge.INITIATORS[(1, A)] is (mark_second if accepted == "second" else mark_first)
+    monkeypatch.setattr(bridge, "INITIATORS", {})
+    bridge.initiated(1, A, 9)
+    bridge.initiated(1, A, None)()                                      # единственный ход отказан
+    assert addressee() == 9
+    monkeypatch.setattr(bridge, "INITIATORS", {})
+    bridge.initiated(1, A, 7)()
+    assert addressee() == "none"
+
+
 def test_role_changes_without_recreating_the_grant_and_is_journaled(studio):
     aid, machine, _, member, base = share(studio)
     created = state.DB.execute("SELECT created FROM project_members WHERE user_id = ?", (member,)).fetchone()[0]

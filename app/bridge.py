@@ -160,8 +160,8 @@ class Watch(asyncio.Queue):
 LINKS: dict[int, Link] = {}
 #: (agent_id, chat) → очереди наблюдателей чата
 WATCHERS: dict[tuple[int, str], set[Watch]] = {}
-#: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
-INITIATORS: dict[tuple[int, str], int] = {}
+#: (agent_id, chat) → кто начал идущий ход (`initiated`, `_Started`): участнику совместного проекта — push хода ему
+INITIATORS: dict[tuple[int, str], "_Started"] = {}
 INITIATORS_MAX = 10_000
 #: (agent_id, chat) → запрос последнего хода владельца в чате (`owner_turn`; ход участника — отметка `_MemberTurn`):
 #: после успешного `done` той же сессией идёт синхронизация зеркала (`project_mirrors.after_turn`). Очередь моста —
@@ -495,18 +495,34 @@ DONE_WORDS = {"done": {"ru": "ход окончен", "en": "turn completed"},
               "stopped": {"ru": "ход прерван", "en": "turn interrupted"}, "error": {"ru": "ошибка", "en": "error"}}
 
 
-def initiated(agent_id: int, chat: str, user_id: int | None) -> int | None:
+class _Started:
+    """Запись `INITIATORS` одного хода: `user_id` участника или None (ход владельца). Своя на каждый ход — возврат
+    при отказе (`initiated`) узнаёт, что место всё ещё за этим ходом."""
+    __slots__ = ("user_id",)
+
+    def __init__(self, user_id: int | None):
+        self.user_id = user_id
+
+
+def initiated(agent_id: int, chat: str, user_id: int | None) -> Callable[[], None]:
     """Ход чата начинает участник `user_id`: ему — push карточек и конца этого хода; `None` — ход владельца
     (push по умолчанию — ему). Ставится до просьбы `turn`: быстрый `done` приходит раньше, чем зовущий получит
-    ответ. Возвращает прежнюю запись — её возвращают, если мост хода не принял. Только память: перезапуск
-    службы возвращает push владельцу."""
+    ответ. Возвращает возврат для хода, которого мост не принял: прежняя запись — только пока место за этим ходом,
+    как у `owner_turn` (адресата хода, принятого тем временем из другого запроса, отказ не подменяет). Только
+    память: перезапуск службы возвращает push владельцу."""
     key = (agent_id, chat)
     previous = INITIATORS.pop(key, None)
-    if user_id is not None:
-        INITIATORS[key] = user_id
-        while len(INITIATORS) > INITIATORS_MAX:
-            del INITIATORS[next(iter(INITIATORS))]
-    return previous
+    mine = INITIATORS[key] = _Started(user_id)
+    while len(INITIATORS) > INITIATORS_MAX:
+        del INITIATORS[next(iter(INITIATORS))]
+
+    def back() -> None:
+        if INITIATORS.get(key) is mine:
+            del INITIATORS[key]
+            if previous is not None:
+                INITIATORS[key] = previous
+
+    return back
 
 
 class _MemberTurn:
@@ -549,7 +565,8 @@ def _after_turn(link: Link, frame: dict) -> None:
 def _addressee(link: Link, frame: dict) -> int | None:
     """Кому push хода: начавшему его участнику, пока проект ему выдан (отозван — никому: владельцу о чужих ходах
     не шлём); нет записи — владельцу компьютера."""
-    member = INITIATORS.get((link.agent_id, frame["chat"]))
+    started = INITIATORS.get((link.agent_id, frame["chat"]))
+    member = started.user_id if started is not None else None
     if member is None:
         return link.user_id
     import project_access                # он импортирует этот модуль: на загрузке — кольцо
