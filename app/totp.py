@@ -15,6 +15,7 @@
   вызов и `FAILS` неудач учётки за `FAIL_SEC` по всем входам и мостам.
 - Журнал — id и коды; ни секрета, ни кодов.
 """
+import asyncio
 import base64
 import hmac
 import json
@@ -29,9 +30,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import account_mail
 import auth
 import clock
 import email_accounts
+import push
 import security
 import security_log
 import state
@@ -54,6 +57,16 @@ BACKUP_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 BACKUP_RE = re.compile(f"[{BACKUP_ALPHABET}]{{10}}")
 #: только ASCII-цифры: `\d` пропускает цифры Unicode, а `hmac.compare_digest` на не-ASCII строке падает
 CODE_RE = re.compile(f"[0-9]{{{DIGITS}}}")
+#: неверный код после верного пароля — push владельцу (не чаще раза за FAIL_SEC, `_fail_notice`); письмо — FAIL_MAIL
+FAIL_PUSH = {"ru": "Верный пароль, но неверный код приложения-аутентификатора",
+             "en": "Correct password but a wrong authenticator app code"}
+FAIL_MAIL = ("Студия: неверный код приложения / Studio: wrong authenticator code",
+             "Для вашей учётной записи Студии ввели верный пароль, но неверный код приложения-аутентификатора."
+             " Если это были не вы, смените пароль в «Настройки → Защита»; попытки видны в «Журнале безопасности».\n"
+             "Someone entered the correct password for your Studio account but a wrong authenticator app code."
+             " If it was not you, change your password in Settings → Security; the attempts are in the Security log.")
+#: фоновые письма `_fail_notice`: ссылка держит задачу до конца
+TASKS: set[asyncio.Task] = set()
 
 
 class SetupIn(BaseModel):
@@ -150,7 +163,31 @@ def verify(uid: int, code: str, source: str, ip: str | None) -> bool:
         email_accounts.refund("totp-user", str(uid))
         return True
     security_log.record(uid, "totp_fail", detail=source, ip=ip)
+    _fail_notice(uid)
     return False
+
+
+def _fail_notice(uid: int) -> None:
+    """Неверный код бывает только после верного пароля: подбор не должен идти молча. Владельцу — push `service` и
+    письмо (почта и SMTP есть), не чаще раза за окно паузы `FAIL_SEC` (счёт — `email_limits`, переживает перезапуск);
+    без кода, адреса и ссылок — подробности в журнале безопасности."""
+    try:
+        email_accounts.throttle("totp-notice", str(uid), 1, FAIL_SEC)
+    except HTTPException:
+        return
+    push.notify_later(uid, FAIL_PUSH, "settings/security", "totp-fail", title=push.STUDIO)
+    email = state.DB.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()["email"]
+    if not email or not account_mail.configured(account_mail.settings()):
+        return
+
+    async def send():
+        try:
+            await account_mail.send(email, *FAIL_MAIL)
+        except HTTPException as err:     # в журнал — только id учётки и код отказа
+            log.warning("totp: fail notice for user %d failed (%s)", uid, err.detail.get("code"))
+    task = asyncio.get_running_loop().create_task(send())
+    TASKS.add(task)
+    task.add_done_callback(TASKS.discard)
 
 
 def challenge(uid: int, request: Request, next_: str) -> str:

@@ -161,6 +161,34 @@ def test_non_ascii_digits_are_an_ordinary_wrong_code(studio, mail):
     assert response.status_code == 400 and response.json()["detail"]["code"] == "wrong_code"
 
 
+def test_wrong_app_code_after_right_password_tells_the_owner_once_per_pause(studio, mail, monkeypatch):
+    """R2-7: верный пароль и подбор кода не должны идти молча. Неудача — письмо (почта и SMTP есть) и push `service`
+    владельцу, не чаще раза за окно паузы `FAIL_SEC`; без кода в тексте."""
+    import push
+    pushed = []
+    monkeypatch.setattr(push, "notify_later", lambda *args, **kw: pushed.append((args, kw)))
+    make_user(studio, "owner")
+    signin(studio, "owner")
+    secret, _ = enable(studio)
+    bad = wrong(studio, secret)
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": bad}).status_code == 400
+    assert studio.c.post("/account/code", json={"code": bad}).status_code == 400
+    body = {"login": "owner", "password": PASSWORD, "name": "pc", "code": bad}
+    assert studio.c.post("/api/agent/enroll", json=body).status_code == 400
+    assert studio.c.get("/health").status_code == 200                    # фоновая отправка письма успела
+    assert len(pushed) == 1 and len(mail) == 1
+    (uid, words, href, tag), options = pushed[0]
+    assert href == "settings/security" and options.get("kind", "service") == "service"
+    _, subject, text = mail[0]
+    assert "Studio" in subject and bad not in text and bad not in str(words) and "http" not in text
+    studio.clock[0] += totp.FAIL_SEC                                       # новое окно — снова сказать
+    totp_login(studio)
+    assert studio.c.post("/account/code", json={"code": wrong(studio, secret)}).status_code == 400
+    studio.c.get("/health")
+    assert len(pushed) == 2 and len(mail) == 2
+
+
 def test_backup_code_signs_in_once(studio, mail):
     uid = make_user(studio, "owner")
     signin(studio, "owner")

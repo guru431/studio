@@ -2257,7 +2257,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Вопросы и подтверждения агентов": "Agent questions and confirmations",
   "Конец хода агентов и ответы чата": "Agent turn ends and chat answers",
   "Готовность заданий разделов": "Finished section tasks",
-  "Служебные: копия базы, отключённая ссылка": "Service: database backup, disabled link",
+  "Служебные: копия базы, отключённая ссылка, неверный код входа": "Service: database backup, disabled link, wrong sign-in code",
   "Не беспокоить": "Do not disturb",
   "С": "From",
   "По": "To",
