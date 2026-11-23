@@ -51,12 +51,20 @@ def chromium(driver):
 
 @contextmanager
 def opened(browser, live, login, width, touch=False):
-    """Вошедшая страница: cookie сессии заголовком (WebKit не шлёт Secure cookie по http://localhost)."""
+    """Вошедшая страница. Chromium — cookie сессии в хранилище контекста (`__Host-` Secure на http://localhost он
+    принимает): её несут и запросы уходящей страницы (keepalive при настоящей перезагрузке). WebKit Secure cookie по
+    http://localhost не шлёт — ему заголовком контекста."""
     signed = httpx.post(live.url + "/login", data={"login": login, "password": "password-123"})
     assert signed.status_code == 303
+    stored = browser.browser_type.name == "chromium"
     cookie = "; ".join(f"{key}={value}" for key, value in signed.cookies.items())
     with browser.new_context(viewport={"width": width, "height": 900}, is_mobile=touch, has_touch=touch,
-                             service_workers="block", extra_http_headers={"Cookie": cookie}) as context:
+                             service_workers="block",
+                             **({} if stored else {"extra_http_headers": {"Cookie": cookie}})) as context:
+        if stored:
+            host = httpx.URL(live.url).host
+            context.add_cookies([{"name": key, "value": value, "domain": host, "path": "/", "secure": True,
+                                  "httpOnly": True, "sameSite": "Lax"} for key, value in signed.cookies.items()])
         page = context.new_page()
         page.set_default_timeout(10000)
         errors = []
@@ -241,8 +249,9 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
 def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
     """Вкладку закрывают посреди ответа прямого подключения (`pagehide`): прочитанное уходит PUT с keepalive и
     сохранено «остановлен» — диалог не ждёт «ответа в другой вкладке»; длиннее предела тела keepalive — сохранено
-    начало, что влезло, а итог страницы совпадает с ним (сервер принимает тот же итог повторно). Настоящая
-    перезагрузка здесь не годится: запрос из уходящей страницы Playwright шлёт без заголовка cookie контекста."""
+    начало, что влезло, а итог страницы совпадает с ним (сервер принимает тот же итог повторно). Затем вкладку
+    закрывают по-настоящему посреди ответа: keepalive уходящей страницы несёт cookie хранилища контекста (`opened`) —
+    сохранено «остановлен» с прочитанным."""
     login = "pagehide-mid-answer"
     live.add_user(login)
     last_saved = """async () => { const m = await import('/static/js/api.js');
@@ -270,6 +279,17 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
                     assert answer == first
                 else:                                # 80 КБ UTF-8 > PART_BYTES: начало, что влезло
                     assert 20000 < len(answer) < 40000 and set(answer) == {"я"}
+            # Настоящее закрытие вкладки: скрипт страницы кончается, сохранить может только keepalive из `pagehide`.
+            live.cloud.chat_reply = ["Перед закрытием. ", "конец"]
+            page.locator("#chat-input").fill("Ещё раз")
+            page.locator("#send").click()
+            pw.expect(page.locator(LAST + " .md")).to_contain_text("Перед закрытием.")
+            address, context = page.url, page.context
+            page.close()
+            after = context.new_page()
+            after.goto(address)
+            after.locator("#chat-input").wait_for()
+            until(after, lambda: after.evaluate(last_saved) == ["stopped", "Перед закрытием. "])
     finally:
         live.cloud.chunk_pause, live.cloud.chat_reply = 0.05, ["Облако ", "на связи."]
 
