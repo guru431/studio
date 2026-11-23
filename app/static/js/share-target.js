@@ -4,9 +4,11 @@ import { tr } from './i18n.js';
  * (app.js enter — и после входа: кэш переживает /login) спрашивает, куда отправить, по типу принятого: запись —
  * «Расшифровка», фото — «Сканы», «Фото» или «Чат», PDF — «Сканы», «Перевод» или «Чат», другой документ — «Перевод» или
  * «Чат», текст и ссылка — «Чат» или «Перевод». Выбор кладёт принятое в поле раздела, как выбор файла или набор текста:
- * дальше — обычный путь раздела (расшифровка и скан начинают загрузку сразу, как после выбора файла). Принятое уходит из
- * кэша, как только окно закрыто (выбором или «Не отправлять»), и не живёт дольше RECEIVED_MS. На сервер — только
- * запросом выбранного раздела. */
+ * дальше — обычный путь раздела. Принятое недоверенное: POST /receive работнику может прислать и чужой сайт (форма с
+ * `form.submit()`), а надёжного признака отправителя у работника нет (`Sec-Fetch-Site` ему не виден, referrer пуст и у
+ * системного листа). Поэтому окно говорит, откуда это, а «Расшифровка» и «Сканы», где выбор файла сразу начинает
+ * загрузку, спрашивают ещё раз своей кнопкой (UPLOAD). Принятое уходит из кэша, как только окно закрыто (выбором или «Не
+ * отправлять»), и не живёт дольше RECEIVED_MS. На сервер — только запросом выбранного раздела. */
 import { button, el, openDialog } from './ui.js';
 import { sectionName } from './sections-meta.js';
 
@@ -19,6 +21,9 @@ const FILES = { transcribe: '#transcribe-file', ocr: '#ocr-file', photo: '#photo
 const TEXT = { chat: '#chat-input', translate: '#tl-input' };
 /** Разделы, где поле файла берёт один файл. */
 const SINGLE = new Set(['photo', 'translate']);
+/** Разделы, где выбор файла сразу загружает его: кнопка подтверждения — как кнопка загрузки раздела. */
+const UPLOAD = { transcribe: () => tr("Загрузить запись"), ocr: () => tr("Загрузить скан") };
+const UNTRUSTED = () => tr("Получено из другого приложения или сайта. Отправляйте, только если делились этим сами.");
 
 /** Разделы для одного файла по типу. */
 function targetsOf(file) {
@@ -92,6 +97,22 @@ function fieldOf(section, selector) {
   });
 }
 
+/** Явная кнопка загрузки принятого в разделе, где выбор файла сразу начинает загрузку: true — нажата. */
+function confirmUpload(section, files) {
+  return new Promise((resolve) => {
+    let yes = false;
+    const go = button(UPLOAD[section](), { class: 'btn btn-accent', id: 'received-upload' });
+    const dialog = openDialog(document.body, { id: 'received-confirm', title: sectionName(section), actions: [go],
+      cancelText: tr("Не отправлять"), body: [el('p', { class: 'received-what' }, files.map((f) => f.name).join(', ')),
+        el('p', { class: 'muted small' }, UNTRUSTED())] });
+    go.addEventListener('click', () => {
+      yes = true;
+      dialog.close();
+    });
+    dialog.addEventListener('close', () => resolve(yes));
+  });
+}
+
 /** В поле раздела: файлы — как выбор файла (change), текст — как набор (input), к уже набранному. */
 async function deliver(section, { files, text }) {
   if (sectionOf() !== section || location.hash.includes('/', 2)) {
@@ -101,7 +122,7 @@ async function deliver(section, { files, text }) {
   }
   if (files.length) {
     const input = await fieldOf(section, FILES[section]);
-    if (!input) return;
+    if (!input || (UPLOAD[section] && !(await confirmUpload(section, files) && input.isConnected))) return;
     const list = new DataTransfer();
     for (const file of files) list.items.add(file);
     input.files = list.files;
@@ -123,7 +144,7 @@ export async function offerReceived() {
   const ids = targets(got.files, got.text);
   const what = got.files.length ? got.files.map((f) => f.name).join(', ') : got.text;
   const choices = ids.map((id) => button(sectionName(id), { class: 'btn btn-accent', 'data-section': id }));
-  const body = [el('p', { class: 'received-what' }, what)];
+  const body = [el('p', { class: 'received-what' }, what), el('p', { class: 'muted small' }, UNTRUSTED())];
   if (!ids.length) body.push(el('p', { class: 'muted' }, tr("Эти файлы вместе не принимает ни один раздел. Поделитесь ими по отдельности.")));
   let chosen = null;
   const dialog = openDialog(document.body, { id: 'received', title: tr("Куда отправить?"), body, actions: choices,

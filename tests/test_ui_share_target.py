@@ -38,6 +38,21 @@ SHARE = """async ({ png, title, text, url }) => {
   form.submit();
 }"""
 
+#: счёт загрузок «Сканов» (POST /api/ocr XHR) без отправки
+OCR_POSTS = """() => {
+  window.ocrPosts = 0;
+  const open = XMLHttpRequest.prototype.open;
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.ocrPost = method === 'POST' && url === '/api/ocr';
+    return open.call(this, method, url, ...rest);
+  };
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this.ocrPost) window.ocrPosts += 1;
+    else send.call(this, body);
+  };
+}"""
+
 
 @pytest.fixture(scope="module")
 def chromium():
@@ -89,6 +104,24 @@ def test_shared_photo_and_text_land_in_the_chosen_section(chromium, live, mobile
         page.wait_for_url("**/#/photo")
         pw.expect(page.locator("#photo-source")).to_be_visible()     # фото стало исходным, как выбранное скрепкой
         assert page.evaluate("caches.has('studio-received')") is False
+
+        # «Сканы» загружают выбранный файл сразу: принятое (его мог прислать и чужой сайт) — только явной кнопкой.
+        # Загрузка (XHR) до службы не доходит: page.route запросы страницы под служебным работником не ловит
+        for upload in (False, True):
+            page.goto(live.url + "/robots.txt")
+            page.evaluate(SHARE, {"png": png(), "title": "", "text": "", "url": ""})
+            pw.expect(page.locator("#received")).to_contain_text("из другого приложения или сайта")
+            page.evaluate(OCR_POSTS)
+            page.locator('#received [data-section="ocr"]').click()
+            pw.expect(page.locator("#received-confirm")).to_be_visible()
+            pw.expect(page.locator("#received-confirm .received-what")).to_have_text("документ.png")
+            pw.expect(page.locator("#received-upload")).to_have_text("Загрузить скан")
+            page.locator("#received-upload" if upload else "#received-confirm .dialog-close").click()
+            pw.expect(page.locator("#received-confirm")).to_have_count(0)
+            if upload:
+                page.wait_for_function("window.ocrPosts === 1")
+            else:
+                assert page.evaluate("window.ocrPosts") == 0
 
         # текст и ссылка — «Чат» или «Перевод»; ссылка, уже вписанная в текст, не повторяется
         page.goto(live.url + "/robots.txt")
