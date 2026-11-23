@@ -125,7 +125,9 @@ def _ocr(uid: int, after: float, hidden: set) -> list:
         job = ocr.JOBS.get(row["id"])
         # этап идущего — без своего времени (как у расшифровки); ждущий и отменяемый — слова строки
         detail = job.stage if job is not None and row["state"] == "working" else row["detail"]
-        item = _item("ocr", row, f"Распознавание «{row['name']}»", detail, f"ocr?id={row['id']}")
+        # поиск строк для «PDF со слоем» (`ocr.find_lines`) — тот же документ снова в работе
+        title = f"PDF со слоем «{row['name']}»" if row["layer_prior"] else f"Распознавание «{row['name']}»"
+        item = _item("ocr", row, title, detail, f"ocr?id={row['id']}")
         if item["state"] == "done" and row["id"] in unread:     # ни одной прочитанной страницы — как push
             item.update(state="error", detail=push.JOB_NOTICES["scans"][2]["ru"])
         out.append(item)

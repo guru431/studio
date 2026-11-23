@@ -35,6 +35,10 @@
    тех же файлов, `again`). PDF длиннее PAGES_MAX — диапазоном страниц (`_inspect`), номера страниц документа —
    номера исходника. «Править» страницу (`edit_page`, `restore_page`): правленый текст — в `text`, распознанный —
    рядом (`recognized`).
+9. «PDF со слоем» (`find_lines`, выгрузка pdf — `ocr_pdf`): рамки строк ищет второй запрос страницы с указанием
+   `translate_spot.PROMPT` — по требованию, документ снова в очереди пользователя (`layer_prior` — его прежний итог,
+   `_finish` его возвращает), с теми же картой, отменой, release и перезапуском; рамки — в `scan_pages.boxes`,
+   повторная выгрузка шлюз не зовёт. s06 координат не даёт: слой его страниц — текст без координат.
 """
 import asyncio
 import base64
@@ -58,11 +62,13 @@ import exports
 import lock_policy
 import media
 import operations
+import ocr_pdf
 import ocr_render
 import push
 import sections
 import speech
 import state
+import translate_spot
 import upstream
 
 MODEL = "tencent/HunyuanOCR"
@@ -97,6 +103,10 @@ NO_CONNECTION = "подключения документа больше нет �
 UNREADABLE = "страница не читается — файл повреждён"
 LEASE_KEY = "ocr_leased"         # settings: [[user_id, connection_id], …] слотов, взятых к остановке службы (`stop`)
 EMPTY = "на странице не найден текст"
+LINES = "ищу строки для PDF"
+#: страницы, которым «PDF со слоем» ищет рамки строк (`find_lines`): распознанные, не правленые (слой правленой —
+#: её текст без координат), ещё без рамок
+LINES_WANTED = "state = 'done' AND recognized IS NULL AND boxes IS NULL"
 
 log = logging.getLogger("studio")
 
@@ -156,6 +166,8 @@ EXTERNAL: dict[str, int] = {}
 #: распознавание вне раздела кончилось и освобождает карту (`_settle` в `borrowed`): ключ → пользователь. Пока
 #: отметка стоит, `idle` его пользователя ложна — модель, позванная раньше, ждала бы карту под арендой слота ocr
 RELEASING: dict[str, int] = {}
+#: поиск строк для PDF кончился отказом (`_finish`): id документа → слова; читает `GET …/layer`, снимает новый поиск
+LINES_FAILED: dict[str, str] = {}
 
 
 # ---- шлюз --------------------------------------------------------------------
@@ -406,8 +418,8 @@ def retry(user_id: int, scan_id: str, page: "int | None" = None) -> None:
     try:
         state.DB.execute(f"UPDATE scan_pages SET state = 'waiting', text = NULL, detail = NULL"
                          f" WHERE scan_id = ? AND n IN ({marks})", (scan_id, *numbers))
-        state.DB.execute("UPDATE scans SET state = 'queued', detail = ?, finished = NULL, done_pages = done_pages - ?"
-                         " WHERE id = ?", (QUEUED, counted, scan_id))
+        state.DB.execute("UPDATE scans SET state = 'queued', detail = ?, finished = NULL, done_pages = done_pages - ?,"
+                         " layer_prior = NULL WHERE id = ?", (QUEUED, counted, scan_id))
         if row["attachment_id"] is not None:
             state.DB.execute("UPDATE attachments SET text = NULL, chars = 0 WHERE id = ?", (row["attachment_id"],))
         state.DB.execute("COMMIT")
@@ -439,6 +451,44 @@ def again(user_id: int, scan_id: str, conn, model: str) -> str:
     if not all(f is not None and media.alive(user_id, f) for f in files):
         raise HTTPException(404, media.GONE)
     return create(user_id, conn, model, row["name"], origin="section", source_media_id=source, pages=pages)
+
+
+def _lines_conn(user_id: int, row):
+    """Подключение, у которого «PDF со слоем» спросит рамки строк документа: есть страницы без рамок
+    (LINES_WANTED), подключение документа есть и даёт координаты. Иначе None — слой таких страниц строится без
+    координат (`ocr_pdf.flow`): s06 их не даёт, удалённое или закрытое подключение больше не спросить."""
+    if state.DB.execute(f"SELECT 1 FROM scan_pages WHERE scan_id = ? AND {LINES_WANTED} LIMIT 1",
+                        (row["id"],)).fetchone() is None:
+        return None
+    try:
+        conn = connections.get(user_id, row["connection_id"])
+    except HTTPException:
+        return None
+    return None if conn.s06 else conn
+
+
+def find_lines(user_id: int, scan_id: str) -> bool:
+    """«PDF со слоем»: рамки строк страниц без них — документ снова в очередь пользователя, тем же раннером и по
+    тем же правилам карты, что распознавание (`_find_lines`); прежний итог — в `layer_prior`, его вернёт `_finish`.
+    Итог — поставлен ли в очередь: False — спрашивать нечего, выгрузка готова сразу. Документ идёт или без текста —
+    409 (`_readable`), очередь полна — 409 `busy`."""
+    row = _readable(user_id, scan_id)
+    conn = _lines_conn(user_id, row)
+    if conn is None:
+        return False
+    operations.check(user_id)
+    if state.DB.execute("SELECT count(*) FROM scans WHERE user_id = ? AND state = 'queued'",
+                        (user_id,)).fetchone()[0] >= QUEUE_MAX:
+        raise HTTPException(409, {"code": "busy", "message": (
+            f"в очереди уже {QUEUE_MAX} документов — дождитесь их или отмените")})
+    prior = json.dumps({"state": row["state"], "detail": row["detail"], "finished": row["finished"]},
+                       ensure_ascii=False)
+    state.DB.execute("UPDATE scans SET state = 'queued', detail = ?, finished = NULL, layer_prior = ? WHERE id = ?",
+                     (QUEUED, prior, scan_id))
+    LINES_FAILED.pop(scan_id, None)
+    JOBS[scan_id] = Job(id=scan_id, user_id=user_id, conn=conn, stage_at=clock.NOW(), epoch=operations.capture(user_id))
+    log.info("распознавание %s: ищу строки для PDF", scan_id[:8])
+    return True
 
 
 def kick(user_id: int) -> None:
@@ -473,7 +523,17 @@ def _text(scan_id: str) -> str:
 
 def _finish(scan_id: str, state_: str, detail_: str, text: "str | None" = None) -> None:
     """Итог документа и, у документа из чата, текст вложения. Без `text` (ошибка, отмена) в поиск идёт то, что
-    успело распознаться: выгрузка и «В чат» его отдают (`_readable`)."""
+    успело распознаться: выгрузка и «В чат» его отдают (`_readable`). Поиск строк для PDF (`find_lines`) кончается
+    прежним итогом документа (`layer_prior`) — без уведомления, вложение и текст не меняются; его отказ — в
+    LINES_FAILED."""
+    prior = state.DB.execute("SELECT layer_prior FROM scans WHERE id = ? AND finished IS NULL", (scan_id,)).fetchone()
+    if prior is not None and prior["layer_prior"] is not None:
+        was = json.loads(prior["layer_prior"])
+        state.DB.execute("UPDATE scans SET state = ?, detail = ?, finished = ?, layer_prior = NULL WHERE id = ?",
+                         (was["state"], was["detail"], was["finished"], scan_id))
+        if state_ == "error":
+            LINES_FAILED[scan_id] = detail_
+        return
     if text is None:
         text = _text(scan_id) or None
     changed = state.DB.execute("UPDATE scans SET state = ?, detail = ?, finished = ?, text = ?"
@@ -493,12 +553,12 @@ def _check(job: Job) -> None:
         raise _Cancelled
 
 
-async def _page_text(job: Job, png: bytes) -> str:
+async def _page_text(job: Job, png: bytes, prompt: str = PROMPT) -> str:
     """Страница через шлюз; 503 — ждать и повторять (отмена между попытками — сразу)."""
     waited_from = None
     while True:
         try:
-            return await recognize(job.conn, png)
+            return await recognize(job.conn, png, prompt)
         except Busy:
             now = clock.NOW()
             waited_from = now if waited_from is None else waited_from
@@ -530,6 +590,42 @@ async def _read(user_id: int, media_id: str) -> bytes:
         raise OcrError("хранилище недоступно") from None
 
 
+async def _page_png(job: Job, source: "bytes | None", stem: str, page) -> "bytes | None":
+    """PNG страницы (`n`, `media_id`) для шлюза: PDF — уже нарисованный или рендер исходника (и PNG на шару), фото —
+    из своего файла; не нарисовать (битая страница, обрезанное фото) — None."""
+    n = page["n"]
+    drawn = None                                      # PNG страницы PDF, уже нарисованный (повтор — `retry`)
+    if source is not None and page["media_id"]:
+        try:
+            drawn = await _read(job.user_id, page["media_id"])
+        except _Missing:                              # файла нет — нарисовать заново; шара не отвечает —
+            pass                                      # отказ документа, прежний PNG остаётся
+    try:
+        if drawn is not None:
+            png = drawn
+        elif source is not None:
+            png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
+        else:
+            png = await asyncio.to_thread(ocr_render.photo_png, await _read(job.user_id, page["media_id"]))
+    except ocr_render.ScanError:                      # битая страница, обрезанное фото — отказ страницы
+        return None
+    if source is not None and drawn is None:
+        media_id = await media.save_async(job.user_id, png, "image/png", f"{stem}-{n}.png")
+        state.DB.execute("UPDATE scan_pages SET media_id = ? WHERE scan_id = ? AND n = ?", (media_id, job.id, n))
+        if page["media_id"] and not media.referenced(job.user_id, page["media_id"]):   # прежний не прочитался
+            await media.delete_async(job.user_id, page["media_id"])
+    return png
+
+
+async def _card(job: Job) -> None:
+    """Перед первым запросом документа к шлюзу — освободить карту (`speech.free_card`); слот ocr — в LEASED."""
+    if not job.called:
+        job.called = True
+        await speech.free_card(job.conn)
+        _check(job)                                   # отменили, пока освобождалась карта
+    LEASED[job.conn.base_url] = job.conn
+
+
 async def _recognize_pages(job: Job, row) -> str:
     """Страницы `waiting` по порядку; итог — текст документа."""
     stem = row["name"].rsplit(".", 1)[0] if "." in row["name"] else row["name"]
@@ -541,37 +637,14 @@ async def _recognize_pages(job: Job, row) -> str:
     for page in waiting:
         _check(job)
         n = page["n"]
-        drawn = None                                      # PNG страницы PDF, уже нарисованный (повтор — `retry`)
-        if source is not None and page["media_id"]:
-            try:
-                drawn = await _read(job.user_id, page["media_id"])
-            except _Missing:                              # файла нет — нарисовать заново; шара не отвечает —
-                pass                                      # отказ документа, прежний PNG остаётся
-        try:
-            if drawn is not None:
-                png = drawn
-            elif source is not None:
-                png = await asyncio.to_thread(ocr_render.render_page, source, n - 1)
-            else:
-                png = await asyncio.to_thread(ocr_render.photo_png, await _read(job.user_id, page["media_id"]))
-        except ocr_render.ScanError:                      # битая страница, обрезанное фото — отказ страницы
-            png = None
-        if png is not None and source is not None and drawn is None:
-            media_id = await media.save_async(job.user_id, png, "image/png", f"{stem}-{n}.png")
-            state.DB.execute("UPDATE scan_pages SET media_id = ? WHERE scan_id = ? AND n = ?", (media_id, job.id, n))
-            if page["media_id"] and not media.referenced(job.user_id, page["media_id"]):   # прежний не прочитался
-                await media.delete_async(job.user_id, page["media_id"])
+        png = await _page_png(job, source, stem, page)
         _check(job)
         if png is None:
             page_state, text, why = "failed", None, UNREADABLE
         elif await asyncio.to_thread(ocr_render.is_blank, png):
             page_state, text, why = "blank", None, None
         else:
-            if not job.called:
-                job.called = True
-                await speech.free_card(job.conn)
-                _check(job)                               # отменили, пока освобождалась карта
-            LEASED[job.conn.base_url] = job.conn
+            await _card(job)
             job.stage = f"распознаю · стр. {n - first + 1} из {row['pages']}"
             _store(job)
             try:
@@ -583,6 +656,32 @@ async def _recognize_pages(job: Job, row) -> str:
                          (page_state, text, why, job.id, n))
         state.DB.execute("UPDATE scans SET done_pages = done_pages + 1 WHERE id = ?", (job.id,))
     return _text(job.id)
+
+
+async def _find_lines(job: Job, row) -> None:
+    """Рамки строк (`translate_spot.PROMPT`) страниц без них (LINES_WANTED) по порядку — в `boxes` после каждой
+    страницы: отмена и отказ документа найденное сохраняют. Ответ без строк, отказ страницы и страница, которую не
+    нарисовать, — `[]`: её слой будет без координат (`ocr_pdf.flow`), повторная выгрузка карту не зовёт."""
+    stem = _stem(row["name"])
+    source = await _read(job.user_id, row["source_media_id"]) if row["source_media_id"] else None
+    pages = state.DB.execute(f"SELECT n, media_id FROM scan_pages WHERE scan_id = ? AND {LINES_WANTED} ORDER BY n",
+                             (job.id,)).fetchall()
+    for k, page in enumerate(pages, 1):
+        _check(job)
+        png = await _page_png(job, source, stem, page)
+        _check(job)
+        lines = []
+        if png is not None:
+            await _card(job)
+            job.stage = f"{LINES} · стр. {k} из {len(pages)}"
+            _store(job)
+            try:
+                lines = translate_spot.parse(await _page_text(job, png, translate_spot.PROMPT))
+            except PageFailed:
+                pass
+            _check(job)                                   # ответ отменённого — выбросить
+        state.DB.execute("UPDATE scan_pages SET boxes = ? WHERE scan_id = ? AND n = ?",
+                         (json.dumps([[line.text, *line.box] for line in lines], ensure_ascii=False), job.id, page["n"]))
 
 
 async def _settle() -> None:
@@ -665,9 +764,14 @@ async def run(job: Job) -> None:
         try:
             job.stage, job.stage_at = "готовлю страницы", clock.NOW()
             state.DB.execute("UPDATE scans SET state = 'working', detail = ? WHERE id = ?", (job.stage, job.id))
-            text = await _recognize_pages(job, row)
-            outcome = ("done", DONE, text)
-            log.info("распознавание %s: готово, %d стр.", job.id[:8], row["pages"])
+            if row["layer_prior"] is not None:
+                await _find_lines(job, row)
+                outcome = ("done", DONE, None)
+                log.info("распознавание %s: строки для PDF найдены", job.id[:8])
+            else:
+                text = await _recognize_pages(job, row)
+                outcome = ("done", DONE, text)
+                log.info("распознавание %s: готово, %d стр.", job.id[:8], row["pages"])
         except _Cancelled:
             outcome = ("cancelled", CANCELLED, None)
             log.info("распознавание %s: отменено", job.id[:8])
@@ -834,6 +938,7 @@ TOO_MANY_PAGES = f"больше {ocr_render.PAGES_MAX} страниц — раз
 BAD_RANGE = f"страницы — от 1 до {{}}, не больше {ocr_render.PAGES_MAX} за раз"
 PHOTO_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
 PAGE_TEXT_MAX = 100_000          # правленый текст страницы (`edit_page`); ответ модели — до MAX_TOKENS токенов
+LAYER_BROKEN = "PDF со слоем из этого файла не собрать"
 
 
 def _row(user_id: int, sid: str):
@@ -1153,19 +1258,77 @@ def _readable(user_id: int, sid: str):
     return row
 
 
+def _layer_lines(page) -> list:
+    """Строки слоя страницы для `ocr_pdf`: распознанная — по рамкам (`find_lines`), без них (правленая, s06, ответ
+    без координат, рамок не искали) — её текст без координат; страница слоя PDF несёт свой текст, прочие — без."""
+    if page["state"] != "done":
+        return []
+    boxes = json.loads(page["boxes"]) if page["recognized"] is None and page["boxes"] else []
+    if boxes:
+        return [(text, tuple(box)) for text, *box in boxes]
+    return ocr_pdf.flow(exports.md_plain(page["text"] or ""))
+
+
+async def _file(user_id: int, media_id: str) -> bytes:
+    try:
+        return await _read(user_id, media_id)
+    except _Missing:
+        raise HTTPException(404, media.GONE) from None
+    except OcrError as e:
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+
+
+async def _layer_pdf(user_id: int, row) -> bytes:
+    """«PDF со слоем» (`ocr_pdf.build`): страницы PDF-исходника — сами страницы исходника, фото — картинками; слой —
+    `_layer_lines`. Рамки, которых ещё нет, выгрузка не ищет: их ищет `find_lines` до неё."""
+    source = await _file(user_id, row["source_media_id"]) if row["source_media_id"] else None
+    plan = []
+    for p in state.DB.execute("SELECT n, state, text, recognized, boxes, media_id FROM scan_pages WHERE scan_id = ?"
+                              " ORDER BY n", (row["id"],)).fetchall():
+        plan.append(ocr_pdf.Page(index=p["n"] - 1, lines=_layer_lines(p)) if source is not None else
+                    ocr_pdf.Page(image=await _file(user_id, p["media_id"]), lines=_layer_lines(p)))
+    try:
+        return await asyncio.to_thread(ocr_pdf.build, source, plan)
+    except Exception:                                 # noqa: BLE001 — pypdf и Pillow падают на чужом файле по-разному
+        log.info("ocr %s: PDF со слоем не собран", row["id"][:8])
+        raise HTTPException(422, {"code": "pdf", "message": LAYER_BROKEN}) from None
+
+
 @router.get("/{sid}/export")
-async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx)$"),  # noqa: A002
+async def export(sid: str, request: Request, format: str = Query(..., pattern="^(txt|md|docx|pdf)$"),  # noqa: A002
                  lang: exports.Lang = "ru"):
     """Документ с распознанным (`_readable`) файлом: имя — по документу («Договор.pdf» → «Договор.docx»);
-    заголовки страниц и пометки — на языке `lang` (exports.Lang)."""
+    заголовки страниц и пометки — на языке `lang` (exports.Lang). pdf — «PDF со слоем» (`_layer_pdf`)."""
     row = _readable(request.state.user.id, sid)
     pages, stem = _page_list(sid), _stem(row["name"])
+    if format == "pdf":
+        return Response(await _layer_pdf(request.state.user.id, row), media_type="application/pdf",
+                        headers={"Content-Disposition": media.disposition(f"{stem}.pdf"), "Cache-Control": "no-store"})
     if format == "docx":
         body = exports.pages_docx(pages, stem, lang)
     else:
         body = (exports.pages_txt(pages, lang) if format == "txt" else exports.pages_md(pages, lang)).encode("utf-8")
     return Response(body, media_type=exports.TYPES[format],
                     headers={"Content-Disposition": media.disposition(f"{stem}.{format}"), "Cache-Control": "no-store"})
+
+
+@router.post("/{sid}/layer")
+async def layer(sid: str, request: Request):
+    """«Скачать ▾ → PDF со слоем»: рамки строк — `find_lines`. `ready` — выгрузка pdf готова сразу; иначе документ
+    ищет строки как идущий (опрос, «Отменить», «В работе»), затем `GET …/layer`."""
+    uid = request.state.user.id
+    queued = find_lines(uid, sid)
+    if queued:
+        kick(uid)
+    return {"ready": not queued}
+
+
+@router.get("/{sid}/layer")
+async def layer_state(sid: str, request: Request):
+    """Выгрузка pdf готова без карты (`ready`); `error` — отказ последнего поиска строк словами."""
+    uid = request.state.user.id
+    row = _row(uid, sid)
+    return {"ready": row["state"] in TERMINAL and _lines_conn(uid, row) is None, "error": LINES_FAILED.get(sid)}
 
 
 @router.post("/{sid}/attachments", status_code=201)

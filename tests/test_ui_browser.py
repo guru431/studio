@@ -5249,7 +5249,7 @@ def test_ocr_download_and_to_chat(browser, live, ocr_reply):
     v = r["values"]
     assert v["pager"] is False                                       # одна страница — без листалки
     assert v["copied"] == f"## Страница 1\n\n{OCR_MARKDOWN}\n"
-    assert v["formats"] == ["txt", "md", "docx"]
+    assert v["formats"] == ["txt", "md", "docx", "pdf"]
     assert v["clicked"] == [f"/api/ocr/{v['sid']}/export?format=md&lang=ru", True]
     assert v["asks"] == [["discuss", "Обсудить в чате"], ["summary", "Кратко пересказать"], ["translate", "Перевести"]]
     assert v["went"] == f"#/chat?ocr={v['sid']}&ask=translate"

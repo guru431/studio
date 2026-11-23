@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 72
+VERSION = 73
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1037,6 +1037,14 @@ SCHEMA += VARIANTS_71
 SCAN_EDITS_72 = "ALTER TABLE scan_pages ADD COLUMN recognized TEXT;\n"
 SCHEMA += SCAN_EDITS_72
 
+#: «PDF со слоем» скана (ocr.find_lines, ocr_pdf): `scan_pages.boxes` — строки страницы с рамками по ответу
+#: `translate_spot.PROMPT` (JSON `[[текст, x1, y1, x2, y2], …]`, доли 0…1000 картинки страницы; `[]` — строк с
+#: координатами нет), NULL — не искали; `scans.layer_prior` — документ снова в очереди ради рамок строк, JSON его
+#: прежнего итога `{state, detail, finished}` (вернётся после поиска); NULL — обычный документ. Прежний код столбцы
+#: не читает: ждущий поиск строк для него — распознавание, которому нечего распознавать, идущий — «прервано»
+SCAN_LAYER_73 = "ALTER TABLE scan_pages ADD COLUMN boxes TEXT;\nALTER TABLE scans ADD COLUMN layer_prior TEXT;\n"
+SCHEMA += SCAN_LAYER_73
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1181,6 +1189,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     71: VARIANTS_71,
     # правленый текст страницы скана и распознанный рядом
     72: SCAN_EDITS_72,
+    # рамки строк страниц скана для «PDF со слоем»
+    73: SCAN_LAYER_73,
 }
 
 

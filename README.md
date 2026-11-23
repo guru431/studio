@@ -94,6 +94,7 @@ The server runs on infrastructure you control. Connect local models through the 
 - Side-by-side page preview and recognized Markdown, including headings, lists and tables.
 - Inspect finished pages while the rest of the document is processing.
 - Retry failed pages, copy text, export **TXT / Markdown / DOCX** or send the document to Chat.
+- **Searchable PDF**: the original pages with invisible recognized text placed on the lines, so any viewer can search and select it.
 - The same OCR pipeline handles scanned PDFs attached to Chat and Translation.
 
 ### Translation
