@@ -102,6 +102,15 @@ def test_recipient_sees_each_record_and_previous_code_reads_only_a_placeholder(s
     assert studio.c.post("/share/file", json={"access": opened["images"]["access"], "file": clip}).status_code == 404
 
 
+def test_scan_snapshot_takes_the_edited_page_text(studio):
+    """05:I6: снимок ссылки на скан — правленый текст страницы, не распознанный."""
+    uid = owner(studio)
+    endpoint, _ = scan(uid)
+    assert studio.c.patch("/api/ocr/sc/pages/1", json={"text": "Сумма: 1 600 руб."}).status_code == 200
+    _, token = create(studio, endpoint)
+    assert unlock(studio, token).json()["item"]["pages"][0]["text"] == "Сумма: 1 600 руб."
+
+
 @pytest.mark.parametrize("kind", ["transcripts", "scans"])
 def test_source_file_goes_into_the_link_only_when_chosen(studio, kind):
     uid = owner(studio)

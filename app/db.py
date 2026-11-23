@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 69
+VERSION = 70
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -387,7 +387,8 @@ ALTER TABLE messages ADD COLUMN reasoning_sec REAL;
 #: распознавание (ocr.py, спека 2026-10-27-studio-ocr-design, 6.3 и 6.7): документ — `scans` (state — queued,
 #: working, cancelling, done, error, cancelled; origin — раздел или вложение чата, attachment_id без ссылки на
 #: attachments: вложение удаляют, документ остаётся; text — весь текст по готовности, для поиска), страницы —
-#: `scan_pages` с n от 1 (свой user_id — media.referenced). Поиск — триггерами, как у расшифровки; текст скана,
+#: `scan_pages`, n — номер страницы исходника с 1 (PDF диапазоном — с первой выбранной; свой user_id —
+#: media.referenced). Поиск — триггерами, как у расшифровки; текст скана,
 #: который раннер дописал во вложение уже после хода, — в поиск чата `search_attachments_text` (строка — заново:
 #: у прямого подключения ход уходит с готовым текстом, и строка уже есть). Каждое
 #: подключение srvllm — в разделе ocr с hunyuan-ocr, умолчание — наименьшее (как шаг 4): скан в чате работает
@@ -1012,6 +1013,12 @@ SHARES_69 = "ALTER TABLE chat_shares ADD COLUMN item_kind TEXT;\nALTER TABLE cha
         for table in ("transcripts", "translations", "scans", "images", "videos"))
 SCHEMA += SHARES_69
 
+#: правка распознанного текста страницы «Сканов» (ocr.edit_page): `text` — правленый (его берут выгрузки, «В чат»,
+#: перевод, ссылка «Поделиться» и поиск), `recognized` — распознанный до первой правки, NULL — страницу не правили.
+#: Прежний код столбец не читает: правленый текст для него — распознанный
+SCAN_EDITS_70 = "ALTER TABLE scan_pages ADD COLUMN recognized TEXT;\n"
+SCHEMA += SCAN_EDITS_70
+
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
     # маска правки кистью (повтор правки идёт с ней); признак жизни ответа, который читает браузер
@@ -1150,6 +1157,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     68: OWUI_DRAFTS_68,
     # ссылка «Поделиться» на расшифровку, перевод, скан, картинку и ролик
     69: SHARES_69,
+    # правленый текст страницы скана и распознанный рядом
+    70: SCAN_EDITS_70,
 }
 
 

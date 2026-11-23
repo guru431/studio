@@ -665,6 +665,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .ocr-scan { display: block; width: 100%; height: auto; }
 .ocr-noscan { margin: 0; padding: var(--space-9) var(--space-6); border: 1px dashed var(--line); border-radius: var(--r-control); text-align: center; }
 .ocr-text { margin: 0; line-height: 1.5; }
+/* «Править» страницу: кнопки над текстом, поле правки — Markdown страницы; окно диапазона страниц PDF */
+.ocr-page, .ocr-edit { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.ocr-page-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); }
+.ocr-edit-text { min-height: 18rem; resize: vertical; overflow: auto; }
+.ocr-range { display: flex; gap: var(--space-5); }
+.ocr-range .field { flex: 1; min-width: 0; }
 @media (max-width: 760px) {
   .ocr-two { grid-template-columns: minmax(0, 1fr); }
 }

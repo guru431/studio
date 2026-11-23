@@ -20,6 +20,10 @@ import { language, message as serverMessage, tr } from './i18n.js';
  * документ, как выгрузка .md; «Прочитать» #ocr-read — его же озвучка (speech-read.js, проигрыватель — #ocr-read-box,
  * другой документ его убирает). «В чат ▾» → #/chat?ocr=<id>&ask=discuss|summary|translate.
  * «Перевести» у готового скана — выбор языка и новая запись «Перевода» без повторного распознавания.
+ * PDF длиннее предела (422 `pages` с числом страниц) — окно диапазона #ocr-range-dialog и тот же файл заново с
+ * x-studio-first-page/x-studio-last-page; страницы документа носят номера исходника (листалка — «страница 51 · 2 из 3»).
+ * «Править» у страницы с текстом кончившегося документа (05:I6): Markdown страницы в поле, PATCH …/pages/<n>;
+ * «правлено» и «Вернуть распознанное» (DELETE …/pages/<n>/edit). Пока идёт правка, листалка стоит.
  * #/ocr?id=<id> («Открыть» в «В работе», «Поиск») выбирает документ после загрузки списка, если его не
  * выбрали сами; ?id из адреса уходит. Принятый документ зовёт jobs.kick(). */
 import { api, hooks, me, toLogin } from './api.js';
@@ -88,7 +92,8 @@ function build(view, ctx) {
   let shownId = null;          // документ, чья страница сейчас в листалке
   let readFor = null;          // документ, чью озвучку показывает readBox
   const readBox = el('div', { class: 'read-box', id: 'ocr-read-box' });
-  let at = 0;                  // номер показанной страницы (с 0)
+  let at = 0;                  // место показанной страницы в документе (с 0)
+  let editing = null;          // { id, n, draft } — правка текста страницы n документа id
   let busy = null;             // блок «идёт» выбранного документа (feed.busyBlock): опрос меняет в нём только текст
   // вид выбранного переживает опрос (05:F14): узлы — по ключу своих данных, иначе меняются только тексты
   let acts = null;             // { key, box } — кнопки документа
@@ -343,8 +348,68 @@ function build(view, ctx) {
     return go;
   }
 
+  /** «Сохранить» правки (PATCH) и «Вернуть распознанное» (DELETE): ответ — документ со страницами. */
+  async function pageEdit(item, n, method, body, button) {
+    button.disabled = true;
+    error.textContent = '';
+    try {
+      const got = await api(method, `/api/ocr/${item.id}/pages/${n}${method === 'DELETE' ? '/edit' : ''}`, body);
+      if (editing && editing.id === item.id && editing.n === n) editing = null;
+      if (docs.current && docs.current.id === got.id) docs.current = got;
+      paintView();
+    } catch (err) {
+      button.disabled = false;
+      error.textContent = words(err);
+    }
+  }
+
+  function confirmRestore(item, page) {
+    const yes = el('button', { type: 'button', class: 'btn btn-accent', id: 'ocr-restore-confirm' }, tr("Вернуть"));
+    const dialog = openDialog(root, { id: 'ocr-restore-dialog', title: tr("Вернуть распознанный текст?"), actions: [yes],
+      body: [el('p', {}, tr("Правка страницы {0} пропадёт.", page.n))] });
+    yes.addEventListener('click', async () => {
+      await pageEdit(item, page.n, 'DELETE', undefined, yes);
+      if (dialog.open) dialog.close();
+    });
+  }
+
+  function editNode(page, item) {
+    const area = el('textarea', { class: 'tr-edit-text ocr-edit-text', id: 'ocr-edit-text',
+      'aria-label': tr("Текст страницы {0}", page.n) });
+    area.value = editing.draft;
+    area.addEventListener('input', () => { editing.draft = area.value; });
+    const save = el('button', { type: 'button', class: 'btn btn-sm btn-accent', id: 'ocr-edit-save' }, tr("Сохранить"));
+    const cancel = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-edit-cancel' }, tr("Отмена"));
+    save.addEventListener('click', () => pageEdit(item, page.n, 'PATCH', { text: area.value }, save));
+    cancel.addEventListener('click', () => {
+      editing = null;
+      paintView();
+    });
+    return el('div', { class: 'ocr-edit' }, area, el('div', { class: 'ocr-page-acts' }, save, cancel));
+  }
+
+  /** «Править», «правлено» и «Вернуть распознанное» над текстом страницы кончившегося документа. */
+  function toolsNode(item, page) {
+    const edit = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-edit' }, tr("Править"));
+    edit.addEventListener('click', () => {
+      // узел кнопок переживает сохранение правки — текст берётся из документа на момент нажатия
+      const now = docs.current.pages.find((p) => p.n === page.n);
+      editing = { id: item.id, n: page.n, draft: (now || page).text || '' };
+      paintView();
+      body.querySelector('#ocr-edit-text')?.focus();
+    });
+    const box = el('div', { class: 'ocr-page-acts' }, edit);
+    if (page.edited) {
+      const restore = el('button', { type: 'button', class: 'btn btn-sm', id: 'ocr-restore' }, tr("Вернуть распознанное"));
+      restore.addEventListener('click', () => confirmRestore(docs.current, page));
+      box.append(el('span', { class: 'tr-mark', id: 'ocr-edited' }, tr("правлено")), restore);
+    }
+    return box;
+  }
+
   function textNode(page, item) {
     if (page.state === 'done' || page.state === 'layer') {
+      if (editing && editing.id === item.id && editing.n === page.n) return editNode(page, item);
       const box = el('div', { class: 'ocr-text md' });
       box.append(renderMarkdown(page.text || '', { html: true }));
       return box;
@@ -381,17 +446,25 @@ function build(view, ctx) {
   });
 
   /** Картинка и текст страницы: та же страница с теми же данными — те же узлы (выделение, декодированная
-   * картинка и фокус переживают опрос); картинка меняется только со своим файлом. */
+   * картинка и фокус переживают опрос); картинка меняется только со своим файлом, кнопки правки над текстом —
+   * отдельно от него (появились у кончившегося документа — текст тот же узел). */
   function pageNode(item, page) {
     // идёт ли документ, видно только у нераспознанной страницы («ждёт распознавания», «Повторить страницу»)
     const running = ['waiting', 'failed'].includes(page.state) && RUNNING.has(item.state);
     const key = `${item.id}:${page.n}`;
     const scanKey = JSON.stringify([page.media_id, page.state === 'layer']);
-    const textKey = JSON.stringify([page.state, page.text, page.detail, running]);
-    if (!two || two.key !== key) two = { key, box: el('div', { class: 'ocr-two', 'data-n': String(page.n) }) };
+    const mine = !!editing && editing.id === item.id && editing.n === page.n;
+    const textKey = JSON.stringify([page.state, page.text, page.detail, running, mine]);
+    const tools = !mine && ['done', 'layer'].includes(page.state) && !RUNNING.has(item.state);
+    const toolsKey = JSON.stringify([tools, page.edited]);
+    if (!two || two.key !== key) {
+      two = { key, box: el('div', { class: 'ocr-two', 'data-n': String(page.n) }), cell: el('div', { class: 'ocr-page' }) };
+    }
     if (two.scanKey !== scanKey) Object.assign(two, { scanKey, scan: scanNode(page) });
     if (two.textKey !== textKey) Object.assign(two, { textKey, text: textNode(page, item) });
-    keep(two.box, [two.scan, two.text]);
+    if (two.toolsKey !== toolsKey) Object.assign(two, { toolsKey, tools: tools ? toolsNode(item, page) : null });
+    keep(two.cell, two.tools ? [two.tools, two.text] : [two.text]);
+    keep(two.box, [two.scan, two.cell]);
     return two.box;
   }
 
@@ -405,9 +478,12 @@ function build(view, ctx) {
     at = Math.min(at, pages.length - 1);
     const nodes = [];
     if (pages.length > 1) {
-      prev.disabled = at === 0;
-      next.disabled = at === pages.length - 1;
-      put(pageNo, tr("страница {0} из {1}", at + 1, pages.length));
+      prev.disabled = at === 0 || !!editing;
+      next.disabled = at === pages.length - 1 || !!editing;
+      // номер страницы исходника; PDF диапазоном — ещё и место в документе
+      const { n } = pages[at];
+      put(pageNo, n === at + 1 ? tr("страница {0} из {1}", n, pages.length)
+        : tr("страница {0} · {1} из {2}", n, at + 1, pages.length));
       nodes.push(pager);
     }
     nodes.push(pageNode(item, pages[at]));
@@ -478,6 +554,7 @@ function build(view, ctx) {
 
   function paintView() {
     const item = docs.current;
+    if (editing && editing.id !== item?.id) editing = null;      // другой документ — черновик правки уходит
     put(title, item ? item.name : NAMES.ocr);
     if (readFor !== item?.id) {
       clearRead(readBox);
@@ -501,12 +578,14 @@ function build(view, ctx) {
       nodes.push(note);
     }
     const n = item.pages.length;
-    put(meta, `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])} · ${when(item.created)} · ${engineName(item)}`);
+    const span = n && item.pages[0].n !== 1 ? ` · ${tr("стр. {0}–{1}", item.pages[0].n, item.pages[n - 1].n)}` : '';
+    put(meta, `${n} ${plural(n, [tr("страница"), tr("страницы"), tr("страниц")])}${span} · ${when(item.created)} · ${engineName(item)}`);
     nodes.push(meta);
     const missed = item.pages.filter((p) => p.state === 'failed').length;
     if (missed) {
       put(failedNo, tr("не распознано страниц: {0} из {1}", missed, n));
       toFailed.hidden = n < 2;
+      toFailed.disabled = !!editing;
       nodes.push(failed);
     }
     nodes.push(actions(item), readBox, ...pageView(item));
@@ -542,7 +621,37 @@ function build(view, ctx) {
     input.disabled = upload.disabled = uploading || mcp.busy;
   }
 
-  async function send(chosen) {
+  /** PDF длиннее предела: «страницы 1–50 из 187» с правкой диапазона, затем тот же файл заново с ним. */
+  function rangeDialog(files, total, max) {
+    const number = (id, value) => el('input', { type: 'number', class: 'input', id, min: '1', max: String(total),
+      step: '1', inputmode: 'numeric', value: String(value) });
+    const first = number('ocr-range-first', 1);
+    const last = number('ocr-range-last', Math.min(total, max));
+    const summary = el('p', { class: 'muted small', id: 'ocr-range-summary', 'aria-live': 'polite' });
+    const go = el('button', { type: 'button', class: 'btn btn-accent', id: 'ocr-range-confirm' }, tr("Распознать"));
+    const dialog = openDialog(root, { id: 'ocr-range-dialog', title: tr("Какие страницы распознать?"), actions: [go],
+      body: [el('p', {}, tr("Страниц в документе: {0}, за раз распознаётся до {1}.", total, max)),
+        el('div', { class: 'ocr-range' }, field(tr("С страницы"), first, 'first'), field(tr("по страницу"), last, 'last')),
+        summary] });
+    const range = () => [Number(first.value), Number(last.value)];
+    const paint = () => {
+      const [a, b] = range();
+      const ok = Number.isInteger(a) && Number.isInteger(b) && a >= 1 && a <= b && b <= total && b - a + 1 <= max;
+      go.disabled = !ok;
+      summary.textContent = ok ? tr("страницы {0}–{1} из {2}", a, b, total)
+        : tr("Номера — от 1 до {0}, не больше {1} страниц за раз", total, max);
+    };
+    first.addEventListener('input', paint);
+    last.addEventListener('input', paint);
+    paint();
+    go.addEventListener('click', () => {
+      const [a, b] = range();
+      dialog.close();
+      send(files, { first: a, last: b });
+    });
+  }
+
+  async function send(chosen, range = null) {
     if (chosen.length > FILES_MAX) {
       error.textContent = tr("Больше {0} файлов за раз", FILES_MAX);
       return;
@@ -573,6 +682,10 @@ function build(view, ctx) {
       xhr.setRequestHeader('x-studio-connection', String(pick.connection_id));
       xhr.setRequestHeader('x-studio-model', pick.model);
     }
+    if (range) {
+      xhr.setRequestHeader('x-studio-first-page', String(range.first));
+      xhr.setRequestHeader('x-studio-last-page', String(range.last));
+    }
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) progress.textContent = tr("Загружаю · {0}%", Math.round(event.loaded * 100 / event.total));
     });
@@ -597,7 +710,11 @@ function build(view, ctx) {
       const detail = answer && answer.detail;
       if (xhr.status === 423 && detail && detail.code === 'screen_locked' && hooks.locked) {
         await hooks.locked();          // студия заперта (lock.js): те же файлы — после отпирания
-        send(files);
+        send(files, range);
+        return;
+      }
+      if (xhr.status === 422 && detail && detail.code === 'pages' && detail.pages && !range) {
+        rangeDialog(files, detail.pages, detail.max);      // PDF длиннее предела — выбрать страницы
         return;
       }
       error.textContent = words((detail && detail.message) || (xhr.status ? tr("Ошибка сервера ({0})", xhr.status) : tr("Нет связи с сервером")));
