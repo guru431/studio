@@ -216,6 +216,50 @@ def test_admin_invitation_list_and_comment_survive_reload(browser, live, mail, w
         assert not errors
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_admin_shows_invitation_link_once_after_password(browser, live, mail, width):
+    """«Показать ссылку»: пароль, затем ссылка в поле с «Копировать» и предупреждением; прежняя из письма погасла,
+    показанная открывает регистрацию."""
+    instance, engine = browser
+    headers = owner_headers(live)
+    email = f"manual-{engine}-{width}@example.com"
+    assert httpx.post(live.url + "/api/admin/invitations", headers=headers, json={"email": email},
+                      verify=False).status_code == 201
+    mailed = last_link(mail)
+    with instance.new_context(viewport={"width": width, "height": 900}, has_touch=width < 760, ignore_https_errors=True,
+                              extra_http_headers={"Cookie": headers["Cookie"]}, service_workers="block") as context:
+        page = context.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(live.url + "/#/admin")
+        row = page.locator(f'#invitations tr[data-email="{email}"]')
+        row.locator(".invite-link").click()
+        dialog = page.locator("#invite-link-dialog")
+        pw.expect(dialog).to_contain_text(email)
+        page.locator("#invite-link-password").fill("wrong-password")
+        page.locator("#invite-link-show").click()
+        pw.expect(dialog.locator("p[role=alert]")).not_to_be_empty()
+        page.locator("#invite-link-password").fill("password-123")
+        page.locator("#invite-link-show").click()
+        result = page.locator("#invite-link-result")
+        pw.expect(result).to_contain_text("Передайте ссылку только адресату")
+        shown = result.locator(".invite-link-url").first.input_value()
+        assert re.fullmatch(r"https://localhost:\d+/account/invite#[A-Za-z0-9_-]+", shown) and shown != mailed
+        assert page.locator("#invite-link-show").count() == 0
+        result.locator(".invite-link-copy").first.click()
+        pw.expect(result).to_contain_text(re.compile("Скопировано|Скопируйте выделенную ссылку"))
+        fits(page)
+        dialog.locator(".dialog-close").click()
+        pw.expect(dialog).to_have_count(0)
+        pw.expect(row).to_contain_text("Ожидает регистрации до ")
+        page.goto(mailed)
+        pw.expect(page.locator("#account-status")).to_contain_text("недействительны")
+        page.goto("about:blank")
+        page.goto(shown)
+        page.locator("#login").wait_for()
+        assert not errors
+
+
 def test_unconfigured_mail_leads_from_invitation_to_smtp_and_test_letter(browser, live, monkeypatch):
     instance, engine = browser
     login = "smtp-" + engine

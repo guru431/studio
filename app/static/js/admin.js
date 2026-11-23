@@ -258,6 +258,47 @@ function invitationsBlock(host) {
       finally { save.disabled = false; }
     });
   }
+  /** «Показать ссылку» — письмо не дошло: паролем администратора выпустить новую ссылку (прежняя гаснет) и
+   *  показать её один раз, для передачи вручную (email_accounts.show_link). */
+  function showLink(invite) {
+    const password = el('input', { class: 'input', id: 'invite-link-password', name: 'password', type: 'password',
+      maxlength: '1024', autocomplete: 'current-password', required: true });
+    const fail = el('p', { class: 'error', role: 'alert' });
+    const show = button(tr("Показать ссылку"), { class: 'btn btn-accent', id: 'invite-link-show', type: 'submit',
+      form: 'invite-link-form' });
+    const form = el('form', { id: 'invite-link-form' },
+      el('p', {}, tr("Новая ссылка для {0} заменит прежнюю и будет действовать 48 часов. Почта учётки будет считаться подтверждённой вами, а не письмом.", invite.email)),
+      field(tr("Пароль учётки"), password, 'password'), fail);
+    const dialog = openDialog(host, { id: 'invite-link-dialog', title: tr("Показать ссылку приглашения?"), body: [form],
+      actions: [show] });
+    password.focus();
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (show.disabled) return;
+      show.disabled = true;
+      try {
+        const { links } = await api('POST', `/api/admin/invitations/${invite.id}/link`, { password: password.value });
+        password.value = '';
+        show.remove();
+        dialog.querySelector('.dialog-close').textContent = tr("Закрыть");
+        const copyFail = el('p', { class: 'error', role: 'status' });
+        form.replaceWith(el('div', { id: 'invite-link-result' },
+          el('p', {}, el('strong', {}, tr("Передайте ссылку только адресату. После закрытия окна её не показать — только выпустить новую."))),
+          ...links.map((value) => {
+            const link = el('input', { class: 'input invite-link-url', readonly: true, value, 'aria-label': tr("Ссылка приглашения") });
+            const copy = button(tr("Копировать"), { class: 'btn btn-sm invite-link-copy' }, async () => {
+              try { await navigator.clipboard.writeText(link.value); copy.textContent = tr("Скопировано"); }
+              catch { link.focus(); link.select(); copyFail.textContent = tr("Скопируйте выделенную ссылку"); }
+            });
+            return el('div', { class: 'field' }, link, copy);
+          }), copyFail));
+        await reload();
+      } catch (err) {
+        fail.textContent = words(err);
+        show.disabled = false;
+      }
+    });
+  }
   async function reload() {
     api('GET', '/api/admin/smtp/status').then(status => {
       delivery.textContent = smtpDeliveryText(status);
@@ -281,6 +322,8 @@ function invitationsBlock(host) {
                 act(() => api('POST', '/api/admin/invitations', {
                   email: invite.email, comment: invite.comment, is_admin: invite.is_admin }));
               }),
+            ...(['pending', 'failed', 'expired'].includes(invite.status)
+              ? [button(tr("Показать ссылку"), { class: 'btn btn-sm invite-link' }, () => showLink(invite))] : []),
             invite.status === 'pending'
               ? button(tr("Отозвать"), { class: 'btn btn-sm invite-revoke' }, () =>
                 act(() => api('DELETE', `/api/admin/invitations/${invite.id}`)))

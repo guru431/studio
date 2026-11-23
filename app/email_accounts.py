@@ -71,6 +71,10 @@ class CommentIn(BaseModel):
     comment: str = Field(max_length=1000)
 
 
+class PasswordIn(BaseModel):
+    password: str = Field(max_length=1024)
+
+
 class EmailIn(BaseModel):
     email: str = Field(max_length=254)
     password: str = Field(max_length=1024)
@@ -282,7 +286,7 @@ async def invite(body: InviteIn, request: Request, admin: auth.User = Depends(au
     if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
         raise HTTPException(403)
     changed = state.DB.execute("UPDATE invitations SET comment=?,is_admin=?,invited_by=?,created=?,expires=?,"
-                               "token_hash=?,revoked=NULL,sent=1 WHERE id=? AND accepted IS NULL AND token_hash IS ? AND revoked IS ?",
+                               "token_hash=?,revoked=NULL,sent=1,manual=0 WHERE id=? AND accepted IS NULL AND token_hash IS ? AND revoked IS ?",
                                (body.comment, int(body.is_admin), admin.id, now, now + INVITE_SEC,
                                 security.digest(token), iid, old["token_hash"] if old else None,
                                 old["revoked"] if old else None)).rowcount
@@ -325,6 +329,30 @@ async def revoke(iid: str):
                             (iid,)).rowcount:
         raise HTTPException(409, {"code": "accepted", "message": "Приглашение уже принято или удалено"})
     return Response(status_code=204)
+
+
+@router.post("/api/admin/invitations/{iid}/link")
+async def show_link(iid: str, body: PasswordIn, request: Request, admin: auth.User = Depends(auth.require_admin)):
+    """«Показать ссылку»: письмо не дошло (спам, сбой SMTP) — администратор передаёт ссылку сам. Только с его паролем
+    (`auth.confirm_password`); каждый показ выпускает новую ссылку со сроком письма, прежняя гаснет, в базе — хеш.
+    Ответ — один раз и `no-store`; в журнал безопасности администратора — `invite_link` без адреса и ссылки. Почту
+    учётки, принявшей такую ссылку, подтвердил не ящик, а администратор: `invitations.manual` → `invite_accept` admin."""
+    await auth.confirm_password(admin.id, body.password, "ссылка приглашения", digest=request.state.digest)
+    # после scrypt снова проверить права: разжалование отзывает приглашения (`revoke_invited_by`) — не оживить их
+    inviter = state.DB.execute("SELECT is_admin,disabled FROM users WHERE id=?", (admin.id,)).fetchone()
+    if inviter is None or not inviter["is_admin"] or inviter["disabled"]:
+        raise HTTPException(403)
+    token, now = security.new_token(), clock.NOW()
+    if not state.DB.execute("UPDATE invitations SET invited_by=?,created=?,expires=?,token_hash=?,sent=1,manual=1"
+                            " WHERE id=? AND accepted IS NULL AND revoked IS NULL",
+                            (admin.id, now, now + INVITE_SEC, security.digest(token), iid)).rowcount:
+        raise HTTPException(409, {"code": "state", "message": "Ссылку можно показать только у непринятого и неотозванного приглашения"})
+    security_log.record(admin.id, "invite_link", digest=request.state.digest, ip=auth.client_ip(request))
+    links = [link("invite", token)]
+    if state.CFG.alternate_origin:
+        links.append(link("invite", token, state.CFG.alternate_origin))
+    return Response(json.dumps({"links": links, "expires": now + INVITE_SEC}), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
 
 
 def revoke_invited_by(uid: int) -> None:
@@ -370,6 +398,7 @@ async def accept_invite(request: Request):
                                 row["email"], db.DEFAULT_THEME)).lastrowid
         state.DB.execute("UPDATE invitations SET accepted=?,user_id=?,token_hash=NULL WHERE id=?",
                          (clock.NOW(), uid, row["id"]))
+        security_log.record(uid, "invite_accept", detail="admin" if row["manual"] else "mail", ip=auth.client_ip(request))
         state.DB.execute("COMMIT")
     except sqlite3.IntegrityError:
         state.DB.execute("ROLLBACK")
