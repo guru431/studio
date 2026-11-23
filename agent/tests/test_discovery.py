@@ -18,7 +18,7 @@ def test_file_suggestions_skip_private_files_generated_trees_and_links(tmp_path)
 
 def test_grep_finds_lines_with_the_same_exclusions_and_skips_binary_and_large_files(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "a.py").write_text("x = 1\nЁЖИК = 2\n\tнайди  ежика\n", encoding="utf-8")
+    (tmp_path / "src" / "a.py").write_bytes("x = 1\r\nЁЖИК = 2\x0c\r\tнайди  ежика\n".encode("utf-8"))
     (tmp_path / "src" / "bin.dat").write_bytes("\x00ежик".encode("utf-8"))
     (tmp_path / "src" / "cp1251.txt").write_bytes("ежик".encode("cp1251"))
     (tmp_path / ".env").write_text("ежик", encoding="utf-8")

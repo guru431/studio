@@ -146,7 +146,8 @@ def grep(project, path, query, *, monotonic=time.monotonic):
         if needle not in normalize(text):
             continue
         found = 0
-        for number, line in enumerate(text.splitlines(), 1):
+        # Строки — как их считает поле правки страницы (textarea): разделители только \r\n, \r и \n.
+        for number, line in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
             if needle in normalize(line):
                 if found == GREP_PER_FILE or len(hits) == GREP_HITS:
                     more = True

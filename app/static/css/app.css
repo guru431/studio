@@ -2302,6 +2302,22 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-files-create { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .code-files-create[hidden] { display: none; }
 .code-files-create .btn { font-size: var(--fs-2xs); }
+.code-files-create .btn[hidden], #code-upload-status:empty { display: none; }
+#code-upload-status { margin: 0; overflow-wrap: anywhere; }
+.code-files-search { display: flex; gap: var(--space-3); min-width: 0; }
+.code-files-search[hidden] { display: none; }
+.code-files-search .input { flex: 1; min-width: 0; }
+.code-files-found:empty { display: none; }
+.code-files-found p { margin: 0 0 var(--space-3); }
+.code-found-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-1); }
+.code-found-item { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: var(--space-3) var(--space-5);
+  border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer; min-width: 0; }
+.code-found-list li:last-child .code-found-item { border-bottom: 0; }
+.code-found-path { font-family: var(--mono); font-size: var(--fs-xs); color: var(--accent); overflow-wrap: anywhere; }
+.code-found-text { font-family: var(--mono); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (hover: hover) { .code-found-item:hover { background: var(--surface-2); } }
 .code-file-actions { display: flex; flex-direction: column; gap: var(--space-4); }
 .code-operation-source { overflow-wrap: anywhere; font-family: var(--mono); }
 #code-files-calculate { flex: none; font-size: var(--fs-2xs); }

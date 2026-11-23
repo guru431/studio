@@ -26,6 +26,12 @@ import { locale, tr } from './i18n.js';
  * gitView(host, { git, failed }) → { unmount() }: общий снимок проекта, #code-git — «Ветка», «впереди на N» / «позади на N»
  * (если есть upstream; нулевые не показываются), изменённые файлы (status, path); пусто — «Изменений нет», 409 not_git — «Не
  * репозиторий git».
+ * - «Скачать» в «⋯» файла — POST …/files/download (до 10 МиБ), имя — из Content-Disposition, blob и ссылка download;
+ *   «Загрузить файл» (#code-upload и «⋯» папки, мост с file_upload) — PUT …/files/upload телом-файлом, путь — заголовком
+ *   X-Studio-Name; имя занято (409 exists) — окно «Заменить?», повтор с X-Studio-Replace: 1;
+ * - поиск по содержимому (#code-files-search, мост с file_search) — POST …/files/search в открытой папке, список
+ *   #code-files-found «файл:строка — фрагмент»; нажатие открывает файл на этой строке (.md — исходный текст);
+ *   найденное — только в памяти страницы.
  * failed(err, box, path) — общие отказы раздела из code.js (closed — к PIN этого компьютера, с path — назад к
  * этому файлу, с { dir } — к папке; offline — слова).
  * Пути — только в теле запросов (поэтому чтения — POST): ни в адрес, ни в хранилище браузера; текст машины —
@@ -45,6 +51,7 @@ const TOO_LARGE = tr("Файл больше 2 МиБ — не открывает
 const BINARY = tr("Двоичный файл — не открывается");
 const NO_CHANGES = tr("Изменений нет");
 const NOT_GIT = tr("Не репозиторий git");
+const UPLOAD_MAX = 10 * 1024 * 1024;   // предел `raw` моста: файл больше 10 МиБ не загружается и не скачивается
 
 function icon(name) {
   return el('span', { class: 'code-file-icon', 'aria-hidden': 'true' }, svgIcon(name));
@@ -76,7 +83,8 @@ const FILE_COLUMNS = [
 /** Правки, чьё сохранение застал 409 closed: `<aid>/<pid>/<путь>` → { text, version }; только память страницы. */
 const edits = new Map();
 
-export function filesView(host, { aid, pid, name, failed, path: start = null, git, operations = false }) {
+export function filesView(host, { aid, pid, name, failed, path: start = null, git, operations = false,
+  upload = false, search = false }) {
   const url = `/api/code/agents/${aid}/projects/${pid}`;
   let alive = true;
   let dir = '';
@@ -106,11 +114,22 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
   const listError = el('p', { id: 'code-files-error', class: 'error', 'aria-live': 'polite' });
   const file = el('section', { id: 'code-file', class: 'code-file', tabindex: '0',
     'aria-label': tr("Открытый файл"), hidden: true });
-  const create = el('div', { class: 'code-files-create', hidden: !operations },
-    button(tr("Новый файл"), { id: 'code-new-file', class: 'btn btn-sm' }, () => operationDialog('create_file', dir)),
-    button(tr("Новая папка"), { id: 'code-new-folder', class: 'btn btn-sm' }, () => operationDialog('create_dir', dir)));
+  const uploadInput = el('input', { type: 'file', id: 'code-upload-input', hidden: true, tabindex: '-1' });
+  const uploadButton = button(tr("Загрузить файл"), { id: 'code-upload', class: 'btn btn-sm', hidden: !upload,
+    title: tr("Положить файл с этого устройства в открытую папку, до 10 МиБ") }, () => pickUpload(dir));
+  const uploadStatus = el('p', { id: 'code-upload-status', class: 'muted small', 'aria-live': 'polite' });
+  const create = el('div', { class: 'code-files-create', hidden: !operations && !upload },
+    button(tr("Новый файл"), { id: 'code-new-file', class: 'btn btn-sm', hidden: !operations }, () => operationDialog('create_file', dir)),
+    button(tr("Новая папка"), { id: 'code-new-folder', class: 'btn btn-sm', hidden: !operations }, () => operationDialog('create_dir', dir)),
+    uploadButton, uploadInput);
+  const searchInput = el('input', { id: 'code-files-search', class: 'input', type: 'search', maxlength: '200',
+    placeholder: tr("Найти в файлах папки"), 'aria-label': tr("Найти в файлах папки"), autocomplete: 'off',
+    autocapitalize: 'off', spellcheck: 'false' });
+  const searchButton = button(tr("Найти"), { type: 'submit', id: 'code-files-search-go', class: 'btn btn-sm' });
+  const searchForm = el('form', { class: 'code-files-search', role: 'search', hidden: !search }, searchInput, searchButton);
+  const found = el('div', { id: 'code-files-found', class: 'code-files-found', 'aria-live': 'polite' });
   const view = el('div', { class: 'code-files-view' }, el('div', { class: 'code-files-toolbar' }, crumbs, create, calculate),
-    statsStatus, listError, el('div', { class: 'code-files-workspace' }, table, file));
+    searchForm, found, statsStatus, uploadStatus, listError, el('div', { class: 'code-files-workspace' }, table, file));
   host.replaceChildren(view);
 
   const contains = (parent, path) => path != null && (path === parent || path.startsWith(`${parent}/`));
@@ -215,15 +234,146 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     });
   }
 
+  /** В «⋯» есть хоть одно действие: скачать файл, загрузить в папку или изменить. */
+  const hasActions = (isDir) => operations || !isDir || upload;
+
   function actionsMenu(path, isDir) {
-    if (!operations || operating) return;
-    const actions = [['rename', tr("Переименовать")], ['move', tr("Переместить")], ['delete', tr("Удалить")]];
-    if (isDir) actions.unshift(['create_file', tr("Новый файл")], ['create_dir', tr("Новая папка")]);
+    if (operating || !hasActions(isDir)) return;
+    const actions = operations ? [['rename', tr("Переименовать")], ['move', tr("Переместить")], ['delete', tr("Удалить")]] : [];
+    if (isDir && operations) actions.unshift(['create_file', tr("Новый файл")], ['create_dir', tr("Новая папка")]);
+    if (isDir && upload) actions.unshift(['upload', tr("Загрузить файл")]);
+    if (!isDir) actions.unshift(['download', tr("Скачать")]);
     const choices = el('div', { class: 'code-file-actions' });
     const dialog = openDialog(host, { id: 'code-file-actions', title: nameOf(path), body: [choices], cancelText: tr("Закрыть") });
     for (const [action, label] of actions) choices.append(button(label, { class: `btn${action === 'delete' ? ' btn-danger' : ''}`,
-      'data-action': action }, () => { dialog.close(); operationDialog(action, path, isDir); }));
+      'data-action': action }, () => {
+      dialog.close();
+      if (action === 'download') download(path);
+      else if (action === 'upload') pickUpload(path);
+      else operationDialog(action, path, isDir);
+    }));
   }
+
+  /** Файл до 10 МиБ — на устройство: байты — blob в памяти страницы, имя — последняя часть пути. */
+  async function download(path) {
+    uploadStatus.textContent = tr("Скачиваю {0}…", nameOf(path));
+    listError.textContent = '';
+    try {
+      const response = await api('POST', `${url}/files/download`, { path });
+      const blob = await response.blob();
+      if (!alive) return;
+      const href = URL.createObjectURL(blob);
+      const link = el('a', { href, download: nameOf(path), hidden: true });
+      view.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 60_000);
+      uploadStatus.textContent = '';
+    } catch (err) {
+      if (!alive) return;
+      uploadStatus.textContent = '';
+      refuse(err, listError, null);
+    }
+  }
+
+  let uploadTarget = '';
+  function pickUpload(target) {
+    if (!upload || operating || !alive) return;
+    uploadTarget = target;
+    uploadInput.value = '';
+    uploadInput.click();
+  }
+  uploadInput.addEventListener('change', () => {
+    const chosen = uploadInput.files?.[0];
+    if (chosen) sendUpload(uploadTarget, chosen);
+  });
+
+  /** Файл в папку `target`: имя занято — окно «Заменить?»; заменить открытый правленый файл нельзя. */
+  async function sendUpload(target, chosen, replace = false) {
+    const path = join(target, chosen.name);
+    listError.textContent = '';
+    if (chosen.size > UPLOAD_MAX) {
+      listError.textContent = tr("Файл больше 10 МиБ — не загружается");
+      return;
+    }
+    if (replace && path === selected && dirty()) {
+      listError.textContent = tr("Сначала сохраните изменения открытого файла");
+      return;
+    }
+    operating = true;
+    uploadButton.disabled = true;
+    uploadStatus.textContent = tr("Загружаю {0}…", chosen.name);
+    try {
+      await api('PUT', `${url}/files/upload`, chosen, { headers: { 'content-type': 'application/octet-stream',
+        'x-studio-name': encodeURIComponent(path), ...(replace ? { 'x-studio-replace': '1' } : {}) } });
+      if (!alive) return;
+      uploadStatus.textContent = tr("Файл загружен: {0}", path);
+      operating = false;
+      await refreshTree('create_file', path, null);
+      if (alive && replace && selected === path) openFile(path);
+    } catch (err) {
+      if (!alive) return;
+      uploadStatus.textContent = '';
+      if (err.code === 'exists' && !replace) confirmReplace(target, chosen);
+      else refuse(err, listError, null);
+    } finally {
+      operating = false;
+      uploadButton.disabled = false;
+    }
+  }
+
+  function confirmReplace(target, chosen) {
+    const yes = button(tr("Заменить"), { id: 'code-upload-replace', class: 'btn btn-danger' });
+    const dialog = openDialog(host, { id: 'code-upload-exists', title: tr("Файл уже есть"), actions: [yes],
+      body: [el('p', {}, tr("В папке уже есть «{0}». Заменить его? Прежний файл не сохранится.", chosen.name))] });
+    yes.addEventListener('click', () => {
+      dialog.close();
+      sendUpload(target, chosen, true);
+    });
+  }
+
+  let searchGen = 0;
+  /** Поиск строк в файлах открытой папки; найденное — только здесь, нажатие открывает файл на строке. */
+  searchForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const query = searchInput.value.trim();
+    const mine = ++searchGen;
+    if (!query) {
+      found.replaceChildren();
+      return;
+    }
+    const scope = dir;
+    searchButton.disabled = true;
+    found.replaceChildren(el('p', { class: 'muted small' }, tr("Ищу…")));
+    try {
+      const result = await api('POST', `${url}/files/search`, { path: scope, query });
+      if (!alive || mine !== searchGen) return;
+      const where = scope || name || tr("Проект");
+      const summary = !result.items.length ? tr("В папке «{0}» ничего не найдено.", where)
+        : tr("В папке «{0}» найдено строк: {1}.", where, result.items.length);
+      const note = el('p', { class: 'muted small' }, summary
+        + (result.more ? tr(" Показаны не все — уточните запрос.") : '')
+        + (!result.complete ? tr(" Поиск неполный: достигнут предел обхода или часть файлов недоступна.") : ''));
+      const rows = result.items.map((item) => {
+        const row = el('button', { type: 'button', class: 'code-found-item', 'data-path': item.path,
+          'data-line': String(item.line) }, el('span', { class: 'code-found-path' }, `${item.path}:${item.line}`),
+        el('span', { class: 'code-found-text' }, item.text));
+        row.addEventListener('click', () => leave(() => {
+          closeFile();
+          listDir(parentOf(item.path));
+          openFile(item.path, item.line);
+        }));
+        return el('li', {}, row);
+      });
+      found.replaceChildren(note, ...(rows.length ? [el('ul', { class: 'code-found-list' }, ...rows)] : []));
+    } catch (err) {
+      if (!alive || mine !== searchGen) return;
+      found.replaceChildren();
+      refuse(err, listError, null);
+    } finally {
+      if (alive && mine === searchGen) searchButton.disabled = false;
+    }
+  });
 
   function clearStats() {
     statsGen += 1;
@@ -404,7 +554,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       'aria-label': item.name, class: item.dir ? 'dir' : null }, row);
     const node = { path, item, row, badge, li, cells };
     nodes.set(path, node);
-    if (operations) {
+    if (hasActions(item.dir)) {
       const menu = button(svgIcon('more'), { class: 'code-file-menu', 'aria-label': tr("Действия: {0}", item.name),
         title: tr("Действия с файлом или папкой"), 'aria-haspopup': 'dialog' }, () => actionsMenu(path, node.item.dir));
       li.classList.add('has-actions');
@@ -549,7 +699,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     showPath(path, true);
     const status = el('p', { id: 'code-file-status', class: 'code-file-status', 'aria-live': 'polite' });
     const bar = el('div', { class: 'code-file-bar' });
-    if (operations) bar.append(button(svgIcon('more'), { class: 'btn btn-sm', id: 'code-open-file-actions',
+    bar.append(button(svgIcon('more'), { class: 'btn btn-sm', id: 'code-open-file-actions',
       'aria-label': tr("Действия с открытым файлом"), title: tr("Действия с открытым файлом") }, () => actionsMenu(path, false)));
     file.replaceChildren(bar, status);
     file.hidden = false;
@@ -562,7 +712,17 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     status.classList.toggle('error', !!error);
   }
 
-  async function openText(path) {
+  /** Строка `line` (с 1) открытого текста — выделена и видна. */
+  function goToLine(editor, line) {
+    const lines = editor.value.split('\n');
+    if (line > lines.length) return;
+    const start = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
+    editor.focus({ preventScroll: true });
+    editor.setSelectionRange(start, start + lines[line - 1].length);
+    editor.scrollTop = Math.max(0, (line - 3) * (parseFloat(getComputedStyle(editor).lineHeight) || 20));
+  }
+
+  async function openText(path, line = null) {
     const { mine, bar, status } = fileFrame(path);
     let got;
     try {
@@ -690,11 +850,12 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     }
     file.append(editor);
     if (/\.md$/i.test(path)) {
-      editor.hidden = true;
-      shown = el('div', { id: 'code-md', class: 'md code-md' });
+      const first = line ? 'text' : 'view';             // к найденной строке — исходный текст
+      editor.hidden = first === 'view';
+      shown = el('div', { id: 'code-md', class: 'md code-md', hidden: first !== 'view' });
       const modes = el('div', { id: 'code-md-view', class: 'code-md-view', role: 'group', 'aria-label': tr("Показ") });
       for (const [mode, text] of [['view', tr("Разметка")], ['text', tr("Исходный")]]) {
-        const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === 'view') }, text);
+        const b = el('button', { type: 'button', class: 'chip', 'data-mode': mode, 'aria-pressed': String(mode === first) }, text);
         b.addEventListener('click', () => {
           for (const other of modes.children) other.setAttribute('aria-pressed', String(other === b));
           editor.hidden = mode === 'view';
@@ -709,6 +870,7 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
       paintMarkdown();
     }
     bar.append(save);
+    if (line) goToLine(editor, line);
   }
 
   function openPdf(path) {
@@ -753,11 +915,11 @@ export function filesView(host, { aid, pid, name, failed, path: start = null, gi
     show(1);
   }
 
-  function openFile(path) {
+  function openFile(path, line = null) {
     dir = parentOf(path);
     if (/\.pdf$/i.test(path)) openPdf(path);
     else if (/\.(?:png|jpe?g|webp|gif)$/i.test(path)) openImage(path);
-    else openText(path);
+    else openText(path, line);
   }
 
   async function openImage(path) {
