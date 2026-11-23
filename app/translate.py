@@ -64,6 +64,7 @@ from pydantic import BaseModel, Field
 
 import chat
 import cleaner_route
+import card
 import clock
 import connections
 import db
@@ -881,7 +882,7 @@ def _photo_heads(tid: str) -> "tuple[str | None, str | None]":
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
     heads = (_photo_heads(row["id"]) if row["kind"] == "photo" else (row["source_head"], row["text_head"]))
-    return {"id": row["id"], "kind": row["kind"], "name": row["name"], "state": row["state"],
+    return card.mark({"id": row["id"], "kind": row["kind"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
             "model": row["model"], "source_lang": row["source_lang"], "target_lang": row["target_lang"],
             "detected_lang": row["detected_lang"], "result_lang": row["result_lang"], "parts": row["parts"],
@@ -890,7 +891,7 @@ def _out(row) -> dict:
             "scan_id": row["scan_id"], "scan_shared": bool(row["scan_shared"]),
             "scan_owned": row["scan_id"] is not None and row["source_media_id"] is not None,
             # «готово», но не всё: нераспознанные страницы скана (UNREAD), снимок без текста (NO_TEXT)
-            "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None}
+            "notice": row["detail"] if row["state"] == "done" and row["detail"] != DONE else None}, "translate", row)
 
 
 def _name(text: str) -> str:

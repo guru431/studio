@@ -44,6 +44,19 @@ export function computerPin(attrs = {}) {
     autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '64', ...attrs });
 }
 
+/** Строка ожидания с очередью карты (поле `card` сервера, card.py): «… · карта занята: ролик · ещё примерно 6 мин ·
+ * перед вами заданий: 2»; `busy` null — карту держит не студия. Нет поля — строка как есть. */
+export function withCard(text, card) {
+  if (!card) return text;
+  const kinds = { image: tr("картинка"), description: tr("описание фото"), translation: tr("перевод промпта"),
+    video: tr("ролик"), transcript: tr("расшифровка"), speech: tr("озвучка"), scan: tr("распознавание"),
+    translate: tr("перевод"), chat: tr("ответ чата") };
+  const parts = [card.busy ? tr("карта занята: {0}", kinds[card.busy] || card.busy) : tr("карта занята другим клиентом")];
+  if (card.minutes) parts.push(tr("ещё примерно {0} мин", card.minutes));
+  if (card.ahead) parts.push(tr("перед вами заданий: {0}", card.ahead));
+  return [text, ...parts].filter(Boolean).join(' · ');
+}
+
 /** Слова отказа с заглавной буквы. */
 export function words(err) {
   const text = message((err && err.message) || err || tr("Не получилось"));

@@ -108,7 +108,7 @@ import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { saveMedia } from './save.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
-import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
+import { button, el, field, focusDesktop, openDialog, plural, withCard, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 import { readAloud } from './speech-read.js';
@@ -320,6 +320,7 @@ async function readServer(job, response) {
       } else if (event === 'wait' && data) {       // {seconds} — ждём карту (503 шлюза), {} — шлюз принял запрос
         job.scan = null;
         job.wait = Number.isFinite(data.seconds) ? Date.now() - data.seconds * 1000 : null;
+        job.card = data.card || null;              // очередь карты (card.py): кто на ней и сколько примерно ждать
         notify(job, false);
       } else if (event === 'closed') {             // сессия вышла или «Чат» заперт: перечитать через вход/блокировку
         break;
@@ -676,6 +677,8 @@ function build(view, ctx) {
   let pendingAnswer = null;    // { signature, requestId } ответа на паузу: повтор того же ответа — с тем же id
   let editing = null;         // выбранное сообщение и снимок конца диалога
   let droppedNote = '';        // адрес подключения чипа убран из списка администратора — слова для #model-note
+  let listed = [];             // диалоги списка (GET /api/chats): сколько ещё на удалённом подключении
+  let moveFor = null;          // диалог, под чипом которого стоит предложение #chat-move
   const parts = new WeakMap(); // сообщение → его узлы в ленте
   const received = new WeakMap(); // сообщение с сервера → его JSON при получении (settle)
   const shown = new WeakMap();    // сообщение → { node, last, cleaner }: узел в ленте и с чем он нарисован
@@ -756,6 +759,7 @@ function build(view, ctx) {
   const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
     dialog: () => chosen().connection_id });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
+  const moveNote = el('p', { class: 'chat-passport', id: 'chat-move', 'aria-live': 'polite', hidden: true });
   const editNote = el('div', { class: 'chat-edit-note', hidden: true },
     el('span', {}, tr("Правка сообщения. После отправки последующие сообщения будут удалены.")),
     button(tr("Отменить правку"), { class: 'btn btn-sm chat-edit-cancel' }, () => {
@@ -763,7 +767,7 @@ function build(view, ctx) {
     }));
   let passportKey = '';
   const ring = contextRing(estimateContext);
-  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, editNote, inputBox.box, inputBox.error,
+  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, moveNote, editNote, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle, ring.node), send, stop),
     webNote, talkNote);
@@ -805,6 +809,7 @@ function build(view, ctx) {
       list.replaceChildren(el('p', { class: 'error small chat-list-note' }, words(err)));
       return;
     }
+    listed = items;
     if (!items.length) {
       list.replaceChildren(el('p', { class: 'muted small chat-list-note' }, tr("Диалогов пока нет")));
       return;
@@ -932,6 +937,11 @@ function build(view, ctx) {
     chip.title = connName.textContent;
     droppedNote = dropped ? connName.textContent : '';     // в шапке подключения больше нет: отказ — строкой над лентой
     routedTag.hidden = !(chat ? chat.chat.routed : link?.connection.routed);
+    if (moveFor !== chatId) {                       // предложение #chat-move — только под своим диалогом
+      moveFor = null;
+      moveNote.hidden = true;
+      moveNote.replaceChildren();
+    }
     paintGuard();
     paintThink();
     paintWeb();
@@ -1508,13 +1518,36 @@ function build(view, ctx) {
       paintChip();
       return;
     }
+    const was = chat.chat;
     try {
       chat.chat = await api('PATCH', `/api/chats/${chat.chat.id}`, { connection_id: connId, model });
       notice.textContent = '';
     } catch (err) {
       notice.textContent = words(err);
     }
+    // подключение было удалено или убрано из списка администратора — те же диалоги списка можно перевести разом
+    if (chat.chat !== was && ((was.connection_id === null && was.model) || was.dropped)) offerMove(was.connection_id, connId, model);
     paintChip();
+  }
+
+  function offerMove(from, connId, model) {
+    const others = listed.filter((c) => c.id !== chatId && c.connection_id === from).length;
+    if (!others) return;
+    moveFor = chatId;
+    const go = button(tr("Перевести их"), { class: 'btn-link', id: 'chat-move-go' }, async () => {
+      go.disabled = true;
+      try {
+        const out = await api('POST', '/api/chats/move', { from_connection_id: from, connection_id: connId, model });
+        moveNote.replaceChildren(el('span', {}, out.kept
+          ? tr("Переведено диалогов: {0}. Остались прежними — с MCP: {1}", out.moved, out.kept)
+          : tr("Переведено диалогов: {0}", out.moved)));
+        loadList();
+      } catch (err) {
+        moveNote.replaceChildren(el('span', { class: 'error' }, words(err)));
+      }
+    });
+    moveNote.replaceChildren(el('span', {}, tr("Ещё диалогов на прежнем подключении: {0} — перевести их на «{1}»?", others, model)), go);
+    moveNote.hidden = false;
   }
 
   /* лента */
@@ -1924,7 +1957,8 @@ function build(view, ctx) {
     // карта занята (503 шлюза): своя вкладка — событие `wait`, ответ, который читает не она, — `wait` с сервера
     const waiting = m.status === 'streaming' && (job ? job.wait != null : Number.isFinite(m.wait));
     p.nowait.hidden = !waiting;
-    if (waiting) text = tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000));
+    if (waiting) text = withCard(tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000)),
+      job ? job.card : m.card);
     else if (m.status === 'streaming') {
       // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке.
       // Грузит модель только локальная (`local` диалога), облачная — просто ещё молчит

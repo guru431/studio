@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 import audio
 import auth
 import chat
+import card
 import clock
 import connections
 import db
@@ -209,7 +210,7 @@ def _out(row, segments: "list | None" = None) -> dict:
            "language": row["language"]}
     if segments is not None:
         out["segments"] = segments
-    return out
+    return card.mark(out, "transcribe", row)
 
 
 def _store(job: Job) -> None:

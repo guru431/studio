@@ -54,6 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+import card
 import chat_pending
 import chat_system
 import chat_tools
@@ -231,6 +232,12 @@ class ChatPatch(BaseModel):
     web: bool | None = None              # кнопка «Интернет»; null — не трогать
     thinking: bool | None = None         # кнопка «Рассуждение»; null — не трогать
     role_id: str | None = Field(None, max_length=64)   # роль диалога (roles.py); null — без роли
+
+
+class ChatsMoveIn(BaseModel):
+    from_connection_id: int | None = None    # null — диалоги, чьё подключение удалено
+    connection_id: int
+    model: str = Field(min_length=1, max_length=MODEL_MAX)
 
 
 class CleanerRule(BaseModel):
@@ -447,6 +454,7 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
            "attachments": [views[a["id"]] if views is not None else _attachment_out(a) for a in atts],
            "tools": [web.public(s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
            "ocr": live.scan_state if live else None, "wait": live.waited() if live else None,
+           "card": card.info("chat", row["id"]) if live and live.card_wait is not None else None,
            "todo": json.loads(row["todo"]) if row["todo"] else None}   # план ответа (chat_tools.TODO_WRITE)
     if pending and row["id"] in pending:
         out["pending"] = pending[row["id"]]
@@ -933,7 +941,7 @@ class StreamTask:
             log.info("чат %s: ответ %s — жду карту", self.chat_id[:8], self.message_id[:8])
         self.card_wait = (shown, counted)
         self.fresh = True
-        self.put("wait", {"seconds": round(now - shown)})
+        self.put("wait", {"seconds": round(now - shown), "card": card.info("chat", self.message_id)})
         await clock.SLEEP(RETRY_SEC)
         self.deadline += clock.NOW() - now
         return None
@@ -1955,6 +1963,24 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
         cols = ", ".join(f"{k} = ?" for k in changes)        # имена — из кода выше, не из запроса
         state.DB.execute(f"UPDATE chats SET {cols} WHERE id = ?", (*changes.values(), chat_id))
     return _chat_view(uid, _chat_row(uid, chat_id))
+
+
+@router.post("/chats/move")
+async def move_chats(body: ChatsMoveIn, request: Request):
+    """Свои диалоги (кроме корзины) с подключения `from_connection_id` (null — удалённого) — одним `UPDATE` на пару
+    раздела «Чат» (`sections.resolve`: чужое и закрытое группами — 404, неотмеченная модель — 422). Диалог с MCP на
+    модель без MCP (прямую или Cleaner) не переводится — как PATCH диалога: `kept` — их число."""
+    uid = request.state.user.id
+    conn, model = _chat_pair(uid, body.connection_id, body.model)
+    rows = state.DB.execute("SELECT id, mcp_ids FROM chats WHERE user_id = ? AND deleted IS NULL AND connection_id IS ?",
+                            (uid, body.from_connection_id)).fetchall()
+    mcp_ok = conn.proxied and not conn.cleaner
+    ids = [r["id"] for r in rows if mcp_ok or not mcp_client.present(uid, r["mcp_ids"])]
+    if ids:
+        state.DB.execute(f"UPDATE chats SET connection_id = ?, model = ? WHERE user_id = ? AND id IN ({','.join('?' * len(ids))})",
+                         (conn.id, model, uid, *ids))
+    log.info("владелец %s: диалогов переведено %d, оставлено %d", uid, len(ids), len(rows) - len(ids))
+    return {"moved": len(ids), "kept": len(rows) - len(ids)}
 
 
 @router.delete("/chats/{chat_id}", status_code=204)

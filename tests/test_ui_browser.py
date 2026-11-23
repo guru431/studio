@@ -1859,6 +1859,59 @@ def test_direct_error_words_survive_reopening_and_deleted_connection_is_named(br
     assert not known_refusals(problems(r), 401), problems(r)
 
 
+def test_chats_move_to_another_model_from_delete_dialog_and_orphan_chip(browser, live):
+    """02:I9: окно удаления подключения переводит его диалоги на выбранную модель; диалоги удалённого без перевода —
+    после выбора модели в одном чип предлагает перевести остальные разом."""
+    live.add_user("mover")
+    panel = ".section-panel[data-section=chat]"
+
+    def conn_of(key):
+        return (f"(async () => {{ const m = {API};"
+                f" return (await m.api('GET', '/api/chats/' + sessionStorage.{key})).chat.connection_id; }})()")
+    setup = ("eval", "setup", f"""(async () => {{ const m = {API}; const ids = [];
+      for (const name of ['Облако 1', 'Облако 2', 'Облако 3']) {{
+        const c = await m.api('POST', '/api/connections', {{ name, kind: 'openai', base_url: {live.cloud.base_url!r},
+          token: {live.cloud.TOKEN!r}, sections: ['chat'] }});
+        await m.api('PUT', '/api/sections/chat/links/' + c.id, {{ models: ['cloud-chat'] }}); ids.push(c.id); }}
+      [sessionStorage.c1, sessionStorage.c2, sessionStorage.c3] = ids;
+      for (const key of ['a', 'b']) sessionStorage[key] = (await m.api('POST', '/api/chats', {{ connection_id: ids[0], model: 'cloud-chat' }})).id;
+      await m.loadMe(); return ids; }})()""")
+
+    def remove(key, value):
+        return [*go("settings/chat"), ("wait", f"document.querySelector('{panel} li.link[data-conn=\"' + sessionStorage.{key} + '\"] .link-menu')"),
+                ("eval", "menu", f"document.querySelector('{panel} li.link[data-conn=\"' + sessionStorage.{key} + '\"] .link-menu').click()"),
+                ("eval", "del", f"document.querySelector('{panel} li.link[data-conn=\"' + sessionStorage.{key} + '\"] .link-delete').click()"),
+                ("wait", is_open("#conn-delete-dialog")),
+                ("wait", "!document.querySelector('#conn-delete-move').closest('[hidden]')"),
+                ("eval", f"options_{key}", "document.querySelector('#conn-delete-move').options.length"),
+                ("eval", "pick", f"document.querySelector('#conn-delete-move').value = {value}"),
+                ("click", "#conn-delete-confirm"), ("wait", f"!{is_open('#conn-delete-dialog')}")]
+
+    r = browser.drive(live.url + "/", [*signin("mover"), ("wait", READY), setup,
+        *remove("c1", "sessionStorage.c2 + ':cloud-chat'"),
+        ("eval", "moved", conn_of("a")),
+        *remove("c2", "''"),
+        ("eval", "open", "location.hash = '#/chat/' + sessionStorage.a"),
+        ("wait", "document.querySelector('#model-chip .chip-name').textContent.includes('удалено')"),
+        ("click", "#model-chip"), ("wait", "document.querySelector('.model-option[data-model=\"cloud-chat\"]')"),
+        ("click", ".model-option[data-model=\"cloud-chat\"]"),
+        ("wait", "!document.querySelector('#chat-move').hidden"),
+        ("eval", "offer", "document.querySelector('#chat-move').textContent"),
+        ("click", "#chat-move-go"),
+        ("wait", "document.querySelector('#chat-move').textContent.startsWith('Переведено')"),
+        ("eval", "done", "document.querySelector('#chat-move').textContent"),
+        ("eval", "b", conn_of("b")),
+        ("eval", "c3", "Number(sessionStorage.c3)")])
+    assert not r.get("failed"), r
+    v = r["values"]
+    c1, c2, c3 = v["setup"]
+    assert v["options_c1"] == 3 and v["options_c2"] == 2           # «не переводить» и модели остальных подключений
+    assert v["moved"] == c2 and v["b"] == c3 == v["c3"]
+    assert v["offer"].startswith("Ещё диалогов на прежнем подключении: 1 — перевести их на «cloud-chat»?"), v
+    assert v["done"] == "Переведено диалогов: 1", v
+    assert not problems(r), problems(r)
+
+
 #: где токен прямого подключения мог бы остаться на странице
 TOKEN_TRACES = """(names) => { const where = { local: JSON.stringify({ ...localStorage }),
   session: JSON.stringify({ ...sessionStorage }), dom: document.documentElement.outerHTML, cookie: document.cookie };

@@ -42,6 +42,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 
 import chains
+import card
 import clock
 import connections
 import db
@@ -154,7 +155,7 @@ def _out(row, with_chain=True, steps=None) -> dict:
            "elapsed": int(max(0, end - row["created"])), "steps": len(chain) if with_chain else steps}
     if with_chain:
         out["chain"] = chains.annotate(row["user_id"], chain)
-    return out
+    return card.mark(out, "video", row)
 
 
 def _settle(video_id: str, state_: str, detail: str, media_id: "str | None" = None) -> bool:

@@ -54,6 +54,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import chat
+import card
 import clock
 import connections
 import db
@@ -952,12 +953,12 @@ def _row(user_id: int, sid: str):
 
 def _out(row) -> dict:
     job = JOBS.get(row["id"])
-    return {"id": row["id"], "name": row["name"], "state": row["state"],
+    return card.mark({"id": row["id"], "name": row["name"], "state": row["state"],
             "detail": detail(job) if job is not None and row["state"] == "working" else row["detail"],
             "connection_id": row["connection_id"], "model": row["model"], "pages": row["pages"],
             "done_pages": row["done_pages"],
             "failed_pages": row["failed_pages"], "origin": row["origin"], "created": row["created"],
-            "finished": row["finished"]}
+            "finished": row["finished"]}, "ocr", row)
 
 
 def _page_list(sid: str) -> list[dict]:
