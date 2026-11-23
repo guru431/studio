@@ -25,7 +25,9 @@ import { mcpStateWords } from './mcp-sections.js';
  * раздел — ответ дочитывается и сохраняется. Пока вкладка читает ответ из браузера, она раз в
  * BEAT_MS шлёт признак жизни (POST .../alive): сервер отдаёт такой ответ с `live` — другая вкладка
  * показывает его идущим и опрашивает диалог, как ответ сервера, который идёт без нас. Ответ
- * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано».
+ * `streaming` из браузера без признака жизни (вкладку закрыли) — «прервано». Закрытие и перезагрузка вкладки
+ * посреди ответа (`pagehide`) кладут прочитанное PUT с keepalive со статусом stopped — начало, что влезает в
+ * предел тела keepalive (`partBody`).
  * Неотправленное вложение крестик удаляет и с сервера (DELETE /api/attachments/<id>); неподходящий тип и размер
  * чип называет при выборе файла. Отправленное фото — миниатюра (окно с ним), документ — ссылка на скачивание.
  * Первый ход нового диалога не прошёл — созданный под него диалог удаляется (`dropEmpty`). Открытый диалог
@@ -463,15 +465,56 @@ async function readBrowser(job, turn) {
       job.message.error = words(err);
     }
   }
+  if (job.parted) {               // вкладку закрывали: итог уже ушёл keepalive — тот же итог сервер примет повторно
+    status = 'stopped';
+    job.message.content = job.parted.content;
+  }
   job.message.status = status;
   job.message.content = wellFormed(job.message.content);
   // признак жизни — до конца сохранения: пока идут повторы PUT, другие вкладки не считают ответ брошенным
   // слова ошибки сервер хранит у ответа (`messages.error`): видны и после перечитывания диалога
   const error = status === 'error' ? clip(wellFormed(job.message.error || ''), ERROR_MAX) : '';
-  await saveAnswer(job.chatId, job.message, { content: job.message.content, status, ...(error ? { error } : {}) });
+  job.saving = { content: job.message.content, status, ...(error ? { error } : {}) };
+  await saveAnswer(job.chatId, job.message, job.saving);
   clearInterval(beat);
   finish(job);
 }
+
+/* ---- закрытие вкладки посреди ответа прямого подключения ---------------------- */
+
+/* Тело fetch с keepalive — не больше 64 КиБ на все такие запросы страницы разом; запас — прочим (jobs.js). */
+const PART_BYTES = 60 * 1024;
+
+/** Итог «остановлен» с прочитанным: начало ответа, а не хвост, — остановленный ответ всегда начало сказанного
+ * моделью, и история с контекстом следующего хода читаются связно; длиннее PART_BYTES тела — начало, что влезает. */
+function partBody(content) {
+  const size = (text) => new TextEncoder().encode(JSON.stringify({ content: text, status: 'stopped' })).length;
+  let text = wellFormed(clip(content, PART_BYTES));             // знак — не меньше байта
+  if (size(text) > PART_BYTES) {
+    let low = 0;
+    let high = text.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (size(clip(text, mid)) <= PART_BYTES) low = mid;
+      else high = mid - 1;
+    }
+    text = clip(text, low);
+  }
+  return { content: text, status: 'stopped' };
+}
+
+/* Вкладку закрывают или перезагружают, пока она читает ответ прямого подключения: прочитанное — PUT с keepalive
+ * (обычный запрос уход страницы оборвал бы), иначе текст пропал бы, а диалог ещё ALIVE_SEC отвечал бы «ответ идёт в
+ * другой вкладке». Уже сохраняемый итог — тем же телом ещё раз (сервер примет тот же итог повторно). */
+window.addEventListener('pagehide', () => {
+  for (const job of jobs.values()) {
+    if (job.message.via !== 'browser' || !job.message.id) continue;
+    const body = job.saving || job.parted || (job.parted = partBody(job.message.content));
+    api('PUT', `/api/chats/${job.chatId}/messages/${job.message.id}`, body, { keepalive: true, unlock: false })
+      .catch(() => {});
+    job.controller.abort();
+  }
+});
 
 /* ---- источники ответа («Интернет») --------------------------------------------- */
 
