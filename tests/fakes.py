@@ -282,7 +282,9 @@ class FakeGateway:
                 half = len(arguments) // 2
                 for part in (arguments[:half], arguments[half:]):
                     yield data({"tool_calls": [{"index": i, "function": {"arguments": part}}]})
-            ending = "tool_calls" if calls else self.chat_ending
+            ending = step.get("ending", self.chat_ending) if isinstance(step, dict) else self.chat_ending
+            if calls and (not isinstance(step, dict) or "ending" not in step):
+                ending = "tool_calls"
             if ending is not None:
                 yield data({}, ending)
                 yield b"data: [DONE]\n\n"

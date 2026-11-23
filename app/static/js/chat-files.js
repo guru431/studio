@@ -146,3 +146,29 @@ export function resultFiles(chatId, message, host) {
   });
   return items.length ? el('div', { class: 'msg-files' }, ...items) : null;
 }
+
+/** Кликабельны только пути к подтверждённым результатам инструментов этого ответа. */
+export function resultPathLinks(chatId, message) {
+  if (!message.id) return null;
+  const urls = new Map();
+  message.tools?.forEach((step, i) => step.files?.forEach((file, n) => {
+    if (!file.has_path) return;
+    const path = `out/${file.name}`;
+    const url = `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(message.id)}/files/${i}/${n}`;
+    urls.set(path, urls.has(path) ? null : url);
+  }));
+  if (!urls.size) return null;
+  return { decorate(fragment) {
+    for (const node of fragment.querySelectorAll('code, a')) {
+      const path = node.tagName === 'A' ? node.getAttribute('href') : !node.closest('pre, a') && node.textContent;
+      const url = urls.get(path);
+      if (!url) continue;
+      if (node.tagName === 'A') {
+        node.href = url;
+        node.download = path.slice(4);
+        node.removeAttribute('target');
+        node.removeAttribute('title');
+      } else node.replaceWith(el('a', { href: url, download: path.slice(4) }, node.cloneNode(true)));
+    }
+  } };
+}

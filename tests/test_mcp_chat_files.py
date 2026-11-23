@@ -28,7 +28,8 @@ CONTENT = b"0123456789result-bytes"
 NOTE = "Секретные заметки о сделке"
 
 
-def server(studio, path="/mcp", *, limit=10 << 20, marked=True, fail_upload=False, on_upload=None, upload_path=None):
+def server(studio, path="/mcp", *, limit=10 << 20, marked=True, fail_upload=False, on_upload=None, upload_path=None,
+           document_reply=None):
     """Мок MCP с `artifact_upload` (с пометкой `studio/chat-files` и пределом `limit`) и инструментом `make`, чей
     результат — файл ART; содержимое файла — по пути передачи с диапазонами; `upload_path` — путь загруженного
     файла в ответе (иначе `/data/in/<n>`). Итог — вызовы (метод, параметры)."""
@@ -39,6 +40,8 @@ def server(studio, path="/mcp", *, limit=10 << 20, marked=True, fail_upload=Fals
     if marked:
         upload["_meta"] = {"studio/chat-files": {"max_bytes": limit}}
     tools = [upload, {"name": "make", "description": "make a file", "inputSchema": {"type": "object"}}]
+    if document_reply is not None:
+        tools[1]["name"] = "create_docx"
 
     async def handler(request):
         if request.method == "DELETE":
@@ -50,6 +53,8 @@ def server(studio, path="/mcp", *, limit=10 << 20, marked=True, fail_upload=Fals
             return httpx.Response(202)
         if method == "initialize":
             result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}
+            if document_reply is not None:
+                result["capabilities"]["experimental"] = {"studio/files": {"version": 1, "max_upload": 1000, "chunk": 100}}
         elif method == "tools/list":
             result = {"tools": tools}
         elif params.get("name") == "artifact_upload":
@@ -59,6 +64,8 @@ def server(studio, path="/mcp", *, limit=10 << 20, marked=True, fail_upload=Fals
             result = ({"isError": True, "content": [{"type": "text", "text": "disk full"}]} if fail_upload else
                       {"content": [{"type": "text", "text": "ok"}],
                        "structuredContent": {"id": "art_" + f"{n:032x}", "path": upload_path or f"/data/in/{n}"}})
+        elif document_reply is not None:
+            result = {"content": [{"type": "text", "text": document_reply}]}
         else:
             result = {"content": [{"type": "text", "text": "made"}], "structuredContent": {"artifacts": [
                 {"id": ART, "mime_type": "image/png", "name": "out.png", "download_path": f"/artifacts/{ART}/content"},
@@ -74,6 +81,12 @@ def server(studio, path="/mcp", *, limit=10 << 20, marked=True, fail_upload=Fals
 
     studio.gw.on[path] = handler
     studio.gw.on[f"/artifacts/{ART}/content"] = content
+    if document_reply is not None:
+        async def document(request):
+            value = request.headers["x-studio-path"]
+            calls.append(("path", base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()))
+            return httpx.Response(200, content=CONTENT)
+        studio.gw.on["/files/content"] = document
     return calls
 
 
@@ -420,6 +433,25 @@ def made(studio, sid):
     studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_1")]}, ["Готово"]]
     send(studio, cid, "Сделай файл")
     return cid, messages(studio, cid)[-1]["id"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_document_result_path_is_downloaded_from_the_chat(studio, legacy):
+    path = "out/План по отделам.docx"
+    sid, calls = setup(studio, document_reply=f"Готово: {path}")
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_1")]}, [f"Готово: `{path}`."]]
+    send(studio, cid)
+    mid = messages(studio, cid)[-1]["id"]
+    if legacy:
+        step = json.loads(state.DB.execute("SELECT tools FROM messages WHERE id = ?", (mid,)).fetchone()[0])[0]
+        state.DB.execute("UPDATE messages SET tools = ? WHERE id = ?", (json.dumps(
+            [{k: v for k, v in step.items() if k not in ("files", "sid", "stamp")}]), mid))
+    files = messages(studio, cid)[-1]["tools"][0]["files"]
+    assert files == [{"name": "План по отделам.docx", "mime": "application/octet-stream", "has_path": True}]
+    response = studio.c.get(f"/api/chats/{cid}/messages/{mid}/files/0/0")
+    assert response.content == CONTENT and response.headers["content-disposition"].startswith("attachment;")
+    assert ("path", path) in calls
 
 
 def test_result_files_under_the_answer_with_range(studio):

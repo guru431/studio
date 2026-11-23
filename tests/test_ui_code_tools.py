@@ -169,9 +169,8 @@ def test_fork_subagents_and_worktree_browser_flows(browser, live, width, tmp_pat
 
 
 @pytest.mark.parametrize("width", [320, 1280])
-def test_second_turn_in_a_project_warns_and_runs_in_a_separate_worktree(browser, live, width, tmp_path):
-    """Другой чат проекта работает: отправка сначала предупреждает; 1280 — «Запустить в отдельной копии» (worktree,
-    новый чат копии, задание уходит туда), 320 — «Отправить здесь» (обычный ход в этом чате)."""
+def test_second_turn_in_a_project_has_no_prompt_and_can_use_a_worktree(browser, live, width):
+    """При активном соседнем чате доступны непосредственная отправка и явный запуск в рабочей копии."""
     login = f"busy-project-{width}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Основной чат"), CODE_CHAT_B: code_session("Второй чат")})
@@ -180,26 +179,21 @@ def test_second_turn_in_a_project_warns_and_runs_in_a_separate_worktree(browser,
                                     "asks": {}, "followups": []}
     machine.script = [{"k": "text", "text": "Принято"}]
     aid, server = code_online(live, login, machine)
-    action = "#code-busy-copy" if width == 1280 else "#code-busy-send"
+    action = "#code-busy-copy" if width == 1280 else "#code-send"
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
             ("eval", "poll", "import('/static/js/code-activity.js').then((m) => { m.refreshCodeActivity(); return true; })"),
             ("wait", f"import('/static/js/code-activity.js').then((m) => m.codeActivity({aid}).some((i) => i.running))"),
-            set_value("#code-text", "Почини сборку"), ("click", "#code-send"),
-            ("wait", "!document.querySelector('#code-busy-notice').hidden"),
-            ("eval", "notice", "document.querySelector('#code-busy-notice').textContent"),
-            ("eval", "fits", "document.documentElement.scrollWidth <= innerWidth"),
-            ("screenshot", str(tmp_path / f"busy-project-{width}.png")),
+            set_value("#code-text", "Почини сборку"),
             ("click", action),
             # ответ машины «Принято»: ход дошёл до моста (своё сообщение лента рисует ещё до запроса)
             ("wait", "document.querySelector('#code-feed')?.textContent.includes('Почини сборку')"
                      " && document.querySelector('#code-feed').textContent.includes('Принято')"
-                     " && document.querySelector('#code-busy-notice').hidden"),
+                     " && !document.querySelector('#code-busy-notice')"),
             ("eval", "hash", "location.hash")], width=width, mobile=width == 320)
     finally:
         server.stop()
     assert not result.get("failed"), result
-    assert "В проекте идёт ещё заданий: 1" in result["values"]["notice"] and result["values"]["fits"]
     turns = [row for row in machine.requests if row["op"] == "turn"]
     assert [row["text"] for row in turns] == ["Почини сборку"]
     if width == 1280:

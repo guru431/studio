@@ -86,7 +86,8 @@ function remoteBadge(remote, name) {
 
 export function panelView(host, { selected: first = null, opened, chose, list, openJournal, initialAgents = null }) {
   const agentsBox = el('ul', { id: 'code-agents', class: 'code-agents' });
-  const addAgent = el('button', { id: 'code-add-agent', type: 'button', class: 'btn-link', 'aria-haspopup': 'dialog' },
+  const addAgent = el('button', { id: 'code-add-agent', type: 'button', class: 'btn-link', 'aria-haspopup': 'dialog',
+    hidden: true },
     tr("Добавить компьютер"));
   const body = el('div', { class: 'code-panel-body' });
   const status = el('p', { id: 'code-panel-status', class: 'error', 'aria-live': 'polite' });
@@ -612,6 +613,7 @@ export function panelView(host, { selected: first = null, opened, chose, list, o
   /* Опрос раз в 30 с перерисовывает список, только если он изменился: иначе фокус клавиатуры и подсказка пропадали
    * бы на ровном месте. После перерисовки фокус возвращается на ту же кнопку той же строки. */
   function paintAgents() {
+    addAgent.hidden = items.length > 0;
     // Выбор компьютера в подпись не входит: его отметку ведёт paintSelected.
     const signature = JSON.stringify([items, [...updates],
       items.map((agent) => !agent.online && Number.isFinite(agent.last_seen) ? lastSeenText(agent.last_seen) : '')]);

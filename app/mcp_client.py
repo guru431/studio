@@ -791,6 +791,12 @@ class Tools:
             step["error" if result.get("isError") else "text"] = text[:60_000]
             import mcp_files                  # здесь, не при загрузке: mcp_files тянет разделы и chat
             files = [] if result.get("isError") else mcp_files.result_files(result)
+            if not files and not result.get("isError"):
+                from mcp_contracts import features
+                catalog = next((found for _, srv, found in self.found if srv is session), None)
+                entry = mcp_files.document_result(tool, text)
+                if entry is not None and catalog is not None and features(catalog).files:
+                    files = [entry]
             if files:                         # файлы под ответом: маршрут скачивания сверит сервер и отпечаток
                 step |= {"sid": session.sid, "stamp": mcp_sources.stamp(session.stamp), "files": files}
         except HTTPException as exc:

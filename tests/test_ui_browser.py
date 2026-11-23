@@ -8886,19 +8886,14 @@ def test_code_empty_offers_agent_download(browser, live):
     assert not problems(r), problems(r)
 
 
-def test_code_panel_offers_installers_when_a_computer_is_already_enrolled(browser, live):
+def test_code_panel_hides_add_computer_when_already_enrolled(browser, live):
     login = "code-add-agent"
     live.add_user(login)
     enroll_live(live, login, "Первый компьютер")
-    selector = "#code-add-agent-dialog[open]"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("code"),
-        ("wait", "document.querySelector('#code-agents li[data-id]')"), ("click", "#code-add-agent"),
-        ("wait", f"document.querySelector('{selector}')"),
-        ("eval", "links", f"[...document.querySelectorAll('{selector} a[download]')].map(a => a.download)"),
-        ("click", f"{selector} .agent-download > button:not([hidden])"),
-        ("wait", f"document.querySelector('{selector} p.agent-install-command code')?.textContent.includes('curl -fsS')")])
+        ("wait", "document.querySelector('#code-agents li[data-id]')"),
+        ("wait", "document.querySelector('#code-add-agent')?.getClientRects().length === 0")])
     assert not r.get("failed"), r
-    assert r["values"]["links"] == ["studio-agent-setup.exe", "studio-agent-setup.pkg", "studio-agent-setup.sh"]
     assert not problems(r), problems(r)
 
 
@@ -10423,8 +10418,6 @@ def test_code_account_defaults_apply_only_to_new_chats(browser, live):
             *go(f"code/{aid}/{pid('alpha')}/{CODE_CHAT_A}"), code_loaded(CODE_CHAT_A),
             ("eval", "again", "[document.querySelector('#code-model').value, document.querySelector('#code-effort').value]"),
             *code_send("снова"),
-            # в проекте ещё идёт ход «нового» чата — предупреждение о втором ходе, «Отправить здесь»
-            ("wait", "!document.querySelector('#code-busy-notice').hidden"), ("click", "#code-busy-send"),
             ("wait", "document.querySelector('#code-chat').dataset.running === '1'"),
             ("eval", "stored2", f"(async () => (await {API}.api('GET', '/api/me')).code_defaults.claude)()"),
             # новый выбор устройства — уже начатому «новому» чату он не подставляется

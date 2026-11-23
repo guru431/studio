@@ -213,7 +213,7 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null, mat
         continue;
       }
     }
-    const path = fileLinks?.resolve(href);
+    const path = fileLinks?.resolve?.(href);
     const visual = path?.toLowerCase().endsWith('.html') ? path : visualizationFilePath(href);
     if (visual && fileLinks?.visualization) {
       link.setAttribute('href', '#');
@@ -238,6 +238,7 @@ function fragmentOf(out, { html = false, highlight = true, fileLinks = null, mat
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
   }
+  fileLinks?.decorate?.(fragment);
   // узлы фрагмента переезжают в страницу, KaTeX дорисует их там, когда загрузится
   if (math) for (const node of fragment.children) typesetMath(node);
   return fragment;

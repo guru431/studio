@@ -437,7 +437,8 @@ def public(step: dict) -> dict:
     тип, без сервера, отпечатка его ключа и id файла на сервере (их читает маршрут скачивания)."""
     out = {k: v for k, v in step.items() if k not in ("text", "sid", "stamp", "files")}
     if isinstance(step.get("files"), list):
-        out["files"] = [{"name": f.get("name", ""), "mime": f.get("mime", "")} for f in step["files"] if isinstance(f, dict)]
+        out["files"] = [{"name": f.get("name", ""), "mime": f.get("mime", "")}
+                        | ({"has_path": True} if "path" in f else {}) for f in step["files"] if isinstance(f, dict)]
     return out
 
 

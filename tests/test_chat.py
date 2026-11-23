@@ -176,10 +176,55 @@ def test_answer_cut_by_the_models_length_limit_is_marked(studio):
     """finish_reason `length` — ответ обрезан пределом длины модели: ошибка с пометкой в тексте."""
     add_gateway(studio); cid = new_chat(studio)
     studio.gw.chat_ending = "length"
+    studio.gw.chat_script = [{"text": ["Здравствуйте!"]}, {"text": []}, {"text": []}]
     events = sse(turn(studio, cid))
     assert events[-1] == ("error", {"message": "ответ обрезан пределом длины модели"})
     answer = messages(studio, cid)[1]
     assert (answer["status"], answer["content"]) == ("error", "Здравствуйте!" + chat.CUT_LENGTH)
+    assert len(studio.gw.chat_requests) == 3
+
+
+def test_length_retries_without_long_reasoning_or_executing_partial_tool_calls(studio):
+    add_gateway(studio)
+    cid = new_chat(studio)
+    studio.gw.chat_script = [
+        {"ending": "length", "reasoning": ["Long thought"], "tool_calls": [("unused", '{"truncated":')]},
+        {"ending": "length", "text": ["Первая часть. "]},
+        {"text": ["Вторая часть."]},
+    ]
+    events = sse(turn(studio, cid, "Подготовь документ"))
+    assert ("recovery", {"stage": "continue"}) in events and events[-1][0] == "done"
+    answer = messages(studio, cid)[-1]
+    assert answer["status"] == "done" and answer["content"] == "Первая часть. Вторая часть."
+    assert answer["tools"] == []
+    first, second, third = studio.gw.chat_requests
+    assert first["messages"][-1]["content"] == "Подготовь документ"
+    assert second["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "Подготовь документ" in second["messages"][-1]["content"]
+    assert third["messages"][-2] == {"role": "assistant", "content": "Первая часть. "}
+
+
+def test_context_is_summarized_before_request_and_original_history_is_kept(studio):
+    gateway = add_gateway(studio)
+    cid = new_chat(studio)
+    old = ("ABCD " * 2800).rstrip()
+    studio.gw.chat_reply = ["Создали out/план.docx."]
+    sse(turn(studio, cid, old))
+    studio.c.put(f"/api/sections/chat/links/{gateway}", json={"models": ["local-gemma-abl", "tiny"]})
+    studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"})
+    studio.gw.models.append({"id": "tiny", "context_length": 8192})
+    chat.LIMITS.clear()
+    studio.gw.chat_script = [{"text": ["Обсудили риски и записали их в out/план.docx."]}] * 2
+    studio.gw.chat_reply = ["Детализация по отделам"]
+    events = sse(turn(studio, cid, "Дополни документ по отделам"))
+    assert ("recovery", {"stage": "summary"}) in events and events[-1][0] == "done"
+    history = messages(studio, cid)
+    assert history[0]["content"] == old and history[-1]["content"] == "Детализация по отделам"
+    calls = studio.gw.chat_requests[1:]
+    assert all("tools" not in request for request in calls[:-1])
+    assert all(request["model"] == "tiny" for request in calls)
+    current = calls[-1]["messages"][-1]["content"]
+    assert "out/план.docx" in current and current.endswith("Дополни документ по отделам") and old not in current
 
 
 def test_server_answer_is_capped_by_size(studio, monkeypatch):

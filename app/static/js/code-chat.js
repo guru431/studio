@@ -380,37 +380,28 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     writerNotice.hidden = true;
     loadState();
   });
-  // Второй ход в том же проекте: другой чат проекта уже работает и правит те же файлы. Перед отправкой — строка и
-  // выбор: «Запустить в отдельной копии» (git worktree и новый чат в нём; владельцу с мостом `worktrees`, без
-  // вложений) или «Отправить здесь». Ходы других чатов — из снимка «Агентов» (code-activity.js), PIN не открывается.
-  const busyText = el('p');
-  const busyCopy = el('button', { type: 'button', id: 'code-busy-copy', class: 'btn btn-sm btn-accent' }, tr("Запустить в отдельной копии"));
-  const busySend = el('button', { type: 'button', id: 'code-busy-send', class: 'btn btn-sm' }, tr("Отправить здесь"));
-  const busyNotice = el('div', { id: 'code-busy-notice', class: 'code-session-notice', hidden: true, role: 'status' },
-    busyText, el('div', { class: 'code-session-actions' }, busyCopy, busySend));
-  let busyConfirmed = false;
+  // Явный запуск в worktree доступен в действиях чата, параллельный ход не требует подтверждения.
+  const busyCopy = iconButton('fork', tr("Запустить в отдельной копии"), { id: 'code-busy-copy', hidden: !separateCopy });
+  if (separateCopy) actions.insertBefore(busyCopy, reloadButton);
+  let copying = false;
   const othersRunning = () => codeActivity(aid).filter((item) => item.project === pid && item.chat !== chat && item.running).length;
-  busySend.addEventListener('click', () => {
-    busyNotice.hidden = true;
-    busyConfirmed = true;
-    submit();
-  });
   busyCopy.addEventListener('click', async () => {
     const value = text.value;
     if (!separateCopy || !value.trim() || images.length || busyCopy.disabled) return;
-    busyCopy.disabled = busySend.disabled = true;
+    copying = true;
+    updateControls();
     showStatus(tr("Создаю отдельную копию…"), false);
     try {
       await separateCopy(value);
       if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }   // текст ушёл в чат копии
-      busyNotice.hidden = true;
       if (alive) showStatus('');
     } catch (err) {
       if (!alive) return;
       if (err.code === 'closed') closed();
       else showStatus(words(err));
     } finally {
-      busyCopy.disabled = busySend.disabled = false;
+      copying = false;
+      if (alive) updateControls();
     }
   });
   const pick = (label, select) => {
@@ -470,7 +461,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
   host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
     el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, writerNotice, askPin, statusBar, form));
-  writerNotice.after(busyNotice);
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -598,6 +588,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function paintImages() {
+    paintCopy();
     attachments.replaceChildren(...images.map((image) => {
       const remove = el('button', { type: 'button', class: 'icon-btn code-image-remove',
         'aria-label': tr("Убрать {0}", image.name), title: tr("Убрать"), disabled: sending }, icon('x'));
@@ -1005,7 +996,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function updateControls() {
-    send.disabled = sending || adding || resolving || historyLoading || !settingsReady || foreign || external || queue.paused() || (running && !agent?.chat_control);
+    send.disabled = copying || sending || adding || resolving || historyLoading || !settingsReady || foreign || external || queue.paused() || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
     deliveryPick.hidden = !running || !agent?.queue_edit || QUEUE_ONLY.has(engine);
     delivery.disabled = foreign || sending;
@@ -1017,13 +1008,18 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     openCode.busy(resolving || historyLoading || running);
     paintPicks();
     const label = running ? (QUEUE_ONLY.has(engine) ? tr("Отправить после ответа") : tr("Отправить уточнение")) : tr("Отправить");
-    send.title = label;
+    send.title = !running && othersRunning() ? tr("В проекте уже выполняются другие задания") : label;
     send.setAttribute('aria-label', label);
     send.querySelector('.go-label').textContent = label;
+    paintCopy();
     text.placeholder = running ? tr("Уточнение…") : tr("Задание…");
     // Мост 0.47.0 примет ответ из этого окна, если окно-владельца хода никто не смотрит (иначе — `owned` словами).
     for (const button of feed.querySelectorAll('.code-ask button')) button.disabled = foreign && !agent?.answer_takeover;
     paintSessionNotice();
+  }
+
+  function paintCopy() {
+    busyCopy.disabled = send.disabled || running || !text.value.trim() || images.length > 0;
   }
 
   /** Плашка чужого окна. Ход, ждущий ответа на карточку, сам не завершится: «Дождаться» тогда не предлагается. */
@@ -1763,7 +1759,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       text.value = startText;
       startText = null;
       autosize();
-      busyConfirmed = true;
       submit();
       return true;
     }
@@ -1824,7 +1819,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       showStatus(running ? tr("Дождитесь завершения задания в чате") : tr("Git недоступен — обновите статус проекта"));
       return;
     }
-    if ((!value.trim() && !images.length) || sending || adding || resolving || foreign || external) return;
+    if ((!value.trim() && !images.length) || copying || sending || adding || resolving || foreign || external) return;
     if (running) {
       if (!agent?.chat_control) {
         showStatus(tr("Обновите мост для отправки уточнений во время работы"));
@@ -1870,14 +1865,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         sending = false;
         if (alive) updateControls();
       }
-      return;
-    }
-    const others = quick || busyConfirmed ? 0 : othersRunning();
-    busyConfirmed = false;
-    busyNotice.hidden = !others;
-    if (others) {
-      busyText.textContent = tr("В проекте идёт ещё заданий: {0} — они могут править те же файлы", others);
-      busyCopy.hidden = !separateCopy || images.length > 0;
       return;
     }
     const sentImages = quick ? [] : images;
@@ -2030,6 +2017,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     autosize();
     if (text.value) drafts.set(draftKey, text.value);
     else drafts.delete(draftKey);
+    paintCopy();
   });
   enterSends(text, () => form.requestSubmit());
   form.addEventListener('submit', (event) => {

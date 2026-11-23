@@ -2,7 +2,7 @@ import { locale, message, tr } from './i18n.js';
 import { chooseDialogMcp, draftCount, draftOf, hasWebTools, stateOf } from './chat-mcp.js';
 import { knowledgeChip } from './knowledge.js';
 import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, mediaChip, mediaTargets, resultFiles,
-  uploadMedia } from './chat-files.js';
+  uploadMedia, resultPathLinks } from './chat-files.js';
 import { paintPending } from './chat-pending.js';
 import { paintSuggestions } from './chat-suggest.js';
 import { contextRing } from './chat-context.js';
@@ -325,6 +325,11 @@ async function readServer(job, response) {
         job.wait = Number.isFinite(data.seconds) ? Date.now() - data.seconds * 1000 : null;
         job.card = data.card || null;              // очередь карты (card.py): кто на ней и сколько примерно ждать
         notify(job, false);
+      } else if (event === 'recovery' && data) {
+        thinkEnd(job);
+        job.tool = null;
+        job.message.recovery = data.stage;
+        notify(job, false);
       } else if (event === 'closed') {             // сессия вышла или «Чат» заперт: перечитать через вход/блокировку
         break;
       } else if (event === 'tool' && data && typeof data.kind === 'string') {
@@ -345,6 +350,7 @@ async function readServer(job, response) {
         if (typeof data.text === 'string') job.message.reasoning = (job.message.reasoning || '') + data.text;
         notify(job, false);
       } else if (event === 'done' || event === 'error') {
+        job.message.recovery = null;
         job.message.status = event === 'done' ? data.status : 'error';
         if (event === 'error') job.message.error = data.message;
         if (event === 'done' && Number.isFinite(data.reasoning_sec)) job.doneSec = data.reasoning_sec;
@@ -1999,9 +2005,11 @@ function build(view, ctx) {
     if (p.shown !== displayed || p.final !== final) {
       p.shown = displayed;
       p.final = final;
-      if (displayed.length <= 2000) p.md.replaceChildren(renderMarkdown(displayed, { highlight: final }));
+      const fileLinks = final ? resultPathLinks(chatId, m) : null;
+      if (displayed.length <= 2000) p.md.replaceChildren(renderMarkdown(displayed, { highlight: final, fileLinks }));
       else if (!final) p.md.replaceChildren(el('pre', { class: 'code-stream-text' }, displayed));
       else renderMarkdownInto(p.md, displayed, {
+        fileLinks,
         valid: () => p.md.isConnected && parts.get(m) === p && p.shown === displayed && p.final,
         update: (change) => { change(); scrollDown(false); },
       });
@@ -2013,7 +2021,9 @@ function build(view, ctx) {
     p.nowait.hidden = !waiting;
     if (waiting) text = withCard(tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000)),
       job ? job.card : m.card);
-    else if (m.status === 'streaming') {
+    else if (m.status === 'streaming' && m.recovery) {
+      text = m.recovery === 'summary' ? tr("Сжимаю историю диалога…") : tr("Продолжаю ответ…");
+    } else if (m.status === 'streaming') {
       // инструмент — на плашке, модель думает — строкой рассуждения: модель уже загружена; скан — на плашке.
       // Грузит модель только локальная (`local` диалога), облачная — просто ещё молчит
       if (job) {

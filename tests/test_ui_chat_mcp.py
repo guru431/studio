@@ -1,16 +1,39 @@
 """MCP в диалоге на странице (chat-mcp.js, спека 2026-11-21-studio-source-foundation-design §4 и §7a п. 2): окно
 `#chat-mcp-dialog` — общий сервер включён по умолчанию, инструменты с метками, инструмент «с подтверждением»
 включён, как остальные (вызов ждёт «Запустить» в чате); политика инструментов общего MCP в окне «Доступ» панели администратора."""
+import json
+
 import httpx
 import pytest
 
 import auth
+import db
+from test_ui_speech_read import answer_chat
 from test_mcp import TOKEN as MCP_KEY
 from test_mcp_dialog import HOST, server, tool
 from test_ui_browser import (ANSWERED, API, NO_OVERFLOW, READY, add_gateway, browser, go, is_open, live, open_new_chat,  # noqa: F401
                              problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
+
+
+def test_mcp_document_has_download_under_answer_and_at_the_inline_path(browser, live):
+    login = "mcp-doc-download"
+    name = "План по отделам.docx"
+    cid = answer_chat(live, live.add_user(login), f"Готово: `out/{name}`")
+    with db.connect(live.db_path) as conn:
+        conn.execute("UPDATE messages SET tools = ? WHERE chat_id = ? AND role = 'assistant'", (json.dumps([
+            {"kind": "mcp", "tool": "create_docx", "server": "MCP", "sid": 1, "stamp": "test",
+             "text": f"Готово: out/{name}",
+             "files": [{"name": name, "path": f"out/{name}", "mime": "application/octet-stream"}]},
+        ], ensure_ascii=False), cid))
+    result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go(f"chat/{cid}"),
+        ("wait", "document.querySelector('.msg.assistant .md a[download]')"),
+        ("eval", "links", """[...document.querySelectorAll('.msg.assistant a[download]')]
+          .map(a => [a.getAttribute('href'), a.download])""")])
+    assert not result.get("failed"), result
+    inline, button = result["values"]["links"]
+    assert inline == button and inline[0].startswith(f"/api/chats/{cid}/messages/") and inline[1] == name
 
 RULES = "Отвечай кратко и только по делу."
 TOOLS = [tool("lookup", title="Поиск по базе"),

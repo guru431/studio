@@ -24,12 +24,14 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+import access
 import auth
 import chat
 import chat_system
@@ -53,6 +55,11 @@ SYNC_BYTES = 256 << 20                       # байтов загрузок н�
 SYNC_SEC = 120                               # загрузки хода начинаются не позже стольких секунд от первой
 MEDIA_MAX = 64 << 20                         # потолок `max_bytes` сервера: тело загрузки (Apache) и память `sync`
 RESULT_FILES = 16                            # файлов результата на шаг
+DOCUMENT_TOOLS = {
+    "create_docx": (".docx",), "create_xlsx": (".xlsx",), "convert_document": (".docx", ".xlsx", ".pdf", ".odt"),
+    "pdf_merge": (".pdf",), "pdf_rotate": (".pdf",), "pdf_delete_pages": (".pdf",), "pdf_compress": (".pdf",),
+}
+OUTPUT_PATH = re.compile(r"\AГотово: (out/[^/\\\r\n]{1,255}?\.[a-z0-9]+)(?=$| \(| — |\n)", re.IGNORECASE)
 NAME_MAX = 255
 REFUSED = "refused:"                         # «Не передавать»: `chats.mcp_file_consent[sid]` = REFUSED + stamp
 UPLOAD = "artifact_upload"
@@ -309,6 +316,49 @@ def result_files(result: dict) -> list[dict]:
     return out
 
 
+def _valid_output(path, tool):
+    return (isinstance(path, str) and path.isprintable() and path.startswith("out/") and path.count("/") == 1
+            and "\\" not in path and 4 < len(path) <= 259 and path.lower().endswith(DOCUMENT_TOOLS.get(tool, ())))
+
+
+def document_result(tool, text):
+    """Spark сообщает путь созданного документа первой строкой ответа инструмента."""
+    extensions = DOCUMENT_TOOLS.get(tool)
+    match = OUTPUT_PATH.match(text.split("\n", 1)[0]) if extensions else None
+    if match is None:
+        return None
+    path = match[1]
+    if not _valid_output(path, tool):
+        return None
+    return {"path": path, "name": path.removeprefix("out/"), "mime": "application/octet-stream"}
+
+
+def chat_result(uid, row, step, *, servers=None):
+    """Результаты старых сообщений: привязать текстовый путь к единственному действующему серверу диалога."""
+    if step.get("files") or step.get("kind") != "mcp" or "error" in step:
+        return step
+    entry = document_result(step.get("tool"), step.get("text", ""))
+    if entry is None:
+        return step
+    if servers is None:
+        servers = chat_result_servers(uid, row)
+    matches = servers.get(step.get("server"), [])
+    if len(matches) != 1 or not access.tool_allowed(uid, matches[0]["id"], step["tool"]):
+        return step
+    server = matches[0]
+    return {**step, "sid": server["id"], "stamp": mcp_sources.stamp(server["secret_enc"]), "files": [entry]}
+
+
+def chat_result_servers(uid, row):
+    conn = chat._chat_connection(uid, row["connection_id"])
+    sids = set(mcp_sources.dialog_servers(uid, row, conn))
+    servers = {}
+    for item in mcp_client.servers(uid, enabled_only=True) if sids else ():
+        if item["id"] in sids:
+            servers.setdefault(item["name"], []).append(item)
+    return servers
+
+
 # ---- API -------------------------------------------------------------------------------------------------
 
 class ConsentIn(BaseModel):
@@ -438,18 +488,28 @@ async def result_file(chat_id: str, message_id: str, step: int, n: int, request:
     """Файл результата MCP под ответом: диалог учётки, шаг с файлами, сервер открыт учётке и включён, его адрес и
     ключ — те же, что при результате (`stamp`); иначе 404."""
     uid = request.state.user.id
-    chat._chat_row(uid, chat_id)
+    row = chat._chat_row(uid, chat_id)
     found = state.DB.execute("SELECT tools FROM messages WHERE id = ? AND chat_id = ?", (message_id, chat_id)).fetchone()
     steps = json.loads(found["tools"] or "[]") if found is not None else []
-    item = steps[step] if 0 <= step < len(steps) and isinstance(steps[step], dict) else {}
+    item = chat_result(uid, row, steps[step]) if 0 <= step < len(steps) and isinstance(steps[step], dict) else {}
     files = item.get("files")
     if not isinstance(files, list) or not 0 <= n < len(files) or type(item.get("sid")) is not int:
         raise HTTPException(404, {"code": "gone", "message": GONE})
     server = mcp_client.row(uid, item["sid"])
     entry = files[n] if isinstance(files[n], dict) else {}
     aid, mime = entry.get("aid"), entry.get("mime")
-    if (not server["enabled"] or mcp_sources.stamp(server["secret_enc"]) != item.get("stamp")
-            or not isinstance(aid, str) or not mcp_sections.ARTIFACT_ID.fullmatch(aid)):
+    if not server["enabled"] or mcp_sources.stamp(server["secret_enc"]) != item.get("stamp"):
+        raise HTTPException(404, {"code": "gone", "message": GONE})
+    name = entry.get("name") or ""
+    if "path" in entry:
+        if (not _valid_output(entry["path"], item.get("tool"))
+                or not access.tool_allowed(uid, server["id"], item["tool"])):
+            raise HTTPException(404, {"code": "gone", "message": GONE})
+        import my_files
+        session, _ = await my_files._features(server, uid)
+        return await my_files._stream(session, "/files/content", {"X-Studio-Path": my_files._b64(entry["path"])},
+                                      request, name, my_files._not_found)
+    if not isinstance(aid, str) or not mcp_sections.ARTIFACT_ID.fullmatch(aid):
         raise HTTPException(404, {"code": "gone", "message": GONE})
     mime = mime if mime in mcp_sections.TICKET_MIME else "application/octet-stream"
-    return await mcp_sections.relay(mcp_client.Session(server, uid=uid), aid, mime, request)
+    return await mcp_sections.relay(mcp_client.Session(server, uid=uid), aid, mime, request, name=name)

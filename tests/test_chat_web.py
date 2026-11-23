@@ -669,7 +669,7 @@ def test_found_goes_into_the_first_text_part_of_a_message_with_a_photo():
     assert chat._prefix(block, [parts[1]]) == [{"type": "text", "text": block}, parts[1]]
 
 
-def test_found_that_does_not_fit_refuses_the_next_turn(studio, monkeypatch):
+def test_large_past_tool_output_is_summarized_for_the_next_turn(studio, monkeypatch):
     cid = web_chat(studio)
     studio.gw.exa_page_text = "слово " * 6000                           # ~12 тыс. токенов
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."]]
@@ -677,9 +677,11 @@ def test_found_that_does_not_fit_refuses_the_next_turn(studio, monkeypatch):
     assert "error" not in steps_of(messages(studio, cid)[1]["id"])[0]
     monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": chat.RESERVE_TOKENS + 5000})
     before = len(messages(studio, cid))
-    r = turn(studio, cid, "Ещё?")
-    assert r.status_code == 413 and r.json()["detail"]["code"] == "context"
-    assert len(messages(studio, cid)) == before
+    studio.gw.chat_reply = ["Краткое содержание."]
+    events = sse(turn(studio, cid, "Ещё?"))
+    assert ("recovery", {"stage": "summary"}) in events and events[-1][0] == "done"
+    assert len(messages(studio, cid)) == before + 2
+    assert "<conversation-summary>" in studio.gw.chat_requests[-1]["messages"][-1]["content"]
 
 
 def test_error_answer_gives_no_found_to_the_next_turn(studio):
