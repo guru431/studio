@@ -5,7 +5,7 @@
 import sqlite3
 from pathlib import Path
 
-VERSION = 74
+VERSION = 75
 DEFAULT_THEME = "dark"
 MEDIA_44 = "ALTER TABLE videos ADD COLUMN model TEXT NOT NULL DEFAULT 'wan';"
 
@@ -1052,6 +1052,19 @@ SCHEMA += GLOSSARY_73
 #: не читает: ждущий поиск строк для него — распознавание, которому нечего распознавать, идущий — «прервано»
 SCAN_LAYER_74 = "ALTER TABLE scan_pages ADD COLUMN boxes TEXT;\nALTER TABLE scans ADD COLUMN layer_prior TEXT;\n"
 SCHEMA += SCAN_LAYER_74
+#: о чём уведомлять устройство (push.muted, push.reminders): у сессии — снятые виды (`off`, JSON-список из
+#: `push.KINDS`), тихие часы (минуты от полуночи по поясу учётки, оба NULL — без них) и интервал напоминания о ждущей
+#: карточке «Агентов», мин (0 — не напоминать). Одна строка на оба канала (push и ntfy) этой сессии; прежний код
+#: таблицу не читает — шлёт все виды и в любое время, строки уходят каскадом с сессией
+NOTIFY_PREFS_75 = """CREATE TABLE notify_prefs(
+       digest TEXT PRIMARY KEY REFERENCES sessions ON DELETE CASCADE,
+       user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+       off TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(off)),
+       quiet_from INTEGER CHECK (quiet_from BETWEEN 0 AND 1439), quiet_to INTEGER CHECK (quiet_to BETWEEN 0 AND 1439),
+       remind INTEGER NOT NULL DEFAULT 30);
+CREATE INDEX notify_prefs_user ON notify_prefs(user_id);
+"""
+SCHEMA += NOTIFY_PREFS_75
 
 #: версия → SQL, который приводит к ней базу предыдущей версии
 STEPS = {
@@ -1201,6 +1214,8 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
     73: GLOSSARY_73,
     # рамки строк страниц скана для «PDF со слоем»
     74: SCAN_LAYER_74,
+    # о чём уведомлять устройство: виды, тихие часы, напоминание о ждущей карточке
+    75: NOTIFY_PREFS_75,
 }
 
 

@@ -124,7 +124,7 @@ def test_push_of_a_member_turn_goes_to_the_member_while_access_lasts(studio, mon
     aid, machine, link, member, base = share(studio)
     owner = link.user_id
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a: pushed.append(uid))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a, **kw: pushed.append(uid))
     monkeypatch.setattr(bridge, "watching", lambda *a: False)       # страница ушла: поток хода — не взгляд
     signin(studio, "friend")
     chat = studio.c.post(url(aid, "projects", ALPHA, "chats")).json()["chat"]
@@ -159,7 +159,7 @@ def test_push_skips_only_when_the_addressee_watches_not_another_user(studio, mon
     aid, machine, link, member, _ = share(studio)
     owner = link.user_id
     pushed = []
-    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a: pushed.append(uid))
+    monkeypatch.setattr(bridge.push, "notify_later", lambda uid, *a, **kw: pushed.append(uid))
     queues = []
     original = bridge.watch
     monkeypatch.setattr(bridge, "watch", lambda *a: queues.append(original(*a)) or queues[-1])

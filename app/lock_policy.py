@@ -156,7 +156,7 @@ def blocks(request, uid: int, digest: str) -> bool:
                              "/api/me/totp", "/api/me/login-notice"))
             or path in ("/api/history", "/api/me/account", "/api/me/screen-lock", "/api/me/pin", "/api/me/password", "/api/me/emergency",
                         "/api/me/password-reset", "/api/me/storage/failed")
-            or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/exa-key")
+            or (path in ("/api/me", "/api/me/ntfy", "/api/me/ntfy/test", "/api/me/push", "/api/me/notify", "/api/me/exa-key")
                 and request.method != "GET")
             or (head == "connections" and request.method != "GET")
             or (head == "connections" and path.endswith("/token") and protected(row, "chat")))

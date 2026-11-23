@@ -156,6 +156,13 @@ WATCHERS: dict[tuple[int, str], set[Watch]] = {}
 #: (agent_id, chat) → участник совместного проекта, начавший идущий ход (`initiated`): push хода — ему
 INITIATORS: dict[tuple[int, str], int] = {}
 INITIATORS_MAX = 10_000
+#: (agent_id, chat) → ждущая карточка для напоминаний (`_card`, `remind`): проект, `request_id`, текст push, время
+#: карточки и последнего взгляда на чат, по сессиям — (повторов, время последнего). Только память: после перезапуска
+#: службы карточки, возникшие без канала, снова заводит досылка моста (`welcome.pending_asks`), прочие — забыты
+CARDS: dict[tuple[int, str], dict] = {}
+CARDS_MAX = 1000
+REMIND_TIMES = 3                  # повторов на карточку каждому устройству
+REMIND_TICK_SEC = 60
 #: фоновые отправки (`forget`) и закрытия каналов (`_close_later`): ссылка держит задачу до конца, `stop` ждёт
 #: их не дольше `STOP_SEC` и отменяет остаток
 TASKS: set[asyncio.Task] = set()
@@ -481,26 +488,91 @@ def _addressee(link: Link, frame: dict) -> int | None:
     return member if frame["project"] in project_access.projects(member, link.agent_id) else None
 
 
+def _place(link: Link, frame: dict) -> str:
+    """«компьютер · проект» в тексте push. Имя — только один компонент пути; неизвестный/старый мост — без него."""
+    project_name = frame.get("project_name")
+    valid_name = (isinstance(project_name, str) and 0 < len(project_name) <= 255
+                  and project_name not in (".", "..") and not any(c in '/\\' or ord(c) < 32
+                  or 0xD800 <= ord(c) <= 0xDFFF or ord(c) == 127 for c in project_name))
+    return f"{link.name} · {project_name}" if valid_name else link.name
+
+
 def _push(link: Link, frame: dict) -> None:
-    """Карточка или конец хода, которых начавший ход не смотрит, — push ему (спека 6.8)."""
+    """Карточка или конец хода, которых начавший ход не смотрит, — push ему (спека 6.8); карточка ещё и ждёт
+    напоминаний (`CARDS`, `remind`)."""
     e = frame["e"]
     words, value = {"ask": (ASK_WORDS, e.get("kind")), "done": (DONE_WORDS, e.get("status"))}.get(e["k"], ({}, None))
     text = words.get(value) if isinstance(value, str) else None
+    kind = "done" if e["k"] == "done" else "ask"
     if e["k"] == "queue" and e.get("paused") is True and e.get("waiting") is True:
         text = {"ru": "очередь ждёт вас", "en": "the queue is waiting for you"}
     user_id = _addressee(link, frame) if text is not None else None
     if e["k"] == "done":
         INITIATORS.pop((link.agent_id, frame["chat"]), None)   # ход кончился: следующий — со своей записью
+    body = {lang: f"{_place(link, frame)}: {words}" for lang, words in text.items()} if text else None
+    _card(link, frame, body)
     if text is None or user_id is None or watching(link.agent_id, frame["chat"], user_id):
         return
-    project_name = frame.get("project_name")
-    # Имя — только один компонент пути; неизвестный/старый мост сохраняет прежний текст push.
-    valid_name = (isinstance(project_name, str) and 0 < len(project_name) <= 255
-                  and project_name not in (".", "..") and not any(c in '/\\' or ord(c) < 32
-                  or 0xD800 <= ord(c) <= 0xDFFF or ord(c) == 127 for c in project_name))
-    place = f"{link.name} · {project_name}" if valid_name else link.name
-    push.notify_later(user_id, {lang: f"{place}: {words}" for lang, words in text.items()},
-                      f"code/{link.agent_id}/{frame['project']}/{frame['chat']}", f"code-{frame['chat']}")
+    push.notify_later(user_id, body, f"code/{link.agent_id}/{frame['project']}/{frame['chat']}",
+                      f"code-{frame['chat']}", kind=kind)
+
+
+def _card(link: Link, frame: dict, body: dict | None) -> None:
+    """Ждущая карточка чата для напоминаний: `ask` её заводит (одна на чат — последняя), закрывает `asked` с её
+    `request_id` (досланная мостом карточка его не знает — любой `asked`), конец хода и снимок без открытых карточек."""
+    key, e = (link.agent_id, frame["chat"]), frame["e"]
+    if e["k"] == "ask" and e.get("kind") in ASK_WORDS:
+        CARDS.pop(key, None)
+        CARDS[key] = {"project": frame["project"], "request_id": e.get("request_id"), "body": body,
+                      "at": clock.NOW(), "seen": 0.0, "sent": {}}
+        while len(CARDS) > CARDS_MAX:
+            del CARDS[next(iter(CARDS))]
+    elif key in CARDS and (e["k"] == "done" or e["k"] == "snapshot" and e.get("asks") == [] or e["k"] == "asked" and (
+            CARDS[key]["request_id"] in (None, e.get("request_id")))):
+        del CARDS[key]
+
+
+def remind() -> None:
+    """Проход напоминаний (07:I5): карточка не закрыта, компьютер на связи, адресат чат не смотрит — каждому его
+    устройству, где напоминание включено и вид `ask` не заглушён (`push.muted`), повтор push с той же меткой
+    (заменяет прежнее) через интервал устройства (`push.reminders`) от карточки, прошлого повтора или последнего
+    взгляда на чат; не больше `REMIND_TIMES` на устройство. Тихие часы откладывают повтор, а не съедают его."""
+    now = clock.NOW()
+    for key, card in list(CARDS.items()):
+        agent_id, chat = key
+        link = LINKS.get(agent_id)
+        if link is None:
+            continue                     # без связи ответить нельзя; вернётся — карточка та же
+        user_id = _addressee(link, {"chat": chat, "project": card["project"]})
+        if user_id is None:
+            del CARDS[key]
+            continue
+        if watching(agent_id, chat, user_id):
+            card["seen"] = now
+            continue
+        intervals, muted = push.reminders(user_id), push.muted(user_id, "ask")
+        due = set()
+        for digest, interval in intervals.items():
+            times, last = card["sent"].get(digest, (0, card["at"]))
+            if interval and times < REMIND_TIMES and digest not in muted and now - max(last, card["seen"]) >= interval:
+                due.add(digest)
+                card["sent"][digest] = (times + 1, now)
+        if due:
+            push.notify_later(user_id, card["body"], f"code/{agent_id}/{card['project']}/{chat}", f"code-{chat}",
+                              kind="ask", skip=frozenset(intervals) - due)
+
+
+async def _reminders() -> None:
+    while True:
+        await clock.SLEEP(REMIND_TICK_SEC)
+        try:
+            remind()
+        except Exception as e:           # noqa: BLE001 — напоминания не должны вставать
+            log.warning("напоминания: сбой (%s)", type(e).__name__)
+
+
+def start_reminders() -> asyncio.Task:
+    return asyncio.create_task(_reminders())
 
 
 # ---- просьбы -------------------------------------------------------------------

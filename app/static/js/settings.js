@@ -39,6 +39,7 @@ import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
 import { quickActionsBlock } from './code-quick-actions.js';
 import { ntfyBlock } from './ntfy-settings.js';
+import { notifyPrefsBlock } from './notify-prefs.js';
 import { pushFlag } from './push-sync.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { profileDialog } from './connection-profile.js';
@@ -1765,7 +1766,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'notifications') {
-      group('notifications', notifyBlock(), ntfyBlock());
+      group('notifications', notifyBlock(), notifyPrefsBlock(), ntfyBlock());
       return;
     }
     if (shown === 'data') {
