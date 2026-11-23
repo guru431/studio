@@ -152,11 +152,19 @@ def _transfer(h, cmd: str, path: str) -> int:
             return 1
         print(tr("Сохранено файлов: {0}. Ключа и PIN в архиве нет. На новом компьютере: import-chats.", count))
         return 0
+    # Работающий мост пишет те же файлы (`Aliases.put`, `Choices.update`) без общего замка — одна из записей пропала бы.
+    # Замок одного экземпляра держится до конца импорта: мост не стартует посреди него.
+    mutex = single.acquire()
+    if mutex is None:
+        print(tr("Мост запущен — выйдите из него и повторите импорт."))
+        return 1
     try:
         added = transfer.import_(h, Path(path))
     except (OSError, zipfile.BadZipFile, transfer.TransferError):
         print(tr("Это не архив переноса моста или он не читается."))
         return 1
+    finally:
+        mutex.close()
     print(tr("Добавлено записей: {0}. Затем в Студии у прежнего компьютера — «Заменить».", added))
     return 0
 
