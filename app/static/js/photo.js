@@ -68,6 +68,7 @@ const PROMPT_MAX = 24000;
 const EXTRA_MAX = 8000;
 const PHOTO_MAX = 20 * 1024 * 1024;  // фото с устройства — как у ролика (image_upload.VIDEO_UPLOAD)
 const PHOTO_SIDE = 2048;
+const UPSCALERS = new Set(['seedvr2-3b-int8', 'realesrgan-x4plus']);
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 const SIZES = [['portrait', tr("Портрет 832×1216"), '832x1216'], ['square', tr("Квадрат 1024×1024"), '1024x1024'],
   ['landscape', tr("Альбом 1216×832"), '1216x832']];
@@ -108,13 +109,17 @@ function build(view, ctx) {
   const running = new Map();     // id → { item, at, timer } — идущие задания ленты
   const gated = new Set();       // кнопки открытого просмотра, начинающие задание
   let alive = true;
+  let canUpscale = false;
 
   /* разметка */
   const status = el('p', { id: 'photo-status', class: 'status photo-status', 'aria-live': 'polite' });
   const describeFile = el('input', { type: 'file', id: 'describe-file', class: 'sr', accept: ACCEPT });
+  const upscaleFile = el('input', { type: 'file', id: 'upscale-file', class: 'sr', accept: ACCEPT });
+  const upscalePick = menuItem(tr("Улучшить фото с устройства…"), { attrs: { id: 'photo-upscale-pick', hidden: true },
+    onSelect: () => { menuPopup.close(true); upscaleFile.click(); } });
   // выбор файла — кнопкой меню: поле файла вне меню, закрытое меню его не прячет
   const menuItems = [menuItem(tr("Описать фото с устройства…"), { attrs: { id: 'photo-describe-pick' },
-    onSelect: () => { menuPopup.close(true); describeFile.click(); } })];
+    onSelect: () => { menuPopup.close(true); describeFile.click(); } }), upscalePick];
   if (ctx.me.is_admin) menuItems.push(menuItem(tr("Освободить карту"), { attrs: { id: 'photo-release' }, onSelect: release }));
   const menu = el('div', { id: 'photo-menu', class: 'photo-menu', role: 'menu', 'aria-label': tr("Ещё") }, ...menuItems);
   const toggle = iconButton('more', tr("Ещё"), { id: 'photo-menu-toggle' });
@@ -138,7 +143,7 @@ function build(view, ctx) {
   // кнопки-значки шапки — одной группой справа: на 320 px она целиком уходит под заголовок
   const head = el('header', { class: 'head' }, el('h1', {}, tr("Фото")), selection.tools,
     el('div', { class: 'head-tools' }, feedModel.node, selection.button, layout.node,
-      el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile)));
+      el('div', { class: 'photo-menu-wrap' }, toggle, menu, describeFile, upscaleFile)));
 
   const sourceImg = el('img', { alt: tr("Исходное фото") });
   const strength = el('input', { type: 'range', id: 'photo-strength', min: '0.05', max: '1', step: '0.05', value: '0.25' });
@@ -287,6 +292,8 @@ function build(view, ctx) {
 
   /** Варианты чипа «модель» — отмеченные модели раздела «Фото», выбор — его умолчание. */
   function loadModels(section) {
+    canUpscale = section.links.some(({ connection }) => connection.kind === 'srvllm' && connection.proxied);
+    upscalePick.hidden = !canUpscale;
     const many = section.links.filter((l) => l.models.length).length > 1;
     choices = section.links.flatMap(({ connection: c, models }) => models.map((m) => {
       const pick = { connection_id: c.id, model: m, kind: c.kind };
@@ -434,6 +441,7 @@ function build(view, ctx) {
       b.title = busy ? tr("Дождитесь конца текущего задания") : '';
     }
     describeFile.disabled = busy;                    // «Описать фото с устройства…» меню раздела
+    upscaleFile.disabled = upscalePick.disabled = busy;
     chipTranslate.disabled = busy && !translating;   // во время перевода «EN» его отменяет
     chipTranslate.title = translating ? tr("Отменить перевод")
       : busy ? tr("Дождитесь конца текущего задания") : tr("Перевести промпт на английский (gemma-abl)");
@@ -687,18 +695,18 @@ function build(view, ctx) {
     }
   }
 
-  async function create(body) {
+  async function create(body, path = '/api/images', fail = error) {
     if (submitting) return false;
     submitting = true;
-    error.textContent = '';
+    fail.textContent = '';
     syncBusy();
     try {
-      const out = await api('POST', '/api/images', body);
+      const out = await api('POST', path, body);
       await adopt(out.ids || [out.id]);
       kick();
       return true;
     } catch (err) {
-      error.textContent = words(err);
+      fail.textContent = words(err);
       busyElsewhere(err);                             // задание с другой вкладки или устройства
       return false;
     } finally {
@@ -767,6 +775,7 @@ function build(view, ctx) {
   }
 
   function canRepeatPhoto(item) {
+    if (!item.mcp_job_id && UPSCALERS.has(item.model)) return false;
     return item.mcp_job_id ? Boolean(item.prompt) && (item.kind !== 'edit' || !!item.source_media_id) : !ctx.hint;
   }
 
@@ -945,13 +954,18 @@ function build(view, ctx) {
         describe({ mediaId: item.media_id });
       }),
       act(tr("Ещё варианты"), 'act-variants', () => chooseVariants(item, () => dialog.close()))];
+    const upscale = canUpscale && act(tr("Улучшить фото"), 'act-upscale', () => {
+      dialog.close();
+      chooseUpscale({ mediaId: item.media_id });
+    });
+    if (upscale) starts.push(upscale);
     // без модели раздела «Изменить», «Повторить», «Ещё варианты» и «В поле» не начать — их нет; «Описать» решает шлюз раздела
     const actions = el('div', { class: 'viewer-actions' }, canNative || remoteSource ? starts[0] : null,
       act(tr("Создать видео"), 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
       }),
-      canRepeat ? starts[1] : null, canRepeat ? starts[3] : null, starts[2],
+      canRepeat ? starts[1] : null, canRepeat ? starts[3] : null, starts[2], upscale || null,
       item.prompt && (canNative || remoteSource) ? act(tr("В поле"), 'act-to-field', () => toField(item, dialog)) : null,
       act(tr("Скачать"), 'act-download', () => saveMedia(item.media_id, root)),
       // ссылка «Поделиться» на картинку (chat_shares.ITEMS): картинка, промпт и модель
@@ -1352,6 +1366,37 @@ function build(view, ctx) {
     undo = null;
     autosize();
     prompt.focus();
+  });
+  function chooseUpscale({ file: input, mediaId }) {
+    if (isBusy()) return;
+    const mode = el('select', { class: 'input', name: 'upscale-mode' },
+      el('option', { value: 'restore' }, tr("Восстановление · SeedVR2")),
+      el('option', { value: 'fast' }, tr("Быстрое увеличение · RealESRGAN")));
+    const scale = el('input', { class: 'input', name: 'upscale-scale', type: 'number', min: '1', max: '4',
+      step: 'any', value: '2', required: true });
+    const fail = el('p', { class: 'error', 'aria-live': 'polite' });
+    const submit = button(tr("Улучшить фото"), { class: 'btn btn-accent', id: 'photo-upscale-submit' });
+    const dialog = openDialog(root, { id: 'photo-upscale-dialog', title: tr("Улучшить фото"),
+      body: [field(tr("Режим улучшения"), mode, 'upscale-mode'), field(tr("Масштаб от 1 до 4"), scale, 'upscale-scale'), fail],
+      actions: [submit], guard: () => !submitting });
+    submit.addEventListener('click', async () => {
+      if (!scale.reportValidity() || isBusy()) return;
+      submit.disabled = true;
+      const body = new FormData();
+      if (input) body.append('image', input);
+      else body.append('source_media_id', mediaId);
+      body.append('mode', mode.value);
+      body.append('scale', scale.value);
+      if (await create(body, '/api/images/upscales', fail)) dialog.close();
+      else submit.disabled = false;
+    });
+  }
+  upscaleFile.addEventListener('change', () => {
+    const selected = upscaleFile.files[0];
+    upscaleFile.value = '';
+    if (!selected) return;
+    if (selected.size > 10 * 1024 * 1024) error.textContent = tr("Фото больше 10 МиБ");
+    else chooseUpscale({ file: selected });
   });
   describeFile.addEventListener('change', async () => {
     const selected = describeFile.files[0];

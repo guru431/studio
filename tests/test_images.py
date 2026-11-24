@@ -92,6 +92,34 @@ def test_job_goes_through_the_gateway_with_the_connection_key(studio):
     assert studio.gw.releases == [(FLUX, f"Bearer {TOKEN}")]      # другая модель — до запроса
 
 
+def test_upscale_saves_photo_and_reuses_the_owned_source(studio):
+    add_gateway(studio)
+
+    async def upscale(request):
+        assert request.headers["authorization"] == f"Bearer {TOKEN}"
+        fields, raw = decode_form(await request.aread(), request.headers["content-type"])
+        assert fields == {"mode": "fast", "scale": "2.5"}
+        assert image_size(raw) == (48, 32)
+        status, payload = reply_with(png(Image.new("RGB", (120, 80), "blue")))
+        return httpx.Response(status, json=payload)
+
+    studio.gw.on["/slot/images/upscales"] = upscale
+    route = "/api/images/upscales"
+    first = studio.c.post(route, data={"mode": "fast", "scale": "2.5"}, files={"image": ("source.png", photo(), "image/png")})
+    assert first.status_code == 202, first.text
+    item = wait_state(studio, first.json()["id"], images.TERMINAL)
+    assert item["state"] == "done" and item["model"] == "realesrgan-x4plus" and item["size"] == "120x80", item
+    assert item["chain"][-1]["scale"] == 2.5
+    assert image_size(studio.c.get(f"/api/media/{item['media_id']}").content) == (120, 80)
+    reused = studio.c.post(route, data={"mode": "fast", "scale": "2.5", "source_media_id": item["source_media_id"]},
+                           files={"scale": (None, "2.5")})
+    assert reused.status_code == 400  # duplicate fields fail before any new job
+    reused = studio.c.post(route, files={key: (None, value) for key, value in
+                           {"mode": "fast", "scale": "2.5", "source_media_id": item["source_media_id"]}.items()})
+    assert reused.status_code == 202, reused.text
+    assert wait_state(studio, reused.json()["id"], images.TERMINAL)["state"] == "done"
+
+
 @pytest.mark.parametrize("reply", [SLOT_BUSY, (500, {"error": {"message": "boom"}})], ids=["busy", "failed"])
 def test_switching_models_releases_the_other_one_first(studio, reply):
     """Аренда SNOFS Krea 2 (слот comfy) держит карту 600 с простоя, и FLUX её не вытесняет: без release

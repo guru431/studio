@@ -12,7 +12,7 @@ import { dateOnly } from './time.js';
 import { LABELS } from './models.js';
 
 const KINDS = { generation: tr("Генерация"), upload: tr("Фото с устройства"), edit: tr("Правка"), brush: tr("Правка кистью"),
-  video: tr("Ролик") };
+  upscale: tr("Улучшение фото"), video: tr("Ролик") };
 /** Модели картинок шлюза (images.MODELS и снятые) → подпись из общей таблицы models.js. */
 export const NAMES = Object.fromEntries(['lustify', 'flux', 'snofs', 'big-love', 'fineview', 'muse', 'jib-moss', 'fineporn',
   'moody-krea'].map((id) => [id, LABELS[id]]));
@@ -84,7 +84,7 @@ export function chainList(chain, { current, onOpen }) {
     const body = el('div', { class: 'chain-body' }, el('p', { class: 'chain-meta' }, meta(step, i + 1)));
     if (step.gone) body.append(el('p', { class: 'chain-gone' }, tr("удалена")));
     let copy = null;
-    if (step.kind !== 'upload') {
+    if (step.kind !== 'upload' && step.kind !== 'upscale') {
       const text = el('p', { class: 'chain-prompt' },
         step.prompt || (step.kind === 'video' ? tr("придуман по фото") : ''));
       body.append(text);

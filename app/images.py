@@ -133,6 +133,7 @@ MODELS = {"snofs": "snofs-krea2-v1.6", "flux": "flux-3-image-klein",
 STRENGTH_MODELS = {"snofs", "jib-moss"}
 COMFY_MODELS = {value for name, value in MODELS.items() if name != "flux"}
 RELEASE_MODELS = {name: MODELS[name] for name in ("snofs", "flux")}
+UPSCALE_MODES = {"seedvr2-3b-int8": "restore", "realesrgan-x4plus": "fast"}
 MEDIA_TIMEOUT_SEC = 1900
 #: Размеры: портрет, квадрат, альбом — около мегапикселя, кратны 16 (обе модели их держат).
 SIZES = {"portrait": "832x1216", "square": "1024x1024", "landscape": "1216x832"}
@@ -194,10 +195,13 @@ class Job:
     mask_media_id: str | None = None
     series: "list[Job] | None" = None        # все строки серии по порядку (п. 8 шапки)
     resumed: bool = False                    # повтор после перезапуска (п. 10 шапки)
+    upscale_scale: float | None = None
 
     @property
     def gateway_model(self) -> str:
         """Id модели в запросе: у шлюза — по короткому имени студии, у внешнего сервиса — как есть."""
+        if self.upscale_scale is not None:    # release работает по модели, привязанной к слоту comfy
+            return RELEASE_MODELS["snofs"]
         return MODELS.get(self.model, self.model) if self.conn.kind == "srvllm" else self.model
 
 
@@ -226,6 +230,12 @@ class JobIn(BaseModel):
     source_media_id: "str | None" = Field(default=None, max_length=64)
     mask_media_id: "str | None" = Field(default=None, max_length=64)    # маска прежней правки (повтор)
     series: "SeriesIn | None" = None
+
+
+class UpscaleIn(BaseModel):
+    mode: Literal["restore", "fast"] = "restore"
+    scale: float = Field(default=2, ge=1, le=4)
+    source_media_id: str | None = Field(default=None, max_length=64)
 
 
 def series_strengths(start: float, end: float, count: int) -> list[float]:
@@ -369,8 +379,13 @@ def resume() -> None:
                             " ORDER BY user_id, created DESC, id", (RESUMED,)).fetchall()
     queues: dict[int, list[Job]] = {}
     for row in rows:
+        upscale_scale = None
         try:
-            conn, model = sections.resolve(row["user_id"], "photo", None, row["model"])
+            if row["model"] in UPSCALE_MODES:
+                conn, model = _srvllm_photo(row["user_id"]), row["model"]
+                upscale_scale = chains.of_image(row["user_id"], row)[-1].get("scale", 2)
+            else:
+                conn, model = sections.resolve(row["user_id"], "photo", None, row["model"])
         except HTTPException:
             conn = None
         if conn is None or (row["mask_media_id"] is not None and conn.kind != "srvllm"):
@@ -380,7 +395,8 @@ def resume() -> None:
         job = Job(id=row["id"], user_id=row["user_id"], conn=conn, model=model, prompt=row["prompt"], size=row["size"],
                   seed=row["seed"], started=row["created"], state="queued", detail=RESUMED, kind=row["kind"],
                   strength=row["strength"] if row["strength"] is not None else 0.65,
-                  source_media_id=row["source_media_id"], mask_media_id=row["mask_media_id"], resumed=True)
+                  source_media_id=row["source_media_id"], mask_media_id=row["mask_media_id"], resumed=True,
+                  upscale_scale=upscale_scale)
         JOBS[job.id] = job
         queues.setdefault(job.user_id, []).append(job)
     for uid, jobs in queues.items():
@@ -574,11 +590,7 @@ async def create_job(request: Request):
         chain = before + [chains.image_step(
             image_id=job.id, kind="brush" if mask_id else job.kind, model=job.model, prompt=job.prompt, size=size,
             seed=job.seed, strength=strengths[i], created=created)]
-        state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id,"
-                         " mask_media_id, state, detail, created, chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (job.id, uid, job.kind, job.model, job.prompt, size, job.seed, strengths[i], source_id, mask_id,
-                          job.state, job.detail, created, json.dumps(chain, ensure_ascii=False)))
-        JOBS[job.id] = job
+        _insert(job, chain, strengths[i])
         jobs.append(job)
     task = asyncio.create_task(run_series(jobs) if count > 1 else run_job(jobs[0]))
     for job in jobs:
@@ -586,6 +598,72 @@ async def create_job(request: Request):
         job.task = task
     log.info("задание %s: %s, строк — %d", jobs[0].id[:8], size, count)
     return {"id": jobs[0].id, "seed": seed, "ids": [j.id for j in jobs]}
+
+
+def _insert(job: Job, chain: list[dict], strength: float | None = None) -> None:
+    state.DB.execute("INSERT INTO images(id, user_id, kind, model, prompt, size, seed, strength, source_media_id,"
+                     " mask_media_id, state, detail, created, chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (job.id, job.user_id, job.kind, job.model, job.prompt, job.size, job.seed, strength,
+                      job.source_media_id, job.mask_media_id, job.state, job.detail, job.started,
+                      json.dumps(chain, ensure_ascii=False)))
+    JOBS[job.id] = job
+
+
+def _upscale_source(image: bytes, body: UpscaleIn) -> tuple[str, str]:
+    mime = _picture(image)
+    with Image.open(io.BytesIO(image)) as photo:
+        width, height = photo.size
+        if photo.getexif().get(274) in (5, 6, 7, 8):
+            width, height = height, width
+    size = (round(width * body.scale), round(height * body.scale))
+    if max(size) > 4096:
+        raise UploadError("Результат должен быть не больше 4096 пикселей по длинной стороне")
+    if body.mode == "fast" and width * height * 16 > 36_000_000:
+        raise UploadError("Для быстрого режима нужен исходник до 2,25 Мп")
+    return mime, "{}x{}".format(*size)
+
+
+@router.post("/upscales", status_code=202)
+async def create_upscale(request: Request):
+    uid = request.state.user.id
+    conn = _srvllm_photo(uid)
+    ensure_idle(uid)
+    try:
+        fields, upload, _ = await asyncio.to_thread(forms.decode, await forms.read_body(request, MAX_BODY),
+                                                    request.headers.get("content-type", ""))
+        body = UpscaleIn.model_validate(fields)
+        source_id = body.source_media_id
+        image = upload if upload is not None else await forms.history_file(uid, source_id)
+        mime, size = await asyncio.to_thread(_upscale_source, image, body)
+    except ValidationError:
+        raise HTTPException(422, {"code": "input", "message": "Выберите режим и масштаб от 1 до 4"}) from None
+    except UploadError as e:
+        raise HTTPException(e.status, {"code": "image", "message": str(e)}) from None
+    except JobError:
+        raise HTTPException(400, {"code": "image", "message": "Нужен PNG, JPEG или WebP до 16 Мп"}) from None
+    saved = []
+    try:
+        ensure_idle(uid)
+        if upload is not None:
+            source_id = await media.save_async(uid, image, mime, f"studio-upscale-source{media.EXT[mime]}", thumb=True)
+            saved.append(source_id)
+            ensure_idle(uid)
+        if not media.alive(uid, source_id):
+            raise HTTPException(404, media.GONE)
+        model = next(model for model, mode in UPSCALE_MODES.items() if mode == body.mode)
+        job = Job(id=uuid.uuid4().hex, user_id=uid, conn=conn, model=model, prompt="", size=size, seed=0,
+                  started=clock.NOW(), kind="edit", image=image, source_media_id=source_id, upscale_scale=body.scale)
+        step = chains.image_step(image_id=job.id, kind="upscale", model=model, prompt="", size=size, seed=0,
+                                 strength=None, created=job.started)
+        _insert(job, chains.of_source(uid, source_id) + [{**step, "scale": body.scale}])
+    except media.StorageError as e:
+        await _discard(uid, saved)
+        raise HTTPException(503, {"code": "storage", "message": str(e)}) from None
+    except Exception:
+        await _discard(uid, saved)
+        raise
+    job.task = asyncio.create_task(run_job(job))
+    return {"id": job.id}
 
 
 # MCP files already belong to section history. Project them into the photo feed without copying them.
@@ -1001,7 +1079,11 @@ async def generate(job: Job) -> "tuple[bytes, int | None, str]":
     await _release_others(job)
     timeout = MEDIA_TIMEOUT_SEC if job.model in MODELS and job.model != "flux" else GENERATE_TIMEOUT_SEC
     try:
-        if job.image is not None:
+        if job.upscale_scale is not None:
+            r = await _slot(job.conn, "/images/upscales", timeout,
+                            data={"mode": UPSCALE_MODES[job.model], "scale": str(job.upscale_scale)},
+                            files={"image": ("input", job.image, "application/octet-stream")})
+        elif job.image is not None:
             if job.model in STRENGTH_MODELS:
                 payload["strength"] = job.strength
             r = await _slot(job.conn, "/images/edits", timeout,
@@ -1116,7 +1198,10 @@ async def run_series(jobs: list[Job]) -> None:
 async def _reload(job: Job) -> None:
     """Фото и маска повтора после перезапуска — снова из media, тем же путём, что у запроса (create_job)."""
     try:
-        job.image = await forms.photo(job.user_id, None, job.source_media_id, VIDEO_PIXELS)
+        if job.upscale_scale is not None:
+            job.image = await forms.history_file(job.user_id, job.source_media_id)
+        else:
+            job.image = await forms.photo(job.user_id, None, job.source_media_id, VIDEO_PIXELS)
         if job.mask_media_id is not None:
             mask = await forms.history_file(job.user_id, job.mask_media_id)
             job.mask = await asyncio.to_thread(lambda: prepare_mask(_fit_mask(mask, job.image), job.image))
