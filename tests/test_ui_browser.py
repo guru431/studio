@@ -2417,7 +2417,7 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
     # текст в поле — получение подтверждено, сервер его стирает (повтор GET до того отдал бы его снова)
     assert len([s for s in r["sent"] if s.startswith("DELETE /api/images/descriptions/")]) == 2
     v = r["values"]
-    assert v["menu"] == ["Описать фото с устройства…"]                 # «Освободить карту» — только админу
+    assert v["menu"] == ["Описать фото с устройства…", "Улучшить фото с устройства…"]  # «Освободить карту» — только админу
     assert v["descriptionLength"] == len(text.strip()) and v["fits"]
     assert v["counter"].startswith(f"{len(v['prompt'])} / 24000")
     assert v["prompt"].startswith(text.strip()) and "Visible extra detail." in v["prompt"]
@@ -2433,6 +2433,40 @@ def test_photo_description_is_edited_and_creates_without_a_source(browser, live,
     gens = live.gw.generations[g0:]
     assert len(gens) == 1 and len(live.gw.edits) == e0                  # по тексту, без исходного фото
     assert gens[0][0]["model"] == MODEL_IDS[model] and gens[0][0]["prompt"] == v["prompt"]
+    assert not problems(r), problems(r)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_enhance_photo_from_device_and_viewer(browser, live, width):
+    login = f"upscale-{width}"
+    live.add_user(login)
+
+    async def upscale(request):
+        assert request.headers.get("authorization") == f"Bearer {GW_TOKEN}"
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG_REAL).decode()}]})
+
+    route = "/slot/images/upscales"
+    dialog = "#photo-upscale-dialog"
+    live.gw.on[route] = upscale
+    try:
+        r = browser.drive(live.url + "/", [*photo_screen(login), ("eval", "spy", SPY),
+            ("wait", "!document.querySelector('#photo-upscale-pick').hidden"),
+            put_file("#upscale-file", png_of(64, 48, "blue")), ("wait", is_open(dialog)),
+            ("eval", "fit", f"{NO_OVERFLOW} && document.querySelector('{dialog}').scrollWidth"
+                            f" <= document.querySelector('{dialog}').clientWidth"),
+            ("click", "#photo-upscale-submit"), ("wait", done_cards(1)),
+            ("click", NEWEST_DONE), ("wait", is_open("#viewer")), ("click", "#viewer .act-upscale"),
+            ("wait", is_open(dialog)), set_value("[name=upscale-mode]", "fast"),
+            set_value("[name=upscale-scale]", "1.5"), ("click", "#photo-upscale-submit"),
+            ("wait", done_cards(2)), ("eval", "forms", "window.sentForms")],
+            width=width, height=900, mobile=width == 390)
+    finally:
+        del live.gw.on[route]
+    assert not r.get("failed"), r
+    assert r["values"]["fit"]
+    first, second = [v["form"] for v in r["values"]["forms"] if v["path"] == "/api/images/upscales"]
+    assert first["image"].startswith("file:") and first["mode"] == "restore" and first["scale"] == "2"
+    assert second["source_media_id"] and second["mode"] == "fast" and second["scale"] == "1.5"
     assert not problems(r), problems(r)
 
 
