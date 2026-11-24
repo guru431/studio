@@ -1279,9 +1279,9 @@ ALTER TABLE sessions ADD COLUMN seen REAL;""" + PASSKEY_TABLES,
 }
 
 
-def connect(path: Path) -> sqlite3.Connection:
+def connect(path: Path | str, *, cached_statements: int = 128) -> sqlite3.Connection:
     """Автокоммит (isolation_level=None): транзакции — явным BEGIN."""
-    conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+    conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None, cached_statements=cached_statements)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

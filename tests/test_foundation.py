@@ -1,6 +1,7 @@
 """Основа студии: конфиг, схема базы, пароли, шифрование токенов."""
 import dataclasses
 import json
+from threading import Barrier
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
@@ -10,6 +11,7 @@ import config
 import db
 import security
 import state
+import upstream
 from historical_schema import install_schema
 
 #: номер последнего шага схемы — точная проверка `db.VERSION`; перенумерация шага при слиянии меняет только его
@@ -37,6 +39,22 @@ def test_migrate_creates_schema_once_and_seeds_the_gateway(env):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == SCHEMA_VERSION
     assert json.loads(conn.execute("SELECT value FROM settings WHERE key='allowlist'").fetchone()[0]) == ["10.77.1.15:4000"]
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_allowlist_reads_from_test_thread_and_app_loop(studio):
+    expected = upstream.allowlist()
+    start = Barrier(2, timeout=5)
+
+    def read():
+        start.wait()
+        for _ in range(500):
+            assert upstream.allowlist() == expected
+
+    app_reads = studio.c.portal.start_task_soon(read)
+    try:
+        read()
+    finally:
+        app_reads.result(timeout=5)
 
 
 def test_step_79_preserves_cleaner_attachment_routes_after_a_model_change(env):

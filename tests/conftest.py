@@ -91,14 +91,14 @@ def env(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_fsync(monkeypatch):
-    """Базы тестов — без fsync (`synchronous=OFF`): на нагруженном диске каждый коммит WAL ждал его
-    десятки миллисекунд. Видимость записей другим соединениям та же — теряется только стойкость к сбою ОС."""
+def sqlite_test_settings(monkeypatch):
+    """Базы тестов без fsync и кэша SQL-выражений, который может давать неверные результаты
+    при чтении общего соединения из потока pytest и цикла TestClient (CPython #118172)."""
     import db
     real = db.connect
 
     def connect(path):
-        conn = real(path)
+        conn = real(path, cached_statements=0)
         conn.execute("PRAGMA synchronous=OFF")
         return conn
 
