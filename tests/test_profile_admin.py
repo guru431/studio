@@ -575,10 +575,11 @@ def test_panel_lists_no_history(studio, env):
 
 def test_allowlist_round_trip(studio):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
-    assert studio.c.get("/api/admin/allowlist").json() == {"entries": ["10.77.1.15:4000"]}
+    assert studio.c.get("/api/admin/allowlist").json() == {"entries": ["10.77.1.15:4000"], "comments": {}}
     r = studio.c.put("/api/admin/allowlist", json={"entries": ["10.77.1.15:4000", "[FD00::5]:8080"]})
-    assert r.status_code == 200 and r.json() == {"entries": ["10.77.1.15:4000", "[fd00::5]:8080"]}
+    saved = {"entries": ["10.77.1.15:4000", "[fd00::5]:8080"], "comments": {}}
+    assert r.status_code == 200 and r.json() == saved
     for bad in ["10.77.1.15", "a b:1", "10.0.0.1:0", "10.0.0.1:65536", "llm:8080"]:
         r = studio.c.put("/api/admin/allowlist", json={"entries": [bad]})
         assert r.status_code == 422 and code(r) == "entry", bad
-    assert studio.c.get("/api/admin/allowlist").json() == {"entries": ["10.77.1.15:4000", "[fd00::5]:8080"]}
+    assert studio.c.get("/api/admin/allowlist").json() == saved

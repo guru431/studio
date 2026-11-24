@@ -18,11 +18,11 @@ import sqlite3
 import threading
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 import access
 import account
@@ -72,6 +72,8 @@ class LdapLink(BaseModel):
 
 class Allowlist(BaseModel):
     entries: list[str]
+    comments: dict[str, Annotated[str, StringConstraints(strip_whitespace=True, max_length=240)]] | None = None
+    expected_entries: list[str] | None = None
 
 
 @router.get("/smtp")
@@ -629,14 +631,25 @@ async def delete_shared_document(kb_id: str, doc_id: str):
     return Response(status_code=204)
 
 
+def _allowlist_comments() -> dict[str, str]:
+    row = state.DB.execute("SELECT value FROM settings WHERE key = 'allowlist_comments'").fetchone()
+    return json.loads(row["value"]) if row else {}
+
+
 @router.get("/allowlist")
 async def get_allowlist():
-    return {"entries": upstream.allowlist()}
+    entries = upstream.allowlist()
+    comments = _allowlist_comments()
+    return {"entries": entries, "comments": {entry: comments[entry] for entry in entries if entry in comments}}
 
 
 @router.put("/allowlist")
 async def put_allowlist(body: Allowlist, admin: auth.User = Depends(auth.require_admin)):
+    if body.expected_entries is not None and body.expected_entries != upstream.allowlist():
+        raise HTTPException(409, {"code": "allowlist_changed", "message": "Список адресов изменился. Откройте раздел заново"})
     entries = []
+    comments = {}
+    supplied = _allowlist_comments() if body.comments is None else body.comments
     for text in body.entries:
         try:
             entry = upstream.parse_entry(text)
@@ -645,10 +658,14 @@ async def put_allowlist(body: Allowlist, admin: auth.User = Depends(auth.require
                                                                   " (имя — только для https)"}) from None
         if entry not in entries:
             entries.append(entry)
-    state.DB.execute("INSERT INTO settings(key, value) VALUES ('allowlist', ?)"
-                     " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(entries),))
+            comment = supplied.get(entry, supplied.get(text, ""))
+            if comment:
+                comments[entry] = comment
+    state.DB.execute("INSERT INTO settings(key, value) VALUES ('allowlist', ?), ('allowlist_comments', ?)"
+                     " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (json.dumps(entries), json.dumps(comments)))
     log.info("администратор %d: список разрешённых адресов — %d записей", admin.id, len(entries))
-    return {"entries": upstream.allowlist()}
+    return {"entries": entries, "comments": comments}
 
 
 # ---- подключения пользователя: те же действия, что в профиле, но для `uid` ------

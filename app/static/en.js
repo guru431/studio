@@ -687,6 +687,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Есть несохранённые изменения — нажмите «Сохранить»": "There are unsaved changes. Click Save",
   "Пароль «{0}» сменён, все его сессии закрыты": "Password for “{0}” changed; all their sessions are closed",
   "Разрешённые внутренние адреса": "Allowed internal addresses",
+  "Комментарий к адресу {0}": "Comment for address {0}",
+  "Список адресов изменился. Откройте раздел заново": "The address list changed. Reopen this section",
   "Сколько раз за один ответ модель может вызвать инструменты (интернет, MCP, вопросы), прежде чем ответить по найденному. Повторный вызов с теми же аргументами не исполняется.": "How many times the model can call tools (internet, MCP, questions) in one answer before it answers from what it found. A repeated call with the same arguments is not run.",
   "Кругов инструментов на ответ (1–30)": "Tool rounds per answer (1–30)",
   "Подключения к этим адресам студия зовёт сама, их токен браузеру не отдаётся. Запись — IP и порт (10.0.0.5:4000, [::1]:8080) или имя и порт (api.openai.com:443). Имя — только для https: студия при каждом запросе проверяет, что имя ведёт в интернет, а не во внутреннюю сеть.": "Studio connects to these addresses itself and does not expose their tokens to the browser. Enter an IP and port (10.0.0.5:4000, [::1]:8080) or a hostname and port (api.openai.com:443). Hostnames require HTTPS. Studio checks on every request that the name resolves to the internet, not an internal network.",

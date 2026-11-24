@@ -70,8 +70,38 @@ def test_allowlist_entries_are_validated(studio):
         r = studio.c.put("/api/admin/allowlist", json={"entries": [bad]})
         assert r.status_code == 422 and code(r) == "entry", bad
     r = studio.c.put("/api/admin/allowlist", json={"entries": [" 10.0.0.2:080 ", "[0:0::1]:8080", "10.0.0.1:1"]})
-    assert r.status_code == 200 and r.json() == {"entries": ["10.0.0.2:80", "[::1]:8080", "10.0.0.1:1"]}
+    assert r.status_code == 200 and r.json() == {"entries": ["10.0.0.2:80", "[::1]:8080", "10.0.0.1:1"], "comments": {}}
     assert upstream.allowlist() == ["10.0.0.2:80", "[::1]:8080", "10.0.0.1:1"]
+
+
+def test_allowlist_comments_are_admin_metadata(studio):
+    endpoint = "/api/admin/allowlist"
+    entry = "10.0.0.2:80"
+    make_user(studio, "member")
+    signin(studio, "member")
+    assert studio.c.get(endpoint).status_code == 403
+    assert studio.c.put(endpoint, json={"entries": [entry], "comments": {entry: "private"}}).status_code == 403
+    make_user(studio, "owner", is_admin=True)
+    signin(studio, "owner")
+    assert studio.c.get(endpoint).json()["comments"] == {}
+
+    raw = "10.0.0.2:080"
+    comment = "Шлюз для чата"
+    saved = {"entries": [entry], "comments": {entry: comment}}
+    response = studio.c.put(endpoint, json={"entries": [raw, entry], "comments": {raw: f" {comment} ",
+                                                                               "10.0.0.3:80": "Не разрешён"}})
+    assert response.status_code == 200 and response.json() == saved
+    assert studio.c.get(endpoint).json() == saved
+    assert upstream.allowlist() == [entry]
+    assert studio.c.put(endpoint, json={"entries": [entry]}).json() == saved
+
+    response = studio.c.put(endpoint, json={"entries": [], "comments": {entry: "a" * 241}})
+    assert response.status_code == 422
+    assert studio.c.get(endpoint).json() == saved
+    assert studio.c.put(endpoint, json={"entries": []}).json() == {"entries": [], "comments": {}}
+    response = studio.c.put(endpoint, json={**saved, "expected_entries": [entry]})
+    assert response.status_code == 409 and upstream.allowlist() == []
+    assert studio.c.put(endpoint, json={"entries": [entry]}).json() == {"entries": [entry], "comments": {}}
 
 
 def named_list(*entries):

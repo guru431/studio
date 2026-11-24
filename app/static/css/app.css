@@ -921,10 +921,14 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .storage dd { margin: 0; overflow-wrap: anywhere; }
 .storage-block .status { margin-bottom: var(--space-4); }
 .allow-list { list-style: none; margin: 0 0 var(--space-6); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
-.allow-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6);
+.allow-list li { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) auto; align-items: center; gap: var(--space-3) var(--space-5); padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6);
   background: var(--surface-0); border: 1px solid var(--line); border-radius: var(--r-control); }
-.allow-list li.muted { padding: var(--space-4) var(--space-6); }
+.allow-list li.muted { display: block; padding: var(--space-4) var(--space-6); }
 .allow-list code { font-family: var(--mono); font-size:var(--fs-sm); overflow-wrap: anywhere; }
+@media (max-width: 40rem) {
+  .allow-list li { grid-template-columns: minmax(0, 1fr) auto; }
+  .allow-list .allow-comment { grid-column: 1 / -1; grid-row: 2; }
+}
 .block .row + .row { margin-top: var(--space-6); }
 
 /* группы доступа и диалоги «Доступ» (admin.js, mcp-settings.js) */

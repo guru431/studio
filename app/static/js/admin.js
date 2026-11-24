@@ -421,11 +421,14 @@ function invitationsBlock(host) {
 
 function allowlistBlock() {
   let entries = [];
+  let loadedEntries = [];
+  let comments = new Map();
   const list = el('ul', { class: 'allow-list', id: 'allow-list' });
   const input = el('input', { class: 'input', id: 'allow-entry', autocomplete: 'off', spellcheck: 'false',
     autocapitalize: 'none', inputmode: 'url', placeholder: tr("IP:порт или имя:порт, например 10.0.0.5:4000 или api.openai.com:443") });
   const note = el('p', { class: 'status', id: 'allow-status', 'aria-live': 'polite' });
   const save = button(tr("Сохранить"), { class: 'btn btn-accent', id: 'allowlist-save' });
+  const addButton = button(tr("Добавить"), { class: 'btn', id: 'allow-add' }, add);
 
   function say(text, kind) {
     note.textContent = text;
@@ -433,13 +436,21 @@ function allowlistBlock() {
   }
 
   function draw() {
-    list.replaceChildren(...(entries.length ? entries.map((entry) => el('li', { 'data-entry': entry },
-      el('code', {}, entry),
-      button(tr("Удалить"), { class: 'btn btn-sm btn-danger', 'aria-label': tr("Удалить {0}", entry) }, () => {
-        entries = entries.filter((e) => e !== entry);
+    list.replaceChildren(...(entries.length ? entries.map((entry) => {
+      const comment = el('input', { class: 'input allow-comment', type: 'text', maxlength: 240, autocomplete: 'off',
+        placeholder: tr("Комментарий"), 'aria-label': tr("Комментарий к адресу {0}", entry), value: comments.get(entry) });
+      comment.addEventListener('input', () => {
+        comments.set(entry, comment.value);
         unsaved();
-        draw();
-      })))
+      });
+      return el('li', { 'data-entry': entry }, el('code', {}, entry), comment,
+        button(tr("Удалить"), { class: 'btn btn-sm btn-danger', 'aria-label': tr("Удалить {0}", entry) }, () => {
+          entries = entries.filter((address) => address !== entry);
+          comments.delete(entry);
+          unsaved();
+          draw();
+        }));
+    })
       : [el('li', { class: 'muted' }, tr("Список пуст: через сервер не идёт ни одно подключение"))]));
   }
 
@@ -456,10 +467,23 @@ function allowlistBlock() {
     draw();
   }
 
+  function show(result) {
+    entries = result.entries;
+    loadedEntries = [...entries];
+    comments = new Map(Object.entries(result.comments || {}));
+    draw();
+  }
+
+  function editable(enabled) {
+    input.disabled = addButton.disabled = save.disabled = !enabled;
+    list.inert = !enabled;
+  }
+
   async function load() {
+    editable(false);
     try {
-      ({ entries } = await api('GET', '/api/admin/allowlist'));
-      draw();
+      show(await api('GET', '/api/admin/allowlist'));
+      editable(true);
     } catch (err) {
       say(words(err), 'error');
     }
@@ -469,22 +493,23 @@ function allowlistBlock() {
     if (event.key === 'Enter') add();
   });
   save.addEventListener('click', async () => {
-    save.disabled = true;
+    editable(false);
     try {
-      ({ entries } = await api('PUT', '/api/admin/allowlist', { entries }));
-      draw();
+      show(await api('PUT', '/api/admin/allowlist', {
+        entries, expected_entries: loadedEntries, comments: Object.fromEntries(comments),
+      }));
       say(tr("Сохранено"), 'ok');
     } catch (err) {
       say(words(err), 'error');
     } finally {
-      save.disabled = false;
+      editable(true);
     }
   });
 
   return {
     el: el('section', { class: 'block' }, el('h2', {}, tr("Разрешённые внутренние адреса")),
       el('p', { class: 'muted small' }, tr("Подключения к этим адресам студия зовёт сама, их токен браузеру не отдаётся. Запись — IP и порт (10.0.0.5:4000, [::1]:8080) или имя и порт (api.openai.com:443). Имя — только для https: студия при каждом запросе проверяет, что имя ведёт в интернет, а не во внутреннюю сеть.")),
-      list, el('div', { class: 'row' }, input, button(tr("Добавить"), { class: 'btn', id: 'allow-add' }, add)),
+      list, el('div', { class: 'row' }, input, addButton),
       el('div', { class: 'row' }, save, note)),
     load,
   };

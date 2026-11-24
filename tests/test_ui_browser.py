@@ -889,7 +889,13 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
         ("type", "#allow-entry", entry), ("click", "#allow-add"),
         ("click", "#allowlist-save"),
         ("wait", "document.querySelector('#allow-status').textContent === 'Сохранено'"),
-        ("eval", "saved", f"(async () => (await {API}.api('GET', '/api/admin/allowlist')).entries)()"),
+        ("type", f"#allow-list li[data-entry='{entry}'] .allow-comment", "Тестовый шлюз"),
+        ("eval", "commentUnsaved", "document.querySelector('#allow-status').textContent"),
+        ("click", "#allowlist-save"),
+        ("wait", "document.querySelector('#allow-status').textContent === 'Сохранено'"),
+        ("eval", "saved", f"(async () => await {API}.api('GET', '/api/admin/allowlist'))()"),
+        *go("settings"), ("wait", "!document.querySelector('#allow-list')"), *go("admin"),
+        ("wait", f"""document.querySelector("#allow-list li[data-entry='{entry}'] .allow-comment")?.value === 'Тестовый шлюз'"""),
         ("click", f"#allow-list li[data-entry='{entry}'] button"), ("click", "#allowlist-save"),
         ("wait", "document.querySelector('#allow-status').textContent === 'Сохранено'"),
         ("eval", "overflow", f"!({NO_OVERFLOW})")],
@@ -903,7 +909,8 @@ def test_admin_manages_users_connections_and_the_allowlist(browser, live, width)
     assert v["selfReset"] is True                  # свой пароль — в «Прочем», с текущим
     assert v["unsaved"] == "Есть несохранённые изменения — нажмите «Сохранить»", v["unsaved"]
     assert "gw:4000" in v["nameRefused"] and "не IP:порт и не имя:порт" in v["nameRefused"]
-    assert v["saved"] == ["10.77.1.15:4000", entry]
+    assert v["commentUnsaved"] == v["unsaved"]
+    assert v["saved"] == {"entries": ["10.77.1.15:4000", entry], "comments": {entry: "Тестовый шлюз"}}
     assert not v["overflow"]
     assert not known_refusals(problems(r), 422), problems(r)
 
