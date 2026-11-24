@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Your AI workspace, on your own server.</strong><br>
-  Chat, images, video, speech, documents and coding agents — in one installable web app.
+  Chat, images, video, speech, documents, Open WebUI and coding agents — in one installable web app.
 </p>
 
 <p align="center">
@@ -30,17 +30,17 @@ The server runs on infrastructure you control. Connect local models through the 
 
 **Nine workspaces:** Chat · Images · Video · Text to speech · Transcription · Scans · Translation · Open WebUI · Agents.
 
-> The interface supports Russian and English. Choose a language on the sign-in page or in **Settings → Appearance**; the choice is saved on this device. Studio Agent on the computer follows the system language (Russian, otherwise English; set `STUDIO_AGENT_LANG=ru|en` to override). Screenshots show the actual application with fictional demonstration data; no personal conversations or production credentials are included.
+> The interface supports Russian and English. Choose a language on the sign-in page or in **Settings → Appearance**. Studio Agent follows the computer's system language (Russian, otherwise English). Set `STUDIO_AGENT_LANG=ru|en` to override it. Screenshots show the English interface in dark mode with fictional demo data.
 
 ## Features
 
-- Connect MCP servers in Settings. Select servers per chat or run compatible tools from Photos, Video, Speech, Transcription, Scans, and Translation. Coding agents have separate project MCP settings.
-- Administrators can change SMTP settings and test the connection without restarting Studio.
+- Connect **MCP servers** in Settings. Choose tools per chat or run compatible tools from Images, Video, Text to speech, Transcription, Scans and Translation. Each run in those sections has its own model, status and result history. Open returned files in **My files** or from the result. Coding agents have separate project MCP settings.
 
 ### Chat
 
 - Multiple conversations, model switching and persistent history grouped by day.
 - Streaming answers with Markdown, tables, syntax highlighting, copy, stop and regenerate.
+- Generate another answer from the same prompt, switch between answer variants and fork a conversation. Supported server-routed models can summarize long context and continue answering when they reach the context limit.
 - Up to 10 attachments per message: images, PDF, DOCX, text and code files; scanned PDFs can pass through OCR before the model answers, and large documents and **knowledge bases** reach the model as excerpts found for the question.
 - Tool-call confirmation and model questions as buttons under the answer, a work plan above the answer and optional personal **memory** across conversations.
 - Profile and MCP prompt suggestions, a context-usage ring and **Talk** mode: speak and hear the answer read aloud.
@@ -55,6 +55,7 @@ The server runs on infrastructure you control. Connect local models through the 
 - Text to image and image to image through the gateway, including SNOFS and FLUX. Compatible external image endpoints are also supported.
 - Portrait, square and landscape formats; image strength where supported.
 - Edit a whole image or paint a mask to change a selected region with the gateway.
+- Paste, drop or attach a reference image. The composer keeps it when you switch models or tools. Images saved from compatible MCP tools appear in the main gallery with their prompt and source.
 - Generate two to four variations, reuse a seed where supported, save presets and inspect generation parameters.
 - Follow prompt and edit chains, browse related variants and compare two images with a draggable before/after divider.
 - Describe an image or translate its prompt into English using a local model.
@@ -110,6 +111,7 @@ The server runs on infrastructure you control. Connect local models through the 
   own external model connection (the provider key stays in Studio; MCP tools, web search and knowledge keep working,
   "What the model received" shows the cleaned request), an administrator flag that sends every external model
   through Cleaner, and the older Cleaner connection with its own Cleaner account; see the [user guide](docs/guide.ru.md#cleaner-чат-и-перевод-с-очисткой-данных).
+- Administrators can require Cleaner for chat web search, page reading and MCP tools marked as web tools.
 
 ### Open WebUI
 
@@ -132,6 +134,9 @@ Use installed coding agents on your own Windows, macOS or Linux computers from a
 - Save reusable quick actions and choose the preferred agent order and defaults for new chats.
 - Search project files with **@file** suggestions and search local agent conversation content through the bridge.
 - Fork supported Claude/Codex conversations, inspect available subagent sessions and create **Git worktrees** as separate projects.
+- Launch a draft in a separate worktree from the agent chat's branch menu. [Agents workspace](docs/architecture/agents-workspace.md)
+- Share an agent project with another Studio account as an editor or read-only viewer. Set an expiry and change or revoke access from Studio. [Project collaboration](docs/architecture/project-collaboration.md)
+- Mirror projects across your connected computers. Review file differences, set shared exclusions and optionally sync changes after a successful agent run. [Project mirrors](docs/guide.ru.md)
 - Rename Claude/Codex sessions, delete sessions started in Studio, and close empty or month-old sessions in bulk.
 - DeepSeek Harness (npm CLI, Python package or Desktop) runs with the models, providers, MCP servers and memory from its own Web or Desktop profile; Studio lists any profile settings it could not apply and shows the DeepSeek balance for the official provider. A chat open in DeepSeek Harness on the computer cannot be continued from Studio until that app is closed; there is no forking, subagent tree or chat deletion, and access is chosen when the chat is created.
 - Browse and edit files, preview Markdown/PDF/images, create folders, rename, move and delete. Conflict checks protect against overwriting a file changed on the computer.
@@ -147,7 +152,9 @@ Agent features depend on the installed CLI and bridge capabilities. Agent conver
 
 ### Accounts, privacy and sharing
 
-- Email invitations from an administrator; users choose their own login and password. Required email, login by username or email, email password recovery and optional email login codes (off by default).
+- Administrators can send email invitations or copy a one-time invitation link. Users choose their login and password. Accounts support login by username or email, email password recovery and optional email login codes.
+- **Active Directory sign-in** over LDAP with TLS. Administrators configure and test the connection in Studio, link existing accounts and gate access by directory group. Linked accounts keep their Studio history, roles and devices. [Active Directory setup](docs/architecture/ldap.md)
+- Administrators can change SMTP settings and test the connection from Studio.
 - Isolated user histories and encrypted connection credentials.
 - Per-section connections, selected models/defaults and an administrator-controlled allowlist for server-side destinations.
 - Password login, brute-force limits, session management and a security event history.
@@ -182,8 +189,8 @@ Click any image to open it at full size. The [complete gallery](docs/screenshots
 | [![Chat with formatted answers](docs/screenshots/chat.png)](docs/screenshots/chat.png) | [![Document preview and OCR](docs/screenshots/ocr.png)](docs/screenshots/ocr.png) |
 | Translation | Files and Markdown |
 | [![Translation and history](docs/screenshots/translation.png)](docs/screenshots/translation.png) | [![Project files and Markdown preview](docs/screenshots/files.png)](docs/screenshots/files.png) |
-| Dark theme | Appearance |
-| [![Agents in dark theme](docs/screenshots/agents-dark.png)](docs/screenshots/agents-dark.png) | [![Theme and display settings](docs/screenshots/appearance.png)](docs/screenshots/appearance.png) |
+| Appearance | Active Directory |
+| [![Theme and display settings](docs/screenshots/appearance.png)](docs/screenshots/appearance.png) | [![Active Directory settings](docs/screenshots/directory.png)](docs/screenshots/directory.png) |
 
 <p align="center">
   <a href="docs/screenshots/chat-mobile.png"><img src="docs/screenshots/chat-mobile.png" alt="Chat on a phone" width="260"></a>
@@ -201,8 +208,8 @@ Studio is the application layer. Models and inference services are configured se
 | Data | Local disk for SQLite; the supplied Docker profile expects a mounted CIFS share for media |
 | Models | srvllm gateway for the complete local media/OCR workflow; OpenAI-compatible endpoints for supported individual tasks |
 | Coding agents | Windows, macOS or Linux computer, Studio bridge and at least one installed, authenticated Claude Code, Codex or OpenCode CLI, or DeepSeek Harness |
-| Optional services | Exa for chat web tools, Web Push or an HTTPS ntfy server for notifications, Cleaner for data cleaning |
-| Deployment workstation | Windows with Git Bash, the project `.venv` and `powershell.exe` (builds the bridge EXE); a Mac reachable over SSH (builds the macOS PKG); the `md2pdf.py` converter (below) |
+| Optional services | Exa for chat web tools, Web Push or an HTTPS ntfy server for notifications, Cleaner for data cleaning, Active Directory for domain sign-in |
+| Deployment workstation | Windows with Git Bash, the project `.venv` and `powershell.exe` (builds the bridge EXE), plus a Mac reachable over SSH to build the macOS PKG |
 
 1. Clone the repository: `git clone https://github.com/guru431/studio.git`.
 2. Follow the [Docker deployment guide](docs/architecture/deploy-docker.md) to configure hosts, media mounts, Apache and the ignored `deploy/local-profile.sh`.
@@ -212,7 +219,7 @@ Studio is the application layer. Models and inference services are configured se
 
 The supplied deployment scripts target a managed installation with SSH, shared media storage and a separate HTTPS proxy. They require a local profile; this repository does not provision the inference gateway. Addresses and paths in tracked examples are placeholders.
 
-PDF export uses an external Markdown-to-PDF converter, `md2pdf.py`, which is not part of this repository: the maintainer's copy comes from a personal Claude Code configuration bundle. `deploy.sh` reads it from `~/.claude/bin/md2pdf.py` or from `STUDIO_MD2PDF_SOURCE` and refuses to deploy, before contacting any host, unless its SHA-256 matches the committed `deploy/md2pdf.sha256`. To use your own converter, commit its hash to `deploy/md2pdf.sha256` in your clone; the contract is described in [publication and local installation](docs/publication.md#конвертер-pdf).
+Chat PDF export uses the bundled `deploy/md2pdf.py`. Deployment verifies its SHA-256 against `deploy/md2pdf.sha256` before contacting any host. [Converter requirements](docs/publication.md#конвертер-pdf)
 
 ### Development
 

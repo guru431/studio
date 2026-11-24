@@ -5,7 +5,8 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "agents.png",
@@ -13,7 +14,8 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "files.png",
@@ -21,7 +23,8 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "images.png",
@@ -29,7 +32,8 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "translation.png",
@@ -37,7 +41,8 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "ocr.png",
@@ -45,7 +50,8 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "appearance.png",
@@ -53,15 +59,17 @@
       1440,
       1000
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
-    "file": "agents-dark.png",
+    "file": "directory.png",
     "viewport": [
       1440,
       1000
     ],
-    "theme": "dark"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "chat-mobile.png",
@@ -69,7 +77,8 @@
       390,
       844
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   },
   {
     "file": "agents-mobile.png",
@@ -77,6 +86,7 @@
       390,
       844
     ],
-    "theme": "light"
+    "theme": "dark",
+    "language": "en"
   }
 ]

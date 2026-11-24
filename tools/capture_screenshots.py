@@ -8,10 +8,12 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack, closing
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tests"), str(ROOT)]
@@ -29,6 +31,15 @@ TRANSLATION = "33333333-3333-4333-8333-333333333333"
 SCAN = "44444444-4444-4444-8444-444444444444"
 PROJECT = "demo-workspace"
 READY = "() => document.documentElement.dataset.ready === '1'"
+LANGUAGE = "en"
+THEME = "dark"
+BRIEF = (
+    "Project brief",
+    "Home Library",
+    "Keep books and reading notes in one place.",
+    (("01", "Book catalog"), ("02", "Search and filters"), ("03", "Notes and collections")),
+    "Add a book, find it and save a note.",
+)
 
 
 def seed(live, document: bytes) -> None:
@@ -37,39 +48,35 @@ def seed(live, document: bytes) -> None:
     with closing(db.connect(live.db_path)) as conn:
         uid = conn.execute("SELECT id FROM users WHERE login='owner'").fetchone()[0]
         cid = conn.execute("SELECT id FROM connections WHERE user_id=?", (uid,)).fetchone()[0]
-        conn.execute("UPDATE users SET name='Demo', theme='light' WHERE id=?", (uid,))
+        conn.execute("UPDATE users SET name='Demo', theme=? WHERE id=?", (THEME, uid))
         conn.execute("UPDATE connections SET name='Local AI' WHERE id=?", (cid,))
         conn.execute("INSERT INTO chats(id,user_id,title,connection_id,model,created,updated)"
                      " VALUES (?,?,?,?,?,?,?)",
-                     (CHAT, uid, "Идея для нового проекта", cid, "local-gemma-abl", now, now))
+                     (CHAT, uid, "Plan a home library app", cid, "local-gemma-abl", now, now))
         messages = [
-            ("user", "Помоги придумать небольшое приложение для домашней библиотеки. "
-             "Хочу хранить список книг, отмечать прочитанное и быстро находить нужное."),
-            ("assistant", "## Домашняя библиотека\n\nНачните с трёх простых экранов:\n\n"
-             "| Экран | Что на нём |\n| --- | --- |\n"
-             "| Книги | Обложка, автор, название и статус чтения |\n"
-             "| Поиск | Фильтры по автору, жанру и вашим заметкам |\n"
-             "| Моя полка | Читаю сейчас, прочитано и планы |\n\n"
-             "**Для первой версии:** добавление книги, поиск и короткая личная заметка. "
-             "Затем можно добавить сканирование штрихкода и семейные подборки.\n\n"
+            ("user", "Help me plan a small home library app. I want to catalog my books, "
+             "track what I have read and find any title quickly."),
+            ("assistant", "## Home Library\n\nStart with three screens.\n\n"
+             "| Screen | What it shows |\n| --- | --- |\n"
+             "| Books | Cover, author, title and reading status |\n"
+             "| Search | Filters for authors, genres and notes |\n"
+             "| My shelf | Reading, finished and to read |\n\n"
+             "**First release** — Add a book, search the catalog and save a reading note. "
+             "Barcode scanning and shared shelves can follow.\n\n"
              "```python\nclass Book:\n    title: str\n    author: str\n    status: str = 'to_read'\n```"),
         ]
         for i, (role, content) in enumerate(messages):
             conn.execute("INSERT INTO messages(id,chat_id,role,content,status,via,model,created)"
                          " VALUES (?,?,?,?,'done','server',?,?)",
                          (f"demo-message-{i}", CHAT, role, content, "local-gemma-abl", now + i))
-        source = ("A place for every idea.\n\nBring your notes, conversations and creative projects "
-                  "together in one workspace. Start on your computer and pick up where you left "
-                  "off on your phone.\n\nYour library stays with you: search it, organize it and "
-                  "share only what you choose.")
-        translated = ("Место для каждой идеи.\n\nСоберите заметки, разговоры и творческие проекты "
-                      "в одном рабочем пространстве. Начните на компьютере и продолжите с того же "
-                      "места на телефоне.\n\nВаша библиотека всегда под рукой: ищите, наводите "
-                      "порядок и делитесь только тем, что выбрали сами.")
+        source = ("Une bibliothèque à portée de main.\n\nRetrouvez vos livres et vos notes au même endroit. "
+                  "Commencez sur votre ordinateur et reprenez là où vous en étiez sur votre téléphone.")
+        translated = ("Your library at your fingertips.\n\nFind your books and notes in one place. "
+                      "Start on your computer and pick up where you left off on your phone.")
         conn.execute("INSERT INTO translations(id,user_id,kind,connection_id,model,source_lang,"
                      "target_lang,detected_lang,result_lang,name,source,text,parts,done_parts,"
-                     "state,detail,created,finished) VALUES (?,?,'text',?,?,'en','ru','en','ru',"
-                     "'Welcome',?,?,1,1,'done','',?,?)",
+                     "state,detail,created,finished) VALUES (?,?,'text',?,?,'fr','en','fr','en',"
+                     "'Library introduction',?,?,1,1,'done','',?,?)",
                      (TRANSLATION, uid, cid, "local-gemma-abl", source, translated, now, now))
         conn.execute("INSERT INTO translation_parts(translation_id,n,source,text,state)"
                      " VALUES (?,1,?,?,'done')", (TRANSLATION, source, translated))
@@ -78,15 +85,14 @@ def seed(live, document: bytes) -> None:
         conn.execute("INSERT INTO media(id,user_id,rel_path,mime,size,has_thumb,download_name,created)"
                      " VALUES ('demo-scan-media',?,'demo-document.png','image/png',?,0,'Project brief.png',?)",
                      (uid, len(document), now))
-        text = ("# План проекта\n\n## Домашняя библиотека\n\n"
-                "Цель: все книги и заметки в одном месте.\n\n"
-                "| Этап | Результат |\n| --- | --- |\n"
-                "| 01 | Каталог книг |\n| 02 | Поиск и фильтры |\n| 03 | Заметки и подборки |\n\n"
-                "**Первая версия:** добавить книгу, найти её и сохранить заметку.\n\n"
-                "Демонстрационный документ · Studio")
+        title, subtitle, goal, milestones, first_release = BRIEF
+        rows = "\n".join(f"| {step} | {result} |" for step, result in milestones)
+        text = (f"# {title}\n\n## {subtitle}\n\n{goal}\n\n"
+                f"| Milestone | Result |\n| --- | --- |\n{rows}\n\n"
+                f"**First release** — {first_release}")
         conn.execute("INSERT INTO scans(id,user_id,connection_id,model,name,source_media_id,origin,"
                      "pages,done_pages,state,detail,text,created,finished)"
-                     " VALUES (?,?,?,'hunyuan-ocr','План проекта.png','demo-scan-media','section',"
+                     " VALUES (?,?,?,'hunyuan-ocr','Project brief.png','demo-scan-media','section',"
                      "1,1,'done','',?,?,?)", (SCAN, uid, cid, text, now, now))
         conn.execute("INSERT INTO scan_pages(scan_id,user_id,n,media_id,state,text)"
                      " VALUES (?,?,1,'demo-scan-media','done',?)", (SCAN, uid, text))
@@ -96,15 +102,15 @@ def demo_machine() -> FakeMachine:
     now = time.time()
     messages = [
         {"id": "a1", "role": "user", "time": now, "steps": [],
-         "text": "Добавь поиск книг по названию и автору. Покажи изменения и проверь тесты."},
+         "text": "Add book search by title and author. Show the changes and run the tests."},
         {"id": "a2", "role": "assistant", "time": now + 1,
-         "text": "Добавил поиск в каталоге. Запрос ищет по названию и автору, "
-                 "не зависит от регистра и убирает лишние пробелы.\n\n"
+         "text": "The catalog now searches both titles and authors. "
+                 "Search ignores case and trims whitespace.\n\n"
                  "```python\ndef find_books(books, query):\n    query = query.strip().casefold()\n"
                  "    return [book for book in books\n"
                  "            if query in f'{book.title} {book.author}'.casefold()]\n```\n\n"
-                 "**Проверка:** все 12 тестов прошли. Добавлены случаи для пустого запроса, "
-                 "названия и имени автора.\n\nИзменения готовы к просмотру в Git.",
+                 "**Tests** — All 12 passed, including the new cases for an empty query, "
+                 "a title and an author's name. The changes are ready for Git review.",
          "steps": [{"id": "s1", "tool": "Read", "input": {"file_path": "src/library.py"},
                     "text": "Read the catalog module.", "error": False},
                    {"id": "s2", "tool": "Edit", "input": {"file_path": "src/library.py"},
@@ -113,7 +119,7 @@ def demo_machine() -> FakeMachine:
                     "text": "12 passed in 0.18s", "error": False}]},
     ]
     machine = FakeMachine({PROJECT: {
-        "chats": {AGENT_CHAT: {"title": "Поиск по библиотеке", "created": now, "modified": now,
+        "chats": {AGENT_CHAT: {"title": "Add catalog search", "created": now, "modified": now,
                                 "messages": messages, "tag": "studio"}},
         "files": {"README.md": b"# Home Library\n\nA small, searchable personal library.\n\n"
                   b"## Features\n\n- Book catalog\n- Search by title and author\n- Reading notes\n",
@@ -145,38 +151,39 @@ def capture(output: Path) -> None:
     if not executable:
         raise RuntimeError("Install Edge or Chromium before capturing screenshots.")
     output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="studio-screenshots-") as folder, ExitStack() as stack:
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="studio-screenshots-", dir=scratch) as folder, ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, dict.fromkeys(("TEMP", "TMP", "TMPDIR"), folder)))
         live = start_live_app(Path(folder))
         stack.callback(live.stop)
         pw = stack.enter_context(sync_playwright())
         browser = pw.chromium.launch(executable_path=executable, headless=True,
                                      args=["--no-proxy-server", "--disable-background-networking"])
         stack.callback(browser.close)
-        # Render an original demonstration document, rather than using a private scan.
+        # Render an original demonstration document.
         doc = browser.new_page(viewport={"width": 700, "height": 840}, device_scale_factor=1)
-        doc.set_content("""<!doctype html><html lang="ru"><meta charset="utf-8">
-            <style>body{padding:65px;color:#253239;font:22px/1.6 Georgia;background:#fff}
-            h1{font-size:40px}h2{font-size:28px;color:#c45100}table{width:100%;border-collapse:collapse}
-            td,th{text-align:left;padding:14px 0;border-bottom:1px solid #ddd}
-            footer{margin-top:65px;color:#777;font:16px Arial}</style>
-            <h1>План проекта</h1><h2>Домашняя библиотека</h2>
-            <p>Цель: все книги и заметки в одном месте.</p>
-            <table><tr><th>Этап</th><th>Результат</th></tr><tr><td>01</td><td>Каталог книг</td></tr>
-            <tr><td>02</td><td>Поиск и фильтры</td></tr><tr><td>03</td><td>Заметки и подборки</td></tr></table>
-            <p><b>Первая версия:</b> добавить книгу, найти её и сохранить заметку.</p>
-            <footer>Демонстрационный документ · Studio</footer></html>""")
+        title, subtitle, goal, milestones, first_release = BRIEF
+        rows = "".join(f"<tr><td>{step}</td><td>{result}</td></tr>" for step, result in milestones)
+        doc.set_content(f"""<!doctype html><html lang="en"><meta charset="utf-8">
+            <style>body{{padding:65px;color:#253239;font:22px/1.6 Georgia;background:#fff}}
+            h1{{font-size:40px}}h2{{font-size:28px;color:#c45100}}table{{width:100%;border-collapse:collapse}}
+            td,th{{text-align:left;padding:14px 0;border-bottom:1px solid #ddd}}</style>
+            <h1>{title}</h1><h2>{subtitle}</h2><p>{goal}</p>
+            <table><tr><th>Milestone</th><th>Result</th></tr>{rows}</table>
+            <p><b>First release</b> — {first_release}</p></html>""")
         seed(live, doc.screenshot())
         doc.close()
         aid, bridge = code_online(live, "owner", demo_machine(), name="Demo PC")
         stack.callback(bridge.stop)
         manifest = []
         for mobile in (False, True):
-            live.set_theme("owner", "light")
             width, height = (390, 844) if mobile else (1440, 1000)
             context = browser.new_context(viewport={"width": width, "height": height},
                                           device_scale_factor=1, is_mobile=mobile, has_touch=mobile,
-                                          service_workers="block", color_scheme="light")
+                                          service_workers="block", color_scheme=THEME, locale="en-US")
             stack.callback(context.close)
+            context.add_init_script(f"localStorage.setItem('studio-language', '{LANGUAGE}')")
             # All web traffic stays on the local test stand, including accidental external links.
             context.route("**/*", lambda route: route.continue_()
                           if route.request.url.startswith((live.url + "/", "data:", "blob:"))
@@ -197,33 +204,44 @@ def capture(output: Path) -> None:
                           ("translation", f"translate?id={TRANSLATION}", "#tl-output"),
                           ("ocr", f"ocr?id={SCAN}", ".ocr-text"),
                           ("appearance", "settings/appearance", "#view h1"),
-                          ("agents-dark", agent_route, "#code-chat[data-loaded='1']")]
+                          ("directory", "admin", "#ldap-settings summary")]
             for name, route, selector in shots:
-                if name == "agents-dark":
-                    live.set_theme("owner", "dark")
                 page.goto(live.url + "/#/" + route)
-                if name == "agents-dark":
-                    # A hash-only navigation retains the old account profile in the page.
-                    page.reload()
                 page.wait_for_function(READY)
-                expected_theme = "dark" if name == "agents-dark" else "light"
-                page.wait_for_function("theme => document.documentElement.dataset.theme === theme",
-                                       arg=expected_theme)
+                page.wait_for_function(
+                    "({theme, language}) => document.documentElement.dataset.theme === theme"
+                    " && document.documentElement.lang === language",
+                    arg={"theme": THEME, "language": LANGUAGE},
+                )
                 page.locator(selector).first.wait_for(state="visible")
                 if name == "translation":
-                    page.wait_for_function("() => document.querySelector('#tl-output')?.textContent.includes('Место')")
+                    page.locator("#tl-output").get_by_text(
+                        "Your library at your fingertips.", exact=False
+                    ).wait_for(state="visible")
                 if name == "ocr":
                     page.wait_for_function("() => document.querySelector('img.ocr-scan')?.naturalWidth > 0")
                 if name == "images":
-                    page.locator("#view textarea").fill("Уютная домашняя библиотека, мягкий свет из окна, "
-                                                       "деревянные полки, иллюстрация акварелью")
+                    page.locator("#photo-prompt").fill("A cozy home library with oak shelves, "
+                                                       "soft window light and watercolor textures")
                 if name == "files":
                     page.get_by_text("README.md", exact=True).click()
                     page.locator("#code-file h1").wait_for(state="visible")
+                if name == "directory":
+                    page.locator("#ldap-settings summary").click()
+                    page.wait_for_function("() => document.querySelector('#ldap-config-save')?.disabled === false")
+                    page.locator("#ldap-config-url").fill("ldaps://dc.example.com")
+                    page.locator("#ldap-config-base").fill("DC=example,DC=com")
+                    page.locator("#ldap-config-group").fill("CN=Studio Users,OU=Groups,DC=example,DC=com")
+                    bind_dn = page.locator("#ldap-config-bind-dn")
+                    bind_dn.fill("CN=Directory Reader,OU=Services,DC=example,DC=com")
+                    bind_dn.blur()
+                    page.locator("#ldap-settings").evaluate("node => node.scrollIntoView({block: 'start'})")
                 if mobile and name == "chat":
                     page.locator("#messages").evaluate("node => { node.scrollTop = 0; }")
                 page.evaluate("() => document.fonts.ready")
                 page.wait_for_timeout(400)
+                if mobile and name == "agents":
+                    page.locator("#code-chat-scroll").evaluate("node => { node.scrollTop = 0; }")
                 if page.evaluate("document.documentElement.scrollWidth > innerWidth"):
                     raise RuntimeError(f"Horizontal overflow: {name}, {width}px")
                 if errors:
@@ -231,7 +249,7 @@ def capture(output: Path) -> None:
                 filename = f"{name}{'-mobile' if mobile else ''}.png"
                 page.screenshot(path=str(output / filename), animations="disabled")
                 manifest.append({"file": filename, "viewport": [width, height],
-                                 "theme": "dark" if name == "agents-dark" else "light"})
+                                 "theme": THEME, "language": LANGUAGE})
                 print(f"Captured {filename}", flush=True)
             context.close()
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
