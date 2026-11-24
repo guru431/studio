@@ -256,6 +256,7 @@ def test_disable_needs_password_and_admin_cannot_reset_it(studio, mail):
     assert login(studio, "friend", PASSWORD).headers["location"] == "/account/totp"
 
 
+@pytest.mark.file_db
 def test_operator_resets_authenticator_of_the_only_admin(studio, mail, capsys):
     """Нет телефона и резервных кодов: сброса в панели нет — только оператор хоста, `recover-email`."""
     import manage

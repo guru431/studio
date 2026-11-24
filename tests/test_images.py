@@ -23,7 +23,7 @@ import state
 import upstream
 from conftest import T0, add_connection, add_gateway, erase_history, login, make_user, signin
 from fakes import PNG_REAL, TOKEN
-from http_checks import on_http
+from http_checks import wait_http_state
 from image_upload import decode_form, image_size, normalize_image
 
 PROMPT = "секретный промпт: женщина у окна"
@@ -37,25 +37,13 @@ def start(s, prompt=PROMPT, size="square", seed=None, model=None, **extra):
     return s.c.post("/api/images", json=body)
 
 
-def _wait_image(s, url, states, limit):
-    async def poll(client):
-        body = None
-        for _ in range(limit):
-            body = (await client.get(url)).json()
-            if body["state"] in states:
-                return body
-        raise AssertionError(f"задание не дошло до {states}: {body}")
-
-    return on_http(s, poll)
+def wait_state(s, job_id, states):
+    return wait_http_state(s, f"/api/images/{job_id}", states)
 
 
-def wait_state(s, job_id, states, limit=3000):
-    return _wait_image(s, f"/api/images/{job_id}", states, limit)
-
-
-def wait_description(s, job_id, limit=3000):
+def wait_description(s, job_id):
     """Первый ответ опроса описания с концом задания (готовое описание — им же)."""
-    return _wait_image(s, f"/api/images/descriptions/{job_id}", images.TERMINAL, limit)
+    return wait_http_state(s, f"/api/images/descriptions/{job_id}", images.TERMINAL)
 
 
 def wait_for(cond, limit=3000):
@@ -820,13 +808,8 @@ def test_ready_text_does_not_wait_a_minute_for_a_busy_gemma(studio, kind):
 
 # ---- перевод промпта ---------------------------------------------------------
 
-def wait_translation(s, job_id, limit=3000):
-    body = None
-    for _ in range(limit):
-        body = s.c.get(f"/api/images/translations/{job_id}").json()
-        if body["state"] in images.TERMINAL:
-            return body
-    raise AssertionError(f"перевод не дошёл до конца: {body}")
+def wait_translation(s, job_id):
+    return wait_http_state(s, f"/api/images/translations/{job_id}", images.TERMINAL)
 
 
 def test_translation_goes_to_gemma_abl_as_text_and_is_given_until_received(studio, caplog):
@@ -977,6 +960,7 @@ def test_restart_queues_images_interrupted_for_the_first_time_and_ends_the_rest(
         assert (row["finished"] is None) == (status == "queued"), key
 
 
+@pytest.mark.file_db
 def test_restart_does_not_repeat_an_image_whose_model_left_the_section(studio):
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
@@ -1163,6 +1147,7 @@ def test_cancel_during_the_save_discards_the_saved_image(studio, env, monkeypatc
     assert studio.gw.releases == [(SNOFS, f"Bearer {TOKEN}"), (FLUX, f"Bearer {TOKEN}")]   # до запроса и после
 
 
+@pytest.mark.file_db
 def test_graceful_stop_during_the_cancel_delete_leaves_no_broken_row(studio, env, monkeypatch):
     """Остановка службы, пока путь отмены удаляет картинку: строка images не ссылается на файл,
     которого уже нет (ревью N3)."""
@@ -1200,6 +1185,7 @@ def test_graceful_stop_during_the_cancel_delete_leaves_no_broken_row(studio, env
     assert body["media_id"] is None and share_files(env) == []
 
 
+@pytest.mark.file_db
 def test_graceful_restart_repeats_an_interrupted_image_once(studio):
     """Остановка службы (SIGTERM при выкладке) — перезапуск, не отмена пользователем (ревью A2-I4): строка —
     RESTARTING без уведомления, после запуска — тот же запрос заново; второй перезапуск — уже ошибка."""
@@ -1222,6 +1208,7 @@ def test_graceful_restart_repeats_an_interrupted_image_once(studio):
     assert (body["state"], body["detail"]) == ("error", images.INTERRUPTED) and len(studio.gw.generations) == 2
 
 
+@pytest.mark.file_db
 def test_restart_repeats_a_brush_edit_with_its_source_and_mask(studio):
     add_gateway(studio)
     first = wait_state(studio, start(studio).json()["id"], {"done"})
@@ -1240,6 +1227,7 @@ def test_restart_repeats_a_brush_edit_with_its_source_and_mask(studio):
     assert done["mask_media_id"] and done["source_media_id"] == first["media_id"]
 
 
+@pytest.mark.file_db
 def test_a_repeat_cancelled_before_it_starts_sends_nothing(studio):
     add_gateway(studio)
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
@@ -1755,6 +1743,7 @@ def test_queued_row_cannot_be_deleted(studio):
     assert studio.c.delete(f"/api/images/{ids[1]}").status_code == 204
 
 
+@pytest.mark.file_db
 def test_stop_marks_queued_rows_interrupted(studio, monkeypatch):
     """Остановка службы посреди серии: строки в очереди — «прервано перезапуском» самой остановкой
     (прежний код после отката install.sh о queued не знает и оставил бы их неудаляемыми)."""

@@ -18,6 +18,7 @@ import state
 import transcripts
 from fastapi import HTTPException
 from conftest import T0, add_gateway, erase_history, make_user, signin
+from http_checks import wait_http_state
 
 NAME = "Звонок Ивану.m4a"
 
@@ -26,13 +27,8 @@ def upload(s, body=b"\x00" * 1024, name=NAME, mime="audio/mp4"):
     return s.c.post("/api/transcripts", content=body, headers={"content-type": mime, "x-studio-name": quote(name)})
 
 
-def wait_tr(s, tid, states, limit=3000):
-    body = None
-    for _ in range(limit):
-        body = s.c.get(f"/api/transcripts/{tid}").json()
-        if body["state"] in states:
-            return body
-    raise AssertionError(f"расшифровка не дошла до {states}: {body}")
+def wait_tr(s, tid, states):
+    return wait_http_state(s, f"/api/transcripts/{tid}", states)
 
 
 def files(env) -> list:
@@ -345,6 +341,7 @@ def test_uploads_queue_up_and_history_wipe_takes_all(studio, env, fake_audio, mo
     assert transcripts.JOBS == {} and transcripts.RUNNERS == {}   # и задание стёртой истории не держится в памяти
 
 
+@pytest.mark.file_db
 def test_queued_records_run_in_turn_and_survive_a_restart(studio, fake_audio):
     """Ждущие идут по одной в порядке загрузки; перезапуск службы делает идущую «прервано», а ждущие
     продолжаются после старта (resume), не теряясь молча."""

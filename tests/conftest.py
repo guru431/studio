@@ -3,6 +3,7 @@ import asyncio
 import math
 import os
 import sys
+from contextlib import ExitStack, closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -247,11 +248,8 @@ def schema_db(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def studio_db(schema_db, tmp_path_factory):
+def studio_db():
     """Снимок пустой базы после одноразовой инициализации при старте службы."""
-    from contextlib import closing
-    from tempfile import TemporaryDirectory
-
     import clock
     import db
     import roles
@@ -259,24 +257,21 @@ def studio_db(schema_db, tmp_path_factory):
     import sections
     import state
 
-    with TemporaryDirectory(prefix='studio-db-', dir=tmp_path_factory.getbasetemp()) as directory:
-        path = Path(directory) / 'studio.db'
-        path.write_bytes(schema_db)
-        with closing(db.connect(path)) as conn, pytest.MonkeyPatch.context() as patch:
-            conn.execute('PRAGMA synchronous=OFF')
-            patch.setattr(state, 'DB', conn)
-            patch.setattr(clock, 'NOW', lambda: T0)
-            sections.adopt('translate', 'chat')
-            roles.seed_defaults()
-            search.compose_once(conn)
-        return path.read_bytes()
+    with closing(db.connect(":memory:")) as conn, pytest.MonkeyPatch.context() as patch:
+        db.migrate(conn)
+        patch.setattr(state, 'DB', conn)
+        patch.setattr(clock, 'NOW', lambda: T0)
+        sections.adopt('translate', 'chat')
+        roles.seed_defaults()
+        search.compose_once(conn)
+        return conn.serialize()
 
 
 @pytest.fixture
-def studio(env, studio_db, monkeypatch):
+def studio(env, studio_db, monkeypatch, request):
     """main.app на свежей базе: часы — список `clock`, пауза двигает их и пишется в `sleeps`,
-    шлюз — FakeGateway через httpx.MockTransport. База — копия `studio_db`, если тест не положил
-    свою заранее (её lifespan доведёт до VERSION сам)."""
+    шлюз — FakeGateway через httpx.MockTransport. Обычный тест получает свою копию `studio_db` в памяти.
+    Для перезапуска или второго соединения нужен `file_db`; заранее подготовленный файл тоже используется."""
     import httpx
     from fastapi.testclient import TestClient
 
@@ -285,6 +280,7 @@ def studio(env, studio_db, monkeypatch):
     import chat
     import claude_code
     import clock
+    import db
     import images
     import main
     import media
@@ -355,10 +351,29 @@ def studio(env, studio_db, monkeypatch):
     import owui
     owui.FAILS.clear()                   # неудачи входа в Open WebUI (ключ — uid той базы)
     clear_owui_links()
-    if not env.db_path.exists():
-        env.db_path.write_bytes(studio_db)
-    with TestClient(main.app, base_url="https://testserver",
-                   backend_options={"loop_factory": new_event_loop}) as client:
+    with ExitStack() as stack:
+        if not env.db_path.exists():
+            if any(request.node.get_closest_marker(mark) for mark in ("file_db", "integration", "manual")):
+                env.db_path.write_bytes(studio_db)
+            else:
+                connect = db.connect
+                conn = stack.enter_context(closing(connect(":memory:")))
+                conn.deserialize(studio_db)
+                opened = False
+
+                def connect_studio(path):
+                    nonlocal opened
+                    if path != env.db_path:
+                        return connect(path)
+                    if opened:
+                        raise RuntimeError("reopening the Studio database requires @pytest.mark.file_db")
+                    opened = True
+                    return conn
+
+                patch = stack.enter_context(pytest.MonkeyPatch.context())
+                patch.setattr(db, "connect", connect_studio)
+        client = stack.enter_context(TestClient(main.app, base_url="https://testserver",
+                                                backend_options={"loop_factory": new_event_loop}))
         yield SimpleNamespace(c=client, clock=now, sleeps=sleeps, gw=gw)
     auth.FAILS.clear()
     screenlock.CHALLENGES.clear()
@@ -472,21 +487,14 @@ def login(s, login, password, ip=LOGIN_IP, spoofed=None):
 
 
 def signin(s, login_name) -> str:
-    """Вход с паролем make_user и csrf из GET /api/me; клиент дальше шлёт заголовок CSRF сам."""
+    """Вход с паролем make_user; CSRF выдаёт созданная маршрутом сессия."""
     import auth
-    from http_checks import on_http
 
-    async def enter(client):
-        response = await client.post("/login", data={"login": login_name, "password": "password-123"},
-                                     headers={"X-Forwarded-For": LOGIN_IP}, follow_redirects=False)
-        assert response.status_code == 303
-        me = await client.get("/api/me")
-        assert me.status_code == 200
-        return me.json()["csrf"], client.cookies.jar
-
-    csrf, cookies = on_http(s, enter)
-    # Transfer the stdlib jar across httpx and TestClient's HTTP client.
-    s.c.cookies.update(cookies)
+    response = login(s, login_name, "password-123")
+    assert response.status_code == 303
+    session = auth.session_user(response.cookies.get(auth.COOKIE), renew=False)
+    assert session is not None
+    _, csrf = session
     s.c.headers[auth.CSRF_HEADER] = csrf
     return csrf
 
@@ -508,28 +516,23 @@ def set_passport(cid: int, passport: dict) -> None:
 
 def add_connection(s, kind="openai", base_url="https://cloud.test/v1", token="cloud-key", sections=None,
                    name=None, chat_models=("local-gemma-abl",)) -> int:
-    """Подключение текущему пользователю через POST /api/connections (без входа — заводит
+    """Подготавливает подключение текущему пользователю (без входа — заводит
     администратора «owner» и входит им). sections=None — srvllm во всех разделах, openai — в чате;
     у openai в чате отмечаются `chat_models` (при подключении у него не отмечено ничего)."""
     import auth
     import connections
     import sections as sections_
-    import state
-    from http_checks import on_http
     if auth.CSRF_HEADER not in s.c.headers:
         make_user(s, "owner", is_admin=True)
         signin(s, "owner")
+    session = auth.session_user(s.c.cookies.get(auth.COOKIE), renew=False)
+    assert session is not None
+    user, _ = session
     chosen = sections if sections is not None else connections.KINDS[kind] if kind == "srvllm" else ["chat"]
-    body = {"name": name or kind, "kind": kind, "base_url": base_url, "token": token, "sections": sorted(chosen)}
-    async def create(client):
-        return await client.post("/api/connections", json=body)
-
-    r = on_http(s, create)
-    assert r.status_code == 201, r.text
-    cid = r.json()["id"]
+    body = connections.ConnIn(name=name or kind, kind=kind, base_url=base_url, token=token, sections=sorted(chosen))
+    cid = connections.create(user.id, body)["id"]
     if kind == "openai" and "chat" in chosen and chat_models:
-        uid = state.DB.execute("SELECT user_id FROM connections WHERE id = ?", (cid,)).fetchone()[0]
-        sections_.set_models(uid, "chat", cid, list(chat_models))
+        sections_.set_models(user.id, "chat", cid, list(chat_models))
     return cid
 
 

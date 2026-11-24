@@ -6,6 +6,7 @@ import logging
 import re
 
 import httpx
+import pytest
 
 import speech
 import speeches
@@ -14,7 +15,7 @@ import upstream
 import voices
 from conftest import add_connection, add_gateway, erase_history, make_user, signin
 from fakes import WAV_FAKE
-from http_checks import on_http
+from http_checks import wait_http_state
 from test_transcripts import hold_temp_unlink
 from test_voices import expire_budget_at_event
 
@@ -30,16 +31,8 @@ def voice(s, fake_audio) -> str:
     return r.json()["id"]
 
 
-def wait_sp(s, sid, states, limit=3000):
-    async def poll(client):
-        body = None
-        for _ in range(limit):
-            body = (await client.get(f"/api/speeches/{sid}")).json()
-            if body["state"] in states:
-                return body
-        raise AssertionError(f"озвучка не дошла до {states}: {body}")
-
-    return on_http(s, poll)
+def wait_sp(s, sid, states):
+    return wait_http_state(s, f"/api/speeches/{sid}", states)
 
 
 def test_phrases_split_by_sentences_and_keep_the_text():
@@ -280,6 +273,7 @@ def test_voice_probe_picks_the_gateway_model_even_when_the_default_is_a_service(
     assert r.status_code == 422 and r.json()["detail"]["code"] == "model"
 
 
+@pytest.mark.file_db
 def test_queued_speeches_run_in_turn_and_survive_a_restart(studio, fake_audio):
     add_gateway(studio)
     vid = voice(studio, fake_audio)

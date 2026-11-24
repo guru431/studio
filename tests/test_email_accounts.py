@@ -763,6 +763,7 @@ def test_public_account_posts_reject_foreign_origin_and_large_body(studio, path,
     assert studio.c.get("/account/reset").headers["referrer-policy"] == "no-referrer"
 
 
+@pytest.mark.file_db
 def test_operator_adds_missing_email_without_resetting_password_or_sessions(studio):
     uid = admin(studio)
     state.DB.execute("UPDATE users SET email=NULL WHERE id=?", (uid,))
@@ -773,6 +774,7 @@ def test_operator_adds_missing_email_without_resetting_password_or_sessions(stud
     assert manage.set_email({"STUDIO_ACCOUNT_LOGIN": "owner", "STUDIO_ACCOUNT_EMAIL": "other@example.com"}) == 2
 
 
+@pytest.mark.file_db
 def test_operator_replaces_email_and_turns_codes_off_without_mailbox_access(studio, mail, capsys):
     uid = admin(studio)
     make_user(studio, "friend")

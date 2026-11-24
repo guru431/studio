@@ -310,6 +310,7 @@ def _restart(s):
     s.c.__enter__()
 
 
+@pytest.mark.file_db
 def test_video_accepted_before_a_shutdown_is_found_after_restart(studio):
     """Находка 2026-11-09: ролик, принятый шлюзом до обрыва службы, генерировался на карте без учёта —
     строки не было. Теперь строка (seed студии) встаёт до запроса, а после перезапуска наблюдатель находит
@@ -331,6 +332,7 @@ def test_video_accepted_before_a_shutdown_is_found_after_restart(studio):
     assert got["prompt"] == PROMPT and got["seconds"] == 7
 
 
+@pytest.mark.file_db
 def test_video_not_accepted_before_a_shutdown_fails_in_words(studio):
     add_gateway(studio)
     foreign = _foreign(studio, 7)                                      # чужое — не трогается
@@ -439,6 +441,7 @@ def test_the_source_of_a_video_stopped_while_sending_is_not_an_orphan(studio, en
         assert studio.c.get(f"/api/media/{source}").status_code == 200
 
 
+@pytest.mark.file_db
 def test_disabling_the_account_closes_its_interrupted_sending_video(studio, caplog):
     """Ревью R2: строка SENDING (без id шлюза), чей запрос оборвался, у отключённой учётки не висит «в очереди»
     с предупреждением наблюдателя на каждом проходе: она отменена, а принятое шлюзом задание снято."""
@@ -541,6 +544,7 @@ def test_video_gateway_401_keeps_the_session(studio):
     assert studio.c.get("/api/me").status_code == 200
 
 
+@pytest.mark.file_db
 def test_watcher_resumes_queued_videos_after_restart(studio):
     add_gateway(studio)
     v = create_video(studio).json()
@@ -552,6 +556,7 @@ def test_watcher_resumes_queued_videos_after_restart(studio):
     assert got["state"] == "done" and studio.c.get(f"/api/media/{got['media_id']}").content == MP4
 
 
+@pytest.mark.file_db
 def test_lifespan_runs_the_watcher_by_itself(studio, monkeypatch):
     """Вкладка не нужна: наблюдатель службы сам доводит ролик до истории и гасится при остановке."""
     add_gateway(studio)

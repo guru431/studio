@@ -247,6 +247,7 @@ def test_a_queued_speech_keeps_its_own_epoch_not_the_runner_one(studio, fake_aud
     assert speeches.EPOCHS == {}
 
 
+@pytest.mark.file_db
 def test_a_speech_resumed_after_restart_is_bound_to_an_epoch(studio, fake_audio, monkeypatch):
     """Ждущая с прошлого запуска — с эпохой старта: очистка истории после него её сохранение запрещает."""
     add_gateway(studio)
@@ -286,6 +287,7 @@ def test_a_queued_transcript_keeps_its_own_epoch_not_the_runner_one(studio, fake
     assert transcripts.EPOCHS == {}
 
 
+@pytest.mark.file_db
 def test_a_transcript_resumed_after_restart_is_bound_to_an_epoch(studio, fake_audio, monkeypatch):
     add_gateway(studio)
     uid = owner_id()

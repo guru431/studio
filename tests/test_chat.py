@@ -1097,6 +1097,7 @@ def test_history_wipe_stops_the_users_streams(studio):
     assert studio.c.get("/api/chats").json() == {"items": []}
 
 
+@pytest.mark.file_db
 def test_graceful_shutdown_saves_the_partial_answer_as_interrupted(studio):
     """Остановка службы посреди ответа (stop_all): прочитанное сохраняется с пометкой о перезапуске."""
     add_gateway(studio); cid = new_chat(studio)

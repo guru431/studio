@@ -334,6 +334,7 @@ def test_admin_backup_check_runs_once(studio, monkeypatch, check, caplog):
     assert studio.c.post("/api/admin/backup-check").status_code == 202      # кончилась — можно снова
 
 
+@pytest.mark.file_db
 def test_admin_backup_check_of_the_real_copy_says_only_numbers(studio, env, check, caplog):
     make_user(studio, "owner", is_admin=True); signin(studio, "owner")
     assert manage.main(["backup"]) == 0
@@ -410,6 +411,7 @@ def test_failed_nightly_check_is_pushed_to_active_admins_once(studio, sent):
     assert admin.notify_failed_check() == 0 and len(sent) == 1
 
 
+@pytest.mark.file_db
 def test_failed_copy_notifies_once_without_erasing_the_last_good_copy(studio, env, monkeypatch, sent):
     owner = make_user(studio, "owner", is_admin=True)
     copy = backup_of(state.DB, env, monkeypatch)
