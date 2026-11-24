@@ -69,7 +69,7 @@ def decode_form(raw, content_type, *, extra_files=None, file_fields=IMAGE_FIELDS
     return fields, image
 
 
-def normalize_image(raw, max_pixels=MAX_PIXELS):
+def normalize_image(raw, max_pixels=MAX_PIXELS, *, fit=True):
     """Decode before queueing; strip metadata and apply EXIF orientation."""
     limit = f"{max_pixels // 1_000_000} Мп"
     try:
@@ -78,14 +78,15 @@ def normalize_image(raw, max_pixels=MAX_PIXELS):
             with Image.open(io.BytesIO(raw)) as image:
                 if image.format not in ("PNG", "JPEG", "WEBP") or image.width * image.height > max_pixels:
                     raise UploadError(f"нужен PNG, JPEG или WebP не больше {limit}")
-                if image.format == "JPEG" and image.width * image.height > MAX_PIXELS:
+                if fit and image.format == "JPEG" and image.width * image.height > MAX_PIXELS:
                     image.draft("RGB", (2048, 2048))   # декодер сразу уменьшает в 2–8 раз
                 image.load()
                 image = ImageOps.exif_transpose(image).convert("RGB")
                 # The graph rescales to the selected output size. Bound normalized memory too.
-                scale = min(1, 2048 / image.width, 2048 / image.height,
-                            (2 * 1024 * 1024 / (image.width * image.height)) ** 0.5)
-                image.thumbnail((max(1, int(image.width * scale)), max(1, int(image.height * scale))))
+                if fit:
+                    scale = min(1, 2048 / image.width, 2048 / image.height,
+                                (2 * 1024 * 1024 / (image.width * image.height)) ** 0.5)
+                    image.thumbnail((max(1, int(image.width * scale)), max(1, int(image.height * scale))))
                 image.info.clear()
                 output = io.BytesIO()
                 image.save(output, format="PNG")

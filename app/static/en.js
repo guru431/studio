@@ -2496,6 +2496,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Режим улучшения": "Enhancement mode",
   "Масштаб от 1 до 4": "Scale from 1 to 4",
   "Фото больше 10 МиБ": "Photo exceeds 10 MiB",
+  "После подготовки фото больше 10 МиБ": "The prepared photo exceeds 10 MiB",
   "Выберите режим и масштаб от 1 до 4": "Choose a mode and a scale from 1 to 4",
   "Нужен PNG, JPEG или WebP до 16 Мп": "Use a PNG, JPEG or WebP up to 16 MP",
   "Результат должен быть не больше 4096 пикселей по длинной стороне": "The output's long edge must be 4096 pixels or less",

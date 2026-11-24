@@ -186,9 +186,12 @@ function build(view, ctx) {
   mcp = sectionMcp('photo', { native: !ctx.hint, fields: ['prompt', 'size', 'strength', 'n'],
     onChange: paintSource, onBusy: syncBusy, onPhoto: (item) => { if (!unfilter([item])) feed.reload(); } });
   const promptBox = fieldBox(prompt, { attach: chipPhoto, tools: [chipTranslate] });
+  const promptTools = chipPhoto.parentNode;
+  const promptTail = promptTools.lastElementChild;
+  const upscaleAttach = el('span', { hidden: true });
   const seriesWrap = el('div', { class: 'chip-wrap' }, chipSeries, seriesMenu);
   const form = el('form', { class: 'composer', id: 'photo-composer', hidden: !!ctx.hint }, sourceBox, promptBox.box, promptBox.error,
-    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, chipModel.wrap, chipSize.wrap, chipTranslate,
+    el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, mcp.control, upscaleAttach, chipModel.wrap, chipSize.wrap, chipTranslate,
       chipUndo, seriesWrap, mcp.fields, presets.wrap), go));
   const nativeHint = ctx.hint?.('hint-bar');
   const root = el('div', { class: 'photo' }, head, status, feedBox, error, orphanLine, mcp.output, nativeHint || form,
@@ -311,9 +314,9 @@ function build(view, ctx) {
   }
 
   /* исходное фото: файл с устройства или файл истории (mediaId — «В поле» просмотра) */
-  function setSource(f, mediaId = null) {
+  function setSource(f, mediaId = null, original = f) {
     if (source?.file) URL.revokeObjectURL(source.url);
-    source = f ? { file: f, url: URL.createObjectURL(f) } : mediaId ? { mediaId, url: media(mediaId, '?thumb=1') } : null;
+    source = f ? { file: f, original, url: URL.createObjectURL(f) } : mediaId ? { mediaId, url: media(mediaId, '?thumb=1') } : null;
     if (source) sourceImg.src = source.url;
     else sourceImg.removeAttribute('src');
     chipPhoto.classList.toggle('on', !!source);
@@ -323,6 +326,7 @@ function build(view, ctx) {
   function paintSource() {
     const active = !!mcp.tool;
     const describe = ['image_describe', 'describe_image'].includes(mcp.tool);
+    const upscale = mcp.tool === 'upscale_image';
     form.hidden = !!ctx.hint && !active;
     if (nativeHint) {
       nativeHint.hidden = active;
@@ -345,7 +349,15 @@ function build(view, ctx) {
     chipModel.wrap.hidden = active;
     chipSize.wrap.hidden = active && !mcp.has('size');
     seriesWrap.hidden = active && (!mcp.has('n') || seriesMax() < 2);
-    go.textContent = describe ? tr("Описать фото") : tr("Создать");
+    if (upscale !== promptBox.box.hidden) {
+      promptBox.box.hidden = promptBox.error.hidden = upscale;
+      upscaleAttach.hidden = !upscale;
+      if (upscale) upscaleAttach.append(chipPhoto);
+      else promptTools.insertBefore(chipPhoto, promptTail);
+    }
+    presets.wrap.hidden = upscale;
+    chipUndo.hidden = upscale || !undo;
+    go.textContent = upscale ? tr("Улучшить фото") : describe ? tr("Описать фото") : tr("Создать");
     paintSizes();
     series.refresh();
   }
@@ -553,6 +565,11 @@ function build(view, ctx) {
     }
     if (!alive) return;
     if (item && !entry.again) {
+      if (item.id !== id) {
+        forget(id);
+        await feed.reload();  // у завершённого задания MCP в ленте отдельная карточка на каждый файл
+        return;
+      }
       feed.update(item);
       watch(item);
     }
@@ -744,6 +761,10 @@ function build(view, ctx) {
       }
       if (mcp.hasFile('artifact_id') && !source) {
         error.textContent = tr("Выберите исходное фото");
+        return;
+      }
+      if (mcp.tool === 'upscale_image') {
+        mcp.run({}, { files: { artifact_id: source.original || source } });
         return;
       }
       const many = series.value();
@@ -1303,7 +1324,7 @@ function build(view, ctx) {
   /* после любой записи поля (ввод, пресет, описание — все зовут autosize): поле изменилось — «Вернуть оригинал» нет */
   function autosize() {
     if (undo && prompt.value !== undo.translated) undo = null;
-    chipUndo.hidden = !undo;
+    chipUndo.hidden = mcp.tool === 'upscale_image' || !undo;
     prompt.style.height = 'auto';
     // Пустое поле сохраняет три строки из общих стилей, непустое растёт по содержимому.
     if (prompt.value) prompt.style.height = `${prompt.scrollHeight}px`;
@@ -1325,7 +1346,7 @@ function build(view, ctx) {
     if (!alive || mine !== choosing) return;
     preparingSource = false;
     if (f.size > PHOTO_MAX) error.textContent = tr("Фото больше 20 МиБ");
-    else setSource(f);
+    else setSource(f, null, selected);
     syncBusy();
   }
   file.addEventListener('change', () => {

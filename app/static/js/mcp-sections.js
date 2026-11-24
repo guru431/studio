@@ -14,9 +14,10 @@ const imageNames = {
   image_generate: tr("Создать фото"), generate_image: tr("Создать фото"),
   image_edit: tr("Изменить фото"), edit_image: tr("Изменить фото"),
   image_describe: tr("Описать фото"), describe_image: tr("Описать фото"),
+  upscale_image: tr("Улучшить фото"),
 };
 
-const PHOTO_TOOLS = new Set(['image_generate', 'image_edit', 'generate_image', 'edit_image']);
+const PHOTO_TOOLS = new Set(['image_generate', 'image_edit', 'generate_image', 'edit_image', 'upscale_image']);
 const JOB_WORDS = {
   queued: tr("В очереди"), waiting_gpu: tr("Ожидает GPU"), running: tr("Выполняется"),
   completed: tr("Готово"), cancelled: tr("Отменено"), failed: tr("Ошибка"),
@@ -71,6 +72,8 @@ function fileData(file, limit) {
 // подписи известных полей инструментов разделов (у остальных — `title` схемы или имя поля)
 const FIELD_NAMES = { protocol: tr("Протокол"), speakers: tr("Говорящих"), language: tr("Язык"),
   diarize: tr("Разделить по говорящим") };
+const UPSCALE_FIELDS = { mode: tr("Режим улучшения"), scale: tr("Масштаб от 1 до 4") };
+const UPSCALE_MODES = { restore: tr("Восстановление · SeedVR2"), fast: tr("Быстрое увеличение · RealESRGAN") };
 const LANGUAGE_NAMES = { ru: tr("Русский"), en: 'English' };
 const TEXT_MAX = 200;
 
@@ -85,7 +88,8 @@ export function extraFields(tool, shown, suffix = '') {
   const required = new Set(tool?.schema.required || []);
   for (const [key, prop] of Object.entries(tool?.schema?.properties || {})) {
     if (skip.has(key) || !prop || typeof prop !== 'object') continue;
-    const name = FIELD_NAMES[key] || (typeof prop.title === 'string' && prop.title.trim().slice(0, 40)) || key;
+    const name = (tool.name === 'upscale_image' && Object.hasOwn(UPSCALE_FIELDS, key) && UPSCALE_FIELDS[key])
+      || FIELD_NAMES[key] || (typeof prop.title === 'string' && prop.title.trim().slice(0, 40)) || key;
     const limits = schemaLimits(prop);
     const id = `mcp-field-${key.replace(/[^\w-]/g, '_')}${suffix}`;
     const models = key === 'model' && prop.type === 'string' ? tool.models || limits?.enum : null;
@@ -107,7 +111,8 @@ export function extraFields(tool, shown, suffix = '') {
       controls.push(chip);
       readers.push([key, () => (chip.getAttribute('aria-pressed') === 'true') === initial ? undefined : !initial]);
     } else if (limits?.enum) {
-      const label = value => (/lang/i.test(key) && LANGUAGE_NAMES[value]) || String(value);
+      const label = value => (tool.name === 'upscale_image' && key === 'mode' && Object.hasOwn(UPSCALE_MODES, value)
+        && UPSCALE_MODES[value]) || (/lang/i.test(key) && LANGUAGE_NAMES[value]) || String(value);
       const select = el('select', { id, 'data-field': key }, el('option', { value: '' }, name),
         ...limits.enum.map(value => el('option', { value: String(value) }, label(value))));
       select.value = limits.default === null ? '' : String(limits.default);

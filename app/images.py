@@ -674,7 +674,7 @@ SELECT COALESCE(m.id, j.id) AS id, j.user_id, j.id AS mcp_job_id, j.server AS mc
 FROM mcp_section_jobs j
 LEFT JOIN mcp_section_files f ON f.job_id = j.id AND f.user_id = j.user_id
 LEFT JOIN media m ON m.id = f.media_id AND m.user_id = j.user_id AND m.mime LIKE 'image/%'
-WHERE j.section = 'photo' AND j.tool IN ('image_generate','image_edit','generate_image','edit_image')
+WHERE j.section = 'photo' AND j.tool IN ('image_generate','image_edit','generate_image','edit_image','upscale_image')
   AND (m.id IS NOT NULL OR (f.media_id IS NULL AND j.status <> 'completed'))
 """
 
@@ -682,7 +682,8 @@ WHERE j.section = 'photo' AND j.tool IN ('image_generate','image_edit','generate
 def _mcp_photo_out(row):
     metadata = mcp_photo_metadata({"photo": json.loads(row["photo"]) if row["photo"] else {}, "text": row["report"] or ""})
     size, seed = metadata.get("size", ""), metadata.get("seed")
-    step = {"image_id": row["id"], "kind": "edit" if row["tool"] in ("image_edit", "edit_image") else "generation",
+    kind = {"image_edit": "edit", "edit_image": "edit", "upscale_image": "upscale"}.get(row["tool"], "generation")
+    step = {"image_id": row["id"], "kind": kind,
             "model": row["model"], "server": row["mcp_server"], "prompt": row["prompt"], "size": size,
             "seed": seed, "mcp_job_id": row["mcp_job_id"], "created": row["created"], "media_id": row["media_id"]}
     status = row["status"]
@@ -706,8 +707,13 @@ def mcp_photo_metadata(result):
     return metadata
 
 
-def _mcp_photo_row(uid, image_id):
-    return state.DB.execute(MCP_PHOTOS + " AND j.user_id = ? AND COALESCE(m.id, j.id) = ?", (uid, image_id)).fetchone()
+def _mcp_photo_row(uid, image_id, *, status=False):
+    query = " AND j.user_id = ? AND COALESCE(m.id, j.id) = ?"
+    args = (uid, image_id)
+    if status:  # карточка опрашивает ID задания, пока полученные файлы ещё не появились в ленте
+        query = " AND j.user_id = ? AND (COALESCE(m.id, j.id) = ? OR j.id = ?) ORDER BY m.id LIMIT 1"
+        args += (image_id,)
+    return state.DB.execute(MCP_PHOTOS + query, args).fetchone()
 
 
 @router.get("")
@@ -866,7 +872,7 @@ async def release_card(request: Request):
 @router.get("/{image_id}")
 async def image_status(image_id: str, request: Request):
     uid = request.state.user.id
-    remote = _mcp_photo_row(uid, image_id)
+    remote = _mcp_photo_row(uid, image_id, status=True)
     return _mcp_photo_out(remote) if remote else _out(_row(uid, image_id))
 
 

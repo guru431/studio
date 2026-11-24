@@ -381,6 +381,8 @@ def test_background_photo_series_appears_in_gallery_and_deletes_individual_files
         asyncio.run(mcp_sections.refresh_history(row))
     photos = studio.c.get("/api/images?model=photo-b").json()["items"]
     assert len(photos) == 2 and all(p["mcp_job_id"] == rid and p["state"] == "done" for p in photos)
+    polled = studio.c.get("/api/images/" + rid)
+    assert polled.status_code == 200 and polled.json()["id"] in {p["id"] for p in photos}
     first, second = ["/api/images/" + p["id"] for p in photos]
     assert studio.c.delete(first).status_code == 204
     assert studio.c.get(first).status_code == 404

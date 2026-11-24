@@ -39,7 +39,7 @@ import voices
 router = APIRouter(prefix="/api/mcp-tools")
 TOOLS = {
     "chat": {"llm_ask"},
-    "photo": {"image_generate", "image_edit", "image_describe", "generate_image", "edit_image", "describe_image"},
+    "photo": {"image_generate", "image_edit", "image_describe", "generate_image", "edit_image", "describe_image", "upscale_image"},
     "video": {"video_create", "video_estimate", "generate_video"},
     "speech": {"speech_synthesize", "synthesize_speech", "text_to_speech"},
     "transcribe": {"audio_transcribe", "transcribe_audio"},
@@ -99,6 +99,8 @@ def supported(section, tools, *, uid=None, sid=None, item=None):
             continue
         file_fields = FILE_FIELDS.get(section, {})
         if not has_upload and file_fields.keys() & set(required):
+            continue
+        if name == "upscale_image" and (not has_upload or "artifact_id" not in properties):
             continue
         try:
             encoded = json.dumps(schema, ensure_ascii=False, allow_nan=False).encode("utf-8", "replace")
@@ -438,33 +440,40 @@ def accepts_name(tools) -> bool:
     return isinstance(schema, dict) and isinstance(schema.get("properties"), dict) and "name" in schema["properties"]
 
 
-async def upload(session, kind, file, *, named=False):
+async def upload(session, kind, file, *, named=False, original_size=False):
     name = file.name.strip() if named and isinstance(file.name, str) and file.name.strip() else None
     if file.media_id is not None:
         if kind != "image" or file.data is not None:
             raise mcp.refused("Выберите одно исходное фото", "invalid", 422)
         try:
-            data = await forms.photo(session.uid, None, file.media_id)
+            if original_size:
+                raw = await forms.history_file(session.uid, file.media_id)
+                data = await asyncio.to_thread(forms.normalize_image, raw, forms.HISTORY_PIXELS, fit=False)
+            else:
+                data = await forms.photo(session.uid, None, file.media_id)
         except forms.UploadError as exc:
             raise mcp.refused(str(exc), "invalid", exc.status) from None
-        return (await upload_artifact(session, data, "image/png"))["id"]
-    encoded = file.data
-    try:
-        data = base64.b64decode(encoded or "", validate=True)
-    except (ValueError, UnicodeError):
-        raise mcp.refused("Неверные данные файла MCP", "invalid", 422) from None
-    if not data or len(data) > UPLOAD_MAX:
-        raise mcp.refused(f"Файл MCP должен быть непустым и не больше {UPLOAD_MAX >> 20} МиБ", "too_big", 413)
-    if kind == "image":
-        try:
-            data = await asyncio.to_thread(forms.normalize_image, data)
-        except forms.UploadError as exc:
-            raise mcp.refused(str(exc), "invalid", exc.status) from None
-        mime = "image/png"
+        mime, name = "image/png", None
     else:
-        mime = forms.audio_type(file.mime_type, file.name)
-        if mime not in INLINE_MIME:
-            raise mcp.refused("Выберите звуковой файл MCP", "invalid", 415)
+        try:
+            data = base64.b64decode(file.data or "", validate=True)
+        except (ValueError, UnicodeError):
+            raise mcp.refused("Неверные данные файла MCP", "invalid", 422) from None
+        if not data or len(data) > UPLOAD_MAX:
+            raise mcp.refused(f"Файл MCP должен быть непустым и не больше {UPLOAD_MAX >> 20} МиБ", "too_big", 413)
+        if kind == "image":
+            try:
+                pixels = forms.HISTORY_PIXELS if original_size else forms.MAX_PIXELS
+                data = await asyncio.to_thread(forms.normalize_image, data, pixels, fit=not original_size)
+            except forms.UploadError as exc:
+                raise mcp.refused(str(exc), "invalid", exc.status) from None
+            mime = "image/png"
+        else:
+            mime = forms.audio_type(file.mime_type, file.name)
+            if mime not in INLINE_MIME:
+                raise mcp.refused("Выберите звуковой файл MCP", "invalid", 415)
+    if original_size and len(data) > forms.MAX_UPLOAD:
+        raise mcp.refused("После подготовки фото больше 10 МиБ", "too_big", 413)
     return (await upload_artifact(session, data, mime, name))["id"]
 
 
@@ -588,7 +597,8 @@ async def run(section: str, sid: int, request: Request):
         else:
             check_bounds(tool, args)
             for key, file in body.files.items():
-                args[key] = await upload(session, tool["files"][key], file, named=named)
+                args[key] = await upload(session, tool["files"][key], file, named=named,
+                                         original_size=body.tool == "upscale_image")
         check_bounds(tool, args)
         if not access.tool_allowed(uid, sid, body.tool):   # правило могли сменить, пока шла загрузка файла
             raise mcp.refused("Инструмент недоступен в этом разделе MCP", "invalid", 422)
