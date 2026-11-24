@@ -21,7 +21,7 @@ PATH = f"/artifacts/{ARTIFACT}/content"
 
 
 def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limits=False, broken_schema=False,
-            named_upload=False, catalogs=False, monkeypatch=None, photo_job=False):
+            named_upload=False, catalogs=False, monkeypatch=None, photo_job=False, catalog_results=None, chat_model=None):
     def params(**types):
         return {key: {"type": value} for key, value in types.items()}
 
@@ -37,6 +37,8 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
         video["model"] = {"type": "string", "enum": ["wan", "h3"], "default": "wan"}
         tools |= {"services_list": ({}, []), "models_list": ({}, []),
                   "llm_ask": (params(messages="array", model="string"), ["messages"])}
+        if chat_model is not None:
+            tools["llm_ask"][0]["model"] = chat_model
     if uploads:
         tools.update(dict.fromkeys(("audio_transcribe", "document_read"), (params(artifact_id="string"), ["artifact_id"])))
     if named_upload:
@@ -74,11 +76,13 @@ def service(gateway, *, image=PNG_REAL, uploads=False, clone_models=False, limit
                 result = {"content": [{"type": "image", "mimeType": "image/png", "data": base64.b64encode(image).decode()}]}
             else:
                 data = {"id": JOB, "status": "queued"}
-                if name == "services_list":
+                if catalog_results and name in catalog_results:
+                    data = catalog_results[name]
+                elif name == "services_list":
                     data = {"declarations": {"images": {"data": [{"id": "photo-a"}, {"id": "wan"}, {"id": "photo-a"}]}},
                             "services": {"video": {"model_limits": {"wan": {}}}}}
                 elif name == "models_list":
-                    data = {"data": [{"id": "chat-a"}, {"id": "chat-b"}]}
+                    data = {"data": [{"id": "chat-a", "mode": "chat"}, {"id": "chat-b", "mode": "chat"}]}
                 elif name == "llm_ask":
                     data = {"text": "Reply from MCP"}
                 elif name == "artifact_upload":
@@ -318,6 +322,49 @@ def test_catalog_keeps_photo_video_and_chat_models_separate(studio):
     chat = studio.c.get("/api/mcp-tools/chat").json()["items"][0]
     assert chat["models"] == ["chat-a", "chat-b"]
     assert calls == [("services_list", {}), ("models_list", {})]
+
+
+def test_mixed_gateway_models_use_the_services_declaration(studio):
+    sid = add(studio)
+    chat_names = ["qwen-27b", "qwen-native", "qwen-27b-fast", "qwen-native-fast"]
+    groups = [
+        {"gateway_path": "/v1/messages", "names": chat_names[:2]},
+        {"gateway_path": "/v1/embeddings", "names": ["vectors", "vectors-version"]},
+        {"gateway_path": "/v1/rerank", "names": ["ranker", "ranker-version"]},
+        {"gateway_path": "/pages/ocr", "names": ["reader", "reader-version"]},
+        {"gateway_path": "/speech/transcriptions", "names": ["recognizer"]},
+    ]
+    other_names = [name for group in groups[1:] for name in group["names"]]
+    calls = service(studio.gw, catalogs=True, catalog_results={
+        "models_list": {"data": [{"id": model} for model in chat_names + other_names]},
+        "services_list": {"declarations": {"llm": {"object": "limits", "services": groups}}},
+    })
+    catalog = studio.c.get("/api/mcp-tools/chat").json()["items"][0]
+    assert catalog["models"] == chat_names
+    chosen = {"mcp_model_sid": sid, "model": "qwen-27b-fast"}
+    created = studio.c.post("/api/chats", json=chosen)
+    assert created.status_code == 201, created.text
+    path = f"/api/chats/{created.json()['id']}"
+    for method, url in ((studio.c.post, "/api/chats"), (studio.c.patch, path)):
+        refused = method(url, json={**chosen, "model": "reader"})
+        assert refused.status_code >= 400, refused.text
+    assert all(name != "llm_ask" for name, _ in calls)
+
+
+@pytest.mark.parametrize(("model_schema", "expected"), [
+    ({"type": "string"}, ["confirmed", "default"]),
+    ({"type": "string", "enum": ["allowed", "embedding"]}, ["allowed"]),
+    ({"type": "string", "const": "allowed"}, ["allowed"]),
+])
+def test_mcp_chat_models_follow_the_tool_schema_and_catalog_metadata(studio, model_schema, expected):
+    add(studio)
+    service(studio.gw, catalogs=True, chat_model=model_schema, catalog_results={
+        "models_list": {"data": [{"id": "confirmed", "model_info": {"mode": "chat"}},
+                                 {"id": "default"}, {"id": "allowed"}, {"id": "unknown"},
+                                 {"id": "embedding", "mode": "embedding"}]},
+        "services_list": {"services": {"llm": {"model": "default"}}},
+    })
+    assert studio.c.get("/api/mcp-tools/chat").json()["items"][0]["models"] == expected
 
 
 def test_recorded_jobs_and_results_are_owned_and_survive_independent_runs(studio):

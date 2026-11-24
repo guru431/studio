@@ -504,6 +504,7 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
       return true;
     },
     argument(key) { return picked()?.tool.schema.properties?.[key]; },
+    requires(key) { return picked()?.tool.schema.required?.includes(key) ?? false; },
     limits(key) { return schemaLimits(picked()?.tool.schema.properties?.[key]); },
     canClone() {
       const engines = picked()?.tool.schema.properties?.engine?.enum;

@@ -197,8 +197,7 @@ def test_english_default_action_labels_keep_prompts_and_custom_titles(browser, l
     finally:
         server.stop()
     assert not result.get('failed'), result
-    assert result['values']['defaults'] == ['Resolve issues and ideas', 'Deep project audit', 'Independent critics',
-                                            'Download video']
+    assert result['values']['defaults'] == ['Resolve issues and ideas', 'Deep project audit', 'Independent critics']
     assert result['values']['custom'] == 'Чат'
     assert result['values']['visualization'] == ['Open visualization', 'Visualization']
     assert result['values']['texts'] == [action['text'] for action in code_actions.DEFAULTS]

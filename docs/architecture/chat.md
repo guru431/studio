@@ -545,7 +545,8 @@ Studio проксирует файлы через исходное подклю�
 
 ## Поле ввода: подсказки, паспорт, заполнение контекста (спека 2026-11-21-studio-source-capabilities-design, п. 2, 31, 33)
 
-- **Подсказки** — `GET /api/chats/suggestions?connection_id=&model=&chat_id=` (`chat.suggestions`, маршрут — раньше
+- **Подсказки** начинаются со встроенного действия «Скачать ролик» в `chat-suggest.js`. Оно вставляет запрос на скачивание
+  через доступный MCP или помощь с локальным `yt-dlp`. Остальные приходят из `GET /api/chats/suggestions?connection_id=&model=&chat_id=` (`chat.suggestions`, маршрут — раньше
   `/chats/{chat_id}`): подсказки профиля подключения (`profiles.suggestions_of`, `source: "profile"`), затем `prompts`
   действующих серверов MCP диалога (новый диалог — общие «в диалоге по умолчанию», `mcp_sources.dialog_servers`) из кэша
   каталогов, холодный — до `mcp_sources.DEFAULT_WAIT_SEC` (5 с), молчащий сервер пропускается; всего — не больше

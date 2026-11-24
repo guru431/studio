@@ -3,7 +3,7 @@
  * is fresh, so a file is uploaded once; only a sample without a fresh token goes to `prepare-sample`. Tokens that were
  * not saved are discarded when the dialog closes (the server keeps referenced ones). Closing with unsaved changes
  * («Отмена», Escape, Android back) asks first (`#voice-unsaved`); so does any address change (the iOS back swipe,
- * a section tab, «Открыть» in «В работе»): settings.js `hold()` asks `holdVoiceEditor()`. */
+ * a section tab, «Открыть» in «В работе»): the screen's `hold()` calls `holdVoiceEditor()`. */
 import { api } from './api.js';
 import { tr } from './i18n.js';
 import { cancelRecording, recordingName, startRecording } from './mic.js';
@@ -16,7 +16,7 @@ const DRAFT_MS = 10 * 60 * 1000;   // token of a recognized sample: voices.DRAFT
 
 let shown = null;   // the open editor: { dialog, home, entry, dirty, ask } — address and history mark it was opened at
 
-/** Router (app.js, through settings.js `hold`) before any address change, like transcribe.js `hold`: unsaved editor —
+/** Router (app.js, through the screen's `hold`) before any address change, like transcribe.js `hold`: unsaved editor —
  * the address goes back and «Изменения не сохранены» asks; «Не сохранять» goes on to where the user was heading.
  * A history move (an entry with a mark) leaves that entry alone: the editor's address is pushed anew, leaving goes
  * back to it. true — the change is held. */
@@ -336,11 +336,11 @@ export async function editVoice(host, voice, onSaved) {
         if (!dialog.open || !dialog.isConnected) return;
         samples.push(sample);
       }
-      await api('PUT', `/api/voices/${voiceId}/batch`, { name: name.value.trim(), revision: original?.revision,
+      const saved = await api('PUT', `/api/voices/${voiceId}/batch`, { name: name.value.trim(), revision: original?.revision,
         selected: entries.indexOf(selected), samples });
       uploads.length = 0;
       if (dialog.open) dialog.close();
-      onSaved();
+      onSaved(saved);
     } catch (err) {
       fail.textContent = words(err);
       // «prepared sample unavailable» (an expired token among others): the next save uploads the files again

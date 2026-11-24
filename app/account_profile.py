@@ -146,7 +146,7 @@ def _me(request: Request) -> dict:
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
             "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
-            "code_quick_actions": json.loads(row["code_quick_actions"]) if row["code_quick_actions"] is not None else code_actions.DEFAULTS,
+            "code_quick_actions": code_actions.for_account(row["code_quick_actions"]),
             "code_quick_actions_default": row["code_quick_actions"] is None,
             "code_quick_actions_set": code_actions.DEFAULTS,     # «Добавить из набора» редактора
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),

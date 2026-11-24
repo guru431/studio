@@ -12,7 +12,7 @@ from fakes import PNG_REAL
 from test_mcp import TOKEN as MCP_TOKEN, URL as MCP_URL
 from test_mcp_dialog import server
 from test_ui_browser import (ANSWERED, API, NO_OVERFLOW, READY, attach, browser, live,  # noqa: F401
-                             live_sql, open_new_chat, problems, signin)
+                             live_sql, open_new_chat, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -116,6 +116,7 @@ def test_passport_warning_and_context_ring(browser, live, width, monkeypatch):
 PROMPTS = [{"name": "brief", "title": "Обзор темы", "description": "Короткий обзор",
             "arguments": [{"name": "topic", "description": "Тема", "required": True}]}]
 SUGGEST = "document.querySelectorAll('#chat-suggest .suggest-chip')"
+DOWNLOAD = "#chat-suggest .suggest-chip[data-source=studio]"
 
 
 @pytest.mark.parametrize("width", [320, 1280])
@@ -132,15 +133,17 @@ def test_suggestion_inserts_text_without_sending(browser, live, width):
         # чат мог открыться первым экраном до профиля: заново
         ("eval", "reload", "location.reload()"),
         ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"),
-        *open_new_chat(width == 320), ("wait", f"{SUGGEST}.length === 1"),
-        ("click", "#chat-suggest .suggest-chip"),
+        *open_new_chat(width == 320), ("wait", f"{SUGGEST}.length === 2"),
+        ("eval", "action", f"document.querySelector('{DOWNLOAD}').textContent"),
+        ("click", DOWNLOAD), ("eval", "download", "document.querySelector('#chat-input').value"),
+        set_value("#chat-input", ""), ("click", "#chat-suggest .suggest-chip[data-source=profile]"),
         ("eval", "inserted", "document.querySelector('#chat-input').value"),
         ("eval", "mcp", f"""(async () => {{ const m = {API};
           const sid = (await m.api('GET', '/api/mcp')).items.find(s => s.name === 'Prompts').id;
           const c = await m.api('POST', '/api/chats', {{}});
           await m.api('PATCH', '/api/chats/' + c.id, {{ mcp_ids: [sid] }});
           location.hash = '#/chat/' + c.id; return sid; }})()"""),
-        ("wait", f"{SUGGEST}.length === 2"),
+        ("wait", f"{SUGGEST}.length === 3"),
         ("click", "#chat-suggest .suggest-chip[data-source=mcp]"),
         ("wait", "document.querySelector('.suggest-form')?.matches(':popover-open')"),
         ("type", ".suggest-form input[name=topic]", "кино"), ("click", ".suggest-form .suggest-go"),
@@ -151,6 +154,7 @@ def test_suggestion_inserts_text_without_sending(browser, live, width):
         width=width, mobile=width == 320)
     assert not r.get("failed"), r
     v = r["values"]
+    assert v["action"] == "Скачать ролик" and v["download"].startswith("Скачай ролик в MP4 со звуком.")
     assert v["inserted"] == "Сделай сводку"
     assert v["after"] == ["Сделай сводку\n\nОбзор: кино", 0, False]
     assert not [s for s in r["sent"] if s.endswith("/turns")], r["sent"]

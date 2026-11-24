@@ -1,8 +1,8 @@
 import { tr } from './i18n.js';
 /* Подсказки пустого экрана чата (спека 2026-11-21-studio-source-capabilities-design, п. 2): GET /api/chats/suggestions —
- * профиль подключения, затем `prompts` MCP диалога (не больше chat.SUGGESTIONS_MAX). Чипы — под пустой заметкой;
+ * быстрое действие Studio, затем профиль подключения и `prompts` MCP диалога. Чипы — под пустой заметкой;
  * нажатие вставляет текст в поле и не отправляет. Подсказка MCP: текст — POST /api/mcp/<sid>/prompt; с аргументами —
- * сначала форма в панели у чипа (menu.js popupPanel). Текст подсказок — пользовательский: не переводится. */
+ * сначала форма в панели у чипа (menu.js popupPanel). Переводится только встроенное действие. */
 import { api } from './api.js';
 import { popupPanel } from './menu.js';
 import { el, words } from './ui.js';
@@ -18,6 +18,8 @@ function put(field, text) {
 /** Чипы подсказок `items` в `host` (ответ GET /api/chats/suggestions); `field` — поле ввода. */
 export function paintSuggestions(host, items, field) {
   const note = el('p', { class: 'error small chat-suggest-note', 'aria-live': 'polite' });
+  const download = { source: 'studio', title: tr("Скачать ролик"),
+    text: tr("Скачай ролик в MP4 со звуком. Если ссылки ещё нет, спроси её. Воспользуйся доступным инструментом MCP для скачивания видео и дай ссылку на готовый файл. Если такого инструмента нет, помоги мне скачать ролик на моём компьютере с помощью yt-dlp.") };
 
   async function fetchText(item, args, chip) {
     chip.disabled = true;
@@ -54,7 +56,7 @@ export function paintSuggestions(host, items, field) {
     return panel;
   }
 
-  const chips = items.map((item) => {
+  const chips = [download, ...items].map((item) => {
     const chip = el('button', { type: 'button', class: 'chip suggest-chip', title: item.text || item.title,
       'data-source': item.source }, item.title);
     if (item.prompt && item.prompt.arguments.length) return [chip, form(item, chip)];
@@ -65,5 +67,5 @@ export function paintSuggestions(host, items, field) {
     return [chip];
   });
   host.replaceChildren(...chips.flat(), note);
-  host.hidden = !items.length;
+  host.hidden = false;
 }

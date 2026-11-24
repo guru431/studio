@@ -1434,13 +1434,14 @@ function build(view, ctx) {
       : connId === null ? '' : `connection_id=${connId}&model=${encodeURIComponent(model || '')}`;
     if (host.dataset.query === query) return;
     host.dataset.query = query;
-    if (!query) { paintSuggestions(host, [], input); return; }
     if (suggestKey?.query === query && suggestKey.items) { paintSuggestions(host, suggestKey.items, input); return; }
+    paintSuggestions(host, [], input);
+    if (!query) { suggestKey = null; return; }
     const mine = suggestKey = { query, items: null };
     api('GET', `/api/chats/suggestions?${query}`).then((items) => {
       mine.items = items;
       if (mine === suggestKey && host.isConnected) paintSuggestions(host, items, input);
-    }, () => { if (mine === suggestKey && host.isConnected) paintSuggestions(host, [], input); });
+    }, () => {});
   }
 
   /* окна подтверждений — по очереди: сначала внешняя модель, затем Exa; каждое несёт уже данное другое */

@@ -56,6 +56,7 @@ MODEL_ID_MAX = 128
 RESULT_MAX = 4 << 20  # MCP-сервисы дублируют structuredContent в текстовом блоке.
 DOWNLOAD_MAX = 512 << 20
 DISCOVERY_TIMEOUT = 8
+CHAT_PATHS = ("/v1/chat/completions", "/v1/messages")
 TICKET_AGE = 3 * 60 * 60
 JOB_ID = re.compile(r"job_[0-9a-f]{32}")
 ARTIFACT_ID = re.compile(r"art_[0-9a-f]{32}")
@@ -114,14 +115,14 @@ def supported(section, tools, *, uid=None, sid=None, item=None):
                "limits": {"max_seconds": found.max_seconds} if (found := speech.tool_limits(tool)) else None}
 
 
-def model_ids(payload):
-    """Model IDs from the OpenAI-style listing returned by an MCP catalog tool."""
+def model_catalog(payload):
+    """Models from the OpenAI-style listing returned by an MCP catalog tool, by valid ID."""
     items = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(items, list):
-        return []
-    return list(dict.fromkeys(model for item in items[:MODEL_CHOICES_MAX] if isinstance(item, dict)
-                              and isinstance(model := item.get("id"), str) and 0 < len(model) <= MODEL_ID_MAX
-                              and model.isprintable() and model == model.strip()))
+        return {}
+    return {model: item for item in items[:MODEL_CHOICES_MAX] if isinstance(item, dict)
+            and isinstance(model := item.get("id"), str) and 0 < len(model) <= MODEL_ID_MAX
+            and model.isprintable() and model == model.strip()}
 
 
 async def image_models(session, tools, listed, uid):
@@ -145,7 +146,7 @@ async def image_models(session, tools, listed, uid):
     services = data.get("services") if isinstance(data, dict) else None
     video = services.get("video") if isinstance(services, dict) else None
     video_models = video.get("model_limits") if isinstance(video, dict) else None
-    choices = [name for name in model_ids(images_catalog) if not isinstance(video_models, dict) or name not in video_models]
+    choices = [name for name in model_catalog(images_catalog) if not isinstance(video_models, dict) or name not in video_models]
     if choices:
         for tool in candidates:
             tool["models"] = choices
@@ -154,6 +155,36 @@ async def image_models(session, tools, listed, uid):
 def require_chat_policy():
     if cleaner_route.forced():
         raise mcp.refused("Ответы через MCP недоступны при обязательном Cleaner", "cleaner_forced")
+
+
+def model_mode(item):
+    info = item.get("model_info")
+    mode = item.get("mode") or (info.get("mode") if isinstance(info, dict) else None)
+    return mode.strip().lower() if isinstance(mode, str) and mode.strip() else None
+
+
+def chat_service_models(data):
+    """The shared platform publishes service defaults and, on mixed gateways, a grouped `/limits` roster."""
+    chat_names, other_names = set(), set()
+    if not isinstance(data, dict):
+        return chat_names, other_names, False
+    services = data.get("services")
+    if isinstance(services, dict):
+        for name, service in services.items():
+            if isinstance(service, dict) and isinstance(model := service.get("model"), str):
+                (chat_names if name == "llm" else other_names).add(model)
+    declarations = data.get("declarations")
+    limits = declarations.get("llm") if isinstance(declarations, dict) else None
+    groups = limits.get("services") if isinstance(limits, dict) and limits.get("object") == "limits" else None
+    split_catalog = False
+    if isinstance(groups, list):
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(names := group.get("names"), list):
+                continue
+            is_chat = group.get("gateway_path") in CHAT_PATHS
+            split_catalog |= is_chat
+            (chat_names if is_chat else other_names).update(name for name in names if isinstance(name, str))
+    return chat_names, other_names, split_catalog
 
 
 async def chat_models(session, uid):
@@ -167,13 +198,34 @@ async def chat_models(session, uid):
             if not {"models_list", "llm_ask"} <= names or not all(
                     access.tool_allowed(uid, session.sid, name) for name in ("models_list", "llm_ask")):
                 return []
-            if not list(supported("chat", found.tools, uid=uid, sid=session.sid, item=mcp.row(uid, session.sid))):
+            tool = next(supported("chat", found.tools, uid=uid, sid=session.sid, item=mcp.row(uid, session.sid)), None)
+            if tool is None:
                 return []
             await session.initialize()
             result = await call(session, "models_list", {}, timeout=DISCOVERY_TIMEOUT)
-            return model_ids(result.get("structuredContent"))
     except (HTTPException, TimeoutError):
         return []
+
+    models = {name: model_mode(item) for name, item in model_catalog(result.get("structuredContent")).items()}
+    schema = tool["schema"].get("properties", {}).get("model", {})
+    choices = schema.get("enum")
+    if isinstance(schema.get("const"), str):
+        choices = [schema["const"]]
+    if isinstance(choices, list):
+        return [name for name, mode in models.items() if name in choices and mode in (None, "chat")]
+
+    data = None
+    if None in models.values() and "services_list" in names and access.tool_allowed(uid, session.sid, "services_list"):
+        try:
+            async with asyncio.timeout(DISCOVERY_TIMEOUT):
+                data = (await call(session, "services_list", {}, timeout=DISCOVERY_TIMEOUT)).get("structuredContent")
+        except (HTTPException, TimeoutError):
+            pass   # explicit chat modes and the tool default are still usable
+    chat_names, other_names, split_catalog = chat_service_models(data)
+    default = schema.get("default")
+    # A grouped limits roster accounts for the non-chat services. Remaining unknown IDs include gateway chat aliases.
+    return [name for name, mode in models.items() if mode == "chat" or (mode is None and (
+        name in chat_names or (name not in other_names and (split_catalog or name == default))))]
 
 
 async def check_chat_model(uid, sid, model):
@@ -184,7 +236,7 @@ async def check_chat_model(uid, sid, model):
     session = mcp.Session(item, uid=uid)
     try:
         if model not in await chat_models(session, uid):
-            raise mcp.refused("Модель недоступна на сервере MCP")
+            raise mcp.refused("Эта модель MCP недоступна для чата. Выберите другую модель.")
     finally:
         await session.close()
     return item

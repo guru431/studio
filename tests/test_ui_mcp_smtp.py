@@ -14,7 +14,8 @@ MCP_TOKEN = TOKEN                    # в тестах ниже имя TOKEN з�
 from test_mcp_sections import service
 from test_ui_browser import (browser, live, signin, READY, NO_OVERFLOW, problems, put_audio, put_files, set_value,
                              code_online, code_requests, add_voice, add_gateway, open_new_chat, API, ANSWERED,
-                             LAST_ANSWER, BADGE, go, is_open)
+                             LAST_ANSWER, BADGE, go, is_open, wav_of)
+from test_ui_section_limits import SERVICE, TEXT, UPLOADED, choose, serve, start
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -150,6 +151,49 @@ def test_mcp_uses_the_existing_voice_audio_and_scan_inputs(browser, live, monkey
     assert calls[2][0] == 'speech_synthesize' and calls[2][1]['model'] == 'f5-tts' and calls[2][1]['engine'] == 'clone'
     assert [name for name, _ in calls[3:]] == ['artifact_upload', 'audio_transcribe', 'artifact_upload', 'document_read']
     assert [calls[i][1]['mime_type'] for i in [3, 5]] == ['audio/wav', 'image/png']
+    assert not problems(result), result.get('log')
+
+
+@pytest.mark.parametrize('width', [320, 1280])
+def test_mcp_requiring_a_voice_sample_offers_to_add_it_in_speech(browser, live, width):
+    login = f'mcp-first-voice-{width}'
+    live.add_user(login)
+    model = {'type': 'string', 'enum': ['qwen3-tts'], 'default': 'qwen3-tts'}
+    engine = {'type': 'string', 'enum': ['clone'], 'default': 'clone'}
+    reference = {'reference_artifact_id': TEXT, 'reference_text': TEXT}
+    calls = serve(live.gw, {
+        'speech_synthesize': {'properties': {'text': TEXT, 'model': model, 'engine': engine, **reference},
+                              'required': ['text', *reference]},
+        **SERVICE,
+    })
+    phrase = 'Какой чудесный день!'
+    result = browser.drive(live.url + '/', [*start(login), add_gateway(), *go('speech'),
+        ('wait', "document.querySelector('#section-mcp-tool option[value$=\":speech_synthesize\"]')"),
+        choose('speech_synthesize'), ('type', '#speech-text', phrase),
+        ('eval', 'hint', "document.querySelector('#speech-voice-hint:not([hidden])')?.textContent ?? ''"),
+        ('eval', 'blocked', """(() => {
+          document.querySelector('#speech-composer').requestSubmit();
+          return [document.querySelector('#speech-go').disabled, document.querySelector('#section-mcp-result').textContent];
+        })()"""),
+        ('eval', 'fits', NO_OVERFLOW),
+        ('click', '#speech-add-voice'), ('wait', is_open('#voice-dialog')),
+        ('type', '#voice-dialog [name=name]', 'Мой первый голос'),
+        put_audio('#voice-files', wav_of(6.0), 'sample.wav'),
+        ('wait', "document.querySelector('#voice-dialog [name=text]').value === 'распознано' && "
+                 "!document.querySelector('#voice-save').disabled"),
+        ('click', '#voice-save'),
+        ('wait', "document.querySelector('#chip-voice option:checked')?.textContent === 'Мой первый голос' && "
+                 "document.querySelector('#speech-go')?.offsetWidth > 0"),
+        ('eval', 'draft', "document.querySelector('#speech-text').value"),
+        ('click', '#speech-go'), ('wait', "document.querySelector('#section-mcp-result pre')?.textContent === 'ok'")],
+        width=width, mobile=width == 320)
+    assert result['values']['blocked'] == [True, ''], result
+    assert not result.get('failed'), result
+    assert 'образец голоса' in result['values']['hint']
+    assert result['values']['fits'] and result['values']['draft'] == phrase
+    assert [name for name, _ in calls] == ['artifact_upload', 'speech_synthesize']
+    assert calls[1][1] == {'text': phrase, 'model': 'qwen3-tts', 'engine': 'clone', 'reference_artifact_id': UPLOADED,
+                           'reference_text': 'распознано'}
     assert not problems(result), result.get('log')
 
 
