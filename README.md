@@ -40,7 +40,7 @@ The server runs on infrastructure you control. Connect local models through the 
 
 - Multiple conversations, model switching and persistent history grouped by day.
 - Streaming answers with Markdown, tables, syntax highlighting, copy, stop and regenerate.
-- Generate another answer from the same prompt, switch between answer variants and fork a conversation. Supported server-routed models can summarize long context and continue answering when they reach the context limit.
+- Generate another answer from the same prompt, switch between variants and compare them side by side on wider screens. Studio can summarize older turns and continue answers that hit a length limit in server-routed chats.
 - Up to 10 attachments per message: images, PDF, DOCX, text and code files; scanned PDFs can pass through OCR before the model answers, and large documents and **knowledge bases** reach the model as excerpts found for the question.
 - Tool-call confirmation and model questions as buttons under the answer, a work plan above the answer and optional personal **memory** across conversations.
 - Profile and MCP prompt suggestions, a context-usage ring and **Talk** mode: speak and hear the answer read aloud.
