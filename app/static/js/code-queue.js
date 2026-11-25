@@ -3,8 +3,11 @@ import { tr } from './i18n.js';
 import { api } from './api.js';
 import { el } from './ui.js';
 
-export function queueView(host, { endpoint, failed, request = api }) {
-  const box = el('section', { id: 'code-queue', class: 'code-queue', 'aria-label': tr("Очередь заданий"), hidden: true });
+/* `labels` — подписи вида (у «Чата» свои); по умолчанию — «Агентов» */
+export function queueView(host, { endpoint, failed, request = api, labels = {} }) {
+  const words = { region: tr("Очередь заданий"), waiting: tr("После текущей задачи"), field: tr("Задание из очереди"),
+    edit: tr("Изменить ожидающее задание"), remove: tr("Удалить ожидающее задание"), ...labels };
+  const box = el('section', { id: 'code-queue', class: 'code-queue', 'aria-label': words.region, hidden: true });
   host.append(box);
   let items = [], foreign = false, pending = false, editing = null, alive = true, paused = false, epoch = 0;
 
@@ -66,7 +69,7 @@ export function queueView(host, { endpoint, failed, request = api }) {
   function paint() {
     box.hidden = !items.length && !paused;
     host.hidden = box.hidden;
-    box.replaceChildren(el('div', { class: 'small muted' }, paused ? tr("Очередь на паузе") : tr("После текущей задачи")));
+    box.replaceChildren(el('div', { class: 'small muted' }, paused ? tr("Очередь на паузе") : words.waiting));
     if (paused && !editing) {
       const next = el('button', { type: 'button', class: 'btn btn-sm', disabled: pending || foreign }, tr("Продолжить очередь"));
       next.addEventListener('click', async () => {
@@ -78,7 +81,7 @@ export function queueView(host, { endpoint, failed, request = api }) {
       const row = el('div', { class: 'code-queue-item', 'data-id': item.id });
       if (editing?.id === item.id) {
         const text = el('textarea', { class: 'input code-queue-text', rows: '3', maxlength: '100000',
-          'aria-label': tr("Задание из очереди"), disabled: pending || foreign });
+          'aria-label': words.field, disabled: pending || foreign });
         text.value = editing.value;
         text.addEventListener('input', () => { editing.value = text.value; });
         const save = el('button', { type: 'button', class: 'btn btn-sm', disabled: pending || foreign }, tr("Сохранить"));
@@ -90,10 +93,10 @@ export function queueView(host, { endpoint, failed, request = api }) {
         row.append(text, el('div', { class: 'code-queue-actions' }, save, cancel));
       } else {
         const editButton = el('button', { type: 'button', class: 'btn btn-sm', disabled: pending || foreign || !!editing,
-          'aria-label': tr("Изменить ожидающее задание") }, tr("Изменить"));
+          'aria-label': words.edit }, tr("Изменить"));
         editButton.addEventListener('click', () => edit(item));
         const remove = el('button', { type: 'button', class: 'btn btn-sm', disabled: pending || foreign || !!editing,
-          'aria-label': tr("Удалить ожидающее задание") }, tr("Удалить"));
+          'aria-label': words.remove }, tr("Удалить"));
         remove.addEventListener('click', () => change(item, null));
         row.append(el('div', { class: 'code-queue-preview' }, item.text),
           el('div', { class: 'code-queue-actions' }, editButton, remove));

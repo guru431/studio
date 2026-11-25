@@ -63,6 +63,9 @@ def test_queue_sends_once_after_the_answer(browser, live):                 # Rev
             ("wait", f"{QUEUED}.length === 1"),
             ("eval", "queued", QUEUED), ("eval", "field", FIELD),
             ("eval", "later", "!document.querySelector('#queue-add').hidden"),
+            ("eval", "words", "(() => { const q = document.querySelector('#code-queue'); return [q.getAttribute('aria-label'),"
+                              " q.querySelector('.small').textContent,"
+                              " ...[...q.querySelectorAll('.code-queue-actions button')].map(b => b.getAttribute('aria-label'))]; })()"),
             *[step for n in ("3", "4", "5", "6") for step in (
                 ("type", "#chat-input", n), ("click", "#queue-add"), ("wait", f"{QUEUED}.at(-1) === {n!r}"))],
             ("type", "#chat-input", "Шестое"), ("press", "Enter"),
@@ -79,6 +82,8 @@ def test_queue_sends_once_after_the_answer(browser, live):                 # Rev
     assert not r.get("failed"), r
     v = r["values"]
     assert v["queued"] == ["Второй"] and v["field"] == "" and v["later"] is True
+    # слова «Чата», а не «Агентов» (queueView, `labels`)
+    assert v["words"] == ["Очередь сообщений", "После ответа", "Изменить ожидающее сообщение", "Удалить ожидающее сообщение"]
     assert v["sixth"] == ["В очереди не больше 5 сообщений", "Шестое"]
     assert v["users"] == ["Первый", "Второй", "3", "4", "5", "6"]
     assert len(live.gw.chat_requests) == before + 6

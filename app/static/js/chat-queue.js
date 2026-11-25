@@ -40,7 +40,9 @@ window.addEventListener('pagehide', () => {
 export function chatQueue(host, { send, failed }) {
   let shown = null;
   const free = new Map();          // id диалога → последний `free` хозяина
-  const view = queueView(host, { endpoint: (tail) => tail, request, failed });
+  const view = queueView(host, { endpoint: (tail) => tail, request, failed, labels: { region: tr("Очередь сообщений"),
+    waiting: tr("После ответа"), field: tr("Сообщение из очереди"), edit: tr("Изменить ожидающее сообщение"),
+    remove: tr("Удалить ожидающее сообщение") } });
   const self = { paint };
   current = self;
 
