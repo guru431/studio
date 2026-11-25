@@ -40,7 +40,7 @@ const DETAILS = { password: tr("паролем"), pin: 'PIN', passkey: tr("кл�
   mail: tr("— почта подтверждена письмом"), admin: tr("— почту вписал администратор"),
   // раздел записи у ссылки «Поделиться» (chat_shares.ITEMS)
   transcribe: sectionName('transcribe'), translate: sectionName('translate'), ocr: sectionName('ocr'),
-  photo: sectionName('photo'), video: sectionName('video') };
+  photo: sectionName('photo'), video: sectionName('video'), speech: sectionName('speech'), owui: sectionName('owui') };
 
 function moment(ts) {
   return ts ? dateTime(ts, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -225,6 +225,9 @@ export function accessBlock(host) {
       s.fails ? tr("неверных PIN: {0}", s.fails) : null].filter(Boolean).join(' · ');
     // чат в корзине: ссылка получателю недоступна, пока его не вернут; открыть его — со страницы «Корзина»
     const href = s.trashed ? '#/trash' : s.chat_id ? `#/chat/${encodeURIComponent(s.chat_id)}`
+      // переписка Open WebUI: `item_id` — "<учётка>:<чат>"
+      : item && s.kind === 'owui' ? `#/owui/${s.item_id.slice(0, s.item_id.indexOf(':'))}/${encodeURIComponent(s.item_id.slice(s.item_id.indexOf(':') + 1))}`
+      : item && s.kind === 'speech' ? `#/speech?chat=${encodeURIComponent(s.item_id)}`   // `item_id` — id чата озвучки
       : item ? `#/${s.kind}?id=${encodeURIComponent(s.item_id)}`
         : s.session_id ? `#/code/${s.computer_id}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session_id)}` : null;
     const info = el('div', { class: 'session-info' },

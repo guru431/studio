@@ -28,6 +28,7 @@ import { schemaLimits, sectionMcp } from './mcp-sections.js';
 import { modelLabel } from './settings.js';
 import { picker } from './picker.js';
 import { chatPlayer } from './speech-read.js';
+import { shareDialog } from './chat-share.js';
 import { el, openDialog, plural, withCard, words } from './ui.js';
 import { timeOnly } from './time.js';
 import { editVoice, holdVoiceEditor } from './voice-editor.js';
@@ -119,10 +120,18 @@ function build(view, ctx) {
     tr("Скачать одним mp3"));
   const cancelChat = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-cancel-chat', hidden: true },
     tr("Отменить"));
+  const share = el('button', { type: 'button', class: 'btn btn-sm', id: 'sp-share', hidden: true }, tr("Поделиться"));
+  share.addEventListener('click', () => {
+    const chat = records.current;
+    if (!chat) return;
+    const first = chat.items.find((i) => i.state === 'done' && i.media_id);
+    shareDialog(view, `/api/speeches/chats/${encodeURIComponent(chat.id)}/share`, (first?.text || '').slice(0, 80),
+      api, { kind: 'speech_chats' });
+  });
   const chainBox = el('div', { class: 'read-box', id: 'sp-chain' });
   let chain = null;              // «Слушать подряд» показанного чата: { box, stop }
   const head = el('header', { class: 'head' }, el('h1', {}, NAMES.speech));
-  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, playAll, downloadAll, cancelChat, dropChat);
+  const toolbar = el('div', { class: 'split-toolbar sp-toolbar' }, toggle, fresh, playAll, downloadAll, cancelChat, share, dropChat);
   const error = el('p', { class: 'error tr-error', 'aria-live': 'polite' });
   const body = el('div', { class: 'tr-view sp-view' });
 
@@ -547,6 +556,8 @@ function build(view, ctx) {
     playAll.hidden = items.length < 2;
     downloadAll.hidden = items.length < 2 || !items.some((i) => i.media_id && !RUNNING.has(i.state));
     cancelChat.hidden = items.length < 2 || !items.some((i) => RUNNING.has(i.state));
+    // ссылка — снимок готовых озвучек (chat_shares `speech_chats`): пока что-то идёт, сервер ответит 409 `running`
+    share.hidden = !items.some((i) => i.state === 'done' && i.media_id) || items.some((i) => RUNNING.has(i.state));
     if (live && !items.some((i) => i.id === live.id && RUNNING.has(i.state))) {
       live.audio.pause();
       live = null;
@@ -684,11 +695,15 @@ function build(view, ctx) {
   const choicesReady = loadChoices();
   /** Список и ?id «В работе»: выбрать озвучку, ?id из адреса убрать — при сборке и при переходе внутри
    * раздела (update; список заново — запись могла начаться на другом устройстве). */
-  async function follow(wanted) {
+  async function follow(wanted, chat = null) {
     const mine = ++following;
     records.load();
-    if (!wanted) return;
+    if (!wanted && !chat) return;
     history.replaceState(history.state, '', '#/speech');
+    if (chat) {                    // ?chat=<chat_id> — «Открыть запись» ссылки чата озвучки («Доступы и ссылки»)
+      select(chat);
+      return;
+    }
     try {
       const item = await api('GET', `/api/speeches/${encodeURIComponent(wanted)}`);
       if (alive && mine === following) select(item.chat_id);
@@ -696,7 +711,7 @@ function build(view, ctx) {
       if (alive && mine === following) error.textContent = words(err);
     }
   }
-  follow(ctx.query.get('id'));
+  follow(ctx.query.get('id'), ctx.query.get('chat'));
 
   return {
     follow,
@@ -718,10 +733,11 @@ export function mount(view, ctx) {
   screen = build(view, ctx);
 }
 
-/** Переход внутри открытого раздела (#/speech?id=…): только ?id — набранный текст и голос целы. */
+/** Переход внутри открытого раздела (#/speech?id=… или ?chat=…): набранный текст и голос целы. */
 export function update(ctx) {
   const wanted = ctx.query.get('id');
-  if (screen && wanted) screen.follow(wanted);
+  const chat = ctx.query.get('chat');
+  if (screen && (wanted || chat)) screen.follow(wanted, chat);
 }
 
 export function hold() {

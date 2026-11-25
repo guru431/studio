@@ -2703,6 +2703,9 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .owui-body:has(.owui-chat-view) { padding: 0; }
 .owui-chat-view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--space-3); }
 .owui-chat-view .owui-feed-title { padding: var(--space-5) var(--space-7) 0; font-size: var(--fs-lg); }
+/* шапка ленты: название и «Поделиться и экспортировать» (#owui-share) */
+.owui-feed-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-5) var(--space-7) 0; min-width: 0; }
+.owui-chat-view .owui-feed-head .owui-feed-title { flex: 1; min-width: 0; padding: 0; }
 .owui-feed-title:empty { display: none; }
 .owui-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .owui-feed-list { width: 100%; max-width: 800px; min-height: 100%; margin: 0 auto; padding: var(--space-6) var(--space-7);
@@ -2745,6 +2748,7 @@ details.owui-tool[open] { flex-basis: 100%; }
   .owui-panel-toggle { display: inline-grid; margin-left: -6px; }
   .owui-body { padding: var(--space-6); }
   .owui-chat-view .owui-feed-title { padding: var(--space-4) var(--space-6) 0; }
+  .owui-feed-head { padding: var(--space-4) var(--space-6) 0; }
   .owui-feed-list { padding: var(--space-5) var(--space-6); }
   .owui-queued, .owui-chat-error, .owui-cleaner-note { margin: 0 var(--space-6); }
 }

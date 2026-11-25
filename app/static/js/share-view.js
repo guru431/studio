@@ -140,8 +140,29 @@ const KINDS = {
   scans: [tr("Только чтение · скан"), tr("Скан")],
   images: [tr("Только чтение · картинка"), tr("Картинка")],
   videos: [tr("Только чтение · ролик"), tr("Ролик")],
+  speech_chats: [tr("Только чтение · чат озвучки"), tr("Чат озвучки")],
 };
-const SHOWN = { images: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], videos: ['video/mp4', 'video/webm'] };
+const SHOWN = { images: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], videos: ['video/mp4', 'video/webm'],
+  speech_chats: ['audio/mpeg'] };
+
+/* запись чата озвучки: «Слушать» — байты по read-токену в `audio` рядом (blob с типом из снимка) */
+async function listen(file, box, button) {
+  const current = access;
+  button.disabled = true;
+  try {
+    const blob = await (await request('/share/file', { access: current, file: file.file })).blob();
+    if (access !== current) return;
+    const href = URL.createObjectURL(new Blob([blob], { type: file.mime }));
+    blobs.add(href);
+    const audio = el('audio', { class: 'shared-audio', src: href, controls: true, preload: 'auto' });
+    box.replaceChildren(audio);
+    audio.play().catch(() => {});
+  } catch (err) {
+    if (access !== current) return;
+    if (err.status === 404) clear(err.message);
+    else box.replaceChildren(el('p', { class: 'error' }, err.message || tr("Не удалось загрузить файл")));
+  } finally { button.disabled = false; }
+}
 
 function stamp(sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0));
@@ -215,6 +236,20 @@ function itemNodes(item, markdown) {
     nodes.push(box, el('section', { class: 'shared-part' }, el('h2', {}, tr("Промпт")), text(item.prompt, false),
       typeof item.model === 'string' && item.model ? el('p', { class: 'muted small' }, tr("Модель: {0}", item.model)) : null),
     file ? fileButtons([file]) : null);
+  } else if (item.kind === 'speech_chats') {
+    for (const record of Array.isArray(item.records) ? item.records : []) {
+      if (!record || typeof record.text !== 'string') continue;
+      const file = record.file && typeof record.file.file === 'string' ? record.file : null;
+      const player = el('div', { class: 'shared-media' });
+      const play = file && SHOWN.speech_chats.includes(file.mime)
+        ? el('button', { type: 'button', class: 'btn btn-sm shared-listen' }, tr("Слушать")) : null;
+      play?.addEventListener('click', () => listen(file, player, play));
+      const save = file ? el('button', { type: 'button', class: 'btn btn-sm' }, tr("Скачать")) : null;
+      save?.addEventListener('click', () => download(file, save));
+      nodes.push(el('section', { class: 'shared-part shared-record' }, text(record.text, false),
+        typeof record.voice === 'string' && record.voice ? el('p', { class: 'muted small' }, tr("Голос: {0}", record.voice)) : null,
+        el('div', { class: 'shared-files' }, play, save), player));
+    }
   }
   if (Array.isArray(item.attachments) && item.attachments.length) {
     nodes.push(el('section', { class: 'shared-part' }, el('h2', {}, tr("Файлы")), fileButtons(item.attachments)));
@@ -269,8 +304,9 @@ form.addEventListener('submit', async (event) => {
       // Правка файла — тем же диффом, что в «Агентах»; без неё — сырой ввод инструмента.
       const stepNode = (step) => {
         const diff = changeView?.(step.changes);
+        // у шага Open WebUI входа нет — только результат
         return el('details', {}, el('summary', {}, partText(step.name || step.tool || tr("Команда"))),
-          diff || el('pre', {}, partText(step.input)), el('pre', {}, partText(step.text)));
+          diff || ('input' in step ? el('pre', {}, partText(step.input)) : null), el('pre', {}, partText(step.text)));
       };
       const text = typeof message.text === 'string' ? message.text : '';
       const steps = Array.isArray(message.steps) ? message.steps : [];
@@ -323,6 +359,12 @@ form.addEventListener('submit', async (event) => {
         files.append(button);
       }
       node.append(files);
+      // переписка Open WebUI: файлы — только имена, сами они остались в Open WebUI
+      const names = Array.isArray(message.files) ? message.files.filter((n) => typeof n === 'string' && n) : [];
+      if (names.length) {
+        node.append(el('div', { class: 'shared-owui-files' }, el('p', { class: 'muted small' }, tr("Файлы остались в Open WebUI:")),
+          el('ul', { class: 'small' }, ...names.map((n) => el('li', {}, n)))));
+      }
       feed.append(node);
     }
     if (!item && !snapshot.messages.length) feed.append(el('p', { class: 'muted' }, tr("В этом чате пока нет сообщений")));

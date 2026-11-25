@@ -46,7 +46,7 @@ export function shareMenu(host, { id, content = null, request = api, failed = ()
       const fragment = key === 'selection' ? selected : null;
       if ((key === 'selection' && !fragment) || (key === 'link' && !current.share) || (key === 'zip' && !current.archive)) return;
       close();
-      if (key === 'link') { shareDialog(host, current.share, current.title, request); return; }
+      if (key === 'link') { shareDialog(host, current.share, current.title, request, { kind: current.kind ?? null }); return; }
       busy = true;
       trigger.disabled = true;
       trigger.setAttribute('aria-busy', 'true');
@@ -146,6 +146,10 @@ const KINDS = {
     intro: tr("Получатель увидит картинку и её промпт, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
   videos: { title: tr("Поделиться роликом"),
     intro: tr("Получатель увидит ролик и его промпт, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+  speech_chats: { title: tr("Поделиться чатом озвучки"),
+    intro: tr("Получатель увидит тексты готовых озвучек по порядку, сможет их прослушать и скачать, только для чтения. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
+  owui: { title: tr("Поделиться чатом Open WebUI"),
+    intro: tr("Получатель увидит снимок переписки, только для чтения; файлы — только именами, сами они остаются в Open WebUI. При каждом открытии нужен PIN. Передайте его отдельно от ссылки.") },
 };
 
 /** Окно ссылки. `kind` — запись раздела (KINDS), `source` — есть ли у неё исходный файл, который можно приложить.

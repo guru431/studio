@@ -19,6 +19,7 @@ import { tr } from './i18n.js';
  *   сообщения), «Остановить» (POST …/stop) — пока в чате идёт ответ; ответ сервера `queued` — «в очереди».
  * Тексты пользователя, ответы модели, названия чатов и слова Open WebUI — только textContent/разметкой, без перевода. */
 import { api } from './api.js';
+import { shareMenu } from './chat-share.js';
 import { enterSends, fieldBox } from './field.js';
 import { icon, iconButton } from './icons.js';
 import { renderMarkdownInto } from './markdown.js';
@@ -83,9 +84,17 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
   const inputBox = fieldBox(input, { attach: clip });
   const form = el('form', { class: 'composer owui-composer', id: 'owui-composer', hidden: readOnly }, chips, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick.wrap), stop, send));
+  const feedHead = el('div', { class: 'owui-feed-head' }, titleNode);
   const root = el('div', { class: 'owui-chat-view', id: 'owui-feed', 'data-account': String(account) },
-    titleNode, scroller, queuedNote, notice, form);
+    feedHead, scroller, queuedNote, notice, form);
   host.append(root);
+  // «Поделиться и экспортировать» (owui_share.py): ссылка — снимок ветки, файлы — только именами
+  const sharing = shareMenu(root, { id: 'owui-share', content: scroller, failed: (err) => { notice.textContent = words(err); } });
+  feedHead.append(sharing.button);
+  function paintShare() {
+    const path = chat ? `${base}/chats/${encodeURIComponent(chat)}` : null;
+    sharing.set(path ? { share: `${path}/share`, export: `${path}/export`, title: titleNode.textContent, kind: 'owui' } : null);
+  }
   if (readOnly) root.append(stop);
 
   /* ---- лента ---- */
@@ -253,6 +262,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
         return false;
       });
       titleNode.textContent = data.title || tr("Без названия");
+      paintShare();
       chatModel = Array.isArray(data.models) && typeof data.models[0] === 'string' ? data.models[0] : null;
       chooseModel();
       notice.textContent = '';
@@ -426,6 +436,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
         messages = [localUser(text, files), placeholder(out.message_id, model)];
         active = true;
         titleNode.textContent = tr("Новый чат");
+        paintShare();
         created(chat);
       } else {
         const parent = messages[messages.length - 1]?.id;
@@ -572,6 +583,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       sync();
     } else if (type === 'title' && typeof data.title === 'string') {
       titleNode.textContent = data.title || tr("Без названия");
+      paintShare();
     } else if (type === 'queued') {
       queuedNote.hidden = false;
       queuedNote.textContent = tr("Сообщение в очереди: Open WebUI отправит его после текущего ответа");
@@ -597,6 +609,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       }
       clearTimeout(reloadTimer);
       cancelAnimationFrame(paintFrame);
+      sharing.unmount();
       modelPick.unmount();
       root.remove();
     },
