@@ -4,6 +4,8 @@
 import logging
 from pathlib import Path
 
+from fastapi import HTTPException
+
 import chat
 import chat_continue
 import state
@@ -149,6 +151,18 @@ def test_continue_refusals_create_nothing(studio):
                      " VALUES ('u1', ?, 'user', 'a', 'done', 'browser', 'm', 1), ('a1', ?, 'assistant', 'b', 'done',"
                      " 'browser', 'm', 2)", (other, other))
     assert refused(studio, other) == (409, "no_compact")
+    # слова — об итоге, не о сжатии (коды прежние)
+    assert go(studio, other).json()["detail"]["message"] == chat_continue.NO_SUMMARY
+    chat.COMPACTING.add(cid)
+    try:
+        assert refused(studio, cid) == (409, "busy")
+        assert go(studio, cid).json()["detail"]["message"] == chat_continue.BUSY
+    finally:
+        chat.COMPACTING.discard(cid)
+    no_limit = chat_continue._reworded(HTTPException(409, {"code": "no_limit", "message": "x"}))
+    assert no_limit.detail == {"code": "no_limit", "message": chat_continue.NO_LIMIT}
+    streaming = HTTPException(409, {"code": "busy", "message": "ответ ещё идёт"})
+    assert chat_continue._reworded(streaming) is streaming                 # прочие отказы — как есть
     # диалог в корзине и чужая учётка — 404
     assert studio.c.delete(f"/api/chats/{other}").status_code == 204
     assert refused(studio, other) == (404, "gone")

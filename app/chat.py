@@ -2956,11 +2956,14 @@ def _free_attachments(user_id: int, ids: list[str]) -> list:
     return rows
 
 
+COMPACTING_BUSY = "диалог сжимается — дождитесь"
+
+
 def _busy(chat_id: str) -> None:
     """Идёт ответ через сервер — его поток или строка `streaming` (поток ещё не запущен: ход читает
     фото) — или ответ из браузера, который вкладка ещё читает. Идёт «Сжать сейчас» (COMPACTING) — тоже."""
     if chat_id in COMPACTING:
-        raise HTTPException(409, {"code": "busy", "message": "диалог сжимается — дождитесь"})
+        raise HTTPException(409, {"code": "busy", "message": COMPACTING_BUSY})
     if _chat_streams(chat_id) or state.DB.execute(
             "SELECT 1 FROM messages WHERE chat_id = ? AND status = 'streaming' AND via = 'server' LIMIT 1",
             (chat_id,)).fetchone():

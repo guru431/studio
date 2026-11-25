@@ -775,7 +775,9 @@ Studio проксирует файлы через исходное подклю�
   (`chat_continue.NOTHING`); диалог через Cleaner, предпросмотр или шлюз, — 409 `cleaner` со словами
   `chat_continue.CLEANER` (контексты замен Cleaner привязаны к диалогу); прочие — как у `/compact`: 409 `busy`,
   `no_connection`, `no_compact` (прямое подключение, MCP-модель), `no_limit`, `changed`, `external`; 413 `context`;
-  503 `card`; 502 `upstream`. После отказа диалогов не прибавляется. Проверки — `test_chat_continue.py`.
+  503 `card`; 502 `upstream`. Коды — те же, слова об итоге, а не о сжатии (`chat_continue._reworded`:
+  `chat_continue.NO_SUMMARY`, `chat_continue.NO_LIMIT`, `chat_continue.BUSY` вместо `chat.COMPACTING_BUSY`). После
+  отказа диалогов не прибавляется. Проверки — `test_chat_continue.py`.
 - Страница: «Новый диалог с итогом» окна «Диалог и контекст» (`#chat-context-continue`, `chat-context-window.js`)
   зовёт маршрут и открывает наследника с итогом в поле (`openWith`). Ещё два места (`chat-continue.js`): отказ хода
   по длине (413 `context`) — строка `#chat-continue-offer` с кнопкой `#chat-continue` под `#chat-error`, и ответ с
