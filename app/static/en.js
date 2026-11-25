@@ -1291,6 +1291,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Сообщение из очереди требует подтверждения — отправьте его сами": "This queued message needs confirmation — send it yourself",
   "Сообщение уже отправлено": "The message has already been sent",
   "Очередь сообщений": "Message queue",
+  "Не удалось узнать, ушло ли сообщение — «Продолжить очередь» повторит его без задвоения": "Could not find out whether the message was sent — “Resume queue” will retry it without sending it twice",
   "Сообщение из очереди": "Queued message",
   "Изменить ожидающее сообщение": "Edit pending message",
   "Удалить ожидающее сообщение": "Delete pending message",

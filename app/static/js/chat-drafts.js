@@ -1,14 +1,19 @@
 /* Черновик на каждый диалог «Чата» (спека 2026-11-25-studio-skills-status-local-models, п. 21): текст поля — в
  * хранилище сессии вкладки по id диалога (dialog-drafts.js, ключ `studio-chat-drafts`), у нового диалога — `'new'`.
  * Вложения — только в памяти страницы (поле общее для диалогов). Блокировка и выход стирают черновики сами
- * (dialog-drafts.js). */
+ * (dialog-drafts.js). Квитанция `receipt` (id сообщения очереди, ушло ли которое — неизвестно, chat-queue.js) живёт,
+ * пока текст черновика тот же: такой текст уходит тем же `request_id`. */
 import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
 
 const store = draftStore(CHAT_DRAFTS);
 const keyOf = (id) => id ?? 'new';
 
 export function chatDrafts(input, { autosize }) {
-  const save = (id) => store.save(keyOf(id), input.value.trim() ? input.value : '');
+  const save = (id) => {
+    const text = input.value.trim() ? input.value : '';
+    const old = store.saved()[keyOf(id)];
+    store.save(keyOf(id), text, old?.receipt && old.text === text ? old.receipt : undefined);
+  };
   return {
     /** Открыт диалог `id`: в поле — его черновик (или пусто). */
     enter(id) {
@@ -19,6 +24,11 @@ export function chatDrafts(input, { autosize }) {
     leave: save,
     /** Человек набрал текст в поле диалога `id`. */
     typed: save,
+    /** `request_id` для текста `text` диалога `id`: квитанция черновика, если текст — тот же, иначе null. */
+    receipt(id, text) {
+      const saved = store.saved()[keyOf(id)];
+      return saved?.receipt && saved.text === text ? saved.receipt : null;
+    },
     /** Текст `text` ушёл в диалог `id`: черновик с тем же текстом больше не нужен (набранное заново — остаётся). */
     sent(id, text) {
       if (store.saved()[keyOf(id)]?.text === text) store.save(keyOf(id), '');

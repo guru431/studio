@@ -131,6 +131,92 @@ def test_queue_survives_a_turn_from_another_device(browser, live):         # Rev
     assert not known_refusals(problems(r), 409), problems(r)
 
 
+def test_queue_pauses_when_the_send_is_uncertain(browser, live):           # Review Focus 4: исход неизвестен
+    """POST хода «Второй» из очереди обрывается ошибкой сети до сервера: ушло ли — неизвестно. Сообщение снова в руках
+    человека (не «уже отправлено»), очередь на паузе со словами; «Продолжить очередь» отправляет его ровно один раз."""
+    live.add_user("queue-unsure")
+    before = len(live.gw.chat_requests)
+    live.gw.chat_hold = held_until("go-unsure")
+    cut = """(() => { const real = window.fetch; let once = true;
+      window.fetch = async (url, opts) => {
+        if (once && opts?.method === 'POST' && /\\/turns$/.test(String(url)) && String(opts.body).includes('"Второй"')) {
+          once = false; throw new TypeError('Failed to fetch');
+        }
+        return real(url, opts); };
+      return true; })()"""
+    saved = f"""(async () => (await {API}.api('GET', '/api/chats/' + {CHAT})).messages
+      .filter(m => m.role === 'user').map(m => m.content))()"""
+    resume = "[...document.querySelectorAll('#code-queue > button')].find(b => b.textContent === 'Продолжить очередь')"
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-unsure"),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", RUNNING),
+            ("eval", "cut", cut),
+            ("type", "#chat-input", "Второй"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            release("go-unsure"),
+            ("wait", f"{ANSWERED} && {resume} && {ERROR}.startsWith('Не удалось узнать')"),
+            pause(2500),                                   # квитанция: сервер хода не принимал — слова остаются
+            ("eval", "paused", f"[{QUEUED}, {ERROR}, {USERS}, !{resume}.disabled]"),
+            ("eval", "buttons", "[...document.querySelectorAll('#code-queue .code-queue-actions button')].every(b => !b.disabled)"),
+            ("eval", "resume", f"{resume}.click(); true"),
+            ("wait", f"{USERS}.length === 2 && {ANSWERED} && {QUEUED}.length === 0"),
+            pause(1500),
+            ("eval", "users", USERS), ("eval", "saved", saved)])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    words = "Не удалось узнать, ушло ли сообщение — «Продолжить очередь» повторит его без задвоения"
+    assert v["paused"] == [["Второй"], words, ["Первый"], True] and v["buttons"] is True
+    assert v["users"] == ["Первый", "Второй"] and v["saved"] == ["Первый", "Второй"]
+    assert len(live.gw.chat_requests) == before + 2
+    assert not problems(r), problems(r)
+
+
+def test_uncertain_message_returns_to_the_draft_with_its_receipt(browser, live):   # Review Focus 4
+    """Закрытие страницы при сообщении очереди с неизвестным исходом: текст — в черновик с квитанцией (id сообщения);
+    после перезагрузки Enter отправляет его тем же `request_id` — сервер принимает его один раз."""
+    live.add_user("queue-receipt")
+    before = len(live.gw.chat_requests)
+    live.gw.chat_hold = held_until("go-receipt")
+    cut = """(() => { const real = window.fetch; let once = true;
+      window.fetch = async (url, opts) => {
+        if (once && opts?.method === 'POST' && /\\/turns$/.test(String(url)) && String(opts.body).includes('"Второй"')) {
+          once = false; window.cutId = JSON.parse(opts.body).request_id; throw new TypeError('Failed to fetch');
+        }
+        return real(url, opts); };
+      return true; })()"""
+    stored = f"JSON.parse(sessionStorage.getItem('studio-chat-drafts') || 'null')?.items?.[{CHAT}]"
+    sent_id = """(() => { const real = window.fetch;
+      window.fetch = async (url, opts) => {
+        if (opts?.method === 'POST' && /\\/turns$/.test(String(url))) window.sentId = JSON.parse(opts.body).request_id;
+        return real(url, opts); };
+      return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-receipt"),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", RUNNING),
+            ("eval", "cut", cut),
+            ("type", "#chat-input", "Второй"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            release("go-receipt"),
+            ("wait", f"{ANSWERED} && {ERROR}.startsWith('Не удалось узнать')"),
+            ("eval", "hide", "window.dispatchEvent(new Event('pagehide')); true"),
+            ("eval", "draft", f"[{stored}?.text, {stored}?.receipt === window.cutId]"),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"
+                     f" && {USERS}.length === 1 && {FIELD} === 'Второй'"),
+            ("eval", "receipt", f"{stored}?.receipt"),
+            ("eval", "spy", sent_id),
+            ("press", "Enter"), ("wait", f"{USERS}.length === 2 && {ANSWERED}"),
+            ("eval", "same", "window.sentId"),
+            ("eval", "users", USERS)])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["draft"] == ["Второй", True] and v["same"] == v["receipt"] and v["receipt"]
+    assert v["users"] == ["Первый", "Второй"] and len(live.gw.chat_requests) == before + 2
+    assert not problems(r), problems(r)
+
+
 def test_queue_waits_for_the_pending_card(browser, live):                  # Review Focus 4: ждущая карточка
     live.add_user("queue-card")
     before = len(live.gw.chat_requests)

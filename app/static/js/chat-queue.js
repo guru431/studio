@@ -2,15 +2,18 @@
  * на диалог в памяти страницы, вид — queueView (code-queue.js) с ответами на его запросы здесь же. Первое сообщение
  * уходит само, когда хозяин зовёт `idle(id, true)` (ответ кончился, нет правки и ждущей карточки) и его диалог на
  * экране; id сообщения — `request_id` хода, так что повтор после обрыва связи не задваивает ход. Исходы `send(item)`:
- * принято — хозяин зовёт `done(id)`; `unknown` — ждём квитанцию (`done` или ничего); `busy` — ход на другом
- * устройстве, сообщение ждёт следующего `idle`; прочее — очередь на паузе до «Продолжить очередь».
- * Закрытие страницы (`pagehide`) дописывает неотправленное к черновику диалога через пустую строку. */
+ * принято — хозяин зовёт `done(id)`; `busy` — ход на другом устройстве, сообщение ждёт следующего `idle`; `unknown`
+ * (ушло ли — неизвестно) — сообщение остаётся первым с отметкой `uncertain`, очередь на паузе со словами:
+ * «Продолжить очередь» повторит его тем же `request_id` (принятое сервер не задвоит, а вернёт `replayed`), поздняя
+ * квитанция «принято» уберёт его (`done`), «не принято» — хозяин зовёт `unsure(id)`; прочее — пауза до «Продолжить
+ * очередь». Закрытие страницы (`pagehide`) дописывает неотправленное к черновику диалога через пустую строку; у
+ * черновика с сообщением `uncertain` — квитанция `receipt` (его id): тот же текст уйдёт тем же `request_id`. */
 import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { tr } from './i18n.js';
 import { queueView } from './code-queue.js';
 
 export const QUEUE_MAX = 5;
-const queues = new Map();        // id диалога → { items: [{ id, text, version, sending }], paused }
+const queues = new Map();        // id диалога → { items: [{ id, text, version, sending, uncertain }], paused }
 let current = null;              // вид на экране: { paint() }
 
 function entryOf(id) {
@@ -27,10 +30,12 @@ window.addEventListener('pagehide', () => {
   const drafts = draftStore(CHAT_DRAFTS);
   for (const [id, entry] of queues) {
     // уходящее (`sending`) не возвращаем: сервер мог его принять — в черновике оно ушло бы второй раз
-    const texts = entry.items.filter((item) => !item.sending).map((item) => item.text);
-    if (!texts.length) continue;
+    const kept = entry.items.filter((item) => !item.sending);
+    if (!kept.length) continue;
     const typed = drafts.saved()[id]?.text || '';
-    drafts.save(id, [typed, ...texts].filter(Boolean).join('\n\n'));
+    // ушло ли — неизвестно: с квитанцией тот же текст уйдёт тем же `request_id` (chat-drafts.js `receipt`)
+    drafts.save(id, [typed, ...kept.map((item) => item.text)].filter(Boolean).join('\n\n'),
+      kept.find((item) => item.uncertain)?.id);
   }
   for (const entry of queues.values()) entry.items.length = 0;   // идущий `send` узнает, что очереди больше нет
   queues.clear();
@@ -85,10 +90,24 @@ export function chatQueue(host, { send, failed }) {
       // отказ — словами у хозяина
     }
     if (!entry.items.includes(item)) return;        // принято (done) или страница уже закрывается
-    if (outcome === 'unknown') return;              // исход неизвестен: держим до квитанции
+    if (outcome === 'unknown') { unsure(item.id); return; }
     item.sending = false;
     if (outcome !== 'busy') entry.paused = true;
     if (current === self) paint();
+  }
+
+  /* ушло ли сообщение `itemId` — неизвестно: оно снова в руках человека, очередь на паузе со словами */
+  function unsure(itemId) {
+    for (const [id, entry] of queues) {
+      const item = entry.items.find((row) => row.id === itemId);
+      if (!item) continue;
+      Object.assign(item, { sending: false, uncertain: true });
+      entry.paused = true;
+      if (id === shown && current === self) {
+        paint();
+        failed(new Error(tr("Не удалось узнать, ушло ли сообщение — «Продолжить очередь» повторит его без задвоения")));
+      }
+    }
   }
 
   function idle(id, isFree) {
@@ -115,6 +134,8 @@ export function chatQueue(host, { send, failed }) {
       paint();
     },
     idle,
+    /** Квитанция: ход сообщения `itemId` сервер не принимал (или исход неизвестен) — пауза со словами. */
+    unsure,
     /** Ход сообщения `itemId` принят сервером. */
     done(itemId) {
       for (const [id, entry] of queues) {

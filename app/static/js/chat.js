@@ -2413,9 +2413,14 @@ function build(view, ctx) {
       if (receipt?.accepted && data.messages.some((message) => message.id === receipt.assistant_message_id)) {
         acknowledgeTurn(attempt);
       }
+      // сообщение очереди сервер не принимал: оно ждёт «Продолжить очередь» (тот же `request_id`), квитанцию больше
+      // не спрашиваем
+      const unsent = receipt && !receipt.accepted && attempt.queued;
+      if (unsent && pendingTurn === attempt) pendingTurn = null;
       needsReload = !!(pendingTurn?.id === id && pendingTurn.uncertain);
       failures = needsReload ? failures + 1 : 0;
       notice.textContent = '';
+      if (unsent) queue.unsure(attempt.queued);
     } catch (err) {
       if (!alive || mine !== opened) return;
       notice.textContent = words(err);
@@ -2871,7 +2876,9 @@ function build(view, ctx) {
       pendingTurn = { signature, requestId: queuing.item.id, queued: queuing.item.id, id, regenerate, text, sent, edit,
         skill };
     } else if (pendingTurn?.signature !== signature || pendingTurn.queued) {
-      pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent, edit, skill };
+      // черновик с квитанцией сообщения очереди (chat-drafts.js): тот же текст — тем же `request_id`, без задвоения
+      const receipt = !regenerate && !edit && !sent.length && !skill ? dialogDrafts.receipt(id, text) : null;
+      pendingTurn = { signature, requestId: receipt || crypto.randomUUID(), id, regenerate, text, sent, edit, skill };
     }
     const attempt = pendingTurn;
     try {
