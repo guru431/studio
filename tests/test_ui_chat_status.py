@@ -408,7 +408,7 @@ KB_CHAT = f"""(async () => {{ const m = {API};
   location.hash = '#/chat/' + chat.id; return chat.id; }})()"""
 
 
-PICK ="""(async () => { const { answerSteps } = await import('/static/js/chat-status.js');
+PICK = """(async () => { const { answerSteps } = await import('/static/js/chat-status.js');
   const auto = { kind: 'knowledge', auto: true }, todo = { kind: 'todo' }, call = { kind: 'mcp' };
   return [{ tools: [auto], calls: [call] }, { tools: [auto] }, { tools: [auto, todo], calls: [call] }, {},
     { tools: [], calls: [call] }].map((m) => answerSteps(m).map((s) => s.kind)); })()"""

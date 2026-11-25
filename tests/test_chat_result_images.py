@@ -129,7 +129,7 @@ def test_pictures_wait_for_the_pause_and_follow_both_tool_messages(studio):
 
 def test_a_big_picture_result_keeps_its_text_and_picture(studio):
     """Ревью, п. 1: ответ `tools/call` больше MAX_BYTES (картинка ~3 МБ base64) не отвергается целиком —
-    предел вызова CALL_MAX_BYTES вмещает RESULT_IMAGES картинок предельного размера."""
+    предел вызова CALL_MAX_BYTES вмещает одну картинку предельного размера сверх MAX_BYTES текста."""
     raw = io.BytesIO()
     Image.frombytes("RGB", (900, 900), random.Random(1).randbytes(900 * 900 * 3)).save(raw, "PNG")
     data = base64.b64encode(raw.getvalue()).decode()
