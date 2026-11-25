@@ -280,15 +280,15 @@ def test_speech_chat_snapshot_title_is_the_first_voiced_record(studio):
 
 
 def test_speech_chat_title_in_access_list_skips_trashed_records(studio):
-    """Название в «Доступах и ссылках» — первая запись не из корзины, пока такие есть; весь чат в корзине — первая."""
+    """Название в «Доступах и ссылках» — как у получателя: первая озвученная запись не из корзины; нет такой — первая
+    не из корзины; весь чат в корзине — первая озвученная из всех."""
     cancelled_then_voiced(studio)
-    assert studio.c.get("/api/me/access").json()["shares"][0]["title"] == "Отменённая"
-    state.DB.execute("UPDATE speeches SET deleted = 5 WHERE id = 'c1'")          # первая запись — в корзину
-    listed = studio.c.get("/api/me/access").json()["shares"]
-    assert [(s["title"], s["trashed"]) for s in listed] == [("Озвученная", False)]
+    titles = lambda: [(s["title"], s["trashed"]) for s in studio.c.get("/api/me/access").json()["shares"]]  # noqa: E731
+    assert titles() == [("Озвученная", False)]                                  # отменённая первая — не название
+    state.DB.execute("UPDATE speeches SET deleted = 5 WHERE id = 'c2'")          # озвученная — в корзину
+    assert titles() == [("Отменённая", False)]
     state.DB.execute("UPDATE speeches SET deleted = 5")                          # весь чат — в корзину
-    listed = studio.c.get("/api/me/access").json()["shares"]
-    assert [(s["title"], s["trashed"]) for s in listed] == [("Отменённая", True)]
+    assert titles() == [("Озвученная", True)]
 
 
 def test_every_share_kind_has_a_live_rule():

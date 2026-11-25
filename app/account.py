@@ -268,18 +268,19 @@ def _label(blob) -> "str | None":
 
 def _item_share(row) -> dict:
     """Строка ссылки как dict; у ссылки на запись раздела (`chat_shares.SECTIONS`) — ещё `section`, название записи
-    (имя, у картинки и ролика — начало промпта, у чата «Озвучки» — начало первой записи, у переписки Open WebUI —
+    (имя, у картинки и ролика — начало промпта, у чата «Озвучки» — начало первой озвученной записи, у переписки Open WebUI —
     `label`) и в корзине ли она: тогда получателю ссылка недоступна."""
     import chat_shares
     out = dict(row) | {"section": None}
     kind = row["item_kind"]
     if kind == chat_shares.OWUI:                # переписка Open WebUI: название — шифром у ссылки
         return out | {"section": chat_shares.SECTIONS[kind], "title": _label(row["label"]), "trashed": False}
-    if kind == "speech_chats":                  # чат «Озвучки»: название — первая запись не из корзины (весь чат в
-        item = state.DB.execute(                # корзине — первая из всех), в корзине — нет живых
+    if kind == "speech_chats":                  # чат «Озвучки»: название — первая озвученная запись не из корзины,
+        item = state.DB.execute(                # как первая запись снимка получателя (иначе — первая не из корзины,
+            # весь чат в корзине — первая из всех); в корзине — нет живых
             "SELECT substr(text, 1, 80) AS title, NOT EXISTS (SELECT 1 FROM speeches WHERE chat_id = ? AND user_id = ?"
             " AND deleted IS NULL) AS trashed FROM speeches WHERE chat_id = ? AND user_id = ?"
-            " ORDER BY deleted IS NOT NULL, created, rowid LIMIT 1",
+            " ORDER BY deleted IS NOT NULL, NOT (state = 'done' AND media_id IS NOT NULL), created, rowid LIMIT 1",
             (row["item_id"], row["user_id"], row["item_id"], row["user_id"])).fetchone()
     elif kind in chat_shares.ITEMS:
         column = "prompt" if kind in ("images", "videos") else "name"
