@@ -355,7 +355,8 @@ async function readServer(job, response) {
         }
         job.tooled = true;                         // по концу — перечитать: источники в ответе с сервера
         // плашка до перечитывания — без итогов шагов; запрос согласия на файлы MCP — сразу блоком под ответом
-        (job.message.calls ||= []).push(data.consent ? { kind: data.kind, server: data.label, consent: data.consent } : { kind: data.kind });
+        (job.message.calls ||= []).push(data.consent ? { kind: data.kind, server: data.label, consent: data.consent }
+          : data.kind === 'part' ? { kind: 'part', label: data.label } : { kind: data.kind });   // часть — с названием
         notify(job, false);
       } else if (event === 'think' && data) {      // {text} — ход мысли виден, {} — модель только думает
         job.tool = null;                           // модель снова думает — инструмент кончился

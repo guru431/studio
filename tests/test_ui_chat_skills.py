@@ -25,6 +25,7 @@ CHAT = "location.hash.split('/')[2]"
 MENU_FITS = f"""(() => {{ const inside = (n) => {{ const r = n.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }};
   const menu = document.querySelector('#slash-menu');
   return {NO_OVERFLOW} && inside(menu) && [...menu.querySelectorAll('.slash-option')].every(inside); }})()"""
+TOOLS_PART = "document.querySelector('#chat-tools-menu .web-part')"
 CLEAR = f"(() => {{ {INPUT}.value = ''; {INPUT}.dispatchEvent(new Event('input', {{ bubbles: true }})); return true; }})()"
 
 
@@ -101,9 +102,21 @@ def test_skill_chip_message_edit_and_parts(browser, live, width, lang):
                           ["Итог части"], ["Общий ответ"]]
         sent = len(gw.chat_requests)
         part = "[...document.querySelectorAll('#messages .msg.assistant')].at(-1)?.querySelector('.web-part')"
+        # пока запрос части задержан: в окне «Шаги текущего ответа» — идущая часть со своим названием
+        gw.chat_hold = lambda: len(gw.chat_requests) == sent + 2
+        try:
+            r = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
+                ("wait", ANSWERED), *pick("частями"),
+                ("type", "#chat-input", "Большая задача"), ("press", "Enter"),
+                ("wait", "!document.querySelector('#chat-tools').hidden"),
+                ("click", "#chat-tools"), ("wait", f"{TOOLS_PART}"),
+                ("eval", "toolsPart", f"[{TOOLS_PART}.querySelector('.part-title').textContent, {TOOLS_PART}.querySelector('.part-state').textContent]")],
+                width=width, mobile=mobile, init=init)
+        finally:
+            gw.chat_hold = False
+        assert not r.get("failed"), r
+        assert r["values"]["toolsPart"] == ["Сбор", "running" if lang == "en" else "идёт"], r["values"]
         r = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
-            ("wait", ANSWERED), *pick("частями"),
-            ("type", "#chat-input", "Большая задача"), ("press", "Enter"),
             ("wait", f"{ANSWERED} && {part} && !document.querySelector('#chat-parts').hidden"),
             ("eval", "part", f"[{part}.querySelector('.part-title').textContent, {part}.querySelector('.part-state').textContent]"),
             ("eval", "partText", f"{part}.querySelector('.part-text').textContent"),

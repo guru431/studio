@@ -20,11 +20,13 @@ function clock(ms) {
 }
 
 export function partNode(step, { ended = false } = {}) {
-  const state = step.state === 'running' && ended ? 'cut' : step.state;
+  // вызов из события `tool` идущего ответа (`{kind, label}`, до события `part`) — идущая часть с названием из `label`
+  const going = step.state || 'running';
+  const state = going === 'running' && ended ? 'cut' : going;
   const word = state === 'cut' ? tr("прервана") : (STATES[state] || STATES.error)();
   const head = [
     el('span', { class: 'part-n' }, `${Number.isInteger(step.n) ? tr("Часть {0}", step.n) : tr("Часть")}: `),
-    el('span', { class: 'part-title' }, step.title || ''),
+    el('span', { class: 'part-title' }, step.title || step.label || ''),
     ' · ', el('span', { class: 'part-state' }, word),
     Number.isFinite(step.ms) ? ` · ${clock(step.ms)}` : null,
   ];
@@ -41,6 +43,9 @@ export function noteParts(m, data) {
   if (!m || !data || !Number.isInteger(data.n)) return;
   m.liveParts ||= new Map();
   m.liveParts.set(data.n, { ...(m.liveParts.get(data.n) || {}), kind: 'part', ...data });
+  // вызов этой части в `calls` (окно «Шаги текущего ответа»): последний `part` без номера или с тем же номером
+  const call = (m.calls || []).findLast((c) => c.kind === 'part' && (c.n === data.n || (c.n == null && c.label === data.title)));
+  if (call) Object.assign(call, { n: data.n, state: data.state, ...(Number.isFinite(data.ms) ? { ms: data.ms } : {}) });
 }
 
 /** Запущенные части ответа: шаги с сервера, а до перечитывания — события этой вкладки. */
