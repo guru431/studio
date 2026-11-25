@@ -103,14 +103,43 @@ STAGES = """(async () => {
     quiet: text({ first: true, stageKey: 'write', stageAt: now - 9000, eventAt: now - 9000, message: streaming }, streaming),
     silent: text({ first: true, stageKey: 'write', stageAt: now - 12000, eventAt: now - 12000, message: streaming }, streaming),
     silence: s.SILENCE_MS,
+    // ответ прямого подключения, брошенный другой вкладкой («прервано»), — не идущий; живой в другой — идёт
+    cut: s.stageOf(null, { status: 'streaming', via: 'browser', live: false })?.key ?? null,
+    elsewhere: s.stageOf(null, { status: 'streaming', via: 'browser', live: true })?.key ?? null,
+    builtin: text({ tool: { kind: 'todo', label: 'todo_write' }, message: streaming }, streaming),
   };
+})()"""
+
+# время стадии `tool` — с начала текущего вызова: новое событие `tool` сбрасывает его (paint строки)
+TOOL_RESTART = """(async () => {
+  const s = await import('/static/js/chat-status.js');
+  const host = document.body.appendChild(document.createElement('div'));
+  const ring = document.createElement('button');
+  const job = { message: { status: 'streaming', content: '', calls: [{ kind: 'mcp' }] }, started: Date.now() - 60000,
+    tool: { kind: 'mcp', label: 'A · one' } };
+  const bar = s.chatStatus(host, { ring, job: () => job, last: () => null, local: () => false,
+    stepNode: () => document.createElement('li'), stats: () => {}, files: () => {} });
+  host.append(bar.bar);
+  job.eventAt = Date.now();
+  bar.paint();
+  job.stageAt = Date.now() - 30000;
+  bar.paint();
+  const before = host.querySelector('#chat-activity').textContent;
+  job.tool = { kind: 'mcp', label: 'B · two' };
+  bar.paint();
+  const after = host.querySelector('#chat-activity').textContent;
+  bar.unmount(); host.remove();
+  return [before, after];
 })()"""
 
 
 def test_stage_words_card_queue_and_silence(browser, live):
-    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("eval", "v", STAGES)])
+    r = browser.drive(live.url + "/", [*signin(), ("wait", READY), ("eval", "v", STAGES), ("eval", "restart", TOOL_RESTART)])
     assert not r.get("failed"), r
     v = r["values"]["v"]
+    assert v["cut"] is None and v["elsewhere"] == "remote"
+    assert v["builtin"].startswith("инструмент todo_write · ")
+    assert r["values"]["restart"] == ["инструмент A · one · 0:30", "инструмент B · two · 0:00"]
     assert v["keys"] == ["card", "scan", "recovery", "tool", "think", "write", "load", "wait", "remote", "pending", None]
     assert v["card"] == "жду карту · 2 · ≈9 мин · 0:42"
     assert v["card_plain"] == "жду карту · 0:05" and v["card_silent"] == "жду карту · 0:20"   # карта — не «тишина»
@@ -262,6 +291,15 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
             ("eval", "menu", "[...document.querySelectorAll('#chat-title-menu .menu-option')].map(i => i.textContent.trim())"),
             ("click", "#chat-title-copy"), ("wait", "window.copied"),
             ("eval", "copied", "window.copied"),
+            ("wait", "!document.querySelector('#chat-title-note').hidden"),
+            ("eval", "copy_note", "document.querySelector('#chat-title-note').textContent"),
+            ("wait", "document.querySelector('#chat-title-note').hidden"),
+            ("eval", "clip_fail", """(() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); };
+              return true; })()"""),
+            ("click", "#chat-title-actions"), ("wait", "document.querySelector('#chat-title-menu:popover-open')"),
+            ("click", "#chat-title-copy"), ("wait", "document.querySelector('#chat-error').textContent"),
+            ("eval", "copy_fail", """[document.querySelector('#chat-error').textContent,
+              document.querySelector('#chat-error').offsetParent !== null, document.querySelector('#chat-title-note').hidden]"""),
             ("click", "#chat-title-actions"), ("wait", "document.querySelector('#chat-title-menu:popover-open')"),
             ("click", "#chat-title-rename"), ("wait", is_open("#rename-dialog")),
             ("eval", "clear", "document.querySelector('#rename-dialog input').value = ''"),
@@ -302,6 +340,7 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
         ("eval", "stats", """[...document.querySelectorAll('#chat-stats-dialog tbody tr')]
           .map(tr => [...tr.cells].map(c => c.textContent)).find(row => row[1] === 'm1').slice(1, 5)"""),
         ("eval", "fits", NO_OVERFLOW),
+        ("eval", "period", "document.querySelector('#chat-stats-dialog p.muted').textContent"),
         ("eval", "close_stats", "document.querySelector('#chat-stats-dialog').close(); true"),
         *go("settings/chat"),
         ("wait", "document.querySelector('#chat-stats-settings')"),
@@ -314,10 +353,13 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
     assert v["new"] == ["Чат", True] and v["title"] == ["Мой план", False]
     assert v["menu"] == ["Переименовать", "Удалить", "Скопировать адрес"]
     assert v["renamed"] == "Новое имя" and v["copied"].endswith(f"/#/chat/{cid}")
+    assert v["copy_note"] == "Адрес скопирован"                   # видимая отметка успеха, уходит сама
+    assert v["copy_fail"] == ["Не удалось скопировать адрес", True, True]   # отказ — видимой строкой #chat-error
     assert v["fcount"] == "2"
     assert v["files"] == ["Файлы диалога (2)", ["notes.txt", "p.png"], ["Скачать", "Открыть"]]
     assert v["tools_count"] == [False, "1"] and v["tools_steps"] == 1 and v["tools_after"] is True
     assert v["stats"] == ["m1", "2", "30", "12"] and v["settings"] is True
+    assert v["period"] == "Ответы ваших диалогов за 31 день по дням и моделям"
     assert v["fits"] is True and v["fits2"] is True
     assert not problems(r) and not problems(r2), (r.get("log"), r2.get("log"))
 
