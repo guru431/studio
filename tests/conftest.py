@@ -320,6 +320,7 @@ def studio(env, studio_db, monkeypatch, request):
     chat.STREAMS.clear()
     chat.LIMITS.clear()
     chat.NO_TOOLS.clear()
+    chat.NO_USAGE.clear()
     transcripts.JOBS.clear()
     card.TYPICAL.clear()                 # медианы прошлого теста (часы теста стоят)
     speech.LIMITS.clear()                # пределы речи прошлого теста (ключ — id подключения той базы)

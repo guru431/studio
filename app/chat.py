@@ -172,6 +172,14 @@ NO_MCP = "эта модель не поддерживает инструмент
 # метка на пару (id подключения, модель): NO_TOOLS_SEC её ходы идут без встроенных инструментов. Только память процесса
 NO_TOOLS: dict[tuple[int, str], float] = {}
 NO_TOOLS_SEC = 3600
+# `usage` потока: id подключений, отказавших `stream_options` (400/422 со словом из USAGE_MARKS); только память процесса
+NO_USAGE: set[int] = set()
+USAGE_MARKS = ("stream_options", "include_usage")
+# знаков на токен по `usage` (model_facts.ratio): ответ меньше RATIO_MIN_TOKENS не учит, вне RATIO_RANGE — выброс,
+# прежнее значение сдвигается на RATIO_BLEND к новому
+RATIO_MIN_TOKENS = 500
+RATIO_RANGE = (1.5, 6.0)
+RATIO_BLEND = 0.3
 NO_EXA_KEY = "сначала задайте ключ Exa в Настройках → Ввод и интернет → Интернет"   # PATCH {web: true} без ключа — 409
 #: PATCH {web: true} диалога, где сработал «Защищённый источник» MCP (`chats.protected_used`), — 409 `protected`
 PROTECTED_WEB = "в этом диалоге сработал защищённый источник — «Интернет» здесь не включается"
@@ -473,7 +481,10 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
            "tools": [web.public(file_step(s) if file_step else s) for s in steps], "reasoning": reasoning, "reasoning_sec": seconds,
            "ocr": live.scan_state if live else None, "wait": live.waited() if live else None,
            "card": card.info("chat", row["id"]) if live and live.card_wait is not None else None,
-           "todo": json.loads(row["todo"]) if row["todo"] else None}   # план ответа (chat_tools.TODO_WRITE)
+           "todo": json.loads(row["todo"]) if row["todo"] else None,   # план ответа (chat_tools.TODO_WRITE)
+           # токены `{in, out, cached, reasoning}` (чего шлюз не назвал — ключа нет) и время ответа; у идущего — null
+           "usage": json.loads(row["usage"]) if row["usage"] else None,
+           "gen_ms": row["gen_ms"], "total_ms": row["total_ms"]}
     if pending and row["id"] in pending:
         out["pending"] = pending[row["id"]]
     if live and live.recovery:
@@ -522,11 +533,14 @@ def _sane_strings(obj: dict) -> dict:
 
 
 def _finish(message_id: str, chat_id: str, content: str, status: str, reasoning: "str | None" = None,
-            reasoning_sec: "float | None" = None, error: "str | None" = None) -> bool:
-    """Итог идущего ответа (`error` — причина отказа словами); False — он уже сохранён (или удалён)."""
-    done = state.DB.execute("UPDATE messages SET content = ?, status = ?, reasoning = ?, reasoning_sec = ?, error = ?"
-                            " WHERE id = ? AND status = 'streaming'",
-                            (content, status, reasoning, reasoning_sec, error, message_id)).rowcount == 1
+            reasoning_sec: "float | None" = None, error: "str | None" = None, *, usage: "dict | None" = None,
+            gen_ms: "int | None" = None, total_ms: "int | None" = None) -> bool:
+    """Итог идущего ответа (`error` — причина отказа словами; `usage`, `gen_ms`, `total_ms` — токены и время ответа,
+    `StreamTask.metrics`); False — он уже сохранён (или удалён)."""
+    done = state.DB.execute("UPDATE messages SET content = ?, status = ?, reasoning = ?, reasoning_sec = ?, error = ?,"
+                            " usage = ?, gen_ms = ?, total_ms = ? WHERE id = ? AND status = 'streaming'",
+                            (content, status, reasoning, reasoning_sec, error,
+                             json.dumps(usage) if usage else None, gen_ms, total_ms, message_id)).rowcount == 1
     if done:
         state.DB.execute("UPDATE chats SET updated = ? WHERE id = ?", (clock.NOW(), chat_id))
     return done
@@ -989,6 +1003,17 @@ class StreamTask:
     history_end: int = 0
     recovery: str | None = None
     compacted: bool = False
+    #: токены ответа `{in, out, cached, reasoning}` — сумма по кругам с инструментами (служебные круги не входят)
+    usage: dict = field(default_factory=dict)
+    gen_sec: float | None = None     # время генерации: по кругам от первого фрагмента до конца потока; не было — None
+    spent_ms: int = 0                # время хода до паузы (продолжение прибавляет своё; ожидание человека не в счёт)
+    began: float = field(default_factory=lambda: clock.NOW())
+
+    def metrics(self) -> dict:
+        """Токены и время ответа — для `_finish` и события `done`."""
+        return {"usage": self.usage or None,
+                "gen_ms": None if self.gen_sec is None else round(self.gen_sec * 1000),
+                "total_ms": self.spent_ms + round((clock.NOW() - self.began) * 1000)}
 
     def waited(self) -> "float | None":
         """Секунды ожидания карты для страницы; не ждём — None."""
@@ -1155,18 +1180,24 @@ class StreamTask:
         400 с именем отправленного параметра профиля — profiles.REFUSED; прочий 400 (контекст, картинка) — словами
         шлюза. Подключение через Cleaner (`conn.routed`) — тот же запрос в шлюз Cleaner (`cleaner_route.stream`):
         контекст диалога, веб-инструменты без восстановления (`_held`), id запроса Cleaner — в
-        `messages.cleaner_request`; отказ самого Cleaner — его словами (`cleaner_route.words`), обхода нет."""
+        `messages.cleaner_request`; отказ самого Cleaner — его словами (`cleaner_route.words`), обхода нет.
+        Запрос просит `usage` потока (`stream_options`), пока подключение его не отвергло: 400/422 со словом из
+        USAGE_MARKS — подключение в NO_USAGE и тот же запрос один раз без параметра. `usage` круга (последний непустой
+        кусок) и время генерации — в ответ (`usage`, `gen_sec`; служебный круг `silent` — нет), знаки на токен —
+        `note_usage`."""
         ending, calls, text = None, {}, ""
+        usage, started = {}, None
         routed = self.conn.routed
+        sent = payload if self.conn.id in NO_USAGE else {**payload, "stream_options": {"include_usage": True}}
         timeout = httpx.Timeout(STREAM_READ_SEC, connect=30)
         try:
             if routed:
                 if self.cleaner_chat is None:
                     self.cleaner_chat = await cleaner_route.context(self.conn, "chat", self.chat_id)
                 opened = cleaner_route.stream(self.conn, "/chat/completions", remote=self.cleaner_chat,
-                                              hold=self._held(), json=payload, timeout=timeout)
+                                              hold=self._held(), json=sent, timeout=timeout)
             else:
-                opened = upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=payload,
+                opened = upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=sent,
                                          timeout=timeout)
             async with opened as r:
                 if routed and r.status_code == 200 and not silent:
@@ -1187,6 +1218,12 @@ class StreamTask:
                             self.cleaner_chat = None
                         return cleaner_route.words(r), None, [], text
                     lowered = r.text.lower()
+                    if (sent is not payload and r.status_code in (400, 422)
+                            and any(mark in lowered for mark in USAGE_MARKS)):
+                        NO_USAGE.add(self.conn.id)              # до перезапуска службы — без параметра
+                        log.info("чат %s: ответ %s — подключение %d не приняло stream_options", self.chat_id[:8],
+                                 self.message_id[:8], self.conn.id)
+                        return await self._round(payload, offer, builtin_only, silent=silent)
                     if offer and builtin_only and r.status_code == 400 and (
                             "tool" in lowered or any(marker in lowered for marker in profiles.REJECTED)):
                         return None, TOOLS_REFUSED, [], text
@@ -1221,6 +1258,8 @@ class StreamTask:
                         error = chunk["error"]
                         words = error.get("message") if isinstance(error, dict) else error
                         return f"модель прервала ответ: {str(words)[:300]}", None, [], text
+                    if isinstance(chunk.get("usage"), dict):    # vLLM — отдельным куском, иные шлюзы — в каждом
+                        usage = _usage_of(chunk["usage"]) or usage
                     for choice in chunk.get("choices") or []:
                         if not isinstance(choice, dict):
                             continue
@@ -1229,6 +1268,9 @@ class StreamTask:
                         thought = delta.get("reasoning_content")
                         if not (isinstance(thought, str) and thought):
                             thought = delta.get("reasoning")
+                        if started is None and ((isinstance(thought, str) and thought) or delta.get("tool_calls")
+                                                or (isinstance(delta.get("content"), str) and delta["content"])):
+                            started = clock.NOW()               # первый фрагмент: начало генерации круга
                         if not silent and isinstance(thought, str) and thought and (error := self._think(thought)) is not None:
                             return error, None, [], text
                         piece = delta.get("content")
@@ -1266,6 +1308,14 @@ class StreamTask:
             return f"шлюз недоступен: {type(e).__name__}", None, [], text
         finally:
             self._think_end()
+            if not silent and started is not None:
+                self.gen_sec = (self.gen_sec or 0.0) + clock.NOW() - started
+        if usage:
+            if not silent:                               # расход ответа: сумма по кругам
+                for key, value in usage.items():
+                    self.usage[key] = self.usage.get(key, 0) + value
+            if (chars := request_chars(sent)) is not None:
+                note_usage(self.conn.id, self.model, chars, usage)
         return None, ending, [calls[i] for i in sorted(calls)], text
 
     def _short_reasoning(self, payload):
@@ -1779,9 +1829,10 @@ class StreamTask:
             pings.cancel()
         self.card_wait = None
         thought = self.thought_out()
+        metrics = self.metrics()
         try:
             if (_finish(self.message_id, self.chat_id, self.content + (INTERRUPTED if self.shutdown else ""), status,
-                        *thought, error=error if status == "error" else None)
+                        *thought, error=error if status == "error" else None, **metrics)
                     and status != "stopped" and not self.shutdown and not self.paused):
                 _answered(self, status)
         except Exception as e:                       # noqa: BLE001 — ответ не должен остаться в STREAMS
@@ -1792,7 +1843,7 @@ class StreamTask:
             if STREAMS.get(self.message_id) is self:
                 del STREAMS[self.message_id]
         log.info("чат %s: ответ %s — %s", self.chat_id[:8], self.message_id[:8], status)
-        self.put(*(("error", error) if error is not None else ("done", _ended_with(status, thought[1]))))
+        self.put(*(("error", error) if error is not None else ("done", _ended_with(status, thought[1], metrics))))
 
 
 STREAMS: dict[str, StreamTask] = {}
@@ -1826,10 +1877,11 @@ async def _cancel(streams: list[StreamTask]) -> None:
     await asyncio.gather(*(st.task for st in streams), return_exceptions=True)
     for st in streams:
         status = "error" if st.shutdown else "stopped"
-        thought = st.thought_out()
+        thought, metrics = st.thought_out(), st.metrics()
         try:                                         # сбой одного итога не оставляет прочие (и lifespan) без своих
-            if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status, *thought):
-                st.put("done", _ended_with(status, thought[1]))
+            if _finish(st.message_id, st.chat_id, st.content + (INTERRUPTED if st.shutdown else ""), status, *thought,
+                       **metrics):
+                st.put("done", _ended_with(status, thought[1], metrics))
         except Exception as e:                       # noqa: BLE001
             log.warning("чат %s: ответ %s — итог не записан (%s)", st.chat_id[:8], st.message_id[:8], type(e).__name__)
         finally:
@@ -1866,10 +1918,12 @@ async def stop_all() -> None:
     await _cancel(streams)
 
 
-def _ended_with(status: str, reasoning_sec: "float | None") -> dict:
+def _ended_with(status: str, reasoning_sec: "float | None", metrics: "dict | None" = None) -> dict:
     """Данные события `done`: статус и секунды рассуждения, что записаны в `messages.reasoning_sec`, — страница
-    пишет их, а не свои часы (иначе «1 с» до перечитывания и «2 с» после)."""
-    return {"status": status} | ({"reasoning_sec": reasoning_sec} if reasoning_sec is not None else {})
+    пишет их, а не свои часы (иначе «1 с» до перечитывания и «2 с» после); `usage`, `gen_ms`, `total_ms` — всегда
+    (`StreamTask.metrics`, иначе null)."""
+    return ({"status": status} | ({"reasoning_sec": reasoning_sec} if reasoning_sec is not None else {})
+            | {"usage": None, "gen_ms": None, "total_ms": None} | (metrics or {}))
 
 
 def _sse(event: str, data: dict) -> str:
@@ -1944,7 +1998,7 @@ class _EventStream(StreamingResponse):
 async def _ended(user_message_id: str, answer_id: str, status: str):
     """Поток SSE хода, чей ответ кончился до запроса к модели (остановлен, пока ход читал фото)."""
     yield _sse("turn", {"user_message_id": user_message_id, "assistant_message_id": answer_id})
-    yield _sse("done", {"status": status})
+    yield _sse("done", {"status": status, "usage": None, "gen_ms": None, "total_ms": None})
 
 
 # ---- API: диалоги --------------------------------------------------------------
@@ -2774,6 +2828,57 @@ async def estimate(chat_id: str, body: EstimateIn, request: Request):
 def spec_tokens(specs: list[dict]) -> int:
     """Описания инструментов запроса в токенах — как `estimate_tokens`: знаки JSON / 3."""
     return math.ceil(len(json.dumps(specs, ensure_ascii=False)) / 3) if specs else 0
+
+
+def _usage_of(raw: dict) -> dict:
+    """`usage` шлюза → `{in, out, cached, reasoning}`: только целые >= 0 (не bool); чего нет — ключа нет."""
+    def number(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    given, made = raw.get("prompt_tokens_details"), raw.get("completion_tokens_details")
+    found = {"in": number(raw.get("prompt_tokens")), "out": number(raw.get("completion_tokens")),
+             "cached": number(given.get("cached_tokens")) if isinstance(given, dict) else None,
+             "reasoning": number(made.get("reasoning_tokens")) if isinstance(made, dict) else None}
+    return {key: value for key, value in found.items() if value is not None}
+
+
+def request_chars(payload: dict) -> "int | None":
+    """Знаков в запросе к модели: текст сообщений, аргументы `tool_calls` и описания инструментов (JSON); в запросе
+    есть картинка — None (её токены по знакам не посчитать)."""
+    chars = 0
+    for message in payload.get("messages") or []:
+        content = message.get("content")
+        if isinstance(content, str):
+            chars += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "text":
+                    return None
+                chars += len(part.get("text") or "")
+        for tc in message.get("tool_calls") or []:
+            chars += len((tc.get("function") or {}).get("arguments") or "")
+    if payload.get("tools"):
+        chars += len(json.dumps(payload["tools"], ensure_ascii=False))
+    return chars
+
+
+def note_usage(conn_id: int, model: str, chars: int, usage: dict) -> None:
+    """Знаков на токен пары «подключение, модель» (`model_facts.ratio`) по `usage` ответа: запрос меньше
+    RATIO_MIN_TOKENS и отношение вне RATIO_RANGE не учат; прежнее значение сдвигается на RATIO_BLEND к новому.
+    Пишет только свой столбец: окно (`window`) — другого писателя."""
+    tokens = usage.get("in")
+    if tokens is None or tokens < RATIO_MIN_TOKENS or chars <= 0:
+        return
+    ratio = chars / tokens
+    if not RATIO_RANGE[0] <= ratio <= RATIO_RANGE[1]:
+        return
+    row = state.DB.execute("SELECT ratio FROM model_facts WHERE connection_id = ? AND model = ?",
+                           (conn_id, model)).fetchone()
+    if row is not None and row[0] is not None:
+        ratio = row[0] + RATIO_BLEND * (ratio - row[0])
+    state.DB.execute("INSERT INTO model_facts(connection_id, model, ratio, updated) VALUES (?, ?, ?, ?)"
+                     " ON CONFLICT(connection_id, model) DO UPDATE SET ratio = excluded.ratio,"
+                     " updated = excluded.updated", (conn_id, model, ratio, clock.NOW()))
 
 
 async def _turn_specs(uid: int, row, conn: Connection, model: str) -> list[dict]:

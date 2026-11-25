@@ -127,6 +127,9 @@ class FakeGateway:
         self.chat_delay = 0              # молчание до первого куска — по часам студии (их двигают другие)
         self.chat_hold = False           # после первого куска ответ «идёт», пока не снимут; функция — пока она истинна
         self.chat_ending = "stop"        # finish_reason конца потока; None — поток рвётся без него и без [DONE]
+        #: `usage` потока (как vLLM — отдельным куском `choices: []` перед [DONE]), если запрос просит
+        #: `stream_options.include_usage`; ключ `usage` шага `chat_script` — свой у этого запроса; None — шлюз не шлёт
+        self.chat_usage = None
         self.asr_requests = []           # запросы распознавания (asr, transcriptions, lite)
         self.asr_replies = []            # (код, тело) по очереди, затем — (200, asr_reply)
         self.asr_reply = {"text": "распознано", "language": "ru", "segments": [
@@ -285,8 +288,11 @@ class FakeGateway:
             ending = step.get("ending", self.chat_ending) if isinstance(step, dict) else self.chat_ending
             if calls and (not isinstance(step, dict) or "ending" not in step):
                 ending = "tool_calls"
+            usage = step["usage"] if isinstance(step, dict) and "usage" in step else self.chat_usage
             if ending is not None:
                 yield data({}, ending)
+                if usage is not None and (body.get("stream_options") or {}).get("include_usage"):
+                    yield f"data: {json.dumps({'choices': [], 'usage': usage})}\n\n".encode()
                 yield b"data: [DONE]\n\n"
 
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=chunks())

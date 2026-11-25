@@ -22,8 +22,12 @@ from test_images import describe, wait_description
 QUESTION = "Что сказано в договоре о сроке оплаты?"
 
 
-def events_of(lines):
-    """События SSE по строкам ответа: (имя, данные); комментарий `: ping` — ("ping", None)."""
+METRICS = ("usage", "gen_ms", "total_ms")
+
+
+def events_of(lines, metrics=False):
+    """События SSE по строкам ответа: (имя, данные); комментарий `: ping` — ("ping", None). Без `metrics` у события
+    `done` нет ключей `usage`, `gen_ms`, `total_ms` (время хода в тестах двигают пинги — сравнения были бы случайными)."""
     event, data = None, None
     for line in lines:
         if line == ": ping":
@@ -33,14 +37,16 @@ def events_of(lines):
         elif line.startswith("data: "):
             data = json.loads(line[len("data: "):])
         elif line == "" and event is not None:
+            if event == "done" and not metrics and isinstance(data, dict):
+                data = {k: v for k, v in data.items() if k not in METRICS}
             yield event, data
             event, data = None, None
 
 
-def sse(response):
+def sse(response, metrics=False):
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/event-stream")
-    return list(events_of(response.iter_lines()))
+    return list(events_of(response.iter_lines(), metrics))
 
 
 def new_chat(s, **body) -> str:

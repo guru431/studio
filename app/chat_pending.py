@@ -272,7 +272,8 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
         if state.DB.execute("UPDATE messages SET status = 'streaming', error = NULL WHERE id = ? AND chat_id = ?"
                             " AND status = 'done' AND unchosen = 0", (mid, chat_id)).rowcount != 1:
             raise _gone()
-        message = state.DB.execute("SELECT content, reasoning, reasoning_sec FROM messages WHERE id = ?", (mid,)).fetchone()
+        message = state.DB.execute("SELECT content, reasoning, reasoning_sec, usage, gen_ms, total_ms FROM messages"
+                                   " WHERE id = ?", (mid,)).fetchone()
         user = state.DB.execute("SELECT id FROM messages WHERE chat_id = ? AND role = 'user'"
                                 " ORDER BY created DESC, rowid DESC LIMIT 1", (chat_id,)).fetchone()
         kinds = web.tools_for(conn, web.has_exa_key(uid)) if fresh["web"] and not fresh["protected_used"] else []
@@ -295,6 +296,10 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
                          thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
                          steps=payload["steps"], reasoning=message["reasoning"] or "",
                          reasoning_sec=message["reasoning_sec"] or 0.0, user_message_id=user["id"] if user else None,
+                         # токены и время до паузы: продолжение прибавляет своё (ожидание человека не в счёт)
+                         usage=json.loads(message["usage"] or "{}"),
+                         gen_sec=None if message["gen_ms"] is None else message["gen_ms"] / 1000,
+                         spent_ms=message["total_ms"] or 0,
                          resume={"kind": pending["kind"], "action": body.action, "answer": answer, **payload})
     chat.STREAMS[mid] = st
     st.task = asyncio.create_task(st.run())
