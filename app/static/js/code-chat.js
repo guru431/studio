@@ -577,6 +577,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       if (!alive || own.signal.aborted) return;
       acceptSettings(data.settings || {});
       paintContext(data.context);
+      context.timing(data);
     } catch (err) {
       if (!alive || own.signal.aborted) return;
       paintSettings({});
@@ -1257,6 +1258,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function finish(data) {
     historyCache.delete(historyKey);
+    context.turnDone(data);
     for (const item of Array.isArray(data.unsent) ? data.unsent : []) {
       unsentFollowups.add(item.id);
       const queued = queuedInputs.get(draftKey)?.get(item.id);
@@ -1329,6 +1331,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         activeTools.clear();
         paintActivity('thinking');
         current();
+        context.turnStarted();
         return false;
       case 'idle':
         foreign = false;

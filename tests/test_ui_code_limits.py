@@ -22,29 +22,44 @@ SHOTS = """(() => { const bytes = Uint8Array.from(atob(%s), (c) => c.charCodeAt(
 PREVIEWS = "document.querySelectorAll('#code-images img').length"
 
 
+#: строки окна «Сессия и контекст»: время хода, время сессии, скорость
+TIMES = "['#code-turn-time', '#code-session-time', '#code-turn-speed'].map((s) => document.querySelector(s)?.textContent)"
+OPEN_CONTEXT = [("click", "#code-context"), ("wait", "document.querySelector('#code-context-dialog').open")]
+
+
 @pytest.mark.parametrize("width", [320, 1280])
-def test_ten_screenshots_in_one_message(browser, live, width):
-    """Мост 0.48.0 объявил 12 и 12: одна вставка 10 файлов — 10 превью, все уходят одним ходом."""
+def test_ten_screenshots_in_one_message_and_turn_time(browser, live, width):
+    """Мост 0.48.0 объявил 12 и 12: одна вставка 10 файлов — 10 превью, все уходят одним ходом; окно «Сессия и
+    контекст» — время хода и сессии от моста и скорость «выходные токены ÷ время хода»."""
     login = f"limits-{width}"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Скриншоты")})
     machine.limits = {"images": 12, "attachments": 12}
-    machine.attachments = machine.large_attachments = True
-    machine.script = [{"k": "text", "text": "Вижу"}, {"k": "done", "status": "done"}]
+    machine.attachments = machine.large_attachments = machine.timing = True
+    machine.context = {"used": 10, "limit": 100, "percent": 10, "usage": {"total": 100, "input": 80, "output": 20}}
+    machine.script = [{"k": "context", "used": 20, "limit": 100, "usage": {"total": 700, "input": 180, "output": 520}},
+                      {"k": "text", "text": "Вижу"}, {"k": "done", "status": "done"}]
     aid, sb = code_online(live, login, machine)
     try:
         r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("wait", "document.querySelector('#code-context').dataset.used === '10'"),
+            *OPEN_CONTEXT, ("eval", "before", TIMES), ("eval", "close", "document.querySelector('#code-context-dialog').close()"),
             ("eval", "setup", SHOTS), ("eval", "paste", "pasteShots(10)"), ("wait", PREVIEWS + " === 10"),
             ("eval", "hint", "document.querySelector('#code-attach').title"),
             ("click", "#code-send"),
             ("wait", "document.querySelector('#code-stop').hidden"
                      " && document.querySelector('#code-feed').textContent.includes('Вижу')"),
-            ("eval", "fits", NO_OVERFLOW)], width=width, mobile=width == 320)
+            *OPEN_CONTEXT, ("eval", "times", TIMES),
+            ("eval", "fits", NO_OVERFLOW + " && (() => { const r = document.querySelector('#code-context-dialog')"
+                             ".getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })()")],
+            width=width, mobile=width == 320)
     finally:
         sb.stop()
     assert not r.get("failed"), r
     values = r["values"]
     assert "до 12 файлов" in values["hint"] and values["fits"], values
+    assert values["before"] == ["нет данных"] * 3, values
+    assert values["times"] == ["1 с", "1 с", "500 ток/с"], values
     [turn] = code_requests(machine, "turn")
     assert len(turn["images"]) == 10
     assert not problems(r), problems(r)
@@ -65,6 +80,7 @@ def test_old_bridge_refuses_the_fifth_image_before_sending(browser, live):
             ("eval", "none", PREVIEWS),
             ("eval", "paste4", "pasteShots(4)"), ("wait", PREVIEWS + " === 4"),
             ("eval", "hint", "document.querySelector('#code-attach').title"),
+            *OPEN_CONTEXT, ("eval", "rows", TIMES),
             ("eval", "fits", NO_OVERFLOW)])
     finally:
         sb.stop()
@@ -72,5 +88,6 @@ def test_old_bridge_refuses_the_fifth_image_before_sending(browser, live):
     values = r["values"]
     assert values["status"] == "Можно прикрепить до 4 изображений к сообщению" and values["none"] == 0, values
     assert "до 8 файлов" in values["hint"] and values["fits"], values
+    assert values["rows"] == ["нет данных"] * 3, values      # мост 0.47 времени не сообщает
     assert not code_requests(machine, "turn")
     assert not problems(r), problems(r)

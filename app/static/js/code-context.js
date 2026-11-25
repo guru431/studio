@@ -4,11 +4,29 @@ import { el } from './ui.js';
 import { accessLabel, effortLabel, ENGINE_NAMES } from './code-options.js';
 
 const number = (value) => Number.isFinite(value) ? value.toLocaleString(locale()) : tr("Не сообщается");
+const NO_DATA = () => tr("нет данных");
+
+/** Длительность по миллисекундам моста: «{0} с» (меньше 10 с — до десятой), «{0} мин {1} с», «{0} ч {1} мин». */
+function duration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return NO_DATA();
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    const value = seconds < 10 ? Math.floor(seconds * 10) / 10 : Math.floor(seconds);
+    return tr("{0} с", value.toLocaleString(locale(), { maximumFractionDigits: 1 }));
+  }
+  const whole = Math.floor(seconds);
+  if (whole < 3600) return tr("{0} мин {1} с", Math.floor(whole / 60), whole % 60);
+  return tr("{0} ч {1} мин", Math.floor(whole / 3600), Math.floor(whole % 3600 / 60));
+}
 
 export function contextView(host, { chat, engine, project, messages }) {
   let context = null;
   let settings = {};
   let cacheTimer = null;
+  // Время хода и сессии — числа моста (мост 0.48.0); скорость считает страница по ходу, начатому при ней.
+  let times = { turn: null, session: null };
+  let speed = null;
+  let startOutput;                   // usage.output при начале хода; undefined — ход начат не при этой странице
   const hasCache = engine === 'codex' || engine === 'claude';
   const cacheText = el('b', { id: 'code-cache-text' }, '—');
   const cacheButton = el('button', { type: 'button', id: 'code-cache', class: 'code-cache',
@@ -27,6 +45,7 @@ export function contextView(host, { chat, engine, project, messages }) {
     : engine === 'deepseek'
       ? tr("Контекст — текущая заполненность окна. Токены накапливаются по завершённым запросам из Студии; запросы из других приложений в эту сумму не входят.")
       : tr("Контекст — текущая заполненность окна. Расход токенов — накопленный за сессию, включая повторное чтение контекста. Данные сообщает помощник.")),
+  el('p', { class: 'muted small' }, tr("Время хода — от принятия задания мостом до конца ответа, вместе с ожиданием ответов на карточки. Скорость — выходные токены хода, делённые на его время.")),
   el('div', { class: 'dialog-actions' }, close));
   host.append(dialog);
   const cacheRead = el('dd');
@@ -89,11 +108,18 @@ export function contextView(host, { chat, engine, project, messages }) {
       [engine === 'opencode' || engine === 'deepseek' ? tr('Токены завершённых ходов Студии') : tr("Потрачено токенов за сессию"), number(usage.total)],
       [tr("Входные токены"), number(usage.input)], [tr("Выходные токены"), number(usage.output)],
       [tr("Рассуждения, токенов"), number(usage.reasoning)],
+      [tr("Время последнего хода"), duration(times.turn), 'code-turn-time'],
+      [tr("Время ходов сессии"), duration(times.session), 'code-session-time'],
+      [tr("Скорость последнего хода"), speed === null ? NO_DATA() : tr("{0} ток/с", speed.toLocaleString(locale())), 'code-turn-speed'],
       ...(engine === 'opencode' ? [[tr('Стоимость сессии, USD'), Number.isFinite(context?.cost?.amount)
         ? context.cost.amount.toLocaleString(locale(), { maximumFractionDigits: 6 }) : tr('Не сообщается')],
         [tr('Основной агент'), settings.agent_mode || tr('Не сообщается')]] : []),
     ];
-    content.replaceChildren(...entries.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)]));
+    content.replaceChildren(...entries.flatMap(([label, value, id]) => [el('dt', {}, label), el('dd', id ? { id } : {}, value)]));
+  }
+  function setTimes(data) {
+    const ms = (value) => Number.isFinite(value) && value >= 0 ? value : null;
+    times = { turn: ms(data?.turn_ms), session: ms(data?.session_ms) };
   }
   button.addEventListener('click', () => { paint(); dialog.showModal(); });
   cacheButton.addEventListener('click', () => { paintCache(); cacheDialog?.showModal(); });
@@ -104,6 +130,19 @@ export function contextView(host, { chat, engine, project, messages }) {
   return {
     button, cacheButton,
     settings(data) { settings = { ...settings, ...data }; paintCache(); if (dialog.open) paint(); },
+    /** Время хода и сессии из ответа `state` (`turn_ms`, `session_ms`; нет — «нет данных»). */
+    timing(data) { setTimes(data); if (dialog.open) paint(); },
+    /** Событие `turn`: точка отсчёта выходных токенов хода. */
+    turnStarted() { startOutput = context?.usage?.output ?? null; },
+    /** Конец хода (`done`): время и скорость — разница выходных токенов, делённая на время хода. */
+    turnDone(data) {
+      setTimes(data);
+      const output = context?.usage?.output;
+      const tokens = Number.isFinite(output) && Number.isFinite(startOutput) ? output - startOutput : -1;
+      speed = tokens >= 0 && times.turn > 0 ? Math.round(tokens / (times.turn / 1000)) : null;
+      startOutput = undefined;
+      if (dialog.open) paint();
+    },
     update(data) {
       if (!data) return;
       if (!Number.isFinite(data.used) || !Number.isFinite(data.limit) || data.used < 0 || data.limit <= 0) {
