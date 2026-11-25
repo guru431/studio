@@ -337,7 +337,7 @@ export function emergencyBlock(host) {
       try {
         await api('POST', '/api/me/emergency', { password: password.value, agents: agents.checked });
         password.value = '';
-        document.dispatchEvent(new Event('studio-signed-out'));      // черновики «Агентов» (code-drafts.js)
+        document.dispatchEvent(new Event('studio-signed-out'));      // черновики «Агентов» и «Чата» (dialog-drafts.js)
         location.assign('/login');
       } catch (err) {
         fail.textContent = words(err);

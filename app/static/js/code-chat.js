@@ -34,7 +34,7 @@ import { deepseekView } from './code-deepseek.js';
  * «Новым чатом» в этом окне, или история пуста), пока выбор не трогали; существующий начинает с «по умолчанию».
  * Черновик текста — в текущей вкладке по чату (drafts): перезагрузка и уход к PIN его сохраняют; снимается, когда ход
  * принят — идущий запрос «Отправить» ни уход с экрана, ни уход с чата не обрывают, поток снимается после ответа. Текст поля —
- * в sessionStorage вкладки (code-drafts.js) до отправки, блокировки, выхода или страницы входа; ленты там нет. Текст машины —
+ * в sessionStorage вкладки (dialog-drafts.js) до отправки, блокировки, выхода или страницы входа; ленты там нет. Текст машины —
  * только textContent и markdown.js. */
 import { api as request, me, unknownOutcome } from './api.js';
 import { icon, iconButton } from './icons.js';
@@ -59,12 +59,13 @@ import { projectFilePath } from './code-file-links.js';
 import { visualizationsView } from './code-visualizations.js';
 import { shareMenu } from './chat-share.js';
 import { menuItem, popupMenu } from './menu.js';
-import { statusActions } from './code-status-bar.js';
+import { statusActions } from './status-bar.js';
+import { messageNav } from './message-nav.js';
 import { historyImages } from './code-chat-images.js';
 import { commandsView } from './code-commands.js';
 import { WINDOW } from './code-window.js';
 import { cancelRefresh, refreshAfterFailure } from './refresh.js';
-import { saveDraft, savedDrafts } from './code-drafts.js';
+import { AGENT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { codeActivity } from './code-activity.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
@@ -112,14 +113,15 @@ function hasDraft(key) {
 function announceDraft(key, had) {
   if (had !== hasDraft(key)) document.dispatchEvent(new CustomEvent('studio-code-draft', { detail: { key, draft: !had } }));
 }
+const agentDrafts = draftStore(AGENT_DRAFTS);
 const drafts = new class extends Drafts {
   set(key, value) {
     const receipt = sendIds.get(key);
-    saveDraft(key, value, receipt?.value === value.trim() && !receipt.images.length ? receipt.id : null);
+    agentDrafts.save(key, value, receipt?.value === value.trim() && !receipt.images.length ? receipt.id : null);
     return super.set(key, value);
   }
   delete(key) {
-    saveDraft(key, '');
+    agentDrafts.save(key, '');
     return super.delete(key);
   }
 }();
@@ -166,7 +168,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   // Ветки чата: у DeepSeek Harness их нет, OpenCode — с мостом opencode_features.
   const branching = !!agent?.chat_fork && engine !== 'deepseek' && (engine !== 'opencode' || !!agent?.opencode_features);
   const draftKey = `${aid}/${chat}`;
-  const saved = savedDrafts()[draftKey];
+  const saved = agentDrafts.saved()[draftKey];
   if (saved && !drafts.has(draftKey)) {
     if (saved.receipt) sendIds.set(draftKey, { id: saved.receipt, value: saved.text.trim(), images: [] });
     drafts.set(draftKey, saved.text);
@@ -205,7 +207,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let accessFixed = false;       // DeepSeek Harness: права чата заданы при создании (settings.access_fixed)
   const stepData = new WeakMap();
   const stepPaint = new WeakMap();
-  let expandSteps = false;
   const messageViews = new WeakMap();
   const pendingPaints = new Set();
   let historyRevision = 0;
@@ -235,18 +236,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const historyNotice = el('p', { id: 'code-history-notice', class: 'code-shared-note', role: 'status', hidden: true },
     tr("Историю этой версии DeepSeek Harness студия пока не читает"));
   const pictures = historyImages(scroller, feed, { api, endpoint, closed: () => closed() });
-  const previous = el('button', { type: 'button', id: 'code-message-up', class: 'icon-btn',
-    'aria-label': tr("Предыдущее моё сообщение"), title: tr("Предыдущее моё сообщение"), disabled: true });
-  const next = el('button', { type: 'button', id: 'code-message-down', class: 'icon-btn',
-    'aria-label': tr("Следующее моё сообщение"), title: tr("Следующее моё сообщение"), disabled: true });
-  const allSteps = el('button', { type: 'button', id: 'code-toggle-steps', class: 'icon-btn',
-    'aria-label': tr("Развернуть все команды"), title: tr("Развернуть все команды"), 'aria-pressed': 'false', disabled: true });
-  previous.append(icon('upward'));
-  next.append(icon('downward'));
-  allSteps.append(icon('expand'));
-  const navigation = el('nav', { class: 'code-message-nav', 'aria-label': tr("Навигация по чату"), hidden: true }, previous, allSteps, next);
-  let messageTarget = null;
-  let messageScrollTop = 0;
+  const nav = messageNav({ scroller, feed, stuck, ready: () => !historyLoading,
+    earlier: { has: () => start > 0, busy: () => more.disabled, load: () => loadEarlier() },
+    act: () => { interacted(); acted = Date.now(); }, follow: (on) => { followTail = on; }, change: grow });
   const text = el('textarea', { id: 'code-text', rows: '1', 'aria-label': tr("Задание"),
     placeholder: tr("Задание…"), maxlength: '100000' });
   const catalog = engine === 'claude' ? agent : agent?.[engine];
@@ -481,7 +473,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   });
   const askObserver = new MutationObserver(paintAskPin);
   askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
-  host.append(el('div', { class: 'code-chat-history' }, scroller, navigation),
+  host.append(el('div', { class: 'code-chat-history' }, scroller, nav.node),
     el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, writerNotice, askPin, statusBar, form));
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
@@ -697,79 +689,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     return !scroller || scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - STICK_PX;
   }
 
-  /** Якорь — верх ленты. Сохраняем выбранное сообщение даже у конца прокрутки. */
-  function messageNeighbours() {
-    const users = [...feed.querySelectorAll('.code-msg.user')];
-    if (messageTarget && (!feed.contains(messageTarget) || Math.abs(scroller.scrollTop - messageScrollTop) > 2)) {
-      messageTarget = null;
-    }
-    const index = users.indexOf(messageTarget);
-    if (index >= 0) return { before: users[index - 1], after: users[index + 1] };
-    if (stuck()) return { before: users.at(-1), after: null };
-    const top = messageTop();
-    return { before: users.findLast((node) => node.getBoundingClientRect().top < top - 2),
-      after: users.find((node) => node.getBoundingClientRect().top > top + 2) };
-  }
-
-  function messageTop() {
-    return scroller.getBoundingClientRect().top;
-  }
-
-  function scrollByViewportPixels(delta) {
-    const scale = Number(document.documentElement.style.getPropertyValue('--ui-scale')) || 1;
-    scroller.scrollTop += delta / scale;
-  }
-
-  function paintNavigation() {
-    if (!scroller || historyLoading) return;
-    const { before, after } = messageNeighbours();
-    const steps = [...feed.querySelectorAll('details.code-step')];
-    const expanded = steps.length > 0 && steps.every((step) => step.open);
-    const stepsLabel = expanded ? tr("Свернуть все команды") : tr("Развернуть все команды");
-    allSteps.disabled = steps.length === 0;
-    allSteps.setAttribute('aria-label', stepsLabel);
-    allSteps.setAttribute('aria-pressed', String(expanded));
-    allSteps.title = stepsLabel;
-    allSteps.querySelector('path').setAttribute('d', expanded ? 'm8 5 4 4 4-4m-8 14 4-4 4 4' : 'm8 9 4-4 4 4m-8 6 4 4 4-4');
-    navigation.hidden = !feed.querySelector('.code-msg.user') && !steps.length && start <= 0;
-    previous.disabled = more.disabled || (!before && start <= 0);
-    next.disabled = !after && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
-    const nextLabel = after ? tr("Следующее моё сообщение") : tr("В конец чата");
-    next.setAttribute('aria-label', nextLabel);
-    next.title = nextLabel;
-  }
-
-  async function jumpMessage(direction) {
-    interacted();
-    acted = Date.now();
-    let target = messageNeighbours()[direction < 0 ? 'before' : 'after'];
-    while (!target && direction < 0 && start > 0) {
-      const first = feed.querySelector('.code-msg.user');
-      if (!await loadEarlier() || !alive) return;
-      const users = [...feed.querySelectorAll('.code-msg.user')];
-      target = first ? users[users.indexOf(first) - 1] : users.at(-1);
-    }
-    if (!scroller) return;
-    if (!target) {
-      if (direction > 0) {
-        messageTarget = null;
-        followTail = true;
-        scroller.scrollTop = scroller.scrollHeight;
-        paintNavigation();
-      }
-      return;
-    }
-    messageTarget = target;
-    followTail = false;
-    scrollByViewportPixels(target.getBoundingClientRect().top - messageTop());
-    messageScrollTop = scroller.scrollTop;
-    paintNavigation();
-  }
-
   /** Правка ленты: была внизу — остаётся внизу. */
   function grow(change) {
     trackScroll();
-    const was = !messageTarget && followTail;
+    const was = !nav.target() && followTail;
     change();
     if (was && scroller) {
       scroller.scrollTop = scroller.scrollHeight;
@@ -780,7 +703,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   function trackScroll() {
     const gap = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
     const tolerance = Math.max(160, Math.min(320, scroller.clientHeight / 2));
-    if (gap <= tolerance && !messageTarget) followTail = true;
+    if (gap <= tolerance && !nav.target()) followTail = true;
     else if (scroller.scrollTop < lastScrollTop - 2) followTail = false;
     lastScrollTop = scroller.scrollTop;
   }
@@ -789,11 +712,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   // Их перерисовка тоже держит конец, пока владелец не ушёл читать далеко вверх.
   const tailObserver = new ResizeObserver(() => {
     trackScroll();
-    if (followFrame !== null || historyLoading || !followTail || messageTarget) return;
+    if (followFrame !== null || historyLoading || !followTail || nav.target()) return;
     followFrame = requestAnimationFrame(() => {
       followFrame = null;
       trackScroll();
-      if (alive && !historyLoading && followTail && !messageTarget) {
+      if (alive && !historyLoading && followTail && !nav.target()) {
         scroller.scrollTop = scroller.scrollHeight;
         lastScrollTop = scroller.scrollTop;
       }
@@ -875,7 +798,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     }
     stepPaint.set(details, paint);
     details.addEventListener('toggle', () => {
-      paintNavigation();
+      nav.paint();
       if (!details.open || filled) return;
       filled = true;
       result = el('pre', { class: 'code-step-result', tabindex: '0', 'aria-label': tr("Вывод инструмента") });
@@ -884,7 +807,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       details.append(inputNode, result, progress);
       paint();
     });
-    details.open = expandSteps;
+    details.open = nav.expanded();
     paint();
     return details;
   }
@@ -1138,7 +1061,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     paintText(true);
     t.view.active = null;
     grow(() => t.steps.append(node));
-    paintNavigation();
+    nav.paint();
   }
 
   async function forkAt(messageId) {
@@ -1527,7 +1450,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           t.steps.append(stepNode(model));
           t.view.progress.update({}, t.models);
         });
-        paintNavigation();
+        nav.paint();
         return false;
       }
       case 'progress':
@@ -1682,7 +1605,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       Promise.all([...pendingPaints]).then(() => {
         if (alive && revision === historyRevision && action === interactions && historyLoading && scroller) {
           scroller.scrollTop = scroller.scrollHeight;
-          paintNavigation();
+          nav.paint();
         }
       });
     }
@@ -1754,14 +1677,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     // Навигация вкладок с клавиатуры сохраняет фокус в ряду вкладок.
     if (thenLive && !interactions && !document.activeElement?.matches('[role="tab"]:focus-visible')) focusDesktop(text);
     if (scroller) scroller.scrollTop = preserveScroll && !followed ? previousScroll : scroller.scrollHeight;
-    paintNavigation();
+    nav.paint();
     markRead();
     const initialScroll = scroller?.scrollTop;
     if (thenLive) requestAnimationFrame(() => {
-      if (alive && revision === historyRevision && scroller && !messageTarget
+      if (alive && revision === historyRevision && scroller && !nav.target()
           && Math.abs(scroller.scrollTop - initialScroll) <= 2) {
         scroller.scrollTop = scroller.scrollHeight;
-        paintNavigation();
+        nav.paint();
       }
     });
     if (first && gitAction) {
@@ -1962,7 +1885,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (more.disabled || start <= 0) return false;
     more.disabled = true;
     const revision = historyRevision;
-    paintNavigation();
+    nav.paint();
     try {
       const page = await api('GET', `${endpoint()}${engine !== 'claude' ? '&' : '?'}before=${start}`);
       if (!alive || revision !== historyRevision) return false;
@@ -1975,13 +1898,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       start = Number.isInteger(page.start) ? page.start : 0;
       more.hidden = start <= 0;
       if (showStart) {
-        messageTarget = null;
+        nav.drop();
         followTail = false;
         scroller.scrollTop = 0;
       } else if (anchor?.isConnected) {
-        scrollByViewportPixels(anchor.getBoundingClientRect().top - top);
+        nav.scrollBy(anchor.getBoundingClientRect().top - top);
       }
-      if (messageTarget && scroller) messageScrollTop = scroller.scrollTop;
+      if (nav.target() && scroller) nav.pin();
       return start < oldStart;
     } catch (err) {
       if (err.code === 'closed') closed();
@@ -1989,25 +1912,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       return false;
     } finally {
       more.disabled = false;
-      paintNavigation();
+      nav.paint();
     }
   }
 
   more.addEventListener('click', () => loadEarlier({ showStart: true }));
-  previous.addEventListener('click', () => jumpMessage(-1));
-  allSteps.addEventListener('click', () => {
-    interacted();
-    acted = Date.now();
-    const steps = [...feed.querySelectorAll('details.code-step')];
-    expandSteps = steps.some((step) => !step.open);
-    grow(() => { for (const step of steps) step.open = expandSteps; });
-    paintNavigation();
-  });
-  next.addEventListener('click', () => jumpMessage(1));
-  scroller?.addEventListener('scroll', paintNavigation, { passive: true });
   scroller.addEventListener('scroll', trackScroll, { passive: true });
-  window.addEventListener('resize', paintNavigation);
-  const feedObserver = new MutationObserver(() => { paintNavigation(); paintQuickActions(); });
+  const feedObserver = new MutationObserver(() => { nav.paint(); paintQuickActions(); });
   feedObserver.observe(feed, { childList: true });
 
   stop.addEventListener('click', async () => {
@@ -2088,12 +1999,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       commands.unmount();
       stateRequest?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
-      scroller?.removeEventListener('scroll', paintNavigation);
+      nav.unmount();
       scroller.removeEventListener('scroll', trackScroll);
       tailObserver.disconnect();
       if (followFrame !== null) cancelAnimationFrame(followFrame);
       scroller?.removeEventListener('scroll', markRead);
-      window.removeEventListener('resize', paintNavigation);
       for (const event of ['pointerdown', 'wheel', 'keydown']) workspace?.removeEventListener(event, interacted);
       feedObserver.disconnect();
       if (!sending) drop();      // «Отправить» оборвёт поток сам, сняв черновик принятого хода

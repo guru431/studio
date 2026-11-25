@@ -1,14 +1,24 @@
 import { tr } from './i18n.js';
-/* Статусу — 40% строки; кнопки сохраняют размер и по одной уходят в «⋯». */
+/* Статусу — 40% строки; кнопки сохраняют размер и по одной уходят в «⋯». Строка «Агентов» и «Чата»:
+ * id «⋯» — `${id}-more`, панели — `${id}-menu`. Вид закреплённой кнопки — `data-status` (`cache`, `usage`,
+ * `ring` — квадрат), без атрибута — по классам `code-cache`, `code-usage`, `code-context`. */
 import { el } from './ui.js';
 import { icon } from './icons.js';
 import { popupPanel } from './menu.js';
 
-export function statusActions(host, bar, activity, actions, fixed) {
-  const more = el('button', { type: 'button', id: 'code-status-more', class: 'icon-btn',
+/** Вид закреплённой кнопки: от него наименьшие ширины и квадрат кольца. */
+function kind(button) {
+  if (button.dataset.status) return button.dataset.status;
+  if (button.classList.contains('code-cache')) return 'cache';
+  if (button.classList.contains('code-usage')) return 'usage';
+  return button.classList.contains('code-context') ? 'ring' : '';
+}
+
+export function statusActions(host, bar, activity, actions, fixed, { id = 'code-status' } = {}) {
+  const more = el('button', { type: 'button', id: `${id}-more`, class: 'icon-btn',
     'aria-label': tr("Другие действия чата"), title: tr("Другие действия чата"), hidden: true }, icon('more'));
   const overflow = el('div', { class: 'code-chat-actions' });
-  const panel = el('div', { id: 'code-status-menu', class: 'code-status-menu' }, overflow);
+  const panel = el('div', { id: `${id}-menu`, class: 'code-status-menu' }, overflow);
   const controls = el('div', { class: 'code-status-controls' }, actions, more, fixed);
   const items = [...actions.children].filter(node => node.tagName === 'BUTTON').map(button => {
     const label = el('span', { class: 'code-status-action-label', hidden: true });
@@ -71,16 +81,17 @@ export function statusActions(host, bar, activity, actions, fixed) {
     }
     const hidden = available.length - shown;
     const inline = shown ? inlineWidth(shown) + gap : 0;
+    const kinds = pinned.map(kind);
     const minimum = pinned.map((button, index) => Math.min(preferred[index].width,
-      button.classList.contains('code-cache') || button.classList.contains('code-usage') ? 32
-        : button.classList.contains('code-context') ? 28 : 24));
+      kinds[index] === 'cache' || kinds[index] === 'usage' ? 32
+        : kinds[index] === 'ring' ? 28 : 24));
     if (minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1) + inline
         + (hidden ? 24 + gap : 0) > budget) {
       gap = fixedGap = 1;
       controls.style.columnGap = fixed.style.columnGap = '1px';
-      for (const [index, button] of pinned.entries()) {
-        minimum[index] = Math.min(minimum[index], button.classList.contains('code-cache') || button.classList.contains('code-usage')
-          ? 28 : button.classList.contains('code-context') ? 24 : 20);
+      for (const index of pinned.keys()) {
+        minimum[index] = Math.min(minimum[index], kinds[index] === 'cache' || kinds[index] === 'usage'
+          ? 28 : kinds[index] === 'ring' ? 24 : 20);
       }
     }
     const compact = minimum.reduce((sum, width) => sum + width, 0) + fixedGap * (pinned.length - 1) + inline
@@ -89,9 +100,9 @@ export function statusActions(host, bar, activity, actions, fixed) {
     if (compact) {
       gap = fixedGap = 0;
       controls.style.columnGap = fixed.style.columnGap = '0px';
-      for (const [index, button] of pinned.entries()) minimum[index] = Math.min(minimum[index],
-        button.classList.contains('code-cache') ? 26 : button.classList.contains('code-usage') ? 24
-          : button.classList.contains('code-context') ? 22 : 18);
+      for (const index of pinned.keys()) minimum[index] = Math.min(minimum[index],
+        kinds[index] === 'cache' ? 26 : kinds[index] === 'usage' ? 24
+          : kinds[index] === 'ring' ? 22 : 18);
     }
     if (hidden) moreWidth = Math.min(moreWidth, Math.max(20,
       budget - minimum.reduce((sum, width) => sum + width, 0) - fixedGap * (pinned.length - 1) - gap - inline));
@@ -104,7 +115,7 @@ export function statusActions(host, bar, activity, actions, fixed) {
       const width = minimum[index] + (size.width - minimum[index]) * ratio;
       button.style.minWidth = '0px';
       button.style.width = `${width}px`;
-      button.style.height = `${button.classList.contains('code-context') ? width : size.height}px`;
+      button.style.height = `${kinds[index] === 'ring' ? width : size.height}px`;
       button.style.fontSize = `${Math.max(9, Math.min(size.font, size.text ? size.font * (width - 2) / size.text : size.font))}px`;
     }
     more.style.width = `${moreWidth}px`;

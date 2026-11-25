@@ -42,7 +42,7 @@ import { SECTIONS as SECTION_LIST, sectionName } from './sections-meta.js';
 import { icon as svgIcon } from './icons.js';
 import { lazy, pageVersion, watchDeploys } from './stale.js';
 import { cancelRefresh, claimActiveSessions, claimRequested, refreshAfterFailure, reloadStudio } from './refresh.js';
-import './code-drafts.js';
+import './dialog-drafts.js';
 
 const LOADERS = {
   chat: () => import('./chat.js'),

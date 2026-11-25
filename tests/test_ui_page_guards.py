@@ -32,15 +32,17 @@ def test_chat_created_after_leaving_keeps_the_address_of_the_open_section(browse
 def test_agent_drafts_leave_the_tab_with_the_emergency_exit(browser, live):
     login = "guard-drafts"
     live.add_user(login)
-    stored = "sessionStorage.getItem('studio-agent-drafts')"
+    stored = "[sessionStorage.getItem('studio-agent-drafts'), sessionStorage.getItem('studio-chat-drafts')]"
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY),
-        ("eval", "saved", "import('/static/js/code-drafts.js').then(m => { m.saveDraft('1/a/b', 'неотправленное задание');"
-                          f" return {stored}.includes('неотправленное'); }})"),
+        ("eval", "saved", "import('/static/js/dialog-drafts.js').then(m => {"
+                          " m.draftStore(m.AGENT_DRAFTS).save('1/a/b', 'неотправленное задание');"
+                          " m.draftStore(m.CHAT_DRAFTS).save('7', 'неотправленное сообщение');"
+                          f" return {stored}.every(value => value.includes('неотправленное')); }})"),
         *go("settings/security"), ("wait", "document.querySelector('#emergency-password')"),
         set_value("#emergency-password", "password-123"), ("click", "#emergency-start"), ("click", "#emergency-confirm"),
         ("wait", "location.pathname === '/login'"), ("eval", "after", stored)])
     assert not r.get("failed"), r
-    assert r["values"]["saved"] is True and r["values"]["after"] is None
+    assert r["values"]["saved"] is True and r["values"]["after"] == [None, None]
 
 
 def test_english_connection_history_names_the_devices_in_english(browser, live):

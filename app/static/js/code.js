@@ -54,7 +54,7 @@ import { tabBar } from './code-tabs.js';
 import { act, get, load, reset, subscribe, tabs as tabsOf } from './code-workspace.js';
 import { lazy } from './stale.js';
 import { refreshAfterFailure, refreshRequested } from './refresh.js';
-import { savedDrafts } from './code-drafts.js';
+import { AGENT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { agentDownload, el, openDialog, words } from './ui.js';
 
 const OFFLINE = tr("Компьютер не на связи — включите его и запустите мост");
@@ -996,7 +996,7 @@ export function mount(node, context) {
   host = node;
   ctx = context;
   none = false;
-  for (const key of Object.keys(savedDrafts())) draftKeys.add(key);
+  for (const key of Object.keys(draftStore(AGENT_DRAFTS).saved())) draftKeys.add(key);
   acted = Date.now();                     // вход в раздел — действие владельца
   const mine = ++gen;
   layout();
