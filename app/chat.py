@@ -52,12 +52,13 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import access
 import card
 import capabilities
 import chat_pending
+import chat_skills
 import chat_system
 import chat_tools
 import clock
@@ -305,6 +306,16 @@ class TurnIn(BaseModel):
     cleaner_ticket: str | None = Field(None, max_length=64)
     cleaner_rules: list[CleanerRule] = Field(default_factory=list, max_length=100)
     cleaner_local: bool = False
+    # навык библиотеки в начале сообщения (chat_skills.apply); `skill_keep` — правка оставляет прежний текст навыка
+    skill_id: str | None = Field(None, min_length=1, max_length=64)
+    skill_keep: bool = False
+
+    @model_validator(mode="after")
+    def _skill_pair(self):
+        """`skill_id` вместе с `skill_keep` или `regenerate`, `skill_keep` без правки — 422 `invalid`."""
+        if (self.skill_id is not None and (self.skill_keep or self.regenerate)) or (self.skill_keep and self.edit is None):
+            raise ValueError("skill")
+        return self
 
 
 class UsageIn(BaseModel):
@@ -550,6 +561,7 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
            "gen_ms": row["gen_ms"], "total_ms": row["total_ms"]}
     if row["status"] == "streaming":                 # продолжение после паузы: в строке — числа части до паузы
         out["usage"] = out["gen_ms"] = out["total_ms"] = None
+    out["skill"] = chat_skills.view(row)          # навык в начале сообщения {name, chars, parts} или None
     if pending and row["id"] in pending:
         out["pending"] = pending[row["id"]]
     if live and live.recovery:
@@ -2994,11 +3006,12 @@ def _cleaner_messages(uid, chat_id, body, atts, model, conn):
         raise cleaner.refused("Нечего переспрашивать")
     limit = profiles.max_images(conn)
     messages = compose(chat_id, last["id"], model, limit) if last else []
+    text, _ = chat_skills.apply(uid, body, edit)     # с текстом навыка — как его запишет ход
     if edit is not None:
         kept = _attachments(chat_id).get(edit["id"], [])
-        messages = compose(chat_id, edit["id"], model, limit, replacement=(body.text, [*kept, *atts]))
+        messages = compose(chat_id, edit["id"], model, limit, replacement=(text, [*kept, *atts]))
     elif not body.regenerate:
-        content = _content(body.text, atts)
+        content = _content(text, atts)
         if messages and messages[-1]["role"] == "user":
             messages[-1]["content"] = _merge(messages[-1]["content"], content)
         else:
@@ -3022,7 +3035,8 @@ async def cleaner_preview(chat_id: str, body: TurnIn, request: Request):
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     edit = _edit_target(chat_id, body)
     saved = _attachments(chat_id).get(edit["id"], []) if edit is not None else []
-    if not body.regenerate and not body.text.strip() and not atts and not saved:
+    if (not body.regenerate and not body.text.strip() and not atts and not saved
+            and body.skill_id is None and not body.skill_keep):      # один навык без текста — не пусто
         raise cleaner.refused("Пустое сообщение", 422)
     if len(atts) + len(saved) > ATTACH_MAX:
         raise HTTPException(422, {"code": "attachments", "message": ATTACHMENTS})
@@ -3076,6 +3090,8 @@ def _turn_fingerprint(body: TurnIn) -> str:
     fields = [body.text, body.attachment_ids, body.regenerate]
     if body.edit is not None:
         fields += [body.edit.id, body.edit.last_id]
+    if body.skill_id is not None or body.skill_keep:    # только тогда: отпечатки прежних отправок не меняются
+        fields.append([body.skill_id, body.skill_keep])
     raw = json.dumps(fields, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -3083,6 +3099,7 @@ def _turn_fingerprint(body: TurnIn) -> str:
 class EstimateIn(BaseModel):
     text: str = Field("", max_length=TEXT_MAX)
     attachment_ids: list[str] = Field(default_factory=list, max_length=ATTACH_MAX)
+    skill_id: str | None = Field(None, min_length=1, max_length=64)     # навык в поле ввода (chat_skills.preview)
 
 
 @router.post("/chats/{chat_id}/estimate")
@@ -3114,11 +3131,12 @@ async def _estimated(uid: int, row, body: EstimateIn) -> dict:
     system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
     excerpts_enabled = conn is None or not conn.cleaner
     block = EXCERPT_GUESS if excerpts_enabled and knowledge.chat_kbs(uid, chat_id) else ""
+    text = chat_skills.preview(uid, body.text, body.skill_id)
 
     def guess(cut):
         excerpts = dict.fromkeys(cut, EXCERPT_GUESS)
         messages = compose(chat_id, "", model, cap, excerpts)
-        content = _content(body.text, atts, excerpts)
+        content = _content(text, atts, excerpts)
         if messages and messages[-1]["role"] == "user":
             messages[-1]["content"] = _merge(messages[-1]["content"], content)
         else:
@@ -3311,7 +3329,7 @@ def create_mcp_turn(uid, row, body, request):
         raise mcp_client.refused("Сервер моделей MCP недоступен")
     if body.attachment_ids or _attachments(chat_id) or knowledge.chat_kbs(uid, chat_id):
         raise mcp_client.refused("Ответы через MCP доступны в текстовых диалогах без вложений и баз знаний")
-    if not body.regenerate and not body.text.strip():
+    if not body.regenerate and not body.text.strip() and body.skill_id is None and not body.skill_keep:
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     if state.DB.execute("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?"
                         " AND m.via = 'server' AND m.status = 'streaming'", (uid,)).fetchone()[0] >= USER_STREAMS:
@@ -3321,6 +3339,7 @@ def create_mcp_turn(uid, row, body, request):
     state.DB.execute("BEGIN")
     try:
         edit = _edit_target(chat_id, body)
+        content, mark = chat_skills.apply(uid, body, edit)    # навык — в начале сообщения
         chat_pending.supersede(chat_id)
         if body.regenerate:
             user_mid = _new_variant(chat_id)
@@ -3329,14 +3348,14 @@ def create_mcp_turn(uid, row, body, request):
             _touch_summary(chat_id, edit["created"], edit["rowid"])
             state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND (created, rowid) > (?, ?)",
                              (chat_id, edit["created"], edit["rowid"]))
-            state.DB.execute("UPDATE messages SET content = ?, via = 'server', model = ? WHERE id = ?",
-                             (body.text, model, user_mid))
+            state.DB.execute("UPDATE messages SET content = ?, skill = ?, via = 'server', model = ? WHERE id = ?",
+                             (content, mark, model, user_mid))
         else:
             user_mid = uuid.uuid4().hex
             state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND unchosen = 1", (chat_id,))
-            state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
-                             " VALUES (?, ?, 'user', ?, 'done', 'server', ?, ?)",
-                             (user_mid, chat_id, body.text, model, now))
+            state.DB.execute("INSERT INTO messages(id, chat_id, role, content, skill, status, via, model, created)"
+                             " VALUES (?, ?, 'user', ?, ?, 'done', 'server', ?, ?)",
+                             (user_mid, chat_id, content, mark, model, now))
         system = chat_system.base(uid, None, _role(uid, row["role_id"]))
         messages = chat_system.wrap(system, compose(chat_id, user_mid, model, 0))
         if len(messages) > 100 or any(len(msg["content"]) > TEXT_MAX for msg in messages):
@@ -3344,7 +3363,7 @@ def create_mcp_turn(uid, row, body, request):
         state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
                          " VALUES (?, ?, 'assistant', '', 'streaming', 'server', ?, ?, ?)",
                          (answer_id, chat_id, model, now, now))
-        title = row["title"] or (None if body.regenerate else _title(body.text))
+        title = row["title"] or (None if body.regenerate else _title(body.text) or chat_skills.title(mark))
         state.DB.execute("UPDATE chats SET title = ?, updated = ?, protected_used = ? WHERE id = ?",
                          (title, now, bool(row["protected_used"] or item["protected"]), chat_id))
         if body.request_id is not None:
@@ -3381,7 +3400,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     edit = _edit_target(chat_id, body)
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     saved = _attachments(chat_id).get(edit["id"], []) if edit is not None else []
-    if not body.regenerate and not body.text.strip() and not atts and not saved:
+    if (not body.regenerate and not body.text.strip() and not atts and not saved
+            and body.skill_id is None and not body.skill_keep):      # один навык без текста — не пусто
         raise HTTPException(422, {"code": "empty", "message": "пустое сообщение"})
     if len(atts) + len(saved) > ATTACH_MAX:
         raise HTTPException(422, {"code": "attachments", "message": ATTACHMENTS})
@@ -3430,6 +3450,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         edit = _edit_target(chat_id, body)
         if edit is not None and (fresh["connection_id"] != row["connection_id"] or fresh["model"] != row["model"]):
             raise HTTPException(409, {"code": "edit_stale", "message": "диалог изменился — откройте сообщение заново"})
+        content, mark = chat_skills.apply(uid, body, edit)    # навык — в начале сообщения; отказ — до записи
         chat_pending.supersede(chat_id)              # открытая пауза ответа больше не ждёт
         # куски 1–3 системного сообщения и параметры профиля — снимок на начало хода; профиль общего подключения
         # браузеру не уходит (его текст и параметры учётке не видны)
@@ -3458,16 +3479,16 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             if edit is None:
                 state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND unchosen = 1", (chat_id,))
                 user_mid = uuid.uuid4().hex
-                state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
-                                 " VALUES (?, ?, 'user', ?, 'done', ?, ?, ?)",
-                                 (user_mid, chat_id, body.text, via, model, now))
+                state.DB.execute("INSERT INTO messages(id, chat_id, role, content, skill, status, via, model, created)"
+                                 " VALUES (?, ?, 'user', ?, ?, 'done', ?, ?, ?)",
+                                 (user_mid, chat_id, content, mark, via, model, now))
             else:
                 user_mid = edit["id"]
                 _touch_summary(chat_id, edit["created"], edit["rowid"])
                 state.DB.execute("DELETE FROM messages WHERE chat_id = ? AND (created, rowid) > (?, ?)",
                                  (chat_id, edit["created"], edit["rowid"]))
-                state.DB.execute("UPDATE messages SET content = ?, via = ?, model = ? WHERE id = ?",
-                                 (body.text, via, model, user_mid))
+                state.DB.execute("UPDATE messages SET content = ?, skill = ?, via = ?, model = ? WHERE id = ?",
+                                 (content, mark, via, model, user_mid))
             for a in atts:
                 if state.DB.execute("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL",
                                     (user_mid, a["id"])).rowcount != 1:
@@ -3518,7 +3539,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created, alive_at)"
                          " VALUES (?, ?, 'assistant', '', 'streaming', ?, ?, ?, ?)",
                          (answer_id, chat_id, via, model, now, now))
-        title = row["title"] or (None if body.regenerate else _title(body.text))
+        title = row["title"] or (None if body.regenerate else _title(body.text) or chat_skills.title(mark))
         state.DB.execute("UPDATE chats SET title = ?, updated = ? WHERE id = ?", (title, now, chat_id))
         if body.request_id is not None:
             state.DB.execute("INSERT INTO chat_turn_requests VALUES (?, ?, ?, ?, ?)",

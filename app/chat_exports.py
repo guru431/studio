@@ -148,6 +148,8 @@ def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
     for message in snapshot["messages"]:
         user = message["role"] == "user"
         parts.append(("md", "## " + word("Пользователь" if user else "Помощник", lang)))
+        if isinstance(message.get("skill"), str) and message["skill"]:    # имя навыка — без его текста
+            parts.append(("plain", word("Навык: {}", lang, message["skill"])))
         if message["text"]:
             parts.append(("plain" if user else "md", message["text"]))
         if message.get("status") == "streaming":

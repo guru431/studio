@@ -277,6 +277,8 @@ form.addEventListener('submit', async (event) => {
       const node = el('article', { class: 'msg shared-message' },
         el('p', { class: 'shared-role' }, message.role === 'user' ? tr("Пользователь") : tr("Помощник")),
         todoNode(message.todo));
+      // навык сообщения — только имя (текст навыка в ссылку не входит)
+      if (typeof message.skill === 'string' && message.skill) node.append(el('p', { class: 'muted small shared-skill' }, tr("Навык: {0}", message.skill)));
       // `parts` — порядок текста и шагов ответа (сервер собрал его из timeline моста); иначе текст, затем шаги.
       const ordered = Array.isArray(message.parts) && message.parts.every((part) => typeof part?.text === 'string'
         || (Number.isInteger(part?.step) && part.step >= 0 && part.step < steps.length));

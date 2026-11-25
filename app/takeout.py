@@ -208,9 +208,10 @@ def _chat(user_id: int, chat_id: str, files: dict) -> "dict | None":
                  "created": m["created"], "attachments": attachments.get(m["id"], []),
                  "tools": _maybe_json(m["tools"] or "[]"),                 # шаги «Интернета» целиком
                  "reasoning": m["reasoning"], "reasoning_sec": m["reasoning_sec"],
-                 "todo": _maybe_json(m["todo"])}                            # план ответа (todo_write)
+                 "todo": _maybe_json(m["todo"]),                            # план ответа (todo_write)
+                 "skill": _maybe_json(m["skill"])}                          # навык; его текст — в начале content
                 for m in state.DB.execute("SELECT id, role, content, status, model, created, tools, reasoning,"
-                                          " reasoning_sec, todo FROM messages"
+                                          " reasoning_sec, todo, skill FROM messages"
                                           " WHERE chat_id = ? AND unchosen = 0 ORDER BY created, rowid", (chat_id,))]
     chat_media = [{"id": r["id"], "name": r["name"], "mime": r["mime"], "size": r["size"], "created": r["created"],
                    "file": files.get(r["media_id"])}

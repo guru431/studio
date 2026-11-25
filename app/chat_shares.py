@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, StrictBool, field_validator
 import auth
 import bridge
 import chat
+import chat_skills
 import claude_code
 import clock
 import images
@@ -302,6 +303,10 @@ def regular_snapshot(user_id: int, chat_id: str, reasoning: bool = True) -> tupl
         messages.append({"role": message["role"], "text": shown["content"], "attachments": attachments,
                          "reasoning": shown["reasoning"] if reasoning else None, "status": message["status"],
                          "tools": shown["tools"], "error": shown["error"], "todo": shown["todo"]})
+        # навык (решение 18 спеки 2026-11-25): только имя и то, что дописал человек, — без текста навыка
+        messages[-1]["skill"] = shown["skill"]["name"] if shown["skill"] else None
+        if shown["skill"]:
+            messages[-1]["text"] = chat_skills.human(message)
     # без названия — пусто: подпись «Чат» на языке читателя ставят страница ссылки (`tr`) и экспорт (`exports.word`)
     snapshot = {"title": row["title"] or "", "messages": messages}
     _encode(snapshot)

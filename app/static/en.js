@@ -4359,7 +4359,9 @@ globalThis.StudioEnglish = Object.freeze({
   "Новый диалог с итогом": "New conversation with a summary",
   "Диалог и контекст": "Conversation and context",
   "Занято — оценка Студии для следующего сообщения. Токены и время сообщает сервис модели; чего он не сообщил — «нет данных».": "Used is Studio's estimate for the next message. Tokens and time come from the model service; anything it did not report shows as \"no data\".",
-  "Контекст: нет данных": "Context: no data"
+  "Контекст: нет данных": "Context: no data",
+  "этот навык — только для «Агентов»": "this skill is for “Agents” only",
+  "у этого сообщения нет навыка": "this message has no skill"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",
