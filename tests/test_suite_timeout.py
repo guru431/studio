@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -143,4 +144,5 @@ def test_failed_write(studio, write_gate):
         cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=20)
     assert out.returncode == 1, out.stdout + out.stderr
     assert "deliberate write scenario failure" in out.stdout, out.stdout + out.stderr
-    assert "1 failed in" in out.stdout, out.stdout + out.stderr
+    # В итог могут попасть предупреждения библиотек (ldap3 на pyasn1), но не ошибка разборки.
+    assert re.search(r"\b1 failed(, \d+ warnings?)? in ", out.stdout), out.stdout + out.stderr
