@@ -767,7 +767,7 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["scopes"] == ["Вся учётка — на всех ваших устройствах.",
                            "Это устройство — в других браузерах и на других устройствах свой выбор.",
                            "Это устройство — этот браузер и учётка.", "Вся учётка — на всех ваших устройствах."]
-    assert v["notifications"] == ["Уведомления", "О чём уведомлять", "ntfy"] and v["data"] == ["Хранилище", "История", "Учётка"]
+    assert v["notifications"] == ["Уведомления", "Звук на устройстве", "О чём уведомлять", "ntfy"] and v["data"] == ["Хранилище", "История", "Учётка"]
     assert v["cleaner"] == "Очистка данных · Cleaner"
     assert v["draft"] == "unsaved-key" and v["saved"] == "whisperx"
     assert not problems(r), problems(r)
