@@ -1,4 +1,5 @@
-/* Настройки и статусы OpenCode; тексты сессии остаются на открытой странице. */
+/* Настройки и статусы OpenCode; тексты сессии остаются на открытой странице. Команды OpenCode — строки меню «/»
+ * поля задания (code-skills.js). */
 import { tr } from './i18n.js';
 import { timeOnly } from './time.js';
 import { el } from './ui.js';
@@ -9,26 +10,14 @@ export function opencodeView(form, text, { enabled, shared, changed }) {
     el('option', { value: '' }, tr('По настройкам OpenCode')));
   const directories = el('textarea', { id: 'code-additional-directories', rows: '2', maxlength: '8200',
     'aria-label': tr('Дополнительные каталоги'), placeholder: tr('Полные пути, по одному на строку') });
-  const command = el('select', { id: 'code-slash-command', 'aria-label': tr('Команды OpenCode') },
-    el('option', { value: '' }, tr('Команды OpenCode')));
   const status = el('p', { id: 'code-opencode-status', class: 'muted small', role: 'status', hidden: true });
   const panel = el('details', { id: 'code-opencode-options' }, el('summary', {}, tr('Настройки OpenCode')),
-    el('label', {}, tr('Основной агент'), mode), command,
+    el('label', {}, tr('Основной агент'), mode),
     ...(!shared ? [el('label', {}, tr('Дополнительные каталоги'), directories)] : []));
   form.before(panel, status);
   let touchedMode = false, touchedDirectories = false;
   mode.addEventListener('change', () => { touchedMode = true; changed(); });
   directories.addEventListener('change', () => { touchedDirectories = true; changed(); });
-  command.addEventListener('change', () => {
-    if (!command.value) return;
-    // Команда — перед набранным текстом (прежняя команда в начале поля заменяется), набранное остаётся.
-    const prefix = `/${command.value} `;
-    text.value = prefix + text.value.replace(/^\/\S+[ \t]*/, '');
-    text.dispatchEvent(new Event('input', { bubbles: true }));
-    text.focus();
-    text.setSelectionRange(prefix.length, prefix.length);
-    command.value = '';
-  });
   return {
     options: () => ({ ...(mode.value ? { agent_mode: mode.value } : {}),
       ...(touchedDirectories && !shared ? { additional_directories: directories.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean) } : {}) }),
@@ -40,8 +29,6 @@ export function opencodeView(form, text, { enabled, shared, changed }) {
       }
       mode.value = touchedMode ? selected : data.agent_mode || '';
       if (!touchedDirectories && Array.isArray(data.additional_directories)) directories.value = data.additional_directories.join('\n');
-      if (Array.isArray(data.commands)) command.replaceChildren(el('option', { value: '' }, tr('Команды OpenCode')),
-        ...data.commands.map(row => el('option', { value: row.name }, `/${row.name} · ${row.description || ''}`)));
     },
     progress(data) {
       const rows = [];
@@ -57,6 +44,6 @@ export function opencodeView(form, text, { enabled, shared, changed }) {
       status.textContent = rows.join(' · ');
       status.hidden = !rows.length;
     },
-    busy(value) { mode.disabled = directories.disabled = command.disabled = value; },
+    busy(value) { mode.disabled = directories.disabled = value; },
   };
 }

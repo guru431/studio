@@ -4291,7 +4291,21 @@ globalThis.StudioEnglish = Object.freeze({
   "проект": "project",
   "команда": "command",
   "Убрать навык": "Remove skill",
-  "Навык: {0}": "Skill: {0}"
+  "Навык: {0}": "Skill: {0}",
+  "Навык пуст": "The skill is empty",
+  "Навык вместе с уточнением длиннее 100 000 знаков": "The skill together with your note is longer than 100,000 characters",
+  "Навыка «Приёмка» нет в вашей библиотеке — добавьте умолчания в настройках": "There is no “Acceptance” skill in your library — add the defaults in settings",
+  "Изменённые файлы последнего ответа:": "Files changed in the last answer:",
+  "Проверить другим помощником: {0}": "Review with another helper: {0}",
+  "Положить набор в проект": "Put the skill set into the project",
+  "Навыки библиотеки для «Агентов» лягут файлами <папка>/<ключ>/SKILL.md. Существующие файлы не перезаписываются.": "Library skills for “Agents” are written as <folder>/<key>/SKILL.md files. Existing files are not overwritten.",
+  "Папка навыков": "Skills folder",
+  "Положить": "Put",
+  "Записываю…": "Writing…",
+  "записан": "written",
+  "уже есть — не тронут": "already exists — left as is",
+  "больше 64 КиБ — пропущен": "larger than 64 KiB — skipped",
+  "В библиотеке нет навыков для набора — добавьте умолчания в настройках": "The library has no skills for the set — add the defaults in settings"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",

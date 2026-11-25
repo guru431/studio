@@ -46,8 +46,9 @@ def test_opencode_mode_directories_commands_progress_and_fork(browser, live, wid
             ('wait', "!document.querySelector('#code-agent-mode').disabled"),
             set_value('#code-additional-directories', 'C:\\Shared'),
             ('wait', "!document.querySelector('#code-agent-mode').disabled"),
-            # команда встаёт перед набранным текстом, не затирая его
-            set_value('#code-text', 'Проверь проект'), set_value('#code-slash-command', 'compact'),
+            # команда OpenCode — строка меню «/»: «/comp», Enter — в поле «/compact », дальше уточнение
+            ('type', '#code-text', '/comp'), ('press', 'Enter'), ('wait', "document.querySelector('#code-text').value === '/compact '"),
+            ('type', '#code-text', 'Проверь проект'),
             ('eval', 'command', "document.querySelector('#code-text').value"),
             ('eval', 'buttons', "[!document.querySelector('#code-subagents').disabled, !!document.querySelector('#code-fork-chat')]"),
             ('click', '#code-context'),

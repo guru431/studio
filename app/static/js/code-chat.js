@@ -70,6 +70,7 @@ import { codeActivity } from './code-activity.js';
 import { attachCounts, countRefusal } from './code-attach-limits.js';
 import { findView } from './code-find.js';
 import { answerTools } from './code-answer-tools.js';
+import { agentSkills } from './code-skills.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -161,7 +162,7 @@ function preview(input) {
 
 export function chatView(host, { aid, pid, chat, agent, project, origin, fresh = false, engine = 'claude', closed: toPin, gone,
   openFile, git, gitAction = null, taskDone, forked, verify = null, onReady = null, title = null, readonly = false, renamed = null,
-  separateCopy = null, startText = null }) {
+  separateCopy = null, startText = null, startSkill = null, verifyWith = null }) {
   const api = (method, path, body, options = {}) => request(method, path, body,
     { ...options, headers: { ...options.headers, 'x-studio-window': WINDOW } });
   const url = `/api/code/agents/${aid}/projects/${pid}/chats/${chat}`;
@@ -189,6 +190,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   let retry = null;              // таймер следующего live
   let running = false;
   let sending = false;
+  let composing = false;         // текст навыка ещё грузится: отправка заперта
   let resolving = true;
   let historyLoading = true;
   let settingsReady = !agent?.chat_state;
@@ -346,15 +348,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const statusBar = el('div', { class: 'code-status-bar' });
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': tr("Быстрые действия") }, el('h2', {}, tr("Быстрые действия")));
-  for (const action of me?.code_quick_actions || []) {
-    const label = me.code_quick_actions_default ? tr(action.title) : action.title;
-    const button = el('button', { type: 'button', class: 'btn code-quick-action', title: label }, label);
-    button.addEventListener('click', () => {
-      if (quickActions.hidden || send.disabled) return;
-      submit(action.text, false);           // как действие Git: набранный текст и вложения остаются в поле
-    });
-    quickActions.append(button);
-  }
   const field = fieldBox(text);
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
   const picker = el('input', { type: 'file', id: 'code-image-input',
@@ -389,16 +382,6 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const forkChat = branching && !readonly ? menuItem(tr("Создать ветку чата"), { attrs: { id: 'code-fork-chat',
     class: 'code-fork', title: tr("Создать ветку чата · копия переписки, файлы в текущем состоянии") } }) : null;
   let branchPopup = null;
-  if (busyCopy || forkChat) {
-    const label = tr("Ветки и рабочие копии");
-    const trigger = iconButton('fork', label, { id: 'code-branch-actions' });
-    const menu = el('div', { 'aria-label': label }, ...[busyCopy, forkChat].filter(Boolean));
-    const popup = popupMenu(trigger, menu, { align: 'end' });
-    branchPopup = popup;
-    busyCopy?.addEventListener('click', () => { popup.close(true); runInCopy(); });
-    forkChat?.addEventListener('click', () => { popup.close(true); forkAt(null); });
-    actions.append(trigger, menu);
-  }
   let copying = false;
   const othersRunning = () => codeActivity(aid).filter((item) => item.project === pid && item.chat !== chat && item.running).length;
   async function runInCopy() {
@@ -430,6 +413,50 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       el('div', { class: 'composer-opts' },
         pick(tr("Модель"), model), pick(tr("Усилие"), effort), pick(tr("Права"), access)),
       stop, send));
+  // Навыки: меню «/», чип над полем, кнопки пустого чата, набор в проект, проверка другим помощником (code-skills.js).
+  // Создаются раньше enterSends и statusActions: меню «/» ловит Enter первым, пункты попадают в меню веток.
+  const skills = agentSkills(host, { aid, pid, agent, engine, text, chipHost: form, readonly, failed: (err) => {
+    if (!alive) return;
+    if (err.code === 'closed') closed();
+    else showStatus(words(err));
+  } });
+  skills.quick().then((rows) => {
+    for (const row of rows) {
+      const button = el('button', { type: 'button', class: 'btn code-quick-action', title: row.name }, row.name);
+      button.addEventListener('click', async () => {
+        if (quickActions.hidden || send.disabled || composing) return;
+        composing = true;
+        updateControls();
+        let value;
+        try {
+          value = await skills.libraryText(row.id);
+        } catch (err) {
+          if (alive) showStatus(words(err));
+          return;
+        } finally {
+          composing = false;
+          if (alive) updateControls();
+        }
+        if (alive) submit(value, false);     // как действие Git: набранный текст и вложения остаются в поле
+      });
+      quickActions.append(button);
+    }
+    if (alive) paintQuickActions();
+  }, () => {});
+  const skillItems = skills.menuItems({ verify: verifyWith,
+    changed: () => messageViews.get([...feed.children].findLast((node) => node.classList.contains('assistant')))
+      ?.progress.changes().files || [] });
+  if (busyCopy || forkChat || skillItems.length) {
+    const label = tr("Ветки и рабочие копии");
+    const trigger = iconButton('fork', label, { id: 'code-branch-actions' });
+    const menu = el('div', { 'aria-label': label }, ...[busyCopy, forkChat, ...skillItems].filter(Boolean));
+    const popup = popupMenu(trigger, menu, { align: 'end' });
+    branchPopup = popup;
+    busyCopy?.addEventListener('click', () => { popup.close(true); runInCopy(); });
+    forkChat?.addEventListener('click', () => { popup.close(true); forkAt(null); });
+    for (const item of skillItems) item.addEventListener('click', () => popup.close(true));
+    actions.append(trigger, menu);
+  }
   host.dataset.engine = engine;
   // Наблюдатель совместного проекта: поле ввода, ответы на карточки, ветки и «Продолжить здесь» скрыты (CSS
   // [data-readonly]); сервер их и так отклонит (403 readonly).
@@ -526,6 +553,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function paintSettings(data) {
     openCode.settings(data);
+    skills.commands(data.commands);          // команды помощника — строки меню «/»
     if (engine === 'deepseek') {
       // Права чата DeepSeek Harness закрепляются при создании: ход шлёт то же значение, что ответил state.
       accessFixed = data.access_fixed === true;
@@ -877,12 +905,14 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         ? el('button', { type: 'button', class: 'btn btn-sm code-fork', disabled: running,
           title: tr("Создать ветку до этого сообщения. Текст задания будет скопирован; вложения прикрепите заново.") }, tr("Продолжить иначе")) : null;
       branch?.addEventListener('click', () => forkAt(m.id));
+      const skill = skills.label(m.text);     // начато текстом навыка, отправленного отсюда: «Навык: имя» и уточнение
       return el('div', { class: 'code-msg user' },
+      ...(skill ? [el('span', { class: 'code-user-skill' }, tr("Навык: {0}", skill.name))] : []),
       ...(Array.isArray(m.images) ? m.images : []).map((i) => IMAGE_TYPES.has(i.mime)
         ? el('img', { class: 'code-sent-image', src: `data:${i.mime};base64,${i.data}`, alt: i.name })
         : agent?.history_images && typeof m.id === 'string' && Number.isInteger(i.index) && i.index >= 0
           ? pictures.node(m.id, i) : el('span', { class: 'code-sent-file' }, i.name)),
-      el('span', { class: 'code-user-text' }, typeof m.text === 'string' ? m.text : ''), branch);
+      el('span', { class: 'code-user-text' }, skill ? skill.rest : typeof m.text === 'string' ? m.text : ''), branch);
     }
     const body = el('div', { class: 'code-steps code-timeline' });
     const progress = progressView({ onChanges: paintChangedFiles,
@@ -938,7 +968,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   }
 
   function updateControls() {
-    send.disabled = copying || sending || adding || resolving || historyLoading || !settingsReady || foreign || external || queue.paused() || (running && !agent?.chat_control);
+    send.disabled = copying || sending || composing || adding || resolving || historyLoading || !settingsReady || foreign || external || queue.paused() || (running && !agent?.chat_control);
     stop.disabled = foreign || external;
     deliveryPick.hidden = !running || !agent?.queue_edit || QUEUE_ONLY.has(engine);
     delivery.disabled = foreign || sending;
@@ -1000,10 +1030,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     historyEmpty = false;
     if (pending.quick) { pendingInputs.delete(draftKey); return; }
     if (sendIds.get(draftKey)?.value === pending.value) sendIds.delete(draftKey);
-    if (drafts.get(draftKey) === pending.value) drafts.delete(draftKey);
+    if (drafts.get(draftKey) === pending.typed) drafts.delete(draftKey);
     if (imageDrafts.get(draftKey) === pending.images) imageDrafts.delete(draftKey);
     pendingInputs.delete(draftKey);
-    if (text.value === pending.value) { text.value = ''; autosize(); }
+    if (text.value === pending.typed) { text.value = ''; autosize(); }
     images = images.filter((i) => !pending.images.includes(i));
     paintImages();
   }
@@ -1014,7 +1044,9 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     pendingInputs.delete(draftKey);
     pending.mine?.remove();
     if (pending.quick) return;
-    text.value = text.value && text.value !== pending.value ? `${pending.value}\n\n${text.value}` : pending.value;
+    text.value = text.value && text.value !== pending.typed
+      ? [pending.typed, text.value].filter(Boolean).join('\n\n') : pending.typed;
+    if (pending.lead) skills.preset(pending.lead);   // навык — снова чипом, его текст в поле не попадает
     if (text.value) drafts.set(draftKey, text.value);
     images = [...pending.images, ...images.filter((i) => !pending.images.includes(i))];
     keepImages();
@@ -1706,7 +1738,13 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       submit(prompt);
       return true;
     }
-    if (first && startText) {      // чат отдельной копии: задание, перенесённое из чата исходного проекта
+    if (first && startText && startSkill) {   // «Проверить другим помощником»: навык и текст в поле, отправляет человек
+      text.value = startText;
+      drafts.set(draftKey, startText);
+      skills.preset(startSkill);
+      startText = startSkill = null;
+      autosize();
+    } else if (first && startText) {      // чат отдельной копии: задание, перенесённое из чата исходного проекта
       text.value = startText;
       startText = null;
       autosize();
@@ -1763,14 +1801,42 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   /** quick — текст мимо поля (действие Git, git = true, или быстрое действие): поле и вложения не трогает. */
   async function submit(quick = null, git = !!quick) {
-    if (resolving || historyLoading || !settingsReady) return;
+    if (resolving || historyLoading || !settingsReady || composing) return;
     if (queue.paused()) { showStatus(tr("Сначала завершите редактирование очереди")); return; }
-    const value = quick ?? text.value;
+    const typed = quick ?? text.value;       // поле (или текст мимо поля); навык уходит перед ним
+    let value = typed;
     if (quick && ((git && !hasGit) || running)) {
       showStatus(running ? tr("Дождитесь завершения задания в чате") : tr("Git недоступен — обновите статус проекта"));
       return;
     }
-    if ((!value.trim() && !images.length) || copying || sending || adding || resolving || foreign || external) return;
+    if (copying || sending || adding || resolving || foreign || external) return;
+    let lead = null;
+    if (!quick) {
+      composing = true;
+      updateControls();
+      try {
+        lead = await skills.lead();
+      } catch (err) {
+        if (alive) {
+          if (err.code === 'closed') closed();
+          else showStatus(words(err));
+        }
+        return;
+      } finally {
+        composing = false;
+        if (alive) updateControls();
+      }
+      if (!alive || text.value !== typed) return;     // поле успели изменить — отправит следующее нажатие
+      if (lead) {
+        value = [lead.text, typed].filter((s) => s.trim()).join('\n\n');
+        if (value.length > 100000) {
+          showStatus(tr("Навык вместе с уточнением длиннее 100 000 знаков"));
+          return;
+        }
+      }
+      if (copying || sending || adding || resolving || foreign || external) return;
+    }
+    if (!value.trim() && !images.length) return;
     if (running) {
       if (!agent?.chat_control) {
         showStatus(tr("Обновите мост для отправки уточнений во время работы"));
@@ -1779,6 +1845,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       const sentImages = images;
       const requestId = sendId(value, sentImages);
       sending = true;
+      skills.close();
       updateControls();
       try {
         const result = await api('POST', endpoint('/steer'), { text: value, request_id: requestId,
@@ -1786,7 +1853,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           ...attachmentBody(sentImages) });
         sendIds.delete(draftKey);
         if (result.repeat === 'turn') {      // это задание уже ушло ходом (обрыв связи раньше): второй раз — нет
-          if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }
+          if (text.value === typed) { text.value = ''; drafts.delete(draftKey); autosize(); }
+          if (lead) skills.clear();
           images = images.filter((i) => !sentImages.includes(i));
           keepImages();
           if (alive) showStatus(tr("Это задание уже принято"), false);
@@ -1797,7 +1865,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
           if (!queuedInputs.has(draftKey)) queuedInputs.set(draftKey, new Map());
           queuedInputs.get(draftKey).set(result.id, { value, images: sentImages });
         }
-        if (text.value === value) { text.value = ''; drafts.delete(draftKey); autosize(); }
+        if (text.value === typed) { text.value = ''; drafts.delete(draftKey); autosize(); }
+        if (lead) skills.clear();
         images = images.filter((i) => !sentImages.includes(i));
         keepImages();
         if (alive) showStatus(result.mode === 'queue' ? tr("Уточнение принято — будет выполнено после текущего ответа")
@@ -1828,9 +1897,10 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     send.disabled = true;
     showStatus('');
     const mine = messageNode({ role: 'user', text: value, images: sentImages });
-    pendingInputs.set(draftKey, { value, images: sentImages, mine, quick: !!quick });
+    pendingInputs.set(draftKey, { value, typed, lead: lead?.item || null, images: sentImages, mine, quick: !!quick });
     grow(() => feed.append(mine));
-    if (!quick) text.value = ''; // Действие Git и быстрое действие сохраняют текст и вложения черновика.
+    if (!quick) { text.value = ''; skills.clear(); } // Действие Git и быстрое действие сохраняют текст и вложения черновика.
+    skills.close();              // меню «/» само не закрывается после отправки
     autosize();
     const own = take();          // уход с экрана или с чата этот запрос не обрывает: ход, может, уже принят
     let response;
@@ -2008,6 +2078,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       usage.unmount();
       changedFiles.unmount();
       hints?.unmount();
+      skills.unmount();
       queue.unmount();
       subtaskControl.unmount();
       commands.unmount();

@@ -133,8 +133,9 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
 
 
 def test_quick_action_keeps_the_typed_draft_and_can_be_retried(browser, live):
-    """Быстрое действие уходит мимо поля: набранный черновик остаётся и при отказе, и после хода; отказ до начала —
-    кнопка снова доступна, повтор отправляет то же действие."""
+    """Быстрое действие — навык библиотеки с `quick`, его текст — из GET /api/skills/{id}; уходит мимо поля:
+    набранный черновик остаётся и при отказе, и после хода; отказ до начала — кнопка снова доступна, повтор
+    отправляет то же действие."""
     login = "quick-action-retry"
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Новый чат")})
@@ -155,6 +156,9 @@ def test_quick_action_keeps_the_typed_draft_and_can_be_retried(browser, live):
     })()"""
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *code_chat(aid, CODE_CHAT_A),
+            ("eval", "expected", f"""(async () => {{ const m = {API};
+              const first = (await m.api('GET', '/api/skills?scope=agents&lang=ru')).items.find(s => s.quick);
+              return (await m.api('GET', '/api/skills/' + first.id)).text; }})()"""),
             ("eval", "reject", reject), set_value("#code-text", "Мой черновик"), ("click", ".code-quick-action"),
             ("wait", "!!window.rejectTurn"),
             ("eval", "pendingHidden", "document.querySelector('#code-quick-actions').hidden"),
@@ -177,5 +181,5 @@ def test_quick_action_keeps_the_typed_draft_and_can_be_retried(browser, live):
     assert result["values"]["restored"] == result["values"]["kept"] == "Мой черновик"
     assert result["values"]["pendingHidden"] and result["values"]["hidden"] and result["values"]["disabled"]
     turns = [r for r in machine.requests if r["op"] == "turn"]
-    assert len(turns) == 1 and turns[0]["text"] == code_actions.DEFAULTS[0]["text"]
+    assert len(turns) == 1 and turns[0]["text"] == result["values"]["expected"] == code_actions.DEFAULTS[0]["text"]
     assert not known_refusals(problems(result), 409), problems(result)
