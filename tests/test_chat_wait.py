@@ -12,7 +12,7 @@ import ocr_render
 import state
 from conftest import add_gateway
 from scans import scan_pdf
-from test_chat import events_of, messages, new_chat, sse, turn
+from test_chat import events_of, messages, new_chat, sse, turn, window
 
 
 @pytest.fixture(autouse=True)
@@ -144,8 +144,8 @@ def test_other_gateway_503_is_an_error_at_once(studio):
 def test_scan_turn_reason_survives_reload(studio, monkeypatch):
     """Ход не поместился в контекст после распознавания — слова в `error` и после перечитывания (ревью)."""
     from test_chat_ocr import ask, held_until_the_turn_waits, upload
-    monkeypatch.setitem(chat.CONTEXT, "local-gemma-abl", chat.RESERVE_TOKENS + 10)
     add_gateway(studio); cid = new_chat(studio)
+    window(studio, chat.RESERVE_TOKENS + 10)
     held_until_the_turn_waits(studio)
     att = upload(studio, scan_pdf("ink"))
     events = sse(ask(studio, cid, ids=[att["id"]]))

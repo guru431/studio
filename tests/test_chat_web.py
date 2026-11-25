@@ -9,7 +9,7 @@ import chat_tools
 import state
 import web
 from conftest import T0, add_connection, add_gateway, make_user, signin
-from test_chat import done_transcript, events_of, from_transcript, messages, new_chat, sse, turn
+from test_chat import done_transcript, events_of, from_transcript, messages, new_chat, sse, turn, window
 from test_web import CANON, FakeYtDlp
 
 EXA_KEY = "exa-test-key"
@@ -301,10 +301,12 @@ def test_rounds_are_capped(studio):
 
 def test_tool_result_is_cut_to_the_context(studio, monkeypatch):
     """Review Focus 4: страница не помещается в остаток контекста модели — обрезка с пометкой, а не 400 модели;
-    шаг хранит то, что получила модель. Остатка нет вовсе — ошибка инструмента словами."""
-    limit = chat.RESERVE_TOKENS + 1000
-    monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": limit})
+    шаг хранит то, что получила модель. Остатка нет вовсе — ошибка инструмента словами. Описания инструментов
+    занимают окно (`StreamTask.spec_size`): остаток — сверх оценки пустого хода (`/estimate`)."""
     cid = web_chat(studio)
+    base = studio.c.post(f"/api/chats/{cid}/estimate", json={"text": ""}).json()["tokens"]
+    limit = chat.RESERVE_TOKENS + base + 1000
+    window(studio, limit)
     studio.gw.exa_page_text = "слово " * 5000
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Кратко."]]
     assert sse(turn(studio, cid, "Прочитай https://example.test/long"))[-1] == ("done", {"status": "done"})
@@ -314,9 +316,9 @@ def test_tool_result_is_cut_to_the_context(studio, monkeypatch):
     (step,) = steps_of(messages(studio, cid)[1]["id"])
     assert step["text"] == sent[-1]["content"]
 
-    monkeypatch.setattr(chat, "CONTEXT", {"local-gemma-abl": chat.RESERVE_TOKENS + 150})
     other = new_chat(studio)
     patch(studio, other, web=True)
+    window(studio, chat.RESERVE_TOKENS + base + 150)
     studio.gw.chat_script = [{"tool_calls": [call("read_page", url="https://example.test/long")]}, ["Не влезло."]]
     assert sse(turn(studio, other, "Прочитай https://example.test/long"))[-1] == ("done", {"status": "done"})
     assert studio.gw.chat_requests[-1]["messages"][-1]["content"] == (
@@ -337,9 +339,14 @@ def test_model_without_tools_answers_in_words(studio):
 
 
 def test_other_400_on_the_first_round_is_the_gateway_words(studio):
-    """M3: 400 без слова tool (контекст, картинка) — не «не умеет интернет», а слова шлюза."""
+    """M3: 400 без слова tool (контекст, картинка) — не «не умеет интернет». Отказ по длине контекста в первом
+    ходе (сжимать нечего) — слова `chat.TOO_LONG_WORDS`, прочий 400 — слова шлюза."""
     cid = web_chat(studio)
     studio.gw.chat_error = (400, {"error": {"message": "This model's maximum context length is 8192 tokens"}})
+    events = sse(turn(studio, cid))
+    assert events[-1] == ("error", {"message": chat.TOO_LONG_WORDS})
+    assert events[-1][1]["message"].startswith(chat.CONTEXT_WORDS) and len(studio.gw.chat_requests) == 1
+    studio.gw.chat_error = (400, {"error": {"message": "image could not be decoded"}})
     events = sse(turn(studio, cid))
     assert events[-1][0] == "error" and events[-1][1]["message"].startswith("шлюз отклонил запрос")
     assert events[-1][1]["message"] != chat.NO_WEB_TOOLS

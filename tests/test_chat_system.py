@@ -11,7 +11,7 @@ import mcp_sources
 import profiles
 import state
 from conftest import T0, add_connection, add_gateway, make_user
-from test_chat import new_chat, sse, turn
+from test_chat import new_chat, sse, turn, window
 from test_cleaner import EMAIL, preview, protected  # noqa: F401 — фикстура Cleaner
 from test_connection_profiles import FULL, TEXT
 
@@ -114,7 +114,7 @@ def test_cleaner_gets_date_and_role_but_no_profile(protected):  # noqa: F811
 
 def test_token_estimate_counts_pieces(studio, monkeypatch):
     gateway = add_gateway(studio)
-    monkeypatch.setitem(chat.CONTEXT, "local-gemma-abl", chat.RESERVE_TOKENS + 3000)
+    window(studio, chat.RESERVE_TOKENS + 3000)
     cid = new_chat(studio)
     sse(turn(studio, cid, "Привет"))                                # без кусков помещается
     long = {"system_text": "п" * profiles.TEXT_MAX}

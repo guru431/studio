@@ -141,7 +141,7 @@ def test_pause_is_not_a_completed_job_and_deleted_chat_cannot_resume(studio, mon
         return chat.CONTEXT.get(model)
 
     with monkeypatch.context() as patch:
-        patch.setattr(chat, "_limit", delete_while_waiting_for_limit)
+        patch.setattr(chat, "model_window", delete_while_waiting_for_limit)
         assert answer(studio, cid, shown["id"], "run").status_code == 404
     row = state.DB.execute("SELECT resolved FROM chat_pending WHERE id = ?", (shown["id"],)).fetchone()
     assert row["resolved"] is None and "tools/call" not in methods(calls)

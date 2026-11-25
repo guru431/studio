@@ -63,6 +63,17 @@ def messages(s, chat_id):
     return s.c.get(f"/api/chats/{chat_id}").json()["messages"]
 
 
+def window(s, tokens, model="local-gemma-abl"):
+    """Окно модели из списка шлюза (`chat.model_window`): запись модели в `s.gw.models` с `context_length = tokens`
+    и сброс запомненных списков `chat.LIMITS`."""
+    entry = next((m for m in s.gw.models if m["id"] == model), None)
+    if entry is None:
+        s.gw.models.append({"id": model, "context_length": tokens})
+    else:
+        entry["context_length"] = tokens
+    chat.LIMITS.clear()
+
+
 def attach(s, name, data, mime="application/octet-stream"):
     r = s.c.post("/api/attachments", files={"file": (name, data, mime)})
     assert r.status_code == 201, r.text
@@ -370,10 +381,10 @@ def test_too_big_document_is_refused_before_saving(studio):
     assert studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"}).json()["model"] == "tiny"
     studio.gw.models.append({"id": "tiny", "context_length": 8192})
     doc = attach(studio, "note.txt", b"word " * 100, "text/plain")
-    r = turn(studio, cid, "а" * 30_000, attachment_ids=[doc["id"]])         # ≈ 10 тыс. токенов
+    r = turn(studio, cid, "а" * 30_000, attachment_ids=[doc["id"]])         # ≈ 10 тыс. токенов и описания инструментов
     assert r.status_code == 413
     assert r.json()["detail"] == {"code": "context", "message": (
-        "Не помещается в контекст модели: ~10 тыс. токенов при пределе 8 тыс. "
+        "Не помещается в контекст модели: ~11 тыс. токенов при пределе 8 тыс. "
         "Уберите документ или начните новый диалог.")}
     assert messages(studio, cid) == [] and not studio.gw.chat_requests
     assert studio.c.get(f"/api/chats/{cid}").json()["chat"]["title"] is None
@@ -387,8 +398,9 @@ def test_too_big_document_is_refused_before_saving(studio):
 
 
 def test_model_list_for_the_context_limit_is_remembered(studio):
-    """Предел модели вне CONTEXT — из списка моделей подключения, запомненного на CONTEXT_TTL_SEC (у OpenRouter
-    список — сотни КБ на каждый ход): ходы подряд — один GET; после срока — снова; неудача не запоминается."""
+    """Предел модели — из списка моделей подключения, запомненного на CONTEXT_TTL_SEC (у OpenRouter список — сотни
+    КБ на каждый ход): ходы подряд — один GET; после срока — снова; неудача не запоминается, а действует окно,
+    запомненное из прежнего списка (`model_facts.window`)."""
     import httpx
     gw = add_gateway(studio)
     studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny"]})
@@ -412,10 +424,9 @@ def test_model_list_for_the_context_limit_is_remembered(studio):
     sse(turn(studio, cid, "три"))
     assert len(listed) == 2
     studio.clock[0] += chat.CONTEXT_TTL_SEC
-    fail.append(503)                                         # не узнали — ход без проверки, и спросим снова
+    fail.append(503)                                         # не прочитали — запомненное окно, и спросим снова
     r = turn(studio, cid, "а" * 15_000)
-    assert r.status_code == 200 and len(listed) == 3
-    sse(r)
+    assert r.status_code == 413 and "при пределе 8 тыс." in r.json()["detail"]["message"] and len(listed) == 3
     r = turn(studio, cid, "а" * 15_000)
     assert r.status_code == 413 and len(listed) == 4
     assert len(chat.LIMITS) == 1

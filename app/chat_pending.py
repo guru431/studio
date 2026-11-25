@@ -235,7 +235,7 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     cleaner_route.refuse_forced(conn, "chat", model)  # пауза до принудительного Cleaner: облачная роль srvllm — отказ
     if conn.shared:
         chat._chat_pair(uid, conn.id, model)
-    limit = await chat._limit(conn, model)
+    limit = await chat.model_window(conn, model)
     auth.recheck(request)
     operations.check(uid)
     if clock.NOW() - pending["created"] > PENDING_TTL_SEC:
@@ -291,7 +291,8 @@ async def answer_pending(chat_id: str, pending_id: str, body: PendingIn, request
     log.info("чат %s: ответ %s — продолжение после паузы %s (%s)", chat_id[:8], mid[:8], pending_id[:8], body.action)
     st = chat.StreamTask(user_id=uid, chat_id=chat_id, message_id=mid, conn=conn, model=model,
                          messages=payload["messages"], content=message["content"], tools=kinds, exa_key=exa_key,
-                         limit=limit, known=chat._known_links(chat_id) if kinds else {}, mcp_ids=mcp_ids,
+                         limit=limit, ratio=chat.ratio(conn, model), known=chat._known_links(chat_id) if kinds else {},
+                         mcp_ids=mcp_ids,
                          mcp_explicit=mcp_client.present(uid, fresh["mcp_ids"]), params=profiles.request_params(conn, model),
                          thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
                          steps=payload["steps"], reasoning=message["reasoning"] or "",

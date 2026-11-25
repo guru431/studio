@@ -2,7 +2,7 @@
 import chat
 import state
 from conftest import add_gateway, make_user, signin
-from test_chat import attach, events_of, messages, new_chat, png, sse, turn
+from test_chat import attach, events_of, messages, new_chat, png, sse, turn, window
 
 KEY = '11111111-1111-4111-8111-111111111111'
 
@@ -85,10 +85,10 @@ def test_edit_turn_replaces_suffix_atomically_and_preserves_attachment(studio, m
     assert stale.status_code == 409 and stale.json()["detail"]["code"] == "edit_stale"
     assert messages(studio, cid) == original
 
-    with monkeypatch.context() as patch:
-        patch.setitem(chat.CONTEXT, "local-gemma-abl", 1)
-        too_large = turn(studio, cid, text="Edit", edit=target)
-        assert too_large.status_code == 413
+    window(studio, 1)
+    too_large = turn(studio, cid, text="Edit", edit=target)
+    assert too_large.status_code == 413
+    window(studio, chat.CONTEXT["local-gemma-abl"])
     assert messages(studio, cid) == original
     accepted = sse(turn(studio, cid, text="Edit", request_id=KEY, edit=target))[0][1]
     assert accepted["user_message_id"] == target["id"]

@@ -14,7 +14,7 @@ import sections
 import state
 from conftest import add_connection, add_gateway
 from scans import scan_pdf
-from test_chat import attach, events_of, messages, new_chat, sse
+from test_chat import attach, events_of, messages, new_chat, sse, window
 
 TEXT = "# Договор\n\nТекст страницы."
 LAYER = "This page has a text layer long enough to be read as it is."      # 46 знаков без пробелов
@@ -67,7 +67,8 @@ def held_until_the_turn_waits(s):
 
 
 def paths(s) -> list:
-    return [r.url.path for r in s.gw.requests]
+    """Запросы к шлюзу, кроме списка моделей (окно контекста хода, `chat.model_window`)."""
+    return [r.url.path for r in s.gw.requests if r.url.path != "/v1/models"]
 
 
 def doc(name, text, question=QUESTION):
@@ -468,8 +469,8 @@ def test_wait_does_not_eat_the_answer_deadline(studio, monkeypatch):
 
 def test_too_big_after_recognition_is_an_error_in_words(studio, monkeypatch):
     """Предел контекста — после распознавания, перед моделью, прежними словами отказа."""
-    monkeypatch.setitem(chat.CONTEXT, "local-gemma-abl", chat.RESERVE_TOKENS + 10)
     add_gateway(studio); cid = new_chat(studio)
+    window(studio, chat.RESERVE_TOKENS + 10)
     held_until_the_turn_waits(studio)
     att = upload(studio, scan_pdf("ink"))
     events = sse(ask(studio, cid, ids=[att["id"]]))

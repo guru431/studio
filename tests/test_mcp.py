@@ -74,8 +74,10 @@ def test_mcp_discovery_tool_round_and_secret_storage(studio, caplog, streaming):
     studio.gw.chat_script = [{'tool_calls': [call(LOOKUP, query='value')]}, ['Готово']]
     events = sse(turn(studio, cid, 'Use tool'))
     assert events[-1] == ('done', {'status': 'done'})
-    assert [method for method, _ in calls] == ['initialize', 'notifications/initialized', 'tools/list', 'tools/call', 'close']
-    assert calls[3][1] == {'name': 'lookup', 'arguments': {'query': 'value'}}
+    # каталог — проверкой окна хода (`chat._turn_specs`, холодный кэш), вызов — ходом из кэша
+    assert [method for method, _ in calls] == ['initialize', 'notifications/initialized', 'tools/list', 'close',
+                                              'initialize', 'notifications/initialized', 'tools/call', 'close']
+    assert calls[6][1] == {'name': 'lookup', 'arguments': {'query': 'value'}}
     assert studio.gw.chat_requests[1]['messages'][-1]['content'] == 'result-private'
     assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Tools', 'tool': 'lookup'}]
     stored = state.DB.execute('SELECT secret_enc FROM mcp_servers WHERE id=?', (sid,)).fetchone()[0]

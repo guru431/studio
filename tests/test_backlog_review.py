@@ -87,6 +87,5 @@ def test_context_error_mentioning_tools_keeps_its_real_reason(studio):
     cid = web_chat(studio)
     studio.gw.chat_error = (400, {"error": {"message": "Context length exceeded including tools tokens"}})
     events = sse(turn(studio, cid))
-    assert events[-1][0] == "error"
-    assert "Context length" in events[-1][1]["message"]
+    assert events[-1] == ("error", {"message": chat.TOO_LONG_WORDS})     # отказ по длине, сжимать нечего
     assert events[-1][1]["message"] != chat.NO_WEB_TOOLS

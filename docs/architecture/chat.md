@@ -561,11 +561,15 @@ Studio проксирует файлы через исходное подклю�
 - **Заполнение контекста** — `POST /api/chats/{chat_id}/estimate {text, attachment_ids}` → `{tokens, limit}`
   (`chat.estimate`): куски 1–3 системного сообщения, история (`chat.compose` с пределом картинок подключения), текст
   и неотправленные вложения по `chat.estimate_tokens`; у хода через сервер (кроме Cleaner) — ещё описания инструментов,
-  которые он отправит модели (`chat._turn_specs`, знаки JSON / 3 — `chat.spec_tokens`): «Интернета», MCP набора — тем же
+  которые он отправит модели (`chat._turn_specs`, знаки JSON / отношение пары — `chat.spec_tokens`): «Интернета», MCP набора — тем же
   отбором `mcp_client.Tools.discover` с пределом подключения, холодный кэш — не дольше `mcp_sources.DEFAULT_WAIT_SEC`,
   как `mcp_client.web_tools`, — и встроенные (`chat_tools.specs`; не принятые шлюзом недавно — без них). `limit` —
-  `chat._limit` или null. Знания (поиск) не считаются — это оценка; проверка 413 хода (`create_turn`, в транзакции без
-  ожидания каталогов) описаний инструментов не считает. Страница (`chat-context.js`) — кольцо 18 px в `.composer-opts`
+  `chat.model_window` или null. Знания (поиск) не считаются — это оценка; проверка 413 хода (`create_turn`) считает те
+  же описания (`_turn_specs` до транзакции). Знаков на токен — `chat.ratio` (`model_facts.ratio`, иначе
+  `chat.DEFAULT_RATIO` (3.0)); окно `chat.model_window` — ручное `context_window` профиля (модели, иначе подключения),
+  иначе список моделей шлюза (оно же — в `model_facts.window`), иначе, если список не прочитан, запомненное, иначе
+  `chat.CONTEXT`. Отказ шлюза 400 по длине (`chat.CONTEXT_REFUSED`) — один повтор с принудительным пересказом всего
+  до сообщения хода, второй отказ или сжимать нечего — `chat.TOO_LONG_WORDS` (начало — `chat.CONTEXT_WORDS`). Страница (`chat-context.js`) — кольцо 18 px в `.composer-opts`
   открытого диалога через 800 мс после ввода или смены вложений; ещё не загруженные вложения оценивает сама грубо;
   `.ctx-warn` от 0.7, `.ctx-full` от 0.9; предел неизвестен — кольца нет.
 
@@ -675,7 +679,7 @@ Cleaner: [docs/cleaner-integration.md](../../docs/cleaner-integration.md), кл�
   `hidden`, профиль администратора не виден). 404 Cleaner (журнал удалён за давностью или контекст удалён) — 410 `journal_gone`
   (`cleaner_route.JOURNAL_GONE`). Поле `cleaner_sent` ответа — признак кнопки; ссылки и экспорт его не читают.
 - Картинки: `chat._max_images` — `chat.NO_IMAGES` (из истории — пометкой `chat.CLEANER_DROPPED`), новое вложение-картинка — 409
-  `cleaner_images` (`chat.CLEANER_IMAGES`). Предел контекста `chat._limit` — из `cleaner_route.models`.
+  `cleaner_images` (`chat.CLEANER_IMAGES`). Предел контекста `chat.model_window` — из `cleaner_route.models`.
 - Отказы: сам Cleaner (сообщение начинается с «Cleaner») — `cleaner_route.words` по коду и `error.code`
   (`upstream`, `hold_tools`, `client_login`, `chat`, 429, 503, 502/504); ошибка провайдера, переданная как есть, —
   `upstream.gateway_error` (`cleaner_route.failure`). Нет связи — `cleaner_route.down`, адрес Cleaner убран из

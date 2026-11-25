@@ -115,6 +115,15 @@ ATTACH_MAX = 10                  # вложений в сообщении (фо�
 ATTACHMENTS = f"не больше {ATTACH_MAX} вложений в сообщении"
 SUGGESTIONS_MAX = 8              # подсказок пустого экрана: профиль подключения, затем `prompts` MCP диалога
 CONTEXT = {"local-gemma-abl": 131072}
+#: знаков на токен, пока пара «подключение, модель» не наблюдалась (`ratio`, `model_facts.ratio`)
+DEFAULT_RATIO = 3.0
+#: начало слов любого отказа по длине контекста (413 `context`, `messages.error`)
+CONTEXT_WORDS = "Не помещается в контекст модели"
+#: шлюз отклонил запрос по длине и после сжатия истории (или сжимать нечего)
+TOO_LONG_WORDS = CONTEXT_WORDS + ": модель отклонила запрос по длине. Уберите документ или начните новый диалог."
+#: отказ шлюза 400 по длине контекста (OpenAI, vLLM, LiteLLM, Anthropic) — `StreamTask._round`
+CONTEXT_REFUSED = re.compile(r"context[ _]length|context window|maximum context|too many tokens|prompt is too long"
+                             r"|input is too long", re.IGNORECASE)
 TITLE_CHARS = 60
 
 # холодная модель грузится до ~290 с, Apache держит линию /api/chats/ до 600 с
@@ -127,7 +136,7 @@ STREAM_TOTAL_SEC = 1800
 # (и очередь событий), а MemoryMax службы — 2 ГБ на всех
 USER_STREAMS = 3
 MODELS_TIMEOUT_SEC = 10
-# пределы контекста из списка моделей подключения (_limit): список почти не меняется, а у OpenRouter он —
+# пределы контекста из списка моделей подключения (_listed): список почти не меняется, а у OpenRouter он —
 # сотни КБ JSON, до MODELS_TIMEOUT_SEC перед каждым ходом. Удачный список живёт CONTEXT_TTL_SEC, записей —
 # не больше CONTEXT_KEEP; неудача не запоминается
 CONTEXT_TTL_SEC = 600
@@ -934,7 +943,18 @@ def _role(user_id: int, role_id: "str | None") -> "dict | None":
     return roles.get(user_id, role_id) if role_id else None
 
 
-def estimate_tokens(messages: list[dict]) -> int:
+def ratio(conn: "Connection | None", model: str) -> float:
+    """Знаков на токен пары «подключение, модель» по наблюдениям (`model_facts.ratio`, `note_usage`); нет
+    наблюдений или подключения — DEFAULT_RATIO."""
+    if conn is None:
+        return DEFAULT_RATIO
+    row = state.DB.execute("SELECT ratio FROM model_facts WHERE connection_id = ? AND model = ?",
+                           (conn.id, model)).fetchone()
+    return row[0] if row is not None and row[0] is not None else DEFAULT_RATIO
+
+
+def estimate_tokens(messages: list[dict], ratio: float = DEFAULT_RATIO) -> int:
+    """Токены сообщений: знаки текста и аргументов вызовов / `ratio` плюс 1000 на картинку."""
     chars, pics = 0, 0
     for m in messages:
         content = m["content"]
@@ -949,36 +969,60 @@ def estimate_tokens(messages: list[dict]) -> int:
                 chars += len(part["text"])
             elif part.get("type") == "image_url":
                 pics += 1
-    return math.ceil(chars / 3) + 1000 * pics
+    return math.ceil(chars / ratio) + 1000 * pics
 
 
-async def _limit(conn: Connection, model: str) -> int | None:
-    """Предел контекста модели: CONTEXT, иначе предел из списка моделей подключения через сервер
-    (`connections.context_size`, запомненный в LIMITS на CONTEXT_TTL_SEC); не узнать — None (тогда без проверки)."""
-    if model in CONTEXT:
-        return CONTEXT[model]
+async def model_window(conn: Connection, model: str) -> int | None:
+    """Окно контекста модели (спека п. 31(б)): ручное значение профиля (`profiles.model_params`: модели, иначе
+    подключения), иначе сообщённое шлюзом в списке моделей (`_listed`; оно же — в `model_facts.window`), иначе — если
+    список прочитать не удалось — запомненное `model_facts.window`, иначе таблица CONTEXT; не узнать — None (тогда
+    без проверки)."""
+    manual = profiles.model_params(conn, model).get("context_window")
+    if manual is not None:
+        return manual
+    read, listed = await _listed(conn, model)
+    if listed is not None:
+        known = state.DB.execute("SELECT window FROM model_facts WHERE connection_id = ? AND model = ?",
+                                 (conn.id, model)).fetchone()
+        if known is None or known[0] != listed:      # окно — только своим столбцом: отношение — другого писателя
+            state.DB.execute("INSERT INTO model_facts(connection_id, model, window, updated) VALUES (?, ?, ?, ?)"
+                             " ON CONFLICT(connection_id, model) DO UPDATE SET window = excluded.window,"
+                             " updated = excluded.updated", (conn.id, model, listed, clock.NOW()))
+        return listed
+    if not read:
+        known = state.DB.execute("SELECT window FROM model_facts WHERE connection_id = ? AND model = ?",
+                                 (conn.id, model)).fetchone()
+        if known is not None and known[0] is not None:
+            return known[0]
+    return CONTEXT.get(model)
+
+
+async def _listed(conn: Connection, model: str) -> "tuple[bool, int | None]":
+    """Окно модели из списка моделей подключения через сервер (`connections.context_size`, список запомнен в LIMITS
+    на CONTEXT_TTL_SEC): (список прочитан, окно или None). Прямое подключение сервер не опрашивает — (False, None);
+    неудача не запоминается."""
     if not conn.proxied:
-        return None
+        return False, None
     now = clock.NOW()
     for key in [k for k, (at, _) in LIMITS.items() if not 0 <= now - at < CONTEXT_TTL_SEC]:
         del LIMITS[key]
     key = (conn.user_id, conn.id, conn.kind, conn.base_url)
     if key in LIMITS:
-        return LIMITS[key][1].get(model)
+        return True, LIMITS[key][1].get(model)
     if conn.routed:                                  # список — только через Cleaner (`cleaner_route.models`)
         try:
             items = await cleaner_route.models(conn)
         except HTTPException:
-            return None
+            return False, None
         lengths = {m["id"]: m["context_length"] for m in reversed(items) if "context_length" in m}
     else:
         try:
             r = await upstream.request(conn, "GET", connections.models_url(conn), timeout=MODELS_TIMEOUT_SEC)
         except (httpx.HTTPError, upstream.UpstreamRefused):
-            return None
+            return False, None
         data = upstream.json_body(r).get("data") if r.is_success else None
         if not isinstance(data, list):
-            return None
+            return False, None
         lengths = {}
         for m in data:
             if isinstance(m, dict) and isinstance(m.get("id"), str):
@@ -988,7 +1032,7 @@ async def _limit(conn: Connection, model: str) -> int | None:
     while len(LIMITS) >= CONTEXT_KEEP:
         del LIMITS[next(iter(LIMITS))]
     LIMITS[key] = (now, lengths)
-    return lengths.get(model)
+    return True, lengths.get(model)
 
 
 def _too_big(tokens: int, limit: int) -> HTTPException:
@@ -1002,16 +1046,18 @@ def _history_end(messages: list[dict]) -> int:
     return next((i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"), 0)
 
 
-def _can_summarize(conn, messages, limit) -> bool:
+def _can_summarize(conn, messages, limit, ratio: float, extra: int) -> bool:
+    """Ход поместится после пересказа: системное сообщение, сообщение хода, описания инструментов (`extra`
+    токенов) и пересказ — в долю SUMMARY_THRESHOLD окна."""
     end = _history_end(messages)
     return (conn.proxied and not conn.cleaner and end > 1
-            and estimate_tokens([messages[0], *messages[end:]]) + SUMMARY_TOKENS
+            and estimate_tokens([messages[0], *messages[end:]], ratio) + extra + SUMMARY_TOKENS
             <= int((limit - RESERVE_TOKENS) * SUMMARY_THRESHOLD))
 
 
-def _summary_batch(limit: int) -> int:
+def _summary_batch(limit: int, ratio: float = DEFAULT_RATIO) -> int:
     """Знаков расшифровки в одном запросе пересказа: сам запрос тоже ограничен контекстом."""
-    return (limit - RESERVE_TOKENS - SUMMARY_TOKENS - estimate_tokens([{"content": SUMMARY_NOTE}])) * 3
+    return int((limit - RESERVE_TOKENS - SUMMARY_TOKENS - estimate_tokens([{"content": SUMMARY_NOTE}], ratio)) * ratio)
 
 
 def _summary_turns(messages):
@@ -1031,6 +1077,8 @@ BUSY = object()
 TOOLS_REFUSED = object()
 #: итог исполнения вызовов: ход встал на паузу (chat_pending.pause) и кончается статусом done
 PAUSED = object()
+#: «конец» круга, когда шлюз отказал по длине контекста (CONTEXT_REFUSED): один повтор со сжатием (`_read_model`)
+TOO_LONG = object()
 
 
 def tool_rounds() -> int:
@@ -1137,7 +1185,10 @@ class StreamTask:
     mcp_explicit: list[int] = field(default_factory=list)   # его явно включённые
     mcp_rules: str = field(default="", repr=False)          # кусок 5 (chat_system.mcp_block) — во всех кругах
     exa_key: str | None = field(default=None, repr=False)
-    limit: int | None = None     # предел контекста модели (chat._limit); None — без обрезки результатов
+    limit: int | None = None     # предел контекста модели (chat.model_window); None — без обрезки результатов
+    ratio: float = DEFAULT_RATIO     # знаков на токен пары (chat.ratio) — снимок на начало хода
+    spec_size: int = 0               # токенов описаний инструментов идущего круга (spec_tokens)
+    forced: bool = False             # шлюз уже отказал по длине: сжато принудительно, второй отказ — слова
     steps: list[dict] = field(default_factory=list)
     known: dict[str, str] = field(default_factory=dict, repr=False)
     #: кнопка «Рассуждение» хода: None — модель без кнопки (параметра в запросе нет), иначе `enable_thinking`
@@ -1351,10 +1402,10 @@ class StreamTask:
         хранит то же, что получила модель: иначе следующий ход не поместился бы из-за полного текста."""
         if self.limit is None or "error" in step:
             return step
-        used = estimate_tokens(self._request(True))
-        if used + math.ceil(len(step["text"]) / 3) <= self.limit - RESERVE_TOKENS:
+        used = estimate_tokens(self._request(True), self.ratio) + self.spec_size
+        if used + math.ceil(len(step["text"]) / self.ratio) <= self.limit - RESERVE_TOKENS:
             return step
-        room = (self.limit - RESERVE_TOKENS - used) * 3 - len(CUT_CONTEXT)
+        room = int((self.limit - RESERVE_TOKENS - used) * self.ratio) - len(CUT_CONTEXT)
         if room < 500:
             return {**{k: v for k, v in step.items() if k != "text"}, "error": NO_ROOM}
         return {**step, "text": step["text"][:room] + CUT_CONTEXT}
@@ -1413,6 +1464,10 @@ class StreamTask:
                         log.info("чат %s: ответ %s — подключение %d не приняло stream_options", self.chat_id[:8],
                                  self.message_id[:8], self.conn.id)
                         return await self._round(payload, offer, builtin_only, silent=silent)
+                    if r.status_code == 400 and CONTEXT_REFUSED.search(r.text):   # vLLM называет и max_tokens
+                        log.info("чат %s: ответ %s — шлюз отказал по длине контекста", self.chat_id[:8],
+                                 self.message_id[:8])
+                        return None, TOO_LONG, [], r.text
                     if offer and builtin_only and r.status_code == 400 and (
                             "tool" in lowered or any(marker in lowered for marker in profiles.REJECTED)):
                         return None, TOOLS_REFUSED, [], text
@@ -1517,28 +1572,33 @@ class StreamTask:
             self.recovery = stage
             self.put("recovery", {"stage": stage})
 
-    async def _compact(self, specs):
-        """Сжать только завершённые старые ходы, оставив запрос и вызовы текущего хода целиком."""
+    async def _compact(self, specs, force: bool = False):
+        """Сжать только завершённые старые ходы, оставив запрос и вызовы текущего хода целиком. `force` — шлюз
+        отказал по длине (`TOO_LONG`): сжать всё до сообщения хода (`history_end`) без проверки «и так помещается»;
+        сжимать нечего — TOO_LONG_WORDS."""
+        if force and (self.limit is None or self.compacted or self.history_end < 2):
+            return TOO_LONG_WORDS
         if self.limit is None or self.compacted:
             return None
         request = self._request(bool(specs))
         budget = self.limit - max(RESERVE_TOKENS, self.params.get("max_tokens", 0),
                                   self.params.get("max_completion_tokens", 0))
         target = int(budget * SUMMARY_THRESHOLD)
-        overhead = estimate_tokens(request[:1]) + spec_tokens(specs)
-        used = estimate_tokens(request[1:]) + overhead
-        if used <= target:
+        overhead = estimate_tokens(request[:1], self.ratio) + spec_tokens(specs, self.ratio)
+        used = estimate_tokens(request[1:], self.ratio) + overhead
+        if used <= target and not force:
             return None
         skill = _last_skill(self.chat_id, self.user_message_id) if self.user_message_id else None
         if skill is not None and skill[0] != self.user_message_id:     # его текст останется в шапке пересказа
-            overhead += estimate_tokens([{"role": "user", "content": skill[1]}])
-        boundary, remaining = None, estimate_tokens(request[self.history_end:])
-        for i in range(self.history_end, 1, -1):
+            overhead += estimate_tokens([{"role": "user", "content": skill[1]}], self.ratio)
+        boundary = self.history_end if force else None     # принудительно — всё до сообщения хода
+        remaining = estimate_tokens(request[self.history_end:], self.ratio)
+        for i in range(self.history_end, 1, -1) if not force else ():
             if remaining + overhead + SUMMARY_TOKENS > target:
                 break
             if request[i]["role"] == "user":
                 boundary = i
-            remaining += estimate_tokens([request[i - 1]])
+            remaining += estimate_tokens([request[i - 1]], self.ratio)
         if boundary is None:
             return None
         self.compacted = True
@@ -1553,6 +1613,8 @@ class StreamTask:
         summary, words = await self._summarize(turns, seed)
         if summary is None:
             self._recovery(None)
+            if force:
+                return words or TOO_LONG_WORDS
             return (words or _too_big(used, self.limit).detail["message"]) if used > budget else None
         rest = self.messages[boundary:]
         head = _summary_head(summary, kept)
@@ -1569,8 +1631,9 @@ class StreamTask:
         """Пересказ сообщений `turns` партиями: первая получает прежний пересказ `seed`, каждая следующая — итог
         прежней. Годен ответ с `ending` `stop` или `length` (оборванный по длине пересказ лучше никакого) и
         непустым текстом. Итог — (пересказ, None) или (None, слова): 503 шлюза — SUMMARY_BUSY, отказ модели — его
-        слова, расшифровка длиннее SUMMARY_ROUNDS партий, пустой или оборванный ответ — None."""
-        batch = _summary_batch(self.limit)
+        слова, расшифровка длиннее SUMMARY_ROUNDS партий, пустой или оборванный ответ — None. Партия — знаки окна
+        по отношению хода (`ratio`)."""
+        batch = _summary_batch(self.limit, self.ratio)
         transcript = "\n\n".join(_summary_turns(turns))
         if batch <= 0 or len(transcript) > batch * SUMMARY_ROUNDS:
             return None, None
@@ -1897,6 +1960,7 @@ class StreamTask:
             builtin = [] if self.builtin_off else chat_tools.specs(self)
             specs = extra + builtin
             offer = bool(specs) and self.rounds < max_rounds
+            self.spec_size = spec_tokens(specs if offer else [], self.ratio)
             if error := await self._compact(specs if offer else []):
                 return error
             payload = {**self.params, "model": self.model, "messages": self._request(offer), "stream": True}
@@ -1913,6 +1977,13 @@ class StreamTask:
                 return error
             if ending is TOOLS_REFUSED:                  # шлюз не принял встроенные инструменты: один повтор без них
                 self.builtin_off = retried = True
+                continue
+            if ending is TOO_LONG:                       # отказ по длине: один повтор со сжатием, второй — слова
+                if self.forced or self.limit is None:
+                    return TOO_LONG_WORDS
+                self.forced = True
+                if error := await self._compact(specs if offer else [], force=True):
+                    return error
                 continue
             if ending == BUSY:                           # 503: тот же круг заново после паузы
                 if not self.freed and self.conn.kind == "srvllm" and sections.is_local(self.conn, self.model):
@@ -2004,7 +2075,7 @@ class StreamTask:
         self.cut, _ = _excerpt_plan(self.user_id, self.chat_id, self.user_message_id, self.model,
                                     _max_images(self.conn, self.model), self.system, self.limit,
                                     bool(knowledge.chat_kbs(self.user_id, self.chat_id)),
-                                    vectors=knowledge.vectors_for(self.conn))
+                                    vectors=knowledge.vectors_for(self.conn), ratio=self.ratio, extra=self.spec_size)
         if self.tools:
             self.known = _known_links(self.chat_id)
         return await self._context()
@@ -2015,7 +2086,7 @@ class StreamTask:
         try:
             self.messages = await _turn_context(self.user_id, self.chat_id, self.user_message_id, self.model,
                                                 self.conn, self.system, self.limit, self.cut, self.knowledge_cache,
-                                                self.photos)
+                                                self.photos, ratio=self.ratio, extra=self.spec_size)
         except HTTPException as exc:
             return exc.detail["message"]
         except OSError as e:
@@ -2827,15 +2898,17 @@ def _sent_documents(chat_id: str, upto: str, model: str) -> list:
     return out
 
 
-def _plan_excerpts(docs: list, system: str, limit: "int | None", guess) -> tuple[set, list[dict]]:
-    """Выбрать документы, которые нужно представить выдержками, без изменения индекса."""
-    sizes = {a["id"]: estimate_tokens([{"role": "user", "content": a["text"]}]) for a in docs}
+def _plan_excerpts(docs: list, system: str, limit: "int | None", guess, ratio: float = DEFAULT_RATIO,
+                   extra: int = 0) -> tuple[set, list[dict]]:
+    """Выбрать документы, которые нужно представить выдержками, без изменения индекса; `extra` — токены описаний
+    инструментов хода."""
+    sizes = {a["id"]: estimate_tokens([{"role": "user", "content": a["text"]}], ratio) for a in docs}
     edge = knowledge.INLINE_TOKENS if limit is None else min(knowledge.INLINE_TOKENS, limit - RESERVE_TOKENS)
     big = sorted((i for i, n in sizes.items() if n > edge), key=lambda i: sizes[i], reverse=True)
     cut = set(big) if limit is None else set()
     messages = guess(cut)
     for att_id in big if limit is not None else ():
-        if estimate_tokens(chat_system.wrap(system, messages)) <= limit - RESERVE_TOKENS:
+        if estimate_tokens(chat_system.wrap(system, messages), ratio) + extra <= limit - RESERVE_TOKENS:
             break
         cut.add(att_id)
         messages = guess(cut)
@@ -2843,7 +2916,8 @@ def _plan_excerpts(docs: list, system: str, limit: "int | None", guess) -> tuple
 
 
 def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, system: str, limit: "int | None",
-                  kbs: bool, vectors: bool = True) -> tuple[set, list[dict]]:
+                  kbs: bool, vectors: bool = True, ratio: float = DEFAULT_RATIO,
+                  extra: int = 0) -> tuple[set, list[dict]]:
     """Какие документы диалога модель хода получит выдержками, и сообщения для проверки контекста, где выдержки и блок
     баз диалога (`kbs`) — оценка EXCERPT_GUESS. Целиком — всё, что помещается в предел `limit` без RESERVE_TOKENS
     вместе с остальным запросом; не помещается — большие документы (длиннее knowledge.INLINE_TOKENS или самого
@@ -2859,7 +2933,7 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
         return _with_block(compose(chat_id, upto, model, cap, dict.fromkeys(cut, EXCERPT_GUESS)),
                            (EXCERPT_GUESS if kbs else "") + history)
 
-    cut, messages = _plan_excerpts(docs, system, limit, guess)
+    cut, messages = _plan_excerpts(docs, system, limit, guess, ratio, extra)
     for a in docs:
         if a["id"] in cut:
             knowledge.adopt(uid, a["id"], a["name"], a["text"], vectors)
@@ -2868,7 +2942,8 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
 
 
 async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Connection, system: str,
-                        limit: "int | None", cut: set, cache: dict, refs: "dict | None" = None) -> list[dict]:
+                        limit: "int | None", cut: set, cache: dict, refs: "dict | None" = None, *,
+                        ratio: float = DEFAULT_RATIO, extra: int = 0) -> list[dict]:
     """Контекст хода после его записи: выдержки документов `cut` и блок баз диалога по сообщению `upto`
     (knowledge.for_turn, источник ждёт knowledge.TURN_TIMEOUT_SEC), проверка предела, фото (fill_photos; `refs` —
     StreamTask.photos для payload паузы), системное сообщение. Не помещается — HTTPException 413; файл фото не
@@ -2878,9 +2953,9 @@ async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Con
     excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache,
                                                knowledge.vectors_for(conn), own=own)
     composed = _with_block(compose(chat_id, upto, model, _max_images(conn, model), excerpts), block)
-    tokens = estimate_tokens(chat_system.wrap(system, composed))
+    tokens = estimate_tokens(chat_system.wrap(system, composed), ratio) + extra
     if (limit is not None and tokens > limit - RESERVE_TOKENS
-            and not _can_summarize(conn, chat_system.wrap(system, composed), limit)):
+            and not _can_summarize(conn, chat_system.wrap(system, composed), limit, ratio, extra)):
         log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
         raise _too_big(tokens, limit)
     photos = await fill_photos(chat_id, uid, composed, refs)
@@ -3010,7 +3085,7 @@ class EstimateIn(BaseModel):
 async def estimate(chat_id: str, body: EstimateIn, request: Request):
     """Заполнение контекста будущим ходом: системное сообщение (куски 1–3, как у хода), история (`compose`), текст
     и неотправленные вложения поля ввода — `estimate_tokens`, плюс описания инструментов хода через сервер
-    (`_turn_specs`, `spec_tokens`); `limit` — предел модели (`_limit`) или None.
+    (`_turn_specs`, `spec_tokens`) — по отношению пары (`ratio`); `limit` — окно модели (`model_window`) или None.
     Знания оцениваются без поиска и индексации, как до отправки хода."""
     uid = request.state.user.id
     return await _estimated(uid, _chat_row(uid, chat_id), body)
@@ -3026,7 +3101,10 @@ async def _estimated(uid: int, row, body: EstimateIn) -> dict:
     atts = [a for att_id in dict.fromkeys(body.attachment_ids) for a in state.DB.execute(
         "SELECT * FROM attachments WHERE id = ? AND user_id = ? AND message_id IS NULL", (att_id, uid))
         if a["kind"] != "document" or a["text"] is not None]
-    limit = await _limit(conn, model) if conn is not None else None
+    limit = await model_window(conn, model) if conn is not None else None
+    rate = ratio(conn, model)
+    specs = await _turn_specs(uid, row, conn, model) if conn is not None and conn.proxied and not conn.cleaner else []
+    spec = spec_tokens(specs, rate)
     cap = _max_images(conn, model) if conn is not None else profiles.DEFAULT_MAX_IMAGES
     profiled = conn if conn is not None and (conn.proxied or not conn.shared) else None
     system = chat_system.base(uid, profiled, _role(uid, row["role_id"]))
@@ -3049,11 +3127,10 @@ async def _estimated(uid: int, row, body: EstimateIn) -> dict:
     if excerpts_enabled:
         docs = _sent_documents(chat_id, "", model)
         docs += [a for a in atts if a["kind"] == "document" and a["text"]]
-        _, messages = _plan_excerpts(docs, system, limit, guess)
+        _, messages = _plan_excerpts(docs, system, limit, guess, rate, spec)
     else:
         messages = guess(())
-    specs = await _turn_specs(uid, row, conn, model) if conn is not None and conn.proxied and not conn.cleaner else []
-    return {"tokens": estimate_tokens(chat_system.wrap(system, messages)) + spec_tokens(specs), "limit": limit}
+    return {"tokens": estimate_tokens(chat_system.wrap(system, messages), rate) + spec, "limit": limit}
 
 
 NO_COMPACT = {"code": "no_compact", "message": "сжатие истории — только для моделей через сервер, кроме Cleaner и MCP"}
@@ -3088,7 +3165,7 @@ async def compact_chat(chat_id: str, request: Request):
     nothing = HTTPException(409, {"code": "nothing", "message": "пересказывать нечего: последний ход остаётся целиком"})
     if not before or before["id"] == row["summary_upto"]:
         raise nothing
-    limit = await _limit(conn, model)
+    limit = await model_window(conn, model)
     if limit is None:
         raise HTTPException(409, {"code": "no_limit", "message": "предел контекста модели неизвестен — сжимать не нужно"})
     operations.check(uid)
@@ -3103,8 +3180,9 @@ async def compact_chat(chat_id: str, request: Request):
     turns, seed, _ = _for_summary(chat_id, before["id"], composed, ids)
     if not turns:
         raise nothing
+    rate = ratio(conn, model)
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id="", conn=conn, model=model, messages=[], limit=limit,
-                    thinking=False if sections.is_local(conn, model) else None, listening=False)
+                    ratio=rate, thinking=False if sections.is_local(conn, model) else None, listening=False)
     _mark_routed(conn, chat_id)                      # до отправки — как у хода
     COMPACTING.add(chat_id)
     try:
@@ -3117,9 +3195,9 @@ async def compact_chat(chat_id: str, request: Request):
             raise HTTPException(503, {"code": "card", "message": SUMMARY_BUSY})
         if words:
             raise HTTPException(502, {"code": "upstream", "message": words})
-        batch = _summary_batch(limit)
+        batch = _summary_batch(limit, rate)
         if batch <= 0 or len("\n\n".join(_summary_turns(turns))) > batch * SUMMARY_ROUNDS:
-            raise _too_big(estimate_tokens(turns), limit)
+            raise _too_big(estimate_tokens(turns, rate), limit)
         raise HTTPException(502, {"code": "upstream", "message": SUMMARY_FAILED})
     operations.check(uid)
     row = _chat_row(uid, chat_id)
@@ -3140,9 +3218,9 @@ async def chat_summary(chat_id: str, request: Request):
     return {"text": row["summary"]}
 
 
-def spec_tokens(specs: list[dict]) -> int:
-    """Описания инструментов запроса в токенах — как `estimate_tokens`: знаки JSON / 3."""
-    return math.ceil(len(json.dumps(specs, ensure_ascii=False)) / 3) if specs else 0
+def spec_tokens(specs: list[dict], ratio: float = DEFAULT_RATIO) -> int:
+    """Описания инструментов запроса в токенах — как `estimate_tokens`: знаки JSON / `ratio`."""
+    return math.ceil(len(json.dumps(specs, ensure_ascii=False)) / ratio) if specs else 0
 
 
 def _usage_of(raw: dict) -> dict:
@@ -3307,7 +3385,11 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
         raise HTTPException(409, {"code": "cleaner_images", "message": CLEANER_IMAGES})
     # контекст Cleaner диалога — до записи хода: Cleaner недоступен или не настроен — отказ, история не меняется
     remote = await cleaner_route.context(conn, "chat", chat_id) if conn.routed else None
-    limit = await _limit(conn, model)
+    limit = await model_window(conn, model)
+    # описания инструментов хода — в проверку окна (п. 31(в)); каталоги MCP — из кэша (холодный — не дольше
+    # mcp_sources.DEFAULT_WAIT_SEC)
+    rate = ratio(conn, model)
+    spec = spec_tokens(await _turn_specs(uid, row, conn, model), rate) if conn.proxied and not conn.cleaner else 0
     operations.check(uid)
     receipt = _turn_receipt(chat_id, body.request_id, body)
     if receipt is not None:
@@ -3339,7 +3421,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     state.DB.execute("BEGIN")
     try:
         # инструменты «Интернета» этого хода — по кнопке, какой она стала к ходу (`row` прочитан до await
-        # _limit); прямому подключению — никаких. Ключ Exa не расшифровался — шаги поиска скажут это (web.NO_KEY)
+        # model_window); прямому подключению — никаких. Ключ Exa не расшифровался — шаги поиска скажут это (web.NO_KEY)
         fresh = _chat_row(uid, chat_id)
         edit = _edit_target(chat_id, body)
         if edit is not None and (fresh["connection_id"] != row["connection_id"] or fresh["model"] != row["model"]):
@@ -3413,12 +3495,12 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 knowledge.release(knowledge.big_attachments(chat_id))
             else:
                 cut, messages = _excerpt_plan(uid, chat_id, user_mid, model, _max_images(conn, model), system,
-                                              limit, kbs, vectors=knowledge.vectors_for(conn))
+                                              limit, kbs, vectors=knowledge.vectors_for(conn), ratio=rate, extra=spec)
             search = bool(cut) or kbs
             known = _known_links(chat_id) if kinds else {}
-            tokens = estimate_tokens(chat_system.wrap(system, messages))
+            tokens = estimate_tokens(chat_system.wrap(system, messages), rate) + spec
             if (limit is not None and tokens > limit - RESERVE_TOKENS
-                    and not _can_summarize(conn, chat_system.wrap(system, messages), limit)):
+                    and not _can_summarize(conn, chat_system.wrap(system, messages), limit, rate, spec)):
                 log.info("чат %s: ход не помещается в контекст (~%d токенов)", chat_id[:8], tokens)
                 raise _too_big(tokens, limit)
         # идущие ответы через сервер — по строкам `streaming` (и те, чей поток ещё не запущен)
@@ -3444,7 +3526,8 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     refs = {}                                        # data: URL → id media (StreamTask.photos)
     try:
         if search and not conn.proxied:              # прямое подключение: знания — до ответа JSON, после записи хода
-            messages = await _turn_context(uid, chat_id, user_mid, model, conn, system, limit, cut, {})
+            messages = await _turn_context(uid, chat_id, user_mid, model, conn, system, limit, cut, {},
+                                           ratio=rate, extra=spec)
         elif not scans and not search:
             photos = await fill_photos(chat_id, uid, messages, refs)   # файлы — после COMMIT и в потоке
             operations.check(uid)
@@ -3474,7 +3557,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
                 "url": connections.chat_url(conn), "model": model, "messages": messages, "params": params}
     st = StreamTask(user_id=uid, chat_id=chat_id, message_id=answer_id, conn=conn, model=model, messages=messages,
                     tools=kinds, exa_key=exa_key, limit=limit, known=known, mcp_ids=mcp_ids, params=params,
-                    mcp_explicit=mcp_explicit,
+                    mcp_explicit=mcp_explicit, ratio=rate, spec_size=spec,
                     system=system,
                     thinking=bool(fresh["thinking"]) if sections.is_local(conn, model) else None,
                     scans=scans, user_message_id=user_mid, cleaner_preview=preview, photos=refs, cut=cut,
