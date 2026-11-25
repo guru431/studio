@@ -56,7 +56,7 @@ def test_poll_tool_repeats_are_not_skipped(studio):
     повтор: тот же вызов в следующем круге исполняется снова; без пометки — пропуск, как прежде."""
     sid, calls, _ = setup(studio, tools=[tool("lookup"), tool("job_status", _meta={"studio/poll": True})])
     cid = new_chat(studio)
-    poll, lookup = call(name_of(sid, 1), job_id="7"), call(name_of(sid), q="1")
+    poll, lookup = call(name_of(sid, "job_status"), job_id="7"), call(name_of(sid), q="1")
     studio.gw.chat_script = [{"tool_calls": [poll, lookup]}, {"tool_calls": [poll, lookup]}, ["Готово"]]
     assert sse(turn(studio, cid, "Жди результат"))[-1] == ("done", {"status": "done"})
     assert [p["name"] for m, p in calls if m == "tools/call"] == ["job_status", "lookup", "job_status"]
@@ -81,7 +81,7 @@ def test_duplicate_after_resumed_pause_skipped(studio):
     """Вызовы до паузы помнит payload: после «Запустить» их повтор не исполняется и не спрашивает снова."""
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    lookup, translate = call(name_of(sid), q="1"), call(name_of(sid, 1), phrase="hi")
+    lookup, translate = call(name_of(sid), q="1"), call(name_of(sid, "translate"), phrase="hi")
     studio.gw.chat_script = [{"tool_calls": [lookup]}, {"tool_calls": [translate]},
                              {"tool_calls": [lookup, translate]}, ["Готово."]]
     shown = pending_of(sse(turn(studio, cid, "Переведи")))

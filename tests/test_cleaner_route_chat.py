@@ -20,7 +20,7 @@ from test_chat_pending import answer
 from test_chat_web import EXA_KEY, call
 from test_knowledge import big_text
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
-from test_mcp_dialog import server, tool
+from test_mcp_dialog import name_of, server, tool
 
 ADDRESS = "https://10.77.1.20:5464"
 SECOND = "https://10.77.1.21:5464"
@@ -113,7 +113,7 @@ def test_tools_web_and_knowledge_stay_on(cleaner_gw):
     assert sse(turn(s, chat_id, "Какой пароль от сейфа?", attachment_ids=[book["id"]]))[-1][0] == "done"
     body = gw.bodies[0]
     names = tool_names(body)
-    assert {"web_search", "read_page", "youtube_subtitles", f"mcp_{sid}_0"} <= set(names)
+    assert {"web_search", "read_page", "youtube_subtitles", name_of(sid)} <= set(names)
     assert body["messages"][0]["role"] == "system"
     asked = body["messages"][-1]["content"]
     assert '<document name="отчёт.txt" excerpts="true">' in asked and "4711" in asked   # знания: выдержки по вопросу
@@ -125,15 +125,15 @@ def test_web_and_open_world_tools_are_held(cleaner_gw):
     chat_id = routed_chat(s, gw)
     web_on(s, chat_id)
     sse(turn(s, chat_id, "Найди"))
-    assert gw.turns[0].headers["x-cleaner-hold-tools"] == f"web_search,read_page,youtube_subtitles,mcp_{sid}_1"
-    assert f"mcp_{sid}_0" in tool_names(gw.bodies[0])                      # обычный MCP получает оригиналы
+    assert gw.turns[0].headers["x-cleaner-hold-tools"] == "web_search,read_page,youtube_subtitles," + name_of(sid, "search")
+    assert name_of(sid) in tool_names(gw.bodies[0])                      # обычный MCP получает оригиналы
 
 
 def test_tool_round_reuses_the_context_and_stores_the_last_request(cleaner_gw):
     s, gw = cleaner_gw
     sid = shared_mcp(s, [tool("lookup")])
     chat_id = routed_chat(s, gw)
-    gw.script = [{"tool_calls": [call(f"mcp_{sid}_0", q="Иван Петров")]}, ["Готово"]]
+    gw.script = [{"tool_calls": [call(name_of(sid), q="Иван Петров")]}, ["Готово"]]
     assert sse(turn(s, chat_id, "Найди Ивана"))[-1] == ("done", {"status": "done"})
     assert len(gw.turns) == 2 and len(gw.chats) == 1
     assert {r.headers["x-cleaner-chat"] for r in gw.turns} == {gw.chats[0]}
@@ -149,7 +149,7 @@ def test_resume_after_a_pause_goes_through_the_same_context(cleaner_gw):
     s, gw = cleaner_gw
     sid = shared_mcp(s, [tool("translate", _meta={"studio/confirm": True})])
     chat_id = routed_chat(s, gw)
-    gw.script = [{"text": ["Сейчас."], "tool_calls": [call(f"mcp_{sid}_0", phrase="hello")]}, ["Готово."]]
+    gw.script = [{"text": ["Сейчас."], "tool_calls": [call(name_of(sid, "translate"), phrase="hello")]}, ["Готово."]]
     events = sse(turn(s, chat_id, "Переведи"))
     shown = next(data for name, data in events if name == "pending")
     assert sse(answer(s, chat_id, shown["id"], "refuse"))[-1] == ("done", {"status": "done"})

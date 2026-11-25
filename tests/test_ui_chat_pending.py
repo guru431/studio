@@ -6,6 +6,7 @@ import json
 import pytest
 
 import chat_pending
+import mcp_client
 from test_mcp import TOKEN as MCP_KEY
 from test_mcp_dialog import HOST, server, tool
 from test_ui_browser import (ANSWERED, LAST_ANSWER, NO_OVERFLOW, READY, add_gateway, browser, go, live,  # noqa: F401
@@ -69,7 +70,7 @@ def test_confirm_card_refuse_continues_and_run_calls_once(browser, live, width):
     response = client.post("/api/admin/shared/mcp", json={"name": name, "url": HOST + path, "token": MCP_KEY})
     assert response.status_code == 201, response.text
     sid = response.json()["id"]
-    translate = f"mcp_{sid}_1"           # номер — сквозной по серверам хода: сервер другой ширины удаляется в конце
+    translate = mcp_client.tool_name(name, "translate")
     live.add_user(login)
     mobile = width == 320
     args = json.dumps({"phrase": "hello"})

@@ -32,6 +32,16 @@ router = APIRouter(prefix="/api/mcp")
 CATALOG_FAILED = "Список инструментов MCP не прочитан"
 MAX_SERVERS = 16
 MAX_TOOLS = 128
+LOCAL_MAX_TOOLS = 32                         # инструментов MCP запроса локальной модели (`sections.is_local`)
+DESCRIPTION_MAX = 4000                       # знаков описания инструмента в запросе к модели
+LOCAL_DESCRIPTION_MAX = 1000                 # то же локальной модели
+CALL_MAX = 64                                # имя функции для модели (`tool_name`)
+SERVER_PART = 24                             # знаков имени сервера в имени функции
+#: кириллица имени сервера в имени функции (`tool_name`); ъ и ь — пусто
+TRANSLIT = str.maketrans({
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
+    "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
+    "х": "h", "ц": "c", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya"})
 MAX_BYTES = 1024 * 1024
 TIMEOUT = 30
 DISCOVER_SEC = 60                            # срок списка инструментов одного сервера в ходе чата
@@ -628,12 +638,27 @@ def _unknown_tool(error, text=""):
         isinstance(words, str) and "unknown tool" in words.lower())
 
 
+def tool_name(server: str, tool: str, taken=()) -> str:
+    """Имя функции инструмента для модели — одно и то же от хода к ходу: `mcp_<сервер>__<инструмент>`, не длиннее
+    CALL_MAX, знаки `[A-Za-z0-9_-]`. Сервер — нижний регистр, кириллица по TRANSLIT, серии прочих знаков — `_`,
+    первые SERVER_PART знаков, пусто — `server`; инструмент — прочие знаки `_`, регистр как есть. Занятое в
+    `taken` — с хвостом `_2`, `_3`… (основа короче на длину хвоста)."""
+    part = re.sub(r"[^a-z0-9]+", "_", server.lower().translate(TRANSLIT)).strip("_")[:SERVER_PART].rstrip("_")
+    base = f"mcp_{part or 'server'}__{re.sub(r'[^A-Za-z0-9_-]', '_', tool)}"
+    name, n = base[:CALL_MAX], 1
+    while name in taken:
+        n += 1
+        name = base[:CALL_MAX - len(f"_{n}")] + f"_{n}"
+    return name
+
+
 class Tools:
     """Инструменты MCP хода: `ids` — действующий набор диалога (`mcp_sources.dialog_servers`, явные первыми),
-    `explicit` — его явно включённые, `conn` — подключение хода (для перепроверки набора перед вызовом)."""
+    `explicit` — его явно включённые, `conn` — подключение хода (для перепроверки набора перед вызовом), `model` —
+    модель хода: локальной (`sections.is_local`) — меньше инструментов и короче описания."""
 
-    def __init__(self, uid, chat_id, ids, *, explicit=(), conn=None):
-        self.uid, self.chat_id, self.conn = uid, chat_id, conn
+    def __init__(self, uid, chat_id, ids, *, explicit=(), conn=None, model=None):
+        self.uid, self.chat_id, self.conn, self.model = uid, chat_id, conn, model
         self.ids, self.explicit = list(ids), set(explicit)
         self.sessions, self.calls, self.specs = [], {}, []
         self.failed = []                     # (имя сервера, слова) — сервер пропущен, ход идёт
@@ -697,14 +722,18 @@ class Tools:
         выключенные в диалоге, «Интернет» (`_offered`; при флажке «Веб только через Cleaner» — только ходу через
         Cleaner, `cleaner_route.web_allowed`) и UPLOAD «с подтверждением» без явного включения; сверх
         предела запроса подключения (`profiles.max_tools`, без подключения — MAX_TOOLS) лишнее по порядку набора
-        отбрасывается заметкой в `notes` (TRIMMED), ход не отказывает. `web` — «Интернет» вместо прочитанного из
-        диалога (`web_tools`)."""
+        отбрасывается заметкой в `notes` (TRIMMED), ход не отказывает. Имя функции — `tool_name` (совпадения —
+        с хвостом по порядку набора), описание — до DESCRIPTION_MAX знаков, локальной модели — LOCAL_DESCRIPTION_MAX.
+        `web` — «Интернет» вместо прочитанного из диалога (`web_tools`)."""
         chat = self._chat()
         if chat is None:
             return
         off, on = mcp_sources.tool_state(chat["mcp_tools_off"])
         import profiles                       # здесь, не при загрузке: profiles тянет разделы
-        cap = profiles.max_tools(self.conn) if self.conn is not None else MAX_TOOLS
+        import sections
+        cap = profiles.max_tools(self.conn, self.model) if self.conn is not None else MAX_TOOLS
+        local = self.conn is not None and self.model is not None and sections.is_local(self.conn, self.model)
+        described = LOCAL_DESCRIPTION_MAX if local else DESCRIPTION_MAX
         if web is None:
             web = bool(chat["web"]) and not chat["protected_used"]   # после защищённого источника — без веб-инструментов
         web = web and cleaner_route.web_allowed(self.conn)          # флажок «Веб только через Cleaner»
@@ -734,12 +763,12 @@ class Tools:
                 if len(self.calls) >= cap:
                     trimmed += 1
                     continue
-                name = f"mcp_{item['id']}_{len(self.calls)}"
+                name = tool_name(item["name"], tool["name"], self.calls)
                 self.calls[name] = (session, tool["name"], item["name"], tool)
                 if hint["open_world"]:
                     self.open_world.add(name)
                 self.specs.append({"type": "function", "function": {"name": name,
-                    "description": (f"{item['name']}: {tool['name']}. " + str(tool.get("description", "")))[:4000],
+                    "description": (f"{item['name']}: {tool['name']}. " + str(tool.get("description", "")))[:described],
                     "parameters": tool["inputSchema"]}})
                 given += 1
             if trimmed or catalog.trimmed:
@@ -813,7 +842,7 @@ async def web_tools(uid, row, conn) -> bool:
     """Даст ли ход диалога `row` (строка `chats`) при «Интернете» хоть один веб-инструмент MCP (пометка
     «интернет»): отбор и каталоги — как у хода (`Tools.discover`), холодный кэш — не дольше
     `mcp_sources.DEFAULT_WAIT_SEC`. Ради них «Интернет» включается и без ключа Exa (`chat.patch_chat`)."""
-    tools = Tools(uid, row["id"], mcp_sources.dialog_servers(uid, row, conn), conn=conn)
+    tools = Tools(uid, row["id"], mcp_sources.dialog_servers(uid, row, conn), conn=conn, model=row["model"])
     try:
         await tools.discover(web=True)
         return bool(tools.open_world)

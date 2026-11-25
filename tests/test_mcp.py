@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import db
+import mcp_client
 import security
 import state
 from conftest import APP, add_gateway, make_user, signin
@@ -15,6 +16,7 @@ from test_chat_web import call, names
 
 URL = "http://10.77.1.15:4000/mcp"
 TOKEN = "private-mcp-token"
+LOOKUP = mcp_client.tool_name("Tools", "lookup")      # имя функции `lookup` сервера «Tools» для модели
 
 
 @pytest.mark.integration
@@ -69,7 +71,7 @@ def test_mcp_discovery_tool_round_and_secret_storage(studio, caplog, streaming):
     calls = mock(studio, streaming=streaming)
     cid = new_chat(studio)
     assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).status_code == 200
-    studio.gw.chat_script = [{'tool_calls': [call(f'mcp_{sid}_0', query='value')]}, ['Готово']]
+    studio.gw.chat_script = [{'tool_calls': [call(LOOKUP, query='value')]}, ['Готово']]
     events = sse(turn(studio, cid, 'Use tool'))
     assert events[-1] == ('done', {'status': 'done'})
     assert [method for method, _ in calls] == ['initialize', 'notifications/initialized', 'tools/list', 'tools/call', 'close']
@@ -88,7 +90,7 @@ def test_mcp_unselected_is_not_contacted_and_calls_are_not_retried(studio):
     sse(turn(studio, cid, 'Hello'))
     assert calls == [] and names(studio.gw.chat_requests[-1]) == []
     studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]})
-    studio.gw.chat_script = [{'tool_calls': [call(f'mcp_{sid}_0')]}, ['Failed']]
+    studio.gw.chat_script = [{'tool_calls': [call(LOOKUP)]}, ['Failed']]
     sse(turn(studio, cid, 'Use tool'))
     assert sum(method == 'tools/call' for method, _ in calls) == 1
     assert messages(studio, cid)[-1]['tools'][0]['error']
@@ -109,7 +111,7 @@ def test_unreachable_mcp_server_is_skipped_and_named_not_the_whole_turn(studio):
     events = sse(turn(studio, cid, 'Use tool'))
     assert events[-1] == ('done', {'status': 'done'})
     assert ('tool', {'kind': 'mcp', 'label': 'Down', 'skipped': True}) in events
-    assert names(studio.gw.chat_requests[-1]) == [f'mcp_{sid}_0']
+    assert names(studio.gw.chat_requests[-1]) == [LOOKUP]
     assert messages(studio, cid)[1]['tools'] == [{'kind': 'mcp', 'server': 'Down',
                                                  'error': 'MCP недоступен или вернул неверный ответ'}]
 
@@ -152,7 +154,7 @@ def test_mcp_only_chat_names_a_made_up_tool_and_calls_a_tool_without_arguments(s
     sid = add(studio); calls = mock(studio)
     cid = new_chat(studio)
     assert studio.c.patch(f'/api/chats/{cid}', json={'mcp_ids': [sid]}).status_code == 200
-    studio.gw.chat_script = [{'tool_calls': [('made_up_tool', '{}'), (f'mcp_{sid}_0', '')]}, ['Готово']]
+    studio.gw.chat_script = [{'tool_calls': [('made_up_tool', '{}'), (LOOKUP, '')]}, ['Готово']]
     assert sse(turn(studio, cid, 'Use tool'))[-1] == ('done', {'status': 'done'})
     assert ('tools/call', {'name': 'lookup', 'arguments': {}}) in calls
     assert messages(studio, cid)[1]['tools'] == [{'kind': 'unknown', 'error': 'модель вызвала инструмент, которого у неё нет'},

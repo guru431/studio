@@ -140,12 +140,19 @@ def max_images(conn: connections.Connection) -> int:
     return json.loads(row["params"]).get("max_images", DEFAULT_MAX_IMAGES) if row else DEFAULT_MAX_IMAGES
 
 
-def max_tools(conn: connections.Connection) -> int:
+def max_tools(conn: connections.Connection, model: str | None = None) -> int:
     """Инструментов MCP на запрос хода к подключению (отбор — `mcp_client.Tools.discover`; встроенные и «Интернета»
-    идут сверх него): `max_tools` профиля, иначе `mcp_client.MAX_TOOLS`."""
+    идут сверх него): `max_tools` профиля, иначе локальной модели хода (`sections.is_local`) —
+    `mcp_client.LOCAL_MAX_TOOLS`, иначе `mcp_client.MAX_TOOLS`."""
     import mcp_client                      # здесь, не при загрузке: mcp_client сам зовёт profiles в ходе
+    import sections
     row = None if conn.cleaner else _row(conn.id)
-    return json.loads(row["params"]).get("max_tools", mcp_client.MAX_TOOLS) if row else mcp_client.MAX_TOOLS
+    saved = json.loads(row["params"]).get("max_tools") if row else None
+    if saved is not None:
+        return saved
+    if model is not None and sections.is_local(conn, model):
+        return mcp_client.LOCAL_MAX_TOOLS
+    return mcp_client.MAX_TOOLS
 
 
 def text_of(conn: connections.Connection) -> str:

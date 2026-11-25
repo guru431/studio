@@ -18,6 +18,7 @@ from conftest import add_connection, make_user, signin
 from test_chat import messages, new_chat, sse, turn
 from test_chat_web import EXA_KEY
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
+from test_mcp_dialog import name_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
 
@@ -199,7 +200,7 @@ def test_real_cleaner_client_key_turn_tools_web_sent_and_delete(studio, cleaner_
     assert studio.c.patch(f"/api/connections/{cid}", json={"via_cleaner": True}).json()["routed"] is True
     calls = echo_mcp(studio)
     sid = studio.c.post("/api/admin/shared/mcp", json={"name": "Echo", "url": MCP_URL, "token": MCP_KEY}).json()["id"]
-    tool = f"mcp_{sid}_0"
+    tool = name_of(sid, "find")
 
     # MCP: заглушка вызывает инструмент, чьё имя есть в вопросе, с текстом вопроса в аргументе
     cid_chat = new_chat(studio, connection_id=cid, model="stub-model")

@@ -8,6 +8,7 @@ import pytest
 
 import auth
 import db
+import mcp_client
 from test_ui_speech_read import answer_chat
 from test_mcp import TOKEN as MCP_KEY
 from test_mcp_dialog import HOST, server, tool
@@ -164,7 +165,7 @@ def test_dialog_mcp_servers_and_tools_are_chosen_and_kept(browser, live, width):
     assert values["keptOff"] == [False, False, True, True]
     # первый ход: «с подтверждением» предложен; выключенный и веб-инструмент без «Интернета» — нет
     offered = [t["function"]["description"].split(". ", 1)[0] for r in live.gw.chat_requests
-               for t in r.get("tools", []) if t["function"]["name"].startswith(f"mcp_{sid}_")]
+               for t in r.get("tools", []) if t["function"]["name"].startswith(mcp_client.tool_name(name, ""))]
     assert offered == [f"{name}: video_translate"]
     assert not problems(result), result.get("log")
 
@@ -219,8 +220,8 @@ def test_default_off_shared_server_is_switched_on_in_the_dialog(browser, live, w
     assert not bad and "ошибк" not in text and "заметк" in text, text
     assert values["kept"] is True and values["dialogFits"] is True
     offered = [t["function"]["description"].split(". ", 1)[0] for t in live.gw.chat_requests[-1].get("tools", [])
-               if t["function"]["name"].startswith(f"mcp_{sid}_")]
-    assert len(offered) == 128 and offered[0] == f"{name}: t0"
+               if t["function"]["name"].startswith(mcp_client.tool_name(name, ""))]
+    assert len(offered) == mcp_client.LOCAL_MAX_TOOLS and offered[0] == f"{name}: t0"   # local-gemma-abl — локальная
     assert not problems(result), result.get("log")
 
 
@@ -262,7 +263,7 @@ def test_internet_without_exa_key_opens_for_mcp_web_tools(browser, live, width):
     assert chat["web"] is True and chat["web_tools"] == []
     assert values["after"] == ["true", False] and values["composerFits"] is True
     offered = [t["function"]["description"].split(". ", 1)[0] for t in live.gw.chat_requests[-1].get("tools", [])
-               if t["function"]["name"].startswith(f"mcp_{sid}_")]
+               if t["function"]["name"].startswith(mcp_client.tool_name(f"Веб {width}", ""))]
     assert f"Веб {width}: web_search" in offered
     assert not problems(result), result.get("log")
 

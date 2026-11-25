@@ -1440,7 +1440,8 @@ class StreamTask:
 
     def _seen_key(self, c: ToolCall) -> str:
         """Ключ вызова для `seen`: sha256 имени и аргументов (JSON с сортировкой ключей). Инструмент MCP — по
-        серверу и имени инструмента: продолжение после паузы может пронумеровать `mcp_<sid>_<n>` иначе."""
+        серверу и имени инструмента: продолжение после паузы может назвать функцию иначе (`mcp_client.tool_name`
+        нумерует совпадения по порядку набора)."""
         name = c.name
         if self.mcp and c.name in self.mcp.calls:
             session, tool, _, _ = self.mcp.calls[c.name]
@@ -1509,7 +1510,7 @@ class StreamTask:
             self._delta(mcp_sections.clean_text(text, ANSWER_MAX) + (CUT_SIZE if len(text) > ANSWER_MAX else ""))
             return "Ответ слишком длинный" if len(text) > ANSWER_MAX else None
         self.mcp = mcp_client.Tools(self.user_id, self.chat_id, self.mcp_ids, explicit=self.mcp_explicit,
-                                    conn=self.conn)
+                                    conn=self.conn, model=self.model)
         row = state.DB.execute("SELECT protected_used FROM chats WHERE id = ?", (self.chat_id,)).fetchone()
         self.protected = row is not None and bool(row[0])
         try:
@@ -2736,7 +2737,7 @@ async def _turn_specs(uid: int, row, conn: Connection, model: str) -> list[dict]
     с пределом подключения `profiles.max_tools`; холодный кэш — не дольше `mcp_sources.DEFAULT_WAIT_SEC`, как
     `mcp_client.web_tools`) и встроенные (`chat_tools.specs`; без них, пока шлюз их недавно не принял — NO_TOOLS)."""
     kinds = web.tools_for(conn, web.has_exa_key(uid)) if row["web"] and not row["protected_used"] else []
-    tools = mcp_client.Tools(uid, row["id"], mcp_sources.dialog_servers(uid, row, conn), conn=conn)
+    tools = mcp_client.Tools(uid, row["id"], mcp_sources.dialog_servers(uid, row, conn), conn=conn, model=model)
     try:
         await tools.discover()
         specs = web.specs(kinds) + tools.specs

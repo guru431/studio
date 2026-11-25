@@ -74,7 +74,7 @@ def test_protected_error_result_locks_too(studio):
     sid, calls, _ = setup(studio, tools=[tool("gone")])
     protect(studio, sid)
     cid = web_dialog(studio)
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid))]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "gone"))]}, ["Готово"]]
     assert sse(turn(studio, cid, "Use tool"))[-1] == ("done", {"status": "done"})
     assert "tools/call" in methods(calls)
     assert "error" in messages(studio, cid)[-1]["tools"][0]

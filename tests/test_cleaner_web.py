@@ -71,12 +71,12 @@ def test_dialog_not_through_cleaner_gets_no_web(flagged):
     r = s.c.patch(f"/api/chats/{chat_id}", json={"web": True})
     assert r.status_code == 409 and r.json()["detail"] == {"code": "cleaner_web", "message": cleaner_route.WEB_ONLY}
     state.DB.execute("UPDATE chats SET web = 1 WHERE id = ?", (chat_id,))   # включён до флажка
-    s.gw.chat_script = [{"tool_calls": [call("web_search", query="секрет"), call(f"mcp_{s.mcp}_1", q="секрет")]},
+    s.gw.chat_script = [{"tool_calls": [call("web_search", query="секрет"), call(name_of(s.mcp, "search"), q="секрет")]},
                         ["Без интернета."]]
     assert sse(turn(s, chat_id, "Найди"))[-1][0] == "done"
     names = tool_names(s.gw.chat_requests[0])
-    assert f"mcp_{s.mcp}_0" in names                     # обычный MCP остаётся
-    assert not {"web_search", "read_page", "youtube_subtitles", f"mcp_{s.mcp}_1"} & set(names)
+    assert name_of(s.mcp) in names                     # обычный MCP остаётся
+    assert not {"web_search", "read_page", "youtube_subtitles", name_of(s.mcp, "search")} & set(names)
     assert s.gw.exa_requests == []
     steps = messages(s, chat_id)[-1]["tools"]
     assert len(steps) == 2 and all(step.get("error") for step in steps)   # оба вызова — ошибки без запроса
@@ -89,8 +89,8 @@ def test_dialog_through_cleaner_keeps_web(flagged):
     assert s.c.patch(f"/api/chats/{chat_id}", json={"web": True}).json()["web"] is True
     assert sse(turn(s, chat_id, "Найди"))[-1][0] == "done"
     names = tool_names(gw.bodies[0])
-    assert {"web_search", "read_page", "youtube_subtitles", f"mcp_{s.mcp}_0", f"mcp_{s.mcp}_1"} <= set(names)
-    assert gw.turns[0].headers["x-cleaner-hold-tools"] == f"web_search,read_page,youtube_subtitles,mcp_{s.mcp}_1"
+    assert {"web_search", "read_page", "youtube_subtitles", name_of(s.mcp), name_of(s.mcp, "search")} <= set(names)
+    assert gw.turns[0].headers["x-cleaner-hold-tools"] == "web_search,read_page,youtube_subtitles," + name_of(s.mcp, "search")
 
 
 def test_flag_off_keeps_web_of_internal_dialogs(flagged):
@@ -99,7 +99,7 @@ def test_flag_off_keeps_web_of_internal_dialogs(flagged):
     chat_id = new_chat(s, connection_id=s.srvllm)
     assert s.c.patch(f"/api/chats/{chat_id}", json={"web": True}).json()["web"] is True
     assert sse(turn(s, chat_id, "Найди"))[-1][0] == "done"
-    assert {"web_search", f"mcp_{s.mcp}_1"} <= set(tool_names(s.gw.chat_requests[0]))
+    assert {"web_search", name_of(s.mcp, "search")} <= set(tool_names(s.gw.chat_requests[0]))
 
 
 def test_dialog_files_do_not_go_to_a_web_server_even_through_cleaner(flagged):
@@ -140,7 +140,7 @@ def test_flag_turned_on_during_a_pause_drops_the_web_call(studio):
     sid, calls = confirm_setup(studio, more=[web_tool])
     cid = new_chat(studio)
     state.DB.execute("UPDATE chats SET web = 1 WHERE id = ?", (cid,))
-    shown = pause_on(studio, cid, name_of(sid, 2), text="Найди")
+    shown = pause_on(studio, cid, name_of(sid, "search"), text="Найди")
     assert shown["tool"] == "search"
     flag_on()
     assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
@@ -166,8 +166,8 @@ def test_flag_turned_on_mid_turn_closes_web_from_the_next_call(flagged):
         return await inner(request)
 
     s.gw.on["/mcp"] = handler
-    s.gw.chat_script = [{"tool_calls": [call(f"mcp_{s.mcp}_0", q="x")]},
-                        {"tool_calls": [call(f"mcp_{s.mcp}_1", q="x"), call("web_search", query="x")]}, ["Готово."]]
+    s.gw.chat_script = [{"tool_calls": [call(name_of(s.mcp), q="x")]},
+                        {"tool_calls": [call(name_of(s.mcp, "search"), q="x"), call("web_search", query="x")]}, ["Готово."]]
     assert sse(turn(s, chat_id, "Найди"))[-1][0] == "done"
     assert "web_search" in tool_names(s.gw.chat_requests[0])
     assert not {"web_search", "read_page", "youtube_subtitles"} & set(tool_names(s.gw.chat_requests[1]))

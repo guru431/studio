@@ -45,7 +45,7 @@ def test_confirm_tool_pauses_and_refuse_never_calls_mcp(studio, caplog):
     caplog.set_level(logging.INFO)
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    shown = pause_on(studio, cid, name_of(sid, 1), text="секретная просьба", phrase="секретный текст")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), text="секретная просьба", phrase="секретный текст")
     assert offered(studio.gw.chat_requests[0]) == ["Shared tools: lookup", "Shared tools: translate"]
     assert shown["kind"] == "confirm" and shown["server"] == "Shared tools" and shown["tool"] == "translate"
     assert shown["arguments"] == [["phrase", "секретный текст"]]
@@ -74,7 +74,7 @@ def test_confirm_tool_pauses_and_refuse_never_calls_mcp(studio, caplog):
 def test_run_calls_once_and_answer_continues_same_message(studio):
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    shown = pause_on(studio, cid, name_of(sid, 1), phrase="hello")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
     mid = messages(studio, cid)[-1]["id"]
     events = sse(answer(studio, cid, shown["id"], "run"))
     assert events[-1] == ("done", {"status": "done"})
@@ -92,7 +92,7 @@ def test_repeated_answer_replays_the_same_message(studio):
     после ответа — `pending_gone`; без `request_id` — 422."""
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    shown = pause_on(studio, cid, name_of(sid, 1), phrase="hello")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
     first = messages(studio, cid)
     rid = "pending-retry-0001"
     assert studio.c.post(f"/api/chats/{cid}/pending/{shown['id']}", json={"action": "run"}).status_code == 422
@@ -112,13 +112,13 @@ def test_repeated_answer_replays_the_same_message(studio):
 def test_second_answer_and_late_answer_get_pending_gone(studio):
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    shown = pause_on(studio, cid, name_of(sid, 1))
+    shown = pause_on(studio, cid, name_of(sid, "translate"))
     assert sse(answer(studio, cid, shown["id"], "refuse"))[-1] == ("done", {"status": "done"})
     again = answer(studio, cid, shown["id"], "run", request_id="pending-request-0002")
     assert again.status_code == 409 and again.json()["detail"]["code"] == "pending_gone"
     assert answer(studio, cid, shown["id"], "answer", "x").status_code == 422   # ответ текстом — только вопросу
 
-    late = pause_on(studio, cid, name_of(sid, 1), text="Ещё раз")
+    late = pause_on(studio, cid, name_of(sid, "translate"), text="Ещё раз")
     studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
     assert "pending" not in messages(studio, cid)[-1]
     gone = answer(studio, cid, late["id"], "run")
@@ -132,7 +132,7 @@ def test_pause_is_not_a_completed_job_and_deleted_chat_cannot_resume(studio, mon
     cid = new_chat(studio)
     notified = []
     monkeypatch.setattr(push, "chat_answered", lambda *args: notified.append(args))
-    shown = pause_on(studio, cid, name_of(sid, 1))
+    shown = pause_on(studio, cid, name_of(sid, "translate"))
     mid = messages(studio, cid)[-1]["id"]
     assert mid not in chat.ANSWERED and notified == []
 
@@ -154,7 +154,7 @@ def test_pause_is_not_a_completed_job_and_deleted_chat_cannot_resume(studio, mon
 def test_new_message_supersedes_pending(studio):
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    shown = pause_on(studio, cid, name_of(sid, 1))
+    shown = pause_on(studio, cid, name_of(sid, "translate"))
     studio.gw.chat_script = [["Хорошо, о другом."]]
     assert sse(turn(studio, cid, "Не надо, давай о другом"))[-1] == ("done", {"status": "done"})
     row = state.DB.execute("SELECT resolved, outcome FROM chat_pending WHERE id = ?", (shown["id"],)).fetchone()
@@ -168,7 +168,7 @@ def test_new_message_supersedes_pending(studio):
 def test_pending_survives_restart(studio):
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    shown = pause_on(studio, cid, name_of(sid, 1), phrase="hello")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
 
     async def restart():                                 # остановка службы и старт на той же базе
         await chat.stop_all()
@@ -187,14 +187,14 @@ def test_web_off_or_access_removed_before_answer_refuses(studio):
     sid, calls = confirm_setup(studio, more=[web_tool])
     cid = new_chat(studio)
     state.DB.execute("UPDATE chats SET web = 1 WHERE id = ?", (cid,))
-    shown = pause_on(studio, cid, name_of(sid, 2), text="Найди")
+    shown = pause_on(studio, cid, name_of(sid, "search"), text="Найди")
     assert shown["tool"] == "search"
     state.DB.execute("UPDATE chats SET web = 0 WHERE id = ?", (cid,))
     assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     step = messages(studio, cid)[-1]["tools"][-1]
     assert step["tool"] == "search" and step["error"]
 
-    shown = pause_on(studio, cid, name_of(sid, 1), text="Переведи")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), text="Переведи")
     access.set_tool_rules(sid, {"translate": []})
     assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     step = messages(studio, cid)[-1]["tools"][-1]
@@ -210,15 +210,15 @@ def test_resolved_pause_drops_payload(studio):
     def payload(pid):
         return state.DB.execute("SELECT payload FROM chat_pending WHERE id = ?", (pid,)).fetchone()[0]
 
-    shown = pause_on(studio, cid, name_of(sid, 1))
+    shown = pause_on(studio, cid, name_of(sid, "translate"))
     assert payload(shown["id"])
     assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})
     assert payload(shown["id"]) == ""
-    shown = pause_on(studio, cid, name_of(sid, 1), text="Ещё")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), text="Ещё")
     studio.gw.chat_script = [["Хорошо, о другом."]]
     sse(turn(studio, cid, "О другом"))
     assert payload(shown["id"]) == ""                    # superseded
-    shown = pause_on(studio, cid, name_of(sid, 1), text="Снова")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), text="Снова")
     studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
     assert answer(studio, cid, shown["id"], "refuse").status_code == 409
     assert payload(shown["id"]) == ""                    # expired
@@ -311,7 +311,7 @@ def test_superseded_or_expired_pause_keeps_the_question(studio):
     assert chat_pending.UNANSWERED in asked["content"]
     assert messages(studio, cid)[1]["tools"] == [{"kind": "ask", "question": "Какой цвет?"}]
 
-    shown = pause_on(studio, cid, name_of(sid, 1), text="Переведи", phrase="hello")
+    shown = pause_on(studio, cid, name_of(sid, "translate"), text="Переведи", phrase="hello")
     studio.gw.chat_script = [["Хорошо."]]
     assert sse(turn(studio, cid, "да, запусти"))[-1] == ("done", {"status": "done"})
     sent = studio.gw.chat_requests[-1]["messages"]       # шаг — перед текстом до паузы «Сейчас переведу.»
@@ -320,7 +320,7 @@ def test_superseded_or_expired_pause_keeps_the_question(studio):
     assert messages(studio, cid)[5]["tools"] == [
         {"kind": "mcp", "server": "Shared tools", "tool": "translate", "refused": True}]
 
-    late = pause_on(studio, cid, name_of(sid, 1), text="Ещё", phrase="late")
+    late = pause_on(studio, cid, name_of(sid, "translate"), text="Ещё", phrase="late")
     assert messages(studio, cid)[-1]["tools"][-1]["waiting"] is True
     studio.clock[0] += chat_pending.PENDING_TTL_SEC + 1
     reply = messages(studio, cid)[-1]
@@ -375,7 +375,7 @@ def test_confirmation_covers_only_the_resumed_call_not_a_reused_id(studio):
     в ответе (`call_0` в каждом круге) или модель, повторившая id, не запускают следующий вызов без карточки."""
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    translate = name_of(sid, 1)
+    translate = name_of(sid, "translate")
     studio.gw.chat_script = [{"tool_calls": [(*call(translate, phrase="one"), "call_0")]},
                              {"tool_calls": [(*call(translate, phrase="two"), "call_0")]}, ["Готово."]]
     shown = pending_of(sse(turn(studio, cid, "Переведи")))
@@ -390,8 +390,8 @@ def test_gone_tool_does_not_mark_a_later_call_with_the_same_id(studio):
     круга с тем же id исполняется."""
     sid, calls = confirm_setup(studio)
     cid = new_chat(studio)
-    studio.gw.chat_script = [{"tool_calls": [(*call(name_of(sid, 1), phrase="one"), "call_0")]},
-                             {"tool_calls": [(*call(name_of(sid, 0), q="x"), "call_0")]}, ["Готово."]]
+    studio.gw.chat_script = [{"tool_calls": [(*call(name_of(sid, "translate"), phrase="one"), "call_0")]},
+                             {"tool_calls": [(*call(name_of(sid, "lookup"), q="x"), "call_0")]}, ["Готово."]]
     shown = pending_of(sse(turn(studio, cid, "Переведи")))
     access.set_tool_rules(sid, {"translate": []})
     assert sse(answer(studio, cid, shown["id"], "run"))[-1] == ("done", {"status": "done"})

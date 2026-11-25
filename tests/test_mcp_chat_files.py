@@ -19,6 +19,7 @@ from test_chat import attach, messages, new_chat, sse, turn
 from test_chat_shares import create as create_share, unlock as unlock_share
 from test_chat_web import call
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL
+from test_mcp_dialog import name_of
 from test_shared_integrations import add_models
 
 pytestmark = pytest.mark.usefixtures("no_pings")
@@ -430,7 +431,7 @@ def test_media_delete_is_scoped_to_the_dialog_and_cleans_up_uploads(studio):
 def made(studio, sid):
     """Ход, где модель зовёт `make`: (id диалога, id ответа)."""
     cid = new_chat(studio)
-    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_1")]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "make"))]}, ["Готово"]]
     send(studio, cid, "Сделай файл")
     return cid, messages(studio, cid)[-1]["id"]
 
@@ -440,7 +441,7 @@ def test_document_result_path_is_downloaded_from_the_chat(studio, legacy):
     path = "out/План по отделам.docx"
     sid, calls = setup(studio, document_reply=f"Готово: {path}")
     cid = new_chat(studio)
-    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_1")]}, [f"Готово: `{path}`."]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "create_docx"))]}, [f"Готово: `{path}`."]]
     send(studio, cid)
     mid = messages(studio, cid)[-1]["id"]
     if legacy:
@@ -523,7 +524,7 @@ def test_file_names_not_in_log(studio, caplog):
     with_note(studio, cid, "private-report.txt")
     assert post_media(studio, cid, b"v" * 40, name="private-voice.mp3").status_code == 201
     send(studio, cid, "Ещё")
-    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_1")]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "make"))]}, ["Готово"]]
     send(studio, cid, "Сделай файл")
     mid = messages(studio, cid)[-1]["id"]
     assert studio.c.get(f"/api/chats/{cid}/messages/{mid}/files/0/0").status_code == 200

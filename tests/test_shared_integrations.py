@@ -9,6 +9,7 @@ from fakes import PNG_REAL, TOKEN as MODEL_KEY
 from test_chat import new_chat, sse, turn
 from test_chat_web import call
 from test_mcp import TOKEN as MCP_KEY, URL as MCP_URL, mock
+from test_mcp_dialog import name_of
 from test_mcp_sections import service
 
 ADMIN = "/api/admin/shared"
@@ -93,7 +94,7 @@ def test_shared_mcp_uses_the_current_users_chat_and_keeps_result_tickets_private
     assert studio.c.delete(f"/api/mcp/{sid}").status_code == 404
     chat_id = new_chat(studio)
     assert studio.c.get(f"/api/chats/{chat_id}").json()["chat"]["mcp_ids"] == [sid]   # общий — по умолчанию
-    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_0")]}, ["Done"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid))]}, ["Done"]]
     assert sse(turn(studio, chat_id, "Call the tool"))[-1] == ("done", {"status": "done"})
     assert calls[-2][0] == "tools/call"
 

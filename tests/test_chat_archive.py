@@ -16,6 +16,7 @@ from conftest import make_user, signin
 from test_chat import new_chat
 from test_chat_web import call
 from test_mcp_chat_files import ART, CONTENT, NOTE, consent, post_media, send, setup, with_note
+from test_mcp_dialog import name_of
 
 
 def full_chat(studio):
@@ -27,7 +28,7 @@ def full_chat(studio):
     assert post_media(studio, cid, b"v" * 40, name="clip.mp4", mime="video/mp4").status_code == 201
     gone = post_media(studio, cid, b"t" * 20, name="trashed.mp3").json()
     assert studio.c.delete(f"/api/chats/{cid}/media/{gone['id']}").status_code == 204
-    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_1")]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "make"))]}, ["Готово"]]
     send(studio, cid, "Сделай файл")
     return cid, sid
 

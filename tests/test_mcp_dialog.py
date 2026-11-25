@@ -103,8 +103,10 @@ def view(studio, cid):
     return studio.c.get(f"/api/chats/{cid}").json()["chat"]
 
 
-def name_of(sid, n=0):
-    return f"mcp_{sid}_{n}"
+def name_of(sid, tool="lookup"):
+    """Имя функции инструмента `tool` сервера `sid` для модели (`mcp_client.tool_name` по имени сервера в базе)."""
+    row = state.DB.execute("SELECT name FROM mcp_servers WHERE id = ?", (sid,)).fetchone()
+    return mcp_client.tool_name(row[0], tool)
 
 
 # ---- набор диалога ----------------------------------------------------------------------------------------
@@ -249,7 +251,7 @@ def test_cache_reset_by_edit_and_failure_not_cached(studio):
 def test_unknown_tool_reply_forgets_catalog(studio):
     sid, calls, _ = setup(studio, tools=[tool("gone")])
     cid = new_chat(studio)
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid))]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "gone"))]}, ["Готово"]]
     sse(turn(studio, cid, "Use tool"))
     assert "tools/call" in methods(calls) and messages(studio, cid)[1]["tools"][0]["error"]
     assert mcp_sources.CACHE == {}
@@ -437,7 +439,7 @@ def test_open_world_only_with_internet_and_rechecked_midturn(studio):
 
     studio.gw.on["/v1/chat/completions"] = switching
     calls.clear()
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 1))]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "search"))]}, ["Готово"]]
     assert sse(turn(studio, cid, "Search"))[-1] == ("done", {"status": "done"})
     assert offered(studio.gw.chat_requests[-2]) == ["Shared tools: lookup", "Shared tools: search"]
     assert calls == []                                 # ни знакомства, ни вызова
@@ -454,7 +456,7 @@ def test_internet_without_exa_key_for_mcp_web_tools(studio):
     assert changed.status_code == 200, changed.text
     assert changed.json()["web"] is True and changed.json()["web_tools"] == []
     calls.clear()
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 1))]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "search"))]}, ["Готово"]]
     assert sse(turn(studio, cid, "Search"))[-1] == ("done", {"status": "done"})
     request = studio.gw.chat_requests[-2]
     assert offered(request) == ["Shared tools: lookup", "Shared tools: search"]
@@ -494,13 +496,13 @@ def test_confirm_tools_offered_and_paused_by_condition(studio):
              tool("video", _meta={"studio/confirm": {"when": [{"arg": "seconds", "gt": 30}]}})]
     sid, calls, _ = setup(studio, tools=tools)
     cid = new_chat(studio)
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 2), seconds=10)]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "video"), seconds=10)]}, ["Готово"]]
     events = sse(turn(studio, cid, "Short video"))
     assert offered(studio.gw.chat_requests[0]) == ["Shared tools: lookup", "Shared tools: translate", "Shared tools: video"]
     assert not any(name == "pending" for name, _ in events)
     assert ("tools/call", {"name": "video", "arguments": {"seconds": 10}}) in calls
     calls.clear()
-    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, 2), seconds=60)]}, ["Готово"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid, "video"), seconds=60)]}, ["Готово"]]
     events = sse(turn(studio, cid, "Long video"))
     assert next(data for name, data in events if name == "pending")["tool"] == "video"
     assert "tools/call" not in methods(calls)

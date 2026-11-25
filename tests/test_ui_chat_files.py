@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 import auth
+import mcp_client
 from fakes import PNG_REAL, TOKEN as GW_TOKEN
 from test_chat_web import call
 from test_documents import pdf
@@ -135,7 +136,7 @@ def test_consent_media_and_result_files_in_chat(browser, live, width):
         sid = made.json()["id"]
         assert client.patch(f"/api/chats/{without}", json={"mcp_off": [sid]}).status_code == 200
         before = len(live.gw.chat_requests)
-        live.gw.chat_script = [["Файл есть"], {"tool_calls": [call(f"mcp_{sid}_1")]}, ["Готово"], ["Б1"], ["Б2"]]
+        live.gw.chat_script = [["Файл есть"], {"tool_calls": [call(mcp_client.tool_name(f"Файлы {width}", "make"))]}, ["Готово"], ["Б1"], ["Б2"]]
         consent = f"{LAST}.querySelector('.msg-consent')"
         steps = [*signin(login), ("wait", READY),
             # старый диалог с PDF: текстовое сообщение — серверу ничего, в ленте запрос согласия

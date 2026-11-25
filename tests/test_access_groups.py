@@ -418,6 +418,7 @@ def test_tool_rule_rechecked_on_call(studio):
     from test_chat import messages, new_chat, sse, turn
     from test_chat_web import call
     from test_mcp import mock
+    from test_mcp_dialog import name_of
     make_user(studio, "admin", is_admin=True)
     make_user(studio, "member")
     sid = shared_tools(studio)
@@ -432,7 +433,7 @@ def test_tool_rule_rechecked_on_call(studio):
         return await model(request)
 
     studio.gw.on["/v1/chat/completions"] = closing_model
-    studio.gw.chat_script = [{"tool_calls": [call(f"mcp_{sid}_0")]}, ["Done"]]
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid))]}, ["Done"]]
     assert sse(turn(studio, chat_id, "Call the tool"))[-1] == ("done", {"status": "done"})
     assert "tools/call" not in [method for method, _ in calls]
     step = messages(studio, chat_id)[1]["tools"][0]
@@ -481,6 +482,7 @@ def test_section_run_rechecks_access_after_upload(studio, monkeypatch):
 def test_closed_mcp_dropped_from_chat_selection(studio):
     from test_chat import new_chat, sse, turn
     from test_mcp import mock
+    from test_mcp_dialog import name_of
     make_user(studio, "admin", is_admin=True)
     make_user(studio, "member")
     sid = shared_tools(studio)
