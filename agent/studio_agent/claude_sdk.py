@@ -49,7 +49,7 @@ class ClaudeSDKClient(_SDKClient):
                        "uuid": uuid}
                 return
             async for message in prompt:
-                yield {**message, "uuid": message.get("uuid", uuid)}
+                yield {**message, "uuid": uuid}  # свой uuid сильнее любого в сообщении: по нему ждём повтор
 
         await super().query(stamped(), session_id)
 

@@ -1,5 +1,6 @@
 """Запуск SDK из GUI скрывает обе консоли, сохраняя штатный транспорт Claude."""
 
+import json
 import subprocess
 
 import anyio
@@ -117,3 +118,27 @@ async def test_sdk_hides_version_and_turn_without_changing_global_anyio(monkeypa
     with pytest.raises(OSError):
         await anyio.open_process(["unrelated.exe"])
     assert "creationflags" not in calls[-1][1]
+
+
+async def test_query_stamps_its_own_uuid_over_one_already_in_the_message():
+    """Повтор ввода ищется по своему uuid: чужой uuid в сообщении (картинки) заменяется, текст получает свой."""
+    from studio_agent.claude_sdk import ClaudeSDKClient
+
+    client = ClaudeSDKClient(options=ClaudeAgentOptions())
+    written = []
+
+    class Transport:
+        async def write(self, data):
+            written.append(json.loads(data))
+
+    client._transport, client._query = Transport(), object()
+
+    async def blocks():
+        yield {"type": "user", "uuid": "foreign", "message": {"role": "user", "content": []}, "parent_tool_use_id": None}
+
+    await client.query(blocks(), uuid="mine")
+    await client.query("Текст", uuid="text")
+    await client.query("Без uuid")
+    assert [m.get("uuid") for m in written] == ["mine", "text", None]
+    assert written[1]["message"] == {"role": "user", "content": "Текст"}
+    assert written[2]["message"]["content"] == "Без uuid"
