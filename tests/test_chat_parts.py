@@ -5,6 +5,8 @@
 import json
 import logging
 
+import httpx
+
 import chat
 import chat_parts
 import chat_tools
@@ -429,6 +431,50 @@ def test_pause_keeps_part_counters(studio):
     answer = messages(studio, cid)[-1]
     done = [s for s in parts_of(answer) if s["state"] == "done"]
     assert len(done) == 10 and parts_of(answer)[-1]["error"] == chat_parts.LIMIT
+
+
+def test_pause_keeps_the_part_of_its_round(studio):
+    """Ревью, п. 6: `part_round` переживает паузу — [run_part, ask_user, run_part] в одном круге: после ответа на
+    вопрос третий вызов — ONE_PER_ROUND без запроса части."""
+    cid, sid = parts_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [part("А", "раз"), call("ask_user", question="Дальше?"), part("Б", "два")]},
+                             ["Итог А"]]
+    pid = pending_of(sse(turn(studio, cid, "Задача", skill_id=sid)))["id"]
+    studio.gw.chat_script = [["Готово"]]
+    sse(answer_card(studio, cid, pid, "answer", "Да"))
+    answer = messages(studio, cid)[-1]
+    assert [(s["title"], s.get("error")) for s in parts_of(answer)] == [("А", None), ("Б", chat_parts.ONE_PER_ROUND)]
+    assert answer["content"] == "Готово" and len(studio.gw.chat_requests) == 3     # ход, часть «А», ход после паузы
+
+
+def test_card_wait_inside_a_part_moves_its_deadline(studio, monkeypatch, no_pings):
+    """Ревью, п. 6, решение 15: ожидание карты в срок части не входит — `_wait_card` сдвигает `part_deadline`."""
+    monkeypatch.setattr(chat, "STREAM_TOTAL_SEC", 20)
+    cid, sid = parts_chat(studio)
+    left = [4]                                       # первый 503 — release картинок, затем три паузы по RETRY_SEC
+
+    async def busy_part(request):
+        if b"<part " in request.content and left[0] > 0:
+            left[0] -= 1
+            return httpx.Response(503, json={"error": {"message": "slot busy"}})
+        return await studio.gw.builtin(request)
+
+    studio.gw.on["/v1/chat/completions"] = busy_part
+    studio.gw.chat_script = [{"tool_calls": [part()]}, ["Итог"], ["Готово"]]
+    events = sse(turn(studio, cid, "Задача", skill_id=sid))
+    assert len([e for e, d in events if e == "wait" and d]) == 3 and 3 * chat.RETRY_SEC > chat.STREAM_TOTAL_SEC
+    (only,) = parts_of(messages(studio, cid)[-1])
+    assert (only["state"], only["text"]) == ("done", "Итог")
+
+
+def test_export_names_the_part(studio):
+    cid, sid = parts_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [part("Обзор рынка", "Собери")]}, ["Итог"], ["Готово"]]
+    sse(turn(studio, cid, "Задача", skill_id=sid))
+    md = studio.c.post(f"/api/chats/{cid}/export", json={"format": "md"}).text
+    assert "Часть: Обзор рынка" in md
+    en = studio.c.post(f"/api/chats/{cid}/export", json={"format": "md", "lang": "en"}).text
+    assert "Part: Обзор рынка" in en and "Часть:" not in en
 
 
 def test_parts_never_reach_the_log(studio, caplog):
