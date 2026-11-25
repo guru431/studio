@@ -279,6 +279,18 @@ def test_speech_chat_snapshot_title_is_the_first_voiced_record(studio):
     assert unlock(studio, cancelled_then_voiced(studio)).json()["title"] == "Озвученная"
 
 
+def test_speech_chat_title_in_access_list_skips_trashed_records(studio):
+    """Название в «Доступах и ссылках» — первая запись не из корзины, пока такие есть; весь чат в корзине — первая."""
+    cancelled_then_voiced(studio)
+    assert studio.c.get("/api/me/access").json()["shares"][0]["title"] == "Отменённая"
+    state.DB.execute("UPDATE speeches SET deleted = 5 WHERE id = 'c1'")          # первая запись — в корзину
+    listed = studio.c.get("/api/me/access").json()["shares"]
+    assert [(s["title"], s["trashed"]) for s in listed] == [("Озвученная", False)]
+    state.DB.execute("UPDATE speeches SET deleted = 5")                          # весь чат — в корзину
+    listed = studio.c.get("/api/me/access").json()["shares"]
+    assert [(s["title"], s["trashed"]) for s in listed] == [("Отменённая", True)]
+
+
 def test_previous_live_rule_hides_links_of_the_new_kinds(setup):                    # откат: SQL-обход не нужен
     s, fake, aid = setup
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]

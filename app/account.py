@@ -275,11 +275,12 @@ def _item_share(row) -> dict:
     kind = row["item_kind"]
     if kind == chat_shares.OWUI:                # переписка Open WebUI: название — шифром у ссылки
         return out | {"section": chat_shares.SECTIONS[kind], "title": _label(row["label"]), "trashed": False}
-    if kind == "speech_chats":                  # чат «Озвучки»: название — первая запись, в корзине — нет живых
-        item = state.DB.execute(
+    if kind == "speech_chats":                  # чат «Озвучки»: название — первая запись не из корзины (весь чат в
+        item = state.DB.execute(                # корзине — первая из всех), в корзине — нет живых
             "SELECT substr(text, 1, 80) AS title, NOT EXISTS (SELECT 1 FROM speeches WHERE chat_id = ? AND user_id = ?"
-            " AND deleted IS NULL) AS trashed FROM speeches WHERE chat_id = ? AND user_id = ? ORDER BY created, rowid"
-            " LIMIT 1", (row["item_id"], row["user_id"], row["item_id"], row["user_id"])).fetchone()
+            " AND deleted IS NULL) AS trashed FROM speeches WHERE chat_id = ? AND user_id = ?"
+            " ORDER BY deleted IS NOT NULL, created, rowid LIMIT 1",
+            (row["item_id"], row["user_id"], row["item_id"], row["user_id"])).fetchone()
     elif kind in chat_shares.ITEMS:
         column = "prompt" if kind in ("images", "videos") else "name"
         item = state.DB.execute(f"SELECT substr({column}, 1, 80) AS title, deleted IS NOT NULL AS trashed"
