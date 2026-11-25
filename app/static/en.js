@@ -4366,7 +4366,7 @@ globalThis.StudioEnglish = Object.freeze({
   "думает": "thinking",
   "пишет": "writing",
   "загружаю модель": "loading the model",
-  "жду ответа": "waiting for a response",
+  "жду ответа": "awaiting reply",
   "ответ идёт": "answer in progress",
   "ждёт вашего ответа": "waiting for your reply",
   "нет активного ответа": "no active answer",
