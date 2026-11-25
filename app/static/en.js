@@ -4239,7 +4239,13 @@ globalThis.StudioEnglish = Object.freeze({
   "Убрать вложение": "Remove attachment",
   "Не больше {0} вложений в сообщении": "No more than {0} attachments per message",
   "Разрешить инструмент?": "Allow the tool?",
-  "Аргументы": "Arguments"
+  "Аргументы": "Arguments",
+  "Навыки и команды": "Skills and commands",
+  "навык": "skill",
+  "проект": "project",
+  "команда": "command",
+  "Убрать навык": "Remove skill",
+  "Навык: {0}": "Skill: {0}"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",

@@ -2157,6 +2157,29 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   padding: var(--space-4); font-family: var(--mono); overflow-wrap: anywhere; cursor: pointer; }
 .code-file-option[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .code-file-hints [role="status"] { padding: var(--space-2) var(--space-4); }
+/* Меню «/» и чип навыка поля ввода (slash.js): блок в потоке над полем, до 420 px описание — второй строкой */
+.slash-menu { border: 1px solid var(--line); border-radius: var(--r-control); padding: 5px; background: var(--surface-1);
+  max-height: calc(22 * var(--dvh)); overflow: auto; min-width: 0; }
+.slash-option { display: grid; grid-template-columns: minmax(0, auto) auto minmax(0, 1fr); align-items: center;
+  column-gap: var(--space-4); width: 100%; min-width: 0; border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--text-1); text-align: left; padding: var(--space-3) var(--space-4); cursor: pointer; }
+.slash-option[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+@media (hover: hover) { .slash-option:not([aria-selected="true"]):hover { background: var(--surface-2); } }
+.slash-name { max-width: 24em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.slash-desc { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere; font-size: var(--fs-sm); }
+.slash-menu [role="status"] { margin: 0; padding: var(--space-2) var(--space-4); }
+@media (max-width: 420px) {
+  .slash-option { grid-template-columns: minmax(0, 1fr) auto; row-gap: var(--space-1); }
+  .slash-name { max-width: none; }
+  .slash-desc { grid-column: 1 / -1; }
+  .slash-desc:empty { display: none; }
+}
+@media (pointer: coarse) { .slash-option { min-height: var(--h-touch); } }
+.skill-chip { display: flex; align-items: center; gap: var(--space-2); align-self: flex-start; min-width: 0; max-width: 100%;
+  padding-left: var(--space-4); border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface-2);
+  font-size: var(--fs-sm); }
+.skill-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-queue { max-height: calc(23 * var(--dvh)); overflow: auto; border: 1px solid var(--line); border-radius: var(--r-control); padding: var(--space-4); margin-bottom: var(--space-3); }
 .code-queue-item { border-top: 1px solid var(--line); padding-top: var(--space-3); margin-top: var(--space-3); min-width: 0; }
 .code-queue-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 5em; overflow: auto; font-size: var(--fs-sm); }
