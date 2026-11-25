@@ -9,6 +9,8 @@
     var accent = localStorage.getItem('studio-accent');     // ACCENTS в appearance.js; оранжевый — без атрибута
     if (accent === 'blue' || accent === 'violet' || accent === 'rose') document.documentElement.dataset.accent = accent;
     if (localStorage.getItem('studio-density') === 'compact') document.documentElement.dataset.density = 'compact';
+    var feed = localStorage.getItem('studio-feed-width');     // FEED_WIDTHS в appearance.js; обычная — без атрибута
+    if (feed === 'wide' || feed === 'full') document.documentElement.dataset.feed = feed;
     var font = Number(localStorage.getItem('studio-font-size')) || 100;
     var scale = Number(localStorage.getItem('studio-ui-scale')) || 100;
     // сенсорный экран: мельче 75% цели касания и текст становятся неразличимы (appearance.js — тот же предел)

@@ -348,7 +348,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   const statusBar = el('div', { class: 'code-status-bar' });
   const quickActions = el('section', { id: 'code-quick-actions', class: 'code-quick-actions', hidden: true,
     'aria-label': tr("Быстрые действия") }, el('h2', {}, tr("Быстрые действия")));
-  const field = fieldBox(text);
+  const field = fieldBox(text, { fold: true });
   const attachments = el('div', { id: 'code-images', class: 'code-images' });
   const picker = el('input', { type: 'file', id: 'code-image-input',
     multiple: true, hidden: true, 'aria-label': tr("Вложения") });
@@ -1788,7 +1788,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
 
   function autosize() {
     text.style.height = 'auto';
-    if (text.value) text.style.height = `${Math.min(text.scrollHeight, innerHeight * .25)}px`;
+    if (text.value) text.style.height = `${Math.min(text.scrollHeight, innerHeight * .5)}px`;
   }
 
   /** Выбор здесь действует в этом чате; умолчания учётки меняются в настройках. */

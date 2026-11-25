@@ -10,16 +10,32 @@ import { tr } from './i18n.js';
  * пересчитает высоту, счётчик, поиск), фокус в поле; у поля только для чтения (перевод «EN») — ничего.
  * `painted()` раздела зовётся после каждой такой сверки (чат прячет «Разговор», пока в поле текст).
  * `dialog()` — подключение диалога для микрофона (attachMic): поле чата.
- * error — место ошибки микрофона под рамкой: его ставит раздел. */
+ * error — место ошибки микрофона под рамкой: его ставит раздел.
+ * fold — первой в `.field-tools` кнопка `.field-fold` «Свернуть поле» / «Развернуть поле» (`aria-pressed`): видна,
+ * пока текст выше FOLD_EM строк шрифта поля или поле свёрнуто; нажатие переключает класс `.field-folded` рамки
+ * (высота поля — FOLD_EM, app.css); пустое поле состояние сбрасывает. */
 import { icon } from './icons.js';
 import { attachMic } from './mic.js';
 import { el } from './ui.js';
 
+const FOLD_EM = 6;
+
 export function fieldBox(field, { mic = true, clear = true, attach = null, tools = [], fit = false, painted = null,
-  dialog = null } = {}) {
+  dialog = null, fold = false } = {}) {
   const error = el('div', { class: 'field-error' });
   const column = el('div', { class: 'field-tools' });
   const shown = [...tools];
+  let folder = null;
+  if (fold) {
+    folder = el('button', { type: 'button', class: 'icon-btn field-fold', 'aria-pressed': 'false', hidden: true });
+    folder.addEventListener('click', () => {
+      box.classList.toggle('field-folded');
+      paint();
+      field.dispatchEvent(new Event('input', { bubbles: true }));   // раздел пересчитает высоту поля
+      field.focus();
+    });
+    column.append(folder);
+  }
   if (clear) {
     const button = el('button', { type: 'button', class: 'icon-btn field-clear', 'aria-label': tr("Очистить поле"),
       title: tr("Очистить поле") });
@@ -37,11 +53,23 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   if (attach) column.append(attach);
   column.append(...tools);
   if (mic) column.append(attachMic(field, error, { dialog }));
+  const box = el('div', { class: 'field-box' }, field, column);
   const paint = () => {
     for (const node of shown) node.hidden = !field.value;
     if (fit && field.tagName === 'TEXTAREA' && field.rows === 1 && field.isConnected) {
       field.style.height = 'auto';
       if (field.value) field.style.height = `${field.scrollHeight}px`;
+    }
+    if (folder) {
+      if (!field.value) box.classList.remove('field-folded');
+      const folded = box.classList.contains('field-folded');
+      const tall = field.isConnected && field.scrollHeight > FOLD_EM * parseFloat(getComputedStyle(field).fontSize);
+      folder.hidden = !field.value || (!folded && !tall);
+      folder.setAttribute('aria-pressed', String(folded));
+      const label = folded ? tr("Развернуть поле") : tr("Свернуть поле");
+      folder.setAttribute('aria-label', label);
+      folder.title = label;
+      folder.replaceChildren(icon(folded ? 'expand' : 'collapse'));
     }
     painted?.();
   };
@@ -51,7 +79,6 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
     set(next) { own.set.call(this, next); paint(); } });
   field.addEventListener('input', paint);
   paint();
-  const box = el('div', { class: 'field-box' }, field, column);
   box.addEventListener('click', (event) => { if (event.target === box) field.focus(); });   // пустое место рамки
   return { box, error };
 }

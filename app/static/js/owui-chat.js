@@ -81,7 +81,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
     title: tr("Отправить") }, icon('send'));
   const stop = el('button', { type: 'button', id: 'owui-stop', class: 'send composer-go composer-stop', 'aria-label': tr("Остановить"),
     title: tr("Остановить"), hidden: true }, icon('stop'));
-  const inputBox = fieldBox(input, { attach: clip });
+  const inputBox = fieldBox(input, { attach: clip, fold: true });
   const form = el('form', { class: 'composer owui-composer', id: 'owui-composer', hidden: readOnly }, chips, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelPick.wrap), stop, send));
   const feedHead = el('div', { class: 'owui-feed-head' }, titleNode);

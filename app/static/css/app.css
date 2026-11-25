@@ -431,16 +431,21 @@ button[data-mcp-state]:not(.pick-trigger)::after, .pick-trigger[data-mcp-state]:
 .solo-card .input, .dialog .input, .card .input { background: var(--surface-0); }   /* поле на панели — темнее её */
 label { font-size:var(--fs-sm); color: var(--text-2); }
 
+/* ширина ленты и поля — настройка устройства «Ширина ленты» (appearance.js FEED_WIDTHS, theme.js): `html[data-feed]` */
+:root { --feed-max: 800px; --composer-max: 900px; }
+:root[data-feed="wide"] { --feed-max: 1100px; --composer-max: 1200px; }
+:root[data-feed="full"] { --feed-max: none; --composer-max: none; }
 /* основные поля разделов: одна рамка и размеры; длинное содержимое прокручивается внутри неё */
-.composer { flex: none; display: flex; flex-direction: column; gap: var(--space-2); width: calc(100% - 2 * var(--space-7)); max-width: 900px;
+.composer { flex: none; display: flex; flex-direction: column; gap: var(--space-2); width: calc(100% - 2 * var(--space-7)); max-width: var(--composer-max);
   align-self: center; min-width: 0; min-height: 0; max-height: 75%; overflow: auto; overscroll-behavior: contain;
   margin: 0 var(--space-7) var(--space-7); padding: var(--space-3) var(--space-4);
   background: var(--surface-1); border: 1px solid var(--field-border); border-radius: var(--r-menu);
   container: composer / inline-size; }
-.composer textarea { width: 100%; min-height: var(--h-sm); max-height: calc(25 * var(--dvh)); padding: var(--space-1) 0; border: 0; outline: none;
+.composer textarea { width: 100%; min-height: var(--h-sm); max-height: calc(50 * var(--dvh)); padding: var(--space-1) 0; border: 0; outline: none;
   background: none; color: var(--text-1); font: inherit; font-size: var(--fs-lg); resize: none; line-height: 1.45; }
 .composer > .field-box { flex: none; }
 .composer > .field-box > textarea { min-height: calc(3lh + 2 * var(--space-1)); } /* три строки с текущим шрифтом */
+.field-box.field-folded > textarea { max-height: 6em; }   /* «Свернуть поле» (field.js fold, FOLD_EM) */
 .composer > .composer-bar { position: sticky; bottom: 0; z-index: var(--z-raised); background: var(--surface-1);
   box-shadow: 0 var(--space-3) 0 var(--surface-1); }
 /* строка под полем: слева параметры (переносятся внутри себя), справа главная кнопка — на последней их строке */
@@ -1024,7 +1029,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 /* лента «Чата» со стрелками по своим сообщениям (message-nav.js): справа у ленты — место под стрелки */
 .chat-history { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat-history .feed { padding-right: calc(30px + var(--space-6)); }
-.feed { width: 100%; max-width: 800px; min-height: 100%; margin: 0 auto; padding: var(--space-8) var(--space-9);
+.feed { width: 100%; max-width: var(--feed-max); min-height: 100%; margin: 0 auto; padding: var(--space-8) var(--space-9);
   display: flex; flex-direction: column; gap: 18px; }
 .feed-note { margin: auto; }
 .msg.user { align-self: flex-end; max-width: min(85%, 640px); display: flex; flex-direction: column; align-items: flex-end;
@@ -1070,7 +1075,7 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .msg-actions .msg-compare-toggle, .msg-compare { display: none; }
 @media (min-width: 1024px) {
   .msg-actions .msg-compare-toggle { display: inline-flex; }
-  .feed:has(.msg.comparing) { max-width: 1200px; }
+  :root:not([data-feed="full"]) .feed:has(.msg.comparing) { max-width: 1200px; }
   .msg.comparing .msg-body > .md { display: none; }
   .msg.comparing .msg-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
     gap: var(--space-5); }
@@ -2708,7 +2713,7 @@ html.shrouded dialog:not(.curtain):not(.lock) { visibility: hidden; }
 .owui-chat-view .owui-feed-head .owui-feed-title { flex: 1; min-width: 0; padding: 0; }
 .owui-feed-title:empty { display: none; }
 .owui-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-.owui-feed-list { width: 100%; max-width: 800px; min-height: 100%; margin: 0 auto; padding: var(--space-6) var(--space-7);
+.owui-feed-list { width: 100%; max-width: var(--feed-max); min-height: 100%; margin: 0 auto; padding: var(--space-6) var(--space-7);
   display: flex; flex-direction: column; gap: 18px; }
 .owui-feed-empty { margin: auto; text-align: center; }
 .owui-stream { white-space: pre-wrap; overflow-wrap: anywhere; }

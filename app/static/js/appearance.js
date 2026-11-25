@@ -16,6 +16,10 @@ export const THEME_NAMES = { auto: tr("Как на устройстве"), light
 const THEME_KEY = 'studio-theme';
 const ACCENT_KEY = 'studio-accent';
 const DENSITY_KEY = 'studio-density';
+/** Ширина ленты (theme.js ставит `html[data-feed]` до отрисовки): нет ключа — обычная (800 px), `wide` — 1100 px,
+ * `full` — во всю ширину; токены `--feed-max` и `--composer-max` в app.css. Ленту «Агентов» не меняет. */
+export const FEED_KEY = 'studio-feed-width';
+export const FEED_WIDTHS = ['wide', 'full'];
 const THEME_COLORS = { light: '#fbfaf7', dark: '#1b1b1b' };
 const SCALES = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
 const darkMedia = matchMedia('(prefers-color-scheme: dark)');
@@ -279,10 +283,17 @@ export function deviceLookBlock() {
       else delete root.dataset.density;
       store(DENSITY_KEY, value === 'compact' ? 'compact' : null);
     });
+  const saved = read(FEED_KEY);
+  const feed = segment('appearance-feed', tr("Ширина ленты"), [['normal', tr("Обычная")], ['wide', tr("Широкая")],
+    ['full', tr("Во всю ширину")]], FEED_WIDTHS.includes(saved) ? saved : 'normal', (value) => {
+      if (FEED_WIDTHS.includes(value)) root.dataset.feed = value;
+      else delete root.dataset.feed;
+      store(FEED_KEY, FEED_WIDTHS.includes(value) ? value : null);
+    });
   return el('section', { class: 'block appearance-device' }, el('h2', {}, tr("Вид на этом устройстве")),
     el('p', { class: 'muted small scope-note' }, tr("Это устройство — в других браузерах и на других устройствах свой выбор.")),
     languagePicker(),
     el('div', { id: 'appearance-controls' }, deviceSizeControls()),
-    density,
+    density, feed,
     el('p', { class: 'muted small' }, tr("«Компактно» — ниже кнопки и меньше просветы: больше строк в «Агентах» и лентах. Цели касания на сенсорном экране не меньше 44 px.")));
 }

@@ -860,7 +860,7 @@ function build(view, ctx) {
   // «Разговор» уступает место «очистить», пока в поле текст (идущий — виден всегда): колонка — три значка, рамка
   // пустого поля не растёт с первой буквой
   const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
-    dialog: voiceDialog });
+    dialog: voiceDialog, fold: true });
   const passportNote = el('p', { class: 'chat-passport', id: 'chat-passport', 'aria-live': 'polite', hidden: true });
   const moveNote = el('p', { class: 'chat-passport', id: 'chat-move', 'aria-live': 'polite', hidden: true });
   const editNote = el('div', { class: 'chat-edit-note', hidden: true },

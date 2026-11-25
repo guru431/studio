@@ -154,6 +154,26 @@ def test_accent_list_is_one_contract_for_server_page_css_and_early_theme():
             assert f"accent === '{accent}'" in early, accent
 
 
+def test_feed_width_is_one_contract_for_css_page_and_early_theme():
+    """«Ширина ленты»: appearance.js FEED_WIDTHS = значения раннего theme.js = селекторы [data-feed] app.css; у каждого —
+    оба токена --feed-max и --composer-max, умолчание — у :root; лента и поле берут токены."""
+    js = (STATIC / "js" / "appearance.js").read_text(encoding="utf-8")
+    widths = re.search(r"export const FEED_WIDTHS = \[([^\]]*)\]", js).group(1)
+    listed = re.findall(r"'(\w+)'", widths)
+    assert listed == ["wide", "full"]
+    early = (STATIC / "theme.js").read_text(encoding="utf-8")
+    assert re.findall(r"feed === '(\w+)'", early) == listed
+    css = strip_comments(CSS["app.css"])
+    assert re.findall(r'\[data-feed="(\w+)"\]\s*\{', css) == listed
+    for value in [None, *listed]:
+        selector = r":root\s*" if value is None else r':root\[data-feed="%s"\]\s*' % value
+        bodies = re.findall(r"(?:^|\n)%s\{([^}]*)\}" % selector, css)
+        assert any("--feed-max" in b and "--composer-max" in b for b in bodies), value
+    for sel, token in ((".feed", "--feed-max"), (".owui-feed-list", "--feed-max"), (".composer", "--composer-max")):
+        body = re.search(r"(?:^|\n)%s\s*\{([^}]*)\}" % re.escape(sel), css).group(1)
+        assert f"max-width: var({token})" in body, sel
+
+
 def test_density_keeps_the_touch_target():
     """«Компактно» уменьшает высоты и просветы, но не цель касания --h-touch."""
     rule = re.search(r'\[data-density="compact"\]\s*\{([^}]*)\}', strip_comments(CSS["app.css"]))

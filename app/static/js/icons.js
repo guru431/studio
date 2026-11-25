@@ -66,6 +66,8 @@ export const ICONS = {
   upward: '<path d="M12 19V5m-6 6 6-6 6 6"/>',
   downward: '<path d="M12 5v14m-6-6 6 6 6-6"/>',
   expand: '<path d="m8 9 4-4 4 4m-8 6 4 4 4-4"/>',
+  // поле ввода: «Свернуть поле» (field.js fold)
+  collapse: '<path d="m8 5 4 4 4-4m-8 14 4-4 4 4"/>',
   fork: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/>'
     + '<path d="M6 7v10m12-10c0 6-12 3-12 10"/>',
   subagents: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/>'
