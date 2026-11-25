@@ -537,25 +537,47 @@ def _head(doc_id: str, name: str, k: int) -> list[Hit]:
         "SELECT n, text FROM kb_chunks WHERE doc_id = ? ORDER BY n LIMIT ?", (doc_id, k))]
 
 
-async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
-                   cache: "dict | None" = None, vectors: bool = True) -> tuple[dict[str, str], str]:
-    """Знания хода по его сообщению `query`: выдержки вложений `attachment_ids`, которые модель получает выдержками
-    (`adopt`; id вложения → текст выдержек), и блок найденного в базах диалога (пусто — баз нет или ничего не
-    нашлось). `cache` — общий на ход (`_vector`, отказ источника); `vectors` False — только BM25 (`vectors_for`)."""
-    cache = {} if cache is None else cache
+def _adopted(att_id: str):
+    return state.DB.execute("SELECT id, name FROM kb_documents WHERE attachment_id = ? AND deleted IS NULL",
+                            (att_id,)).fetchone()
+
+
+def heads(att_ids) -> dict[str, str]:
+    """Начало больших вложений `att_ids` (первые TOP_K кусков, `excerpts`): id вложения → текст. Не зависит от
+    вопроса — запрос следующего хода повторяет старые сообщения байт в байт (спека п. 34)."""
     out = {}
+    for att_id in att_ids:
+        row = _adopted(att_id)
+        if row is not None:
+            out[att_id] = excerpts(_head(row["id"], row["name"], TOP_K))
+    return out
+
+
+async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
+                   cache: "dict | None" = None, vectors: bool = True, own=()) -> tuple[dict[str, str], str]:
+    """Знания хода по его сообщению `query`: выдержки вложений `attachment_ids`, которые модель получает выдержками
+    (`adopt`; id вложения → текст выдержек), и блок найденного (пусто — ничего не нашлось). Вложения сообщения хода
+    (`own`) — выдержками по вопросу (ничего — начало документа); прочие — началом (`heads`), а найденное по вопросу в
+    них — в блок вместе с найденным в базах диалога: старое сообщение от нового вопроса не меняется (спека п. 34).
+    `cache` — общий на ход (`_vector`, отказ источника); `vectors` False — только BM25 (`vectors_for`)."""
+    cache = {} if cache is None else cache
+    out, history = {}, {}
     for att_id in attachment_ids:
-        row = state.DB.execute("SELECT id, name FROM kb_documents WHERE attachment_id = ? AND deleted IS NULL",
-                               (att_id,)).fetchone()
+        row = _adopted(att_id)
         if row is None:
+            continue
+        if att_id not in own:
+            history[row["id"]] = row["name"]
+            out[att_id] = excerpts(_head(row["id"], row["name"], TOP_K))
             continue
         hits = (await _search(uid, query, {row["id"]: row["name"]}, TOP_K, cache, vectors)
                 or _head(row["id"], row["name"], TOP_K))
         out[att_id] = excerpts(hits)
+    found = await _search(uid, query, history, TOP_K, cache, vectors) if history else []
     kbs = chat_kbs(uid, chat_id)
-    found = await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache, vectors) if kbs else []
+    found += await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache, vectors) if kbs else []
     if out or found:
-        log.info("знания: чат %s — выдержек вложений %d, кусков баз %d", chat_id[:8], len(out), len(found))
+        log.info("знания: чат %s — выдержек вложений %d, кусков баз и истории %d", chat_id[:8], len(out), len(found))
     return out, block(found)
 
 

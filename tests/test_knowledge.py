@@ -186,13 +186,15 @@ def test_big_document_whole_when_it_fits_excerpts_when_not(studio):
     sse(turn(studio, cid, "Какой пароль от сейфа?", attachment_ids=[doc["id"], small["id"]]))
     assert f'<document name="отчёт.txt">\n{text}\n</document>' in first_user(studio)     # 131 тыс. — помещается
     assert marks(studio, cid) == {"отчёт.txt": False, "заметка.txt": False}
-    # модель с пределом 20 тыс.: тот же документ из истории — выдержками по сообщению хода
+    # модель с пределом 20 тыс.: тот же документ из истории — началом, найденное по сообщению хода — в нём
     small_model(studio, cid, gw, 20_000)
     studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "tiny", "nolimit"]})
     sse(turn(studio, cid, "Какой пароль от сейфа?"))
     sent = first_user(studio)
-    assert '<document name="отчёт.txt" excerpts="true">' in sent and "4711" in sent
+    assert '<document name="отчёт.txt" excerpts="true">\n[кусок 1]' in sent and "4711" not in sent
     assert re.search(r"\[кусок \d+\]", sent) and len(sent) < len(text) // 4
+    asked = studio.gw.chat_requests[-1]["messages"][-1]["content"]
+    assert asked.startswith("<knowledge>") and "4711" in asked
     assert '<document name="заметка.txt">\nКороткая заметка.\n</document>' in sent
     assert marks(studio, cid) == {"отчёт.txt": True, "заметка.txt": False}
     row = state.DB.execute("SELECT * FROM kb_documents WHERE attachment_id = ?", (doc["id"],)).fetchone()
@@ -400,8 +402,8 @@ def test_turn_search_runs_after_the_turn_is_accepted(studio):
     events = sse(turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20))
     assert seen == [(1, 1)] and events[0][0] == "turn" and events[-1] == ("done", {"status": "done"})
     sent = first_user(studio)
-    assert sent.count('excerpts="true"') == 2 and "4711" in sent
-    again = turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20)
+    assert sent.count('excerpts="true"') == 2 and "4711" in studio.gw.chat_requests[-1]["messages"][-1]["content"]
+    again =turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20)
     assert again.json()["replayed"] is True and len(seen) == 1
 
 

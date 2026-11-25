@@ -99,6 +99,9 @@ SUMMARY_NOTE = ("Summarize the supplied earlier chat turns as a handoff for the 
 CONTINUE_NOTE = ("Continue the latest substantive user request. If a partial answer precedes this message, resume "
                  "exactly where it stopped without repeating it. Keep reasoning brief. If a tool call was interrupted, "
                  "emit a complete call only if still needed. Never repeat a completed action.")
+#: результат инструмента прошлого ответа в запросах следующих ходов (`_for_history`) — первые столько знаков
+HISTORY_RESULT_CHARS = 1500
+HISTORY_CUT = "\n[результат сокращён: остальное можно получить повторным вызовом инструмента]"
 #: выдержки большого вложения и блок баз диалога при проверке «ход помещается» до поиска (`_excerpt_plan`): не
 #: меньше настоящих — knowledge.TOP_K кусков по knowledge.CHUNK_CHARS с подписями
 EXCERPT_GUESS = "x" * (knowledge.TOP_K * (knowledge.CHUNK_CHARS + 300))
@@ -661,6 +664,14 @@ def _refused_turns(rows, model: "str | None") -> set[str]:
     return refused
 
 
+def _for_history(step: dict) -> str:
+    """Результат шага прошлого ответа в запросах следующих ходов: `_for_model`, длиннее HISTORY_RESULT_CHARS —
+    первые HISTORY_RESULT_CHARS знаков и HISTORY_CUT (спека п. 29). В ходе вызова, в паузе и в `messages.tools` —
+    полный текст."""
+    text = _for_model(step)
+    return text if len(text) <= HISTORY_RESULT_CHARS else text[:HISTORY_RESULT_CHARS] + HISTORY_CUT
+
+
 def compose(chat_id: str, upto: str, model: "str | None" = None,
             max_images: int = profiles.DEFAULT_MAX_IMAGES, excerpts: "dict | None" = None,
             replacement: "tuple[str, list] | None" = None) -> list[dict]:
@@ -695,7 +706,7 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
                 # заметка (`note`, урезанный список MCP) модели не нужна — у неё нет и текста
                 steps = [s for s in json.loads(row["tools"] or "[]") if "note" not in s]
                 if steps and out and out[-1]["role"] == "user":
-                    out[-1]["content"] = _prefix(web.history_block(steps, _for_model), out[-1]["content"])
+                    out[-1]["content"] = _prefix(web.history_block(steps, _for_history), out[-1]["content"])
                 if row["content"]:
                     out.append({"role": "assistant", "content": row["content"]})
         if row["id"] == upto:
@@ -2647,9 +2658,12 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
     `knowledge.release` (отметка «модель видит выдержки» у вложения — `knowledge.big_attachments`); `vectors` False —
     документ без векторов (`knowledge.vectors_for`)."""
     docs = _sent_documents(chat_id, upto, model)
+    own = {a["id"] for a in _attachments(chat_id).get(upto, [])}
     def guess(cut):
+        # найденное по вопросу в документах истории (knowledge.for_turn) — ещё один блок в сообщении хода
+        history = EXCERPT_GUESS if cut - own else ""
         return _with_block(compose(chat_id, upto, model, cap, dict.fromkeys(cut, EXCERPT_GUESS)),
-                           EXCERPT_GUESS if kbs else "")
+                           (EXCERPT_GUESS if kbs else "") + history)
 
     cut, messages = _plan_excerpts(docs, system, limit, guess)
     for a in docs:
@@ -2666,8 +2680,9 @@ async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Con
     StreamTask.photos для payload паузы), системное сообщение. Не помещается — HTTPException 413; файл фото не
     прочитался — OSError."""
     asked = state.DB.execute("SELECT content FROM messages WHERE id = ?", (upto,)).fetchone()
+    own = {a["id"] for a in _attachments(chat_id).get(upto, [])}
     excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache,
-                                               knowledge.vectors_for(conn))
+                                               knowledge.vectors_for(conn), own=own)
     composed = _with_block(compose(chat_id, upto, model, _max_images(conn), excerpts), block)
     tokens = estimate_tokens(chat_system.wrap(system, composed))
     if (limit is not None and tokens > limit - RESERVE_TOKENS
@@ -2828,7 +2843,9 @@ async def estimate(chat_id: str, body: EstimateIn, request: Request):
         else:
             messages.append({"role": "user", "content": content})
         _cap_images(messages, cap)
-        return _with_block(messages, block)
+        # найденное по вопросу в документах истории (knowledge.for_turn) — ещё один блок в сообщении хода
+        history = EXCERPT_GUESS if set(cut) - {a["id"] for a in atts} else ""
+        return _with_block(messages, block + history)
 
     if excerpts_enabled:
         docs = _sent_documents(chat_id, "", model)
