@@ -28,7 +28,7 @@ def validate(items, images=()):
         images = list(images)
     image_input.validate(images)
     if not isinstance(items, list) or len(items) + len(images) > limits.ATTACHMENT_COUNT:
-        raise Refused("invalid", "можно прикрепить до 8 файлов")
+        raise Refused("invalid", f"можно прикрепить до {limits.ATTACHMENT_COUNT} файлов")
     total = sum(len(base64.b64decode(i["data"], validate=True)) for i in images)
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("data"), str):

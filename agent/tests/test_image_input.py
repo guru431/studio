@@ -24,7 +24,7 @@ async def test_image_only_turn_reaches_claude_as_an_image_block(agent):
             "type": "base64", "media_type": "image/png", "data": PNG["data"]}}]}}]]
 
 
-@pytest.mark.parametrize("images", [None, {}, [PNG] * 5, [{"mime": "image/svg+xml", "data": "PHN2Zz4="}],
+@pytest.mark.parametrize("images", [None, {}, [PNG] * 13, [{"mime": "image/svg+xml", "data": "PHN2Zz4="}],
     [{"mime": "image/png", "data": "not base64"}], [{"mime": "image/png", "data": ""}],
     [{"mime": "image/jpeg", "data": PNG["data"]}], [{"mime": "image/png", "url": "https://example.org/x.png"}],
     [{"mime": "image/png", "path": "C:/private.png"}]])
@@ -32,6 +32,13 @@ async def test_invalid_images_do_not_start_a_turn(agent, images):
     await opened(agent)
     response = (await agent.handle(req("turn", project=projects.pid("demo"), chat=CHAT, text="Вопрос", images=images)))[0]
     assert response["code"] == "invalid" and not agent.runner.live()
+
+
+def test_twelve_images_pass_and_the_thirteenth_names_the_limit():
+    image_input.validate([PNG] * 12)
+    with pytest.raises(Refused) as e:
+        image_input.validate([PNG] * 13)
+    assert (e.value.code, e.value.message) == ("invalid", "можно прикрепить до 12 изображений")
 
 
 def test_image_limits_count_decoded_bytes(monkeypatch):

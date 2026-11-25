@@ -3996,6 +3996,11 @@ globalThis.StudioEnglish = Object.freeze({
   "файл документа удалён": "document file deleted",
   "текст не найден": "text not found",
   "можно прикрепить до 8 файлов": "you can attach up to 8 files",
+  "можно прикрепить до {0} изображений": "up to {0} images can be attached",
+  "можно прикрепить до {0} файлов": "you can attach up to {0} files",
+  "нет такого навыка": "no such skill",
+  "навык больше 64 КиБ": "the skill is larger than 64 KiB",
+  "навык пуст": "the skill is empty",
   "неверный проект": "invalid project",
   "неверный чат": "invalid chat",
   "Сеанс Студии закрыт": "Studio session ended",
@@ -4238,6 +4243,8 @@ globalThis.StudioEnglish = Object.freeze({
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",
+  "можно прикрепить до {0} изображений",
+  "можно прикрепить до {0} файлов",
   "Cleaner не ответил за {0} с",
   "связь с Cleaner оборвалась: {0}",
   "Cleaner не дождался провайдера ({0}): {1}",

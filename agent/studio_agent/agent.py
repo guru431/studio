@@ -218,7 +218,8 @@ class Agent:
                  "answer_takeover": True,  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
                  "chat_manage": True,  # 0.47.0: переименовать и удалить сессию (§25)
                  "claude_models": self.claude_probe is not None,
-                 "skills": True}  # 0.48.0: навыки проекта, просьбы `skills` и `skill` (§26)
+                 "skills": True,  # 0.48.0: навыки проекта, просьбы `skills` и `skill` (§26)
+                 "limits": {"images": limits.IMAGE_COUNT, "attachments": limits.ATTACHMENT_COUNT}}  # 0.48.0 (§26)
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):

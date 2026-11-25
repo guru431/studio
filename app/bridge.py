@@ -87,6 +87,10 @@ DEEPSEEK_SKIPPED = ("unknown", "acp_own", "env_key", "unreadable")
 PID = re.compile(r"[0-9a-f]{16}")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")  # id карточки в досылке (`turns.REQUEST_ID` моста)
+#: вложения хода у моста без `hello.limits` (до 0.48.0): изображений и всего
+LEGACY_LIMITS = {"images": 4, "attachments": 8}
+#: больше этих чисел студия не пропускает и от нового моста (`limits.IMAGE_COUNT`, `ATTACHMENT_COUNT` моста 0.48.0)
+LIMITS_MAX = {"images": 12, "attachments": 12}
 
 
 class ProtocolError(ValueError):
@@ -258,11 +262,17 @@ def parse_hello(frame: dict) -> dict:
                        "file_suggestions", "chat_search", "queue_edit", "chat_fork", "subagents", "worktrees", "project_create", "project_mirror", "project_mirror_discovery", "mirror_exclude", "mirror_groups", "pin_timeout", "agent_update", "agent_update_cancel", "computer_info", "software_versions", "software_update_all", "desktop", "terminal", "visualizations",
                        "passive_requests", "history_images", "project_sharing", "completions", "visualization_scope", "visualization_images", "opencode_features", "codex_models", "opencode_models", "account_disabled", "git_compare", "file_upload", "file_search",
                        "deepseek_models", "deepseek_usage", "self_check", "agent_log", "open_asks", "answer_takeover", "chat_manage",
-                       "claude_models", "chat_search_all"):
+                       "claude_models", "chat_search_all", "skills"):
         if capability in frame:
             if type(frame[capability]) is not bool:
                 raise ProtocolError("hello")
             result[capability] = frame[capability]
+    if "limits" in frame:
+        limits = frame["limits"]
+        images, attachments = (limits.get("images"), limits.get("attachments")) if isinstance(limits, dict) else (None, None)
+        if type(images) is not int or type(attachments) is not int or not 1 <= images <= attachments <= 100:
+            raise ProtocolError("hello")
+        result["limits"] = {"images": images, "attachments": attachments}
     if isinstance(frame.get("defaults"), dict):
         result["defaults"] = {k: v for k, v in frame["defaults"].items() if k in ("model", "effort", "access")
                               and (v is None or isinstance(v, str) and len(v) <= 100)}
@@ -303,6 +313,14 @@ def parse_hello(frame: dict) -> dict:
     if "deepseek" in frame:
         result["deepseek"] = _deepseek(frame["deepseek"])
     return result
+
+
+def turn_limits(hello: dict) -> dict:
+    """Пределы вложений хода моста: `hello.limits`, но не больше `LIMITS_MAX`; без поля — `LEGACY_LIMITS`."""
+    limits = hello.get("limits") if isinstance(hello, dict) else None
+    if not isinstance(limits, dict):
+        return dict(LEGACY_LIMITS)
+    return {key: min(limits[key], LIMITS_MAX[key]) for key in LIMITS_MAX}
 
 
 def _deepseek(catalog) -> dict:

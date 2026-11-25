@@ -20,7 +20,7 @@ def mime_of(raw):
 def validate(images):
     """Проверка на машине обязательна: сервер не может подставить URL или локальный путь."""
     if not isinstance(images, list) or len(images) > COUNT:
-        raise Refused("invalid", "можно прикрепить до 4 изображений")
+        raise Refused("invalid", f"можно прикрепить до {COUNT} изображений")
     total = 0
     for image in images:
         if not isinstance(image, dict) or image.get("mime") not in MIMES or not isinstance(image.get("data"), str):

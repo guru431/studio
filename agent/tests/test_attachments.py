@@ -47,7 +47,7 @@ async def test_attachment_only_and_followup_are_readable_until_claude_disconnect
     assert not first.parent.exists()
 
 
-@pytest.mark.parametrize("items", [None, {}, [FILE] * 9, [{"name": "x", "mime": "text/plain", "data": "???"}],
+@pytest.mark.parametrize("items", [None, {}, [FILE] * 13, [{"name": "x", "mime": "text/plain", "data": "???"}],
     [{"name": "x", "mime": "text/plain", "path": "C:/private.txt"}],
     [{**FILE, "name": ".."}], [{**FILE, "mime": "text/plain\nX: secret"}]])
 async def test_invalid_attachment_never_starts_cli(agent, items):
@@ -60,8 +60,10 @@ async def test_invalid_attachment_never_starts_cli(agent, items):
 def test_combined_size_and_count_limits_include_images(monkeypatch):
     from test_image_input import PNG
 
-    with pytest.raises(Refused, match="invalid"):
-        attachments.validate([FILE] * 8, [PNG])
+    attachments.validate([FILE] * 11, [PNG])
+    with pytest.raises(Refused) as e:
+        attachments.validate([FILE] * 12, [PNG])
+    assert (e.value.code, e.value.message) == ("invalid", "можно прикрепить до 12 файлов")
     monkeypatch.setattr(limits, "IMAGES_MAX", 25)
     with pytest.raises(Refused, match="too_large"):
         attachments.validate([FILE], [PNG])
