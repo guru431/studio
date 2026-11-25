@@ -548,6 +548,8 @@ def _message_out(row, atts: list, views: dict | None = None, pending: dict | Non
            # токены `{in, out, cached, reasoning}` (чего шлюз не назвал — ключа нет) и время ответа; у идущего — null
            "usage": json.loads(row["usage"]) if row["usage"] else None,
            "gen_ms": row["gen_ms"], "total_ms": row["total_ms"]}
+    if row["status"] == "streaming":                 # продолжение после паузы: в строке — числа части до паузы
+        out["usage"] = out["gen_ms"] = out["total_ms"] = None
     if pending and row["id"] in pending:
         out["pending"] = pending[row["id"]]
     if live and live.recovery:

@@ -86,6 +86,36 @@ def test_usage_sums_the_rounds_of_one_answer(studio):
     assert ratios() == 0                                                                # 100 токенов < 500
 
 
+def test_answer_resumed_after_a_pause_shows_no_numbers_until_done(studio):
+    """У продолжения после паузы в строке `messages` — числа части до паузы: пока ответ идёт, страница получает
+    `usage`, `gen_ms`, `total_ms` = null (как у любого идущего), после конца — суммы обеих частей."""
+    from test_chat import events_of
+    from test_chat_pending import confirm_setup, pause_on
+    from test_mcp_dialog import name_of
+    sid, _ = confirm_setup(studio)
+    cid = new_chat(studio); studio.gw.chat_usage = {"prompt_tokens": 100, "completion_tokens": 10}
+    shown = pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
+    paused = messages(studio, cid)[-1]
+    assert paused["usage"] == {"in": 100, "out": 10} and isinstance(paused["total_ms"], int)
+    studio.gw.chat_hold = True                       # продолжение отдаёт первый кусок и ждёт
+    body = {"request_id": "pending-usage-0001", "action": "run"}
+    try:
+        with studio.c.stream("POST", f"/api/chats/{cid}/pending/{shown['id']}", json=body) as r:
+            assert r.status_code == 200
+            events = events_of(r.iter_lines())
+            assert next(d for e, d in events if e == "delta" and "Готово" in d["text"])
+            going = messages(studio, cid)[-1]
+            assert going["status"] == "streaming"
+            assert (going["usage"], going["gen_ms"], going["total_ms"]) == (None, None, None)
+            studio.gw.chat_hold = False
+            assert [e for e, _ in events][-1] == "done"
+    finally:
+        studio.gw.chat_hold = False
+    done = messages(studio, cid)[-1]
+    assert done["status"] == "done" and done["usage"] == {"in": 200, "out": 20}
+    assert isinstance(done["gen_ms"], int) and done["total_ms"] >= paused["total_ms"]
+
+
 def test_direct_answer_brings_its_own_numbers(studio):
     add_connection(studio); cid = new_chat(studio)                      # прямое подключение: модель читает браузер
     aid = turn(studio, cid, "Привет").json()["assistant_message_id"]
