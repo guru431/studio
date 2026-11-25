@@ -29,7 +29,7 @@ def chip_pick(section, model):
 @pytest.mark.parametrize("width", [320, 1280])
 def test_photo_model_chip_failed_pick_more_variants_and_to_field(browser, live, width):
     login = f"phtools{width}"
-    uid = live.add_user(login)
+    uid = live.add_user(login, views={"photo": "tiles"})
     old = time.time() - 100
     for n, (model, state_) in enumerate([("flux", "error"), ("snofs", "cancelled")]):
         live_sql(live, "INSERT INTO images(id, user_id, kind, model, prompt, size, seed, state, detail, created)"

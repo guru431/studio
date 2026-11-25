@@ -11,6 +11,7 @@ Cookie сессии — `__Host-` и Secure: Chromium принимает так�
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import threading
@@ -36,16 +37,18 @@ class LiveApp:
     db_path: Path
     _stop: list = field(default_factory=list, repr=False)
 
-    def add_user(self, login: str, password: str = PASSWORD, *, is_admin: bool = False, theme: str = "auto") -> int:
-        """Пользователь без подключений; своим соединением с базой (WAL), а не соединением службы."""
+    def add_user(self, login: str, password: str = PASSWORD, *, is_admin: bool = False, theme: str = "auto",
+                 views: dict | None = None) -> int:
+        """Пользователь без подключений; своим соединением с базой (WAL), а не соединением службы.
+        `views` — вид лент учётки (`users.views`, как PATCH /api/me), например `{"photo": "tiles"}`."""
         import db
         import security
         conn = db.connect(self.db_path)
         try:
-            return conn.execute("INSERT INTO users(login, name, pw_hash, is_admin, theme, created, email)"
-                                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            return conn.execute("INSERT INTO users(login, name, pw_hash, is_admin, theme, created, email, views)"
+                                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                 (login, login, security.hash_password(password), int(is_admin), theme,
-                                 time.time(), login + '@example.com')).lastrowid
+                                 time.time(), login + '@example.com', json.dumps(views or {}))).lastrowid
         finally:
             conn.close()
 

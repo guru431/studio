@@ -2845,7 +2845,7 @@ def test_photo_cancel_during_a_poll_keeps_one_poll_chain(browser, live):
 
 def test_photo_layout_fits_390(browser, live):
     login = "narrow"
-    live.add_user(login)
+    live.add_user(login, views={"photo": "tiles"})       # сетка плиток, не вид по умолчанию
     grid = "document.querySelector('#photo-feed .feed-grid')"
     inside = """(sel) => [...document.querySelectorAll(sel)].every(e => { const b = e.getBoundingClientRect();
       return b.width === 0 || (b.left >= 0 && b.right <= innerWidth); })"""
@@ -2872,14 +2872,14 @@ def test_photo_layout_fits_390(browser, live):
     assert v["chips"] and v["sizeMenu"] and v["viewer"]
     assert v["sizes"] == ["Портрет 832×1216", "Квадрат 1024×1024", "Альбом 1216×832"]
     assert "Альбом" in v["sizeChip"]
-    assert v["actions"] == ["Изменить", "Создать видео", "Повторить с тем же seed", "Ещё варианты", "Описать", "В поле",
-                            "Скачать", "Поделиться", "Удалить"]
+    assert v["actions"] == ["Изменить", "Создать видео", "Повторить с тем же seed", "Ещё варианты", "Описать",
+                            "Улучшить фото", "В поле", "Скачать", "Поделиться", "Удалить"]
     assert not problems(r), problems(r)
 
 
 def test_photo_viewer_actions_and_release_for_the_admin(browser, live):
     login = "boss"
-    live.add_user(login, is_admin=True)
+    live.add_user(login, is_admin=True, views={"photo": "tiles"})
     g0, rel0 = len(live.gw.generations), len(live.gw.releases)
     grid = "document.querySelector('#photo-feed .feed-grid')"
     cards = "document.querySelectorAll('#photo-feed .photo-card').length"
@@ -3628,7 +3628,7 @@ def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, l
     live.add_user(login, theme="light")
     elsewhere = ("fetch('/api/me').then(r => r.json()).then(m => fetch('/api/me', { method: 'PATCH',"
                  " headers: { 'content-type': 'application/json', 'x-studio-csrf': m.csrf },"
-                 " body: JSON.stringify({ theme: 'dark', views: { photo: 'table' } }) })).then(r => r.status)")
+                 " body: JSON.stringify({ theme: 'dark', views: { photo: 'tiles' } }) })).then(r => r.status)")
     r = browser.drive(live.url + "/", [*photo_screen(login),
         ("eval", "before", "[document.documentElement.dataset.theme, document.querySelector('#photo-feed').dataset.view]"),
         ("eval", "patched", elsewhere),
@@ -3638,11 +3638,11 @@ def test_theme_and_view_follow_the_account_when_the_studio_comes_back(browser, l
         *go("chat"), ("wait", "!document.querySelector('#photo-feed')"),
         *go("photo"), ("wait", FEED_READY),
         ("eval", "after", "document.querySelector('#photo-feed').dataset.view"),
-        ("eval", "pressed", "document.querySelector('#photo-view-table').getAttribute('aria-checked')")])
+        ("eval", "pressed", "document.querySelector('#photo-view-tiles').getAttribute('aria-checked')")])
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["before"] == ["light", "tiles"] and v["patched"] == 200
-    assert v["stillOpen"] == "tiles" and v["after"] == "table" and v["pressed"] == "true"
+    assert v["before"] == ["light", "table"] and v["patched"] == 200        # таблица — вид «Фото» по умолчанию
+    assert v["stillOpen"] == "table" and v["after"] == "tiles" and v["pressed"] == "true"
     assert not problems(r), problems(r)
 
 
@@ -3765,7 +3765,7 @@ def test_photo_series_by_seed_shows_queued_then_done(browser, live, width):
     """Критерий 4: «×3 · seed» → три карточки, две «в очереди серии», готовые встают по одной; чип — снова «×1».
     Поля seed нет: запрос без seed, у шлюза — три разных случайных."""
     login = f"series{width}"
-    live.add_user(login)
+    live.add_user(login, views={"photo": "tiles"})
     g0 = len(live.gw.generations)
     queued = "#photo-feed .photo-card[data-state=queued]"
     live.gw.on["/slot/images/generations"] = slow_first(live, "серия котов")
