@@ -97,7 +97,8 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
   // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
   const quote = quoteChip(form, input, { id: 'owui-quote' });
   const quoteText = (node) => messages.find((m) => m.id === node.dataset.id)?.text || '';
-  const selQuote = selectionQuote(scroller, { texts: '.owui-msg > .bubble, .owui-msg .md', quote: quote.set });
+  const selQuote = readOnly ? null   // только чтение: поля нет — и кнопки у выделения
+    : selectionQuote(scroller, { texts: '.owui-msg > .bubble, .owui-msg .md', quote: quote.set });
   const msgMenu = messageMenu(scroller, { message: '.owui-msg', text: quoteText, quote: readOnly ? null : quote.set });
   function paintShare() {
     const path = chat ? `${base}/chats/${encodeURIComponent(chat)}` : null;
@@ -621,7 +622,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       clearTimeout(reloadTimer);
       cancelAnimationFrame(paintFrame);
       sharing.unmount();
-      selQuote.unmount();
+      selQuote?.unmount();
       msgMenu.unmount();
       modelPick.unmount();
       root.remove();
