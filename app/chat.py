@@ -57,6 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 import access
 import card
 import capabilities
+import chat_list
 import chat_parts
 import chat_pending
 import chat_skills
@@ -276,6 +277,7 @@ class ChatPatch(BaseModel):
     mcp_tools_off: dict[str, list[str]] | None = Field(default=None, max_length=16)
     mcp_tools_on: dict[str, list[str]] | None = Field(default=None, max_length=16)
     title: str | None = Field(None, max_length=200)
+    pinned: bool | None = None           # звезда «Закрепить» в списке диалогов (chat_list.py); null — не трогать
     mcp_model_sid: int | None = Field(None, gt=0)
     connection_id: int | None = None
     model: str | None = Field(None, max_length=MODEL_MAX)
@@ -374,7 +376,8 @@ def unprotected(row):
 def _chat_out(row) -> dict:
     # protected — сработал защищённый источник MCP: «Интернет» не включить, «Поделиться» и экспорт — 409
     return {"id": row["id"], "title": row["title"], "connection_id": row["connection_id"], "model": row["model"],
-            "updated": row["updated"], "protected": bool(row["protected_used"]), "mcp_model_sid": row["mcp_model_sid"]}
+            "updated": row["updated"], "protected": bool(row["protected_used"]), "mcp_model_sid": row["mcp_model_sid"],
+            "pinned": bool(row["pinned"])}
 
 
 def _needs_consent(chat_id: str, model: str, via: str) -> bool:
@@ -2362,8 +2365,9 @@ async def _ended(user_message_id: str, answer_id: str, status: str):
 async def list_chats(request: Request):
     rows = state.DB.execute("SELECT * FROM chats WHERE user_id = ? AND deleted IS NULL"
                             " ORDER BY updated DESC, rowid DESC",
-                            (request.state.user.id,))
-    return {"items": [_chat_out(r) for r in rows]}
+                            (request.state.user.id,)).fetchall()
+    marks = chat_list.marks(request.state.user.id, rows)       # метки «идёт ответ» и «не прочитано»
+    return {"items": [_chat_out(r) | marks[r["id"]] for r in rows]}
 
 
 @router.post("/chats", status_code=201)
@@ -2378,8 +2382,9 @@ async def create_chat(body: ChatIn, request: Request):
         conn, model = _chat_pair(user.id, body.connection_id, body.model)
         cid = conn.id
     chat_id, now = uuid.uuid4().hex, clock.NOW()
-    state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated, mcp_model_sid)"
-                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?)", (chat_id, user.id, cid, model, now, now, body.mcp_model_sid))
+    state.DB.execute("INSERT INTO chats(id, user_id, title, connection_id, model, created, updated, mcp_model_sid, seen)"
+                     " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+                     (chat_id, user.id, cid, model, now, now, body.mcp_model_sid, now))
     log.info("чат %s: создан", chat_id[:8])
     return _chat_view(user.id, _chat_row(user.id, chat_id))
 
@@ -2536,6 +2541,8 @@ async def patch_chat(chat_id: str, body: ChatPatch, request: Request):
     sent, changes = body.model_fields_set, {}
     if "title" in sent:
         changes["title"] = (body.title or "").strip() or None
+    if body.pinned is not None:
+        changes["pinned"] = int(body.pinned)
     if body.mcp_model_sid is not None:
         row = _chat_row(uid, chat_id)
         conn = _chat_connection(uid, row["connection_id"])

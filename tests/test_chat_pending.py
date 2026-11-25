@@ -16,6 +16,7 @@ from test_chat import attach, messages, new_chat, png, sse, turn
 from test_chat_ocr import on_loop
 from test_chat_web import call
 from test_mcp_dialog import methods, name_of, offered, setup, tool
+from test_push import Device, settle
 
 def answer(studio, cid, pid, action, text=None, request_id=None):
     """Ответ на паузу; без `request_id` — свой у каждой пары «пауза + действие» (квитанция `chat_turn_requests`)."""
@@ -399,3 +400,95 @@ def test_gone_tool_does_not_mark_a_later_call_with_the_same_id(studio):
     assert steps[0]["tool"] == "translate" and steps[0]["error"] == chat_pending.GONE
     assert steps[1] == {"kind": "mcp", "server": "Shared tools", "tool": "lookup"}
     assert [p["name"] for m, p in calls if m == "tools/call"] == ["lookup"]
+
+
+# ---- push и напоминание о паузе (спека 2026-11-25, п. 20) ----------------------------------------------------
+
+def phone_on(studio, remind=10):
+    """Телефон текущей сессии: подписка push и «О чём уведомлять» с напоминанием через `remind` минут."""
+    phone = Device()
+    assert studio.c.post("/api/me/push", json=phone.body()).status_code == 204
+    prefs(studio, remind=remind)
+    return phone
+
+
+def prefs(studio, **kw):
+    body = {"off": [], "quiet_from": None, "quiet_to": None, "remind": 10} | kw
+    assert studio.c.put("/api/me/notify", json=body).status_code == 200
+
+
+def ticker(studio, phone, base=0):
+    """`tick(n)`: часы на `n` минут вперёд, проход напоминаний, фоновые отправки — число напоминаний с начала
+    (push карточки `chat-ask-…` сверх первых `base`; «ответ готов» после ответа на карточку — не в счёт)."""
+    def tick(minutes):
+        studio.clock[0] += minutes * 60
+        studio.c.portal.call(chat_pending.remind)
+        settle(studio)
+        return sum(phone.decrypt(r.content)["tag"].startswith("chat-ask-") for r in studio.gw.push_requests) - base
+    return tick
+
+
+def test_pause_pushes_ask_without_content_and_reminds_three_times(studio, caplog, no_pings):
+    caplog.set_level(logging.INFO)
+    sid, _ = confirm_setup(studio)
+    phone = phone_on(studio)
+    cid = new_chat(studio)
+    pause_on(studio, cid, name_of(sid, "translate"), text="секретная просьба", phrase="секретный текст")
+    settle(studio)
+    [first] = [phone.decrypt(r.content) for r in studio.gw.push_requests]
+    assert first == {"title": "Студия", "body": "нужно ваше решение", "href": f"chat/{cid}", "tag": f"chat-ask-{cid}"}
+    tick = ticker(studio, phone, base=1)
+    assert [tick(9), tick(1), tick(10), tick(10), tick(10)] == [0, 1, 2, 3, 3]          # не больше REMIND_TIMES
+    assert chat_pending.REMIND_TIMES == 3 and chat_pending.REMIND_TICK_SEC == 60
+    payloads = [phone.decrypt(r.content) for r in studio.gw.push_requests]
+    assert all(p == first for p in payloads)                                          # повтор — с той же меткой
+    sent = "".join(str(p) for p in payloads)
+    for secret in ("секретный текст", "секретная просьба", "translate"):
+        assert secret not in sent + caplog.text
+
+
+def test_chat_reminder_follows_the_look_the_device_choice_and_the_answer(studio, no_pings):
+    sid, _ = confirm_setup(studio)
+    phone = phone_on(studio)
+    cid = new_chat(studio)
+    assert studio.c.get("/api/jobs?visible=1").status_code == 200
+    shown = pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
+    settle(studio)
+    assert len(studio.gw.push_requests) == 0                                           # страница на экране
+    tick = ticker(studio, phone)
+    studio.clock[0] += push.SCREEN_SEC
+    assert tick(10) == 1                                                               # ушла с экрана — напоминание
+    assert studio.c.post(f"/api/chats/{cid}/seen").status_code == 204
+    assert [tick(9), tick(1)] == [1, 2]                                                # интервал — от взгляда на диалог
+    prefs(studio, off=["ask"])
+    assert tick(10) == 2                                                               # снятый вид
+    prefs(studio, remind=0)
+    assert tick(10) == 2                                                               # «не напоминать»
+    prefs(studio, quiet_from="00:00", quiet_to="23:59")
+    assert tick(10) == 2                                                               # тихие часы откладывают
+    prefs(studio)
+    assert tick(1) == 3
+    assert sse(answer(studio, cid, shown["id"], "refuse"))[-1] == ("done", {"status": "done"})
+    assert tick(30) == 3 and chat_pending.SENT == {}
+
+
+def test_chat_reminder_skips_trashed_chats_and_waits_from_the_last_look(studio, no_pings):
+    """Взгляд на диалог (`chats.seen`) позже паузы отсчитывает интервал заново; диалог в корзине не напоминает и
+    первого push не шлёт."""
+    sid, _ = confirm_setup(studio)
+    phone = phone_on(studio)
+    cid = new_chat(studio)
+    pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
+    settle(studio)
+    tick = ticker(studio, phone, base=1)
+    studio.clock[0] += 5 * 60
+    assert studio.c.post(f"/api/chats/{cid}/seen").status_code == 204
+    assert [tick(5), tick(5)] == [0, 1]                                                # 10 мин от взгляда, не от паузы
+    assert studio.c.delete(f"/api/chats/{cid}").status_code == 204
+    assert tick(30) == 1 and chat_pending.SENT == {}
+    other = new_chat(studio)
+    uid = state.DB.execute("SELECT user_id FROM chats WHERE id = ?", (other,)).fetchone()[0]
+    state.DB.execute("UPDATE chats SET deleted = ? WHERE id = ?", (studio.clock[0], other))
+    studio.c.portal.call(chat_pending.notify, uid, other)
+    settle(studio)
+    assert len(studio.gw.push_requests) == 2

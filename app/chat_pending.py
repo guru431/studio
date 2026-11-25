@@ -14,7 +14,9 @@
    другой ответ с тем же id — 409 `request_conflict`.
 3. Новый ход диалога снимает открытую паузу (`supersede`, исход `superseded`), срок — `_expire`. Шаг вызова паузы
    пишется сразу (`waiting_step`): снятая без ответа пауза оставляет вопрос странице и модели следующих ходов.
-4. В журнал — только id и вид паузы: ни вопроса, ни аргументов, ни ответа."""
+4. В журнал — только id и вид паузы: ни вопроса, ни аргументов, ни ответа.
+5. Пауза шлёт push вида `ask` без содержимого (`notify`), `remind` повторяет его, пока пауза открыта (спека
+   2026-11-25-studio-skills-status-local-models, п. 20): интервал и тихие часы — «О чём уведомлять» устройства."""
 import asyncio
 import hashlib
 import json
@@ -37,6 +39,7 @@ import mcp_client
 import mcp_sources
 import operations
 import profiles
+import push
 import security
 import sections
 import state
@@ -60,6 +63,10 @@ VIEW = ("server", "tool", "arguments", "question", "options", "allow_text")
 ACTIONS = {"confirm": ("run", "refuse"), "ask": ("answer", "refuse")}
 # решённая пауза (любой исход) payload и вид карточки не хранит: в нём сообщения модели, документы и вопрос
 RESOLVE = "resolved = ?, payload = '', view = ''"
+REMIND_TIMES = 3                   # повторов push на паузу каждому устройству (как bridge.REMIND_TIMES)
+REMIND_TICK_SEC = 60
+#: повторы напоминаний: id паузы → сессия → (повторов, когда последний)
+SENT: dict[str, dict[str, tuple[int, float]]] = {}
 
 
 class PendingIn(BaseModel):
@@ -123,6 +130,7 @@ async def pause(task, kind: str, call, view: dict) -> str:
     task.paused = pid
     task.fresh = True
     task.put("pending", {"id": pid, "kind": kind, **view})
+    notify(task.user_id, task.chat_id)               # push вида `ask` без содержимого
     log.info("чат %s: ответ %s — пауза %s (%s)", task.chat_id[:8], task.message_id[:8], pid[:8], kind)
     return pid
 
@@ -315,3 +323,56 @@ def resume_step(kind: str, action: str, answer: "str | None", view: dict) -> dic
     if "memory_text" in view:
         return {"kind": "memory", "action": "save", "refused": True, "text": MEMORY_REFUSED}
     return {"kind": "mcp", "server": view["server"], "tool": view["tool"], "refused": True, "text": REFUSED}
+
+
+# ---- push и напоминание о ждущей карточке (спека 2026-11-25, п. 20) ----------------------------------------
+
+def notify(user_id: int, chat_id: str) -> None:
+    """Ход встал на паузу: push вида `ask` без содержимого (ни вопроса, ни инструмента) в диалог — сессиям, чья
+    страница не на экране, и устройствам, где вид не снят и не идут тихие часы. Диалог в корзине — молча."""
+    if state.DB.execute("SELECT 1 FROM chats WHERE id = ? AND deleted IS NULL", (chat_id,)).fetchone() is None:
+        return
+    push.notify_later(user_id, push.DECISION_NOTICE, f"chat/{chat_id}", f"chat-ask-{chat_id}", title=push.STUDIO,
+                      quiet=True, kind="ask")
+
+
+def remind() -> None:
+    """Проход напоминаний: пауза открыта и моложе PENDING_TTL_SEC, диалог не в корзине, учётка включена — каждому её
+    устройству, где напоминание включено (`push.reminders`), вид `ask` не заглушён (`push.muted`) и страница не на
+    экране (`push.on_screen`), повтор push с той же меткой через интервал устройства от паузы, прошлого повтора или
+    последнего взгляда на диалог (`chats.seen`); не больше REMIND_TIMES на устройство. Тихие часы откладывают
+    повтор, а не съедают его. Счёт — в памяти (SENT): перезапуск службы начинает его заново."""
+    now = clock.NOW()
+    rows = state.DB.execute(
+        "SELECT p.id, p.chat_id, p.created, c.user_id, c.seen FROM chat_pending p JOIN chats c ON c.id = p.chat_id"
+        " JOIN users u ON u.id = c.user_id WHERE p.resolved IS NULL AND p.created >= ? AND c.deleted IS NULL"
+        " AND u.disabled = 0", (now - PENDING_TTL_SEC,)).fetchall()
+    for pid in set(SENT) - {row["id"] for row in rows}:
+        del SENT[pid]
+    screen = push.on_screen()
+    for row in rows:
+        uid = row["user_id"]
+        intervals, muted, sent = push.reminders(uid), push.muted(uid, "ask"), SENT.get(row["id"], {})
+        due = set()
+        for digest, interval in intervals.items():
+            times, last = sent.get(digest, (0, row["created"]))
+            if (interval and times < REMIND_TIMES and digest not in muted and digest not in screen
+                    and now - max(last, row["seen"] or 0) >= interval):
+                due.add(digest)
+                SENT.setdefault(row["id"], {})[digest] = (times + 1, now)
+        if due:
+            push.notify_later(uid, push.DECISION_NOTICE, f"chat/{row['chat_id']}", f"chat-ask-{row['chat_id']}",
+                              title=push.STUDIO, quiet=True, kind="ask", skip=frozenset(intervals) - due)
+
+
+async def _reminders() -> None:
+    while True:
+        await clock.SLEEP(REMIND_TICK_SEC)
+        try:
+            remind()
+        except Exception as e:           # noqa: BLE001 — напоминания не должны вставать
+            log.warning("напоминания чата: сбой (%s)", type(e).__name__)
+
+
+def start_reminders() -> asyncio.Task:
+    return asyncio.create_task(_reminders())

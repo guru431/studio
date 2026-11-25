@@ -35,6 +35,7 @@ import auth
 import bridge
 import chat
 import chat_info
+import chat_list
 import chat_pending
 import mcp_client
 import mcp_contracts
@@ -150,6 +151,8 @@ async def lifespan(_app):
               admin.start_check_watch(), trash.start_purger(), bridge.start_reminders()]
              if state.WATCHER else [])
     if state.WATCHER:
+        loops.append(chat_pending.start_reminders())   # напоминания о ждущей карточке «Чата»
+    if state.WATCHER:
         loops.append(asyncio.create_task(ldap_auth.watch()))
     try:
         yield
@@ -217,6 +220,7 @@ app.include_router(videos.router)
 app.include_router(chat_info.router)          # раньше chat: /api/chats/stats — не id диалога
 app.include_router(chat.router)
 app.include_router(chat_pending.router)
+app.include_router(chat_list.router)
 app.include_router(knowledge.router)
 app.include_router(roles.router)
 app.include_router(skills.router)
