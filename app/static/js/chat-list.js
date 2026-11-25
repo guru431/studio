@@ -7,9 +7,13 @@
  *   слова в aria-label и title, textContent строки остаётся названием; «идёт ответ» важнее «не прочитано».
  *   Перерисовка — только когда ответ сервера изменился: опрос не сбивает фокус и открытое меню строки. Опрос — раз в
  *   LIST_POLL_MS, пока у диалога идёт ответ и страница видна. Удачный ответ — loaded(items); итог — items или null (отказ).
+ *   Отказ при нарисованном списке (нет связи, выкладка) список не стирает — повтор через LIST_POLL_MS; без списка —
+ *   слова отказа на его месте.
  * - search — input#chat-search: отбор по названиям на странице без учёта регистра, без запросов.
- * - seen(chat) — страница видна и `updated` открытого диалога ещё не отмечен: POST …/seen (отказ молча), метка
- *   «не прочитано» строки снимается сразу и не возвращается, пока `updated` прежний.
+ * - seen(chat, waiting) — страница видна и `updated` открытого диалога ещё не отмечен: POST …/seen (отказ молча), метка
+ *   «не прочитано» строки снимается сразу и не возвращается, пока `updated` прежний. waiting — в диалоге ждущая
+ *   карточка: пока её видно, POST …/seen повторяется раз в SEEN_REPEAT_MS — напоминание (chat_pending.remind)
+ *   отсчитывает интервал от взгляда и не приходит ни одному устройству того, кто смотрит на карточку.
  * - черновик — draftStore(CHAT_DRAFTS).has(id); событие `studio-dialog-draft` перерисовывает только метки строки. */
 import { tr } from './i18n.js';
 import { api } from './api.js';
@@ -18,6 +22,7 @@ import { CHAT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { el, words } from './ui.js';
 
 export const LIST_POLL_MS = 5000;
+const SEEN_REPEAT_MS = 60000;     // как chat_pending.REMIND_TICK_SEC: проход напоминаний — раз в минуту
 const MARKS = { busy: tr("идёт ответ"), unread: tr("не прочитано"), draft: tr("есть черновик") };
 
 export function chatList(list, { row, group, failed = () => {}, loaded = () => {} }) {
@@ -31,6 +36,16 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
   let alive = true;
   const looked = new Map();   // id → `updated`, отмеченный POST …/seen
   const rows = new Map();     // id → { item, box } нарисованной строки
+  let stale = false;         // последний опрос не удался при нарисованном списке — повтор
+  let watching = null;        // { id, timer } открытого диалога с ждущей карточкой
+
+  function watch(id) {
+    if (watching?.id === id) return;
+    if (watching) clearInterval(watching.timer);
+    watching = id === null ? null : { id, timer: setInterval(() => {
+      if (document.visibilityState === 'visible') api('POST', `/api/chats/${id}/seen`).catch(() => {});
+    }, SEEN_REPEAT_MS) };
+  }
 
   function unread(item) {
     return item.unread && !(looked.get(item.id) >= item.updated);
@@ -94,10 +109,10 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
     list.replaceChildren(...nodes);
   }
 
-  function schedule() {
+  function schedule(retry = false) {
     clearTimeout(timer);
     timer = null;
-    if (alive && document.visibilityState === 'visible' && items.some((item) => item.busy)) {
+    if (alive && document.visibilityState === 'visible' && (retry || items.some((item) => item.busy))) {
       timer = setTimeout(reload, LIST_POLL_MS);
     }
   }
@@ -109,13 +124,18 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
       got = (await api('GET', '/api/chats')).items;
     } catch (err) {
       if (!alive || mine !== reading) return null;
-      answer = null;
+      if (answer !== null) {                         // нарисованный список остаётся — повтор
+        stale = true;
+        schedule(true);
+        return null;
+      }
       rows.clear();
       list.replaceChildren(el('p', { class: 'error small chat-list-note' }, words(err)));
       schedule();
       return null;
     }
     if (!alive || mine !== reading) return got;
+    stale = false;
     const text = JSON.stringify(got);
     if (text !== answer) {
       answer = text;
@@ -131,7 +151,7 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
     if (event.detail?.store === CHAT_DRAFTS) paintMarks(event.detail.id);
   };
   const onVisible = () => {
-    if (document.visibilityState === 'visible' && !timer && items.some((item) => item.busy)) reload();
+    if (document.visibilityState === 'visible' && !timer && (stale || items.some((item) => item.busy))) reload();
   };
   document.addEventListener('studio-dialog-draft', onDraft);
   document.addEventListener('visibilitychange', onVisible);
@@ -141,7 +161,8 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
     search,
     reload,
     items: () => items,
-    seen(chat) {
+    seen(chat, waiting = false) {
+      watch(chat && waiting ? chat.id : null);
       if (!chat || document.visibilityState !== 'visible' || looked.get(chat.id) === chat.updated) return;
       looked.set(chat.id, chat.updated);
       api('POST', `/api/chats/${chat.id}/seen`).catch(() => {});
@@ -150,6 +171,7 @@ export function chatList(list, { row, group, failed = () => {}, loaded = () => {
     unmount() {
       alive = false;
       clearTimeout(timer);
+      watch(null);
       document.removeEventListener('studio-dialog-draft', onDraft);
       document.removeEventListener('visibilitychange', onVisible);
     },

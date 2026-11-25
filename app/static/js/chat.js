@@ -860,7 +860,7 @@ function build(view, ctx) {
     sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
       export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive`,
       blocked: current.protected ? PROTECTED_SHARE : null } : null);
-    listing.seen(current);
+    listing.seen(current, !!current && chat.messages.some((m) => m.pending && m.status !== 'streaming'));
     tabs.show(current);
   }
 

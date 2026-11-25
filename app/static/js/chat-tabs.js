@@ -142,7 +142,7 @@ export function chatTabs({ open, info }) {
     show(chat) {
       const id = chat ? chat.id : null;
       if (id !== null && !ids.includes(id)) {
-        if (ids.length >= TABS_MAX) ids.splice(ids.findIndex((x) => x !== id), 1);
+        if (ids.length >= TABS_MAX) ids.shift();       // новая ещё не в ряду: самая левая — не текущая
         ids.push(id);
         save();
       }
