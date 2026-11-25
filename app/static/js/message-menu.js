@@ -5,8 +5,9 @@ import { tr } from './i18n.js';
  *
  * messageMenu(scroller, { message, text, quote, said }) → { unmount() }: message — селектор узла сообщения; text(узел)
  * — его текст для «Копировать» и «Цитировать» (выделение внутри этого сообщения — важнее); quote(text) — чип цитаты
- * (null — без «Цитировать»); said(слова) — итог копирования. На ссылке, картинке, видео, звуке и в полях ввода, а
- * также с Shift — меню браузера. Где `contextmenu` долгим нажатием нет (iOS) — касание без сдвига больше MOVE_PX
+ * (null — без «Цитировать»); said(слова) — итог копирования (без него — своя область `role=status`). Escape и Tab
+ * в меню возвращают фокус туда, где он был внутри сообщения, иначе на само сообщение. На ссылке, картинке, видео,
+ * звуке и в полях ввода, а также с Shift — меню браузера. Где `contextmenu` долгим нажатием нет (iOS) — касание без сдвига больше MOVE_PX
  * дольше LONG_PRESS_MS; меню открывается по отпусканию пальца: иначе отпускание закрыло бы popover сразу. Сенсорный
  * `contextmenu` не отменяется (это выделение слова браузером): долгое нажатие, оставившее выделение, меню не
  * открывает — работает «Цитировать» у выделения (quote.js). */
@@ -23,7 +24,10 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
   const anchor = el('button', { type: 'button', class: 'msg-menu-anchor', tabindex: '-1',
     'aria-label': tr("Действия сообщения") });
   const menu = el('div', { id: 'msg-menu', class: 'msg-menu', 'aria-label': tr("Действия сообщения") });
+  const status = el('span', { class: 'sr', role: 'status', 'aria-live': 'polite' });
+  const say = said || ((words) => { status.textContent = words; });
   let target = null;
+  let opener = null;               // фокус до меню: Escape и Tab возвращают его (или само сообщение), не якорь
   const picked = () => {
     const sel = document.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
@@ -36,12 +40,12 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
     const items = [];
     if (words) {
       items.push(menuItem(tr("Копировать"), { onSelect: async () => {
-        close(false);
+        close(true);
         try {
           await navigator.clipboard.writeText(words);
-          said?.(tr("Скопировано"));
+          say(tr("Скопировано"));
         } catch {
-          said?.(tr("Не вышло"));
+          say(tr("Не вышло"));
         }
       } }));
       if (quote) items.push(menuItem(tr("Цитировать"), { onSelect: () => { close(false); quote(words); } }));
@@ -54,10 +58,17 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
     }
     return [items, items];
   } });
-  document.body.append(anchor, menu);
+  document.body.append(anchor, menu, status);
+  anchor.addEventListener('focus', () => {
+    const back = opener?.isConnected && target?.contains(opener) ? opener : target;
+    if (!back?.isConnected) return;
+    if (back === target && !back.hasAttribute('tabindex')) back.setAttribute('tabindex', '-1');
+    back.focus({ preventScroll: true });
+  });
 
   const show = (node, x, y) => {
     target = node;
+    opener = document.activeElement;
     const box = node.getBoundingClientRect();
     if (!x && !y) { x = box.left + 16; y = box.top + 16; }          // клавиша меню: у начала сообщения
     const zoom = rootZoom();
@@ -125,6 +136,7 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
       scroller.removeEventListener('touchcancel', onEnd);
       popup.unmount();
       anchor.remove();
+      status.remove();
     },
   };
 }

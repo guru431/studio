@@ -88,6 +88,18 @@ MODULES = "(async () => {" + FRAMES + """
     out.native = [prevented, withWord, plain, opened()];
     getSelection().removeAllRanges();
   } else out.long = out.native = null;
+  // Escape и Tab — фокус на сообщение, не на невидимый якорь; «Копировать» — итог в области role=status
+  const key = (k) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true,
+    cancelable: true }));
+  context(msg.querySelector('.bubble')); key('Escape');
+  const escaped = document.activeElement === msg;
+  edit.focus(); context(msg.querySelector('.bubble')); key('Tab');
+  const tabbed = document.activeElement === edit;
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => {} } });
+  context(msg.querySelector('.bubble')); items().find((b) => b.textContent === 'Копировать').click();
+  await sleep(50);
+  out.keys = [escaped, tabbed, document.activeElement === edit,
+    [...document.querySelectorAll('.sr[role=status]')].at(-1).textContent];
   menu.unmount();
   out.unmounted = !pop.isConnected;
   return out;
@@ -103,6 +115,7 @@ def test_quote_chip_folds_into_the_field_and_the_menu_mirrors_actions(browser, l
     assert v["menu"] == ["Копировать", "Цитировать", "Изменить"] and v["clicked"] == 1 and v["closed"] is True, v
     assert v["quote"] == "Текст ссылка" and v["anchor"] is True and v["unmounted"] is True, v
     assert v["link"] is False and v["inside"] is True, v
+    assert v["keys"] == [True, True, True, "Скопировано"], v
     if width == 320:                                       # сенсор: 550 мс — меню, короткое касание — нет
         assert v["long"] == [True, False], v
         # сенсорный contextmenu не отменён; осталось выделение — меню нет (работает «Цитировать» у выделения)
