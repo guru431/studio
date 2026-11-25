@@ -117,6 +117,22 @@ def test_context_refusal_retries_once_with_compaction_then_refuses_in_words(stud
     assert len(seen) == 6                                                  # отказ, пересказ, отказ — третьего нет
 
 
+def test_context_refusal_round_returns_the_round_text_not_the_gateway_body(studio, monkeypatch):
+    """Договор `StreamTask._round`: четвёртый элемент — текст круга; у отказа по длине его нет, тело ошибки шлюза
+    туда не попадает."""
+    add_gateway(studio); cid = new_chat(studio)
+    rounds, real = [], chat.StreamTask._round
+
+    async def spy(self, *args, **kwargs):
+        out = await real(self, *args, **kwargs)
+        rounds.append(out)
+        return out
+    monkeypatch.setattr(chat.StreamTask, "_round", spy)
+    studio.gw.chat_error = (400, {"error": {"message": "This model's maximum context length is 8192 tokens"}})
+    assert sse(turn(studio, cid))[-1] == ("error", {"message": chat.TOO_LONG_WORDS})
+    assert rounds == [(None, chat.TOO_LONG, [], "")]
+
+
 def test_context_refusal_from_a_profile_max_tokens_names_the_parameter(studio):
     """Предел ответа профиля (на модель) не меньше окна без запаса: отказ шлюза по длине — слова о параметре
     профиля, без сжатия и без записи пересказа (`chats.summary`): сжатие не помогло бы."""

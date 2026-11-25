@@ -1484,7 +1484,8 @@ class StreamTask:
         впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_WEB_TOOLS (vLLM: «"auto" tool choice
         requires…», LiteLLM называет `tools`); в запросе только встроенные инструменты (`builtin_only`) — 400 со
         словом tool или признаком отказа profiles.REJECTED даёт TOOLS_REFUSED: повтор без них (_read_model);
-        400 с именем отправленного параметра профиля — profiles.REFUSED; прочий 400 (контекст, картинка) — словами
+        400 по длине контекста (CONTEXT_REFUSED) — конец TOO_LONG (сжатие или слова — в _read_model);
+        отвергнутый уровень рассуждения или параметр профиля — profiles.refusal; прочий 400 (картинка) — словами
         шлюза. Подключение через Cleaner (`conn.routed`) — тот же запрос в шлюз Cleaner (`cleaner_route.stream`):
         контекст диалога, веб-инструменты без восстановления (`_held`), id запроса Cleaner — в
         `messages.cleaner_request`; отказ самого Cleaner — его словами (`cleaner_route.words`), обхода нет.
@@ -1538,7 +1539,7 @@ class StreamTask:
                     if r.status_code == 400 and CONTEXT_REFUSED.search(r.text):   # vLLM называет и max_tokens
                         log.info("чат %s: ответ %s — шлюз отказал по длине контекста", self.chat_id[:8],
                                  self.message_id[:8])
-                        return None, TOO_LONG, [], r.text
+                        return None, TOO_LONG, [], text
                     # отвергнут уровень рассуждения диалога — его словами, а не повтором без встроенных инструментов
                     effort = profiles.refusal(r.text, {k: v for k, v in self.params.items()
                                                        if k in profiles.EFFORT_PARAMS}) if r.status_code == 400 else None
