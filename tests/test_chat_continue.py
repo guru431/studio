@@ -13,6 +13,7 @@ from test_chat_fork import INHERITED, count_chats, row_of
 from test_chat_summary import code, compact, stored, three_turns, with_skill
 from test_chat_system import role, with_role
 from test_chat_web import call
+from test_cleaner import EMAIL, preview, protected  # noqa: F401 — фикстура Cleaner (вид предпросмотра)
 from test_cleaner_route_chat import cleaner_gw, routed_chat  # noqa: F401 — фикстура шлюза Cleaner
 from test_knowledge import base
 from test_mcp_dialog import name_of, offered, setup, tool, view
@@ -155,6 +156,19 @@ def test_continue_refusals_create_nothing(studio):
     assert refused(studio, cid) == (404, "gone")
     # слова отказа по длине — копия chat.CONTEXT_WORDS в модуле страницы
     assert f"'{chat.CONTEXT_WORDS}'" in (STATIC / "js" / "chat-continue.js").read_text("utf-8")
+
+
+def test_continue_refuses_cleaner_preview_dialogs_in_words(protected):
+    """Предпросмотр Cleaner (`conn.cleaner`), как и шлюз: 409 `cleaner` словами, нового диалога нет."""
+    studio, _ = protected
+    cid = new_chat(studio)
+    shown = preview(studio, cid)
+    assert shown.status_code == 200, shown.text
+    sse(turn(studio, cid, f"Почта {EMAIL}", cleaner_ticket=shown.json()["ticket"]))
+    asked = len(studio.gw.chat_requests)
+    assert refused(studio, cid) == (409, "cleaner")
+    assert go(studio, cid).json()["detail"]["message"] == chat_continue.CLEANER
+    assert len(studio.gw.chat_requests) == asked                       # итог модели не заказан
 
 
 def test_continue_refuses_cleaner_dialogs_in_words(cleaner_gw):
