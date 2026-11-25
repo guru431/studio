@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -78,6 +79,44 @@ def fits(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+#: куда пришлись касания: цели touchstart/touchend/click в фазе захвата (журнал — с последнего tap_state)
+TAP_LOG = """() => {
+  window.__taps = [];
+  if (!window.__tapLog) {
+    window.__tapLog = true;
+    for (const type of ['touchstart', 'touchend', 'click']) addEventListener(type, (event) => {
+      const t = event.target instanceof Element ? event.target : null;
+      window.__taps?.push([type, t && (t.id || t.tagName), t?.getAttribute('href') || t?.dataset.section || '',
+        Math.round(performance.now())]);
+    }, true);
+  }
+  return true;
+}"""
+#: состояние при сбое: адрес, текущая вкладка, лист «Ещё» и меню, фокус, цель касания и что под её серединой сейчас
+TAP_STATE = """(selector) => {
+  const node = document.querySelector(selector), box = node?.getBoundingClientRect();
+  const under = box && document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+  const name = (n) => n && (n.id || `${n.tagName}.${n.className}`);
+  return { hash: location.hash, now: Math.round(performance.now()),
+    current: [...document.querySelectorAll('#rail [aria-current=page]')].map(name),
+    moreLabel: document.querySelector('#mobile-more-label')?.textContent,
+    sheetOpen: !!document.querySelector('#mobile-sections[open]'), menuHidden: document.getElementById('menu')?.hidden,
+    modal: [...document.querySelectorAll('dialog[open]')].map(name), active: name(document.activeElement),
+    target: box && [box.x, box.y, box.width, box.height].map(Math.round), under: name(under), taps: window.__taps };
+}"""
+
+
+@contextmanager
+def tap_state(page, selector):
+    """Касание и ожидание его итога; сбой — с состоянием страницы (TAP_STATE), чтобы искать гонку по нему."""
+    page.evaluate(TAP_LOG)
+    try:
+        yield
+    except (AssertionError, pw.Error) as error:
+        state = page.evaluate(TAP_STATE, selector)
+        raise AssertionError(f"{error}\nсостояние после касания {selector}: {state}") from error
+
+
 def test_webkit_resizes_a_photo_with_its_exif_orientation(webkit, live, large_rotated_photo):
     with webkit.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True) as context:
         page = context.new_page()
@@ -124,14 +163,18 @@ def test_mobile_more_keeps_all_sections_reachable_at_large_font(iphone):
     for theme in ('light', 'dark'):
         page.evaluate('theme => {document.documentElement.dataset.theme = theme;}', theme)
         for section in ('video', 'speech', 'transcribe', 'ocr', 'translate', 'owui'):
-            page.locator('#mobile-more').tap()
+            with tap_state(page, '#mobile-more'):
+                page.locator('#mobile-more').tap()
+                pw.expect(page.locator('#mobile-sections')).to_be_visible()
             link = page.locator(f'#mobile-section-links a[data-section="{section}"]')
             name = link.inner_text().strip()
-            link.tap()
-            pw.expect(page.locator('#mobile-more')).to_have_attribute('aria-current', 'page')
-            pw.expect(page.locator('#mobile-more-label')).to_have_text('Ещё: ' + name)
-            geometry = page.evaluate(NAV_GEOMETRY)
-            assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels'])
+            with tap_state(page, f'#mobile-section-links a[data-section="{section}"]'):
+                link.tap()
+                pw.expect(page.locator('#mobile-more')).to_have_attribute('aria-current', 'page')
+                pw.expect(page.locator('#mobile-more-label')).to_have_text('Ещё: ' + name)
+                geometry = page.evaluate(NAV_GEOMETRY)
+                assert not geometry['overlaps'] and all(label['inside'] and label['hit'] for label in geometry['labels']), \
+                    geometry
             fits(page)
     open_mobile_nav_editor(page)
     page.locator('#mobile-nav-mode-all').tap()
