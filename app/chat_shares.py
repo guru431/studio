@@ -569,7 +569,7 @@ async def item_snapshot(uid: int, kind: str, item_id: str, source: bool = False)
         if not records:
             raise _not_ready("в чате ещё нет готовых озвучек")
         item["records"] = records
-        title = row[0]["text"][:80]
+        title = records[0]["text"][:80]
     else:
         if row["state"] != "done" or not row["media_id"]:
             raise _not_ready("картинка ещё не готова" if kind == "images" else "ролик ещё не готов")

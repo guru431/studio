@@ -264,6 +264,21 @@ def test_speech_chat_link_carries_texts_and_audio_of_ready_records(studio):
     state.DB.execute("DELETE FROM speeches WHERE chat_id = 'sc1'"); assert state.DB.execute("SELECT count(*) FROM chat_shares").fetchone()[0] == 0
 
 
+def cancelled_then_voiced(studio) -> str:
+    """Чат озвучки `sc9`: первая запись отменена, вторая озвучена; ссылка создана — её токен."""
+    uid = owner(studio)
+    voiced = media.save(uid, b"mp3", "audio/mpeg", "x.mp3")
+    state.DB.executemany(
+        "INSERT INTO speeches(id, user_id, model, voice, voice_name, text, media_id, duration, state, detail, created,"
+        " chat_id, chat_created) VALUES (?, ?, 'qwen3-tts', 'v1', 'Анна', ?, ?, 1, ?, '', ?, 'sc9', 0)",
+        [("c1", uid, "Отменённая", None, "cancelled", 1), ("c2", uid, "Озвученная", voiced, "done", 2)])
+    return create(studio, "/api/speeches/chats/sc9/share")[1]
+
+
+def test_speech_chat_snapshot_title_is_the_first_voiced_record(studio):
+    assert unlock(studio, cancelled_then_voiced(studio)).json()["title"] == "Озвученная"
+
+
 def test_previous_live_rule_hides_links_of_the_new_kinds(setup):                    # откат: SQL-обход не нужен
     s, fake, aid = setup
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
