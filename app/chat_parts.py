@@ -30,6 +30,9 @@ TIME = "часть шла дольше срока ответа — остано�
 EMPTY = "модель не вернула итог части"
 STOPPED = "часть остановлена"
 NEEDS_CONFIRM = "инструмент с подтверждением недоступен внутри части"
+#: рассуждение круга части сверх chat.STRAY_MAX при выключенной кнопке / сверх chat.REASONING_MAX (`StreamTask._round`)
+LOOPED = "модель зациклилась — часть остановлена"
+THINK_LONG = "рассуждение части слишком длинное — часть остановлена"
 #: записка модели части — перед заданием в единственном сообщении пользователя
 NOTE = ("You are carrying out one part of a larger task in a separate request. Do only the task inside <part>; the "
         "results of earlier parts, if any, are in <done-part> blocks. Use tools only when the part needs them. Reply "

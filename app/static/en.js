@@ -4369,6 +4369,8 @@ globalThis.StudioEnglish = Object.freeze({
   "модель не вернула итог части": "the model returned no result for the part",
   "часть остановлена": "the part was stopped",
   "инструмент с подтверждением недоступен внутри части": "a tool that needs confirmation is not available inside a part",
+  "модель зациклилась — часть остановлена": "model stuck in a loop; the part was stopped",
+  "рассуждение части слишком длинное — часть остановлена": "the part's reasoning is too long; the part was stopped",
   "этот инструмент недоступен внутри части": "this tool is not available inside a part"
 });
 globalThis.StudioEnglishMessages = Object.freeze([

@@ -1455,9 +1455,12 @@ class StreamTask:
         USAGE_MARKS — подключение в NO_USAGE и тот же запрос один раз без параметра. `usage` круга (последний непустой
         кусок) и время генерации — в ответ (`usage`, `gen_sec`; служебный круг `silent` — нет), знаки на токен —
         `note_usage`. Круг части (`part`, chat_parts) — как `silent`: текст, рассуждение и `messages.cleaner_request`
-        ответа не пишутся, но предел текста — ANSWER_MAX, а `usage` и время входят в ответ; срок части — `part_deadline`."""
+        ответа не пишутся, но предел текста — ANSWER_MAX, а `usage` и время входят в ответ; срок части — `part_deadline`;
+        рассуждение круга части сверх STRAY_MAX (кнопка выключена) или REASONING_MAX — ошибка части (chat_parts.LOOPED,
+        chat_parts.THINK_LONG), ход идёт дальше."""
         ending, calls, text = None, {}, ""
         usage, started = {}, None
+        thought_chars = 0                            # знаки рассуждения круга части (`part`)
         routed = self.conn.routed
         sent = payload if self.conn.id in NO_USAGE else {**payload, "stream_options": {"include_usage": True}}
         timeout = httpx.Timeout(STREAM_READ_SEC, connect=30)
@@ -1551,6 +1554,11 @@ class StreamTask:
                             started = clock.NOW()               # первый фрагмент: начало генерации круга
                         if not (silent or part) and isinstance(thought, str) and thought and (error := self._think(thought)) is not None:
                             return error, None, [], text
+                        if part and isinstance(thought, str) and thought:   # рассуждение части не хранится и не идёт,
+                            thought_chars += len(thought)                    # но петля держала бы карту — предел круга
+                            if thought_chars > (STRAY_MAX if self.thinking is False else REASONING_MAX):
+                                return (chat_parts.LOOPED if self.thinking is False else chat_parts.THINK_LONG,
+                                        None, [], text)
                         piece = delta.get("content")
                         if isinstance(piece, str) and piece:
                             text += piece

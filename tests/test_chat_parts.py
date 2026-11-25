@@ -199,6 +199,30 @@ def test_answer_with_parts_outlives_1800_seconds_and_a_part_has_its_own_limit(st
     assert (only["state"], only["error"], answer["status"]) == ("error", chat_parts.TIME, "done")
 
 
+def test_looping_reasoning_stops_the_part_and_the_answer_goes_on(studio):
+    """Ревью, п. 1: рассуждение круга части не хранится и не идёт на страницу, но сверх STRAY_MAX (кнопка
+    выключена) или REASONING_MAX — ошибка части, а не 1800 с на карте; ход отвечает дальше."""
+    cid, sid = parts_chat(studio)                    # локальная модель: кнопка «Рассуждение» выключена
+    studio.gw.chat_script = [{"tool_calls": [part()]}, {"reasoning": ["thought" * 100] * 3, "text": ["не дойдёт"]},
+                             ["Готово"]]
+    events = sse(turn(studio, cid, "Задача", skill_id=sid))
+    answer = messages(studio, cid)[-1]
+    (only,) = parts_of(answer)
+    assert (only["state"], only["error"]) == ("error", chat_parts.LOOPED)
+    assert (answer["status"], answer["content"], answer["reasoning"]) == ("done", "Готово", None)
+    assert not any(e == "think" for e, _ in events) and events[-1] == ("done", {"status": "done"})
+    # кнопка включена — предел REASONING_MAX
+    assert studio.c.patch(f"/api/chats/{cid}", json={"thinking": True}).json()["thinking"] is True
+    studio.gw.chat_script = [{"tool_calls": [part("Ещё", "Снова")]},
+                             {"reasoning": ["x" * chat.REASONING_MAX, "y"], "text": ["не дойдёт"]}, ["Готово 2"]]
+    events = sse(turn(studio, cid, "Ещё"))
+    answer = messages(studio, cid)[-1]
+    (only,) = parts_of(answer)
+    assert (only["state"], only["error"]) == ("error", chat_parts.THINK_LONG)
+    assert (answer["status"], answer["content"], answer["reasoning"]) == ("done", "Готово 2", None)
+    assert not any(e == "think" for e, _ in events)
+
+
 def test_stop_interrupts_the_part(studio):
     cid, sid = parts_chat(studio)
     studio.gw.chat_script = [{"tool_calls": [part()]}, ["Итог", " части"], ["Готово"]]
