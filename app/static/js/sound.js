@@ -82,14 +82,19 @@ export function signal(kind, key = null) {
   return true;
 }
 
-/** Конец ответа «Чата»: пауза хода — `ask`, ошибка — `error`, готово — `done`; ключ — id ответа. */
-export function answerSignal(message) {
+/** Конец ответа «Чата»: пауза хода — `ask`, ошибка — `error`, готово — `done`; ключ — id ответа (он же id строки
+ * «В работе»). `quiet` — ход «Разговора», что отвечает голосом: без звука, но ключ помечен прозвучавшим, и опрос
+ * «В работе» того же ответа тоже молчит. */
+export function answerSignal(message, { quiet = false } = {}) {
   if (!message) return false;
   const key = message.id ?? null;
-  if (message.pending) return signal('ask', key);
-  if (message.status === 'error') return signal('error', key);
-  if (message.status === 'done') return signal('done', key);
-  return false;
+  const kind = message.pending ? 'ask' : message.status === 'error' ? 'error' : message.status === 'done' ? 'done' : null;
+  if (!kind) return false;
+  if (quiet) {
+    if (key !== null) keys.set(`${kind}:${key}`, performance.now());
+    return false;
+  }
+  return signal(kind, key);
 }
 
 /** Новое готовое опроса «В работе»: отменённое человеком — без сигнала; хоть один итог не `done` — `error`, иначе

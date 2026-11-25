@@ -33,6 +33,10 @@ FAKE_TALKER = f"""(() => {{
   new MutationObserver(() => {{ const s = button.dataset.state; if (window.states.at(-1) !== s) window.states.push(s); }})
     .observe(button, {{ attributes: true, attributeFilter: ['data-state'] }});
   return true; }})()"""
+#: звуковые сигналы включены; window.oscs — созданные генераторы (микрофон — один, сигнал — по два)
+SOUND_SPY = """localStorage.setItem('studio-sound', '1'); window.oscs = 0;
+  const made = AudioContext.prototype.createOscillator;
+  AudioContext.prototype.createOscillator = function () { window.oscs += 1; return made.call(this); };"""
 
 
 @pytest.mark.parametrize("width", [320, 1280])
@@ -54,6 +58,7 @@ def test_conversation_hears_a_phrase_answers_aloud_and_listens_again(browser, li
             ("wait", f"window.states.includes('speaking') && {STATE} === 'listening'"
                      " && document.querySelectorAll('#messages .msg.assistant').length === 1"),
             ("eval", "states", "window.states.join(',')"),
+            ("eval", "oscs", "window.oscs"),                 # конец хода «Разговора» — без сигнала поверх озвучки
             ("eval", "user", "document.querySelector('#messages .msg.user').textContent"),
             ("eval", "answer", "document.querySelector('#messages .msg.assistant').textContent"),
             ("eval", "field", "document.querySelector('#chat-input').value"),
@@ -64,7 +69,7 @@ def test_conversation_hears_a_phrase_answers_aloud_and_listens_again(browser, li
             ("press", "Escape"), ("wait", f"{STATE} === 'off' && window.stopped === 1"),
             ("eval", "after", f"document.querySelector('{TALK}').getAttribute('aria-pressed')"),
             ("eval", "mics", "window.mics")],
-            width=width, height=900, mobile=width == 320, timeout=30000)
+            width=width, height=900, mobile=width == 320, timeout=30000, init=SOUND_SPY)
     finally:
         live.gw.asr_reply, live.gw.chat_reply = saved[0], saved[1]
     assert not r.get("failed"), r
@@ -73,6 +78,7 @@ def test_conversation_hears_a_phrase_answers_aloud_and_listens_again(browser, li
     assert v["states"].startswith("listening,hearing,thinking,speaking") and v["states"].endswith("listening"), v["states"]
     assert "Как дела?" in v["user"] and "А у вас как?" in v["answer"] and v["field"] == "", v
     assert "Разговор" in v["busy"], v["busy"]
+    assert v["oscs"] == v["mics"], v
     assert r["sent"].count("POST /api/dictation") == 1, r["sent"]
     assert r["sent"].count("POST /api/speech/say") == 2, r["sent"]   # два предложения — две фразы по порядку
     assert len(live.gw.tts_requests) - saved[2] == 2

@@ -279,7 +279,7 @@ function notify(job, final, replaced = false) {
 function finish(job) {
   if (jobs.get(job.chatId) === job) jobs.delete(job.chatId);
   notify(job, true);
-  answerSignal(job.message);
+  answerSignal(job.message, { quiet: !!job.voice });   // «Разговор» отвечает голосом — сигнал звучал бы поверх озвучки
 }
 
 /* ---- чтение ответа ------------------------------------------------------------ */
