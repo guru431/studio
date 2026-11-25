@@ -7,11 +7,14 @@ import { tr } from './i18n.js';
  * — его текст для «Копировать» и «Цитировать» (выделение внутри этого сообщения — важнее); quote(text) — чип цитаты
  * (null — без «Цитировать»); said(слова) — итог копирования. На ссылке, картинке, видео, звуке и в полях ввода, а
  * также с Shift — меню браузера. Где `contextmenu` долгим нажатием нет (iOS) — касание без сдвига больше MOVE_PX
- * дольше LONG_PRESS_MS; меню открывается по отпусканию пальца: иначе отпускание закрыло бы popover сразу. */
+ * дольше LONG_PRESS_MS; меню открывается по отпусканию пальца: иначе отпускание закрыло бы popover сразу. Сенсорный
+ * `contextmenu` не отменяется (это выделение слова браузером): долгое нажатие, оставившее выделение, меню не
+ * открывает — работает «Цитировать» у выделения (quote.js). */
 import { menuItem, popupMenu, rootZoom } from './menu.js';
 import { el } from './ui.js';
 
 export const LONG_PRESS_MS = 550;
+const SELECT_WAIT_MS = 60;
 const MOVE_PX = 10;
 const NATIVE = 'a[href], img, video, audio, input, textarea';
 const ACTIONS = ':is(.msg-actions, .code-msg-actions) button, .code-fork';
@@ -69,13 +72,20 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
     return node;
   };
 
-  let press = null;                // { node, x, y, timer, long }
+  let press = null;                // { node, x, y, timer, long, native }
   const drop = () => { if (press) clearTimeout(press.timer); press = null; };
+  const selected = () => {
+    const sel = document.getSelection();
+    return !!sel && !sel.isCollapsed && sel.toString().trim() !== '';
+  };
   const onContext = (event) => {
     const node = own(event);
     if (!node) return;
+    // сенсор: долгое нажатие Android выделяет слово действием contextmenu — его не отменять, меню — по отпусканию
+    // пальца и только без выделения (с выделением — кнопка «Цитировать» у него)
+    if (press) { press.long = true; press.native = true; return; }
+    if (event.pointerType === 'touch') return;
     event.preventDefault();
-    if (press) { press.long = true; return; }      // долгое нажатие Android: меню — по отпусканию пальца
     show(node, event.clientX, event.clientY);
   };
   const onStart = (event) => {
@@ -84,7 +94,8 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
     const node = own(event);
     if (!node) return;
     const { clientX: x, clientY: y } = event.touches[0];
-    press = { node, x, y, long: false, timer: setTimeout(() => { if (press) press.long = true; }, LONG_PRESS_MS) };
+    press = { node, x, y, long: false, native: false,
+      timer: setTimeout(() => { if (press) press.long = true; }, LONG_PRESS_MS) };
   };
   const onMove = (event) => {
     const t = event.touches[0];
@@ -93,9 +104,11 @@ export function messageMenu(scroller, { message, text, quote = null, said = null
   const onEnd = (event) => {
     const done = press;
     drop();
-    if (!done?.long) return;
+    if (!done?.long || selected()) return;         // выделил браузер (Android, iOS) — его выделение и «Цитировать»
     if (event.cancelable) event.preventDefault();  // без щелчка после долгого нажатия
-    show(done.node, done.x, done.y);
+    const open = () => { if (!selected() && done.node.isConnected) show(done.node, done.x, done.y); };
+    if (done.native) setTimeout(open, SELECT_WAIT_MS);   // выделение браузера могло ещё не встать
+    else open();
   };
   scroller.addEventListener('contextmenu', onContext);
   scroller.addEventListener('touchstart', onStart, { passive: true });

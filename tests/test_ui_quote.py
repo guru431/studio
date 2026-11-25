@@ -72,7 +72,22 @@ MODULES = "(async () => {" + FRAMES + """
     if (long) pop.hidePopover();
     touch('touchstart'); await sleep(150); touch('touchend');
     out.long = [long, pop.matches(':popover-open')];
-  } else out.long = null;
+    const word = () => { const r = document.createRange(); r.selectNodeContents(msg.querySelector('.bubble').firstChild);
+      getSelection().removeAllRanges(); getSelection().addRange(r); };
+    const opened = () => { const o = pop.matches(':popover-open'); if (o) pop.hidePopover(); return o; };
+    // Android: долгое нажатие — contextmenu посреди касания; его не отменяем — это выделение слова браузером
+    touch('touchstart'); const prevented = context(msg.querySelector('.bubble')); word(); touch('touchend');
+    await sleep(150);
+    const withWord = opened();
+    getSelection().removeAllRanges();
+    touch('touchstart'); context(msg.querySelector('.bubble')); touch('touchend');
+    await sleep(150);
+    const plain = opened();
+    touch('touchstart'); await sleep(700); word(); touch('touchend');         // iOS: выделение без contextmenu
+    await sleep(150);
+    out.native = [prevented, withWord, plain, opened()];
+    getSelection().removeAllRanges();
+  } else out.long = out.native = null;
   menu.unmount();
   out.unmounted = !pop.isConnected;
   return out;
@@ -90,6 +105,8 @@ def test_quote_chip_folds_into_the_field_and_the_menu_mirrors_actions(browser, l
     assert v["link"] is False and v["inside"] is True, v
     if width == 320:                                       # сенсор: 550 мс — меню, короткое касание — нет
         assert v["long"] == [True, False], v
+        # сенсорный contextmenu не отменён; осталось выделение — меню нет (работает «Цитировать» у выделения)
+        assert v["native"] == [False, False, True, False], v
 
 
 ZOOMED = "(async () => {" + FRAMES + """
