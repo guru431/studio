@@ -403,7 +403,7 @@ def test_turn_search_runs_after_the_turn_is_accepted(studio):
     assert seen == [(1, 1)] and events[0][0] == "turn" and events[-1] == ("done", {"status": "done"})
     sent = first_user(studio)
     assert sent.count('excerpts="true"') == 2 and "4711" in studio.gw.chat_requests[-1]["messages"][-1]["content"]
-    again =turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20)
+    again = turn(studio, cid, "Какой пароль от сейфа?", request_id="r" * 20)
     assert again.json()["replayed"] is True and len(seen) == 1
 
 
