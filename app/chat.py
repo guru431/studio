@@ -1777,7 +1777,8 @@ class StreamTask:
         for i, c in enumerate(calls):
             n = start + i
             n -= sum(d.name == "run_part" for d in calls[:i])   # run_part не занимает место среди CALLS_PER_ROUND
-            if self.part is not None and clock.NOW() > self.deadline:   # внутри части — её ошибка, пометку ставит ход
+            if self.part is not None and clock.NOW() > min(self.deadline, self.part_deadline):   # внутри части — её
+                # ошибка (и по сроку части), пометку срока ответа ставит ход
                 return chat_parts.TIME
             if clock.NOW() > self.deadline:
                 return self._cut_time()

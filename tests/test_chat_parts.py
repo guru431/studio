@@ -245,6 +245,44 @@ def test_looping_reasoning_stops_the_part_and_the_answer_goes_on(studio):
     assert not any(e == "think" for e, _ in events)
 
 
+def test_part_time_runs_out_between_calls_and_rounds(studio, monkeypatch, no_pings):
+    """Ревью, п. 3: срок части проверяется не только при чтении потока — после вызова, съевшего срок, ни следующий
+    вызов круга, ни следующий запрос части не идут."""
+    monkeypatch.setattr(chat, "STREAM_TOTAL_SEC", 1800)
+    add_gateway(studio)
+    assert studio.c.put("/api/me/exa-key", json={"key": EXA_KEY}).status_code == 204
+    cid = new_chat(studio)
+    assert studio.c.patch(f"/api/chats/{cid}", json={"web": True}).json()["web"] is True
+    sid = new_skill(studio)
+
+    real = web.call
+
+    async def slow_call(*args, **kwargs):
+        studio.clock[0] += 1801
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(web, "call", slow_call)
+    studio.gw.chat_script = [{"tool_calls": [part()]},
+                             {"tool_calls": [call("web_search", query="раз"), call("web_search", query="два")]},
+                             ["Готово"]]
+    sse(turn(studio, cid, "Задача", skill_id=sid))
+    answer = messages(studio, cid)[-1]
+    (only,) = parts_of(answer)
+    assert (only["state"], only["error"]) == ("error", chat_parts.TIME)
+    assert (answer["status"], answer["content"]) == ("done", "Готово")
+    assert len([r for r in studio.gw.exa_requests if r[0] == "/search"]) == 1   # второй вызов круга не исполнен
+    assert len(studio.gw.chat_requests) == 3                                    # ход, часть, ход — второго круга нет
+    # второй вызов отдельным кругом: срок вышел между кругами — запроса части нет
+    studio.gw.chat_requests.clear()
+    studio.gw.chat_script = [{"tool_calls": [part("Ещё", "Снова")]}, {"tool_calls": [call("web_search", query="три")]},
+                             ["Готово 2"]]
+    sse(turn(studio, cid, "Ещё"))
+    answer = messages(studio, cid)[-1]
+    (only,) = parts_of(answer)
+    assert only["error"] == chat_parts.TIME and answer["content"] == "Готово 2" and len(studio.gw.chat_requests) == 3
+    assert studio.gw.chat_requests[-1]["messages"][-1]["role"] == "tool"
+
+
 def test_stop_interrupts_the_part(studio):
     cid, sid = parts_chat(studio)
     studio.gw.chat_script = [{"tool_calls": [part()]}, ["Итог", " части"], ["Готово"]]

@@ -82,8 +82,10 @@ def _specs(task) -> list[dict]:
 
 async def _rounds(task) -> "tuple[str | None, str]":
     """Круги части до текста без вызовов; итог — (слова ошибки или None, текст последнего круга)."""
-    rounds = 0
+    rounds, text = 0, ""
     while True:
+        if clock.NOW() > min(task.deadline, task.part_deadline):   # срок вышел между кругами (инструменты, карта)
+            return TIME, text
         if task.tools and not task._web_on():         # выключили посреди ответа — дальше без «Интернета»
             task.tools = []
         specs = _specs(task) if rounds < chat_tools.PART_ROUNDS else []
