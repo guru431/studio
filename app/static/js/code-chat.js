@@ -69,6 +69,7 @@ import { AGENT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { codeActivity } from './code-activity.js';
 import { attachCounts, countRefusal } from './code-attach-limits.js';
 import { findView } from './code-find.js';
+import { answerTools } from './code-answer-tools.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -890,6 +891,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     const view = { body, progress, ...renderTimeline(body, m) };
     const node = el('div', { class: 'code-msg assistant' }, progress.root, body);
     messageViews.set(node, view);
+    if (!m.live) answerTools(node, { text: m.text, model: m.model });
     return node;
   }
 
@@ -1305,6 +1307,11 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
         const note = el('p', { class: `code-turn-end${data.status === 'error' ? ' error' : ' muted'}` }, end);
         grow(() => turn.node.append(note));
       }
+      // модель DeepSeek Harness — JSON «провайдер, модель»: под ответом — подпись каталога, как на кнопке
+      const answerModel = engine === 'deepseek' && models.find((m) => String(m.id) === effectiveModel)?.label || effectiveModel;
+      const node = turn.node;
+      const answer = turn.view.segments.map((segment) => segment.text).join('');
+      grow(() => answerTools(node, { text: answer, model: answerModel }));
     } else {
       loadHistory(false);        // ход кончился раньше снимка: его ответ — уже в истории
     }
