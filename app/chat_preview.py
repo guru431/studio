@@ -57,7 +57,7 @@ async def open_preview(chat_id: str, body: PreviewIn, request: Request):
     for owner in [owner for owner, kept in VIEWS.items() if kept[4] <= now]:   # истёкшие окна всех учёток — из памяти
         del VIEWS[owner]
     VIEWS[uid] = (token, request.state.digest, chat_id, document, now + TTL_SEC)
-    log.info("чат %s: окно HTML, %d байт", chat_id, size)
+    log.info("чат %s: окно HTML, %d байт", chat_id[:8], size)
     return {"token": token}
 
 

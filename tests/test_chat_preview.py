@@ -61,6 +61,8 @@ def test_expired_windows_of_every_account_leave_memory_on_a_new_window(studio, c
     chat_preview.VIEWS[-2] = ("live", "digest", "other", "y", now + 10)
     assert post(studio, cid).status_code == 201
     assert -1 not in chat_preview.VIEWS and -2 in chat_preview.VIEWS and len(chat_preview.VIEWS) == 2
+    said = "\n".join(r.getMessage() for r in caplog.records if r.name == "studio")    # без адресов клиента тестов
+    assert f"чат {cid[:8]}: окно HTML" in said and cid not in said
 
 
 def test_preview_closes_with_the_dialog(studio):
