@@ -2,6 +2,7 @@
 хода, старый мост без `hello.skills`, «Положить набор в проект» и «Проверить другим помощником»."""
 import pytest
 
+from fake_bridge import pid
 from test_codex import CATALOG
 from test_ui_browser import (API, CODE_CHAT_A, NO_OVERFLOW, READY, browser, code_chat, code_free_machine,  # noqa: F401
                              code_online, code_requests, code_session, known_refusals, live, problems, signin)
@@ -42,22 +43,32 @@ def test_slash_menu_calls_project_and_library_skills(browser, live, width):
     live.add_user(login)
     machine = code_free_machine({CODE_CHAT_A: code_session("Навыки")})
     machine.skills = True
+    machine.codex = CATALOG
     machine.projects["alpha"]["skills"] = {(".agents/skills", "review-local"): {"description": "Ревью", "text": "Проверь diff"}}
     turns_finish(machine, 2)
     aid, server = code_online(live, login, machine)
     user = "[...document.querySelectorAll('#code-feed .code-msg.user')]"
+    project = f"#/code/{aid}/{pid('alpha')}"
+    menu = [*([("click", "#code-status-more")] if width == 320 else []), ("click", "#code-branch-actions")]
     try:
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), ("eval", "mine", MINE),
             *code_chat(aid, CODE_CHAT_A),
             *pick("/review"),
             ("eval", "chip", f"[{CHIP}.textContent, document.querySelector('#code-text').value]"),
             ("eval", "chipFits", f"(() => {{ const r = {CHIP}.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }})()"),
-            ("type", "#code-text", "только тесты"), ("click", "#code-send"),
+            ("type", "#code-text", "только тесты"),
+            # «Файлы» и обратно: вид чата снят и создан заново — черновик поля и чип навыка на месте
+            ("eval", "files", f"location.hash = '{project}?tab=files'"), ("wait", "!!document.querySelector('#code-files')"),
+            ("eval", "back", f"location.hash = '{project}/{CODE_CHAT_A}'"),
+            ("wait", f"document.querySelector('#code-chat')?.dataset.loaded === '1' && !!{CHIP}"),
+            ("eval", "kept", f"[{CHIP}.hidden, {CHIP}.textContent, document.querySelector('#code-text').value]"),
+            ("click", "#code-send"),
             ("wait", f"{user}.length === 1 && {IDLE} && document.querySelector('.code-msg.assistant .md')"),
             ("eval", "first", f"{user}.map(m => [m.querySelector('.code-user-skill')?.textContent, m.querySelector('.code-user-text').textContent, m.textContent.includes('Проверь diff')])"),
             ("eval", "chipGone", f"{CHIP}.hidden"),
             *pick("/Мой"), ("click", "#code-send"),
-            ("wait", f"{user}.length === 2"),
+            ("wait", f"{user}.length === 2 && {IDLE}"
+                     " && document.querySelectorAll('#code-feed .code-msg.assistant .md').length === 2"),
             ("eval", "fits", NO_OVERFLOW),
             ("eval", "pure", PURE)], width=width, mobile=width == 320)
     finally:
@@ -66,6 +77,7 @@ def test_slash_menu_calls_project_and_library_skills(browser, live, width):
     values = result["values"]
     assert values["chip"] == ["Навык: review-local", ""]
     assert values["first"] == [["Навык: review-local", "только тесты", False]]
+    assert values["kept"] == [False, "Навык: review-local", "только тесты"]
     assert values["chipGone"] and values["chipFits"] and values["fits"]
     assert [t["text"] for t in code_requests(machine, "turn")] == ["Проверь diff\n\nтолько тесты", "Текст навыка"]
     assert len(code_requests(machine, "skill")) == 1

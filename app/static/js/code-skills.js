@@ -4,7 +4,8 @@
  * Меню «/» (slash.js) — навыки проекта (мост 0.48.0, `agent.skills`: GET …/projects/<pid>/skills; отказ списка —
  * библиотека без них, `closed` — `failed`), навыки библиотеки (GET /api/skills?scope=agents) и команды помощника
  * (`commands(rows)` из настроек сессии). Навык проекта с ключом навыка библиотеки (`origin`) показывается один раз —
- * проектный. Выбор команды — «/имя » перед остатком поля; выбор навыка — чип «Навык: имя» (#code-skill-chip).
+ * проектный. Выбор команды — «/имя » перед остатком поля; выбор навыка — чип «Навык: имя» (#code-skill-chip); выбор
+ * живёт на модуль по чату (`key`), как черновик поля, и переживает смену вкладки и вида.
  * `lead()` — текст выбранного навыка (GET /api/skills/<id> или POST …/skills/text), он уходит перед уточнением.
  * Тексты навыков — только память страницы: `label(text)` узнаёт сообщение, начатое текстом навыка, отправленного
  * отсюда (20 последних), — лента показывает «Навык: имя» и уточнение.
@@ -28,6 +29,10 @@ const KEY = /^[a-z][a-z0-9-]{0,63}$/;
 const CHANGED_MAX = 200;                                 // строк «- путь» в поле проверки
 const LABELS_MAX = 20;
 const sentTexts = [];                                    // { text, name } отправленных отсюда навыков, новые — в конце
+/** Выбранный навык чата (`${aid}/${chat}` → строка меню) — на модуль, как черновики поля: смена вкладки, «Файлы» и
+ * «Git» снимают вид, а чип возвращается вместе с текстом поля. Блокировка экрана стирает его, как черновики. */
+const chips = new Map();
+document.addEventListener('studio-locked', () => chips.clear());
 
 const lang = () => (locale().toLowerCase().startsWith('en') ? 'en' : 'ru');
 const library = async () => (await api('GET', `/api/skills?scope=agents&lang=${lang()}`)).items || [];
@@ -52,10 +57,12 @@ export function skillFile(key, name, description, text) {
   return `---\nname: ${key}\ndescription: ${JSON.stringify(about)}\ndisable-model-invocation: true\n---\n\n${text}\n`;
 }
 
-export function agentSkills(host, { aid, pid, agent, engine, text, chipHost, failed, readonly = false }) {
+export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost, failed, readonly = false }) {
   const base = `/api/code/agents/${aid}/projects/${pid}`;
-  const chip = skillChip(chipHost);
+  const chip = skillChip(chipHost, { changed: () => chips.delete(key) });   // крестик
   chip.node.id = 'code-skill-chip';
+  const choose = (item) => { chip.set(item); chips.set(key, item); };
+  if (chips.has(key)) chip.set(chips.get(key));
   let commandRows = [];
 
   async function items() {
@@ -69,7 +76,7 @@ export function agentSkills(host, { aid, pid, agent, engine, text, chipHost, fai
 
   function pick(item) {
     if (item.kind !== 'command') {
-      chip.set(item);
+      choose(item);
       text.value = text.value.replace(/^\/\S*[ \t]*/, '');
     } else {
       const prefix = `/${item.name} `;
@@ -184,8 +191,8 @@ export function agentSkills(host, { aid, pid, agent, engine, text, chipHost, fai
       remember(value, item.name);
       return { text: value, item };
     },
-    preset(item) { if (item) chip.set(item); },
-    clear() { chip.clear(); },
+    preset(item) { if (item) choose(item); },
+    clear() { chip.clear(); chips.delete(key); },
     close() { menu.close(); },
     label(value) {
       if (typeof value !== 'string') return null;

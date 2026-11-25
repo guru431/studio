@@ -415,7 +415,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       stop, send));
   // Навыки: меню «/», чип над полем, кнопки пустого чата, набор в проект, проверка другим помощником (code-skills.js).
   // Создаются раньше enterSends и statusActions: меню «/» ловит Enter первым, пункты попадают в меню веток.
-  const skills = agentSkills(host, { aid, pid, agent, engine, text, chipHost: form, readonly, failed: (err) => {
+  const skills = agentSkills(host, { aid, pid, key: draftKey, agent, engine, text, chipHost: form, readonly, failed: (err) => {
     if (!alive) return;
     if (err.code === 'closed') closed();
     else showStatus(words(err));
