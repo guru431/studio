@@ -8,7 +8,6 @@
 Ветка — диалог-наследник `new_dialog`: подключение, модель, роль, MCP, базы знаний и отметка защищённого источника
 (`chats.protected_used`) — как у исходного; хранимый пересказ, закрепление, согласия и медиа диалога — нет. Диалог
 через Cleaner (предпросмотр или шлюз `cleaner_route`) не ветвится: контексты замен Cleaner привязаны к диалогу."""
-import json
 import logging
 import uuid
 
@@ -16,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import chat
+import chat_skills
 import cleaner_client
 import clock
 import connections
@@ -70,17 +70,6 @@ def _through_cleaner(uid: int, conn_id: "int | None") -> bool:
     return conn.cleaner or conn.routed
 
 
-def _field_text(target) -> str:
-    """Текст сообщения-точки для поля ветки: без текста навыка (`messages.skill` — первые `chars` знаков) и
-    переводов строки после него — в поле уходит только уточнение."""
-    content = target["content"]
-    try:
-        chars = int(json.loads(target["skill"])["chars"]) if target["skill"] else 0
-    except (ValueError, TypeError, KeyError):
-        chars = 0
-    return content[max(chars, 0):].lstrip("\n") if chars else content
-
-
 @router.post("/chats/{chat_id}/fork", status_code=201)
 async def fork(chat_id: str, body: ForkIn, request: Request):
     """Ветка от своего сообщения `message_id`: 201 `{chat_id, text}`. Нет диалога или своего выбранного сообщения —
@@ -127,4 +116,4 @@ async def fork(chat_id: str, body: ForkIn, request: Request):
         state.DB.execute("ROLLBACK")
         raise
     log.info("чат %s: ветка %s, сообщений %d", chat_id[:8], new[:8], len(rows))
-    return {"chat_id": new, "text": _field_text(target)}
+    return {"chat_id": new, "text": chat_skills.human(target)}   # в поле — только уточнение, без навыка
