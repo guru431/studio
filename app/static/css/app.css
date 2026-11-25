@@ -1115,6 +1115,13 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 
 .chat-error { margin: 0 var(--space-7) var(--space-4); font-size:var(--fs-md); }
 .chat-error:empty { display: none; }
+/* «Новый диалог с итогом» у отказа по длине (chat-continue.js) */
+.chat-continue { margin: calc(-1 * var(--space-2)) var(--space-7) var(--space-4); }
+/* картинки результата MCP под ответом (chat-result-images.js), куски «Знаний» и их окно (chat-knowledge-sources.js) */
+.msg-pictures { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: var(--space-2) 0; }
+.kb-sources { margin: var(--space-1) 0 0; padding-left: 18px; }
+.kb-source { padding: 0; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.kb-source-text { max-height: calc(60 * var(--dvh)); overflow: auto; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .att-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .att-chips:empty { display: none; }
 .att-chip { display: inline-flex; align-items: center; gap: var(--space-3); max-width: 100%; padding: 3px var(--space-2) 3px 9px;
@@ -1284,6 +1291,19 @@ video.msg-file-media { max-height: 320px; }
   background: var(--surface-1); color: var(--text-2); font-size:var(--fs-xs); user-select: none; opacity: .85; }
 @media (hover: hover) { .copy:hover { color: var(--text-1); opacity: 1; } }
 @media (max-width: 760px) { .md pre { padding-top: 36px; } }   /* «Копировать» — над кодом, а не поверх строки */
+/* «Открыть» блока html/svg (chat-preview.js) — рядом с «Копировать», обе в одном углу блока */
+.pre-tools { position: absolute; top: 6px; right: 6px; display: flex; gap: var(--space-2); }
+.pre-tools .copy { position: static; }
+.preview-open { padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--r-control);
+  background: var(--surface-1); color: var(--text-2); font-size:var(--fs-xs); user-select: none; opacity: .85; }
+@media (hover: hover) { .preview-open:hover { color: var(--text-1); opacity: 1; } }
+.chat-preview-dialog { width: min(calc(96 * var(--vw)), 900px); max-width: calc(96 * var(--vw)); height: calc(92 * var(--dvh));
+  max-height: calc(96 * var(--dvh)); display: flex; flex-direction: column; gap: .6rem; overflow: hidden; }
+.chat-preview-dialog:not([open]) { display: none; }
+.chat-preview-dialog h2, .chat-preview-note { margin: 0; }
+/* документ блока рисуется в своей светлой схеме, а не в теме Студии */
+.chat-preview-frame { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 8px;
+  color-scheme: light; background: Canvas; }
 
 /* ---- фото (и лента видео) ------------------------------------------------------ */
 
@@ -1478,6 +1498,9 @@ label.chip { cursor: pointer; }
 /* роли диалога (roles.js): чип в поле чата, списки в настройках и панели администратора */
 .role-chip { min-width: 0; max-width: min(220px, 45%); }
 .role-chip .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* уровень рассуждения (chat-effort.js): слово «Рассуждение» на узком экране прячется, уровень — виден */
+.effort-chip { min-width: 0; max-width: min(240px, 60%); }
+.effort-level { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* базы знаний (knowledge.js): панель флажков чипа «Знания» и документы базы в настройках */
 .kb-panel { flex-direction: column; gap: var(--space-2); min-width: 220px; max-width: 320px; }
 .kb-panel:popover-open { display: flex; }          /* закрытый popover — display: none браузера */

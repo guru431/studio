@@ -128,6 +128,11 @@ import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 import { readAloud } from './speech-read.js';
 import { startConversation } from './chat-voice.js';
+import { dropPreviews, previewLinks } from './chat-preview.js';
+import { continueOffer, lengthError, lengthRefusal } from './chat-continue.js';
+import { knowledgeStep, sourceClicks } from './chat-knowledge-sources.js';
+import { resultImages } from './chat-result-images.js';
+import { effortChooser } from './chat-effort.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
   '.ini', '.log', '.py', '.js', '.ts', '.html', '.css', '.sql', '.sh', '.ps1'];   // как documents.SUFFIXES
@@ -429,6 +434,8 @@ async function serviceRefusal(response, params) {
   const lowered = text.toLowerCase();
   const refused = response.status === 400 && REJECTED.some((marker) => lowered.includes(marker))
     && Object.keys(params || {}).find((name) => lowered.includes(name));
+  // уровень рассуждения — выбор диалога, а не профиля (profiles.EFFORT_REFUSED)
+  if (['reasoning_effort', 'reasoning'].includes(refused)) return tr("модель не принимает уровень рассуждения — выберите «Как у модели»");
   if (refused) return tr("подключение не принимает параметр «{0}» — уберите его в профиле подключения", refused);
   let detail = '';
   try {
@@ -630,7 +637,7 @@ function duration(sec) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${rest}` : `${m}:${rest}`;
 }
 
-function stepNode(s, { ended = false } = {}) {
+function stepNode(s, { ended = false, sources = false } = {}) {
   if (s.kind === 'part') return partNode(s, { ended });   // часть ответа (chat-parts.js)
   const li = el('li', { class: `web-step web-${s.kind}` });
   if (s.kind === 'search') {
@@ -646,10 +653,7 @@ function stepNode(s, { ended = false } = {}) {
     li.append(tr("Ролик: "), stepLink(s), about ? el('span', { class: 'muted' }, ` · ${about}`) : null);
   } else if (s.kind === 'mcp') li.append(['MCP', s.server, s.tool].filter(Boolean).join(' · '));   // без tool — сервер не ответил
   else if (s.kind === 'ask') li.append(s.question ? tr("Вопрос: «{0}»", s.question) : tr("Вопрос модели"));
-  else if (s.kind === 'knowledge') {                // knowledge_search (chat_tools.py): запрос и документы найденного
-    li.append(s.query ? tr("Знания: «{0}»", s.query) : tr("Знания"));
-    if (Array.isArray(s.sources) && s.sources.length) li.append(el('span', { class: 'muted' }, ` · ${s.sources.join(', ')}`));
-  }
+  else if (s.kind === 'knowledge') knowledgeStep(li, s, { buttons: sources });   // куски — кнопками под ответом
   else if (s.kind === 'duplicate') li.append(tr("Повтор пропущен: {0}", s.tool));   // chat.DUPLICATE
   else if (s.kind === 'todo') li.append(tr("План работы"));                        // chat_tools.TODO_WRITE
   else if (s.kind === 'memory') li.append(s.refused || s.error ? tr("Память")
@@ -708,12 +712,16 @@ function badgeText(steps) {
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
 }
 
-/* ссылок нет (одни вызовы MCP, ошибки) — заголовок считает вызовы, а не «Источники (0)» */
+/* ссылок нет (одни вызовы MCP, ошибки) — заголовок считает вызовы, а не «Источники (0)»; шаг автоматического
+   блока «Знаний» (`auto`) — в списке, но не вызов: при одних таких шагах заголовок считает их куски */
 function sourcesNode(steps, ended) {
   const links = linkCount(steps);
+  const calls = steps.filter((s) => !s.auto).length;
+  const pieces = steps.reduce((n, s) => n + (s.auto && Array.isArray(s.hits) ? s.hits.length : 0), 0);
   return el('details', { class: 'web-steps' },
-    el('summary', {}, links ? tr("Источники ({0})", links) : tr("Вызовы инструментов ({0})", steps.length)),
-    el('ul', { class: 'web-list' }, ...steps.map((s) => stepNode(s, { ended }))));
+    el('summary', {}, links ? tr("Источники ({0})", links) : calls ? tr("Вызовы инструментов ({0})", calls)
+      : tr("Источники ({0})", pieces)),
+    el('ul', { class: 'web-list' }, ...steps.map((s) => stepNode(s, { ended, sources: true }))));
 }
 
 /* ---- экран -------------------------------------------------------------------- */
@@ -736,6 +744,7 @@ function build(view, ctx) {
   let creating = null;         // идущее создание нового диалога (ensureChat)
   let draftThink = false;      // «Рассуждение» нового диалога — так же
   let draftRole = null;        // роль нового диалога {id, name}: PATCH {role_id} после его создания
+  let draftEffort = null;      // уровень рассуждения нового диалога (chat-effort.js): PATCH {effort} после его создания
   let draftKbs = [];           // базы знаний нового диалога (чип «Знания»): PUT …/knowledge после его создания
   let sending = false;
   let stick = true;
@@ -835,6 +844,17 @@ function build(view, ctx) {
       if (current === chat) chat.knowledge = out.kb_ids;
     },
     failed: (err) => { notice.textContent = words(err); } });
+  // уровень рассуждения (chat-effort.js): у открытого — `effort` сервера, у нового — черновик до создания
+  const effort = effortChooser({ current: () => (chat ? chat.chat.effort : draftEffort),
+    offered: () => (chat ? !!chat.chat.effort_ok
+      : !!links.find((l) => l.connection.id === chosen().connection_id)?.connection.effort),
+    choose: async (level) => {
+      if (!chat) { draftEffort = level; return; }
+      const current = chat;
+      const out = await api('PATCH', `/api/chats/${chat.chat.id}`, { effort: level });
+      if (current === chat) chat.chat = out;
+    },
+    failed: (err) => { notice.textContent = words(err); } });
   // «Разговор» уступает место «очистить», пока в поле текст (идущий — виден всегда): колонка — три значка, рамка
   // пустого поля не растёт с первой буквой
   const inputBox = fieldBox(input, { attach: clip, painted: () => { talkToggle.hidden = !talking && !!input.value; },
@@ -852,7 +872,7 @@ function build(view, ctx) {
   const skillHost = el('div', { class: 'chat-skill', id: 'chat-skill', hidden: true });
   const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, moveNote, editNote, skillHost, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
-      kbs.chip, kbs.panel, thinkToggle), send, stop),
+      kbs.chip, kbs.panel, thinkToggle, effort.chip, effort.menu), send, stop),
     webNote, talkNote);
   const skills = chatSkills({ input, host: skillHost, changed: () => ring.schedule() });   // меню — перед полем формы
   const fieldTools = inputBox.box.querySelector('.field-tools');
@@ -904,9 +924,14 @@ function build(view, ctx) {
   const share = sharing.button;
   share.hidden = true;
   head.append(share);
+  // «Новый диалог с итогом» у отказа по длине (chat-continue.js) — строкой под #chat-error
+  const offer = continueOffer({ chatId: () => chatId, openWith, busy: () => sending || jobs.has(chatId) || remoteStream(),
+    failed: (err) => { notice.textContent = words(err); } });
+  notice.after(offer.node);
 
   function shareContext() {
     const current = chat?.chat.id === chatId ? chat.chat : null;
+    if (current?.protected) dropPreviews(root);     // сработал защищённый источник — окна HTML и SVG нет
     share.hidden = !current;
     title.set(current);
     status.dialog(current ? chat : null);
@@ -1364,6 +1389,7 @@ function build(view, ctx) {
   function paintThink() {
     thinkToggle.hidden = !thinkOk();
     thinkToggle.setAttribute('aria-pressed', String(thinkOn()));
+    effort.paint();
   }
 
   /* «Разговор»: нажатие — круг chat-voice.js (звук разблокируется этим нажатием), ещё нажатие — стоп */
@@ -2064,6 +2090,7 @@ function build(view, ctx) {
     const actions = el('div', { class: 'msg-actions' });
     const visibleTools = m.tools?.filter((step) => !m.pending || !step.waiting) || [];
     const steps = visibleTools.length ? sourcesNode(visibleTools, m.status !== 'streaming') : null;
+    sourceClicks(steps, { chatId, message: m, host: root });   // куски «Знаний» — окном с текстом
     const badge = el('button', { type: 'button', class: 'web-badge', hidden: true });
     const think = el('div', { class: 'think-box' });
     badge.addEventListener('click', () => {                    // «Источники» этого ответа — там тексты ошибок
@@ -2088,7 +2115,8 @@ function build(view, ctx) {
     const plan = el('div', { class: 'msg-todo' });
     const compare = el('div', { class: 'msg-compare' });
     const node = el('div', { class: 'msg assistant', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }),
-      el('div', { class: 'msg-body' }, badge, think, plan, md, compare, pending, resultFiles(chatId, m, root), consent, steps,
+      el('div', { class: 'msg-body' }, badge, think, plan, md, compare, pending, resultFiles(chatId, m, root),
+        resultImages(m, showPhoto), consent, steps,
         model, meta, nowait, actions));
     parts.set(m, { badge, steps, think, thought: '', said: '', md, meta, nowait, actions, last, shown: null, consent, consentKey: '',
       pending, plan, model, planKey: '', node, compare });
@@ -2209,7 +2237,9 @@ function build(view, ctx) {
     if (p.shown !== displayed || p.final !== final) {
       p.shown = displayed;
       p.final = final;
-      const fileLinks = final ? resultPathLinks(chatId, m) : null;
+      // «Открыть» у блоков html/svg — только у перечитанного с сервера: отметка защищённого источника к этому мигу верна
+      const fileLinks = final ? previewLinks(resultPathLinks(chatId, m), { host: root, chatId: () => chatId,
+        allowed: () => received.has(m) && !chat?.chat.protected, failed: (err) => { notice.textContent = words(err); } }) : null;
       if (displayed.length <= 2000) p.md.replaceChildren(renderMarkdown(displayed, { highlight: final, fileLinks }));
       else if (!final) p.md.replaceChildren(el('pre', { class: 'code-stream-text' }, displayed));
       else renderMarkdownInto(p.md, displayed, {
@@ -2285,6 +2315,7 @@ function build(view, ctx) {
       { class: 'btn btn-sm msg-cleaner-view' }, () => { m.cleaner_show_raw = !m.cleaner_show_raw; paint(m); }));
     if (chat?.chat.cleaner && m.content) p.actions.append(cleanerCopy(m));
     if (m.cleaner_sent && m.id) p.actions.append(cleanerSent(m));
+    if (lengthError(m)) p.actions.append(offer.button());   // ответ не поместился — «Новый диалог с итогом»
     if (p.last) p.actions.append(button(tr("Ответить заново"), { class: 'btn btn-sm msg-retry' }, () => submit(true)));
   }
 
@@ -2477,6 +2508,8 @@ function build(view, ctx) {
     draftMcp = null;
     draftThink = false;
     draftRole = null;
+    draftEffort = null;
+    offer.hide();
     draftKbs = [];
     pendingMedia = [];
     clearTimeout(poll);
@@ -2668,6 +2701,7 @@ function build(view, ctx) {
     }
     sending = true;
     notice.textContent = '';
+    offer.hide();
     syncBusy();
     paintAtts();
     const made = {};                               // диалог, созданный этим ходом (`id`)
@@ -2696,6 +2730,7 @@ function build(view, ctx) {
       paintAtts();
     }
     if (made.id && !again) dropEmpty(made.id);
+    if (lengthRefusal(refusal) && chatId && chat?.messages.length) offer.show();   // есть что пересказать
     return refusal;
   }
 
@@ -2719,6 +2754,7 @@ function build(view, ctx) {
       draftMcp = draftOf(was, mcpServers);
       draftThink = !!was.thinking;
       draftRole = was.role || null;
+      draftEffort = was.effort || null;
       draftKbs = knew;
       if (location.hash === `#/chat/${id}`) history.replaceState(history.state, '', '#/chat');
       shareContext();
@@ -2784,6 +2820,12 @@ function build(view, ctx) {
     }
     if (think) {
       chat.chat = await api('PATCH', `/api/chats/${created.id}`, { thinking: true });
+      paintThink();
+    }
+    if (draftEffort) {                          // уровень рассуждения, выбранный до создания диалога
+      const level = draftEffort;
+      draftEffort = null;
+      if (chat.chat.effort_ok) chat.chat = await api('PATCH', `/api/chats/${created.id}`, { effort: level });
       paintThink();
     }
     if (draftWeb && ['ready', 'mcp'].includes(webState())) {   // «Интернет», включённый до создания диалога
@@ -3155,6 +3197,7 @@ function build(view, ctx) {
       document.removeEventListener('keydown', onKey);
       models.close();
       roles.close();
+      effort.close();
       document.removeEventListener('studio-me', paintWeb);
       clearInterval(tick);
       clearTimeout(poll);

@@ -2,6 +2,7 @@
 диалог механизмом п. 30, наследник открывается с теми же подключением, моделью, ролью, MCP и знаниями, итог — в поле
 ввода (ответом маршрута, не в базе)."""
 import logging
+from pathlib import Path
 
 import chat
 import chat_continue
@@ -18,6 +19,7 @@ from test_mcp_dialog import name_of, offered, setup, tool, view
 from test_protected_source import code_of, flags, names, protect, web_dialog
 from test_shared_integrations import MODEL
 
+STATIC = Path(__file__).resolve().parents[1] / "app" / "static"
 KEEP = ("connection_id", "model", "role", "mcp_ids", "thinking", "effort", "title")
 
 
@@ -127,6 +129,8 @@ def test_continue_refusals_create_nothing(studio):
     make_user(studio, "bob"); signin(studio, "bob")
     assert code(go(studio, cid)) == (404, "gone")
     assert count_chats() == before
+    # слова отказа по длине — копия chat.CONTEXT_WORDS в модуле страницы
+    assert f"'{chat.CONTEXT_WORDS}'" in (STATIC / "js" / "chat-continue.js").read_text("utf-8")
 
 
 def test_continue_refuses_cleaner_dialogs_in_words(cleaner_gw):
