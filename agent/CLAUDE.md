@@ -34,7 +34,7 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
 | Codex, OpenCode | `codex`, `codex_rpc`, `codex_progress`, `acp` (общая основа помощников ACP: процесс, сессии, ход, карточки), `opencode`, `opencode_rpc`, `opencode_events` (метки детей и статусы), `opencode_native` (ветки перед сообщением и дети через защищённый loopback API), `chrome` (Chrome DevTools MCP), `permissions`, `jobs` (Job Object) |
 | DeepSeek Harness | `deepseek` (`DeepSeekRunner` поверх `acp`: `session/resume`, права только у нового чата, пробные сессии во временном хранилище), `deepseek_rpc` (установки npm, Python-пакета и Desktop, запуск `--profile acp`), `deepseek_settings` (наложение профиля Web/Desktop `--patch`, `sweep`), `deepseek_history` (история из файлов сессий v4, `.jsonl[.zstd]`), `deepseek_usage` (баланс DeepSeek) |
 | Ход: ввод и вывод | `timeline`, `image_input`, `attachments`, `diffs`, `discovery` |
-| Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
+| Проекты и файлы | `projects` (`Catalog`, `pid`), `files`, `skills` (навыки проекта `SKILL.md`), `file_stats`, `worktrees`, `gitinfo`, `github_status`, `remote_status`, `project_summary`, `metadata` (кэш), `subscription` и `opencode_usage` (лимиты), `visualizations` |
 | Компьютер | `computer_info`, `selfcheck` (самопроверка моста), `desktop`, `desktop_native` (Windows), `desktop_macos` (macOS) |
 | Обновление | `updater`, `update_helper` (stdlib-хелпер), `winacl` (ACL каталогов Windows), `shortcut` (ярлык меню «Пуск»), `install.ps1`, `install.cmd` |
 | Оболочка | `app` (`Controller` без Tk), `window`, `tray`, `theme`, `i18n` (язык окна, трея и консоли), `__main__` (консольные команды), `transfer` (перенос на новый компьютер: `export-chats`/`import-chats`), `studio_agent.pyw` |
@@ -64,7 +64,9 @@ remote у компонента нет. Версия — `studio_agent/__init__.p
   пропадают при `close`, перезапуске моста и явной настройке (`restart_link`); переподключение и обновление каталога
   моделей сохраняют отметки без продления. Запирание студии сохраняет PIN компьютера; сервер закрывает потоки и кэши и
   блокирует запросы до отпирания.
-- Пределы: текст редактора 2 МиБ, HTML-визуализация 10 МиБ, `raw` 10 МиБ, путь ≤ 1024 знака, `history.limit` 1–100, строки событий и шагов — до
+- Пределы: текст редактора 2 МиБ, HTML-визуализация 10 МиБ, `raw` 10 МиБ, вложений хода — 12 изображений и 12 всего
+  (`limits.IMAGE_COUNT`, `limits.ATTACHMENT_COUNT`, `hello.limits`), навык проекта — 64 КиБ, в списке ≤ 100
+  (`limits.SKILL_MAX`, `limits.SKILLS_MAX`), путь ≤ 1024 знака, `history.limit` 1–100, строки событий и шагов — до
   20 000 знаков с `…` в конце, страница истории — ≤ 512 КиБ, снимок — ≤ `limits.HISTORY_BUDGET` (8 МиБ), файлов в
   списке ≤ 5000, чатов ≤ 200, файлов git ≤ 2000, одновременных ходов — `Config.max_turns` (по умолчанию 12).
   С 0.26.1 запуск однократно переводит прежние лимиты на 12 (`store.migrate_config`, `Config.max_turns_revision`);

@@ -38,6 +38,8 @@ PIN_TRIES = 5                    # неверных PIN подряд — дал�
 OPEN_MAX = 2 * 1024 * 1024       # текст до 2 МиБ (§6)
 RAW_MAX = 10 * 1024 * 1024
 T0 = 1_800_000_000               # часы машины: свои, не настоящие
+LEGACY_LIMITS = {"images": 4, "attachments": 8}  # вложения хода моста без `hello.limits` (до 0.48.0)
+SKILL_FOLDERS = (".agents/skills", ".claude/skills")  # `skills.FOLDERS` моста
 
 
 def enroll(s, login="owner", name="Рабочий ПК", password="password-123", ip="10.77.48.5") -> tuple[int, str]:
@@ -67,7 +69,8 @@ class Refused(Exception):
 class FakeMachine:
     """Компьютер с мостом. `projects` — имя → {"files": {путь: bytes}, "chats": {chat: {"title", "created",
     "modified", "tag", "messages": [...]}}, "git": dict | None}; `script` — события следующего хода (без `t`,
-    `project`, `chat`), `requests` — все просьбы по порядку."""
+    `project`, `chat`), `requests` — все просьбы по порядку. Навыки проекта (мост 0.48.0) —
+    `projects[имя]["skills"] = {(папка, имя): {"description", "text"}}`."""
 
     def __init__(self, projects: dict | None = None, pin: str | None = None):
         self.projects = projects if projects is not None else {}
@@ -147,6 +150,9 @@ class FakeMachine:
         self.visualization_scope = False         # участнику — только визуализации проекта (§17)
         self.visualization_images = False
         self.large_attachments = False
+        self.skills = False                      # навыки проекта: просьбы `skills` и `skill` (мост 0.48.0)
+        self.limits = None                       # `hello.limits` (мост 0.48.0); None — прежние 4 и 8
+        self.timing = False                      # `done` и `state` несут `turn_ms`, `session_ms`, ответ — `model` (0.48.0)
 
     @property
     def hello(self) -> dict:
@@ -163,8 +169,9 @@ class FakeMachine:
                                            "completions", "visualization_scope", "visualization_images", "agent_update_cancel", "large_attachments", "project_create", "codex_models",
                                            "software_update_all", "git_compare", "deepseek_models", "deepseek_usage", "file_upload", "file_search",
                                            "self_check", "agent_log", "answer_takeover", "chat_manage", "open_asks",
-                                           "claude_models", "chat_search_all")
+                                           "claude_models", "chat_search_all", "skills")
                    if getattr(self, name)},
+                **({"limits": self.limits} if self.limits is not None else {}),
                 "defaults": {"model": "opus", "effort": "high", "access": "auto"},
                 **{name: catalog for name, catalog in (("codex", self.codex), ("opencode", self.opencode),
                                                         ("deepseek", self.deepseek))
@@ -445,6 +452,7 @@ class FakeMachine:
 
     def _op_state(self, req, events):
         _, project = self._project(req)
+        chat = project.get("chats", {}).get(req["chat"], {})
         engine = req.get("engine", "claude")
         catalog = self.hello if engine == "claude" else getattr(self, engine) or {}
         saved = project.get("chats", {}).get(req["chat"], {}).get("settings", {})
@@ -453,7 +461,38 @@ class FakeMachine:
                 "effort": req.get("effort") or saved.get("effort") or "high",
                 "access": req.get("access") or saved.get("access") or
                           {"codex": "workspace-write", "deepseek": "default"}.get(engine, "auto")},
-                "context": self.context}
+                "context": self.context,
+                **({key: chat[key] for key in ("turn_ms", "session_ms") if key in chat} if self.timing else {})}
+
+    def _op_skills(self, req, events):
+        if not self.skills:
+            raise Refused("invalid", "неизвестная просьба")
+        _, project = self._project(req)
+        found = project.get("skills", {})
+        items = [{"name": name, "description": found[(folder, name)]["description"], "folder": folder}
+                 for folder in SKILL_FOLDERS
+                 for name in sorted((n for f, n in found if f == folder), key=lambda n: (n.casefold(), n))]
+        return {"items": items, "truncated": False}
+
+    def _op_skill(self, req, events):
+        if not self.skills:
+            raise Refused("invalid", "неизвестная просьба")
+        _, project = self._project(req)
+        if req.get("folder") not in SKILL_FOLDERS or not isinstance(req.get("name"), str):
+            raise Refused("invalid")
+        skill = project.get("skills", {}).get((req["folder"], req["name"]))
+        if skill is None:
+            raise Refused("not_found", "нет такого навыка")
+        return {"text": skill["text"]}
+
+    def _attachments(self, req):
+        """Число вложений хода — словами моста по его пределам (`hello.limits`, без поля — 4 и 8)."""
+        limits = self.limits or LEGACY_LIMITS
+        images, items = req.get("images") or [], req.get("attachments") or []
+        if len(images) > limits["images"]:
+            raise Refused("invalid", f"можно прикрепить до {limits['images']} изображений")
+        if len(images) + len(items) > limits["attachments"]:
+            raise Refused("invalid", f"можно прикрепить до {limits['attachments']} файлов")
 
     def _op_history(self, req, events):
         messages = self._chat(req).get("messages", [])
@@ -477,6 +516,7 @@ class FakeMachine:
         chat_id = req.get("chat")
         if chat_id in self.running:
             raise Refused("running", "в чате уже идёт ход")
+        self._attachments(req)
         chats = project.setdefault("chats", {})
         self.now += 1
         chat = chats.get(chat_id)
@@ -490,7 +530,7 @@ class FakeMachine:
         turn = f"t-{self.turns}"
         self.running[chat_id] = {"turn": turn, "project": req["project"], "rest": list(self.script),
                                  "text": "", "steps": [], "asks": {}, "owner": req.get("window"), "followups": [],
-                                 "timeline": [], "progress": {}}
+                                 "timeline": [], "progress": {}, "started": self.now}
         self.script = []
         if req.get("window"):
             events.append(self._ev(chat_id, {"k": "input_accepted"}))
@@ -502,6 +542,7 @@ class FakeMachine:
         run = self.running.get(req["chat"])
         if run is None:
             raise Refused("idle", "хода нет")
+        self._attachments(req)
         if run.get("owner") and run["owner"] != req.get("window"):
             raise Refused("owned", "задание выполняется в другом окне")
         mode = 'queue' if req.get('engine') in ('opencode', 'deepseek') or req.get('mode') == 'queue' else 'steer'
@@ -857,16 +898,23 @@ class FakeMachine:
 
     def _finish(self, chat_id: str, events: list, done: dict) -> None:
         run = self.running[chat_id]
+        chat = next((project["chats"][chat_id] for project in self.projects.values()
+                     if chat_id in project.get("chats", {})), None)
+        if self.timing and chat is not None and "started" in run:
+            # Время хода — часами машины: от принятия просьбы до ответа (его время — следующая секунда).
+            turn_ms = (self.now + 1 - run["started"]) * 1000
+            chat["turn_ms"], chat["session_ms"] = turn_ms, chat.get("session_ms", 0) + turn_ms
+            done = {**done, "turn_ms": turn_ms, "session_ms": chat["session_ms"]}
         events.append(self._ev(chat_id, done))
         del self.running[chat_id]
-        for project in self.projects.values():
-            chat = project.get("chats", {}).get(chat_id)
-            if chat is not None:
-                self.now += 1
-                chat["messages"].append({"id": f"m-{len(chat['messages'])}", "role": "assistant",
-                                         "text": run["text"], "steps": run["steps"], "time": self.now,
-                                         **{key: run[key] for key in ("timeline", "progress") if run.get(key)}})
-                chat["modified"] = self.now
+        if chat is not None:
+            self.now += 1
+            model = chat.get("settings", {}).get("model") if self.timing else None
+            chat["messages"].append({"id": f"m-{len(chat['messages'])}", "role": "assistant",
+                                     "text": run["text"], "steps": run["steps"], "time": self.now,
+                                     **({"model": model} if isinstance(model, str) else {}),
+                                     **{key: run[key] for key in ("timeline", "progress") if run.get(key)}})
+            chat["modified"] = self.now
 
 
 # ---- канал в процессе службы ---------------------------------------------------------

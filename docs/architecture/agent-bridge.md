@@ -146,6 +146,7 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 
 | Мост | Capability / добавка | Протокол |
 |---|---|---|
+| 0.48.0 | `hello.skills` — навыки проекта: `skills` (имя, описание, папка, без текста) и `skill` (текст одного навыка) из `.agents/skills` и `.claude/skills`, и участнику, и наблюдателю ([ниже](#навыки-пределы-вложений-и-время-хода-0480)); `hello.limits` — `{images, attachments}`: 12 изображений и 12 вложений хода (прежний мост — 4 и 8, сервер — `bridge.turn_limits`); время хода без capability: `done` и `state` несут `turn_ms` и `session_ms`, ответ истории Claude Code и DeepSeek Harness — `model` | §26 |
 | 0.47.0 | `hello.self_check` (`self_check`) — самопроверка моста; `hello.agent_log` (`agent_log`) — последние строки `agent.log` ([ниже](#самопроверка-и-журнал-0470)); уведомление трея о задании, ждущем ответа (локально, без capability); привязка (`POST /api/agent/enroll`, не канал): отказы `428 totp_code` и `400 wrong_code` учётки с приложением-аутентификатором — словами окна и консоли, код приложения или резервный код — в поле «Код из письма или приложения» (`code`); прежний мост показывает их «Студия недоступна (HTTP 428/400)»; доверенное `req.shared_readonly` наблюдателя проекта — только `agent.SHARED_READ_OPS`, без capability (прежний мост поле пропускает, отказывает сервер); `hello.file_upload` (`file_upload`) — файл с устройства в папку проекта, без замены занятого имени без подтверждения (наблюдателю — нет); `hello.file_search` (`file_search`) — поиск строк по содержимому файлов папки (и наблюдателю); перенос на новый компьютер (локально, без capability): консольные `export-chats`/`import-chats` (`transfer`: соответствия чатов и выбор моделей в ZIP без ключа и PIN, пути проектов — на корни нового), `welcome.agent_id` и `name` записываются в `config.json` — после «Заменить компьютер» в Студии (`POST /api/agents/<id>/replace`) мост берёт id и имя прежнего; `hello.open_asks` (`welcome.open_asks`) — все открытые карточки ходов при каждом новом канале (`known: true`, `request_id`): после перезапуска службы студия снова знает ждущие ответа карточки, без второго push; `hello.answer_takeover` — ответ на карточку из окна, не владеющего ходом, принимается и передаёт ему управление, если окно-владельца никто не смотрит (`answer.watched`); `hello.chat_manage` — `chat_rename` (своё название: `custom-title` Claude Code, имя thread Codex) и `chat_delete` (Claude — `delete_session` SDK, Codex — `thread/archive`); OpenCode и DeepSeek Harness — `unsupported` (наблюдателю оба — нет); запускатель Windows `Studio Agent.exe` — автозапуск и ярлык после пробы, откат на `pythonw.exe` (локально, без capability, абзац «С 0.47.0» выше); `hello.claude_models` (`models`, `engine: claude`) — каталог Claude Code по кнопке обновления Студии без смены канала, ответ `{claude: {models, efforts}}`; `hello.chat_search_all` (`chat_search_all`, поле `query`) — поиск по чатам всех проектов одной просьбой для чипа «Агенты» общего поиска (`POST /api/code/search`), находки с `project` и `project_name`, только владельцу | §1, §4, §11, §17, §18, §22, §24, §25 |
 | 0.46.0 | `hello.deepseek` (каталог `{version, models, efforts, defaults, settings}`), `hello.deepseek_models` (`models`, `engine: deepseek`), `hello.deepseek_usage` (баланс) — DeepSeek Harness, четвёртый помощник ([ниже](#deepseek-harness-0460)); `usage.balance`, `history.notice`, отказ `writer_active`; ветвление и подагенты — `unsupported` | §2.2, §4, §9, §21, §22 |
 | 0.45.0 | `hello.mirror_groups` — группы копий: `root`/`folder` в `mirror_identity`, причины пропуска `reasons`; база SQLite с журналом — пропуск, а не отказ | §23.3 |
@@ -215,6 +216,28 @@ session/new и session/resume. Наложение настроек DeepSeek Harn
 | `platform` | `win32` | `darwin` | `linux` |
 | `desktop` | `true` | `true` | `false` до проверки `desktop_linux.available` при старте ядра |
 | `terminal` | — | — | `true` |
+
+## Навыки, пределы вложений и время хода (0.48.0)
+
+- **Навыки проекта** — модуль `skills`: `skills.list_skills` читает папки `skills.FOLDERS` по порядку, записи — по
+  имени без регистра; имя — `skills.NAME`, файл `<папка>/<имя>/SKILL.md` разрешается `files.resolve` (ссылка внутри
+  проекта читается, за проект — запись пропущена), не больше `limits.SKILL_MAX` (65536) байт; описание — из первых
+  `skills.HEAD` байт (`skills.head`: поле `description:` заголовка `---` или первая непустая строка без `#`, до
+  `skills.DESCRIPTION_MAX` знаков). В списке не больше `limits.SKILLS_MAX` (100), дальше — `truncated`. Список
+  кэшируется на 20 с (`metadata.Cache`, ключ `(pid, "skills")`), запись файлов проекта кэш сбрасывает.
+  `skills.read_skill` — текст без заголовка через `files._read` и `files._text`; отказы — `invalid`, `not_found`,
+  `too_large`, `binary`, `outside`. Обе просьбы — в `agent.RESTART_SAFE_OPS` и `agent.SHARED_OPS`; в журнал — только
+  код отказа, ни имени навыка, ни текста.
+- **Пределы вложений** — `limits.IMAGE_COUNT` (12) изображений и `limits.ATTACHMENT_COUNT` (12) вложений всего;
+  `hello.limits` объявляет оба числа, слова отказов `image_input.validate` и `attachments.validate` собираются из них.
+  Сервер принимает `hello.limits` только целыми `1 <= images <= attachments <= 100` и режет до
+  `bridge.LIMITS_MAX`; моста без поля — `bridge.LEGACY_LIMITS`.
+- **Время хода** — `turns.Runner` меряет своими часами `monotonic` (параметр, в тестах — подставной): начало —
+  `Runner.start`, конец — `Runner._time` в начале `_finish`, для всех четырёх помощников. Ход, не дошедший до
+  помощника, не считается. `store.Choices.add_turn` под замком пишет в `choices.json` `turn_ms` и сумму
+  `session_ms` чата (только числа); `Agent._op_state` отдаёт их, если целые и неотрицательные.
+- **Модель ответа** — `sessions.normalize` (Claude Code: последняя запись ответа с моделью вида `limits.MODEL_ID`,
+  не `<synthetic>`) и `deepseek_history.read` (источник ответа DSH) кладут `model` в ответ истории.
 
 ## Самопроверка и журнал (0.47.0)
 
@@ -765,7 +788,7 @@ Node/npm из PATH, без отдельных профилей, статисти
 node_repl, браузерный плагин зависит от доступности browser access host приложения Codex.
 
 (мост ≥ 0.3.3) `hello.images: true` объявляет вложения для обоих помощников. `image_input.validate` проверяет
-до 4 `{mime, data}` (base64): PNG/JPEG/WebP/GIF, сигнатура, 10 МиБ на файл / 30 МиБ всего
+до `limits.IMAGE_COUNT` `{mime, data}` (base64; до 0.48.0 — 4): PNG/JPEG/WebP/GIF, сигнатура, 10 МиБ на файл / 30 МиБ всего
 (мост ≥ 0.22.1, `hello.large_attachments`; старые — 5/8 МиБ), в потоке до
 запуска хода. `Runner.start(images=...)` передаёт их в Agent SDK потоковым user-сообщением с image/source
 base64, Codex — image с data URL в `turn/start.input`; текст может быть пустым. URL и пути из просьбы
@@ -815,6 +838,7 @@ UUID нового чата задаёт студия, настоящий thread 
   у остальных корней pid = sha256(normalized_real_root + NUL + name)[:16]. Добавление, удаление и перестановка
   корней не меняют id оставшихся проектов. Одинаковые имена различаются подписью без полного пути.
   Worktree создаётся рядом с исходным проектом в его разрешённом корне; список видит все разрешённые корни.
+- `skills` — навыки проекта (0.48.0): `list_skills`, `read_skill`, `head` ([выше](#навыки-пределы-вложений-и-время-хода-0480)).
 - `files` — `resolve` (вид пути проверяется **до диска**: имена устройств, ADS `:`, точка или пробел в конце части —
   `invalid`; настоящий путь вне проекта — `outside`), `list_dir`, `read_text`, `read_raw` (base64), `save_text`
   (`version` — sha256 байтов, запись через `atomic.write_atomic`; «только чтение» — `read_only` «файл только для

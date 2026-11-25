@@ -771,7 +771,44 @@ def test_fake_machine_follows_the_protocol():
     assert refused("git", project=p)["code"] == "not_git"
     assert ok("git", project=pid("alpha"))[0]["branch"] == "main"
     assert refused("nope")["code"] == "invalid"
+    # Мост 0.47 (по умолчанию): навыков нет, изображений — до 4, хода нет.
+    assert refused("skills", project=p)["code"] == "invalid"
+    png = {"mime": "image/png", "data": "iVBORw0KGgo="}
+    turns = m.turns
+    many = refused("turn", project=p, chat=new, text="x", model=None, effort=None, images=[png] * 5)
+    assert (many["code"], many["message"], m.turns) == ("invalid", "можно прикрепить до 4 изображений", turns)
+    # Мост 0.48.0: навыки проекта, 12 изображений, время хода.
+    m.skills, m.limits, m.timing = True, {"images": 12, "attachments": 12}, True
+    m.projects["studio"]["skills"] = {(".claude/skills", "review"): {"description": "Ревью", "text": "Смотри diff"},
+                                      (".agents/skills", "plan"): {"description": "План", "text": "Составь план"}}
+    assert ok("skills", project=p)[0] == {"truncated": False, "items": [
+        {"name": "plan", "description": "План", "folder": ".agents/skills"},
+        {"name": "review", "description": "Ревью", "folder": ".claude/skills"}]}
+    assert ok("skill", project=p, name="review", folder=".claude/skills")[0] == {"text": "Смотри diff"}
+    assert refused("skill", project=p, name="none", folder=".claude/skills")["code"] == "not_found"
+    assert refused("skill", project=p, name="review", folder="docs")["code"] == "invalid"
+    many = refused("turn", project=p, chat=new, text="x", model=None, effort=None, images=[png] * 13)
+    assert many["message"] == "можно прикрепить до 12 изображений"
+    m.script = [{"k": "text", "text": "Да"}, {"k": "done", "status": "done"}]
+    _, evs = ok("turn", project=p, chat=new, text="x", model=None, effort=None, images=[png] * 12)
+    assert evs[-1] == {"k": "done", "status": "done", "turn_ms": 1000, "session_ms": 1000}
+    state, _ = ok("state", project=p, chat=new, model=None, effort=None, access=None)
+    assert (state["turn_ms"], state["session_ms"]) == (1000, 1000)
     assert all(r["op"] for r in m.requests) and len(m.requests) == next(n)
+
+
+def test_hello_limits_and_skills_and_the_old_bridge_defaults():
+    """Мост 0.47 без `hello.limits` — прежние 4 и 8; 0.48.0 — свои числа, не больше `LIMITS_MAX`."""
+    old = bridge.parse_hello(FakeMachine().hello)
+    assert "skills" not in old and bridge.turn_limits(old) == bridge.LEGACY_LIMITS == {"images": 4, "attachments": 8}
+    m = FakeMachine()
+    m.skills, m.limits = True, {"images": 12, "attachments": 12}
+    assert bridge.parse_hello(m.hello)["skills"] is True and bridge.turn_limits(bridge.parse_hello(m.hello)) == m.limits
+    assert bridge.turn_limits({"limits": {"images": 50, "attachments": 90}}) == bridge.LIMITS_MAX
+    for bad in ({"images": 0, "attachments": 8}, {"images": True, "attachments": 8}, {"images": 4}, [4, 8],
+                {"images": 9, "attachments": 8}, {"images": 4, "attachments": 101}):
+        with pytest.raises(bridge.ProtocolError):
+            bridge.parse_hello({**m.hello, "limits": bad})
 
 
 def test_fake_machine_admits_members_only_where_the_bridge_does():
