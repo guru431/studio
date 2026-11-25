@@ -6,6 +6,7 @@ import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, me
 import { paintPending } from './chat-pending.js';
 import { paintSuggestions } from './chat-suggest.js';
 import { contextRing } from './chat-context.js';
+import { placeSummary } from './chat-summary.js';
 import { mcpStateWords } from './mcp-sections.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
@@ -2093,7 +2094,7 @@ function build(view, ctx) {
       return;
     }
     const cleaner = !!chat.chat.cleaner;               // от него — «Очищенная копия» ответов
-    keep(feed, msgs.map((m, i) => {
+    keep(feed, placeSummary(msgs.map((m, i) => {
       const last = i === msgs.length - 1;
       const was = shown.get(m);
       // идущий ответ рисуется заново: «жду карту · м:сс» считается от неизменного `wait` по Date.now()
@@ -2103,7 +2104,7 @@ function build(view, ctx) {
       const node = messageNode(m, last);
       shown.set(m, { node, last, cleaner });
       return node;
-    }));
+    }), msgs, chat));
     paintConsents();                                   // решение о файлах MCP могло смениться и у прежних узлов
   }
 

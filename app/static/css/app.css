@@ -1134,6 +1134,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .msg-pending-args dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .msg-pending-actions, .msg-pending-own { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .msg-pending-own .input { flex: 1 1 12rem; min-width: 0; }
+/* отметка хранимого пересказа (chat-summary.js): ранняя часть диалога ушла модели пересказом */
+.msg-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-3);
+  padding-block: var(--space-3); border-block: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-sm);
+  text-align: center; min-width: 0; }
+.msg-summary > span { overflow-wrap: anywhere; min-width: 0; }
+.msg-summary .error:empty { display: none; }
 /* план ответа (chat.js paintTodo, todo_write): отметка состояния — знаком перед шагом */
 .msg-todo:empty { display: none; }
 .chat-todo { padding: var(--space-3) var(--space-5); border: 1px solid var(--line); border-radius: var(--r-control);

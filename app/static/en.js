@@ -4067,6 +4067,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Подсказки": "Suggestions",
   "Вставить": "Insert",
   "Контекст ~{0} % ({1} из {2})": "Context ~{0}% ({1} of {2})",
+  "Ранняя часть свёрнута в пересказ": "Earlier part condensed into a summary",
+  "Пересказ ранней части": "Summary of the earlier part",
   "Модель по паспорту не смотрит фото": "According to its passport, the model does not see photos",
   "Фото получит инструмент MCP «{0}»": "Photos will go to the MCP tool “{0}”",
   "Сменить модель": "Change model",
