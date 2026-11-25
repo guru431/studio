@@ -253,6 +253,12 @@ def test_closed_page_returns_the_queue_to_the_draft(browser, live):        # Rev
             ("type", "#chat-input", "Вернётся"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
             ("type", "#chat-input", "Набранное"),
             ("eval", "hide", "window.dispatchEvent(new Event('pagehide')); true"),
+            # возврат из bfcache: поле показывает черновик с очередью, и правка его не затирает
+            ("eval", "back", "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));"
+                             f" {FIELD}"),
+            ("eval", "edit", "(() => { const f = document.querySelector('#chat-input'); f.value += '!';"
+                             " f.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"),
+            ("eval", "kept", draft_of(CHAT)),
             ("eval", "id", CHAT),
             ("eval", "reload", "location.reload()"),
             ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"
@@ -265,7 +271,8 @@ def test_closed_page_returns_the_queue_to_the_draft(browser, live):        # Rev
         live.gw.chat_hold = False
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["stored"] == "Набранное\n\nВернётся" == v["field"]
+    assert v["back"] == "Набранное\n\nВернётся" and v["kept"] == "Набранное\n\nВернётся!"
+    assert v["stored"] == "Набранное\n\nВернётся!" == v["field"]
     assert v["users"] == ["Первый"] and v["queued"] == []
     assert not problems(r), problems(r)
 

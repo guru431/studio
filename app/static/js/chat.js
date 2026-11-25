@@ -3006,6 +3006,12 @@ function build(view, ctx) {
   window.addEventListener('online', resume);
   window.addEventListener('focus', resume);
   document.addEventListener('visibilitychange', resume);
+  /* страница вернулась из bfcache: `pagehide` дописал очередь к черновику (chat-queue.js) — поле показывает его, иначе
+     первое нажатие перезаписало бы черновик прежним текстом поля */
+  const restored = (event) => {
+    if (event.persisted && alive && chatId !== undefined && !editing && !queuing) dialogDrafts.enter(chatId);
+  };
+  window.addEventListener('pageshow', restored);
   const tick = setInterval(() => {
     const job = jobs.get(chatId);
     if (job && (!job.first || job.thinking)) paint(job.message);   // счётчики «загружаю модель» / «жду ответа» и «Думает…»
@@ -3124,6 +3130,7 @@ function build(view, ctx) {
       historyRead?.controller.abort();
       window.removeEventListener('online', resume);
       window.removeEventListener('focus', resume);
+      window.removeEventListener('pageshow', restored);
       document.removeEventListener('visibilitychange', resume);
       document.removeEventListener('keydown', onKey);
       models.close();
