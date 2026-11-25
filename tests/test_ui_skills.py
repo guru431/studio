@@ -94,6 +94,8 @@ def test_admin_edits_a_default_skill(browser, live, width):
         ("wait", item("#admin-skill-defaults", "Подготовить ТЗ")),
         set_value("#skill-default-lang", "en"), ("wait", item("#admin-skill-defaults", "Prepare the spec")),
         ("eval", "english", "[...document.querySelectorAll('#admin-skill-defaults .skill-item-name')].map(e => e.textContent)"),
+        ("eval", "before", f"""(async () => {{ const m = {API};
+          return (await m.api('GET', '/api/admin/skills?lang=en')).items.find(s => s.builtin === 'acceptance').text; }})()"""),
         press("#admin-skill-defaults", "Acceptance", ".skill-edit"), ("wait", is_open("#skill-dialog")),
         ("eval", "fullText", "document.querySelector('#skill-text').value"),
         set_value("#skill-text", text), ("click", "#skill-save"), ("wait", f"!{is_open('#skill-dialog')}"),
@@ -105,8 +107,8 @@ def test_admin_edits_a_default_skill(browser, live, width):
     assert not result.get("failed"), result
     values = result["values"]
     assert values["english"] == [b.name for b in skills.BUILTIN["en"]]
-    # прогоны идут по порядку параметров на одной службе: 1280 видит правку прогона 320
-    assert values["fullText"] == (skills.BUILTIN["en"][3].text if width == 320 else "Сверь сделанное с критериями, вариант 320.")
+    # окно показывает текст, который сервер хранил до правки (прогоны на одной службе не зависят от порядка)
+    assert values["fullText"] == values["before"] and values["before"] != text
     assert values["server"]["text"] == text and values["server"]["name"] == "Acceptance", json.dumps(values["server"])
     assert values["fits"] is True
     assert not problems(result), result.get("log")

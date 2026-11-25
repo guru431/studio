@@ -2079,8 +2079,6 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-quick-actions h2 { margin: 0 0 var(--space-2); font-size: var(--fs-lg); }
 .code-quick-action { display: block; min-width: 0; width: 100%; text-align: left; overflow: hidden;
   white-space: nowrap; text-overflow: ellipsis; }
-.code-quick-action-row { min-width: 0; }
-.code-quick-action-row textarea { resize: vertical; }
 .code-shared-note { margin: 0; padding: var(--space-5) var(--space-6); border-radius: var(--r-menu); overflow-wrap: anywhere;
   background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .code-more { align-self: center; }
