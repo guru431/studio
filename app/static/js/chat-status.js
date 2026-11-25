@@ -158,6 +158,7 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
       parts?.paint(m);
       const going = ongoing(current, m) ? m : null;
       steps = going ? (going.tools?.length ? going.tools : going.calls || []) : [];
+      steps = steps.filter((s) => !s?.auto);      // шаг автоматического блока «Знаний» — не вызов инструмента
       toolsCount.textContent = String(steps.length);
       const label = tr("Вызовы инструментов: {0}", steps.length);
       if (toolsButton.getAttribute('aria-label') !== label) {

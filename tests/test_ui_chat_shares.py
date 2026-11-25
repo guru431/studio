@@ -169,7 +169,10 @@ def test_reader_sees_built_in_steps_and_the_plan_like_the_chat(focus_browser, li
     client, _, _ = owner(live)
     cid = client.post('/api/chats', json={}).json()['id']
     conn = db.connect(live.db_path)
-    tools = ('[{"kind":"ask","question":"Какой город?"},{"kind":"duplicate","tool":"web_search"},'
+    # первый шаг — автоматический блок «Знаний» (`auto`): не вызов инструмента, в перечень и счёт не входит
+    tools = ('[{"kind":"knowledge","auto":true,"found":1,"sources":["Регламент.pdf"],"text":"",'
+             '"hits":[{"doc":"Регламент.pdf","n":1,"id":"d1"}]},'
+             '{"kind":"ask","question":"Какой город?"},{"kind":"duplicate","tool":"web_search"},'
              '{"kind":"todo"},{"kind":"memory","action":"forget"},'
              '{"kind":"knowledge","query":"отпуск","sources":["Регламент.pdf"]}]')
     plan = '[{"text":"Найти данные","status":"done"},{"text":"Свести","status":"in_progress"}]'

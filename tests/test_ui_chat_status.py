@@ -368,6 +368,59 @@ def test_title_files_tools_counter_and_stats(browser, live, width):
     assert not problems(r) and not problems(r2), (r.get("log"), r2.get("log"))
 
 
+KB_CHAT = f"""(async () => {{ const m = {API};
+  const kb = await m.api('POST', '/api/knowledge', {{ name: 'Справочник' }});
+  const file = new File(['Составь план: сначала шаг один, потом шаг два.'], 'справка.txt', {{ type: 'text/plain' }});
+  await m.api('POST', `/api/knowledge/${{kb.id}}/documents`, file,
+    {{ headers: {{ 'content-type': 'text/plain', 'x-studio-name': encodeURIComponent(file.name) }} }});
+  for (let i = 0; i < 200; i++) {{
+    const docs = (await m.api('GET', '/api/knowledge')).items.find(b => b.id === kb.id);
+    if (JSON.stringify(docs).includes('"ready"')) break;
+    await new Promise(r => setTimeout(r, 50));
+  }}
+  const chat = await m.api('POST', '/api/chats', {{}});
+  await m.api('PUT', `/api/chats/${{chat.id}}/knowledge`, {{ kb_ids: [kb.id] }});
+  location.hash = '#/chat/' + chat.id; return chat.id; }})()"""
+
+
+def test_auto_knowledge_step_is_not_counted_as_a_tool_call(browser, live):
+    """Ревью задачи 15, п. 7: шаг автоматического блока «Знаний» (`auto`) в `tools` идущего ответа, прочитанного с
+    сервера, — не вызов инструмента: счётчик и список строки состояния его не считают."""
+    login = "auto-step"
+    live.add_user(login)
+    hold = {"on": True}
+    live.gw.chat_script = [{"tool_calls": [("todo_write", TODO)]}, ["Готово", " полностью."]]
+    live.gw.chat_hold = lambda: hold["on"] and "Составь план" in json.dumps(live.gw.chat_requests[-1], ensure_ascii=False)
+    try:
+        r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
+            ("wait", "document.querySelector('.settings-nav')"), ("eval", "cid", KB_CHAT),
+            ("wait", "document.querySelector('#chat-input') && document.querySelector('#model-chip')"
+                     ".textContent.includes('local-gemma-abl')"),
+            ("type", "#chat-input", "Составь план"), ("press", "Enter"),
+            ("wait", "!document.querySelector('#chat-tools').hidden")])
+        assert not r.get("failed"), r
+        cid = r["values"]["cid"]
+        r2 = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
+            ("wait", "!document.querySelector('#chat-tools').hidden"),
+            ("eval", "stored", f"""(async () => {{ const m = {API};
+              const last = (await m.api('GET', '/api/chats/' + {CHAT})).messages.at(-1);
+              return [last.status, last.tools.map(s => [s.kind, !!s.auto])]; }})()"""),
+            ("eval", "count", "document.querySelector('#chat-tools .code-active-count').textContent"),
+            ("click", "#chat-tools"), ("wait", "document.querySelector('#chat-tools-menu:popover-open')"),
+            ("eval", "steps", "document.querySelectorAll('#chat-tools-menu .web-list > li').length"),
+            ("press", "Escape")])
+    finally:
+        hold["on"] = False
+    try:
+        assert not r2.get("failed"), r2
+        v = r2["values"]
+        assert v["stored"] == ["streaming", [["knowledge", True], ["todo", False]]]   # авто-шаг пришёл с сервера
+        assert v["count"] == "1" and v["steps"] == 1
+        assert not problems(r) and not problems(r2), (r.get("log"), r2.get("log"))
+    finally:
+        live.gw.chat_hold = False
+        live.gw.chat_script = []
+
 SAVED_NUMBERS = f"""(async () => {{ const m = {API};
   const last = (await m.api('GET', '/api/chats/' + {CHAT})).messages.at(-1);
   return {{ status: last.status, usage: last.usage, gen_ms: last.gen_ms, total_ms: last.total_ms }}; }})()"""

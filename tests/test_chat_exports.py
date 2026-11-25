@@ -396,6 +396,21 @@ def test_export_keeps_sources_error_words_and_marks_an_unfinished_answer(studio)
     assert '<div class="chat-export-plain">Ошибка: шлюз не ответил: 502</div>' in document
 
 
+def test_auto_knowledge_step_is_not_a_tool_call_in_the_export(studio):
+    """Ревью задачи 15, п. 7: шаг автоматического блока «Знаний» (`auto`) — не «Вызовы инструментов» экспорта; вызовы
+    рядом с ним считаются без него, а ответ с одним авто-шагом раздела вызовов не получает."""
+    _, uid = regular(studio)
+    auto = {'kind': 'knowledge', 'auto': True, 'found': 1, 'sources': ['справка.txt'], 'text': '',
+            'hits': [{'doc': 'справка.txt', 'n': 1, 'id': 'd1'}]}
+    state.DB.execute("UPDATE messages SET tools=? WHERE id='chat-a'", (json.dumps([auto]),))
+    text = studio.c.post('/api/chats/chat/export', json={'format': 'md'}).text
+    assert 'Вызовы инструментов' not in text and '- Инструмент' not in text
+    state.DB.execute("UPDATE messages SET tools=? WHERE id='chat-a'",
+                     (json.dumps([auto, {'kind': 'mcp', 'server': 'files', 'tool': 'read', 'text': 'x'}]),))
+    text = studio.c.post('/api/chats/chat/export', json={'format': 'md'}).text
+    assert '### Вызовы инструментов (1)\n\n- MCP · files · read' in text and '- Инструмент' not in text
+
+
 def test_english_export_translates_studio_words_but_not_the_conversation(studio):
     """FINDINGS 06:F4: the file follows the device's interface language (`lang`); messages and names stay as is."""
     _, uid = regular(studio)

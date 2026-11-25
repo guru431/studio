@@ -158,8 +158,10 @@ def _parts(snapshot: dict, lang: str) -> list[tuple[str, str]]:
             parts.append(("md", "*" + word("(ответ не дописан)", lang) + "*"))
         if message.get("error"):
             parts.append(("plain", word("Ошибка: {}", lang, server_word(message["error"], lang))))
-        if message.get("tools"):
-            parts.append(("md", _sources(message["tools"], lang)))
+        # шаг автоматического блока «Знаний» (`auto`) — не вызов инструмента: в перечень и счёт вызовов не входит
+        called = [step for step in message.get("tools") or [] if not (isinstance(step, dict) and step.get("auto"))]
+        if called:
+            parts.append(("md", _sources(called, lang)))
         for step in message.get("steps", []):
             tool = step.get("tool")
             tool = server_word(tool, lang) if isinstance(tool, str) else tool      # как страница: message(s.tool)
