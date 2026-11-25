@@ -4,7 +4,7 @@ import { tr } from './i18n.js';
 import { timeOnly } from './time.js';
 import { el } from './ui.js';
 
-export function opencodeView(form, text, { enabled, shared, changed }) {
+export function opencodeView(form, { enabled, shared, changed }) {
   if (!enabled) return { options: () => ({}), settings() {}, progress() {}, busy() {} };
   const mode = el('select', { id: 'code-agent-mode', 'aria-label': tr('Основной агент') },
     el('option', { value: '' }, tr('По настройкам OpenCode')));

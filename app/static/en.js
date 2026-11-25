@@ -467,7 +467,6 @@ globalThis.StudioEnglish = Object.freeze({
   "По настройкам OpenCode": "Use OpenCode settings",
   "Дополнительные каталоги": "Additional directories",
   "Полные пути, по одному на строку": "Absolute paths, one per line",
-  "Команды OpenCode": "OpenCode commands",
   "Настройки OpenCode": "OpenCode settings",
   "Повторная попытка {0}": "Retry attempt {0}",
   "Сжимаю контекст…": "Compacting context…",

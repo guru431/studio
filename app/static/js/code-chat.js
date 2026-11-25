@@ -512,7 +512,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
     if (err.code === 'closed') closed();
     else showStatus(words(err));
   } });
-  const openCode = opencodeView(form, text, { enabled: engine === 'opencode' && agent?.opencode_features,
+  const openCode = opencodeView(form, { enabled: engine === 'opencode' && agent?.opencode_features,
     shared: agent?.shared, changed: () => loadState() });
   // Сводка наложения — настройки компьютера владельца: участнику совместного проекта её не показываем
   const deepseek = engine === 'deepseek' && !agent?.shared ? deepseekView(form, agent?.deepseek?.settings) : null;
