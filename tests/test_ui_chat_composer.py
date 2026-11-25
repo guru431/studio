@@ -91,7 +91,7 @@ def test_passport_warning_and_context_ring(browser, live, width, monkeypatch):
         ("wait", f"!{RING}.hidden"),
         ("eval", "calm", f"[{RING}.className, {RING}.getAttribute('aria-label')]"),
         ("eval", "sizes", f"""[{RING}.querySelector('.ctx-ring').getBoundingClientRect().width,
-          {RING}.getBoundingClientRect().height, document.querySelector('#model-chip').getBoundingClientRect().height]"""),
+          !!{RING}.closest('.code-status-bar')]"""),
         long_text(21600), ("wait", f"{RING}.classList.contains('ctx-warn')"),
         ("eval", "warn", f"[{RING}.className, {RING}.title]"),
         long_text(28500), ("wait", f"{RING}.classList.contains('ctx-full')"),
@@ -104,8 +104,8 @@ def test_passport_warning_and_context_ring(browser, live, width, monkeypatch):
     assert v["warned"] == "Модель по паспорту не смотрит фотоУбрать фотоСменить модель"
     assert v["left"] == "notes.txt"
     assert v["calm"][0] == "ctx-meter" and v["calm"][1].startswith("Контекст ~")
-    ring, meter, chip = v["sizes"]
-    assert ring == 18 and abs(meter - chip) <= 1
+    ring, in_bar = v["sizes"]
+    assert ring == 18 and in_bar is True       # кольцо — кнопка строки состояния над полем (chat-status.js)
     assert "ctx-warn" in v["warn"][0] and "ctx-full" not in v["warn"][0]
     assert v["warn"][1].replace(" ", " ").endswith("из 10 000)") and "~7" in v["warn"][1]
     assert "ctx-full" in v["full"] and "ctx-warn" not in v["full"]

@@ -976,6 +976,8 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 
 .chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .chat-head { gap: var(--space-4); }
+.chat-head h1 { flex: 0 1 auto; min-width: 0; }
+.chat-title-actions[hidden] { display: none; }
 /* чип модели — первым в ряду под полем; размеры — .ctl-chip («Агенты»), сжимается до многоточия */
 .model-wrap { display: flex; flex: 0 1 auto; min-width: 0; max-width: 220px; }
 .model-chip { flex: 0 1 auto; max-width: 100%; }
@@ -1076,9 +1078,12 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
 .chat-passport .btn-link { padding: 0; }
 .chat-edit-note { margin: 0; font-size: var(--fs-sm); color: var(--text-2); }
 .chat-edit-note .btn { margin-inline-start: var(--space-3); }
-/* кольцо заполнения контекста (chat-context.js): ячейка ряда высотой --ctl-h, само кольцо — 18 px, как у «Агентов» */
+/* кольцо заполнения контекста (chat-context.js): кнопка строки состояния, само кольцо — 18 px, как у «Агентов»;
+   размер ячейки задаёт status-bar.js */
 .ctx-meter { --context-color: var(--accent); --context-percent: 0%; display: inline-grid; place-items: center; flex: none;
-  align-self: stretch; min-width: var(--ctl-h); min-height: var(--ctl-h); border-radius: var(--ctl-radius); }
+  width: var(--h-sm); height: 36px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer;
+  border-radius: var(--ctl-radius); }
+.ctx-meter.ctx-none { --context-color: var(--line); }
 .ctx-meter[hidden] { display: none; }
 .ctx-meter.ctx-warn { --context-color: var(--caution); }
 .ctx-meter.ctx-full { --context-color: var(--danger); }
@@ -2226,7 +2231,23 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-status-controls { display: flex; flex: 0 0 60%; justify-content: flex-end; align-items: center;
   min-width: 0; max-width: 60%; gap: var(--space-2); }
 .code-status-fixed { display: flex; flex: none; align-items: center; gap: var(--space-2); }
-.code-status-controls[data-compact="true"] :is(.code-cache, .code-usage) > span { display: none; }
+.code-status-controls[data-compact="true"] :is(.code-cache, .code-usage, [data-status="cache"], [data-status="usage"]) > span { display: none; }
+/* строка состояния «Чата» (chat-status.js): над полем, той же ширины, что поле */
+.chat-status-bar { flex: none; width: calc(100% - 2 * var(--space-7)); max-width: 900px; align-self: center;
+  margin: 0 var(--space-7) var(--space-2); }
+.chat-status-bar :is(#chat-files-open, #chat-tools) { position: relative; }
+.chat-tools-menu { width: min(420px, calc(100 * var(--vw) - 24px)); }
+.chat-tools-menu .web-list { margin: 0 var(--space-3) var(--space-3); padding-left: var(--space-7); overflow-wrap: anywhere; }
+.chat-file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); max-height: calc(55 * var(--dvh)); overflow: auto; }
+.chat-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-1) var(--space-4); }
+.chat-file-name { min-width: 0; overflow-wrap: anywhere; }
+.chat-file-about { grid-column: 1; }
+.chat-file-open { grid-column: 2; grid-row: 1 / span 2; }
+.chat-file-picture { display: block; max-width: 100%; max-height: calc(70 * var(--dvh)); margin: 0 auto; }
+.chat-stats-scroll { max-width: 100%; overflow-x: auto; }
+.chat-stats-table td, .chat-stats-table th { white-space: nowrap; }
+.chat-stats-model { white-space: normal; overflow-wrap: anywhere; }
+#chat-context-dialog, #chat-stats-dialog, #chat-files-dialog { width: min(560px, calc(100 * var(--vw) - 24px)); }
 .code-chat-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
 .code-status-measure { position: absolute; left: 0; top: 0; width: max-content; max-width: none;
   visibility: hidden; pointer-events: none; }

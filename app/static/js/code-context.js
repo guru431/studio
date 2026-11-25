@@ -7,7 +7,7 @@ const number = (value) => Number.isFinite(value) ? value.toLocaleString(locale()
 const NO_DATA = () => tr("нет данных");
 
 /** Длительность по миллисекундам моста: «{0} с» (меньше 10 с — до десятой), «{0} мин {1} с», «{0} ч {1} мин». */
-function duration(ms) {
+export function duration(ms) {
   if (!Number.isFinite(ms) || ms < 0) return NO_DATA();
   const seconds = ms / 1000;
   if (seconds < 60) {

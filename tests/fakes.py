@@ -554,6 +554,9 @@ class FakeCloud:
         self.chunk_pause = 0.05          # пауза между кусками: браузер видит поток, а не готовый ответ
         self.chat_ending = "stop"        # finish_reason конца потока; None — поток рвётся без него и без [DONE]
         self.chat_error = None           # (код, тело) вместо ответа /v1/chat/completions
+        #: `usage` потока — кусок `choices: []` перед [DONE], если запрос просит `stream_options.include_usage`
+        self.chat_usage = None
+        self.reject_usage = False        # 400 на запрос со `stream_options`, как сервис, что параметра не знает
         cloud = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -600,6 +603,9 @@ class FakeCloud:
                 cloud.chat_requests.append(body)
                 if cloud.chat_error is not None:
                     return self._json(*cloud.chat_error)
+                if cloud.reject_usage and "stream_options" in body:
+                    return self._json(400, {"error": {
+                        "message": "Unrecognized request argument supplied: stream_options"}})
                 if not body.get("stream"):
                     return self._json(200, {"choices": [{"message": {"role": "assistant",
                                                                      "content": "".join(cloud.chat_reply)},
@@ -618,6 +624,9 @@ class FakeCloud:
                 if cloud.chat_ending is not None:
                     end = {"choices": [{"index": 0, "delta": {}, "finish_reason": cloud.chat_ending}]}
                     self.wfile.write(f"data: {json.dumps(end)}\n\n".encode())
+                    if cloud.chat_usage is not None and (body.get("stream_options") or {}).get("include_usage"):
+                        usage = {"choices": [], "usage": cloud.chat_usage}
+                        self.wfile.write(f"data: {json.dumps(usage)}\n\n".encode())
                     self.wfile.write(b"data: [DONE]\n\n")
 
             def log_message(self, *_args):

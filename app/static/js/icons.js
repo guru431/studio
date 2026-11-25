@@ -58,6 +58,7 @@ export const ICONS = {
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   swap: '<path d="M5 8h14l-3-3M19 16H5l3 3"/>',
   folder: '<path d="M3 6.5h6l2 2h10V19H3z"/>',
+  stats: '<path d="M3 20h18M6 20v-7M11 20V5M16 20v-10M21 20v-4"/>',
   file: '<path d="M6 3h8l4 4v14H6zM14 3v4h4"/>',
   branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/>'
     + '<path d="M6 7v10M18 7v3a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4"/>',

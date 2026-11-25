@@ -56,6 +56,7 @@ import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { rolesBlock } from './roles.js';
 import { skillsBlock } from './skills.js';
 import { knowledgeBlock } from './knowledge.js';
+import { statsBlock } from './chat-stats.js';
 import { glossaryBlock } from './translate-glossary.js';
 import { smtpSettings } from './smtp-settings.js';
 import { SPEECH_LANGUAGES, dictationLanguage, setDictationLanguage } from './mic.js';
@@ -1890,7 +1891,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       panel.replaceChildren(back, note);
       return;
     }
-    panel.replaceChildren(back, sectionBlock(s), ...(other && s.id === 'chat' ? [rolesBlock(), chatMcpBlock(), memoryBlock(host), knowledgeBlock()] : []),
+    panel.replaceChildren(back, sectionBlock(s), ...(other && s.id === 'chat' ? [rolesBlock(), chatMcpBlock(), memoryBlock(host), statsBlock(host), knowledgeBlock()] : []),
       ...(voices && s.id === 'speech' ? [voicesBlock(host)] : []), ...(other && s.id === 'translate' ? [glossaryBlock()] : []));
   }
 

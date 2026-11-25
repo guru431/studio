@@ -6,6 +6,12 @@ import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, me
 import { paintPending } from './chat-pending.js';
 import { paintSuggestions } from './chat-suggest.js';
 import { contextRing } from './chat-context.js';
+import { chatStatus } from './chat-status.js';
+import { contextWindow } from './chat-context-window.js';
+import { statsDialog } from './chat-stats.js';
+import { filesDialog } from './chat-dialog-files.js';
+import { chatTitle } from './chat-title.js';
+import { usageBody, usageOf, usageRefused, withSpeed } from './chat-usage.js';
 import { placeSummary } from './chat-summary.js';
 import { mcpStateWords } from './mcp-sections.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
@@ -109,12 +115,11 @@ import { renderMarkdown, renderMarkdownInto } from './markdown.js';
 import { saveMedia } from './save.js';
 import { CORS } from './settings.js';
 import { readSSE } from './sse.js';
-import { button, el, field, focusDesktop, openDialog, plural, withCard, words } from './ui.js';
+import { button, el, field, focusDesktop, openDialog, plural, words } from './ui.js';
 import { shareDialog, shareMenu } from './chat-share.js';
 import { roleChooser } from './roles.js';
 import { readAloud } from './speech-read.js';
 import { startConversation } from './chat-voice.js';
-import { NAMES } from './sections-meta.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
   '.ini', '.log', '.py', '.js', '.ts', '.html', '.css', '.sql', '.sh', '.ps1'];   // как documents.SUFFIXES
@@ -243,6 +248,7 @@ async function saveAnswer(chatId, message, body) {
 }
 
 function notify(job, final, replaced = false) {
+  job.eventAt = Date.now();                        // строка состояния: «последнее событие N с назад»
   if (job.voice) {                                 // ход «Разговора» (chat-voice.js): текст ответа — в озвучку
     job.voice.update(job.message.content, final, replaced);
     if (final) job.voice.resolve(job.message.status);
@@ -274,6 +280,7 @@ function thinkEnd(job) {
 function append(job, text) {
   thinkEnd(job);
   job.first = true;
+  job.firstAt ??= Date.now();      // начало текста — от него время генерации (`gen_ms`) прямого подключения
   job.tool = null;                 // модель снова пишет — инструмент кончился
   job.scan = null;                 // и скан распознан
   job.message.content += text;
@@ -316,6 +323,7 @@ async function readServer(job, response) {
       }
       else if (event === 'todo' && data && Array.isArray(data.items)) {   // план ответа (todo_write) — блок над ним
         job.message.todo = data.items;
+        (job.message.calls ||= []).push({ kind: 'todo' });   // встроенный вызов без события `tool`: счётчик строки
         notify(job, false);
       }
       else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {
@@ -431,11 +439,15 @@ async function readBrowser(job, turn) {
   try {
     const token = await tokenFor(job.connId, turn.url);
     let response;
+    // `usage` в потоке (chat-usage.js): сервис отверг параметр — один повтор без него, подключение запомнено
+    const ask = () => fetch(turn.url, { method: 'POST', signal: job.controller.signal,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(turn.params || {}), ...usageBody(job.connId), model: turn.model, messages: turn.messages,
+        stream: true }),
+      credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
     try {
-      response = await fetch(turn.url, { method: 'POST', signal: job.controller.signal,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...(turn.params || {}), model: turn.model, messages: turn.messages, stream: true }),
-        credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
+      response = await ask();
+      if (response.status === 400 && usageRefused(job.connId, 400, await response.clone().text())) response = await ask();
     } catch (err) {
       cut = err instanceof TypeError;
       throw cut ? new Error(CORS) : err;
@@ -453,6 +465,7 @@ async function readBrowser(job, turn) {
         }
         if (!data || typeof data !== 'object') continue;
         if (data.error) throw new Error(tr("Модель прервала ответ: {0}", String(data.error.message || data.error).slice(0, 300)));
+        if (data.usage) job.usage = usageOf(data.usage) || job.usage;   // кусок `choices: []` перед [DONE]
         for (const choice of data.choices || []) {
           const text = choice && choice.delta && choice.delta.content;
           if (typeof text === 'string' && text) append(job, text);
@@ -491,7 +504,13 @@ async function readBrowser(job, turn) {
   // признак жизни — до конца сохранения: пока идут повторы PUT, другие вкладки не считают ответ брошенным
   // слова ошибки сервер хранит у ответа (`messages.error`): видны и после перечитывания диалога
   const error = status === 'error' ? clip(wellFormed(job.message.error || ''), ERROR_MAX) : '';
-  job.saving = { content: job.message.content, status, ...(error ? { error } : {}) };
+  // токены и время ответа — серверу (решение 19 спеки 2026-11-25): целые от 0 до chat.MS_MAX
+  const ended = Date.now();
+  const ms = (since) => Math.min(86400000, Math.max(0, Math.round(ended - since)));
+  const numbers = { ...(job.usage ? { usage: job.usage } : {}), ...(job.firstAt ? { gen_ms: ms(job.firstAt) } : {}),
+    total_ms: ms(job.started) };
+  Object.assign(job.message, { usage: null, gen_ms: null }, numbers);
+  job.saving = { content: job.message.content, status, ...(error ? { error } : {}), ...numbers };
   await saveAnswer(job.chatId, job.message, job.saving);
   clearInterval(beat);
   finish(job);
@@ -709,6 +728,7 @@ function build(view, ctx) {
   let droppedNote = '';        // адрес подключения чипа убран из списка администратора — слова для #model-note
   let listed = [];             // диалоги списка (GET /api/chats): сколько ещё на удалённом подключении
   let moveFor = null;          // диалог, под чипом которого стоит предложение #chat-move
+  let prefill = null;          // { id, text } — текст в поле диалога после его загрузки (openWith)
   const parts = new WeakMap(); // сообщение → его узлы в ленте
   const received = new WeakMap(); // сообщение с сервера → его JSON при получении (settle)
   const shown = new WeakMap();    // сообщение → { node, last, cleaner }: узел в ленте и с чем он нарисован
@@ -733,7 +753,11 @@ function build(view, ctx) {
   // диалог через шлюз Cleaner (`routed`, cleaner_route.routes): признак рядом с выбором модели
   const routedTag = el('span', { class: 'tag server chat-routed', id: 'chat-routed', hidden: true, title: tr("Диалог идёт через Cleaner") },
     el('span', { 'aria-hidden': 'true' }, 'Cleaner'), el('span', { class: 'sr' }, tr("Диалог идёт через Cleaner")));
-  const head = el('header', { class: 'head chat-head' }, toggle, el('h1', {}, NAMES.chat), el('span', { class: 'grow' }));
+  // название диалога и «Действия с диалогом» (chat-title.js): те же окна, что в меню строки списка
+  const title = chatTitle({ rename: (item) => renameDialog(item), remove: (item) => deleteDialog(item),
+    said: (text) => { answering.textContent = text; } });
+  const head = el('header', { class: 'head chat-head' }, toggle, title.node, title.actions, title.menu,
+    el('span', { class: 'grow' }));
   const modelNote = el('p', { class: 'chat-model-note error', id: 'model-note', 'aria-live': 'polite' });
   const feed = el('div', { class: 'feed' });
   const scroller = el('div', { id: 'messages', class: 'messages' }, feed);
@@ -796,10 +820,10 @@ function build(view, ctx) {
       if (!sending) closeEdit();
     }));
   let passportKey = '';
-  const ring = contextRing(estimateContext);
+  const ring = contextRing(estimateContext, { open: () => ctxWindow.open() });
   const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, moveNote, editNote, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
-      kbs.chip, kbs.panel, thinkToggle, ring.node), send, stop),
+      kbs.chip, kbs.panel, thinkToggle), send, stop),
     webNote, talkNote);
   const fieldTools = inputBox.box.querySelector('.field-tools');
   fieldTools.insertBefore(talkToggle, fieldTools.querySelector('.mic'));
@@ -807,6 +831,18 @@ function build(view, ctx) {
   const main = el('section', { class: 'chat-main' }, head, modelNote, scroller, notice, answering, form);
   const root = el('div', { class: 'chat' }, aside, backdrop, main);
   view.append(root);
+  // строка состояния над полем (chat-status.js), окна «Диалог и контекст», «Статистика», «Файлы диалога»
+  const ctxWindow = contextWindow(root, { dialog: () => (chatId && chat?.chat.id === chatId ? chat : null),
+    connection: () => connName.textContent, estimate: estimateContext,
+    busy: () => jobs.has(chatId) || remoteStream(), openWith });
+  const status = chatStatus(root, { ring: ring.node, job: () => jobs.get(chatId) || null,
+    last: () => {
+      const m = chat?.chat.id === chatId ? chat.messages.findLast((x) => x.role === 'assistant') : null;
+      return m ? liveOf(m) : null;
+    },
+    local: () => !!chat?.chat.local, stepNode, stats: () => statsDialog(root),
+    files: () => { if (chatId) filesDialog(root, chatId); } });
+  form.before(status.bar);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
   if (input.value) autosize();
   const sharing = shareMenu(root, { id: 'chat-share', content: scroller, archive: true,
@@ -818,6 +854,8 @@ function build(view, ctx) {
   function shareContext() {
     const current = chat?.chat.id === chatId ? chat.chat : null;
     share.hidden = !current;
+    title.set(current);
+    status.dialog(current ? chat : null);
     sharing.set(current ? { title: current.title || tr("Чат"), share: `/api/chats/${chatId}/share`,
       export: `/api/chats/${chatId}/export`, archive: `/api/chats/${chatId}/archive`,
       blocked: current.protected ? PROTECTED_SHARE : null } : null);
@@ -934,6 +972,19 @@ function build(view, ctx) {
       if (chatId === item.id) newChat();
       loadList();
     });
+  }
+
+  /* открыть диалог с текстом в поле («Новый диалог с итогом», ветка): текст кладёт open() после загрузки */
+  function openWith(id, text) {
+    if (id === chatId && chat) {
+      input.value = text;
+      autosize();
+      ring.schedule();
+      return;
+    }
+    prefill = { id, text };
+    loadList();
+    ctx.navigate('chat/' + id);
   }
 
   function newChat() {
@@ -2021,8 +2072,8 @@ function build(view, ctx) {
     // карта занята (503 шлюза): своя вкладка — событие `wait`, ответ, который читает не она, — `wait` с сервера
     const waiting = m.status === 'streaming' && (job ? job.wait != null : Number.isFinite(m.wait));
     p.nowait.hidden = !waiting;
-    if (waiting) text = withCard(tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000)),
-      job ? job.card : m.card);
+    // очередь карты и оценка — в строке состояния (chat-status.js), под ответом — только время ожидания
+    if (waiting) text = tr("жду карту · {0}", job ? elapsed(job.wait) : elapsed(Date.now() - m.wait * 1000));
     else if (m.status === 'streaming' && m.recovery) {
       text = m.recovery === 'summary' ? tr("Сжимаю историю диалога…") : tr("Продолжаю ответ…");
     } else if (m.status === 'streaming') {
@@ -2042,8 +2093,8 @@ function build(view, ctx) {
     p.meta.textContent = text;
     p.meta.className = `msg-meta${kind}`;
     p.model.hidden = !m.model || m.status === 'streaming';
-    if (!p.model.hidden) p.model.textContent = m.cleaner_raw != null || m.cleanerTurn || m.cleaner_sent
-      ? tr("{0} · через Cleaner", m.model) : m.model;
+    if (!p.model.hidden) p.model.textContent = withSpeed(m.cleaner_raw != null || m.cleanerTurn || m.cleaner_sent
+      ? tr("{0} · через Cleaner", m.model) : m.model, m);
     const variants = m.status !== 'streaming' && m.variants?.length > 1 ? m.variants : null;
     paintCompare(p, m, variants);
     p.actions.replaceChildren();
@@ -2159,6 +2210,7 @@ function build(view, ctx) {
     send.hidden = busy;
     stop.hidden = !busy;
     paintGuard();
+    status.paint();
   }
 
   function schedulePoll() {
@@ -2279,6 +2331,11 @@ function build(view, ctx) {
       if (mine !== opened) return;
       chat = settle(data);
       shareContext();
+      if (prefill?.id === id) {                      // openWith: текст — в поле открытого диалога
+        input.value = prefill.text;
+        autosize();
+        ring.schedule();
+      }
     } catch (err) {
       if (mine !== opened) return;
       feed.replaceChildren(el('p', { class: 'error feed-note' }, words(err)));
@@ -2286,6 +2343,7 @@ function build(view, ctx) {
       schedulePoll();
       return;
     }
+    if (prefill?.id === id) prefill = null;
     renderFeed();
     paintChip();
     syncBusy();
@@ -2721,6 +2779,7 @@ function build(view, ctx) {
         paintTimer = null;
         lastPaint = Date.now();
         paint(job.message);
+        status.paint();
         scrollDown(false);
       }, Math.max(0, RENDER_MS - (Date.now() - lastPaint)));
       return;
@@ -2759,6 +2818,7 @@ function build(view, ctx) {
   const tick = setInterval(() => {
     const job = jobs.get(chatId);
     if (job && (!job.first || job.thinking)) paint(job.message);   // счётчики «загружаю модель» / «жду ответа» и «Думает…»
+    status.paint();                                // время стадии и «последнее событие N с назад»
   }, 1000);
 
   fresh.addEventListener('click', newChat);
@@ -2863,6 +2923,7 @@ function build(view, ctx) {
       if (talking) talking();
       closeEdit();
       ring.hide();
+      status.unmount();
       inputDraft.save();
       sharing.unmount();
       alive = false;

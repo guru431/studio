@@ -125,6 +125,8 @@ def test_busy_card_shows_the_wait_and_do_not_wait_ends_it(browser, live, width):
             ('type', '#chat-input', 'Wait for the card'), ('click', '#send'),
             ('wait', f"{last}?.querySelector('.msg-meta').textContent.startsWith('жду карту · ')"),
             ('wait', f"!{last}.querySelector('.msg-nowait').hidden"),
+            ('wait', "document.querySelector('#chat-activity').dataset.stage === 'card'"),
+            ('eval', 'stage', "document.querySelector('#chat-activity').textContent.startsWith('жду карту')"),
             ('eval', 'overflow', 'document.documentElement.scrollWidth <= document.documentElement.clientWidth'),
             ('click', '#messages .msg.assistant .msg-nowait'),
             ('wait', f"{last}.querySelector('.msg-meta').textContent === 'карта занята — ждать не стали'"),
@@ -136,6 +138,7 @@ def test_busy_card_shows_the_wait_and_do_not_wait_ends_it(browser, live, width):
         live.gw.chat_error = None
     assert not result.get('failed'), result
     assert result['values']['overflow'] is True and result['values']['hidden'] is True
+    assert result['values']['stage'] is True               # очередь карты — в строке состояния (chat-status.js)
 
 
 def test_late_recovery_does_not_replace_another_chat_or_its_draft(browser, live):
