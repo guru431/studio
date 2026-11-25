@@ -124,6 +124,36 @@ def test_queue_takes_text_without_the_skill_chip(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_edit_during_an_answer_from_another_device_says_why(browser, live):
+    """Правка сообщения открыта, ответ пошёл с другого устройства: Enter уводит в очередь, а правка в неё не встаёт —
+    отказ словами, правка остаётся в поле."""
+    import state
+    live.add_user("queue-edit")
+    released = lambda: state.DB.execute("SELECT 1 FROM chats WHERE title = 'go-edit'").fetchone() is not None  # noqa: E731
+    live.gw.chat_hold = lambda: ("с телефона" in json.dumps(live.gw.chat_requests[-1], ensure_ascii=False)
+                                 and not released())
+    phone = f"""(async () => {{
+      const r = await {API}.api('POST', '/api/chats/' + {CHAT} + '/turns', {{ text: 'с телефона' }});
+      window.held = r.body.getReader(); await window.held.read();
+      window.dispatchEvent(new Event('focus')); return true; }})()"""
+    edit = "([...document.querySelectorAll('#messages .msg.user')].at(-1).querySelector('.msg-edit').click(), true)"
+    field = """(() => { const f = document.querySelector('#chat-input'); f.value = 'Правка';
+      f.dispatchEvent(new Event('input', { bubbles: true })); f.focus(); return true; })()"""
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-edit"),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", ANSWERED),
+            ("eval", "edit", edit), ("wait", f"{FIELD} === 'Первый'"),
+            ("eval", "phone", phone), ("wait", "!document.querySelector('#stop').hidden"),
+            ("eval", "field", field), ("press", "Enter"), ("wait", ERROR),
+            ("eval", "refused", f"[{ERROR}, {QUEUED}, {FIELD}]"),
+            release("go-edit"), ("wait", f"{USERS}.length === 2 && {ANSWERED}")])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    assert r["values"]["refused"] == ["Ответ ещё идёт — сохраните правку после него", [], "Правка"]
+    assert not problems(r), problems(r)
+
+
 def test_queue_survives_a_turn_from_another_device(browser, live):         # Review Focus 4: 409 busy
     """Перед POST хода «Второй» из очереди тот же API начинает удержанный ход «с телефона»: отказ 409 `busy` — элемент
     остаётся в очереди и уходит один раз, когда ответ «телефона» кончился."""

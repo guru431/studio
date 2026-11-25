@@ -1455,7 +1455,12 @@ function build(view, ctx) {
   function enqueue() {
     quote.fold();
     const text = input.value;
-    if (editing || !chatId || (!text.trim() && !skills.chosen())) return;
+    if (!chatId) return;
+    if (editing) {                    // ответ пошёл (с другого устройства), пока открыта правка: она ждёт конца ответа
+      notice.textContent = tr("Ответ ещё идёт — сохраните правку после него");
+      return;
+    }
+    if (!text.trim() && !skills.chosen()) return;
     if (atts.length) {
       notice.textContent = tr("В очередь встаёт только текст — вложения отправьте после ответа");
       return;
