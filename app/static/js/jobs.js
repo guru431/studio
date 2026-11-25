@@ -28,6 +28,7 @@ import { svg } from './icons.js';
 import { timeOnly } from './time.js';
 import { el, withCard, words } from './ui.js';
 import { allCodeActivity, codeActivityState, codeActivityLabel, refreshCodeActivity } from './code-activity.js';
+import { jobSignal } from './sound.js';
 import { ENGINE_NAMES } from './code-options.js';
 import { sectionName } from './sections-meta.js';
 
@@ -273,6 +274,7 @@ function take(out, full = false) {
   const known = new Map(finished.map((f) => [f.id, f.finished]));
   const fresh = out.finished.filter((f) => !known.has(f.id) || f.finished > known.get(f.id));
   if (!first && !out.push) for (const item of fresh) notify(item);
+  if (!first && fresh.length) jobSignal(fresh);
   first = false;
   const floor = out.window_start ?? out.now - RECENT_SEC;
   sinceVisit = floor < out.now - RECENT_SEC;

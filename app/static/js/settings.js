@@ -40,6 +40,7 @@ import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './c
 import { mirrorsBlock } from './mirror-list.js';
 import { ntfyBlock } from './ntfy-settings.js';
 import { notifyPrefsBlock } from './notify-prefs.js';
+import { soundBlock } from './sound.js';
 import { pushFlag } from './push-sync.js';
 import { connectionForm, editConnection, SECTION_NAMES, sectionsText } from './connection-form.js';
 import { profileDialog } from './connection-profile.js';
@@ -1878,7 +1879,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       return;
     }
     if (shown === 'notifications') {
-      group('notifications', notifyBlock(), notifyPrefsBlock(), ntfyBlock());
+      group('notifications', notifyBlock(), soundBlock(), notifyPrefsBlock(), ntfyBlock());
       return;
     }
     if (shown === 'data') {

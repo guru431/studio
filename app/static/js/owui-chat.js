@@ -24,6 +24,7 @@ import { icon, iconButton } from './icons.js';
 import { renderMarkdownInto } from './markdown.js';
 import { paintOwuiPending } from './owui-pending.js';
 import { picker } from './picker.js';
+import { signal } from './sound.js';
 import { el, words } from './ui.js';
 
 /** Предел вложения, байт (owui.FILE_MAX) и число вложений сообщения (owui.FILES_MAX). */
@@ -557,10 +558,12 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
         m.done = true;
         m.error = data.error ?? null;
       }
+      signal(data.error ? 'error' : 'done', id);
       active = false;
       render();
       scheduleReload();
     } else if (type === 'pending') {
+      signal('ask', id);
       scheduleReload();
     } else if (type === 'active') {
       const was = active;

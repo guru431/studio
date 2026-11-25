@@ -133,6 +133,7 @@ import { continueOffer, lengthError, lengthRefusal } from './chat-continue.js';
 import { knowledgeStep, sourceClicks } from './chat-knowledge-sources.js';
 import { resultImages } from './chat-result-images.js';
 import { effortChooser } from './chat-effort.js';
+import { answerSignal } from './sound.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
   '.ini', '.log', '.py', '.js', '.ts', '.html', '.css', '.sql', '.sh', '.ps1'];   // как documents.SUFFIXES
@@ -276,6 +277,7 @@ function notify(job, final, replaced = false) {
 function finish(job) {
   if (jobs.get(job.chatId) === job) jobs.delete(job.chatId);
   notify(job, true);
+  answerSignal(job.message);
 }
 
 /* ---- чтение ответа ------------------------------------------------------------ */
