@@ -98,6 +98,7 @@ ENGLISH = {
     "Вложение: {}": "Attachment: {}",
     "Файл": "File",
     "Навык: {}": "Skill: {}",
+    "Часть: {}": "Part: {}",
 }
 _LABEL = re.compile(r"Собеседник (\d+)")       # speech.LABEL
 

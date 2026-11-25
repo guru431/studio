@@ -57,6 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 import access
 import card
 import capabilities
+import chat_parts
 import chat_pending
 import chat_skills
 import chat_system
@@ -160,6 +161,9 @@ INTERRUPTED = "\n\n[прервано перезапуском студии]"
 CUT_LENGTH = "\n\n[ответ обрезан пределом длины модели]"
 CUT_SIZE = "\n\n[ответ обрезан: слишком длинный для студии]"
 CUT_TIME = f"\n\n[ответ обрезан: шёл дольше {STREAM_TOTAL_SEC // 60} минут]"
+#: ответ по частям (`run_part`, chat_parts.extend) живёт дольше обычного; часть — до STREAM_TOTAL_SEC (решение 15)
+PARTS_TOTAL_SEC = 7200
+CUT_TIME_PARTS = f"\n\n[ответ обрезан: шёл дольше {PARTS_TOTAL_SEC // 60} минут]"
 # рассуждение модели (спека 2026-10-22-studio-chat-tools-badge-reasoning, 4.3) — пределы на весь ответ, все круги.
 # Видимое (кнопка включена или у модели её нет) — до REASONING_MAX знаков: дальше с кнопкой ответ остановлен (петля
 # держала бы карту), у модели без неё — пометка REASONING_CUT, ответ дочитывается. При выключенной кнопке gemma-abl в
@@ -875,6 +879,8 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
             else:
                 # заметка (`note`, урезанный список MCP) модели не нужна — у неё нет и текста
                 steps = [s for s in json.loads(row["tools"] or "[]") if "note" not in s]
+                # шаги внутри части (`part`) — нет: её итог идёт шагом самой части (chat_parts)
+                steps = [s for s in steps if "part" not in s]
                 if steps and out and out[-1]["role"] == "user":
                     out[-1]["content"] = _prefix(web.history_block(steps, _for_history), out[-1]["content"])
                     if not row["content"]:
@@ -1262,6 +1268,13 @@ class StreamTask:
     gen_sec: float | None = None     # время генерации: по кругам от первого фрагмента до конца потока; не было — None
     spent_ms: int = 0                # время хода до паузы (продолжение прибавляет своё; ожидание человека не в счёт)
     began: float = field(default_factory=lambda: clock.NOW())
+    #: части ответа (`run_part`, chat_parts): сколько запущено, была ли часть в идущем круге, номер идущей (None — ход
+    #: сам), её срок и признак ответа по частям (срок PARTS_TOTAL_SEC)
+    parts: int = 0
+    part_round: bool = False
+    part: int | None = None
+    part_deadline: float = math.inf
+    long: bool = False
 
     def metrics(self) -> dict:
         """Токены и время ответа — для `_finish` и события `done`."""
@@ -1303,6 +1316,7 @@ class StreamTask:
         self.put("wait", {"seconds": round(now - shown), "card": card.info("chat", self.message_id)})
         await clock.SLEEP(RETRY_SEC)
         self.deadline += clock.NOW() - now
+        self.part_deadline += clock.NOW() - now      # и срок идущей части
         return None
 
     async def _free_images(self) -> None:
@@ -1425,7 +1439,7 @@ class StreamTask:
         return {**step, "text": step["text"][:room] + CUT_CONTEXT}
 
     async def _round(self, payload: dict, offer: bool, builtin_only: bool = False, *,
-                     silent: bool = False) -> "tuple[str | None, str | None, list[ToolCall], str]":
+                     silent: bool = False, part: bool = False) -> "tuple[str | None, str | None, list[ToolCall], str]":
         """Один запрос к модели потоком: (слова ошибки или None, finish_reason, вызовы инструментов по
         `index`, текст круга). Текст идёт пользователю дельтами (`_delta`). Отказ 400 о tools, когда запрос
         впервые несёт tools (`offer`), — модель или шлюз их не умеют: NO_WEB_TOOLS (vLLM: «"auto" tool choice
@@ -1438,7 +1452,8 @@ class StreamTask:
         Запрос просит `usage` потока (`stream_options`), пока подключение его не отвергло: 400/422 со словом из
         USAGE_MARKS — подключение в NO_USAGE и тот же запрос один раз без параметра. `usage` круга (последний непустой
         кусок) и время генерации — в ответ (`usage`, `gen_sec`; служебный круг `silent` — нет), знаки на токен —
-        `note_usage`."""
+        `note_usage`. Круг части (`part`, chat_parts) — как `silent`: текст, рассуждение и `messages.cleaner_request`
+        ответа не пишутся, но предел текста — ANSWER_MAX, а `usage` и время входят в ответ; срок части — `part_deadline`."""
         ending, calls, text = None, {}, ""
         usage, started = {}, None
         routed = self.conn.routed
@@ -1454,7 +1469,7 @@ class StreamTask:
                 opened = upstream.stream(self.conn, "POST", connections.chat_url(self.conn), json=sent,
                                          timeout=timeout)
             async with opened as r:
-                if routed and r.status_code == 200 and not silent:
+                if routed and r.status_code == 200 and not (silent or part):
                     self._cleaner_request(r)
                 if r.status_code == 503 and self._card_gateway():
                     await r.aread()
@@ -1462,7 +1477,7 @@ class StreamTask:
                 if r.status_code != 200:
                     await r.aread()
                     own = cleaner_route.refusal(r) if routed else None
-                    if routed and own is None and not silent:    # ошибка провайдера: запрос до него дошёл
+                    if routed and own is None and not (silent or part):    # ошибка провайдера: запрос до него дошёл
                         self._cleaner_request(r)
                     if own is not None:                         # отказ самого Cleaner: провайдер запроса не получил
                         log.info("чат %s: ответ %s — ход через Cleaner: код %d", self.chat_id[:8], self.message_id[:8],
@@ -1477,7 +1492,7 @@ class StreamTask:
                         NO_USAGE.add(self.conn.id)              # до перезапуска службы — без параметра
                         log.info("чат %s: ответ %s — подключение %d не приняло stream_options", self.chat_id[:8],
                                  self.message_id[:8], self.conn.id)
-                        return await self._round(payload, offer, builtin_only, silent=silent)
+                        return await self._round(payload, offer, builtin_only, silent=silent, part=part)
                     if r.status_code == 400 and CONTEXT_REFUSED.search(r.text):   # vLLM называет и max_tokens
                         log.info("чат %s: ответ %s — шлюз отказал по длине контекста", self.chat_id[:8],
                                  self.message_id[:8])
@@ -1498,6 +1513,9 @@ class StreamTask:
                     return refused or upstream.gateway_error(r, self.conn), None, [], text
                 self._card_free()
                 async for line in r.aiter_lines():
+                    # срок части или всего ответа в круге части — ошибка части; пометку срока ставит сам ход
+                    if part and clock.NOW() > min(self.deadline, self.part_deadline):
+                        return chat_parts.TIME, None, [], text
                     if clock.NOW() > self.deadline:
                         return self._cut_time(), None, [], text
                     if not line.startswith("data:"):
@@ -1529,13 +1547,13 @@ class StreamTask:
                         if started is None and ((isinstance(thought, str) and thought) or delta.get("tool_calls")
                                                 or (isinstance(delta.get("content"), str) and delta["content"])):
                             started = clock.NOW()               # первый фрагмент: начало генерации круга
-                        if not silent and isinstance(thought, str) and thought and (error := self._think(thought)) is not None:
+                        if not (silent or part) and isinstance(thought, str) and thought and (error := self._think(thought)) is not None:
                             return error, None, [], text
                         piece = delta.get("content")
                         if isinstance(piece, str) and piece:
                             text += piece
-                            if silent:
-                                if len(text) > SUMMARY_TOKENS * 6:
+                            if silent or part:
+                                if len(text) > (ANSWER_MAX if part else SUMMARY_TOKENS * 6):
                                     return NO_ANSWER, None, [], ""
                             else:
                                 self._think_end()
@@ -1706,8 +1724,8 @@ class StreamTask:
             call.arguments += fn["arguments"]
 
     def _cut_time(self) -> str:
-        """Срок ответа (STREAM_TOTAL_SEC) вышел: пометка в текст, слова ошибки."""
-        self.content += CUT_TIME
+        """Срок ответа (STREAM_TOTAL_SEC, у ответа по частям — PARTS_TOTAL_SEC) вышел: пометка в текст, слова ошибки."""
+        self.content += CUT_TIME_PARTS if self.long else CUT_TIME
         return TIME_WORDS
 
     def _web_on(self) -> bool:
@@ -1748,6 +1766,9 @@ class StreamTask:
         Итог — слова ошибки ответа (срок вышел), PAUSED или None."""
         for i, c in enumerate(calls):
             n = start + i
+            n -= sum(d.name == "run_part" for d in calls[:i])   # run_part не занимает место среди CALLS_PER_ROUND
+            if self.part is not None and clock.NOW() > self.deadline:   # внутри части — её ошибка, пометку ставит ход
+                return chat_parts.TIME
             if clock.NOW() > self.deadline:
                 return self._cut_time()
             self.rest, self.index = calls[i + 1:], n
@@ -1762,6 +1783,10 @@ class StreamTask:
                         "tool": self.mcp.calls[c.name][1] if self.mcp and c.name in self.mcp.calls else c.name}
             elif self.protected and mcp_client.has_url(web.args_of(c.arguments) or c.arguments):
                 step = self._url_refused(c, kind)    # после защищённого источника ссылка не уходит никуда
+            elif (self.part is not None and self.mcp and c.name in self.mcp.calls and mcp_sources.confirm_needed(
+                    self.mcp.confirm_hint(c.name), web.args_of(c.arguments))):   # внутри части паузы нет
+                _, tool, server, _ = self.mcp.calls[c.name]
+                step = {"kind": "mcp", "server": server, "tool": tool, "error": chat_parts.NEEDS_CONFIRM}
             elif self.mcp and c.name in self.mcp.calls:
                 _, tool, server, _ = self.mcp.calls[c.name]
                 hint = self.mcp.confirm_hint(c.name)
@@ -1776,6 +1801,9 @@ class StreamTask:
                         if n >= CALLS_PER_ROUND else self._fit(_sane_strings(await self.mcp.call(c.name, c.arguments))))
                 if not self.protected and self.mcp.reached_protected():
                     self._protect()
+            elif (c.name == "run_part" and self.part is None and not self.builtin_off
+                    and chat_tools.parts_offered(self.chat_id)):
+                step = await chat_parts.run(self, c)
             elif c.name in chat_tools.NAMES and not self.builtin_off:
                 # событие на каждый шаг встроенного, как у MCP: счётчик вызовов строки состояния «Чата» (п. 16)
                 self.put("tool", {"kind": chat_tools.KIND_OF[c.name], "label": c.name})
@@ -1838,6 +1866,9 @@ class StreamTask:
         Картинки payload хранит ссылкой (photo_refs): файлы читаются заново, пропавший — пометкой (fill_photos)."""
         r = self.resume
         self.rounds, self.seen = r["rounds"], set(r["seen"])
+        self.parts, self.part_round = r.get("parts", 0), r.get("part_round", False)
+        if self.parts > 0:
+            chat_parts.extend(self)
         try:
             self.messages = await fill_photos(self.chat_id, self.user_id, self.messages, self.photos)
         except OSError as e:
@@ -1865,8 +1896,13 @@ class StreamTask:
         return await self._calls(calls[1:], r["index"] + 1)
 
     def _step(self, step: dict) -> None:
-        """Шаг ответа — в `steps` и сразу в `messages.tools`; в журнал — только вид и итог."""
-        self.steps.append(step)
+        """Шаг ответа — в `steps` и сразу в `messages.tools`; в журнал — только вид и итог. Шаг, уже лежащий в `steps`
+        (тот же объект: шаг части получает итог), — только запись. Внутри части шаг хранится копией с `"part": n` и
+        пустым `text` (ключ нужен прежнему compose при откате): следующим ходам итог идёт шагом самой части."""
+        if self.part is not None:
+            step = {**step, "text": "", "part": self.part}
+        if not any(s is step for s in self.steps):
+            self.steps.append(step)
         state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
                          (json.dumps(self.steps, ensure_ascii=False), self.message_id))
         log.info("чат %s: ответ %s — шаг %s: %s", self.chat_id[:8], self.message_id[:8], step["kind"],
@@ -2033,7 +2069,10 @@ class StreamTask:
             if not (offer and calls and ending not in (None, "length")):
                 break
             self.rounds += 1
+            before, self.part_round = self.parts, False
             error = await self._tools(calls, text)
+            if self.parts > before and all(c.name == "run_part" for c in calls):
+                self.rounds -= 1                         # круг частей не в счёт кругов хода (решение 15)
             if error is PAUSED:
                 return None
             if error is not None:
@@ -2269,6 +2308,8 @@ async def _events(st: StreamTask, user_message_id: str, digest: "str | None" = N
         elif kind == "wait":
             yield _sse("wait", data if data is not None else {})
         elif kind in ("replace", "cleaner", "pending", "todo", "recovery"):
+            yield _sse(kind, data)
+        elif kind == "part":                         # часть ответа (chat_parts): {n, title, state[, ms]}
             yield _sse(kind, data)
         elif kind == "done":
             yield _sse("done", data)

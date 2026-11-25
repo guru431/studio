@@ -113,6 +113,7 @@ async def pause(task, kind: str, call, view: dict) -> str:
                "call": {"id": call.id, "name": call.name, "arguments": call.arguments},
                "rounds": task.rounds, "seen": sorted(task.seen), "steps": task.steps, "rest": rest, "index": task.index,
                "targets": targets, "view": view, "conn_id": task.conn.id, "model": task.model}
+    payload["parts"], payload["part_round"] = task.parts, task.part_round   # счёт частей ответа (chat_parts)
     sealed = security.encrypt(json.dumps(payload, ensure_ascii=False)).decode("ascii")
     shown = security.encrypt(json.dumps(view, ensure_ascii=False)).decode("ascii")   # выдаче сообщений — только он
     state.DB.execute("INSERT INTO chat_pending(id, chat_id, message_id, kind, payload, view, created)"

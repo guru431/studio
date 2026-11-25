@@ -4361,7 +4361,15 @@ globalThis.StudioEnglish = Object.freeze({
   "Занято — оценка Студии для следующего сообщения. Токены и время сообщает сервис модели; чего он не сообщил — «нет данных».": "Used is Studio's estimate for the next message. Tokens and time come from the model service; anything it did not report shows as \"no data\".",
   "Контекст: нет данных": "Context: no data",
   "этот навык — только для «Агентов»": "this skill is for “Agents” only",
-  "у этого сообщения нет навыка": "this message has no skill"
+  "у этого сообщения нет навыка": "this message has no skill",
+  "неверные аргументы run_part — нужны название и задание части": "invalid run_part arguments: a part title and task are required",
+  "за один круг выполняется одна часть — вызови следующую после итога этой": "one part runs per round: call the next one after this part's result",
+  "не больше {0} частей в одном ответе — собери ответ из готовых итогов": "no more than {0} parts per answer: build the answer from the finished results",
+  "часть шла дольше срока ответа — остановлена": "the part ran longer than the answer time limit and was stopped",
+  "модель не вернула итог части": "the model returned no result for the part",
+  "часть остановлена": "the part was stopped",
+  "инструмент с подтверждением недоступен внутри части": "a tool that needs confirmation is not available inside a part",
+  "этот инструмент недоступен внутри части": "this tool is not available inside a part"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",
@@ -4574,7 +4582,8 @@ globalThis.StudioEnglishMessages = Object.freeze([
   "Неделя · {0}",
   "{0} · {1} мин",
   "{0} Мп",
-  "Обновите мост на компьютере «{0}», чтобы он пропускал открытые базы SQLite"
+  "Обновите мост на компьютере «{0}», чтобы он пропускал открытые базы SQLite",
+  "не больше {0} частей в одном ответе — собери ответ из готовых итогов"
 ]);
 /* Patterns whose bare slots carry user text (titles, prompts, file names): message() keeps their values as is. */
 globalThis.StudioEnglishVerbatim = Object.freeze([

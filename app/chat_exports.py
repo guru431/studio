@@ -124,6 +124,8 @@ def _tool_line(step: dict, lang: str) -> list[str]:
         lines = ["- " + " · ".join(["MCP"] + [_inline(step[key]) for key in ("server", "tool") if step.get(key)])]
         # файлы результата — только имена (web.public): сами файлы остаются на сервере MCP
         lines += ["  - " + _inline(f["name"]) for f in step.get("files") or [] if isinstance(f, dict) and f.get("name")]
+    elif kind == "part":                                  # часть ответа (run_part) — название
+        lines = ["- " + word("Часть: {}", lang, _inline(step.get("title") or ""))]
     else:
         lines = ["- " + word("Инструмент", lang)]
     if error:
