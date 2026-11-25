@@ -246,6 +246,39 @@ def test_direct_answer_survives_a_lost_put_and_can_be_saved_again(chromium, live
         assert page.evaluate(last_saved) == ["streaming", ""]
 
 
+def test_saved_again_answer_is_no_longer_read_by_another_tab(chromium, live):
+    """«Сохранить ещё раз» после ухода из диалога и возврата: лента держит строку сервера `streaming` с признаком жизни,
+    и без перечитывания страница считала бы, что ответ идёт в другой вкладке (`otherTab`): «Изменить» молчало бы."""
+    login = "save-again-other-tab"
+    live.add_user(login)
+    mode = {"put": "fail"}
+
+    def put(route):
+        if route.request.method == "PUT" and mode["put"] == "fail":
+            route.fulfill(status=500, json={"detail": {"code": "http", "message": "сбой"}})
+        else:
+            route.continue_()
+
+    with opened(chromium, live, login, 1280) as page:
+        add_cloud(page, live)
+        page.route("**/api/chats/*/messages/*", put)
+        answer = page.locator(LAST)
+        page.locator("#chat-input").fill("Ты здесь?")
+        page.locator("#send").click()
+        pw.expect(answer.locator(".msg-meta")).to_contain_text("Ответ не сохранился")
+        dialog = page.evaluate("location.hash")
+        page.evaluate("() => { location.hash = '#/chat'; }")
+        page.locator("#messages .msg").first.wait_for(state="detached")
+        page.evaluate("hash => { location.hash = hash; }", dialog)
+        pw.expect(answer.locator(".md")).to_have_text("Облако на связи.")
+        mode["put"] = None
+        answer.locator(".msg-save").click()
+        pw.expect(answer.locator(".msg-save")).to_have_count(0)
+        page.evaluate("() => document.querySelector('#messages .msg.user .msg-edit').click()")
+        pw.expect(page.locator("#chat-input")).to_have_value("Ты здесь?")
+        pw.expect(answer.locator(".msg-meta")).to_have_text("")
+
+
 def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
     """Вкладку закрывают посреди ответа прямого подключения (`pagehide`): прочитанное уходит PUT с keepalive и
     сохранено «остановлен» — диалог не ждёт «ответа в другой вкладке»; длиннее предела тела keepalive — сохранено

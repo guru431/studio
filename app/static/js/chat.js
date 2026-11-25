@@ -2323,9 +2323,12 @@ function build(view, ctx) {
     if (kept?.message === m && !kept.closed) {
       const again = button(tr("Сохранить ещё раз"), { class: 'btn btn-sm msg-save' }, async () => {
         again.disabled = true;
-        await saveAnswer(kept.chatId, m, kept.body);
+        const saved = await saveAnswer(kept.chatId, m, kept.body);
         paint(m);
         loadList();
+        // перечитанная после сбоя лента держит строку сервера `streaming` с признаком жизни: без `unsaved` она — «ответ
+        // в другой вкладке» (`otherTab`), пока ленту не перечитать
+        if (saved) reload();
       });
       p.actions.append(again);
     }
