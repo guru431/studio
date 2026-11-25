@@ -10,6 +10,7 @@ import uuid
 import pytest
 
 from studio_agent import cli, codex, codex_rpc, projects
+from turn_events import bare
 
 pytestmark = [pytest.mark.manual, pytest.mark.timeout(240)]
 
@@ -36,7 +37,7 @@ async def test_resume_after_state_with_a_real_codex_writer(home):
                 "Тест соединения. Ответь только STUDIO_OK. Не используй инструменты, не открывай браузер и не меняй файлы.",
                 "gpt-6.1-sol", "low", access="read-only")
             await asyncio.wait_for(runner._turns[chat].task, 90)
-            assert sent[-1]["e"] == {"k": "done", "status": "done"}
+            assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
         assert sum(f["e"]["k"] == "done" for f in sent) == 2
         assert "STUDIO_OK" in "".join(f["e"].get("text", "") for f in sent if f["e"]["k"] == "text")
     finally:

@@ -17,6 +17,7 @@ from studio_agent import app, autostart, enroll, projects, sessions, setup, stor
 from studio_agent.agent import Agent
 from studio_agent.link import Link
 from studio_agent.pin import PinStore
+from turn_events import bare
 
 MODELS = [{"id": "opus", "label": "Opus"}]
 
@@ -731,7 +732,7 @@ def test_revoked_or_replaced_link_stops_running_turns(make, configured, root, mo
     client = sdk.clients[0]
     assert client.decisions == [PermissionResultDeny(message="Остановлено", interrupt=True)] and client.disconnected
     until(lambda: sent and sent[-1]["e"]["k"] == "done")
-    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
     until(lambda: not ctrl.agent.open._seen)                    # открытые сессии прочь
     assert len(ctrl.links) == 1
 
@@ -756,7 +757,7 @@ def test_disabled_account_stops_running_turns_but_keeps_the_link(make, configure
     asyncio.run_coroutine_threadsafe(ctrl.links[0].on_disabled(), ctrl._loop).result(15)
     assert not ctrl.runner._turns and not ctrl.agent.open._seen and not ctrl.runner._closing
     until(lambda: sent and sent[-1]["e"]["k"] == "done")
-    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
     assert len(ctrl.links) == 1 and not ctrl.links[0].stopped
 
 
@@ -950,7 +951,7 @@ def test_unenroll_stops_turns_and_link_first(make, home, root, enrolled, monkeyp
     ctrl.runner.close = close
     assert ctrl.unenroll() == (True, "")
     assert order == ["close", "done", "stop", "studio"]         # ход прерван до закрытия канала, запрос — после
-    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "error", "message": turns.BRIDGE_STOPPED}
     assert sdk.clients[0].disconnected
     time.sleep(0.05)
     assert len(ctrl.links) == 1 and ctrl.state == "setup"

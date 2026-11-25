@@ -13,7 +13,7 @@ import pytest
 from studio_agent import acp, deepseek, deepseek_rpc, deepseek_settings, limits, mcp, projects
 from studio_agent.errors import Refused
 from test_deepseek_settings import dsh, node, parsed
-from turn_events import asking
+from turn_events import asking, bare
 
 FIXTURES = Path(__file__).parent / "fixtures" / "deepseek"
 CHAT = "11111111-2222-4333-8444-555555555555"
@@ -256,7 +256,7 @@ async def test_turn_streams_text_step_and_permission_card_then_done(runner, home
     assert [e["error"] for e in events(runner, "result") if e["id"] == "call_probe_6"] == [True]
     settings = events(runner, "settings")[0]
     assert settings["model"] == TOOLS and settings["access_fixed"] and settings["overlay"]["profile"] == "web"
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
     assert runner.aliases.target(runner.project, CHAT) == SESSION
     assert runner.choices.details(CHAT)["context"]["used"] == 7342
     prompt = runner.fake.prompts[0]["prompt"]
@@ -316,7 +316,7 @@ async def test_state_of_existing_chat_reads_session_file_and_never_resumes(runne
     rid = await asking(runner)
     runner.answer(runner.pid, external, rid, "allow", None, None)
     await runner._turns[external].task
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_chats_take_title_and_times_from_session_files(runner):
@@ -362,7 +362,7 @@ async def test_access_sets_permission_env_only_for_presets(runner, home, monkeyp
     assert state["settings"]["overlay"]["profile"] == "web"
     runner.start(runner.project, runner.pid, CHAT, "Дальше", None, None, access="read-only")
     await runner._turns[CHAT].task
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
     assert any(method == "session/resume" for method, _ in runner.fake.calls)
     # новый чат: предпросмотр без закрепления, пробная сессия — во временном хранилище
     fresh = await runner.state(runner.project, "22222222-2222-4333-8444-555555555555", TOOLS, "off", "workspace-write")
@@ -388,7 +388,7 @@ async def test_history_reads_session_file_and_unsupported_format_gives_notice_an
     rid = await asking(runner)
     runner.answer(runner.pid, CHAT, rid, "allow", None, None)
     await runner._turns[CHAT].task
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_history_with_other_spelling_of_cwd_is_a_notice_not_gone(runner):
@@ -420,7 +420,7 @@ async def test_followup_during_answer_is_queued_until_end(runner):
     await task
     assert [p["prompt"] for p in runner.fake.prompts[1:]] == [[{"type": "text", "text": "И ещё"}]]
     assert [e["id"] for e in events(runner, "followup_sent")] == [result["id"]]
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 def chunk(text, message):

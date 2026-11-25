@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from studio_agent import deepseek, deepseek_rpc, deepseek_settings, projects
+from turn_events import bare
 
 pytestmark = [pytest.mark.manual, pytest.mark.timeout(300)]
 
@@ -78,7 +79,7 @@ async def test_live_dsh_turn(home, monkeypatch, caplog):
             caplog.clear()
             pytest.fail("Ключ провайдера попал в события или журнал", pytrace=False)
         emitted = [frame["e"] for frame in sent]
-        assert emitted[-1] == {"k": "done", "status": "done"}, emitted[-1]
+        assert bare(emitted[-1]) == {"k": "done", "status": "done"}, emitted[-1]
         text = "".join(e.get("text", "") for e in emitted if e["k"] == "text")
         if shell:
             steps = {e["id"] for e in emitted if e["k"] == "step" and e["tool"].casefold() == "bash"}

@@ -1033,6 +1033,10 @@ class Agent:
                                                 frame.get("access"), **await self._opencode_options(frame))
         if frame.get('shared_projects') is not None:
             result.get('settings', {}).pop('additional_directories', None)
+        saved = await asyncio.to_thread(self._runner(frame).choices.details, frame["chat"])
+        for key in ("turn_ms", "session_ms"):  # время хода (протокол §26): только целые неотрицательные
+            if type(saved.get(key)) is int and saved[key] >= 0:
+                result[key] = saved[key]
         return result
 
     async def _opencode_options(self, frame):

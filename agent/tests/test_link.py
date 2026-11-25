@@ -12,6 +12,7 @@ from studio_agent.agent import Agent
 from studio_agent.link import Link
 from studio_agent.pin import PinStore
 from studio_agent.turns import Runner
+from turn_events import bare
 
 KEY = "device-key-not-for-the-journal"
 CHAT = "0b1e2c3d-4f50-4617-8899-aabbccddeeff"
@@ -470,7 +471,7 @@ async def test_turn_res_comes_before_its_events_and_a_card_survives_reconnect(fa
     assert answer["ok"] is True
     await until(lambda: any(f.get("e", {}).get("k") == "done" for n, f in fake_studio.frames))
     [(n, done)] = [(n, f) for n, f in fake_studio.frames if f.get("e", {}).get("k") == "done"]
-    assert n == 1 and done["e"] == {"k": "done", "status": "done"}
+    assert n == 1 and bare(done["e"]) == {"k": "done", "status": "done"}
     assert [f["e"]["text"] for n, f in fake_studio.frames if n == 1 and f.get("e", {}).get("k") == "text"] == ["вет"]
     assert factory.clients[0].decisions[0].updated_input == {"command": "ls"}
     assert pauses.list == [1]

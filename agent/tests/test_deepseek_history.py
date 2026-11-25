@@ -98,6 +98,10 @@ def test_recorded_falls_back_to_request_context_and_answer_source(tmp_path):
     path = put(tmp_path, "session.v4.jsonl", header + answer)
     assert history.recorded(path) == {"model": ("p1", "m1"), "effort": None, "used": 40, "limit": None,
                                       "preset": None}
+    reply = (b'{"type":"assistant/message","seq":2,"time":3,"data":{"message":{"content":[{"type":"text",'
+             b'"text":"ok"}],"source":{"kind":"model","provider":"deepseek","model":"deepseek-chat"}}}}\n')
+    path.write_bytes(header + reply)
+    assert [m.get("model") for m in history.read(path)] == ["deepseek-chat"]       # модель ответа — в историю
     path.write_bytes(header + answer + context)
     assert history.recorded(path)["model"] == ("p2", "m2") and history.recorded(path)["limit"] == 100
     assert history.overview(path) == {"title": "", "created": 0.001}

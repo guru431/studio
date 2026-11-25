@@ -76,6 +76,9 @@ def normalize(messages: list, *, include_subagents=False) -> list[dict]:
             if answer is None:
                 answer, steps = {"id": m.uuid, "role": "assistant", "text": "", "steps": [], "time": None}, {}
                 items.append(answer)
+            model = m.message.get("model") if isinstance(m.message, dict) else None
+            if isinstance(model, str) and model != "<synthetic>" and limits.MODEL_ID.fullmatch(model):
+                answer["model"] = model  # модель ответа — последней его записи с настоящей моделью
             if isinstance(content, str):
                 content = [{"type": "text", "text": content}]
             for block in content if isinstance(content, list) else []:

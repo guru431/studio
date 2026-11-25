@@ -60,14 +60,15 @@ def result(tid, content, error=False):
 def test_normalize_merges_one_answer_and_attaches_results():
     msgs = [U("u1", "Сделай"), A("a1", [text("Смотрю."), tool("t1", "Bash", {"command": "git status"})]),
             U("u2", [result("t1", "чисто")]), A("a2", [text("Готово.")]), A("s1", [text("подагент")], parent="t9"),
-            U("u3", "Ещё")]
+            U("u3", "Ещё"), A("x1", [text("No response requested.")], model="<synthetic>")]
     assert sessions.normalize(msgs) == [
         {"id": "u1", "role": "user", "text": "Сделай", "steps": [], "time": None},
-        {"id": "a1", "role": "assistant", "text": "Смотрю.\n\nГотово.", "time": None,
+        {"id": "a1", "role": "assistant", "text": "Смотрю.\n\nГотово.", "time": None, "model": "claude-opus-5-5",
          "timeline": [{"kind": "text", "start": 0, "end": 7, "block": "a1"}, {"kind": "step", "id": "t1"},
                       {"kind": "text", "start": 7, "end": 16, "block": "a2"}],
          "steps": [{"id": "t1", "tool": "Bash", "input": {"command": "git status"}, "text": "чисто", "error": False}]},
-        {"id": "u3", "role": "user", "text": "Ещё", "steps": [], "time": None}]
+        {"id": "u3", "role": "user", "text": "Ещё", "steps": [], "time": None},
+        {"id": "x1", "role": "assistant", "text": "No response requested.", "steps": [], "time": None}]
 
 
 def test_normalize_blocks_errors_images_and_thinking():

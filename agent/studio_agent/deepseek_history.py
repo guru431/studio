@@ -348,6 +348,9 @@ def read(path, *, image_blocks=None):
                     current = {"id": _identifier(inner.get("id") if isinstance(inner, dict) else None, str(len(out))),
                                "role": "assistant", "text": "", "steps": [], "time": None}
                     out.append(current)
+                inner = data.get("message")
+                if pair := _pair(inner.get("source") if isinstance(inner, dict) else None):
+                    current["model"] = pair[1][:100]  # модель ответа (протокол §26)
                 _assistant(current, data, calls)
             elif kind == "tool/result" and current is not None:
                 _result(data, calls)

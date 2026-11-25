@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from studio_agent import cli, opencode, opencode_rpc, projects
+from turn_events import bare
 
 pytestmark = [pytest.mark.manual, pytest.mark.timeout(180)]
 
@@ -26,7 +27,7 @@ async def test_real_opencode_turn_history_and_state(home):
             None, None)
         await asyncio.wait_for(runner._turns[chat].task, 90)
         target = runner.aliases.target(project, chat)
-        assert sent[-1]["e"] == {"k": "done", "status": "done"}
+        assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
         assert "STUDIO_OK" in "".join(f["e"].get("text", "") for f in sent if f["e"]["k"] == "text")
         assert (await runner.history(project, chat, None, 10))["total"] >= 2
         assert (await runner.chats(project))[0]["chat"] == chat

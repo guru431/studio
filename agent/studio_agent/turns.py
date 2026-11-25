@@ -127,6 +127,8 @@ class _Turn:
     opencode_options: dict = field(default_factory=dict)
     opencode_children: dict = field(default_factory=dict)
     mcp_config: object | None = None
+    started: float = 0.0  # `Runner.monotonic` при принятии просьбы `turn`
+    times: dict | None = None  # `turn_ms`, `session_ms` для `done` (протокол §26)
 
     @property
     def waiting(self) -> bool:
@@ -139,7 +141,8 @@ class Runner:
     `cli_path` сверяется перед каждым ходом (`cli.current`): VS Code обновляет расширение и удаляет прежнюю папку."""
 
     def __init__(self, emit: Callable[[dict], None], *, choices: store.Choices, cli_path: Path | None,
-                 factory=ClaudeSDKClient, max_turns: int = MAX_TURNS, find_cli=cli.find_cli, now=time.time):
+                 factory=ClaudeSDKClient, max_turns: int = MAX_TURNS, find_cli=cli.find_cli, now=time.time,
+                 monotonic=time.monotonic):
         self.emit = emit
         self.choices = choices
         self.cli_path = cli_path
@@ -147,6 +150,7 @@ class Runner:
         self.max_turns = max_turns
         self.find_cli = find_cli
         self.now = now
+        self.monotonic = monotonic  # время хода (`_time`)
         self.queue_pause_sec = limits.QUEUE_PAUSE_SEC
         self._turns: dict[str, _Turn] = {}
         self._closing = False  # close() идёт (или прошёл с `final` или `hold`): новых ходов нет
@@ -166,6 +170,7 @@ class Runner:
         if len(self._turns) >= self.max_turns:
             raise Refused("busy")
         t = _Turn(project, pid, chat, secrets.token_hex(8), access=access, owner=owner)
+        t.started = self.monotonic()
         t.attachments = attachments or []
         self._turns[chat] = t
         t.task = asyncio.create_task(self._run(t, text, model, effort, images or []))
@@ -768,6 +773,7 @@ class Runner:
         """Конец хода: карточки — отказ, клиент гаснет, новой сессии — метка, чат свободен, затем `done`."""
         t.finishing = True
         try:
+            await self._time(t)
             self._deny_all(t)
             disconnected = t.client is None
             if t.client is not None:
@@ -811,6 +817,18 @@ class Runner:
                     del self._turns[t.chat]
                 self._send(t, self._done(t, failure))
 
+    async def _time(self, t: _Turn) -> None:
+        """Время хода — от принятия просьбы `turn` до конца ответа, с ожиданием карточек и очереди; сумма ходов
+        сессии — в `choices.json` (только числа). Ход, не дошедший до помощника, не считается."""
+        if not t.accepted and not t.start_attempted:
+            return
+        turn_ms = max(0, int((self.monotonic() - t.started) * 1000))
+        t.times = {"turn_ms": turn_ms}
+        try:
+            t.times["session_ms"] = await asyncio.to_thread(self.choices.add_turn, t.chat, turn_ms)
+        except OSError as e:
+            log.info("ход %s: время сессии: %s", t.turn, type(e).__name__)
+
     def _done(self, t: _Turn, failure: str | None) -> dict:
         if t.closing:
             done = {"k": "done", "status": "error", "message": BRIDGE_STOPPED}
@@ -822,6 +840,8 @@ class Runner:
             done = {"k": "done", "status": "done"}
         if not t.accepted and not t.start_attempted:
             done["not_started"] = True
+        if t.times:
+            done.update(t.times)
         if t.queued:
             originals = {item["id"]: item["text"] for item in t.followups}
             done["unsent"] = [{"id": message_id, "text": originals.get(message_id, text)}

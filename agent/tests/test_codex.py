@@ -8,7 +8,7 @@ import pytest
 from studio_agent import codex, codex_rpc, projects
 from studio_agent.errors import Refused
 from studio_agent.turns import _Turn
-from turn_events import asking
+from turn_events import asking, bare
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 THREAD = "01999999-2222-7333-8444-555555555555"
@@ -296,7 +296,7 @@ async def test_new_thread_mapping_resume_and_permission_snapshot(runner, home):
     runner.answer(pid, CHAT, rid, "always", None, None)
     await task
     assert runner.fake.replies == [{"id": 91, "result": {"decision": "acceptForSession"}}]
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
     assert [f["e"]["state"] for f in runner.sent if f["e"]["k"] == "activity"] == [
         "thinking", "responding", "waiting", "thinking"]
     assert not runner.live() and runner.fake.clients[0].closed
@@ -382,7 +382,7 @@ async def test_reading_existing_chat_state_does_not_hold_its_writer(runner):
         rid = await asking(runner)
         runner.answer(pid, CHAT, rid, "deny", None, None)
         await task
-        assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+        assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
         assert any(method == "thread/resume" for method, _ in runner.fake.calls)
     finally:
         await runner.close(final=True)
@@ -509,7 +509,7 @@ async def test_missing_codex_finishes_without_using_claude(runner):
     runner.find_codex = lambda: None
     runner.start(runner.project, "a" * 16, CHAT, "Задание", None, None)
     await runner._turns[CHAT].task
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "error", "message": "Codex не найден на компьютере", "not_started": True}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "error", "message": "Codex не найден на компьютере", "not_started": True}
     assert not runner.fake.calls
 
 

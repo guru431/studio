@@ -193,6 +193,20 @@ class Choices:
     def put(self, chat: str, model: str | None, effort: str | None) -> None:
         self.update(chat, model=model, effort=effort)
 
+    def add_turn(self, chat: str, turn_ms: int) -> int:
+        """Время хода: `turn_ms` — последний ход, `session_ms` — сумма ходов чата через Studio; возвращает сумму."""
+        with self._lock:
+            data = self._load()
+            item = data.pop(chat, {})
+            item = item if isinstance(item, dict) else {}
+            before = item.get("session_ms")
+            session_ms = (before if type(before) is int and before >= 0 else 0) + turn_ms
+            data[chat] = {**item, "turn_ms": turn_ms, "session_ms": session_ms}
+            for old in list(data)[:max(0, len(data) - CHOICES_MAX)]:
+                del data[old]
+            write_atomic(self.path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        return session_ms
+
 
 def load_key(h: Path) -> str | None:
     """Ключ устройства; нет файла или блоб не читается (чужая учётка, порча) — None."""

@@ -11,6 +11,7 @@ from studio_agent import VERSION, deepseek, files, limits, projects, sessions, s
 from studio_agent.agent import Agent
 from studio_agent.pin import PinStore
 from studio_agent.turns import Runner
+from turn_events import bare
 
 SESSION = "3b1e" * 8
 CHAT = "0b1e2c3d-4f50-4617-8899-aabbccddeeff"
@@ -327,7 +328,8 @@ def test_hello(agent):
                              "completions": True, "visualization_scope": True, "visualization_images": True,
                              "agent_update_cancel": False, "codex_models": True, "opencode_models": False,
                              "deepseek_models": False, "deepseek_usage": True, "open_asks": True,
-                             "answer_takeover": True, "chat_manage": True, "claude_models": False}
+                             "answer_takeover": True, "chat_manage": True, "claude_models": False, "skills": True,
+                             "limits": {"images": 12, "attachments": 12}}
     agent.set_models([{"id": "haiku", "label": "Haiku"}], ["max"])
     assert agent.hello()["models"] == [{"id": "haiku", "label": "Haiku"}] and agent.hello()["efforts"] == ["max"]
 
@@ -581,7 +583,7 @@ async def test_answer_stop_watch_of_another_project_do_not_see_the_turn(home, ro
     assert a.runner.live() == {CHAT: True}                              # ход и карточка — на месте
     assert (await a.handle(req("answer", project=pid, chat=CHAT, request_id=rid, decision="allow")))[0]["ok"]
     await settle(a)
-    assert a.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(a.sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_open_asks_are_resent_on_every_new_link_only_to_a_studio_that_takes_them(home, root):
@@ -708,7 +710,8 @@ async def test_opencode_routes_use_its_catalog_and_share_the_turn_limit(agent, r
                               history=AsyncMock(return_value={"messages": []}),
                               state=AsyncMock(return_value={"settings": {"model": model}}),
                               live=Mock(return_value={}), activity=Mock(return_value=[]), start=Mock(return_value="turn-id"),
-                              watch=AsyncMock(return_value=(False, [])), answer=Mock(), stop=AsyncMock(), check_owner=Mock())
+                              watch=AsyncMock(return_value=(False, [])), answer=Mock(), stop=AsyncMock(), check_owner=Mock(),
+                              choices=agent.runner.choices)
     agent.opencode = backend
     await opened(agent)
     assert agent.hello()["opencode"] == backend.catalog

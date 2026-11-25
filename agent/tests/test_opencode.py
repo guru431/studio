@@ -7,7 +7,7 @@ import pytest
 
 from studio_agent import opencode, opencode_rpc, projects
 from studio_agent.errors import Refused
-from turn_events import asking
+from turn_events import asking, bare
 
 CHAT = "11111111-2222-4333-8444-555555555555"
 SESSION = "ses_test123"
@@ -220,7 +220,7 @@ async def test_turn_mapping_resume_permissions_snapshot_and_usage(runner, home):
     runner.answer(runner.pid, CHAT, rid, "always", None, None)
     await task
     assert runner.fake.replies[0] == {"id": 91, "result": {"outcome": {"outcome": "selected", "optionId": "always"}}}
-    assert runner.sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(runner.sent[-1]["e"]) == {"k": "done", "status": "done"}
     assert not runner.live() and runner.fake.clients[0].closed
     assert runner.aliases.target(runner.project, CHAT) == SESSION
     assert runner.choices.details(CHAT)["context"] == {"used": 100, "limit": 1000, "percent": 10}

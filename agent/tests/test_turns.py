@@ -10,6 +10,7 @@ from fake_sdk import (HOLD, FakeFactory, assistant, block_start, delta, result, 
                       tool_use, user)
 from studio_agent import VERSION, cli, errors, events, limits, sessions, store
 from studio_agent.turns import Runner
+from turn_events import bare
 
 PID = "a1b2c3d4e5f60718"
 CHAT = "0b1e2c3d-4f50-4617-8899-aabbccddeeff"
@@ -70,7 +71,7 @@ async def test_turn_streams_text_steps_and_ends_done(home, project, monkeypatch)
     turn = r.start(project, PID, CHAT, "Привет", None, None)
     await settle(r)
     assert kinds(sent) == ["text", "text", "step", "result", "done"]
-    assert {e["turn"] for e in sent} == {turn} and sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert {e["turn"] for e in sent} == {turn} and bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
     assert all(e["t"] == "ev" and e["project"] == PID and e["chat"] == CHAT for e in sent)
     assert sent[-1]["project_name"] == project.name
     assert sent[2]["e"] == {"k": "step", "id": "t1", "tool": "Read", "input": {"file_path": "a"}}
@@ -169,7 +170,7 @@ async def test_stop_during_a_card_denies_it_and_ends_stopped(home, project):
     await r.stop(PID, CHAT)
     await settle(r)
     assert kinds(sent) == ["ask", "asked", "done"]
-    assert sent[-1]["e"] == {"k": "done", "status": "stopped"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "stopped"}
     assert f.clients[0].decisions == [PermissionResultDeny(message="Остановлено", interrupt=True)]
     assert f.clients[0].interrupted and f.clients[0].disconnected
     with pytest.raises(errors.Refused) as e:
@@ -217,7 +218,7 @@ async def test_missing_cli_ends_with_words_and_frees_the_chat(home, project, mar
     f.script = [result_ok()]
     r.start(project, PID, CHAT, "Ещё", None, None)
     await settle(r)
-    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_failure_before_the_query_is_not_started_and_after_it_is_a_broken_turn(home, project):
@@ -232,7 +233,7 @@ async def test_failure_before_the_query_is_not_started_and_after_it_is_a_broken_
     r.start(project, PID, CHAT, "Привет", None, None)
     await settle(r)
     assert any(s["e"].get("k") == "text" for s in sent)
-    assert sent[-1]["e"] == {"k": "done", "status": "error", "message": "Claude Code прервал ход — повторите задание"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "error", "message": "Claude Code прервал ход — повторите задание"}
 
 
 async def test_other_failures_end_with_their_words(home, project):
@@ -248,7 +249,7 @@ async def test_other_failures_end_with_their_words(home, project):
         r = runner(home, FakeFactory(script), sent)
         r.start(project, PID, CHAT, "Привет", None, None)
         await settle(r)
-        assert sent[-1]["e"] == {"k": "done", "status": "error", "message": words}
+        assert bare(sent[-1]["e"]) == {"k": "done", "status": "error", "message": words}
 
 
 async def test_existing_session_resumes_with_the_remembered_choice_then_the_last_model(home, project, marked,
@@ -362,7 +363,7 @@ async def test_close_stops_every_turn_with_words(home, project):
     await until(lambda: r.live() == {CHAT: True, OTHER: True})
     await r.close()
     assert r.live() == {}
-    done = [s["e"] for s in sent if s["e"]["k"] == "done"]
+    done = [bare(s["e"]) for s in sent if s["e"]["k"] == "done"]
     assert done == [{"k": "done", "status": "error", "message": "ход прерван: мост остановлен"}] * 2
     assert all(c.decisions == [PermissionResultDeny(message="Остановлено", interrupt=True)] for c in f.clients)
 
@@ -405,7 +406,7 @@ async def test_second_stop_cancels_a_turn_that_ignored_interrupt(home, project):
     assert r.live() == {CHAT: False} and kinds(sent) == ["text"]
     await r.stop(PID, CHAT)                                         # повторное «Остановить» — отмена задачи хода
     await settle(r)
-    assert sent[-1]["e"] == {"k": "done", "status": "stopped"} and r.live() == {}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "stopped"} and r.live() == {}
     assert f.clients[0].disconnected
 
 
@@ -421,7 +422,7 @@ async def test_a_failing_interrupt_cancels_the_turn_at_once(home, project):
     f.clients[0].interrupt = broken
     await r.stop(PID, CHAT)
     await settle(r)
-    assert sent[-1]["e"] == {"k": "done", "status": "stopped"} and f.clients[0].disconnected
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "stopped"} and f.clients[0].disconnected
 
 
 async def test_a_turn_during_close_is_busy(home, project):
@@ -448,7 +449,7 @@ async def test_a_turn_during_close_is_busy(home, project):
     f.script = [result_ok()]
     r.start(project, PID, OTHER, "3", None, None)              # закрытие кончилось — ходы снова можно
     await settle(r)
-    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_after_the_final_close_turns_stay_refused(home, project):
@@ -476,7 +477,7 @@ async def test_a_held_close_refuses_turns_until_reopen(home, project):
     r.reopen()                                                 # новый канал — ходы снова можно
     r.start(project, PID, CHAT, "2", None, None)
     await settle(r)
-    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_stop_while_the_turn_finishes_does_not_cancel_it(home, project, marked):
@@ -508,7 +509,7 @@ async def test_stop_while_the_turn_finishes_does_not_cancel_it(home, project, ma
     gate.set()
     await settle(r)
     assert client.disconnected and marked == [(project, CHAT)]  # claude.exe погашен, метка studio — есть
-    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_answer_stop_watch_of_another_project_see_no_turn(home, project):
@@ -527,7 +528,7 @@ async def test_answer_stop_watch_of_another_project_see_no_turn(home, project):
     assert r.live() == {CHAT: True} and f.clients[0].decisions == []
     r.answer(PID, CHAT, "toolu_1", "allow", None, None)
     await settle(r)
-    assert sent[-1]["e"] == {"k": "done", "status": "done"}
+    assert bare(sent[-1]["e"]) == {"k": "done", "status": "done"}
 
 
 async def test_events_while_the_snapshot_is_made_follow_it(home, project, monkeypatch):
