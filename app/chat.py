@@ -189,6 +189,8 @@ TOO_MANY = f"не больше {CALLS_PER_ROUND} вызовов за раз"
 WEB_OFF = "Интернет выключен"
 TIME_WORDS = "ответ шёл слишком долго — обрезан"
 NO_ANSWER = "модель не ответила по найденному — переспросите"
+#: поток модели кончился без признака конца (ход и часть, chat_parts)
+CUT_OFF = "модель оборвала ответ: поток кончился без признака конца"
 CUT_CONTEXT = "\n[обрезано: не помещается в контекст модели]"
 NO_ROOM = "не помещается в контекст модели"
 NO_WEB_TOOLS = "эта модель не умеет пользоваться интернетом — выключите «Интернет» в этом диалоге"
@@ -2080,7 +2082,7 @@ class StreamTask:
             if text and not text[-1].isspace():          # текст до вызовов и ответ — не слитно
                 self._delta("\n\n")
         if ending is None:
-            return "модель оборвала ответ: поток кончился без признака конца"
+            return CUT_OFF
         if ending == "stop" and retries and not self.content.strip():
             return NO_ANSWER
         if calls and ending != "length" and not text.strip():

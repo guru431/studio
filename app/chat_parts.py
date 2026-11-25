@@ -30,8 +30,6 @@ TIME = "часть шла дольше срока ответа — остано�
 EMPTY = "модель не вернула итог части"
 STOPPED = "часть остановлена"
 NEEDS_CONFIRM = "инструмент с подтверждением недоступен внутри части"
-#: поток части кончился без признака конца (те же слова, что у хода)
-CUT_OFF = "модель оборвала ответ: поток кончился без признака конца"
 #: записка модели части — перед заданием в единственном сообщении пользователя
 NOTE = ("You are carrying out one part of a larger task in a separate request. Do only the task inside <part>; the "
         "results of earlier parts, if any, are in <done-part> blocks. Use tools only when the part needs them. Reply "
@@ -113,7 +111,7 @@ async def _rounds(task) -> "tuple[str | None, str]":
                 return error, text
             continue
         if ending is None:
-            return CUT_OFF, text
+            return chat.CUT_OFF, text           # те же слова, что у хода
         return None, text
 
 
