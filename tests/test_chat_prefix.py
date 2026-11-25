@@ -32,3 +32,9 @@ def test_next_request_repeats_the_previous_one_up_to_the_penultimate_message(stu
     asked = second["messages"][-1]["content"]                    # найденное по новому вопросу — в новом сообщении
     assert asked.startswith("<knowledge>") and "4711" in asked and asked.endswith("Какой пароль от сейфа?")
     assert len(messages(studio, cid)) == 6
+
+
+def test_history_excerpt_keeps_the_first_chars_and_marks_the_cut():   # выжимка от текста — и для итогов частей
+    limit = chat.HISTORY_RESULT_CHARS
+    assert chat.history_excerpt("я" * limit) == "я" * limit
+    assert chat.history_excerpt("я" * (limit + 1)) == "я" * limit + chat.HISTORY_CUT

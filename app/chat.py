@@ -692,12 +692,16 @@ def _refused_turns(rows, model: "str | None") -> set[str]:
     return refused
 
 
-def _for_history(step: dict) -> str:
-    """Результат шага прошлого ответа в запросах следующих ходов: `_for_model`, длиннее HISTORY_RESULT_CHARS —
-    первые HISTORY_RESULT_CHARS знаков и HISTORY_CUT (спека п. 29). В ходе вызова, в паузе и в `messages.tools` —
-    полный текст."""
-    text = _for_model(step)
+def history_excerpt(text: str) -> str:
+    """Выжимка для запросов следующих ходов (спека п. 29): длиннее HISTORY_RESULT_CHARS — первые
+    HISTORY_RESULT_CHARS знаков и HISTORY_CUT, иначе текст как есть."""
     return text if len(text) <= HISTORY_RESULT_CHARS else text[:HISTORY_RESULT_CHARS] + HISTORY_CUT
+
+
+def _for_history(step: dict) -> str:
+    """Результат шага прошлого ответа в запросах следующих ходов: `history_excerpt(_for_model(step))`. В ходе
+    вызова, в паузе и в `messages.tools` — полный текст."""
+    return history_excerpt(_for_model(step))
 
 
 def _stored_summary(chat_id: str, rows) -> "tuple[str, int] | None":
