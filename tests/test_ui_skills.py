@@ -61,8 +61,9 @@ def test_skills_page_seeds_creates_edits_orders_and_restores(browser, live, widt
         ("eval", "deleted", NAMES),
         ("click", "#skill-defaults"), ("wait", f"{NAMES}.length === 10"),
         ("eval", "restored", NAMES), ("eval", "fits", NO_OVERFLOW),
-        # кнопки пустого чата «Агентов» читают профиль, который страница обновила после записи
-        ("eval", "quick", f"(async () => (await {API}.api('GET', '/api/me')).code_quick_actions.map(a => a.title))()"),
+        # кнопки пустого чата «Агентов» — навыки с отметкой «кнопкой»
+        ("eval", "quick", "fetch('/api/skills?scope=agents').then(r => r.json())"
+                          ".then(m => m.items.filter(s => s.quick).map(s => s.name))"),
         # «Настройки → Агенты»: прежнего редактора быстрых действий нет
         *go("settings/code"), ("wait", "document.querySelector('.section-panel[data-section=code]')"),
         ("eval", "noQuickEditor", "!document.querySelector('.code-quick-actions-settings, #code-quick-action-rows')")]

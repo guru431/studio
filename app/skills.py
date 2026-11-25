@@ -310,11 +310,10 @@ def _default_out(row) -> dict:
             "quick": bool(row["quick"]), "parts": bool(row["parts"]), "position": row["position"]}
 
 
-def _rows(uid: int, scope: "str | None" = None, quick: bool = False) -> list:
+def _rows(uid: int, scope: "str | None" = None) -> list:
     shown = SCOPES.get(scope, ("chat", "agents", "both"))
     marks = ", ".join("?" * len(shown))
-    only = " AND quick = 1" if quick else ""
-    return state.DB.execute(f"SELECT * FROM skills WHERE user_id = ? AND scope IN ({marks}){only} ORDER BY position, id",
+    return state.DB.execute(f"SELECT * FROM skills WHERE user_id = ? AND scope IN ({marks}) ORDER BY position, id",
                             (uid, *shown)).fetchall()
 
 
@@ -439,13 +438,6 @@ def get(uid: int, skill_id: str) -> dict:
     if row is None:
         raise HTTPException(404, GONE)
     return _out(row)
-
-
-def quick_actions(uid: int) -> "list[dict] | None":
-    """Кнопки пустого чата «Агентов» из навыков; None — библиотека не засеяна (действуют прежние быстрые действия)."""
-    if not _seeded(uid):
-        return None
-    return [{"title": r["name"], "text": r["text"]} for r in _rows(uid, "agents", quick=True)]
 
 
 def _ensure_seeded(uid: int, lang: str) -> None:

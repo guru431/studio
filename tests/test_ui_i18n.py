@@ -199,7 +199,9 @@ def test_english_default_action_labels_keep_prompts_and_custom_titles(browser, l
               const button = host.querySelector('.code-visualization-open');
               const result = [button.textContent, button.title]; host.remove(); return result;
             })()"""),
-            ('eval', 'texts', "fetch('/api/me').then(r=>r.json()).then(m=>m.code_quick_actions.map(a=>a.text))")],
+            ('eval', 'texts', """(async () => {
+              const rows = (await (await fetch('/api/skills?scope=agents')).json()).items.filter(s => s.quick);
+              return Promise.all(rows.map(async s => (await (await fetch('/api/skills/' + s.id)).json()).text)); })()""")],
             init="localStorage.setItem('studio-language', 'en')")
     finally:
         server.stop()

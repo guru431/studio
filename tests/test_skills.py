@@ -113,14 +113,12 @@ def test_own_quick_actions_become_skills_once(studio):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     custom = {"title": "Моё", "text": "Мой текст"}
     saved = [custom, code_actions.DEFAULTS[1], code_actions.LEGACY_VIDEO_ACTION]
-    assert studio.c.patch("/api/me", json={"code_quick_actions": saved}).status_code == 200
+    state.DB.execute("UPDATE users SET code_quick_actions = ? WHERE id = ?", (json.dumps(saved), uid))  # прежний код
     quick = [s for s in listed(studio, "/api/skills?scope=agents") if s["quick"]]
     assert [(s["name"], s["origin"]) for s in quick] == [("Моё", None), ("Глубокий аудит проекта", "audit")]
     assert all(s["scope"] == "agents" and s["description"] == "" for s in quick)
     assert skills.get(uid, quick[0]["id"])["text"] == "Мой текст"
     assert names(listed(studio))[:2] == ["Моё", "Глубокий аудит проекта"] and len(listed(studio)) == 2 + 6
-    me = studio.c.get("/api/me").json()
-    assert me["code_quick_actions"] == [custom, code_actions.DEFAULTS[1]] and me["code_quick_actions_default"] is False
     assert json.loads(state.DB.execute("SELECT code_quick_actions FROM users").fetchone()[0])[0] == custom     # не стёрт
     # перенос один раз: удалённый перенесённый навык следующее чтение не возвращает
     assert studio.c.delete(f"/api/skills/{quick[0]['id']}").status_code == 204
@@ -131,22 +129,14 @@ def test_own_quick_actions_become_skills_once(studio):
 
 
 def test_unseeded_and_empty_quick_actions(studio):
-    uid = make_user(studio, "owner"); signin(studio, "owner")
-    me = studio.c.get("/api/me").json()
-    assert me["code_quick_actions"] == code_actions.DEFAULTS and me["code_quick_actions_default"] is True
-    assert skills.quick_actions(uid) is None
-    listed(studio)                                                  # посев без своего списка — три быстрых набора
-    me = studio.c.get("/api/me").json()
-    assert me["code_quick_actions"] == code_actions.DEFAULTS and me["code_quick_actions_default"] is False
+    make_user(studio, "owner"); signin(studio, "owner")
+    quick = [s for s in listed(studio, "/api/skills?scope=agents") if s["quick"]]   # без своего списка — три набора
+    assert [s["name"] for s in quick] == [a["title"] for a in code_actions.DEFAULTS]
     empty = make_user(studio, "empty")
     state.DB.execute("UPDATE users SET code_quick_actions = '[]' WHERE id = ?", (empty,))
     signin(studio, "empty")
-    assert studio.c.get("/api/me").json()["code_quick_actions"] == []
     items = listed(studio)
     assert [s for s in items if s["quick"]] == [] and len(items) == 6
-    assert skills.quick_actions(empty) == []
-    me = studio.c.get("/api/me").json()
-    assert me["code_quick_actions"] == [] and me["code_quick_actions_default"] is False
 
 
 def test_create_replace_reorder_delete_and_limits(studio):
@@ -283,7 +273,8 @@ def test_history_wipe_keeps_skills_and_takeout_contains_them(studio):
 def test_skill_text_is_not_logged(studio, caplog):
     caplog.set_level(logging.INFO, logger="studio")
     make_user(studio, "admin", is_admin=True); signin(studio, "admin")
-    studio.c.patch("/api/me", json={"code_quick_actions": [{"title": "secret-quick", "text": "secret-quick-text"}]})
+    state.DB.execute("UPDATE users SET code_quick_actions = ?",
+                     ('[{"title": "secret-quick", "text": "secret-quick-text"}]',))
     listed(studio)
     skill = studio.c.post("/api/skills", json={"name": "secret-name", "description": "secret-description",
                                                "text": "secret-text", "scope": "both"}).json()

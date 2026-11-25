@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field, StrictInt, field_validator
 import auth
 import cleaner_client
 import cleaner_route
-import code_actions
 import history
 import lock_policy
 import media
@@ -28,7 +27,6 @@ import release
 import sections
 import security
 import security_log
-import skills
 import state
 import totp
 import trash
@@ -54,18 +52,6 @@ class CodeChoice(BaseModel):
                     "read-only", "workspace-write", "danger-full-access"] | None = None
 
 
-class CodeQuickAction(BaseModel):
-    title: str = Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")
-    text: str = Field(min_length=1, max_length=100000)
-
-    @field_validator("title", "text")
-    @classmethod
-    def _not_blank(cls, value):
-        if not value.strip():
-            raise ValueError("blank")
-        return value
-
-
 class MePatch(BaseModel):
     name: str | None = Field(None, max_length=64)
     theme: str | None = None
@@ -73,7 +59,6 @@ class MePatch(BaseModel):
     timezone: str | None = Field(None, min_length=1, max_length=100)
     views: dict[str, str] | None = None     # {раздел: вид} — только присланные разделы
     code_defaults: dict[Literal["claude", "codex", "opencode", "deepseek"], CodeChoice] | None = None
-    code_quick_actions: list[CodeQuickAction] = Field(default_factory=list, max_length=20)
     computer_pin_timeout: StrictInt | None = Field(None, ge=60, le=604800)
     #: язык интерфейса устройства — его push и ntfy (только этой сессии; push-sync.js после смены языка)
     notify_lang: ntfy.Lang | None = None
@@ -130,11 +115,10 @@ def _me(request: Request) -> dict:
     uid = request.state.user.id
     row = state.DB.execute("SELECT id, login, name, is_admin, theme, timezone, views, screen_lock,"
                            " exa_key IS NOT NULL AS exa_key, pin_hash IS NOT NULL AS pin, code_defaults,"
-                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout, code_quick_actions,"
+                           " screen_lock_sections, screen_lock_timeout, computer_pin_timeout,"
                            " password_reset, email, email_codes, memory_on, login_notice, ldap_guid FROM users WHERE id = ?",
                            (uid,)).fetchone()
     chat = sections.default(uid, "chat")
-    quick = skills.quick_actions(uid)       # засеянная библиотека навыков — кнопки из навыков с отметкой
     views = json.loads(row["views"])
     accent = views.pop("accent", None)
     return {"id": row["id"], "login": row["login"], "name": row["name"], "is_admin": bool(row["is_admin"]),
@@ -148,9 +132,6 @@ def _me(request: Request) -> dict:
             "default_model": chat[1] if chat else None, "csrf": request.state.csrf,
             "capabilities": sections.capabilities(uid), "screen_lock": bool(row["screen_lock"]),
             "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
-            "code_quick_actions": code_actions.for_account(row["code_quick_actions"]) if quick is None else quick,
-            "code_quick_actions_default": row["code_quick_actions"] is None if quick is None else False,
-            "code_quick_actions_set": code_actions.DEFAULTS,     # «Добавить из набора» страницы прежней выкладки
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
             # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null
@@ -212,8 +193,6 @@ async def patch_me(body: MePatch, request: Request):
                 and not (priorities[3] is None and set(priorities[:3]) == {1, 2, 3})):
             raise HTTPException(422, {"code": "priority", "message": "укажите разный приоритет от 1 до 4 для каждого агента"})
         changes["code_defaults"] = json.dumps(stored)
-    if "code_quick_actions" in sent:
-        changes["code_quick_actions"] = json.dumps([action.model_dump() for action in body.code_quick_actions])
     if body.memory_on is not None:
         changes["memory_on"] = int(body.memory_on)
     if changes:

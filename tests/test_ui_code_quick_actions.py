@@ -10,6 +10,10 @@ from test_ui_browser import (API, CODE_CHAT_A, CODE_CHAT_B, READY, browser, code
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 SKILLS = "[...document.querySelectorAll('#skills-settings .skill-item-name')].map(e => e.textContent)"
+#: тексты кнопок пустого чата «Агентов» — навыков с отметкой `quick`, как их читает страница (`/api/skills`)
+QUICK_TEXTS = """(async () => {
+  const rows = (await (await fetch('/api/skills?scope=agents')).json()).items.filter(s => s.quick);
+  return Promise.all(rows.map(async s => (await (await fetch('/api/skills/' + s.id)).json()).text)); })()"""
 
 
 def _item(name: str) -> str:
@@ -95,7 +99,7 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
         # быстрые действия — навыки с отметкой «Кнопкой в пустом чате» на странице «Настройки → Навыки»
         result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/skills"),
             ("wait", f"{SKILLS}.length === 9"),
-            ("eval", "defaults", f"(async () => (await {API}.api('GET','/api/me')).code_quick_actions.map(a => a.text))()"),
+            ("eval", "defaults", QUICK_TEXTS),
             *edit(code_actions.DEFAULTS[0]["title"]), set_value("#skill-name", title), set_value("#skill-text", prompt),
             ("click", "#skill-save"), ("wait", f"!{is_open('#skill-dialog')} && {SKILLS}[4] === {title.strip()!r}"),
             *remove(code_actions.DEFAULTS[2]["title"]),
@@ -117,7 +121,7 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
             ("click", "#code-stop"), ("wait", "document.querySelector('#code-chat').dataset.running === '0'"),
             *code_chat(aid, CODE_CHAT_B), *code_tab_click(CODE_CHAT_A),
             ("eval", "stillHidden", "document.querySelector('#code-quick-actions').hidden"),
-            ("eval", "stored", f"(async () => (await {API}.api('GET','/api/me')).code_quick_actions)()")],
+            ("eval", "stored", QUICK_TEXTS)],
             width=width, mobile=width == 320)
     finally:
         server.stop()
@@ -126,7 +130,7 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
     assert values["defaults"] == [a["text"] for a in code_actions.DEFAULTS]
     assert values["kept"] == prompt
     assert values["titles"] and values["hidden"] and values["stillHidden"]
-    assert values["stored"][0]["text"] == prompt and values["stored"][-1]["text"] == "Добавленный текст"
+    assert values["stored"][0] == prompt and values["stored"][-1] == "Добавленный текст"
     turns = [r for r in machine.requests if r["op"] == "turn"]
     assert len(turns) == 1 and turns[0]["text"] == prompt
     assert not problems(result), problems(result)
