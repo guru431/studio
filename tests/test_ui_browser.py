@@ -9616,6 +9616,10 @@ CODE_STEPS = """(async () => { const rows = [...document.querySelectorAll('#code
 CODE_IDLE_AFTER = ("document.querySelector('#code-chat').dataset.running === '0'"
                    " && document.querySelectorAll('#code-feed .code-msg.assistant').length === {n}"
                    " && !document.querySelector('.code-ask')")
+#: ход дошёл до машины и кончился: задание рисуется в ленте ещё до POST хода (code-chat.js submit), а закрытая
+#: страница его уже не отправит — ждём ответ машины («Готово» в сценарии), а не только своё сообщение
+TURN_DONE = ("document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"
+             " && document.querySelector('#code-feed .code-msg.assistant')?.textContent.includes('Готово')")
 
 
 def code_free_machine(chats=None):

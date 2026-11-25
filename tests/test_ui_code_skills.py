@@ -4,7 +4,7 @@ import pytest
 
 from fake_bridge import pid
 from test_codex import CATALOG
-from test_ui_browser import (API, CODE_CHAT_A, NO_OVERFLOW, READY, browser, code_chat, code_free_machine,  # noqa: F401
+from test_ui_browser import (API, CODE_CHAT_A, NO_OVERFLOW, READY, TURN_DONE, browser, code_chat, code_free_machine,  # noqa: F401
                              code_online, code_requests, code_session, known_refusals, live, problems, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -109,7 +109,7 @@ def test_old_bridge_has_library_skills_only(browser, live):                     
             ("press", "Escape"), ("eval", "clear", "(() => { const t = document.querySelector('#code-text'); t.value = '';"
                                  " t.dispatchEvent(new Event('input', {bubbles: true})); return true; })()"),
             *pick("/Мой"), ("eval", "chip", f"{CHIP}.textContent"), ("click", "#code-send"),
-            ("wait", f"document.querySelector('#code-feed .code-msg.user') && {IDLE}"),
+            ("wait", TURN_DONE),
             ("eval", "install", "!document.querySelector('#code-skills-install-item')")])
     finally:
         server.stop()

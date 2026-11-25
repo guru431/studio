@@ -5,15 +5,10 @@ from fake_bridge import pid
 from test_codex import CATALOG as CODEX
 from test_ui_opencode import CATALOG as OPENCODE
 from test_deepseek import CATALOG as DEEPSEEK
-from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_free_machine, code_online, code_requests,
-                             code_session, go, live, live_sql, problems, set_value, signin)
+from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, TURN_DONE, browser, code_free_machine, code_online,
+                             code_requests, code_session, go, live, live_sql, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
-
-#: ход дошёл до машины и кончился: задание рисуется в ленте ещё до POST хода (code-chat.js submit), а закрытая
-#: страница его уже не отправит — ждём ответ машины, а не только своё сообщение
-TURN_DONE = ("document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"
-             " && document.querySelector('#code-feed .code-msg.assistant')?.textContent.includes('Готово')")
 
 
 @pytest.mark.parametrize('width', [320, 1280])

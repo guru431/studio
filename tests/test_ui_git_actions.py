@@ -2,9 +2,9 @@
 import pytest
 
 from fake_bridge import T0, pid
-from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine, code_online,
-                             code_files_machine, code_item, code_requests, code_session, code_tab_click, go,
-                             known_refusals, live, problems, set_value, signin)
+from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, TURN_DONE, browser, code_chat, code_free_machine,
+                             code_online, code_files_machine, code_item, code_requests, code_session, code_tab_click,
+                             go, known_refusals, live, problems, set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
@@ -38,7 +38,7 @@ def test_git_action_creates_chat_once_without_an_active_tab(browser, live, actio
             ("eval", "pending", "[...document.querySelectorAll('.code-git-actions button')].every(b => b.disabled)"),
             ("eval", "doubleClick", f"document.querySelector('#code-git-{action}').click(); window.newChats"),
             ("eval", "release", "window.releaseNewChat(); true"),
-            ("wait", "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"),
+            ("wait", TURN_DONE),
             ("eval", "chat", "document.querySelector('#code-chat').dataset.chat"),
             ("eval", "tabs", "document.querySelectorAll('.code-tab').length"),
             ("eval", "created", "window.newChats")], width=width, mobile=width == 320)
@@ -99,7 +99,7 @@ def test_git_chat_creation_handles_failure_and_leaving_the_project(browser, live
                 ('wait', "!document.querySelector('#code-git-dialog')")]
         actions += [('eval', 'release', 'window.releaseNewChat(); true'), ('wait', 'window.chatCreated')]
         if outcome == 'retry':
-            actions += [('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')")]
+            actions += [('wait', TURN_DONE)]
         actions += [('eval', 'path', 'location.hash'), ('eval', 'created', 'window.newChats')]
         result = browser.drive(live.url + '/', actions)
     finally:
@@ -180,7 +180,11 @@ def test_git_actions_color_and_preserve_draft_in_current_chat(browser, live, wid
         for count, action in enumerate(["push", "push-all", "deploy"], 2):
             actions += [("click", "#code-repo-status"), ("wait", "!document.querySelector('#code-git-commit').disabled"),
                 ("click", f"#code-git-{action}"),
-                ("wait", f"document.querySelectorAll('#code-feed .code-msg.user').length === {count} && !document.querySelector('#code-send').disabled && document.querySelector('#code-chat').dataset.running === '0'")]
+                # ответ машины на этот ход, а не только своё сообщение: оно рисуется ещё до POST хода
+                ("wait", f"document.querySelectorAll('#code-feed .code-msg.user').length === {count}"
+                         f" && document.querySelectorAll('#code-feed .code-msg.assistant').length === {count}"
+                         " && [...document.querySelectorAll('#code-feed .code-msg.assistant')].at(-1).textContent.includes('Готово')"
+                         " && !document.querySelector('#code-send').disabled && document.querySelector('#code-chat').dataset.running === '0'")]
         actions += [("wait", "document.querySelector('#code-repo-status').dataset.gitLevel === 'green'"),
             ("eval", "draft", "document.querySelector('#code-text').value"),
             *code_tab_click(CODE_CHAT_B), *code_tab_click(CODE_CHAT_A),
@@ -242,7 +246,7 @@ def test_git_popup_keeps_unsaved_file_and_requires_leaving_before_start(browser,
             ('click', '#code-repo-status'), ('wait', "!document.querySelector('#code-git-commit').disabled"),
             ('click', '#code-git-commit'),
             ('wait', "document.querySelector('#code-unsaved[open]')"), ('click', '#code-unsaved-leave'),
-            ('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')")],
+            ('wait', TURN_DONE)],
             width=320, mobile=True)
     finally:
         server.stop()
