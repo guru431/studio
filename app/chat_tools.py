@@ -264,7 +264,7 @@ async def _knowledge(task, call) -> dict:
     hits = await knowledge.search(task.user_id, query.strip(), **scope, cache=task.knowledge_cache,
                                   vectors=knowledge.vectors_for(task.conn))
     return {"kind": "knowledge", "query": query.strip(), "found": len(hits),
-            "sources": list(dict.fromkeys(h.doc_name for h in hits)),
+            "sources": list(dict.fromkeys(h.doc_name for h in hits)), "hits": knowledge.hits_view(hits),
             "text": knowledge.render(hits) if hits else knowledge.NOTHING}
 
 

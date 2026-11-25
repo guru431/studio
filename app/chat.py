@@ -888,6 +888,8 @@ def compose(chat_id: str, upto: str, model: "str | None" = None,
                 steps = [s for s in json.loads(row["tools"] or "[]") if "note" not in s]
                 # шаги внутри части (`part`) — нет: её итог идёт шагом самой части (chat_parts)
                 steps = [s for s in steps if "part" not in s]
+                # автоматический блок знаний (`auto`) — только источники под ответом: модель получила его в ходе
+                steps = [s for s in steps if not s.get("auto")]
                 if steps and out and out[-1]["role"] == "user":
                     out[-1]["content"] = _prefix(web.history_block(steps, _for_history), out[-1]["content"])
                     if not row["content"]:
@@ -2155,15 +2157,19 @@ class StreamTask:
     async def _context(self) -> str | None:
         """Контекст хода в потоке (`_turn_context`): знания, предел, фото. Итог — слова ошибки (не помещается,
         хранилище) или None."""
+        found = []
         try:
             self.messages = await _turn_context(self.user_id, self.chat_id, self.user_message_id, self.model,
                                                 self.conn, self.system, self.limit, self.cut, self.knowledge_cache,
-                                                self.photos, ratio=self.ratio, extra=self.spec_size)
+                                                self.photos, ratio=self.ratio, extra=self.spec_size, found=found)
         except HTTPException as exc:
             return exc.detail["message"]
         except OSError as e:
             log.warning("чат %s: вложение не прочиталось (%s)", self.chat_id[:8], type(e).__name__)
             return STORAGE
+        step = _knowledge_step(found)
+        if step is not None:                         # события нет: шаг придёт с перечитанным диалогом
+            self._step(step)
         return None
 
     async def run(self) -> None:
@@ -3021,15 +3027,15 @@ def _excerpt_plan(uid: int, chat_id: str, upto: str, model: str, cap: int, syste
 
 async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Connection, system: str,
                         limit: "int | None", cut: set, cache: dict, refs: "dict | None" = None, *,
-                        ratio: float = DEFAULT_RATIO, extra: int = 0) -> list[dict]:
+                        ratio: float = DEFAULT_RATIO, extra: int = 0, found: "list | None" = None) -> list[dict]:
     """Контекст хода после его записи: выдержки документов `cut` и блок баз диалога по сообщению `upto`
     (knowledge.for_turn, источник ждёт knowledge.TURN_TIMEOUT_SEC), проверка предела, фото (fill_photos; `refs` —
     StreamTask.photos для payload паузы), системное сообщение. Не помещается — HTTPException 413; файл фото не
-    прочитался — OSError."""
+    прочитался — OSError. `found` (список) получает найденные куски — источники шага «Знания» (`_knowledge_step`)."""
     asked = state.DB.execute("SELECT content FROM messages WHERE id = ?", (upto,)).fetchone()
     own = {a["id"] for a in _attachments(chat_id).get(upto, [])}
     excerpts, block = await knowledge.for_turn(uid, chat_id, asked["content"] if asked else "", cut, cache,
-                                               knowledge.vectors_for(conn), own=own)
+                                               knowledge.vectors_for(conn), own=own, found=found)
     composed = _with_block(compose(chat_id, upto, model, _max_images(conn, model), excerpts), block)
     tokens = estimate_tokens(chat_system.wrap(system, composed), ratio) + extra
     if (limit is not None and tokens > limit - RESERVE_TOKENS
@@ -3039,6 +3045,16 @@ async def _turn_context(uid: int, chat_id: str, upto: str, model: str, conn: Con
     photos = await fill_photos(chat_id, uid, composed, refs)
     operations.check(uid)
     return chat_system.wrap(system, photos)
+
+
+def _knowledge_step(found: list) -> "dict | None":
+    """Шаг автоматического блока знаний под ответом (спека 2026-11-25 п. 28): источники найденного по вопросу хода;
+    ничего не нашлось — None. `text` пуст — ради прежнего compose при откате; модели шаг не идёт (`auto`)."""
+    hits = knowledge.hits_view(found)
+    if not hits:
+        return None
+    return {"kind": "knowledge", "auto": True, "found": len(hits),
+            "sources": list(dict.fromkeys(h["doc"] for h in hits)), "hits": hits, "text": ""}
 
 
 def _with_block(messages: list[dict], block: str) -> list[dict]:
@@ -3613,8 +3629,13 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     refs = {}                                        # data: URL → id media (StreamTask.photos)
     try:
         if search and not conn.proxied:              # прямое подключение: знания — до ответа JSON, после записи хода
+            found = []
             messages = await _turn_context(uid, chat_id, user_mid, model, conn, system, limit, cut, {},
-                                           ratio=rate, extra=spec)
+                                           ratio=rate, extra=spec, found=found)
+            auto = _knowledge_step(found)
+            if auto is not None:                     # источники под ответом — шагом идущего ответа
+                state.DB.execute("UPDATE messages SET tools = ? WHERE id = ? AND status = 'streaming'",
+                                 (json.dumps([auto], ensure_ascii=False), answer_id))
         elif not scans and not search:
             photos = await fill_photos(chat_id, uid, messages, refs)   # файлы — после COMMIT и в потоке
             operations.check(uid)

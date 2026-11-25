@@ -96,6 +96,7 @@ class Hit:
     n: int                       # номер куска в документе, с 1
     text: str
     score: float
+    doc_id: str = ""             # id документа (`kb_documents`) — источник под ответом (`hits_view`, `chunk`)
 
 
 # ---- куски ----------------------------------------------------------------------
@@ -504,7 +505,7 @@ async def _search(uid: int, query: str, docs: dict, k: int, cache: dict, vectors
         except SourceError as e:
             cache["down"] = True
             log.warning("знания: переранжирование не прошло (%s)", e.code)
-    return [Hit(docs[row["doc_id"]], row["n"], row["text"], score) for row, score in found[:k]]
+    return [Hit(docs[row["doc_id"]], row["n"], row["text"], score, row["doc_id"]) for row, score in found[:k]]
 
 
 async def search(uid: int, query: str, *, kb_ids=(), attachment_ids=(), k: int = TOP_K,
@@ -513,6 +514,33 @@ async def search(uid: int, query: str, *, kb_ids=(), attachment_ids=(), k: int =
     векторы топ-30 → RRF → переранжирование; не больше `k`. `cache` — общий на ход (отказ источника, векторы);
     `vectors` False — только BM25 (`vectors_for`)."""
     return await _search(uid, query, _scope(uid, kb_ids, attachment_ids), k, {} if cache is None else cache, vectors)
+
+
+def hits_view(hits: list[Hit]) -> list[dict]:
+    """Источники шага «Знания» под ответом (спека 2026-11-25, п. 28): `[{doc, n, id}]` — имя документа, номер куска
+    и id документа, без повторов пары (id, n); текст куска страница читает маршрутом (`chat_sources`)."""
+    seen, out = set(), []
+    for h in hits:
+        if (h.doc_id, h.n) not in seen:
+            seen.add((h.doc_id, h.n))
+            out.append({"doc": h.doc_name, "n": h.n, "id": h.doc_id})
+    return out
+
+
+def chunk(uid: int, chat_id: str, doc_id: str, n: int) -> "dict | None":
+    """Кусок `n` документа `doc_id` для источника под ответом: документ жив и лежит в базе, которую учётка видит
+    (`visible_ids`), или это документ большого вложения этого диалога и этой учётки; иначе None."""
+    doc = state.DB.execute("SELECT id, kb_id, attachment_id, user_id, name FROM kb_documents"
+                           " WHERE id = ? AND deleted IS NULL", (doc_id,)).fetchone()
+    if doc is None:
+        return None
+    if doc["kb_id"] is not None:
+        if not visible_ids(uid, [doc["kb_id"]]):
+            return None
+    elif doc["user_id"] != uid or doc["attachment_id"] not in big_attachments(chat_id):
+        return None
+    row = state.DB.execute("SELECT text FROM kb_chunks WHERE doc_id = ? AND n = ?", (doc_id, n)).fetchone()
+    return None if row is None else {"doc": doc["name"], "n": n, "text": row["text"]}
 
 
 def render(hits: list[Hit]) -> str:
@@ -533,7 +561,7 @@ def excerpts(hits: list[Hit]) -> str:
 
 def _head(doc_id: str, name: str, k: int) -> list[Hit]:
     """Начало документа — когда по сообщению ничего не нашлось (модель хотя бы знает, о чём он)."""
-    return [Hit(name, r["n"], r["text"], 0.0) for r in state.DB.execute(
+    return [Hit(name, r["n"], r["text"], 0.0, doc_id) for r in state.DB.execute(
         "SELECT n, text FROM kb_chunks WHERE doc_id = ? ORDER BY n LIMIT ?", (doc_id, k))]
 
 
@@ -554,12 +582,15 @@ def heads(att_ids) -> dict[str, str]:
 
 
 async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
-                   cache: "dict | None" = None, vectors: bool = True, own=()) -> tuple[dict[str, str], str]:
+                   cache: "dict | None" = None, vectors: bool = True, own=(),
+                   found: "list | None" = None) -> tuple[dict[str, str], str]:
     """Знания хода по его сообщению `query`: выдержки вложений `attachment_ids`, которые модель получает выдержками
     (`adopt`; id вложения → текст выдержек), и блок найденного (пусто — ничего не нашлось). Вложения сообщения хода
     (`own`) — выдержками по вопросу (ничего — начало документа); прочие — началом (`heads`), а найденное по вопросу в
     них — в блок вместе с найденным в базах диалога: старое сообщение от нового вопроса не меняется (спека п. 34).
-    `cache` — общий на ход (`_vector`, отказ источника); `vectors` False — только BM25 (`vectors_for`)."""
+    `cache` — общий на ход (`_vector`, отказ источника); `vectors` False — только BM25 (`vectors_for`). `found`
+    (список) получает куски, найденные по вопросу, — выдержки вложений хода и блок; начало документа, взятое за
+    неимением совпадений, — нет (источники шага «Знания», спека 2026-11-25 п. 28)."""
     cache = {} if cache is None else cache
     out, history = {}, {}
     for att_id in attachment_ids:
@@ -570,15 +601,18 @@ async def for_turn(uid: int, chat_id: str, query: str, attachment_ids=(),
             history[row["id"]] = row["name"]
             out[att_id] = excerpts(_head(row["id"], row["name"], TOP_K))
             continue
-        hits = (await _search(uid, query, {row["id"]: row["name"]}, TOP_K, cache, vectors)
-                or _head(row["id"], row["name"], TOP_K))
-        out[att_id] = excerpts(hits)
-    found = await _search(uid, query, history, TOP_K, cache, vectors) if history else []
+        hits = await _search(uid, query, {row["id"]: row["name"]}, TOP_K, cache, vectors)
+        if found is not None:
+            found.extend(hits)
+        out[att_id] = excerpts(hits or _head(row["id"], row["name"], TOP_K))
+    blocked = await _search(uid, query, history, TOP_K, cache, vectors) if history else []
     kbs = chat_kbs(uid, chat_id)
-    found += await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache, vectors) if kbs else []
-    if out or found:
-        log.info("знания: чат %s — выдержек вложений %d, кусков баз и истории %d", chat_id[:8], len(out), len(found))
-    return out, block(found)
+    blocked += await _search(uid, query, _scope(uid, kbs, ()), TOP_K, cache, vectors) if kbs else []
+    if found is not None:
+        found.extend(blocked)
+    if out or blocked:
+        log.info("знания: чат %s — выдержек вложений %d, кусков баз и истории %d", chat_id[:8], len(out), len(blocked))
+    return out, block(blocked)
 
 
 def adopt(uid: int, att_id: str, name: str, text: str, vectors: bool = True) -> str:

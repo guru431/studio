@@ -307,8 +307,10 @@ def test_chat_kb_block_and_tool(studio):
     studio.gw.chat_script = [{"tool_calls": [call("knowledge_search", query="весной меняют")]}, ["Весной."]]
     events = sse(turn(studio, cid, "Когда меняют?"))
     assert events[-1] == ("done", {"status": "done"})
-    step = messages(studio, cid)[-1]["tools"]
-    assert step == [{"kind": "knowledge", "query": "весной меняют", "found": 1, "sources": ["пароли.txt"]}]
+    auto, step = messages(studio, cid)[-1]["tools"]                # блок хода — своим шагом (спека 2026-11-25 п. 28)
+    hits = [{"doc": "пароли.txt", "n": 1, "id": state.DB.execute("SELECT id FROM kb_documents").fetchone()[0]}]
+    assert auto == {"kind": "knowledge", "auto": True, "found": 1, "sources": ["пароли.txt"], "hits": hits}
+    assert step == {"kind": "knowledge", "query": "весной меняют", "found": 1, "sources": ["пароли.txt"], "hits": hits}
     tool = [m for m in studio.gw.chat_requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
     assert "бирюза" in tool
     studio.gw.chat_script = [{"tool_calls": [call("knowledge_search", query="")]}, ["Ладно."]]

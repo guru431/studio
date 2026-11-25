@@ -3407,6 +3407,7 @@ globalThis.StudioEnglish = Object.freeze({
   "в этом диалоге сработал защищённый источник — HTML и SVG из ответа здесь не открываются": "a protected source was used in this conversation, so HTML and SVG from answers do not open here",
   "блок больше 2 МиБ — в окне не открывается": "the block is larger than 2 MiB and does not open in a window",
   "окно закрыто — откройте его заново": "the window is closed. Open it again",
+  "кусок недоступен: документ изменён, удалён или закрыт": "the excerpt is unavailable: the document was changed, deleted or closed",
   "Ссылки в аргументах после защищённого источника запрещены": "Links in arguments are not allowed after a protected source",
   "«Защищённый источник» — только у общих подключений MCP": "Protected source is available only for shared MCP connections",
   "неверные аргументы todo_write — нужен список items до {0} пунктов: text до {1} знаков и status pending, in_progress или done": "invalid todo_write arguments: items must be a list of up to {0} entries with text up to {1} characters and status pending, in_progress or done",
