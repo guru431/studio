@@ -26,6 +26,13 @@ function toolWords(tool) {
   return what ? tr("инструмент {0}", what) : tr("инструмент");
 }
 
+/** Шаги ответа `m`: записанные (`m.tools`), а пока в них нет ничего, кроме автоматического блока «Знаний» (`auto`), —
+ * живые `m.calls` хода; нет ни тех, ни других — []. */
+export function answerSteps(m) {
+  const tools = Array.isArray(m?.tools) ? m.tools : [];
+  return tools.some((s) => !s?.auto) || !m?.calls?.length ? tools : m.calls;
+}
+
 /** Ответ идёт: `streaming`, кроме ответа прямого подключения, брошенного другой вкладкой (под ним «прервано»). */
 function ongoing(job, m) {
   return m?.status === 'streaming' && (!!job || m.via !== 'browser' || !!m.live);
@@ -157,7 +164,7 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
       activity.dataset.state = stage?.state || 'idle';
       parts?.paint(m);
       const going = ongoing(current, m) ? m : null;
-      steps = going ? (going.tools?.length ? going.tools : going.calls || []) : [];
+      steps = going ? answerSteps(going) : [];
       steps = steps.filter((s) => !s?.auto);      // шаг автоматического блока «Знаний» — не вызов инструмента
       toolsCount.textContent = String(steps.length);
       const label = tr("Вызовы инструментов: {0}", steps.length);

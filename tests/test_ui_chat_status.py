@@ -236,13 +236,15 @@ def test_context_window_numbers_buttons_and_no_data(browser, live, width):
     assert not problems(r), r.get("log")
 
 
-def test_context_window_continue_goes_to_the_real_route(browser, live):
+@pytest.mark.parametrize("width", [320, 1280])
+def test_context_window_continue_goes_to_the_real_route(browser, live, width):
     """«Новый диалог с итогом» без подмены (задача 15, `chat_continue`): итог модели — в поле открытого наследника."""
     import chat
-    login = "ctxwin-continue"
+    login = f"ctxwin-continue-{width}"
+    mobile = width == 320
     live.add_user(login)
     r = browser.drive(live.url + "/", [*signin(login), ("wait", READY), add_gateway(), *go("settings"),
-        ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(False),
+        ("wait", "document.querySelector('.settings-nav')"), *open_new_chat(mobile),
         ("wait", "document.querySelector('#model-chip').textContent.includes('local-gemma-abl')"),
         ("type", "#chat-input", "Вопрос"), ("press", "Enter"),
         ("wait", f"{ANSWERED} && !document.querySelector('#ctx-meter').hidden"),
@@ -250,10 +252,11 @@ def test_context_window_continue_goes_to_the_real_route(browser, live):
         ("click", "#ctx-meter"), ("wait", is_open("#chat-context-dialog")),
         ("click", "#chat-context-continue"),
         ("wait", "document.querySelector('#chat-input').value !== ''"),
-        ("eval", "moved", f"[{CHAT}, document.querySelector('#chat-input').value]")], width=1280)
+        ("eval", "moved", f"[{CHAT}, document.querySelector('#chat-input').value]"),
+        ("eval", "fits", NO_OVERFLOW)], width=width, mobile=mobile)
     assert not r.get("failed"), r
     v = r["values"]
-    assert v["moved"][0] != v["cid"] and v["moved"][1] == "".join(live.gw.chat_reply)
+    assert v["moved"][0] != v["cid"] and v["moved"][1] == "".join(live.gw.chat_reply) and v["fits"] is True
     assert live.gw.chat_requests[-1]["messages"][0]["content"] == chat.SUMMARY_NOTE
     assert not problems(r), r.get("log")
 
@@ -405,10 +408,18 @@ KB_CHAT = f"""(async () => {{ const m = {API};
   location.hash = '#/chat/' + chat.id; return chat.id; }})()"""
 
 
-def test_auto_knowledge_step_is_not_counted_as_a_tool_call(browser, live):
+PICK ="""(async () => { const { answerSteps } = await import('/static/js/chat-status.js');
+  const auto = { kind: 'knowledge', auto: true }, todo = { kind: 'todo' }, call = { kind: 'mcp' };
+  return [{ tools: [auto], calls: [call] }, { tools: [auto] }, { tools: [auto, todo], calls: [call] }, {},
+    { tools: [], calls: [call] }].map((m) => answerSteps(m).map((s) => s.kind)); })()"""
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_auto_knowledge_step_is_not_counted_as_a_tool_call(browser, live, width):
     """Ревью задачи 15, п. 7: шаг автоматического блока «Знаний» (`auto`) в `tools` идущего ответа, прочитанного с
     сервера, — не вызов инструмента: счётчик и список строки состояния его не считают."""
-    login = "auto-step"
+    login = f"auto-step-{width}"
+    mobile = width == 320
     live.add_user(login)
     hold = {"on": True}
     live.gw.chat_script = [{"tool_calls": [("todo_write", TODO)]}, ["Готово", " полностью."]]
@@ -419,7 +430,7 @@ def test_auto_knowledge_step_is_not_counted_as_a_tool_call(browser, live):
             ("wait", "document.querySelector('#chat-input') && document.querySelector('#model-chip')"
                      ".textContent.includes('local-gemma-abl')"),
             ("type", "#chat-input", "Составь план"), ("press", "Enter"),
-            ("wait", "!document.querySelector('#chat-tools').hidden")])
+            ("wait", "!document.querySelector('#chat-tools').hidden")], width=width, mobile=mobile)
         assert not r.get("failed"), r
         cid = r["values"]["cid"]
         r2 = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
@@ -430,18 +441,21 @@ def test_auto_knowledge_step_is_not_counted_as_a_tool_call(browser, live):
             ("eval", "count", "document.querySelector('#chat-tools .code-active-count').textContent"),
             ("click", "#chat-tools"), ("wait", "document.querySelector('#chat-tools-menu:popover-open')"),
             ("eval", "steps", "document.querySelectorAll('#chat-tools-menu .web-list > li').length"),
-            ("press", "Escape")])
+            ("press", "Escape"), ("eval", "pick", PICK), ("eval", "fits", NO_OVERFLOW)], width=width, mobile=mobile)
     finally:
         hold["on"] = False
     try:
         assert not r2.get("failed"), r2
         v = r2["values"]
         assert v["stored"] == ["streaming", [["knowledge", True], ["todo", False]]]   # авто-шаг пришёл с сервера
-        assert v["count"] == "1" and v["steps"] == 1
+        assert v["count"] == "1" and v["steps"] == 1 and v["fits"] is True
+        # только авто-шаг в `tools` — живые `calls` хода; вызов в `tools` — записанные шаги (answerSteps)
+        assert v["pick"] == [["mcp"], ["knowledge"], ["knowledge", "todo"], [], ["mcp"]]
         assert not problems(r) and not problems(r2), (r.get("log"), r2.get("log"))
     finally:
         live.gw.chat_hold = False
         live.gw.chat_script = []
+
 
 SAVED_NUMBERS = f"""(async () => {{ const m = {API};
   const last = (await m.api('GET', '/api/chats/' + {CHAT})).messages.at(-1);

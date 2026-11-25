@@ -6,7 +6,7 @@ import { MEDIA_ACCEPT, byteSize, consentAsks, consentNode, draftIds, isMedia, me
 import { paintPending } from './chat-pending.js';
 import { paintSuggestions } from './chat-suggest.js';
 import { contextRing } from './chat-context.js';
-import { chatStatus } from './chat-status.js';
+import { answerSteps, chatStatus } from './chat-status.js';
 import { contextWindow } from './chat-context-window.js';
 import { statsDialog } from './chat-stats.js';
 import { filesDialog } from './chat-dialog-files.js';
@@ -1291,7 +1291,7 @@ function build(view, ctx) {
   function paintConsent(m) {
     const p = parts.get(m);
     if (!p) return;
-    const asks = consentAsks(Array.isArray(m.tools) && m.tools.length ? m.tools : m.calls || []);
+    const asks = consentAsks(answerSteps(m));
     const decisions = chat?.chat.mcp_file_consent || {};
     const key = JSON.stringify([asks, asks.map((a) => decisions[String(a.sid)] || '')]);
     if (p.consentKey === key) return;
@@ -2114,8 +2114,9 @@ function build(view, ctx) {
   /* плашка: идёт инструмент — он с крутилкой; есть шаги с сервера — итог зелёным или красным; вызовы этого хода
      до перечитывания — итог без цвета (ошибок ещё не знаем); нет ничего — плашки нет (ответ по памяти) */
   function paintBadge(p, m, job) {
-    const tools = Array.isArray(m.tools) && m.tools.length ? m.tools : null;
-    const steps = (tools || m.calls || []).filter((step) => !m.pending || !step.waiting);
+    const recorded = answerSteps(m);            // только авто-шаг «Знаний» в `tools` — живые `calls` хода
+    const tools = recorded.length && recorded === m.tools ? m.tools : null;
+    const steps = recorded.filter((step) => !m.pending || !step.waiting);
     // скан: своя вкладка — событие `ocr`, ответ, который читает не она, — `ocr` сообщения с сервера
     const scan = m.status === 'streaming' ? (job ? job.scan : m.ocr) : null;
     const busy = m.status === 'streaming' && job && job.tool;
