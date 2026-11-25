@@ -63,8 +63,10 @@ def test_agents_icon_counts_sessions_across_computers_and_sections(browser, live
             ("eval", "outside", "!location.hash.includes('/code')"),
             ("eval", "label", "document.querySelector('[data-section=code]').getAttribute('aria-label')"),
             ("eval", "fits", fits), ("screenshot", str(tmp_path / f"agent-count-{width}.png")),
-            *code_chat(aid, CODE_CHAT_A), set_value("#code-text", "Новая задача"), ("click", "#code-send"),
-            ("wait", "!document.querySelector('#code-busy-notice').hidden"), ("click", "#code-busy-send"),
+            *code_chat(aid, CODE_CHAT_A), set_value("#code-text", "Новая задача"),
+            # в проекте идёт ход другого чата — подсказка кнопки об этом, отправка без подтверждения (956892d1)
+            ("wait", "document.querySelector('#code-send').title === 'В проекте уже выполняются другие задания'"),
+            ("click", "#code-send"),
             ("wait", f"document.querySelector('#code-chat').dataset.running === '1' && {badge}.textContent === '4'"),
             ("click", "#code-stop"), ("wait", f"{badge}.textContent === '3'"),
             *go("photo"), ("eval", "kept", f"!{badge}.hidden && {badge}.textContent === '3'"),
@@ -571,7 +573,9 @@ def test_agent_attachments_context_project_status_and_subscription(browser, live
             ("eval", "usage", "document.querySelector('#code-usage-dialog').textContent"),
             ("screenshot", str(tmp_path / f"agent-usage-{width}.png")), ("click", "#code-usage-dialog .actions .btn:last-child"),
             ("screenshot", str(tmp_path / f"agent-controls-{width}.png")),
-            ("click", "#code-send"), ("wait", "!document.querySelector('#code-busy-notice').hidden"), ("click", "#code-busy-send"),
+            # в проекте идёт ход другого чата — подсказка кнопки об этом, отправка без подтверждения (956892d1)
+            ("wait", "document.querySelector('#code-send').title === 'В проекте уже выполняются другие задания'"),
+            ("click", "#code-send"),
             ("wait", "document.querySelector('#code-feed').textContent.includes('Получил файлы')"),
             ("eval", "overflow", "document.documentElement.scrollWidth > innerWidth")], width=width, mobile=width == 390)
     finally:
