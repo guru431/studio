@@ -16,6 +16,7 @@ from conftest import add_connection, add_gateway, make_user, signin
 from fakes import FakeCleanerGateway
 from test_chat import attach, messages, new_chat, png, sse, turn
 from test_chat_shares import create as create_share, unlock as unlock_share
+from test_chat_weak_calls import TEXT_CALL
 from test_chat_pending import answer
 from test_chat_web import EXA_KEY, call
 from test_knowledge import big_text
@@ -127,6 +128,20 @@ def test_web_and_open_world_tools_are_held(cleaner_gw):
     sse(turn(s, chat_id, "Найди"))
     assert gw.turns[0].headers["x-cleaner-hold-tools"] == "web_search,read_page,youtube_subtitles," + name_of(sid, "search")
     assert name_of(sid) in tool_names(gw.bodies[0])                      # обычный MCP получает оригиналы
+
+
+def test_text_tool_call_is_never_parsed_through_cleaner(cleaner_gw, monkeypatch):
+    """Решение 13 спеки 2026-11-25-studio-skills-status-local-models: замены Cleaner получают только структурные
+    вызовы — текст `<tool_call>` через Cleaner не разбирается, даже если признак «локальная» истинен."""
+    s, gw = cleaner_gw
+    monkeypatch.setattr(sections, "is_local", lambda conn, model: True)
+    chat_id = routed_chat(s, gw)
+    web_on(s, chat_id)
+    gw.script = [[TEXT_CALL]]
+    assert sse(turn(s, chat_id, "Найди"))[-1] == ("done", {"status": "done"})
+    assert len(gw.turns) == 1 and s.gw.exa_requests == []
+    answer = messages(s, chat_id)[-1]
+    assert answer["content"] == TEXT_CALL and answer["tools"] == []
 
 
 def test_tool_round_reuses_the_context_and_stores_the_last_request(cleaner_gw):

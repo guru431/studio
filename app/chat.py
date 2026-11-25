@@ -861,6 +861,41 @@ class ToolCall:
     arguments: str
 
 
+#: вызов инструмента, написанный моделью текстом (локальная модель без разборщика вызовов vLLM)
+TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.S)
+TOOL_CALL_NAME_RE = re.compile(r'"name"\s*:\s*"([^"]{1,128})"')
+
+
+def _text_calls(text: str) -> "tuple[str, list[ToolCall]]":
+    """Вызовы из блоков `<tool_call>{…}</tool_call>` текста круга: (текст без разобранных блоков, вызовы). Тело —
+    объект JSON с `name` (строка 1–128 знаков); аргументы — словарь (в JSON), строка как есть, нет — `{}`, иное — в
+    JSON. Тело не JSON, но имя в нём есть — вызов с телом вместо аргументов: инструмент откажет словами модели
+    (неверные аргументы — шаг-ошибка, не ошибка хода). Имени нет — блок остаётся текстом."""
+    calls = []
+
+    def take(found: "re.Match") -> str:
+        body = found.group(1).strip()
+        try:
+            data = json.loads(body)
+        except ValueError:
+            named = TOOL_CALL_NAME_RE.search(body)
+            if named is None:
+                return found.group(0)
+            calls.append(ToolCall("", named.group(1), body))
+            return ""
+        name = data.get("name") if isinstance(data, dict) else None
+        if not isinstance(name, str) or not 1 <= len(name) <= 128:
+            return found.group(0)
+        args = data.get("arguments", "{}")
+        if not isinstance(args, str):                 # словарь и прочее — в JSON
+            args = json.dumps(args, ensure_ascii=False)
+        calls.append(ToolCall("", name, args))
+        return ""
+
+    rest = TOOL_CALL_RE.sub(take, text)
+    return rest.strip(), calls
+
+
 @dataclass(eq=False)
 class StreamTask:
     """Запрос к модели ответа `message_id`; очередь — события для потока SSE: ("ping", None),
@@ -1633,7 +1668,17 @@ class StreamTask:
                 self._continue(text)
                 continue
             self._recovery(None)
-            if not (offer and ending == "tool_calls" and calls):
+            # вызов текстом — только у локальной модели и никогда через Cleaner: замены получают только структурные
+            if (offer and not calls and ending not in (None, "length") and "<tool_call>" in text
+                    and sections.is_local(self.conn, self.model) and not (self.conn.cleaner or self.conn.routed)):
+                cleaned, calls = _text_calls(text)
+                if calls:
+                    self.content = self.content[:len(self.content) - len(text)] + cleaned
+                    text, self.fresh = cleaned, True
+                    self.put("replace", {"text": self.content})
+                    self._save()
+            # структурный вызов — при любом признаке конца, кроме обрыва (`length`: вызов мог прийти не весь)
+            if not (offer and calls and ending not in (None, "length")):
                 break
             self.rounds += 1
             error = await self._tools(calls, text)
@@ -1647,7 +1692,7 @@ class StreamTask:
             return "модель оборвала ответ: поток кончился без признака конца"
         if ending == "stop" and retries and not self.content.strip():
             return NO_ANSWER
-        if ending == "tool_calls" and not text.strip():
+        if calls and ending != "length" and not text.strip():
             return NO_ANSWER
         if ending == "length":
             self.content += CUT_LENGTH
