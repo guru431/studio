@@ -220,7 +220,7 @@ def test_context_is_summarized_before_request_and_original_history_is_kept(studi
     studio.c.patch(f"/api/chats/{cid}", json={"model": "tiny"})
     studio.gw.models.append({"id": "tiny", "context_length": 8192})
     chat.LIMITS.clear()
-    studio.gw.chat_script = [{"text": ["Обсудили риски и записали их в out/план.docx."]}] * 2
+    studio.gw.chat_script = [{"text": ["Обсудили риски и записали их в out/план.docx."]}] * 3   # три партии пересказа
     studio.gw.chat_reply = ["Детализация по отделам"]
     events = sse(turn(studio, cid, "Дополни документ по отделам"))
     assert ("recovery", {"stage": "summary"}) in events and events[-1][0] == "done"
