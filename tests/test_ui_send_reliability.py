@@ -270,8 +270,9 @@ def test_direct_answer_read_so_far_is_kept_on_pagehide(chromium, live):
                 page.locator("#send").click()
                 pw.expect(page.locator(LAST + " .md")).to_contain_text(first[:20])
                 page.evaluate("() => window.dispatchEvent(new PageTransitionEvent('pagehide'))")
-                pw.expect(page.locator(LAST + " .msg-meta")).to_have_text("")
                 until(page, lambda: len(puts) == 2)
+                # подпись — после конца сохранения: до него она пуста (ответ ещё «идёт»), после — итог «остановлено»
+                pw.expect(page.locator(LAST + " .msg-meta")).to_have_text("остановлено")
                 assert puts[0] == puts[1]                # keepalive и итог страницы — одно тело
                 assert json.loads(puts[0])["total_ms"] >= 0      # числа ответа — в keepalive: при закрытии дойдёт он
                 status, answer = page.evaluate(last_saved)
