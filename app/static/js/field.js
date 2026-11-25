@@ -53,7 +53,7 @@ export function fieldBox(field, { mic = true, clear = true, attach = null, tools
   if (attach) column.append(attach);
   column.append(...tools);
   if (mic) column.append(attachMic(field, error, { dialog }));
-  const box = el('div', { class: 'field-box' }, field, column);
+  const box = el('div', { class: fold ? 'field-box field-foldable' : 'field-box' }, field, column);
   const paint = () => {
     for (const node of shown) node.hidden = !field.value;
     if (fit && field.tagName === 'TEXTAREA' && field.rows === 1 && field.isConnected) {

@@ -26,6 +26,9 @@ import { renderMarkdownInto } from './markdown.js';
 import { paintOwuiPending } from './owui-pending.js';
 import { picker } from './picker.js';
 import { signal } from './sound.js';
+import { answerTools } from './code-answer-tools.js';
+import { quoteChip, selectionQuote } from './quote.js';
+import { messageMenu } from './message-menu.js';
 import { el, words } from './ui.js';
 
 /** Предел вложения, байт (owui.FILE_MAX) и число вложений сообщения (owui.FILES_MAX). */
@@ -91,6 +94,11 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
   // «Поделиться и экспортировать» (owui_share.py): ссылка — снимок ветки, файлы — только именами
   const sharing = shareMenu(root, { id: 'owui-share', content: scroller, failed: (err) => { notice.textContent = words(err); } });
   feedHead.append(sharing.button);
+  // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
+  const quote = quoteChip(form, input, { id: 'owui-quote' });
+  const quoteText = (node) => messages.find((m) => m.id === node.dataset.id)?.text || '';
+  const selQuote = selectionQuote(scroller, { texts: '.owui-msg > .bubble, .owui-msg .md', quote: quote.set });
+  const msgMenu = messageMenu(scroller, { message: '.owui-msg', text: quoteText, quote: readOnly ? null : quote.set });
   function paintShare() {
     const path = chat ? `${base}/chats/${encodeURIComponent(chat)}` : null;
     sharing.set(path ? { share: `${path}/share`, export: `${path}/export`, title: titleNode.textContent, kind: 'owui' } : null);
@@ -176,8 +184,10 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
     body.append(...[thinkNode(m), toolsNode(m),
       ...(Array.isArray(m.other) ? m.other : []).map((type) => el('p', { class: 'muted small owui-other' }, tr("элемент {0}", type))),
       md, filesNode(m.files), pending,
-      meta ? el('p', { class: `msg-meta${meta.error ? ' error' : ''}` }, meta.text) : null,
-      m.model ? el('p', { class: 'msg-model muted small' }, m.model) : null].filter(Boolean));
+      meta ? el('p', { class: `msg-meta${meta.error ? ' error' : ''}` }, meta.text) : null].filter(Boolean));
+    // готовый ответ с текстом — модель и «Копировать» (code-answer-tools.js), иначе только модель
+    if (m.done && m.text) answerTools(body, { text: m.text, model: m.model });
+    else if (m.model) body.append(el('p', { class: 'msg-model muted small' }, m.model));
     return el('div', { class: 'msg assistant owui-msg', 'data-id': m.id }, el('span', { class: 'mark', 'aria-hidden': 'true' }), body);
   }
 
@@ -417,6 +427,7 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
 
   async function submit() {
     if (readOnly || sending) return;
+    quote.fold();                    // цитата — в начало поля: дальше обычное поле
     const text = input.value;
     const ready = attachments.filter((a) => a.id);
     if (attachments.some((a) => a.uploading || a.removing)) return;
@@ -610,6 +621,8 @@ export function chatView(host, { account, chatId = null, readOnly = false, creat
       clearTimeout(reloadTimer);
       cancelAnimationFrame(paintFrame);
       sharing.unmount();
+      selQuote.unmount();
+      msgMenu.unmount();
       modelPick.unmount();
       root.remove();
     },

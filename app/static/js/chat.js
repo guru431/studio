@@ -134,6 +134,8 @@ import { knowledgeStep, sourceClicks } from './chat-knowledge-sources.js';
 import { resultImages } from './chat-result-images.js';
 import { effortChooser } from './chat-effort.js';
 import { answerSignal } from './sound.js';
+import { quoteChip, selectionQuote } from './quote.js';
+import { messageMenu } from './message-menu.js';
 
 const DOC_EXT = ['.pdf', '.docx', '.txt', '.md', '.csv', '.tsv', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.toml',
   '.ini', '.log', '.py', '.js', '.ts', '.html', '.css', '.sql', '.sh', '.ps1'];   // как documents.SUFFIXES
@@ -930,6 +932,12 @@ function build(view, ctx) {
   const offer = continueOffer({ chatId: () => chatId, openWith, busy: () => sending || jobs.has(chatId) || remoteStream(),
     failed: (err) => { notice.textContent = words(err); } });
   notice.after(offer.node);
+  // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
+  const quote = quoteChip(form, input, { id: 'chat-quote', changed: () => ring.schedule() });
+  const quoteText = (node) => (node.matches('.msg.user') ? node.querySelector(':scope > .bubble')?.textContent || ''
+    : chat?.messages.find((m) => m.id === node.dataset.id)?.content || '');
+  const selQuote = selectionQuote(scroller, { texts: '.msg.user > .bubble, .msg.assistant .md', quote: quote.set });
+  const msgMenu = messageMenu(scroller, { message: '.msg', text: quoteText, quote: quote.set });
 
   function shareContext() {
     const current = chat?.chat.id === chatId ? chat.chat : null;
@@ -1445,6 +1453,7 @@ function build(view, ctx) {
   /* «После ответа» (chat-queue.js): текст поля — в очередь открытого диалога; правка сообщения, вложения и навык
      (чип chat-skills.js) в очередь не встают. Принято — поле и черновик диалога пусты */
   function enqueue() {
+    quote.fold();
     const text = input.value;
     if (editing || !chatId || (!text.trim() && !skills.chosen())) return;
     if (atts.length) {
@@ -2491,6 +2500,7 @@ function build(view, ctx) {
     roles.close();
     if (!ctx.hint || id !== null) focusDesktop(input);
     if (id === chatId && (id === null || chat)) return;
+    quote.clear();
     closeEdit();
     unqueueField();                                  // в поле — набранное, а не текст уходящего сообщения очереди
     if (chatId !== undefined) dialogDrafts.leave(chatId);   // первое открытие — черновика прежнего диалога нет
@@ -2676,6 +2686,7 @@ function build(view, ctx) {
   }
 
   async function submit(regenerate, externalOk = false, webOk = false) {
+    if (!regenerate && !queuing && !voiceWait) quote.fold();   // цитата — в начало поля (сообщение очереди и «Разговора» — нет)
     // ответ идёт (здесь или через сервер с другого устройства): Enter ставит текст в очередь. Ответ другой вкладки
     // (`otherTab`) — только кнопкой «После ответа»: его признак у страницы бывает устаревшим, сервер решит сам
     if (!regenerate && !queuing && !voiceWait && chatId && (jobs.has(chatId) || remoteStream())) {
@@ -3190,6 +3201,8 @@ function build(view, ctx) {
       skills.unmount();
       inputDraft.save(false);
       sharing.unmount();
+      selQuote.unmount();
+      msgMenu.unmount();
       listing.unmount();
       tabs.unmount();
       alive = false;

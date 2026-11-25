@@ -70,6 +70,8 @@ import { codeActivity } from './code-activity.js';
 import { attachCounts, countRefusal } from './code-attach-limits.js';
 import { findView } from './code-find.js';
 import { answerTools } from './code-answer-tools.js';
+import { quoteChip, selectionQuote } from './quote.js';
+import { messageMenu } from './message-menu.js';
 import { agentSkills } from './code-skills.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
@@ -413,6 +415,12 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       el('div', { class: 'composer-opts' },
         pick(tr("Модель"), model), pick(tr("Усилие"), effort), pick(tr("Права"), access)),
       stop, send));
+  // «Цитировать» и меню сообщения (quote.js, message-menu.js): цитата — чипом над полем, при отправке — в начало поля
+  const quote = quoteChip(form, text, { id: 'code-quote' });
+  const quoteText = (node) => (node.matches('.user') ? node.querySelector('.code-user-text')?.textContent || ''
+    : [...node.querySelectorAll('.code-timeline-text')].map((n) => n.textContent.trim()).filter(Boolean).join('\n\n'));
+  const selQuote = selectionQuote(scroller, { texts: '.code-user-text, .code-timeline-text', quote: quote.set });
+  const msgMenu = messageMenu(scroller, { message: '.code-msg', text: quoteText, quote: readonly ? null : quote.set });
   // Навыки: меню «/», чип над полем, кнопки пустого чата, набор в проект, проверка другим помощником (code-skills.js).
   // Создаются раньше enterSends и statusActions: меню «/» ловит Enter первым, пункты попадают в меню веток.
   const skills = agentSkills(host, { aid, pid, key: draftKey, agent, engine, text, chipHost: form, readonly, failed: (err) => {
@@ -1803,6 +1811,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   async function submit(quick = null, git = !!quick) {
     if (resolving || historyLoading || !settingsReady || composing) return;
     if (queue.paused()) { showStatus(tr("Сначала завершите редактирование очереди")); return; }
+    if (!quick) quote.fold();                // цитата — в начало поля: дальше обычное поле
     const typed = quick ?? text.value;       // поле (или текст мимо поля); навык уходит перед ним
     let value = typed;
     if (quick && ((git && !hasGit) || running)) {
@@ -2066,6 +2075,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       alive = false;
       askObserver.disconnect();
       sharing.unmount();
+      selQuote.unmount();
+      msgMenu.unmount();
       sessionPopup?.unmount();
       branchPopup?.unmount();
       pictures.unmount();

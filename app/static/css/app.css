@@ -441,11 +441,13 @@ label { font-size:var(--fs-sm); color: var(--text-2); }
   margin: 0 var(--space-7) var(--space-7); padding: var(--space-3) var(--space-4);
   background: var(--surface-1); border: 1px solid var(--field-border); border-radius: var(--r-menu);
   container: composer / inline-size; }
-.composer textarea { width: 100%; min-height: var(--h-sm); max-height: calc(50 * var(--dvh)); padding: var(--space-1) 0; border: 0; outline: none;
+.composer textarea { width: 100%; min-height: var(--h-sm); max-height: calc(25 * var(--dvh)); padding: var(--space-1) 0; border: 0; outline: none;
   background: none; color: var(--text-1); font: inherit; font-size: var(--fs-lg); resize: none; line-height: 1.45; }
 .composer > .field-box { flex: none; }
 .composer > .field-box > textarea { min-height: calc(3lh + 2 * var(--space-1)); } /* три строки с текущим шрифтом */
-.field-box.field-folded > textarea { max-height: 6em; }   /* «Свернуть поле» (field.js fold, FOLD_EM) */
+/* поле со «Свернуть поле» (field.js fold: чат, «Агенты», Open WebUI) растёт до половины окна, свёрнутое — 6em (FOLD_EM) */
+.composer > .field-box.field-foldable > textarea { max-height: calc(50 * var(--dvh)); }
+.composer > .field-box.field-folded > textarea { max-height: 6em; }
 .composer > .composer-bar { position: sticky; bottom: 0; z-index: var(--z-raised); background: var(--surface-1);
   box-shadow: 0 var(--space-3) 0 var(--surface-1); }
 /* строка под полем: слева параметры (переносятся внутри себя), справа главная кнопка — на последней их строке */
@@ -2260,6 +2262,16 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
   padding-left: var(--space-4); border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface-2);
   font-size: var(--fs-sm); }
 .skill-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* «Цитировать» (quote.js): чип цитаты над полем, кнопка у выделения ленты; меню сообщения (message-menu.js) */
+.quote-chip { display: flex; align-items: center; gap: var(--space-2); align-self: flex-start; min-width: 0; max-width: 100%;
+  padding-left: var(--space-4); border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface-2);
+  font-size: var(--fs-sm); color: var(--text-2); }
+.quote-chip[hidden] { display: none; }
+.quote-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-float { position: fixed; z-index: var(--z-popover); display: inline-flex; align-items: center; gap: var(--space-2);
+  box-shadow: var(--shadow-2); background: var(--surface-1); }
+.quote-float[hidden] { display: none; }
+.msg-menu-anchor { position: fixed; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; }
 /* Навыки «Агентов» (code-skills.js): чип над полем задания, «Навык: имя» в ленте, окно «Положить набор в проект» */
 .code-composer > .skill-chip { margin-bottom: var(--space-3); }
 .code-user-skill { display: block; margin-bottom: var(--space-2); color: var(--text-2); font-size: var(--fs-sm);
