@@ -148,6 +148,22 @@ def test_a_big_picture_result_keeps_its_text_and_picture(studio):
     assert len(reply["attachments"]) == 1 and reply["tools"][-1]["pictures"] == 1 and "error" not in reply["tools"][-1]
 
 
+def test_a_result_that_did_not_fit_keeps_its_pictures_from_the_model(studio, monkeypatch):
+    """Ревью, п. 2: шаг, ставший ошибкой NO_ROOM (`_fit`), модели не дошёл — его картинки ей тоже не идут,
+    под ответом они есть."""
+    sid, calls, _ = setup(studio, results={"lookup": RESULT})
+    vision()
+    monkeypatch.setattr(chat.StreamTask, "_fit", lambda self, step: {
+        **{k: v for k, v in step.items() if k != "text"}, "error": chat.NO_ROOM})
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="1")]}, ["Не влезло."]]
+    sse(turn(studio, cid, "Нарисуй"))
+    tail = after_tools(studio.gw.chat_requests[1])
+    assert [m["role"] for m in tail] == ["tool"] and "image_url" not in json.dumps(studio.gw.chat_requests[1])
+    reply = messages(studio, cid)[1]
+    assert reply["tools"][-1]["error"] == chat.NO_ROOM and len(reply["attachments"]) == 1
+
+
 def test_pictures_do_not_go_through_cleaner(cleaner_gw):
     s, gw = cleaner_gw
     server(s, tools=[tool("lookup")], results={"lookup": RESULT})

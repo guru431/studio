@@ -1885,10 +1885,11 @@ class StreamTask:
     async def _result_images(self, step: dict, images: list) -> None:
         """Картинки результата MCP (`mcp_client.Tools.call`, ключ `images`) — вложениями ответа (`attachments`,
         `<инструмент>-<n>.png`), не больше RESULT_IMAGES_MAX на ответ; негодная — мимо. `step["pictures"]` — сколько
-        сохранено. Модели, что видит картинки (`_sees_images`), id файлов копятся в `round_images`."""
+        сохранено. Модели, что видит картинки (`_sees_images`), id файлов копятся в `round_images` — кроме шага,
+        ставшего ошибкой (`_fit`: NO_ROOM): результата модель не получила, картинки остаются только под ответом."""
         saved = 0
         stem = re.sub(r"[^\w.-]", "_", str(step.get("tool") or "mcp"))[:60]
-        sees = _sees_images(self.conn, self.model)
+        sees = _sees_images(self.conn, self.model) and "error" not in step
         for data, _ in images:
             have = state.DB.execute("SELECT count(*) FROM attachments WHERE message_id = ?",
                                     (self.message_id,)).fetchone()[0]
