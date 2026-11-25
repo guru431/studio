@@ -64,6 +64,11 @@ def test_bad_fields_and_odd_bridge_answers(studio):
     machine._op_skill = lambda req, events: {"text": "x" * (claude_code.SKILL_TEXT_MAX + 1)}
     r = studio.c.post(text_url, json={"name": "acceptance", "folder": ".agents/skills"})
     assert (r.status_code, detail(r)["code"]) == (502, "bridge")
+    machine._op_skill = lambda req, events: {"text": "д" * (claude_code.SKILL_TEXT_MAX // 2 + 1)}   # байт больше 64 КиБ
+    r = studio.c.post(text_url, json={"name": "acceptance", "folder": ".agents/skills"})
+    assert (r.status_code, detail(r)["code"]) == (502, "bridge")
+    machine._op_skill = lambda req, events: {"text": "д" * (claude_code.SKILL_TEXT_MAX // 2)}       # ровно 64 КиБ
+    assert studio.c.post(text_url, json={"name": "acceptance", "folder": ".agents/skills"}).status_code == 200
     machine._op_skill = lambda req, events: {"text": 5}
     r = studio.c.post(text_url, json={"name": "acceptance", "folder": ".agents/skills"})
     assert (r.status_code, detail(r)["code"]) == (502, "bridge")

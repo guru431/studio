@@ -870,7 +870,7 @@ async def file_search(aid: int, pid: str, body: FileSearch, request: Request):
 #: имя навыка проекта (`skills.NAME` моста), папки (`skills.FOLDERS`), предел текста — `limits.SKILL_MAX` моста
 SKILL_NAME = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 SKILL_FOLDERS = (".agents/skills", ".claude/skills")
-SKILL_TEXT_MAX = 64 * 1024
+SKILL_TEXT_MAX = 64 * 1024     # байт UTF-8 текста навыка проекта
 SKILLS_MAX = 100                 # строк списка навыков проекта
 SKILL_DESCRIPTION_MAX = 200
 
@@ -901,14 +901,14 @@ class ProjectSkill(BaseModel):
 
 @router.post("/agents/{aid}/projects/{pid}/skills/text")
 async def project_skill_text(aid: int, pid: str, body: ProjectSkill, request: Request):
-    """Текст навыка проекта без заголовка: имя — телом POST (строку запроса пишет журнал Apache); текст длиннее
-    `SKILL_TEXT_MAX` — 502 `bridge`. Текст сервер передаёт странице и не хранит."""
+    """Текст навыка проекта без заголовка: имя — телом POST (строку запроса пишет журнал Apache); текст больше
+    `SKILL_TEXT_MAX` байт UTF-8 (предел файла моста) — 502 `bridge`. Текст сервер передаёт странице и не хранит."""
     own_agent(request, aid)
     check_pid(pid)
     require_capability(aid, "skills")
     data = await ask(request, aid, "skill", project=pid, name=body.name, folder=body.folder)
     text = data.get("text")
-    if not isinstance(text, str) or len(text) > SKILL_TEXT_MAX:
+    if not isinstance(text, str) or len(text.encode("utf-8", "surrogatepass")) > SKILL_TEXT_MAX:
         error = _refuse(502, "bridge", ODD)
         _warn(request, aid, "skill", error)
         raise error
