@@ -197,6 +197,16 @@ _EN_QUICK = (
      "Record everything you find in the corresponding files — FINDINGS.md and IDEAS.md"),
 )
 
+#: описания трёх быстрых навыков (порядок — `QUICK_KEYS`): одна фраза, видна в меню «/»
+_QUICK_DESCRIPTIONS = {
+    "ru": ("Решить всё из FINDINGS.md и IDEAS.md и оставить в файлах только шапку.",
+           "Проверить проект на ошибки и логику, записать находки в FINDINGS.md и IDEAS.md.",
+           "Прогнать проект через независимых критиков и записать находки в FINDINGS.md и IDEAS.md."),
+    "en": ("Resolve everything in FINDINGS.md and IDEAS.md and leave only the header.",
+           "Audit the project for bugs and logic errors, record findings in FINDINGS.md and IDEAS.md.",
+           "Run the project past independent critics and record findings in FINDINGS.md and IDEAS.md."),
+}
+
 #: встроенный набор по языкам: порядок — порядок в библиотеке; ключ — `skill_defaults.builtin` и `origin` навыка
 BUILTIN = {
     "ru": (
@@ -208,8 +218,8 @@ BUILTIN = {
                 _TEXTS["ru", "queue"], "agents", False, False),
         Builtin("acceptance", "Приёмка", "Сверить сделанное с критериями всех задач и дать отчёт.",
                 _TEXTS["ru", "acceptance"], "agents", False, False),
-        *(Builtin(key, action["title"], "", action["text"], "agents", True, False)
-          for key, action in zip(QUICK_KEYS, code_actions.DEFAULTS)),
+        *(Builtin(key, action["title"], description, action["text"], "agents", True, False)
+          for key, action, description in zip(QUICK_KEYS, code_actions.DEFAULTS, _QUICK_DESCRIPTIONS["ru"])),
         Builtin("parts", "Разобрать по частям", "Составить план до 7 частей и выполнить каждую отдельным запросом.",
                 _TEXTS["ru", "parts"], "chat", False, True),
         Builtin("minutes", "Протокол встречи", "Решения, поручения и открытые вопросы по расшифровке в диалоге.",
@@ -224,7 +234,8 @@ BUILTIN = {
                 _TEXTS["en", "queue"], "agents", False, False),
         Builtin("acceptance", "Acceptance", "Compare the work with the criteria of all tasks and report.",
                 _TEXTS["en", "acceptance"], "agents", False, False),
-        *(Builtin(key, name, "", text, "agents", True, False) for key, (name, text) in zip(QUICK_KEYS, _EN_QUICK)),
+        *(Builtin(key, name, description, text, "agents", True, False)
+          for key, (name, text), description in zip(QUICK_KEYS, _EN_QUICK, _QUICK_DESCRIPTIONS["en"])),
         Builtin("parts", "Work in parts", "Plan up to 7 parts and run each one as a separate request.",
                 _TEXTS["en", "parts"], "chat", False, True),
         Builtin("minutes", "Meeting minutes", "Decisions, action items and open questions from a transcript in the chat.",
@@ -299,10 +310,11 @@ def _default_out(row) -> dict:
             "quick": bool(row["quick"]), "parts": bool(row["parts"]), "position": row["position"]}
 
 
-def _rows(uid: int, scope: "str | None" = None) -> list:
+def _rows(uid: int, scope: "str | None" = None, quick: bool = False) -> list:
     shown = SCOPES.get(scope, ("chat", "agents", "both"))
     marks = ", ".join("?" * len(shown))
-    return state.DB.execute(f"SELECT * FROM skills WHERE user_id = ? AND scope IN ({marks}) ORDER BY position, id",
+    only = " AND quick = 1" if quick else ""
+    return state.DB.execute(f"SELECT * FROM skills WHERE user_id = ? AND scope IN ({marks}){only} ORDER BY position, id",
                             (uid, *shown)).fetchall()
 
 
@@ -433,10 +445,18 @@ def quick_actions(uid: int) -> "list[dict] | None":
     """Кнопки пустого чата «Агентов» из навыков; None — библиотека не засеяна (действуют прежние быстрые действия)."""
     if not _seeded(uid):
         return None
-    return [{"title": r["name"], "text": r["text"]} for r in _rows(uid, "agents") if r["quick"]]
+    return [{"title": r["name"], "text": r["text"]} for r in _rows(uid, "agents", quick=True)]
 
 
-def create(uid: int, body: SkillIn) -> dict:
+def _ensure_seeded(uid: int, lang: str) -> None:
+    """Незасеянная библиотека засевается, как при первом чтении (иначе первый свой навык отнял бы посев умолчаний)."""
+    with sections.transaction():
+        if not _seeded(uid):
+            _seed(uid, lang)
+
+
+def create(uid: int, body: SkillIn, lang: str = "ru") -> dict:
+    _ensure_seeded(uid, lang)
     # без await от проверки до записи: предел не гоняется с другой вкладкой
     if _count(uid) >= MAX_SKILLS:
         raise HTTPException(422, FULL)
@@ -455,8 +475,9 @@ def replace(uid: int, skill_id: str, body: SkillIn) -> dict:
     return get(uid, skill_id)
 
 
-def reorder(uid: int, ids: list[str]) -> list[dict]:
+def reorder(uid: int, ids: list[str], lang: str = "ru") -> list[dict]:
     """Новый порядок — перестановка всех своих id; иначе (список изменился в другой вкладке, чужой id) — 409."""
+    _ensure_seeded(uid, lang)
     with sections.transaction():
         own = [r[0] for r in state.DB.execute("SELECT id FROM skills WHERE user_id = ?", (uid,))]
         if len(ids) != len(own) or set(ids) != set(own):
@@ -496,14 +517,14 @@ async def list_skills(request: Request, scope: "Literal['chat', 'agents'] | None
 
 
 @router.post("", status_code=201)
-async def create_skill(request: Request):
-    return create(request.state.user.id, await read(request, SkillIn))
+async def create_skill(request: Request, lang: Lang = Query("ru")):
+    return create(request.state.user.id, await read(request, SkillIn), lang)
 
 
 @router.put("/order")
-async def order_skills(request: Request):
+async def order_skills(request: Request, lang: Lang = Query("ru")):
     body = await read(request, OrderIn)
-    return {"items": reorder(request.state.user.id, body.ids)}
+    return {"items": reorder(request.state.user.id, body.ids, lang)}
 
 
 @router.post("/defaults")

@@ -48,7 +48,7 @@ def test_builtin_set_has_nine_skills_with_required_content():
         assert list(items) == KEYS and all(skills.KEY.fullmatch(k) for k in KEYS)
         assert {k: b.scope for k, b in items.items()} == {**dict.fromkeys(KEYS[:7], "agents"), "parts": "chat", "minutes": "chat"}
         assert [k for k in KEYS if items[k].quick] == list(skills.QUICK_KEYS) and [k for k in KEYS if items[k].parts] == ["parts"]
-        assert all(0 < len(b.name) <= 80 and len(b.description) <= 200 and 0 < len(b.text) <= 100_000 for b in items.values())
+        assert all(0 < len(b.name) <= 80 and 0 < len(b.description) <= 200 and 0 < len(b.text) <= 100_000 for b in items.values())
         assert [(k, w) for k in KEYS for w in ANY.get(k, []) + words.get(k, []) if w not in items[k].text] == []
     ru = {b.key: b for b in skills.BUILTIN["ru"]}                    # три быстрых — слово в слово прежние действия
     assert [(ru[k].name, ru[k].text) for k in skills.QUICK_KEYS] == [(a["title"], a["text"]) for a in code_actions.DEFAULTS]
@@ -57,6 +57,18 @@ def test_builtin_set_has_nine_skills_with_required_content():
     for lang in skills.LANGS:
         for b in skills.BUILTIN[lang]:
             skills.SkillIn(name=b.name, description=b.description, text=b.text, scope=b.scope, quick=b.quick, parts=b.parts)
+
+
+def test_create_and_reorder_seed_an_unseeded_library(studio):
+    first = make_user(studio, "first"); signin(studio, "first")
+    assert state.DB.execute("SELECT skills_seeded FROM users WHERE id = ?", (first,)).fetchone()[0] is None
+    assert studio.c.post("/api/skills?lang=en", json=BASE).status_code == 201     # свой навык не отнимает умолчания
+    assert state.DB.execute("SELECT skills_seeded FROM users WHERE id = ?", (first,)).fetchone()[0] is not None
+    assert names(listed(studio)) == EN_NAMES + ["Навык"] and count(first) == 10
+    second = make_user(studio, "second"); signin(studio, "second")
+    assert studio.c.put("/api/skills/order", json={"ids": []}).status_code == 409   # список устарел, но посев состоялся
+    assert state.DB.execute("SELECT skills_seeded FROM users WHERE id = ?", (second,)).fetchone()[0] is not None
+    assert count(second) == 9 and names(listed(studio)) == RU_NAMES
 
 
 def test_first_list_seeds_once_in_page_language(env, schema_db, request):
@@ -276,7 +288,8 @@ def test_skill_text_is_not_logged(studio, caplog):
     skill = studio.c.post("/api/skills", json={"name": "secret-name", "description": "secret-description",
                                                "text": "secret-text", "scope": "both"}).json()
     studio.c.put(f"/api/skills/{skill['id']}", json={"name": "secret-renamed", "text": "secret-edited", "scope": "chat"})
-    studio.c.post("/api/skills", json={"name": "secret-bad\n", "text": "secret-refused", "scope": "chat"})
+    refused = studio.c.post("/api/skills", json={"name": "secret\nbad", "text": "secret-refused", "scope": "chat"})
+    assert refused.status_code == 422
     studio.c.put("/api/skills/order", json={"ids": [i["id"] for i in listed(studio)]})
     studio.c.delete(f"/api/skills/{skill['id']}")
     studio.c.post("/api/skills/defaults")
