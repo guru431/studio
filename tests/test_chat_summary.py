@@ -229,3 +229,27 @@ def test_compact_is_refused_once_the_shared_model_is_withdrawn(studio):
     sent = len(studio.gw.chat_requests)
     assert compact(studio, cid).status_code == 422 and turn(studio, cid, "Вопрос-3").status_code == 422
     assert len(studio.gw.chat_requests) == sent and stored(cid)["summary"] is None
+
+
+def test_skill_in_the_summary_head_stays_after_a_newer_skill(studio):
+    """Решение 14 и п. 34: навык A пересказанной части стоит в шапке; новый навык B после границы шапку не меняет
+    (начало запроса прежнее, текст A не теряется). Следующее сжатие с B внутри границы пересказывает A, B — в шапке."""
+    add_gateway(studio); cid = three_turns(studio); ms = messages(studio, cid)
+    with_skill(ms[2]["id"], "НАВЫК-A")
+    studio.gw.chat_script = [["Итог-1"], ["Ответ-4"], ["Ответ-5"], ["Итог-2"]]
+    assert compact(studio, cid).status_code == 200                         # пересказаны ms[0]…ms[3], A — в шапке
+    sse(turn(studio, cid, "Вопрос-4"))
+    first = studio.gw.chat_requests[-1]["messages"]
+    assert first[1]["content"] == "НАВЫК-A\n\n" + chat.SUMMARY_BLOCK.format("Итог-1") + "Вопрос-3"
+    ms = messages(studio, cid)
+    with_skill(ms[6]["id"], "НАВЫК-B")                                     # «Вопрос-4» — вызван навык B
+    sse(turn(studio, cid, "Вопрос-5"))
+    second = studio.gw.chat_requests[-1]["messages"]
+    dump = lambda value: json.dumps(value, ensure_ascii=False)             # noqa: E731
+    assert dump(second[:3]) == dump(first[:3])                             # начало запроса не изменилось
+    assert second[3]["content"].startswith("НАВЫК-B\n\n")
+    assert compact(studio, cid).status_code == 200                         # граница — ответ на «Вопрос-4»
+    prompt = studio.gw.chat_requests[-1]["messages"][1]["content"]
+    assert "user: НАВЫК-A" in prompt and "НАВЫК-B" not in prompt and "Вопрос-4" in prompt
+    head = chat.compose(cid, messages(studio, cid)[-2]["id"])[0]["content"]
+    assert head.startswith("НАВЫК-B\n\n" + chat.SUMMARY_BLOCK.format("Итог-2")) and "НАВЫК-A" not in head

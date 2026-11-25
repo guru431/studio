@@ -736,18 +736,17 @@ def _summary_head(summary: str, skill: "str | None") -> str:
     return (skill + "\n\n" if skill else "") + SUMMARY_BLOCK.format(summary)
 
 
-def _history_head(chat_id: str, rows, upto: str) -> "tuple[str, str, int, bool] | None":
+def _history_head(chat_id: str, rows, upto: str) -> "tuple[str, str, int, tuple[str, str] | None] | None":
     """Пересказ, который действует в запросе до `upto`: строка `summary_upto` среди `rows` и раньше `upto` (`upto`
-    нет — раньше конца). Итог — (шапка `_summary_head`, пересказ, номер строки summary_upto, навык в шапке) или None.
-    Навык — в шапке, если его сообщение пересказано (не позже `summary_upto`)."""
+    нет — раньше конца). Итог — (шапка `_summary_head`, пересказ, номер строки summary_upto, навык шапки (id, текст)
+    или None) или None. Навык шапки — свойство пересказа: последний навык не позже `summary_upto` (его текст сжатие
+    не пересказало); навык, вызванный после границы, шапку не меняет (начало запроса неизменно, п. 34)."""
     stored = _stored_summary(chat_id, rows)
     end = next((i for i, r in enumerate(rows) if r["id"] == upto), len(rows))
     if stored is None or stored[1] >= end:
         return None
-    skill = _last_skill(chat_id, upto)
-    at = next((i for i, r in enumerate(rows) if skill is not None and r["id"] == skill[0]), None)
-    inside = at is not None and at <= stored[1]
-    return _summary_head(stored[0], skill[1] if inside else None), stored[0], stored[1], inside
+    skill = _last_skill(chat_id, rows[stored[1]]["id"])
+    return _summary_head(stored[0], skill[1] if skill else None), stored[0], stored[1], skill
 
 
 def _without(content, text: str):
@@ -764,17 +763,22 @@ def _without(content, text: str):
 
 def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None") -> tuple[list[dict], str, "str | None"]:
     """Сообщения запроса до `upto` для пересказа: без шапки действующего пересказа и без текста последнего навыка
-    (решение 14). `ids` — id строк на каждое сообщение `turns` (None — не известны: навык ищется текстом). Итог —
-    (сообщения, прежний пересказ или "", текст навыка для новой шапки или None — навык остался дословно дальше)."""
-    turns, seed, out = list(turns), "", False
+    внутри новой границы (решение 14). `ids` — id строк на каждое сообщение `turns` (None — не известны: граница —
+    `upto`, навык ищется текстом). Итог — (сообщения, прежний пересказ или "", текст навыка для новой шапки или None).
+    Навык прежней шапки остаётся в новой, пока он последний внутри границы; иначе его текст идёт в расшифровку
+    первым сообщением — его пересказывают, как другие ранние навыки."""
+    turns, seed, held = list(turns), "", None
     applied = _history_head(chat_id, _messages(chat_id), upto)
     if applied is not None and turns:
         stripped = _without(turns[0]["content"], applied[0])
         if stripped != turns[0]["content"]:
             turns[0] = {**turns[0], "content": stripped}
-            seed, out = applied[1], applied[3]
-    skill = _last_skill(chat_id, upto)
-    if skill is not None and not out:
+            seed, held = applied[1], applied[3]
+    skill = _last_skill(chat_id, ids[-1][-1] if ids else upto)
+    if skill is not None and held is not None and skill[0] == held[0]:
+        return turns, seed, held[1]                    # навык шапки — всё ещё последний: дословно в новой шапке
+    out = False
+    if skill is not None:
         for j, t in enumerate(turns):
             if ids is not None and (j >= len(ids) or skill[0] not in ids[j]):
                 continue
@@ -782,7 +786,9 @@ def _for_summary(chat_id: str, upto: str, turns: list[dict], ids: "list | None")
             if stripped != t["content"]:
                 turns[j], out = {**t, "content": stripped}, True
                 break
-    return turns, seed, skill[1] if skill is not None and out else None
+    if held is not None:                               # навык шапки больше не последний — его пересказывают
+        turns.insert(0, {"role": "user", "content": held[1]})
+    return turns, seed, skill[1] if out else None
 
 
 def _touch_summary(chat_id: str, created: float, rowid: int) -> None:
