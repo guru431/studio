@@ -84,7 +84,8 @@ def test_fork_copies_history_before_the_message_and_shares_files(studio, caplog)
     assert [branch[k] for k in INHERITED] == [source[k] for k in INHERITED]
     assert (branch["summary"], branch["summary_upto"], branch["summary_at"], branch["pinned"],
             branch["web_consent"], branch["mcp_file_consent"]) == (None, None, None, 0, None, "{}")
-    assert branch["created"] == branch["updated"] == branch["seen"]
+    # «не прочитано» списка диалогов (`updated > seen`) работает и у ветки: `seen` не NULL с вставки
+    assert branch["seen"] is not None and branch["created"] == branch["updated"] == branch["seen"]
     assert studio.c.get(f"/api/chats/{new}").json()["summary"] is None
     assert new in [c["id"] for c in studio.c.get("/api/chats").json()["items"]]
 
