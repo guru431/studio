@@ -1437,6 +1437,12 @@ label.chip { cursor: pointer; }
 .profile-params { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 0 var(--space-6); }
 .profile-params .field { min-width: 0; }
 #conn-profile-dialog .profile-hint { margin: var(--space-2) 0 0; }
+.profile-model-new { display: flex; gap: var(--space-3); align-items: center; min-width: 0; margin-bottom: var(--space-4); }
+.profile-model-new .input { flex: 1; min-width: 0; }
+.profile-models { display: flex; flex-direction: column; gap: var(--space-4); }
+.profile-model { min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); }
+.profile-model-head { display: flex; gap: var(--space-3); align-items: center; justify-content: space-between; min-width: 0; }
+.profile-model-title { min-width: 0; overflow-wrap: anywhere; }
 .profile-suggestions { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
 .profile-suggestion { display: flex; gap: var(--space-3); align-items: flex-start; min-width: 0; }
 .profile-suggestion-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
