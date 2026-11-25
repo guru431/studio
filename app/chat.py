@@ -1765,6 +1765,8 @@ class StreamTask:
                 if not self.protected and self.mcp.reached_protected():
                     self._protect()
             elif c.name in chat_tools.NAMES and not self.builtin_off:
+                # событие на каждый шаг встроенного, как у MCP: счётчик вызовов строки состояния «Чата» (п. 16)
+                self.put("tool", {"kind": chat_tools.KIND_OF[c.name], "label": c.name})
                 if n >= CALLS_PER_ROUND:
                     step = {"kind": chat_tools.KIND_OF[c.name], "error": TOO_MANY}
                 else:

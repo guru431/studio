@@ -323,7 +323,6 @@ async function readServer(job, response) {
       }
       else if (event === 'todo' && data && Array.isArray(data.items)) {   // план ответа (todo_write) — блок над ним
         job.message.todo = data.items;
-        (job.message.calls ||= []).push({ kind: 'todo' });   // встроенный вызов без события `tool`: счётчик строки
         notify(job, false);
       }
       else if (event === 'ocr' && data && Number.isFinite(data.page) && Number.isFinite(data.pages)) {

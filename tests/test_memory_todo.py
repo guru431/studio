@@ -53,6 +53,29 @@ def test_todo_write_persists_and_streams(studio):
     assert messages(studio, cid)[0].get("todo") is None
 
 
+def test_builtin_calls_stream_a_tool_event_per_step(studio):
+    """Счётчик вызовов строки состояния (п. 16): у встроенных инструментов, как у MCP и «Интернета», событие `tool`
+    на каждый шаг — и при неверных аргументах (шаг-ошибка, события `todo` нет)."""
+    add_gateway(studio)
+    assert studio.c.patch("/api/me", json={"memory_on": True}).json()["memory_on"] is True
+    cid = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("todo_write", items=PLAN)]},
+                             {"tool_calls": [call("todo_write", items=[{"text": "", "status": "done"}])]},
+                             ["Готово"]]
+    events = sse(turn(studio, cid, "Составь план"))
+    assert events[-1] == ("done", {"status": "done"})
+    tools = [data for name, data in events if name == "tool"]
+    steps = messages(studio, cid)[-1]["tools"]
+    assert [s["kind"] for s in steps] == ["todo", "todo"] and "error" in steps[1]
+    assert tools == [{"kind": "todo", "label": "todo_write"}] * 2
+    # память ждёт подтверждения: шаг есть, ход на паузе — и событие `tool` тоже есть
+    other = new_chat(studio)
+    studio.gw.chat_script = [{"tool_calls": [call("memory_save", text="Живёт в Казани")]}]
+    events = sse(turn(studio, other, "Запомни"))
+    assert [s["kind"] for s in messages(studio, other)[-1]["tools"]] == ["memory"]
+    assert [data for name, data in events if name == "tool"] == [{"kind": "memory", "label": "memory_save"}]
+
+
 def test_memory_off_offers_no_memory_tools_and_no_block(studio):
     add_gateway(studio)
     me = studio.c.get("/api/me").json()
