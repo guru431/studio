@@ -164,6 +164,21 @@ def test_a_result_that_did_not_fit_keeps_its_pictures_from_the_model(studio, mon
     assert reply["tools"][-1]["error"] == chat.NO_ROOM and len(reply["attachments"]) == 1
 
 
+def test_srvllm_vision_comes_from_the_catalog_without_a_passport(studio):
+    """Ревью, п. 3: `local-gemma-abl` шлюза srvllm видит картинки по перечню `capabilities.CATALOG_CAPS`, паспорта нет."""
+    gw = add_gateway(studio)
+    server(studio, results={"lookup": RESULT})
+    sid = add_shared(studio, "Shared tools", "/mcp")
+    assert state.DB.execute("SELECT passport FROM connections WHERE id = ?", (gw,)).fetchone()[0] is None
+    assert "vision" in capabilities.CATALOG_CAPS["local-gemma-abl"]
+    cid = new_chat(studio, connection_id=gw, model="local-gemma-abl")
+    studio.gw.chat_script = [{"tool_calls": [call(name_of(sid), q="1")]}, ["Вижу."]]
+    sse(turn(studio, cid, "Нарисуй"))
+    tail = after_tools(studio.gw.chat_requests[1])
+    assert [m["role"] for m in tail] == ["tool", "user"]
+    assert tail[-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
 def test_pictures_do_not_go_through_cleaner(cleaner_gw):
     s, gw = cleaner_gw
     server(s, tools=[tool("lookup")], results={"lookup": RESULT})
