@@ -3379,6 +3379,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Модель диалога изменилась: проверьте запрос ещё раз": "The conversation model changed. Review the request again",
   "Запросы из расшифровки могут уйти на MCP-серверы — подтвердите": "Queries based on the transcript may be sent to MCP servers. Confirm",
   "такого сообщения нет": "no such message",
+  "диалог через Cleaner не ветвится: замены Cleaner привязаны к диалогу": "a conversation through Cleaner cannot be branched: Cleaner replacements are tied to the conversation",
   "текст файла не читается — сохраните его в кодировке UTF-8": "file text unreadable. Save it as UTF-8",
   "нужен ровно один файл в поле file": "exactly one file required in the file field",
   "нужны файлы в поле file": "files required in the file field",

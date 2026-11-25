@@ -37,6 +37,7 @@ import chat
 import chat_info
 import chat_list
 import chat_pending
+import chat_fork
 import mcp_client
 import mcp_contracts
 import mcp_files
@@ -222,6 +223,7 @@ app.include_router(chat_info.router)          # раньше chat: /api/chats/st
 app.include_router(chat.router)
 app.include_router(chat_pending.router)
 app.include_router(chat_list.router)
+app.include_router(chat_fork.router)
 app.include_router(knowledge.router)
 app.include_router(roles.router)
 app.include_router(skills.router)
