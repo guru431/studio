@@ -92,10 +92,11 @@ read-токен живёт только в памяти страницы, не �
   `#/<раздел>?id=<id>`. Журнал — `share_create|share_refresh|share_revoke|share_pin_fail` с разделом в `detail`.
 - Чат «Озвучки» (шаг 82, вид `speech_chats`, `item_id` — `speeches.chat_id`): `GET/POST/PUT/DELETE
   /api/speeches/chats/<chat_id>/share`, раздел — `speech`. Снимок — готовые записи группы по порядку `item.records`
-  `[{text, voice, duration, file}]` (голос — `voice_name`, файлы — все их mp3), название — начало первой записи; запись
-  вне `speeches.TERMINAL` — 409 `running` («дождитесь озвучки или отмените её»), готовых нет — тоже 409. Ссылка
-  «недоступна», пока у чата нет живых записей (весь чат в корзине); удаление последней записи группы уносит строку
-  триггером `chat_shares_speech_chats_gone`.
+  `[{text, voice, duration, file}]` (голос — `voice_name`, файлы — все их mp3), название — начало первой озвученной
+  записи (в «Доступах и ссылках» — первой не из корзины); запись вне `speeches.TERMINAL` — 409 `running` («дождитесь
+  озвучки или отмените её»), готовых нет — тоже 409. Ссылка «недоступна», пока у чата нет живых записей (весь чат в
+  корзине); удаление последней записи группы уносит строку триггером `chat_shares_speech_chats_gone`. Запись, убранная
+  из живого чата (в корзину или удалена), остаётся в снимке ссылки до «Обновить снимок».
 - Переписка Open WebUI (шаг 82, `owui_share.py`, вид `chat_shares.OWUI`, `item_id` — "<учётка>:<чат>"): `GET/POST/PUT/DELETE
   /api/owui/accounts/<учётка>/chats/<чат>/share`, раздел — `owui`. Снимок (`owui_share.snapshot`) — текущая ветка
   (`owui.read_chat`) в форме снимка чата: роль, текст, `files` — только имена (файлы остаются в Open WebUI), `steps`

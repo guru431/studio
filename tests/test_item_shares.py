@@ -291,6 +291,12 @@ def test_speech_chat_title_in_access_list_skips_trashed_records(studio):
     assert [(s["title"], s["trashed"]) for s in listed] == [("Отменённая", True)]
 
 
+def test_every_share_kind_has_a_live_rule():
+    """Вид ссылки без условия в `_ALIVE` для LIVE «недоступен» всегда — новый вид не забыть."""
+    assert set(chat_shares._ALIVE) == set(chat_shares.ITEMS) | {chat_shares.OWUI}
+    assert set(chat_shares.SECTIONS) == set(chat_shares._ALIVE)
+
+
 def test_previous_live_rule_hides_links_of_the_new_kinds(setup):                    # откат: SQL-обход не нужен
     s, fake, aid = setup
     uid = state.DB.execute("SELECT id FROM users WHERE login = 'owner'").fetchone()[0]
