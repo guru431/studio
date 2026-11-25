@@ -2233,6 +2233,16 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-composer > .skill-chip { margin-bottom: var(--space-3); }
 .code-user-skill { display: block; margin-bottom: var(--space-2); color: var(--text-2); font-size: var(--fs-sm);
   white-space: normal; overflow-wrap: anywhere; }
+/* Навыки и части «Чата» (chat-skills.js, chat-parts.js): чип над полем, свёрнутое «Навык: имя» в ленте, шаг части */
+#chat-skill { display: flex; min-width: 0; }
+.msg.user .msg-skill { max-width: 100%; min-width: 0; margin-bottom: var(--space-2); color: var(--text-2); font-size: var(--fs-sm); }
+.msg-skill summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-skill-text { margin-top: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--r-control);
+  background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(30 * var(--dvh)); overflow: auto; }
+.web-part summary { cursor: pointer; }
+.web-part .part-text { margin: var(--space-2) 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-1); }
+.web-part[data-state="cut"] .part-state, .web-part[data-state="error"] .part-state { color: var(--danger); }
+.chat-parts-list { max-height: calc(60 * var(--dvh)); overflow: auto; }
 .code-skills-folders { display: flex; flex-wrap: wrap; gap: var(--space-4); min-width: 0; margin: var(--space-3) 0;
   padding: 0; border: 0; }
 .code-skills-install-list { max-height: calc(40 * var(--dvh)); overflow: auto; margin: var(--space-3) 0; padding: 0;

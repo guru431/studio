@@ -96,7 +96,7 @@ export function stageText(stage, now = Date.now()) {
 
 /** Строка над полем. `job()` — ответ, который читает вкладка; `last()` — последний ответ открытого диалога;
  * `local()` — модель диалога локальная; `stepNode(step)` — строка шага; `stats()`, `files()` — открыть окна. */
-export function chatStatus(host, { ring, job, last, local, stepNode, stats, files }) {
+export function chatStatus(host, { ring, job, last, local, stepNode, stats, files, parts = null }) {
   const text = el('span', {}, tr("нет активного ответа"));
   // слова меняются каждую секунду: начало и конец ответа зачитывает #chat-status, а не эта строка
   const activity = el('div', { id: 'chat-activity', class: 'code-activity', role: 'status', 'aria-live': 'off',
@@ -113,7 +113,8 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
     el('p', { class: 'small muted' }, tr("Шаги текущего ответа")), toolsList);
   host.append(toolsPanel);
   const toolsPopup = popupPanel(toolsButton, toolsPanel, { label: tr("Шаги текущего ответа"), side: 'above', align: 'end' });
-  const actions = el('div', { class: 'code-chat-actions' }, filesButton, statsButton);
+  // `parts` — кнопка «Части» (chat-parts.js): в ряду перед «Файлами диалога», до разбора ряда statusActions
+  const actions = el('div', { class: 'code-chat-actions' }, ...(parts ? [parts.node] : []), filesButton, statsButton);
   const fixed = el('div', { class: 'code-status-fixed' }, toolsButton, ring);
   const bar = el('div', { class: 'code-status-bar chat-status-bar' });
   const controls = statusActions(host, bar, activity, actions, fixed, { id: 'chat-status' });
@@ -152,6 +153,7 @@ export function chatStatus(host, { ring, job, last, local, stepNode, stats, file
       activity.title = stage ? stage.title : words;
       activity.dataset.stage = stage?.key || 'idle';
       activity.dataset.state = stage?.state || 'idle';
+      parts?.paint(m);
       const going = ongoing(current, m) ? m : null;
       steps = going ? (going.tools?.length ? going.tools : going.calls || []) : [];
       toolsCount.textContent = String(steps.length);

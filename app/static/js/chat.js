@@ -13,6 +13,8 @@ import { filesDialog } from './chat-dialog-files.js';
 import { chatTitle } from './chat-title.js';
 import { usageBody, usageOf, usageRefused, withSpeed } from './chat-usage.js';
 import { placeSummary } from './chat-summary.js';
+import { chatSkills, humanText, skillMessage } from './chat-skills.js';
+import { noteParts, partNode, partsButton } from './chat-parts.js';
 import { mcpStateWords } from './mcp-sections.js';
 /* Раздел «Чат» (#/chat — новый диалог, #/chat/<id> — диалог): список диалогов, чип модели,
  * лента сообщений с markdown, поле ввода с вложениями.
@@ -170,7 +172,7 @@ const WEB_TITLE = tr("Интернет: поиск, страницы и субт
 // без ключа Exa: «Интернет» открывает только веб-инструменты MCP диалога (поиска Studio нет)
 const WEB_MCP_TITLE = tr("Интернет: только веб-инструменты MCP — для поиска Studio задайте ключ Exa в Настройках");
 const WEB_ASK = tr("Запросы, составленные из расшифровки, могут уйти в Exa — отправить?");
-const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры"), mcp: 'MCP' };   // строка хода по виду инструмента
+const TOOL_WORDS = { search: tr("Ищу"), page: tr("Читаю"), youtube: tr("Субтитры"), mcp: 'MCP', part: tr("Часть") };   // строка хода по виду инструмента
 const TOOL_MARKS = { youtube: '▶', mcp: '🧩' };   // значок идущего инструмента; прочие — интернет 🌐
 const THINK_TITLE = tr("Рассуждение: модель думает перед ответом, ход мысли виден");
 const THINK_NOTE = tr("С рассуждением модель реже ищет в интернете");   // замер 2026-10-22: 5 поисков из 10 против 10
@@ -339,6 +341,9 @@ async function readServer(job, response) {
         thinkEnd(job);
         job.tool = null;
         job.message.recovery = data.stage;
+        notify(job, false);
+      } else if (event === 'part' && data) {       // часть ответа (run_part): запуск и итог — кнопке «Части»
+        noteParts(job.message, data);
         notify(job, false);
       } else if (event === 'closed') {             // сессия вышла или «Чат» заперт: перечитать через вход/блокировку
         break;
@@ -616,7 +621,8 @@ function duration(sec) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${rest}` : `${m}:${rest}`;
 }
 
-function stepNode(s) {
+function stepNode(s, { ended = false } = {}) {
+  if (s.kind === 'part') return partNode(s, { ended });   // часть ответа (chat-parts.js)
   const li = el('li', { class: `web-step web-${s.kind}` });
   if (s.kind === 'search') {
     li.append(s.query ? tr("Поиск: «{0}»", s.query) : tr("Поиск"));
@@ -686,18 +692,19 @@ function badgeText(steps) {
   if (of('duplicate')) parts.push(count(of('duplicate'), [tr("повтор пропущен"), tr("повтора пропущено"), tr("повторов пропущено")]));
   if (of('todo')) parts.push(tr("план"));
   if (of('memory')) parts.push(tr("память: {0}", of('memory')));
-  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && !['mcp', 'ask', 'knowledge', 'duplicate', 'todo', 'memory'].includes(s.kind)).length;
+  if (of('part')) parts.push(count(of('part'), [tr("часть"), tr("части"), tr("частей")]));   // run_part (chat-parts.js)
+  const wrong = steps.filter((s) => !WEB_KINDS.includes(s.kind) && !['mcp', 'ask', 'knowledge', 'duplicate', 'todo', 'memory', 'part'].includes(s.kind)).length;
   if (wrong) parts.push(count(wrong, [tr("неверный вызов"), tr("неверных вызова"), tr("неверных вызовов")]));
   const errors = steps.filter((s) => s.error).length;
   return parts.join(' · ') + (errors ? ` — ${count(errors, [tr("ошибка"), tr("ошибки"), tr("ошибок")])}` : '');
 }
 
 /* ссылок нет (одни вызовы MCP, ошибки) — заголовок считает вызовы, а не «Источники (0)» */
-function sourcesNode(steps) {
+function sourcesNode(steps, ended) {
   const links = linkCount(steps);
   return el('details', { class: 'web-steps' },
     el('summary', {}, links ? tr("Источники ({0})", links) : tr("Вызовы инструментов ({0})", steps.length)),
-    el('ul', { class: 'web-list' }, ...steps.map(stepNode)));
+    el('ul', { class: 'web-list' }, ...steps.map((s) => stepNode(s, { ended }))));
 }
 
 /* ---- экран -------------------------------------------------------------------- */
@@ -832,10 +839,13 @@ function build(view, ctx) {
     }));
   let passportKey = '';
   const ring = contextRing(estimateContext, { open: () => ctxWindow.open() });
-  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, moveNote, editNote, inputBox.box, inputBox.error,
+  // навык над полем (chat-skills.js): меню «/» и чип #skill-chip; выбор и снятие — новая оценка контекста
+  const skillHost = el('div', { class: 'chat-skill', id: 'chat-skill', hidden: true });
+  const form = el('form', { class: 'composer', id: 'composer' }, mediaBox, chipsBox, passportNote, moveNote, editNote, skillHost, inputBox.box, inputBox.error,
     el('div', { class: 'composer-bar' }, el('div', { class: 'composer-opts' }, modelWrap, routedTag, roles.chip, roles.menu, webToggle, mcpToggle,
       kbs.chip, kbs.panel, thinkToggle), send, stop),
     webNote, talkNote);
+  const skills = chatSkills({ input, host: skillHost, changed: () => ring.schedule() });   // меню — перед полем формы
   const fieldTools = inputBox.box.querySelector('.field-tools');
   fieldTools.insertBefore(talkToggle, fieldTools.querySelector('.mic'));
   let suggestKey = null;       // подсказки пустого экрана: { query, items } последнего запроса (items — когда пришли)
@@ -852,7 +862,7 @@ function build(view, ctx) {
       return m ? liveOf(m) : null;
     },
     local: () => !!chat?.chat.local, stepNode, stats: () => statsDialog(root),
-    files: () => { if (chatId) filesDialog(root, chatId); } });
+    files: () => { if (chatId) filesDialog(root, chatId); }, parts: partsButton({ root }) });
   form.before(status.bar);
   const inputDraft = sectionDraft('chat', input);      // поле общее для диалогов — и черновик один на раздел
   if (input.value) autosize();
@@ -1472,8 +1482,9 @@ function build(view, ctx) {
     if (!id || chat?.chat.id !== id || editing) return null;
     const sent = atts.filter((a) => a.meta && !a.error);
     const local = atts.filter((a) => !a.meta && !a.error && a.file);
+    const skillId = skills.chosen()?.id;
     const out = await api('POST', `/api/chats/${id}/estimate`, { text: input.value,
-      attachment_ids: sent.slice(0, ATTACH_MAX).map((a) => a.meta.id) });
+      attachment_ids: sent.slice(0, ATTACH_MAX).map((a) => a.meta.id), ...(skillId ? { skill_id: skillId } : {}) });
     if (chatId !== id) return null;
     const guess = local.reduce((sum, a) => sum + (a.file.type.startsWith('image/') ? 1000
       : /\.(pdf|docx)$/i.test(a.file.name) ? 0 : Math.ceil(a.file.size / 3)), 0);
@@ -1792,6 +1803,7 @@ function build(view, ctx) {
     if (!editing) return;
     input.value = editing.previous;
     editing = null;
+    skills.clear();
     editNote.hidden = true;
     autosize();
     ring.schedule();
@@ -1802,7 +1814,8 @@ function build(view, ctx) {
     if (talking) talking();
     closeEdit();
     editing = { message: m, last: chat.messages.at(-1).id, previous: input.value };
-    input.value = m.content;
+    input.value = humanText(m);
+    skills.keep(m.skill);                          // навык сообщения — чипом; крестик — правка без навыка
     autosize();
     editNote.hidden = false;
     ring.hide();
@@ -1899,7 +1912,9 @@ function build(view, ctx) {
     if (m.role === 'user') {
       const box = el('div', { class: 'msg user', 'data-id': m.id });
       if (m.attachments && m.attachments.length) box.append(el('div', { class: 'atts' }, ...m.attachments.map(attLabel)));
-      if (m.content) box.append(el('div', { class: 'bubble' }, m.content));
+      const { head, text } = skillMessage(m);      // навык — свёрнутым «Навык: имя», в пузыре — уточнение
+      if (head) box.append(head);
+      if (text) box.append(el('div', { class: 'bubble' }, text));
       if (m.id) {
         const actions = el('div', { class: 'msg-actions' },
           button(tr("Изменить"), { class: 'btn btn-sm msg-edit' }, () => editTurn(m)),
@@ -1916,7 +1931,7 @@ function build(view, ctx) {
     const model = el('p', { class: 'msg-model muted small', hidden: true });
     const actions = el('div', { class: 'msg-actions' });
     const visibleTools = m.tools?.filter((step) => !m.pending || !step.waiting) || [];
-    const steps = visibleTools.length ? sourcesNode(visibleTools) : null;
+    const steps = visibleTools.length ? sourcesNode(visibleTools, m.status !== 'streaming') : null;
     const badge = el('button', { type: 'button', class: 'web-badge', hidden: true });
     const think = el('div', { class: 'think-box' });
     badge.addEventListener('click', () => {                    // «Источники» этого ответа — там тексты ошибок
@@ -2235,6 +2250,8 @@ function build(view, ctx) {
     if (attempt.edit) {
       if (editing?.message.id === attempt.edit.id && chatId === attempt.id) closeEdit();
     } else if (input.value === attempt.text) { input.value = ''; autosize(); }
+    if (attempt.skill && skills.chosen() === attempt.skill) skills.clear();   // навык ушёл с ходом
+    skills.close();                                    // меню «/» — после отправки хода (slash.js)
     atts = atts.filter((a) => !attempt.sent.includes(a));
     paintAtts();
   }
@@ -2464,7 +2481,7 @@ function build(view, ctx) {
     stopWaiting();                                 // ждали скан — ход идёт сейчас
     const text = input.value;
     const retained = editing?.message.attachments?.length || 0;
-    if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length && !retained)) return;
+    if (sending || jobs.has(chatId) || (!regenerate && !text.trim() && !atts.length && !retained && !skills.chosen())) return;
     if (!regenerate && blocked()) return;
     if (!regenerate && atts.some((a) => a.unfit)) {   // слова — у чипа с выбора файла; диалог не создаётся
       notice.textContent = tr("Уберите неподходящие файлы");
@@ -2617,7 +2634,8 @@ function build(view, ctx) {
     if (chatId !== id) return;
     const edit = edited ? { id: edited.message.id, last_id: edited.last } : null;
     const turnInput = regenerate ? { regenerate: true } : { text, attachment_ids: sent.map((a) => a.meta.id),
-      ...(edit ? { edit } : {}) };
+      ...(edit ? { edit } : {}), ...skills.body() };
+    const skill = regenerate ? null : skills.chosen();
     let cleanerTicket;
     if (chat.chat.cleaner) {
       let retry;
@@ -2672,7 +2690,7 @@ function build(view, ctx) {
       if (!cleanerTicket || chatId !== id || (!regenerate && input.value !== text)) return;
     }
     const before = chat.messages;
-    const user = regenerate ? null : { id: edit?.id || null, role: 'user', content: text, status: 'done',
+    const user = regenerate ? null : { id: edit?.id || null, role: 'user', content: text, status: 'done', skill: skills.view(),
       attachments: [...(edited?.message.attachments || []), ...sent.map((a) =>
         (a.transcript ? { ...a.meta, source: { transcript_id: a.transcript, exists: true } } : a.meta))] };
     const message = { id: null, role: 'assistant', content: '', status: 'streaming', via: null, attachments: [],
@@ -2691,7 +2709,7 @@ function build(view, ctx) {
     let reply;
     const signature = JSON.stringify([id, turnInput]);
     if (pendingTurn?.signature !== signature) {
-      pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent, edit };
+      pendingTurn = { signature, requestId: crypto.randomUUID(), id, regenerate, text, sent, edit, skill };
     }
     const attempt = pendingTurn;
     try {
@@ -2928,6 +2946,7 @@ function build(view, ctx) {
       closeEdit();
       ring.hide();
       status.unmount();
+      skills.unmount();
       inputDraft.save();
       sharing.unmount();
       listing.unmount();

@@ -4377,7 +4377,13 @@ globalThis.StudioEnglish = Object.freeze({
   "Закрепить": "Pin",
   "Открепить": "Unpin",
   "не прочитано": "unread",
-  "Открытые диалоги": "Open conversations"
+  "Открытые диалоги": "Open conversations",
+  "Часть": "Part",
+  "Часть {0}": "Part {0}",
+  "идёт": "running",
+  "прервана": "interrupted",
+  "Части ответа": "Answer parts",
+  "Части: {0} из {1}": "Parts: {0} of {1}"
 });
 globalThis.StudioEnglishMessages = Object.freeze([
   "{0} не даёт переименовать или удалить сессию из Студии",

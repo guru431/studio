@@ -65,7 +65,7 @@ SCRIPT = """(async () => {
   await type('/раз'); out.escaped = [...escaped, menu.hidden];
   await type(''); await type('/'); out.reopened = !menu.hidden && rows().length === 4;
   view.unmount();
-  out.removed = !document.querySelector('#slash-menu');
+  out.removed = !menu.isConnected;                 // своё меню «Чата» на странице остаётся
   // items() с задержкой: Enter до ответа — не отправка; после ответа — первая строка, а без строк — ничего
   let release;
   window.picked = null;

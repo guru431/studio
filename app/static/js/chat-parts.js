@@ -1,0 +1,84 @@
+import { message, tr } from './i18n.js';
+/* Части ответа (инструмент `run_part`, спека 2026-11-25-studio-skills-status-local-models, п. 7): шаг под ответом и
+ * кнопка `#chat-parts` в строке состояния «Чата».
+ *
+ * Шаг части с сервера — `{kind: "part", n, title, state: running|done|error, ms, text}` (у ошибки — `error`); отказ до
+ * запуска — без `n` и `ms`; шаги инструментов внутри части — обычные шаги с ключом `part`. Идущий ответ этой вкладки
+ * знает части по событиям SSE `part` (`noteParts`), до перечитывания — без текста итога.
+ * partNode(step, { ended }) — `li.web-step.web-part`: «Часть N: название · идёт / готово / ошибка · м:сс» и раскрываемый
+ * итог; шаг `running` у кончившегося ответа — «прервана».
+ * partsButton({ root }) → { node, paint(message) } — «Части: готово из запущенных» последнего ответа, скрыта без частей;
+ * нажатие — окно со списком частей. */
+import { icon } from './icons.js';
+import { el, openDialog } from './ui.js';
+
+const STATES = { running: () => tr("идёт"), done: () => tr("готово"), error: () => tr("ошибка") };
+
+function clock(ms) {
+  const s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+export function partNode(step, { ended = false } = {}) {
+  const state = step.state === 'running' && ended ? 'cut' : step.state;
+  const word = state === 'cut' ? tr("прервана") : (STATES[state] || STATES.error)();
+  const head = [
+    el('span', { class: 'part-n' }, `${Number.isInteger(step.n) ? tr("Часть {0}", step.n) : tr("Часть")}: `),
+    el('span', { class: 'part-title' }, step.title || ''),
+    ' · ', el('span', { class: 'part-state' }, word),
+    Number.isFinite(step.ms) ? ` · ${clock(step.ms)}` : null,
+  ];
+  const error = step.error ? el('span', { class: 'error' }, ` — ${message(step.error)}`) : null;
+  const li = el('li', { class: 'web-step web-part', 'data-state': state });
+  if (step.text) li.append(el('details', { class: 'part-result' }, el('summary', {}, ...head, error),
+    el('div', { class: 'part-text' }, step.text)));
+  else li.append(...head, error);
+  return li;
+}
+
+/** Событие SSE `part` идущего ответа: `{n, title, state}` при запуске, `{n, title, state, ms}` при итоге. */
+export function noteParts(m, data) {
+  if (!m || !data || !Number.isInteger(data.n)) return;
+  m.liveParts ||= new Map();
+  m.liveParts.set(data.n, { ...(m.liveParts.get(data.n) || {}), kind: 'part', ...data });
+}
+
+/** Запущенные части ответа: шаги с сервера, а до перечитывания — события этой вкладки. */
+export function partsOf(m) {
+  const saved = (Array.isArray(m?.tools) ? m.tools : [])
+    .filter((s) => s?.kind === 'part' && Number.isInteger(s.n) && !('part' in s));
+  return saved.length ? saved : [...(m?.liveParts?.values() || [])];
+}
+
+export function partsButton({ root }) {
+  const count = el('span', { class: 'chat-parts-count', 'aria-hidden': 'true' });
+  const node = el('button', { type: 'button', id: 'chat-parts', class: 'icon-btn', 'aria-haspopup': 'dialog', hidden: true },
+    icon('subagents'), count);
+  let shown = null;            // ответ, чьи части считает кнопка
+
+  node.addEventListener('click', () => {
+    const m = shown;
+    if (!m) return;
+    const ended = m.status !== 'streaming';
+    openDialog(root, { id: 'chat-parts-dialog', title: tr("Части ответа"), cancelText: tr("Закрыть"),
+      body: [el('ul', { class: 'web-list chat-parts-list' }, ...partsOf(m).map((s) => partNode(s, { ended })))] });
+  });
+
+  return {
+    node,
+    paint(m) {
+      const list = partsOf(m);
+      shown = list.length ? m : null;
+      node.hidden = !list.length;
+      if (!list.length) return;
+      const done = list.filter((s) => s.state === 'done').length;
+      const words = tr("{0} из {1}", done, list.length);
+      if (count.textContent !== words) count.textContent = words;
+      const label = tr("Части: {0} из {1}", done, list.length);
+      if (node.getAttribute('aria-label') !== label) {
+        node.setAttribute('aria-label', label);
+        node.title = label;
+      }
+    },
+  };
+}
