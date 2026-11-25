@@ -112,12 +112,19 @@ def test_protection_set_while_the_summary_was_written_reaches_the_heir(studio, m
     assert flags(new) == (1, 0)
 
 
+def refused(s, cid) -> tuple:
+    """Отказ `/continue` — (статус, код); диалогов после него столько же, сколько до."""
+    before = count_chats()
+    r = go(s, cid)
+    assert count_chats() == before, r.text
+    return code(r)
+
+
 def test_continue_refusals_create_nothing(studio):
     add_gateway(studio); empty = new_chat(studio)
-    before = count_chats()
-    r = go(studio, empty)
-    assert code(r) == (409, "nothing") and r.json()["detail"]["message"] == chat_continue.NOTHING
-    cid = new_chat(studio); sse(turn(studio, cid, "Один ход")); before = count_chats()
+    assert refused(studio, empty) == (409, "nothing")
+    assert go(studio, empty).json()["detail"]["message"] == chat_continue.NOTHING
+    cid = new_chat(studio); sse(turn(studio, cid, "Один ход"))
     # идёт ответ — busy
     studio.gw.chat_hold = True
     try:
@@ -125,14 +132,14 @@ def test_continue_refusals_create_nothing(studio):
             events = events_of(r.iter_lines())
             assert next(events)[0] == "turn"
             assert next(d for e, d in events if e == "delta") == {"text": "Здрав"}
-            assert code(go(studio, cid)) == (409, "busy")
+            assert refused(studio, cid) == (409, "busy")
             studio.gw.chat_hold = False
             assert [e for e, _ in events if e != "ping"][-1] == "done"
     finally:
         studio.gw.chat_hold = False
     # шлюз ответил 503 — карта занята
     studio.gw.chat_error = (503, {"error": {"message": "busy"}})
-    assert code(go(studio, cid)) == (503, "card")
+    assert refused(studio, cid) == (503, "card")
     studio.gw.chat_error = None
     # прямое подключение — no_compact
     direct = add_connection(studio)
@@ -140,14 +147,12 @@ def test_continue_refusals_create_nothing(studio):
     state.DB.execute("INSERT INTO messages(id, chat_id, role, content, status, via, model, created)"
                      " VALUES ('u1', ?, 'user', 'a', 'done', 'browser', 'm', 1), ('a1', ?, 'assistant', 'b', 'done',"
                      " 'browser', 'm', 2)", (other, other))
-    before = count_chats()
-    assert code(go(studio, other)) == (409, "no_compact")
+    assert refused(studio, other) == (409, "no_compact")
     # диалог в корзине и чужая учётка — 404
     assert studio.c.delete(f"/api/chats/{other}").status_code == 204
-    assert code(go(studio, other)) == (404, "gone")
+    assert refused(studio, other) == (404, "gone")
     make_user(studio, "bob"); signin(studio, "bob")
-    assert code(go(studio, cid)) == (404, "gone")
-    assert count_chats() == before
+    assert refused(studio, cid) == (404, "gone")
     # слова отказа по длине — копия chat.CONTEXT_WORDS в модуле страницы
     assert f"'{chat.CONTEXT_WORDS}'" in (STATIC / "js" / "chat-continue.js").read_text("utf-8")
 
