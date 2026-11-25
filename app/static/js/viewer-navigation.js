@@ -103,7 +103,10 @@ export function viewerNavigation(dialog, { item, items, section, open, done, ope
   previous.addEventListener('click', () => move(-1));
   next.addEventListener('click', () => move(1));
   dialog.addEventListener('close', () => {
-    if (!document.querySelector('dialog[open]') && state.opener?.isConnected) state.opener.focus({ preventScroll: true });
+    // У действия с результатом может быть свой переход фокуса (например, к промпту).
+    if (!dialog.returnValue && !document.querySelector('dialog[open]') && state.opener?.isConnected) {
+      state.opener.focus({ preventScroll: true });
+    }
   });
   dialog.addEventListener('keydown', (event) => {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey

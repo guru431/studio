@@ -5,8 +5,8 @@ import time
 import pytest
 
 from test_ui_browser import (API, CLIP, FEED_READY, NEWEST_DONE, NO_OVERFLOW, READY, SPY, add_gateway, browser,  # noqa: F401
-                             clips, done_cards, go, is_open, live, live_sql, make_images, png_of, problems, put_file,
-                             ready_clips, set_value, signin, video_screen)
+                             clips, done_cards, go, is_open, live, live_sql, make_images, photo_screen, png_of, problems,
+                             put_file, ready_clips, set_value, signin, video_screen)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -24,6 +24,30 @@ EDIT = f"""(async () => {{ const m = {API};
 
 def chip_pick(section, model):
     return [("click", f"#{section}-model-filter"), ("click", f"#{section}-model-filter-menu [data-model='{model}']")]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_photo_viewer_uses_the_result_as_source_for_a_new_prompt(browser, live, width):
+    login = f"photosource{width}"
+    live.add_user(login)
+    r = browser.drive(live.url + "/", [*photo_screen(login, cards=1), ("eval", "spy", SPY),
+        ("type", "#photo-prompt", "Добавь снег"),
+        put_file("#photo-file", png_of(40, 30, "blue")),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth === 40"),
+        ("click", NEWEST_DONE), ("wait", is_open("#viewer")),
+        ("eval", "source", "document.querySelector('#viewer .viewer-stage img').getAttribute('src').split('/').at(-1)"),
+        ("click", "#viewer .act-use-source"),
+        ("wait", "!document.querySelector('#viewer') && document.querySelector('#photo-source img')?.naturalWidth > 0"),
+        ("eval", "composer", "[location.hash, document.activeElement.id, document.querySelector('#photo-prompt').value,"
+         " document.querySelector('#photo-source img').getAttribute('src'), window.sentForms.length]"),
+        ("click", "#photo-go"), ("wait", done_cards(2)),
+        ("eval", "sent", "window.sentForms.map(x => x.form)")], width=width, height=900, mobile=width == 320)
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["composer"] == ["#/photo", "photo-prompt", "Добавь снег", f"/api/media/{v['source']}?thumb=1", 0]
+    [sent] = v["sent"]
+    assert sent["prompt"] == "Добавь снег" and sent["source_media_id"] == v["source"]
+    assert not problems(r), problems(r)
 
 
 @pytest.mark.parametrize("width", [320, 1280])

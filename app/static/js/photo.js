@@ -95,7 +95,7 @@ function build(view, ctx) {
   let choices = [];              // варианты чипа: [ключ, подпись, выбор]
   let size = 'portrait';
   let sizes = SIZES;             // варианты чипа размера: свои или `size.enum` инструмента MCP
-  let source = null;             // { file, url } — исходное фото с устройства
+  let source = null;             // { file, url } или { mediaId, url } — исходное фото
   let choosing = 0;
   let preparingSource = false;
   let preparingDescription = false;
@@ -313,14 +313,18 @@ function build(view, ctx) {
     status.className = `status photo-status${bad ? ' error' : ''}`;
   }
 
-  /* исходное фото: файл с устройства или файл истории (mediaId — «В поле» просмотра) */
+  /* Исходное фото с устройства или из истории. Новый выбор отменяет подстановку предыдущего файла. */
   function setSource(f, mediaId = null, original = f) {
+    choosing += 1;
+    preparingSource = false;
+    file.value = '';
     if (source?.file) URL.revokeObjectURL(source.url);
     source = f ? { file: f, original, url: URL.createObjectURL(f) } : mediaId ? { mediaId, url: media(mediaId, '?thumb=1') } : null;
     if (source) sourceImg.src = source.url;
     else sourceImg.removeAttribute('src');
     chipPhoto.classList.toggle('on', !!source);
     paintSource();
+    syncBusy();
   }
 
   function paintSource() {
@@ -899,11 +903,7 @@ function build(view, ctx) {
         strength.value = String(item.strength);
         strengthValue.textContent = Number(strength.value).toFixed(2);
       }
-      choosing += 1;                                    // выбор файла в пути — устарел
-      preparingSource = false;
-      file.value = '';
       setSource(null, item.source_media_id);
-      syncBusy();
       prompt.focus();
     };
     const own = prompt.value.trim();
@@ -919,6 +919,24 @@ function build(view, ctx) {
       ask.close();
       apply();
     });
+  }
+
+  function useAsSource(item, viewer, fail) {
+    if ((mcp.tool || ctx.hint) && !mcp.acceptsPhotoSource()) {
+      const server = mcp.serverId || item.mcp_server_id;
+      const edit = (server && mcp.editSource(server, { withPrompt: true }))
+        || mcp.editSource(undefined, { withPrompt: true });
+      if (edit) mcp.selectSource(edit);
+      else if (!ctx.hint) mcp.useNative();
+      else {
+        fail.textContent = tr("Нет доступного инструмента для создания фото по исходнику");
+        return;
+      }
+    }
+    viewer.close('source');
+    error.textContent = '';
+    setSource(null, item.media_id);
+    prompt.focus();
   }
 
   async function remove(item, dialogs = []) {
@@ -981,7 +999,9 @@ function build(view, ctx) {
     });
     if (upscale) starts.push(upscale);
     // без модели раздела «Изменить», «Повторить», «Ещё варианты» и «В поле» не начать — их нет; «Описать» решает шлюз раздела
+    const canUseSource = canNative || remoteSource || mcp.tool;
     const actions = el('div', { class: 'viewer-actions' }, canNative || remoteSource ? starts[0] : null,
+      canUseSource ? act(tr("Взять за основу"), 'act-use-source', () => useAsSource(item, dialog, missing)) : null,
       act(tr("Создать видео"), 'act-animate', () => {
         dialog.close();
         ctx.navigate(`video?photo=${encodeURIComponent(item.id)}`);
@@ -1344,10 +1364,11 @@ function build(view, ctx) {
     syncBusy();
     const f = await resizePhoto(selected, PHOTO_SIDE);
     if (!alive || mine !== choosing) return;
-    preparingSource = false;
-    if (f.size > PHOTO_MAX) error.textContent = tr("Фото больше 20 МиБ");
-    else setSource(f, null, selected);
-    syncBusy();
+    if (f.size > PHOTO_MAX) {
+      preparingSource = false;
+      error.textContent = tr("Фото больше 20 МиБ");
+      syncBusy();
+    } else setSource(f, null, selected);
   }
   file.addEventListener('change', () => {
     const selected = file.files[0];
@@ -1371,11 +1392,7 @@ function build(view, ctx) {
   });
   sourceClear.addEventListener('click', () => {
     error.textContent = '';
-    choosing += 1;
-    preparingSource = false;
-    file.value = '';
     setSource(null);
-    syncBusy();
   });
   strength.addEventListener('input', () => {
     strengthValue.textContent = Number(strength.value).toFixed(2);

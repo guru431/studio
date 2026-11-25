@@ -8,7 +8,7 @@ import httpx
 from fakes import PNG_REAL
 from test_mcp import TOKEN, URL
 from test_mcp_sections import LIMIT_CASES
-from test_ui_browser import API, browser, live, signin, READY, NO_OVERFLOW, problems, put_files, set_value  # noqa: F401
+from test_ui_browser import API, browser, live, signin, READY, NO_OVERFLOW, NEWEST_DONE, problems, put_files, set_value  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
@@ -259,5 +259,28 @@ def test_photo_reference_stays_visible_and_requires_a_tool_that_accepts_it(brows
     assert "исходное фото" in result["values"]["blocked"]
     assert result["values"]["retained"] == [True, "Keep the composition"]
     assert [name for name, _ in calls] == ["artifact_upload", "image_edit"]
+    assert calls[-1][1] == {"artifact_id": UPLOADED, "prompt": "Keep the composition"}
+    assert not problems(result), problems(result)
+
+
+def test_mcp_photo_viewer_reuses_the_generated_image_with_an_editing_tool(browser, live):
+    login = "mcp-photo-result-as-source"
+    live.add_user(login)
+    tools = {**GOOD, "image_edit": {
+        "properties": {"prompt": TEXT, "artifact_id": TEXT}, "required": ["prompt", "artifact_id"],
+    }}
+    calls = serve(live.gw, tools, photo_result=True)
+    result = browser.drive(live.url + "/", [*start(login),
+        ("eval", "photo", "location.hash='#/photo'"), ("wait", ready("image_generate")), choose("image_generate"),
+        set_value("#photo-prompt", "First result"), ("click", "#photo-go"), ("wait", f"document.querySelector('{NEWEST_DONE}')"),
+        set_value("#photo-prompt", "Keep the composition"),
+        ("click", NEWEST_DONE), ("click", "#viewer .act-use-source"),
+        ("wait", "document.querySelector('#photo-source img')?.naturalWidth > 0"),
+        ("eval", "tool", "document.querySelector('#section-mcp-tool').value.split(':').at(-1)"),
+        ("click", "#photo-go"), ("wait", DONE)], width=1280)
+    assert not result.get("failed"), result
+    assert result["values"]["tool"] == "image_edit"
+    assert [name for name, _ in calls] == ["image_generate", "artifact_upload", "image_edit"]
+    assert base64.b64decode(calls[1][1]["data_base64"]) == PNG_REAL
     assert calls[-1][1] == {"artifact_id": UPLOADED, "prompt": "Keep the composition"}
     assert not problems(result), problems(result)

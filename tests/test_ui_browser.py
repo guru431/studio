@@ -2872,7 +2872,7 @@ def test_photo_layout_fits_390(browser, live):
     assert v["chips"] and v["sizeMenu"] and v["viewer"]
     assert v["sizes"] == ["Портрет 832×1216", "Квадрат 1024×1024", "Альбом 1216×832"]
     assert "Альбом" in v["sizeChip"]
-    assert v["actions"] == ["Изменить", "Создать видео", "Повторить с тем же seed", "Ещё варианты", "Описать",
+    assert v["actions"] == ["Изменить", "Взять за основу", "Создать видео", "Повторить с тем же seed", "Ещё варианты", "Описать",
                             "Улучшить фото", "В поле", "Скачать", "Поделиться", "Удалить"]
     assert not problems(r), problems(r)
 
@@ -5959,7 +5959,7 @@ def test_history_without_a_model_is_read_downloaded_and_deleted(browser, live, r
     assert v["chatNew"] == [True, "#/settings/chat", "модель не выбрана", True]
     assert v["chatOld"] == [False, ["привет", "Здравствуйте!"]]
     assert v["video"] == [False, "#/settings/video"] and v["photo"] == [False, "#/settings/photo"] and not v["overflow"]
-    assert "Изменить" not in v["acts"] and "Повторить с тем же seed" not in v["acts"]
+    assert {"Изменить", "Взять за основу", "Повторить с тем же seed"}.isdisjoint(v["acts"])
     assert {"Скачать", "Удалить", "Создать видео"} <= set(v["acts"])
     assert v["transcribe"] == [False, "#/settings/transcribe", "Выберите запись в списке."]
     assert v["export"] == [200, True] and v["speech"] == [False, "#/settings/speech"]

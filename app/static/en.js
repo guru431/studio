@@ -2574,6 +2574,8 @@ globalThis.StudioEnglish = Object.freeze({
   "Повторить с тем же seed": "Repeat with same seed",
   "Описать": "Describe",
   "Создать видео": "Create video",
+  "Взять за основу": "Use as source",
+  "Нет доступного инструмента для создания фото по исходнику": "No available tool can create a photo from a source image",
   "Картинка удалена": "Image deleted",
   "Сравнить с исходником": "Compare with original",
   "Открыть вариант": "Open variation",

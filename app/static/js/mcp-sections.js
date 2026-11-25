@@ -485,9 +485,14 @@ export function sectionMcp(section, { native, fields, fileRequired, onChange, on
   });
   return { control, output, fields: extras, has, hasFile, run, clear,
     option(key) { return options.get(key)?.tool; },
-    editSource(sid) {
+    acceptsPhotoSource() {
+      const name = picked()?.tool.name;
+      return PHOTO_TOOLS.has(name) && name !== 'upscale_image' && has('prompt') && hasFile('artifact_id');
+    },
+    editSource(sid, { withPrompt = false } = {}) {
       return [...options].find(([, { server, tool }]) => (!sid || server.id === sid)
-        && ['image_edit', 'edit_image'].includes(tool.name) && Object.hasOwn(tool.files, 'artifact_id'))?.[0];
+        && ['image_edit', 'edit_image'].includes(tool.name) && Object.hasOwn(tool.files, 'artifact_id')
+        && (!withPrompt || Object.hasOwn(tool.schema.properties || {}, 'prompt')))?.[0];
     },
     sourceName(key) { return options.get(key)?.server.name; },
     selectSource(key, model) {
