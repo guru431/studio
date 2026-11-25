@@ -38,7 +38,6 @@ export function chatSkills({ input, host, changed }) {
     sync();
     changed?.();
   } });
-  chip.node.id = 'skill-chip';
 
   function sync() {
     host.hidden = chip.node.hidden;
