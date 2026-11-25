@@ -2744,7 +2744,7 @@ def test_failed_photo_repeats_from_its_tile_and_row(browser, live, width):
     """У неудачной картинки «Повторить» — в плитке и строке таблицы: то же тело, что у «Повторить» просмотра;
     пока задание идёт, кнопка закрыта."""
     login = f"photoretry{width}"
-    live.add_user(login)
+    live.add_user(login, views={"photo": "tiles"})        # сначала плитка, потом таблица
     calls = []
 
     async def flaky(request):
