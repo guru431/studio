@@ -2080,6 +2080,12 @@ body.solo { display: grid; place-items: center; padding: var(--space-7); }
 .code-chat-scroll { flex: 1; display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; min-height: 0;
   overflow: auto; overscroll-behavior: contain; }
 .code-chat-scroll > * { flex: none; }
+/* поиск по открытому чату (code-find.js) */
+.code-find-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); min-width: 0; }
+.code-find-input { flex: 1 1 10em; min-width: 0; }
+.code-find-count { color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
+::highlight(code-find) { background-color: light-dark(#fde68a, #5c4813); color: var(--text-1); }
+::highlight(code-find-current) { background-color: var(--accent); color: var(--on-accent); }
 .code-quick-actions { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-4); min-width: 0;
   width: min(100%, 420px); margin: auto; }
 .code-quick-actions h2 { margin: 0 0 var(--space-2); font-size: var(--fs-lg); }

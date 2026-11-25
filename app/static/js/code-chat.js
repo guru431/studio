@@ -68,6 +68,7 @@ import { cancelRefresh, refreshAfterFailure } from './refresh.js';
 import { AGENT_DRAFTS, draftStore } from './dialog-drafts.js';
 import { codeActivity } from './code-activity.js';
 import { attachCounts, countRefusal } from './code-attach-limits.js';
+import { findView } from './code-find.js';
 
 const WAITING = tr("Компьютер пропал со связи — жду его");
 const SHARED = tr("Эту сессию начали в VS Code или терминале. Если она открыта и там, не пишите в двух местах сразу — ответы перемешаются.");
@@ -475,6 +476,8 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
   askObserver.observe(feed, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
   host.append(el('div', { class: 'code-chat-history' }, scroller, nav.node),
     el('div', { class: 'code-compose-area' }, status, defaultsNotice, sessionNotice, writerNotice, askPin, statusBar, form));
+  const find = findView(host, { scroller, feed, earlier: () => loadEarlier(), hasEarlier: () => start > 0 });
+  actions.append(find.button);
   const queueHost = el('div', { hidden: true });
   form.before(queueHost);
   const queue = queueView(queueHost, { endpoint, request: api, failed: (err) => {
@@ -1988,6 +1991,7 @@ export function chatView(host, { aid, pid, chat, agent, project, origin, fresh =
       branchPopup?.unmount();
       pictures.unmount();
       statusControls.unmount();
+      find.unmount();
       for (const view of picks.values()) view.unmount();
       visualizations.unmount();
       unsubscribeGit?.();
