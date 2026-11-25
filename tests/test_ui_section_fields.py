@@ -1,6 +1,7 @@
 """Поля формы раздела по схеме инструмента MCP (спека 2026-11-21-studio-source-capabilities-design, п. 11, 26, 37):
 у `audio_transcribe` с `protocol`/`speakers`/`language` в ряду «Расшифровки» появляются «Протокол», «Говорящих», «Язык»,
 значения уходят в вызов; итог с метками собеседников — видом расшифровки, файлы итога — списком скачивания."""
+import httpx
 import pytest
 
 from fakes import WAV_FAKE
@@ -27,6 +28,10 @@ def test_tool_schema_fields_appear_and_reach_the_call(browser, live, width):
     login = f"fields{width}"
     live.add_user(login)
     calls = transcriber(live.gw, RESULT)
+
+    async def protocol(request):     # итог раздела сохраняется в историю — файл скачивается со шлюза
+        return httpx.Response(200, content="# Протокол".encode())
+    live.gw.on[f"/artifacts/{ARTIFACT}/content"] = protocol
     r = browser.drive(live.url + "/", [*start(login),
         ("eval", "go", "location.hash = '#/transcribe'"), ("wait", FIELDS),
         ("eval", "shown", "[...document.querySelectorAll('.split-toolbar .mcp-fields [data-field]')].map(e => e.dataset.field)"),
@@ -50,7 +55,7 @@ def test_tool_schema_fields_appear_and_reach_the_call(browser, live, width):
     assert v["language"] == "English"
     assert v["refused"] == "Значение «Говорящих» — от 1 до 10"               # вне границ — до вызова
     assert v["turns"] == [["Собеседник 1", "Добрый день."], ["Собеседник 2", "Начнём."]]   # без времени — без него
-    assert v["files"] == [["protocol.md", "protocol.md"]] and v["fits"]
+    assert v["files"] == [["protocol.md", "protocol.md"]] and v["fits"], v
     sent = [args for name, args in calls if name == "audio_transcribe"]
     assert sent == [{"protocol": True, "speakers": 3, "language": "en", "topic": "Планёрка", "artifact_id": UPLOADED}]
     assert not problems(r), problems(r)
