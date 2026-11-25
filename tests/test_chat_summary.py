@@ -8,10 +8,15 @@ import httpx
 
 import chat
 import chat_shares
+import cleaner_route
+import sections
 import state
 from conftest import add_connection, add_gateway, make_user, signin
-from test_chat import events_of, messages, new_chat, sse, turn
+from test_chat import done_transcript, events_of, from_transcript, messages, new_chat, sse, turn
+from test_cleaner_forced import CLEANER_HOSTS, owner_id
+from test_cleaner_route_chat import allow, settings
 from test_knowledge import small_model
+from test_shared_integrations import MODEL, add_models
 
 OLD = ("ABCD " * 2800).rstrip()                  # ≈ 4,7 тыс. токенов
 SKILL = "НАВЫК: разбери по частям."
@@ -168,3 +173,59 @@ def test_compact_refusals(studio):
     # чужой диалог — 404
     make_user(studio, "bob"); signin(studio, "bob")
     assert code(compact(studio, cid)) == (404, "gone")
+
+
+def test_compact_is_refused_for_a_cloud_role_when_cleaner_is_forced(studio):
+    """Ход облачной роли srvllm при принудительном Cleaner — 409 `cleaner_forced`; «Сжать сейчас» тоже не уносит
+    историю мимо Cleaner."""
+    gw = add_gateway(studio)
+    sections.set_models(owner_id(), "chat", gw, ["local-gemma-abl", "gpt-x"])
+    cid = new_chat(studio, connection_id=gw, model="gpt-x")
+    studio.gw.chat_script = [["Ответ-1"], ["Ответ-2"]]
+    for text in ("Вопрос-1", "Вопрос-2"):
+        assert sse(turn(studio, cid, text))[-1] == ("done", {"status": "done"})
+    allow(*CLEANER_HOSTS)
+    settings(studio, forced=True)
+    sent = len(studio.gw.chat_requests)
+    r = compact(studio, cid)
+    assert code(r) == (409, "cleaner_forced") and r.json()["detail"]["message"] == cleaner_route.FORCED_SRVLLM
+    assert code(turn(studio, cid, "Вопрос-3")) == (409, "cleaner_forced")                  # тот же допуск у хода
+    assert len(studio.gw.chat_requests) == sent and stored(cid)["summary"] is None
+
+
+def test_compact_asks_for_consent_when_a_transcript_goes_to_a_cloud_model(studio, fake_audio):
+    """Расшифровка в истории и нелокальная модель без её ответа после вложения — ход 409 `external`, сжатие тоже;
+    ответ этой модели (подтверждённый ход) снимает отказ."""
+    gw = add_gateway(studio); tid = done_transcript(studio)
+    studio.c.put(f"/api/sections/chat/links/{gw}", json={"models": ["local-gemma-abl", "gemma4-abl"]})
+    studio.gw.models[1]["context_length"] = 131072                                     # окно модели известно
+    cid = new_chat(studio, connection_id=gw, model="local-gemma-abl")
+    a = from_transcript(studio, tid).json()
+    studio.gw.chat_script = [["Ответ-1"], ["Ответ-2"], ["Ответ-3"], ["Итог"]]
+    sse(turn(studio, cid, "Итоги?", attachment_ids=[a["id"]]))                         # локальная — без вопроса
+    sse(turn(studio, cid, "Ещё?"))
+    studio.c.patch(f"/api/chats/{cid}", json={"model": "gemma4-abl"})
+    sent = len(studio.gw.chat_requests)
+    r = compact(studio, cid)
+    assert code(r) == (409, "external") and r.json()["detail"]["message"] == (
+        "Расшифровка уйдёт во внешний сервис «srvllm» — подтвердите")
+    assert len(studio.gw.chat_requests) == sent and stored(cid)["summary"] is None
+    sse(turn(studio, cid, "Третий", external_ok=True))                                  # подтвердили ходом
+    assert compact(studio, cid).status_code == 200 and stored(cid)["summary"] == "Итог"
+
+
+def test_compact_is_refused_once_the_shared_model_is_withdrawn(studio):
+    """Общее подключение: модель снята из раздела для учёток — ход 422, сжатие тоже, без запроса к модели."""
+    make_user(studio, "admin", is_admin=True); make_user(studio, "existing")
+    signin(studio, "admin"); shared = add_models(studio)
+    signin(studio, "existing")
+    assert studio.c.put("/api/sections/chat/default", json={"connection_id": shared, "model": MODEL}).status_code == 200
+    cid = new_chat(studio)
+    for text in ("Вопрос-1", "Вопрос-2"):
+        assert sse(turn(studio, cid, text))[-1] == ("done", {"status": "done"})
+    signin(studio, "admin")
+    assert studio.c.put(f"/api/admin/shared/sections/chat/links/{shared}", json={"models": []}).status_code == 200
+    signin(studio, "existing")
+    sent = len(studio.gw.chat_requests)
+    assert compact(studio, cid).status_code == 422 and turn(studio, cid, "Вопрос-3").status_code == 422
+    assert len(studio.gw.chat_requests) == sent and stored(cid)["summary"] is None

@@ -453,6 +453,28 @@ def _chat_pair(user_id: int, conn_id: "int | None", model: "str | None") -> tupl
     return sections.resolve(user_id, "chat", conn_id, (model or "").strip() or None)
 
 
+def _admit(user_id: int, conn: Connection, model: str) -> None:
+    """Допуски подключения до вызова модели — общие для хода и «Сжать сейчас» (история уходит модели в обоих):
+    адрес убран из списка — 409 `server`; облачная роль srvllm при принудительном Cleaner — 409 `cleaner_forced`
+    (`cleaner_route.refuse_forced`); общее подключение — модель отмечена для учётки (`_chat_pair`, иначе 422)."""
+    if connections.dropped(conn):                    # ни сервер, ни браузер туда не пойдут
+        raise HTTPException(409, {"code": "server", "message": sections.unlisted(conn)})
+    cleaner_route.refuse_forced(conn, "chat", model)
+    if conn.shared:
+        _chat_pair(user_id, conn.id, model)
+
+
+def _consent_free(conn: Connection, model: str, external_ok: bool = False) -> bool:
+    """Расшифровку в истории можно отдать модели без подтверждения: подтверждено телом хода, модель локальная, или
+    путь через Cleaner (предпросмотр или шлюз `cleaner_route`)."""
+    return external_ok or sections.is_local(conn, model) or conn.cleaner or conn.routed
+
+
+def _external(conn: Connection) -> HTTPException:
+    """409 `external`: история с расшифровкой уйдёт внешней модели без подтверждения (`_needs_consent`)."""
+    return HTTPException(409, {"code": "external", "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
+
+
 def _attachments(chat_id: str) -> dict[str, list]:
     """Вложения сообщений диалога: id сообщения → строки по порядку загрузки."""
     rows = state.DB.execute("SELECT a.* FROM attachments a JOIN messages m ON m.id = a.message_id"
@@ -3035,6 +3057,12 @@ async def compact_chat(chat_id: str, request: Request):
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
     if not conn.proxied or conn.cleaner:
         raise HTTPException(409, NO_COMPACT)
+    model = row["model"] or manage.DEFAULT_MODEL
+    _admit(uid, conn, model)                         # история уходит модели — допуски хода (create_turn)
+    # расшифровка в истории: без подтверждения ходом этой модели — отказ, как у хода без `external_ok`
+    # (подтверждают отправкой хода; след подтверждения — её ответ, `_needs_consent`)
+    if not _consent_free(conn, model) and _needs_consent(chat_id, model, "server"):
+        raise _external(conn)
     last = _last_user(chat_id)
     before = last and state.DB.execute(
         "SELECT id FROM messages WHERE chat_id = ? AND unchosen = 0 AND (created, rowid) < (?, ?)"
@@ -3042,12 +3070,15 @@ async def compact_chat(chat_id: str, request: Request):
     nothing = HTTPException(409, {"code": "nothing", "message": "пересказывать нечего: последний ход остаётся целиком"})
     if not before or before["id"] == row["summary_upto"]:
         raise nothing
-    model = row["model"] or manage.DEFAULT_MODEL
     limit = await _limit(conn, model)
     if limit is None:
         raise HTTPException(409, {"code": "no_limit", "message": "предел контекста модели неизвестен — сжимать не нужно"})
     operations.check(uid)
     _busy(chat_id)                                   # пока ждали список моделей, мог начаться ход
+    fresh = _chat_row(uid, chat_id)
+    if fresh["connection_id"] != conn.id or fresh["model"] != row["model"]:
+        raise HTTPException(409, {"code": "changed", "message": "Модель диалога изменилась — отправьте запрос заново"})
+    _admit(uid, conn, model)                         # снятие модели или принудительный режим — тем временем
     ids = []
     composed = compose(chat_id, before["id"], model, 0, excerpts=knowledge.heads(knowledge.big_attachments(chat_id)),
                        ids=ids)
@@ -3242,14 +3273,10 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     conn = _chat_connection(uid, row["connection_id"])
     if conn is None:                                 # не выбрано, удалено или закрыто группами доступа
         raise HTTPException(409, {"code": "no_connection", "message": "выберите подключение диалога"})
-    if connections.dropped(conn):                    # ни сервер, ни браузер туда не пойдут — до записи хода
-        raise HTTPException(409, {"code": "server", "message": sections.unlisted(conn)})
+    model = row["model"] or manage.DEFAULT_MODEL
+    _admit(uid, conn, model)                         # те же допуски у «Сжать сейчас» — до записи хода
     if mcp_client.present(uid, row["mcp_ids"]) and (not conn.proxied or conn.cleaner):
         raise mcp_client.refused("MCP доступен для моделей через сервер, кроме Cleaner")
-    model = row["model"] or manage.DEFAULT_MODEL
-    cleaner_route.refuse_forced(conn, "chat", model)  # облачная роль srvllm при принудительном Cleaner — до записи хода
-    if conn.shared:
-        _chat_pair(uid, conn.id, model)
     edit = _edit_target(chat_id, body)
     atts = [] if body.regenerate else _free_attachments(uid, body.attachment_ids)
     saved = _attachments(chat_id).get(edit["id"], []) if edit is not None else []
@@ -3287,7 +3314,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
     scans = _pending_scans(uid, chat_id, atts, edit)
     if scans and via == "browser":
         raise HTTPException(409, {"code": "not_ready", "message": NOT_READY})
-    free = body.external_ok or sections.is_local(conn, model) or conn.cleaner or conn.routed
+    free = _consent_free(conn, model, body.external_ok)
     now, answer_id = clock.NOW(), uuid.uuid4().hex
     # без await до COMMIT: другой запрос не вклинится, отказ откатывает всё
     state.DB.execute("BEGIN")
@@ -3345,8 +3372,7 @@ async def create_turn(chat_id: str, body: TurnIn, request: Request):
             state.DB.execute("UPDATE attachments SET cleaner_used = 1 WHERE cleaner_used = 0 AND message_id IN"
                              " (SELECT id FROM messages WHERE chat_id = ?)", (chat_id,))
         if ask:
-            raise HTTPException(409, {"code": "external",
-                                      "message": f"Расшифровка уйдёт во внешний сервис «{conn.name}» — подтвердите"})
+            raise _external(conn)
         # Exa получает запросы, составленные моделью из всей истории (6.10): расшифровка новее подтверждения —
         # только с `web_ok`; подтверждение — `now`, им покрыта и расшифровка этого хода (created = now)
         if "search" in kinds or mcp_ids:
