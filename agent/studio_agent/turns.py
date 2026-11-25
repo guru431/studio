@@ -851,8 +851,8 @@ class Runner:
         """Конец хода: карточки — отказ, клиент гаснет, новой сессии — метка, чат свободен, затем `done`."""
         t.finishing = True
         try:
+            self._deny_all(t)  # до первого await: отмена конца хода не оставит карточки ждать
             await self._time(t)
-            self._deny_all(t)
             disconnected = t.client is None
             if t.client is not None:
                 with contextlib.suppress(Exception):
