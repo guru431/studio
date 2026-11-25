@@ -2414,9 +2414,9 @@ function build(view, ctx) {
         acknowledgeTurn(attempt);
       }
       // сообщение очереди сервер не принимал: оно ждёт «Продолжить очередь» (тот же `request_id`), квитанцию больше
-      // не спрашиваем
-      const unsent = receipt && !receipt.accepted && attempt.queued;
-      if (unsent && pendingTurn === attempt) pendingTurn = null;
+      // не спрашиваем. Запоздалая квитанция (повтор «Продолжить очередь» уже идёт — `pendingTurn` новый) — не трогаем
+      const unsent = receipt && !receipt.accepted && attempt.queued && pendingTurn === attempt;
+      if (unsent) pendingTurn = null;
       needsReload = !!(pendingTurn?.id === id && pendingTurn.uncertain);
       failures = needsReload ? failures + 1 : 0;
       notice.textContent = '';
