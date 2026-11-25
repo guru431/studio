@@ -67,6 +67,9 @@ REMIND_TIMES = 3                   # повторов push на паузу ка�
 REMIND_TICK_SEC = 60
 #: повторы напоминаний: id паузы → сессия → (повторов, когда последний)
 SENT: dict[str, dict[str, tuple[int, float]]] = {}
+#: начало проходов напоминаний этого процесса (`start_reminders`): счёт SENT в памяти, и пауза, созданная до
+#: перезапуска службы, отсчитывает интервал от него, а не от своего создания — без залпа повторов после выкладки
+STARTED = 0.0
 
 
 class PendingIn(BaseModel):
@@ -341,10 +344,13 @@ def remind() -> None:
     устройству, где напоминание включено (`push.reminders`), вид `ask` не заглушён (`push.muted`) и страница не на
     экране (`push.on_screen`), повтор push с той же меткой через интервал устройства от паузы, прошлого повтора или
     последнего взгляда на диалог (`chats.seen`); не больше REMIND_TIMES на устройство. Тихие часы откладывают
-    повтор, а не съедают его. Счёт — в памяти (SENT): перезапуск службы начинает его заново."""
+    повтор, а не съедают его. Устройство, чья страница на экране, — как взгляд: его отсчёт начинается заново.
+    Пауза невыбранного варианта ответа (`messages.unchosen`: карточки не видно) не напоминает. Счёт — в памяти
+    (SENT): перезапуск службы начинает его заново, отсчёт — не раньше STARTED."""
     now = clock.NOW()
     rows = state.DB.execute(
         "SELECT p.id, p.chat_id, p.created, c.user_id, c.seen FROM chat_pending p JOIN chats c ON c.id = p.chat_id"
+        " JOIN messages m ON m.id = p.message_id AND m.unchosen = 0"
         " JOIN users u ON u.id = c.user_id WHERE p.resolved IS NULL AND p.created >= ? AND c.deleted IS NULL"
         " AND u.disabled = 0", (now - PENDING_TTL_SEC,)).fetchall()
     for pid in set(SENT) - {row["id"] for row in rows}:
@@ -355,8 +361,11 @@ def remind() -> None:
         intervals, muted, sent = push.reminders(uid), push.muted(uid, "ask"), SENT.get(row["id"], {})
         due = set()
         for digest, interval in intervals.items():
-            times, last = sent.get(digest, (0, row["created"]))
-            if (interval and times < REMIND_TIMES and digest not in muted and digest not in screen
+            times, last = sent.get(digest, (0, max(row["created"], STARTED)))
+            if digest in screen:                    # смотрит на страницу — как `bridge.watching` у «Агентов»
+                SENT.setdefault(row["id"], {})[digest] = (times, now)
+                continue
+            if (interval and times < REMIND_TIMES and digest not in muted
                     and now - max(last, row["seen"] or 0) >= interval):
                 due.add(digest)
                 SENT.setdefault(row["id"], {})[digest] = (times + 1, now)
@@ -375,4 +384,6 @@ async def _reminders() -> None:
 
 
 def start_reminders() -> asyncio.Task:
+    global STARTED
+    STARTED = clock.NOW()
     return asyncio.create_task(_reminders())

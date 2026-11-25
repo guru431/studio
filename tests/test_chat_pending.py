@@ -492,3 +492,55 @@ def test_chat_reminder_skips_trashed_chats_and_waits_from_the_last_look(studio, 
     studio.c.portal.call(chat_pending.notify, uid, other)
     settle(studio)
     assert len(studio.gw.push_requests) == 2
+
+
+def test_page_on_screen_restarts_the_interval_like_a_look(studio, no_pings):
+    """Ревью 14, п. 1а: проход напоминаний застал страницу на экране — повтора нет, и отсчёт устройства идёт заново
+    (как `bridge.watching` у «Агентов»), а не со времени паузы: ушедшая с экрана страница не получает push сразу."""
+    sid, _ = confirm_setup(studio)
+    phone = phone_on(studio)
+    cid = new_chat(studio)
+    pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
+    settle(studio)
+    tick = ticker(studio, phone, base=1)
+    studio.clock[0] += 10 * 60
+    assert studio.c.get("/api/jobs?visible=1").status_code == 200
+    assert tick(0) == 0                                                                # на экране — молчит
+    studio.clock[0] += push.SCREEN_SEC                                                 # ушла с экрана
+    assert [tick(9), tick(1)] == [0, 1]                                                # 10 мин от прохода на экране
+
+
+def test_reminders_after_restart_count_from_the_process_start(studio, no_pings, monkeypatch):
+    """Ревью 14, п. 2: счёт повторов в памяти; пауза старше перезапуска службы не получает залп повторов сразу —
+    интервал отсчитывается от `chat_pending.STARTED`."""
+    sid, _ = confirm_setup(studio)
+    phone = phone_on(studio)
+    cid = new_chat(studio)
+    pause_on(studio, cid, name_of(sid, "translate"), phrase="hello")
+    settle(studio)
+    studio.clock[0] += 40 * 60
+    monkeypatch.setattr(chat_pending, "STARTED", studio.clock[0])                     # служба перезапущена
+    chat_pending.SENT.clear()
+    tick = ticker(studio, phone, base=1)
+    assert [tick(0), tick(9), tick(1), tick(1)] == [0, 0, 1, 1]
+
+
+def test_pause_of_an_unchosen_variant_does_not_remind(studio, no_pings):
+    """Ревью 14, п. 3: пауза невыбранного варианта ответа (карточки в диалоге не видно) не напоминает; вариант снова
+    выбран — напоминание возвращается."""
+    add_gateway(studio)
+    phone = phone_on(studio)
+    cid = new_chat(studio)
+    studio.gw.chat_reply = ["A0"]
+    sse(turn(studio, cid, "Привет"))
+    studio.gw.chat_script = [{"tool_calls": [call("ask_user", question="Какой цвет?", options=["Красный"])]},
+                             ["Выбран красный."]]
+    pending_of(sse(turn(studio, cid, "", regenerate=True)))
+    settle(studio)
+    a0, a1 = messages(studio, cid)[1]["variants"]
+    assert studio.c.post(f"/api/chats/{cid}/messages/{a0['id']}/choose").status_code == 204
+    tick = ticker(studio, phone, base=1)
+    assert tick(30) == 0
+    assert studio.c.post(f"/api/chats/{cid}/messages/{a1['id']}/choose").status_code == 204
+    assert tick(0) == 1
+
