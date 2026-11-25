@@ -10,6 +10,11 @@ from test_ui_browser import (CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_free
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
+#: ход дошёл до машины и кончился: задание рисуется в ленте ещё до POST хода (code-chat.js submit), а закрытая
+#: страница его уже не отправит — ждём ответ машины, а не только своё сообщение
+TURN_DONE = ("document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"
+             " && document.querySelector('#code-feed .code-msg.assistant')?.textContent.includes('Готово')")
+
 
 @pytest.mark.parametrize('width', [320, 1280])
 def test_priority_saved_in_settings_orders_starters_and_selects_git_agent(browser, live, width, tmp_path):
@@ -43,7 +48,7 @@ def test_priority_saved_in_settings_orders_starters_and_selects_git_agent(browse
             ('wait', "document.querySelector('#code-repo-status')?.textContent"), ('click', '#code-repo-status'),
             ('wait', "document.querySelector('#code-git-commit') && !document.querySelector('#code-git-commit').disabled"),
             ('click', '#code-git-commit'),
-            ('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"),
+            ('wait', TURN_DONE),
             ('eval', 'engine', "document.querySelector('#code-chat').dataset.engine")], width=width, mobile=width == 320)
     finally:
         server.stop()
@@ -76,7 +81,7 @@ def test_auto_chat_skips_agents_missing_from_the_computer(browser, live, availab
             ('wait', "document.querySelector('#code-git .code-git-branch')"), ('click', '#code-repo-status'),
             ('wait', "document.querySelector('#code-git-commit') && !document.querySelector('#code-git-commit').disabled"),
             ('click', '#code-git-commit'),
-            ('wait', "document.querySelector('#code-chat')?.dataset.running === '0' && document.querySelector('#code-feed .code-msg.user')"),
+            ('wait', TURN_DONE),
             ('eval', 'engine', "document.querySelector('#code-chat').dataset.engine")])
     finally:
         server.stop()
