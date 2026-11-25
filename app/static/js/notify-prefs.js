@@ -1,7 +1,8 @@
 import { tr } from './i18n.js';
 /* «О чём уведомлять» этого устройства (GET/PUT /api/me/notify): виды push и ntfy, тихие часы по поясу учётки и
- * напоминание о ждущей карточке «Агентов». Настройка — у сессии: телефон и компьютер настраиваются отдельно,
- * после выхода из учётки — заново. Решает сервер до отправки (push.muted, bridge.remind). */
+ * напоминание о ждущей карточке «Агентов» и «Чата». Настройка — у сессии: телефон и компьютер настраиваются отдельно,
+ * после выхода из учётки — заново. Решает сервер до отправки (push.muted, bridge.remind,
+ * chat_pending.remind). */
 import { api } from './api.js';
 import { el, field, words } from './ui.js';
 
@@ -38,7 +39,7 @@ export function notifyPrefsBlock() {
       to.value = value.quiet_to;
     }
     remind.value = String(value.remind);
-    zone.textContent = tr("Тихие часы — по часовому поясу учётки: {0}. В них не приходит ничего; о ждущем вопросе агента после них напомнит повтор, если напоминание включено.", value.timezone);
+    zone.textContent = tr("Тихие часы — по часовому поясу учётки: {0}. В них не приходит ничего; о ждущем вопросе агента или чата после них напомнит повтор, если напоминание включено.", value.timezone);
   }
   save.addEventListener('click', async () => {
     note.textContent = '';
@@ -65,7 +66,7 @@ export function notifyPrefsBlock() {
     el('div', { class: 'checks' }, ...boxes.map((box, i) => el('label', { class: 'check' }, box, KINDS[i][1]))),
     el('div', { class: 'row' }, el('label', { class: 'check' }, quiet, tr("Не беспокоить"))),
     el('div', { class: 'row' }, field(tr("С"), from, from.id), field(tr("По"), to, to.id)), zone,
-    field(tr("Напомнить о ждущем вопросе агента"), remind, remind.id),
+    field(tr("Напомнить о ждущем вопросе агента или чата"), remind, remind.id),
     el('p', { class: 'muted small' }, tr("Повтор приходит, если вопрос или подтверждение не закрыты и чат не открыт, — не больше трёх раз.")),
     el('div', { class: 'row' }, save), note);
   busy(true);
