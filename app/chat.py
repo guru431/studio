@@ -1534,6 +1534,13 @@ class StreamTask:
                         log.info("чат %s: ответ %s — шлюз отказал по длине контекста", self.chat_id[:8],
                                  self.message_id[:8])
                         return None, TOO_LONG, [], r.text
+                    # отвергнут уровень рассуждения диалога — его словами, а не повтором без встроенных инструментов
+                    effort = profiles.refusal(r.text, {k: v for k, v in self.params.items()
+                                                       if k in profiles.EFFORT_PARAMS}) if r.status_code == 400 else None
+                    if effort is not None:
+                        log.info("чат %s: ответ %s — подключение не приняло уровень рассуждения", self.chat_id[:8],
+                                 self.message_id[:8])
+                        return effort, None, [], text
                     if offer and builtin_only and r.status_code == 400 and (
                             "tool" in lowered or any(marker in lowered for marker in profiles.REJECTED)):
                         return None, TOOLS_REFUSED, [], text

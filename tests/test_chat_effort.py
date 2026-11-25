@@ -6,7 +6,7 @@ import chat
 import profiles
 import state
 from conftest import add_connection, add_gateway
-from test_chat import new_chat, sse, turn
+from test_chat import messages, new_chat, sse, turn
 from test_chat_pending import answer, pending_of
 from test_chat_web import call
 from test_checks import CLOUD_ROLE, gateway_as_openai
@@ -76,6 +76,22 @@ def test_effort_reaches_a_server_request_and_its_continuation(studio, monkeypatc
     monkeypatch.delitem(capabilities.PROFILES, "10.77.1.15")                          # провайдер перестал принимать
     sse(turn(studio, cid, "Ещё"))
     assert "reasoning_effort" not in studio.gw.chat_requests[-1] and view(studio, cid)["effort"] == "low"
+
+
+def test_a_refused_effort_is_named_before_the_built_in_tools(studio, monkeypatch):
+    """Шлюз отверг `reasoning_effort` в ходе через сервер со встроенными инструментами — ошибка ответа словами
+    EFFORT_REFUSED с первого запроса, без повтора «без инструментов» (ветка TOOLS_REFUSED)."""
+    cid_conn = gateway_as_openai(studio)
+    monkeypatch.setitem(capabilities.PROFILES, "10.77.1.15", "openai")
+    cid = new_chat(studio, connection_id=cid_conn, model=CLOUD_ROLE)
+    assert studio.c.patch(f"/api/chats/{cid}", json={"effort": "high"}).json()["effort"] == "high"
+    studio.gw.chat_error = (400, {"error": {"message": "Unrecognized request argument supplied: reasoning_effort"}})
+    sent = len(studio.gw.chat_requests)
+    sse(turn(studio, cid, "Привет"))
+    assert len(studio.gw.chat_requests) == sent + 1 and studio.gw.chat_requests[-1]["reasoning_effort"] == "high"
+    assert "tools" in studio.gw.chat_requests[-1]                                      # встроенные были предложены
+    last = messages(studio, cid)[-1]
+    assert (last["status"], last["error"]) == ("error", profiles.EFFORT_REFUSED)
 
 
 def test_effort_is_not_offered_through_cleaner(cleaner_gw, monkeypatch):  # noqa: F811

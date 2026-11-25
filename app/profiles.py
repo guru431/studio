@@ -44,6 +44,7 @@ EFFORTS = ("low", "medium", "high")
 EFFORT_PROVIDERS = ("openai", "openrouter")
 #: отказ сервиса по параметру уровня (`reasoning_effort`, `reasoning`) — вместо REFUSED
 EFFORT_REFUSED = "модель не принимает уровень рассуждения — выберите «Как у модели»"
+EFFORT_PARAMS = ("reasoning_effort", "reasoning")   # имена параметра уровня в теле запроса (effort_params)
 
 log = logging.getLogger("studio")
 router = APIRouter(prefix="/api/connections")
@@ -224,7 +225,7 @@ def refusal(text: str, params: dict) -> "str | None":
     lowered = text.lower()
     if not any(marker in lowered for marker in REJECTED):
         return None
-    return next((EFFORT_REFUSED if name in ("reasoning_effort", "reasoning") else REFUSED.format(name)
+    return next((EFFORT_REFUSED if name in EFFORT_PARAMS else REFUSED.format(name)
                  for name in params if name in lowered), None)
 
 
