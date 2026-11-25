@@ -270,6 +270,59 @@ def test_uncertain_message_returns_to_the_draft_with_its_receipt(browser, live):
     assert not problems(r), problems(r)
 
 
+def test_receipt_draft_queued_again_is_not_sent_twice(browser, live):       # Review Focus 4
+    """Сервер принял сообщение очереди, но страница ответа не получила и закрылась: черновик с квитанцией. После
+    перезагрузки ответ на него ещё идёт — Enter ставит текст в очередь с тем же `request_id`, и после ответа второго
+    хода нет."""
+    import state
+    live.add_user("queue-twice")
+    before = len(live.gw.chat_requests)
+    released = lambda word: state.DB.execute("SELECT 1 FROM chats WHERE title = ?", (word,)).fetchone() is not None  # noqa: E731
+    live.gw.chat_hold = lambda: (not released("go-twice-1")
+                                 or ("Второй" in json.dumps(live.gw.chat_requests[-1], ensure_ascii=False)
+                                     and not released("go-twice-2")))
+    # POST «Второй» доходит до сервера, но страница видит обрыв; квитанции до закрытия страницы не узнать
+    cut = """(() => { const real = window.fetch; let once = true;
+      window.fetch = async (url, opts) => {
+        const path = String(url);
+        if (/\\/turns\\/[^/]+$/.test(path)) throw new TypeError('Failed to fetch');
+        if (once && opts?.method === 'POST' && /\\/turns$/.test(path) && String(opts.body).includes('"Второй"')) {
+          once = false; window.cutId = JSON.parse(opts.body).request_id;
+          const r = await real(url, opts); r.body?.cancel(); window.cut = true; throw new TypeError('Failed to fetch');
+        }
+        return real(url, opts); };
+      return true; })()"""
+    stored = f"JSON.parse(sessionStorage.getItem('studio-chat-drafts') || 'null')?.items?.[{CHAT}]"
+    resume = "[...document.querySelectorAll('#code-queue > button')].find(b => b.textContent === 'Продолжить очередь')"
+    saved = f"""(async () => (await {API}.api('GET', '/api/chats/' + {CHAT})).messages
+      .filter(m => m.role === 'user').map(m => m.content))()"""
+    try:
+        r = browser.drive(live.url + "/", [*start("queue-twice"),
+            ("eval", "cut", cut),
+            ("type", "#chat-input", "Первый"), ("press", "Enter"), ("wait", RUNNING),
+            ("type", "#chat-input", "Второй"), ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            release("go-twice-1"),
+            ("wait", f"window.cut && {resume}"),
+            ("eval", "hide", "window.dispatchEvent(new Event('pagehide')); true"),
+            ("eval", "draft", f"[{stored}?.text, {stored}?.receipt === window.cutId]"),
+            ("eval", "reload", "location.reload()"),
+            ("wait", f"performance.getEntriesByType('navigation')[0].type === 'reload' && {READY}"
+                     f" && {USERS}.length === 2 && {FIELD} === 'Второй' && {RUNNING}"),
+            ("press", "Enter"), ("wait", f"{QUEUED}.length === 1"),
+            release("go-twice-2"),
+            ("wait", f"{QUEUED}.length === 0 && {ANSWERED}"),
+            pause(1500),
+            ("eval", "users", USERS), ("eval", "saved", saved)])
+    finally:
+        live.gw.chat_hold = False
+    assert not r.get("failed"), r
+    v = r["values"]
+    assert v["draft"] == ["Второй", True]
+    assert v["users"] == ["Первый", "Второй"] and v["saved"] == ["Первый", "Второй"]
+    assert len(live.gw.chat_requests) == before + 2
+    assert not known_refusals(problems(r), 409), problems(r)
+
+
 def test_queue_waits_for_the_pending_card(browser, live):                  # Review Focus 4: ждущая карточка
     live.add_user("queue-card")
     before = len(live.gw.chat_requests)

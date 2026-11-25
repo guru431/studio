@@ -133,11 +133,13 @@ export function chatQueue(host, { send, failed }) {
   }
 
   return {
-    /** Текст в очередь диалога `id`; false — очередь полна. */
-    add(id, text) {
+    /** Текст в очередь диалога `id`; false — очередь полна. `receipt` — квитанция черновика (chat-drafts.js): ушло ли
+     * это сообщение — неизвестно, оно встаёт с тем же id (`request_id`) и отметкой `uncertain` — сервер не задвоит. */
+    add(id, text, receipt = null) {
       const entry = entryOf(id);
       if (entry.items.length >= QUEUE_MAX) return false;
-      entry.items.push({ id: crypto.randomUUID(), text, version: 1, sending: false });
+      const known = !!receipt && !entry.items.some((item) => item.id === receipt);
+      entry.items.push({ id: known ? receipt : crypto.randomUUID(), text, version: 1, sending: false, uncertain: known });
       if (id === shown) paint();
       return true;
     },

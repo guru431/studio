@@ -1423,7 +1423,8 @@ function build(view, ctx) {
       notice.textContent = tr("В очередь встаёт только текст — вложения отправьте после ответа");
       return;
     }
-    if (!queue.add(chatId, text)) {
+    // текст черновика с квитанцией (ушло ли — неизвестно) встаёт в очередь с тем же `request_id`
+    if (!queue.add(chatId, text, dialogDrafts.receipt(chatId, text))) {
       notice.textContent = tr("В очереди не больше {0} сообщений", QUEUE_MAX);
       return;
     }
