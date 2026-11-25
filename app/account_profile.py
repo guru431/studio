@@ -150,7 +150,7 @@ def _me(request: Request) -> dict:
             "exa_key": bool(row["exa_key"]), "pin": bool(row["pin"]), "code_defaults": json.loads(row["code_defaults"]),
             "code_quick_actions": code_actions.for_account(row["code_quick_actions"]) if quick is None else quick,
             "code_quick_actions_default": row["code_quick_actions"] is None if quick is None else False,
-            "code_quick_actions_set": code_actions.DEFAULTS,     # «Добавить из набора» редактора
+            "code_quick_actions_set": code_actions.DEFAULTS,     # «Добавить из набора» страницы прежней выкладки
             "screen_lock_sections": json.loads(row["screen_lock_sections"]),
             "screen_lock_timeout": row["screen_lock_timeout"], "computer_pin_timeout": row["computer_pin_timeout"],
             # когда пароль сбросил администратор (до «Понятно» или аварийного выхода, account.py), иначе null

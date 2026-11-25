@@ -141,7 +141,8 @@ def test_create_replace_reorder_delete_and_limits(studio):
     uid = make_user(studio, "owner"); signin(studio, "owner")
     for body in ({**BASE, "name": "x" * 81}, {**BASE, "name": "две\nстроки"}, {**BASE, "description": "d" * 201},
                  {**BASE, "description": "две\nстроки"}, {**BASE, "text": "t" * 100_001}, {**BASE, "name": ""},
-                 {**BASE, "name": "   "}, {**BASE, "text": ""}, {**BASE, "text": "nul\x00"}, {**BASE, "scope": "all"},
+                 {**BASE, "name": "   "}, {**BASE, "text": ""}, {**BASE, "text": " \n "}, {**BASE, "text": "nul\x00"},
+                 {**BASE, "scope": "all"},
                  {**BASE, "extra": 1}, {"name": "x", "text": "t"}, {**BASE, "quick": "maybe"}):
         r = studio.c.post("/api/skills", json=body)
         assert r.status_code == 422 and r.json()["detail"]["code"] == "input", body
@@ -152,10 +153,11 @@ def test_create_replace_reorder_delete_and_limits(studio):
     created = big.json()
     assert created["quick"] is True and created["parts"] is True and created["origin"] is None
     assert len(created["text"]) == 100_000
-    # PUT — навык целиком: неприсланные поля — умолчания
-    put = studio.c.put(f"/api/skills/{created['id']}", json={"name": "Новое", "text": "новый текст", "scope": "chat"})
+    # PUT — навык целиком: неприсланные поля — умолчания; текст — как введён (быстрое действие уходит слово в слово)
+    exact = "  новый текст\n\n"
+    put = studio.c.put(f"/api/skills/{created['id']}", json={"name": " Новое ", "text": exact, "scope": "chat"})
     assert put.status_code == 200
-    assert put.json() == {"id": created["id"], "name": "Новое", "description": "", "text": "новый текст", "scope": "chat",
+    assert put.json() == {"id": created["id"], "name": "Новое", "description": "", "text": exact, "scope": "chat",
                           "quick": False, "parts": False, "origin": None}
     bad = studio.c.put(f"/api/skills/{created['id']}", json={"name": "Без текста", "scope": "chat"})
     assert bad.status_code == 422 and bad.json()["detail"]["code"] == "input"

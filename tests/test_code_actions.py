@@ -1,7 +1,9 @@
-"""Набор быстрых действий «Агентов» виден и при своём списке учётки («Добавить из набора»)."""
+"""Набор быстрых действий «Агентов» виден и при своём списке учётки (`code_quick_actions_set` для страницы прежней
+выкладки); подписи набора совпадают с английскими навыками."""
 from pathlib import Path
 
 import code_actions
+import skills
 from conftest import make_user, signin
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,9 +31,11 @@ def test_the_set_is_on_the_page_with_a_custom_list(studio):
     assert answer["code_quick_actions"] == saved and answer["code_quick_actions_set"] == code_actions.DEFAULTS
 
 
-def test_set_titles_and_editor_words_have_english():
+def test_set_titles_have_english_matching_the_english_skills():
+    """Кнопки пустого чата переводят заголовки набора (`tr`), а английский посев — навыки `skills.BUILTIN["en"]`:
+    подпись одна и та же. Прежний редактор быстрых действий заменён «Настройками → Навыками»."""
     en = (ROOT / "app" / "static" / "en.js").read_text(encoding="utf-8")
-    for words in [a["title"] for a in code_actions.DEFAULTS] + ["Добавить из набора"]:
-        assert f'"{words}":' in en, words
-    editor = (ROOT / "app" / "static" / "js" / "code-quick-actions.js").read_text(encoding="utf-8")
-    assert "code_quick_actions_set" in editor and 'tr("Добавить из набора")' in editor
+    english = {b.key: b.name for b in skills.BUILTIN["en"]}
+    for key, action in zip(skills.QUICK_KEYS, code_actions.DEFAULTS):
+        assert f'"{action["title"]}": "{english[key]}",' in en, action["title"]
+    assert not (ROOT / "app" / "static" / "js" / "code-quick-actions.js").exists()

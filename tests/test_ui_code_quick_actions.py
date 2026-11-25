@@ -1,13 +1,29 @@
-"""Быстрые действия нового чата и расположение панели задания."""
-import json
-
+"""Быстрые действия нового чата и расположение панели задания. Быстрые действия — навыки с отметкой «Кнопкой в
+пустом чате» («Настройки → Навыки», skills.js)."""
 import pytest
 
 import code_actions
-from test_ui_browser import (API, CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine,
-                             code_online, code_session, code_tab_click, go, known_refusals, live, problems, set_value, signin)
+from test_ui_browser import (API, CODE_CHAT_A, CODE_CHAT_B, READY, browser, code_chat, code_free_machine,  # noqa: F401
+                             code_online, code_session, code_tab_click, go, is_open, known_refusals, live, problems,
+                             set_value, signin)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+
+SKILLS = "[...document.querySelectorAll('#skills-settings .skill-item-name')].map(e => e.textContent)"
+
+
+def _item(name: str) -> str:
+    return (f"[...document.querySelectorAll('#skills-settings .skill-item')]"
+            f".find(e => e.querySelector('.skill-item-name').textContent === {name!r})")
+
+
+def edit(name: str) -> list:
+    return [("eval", "edit", f"{_item(name)}.querySelector('.skill-edit').click()"), ("wait", is_open("#skill-dialog"))]
+
+
+def remove(name: str) -> list:
+    return [("eval", "remove", f"{_item(name)}.querySelector('.skill-delete').click()"), ("wait", is_open("#skill-remove")),
+            ("click", "#skill-remove-confirm"), ("wait", f"!{is_open('#skill-remove')} && !{_item(name)}")]
 
 
 @pytest.mark.parametrize("width", [320, 1280])
@@ -74,26 +90,23 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
     machine.script = [{"k": "text", "text": "Выполняю"}]
     aid, server = code_online(live, login, machine)
     prompt = "  Точный текст.\n\nБез сокращений и правок.  "
+    title = "Моё действие " + "с длинным названием " * 3
     try:
-        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/code"),
-            ("wait", f"document.querySelectorAll('.code-quick-action-row').length === {len(code_actions.DEFAULTS)}"),
-            ("eval", "defaults", "[...document.querySelectorAll('.code-quick-action-row textarea')].map(n=>n.value)"),
-            set_value(".code-quick-action-row input", "Моё действие " + "с длинным названием " * 3),
-            set_value(".code-quick-action-row textarea", prompt),
-            ("click", ".code-quick-action-row:nth-child(3) [aria-label='Удалить действие']"),
-            ("click", "#code-quick-actions-add"),
-            set_value(".code-quick-action-row:last-child input", "Добавленное действие"),
-            set_value(".code-quick-action-row:last-child textarea", "Добавленный текст"),
-            ("click", "#code-quick-actions-save"),
-            ("wait", "document.querySelector('#code-quick-actions-status').textContent.includes('сохранены')"),
-            ("eval", "reload", "location.reload(); true"), ("wait", READY),
-            ("wait", "document.querySelector('.code-quick-action-row textarea')?.value === " + json.dumps(prompt)),
-            # «Добавить из набора» — только действия набора, чьего текста в списке нет (первое изменено, третье удалено)
-            ("click", "#code-quick-actions-preset"),
-            ("wait", "!!document.querySelector('#code-quick-actions-preset-menu:popover-open')"),
-            ("eval", "preset", "[...document.querySelectorAll('#code-quick-actions-preset-menu [role=menuitem]')].map(n=>n.textContent)"),
-            ("click", "#code-quick-actions-preset-menu [role=menuitem]"),
-            ("eval", "presetAdded", "document.querySelector('.code-quick-action-row:last-child textarea').value"),
+        # быстрые действия — навыки с отметкой «Кнопкой в пустом чате» на странице «Настройки → Навыки»
+        result = browser.drive(live.url + "/", [*signin(login), ("wait", READY), *go("settings/skills"),
+            ("wait", f"{SKILLS}.length === 9"),
+            ("eval", "defaults", f"(async () => (await {API}.api('GET','/api/me')).code_quick_actions.map(a => a.text))()"),
+            *edit(code_actions.DEFAULTS[0]["title"]), set_value("#skill-name", title), set_value("#skill-text", prompt),
+            ("click", "#skill-save"), ("wait", f"!{is_open('#skill-dialog')} && {SKILLS}[4] === {title.strip()!r}"),
+            *remove(code_actions.DEFAULTS[2]["title"]),
+            ("click", "#skills-settings-add"), ("wait", is_open("#skill-dialog")),
+            set_value("#skill-name", "Добавленное действие"), set_value("#skill-text", "Добавленный текст"),
+            set_value("#skill-scope", "agents"), ("click", "#skill-quick"), ("click", "#skill-save"),
+            ("wait", f"!{is_open('#skill-dialog')} && {SKILLS}.at(-1) === 'Добавленное действие'"),
+            ("eval", "reload", "location.reload(); true"), ("wait", READY), ("wait", f"{SKILLS}.length === 9"),
+            ("eval", "kept", f"""(async () => {{ const m = {API};
+              const skill = (await m.api('GET', '/api/skills?scope=agents')).items.find(s => s.name === {title.strip()!r});
+              return (await m.api('GET', '/api/skills/' + skill.id)).text; }})()"""),
             *code_chat(aid, CODE_CHAT_A), ("wait", "!document.querySelector('#code-quick-actions').hidden"),
             ("eval", "titles", """[...document.querySelectorAll('.code-quick-action')].every(b => {
               const s=getComputedStyle(b); return s.whiteSpace==='nowrap' && b.getBoundingClientRect().right <= innerWidth;
@@ -111,8 +124,7 @@ def test_quick_actions_settings_and_exact_first_message(browser, live, width, tm
     assert not result.get("failed"), result
     values = result["values"]
     assert values["defaults"] == [a["text"] for a in code_actions.DEFAULTS]
-    assert values["preset"] == [code_actions.DEFAULTS[0]["title"], code_actions.DEFAULTS[2]["title"]]
-    assert values["presetAdded"] == code_actions.DEFAULTS[0]["text"]
+    assert values["kept"] == prompt
     assert values["titles"] and values["hidden"] and values["stillHidden"]
     assert values["stored"][0]["text"] == prompt and values["stored"][-1]["text"] == "Добавленный текст"
     turns = [r for r in machine.requests if r["op"] == "turn"]
@@ -153,11 +165,9 @@ def test_quick_action_keeps_the_typed_draft_and_can_be_retried(browser, live):
             ("wait", "document.querySelector('#code-chat').dataset.running === '0' && document.querySelector('.code-msg.assistant .md')?.textContent.includes('Готово')"),
             ("eval", "hidden", "document.querySelector('#code-quick-actions').hidden"),
             ("eval", "kept", "document.querySelector('#code-text').value"),
-            *go("settings/code"),
-            ("wait", f"document.querySelectorAll('.code-quick-action-row').length === {len(code_actions.DEFAULTS)}"),
-            *[("click", ".code-quick-action-row [aria-label='Удалить действие']")] * len(code_actions.DEFAULTS),
-            ("click", "#code-quick-actions-save"),
-            ("wait", "document.querySelector('#code-quick-actions-status').textContent.includes('сохранены')"),
+            *go("settings/skills"), ("wait", f"{SKILLS}.length === 9"),
+            *[step for action in code_actions.DEFAULTS for step in remove(action["title"])],
+            ("wait", f"{SKILLS}.length === 6"),
             *go("code"), ("click", "#code-tab-add"), ("wait", "!!document.querySelector('#code-new-chat')"),
             ("click", "#code-new-chat"), ("wait", "document.querySelector('#code-chat')?.dataset.loaded === '1'"),
             ("eval", "disabled", "document.querySelector('#code-quick-actions').hidden && document.querySelectorAll('.code-quick-action').length===0")])

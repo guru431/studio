@@ -755,7 +755,8 @@ def test_settings_menu_and_old_profile_route(browser, live, width):
     assert v["studioVersion"] == f"Studio {release.VERSION}"
     assert v["nav"] == [["chat", "Чат"], ["photo", "Фото"], ["video", "Видео"], ["speech", "Озвучка"],
                         ["transcribe", "Расшифровка"], ["ocr", "Сканы"], ["translate", "Перевод"], ["code", "Агенты"],
-                        ["cleaner", "Очистка данных · Cleaner"], ["appearance", "Оформление"], ["security", "Защита"],
+                        ["cleaner", "Очистка данных · Cleaner"], ["appearance", "Оформление"], ["skills", "Навыки"],
+                        ["security", "Защита"],
                         ["notifications", "Уведомления"], ["data", "Данные"], ["input", "Ввод и интернет"]]
     assert v["records"] == "Расшифровка" and v["scans"] == "Сканы"
     assert v["code"] and v["input"] and v["codeFits"] and v["inputFits"] and v["appearanceFits"]

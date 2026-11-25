@@ -8,13 +8,16 @@ import pytest
 
 from browser import run_playwright
 
-import code_actions
 import db
+import skills
 
 from test_ui_browser import (CLICKS, CODE_CHAT_A, READY, add_gateway, browser, code_chat, code_free_machine,
                              code_online, code_session, go, live, problems, put_audio, set_value, signin, wav_of)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+
+SKILL_ITEMS = "[...document.querySelectorAll('#skills-settings .skill-item')]"
+SKILL_NAMES = f"{SKILL_ITEMS}.map(e => e.querySelector('.skill-item-name').textContent)"
 
 
 @pytest.mark.parametrize('width', [320, 1280])
@@ -179,9 +182,13 @@ def test_english_default_action_labels_keep_prompts_and_custom_titles(browser, l
         result = browser.drive(live.url + '/', [*signin(login), ('wait', READY), *code_chat(aid, CODE_CHAT_A),
             ('wait', "!document.querySelector('#code-quick-actions').hidden"),
             ('eval', 'defaults', "[...document.querySelectorAll('.code-quick-action')].map(b=>b.textContent)"),
-            *go('settings/code'), ('wait', "document.querySelector('.code-quick-action-row input')"),
-            set_value('.code-quick-action-row input', 'Чат'), ('click', '#code-quick-actions-save'),
-            ('wait', "document.querySelector('#code-quick-actions-status').textContent === 'Quick actions saved'"),
+            # «Settings → Skills» засевает библиотеку на английском; имя первого быстрого навыка — своё
+            *go('settings/skills'), ('wait', f"{SKILL_NAMES}.length === 9"),
+            ('eval', 'edit', f"{SKILL_ITEMS}.find(e => e.querySelector('.skill-item-name').textContent === "
+                             "'Resolve issues and ideas').querySelector('.skill-edit').click()"),
+            ('wait', "!!document.querySelector('#skill-dialog')?.open"),
+            set_value('#skill-name', 'Чат'), ('click', '#skill-save'),
+            ('wait', f"!document.querySelector('#skill-dialog') && {SKILL_NAMES}.includes('Чат')"),
             *code_chat(aid, CODE_CHAT_A), ('wait', "!document.querySelector('#code-quick-actions').hidden"),
             ('eval', 'custom', "document.querySelector('.code-quick-action').textContent"),
             ('eval', 'visualization', """(async () => {
@@ -200,5 +207,5 @@ def test_english_default_action_labels_keep_prompts_and_custom_titles(browser, l
     assert result['values']['defaults'] == ['Resolve issues and ideas', 'Deep project audit', 'Independent critics']
     assert result['values']['custom'] == 'Чат'
     assert result['values']['visualization'] == ['Open visualization', 'Visualization']
-    assert result['values']['texts'] == [action['text'] for action in code_actions.DEFAULTS]
+    assert result['values']['texts'] == [skill.text for skill in skills.BUILTIN['en'] if skill.quick]
     assert not problems(result), problems(result)

@@ -11,6 +11,7 @@ import { accessPicker, chatMcpBlock } from './mcp-settings.js';
 import { knowledgeAdminBlock } from './knowledge.js';
 import { ldapSettings } from './ldap-settings.js';
 import { roleDefaultsBlock } from './roles.js';
+import { skillDefaultsBlock } from './skills.js';
 import { NAMES } from './sections-meta.js';
 import { dateTime } from './time.js';
 import { momentText, queueText, settingsView, sizeText } from './settings.js';
@@ -974,7 +975,7 @@ export function mount(view, ctx) {
   root.append(invitations.el);
   if (!me.ldap) root.append(ldapSettings(users.reload));
   root.append(users.el, allow.el, cleaner.el, groups.el, sharedModelsBlock(root), chatSettings.el,
-    chatMcpBlock({ admin: true }), knowledgeAdminBlock(root), roleDefaultsBlock(), storage.el);
+    chatMcpBlock({ admin: true }), knowledgeAdminBlock(root), roleDefaultsBlock(), skillDefaultsBlock(), storage.el);
   view.append(el('header', { class: 'head' }, el('h1', {}, NAMES.admin)), root);
   users.reload();
   groups.reload();

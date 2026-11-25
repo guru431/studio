@@ -239,12 +239,18 @@ def _clean(text: str) -> str:
     return text
 
 
+def _text(text: str) -> str:
+    """Текст — как введён (быстрое действие уходит в чат слово в слово), но не пустой."""
+    if not text.strip():
+        raise ValueError("blank")
+    return _clean(text)
+
+
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=NAME_MAX, pattern=r"^[^\r\n]*$"),
                  AfterValidator(_clean)]
 Description = Annotated[str, StringConstraints(strip_whitespace=True, max_length=DESCRIPTION_MAX, pattern=r"^[^\r\n]*$"),
                         AfterValidator(_clean)]
-Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TEXT_MAX),
-                 AfterValidator(_clean)]
+Text = Annotated[str, StringConstraints(min_length=1, max_length=TEXT_MAX), AfterValidator(_text)]
 
 
 class SkillIn(BaseModel):

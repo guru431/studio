@@ -1454,6 +1454,14 @@ label.chip { cursor: pointer; }
   overflow-wrap: anywhere; }
 #role-dialog { width: min(640px, calc(100 * var(--vw) - 32px)); }
 #role-dialog .role-count { margin-top: calc(-1 * var(--space-4)); text-align: end; }
+/* «Настройки → Навыки» и умолчания навыков (skills.js) */
+.skill-list { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.skill-item { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3) var(--space-5);
+  padding-bottom: var(--space-4); border-bottom: 1px solid var(--line); min-width: 0; }
+.skill-item-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.skill-item-description, .skill-item-meta { margin: var(--space-2) 0 0; }
+#skill-dialog { width: min(640px, calc(100 * var(--vw) - 32px)); }
+#skill-dialog .skill-count { margin-top: calc(-1 * var(--space-4)); text-align: end; }
 /* MCP диалога (chat-mcp.js) и политика инструментов общего MCP (mcp-settings.js) */
 #chat-mcp-dialog { width: min(640px, calc(100 * var(--vw) - 32px)); }
 .chat-mcp-servers { display: flex; flex-direction: column; }

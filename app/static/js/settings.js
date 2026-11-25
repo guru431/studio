@@ -4,7 +4,7 @@ import { language, locale, message, tr } from './i18n.js';
  * Слева две группы. «Разделы» — в порядке рельса (Чат, Фото, Видео, Озвучка, Расшифровка, Сканы, Перевод, Агенты;
  * «Агенты» — умолчания чатов и компьютеры) и «Очистка данных · Cleaner». «Учётка»: «Оформление» (тема и акцент
  * учётки, шрифт, масштаб, плотность и нижняя панель этого устройства, часовой пояс — appearance.js),
- * «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, доступы и ссылки, аварийный выход и журнал безопасности —
+ * «Навыки» (библиотека навыков учётки и кнопки пустого чата «Агентов» — skills.js), «Защита» (пароль, блокировка и PIN, ключи устройства; сессии, доступы и ссылки, аварийный выход и журнал безопасности —
  * account-security.js), «Уведомления» (push, ntfy), «Данные» (хранилище, выгрузка, удаление истории),
  * «Ввод и интернет» (голосовой ввод, ключ Exa). Прежние адреса (`other` — «Прочее», `dictation`) ведут
  * на новые (OLD_IDS). Справа — выбранный раздел: его
@@ -37,7 +37,6 @@ import { accountLookBlock, deviceLookBlock } from './appearance.js';
 import { openMobileNavigationEditor } from './mobile-navigation.js';
 import { DEFAULT_TIMEZONE, dateOnly, dateTime } from './time.js';
 import { ACCESS, ENGINE_NAMES, accessLabel, effortLabel, engineOrder } from './code-options.js';
-import { quickActionsBlock } from './code-quick-actions.js';
 import { mirrorsBlock } from './mirror-list.js';
 import { ntfyBlock } from './ntfy-settings.js';
 import { notifyPrefsBlock } from './notify-prefs.js';
@@ -55,6 +54,7 @@ import { modelLabel } from './models.js';
 import { deviceZone, offsetOf } from './timezone-offer.js';
 import { chatMcpBlock, agentMcpBlock } from './mcp-settings.js';
 import { rolesBlock } from './roles.js';
+import { skillsBlock } from './skills.js';
 import { knowledgeBlock } from './knowledge.js';
 import { glossaryBlock } from './translate-glossary.js';
 import { smtpSettings } from './smtp-settings.js';
@@ -1462,14 +1462,14 @@ function voicesBlock(host) {
 /** Разделы — в порядке рельса; «Учётка» — личные группы. Прежние адреса — на новые места. */
 // порядок рельса — из реестра разделов; без страницы настроек (`settings: false`: учётки «Open WebUI» — в самом разделе)
 const RAIL_ORDER = RAIL_SECTIONS.filter((s) => s.settings !== false).map((s) => s.id);
-const ACCOUNT_IDS = ['appearance', 'security', 'notifications', 'data', 'input'];
+const ACCOUNT_IDS = ['appearance', 'skills', 'security', 'notifications', 'data', 'input'];
 const OLD_IDS = { other: 'security', dictation: 'input' };
-const PERSONAL = new Set(['code', 'appearance', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
+const PERSONAL = new Set(['code', 'appearance', 'skills', 'security', 'notifications', 'data', 'smtp']);   // ответ разделов их не перерисовывает
 
 export function settingsView(host, { sections: base, connections: connBase, section = null, hash = false,
   other = false, direct = false, voices = false, onChange = null, shared = false, access = null, profiles = false }) {
   const names = { ...SECTION_NAMES, cleaner: tr("Очистка данных · Cleaner"), code: NAMES.code, appearance: tr("Оформление"),
-    security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
+    skills: tr("Навыки"), security: tr("Защита"), notifications: tr("Уведомления"), data: tr("Данные"), smtp: 'SMTP', input: other ? tr("Ввод и интернет") : tr("Голосовой ввод") };
   // панель администратора (other = false): разделы без «Агентов» и Cleaner, из «Учётки» — только голосовой ввод
   const sectionIds = [...RAIL_ORDER.filter((id) => other || id !== 'code'), ...(other ? ['cleaner'] : [])];
   const accountIds = other ? [...ACCOUNT_IDS, ...(me?.is_admin ? ['smtp'] : [])] : ['input'];
@@ -1849,7 +1849,7 @@ export function settingsView(host, { sections: base, connections: connBase, sect
       let pendingAgents = null;
       const agents = () => pendingAgents ||= api('GET', '/api/agents').finally(() => { pendingAgents = null; });
       panel.replaceChildren(back, el('div', { class: 'section-panel', 'data-section': 'code' },
-        codeDefaultsBlock(agents), quickActionsBlock(), agentMcpBlock(agents), computerPinBlock(), agentsBlock(host, agents),
+        codeDefaultsBlock(agents), agentMcpBlock(agents), computerPinBlock(), agentsBlock(host, agents),
         mirrorsBlock(host)));
       return;
     }
@@ -1865,6 +1865,10 @@ export function settingsView(host, { sections: base, connections: connBase, sect
     }
     if (shown === 'appearance') {
       group('appearance', accountNameBlock(), accountLookBlock(), deviceLookBlock(), mobileNavBlock(), timezoneBlock(() => {}));
+      return;
+    }
+    if (shown === 'skills') {
+      group('skills', skillsBlock({ changed: () => loadMe().catch(() => null) }));
       return;
     }
     if (shown === 'security') {
