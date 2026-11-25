@@ -89,8 +89,9 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
         ('type', '#photo-prompt', 'A photo via MCP'), choose('image_generate'),
         ('click', '#chip-size'), ('click', '#chip-size-menu [data-value=square]'),
         ('click', '#photo-go'),
-        # снимок MCP сохраняется в историю и встаёт в ленту «Фото», а не под форму
-        ('wait', "document.querySelector('#photo-feed .photo-card[data-state=done] img')?.naturalWidth > 0"),
+        # снимок MCP сохраняется в историю и встаёт в ленту «Фото», а не под форму; миниатюра (media.THUMB_SIDE)
+        # не увеличивает: у снимка 64 px шириной та же ширина, что у исходника
+        ('wait', "document.querySelector('#photo-feed .photo-card[data-state=done] img')?.naturalWidth === 64"),
         ('eval', 'photoFits', NO_OVERFLOW),
         ('eval', 'video', "location.hash='#/video'"), ('wait', tool_ready('video_estimate')), choose('video_estimate'),
         put_files('#video-file', [("source.png", PNG_REAL)]),
