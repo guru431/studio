@@ -62,9 +62,14 @@ class BackgroundClient(FakeClient):
         self.results = asyncio.Queue()
         self.stopped_tasks = []
 
-    async def query(self, value):
-        await super().query(value)
+    async def query(self, value, **kwargs):
+        await super().query(value, **kwargs)
         self.queried.put_nowait(value)
+
+    def replay(self, index):
+        """Повтор ввода, как у CLI с `--replay-user-messages`: ввод поглощён ответом."""
+        value = self.queries[index]
+        return UserMessage(content=value if isinstance(value, str) else "images", uuid=self.uuids[index])
 
     async def receive_response(self):
         while True:
@@ -189,6 +194,68 @@ async def test_cli_idle_sends_queued_input_after_consuming_a_notification(backgr
     await turn.task
     assert sent[-1]["e"]["status"] == "done"
     assert any(f["e"] == {"k": "followup_sent", "id": queued["id"]} for f in sent)
+
+
+async def drain(client):
+    """Цикл хода прочитал всё, что выдал CLI."""
+    while not client.items.empty():
+        await asyncio.sleep(0)
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize("notification", [False, True])
+async def test_input_absorbed_by_the_running_response_finishes_on_idle(background, notification):
+    """Случай 25.11: уточнение, отправленное во время ответа, CLI поглощает тем же ответом (queued_command) — один
+    ResultMessage на оба ввода, затем idle. Ход кончается одним `done`, а не висит «Думает…» с `pending` 1."""
+    runner, client, turn, sent = background
+    client.items.put_nowait(client.replay(0))
+    client.items.put_nowait(assistant(tool_use("run", "Bash", {"command": "build"})))
+    if notification:
+        client.items.put_nowait(lifecycle("task_started", "helper", task_type="local_agent", description="Помощник"))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    client.items.put_nowait(user(tool_result("run", "ok")))
+    client.items.put_nowait(client.replay(1))
+    client.items.put_nowait(assistant(text("Ответ на оба")))
+    client.items.put_nowait(result(result="готово"))
+    if notification:
+        client.items.put_nowait(lifecycle("task_notification", "helper", status="completed", output_file="private",
+                                          summary="finished"))
+        client.items.put_nowait(UserMessage(content="notification", origin={"kind": "task-notification"}))
+        client.items.put_nowait(assistant(text("Итог помощника")))
+        client.items.put_nowait(result(result="готово", origin={"kind": "task-notification"}))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await drain(client)
+    assert turn.finishing, ("ход висит", turn.pending, turn.background_tasks, turn.cli_state)
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert CHAT not in runner.live() and runner.activity() == []
+    assert client.disconnected and turn.pending == 0
+    assert not turn.background_notices and not turn.background_reply
+    assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
+    # Подтверждение поглощения — повтор ввода с его uuid: CLI шлёт его только с этим флагом.
+    assert "replay-user-messages" in client.options.extra_args and all(client.uuids)
+
+
+async def test_idle_before_the_cli_reads_new_input_keeps_the_turn(background):
+    """CLI отвечает idle раньше, чем прочитал уточнение из stdin (проверено на 2.1.330): ход ждёт его ответа."""
+    runner, client, turn, sent = background
+    client.items.put_nowait(client.replay(0))
+    await runner.steer(PID, CHAT, "Уточнение", [])
+    assert await client.queried.get() == "Уточнение"
+    client.items.put_nowait(assistant(text("Первый ответ")))
+    client.items.put_nowait(result(result="готово"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await drain(client)
+    assert CHAT in runner.live() and not turn.finishing and not client.disconnected
+    client.items.put_nowait(lifecycle("session_state_changed", state="running"))
+    client.items.put_nowait(client.replay(1))
+    client.items.put_nowait(assistant(text("Ответ на уточнение")))
+    client.items.put_nowait(result(result="готово"))
+    client.items.put_nowait(lifecycle("session_state_changed", state="idle"))
+    await asyncio.wait_for(asyncio.shield(turn.task), 0.5)
+    assert [f["e"]["status"] for f in sent if f["e"]["k"] == "done"] == ["done"]
+    assert any(f["e"].get("text") == "Ответ на уточнение" for f in sent)
 
 
 async def test_batched_background_replies_preserve_later_notices_and_explicit_input(background):

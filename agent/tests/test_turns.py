@@ -84,7 +84,7 @@ async def test_turn_streams_text_steps_and_ends_done(home, project, monkeypatch)
                         "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"} and opts.stderr is not None
     assert opts.system_prompt == {"type": "preset", "preset": "claude_code"}
     assert opts.permission_mode is None and opts.can_use_tool is not None
-    assert opts.extra_args == {"chrome": None} and opts.tools is None and opts.disallowed_tools == []
+    assert opts.extra_args == {"chrome": None, "replay-user-messages": None} and opts.tools is None and opts.disallowed_tools == []
     hook = opts.hooks["PreToolUse"][0]
     assert hook.matcher is None and await hook.hooks[0]({}, None, {}) == {"continue_": True}
     assert f.clients[0].queries == ["Привет"] and f.clients[0].disconnected

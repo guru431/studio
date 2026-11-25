@@ -88,7 +88,7 @@ async def test_claude_followup_keeps_the_client_until_both_results(home, project
         async def disconnect(self):
             pass
 
-        async def query(self, value):
+        async def query(self, value, **_):
             self.prompts.append(value)
             self.first.set()
 

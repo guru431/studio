@@ -67,6 +67,7 @@ class FakeClient:
         self.fail = fail
         self.decisions = []
         self.queries = []
+        self.uuids = []  # uuid ввода: CLI с `--replay-user-messages` повторяет его, когда ввод поглощён
         self.connected = self.interrupted = self.disconnected = False
         self._wake = asyncio.Event()
         self._asks = itertools.count(1)
@@ -76,8 +77,9 @@ class FakeClient:
             raise self.fail
         self.connected = True
 
-    async def query(self, prompt):
+    async def query(self, prompt, *, uuid=None):
         self.queries.append(prompt if isinstance(prompt, str) else [m async for m in prompt])
+        self.uuids.append(uuid)
 
     async def receive_response(self):
         for item in self._messages:

@@ -11,6 +11,7 @@ import logging
 import re
 import secrets
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,7 +69,7 @@ def options_for(project: Path, cli_path: Path | None, chat: str, new: bool, mode
         hooks=hooks, mcp_servers=mcp_servers or {}, strict_mcp_config=strict_mcp,
         setting_sources=list(cli.SETTINGS), settings=settings, system_prompt=cli.coding_prompt(limits),
         env={**limits, **cli.ENV, "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"},
-        stderr=cli._drop, extra_args={"chrome": None})
+        stderr=cli._drop, extra_args={"chrome": None, "replay-user-messages": None})
 
 
 def _words(errors: list | None, result: str | None, subtype: str | None) -> str:
@@ -124,6 +125,7 @@ class _Turn:
     background_notices: set[str] = field(default_factory=set)  # завершились; CLI ещё должен обработать уведомления
     background_reply: set[str] = field(default_factory=set)  # уведомления текущего автоматического ответа
     cli_state: str | None = None  # подтверждённое состояние CLI; idle завершает уже поглощённые уведомления
+    unread: set[str] = field(default_factory=set)  # uuid ввода, который CLI ещё не повторил (не принял в работу)
     opencode_options: dict = field(default_factory=dict)
     opencode_children: dict = field(default_factory=dict)
     mcp_config: object | None = None
@@ -326,9 +328,22 @@ class Runner:
             return {"items": current, "paused": t.queue_paused}
 
     async def _steer_input(self, t, text, images, message_id):
-        await t.client.query(image_input.prompt(text, images) if images else text)
+        await self._query(t, text, images)
         t.pending += 1
         return "steer"
+
+    @staticmethod
+    async def _query(t, text, images):
+        """Ввод со своим uuid: CLI повторяет его (`--replay-user-messages`), когда принял в работу. Уточнение во
+        время ответа CLI поглощает тем же ответом — отдельного `ResultMessage` у него нет, ответ на него — idle."""
+        uid = str(uuid.uuid4())
+        t.unread.add(uid)
+        t.cli_state = None  # прежний idle был до этого ввода
+        try:
+            await t.client.query(image_input.prompt(text, images) if images else text, uuid=uid)
+        except BaseException:
+            t.unread.discard(uid)
+            raise
 
     def _accepted(self, t):
         t.accepted = True
@@ -564,7 +579,7 @@ class Runner:
             if not (t.stopped or t.closing):
                 sent = True  # дальше файл сессии может появиться
                 t.start_attempted = True
-                await t.client.query(image_input.prompt(text, images) if images else text)
+                await self._query(t, text, images)
                 self._accepted(t)
                 while t.waiting:
                     received_result = False
@@ -593,6 +608,10 @@ class Runner:
                                     if message.is_error:
                                         failure = _words(message.errors, message.result, message.subtype)
                                         t.pending = 0
+                                if t.cli_state == "idle" and not t.unread:
+                                    # CLI принял весь ввод хода и простаивает: на поглощённое идущим ответом
+                                    # уточнение (queued_command) отдельного ResultMessage не будет.
+                                    t.pending = 0
                                 if t.cli_state == "idle" and not (t.pending or t.background_tasks):
                                     # CLI мог поглотить уведомление текущим ответом без отдельного ResultMessage.
                                     t.background_notices.clear()
@@ -611,6 +630,10 @@ class Runner:
                                 await self._usage(t, model, effort)
                             elif not t.waiting:
                                 break
+                            else:  # только числа: чем ход занят после простоя CLI
+                                log.info("ход %s: CLI ждёт, ход открыт: ввод %d, не принято %d, фоновых %d, "
+                                         "уведомлений %d+%d", t.turn, t.pending, len(t.unread),
+                                         len(t.background_tasks), len(t.background_notices), len(t.background_reply))
                     if failure is not None or t.stopped or t.closing:
                         break
                     if not received_result:
@@ -657,6 +680,9 @@ class Runner:
 
     def _subtask(self, t, message):
         """Штатные lifecycle-события SDK; фоновые Bash-задачи в счётчик агентов не попадают."""
+        if isinstance(message, UserMessage) and message.parent_tool_use_id is None and message.uuid in t.unread:
+            t.unread.discard(message.uuid)  # повтор своего ввода: CLI принял его в работу
+            return
         if isinstance(message, UserMessage) and message.parent_tool_use_id is None and (message.origin or {}).get("kind") == "task-notification":
             # Несколько завершений CLI может объединить в один ввод и один ResultMessage.
             t.background_reply.update(t.background_notices)

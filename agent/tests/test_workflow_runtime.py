@@ -70,13 +70,14 @@ def provider(project):
             shell = 'shell-probe-main' in words
             consumed = 'shell-consumed-probe-main' in words
             monitor = 'monitor-probe-main' in words or 'monitor-finished-probe-main' in words
-            main = shell or consumed or monitor or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
+            steered = 'steer-probe-main' in words
+            main = shell or consumed or monitor or steered or not child and any(t.get('name') == 'Workflow' for t in data.get('tools', []))
             if child:
                 if not release.wait(30):
                     self.send_error(504)
                     return
             elif main:
-                main_calls.append(1)
+                main_calls.append('steer-probe-second' in json.dumps(data.get('messages', [])))
                 if 'monitor-finished-probe-main' in words and len(main_calls) == 2:
                     if not background_finished.wait(10):
                         self.send_error(504)
@@ -89,7 +90,7 @@ def provider(project):
                 name, arguments = 'Read', {'file_path': str(source)}
             elif followup:
                 name, arguments = 'Bash', {'command': 'echo monitor-followup-finished', 'description': 'Inspect monitor result'}
-            elif shell or consumed or monitor:
+            elif shell or consumed or monitor or steered:
                 name = 'Monitor' if monitor else 'Bash'
                 arguments = {'command': f'"{Path(sys.executable).as_posix()}" "{(project / "shell_probe.py").as_posix()}"',
                              'description': 'Studio shell probe'}
@@ -157,7 +158,7 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
             options.env.update(ANTHROPIC_BASE_URL=address, ANTHROPIC_API_KEY='local-test-key',
                                ANTHROPIC_AUTH_TOKEN='', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
                                CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS='0')
-            options.extra_args = {}
+            options.extra_args.pop('chrome', None)
             super().__init__(options=options)
 
         async def receive_response(self):
@@ -211,6 +212,50 @@ async def test_native_background_work_keeps_its_children_alive_after_parent_resu
     finally:
         release.set()
         (project / 'release').touch()
+        if not turn.task.done() and not turn.finishing:
+            turn.task.cancel()
+        await asyncio.gather(turn.task, return_exceptions=True)
+
+
+async def test_native_steer_absorbed_by_the_running_response_finishes_the_turn(home, project, provider, monkeypatch):
+    """Уточнение во время Bash: CLI поглощает его тем же ответом (один ResultMessage на два ввода) — ход кончается
+    одним `done`, а не висит «Думает…» (мост 0.47.1, 25.11)."""
+    address, _release, main_calls, _finished = provider
+    config = home / 'claude'
+    config.mkdir()
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
+    monkeypatch.delenv('CLAUDECODE', raising=False)
+    (project / 'shell_probe.py').write_text('import time\ntime.sleep(3)\nprint("shell finished")\n', encoding='utf-8')
+    sent = []
+    step = asyncio.Event()
+
+    class Client(ClaudeSDKClient):
+        def __init__(self, *, options):
+            options.setting_sources = []
+            options.allowed_tools = ['Bash']
+            options.can_use_tool = None
+            options.env.update(ANTHROPIC_BASE_URL=address, ANTHROPIC_API_KEY='local-test-key',
+                               ANTHROPIC_AUTH_TOKEN='', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1')
+            options.extra_args.pop('chrome', None)
+            super().__init__(options=options)
+
+    def emit(frame):
+        sent.append(frame)
+        if frame['e']['k'] == 'step':
+            step.set()
+
+    cli_path = os.environ.get('STUDIO_TEST_CLAUDE_CLI')
+    runner = Runner(emit, choices=store.Choices(home), cli_path=Path(cli_path) if cli_path else None, factory=Client)
+    runner.start(project, PID, CHAT, 'steer-probe-main', 'claude-sonnet-5-5', None)
+    turn = runner._turns[CHAT]
+    try:
+        await asyncio.wait_for(step.wait(), 20)
+        assert (await runner.steer(PID, CHAT, 'steer-probe-second', []))['mode'] == 'steer'
+        await asyncio.wait_for(asyncio.shield(turn.task), 20)
+        assert main_calls == [False, True]  # уточнение ушло модели в том же ответе, своего ответа у него нет
+        assert [f['e']['status'] for f in sent if f['e']['k'] == 'done'] == ['done']
+        assert CHAT not in runner.live() and not turn.unread
+    finally:
         if not turn.task.done() and not turn.finishing:
             turn.task.cancel()
         await asyncio.gather(turn.task, return_exceptions=True)
