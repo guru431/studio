@@ -18,7 +18,8 @@ MODULES = "(async () => {" + FRAMES + """
   const { el } = await import('/static/js/ui.js');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const out = {};
-  out.quoted = [q.quoted('а\\nб'), q.quoted('я'.repeat(5000)).replace(/^> /, '').replace(/…$/, '').length];
+  const long = q.quoted('я'.repeat(5000)), lines = q.quoted('я\\n'.repeat(3000));   // предел — по отправляемой цитате
+  out.quoted = [q.quoted('а\\nб'), long.length, long.endsWith('…'), lines.length, lines.startsWith('> я\\n> я')];
   const field = el('textarea');
   const form = el('form', {}, el('div', { class: 'field-box' }, field));
   document.body.append(form);
@@ -109,7 +110,7 @@ MODULES = "(async () => {" + FRAMES + """
 @pytest.mark.parametrize("width", [320, 1280])
 def test_quote_chip_folds_into_the_field_and_the_menu_mirrors_actions(browser, live, width):
     v = probe(browser, live, MODULES, width=width)
-    assert v["quoted"] == ["> а\n> б", 4000], v
+    assert v["quoted"] == ["> а\n> б", 4000, True, 4000, True], v
     assert v["placed"] is True and v["chip"] == [False, "Цитата: первая строка"], v
     assert v["fold"] == [True, "> цитата\n\nвопрос", True, 1] and v["empty"] is False, v
     assert v["menu"] == ["Копировать", "Цитировать", "Изменить"] and v["clicked"] == 1 and v["closed"] is True, v

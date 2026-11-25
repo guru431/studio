@@ -3,7 +3,8 @@ import { tr } from './i18n.js';
  * «Чата», «Агентов» и Open WebUI; при отправке раздел зовёт fold() первой строкой, и цитата встаёт в начало самого
  * поля строками «> …» — дальше код видит обычное поле, сверки «поле равно отправленному» целы.
  *
- * quoted(text) — текст без краевых пробелов, первые QUOTE_MAX знаков (обрезано — «…»), каждая строка с «> ».
+ * quoted(text) — текст без краевых пробелов, каждая строка с «> »; отправляемая цитата целиком (с «> » и «…» обрезки)
+ *   — не длиннее QUOTE_MAX знаков.
  * quoteChip(host, field, { id, changed }) → { node, set(text), clear(), value(), fold() }: чип `div.quote-chip#id`
  *   (значок, начало цитаты, «Убрать цитату») — в host перед рамкой поля; changed() — после смены цитаты.
  * selectionQuote(scroller, { texts, quote }) → { unmount() }: выделение целиком внутри одного узла `texts` ленты —
@@ -18,9 +19,8 @@ const TITLE = 300;
 const EDGE = 8;
 
 export function quoted(text) {
-  let body = String(text ?? '').trim();
-  if (body.length > QUOTE_MAX) body = `${body.slice(0, QUOTE_MAX)}…`;
-  return body.split('\n').map((line) => `> ${line}`).join('\n');
+  const out = String(text ?? '').trim().split('\n').map((line) => `> ${line}`).join('\n');
+  return out.length > QUOTE_MAX ? `${out.slice(0, QUOTE_MAX - 1)}…` : out;
 }
 
 const cut = (text, n) => (text.length > n ? `${text.slice(0, n)}…` : text);
