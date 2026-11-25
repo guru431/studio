@@ -225,9 +225,20 @@ async def test_native_steer_absorbed_by_the_running_response_finishes_the_turn(h
     config.mkdir()
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
     monkeypatch.delenv('CLAUDECODE', raising=False)
-    (project / 'shell_probe.py').write_text('import time\ntime.sleep(3)\nprint("shell finished")\n', encoding='utf-8')
+    # Команда ждёт файла `release`: тест кладёт его, когда CLI записал уточнение в свою очередь, — без запаса по времени.
+    (project / 'shell_probe.py').write_text(
+        'import pathlib, time\ndeadline = time.monotonic() + 30\n'
+        'while not pathlib.Path(__file__).with_name("release").exists() and time.monotonic() < deadline:\n'
+        ' time.sleep(0.05)\nprint("shell finished")\n', encoding='utf-8')
     sent = []
     step = asyncio.Event()
+
+    def enqueued():
+        """Сколько вводов CLI поставил в свою очередь (`queue-operation enqueue` в JSONL сессии)."""
+        rows = []
+        for path in (config / 'projects').glob('*/' + CHAT + '.jsonl'):
+            rows += [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+        return sum(row.get('type') == 'queue-operation' and row.get('operation') == 'enqueue' for row in rows)
 
     class Client(ClaudeSDKClient):
         def __init__(self, *, options):
@@ -251,6 +262,12 @@ async def test_native_steer_absorbed_by_the_running_response_finishes_the_turn(h
     try:
         await asyncio.wait_for(step.wait(), 20)
         assert (await runner.steer(PID, CHAT, 'steer-probe-second', []))['mode'] == 'steer'
+        for _ in range(400):  # до 20 с: CLI прочитал уточнение, пока команда ещё идёт
+            if enqueued() >= 2:
+                break
+            await asyncio.sleep(0.05)
+        assert enqueued() >= 2
+        (project / 'release').touch()
         await asyncio.wait_for(asyncio.shield(turn.task), 20)
         assert main_calls == [False, True]  # уточнение ушло модели в том же ответе, своего ответа у него нет
         assert [f['e']['status'] for f in sent if f['e']['k'] == 'done'] == ['done']
