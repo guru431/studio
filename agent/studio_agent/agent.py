@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, journal, limits, mcp, metadata, mirror, permissions, project_summary, projects, selfcheck, sessions, store, subagents, subscription, visualizations, worktrees
+from . import attachments, branches, cli, computer_info, desktop, discovery, events, file_stats, files, github_status, gitinfo, history_images, host, journal, limits, mcp, metadata, mirror, permissions, project_summary, projects, selfcheck, sessions, skills, store, subagents, subscription, visualizations, worktrees
 from .errors import Refused
 from .software import Software
 from .pin import OpenSessions, PinStore
@@ -96,6 +96,8 @@ OPS = {
     "save": ("project", "path", "text", "version"),
     "git": ("project",),
     "git_compare": ("project", "path"),
+    "skills": ("project",),
+    "skill": ("project", "name", "folder"),
 }
 
 # Эти просьбы читают данные, обслуживают обновлятор или меняют только временное состояние.
@@ -107,14 +109,14 @@ RESTART_SAFE_OPS = frozenset({
     "mcp_get", "chats", "history", "history_image", "state", "watch",
     "files", "file_stats", "file_suggestions", "file_search", "chat_search", "chat_search_all", "subagents", "subagent_history",
     "worktrees", "read", "raw", "visualization", "git", "git_compare", "mirror_identity", "mirror_candidates",
-    "mirror_scan", "mirror_destination", "mirror_read", "mirror_text",
+    "mirror_scan", "mirror_destination", "mirror_read", "mirror_text", "skills", "skill",
 })
 
 # Новая операция получает доступ соавтора только после явного включения в контракт.
 SHARED_OPS = frozenset({"projects", "activity", "project_summary", "chats", "history", "history_image",
     "state", "turn", "steer", "queue_edit", "queue_pause", "claim", "watch", "answer", "stop",
     "files", "file_stats", "file_operation", "file_suggestions", "file_search", "file_upload", "chat_search", "chat_fork",
-    "subagents", "subagent_history", "read", "raw", "visualization", "save", "git"})
+    "subagents", "subagent_history", "read", "raw", "visualization", "save", "git", "skills", "skill"})
 # Наблюдатель проекта (`shared_readonly`, 0.47.0): только чтение — без хода, ответов, правки и новых чатов.
 SHARED_READ_OPS = SHARED_OPS - {"turn", "steer", "queue_edit", "queue_pause", "claim", "answer", "stop",
                                 "file_operation", "file_upload", "chat_fork", "save"}
@@ -215,7 +217,8 @@ class Agent:
                  "open_asks": True,  # 0.47.0: все открытые карточки — при каждом новом канале (§18)
                  "answer_takeover": True,  # 0.47.0: ответ на карточку из чужого окна, если владельца не смотрят (§25)
                  "chat_manage": True,  # 0.47.0: переименовать и удалить сессию (§25)
-                 "claude_models": self.claude_probe is not None}
+                 "claude_models": self.claude_probe is not None,
+                 "skills": True}  # 0.48.0: навыки проекта, просьбы `skills` и `skill` (§26)
         if host.platform_id() == "linux":
             hello["terminal"] = True
         if defaults := cli.DEFAULTS.get(str(self.cfg.projects_root)):
@@ -613,7 +616,11 @@ class Agent:
         if name == "index":
             return type(value) is int and 0 <= value < history_images.COUNT
         if name == "name":
+            if op == "skill":
+                return isinstance(value, str) and skills.NAME.fullmatch(value) is not None
             return projects.valid_name(value)
+        if name == "folder":
+            return value in skills.FOLDERS
         if name in ("project", "root"):
             return isinstance(value, str) and ID.fullmatch(value) is not None
         if name == "chat":
@@ -1190,6 +1197,16 @@ class Agent:
     async def _op_git_compare(self, frame, after):
         project = await self._project(frame)
         return await asyncio.to_thread(gitinfo.compare, project, frame["path"])
+
+    async def _op_skills(self, frame, after):
+        """Навыки проекта без текста (протокол §26); список кэшируется, как сводка проекта."""
+        project = await self._project(frame)
+        return await self._metadata.get((frame["project"], "skills"),
+                                        lambda: asyncio.to_thread(skills.list_skills, project), ttl=20)
+
+    async def _op_skill(self, frame, after):
+        project = await self._project(frame)
+        return await asyncio.to_thread(skills.read_skill, project, frame["name"], frame["folder"])
 
 
 def _error(rid: str) -> dict:
