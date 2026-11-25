@@ -1807,8 +1807,8 @@ function build(view, ctx) {
   function closeEdit() {
     if (!editing) return;
     input.value = editing.previous;
+    skills.restore(editing.previousSkill);         // чип, выбранный до «Изменить»
     editing = null;
-    skills.clear();
     editNote.hidden = true;
     autosize();
     ring.schedule();
@@ -1818,7 +1818,7 @@ function build(view, ctx) {
     if (sending || jobs.has(chatId) || remoteStream() || otherTab()) return;
     if (talking) talking();
     closeEdit();
-    editing = { message: m, last: chat.messages.at(-1).id, previous: input.value };
+    editing = { message: m, last: chat.messages.at(-1).id, previous: input.value, previousSkill: skills.chosen() };
     input.value = humanText(m);
     skills.keep(m.skill);                          // навык сообщения — чипом; крестик — правка без навыка
     autosize();

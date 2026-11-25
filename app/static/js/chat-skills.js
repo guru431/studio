@@ -85,6 +85,13 @@ export function chatSkills({ input, host, changed }) {
       sync();
     },
     clear,
+    /** Чип, выбранный до правки (`chosen()` тогда), — снова; null — без чипа. */
+    restore(item) {
+      if (!item) { clear(); return; }
+      kept = null;
+      chip.set(item);
+      sync();
+    },
     close: () => menu.close(),
     /** Список навыков читается при каждом открытии меню: закрыть — следующее откроет свежий. */
     reload: () => menu.close(),

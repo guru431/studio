@@ -74,6 +74,12 @@ def test_skill_chip_message_edit_and_parts(browser, live, width, lang):
         gw.chat_script = [["Иначе."], ["Без навыка."]]
         r = browser.drive(live.url + "/", [("wait", READY), ("eval", "go", f"location.hash = '#/chat/{cid}'"),
             ("wait", f"{ANSWERED} && {USER}?.querySelector('.msg-edit')"),
+            # «Отменить правку» возвращает и текст поля, и чип, выбранный до «Изменить»
+            *pick("сокр"), ("type", "#chat-input", "черновик"),
+            ("eval", "edit", EDIT), ("wait", f"{INPUT}.value === 'вот текст'"),
+            ("click", ".chat-edit-cancel"), ("wait", f"{INPUT}.value === 'черновик'"),
+            ("eval", "restored", f"[{CHIP}.hidden, {CHIP}.textContent]"),
+            ("click", "#skill-chip button"), ("eval", "clear", CLEAR),
             ("eval", "edit", EDIT),
             ("wait", f"{INPUT}.value === 'вот текст'"),
             ("eval", "editing", f"[{CHIP}.hidden, {CHIP}.textContent]"),
@@ -90,6 +96,7 @@ def test_skill_chip_message_edit_and_parts(browser, live, width, lang):
             width=width, mobile=mobile, init=init)
         assert not r.get("failed"), r
         v = r["values"]
+        assert v["restored"] == [False, skill + "Сократить"], v
         assert v["editing"] == [False, skill + "Сократить"], v
         assert v["kept"] == skill + "Сократить", v
         assert gw.chat_requests[-2]["messages"][-1]["content"] == TEXT + "\n\nиначе"
