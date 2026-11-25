@@ -89,7 +89,8 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
         ('type', '#photo-prompt', 'A photo via MCP'), choose('image_generate'),
         ('click', '#chip-size'), ('click', '#chip-size-menu [data-value=square]'),
         ('click', '#photo-go'),
-        ('wait', "document.querySelector('#section-mcp-result img')?.naturalWidth === 64"),
+        # снимок MCP сохраняется в историю и встаёт в ленту «Фото», а не под форму
+        ('wait', "document.querySelector('#photo-feed .photo-card[data-state=done] img')?.naturalWidth > 0"),
         ('eval', 'photoFits', NO_OVERFLOW),
         ('eval', 'video', "location.hash='#/video'"), ('wait', tool_ready('video_estimate')), choose('video_estimate'),
         put_files('#video-file', [("source.png", PNG_REAL)]),
@@ -109,8 +110,8 @@ def test_mcp_uses_the_existing_photo_video_and_translate_forms(browser, live, wi
     assert result['values']['photoFits'] and result['values']['videoFits'] and result['values']['translateFits']
     assert not result['values']['hasDialog']
     assert bool(result['values']['provider']) is (width == 320)
-    model = {'model': 'snofs-krea2-v1.6'} if login == 'owner' else {}
-    assert calls[0] == ('image_generate', {'prompt': 'A photo via MCP', 'size': '1024x1024', 'n': 1, **model})
+    # модель чипа Студии инструменту MCP не уходит: у MCP — свой каталог моделей
+    assert calls[0] == ('image_generate', {'prompt': 'A photo via MCP', 'size': '1024x1024', 'n': 1})
     assert calls[1][0] == 'artifact_upload' and calls[1][1]['mime_type'] == 'image/png'
     assert calls[2][0] == 'video_estimate'
     assert {key: value for key, value in calls[2][1].items() if key != 'artifact_id'} == {
