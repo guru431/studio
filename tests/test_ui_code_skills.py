@@ -70,6 +70,11 @@ def test_slash_menu_calls_project_and_library_skills(browser, live, width):
             ("wait", f"{user}.length === 2 && {IDLE}"
                      " && document.querySelectorAll('#code-feed .code-msg.assistant .md').length === 2"),
             ("eval", "fits", NO_OVERFLOW),
+            # «Проверить другим помощником» после ответа без изменённых файлов — в поле «… : нет»
+            *menu, ("click", "[data-verify=\"codex\"]"),
+            ("wait", "document.querySelector('#code-chat')?.dataset.engine === 'codex'"
+                     f" && document.querySelector('#code-chat').dataset.loaded === '1' && !{CHIP}?.hidden"),
+            ("eval", "verify", "document.querySelector('#code-text').value"),
             ("eval", "pure", PURE)], width=width, mobile=width == 320)
     finally:
         server.stop()
@@ -78,6 +83,7 @@ def test_slash_menu_calls_project_and_library_skills(browser, live, width):
     assert values["chip"] == ["Навык: review-local", ""]
     assert values["first"] == [["Навык: review-local", "только тесты", False]]
     assert values["kept"] == [False, "Навык: review-local", "только тесты"]
+    assert values["verify"] == "Изменённые файлы последнего ответа: нет"
     assert values["chipGone"] and values["chipFits"] and values["fits"]
     assert [t["text"] for t in code_requests(machine, "turn")] == ["Проверь diff\n\nтолько тесты", "Текст навыка"]
     assert len(code_requests(machine, "skill")) == 1

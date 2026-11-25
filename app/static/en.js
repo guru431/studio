@@ -4295,6 +4295,7 @@ globalThis.StudioEnglish = Object.freeze({
   "Навык вместе с уточнением длиннее 100 000 знаков": "The skill together with your note is longer than 100,000 characters",
   "Навыка «Приёмка» нет в вашей библиотеке — добавьте умолчания в настройках": "There is no “Acceptance” skill in your library — add the defaults in settings",
   "Изменённые файлы последнего ответа:": "Files changed in the last answer:",
+  "Изменённые файлы последнего ответа: нет": "Files changed in the last answer: none",
   "Проверить другим помощником: {0}": "Review with another helper: {0}",
   "Положить набор в проект": "Put the skill set into the project",
   "Навыки библиотеки для «Агентов» лягут файлами <папка>/<ключ>/SKILL.md. Существующие файлы не перезаписываются.": "Library skills for “Agents” are written as <folder>/<key>/SKILL.md files. Existing files are not overwritten.",

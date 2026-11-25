@@ -101,8 +101,9 @@ export function agentSkills(host, { aid, pid, key, agent, engine, text, chipHost
         return;
       }
       const files = (changed() || []).map((row) => row?.path).filter((path) => typeof path === 'string');
-      const value = [tr("Изменённые файлы последнего ответа:"), ...files.slice(0, CHANGED_MAX).map((path) => `- ${path}`)]
-        .join('\n');
+      // Изменений нет (или ответ их не сообщил) — так и сказано: помощник не гадает, что проверять.
+      const value = files.length ? [tr("Изменённые файлы последнего ответа:"),
+        ...files.slice(0, CHANGED_MAX).map((path) => `- ${path}`)].join('\n') : tr("Изменённые файлы последнего ответа: нет");
       await verifyWith(target, value, { kind: 'skill', id: skill.id, name: skill.name,
         description: skill.description || '', origin: skill.origin });
     } catch (err) {
